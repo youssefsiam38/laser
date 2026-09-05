@@ -14,7 +14,7 @@
  * fails, the same window shows a written explanation instead — a state that was
  * designed, not a blank page.
  */
-import { APP_ID, ENV, PRODUCT_NAME } from "@lasercode/protocol";
+import { APP_ID, DATA_DIR_NAME, ENV, PRODUCT_NAME } from "@lasercode/protocol";
 import { BrowserWindow, Menu, app, dialog, ipcMain, nativeTheme, session, shell } from "electron";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -93,6 +93,38 @@ let quitting = false;
 
 // ------------------------------------------------------------ singleton ----
 
+/**
+ * The display backend, before anything opens a window.
+ *
+ * `ozone-platform-hint=auto` is Chromium's own setting for "native Wayland on a
+ * Wayland session, X11 otherwise", and it is the supported way to say it.
+ *
+ * Chromium refuses to run Vulkan on its Wayland backend — the log says
+ * "'--ozone-platform=wayland' is not compatible with Vulkan" — and then carries
+ * on anyway. What the person gets is a window whose cursor draws in one place
+ * and hit-tests in another: a button is live down one edge and dead across the
+ * rest, and never shows a pointer. It looks like broken CSS and it is not.
+ *
+ * So Vulkan comes off *only* when the Wayland backend is the one that will run.
+ * An X11 session, or someone who chose their own `--ozone-platform`, is left
+ * exactly as Chromium would have left them — this is avoiding one specific
+ * incompatibility at the moment it would occur, not switching a feature off for
+ * every Linux user, most of whom would never have hit it.
+ */
+if (process.platform === "linux") {
+  const argv = process.argv.slice(1);
+  const asked = (flag: string) => argv.some((a) => a === `--${flag}` || a.startsWith(`--${flag}=`));
+  const chosePlatform = asked("ozone-platform") || asked("ozone-platform-hint");
+  if (!chosePlatform) app.commandLine.appendSwitch("ozone-platform-hint", "auto");
+
+  const willRunWayland = chosePlatform
+    ? argv.some((a) => a === "--ozone-platform=wayland")
+    : Boolean(process.env["WAYLAND_DISPLAY"]);
+  if (willRunWayland && !asked("disable-features") && !asked("enable-features")) {
+    app.commandLine.appendSwitch("disable-features", "Vulkan");
+  }
+}
+
 // A second launch (a deep link, a double-click) must reach the instance that
 // already owns the host, not start a rival one. This has to run before
 // anything else touches the port or the state directory.
@@ -103,6 +135,20 @@ if (!app.requestSingleInstanceLock()) {
 
 app.setAppUserModelId(APP_ID);
 app.setName(PRODUCT_NAME);
+
+/**
+ * Pin where Chromium keeps its own state — cookies, local storage, the GPU
+ * cache — instead of letting it derive one.
+ *
+ * `setName` comes too late to move it: Electron has already resolved
+ * `userData` from the executable, which in a development run is the `electron`
+ * binary itself. The effect is that `pnpm dev` writes into `~/.config/Electron`,
+ * shared with every other Electron app anyone has ever run from source, and a
+ * packaged build writes somewhere else again — so the two disagree about what
+ * theme you chose and a stale value from an unrelated app can decide how this
+ * one looks. Naming it once fixes both.
+ */
+app.setPath("userData", join(app.getPath("appData"), DATA_DIR_NAME));
 
 // ---------------------------------------------------------------- parts ----
 

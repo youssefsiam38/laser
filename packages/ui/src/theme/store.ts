@@ -154,6 +154,26 @@ export const themeStore = {
     wireGlobalListeners();
     const blob = readBootBlob();
     commit(blob && isThemeState(blob.state) ? blob.state : DEFAULT_STATE, !blob);
+
+    // Chromium can answer `prefers-color-scheme` before it knows what the
+    // desktop actually prefers — on Linux the real value lands a frame or two
+    // after the first paint. The first commit then reads "light", writes the
+    // light half of the pair, and no `change` event ever fires to correct it,
+    // because from the browser's point of view nothing changed. The result is
+    // a person on a dark desktop opening a light window and the app looking
+    // like it ignored them.
+    //
+    // So ask again, a few times, early. Re-resolving costs one style write and
+    // only happens while the person is following the system; the moment they
+    // pick a preset themselves this stops mattering.
+    if (typeof window !== "undefined") {
+      const reresolve = (): void => {
+        if (state.followSystem) commit(state);
+      };
+      requestAnimationFrame(reresolve);
+      window.addEventListener("load", reresolve, { once: true });
+      window.setTimeout(reresolve, 250);
+    }
   },
 
   getState: (): ThemeState => state,
