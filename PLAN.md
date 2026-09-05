@@ -344,6 +344,11 @@ installs a native desktop app that appears in the application menu, launches,
 runs an agent, and installs extensions from Settings — with no Node, no npm,
 no Pi and no manual step anywhere.
 
+Updating is deliberately staged. T1–T8 ship an app that installs and runs;
+T10 turns the in-app updater on once the repo can serve a feed an installed
+app may read, and T9 adds the system's own updater after that. Until T10 the
+app says updates are unavailable and why, which is true (D-31).
+
 Depends on: M5 (desktop shell), M9 (CLI).
 
 | ID | Task | Done when |
@@ -356,6 +361,8 @@ Depends on: M5 (desktop shell), M9 (CLI).
 | M10-T6 | First-run experience inside the app: pick a provider, sign in, pick a model, add a project — all in the UI. No config file, no environment variable, no terminal | a new user reaches a working session without leaving the window |
 | M10-T7 | Release pipeline: a tagged build produces every artifact plus a checksum manifest, and the app's updater points at it. Versions pinned end to end — Node, Pi, every workspace package | a release is reproducible from a tag |
 | M10-T8 | Product language: the UI never requires knowing Pi exists. "Agent", "model", "extension", "session" — Pi is named only in advanced settings and diagnostics, where it is the truth | a reader of every visible string could not tell which agent runs underneath |
+| M10-T9 | The OS-native update channel: a signed APT repository and a dnf `.repo`, dropped by the `.deb` and `.rpm` postinst, so `apt upgrade`, GNOME Software and KDE Discover all offer the update. Needs a signing key and a host | a `.deb` installed from the one-line install is upgraded by the system's own updater, with no terminal |
+| M10-T10 | Turn the in-app updater on. It is built and deliberately disabled (D-31) because a private repo cannot serve a feed an installed app can read. When the repo goes public, set `publish` back to the GitHub provider, point the updater at it, and prove an AppImage self-updates in place | a packaged build finds a newer release, downloads it, and restarts into it |
 
 ---
 
