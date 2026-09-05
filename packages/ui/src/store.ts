@@ -68,6 +68,7 @@ export type Action =
   | { type: "forked"; from: string; state: SessionState }
   | { type: "optimisticUser"; path: string; text: string; images: number }
   | { type: "dialogAnswered"; id: string }
+  | { type: "toast"; level: "info" | "warning" | "error"; text: string }
   | { type: "notification"; method: HostNotificationMethod; params: HostNotifications[HostNotificationMethod] }
   | { type: "dismissToast"; id: number };
 
@@ -126,6 +127,8 @@ export function reduce(state: AppState, action: Action): AppState {
       }));
     case "dismissToast":
       return { ...state, toasts: state.toasts.filter((t) => t.id !== action.id) };
+    case "toast":
+      return pushToast(state, action.level, action.text);
     case "dialogAnswered": {
       const open: Record<string, SessionView> = {};
       for (const [path, v] of Object.entries(state.open)) {

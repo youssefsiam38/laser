@@ -25,6 +25,16 @@ export function App() {
     [],
   );
 
+  /** Every user-triggered request goes through here so a failure is a toast, never a silent rejection. */
+  const guard = useCallback(
+    <T,>(fn: () => Promise<T>): Promise<T | undefined> =>
+      fn().catch((error: unknown) => {
+        dispatch({ type: "toast", level: "error", text: error instanceof Error ? error.message : String(error) });
+        return undefined;
+      }),
+    [],
+  );
+
   const refreshSessions = useCallback(async () => {
     try {
       const { sessions } = await client.request("pi/session/list", {});
@@ -190,8 +200,8 @@ export function App() {
         open={state.open}
         current={state.current}
         connection={state.connection}
-        onOpen={openSession}
-        onNew={newSession}
+        onOpen={(p) => void guard(() => openSession(p))}
+        onNew={(cwd) => void guard(() => newSession(cwd))}
         onSelect={(path) => {
           dispatch({ type: "select", path });
           setSidebarOpen(false);
@@ -204,17 +214,29 @@ export function App() {
           connection={state.connection}
           historyOpen={historyOpen}
           onMenu={() => setSidebarOpen((v) => !v)}
-          onSetModel={setModel}
-          onSetThinking={setThinking}
-          onListModels={listModels}
-          onRename={rename}
-          onCompact={compact}
+          onSetModel={(m) => guard(() => setModel(m)).then(() => {})}
+          onSetThinking={(l) => guard(() => setThinking(l)).then(() => {})}
+          onListModels={() => guard(listModels).then((m) => m ?? [])}
+          onRename={(n) => guard(() => rename(n)).then(() => {})}
+          onCompact={() => guard(compact).then(() => {})}
           onToggleHistory={() => setHistoryOpen((v) => !v)}
         />
         {current ? (
           <>
             <Transcript view={current} />
-            <Composer view={current} onSend={send} onAbort={abort} />
+            <Composer
+              view={current}
+              onSend={async (c, b) => {
+                // Let the composer restore its text on failure, but still surface the error.
+                try {
+                  await send(c, b);
+                } catch (error) {
+                  dispatch({ type: "toast", level: "error", text: error instanceof Error ? error.message : String(error) });
+                  throw error;
+                }
+              }}
+              onAbort={() => guard(abort).then(() => {})}
+            />
           </>
         ) : (
           <div className="empty">
@@ -223,8 +245,16 @@ export function App() {
           </div>
         )}
       </main>
-      {historyOpen && current && <History view={current} onRefresh={refreshEntries} onFork={fork} onJump={jump} onClose={() => setHistoryOpen(false)} />}
-      {current && <Dialogs view={current} onAnswer={answerDialog} />}
+      {historyOpen && current && (
+        <History
+          view={current}
+          onRefresh={() => guard(refreshEntries).then(() => {})}
+          onFork={(id) => guard(() => fork(id)).then(() => {})}
+          onJump={(id) => guard(() => jump(id)).then(() => {})}
+          onClose={() => setHistoryOpen(false)}
+        />
+      )}
+      {current && <Dialogs view={current} onAnswer={(r) => guard(() => answerDialog(r)).then(() => {})} />}
       <div className="toasts">
         {state.toasts.map((t) => (
           <div key={t.id} className={`toast toast-${t.level}`} onClick={() => dispatch({ type: "dismissToast", id: t.id })}>
