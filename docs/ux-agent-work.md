@@ -96,10 +96,21 @@ disabled, when they do not apply.
 
 ## Plans
 
-Phases are columns, runs are cards inside them. Dependencies are drawn only
-where they were declared. This is deliberately **not** a free-form graph
-canvas: a canvas implies we know the graph, and for scripted workflows we do
-not. Inferred connectors are dashed and labelled `inferred` (R3).
+A plan renders by island size, because a phase column needs width a dock pane
+does not have (D-20):
+
+- **Expanded in the dock**: phases as vertical collapsible sections. Each
+  section header carries the phase title, a `done/total` count, and a row of
+  small squares — one per step, filled as it completes. Expanding a phase
+  shows its steps as a table: name, model, tokens, time, and a check when
+  done. Cost and tokens for the whole plan sit at the top (R8).
+- **Maximized**: phases as columns, steps as run islands inside them.
+- **Minimal**: the plan name and `done/total`.
+
+Dependencies are drawn only where they were declared. This is deliberately
+**not** a free-form graph canvas: a canvas implies we know the graph, and for
+scripted workflows we do not. Inferred connectors are dashed and labelled
+`inferred` (R3).
 
 ## What this costs
 

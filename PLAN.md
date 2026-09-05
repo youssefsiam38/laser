@@ -137,6 +137,7 @@ Depends on: M1.
 | M2-T3 | Fast switching: keep last N transcripts hydrated; others lazy from catalog | switch under 100 ms perceived |
 | M2-T4 | Project management: add, remove, trust prompt passthrough, per-project settings awareness | untrusted project shows Pi's trust question in UI |
 | M2-T5 | Notifications (desktop) for waiting/finished sessions | notification deep-links to the session |
+| M2-T6 | Project git line under the composer: branch, `+added −removed` since session start, "Create PR" when ahead; worker runs git per project, hidden when not a repo | numbers update after each turn that edits files |
 
 ---
 
@@ -181,7 +182,7 @@ Depends on: M1.
 
 | ID | Task | Done when |
 | --- | --- | --- |
-| M4-T1 | Settings adapter over `SettingsManager`: read merged, write scoped, reload live session | round-trip test on all 52 top-level keys |
+| M4-T1 | Settings adapter over `SettingsManager`: read merged, write scoped, reload live session | round-trip test on every top-level key of the pinned Pi (51 on 0.85.0; the count is pinned by a test so a bump fails loudly) |
 | M4-T2 | Settings UI: schema-driven forms for every key, global vs project tabs, diff view of effective settings | no setting missing versus `docs/settings.md` of the pinned Pi |
 | M4-T3 | Package manager UI over `DefaultPackageManager`: install, remove, update, progress, update check | pi-web-access install from UI succeeds |
 | M4-T4 | Providers and models: auth status, login flows Pi supports headlessly, enabled models, thinking levels per model | model picker matches Pi's |

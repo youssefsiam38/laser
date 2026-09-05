@@ -410,6 +410,31 @@ Scheduled runs deferred. The CLI uses the same nouns (`piorbit runs`,
 the upstream index patch is written to `docs/upstream.md`.
 Consequences: unblocks M3.
 
+### D-20 · 2026-09-05 · Seven amendments from Claude Code's desktop UI
+Decision: the user shared Claude Code's desktop as inspiration; judged against
+our decisions, it does seven things better and each is adopted.
+1. The dock grows with the window: resizable, and two columns of two expanded
+   islands past ~640px dock width or a 1600px window. The rule stays "two
+   per column".
+2. Every expanded island can pop out to its own window (desktop) or tab (web);
+   header controls in a fixed order: pop out, maximize, close.
+3. Plans render by island size: in the dock, vertical collapsible phases with
+   done/total and a row of step squares, expanding to a table of name, model,
+   tokens, time, check; columns only when maximized.
+4. Consecutive tool calls collapse into one summary row ("Ran 2 commands")
+   that expands to the individual rows.
+5. The ambient surface moves from the top bar to a status line directly above
+   the composer, on every width, so it is in the same place on phone and
+   desktop and next to where you type.
+6. The sessions panel lists every project as collapsible, attention-sorted
+   groups in one scrolling list; the rail jumps to and filters a group rather
+   than replacing the list. Quick navigation across projects never requires
+   switching first.
+7. A project line under the composer: git branch, +added −removed since the
+   session started, Create PR when ahead. New task M2-T6.
+Not adopted: an embedded browser pane (embeds are out of scope, D-18) and a
+four-pane dock on a laptop-width window (theirs was 1860px wide).
+
 ---
 
 ## Open questions
@@ -447,3 +472,4 @@ Consequences: unblocks M3.
 - 2026-09-05 known gaps, not blocking: main bundle is 1.0 MB / 303 kB gzip (no manual chunking yet); `SPEND` reads "No spend recorded" until Pi persists usage; worker status shows "No status yet" because the pool never emits `starting`.
 - 2026-09-05 · claude-2026-09-05-b · M0-T8: `workflow` scope granted and `.github/workflows/ci.yml` installed, but the first run was refused by GitHub billing (private repos bill Actions minutes). Added `pnpm verify` as the local equivalent. Blocked on the user's GitHub billing, not on code.
 - 2026-09-05 · claude-2026-09-05-b · D-18 and D-19: panel contract and agent-work model decided (all leans). M3 unblocked; the panel system becomes a prerequisite lane in wave 2.
+- 2026-09-05 · claude-2026-09-05-b · D-20: seven amendments adopted from Claude Code's desktop UI; M2-T6 added; docs updated.

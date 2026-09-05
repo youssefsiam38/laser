@@ -63,15 +63,27 @@ Where a panel can appear. Also closed.
 
 | Surface | Shape | For |
 | --- | --- | --- |
-| **Ambient** | one line in the top bar or telemetry rail | state you glance at |
+| **Ambient** | one line directly above the composer, on every width | state you glance at |
 | **Inline** | a card in the transcript, at the point it happened | the result of a tool call you just watched |
 | **Dock** | the right side, at most **two** stacked panes | something you want to keep watching while you keep working |
 | **Sheet** | overlay, focused, dismissible | something you are doing *instead of* the conversation |
 
-The dock holds at most two **expanded** islands, never three. A third does not
-evict anything — it shrinks the least recently watched one to minimal, where
-it keeps ticking. Nothing is ever parked in a drawer, because there is no
-drawer: minimal is a size, not a storage location.
+The dock holds at most two **expanded** islands per column, never three. A
+third does not evict anything — it shrinks the least recently watched one to
+minimal, where it keeps ticking. Nothing is ever parked in a drawer, because
+there is no drawer: minimal is a size, not a storage location.
+
+**The dock grows with the window (D-20).** It is resizable by dragging its
+edge, and past a width of about 640px — or a window of 1600px and up — it
+becomes two columns, each holding two expanded islands. A wide monitor gets
+four expanded panels without any of them getting narrow; a laptop gets two.
+The rule is per column, so it never changes.
+
+**Every expanded island can pop out (D-20).** Its header carries three
+controls in a fixed order: pop out, maximize, close. Pop out opens the panel
+in its own window on desktop and its own tab on the web, keeping identity and
+state (R6); the island in the dock shrinks to minimal and points at where it
+went.
 
 ### Panels are islands, not boxes
 

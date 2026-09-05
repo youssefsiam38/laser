@@ -100,11 +100,14 @@ Desktop (≥1024px), four columns left to right:
 1. **Rail** (56px): project icons (initials in a ring), theme toggle, settings.
    The ring around a project icon shows aggregate status: solid `--live` arc
    while any session runs, `--attention` when any waits.
-2. **Sessions** (288px): attention-sorted list for the selected project
-   (waiting > error > finished-unread > working > idle, then by modified). Each
-   row: status dot (see Status), title (Martian Mono id prefix when untitled),
-   relative time, last tool or "waiting for you" subtitle. "New session" at top.
-   Collapsible to 0 with `[` .
+2. **Sessions** (288px): **every project**, as collapsible groups, each
+   attention-sorted inside (waiting > error > finished-unread > working >
+   idle, then by modified). One scrolling list, so quick navigation across
+   projects never requires switching first (D-20). Each group header: project
+   name, a `+` for a new session there, a collapse chevron. Each row: status
+   dot, title (Martian Mono id prefix when untitled), relative time, last tool
+   or "waiting for you" subtitle. The rail's project icons jump to and filter
+   that group rather than replacing the list. Collapsible to 0 with `[`.
 3. **Thread** (flex): the assistant-ui thread. Max width 76ch centered, sticky
    top bar (session title, model, thinking, context ring, more menu), floating
    composer at the bottom with queue chips above it.
@@ -143,9 +146,11 @@ by color and an `aria-label`.
   left hairline appears only while streaming.
 - Reasoning: collapsible row "Reasoning · 3.2s" with a shimmering label while
   streaming; collapsed by default once complete.
-- Tool calls: one-line rows in a tight stack. `[icon] verb  path/or/summary
-  ····· 120ms`. Verb in Host Grotesk 500, path in Martian Mono. Rows expand to
-  show args and result. `bash` expands into a terminal block (dark ground in
+- Tool calls: **consecutive calls collapse into one summary row** by default
+  — "Ran 2 commands", "Edited 3 files", "Read 5 files" — with a chevron that
+  expands to the individual rows (D-20). Each individual row: `[icon] verb
+  path/or/summary ····· 120ms`. Verb in Host Grotesk 500, path in Martian
+  Mono. Rows expand to show args and result. `bash` expands into a terminal block (dark ground in
   both themes, Martian Mono, stdout/stderr). `edit`/`write` show a diff. Errors
   get a `--danger` left hairline and the error text.
 - Tool-associated dialogs (approval/select/input/editor raised while exactly
@@ -160,6 +165,17 @@ by color and an `aria-label`.
   fence closes.
 
 ## Composer
+
+Directly above the composer, one **status line** on every width (D-20): the
+turn's elapsed time and tokens, the fleet pill ("3 running · 1 needs you",
+absent when nothing runs), and the session state in words ("waiting for
+you", "working", "idle"). This is the ambient surface; it lives here rather
+than in the top bar so the eye finds it in the same place on a phone and a
+desktop, next to where you type.
+
+Below the composer, a **project line**: git branch, `+added −removed` since
+the session started, and a "Create PR" action when there is something to
+push. Tabular numerals; hidden entirely when the project is not a repo.
 
 Floating card, 12px radius, `--surface` on `--bg`, one soft shadow. Textarea
 autosizes to 8 lines. Left: attach image (paste also works). Right: model
