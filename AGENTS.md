@@ -60,6 +60,16 @@ assistant-ui element or primitive over hand-rolling; style it to `DESIGN.md`
 rather than rebuilding it. Its guidance is secondary only to the installed
 `.d.ts` when the two disagree.
 
+**Every element in the catalog is already claimed.** Before writing any
+component, check [`docs/ux-elements.md`](docs/ux-elements.md): it maps all
+~120 assistant-ui elements onto a piorbit surface, or states why one does not
+apply. If the thing you are about to build has a row there, install that
+element (`npx assistant-ui@latest add <name>`) and restyle it. Editing the
+copied source is expected; starting from an empty file is not. Standalone
+elements ship with demo props — strip them and feed the component from a
+panel payload. If you build something the inventory claims, a reviewer will
+send it back.
+
 This file is the contract for every agent (human or model) working here. Read it
 fully before touching anything. The three planning files it governs are:
 

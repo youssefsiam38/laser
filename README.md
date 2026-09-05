@@ -23,7 +23,7 @@ the contract renders natively. That contract is
 
 - Start here: [`AGENTS.md`](AGENTS.md) (how to work in this repo)
 - Plan: [`PLAN.md`](PLAN.md) · Status: [`STATUS.md`](STATUS.md) · Ledger: [`STATUS_DETAILED.md`](STATUS_DETAILED.md)
-- Panel contract: [`docs/ux-panels.md`](docs/ux-panels.md) · Agent work: [`docs/ux-agent-work.md`](docs/ux-agent-work.md) · Visual system: [`packages/ui/DESIGN.md`](packages/ui/DESIGN.md)
+- Panel contract: [`docs/ux-panels.md`](docs/ux-panels.md) · Agent work: [`docs/ux-agent-work.md`](docs/ux-agent-work.md) · Element inventory: [`docs/ux-elements.md`](docs/ux-elements.md) · Visual system: [`packages/ui/DESIGN.md`](packages/ui/DESIGN.md)
 - Architecture: [`docs/architecture.md`](docs/architecture.md)
 - Research: [`docs/research/findings.md`](docs/research/findings.md)
 
