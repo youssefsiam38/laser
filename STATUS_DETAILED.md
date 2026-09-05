@@ -63,9 +63,9 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 | M1-T4 | Transcript renderer | done | claude-2026-09-05-a | `markdown.tsx` (block-split, index keys, DOMPurify, open-fence guard); browser: list + code fence streamed from the sandbox provider | thinking blocks and tool cards render; syntax highlighting deferred (see notes) |
 | M1-T5 | Composer | done | claude-2026-09-05-a | `components/Composer.tsx`; browser: send, steer/follow-up/stop while running, queue chips, image paste | — |
 | M1-T6 | Extension dialogs in UI | done | claude-2026-09-05-a | browser: sandbox extension `/ask` → `ctx.ui.select` rendered, answered, `notify` toast + `setStatus` pill arrived; `test/store.test.ts` | see notes |
-| M1-T7 | Model/thinking/name/compaction controls | in-progress | claude-2026-09-05-a | model picker + thinking select in `TopBar.tsx` (browser-verified) | rename and compaction trigger not in the UI yet |
+| M1-T7 | Model/thinking/name/compaction controls | done | claude-2026-09-05-a | `TopBar.tsx`: model picker, thinking select, context % pill that compacts on click, double-click title to rename (`pi/session/rename`) | browser-verified model/thinking; rename/compact wired to tested worker methods |
 | M1-T8 | Resume and reattach with seq | done | claude-2026-09-05-a | `client.ts` (track/resume on reconnect + visibilitychange); host e2e resume test; browser: reload → session listed → transcript hydrated via `pi/session/entries` | — |
-| M1-T9 | Session tree | todo | — | — | worker returns Unsupported for fork; navigate is wired |
+| M1-T9 | Session tree | done | claude-2026-09-05-a | driver `fork()` via `AgentSessionRuntime.fork` (test: `stable-sdk.prompt.test.ts` forks at a user entry into a new file and keeps serving); worker re-keys the session (`server.test.ts`); `History.tsx` panel with fork/jump, branch depth by indentation; browser-verified | see notes |
 
 #### M1-T1 notes
 - 2026-09-05 done: `WorkerClient` (spawn over fd 3, id correlation, ready/exit), `WorkerPool` (one per cwd, shared in-flight spawn, crash → `pi/worker/status crashed`), `Router` (session/new by cwd; path-bearing methods by pool memory then catalog header; `pi/session/list` from catalog; `pi/ui/response` fanned to all workers), `HostServer` (HTTP static UI with SPA fallback + `/healthz`, WS `/ws`, broadcast notifications to every client). Loopback only.
@@ -82,6 +82,9 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 
 #### M1-T6 notes
 - 2026-09-05 verified with a real Pi extension inside the sandbox worker. Found and fixed: the store never removed an answered dialog (`dialogAnswered` action). Extension commands keep `session/prompt` pending until their dialog resolves, so the composer now clears optimistically and restores on failure.
+
+#### M1-T9 notes
+- 2026-09-05 fork replaces `runtime.session` and changes the session file path. The driver re-binds extensions and re-subscribes (`applySession`), the worker re-keys its session map and emits a `state` update under the new path, the host router binds the new path to the same cwd, and the UI moves the view (`forked` action) and re-hydrates. Jump uses `pi/session/navigate` then re-hydrates. A proper tree visualisation (not just indentation) can come with M2-T3 when transcripts get virtualised.
 
 #### M1-T2 notes
 - 2026-09-05 catalog reads only the first line (header) + stat per file, cached by (size, mtime). Handles Pi's slug-subdir layout (default dir) and the flat layout Pi uses for an explicit `--session-dir` (found by the e2e test). `messageCount` is not computed yet (would need a full read; defer to a background pass or Pi's own `SessionInfo` cache format).
@@ -336,3 +339,4 @@ reworded; M8-T5 added (module authoring guide).
 - 2026-09-05 · claude-2026-09-05-a · M0-T2 and M0-T6 done; M0 complete except CI. 26 tests green.
 - 2026-09-05 · claude-2026-09-05-a · M1-T1 and M1-T2 done (host e2e through a real worker and stub provider; catalog timed on the real dir). 31 tests green.
 - 2026-09-05 · claude-2026-09-05-a · M1-T3/T4/T5/T6/T8 done, T7 in-progress; UI verified in the browser against the sandbox (streaming markdown, hydration after reload, extension select dialog round trip). `pnpm sandbox` added.
+- 2026-09-05 · claude-2026-09-05-a · M1-T7 and M1-T9 done (fork on the real SDK, history panel, rename, compact). M1 complete. 39 tests green.

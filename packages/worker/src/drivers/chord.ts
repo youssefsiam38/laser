@@ -44,6 +44,7 @@ export class ChordDriver implements SessionDriver {
   async rename(name: string): Promise<void> { void name; throw new DriverUnavailableError(this.kind, NOT_YET); }
   async compact(instructions?: string): Promise<void> { void instructions; throw new DriverUnavailableError(this.kind, NOT_YET); }
   async navigateTree(entryId: string, options?: { summarize?: boolean; label?: string }): Promise<{ editorText?: string; cancelled: boolean }> { void entryId; void options; throw new DriverUnavailableError(this.kind, NOT_YET); }
+  async fork(entryId: string): Promise<SessionState> { void entryId; throw new DriverUnavailableError(this.kind, NOT_YET); }
   respondToUi(response: UiDialogResponse): void { void response; }
   async entries(): Promise<unknown[]> { throw new DriverUnavailableError(this.kind, NOT_YET); }
   async dispose(): Promise<void> { this.listeners.clear(); }

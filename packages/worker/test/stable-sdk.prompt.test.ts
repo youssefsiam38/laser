@@ -158,6 +158,41 @@ describe("StableSdkDriver.prompt", () => {
     }
   }, 60_000);
 
+  it("forks at a user entry into a new session file and keeps serving it", async () => {
+    const settled = () =>
+      new Promise<void>((resolve) => {
+        const off = driver.subscribe((e) => {
+          if (e.type === "update" && e.update.kind === "agent_settled") { off(); resolve(); }
+        });
+      });
+    await driver.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir: join(base, "sessions") });
+    await driver.setModel({ provider: "stub", id: "stub-1" });
+    const first = driver.state().path;
+
+    let done = settled();
+    await driver.prompt([{ type: "text", text: "one" }]);
+    await done;
+    done = settled();
+    await driver.prompt([{ type: "text", text: "two" }]);
+    await done;
+
+    const entries = (await driver.entries()) as Array<{ type: string; id: string; message?: { role: string } }>;
+    const firstUser = entries.find((e) => e.type === "message" && e.message?.role === "user")!;
+    expect(firstUser).toBeDefined();
+
+    const state = await driver.fork(firstUser.id);
+    expect(state.path).not.toBe(first);
+    expect(state.path.startsWith(join(base, "sessions"))).toBe(true);
+    // The fork keeps history up to the fork point (the first user message) and drops the rest.
+    expect(state.messageCount).toBeLessThan(4);
+
+    // The forked session is live: a new prompt streams into it.
+    done = settled();
+    await driver.prompt([{ type: "text", text: "three" }]);
+    await done;
+    expect(driver.state().path).toBe(state.path);
+  }, 60_000);
+
   it("rejects a prompt while streaming unless a streaming behaviour is given", async () => {
     await driver.open({
       cwd: join(base, "project"),

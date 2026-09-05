@@ -119,8 +119,20 @@ export class WorkerServer {
         return {};
       case "pi/session/clear_queue":
         return this.live(req.params.path).driver.clearQueue();
-      case "pi/session/fork":
-        throw new ProtocolError(ErrorCodes.Unsupported, "pi/session/fork is not wired yet (M1-T9)");
+      case "pi/session/fork": {
+        const live = this.live(req.params.path);
+        const state = await live.driver.fork(req.params.entryId);
+        if (state.path !== live.path) {
+          // The driver now serves the forked session file; re-key it so later
+          // requests by the new path find it. Clients learn the new path from
+          // the result and from the state update that follows.
+          this.sessions.delete(live.path);
+          live.path = state.path;
+          this.sessions.set(state.path, live);
+        }
+        this.onDriverEvent(live, { type: "update", update: { kind: "state", state } });
+        return { state } satisfies Result<"pi/session/fork">;
+      }
       case "pi/session/navigate": {
         const { driver } = this.live(req.params.path);
         return driver.navigateTree(req.params.entryId, {

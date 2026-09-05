@@ -68,6 +68,9 @@ export class Router {
         const worker = await this.pool.get(cwd);
         const result = await worker.request(req.method, req.params);
         if (req.method === "session/load") this.pool.bindSession(path, cwd);
+        // A fork answers with a new session path served by the same worker.
+        const forked = (result as { state?: { path?: string } } | null)?.state?.path;
+        if (forked) this.pool.bindSession(forked, cwd);
         return result;
       }
     }

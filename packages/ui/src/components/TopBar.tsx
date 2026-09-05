@@ -7,16 +7,22 @@ const LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhi
 interface Props {
   view: SessionView | undefined;
   connection: "connecting" | "open" | "closed";
+  historyOpen: boolean;
   onMenu: () => void;
   onSetModel: (model: SessionState["model"]) => Promise<void>;
   onSetThinking: (level: ThinkingLevel) => Promise<void>;
   onListModels: () => Promise<ModelRef[]>;
+  onRename: (name: string) => Promise<void>;
+  onCompact: () => Promise<void>;
+  onToggleHistory: () => void;
 }
 
-export function TopBar({ view, connection, onMenu, onSetModel, onSetThinking, onListModels }: Props) {
+export function TopBar({ view, connection, historyOpen, onMenu, onSetModel, onSetThinking, onListModels, onRename, onCompact, onToggleHistory }: Props) {
   const [models, setModels] = useState<ModelRef[]>([]);
   const [filter, setFilter] = useState("");
   const [picking, setPicking] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
 
   useEffect(() => {
     if (!picking) return;
@@ -26,13 +32,40 @@ export function TopBar({ view, connection, onMenu, onSetModel, onSetThinking, on
   const model = view?.state.model;
   const shown = models.filter((m) => `${m.provider}/${m.id} ${m.name ?? ""}`.toLowerCase().includes(filter.toLowerCase())).slice(0, 60);
   const usage = view?.state.contextUsage;
+  const name = view ? (view.state.name ?? view.title ?? view.state.id.slice(0, 8)) : "piorbit";
+
+  const startEdit = () => {
+    if (!view) return;
+    setDraft(view.state.name ?? "");
+    setEditing(true);
+  };
+  const commit = async () => {
+    setEditing(false);
+    if (view && draft.trim() && draft.trim() !== view.state.name) await onRename(draft.trim());
+  };
 
   return (
     <header className="topbar">
       <button className="icon-btn hide-desktop" onClick={onMenu} aria-label="Sessions">☰</button>
-      <div className="topbar-title" title={view?.path}>
-        {view ? (view.title ?? view.state.name ?? view.state.id.slice(0, 8)) : "piorbit"}
-        {view && <span className="muted"> · {view.state.cwd.split("/").slice(-1)[0]}</span>}
+      <div className="topbar-title" title={view ? `${view.path} (double-click to rename)` : undefined} onDoubleClick={startEdit}>
+        {editing ? (
+          <input
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={() => void commit()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void commit();
+              if (e.key === "Escape") setEditing(false);
+            }}
+            aria-label="Session name"
+          />
+        ) : (
+          <>
+            {name}
+            {view && <span className="muted"> · {view.state.cwd.split("/").slice(-1)[0]}</span>}
+          </>
+        )}
       </div>
       {view && (
         <div className="topbar-controls">
@@ -45,8 +78,11 @@ export function TopBar({ view, connection, onMenu, onSetModel, onSetThinking, on
             ))}
           </select>
           {usage && usage.percent !== null && (
-            <span className="pill muted" title={`${usage.tokens ?? "?"} / ${usage.contextWindow} tokens`}>{Math.round(usage.percent)}% ctx</span>
+            <button className="pill muted" onClick={() => void onCompact()} title={`${usage.tokens ?? "?"} / ${usage.contextWindow} tokens. Click to compact.`} disabled={view.running}>
+              {Math.round(usage.percent)}% ctx
+            </button>
           )}
+          <button className={`pill ${historyOpen ? "active" : ""}`} onClick={onToggleHistory} title="History: fork or jump to an earlier point">history</button>
         </div>
       )}
       <span className={`conn conn-${connection}`} title={`host ${connection}`} />

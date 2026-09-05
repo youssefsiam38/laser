@@ -271,6 +271,15 @@ export class StableSdkDriver implements SessionDriver {
     };
   }
 
+  async fork(entryId: string): Promise<SessionState> {
+    if (!this.runtime) throw new DriverUnavailableError(this.kind, "no open session");
+    const { cancelled } = await this.runtime.fork(entryId);
+    if (cancelled) throw new DriverUnavailableError(this.kind, "fork was cancelled by an extension");
+    // Runtime replacement swapped `runtime.session`; re-bind and re-subscribe.
+    await this.applySession();
+    return this.state();
+  }
+
   respondToUi(response: UiDialogResponse): void {
     this.ui.respond(response);
   }

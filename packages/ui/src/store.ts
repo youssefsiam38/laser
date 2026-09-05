@@ -35,6 +35,8 @@ export interface SessionView {
   title?: string;
   editorText?: string;
   hydrated: boolean;
+  /** Raw persisted entries (for the history/tree panel). */
+  entries: unknown[];
 }
 
 export interface AppState {
@@ -62,6 +64,8 @@ export type Action =
   | { type: "select"; path: string | undefined }
   | { type: "closeView"; path: string }
   | { type: "hydrate"; path: string; entries: unknown[] }
+  | { type: "entries"; path: string; entries: unknown[] }
+  | { type: "forked"; from: string; state: SessionState }
   | { type: "optimisticUser"; path: string; text: string; images: number }
   | { type: "dialogAnswered"; id: string }
   | { type: "notification"; method: HostNotificationMethod; params: HostNotifications[HostNotificationMethod] }
@@ -92,8 +96,18 @@ export function reduce(state: AppState, action: Action): AppState {
             statuses: {},
             widgets: {},
             hydrated: false,
+            entries: [],
           };
       return { ...state, open: { ...state.open, [view.path]: view }, current: view.path };
+    }
+    case "forked": {
+      // The old view's live state moved to a new path; carry the transcript over.
+      const old = state.open[action.from];
+      const { [action.from]: _gone, ...rest } = state.open;
+      const view: SessionView = old
+        ? { ...old, path: action.state.path, state: action.state, lastSeq: 0, hydrated: false, entries: [] }
+        : { path: action.state.path, state: action.state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, dialogs: [], statuses: {}, widgets: {}, hydrated: false, entries: [] };
+      return { ...state, open: { ...rest, [view.path]: view }, current: view.path };
     }
     case "select":
       return { ...state, current: action.path };
@@ -102,7 +116,9 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, open: rest, current: state.current === action.path ? undefined : state.current };
     }
     case "hydrate":
-      return updateView(state, action.path, (v) => ({ ...v, blocks: blocksFromEntries(action.entries), hydrated: true }));
+      return updateView(state, action.path, (v) => ({ ...v, blocks: blocksFromEntries(action.entries), entries: action.entries, hydrated: true }));
+    case "entries":
+      return updateView(state, action.path, (v) => ({ ...v, entries: action.entries }));
     case "optimisticUser":
       return updateView(state, action.path, (v) => ({
         ...v,

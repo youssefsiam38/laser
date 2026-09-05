@@ -7,12 +7,14 @@ import { Transcript } from "./components/Transcript.js";
 import { Composer } from "./components/Composer.js";
 import { Dialogs } from "./components/Dialogs.js";
 import { TopBar } from "./components/TopBar.js";
+import { History } from "./components/History.js";
 
 export function App() {
   const [state, dispatch] = useReducer(reduce, initialState);
   const stateRef = useRef<AppState>(state);
   stateRef.current = state;
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const client = useMemo(
     () =>
@@ -82,30 +84,29 @@ export function App() {
   );
 
   const current = state.current ? state.open[state.current] : undefined;
+  const currentPath = current?.path;
 
   const send = useCallback(
     async (content: ContentBlock[], behavior: "prompt" | "steer" | "followUp") => {
-      if (!current) return;
+      if (!currentPath) return;
       const text = content.filter((c) => c.type === "text").map((c) => (c as { text: string }).text).join("\n");
       const images = content.filter((c) => c.type === "image").length;
       if (behavior === "prompt") {
-        dispatch({ type: "optimisticUser", path: current.path, text, images });
-        const r = await client.request("session/prompt", { path: current.path, content });
-        if (!r.accepted) {
-          await client.request("pi/session/steer", { path: current.path, content });
-        }
+        dispatch({ type: "optimisticUser", path: currentPath, text, images });
+        const r = await client.request("session/prompt", { path: currentPath, content });
+        if (!r.accepted) await client.request("pi/session/steer", { path: currentPath, content });
       } else if (behavior === "steer") {
-        await client.request("pi/session/steer", { path: current.path, content });
+        await client.request("pi/session/steer", { path: currentPath, content });
       } else {
-        await client.request("pi/session/follow_up", { path: current.path, content });
+        await client.request("pi/session/follow_up", { path: currentPath, content });
       }
     },
-    [client, current],
+    [client, currentPath],
   );
 
   const abort = useCallback(async () => {
-    if (current) await client.request("session/cancel", { path: current.path });
-  }, [client, current]);
+    if (currentPath) await client.request("session/cancel", { path: currentPath });
+  }, [client, currentPath]);
 
   const answerDialog = useCallback(
     async (response: UiDialogResponse) => {
@@ -117,30 +118,73 @@ export function App() {
 
   const setModel = useCallback(
     async (model: SessionState["model"]) => {
-      if (!current || !model) return;
-      const { state: s } = await client.request("pi/model/set", { path: current.path, model: { provider: model.provider, id: model.id } });
+      if (!currentPath || !model) return;
+      const { state: s } = await client.request("pi/model/set", { path: currentPath, model: { provider: model.provider, id: model.id } });
       dispatch({ type: "opened", state: s });
     },
-    [client, current],
+    [client, currentPath],
   );
 
   const setThinking = useCallback(
     async (level: ThinkingLevel) => {
-      if (!current) return;
-      const { state: s } = await client.request("pi/thinking/set", { path: current.path, level });
+      if (!currentPath) return;
+      const { state: s } = await client.request("pi/thinking/set", { path: currentPath, level });
       dispatch({ type: "opened", state: s });
     },
-    [client, current],
+    [client, currentPath],
   );
 
   const listModels = useCallback(async () => {
-    if (!current) return [];
-    const { models } = await client.request("pi/model/list", { path: current.path });
+    if (!currentPath) return [];
+    const { models } = await client.request("pi/model/list", { path: currentPath });
     return models;
-  }, [client, current]);
+  }, [client, currentPath]);
+
+  const rename = useCallback(
+    async (name: string) => {
+      if (!currentPath) return;
+      await client.request("pi/session/rename", { path: currentPath, name });
+      void refreshSessions();
+    },
+    [client, currentPath, refreshSessions],
+  );
+
+  const compact = useCallback(async () => {
+    if (currentPath) await client.request("pi/session/compact", { path: currentPath });
+  }, [client, currentPath]);
+
+  const refreshEntries = useCallback(async () => {
+    if (!currentPath) return;
+    const { entries } = await client.request("pi/session/entries", { path: currentPath });
+    dispatch({ type: "entries", path: currentPath, entries });
+  }, [client, currentPath]);
+
+  const fork = useCallback(
+    async (entryId: string) => {
+      if (!currentPath) return;
+      const { state: s } = await client.request("pi/session/fork", { path: currentPath, entryId });
+      client.untrack(currentPath);
+      client.track(s.path, 0);
+      dispatch({ type: "forked", from: currentPath, state: s });
+      const { entries } = await client.request("pi/session/entries", { path: s.path });
+      dispatch({ type: "hydrate", path: s.path, entries });
+      void refreshSessions();
+    },
+    [client, currentPath, refreshSessions],
+  );
+
+  const jump = useCallback(
+    async (entryId: string) => {
+      if (!currentPath) return;
+      await client.request("pi/session/navigate", { path: currentPath, entryId });
+      const { entries } = await client.request("pi/session/entries", { path: currentPath });
+      dispatch({ type: "hydrate", path: currentPath, entries });
+    },
+    [client, currentPath],
+  );
 
   return (
-    <div className={`app ${sidebarOpen ? "sidebar-open" : ""}`}>
+    <div className={`app ${sidebarOpen ? "sidebar-open" : ""} ${historyOpen && current ? "history-open" : ""}`}>
       <Sidebar
         sessions={state.sessions}
         open={state.open}
@@ -158,10 +202,14 @@ export function App() {
         <TopBar
           view={current}
           connection={state.connection}
+          historyOpen={historyOpen}
           onMenu={() => setSidebarOpen((v) => !v)}
           onSetModel={setModel}
           onSetThinking={setThinking}
           onListModels={listModels}
+          onRename={rename}
+          onCompact={compact}
+          onToggleHistory={() => setHistoryOpen((v) => !v)}
         />
         {current ? (
           <>
@@ -175,6 +223,7 @@ export function App() {
           </div>
         )}
       </main>
+      {historyOpen && current && <History view={current} onRefresh={refreshEntries} onFork={fork} onJump={jump} onClose={() => setHistoryOpen(false)} />}
       {current && <Dialogs view={current} onAnswer={answerDialog} />}
       <div className="toasts">
         {state.toasts.map((t) => (

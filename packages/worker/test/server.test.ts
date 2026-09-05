@@ -51,6 +51,7 @@ class FakeDriver implements SessionDriver {
   async setThinkingLevel(level: SessionState["thinkingLevel"]) { this.st = { ...this.st, thinkingLevel: level }; return this.st; }
   async rename() {} async compact() {}
   async navigateTree() { return { cancelled: false }; }
+  async fork(entryId: string) { this.st = { ...this.st, path: `/tmp/fake/fork-${entryId}.jsonl` }; return this.st; }
   respondToUi(r: unknown) { this.answered.push(r); }
   pendingUi() { return this.pending; }
   async entries() { return []; }
@@ -135,9 +136,23 @@ describe("WorkerServer", () => {
     expect((await h.call(2, "session/new", { cwd: "" })).error?.code).toBe(-32602);
     expect((await h.call(3, "session/new", { cwd: "/elsewhere" })).error?.code).toBe(-32602);
     expect((await h.call(4, "session/prompt", { path: "/none", content: [{ type: "text", text: "x" }] })).error?.code).toBe(-32000);
-    expect((await h.call(5, "pi/session/fork", { path: "/none", entryId: "e" })).error?.code).toBe(-32004);
+    expect((await h.call(5, "pi/session/fork", { path: "/none", entryId: "e" })).error?.code).toBe(-32000);
+    expect((await h.call(6, "session/set_mode", { path: "/none", mode: "x" })).error?.code).toBe(-32004);
     await h.server.handle("not an object");
     expect(h.out.at(-1)).toMatchObject({ error: { code: -32600 } });
+  });
+
+  it("re-keys a forked session under its new path and announces the state", async () => {
+    const h = harness();
+    await h.call(1, "session/new", { cwd: "/tmp/fake" });
+    const forked = await h.call(2, "pi/session/fork", { path: "/tmp/fake/s1.jsonl", entryId: "e9" });
+    expect(forked.result).toMatchObject({ state: { path: "/tmp/fake/fork-e9.jsonl" } });
+    expect(h.server.openSessions()).toEqual(["/tmp/fake/fork-e9.jsonl"]);
+    const last = h.notifications("session/update").at(-1)!.params as { sessionPath: string; update: { kind: string } };
+    expect(last).toMatchObject({ sessionPath: "/tmp/fake/fork-e9.jsonl", update: { kind: "state" } });
+    // The old path no longer routes; the new one does.
+    expect((await h.call(3, "pi/model/list", { path: "/tmp/fake/s1.jsonl" })).error?.code).toBe(-32000);
+    expect((await h.call(4, "pi/model/list", { path: "/tmp/fake/fork-e9.jsonl" })).result).toBeDefined();
   });
 
   it("drops a session when its driver closes and disposes all on shutdown", async () => {

@@ -8,7 +8,7 @@ const state: SessionState = {
 };
 
 function view(): SessionView {
-  return { path: "/s.jsonl", state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, dialogs: [], statuses: {}, widgets: {}, hydrated: true };
+  return { path: "/s.jsonl", state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, dialogs: [], statuses: {}, widgets: {}, hydrated: true, entries: [] };
 }
 
 function run(v: SessionView, updates: SessionUpdate[]): SessionView {
@@ -80,6 +80,16 @@ describe("applyUpdate", () => {
     expect(v.widgets["w"]).toEqual({ lines: ["l1"], placement: "belowEditor" });
     expect(s.toasts.map((t) => t.level)).toEqual(["warning", "error"]);
     expect(s.workers["/p"]).toMatchObject({ status: "crashed" });
+  });
+});
+
+describe("forked", () => {
+  it("moves the view to the new path and selects it", () => {
+    const s0 = { ...initialState, open: { "/s.jsonl": { ...view(), lastSeq: 7 } }, current: "/s.jsonl" };
+    const s1 = reduce(s0, { type: "forked", from: "/s.jsonl", state: { ...state, path: "/f.jsonl" } });
+    expect(Object.keys(s1.open)).toEqual(["/f.jsonl"]);
+    expect(s1.current).toBe("/f.jsonl");
+    expect(s1.open["/f.jsonl"]).toMatchObject({ path: "/f.jsonl", lastSeq: 0, hydrated: false });
   });
 });
 
