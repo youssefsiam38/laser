@@ -13,6 +13,7 @@
  *
  * The builders below are pure and tested in test/runtime/threadList.test.ts.
  */
+import { PRODUCT_NAME, storageKey } from "@piorbit/protocol";
 import type { RemoteThreadListAdapter } from "@assistant-ui/react";
 import type { SessionAttention, SessionSummary } from "@piorbit/protocol";
 import type { SessionView } from "../store.js";
@@ -33,7 +34,7 @@ export const ATTENTION_ORDER: readonly SessionAttention[] = [
   "idle",
 ];
 
-export const ARCHIVE_STORAGE_KEY = "piorbit-archived";
+export const ARCHIVE_STORAGE_KEY = storageKey("archived");
 
 /** Lower sorts first. An absent (or unknown) attention is `idle`. */
 export function attentionRank(attention: SessionAttention | undefined): number {
@@ -53,9 +54,41 @@ export function sessionAttention(summary: SessionSummary, view?: SessionView | u
   return summary.attention ?? "idle";
 }
 
-/** `name` from Pi, else the extension-set title, else a short id. */
+/**
+ * `name` from Pi, else the extension-set title, else what the person asked for.
+ *
+ * A session's identity is what it is about. Showing `01a07364` in the tab
+ * title, the top bar, the sessions list and the mobile header names four
+ * places after a hash the person has never seen and cannot use — while the
+ * first line they typed is sitting right there in the catalog. So the fallback
+ * is that line, and a session with nothing in it yet is "New session", which is
+ * true and readable.
+ *
+ * Clipped to one line and a sane width here rather than in CSS, because this
+ * string is also the browser tab title and a notification's heading, where
+ * `truncate` does not reach.
+ */
 export function sessionTitle(summary: SessionSummary, view?: SessionView | undefined): string {
-  return summary.name ?? view?.title ?? summary.id.slice(0, 8);
+  const named = summary.name ?? view?.title;
+  if (named) return named;
+  const first = summary.firstMessage?.trim() || firstUserText(view);
+  return first ? clipToTitle(first) : "New session";
+}
+
+/** The transcript's own first user line, for a session opened before the catalog scanned it. */
+function firstUserText(view: SessionView | undefined): string | undefined {
+  if (!view) return undefined;
+  for (const block of view.blocks) if (block.kind === "user" && block.text.trim()) return block.text;
+  return undefined;
+}
+
+/** One line, no runs of whitespace, and an ellipsis rather than a hard cut mid-word. */
+function clipToTitle(text: string, max = 60): string {
+  const line = text.replace(/\s+/g, " ").trim();
+  if (line.length <= max) return line;
+  const cut = line.slice(0, max);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }
 
 const modifiedTime = (summary: SessionSummary): number => {
@@ -242,7 +275,7 @@ export function createThreadListAdapter(deps: ThreadListDeps): RemoteThreadListA
 
     delete: async () => {
       throw new Error(
-        "piorbit does not delete sessions: the transcript file is your history. Archive the session instead.",
+        `${PRODUCT_NAME} does not delete sessions: the transcript file is your history. Archive the session instead.`,
       );
     },
 

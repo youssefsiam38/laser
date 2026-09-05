@@ -18,6 +18,7 @@
  * swap does not reflow. The overrides are injected as a `<family> Fallback`
  * face and the stack lists it right after the real family.
  */
+import { namespaced } from "@piorbit/protocol";
 import type { FontChoice } from "./types.js";
 
 export type FontKind = "sans" | "mono";
@@ -209,8 +210,8 @@ export function fontStack(choice: FontChoice, kind: FontKind): string {
   return `${parts.join(", ")}, ${tail}`;
 }
 
-const FALLBACK_STYLE_ID = "piorbit-font-fallbacks";
-const GOOGLE_LINK_PREFIX = "piorbit-font-";
+const FALLBACK_STYLE_ID = namespaced("font-fallbacks");
+const GOOGLE_LINK_PREFIX = namespaced("font-");
 
 function hasDom(): boolean {
   return typeof document !== "undefined";

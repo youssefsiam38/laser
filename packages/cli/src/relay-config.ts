@@ -22,6 +22,7 @@
  * `FileRootIdentityStore` is the store the crypto package ships for exactly
  * that case.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -80,7 +81,7 @@ export function readRelayConfig(paths: PiorbitPaths): RelayConfig | undefined {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw new CliError(`could not read ${path}`, {
       cause: error,
-      fix: "Check the file's permissions, or delete it and run `piorbit relay login <url>` again.",
+      fix: `Check the file's permissions, or delete it and run \`${PRODUCT_NAME} relay login <url>\` again.`,
     });
   }
   let parsed: Partial<RelayConfig>;
@@ -90,12 +91,12 @@ export function readRelayConfig(paths: PiorbitPaths): RelayConfig | undefined {
     throw new CliError(`${path} is not valid JSON`, {
       cause: error,
       details: ["Nothing else reads this file, so deleting it loses only the relay URL and the device list."],
-      fix: "Delete it and run `piorbit relay login <url>`, then pair each device again.",
+      fix: `Delete it and run \`${PRODUCT_NAME} relay login <url>\`, then pair each device again.`,
     });
   }
   if (parsed.v !== 1 || typeof parsed.relayUrl !== "string") {
     throw new CliError(`${path} is not a relay configuration this version understands`, {
-      fix: "Delete it and run `piorbit relay login <url>`.",
+      fix: `Delete it and run \`${PRODUCT_NAME} relay login <url>\`.`,
     });
   }
   return parsed as RelayConfig;
@@ -192,7 +193,7 @@ export function deviceListOf(config: RelayConfig | undefined, identity: RootIden
   } catch (error) {
     throw new CliError(`the stored device list does not verify: ${error instanceof Error ? error.message : String(error)}`, {
       exitCode: ExitCode.Failure,
-      details: ["piorbit will not connect any device on a list it cannot check."],
+      details: [`${PRODUCT_NAME} will not connect any device on a list it cannot check.`],
       fix: "If you changed or lost the root identity, delete relay.json and pair every device again.",
     });
   }

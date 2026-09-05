@@ -1,6 +1,12 @@
 # Written by `pnpm -F @piorbit/desktop linux:assets` (scripts/make-linux-assets.mjs)
-# from build/linux/product.mjs and package.json's version. The inputs are
-# committed; the output is not, the same way build/icons/ is not.
+# from product.json, the two .tpl files beside this one, and package.json's
+# version. The inputs are committed; the output is not, the same way
+# build/icons/ is not.
+#
+# Four files land here: <appId>.metainfo.xml, <binary>.desktop,
+# <binary>-setup.sh and launcher.sh. Every name in them comes from product.json
+# (MX-T7), so a rename regenerates them under the new name and deletes the old
+# ones rather than leaving a second dead menu entry behind.
 #
 # The rule lives here rather than in packages/desktop/.gitignore so that
 # everything the Linux packaging owns stays in one directory.

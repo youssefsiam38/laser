@@ -5,6 +5,7 @@
  * and state carried by the panel id. Tells the opener when it opens and
  * closes so the dock island can point at it and come back.
  */
+import { PRODUCT_DISPLAY_NAME } from "@piorbit/protocol";
 import { useEffect, useMemo } from "react";
 
 import { StatusRing } from "@/components/status";
@@ -39,7 +40,7 @@ export function PoppedOutPanel({ hash }: { hash: string }) {
   }, [target]);
 
   useEffect(() => {
-    document.title = entry ? `${entry.panel.title} · piorbit` : "piorbit";
+    document.title = entry ? `${entry.panel.title} · ${PRODUCT_DISPLAY_NAME}` : PRODUCT_DISPLAY_NAME;
   }, [entry]);
 
   if (!target) {

@@ -28,6 +28,7 @@
  * that hold; `modules/transcribe.ts` awaits it from Pi's `input` hook.
  */
 
+import { PRODUCT_NAME, symbolKey } from "@piorbit/protocol";
 import type { ProviderAuthInfo, TranscribeStatus } from "@piorbit/protocol";
 import { randomBytes } from "node:crypto";
 import {
@@ -240,7 +241,7 @@ export function audioExtensionFor(mimeType: string): string {
   const accepted = [...new Set(AUDIO_EXTENSIONS.values())].sort().join(", ");
   throw new TranscribeError(
     "unsupported_audio",
-    `piorbit cannot send ${base || "that audio format"} for transcription. Accepted containers: ${accepted}.`,
+    `${PRODUCT_NAME} cannot send ${base || "that audio format"} for transcription. Accepted containers: ${accepted}.`,
   );
 }
 
@@ -281,7 +282,7 @@ const sanitize = (value: string): string => value.replace(/[\r\n]+/g, " ");
 function buildMultipart(request: TranscribeAudioRequest): { body: Uint8Array; contentType: string } {
   const { config } = request;
   const extension = audioExtensionFor(request.mimeType);
-  const boundary = `----piorbit-transcribe-${randomBytes(16).toString("hex")}`;
+  const boundary = `----${PRODUCT_NAME}-transcribe-${randomBytes(16).toString("hex")}`;
   const parts: Buffer[] = [];
   const field = (name: string, value: string): void => {
     parts.push(
@@ -751,7 +752,7 @@ function concat(chunks: readonly Buffer[], bytes: number): Uint8Array {
  * that finds a symbol it does not understand is indistinguishable from one that
  * finds nothing, and both must degrade to "no dictation" rather than to a hang.
  */
-export const TRANSCRIBE_BRIDGE_KEY = "piorbit.transcribe.v1";
+export const TRANSCRIBE_BRIDGE_KEY = symbolKey("transcribe.v1");
 export const TRANSCRIBE_BRIDGE_SYMBOL = Symbol.for(TRANSCRIBE_BRIDGE_KEY);
 
 export interface TranscribeBridge {

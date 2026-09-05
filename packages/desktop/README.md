@@ -288,13 +288,13 @@ This is also why the root `install.sh` *extracts* an AppImage rather than
 installing the single file: `--appimage-extract` needs no FUSE at all.
 
 `piorbit://` works out of the box from the `.deb` and `.rpm` (their post-install
-runs `update-desktop-database`) and from the tarball once `piorbit-setup.sh` has
+runs `update-desktop-database`) and from the tarball once its `<binary>-setup.sh` has
 run. A `chmod +x` AppImage started straight out of `~/Downloads` has no
 `.desktop` entry, so it has no deep links until it is integrated — that is the
 format, not a bug in piorbit. The one-line installer sidesteps it entirely by
 writing the entry itself.
 
-**The sandbox contract.** [`build/linux/launcher.sh`](build/linux/launcher.sh)
+**The sandbox contract.** [`build/linux/launcher.sh.tpl`](build/linux/launcher.sh.tpl), rendered into `build/linux/generated/launcher.sh` from `product.json` (MX-T7),
 is installed as `piorbit`, with Electron's own binary renamed `piorbit-bin`, so
 the menu entry, `/usr/bin/piorbit`, the AppImage's `AppRun` and `./piorbit` out
 of the tarball all run the same code. It never passes `--no-sandbox` on the

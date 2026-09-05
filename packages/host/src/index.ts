@@ -10,6 +10,12 @@ export {
   defaultUiDir,
 } from "./server.js";
 export { piorbitDataDir, defaultAgentDir, defaultStateDir } from "./paths.js";
+export {
+  migrateFormerIdentities,
+  ownedDirectories,
+  type IdentityMigrationResult,
+  type IdentityMigrationStep,
+} from "./identity-migration.js";
 export { WorkerPool, type WorkerPoolOptions } from "./worker-pool.js";
 export { WorkerClient, WorkerRpcError, defaultWorkerMain, type WorkerClientOptions } from "./worker-client.js";
 export { SessionCatalog, defaultSessionDir, type CatalogEntry } from "./catalog.js";

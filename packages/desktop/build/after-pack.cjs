@@ -1,13 +1,15 @@
 /**
- * Linux only: put piorbit's launcher where every route into the app runs it.
+ * Linux only: put the product's launcher where every route into the app runs it.
  *
  * electron-builder names the Electron executable after the product, and each
  * Linux format then points at that name in its own way — the AppImage's AppRun
- * execs `$APPDIR/piorbit`, the deb and the rpm symlink `/usr/bin/piorbit` at
- * `/opt/piorbit/piorbit`, the tarball is extracted and `./piorbit` is
- * double-clicked. So this renames Electron's binary to `piorbit-bin` and
- * installs `build/linux/launcher.sh` in its place. One file, four formats, one
+ * execs `$APPDIR/<binary>`, the deb and the rpm symlink `/usr/bin/<binary>` at
+ * `/opt/<binary>/<binary>`, the tarball is extracted and `./<binary>` is
+ * double-clicked. So this renames Electron's binary to `<binary>-bin` and
+ * installs the generated launcher in its place. One file, four formats, one
  * decision about the sandbox.
+ *
+ * Every name comes from product.json, through build/linux/product.mjs (MX-T7).
  *
  * It also drops the AppStream metainfo into `usr/share/metainfo/` inside the
  * packed directory. That is where an AppImage's AppDir wants it, and it is
@@ -27,6 +29,17 @@ const GENERATED = join(__dirname, "linux", "generated");
 exports.default = async function afterPack(context) {
   if (context.electronPlatformName !== "linux") return;
 
+  // product.mjs is ESM and this hook is CJS, so the identity arrives through a
+  // dynamic import rather than a second copy of the names.
+  const { identity, METAINFO_FILE_NAME } = await import("./linux/product.mjs");
+  const launcherSource = join(GENERATED, "launcher.sh");
+  if (!existsSync(launcherSource)) {
+    throw new Error(
+      `${identity.name}: ${launcherSource} is missing, so the packaged app would start Electron ` +
+        `directly and make no decision about the sandbox.\nRun \`pnpm -F @piorbit/desktop linux:assets\`.`,
+    );
+  }
+
   const appOutDir = context.appOutDir;
   const executable = context.packager.executableName;
   const launcher = join(appOutDir, executable);
@@ -35,36 +48,36 @@ exports.default = async function afterPack(context) {
   if (existsSync(real)) {
     // A rebuild into the same directory: the rename already happened and
     // `launcher` is our script, not Electron. Refresh the script and stop.
-    copyFileSync(join(__dirname, "linux", "launcher.sh"), launcher);
+    copyFileSync(launcherSource, launcher);
     chmodSync(launcher, 0o755);
   } else {
     if (!existsSync(launcher)) {
       throw new Error(
-        `piorbit: expected Electron's executable at ${launcher} and it is not there. ` +
+        `${identity.name}: expected Electron's executable at ${launcher} and it is not there. ` +
           `electron-builder names it after linux.executableName; if that changed, ` +
           `build/after-pack.cjs and build/linux/apparmor.tpl have to change with it.`,
       );
     }
     renameSync(launcher, real);
-    copyFileSync(join(__dirname, "linux", "launcher.sh"), launcher);
+    copyFileSync(launcherSource, launcher);
     chmodSync(launcher, 0o755);
     chmodSync(real, 0o755);
   }
 
-  const metainfoSource = join(GENERATED, "dev.piorbit.desktop.metainfo.xml");
+  const metainfoSource = join(GENERATED, METAINFO_FILE_NAME);
   if (!existsSync(metainfoSource)) {
     throw new Error(
-      `piorbit: ${metainfoSource} is missing, so GNOME Software and KDE Discover would show this ` +
+      `${identity.name}: ${metainfoSource} is missing, so GNOME Software and KDE Discover would show this ` +
         `package with no name and no description.\nRun \`pnpm -F @piorbit/desktop linux:assets\`.`,
     );
   }
-  const metainfoTarget = join(appOutDir, "usr", "share", "metainfo", "dev.piorbit.desktop.metainfo.xml");
+  const metainfoTarget = join(appOutDir, "usr", "share", "metainfo", METAINFO_FILE_NAME);
   mkdirSync(dirname(metainfoTarget), { recursive: true });
   copyFileSync(metainfoSource, metainfoTarget);
 
-  assertFpmPathsResolve(context);
+  assertFpmPathsResolve(context, identity, METAINFO_FILE_NAME);
 
-  console.log(`piorbit: ${executable} is now the launcher; Electron is ${executable}-bin`);
+  console.log(`${identity.name}: ${executable} is now the launcher; Electron is ${executable}-bin`);
 };
 
 /**
@@ -77,13 +90,13 @@ exports.default = async function afterPack(context) {
  * Checked here, before any target is built, because fpm's own failure for this
  * is `{level: :fatal, message: "File not found"}` twenty minutes into a build.
  */
-function assertFpmPathsResolve(context) {
+function assertFpmPathsResolve(context, identity, metainfoFileName) {
   const usesFpm = (context.targets ?? []).some((target) => target.name === "deb" || target.name === "rpm");
   if (!usesFpm) return;
-  const relative = "build/linux/generated/dev.piorbit.desktop.metainfo.xml";
+  const relative = `build/linux/generated/${metainfoFileName}`;
   if (existsSync(relative)) return;
   throw new Error(
-    `piorbit: the .deb and .rpm hand fpm the path "${relative}", and from this working directory\n` +
+    `${identity.name}: the .deb and .rpm hand fpm the path "${relative}", and from this working directory\n` +
       `  ${process.cwd()}\n` +
       `it does not resolve. Build them from the desktop package instead:\n` +
       `  pnpm -F @piorbit/desktop dist:linux`,

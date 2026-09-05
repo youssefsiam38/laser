@@ -4,6 +4,7 @@
  * transform's race — a phrase claimed by a prompt while it is in flight must
  * reach the prompt and must not also reach the composer.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import type { ProviderAuthInfo } from "@piorbit/protocol";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -41,7 +42,7 @@ const keys = (over: Partial<KeySources> = {}): KeySources => ({
 });
 
 function configDir(): string {
-  const home = mkdtempSync(join(tmpdir(), "piorbit-transcribe-"));
+  const home = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-transcribe-`));
   mkdirSync(join(home, "pi-gpt-transcribe"), { recursive: true });
   return home;
 }
@@ -58,12 +59,12 @@ describe("loadTranscribeConfig", () => {
     const home = configDir();
     writeFileSync(
       join(home, "pi-gpt-transcribe", "config.json"),
-      JSON.stringify({ model: "whisper-1", baseUrl: "https://gw.example/v1///", keywords: ["piorbit", ""], languages: [] }),
+      JSON.stringify({ model: "whisper-1", baseUrl: "https://gw.example/v1///", keywords: [PRODUCT_NAME, ""], languages: [] }),
     );
     const config = loadTranscribeConfig({ XDG_CONFIG_HOME: home });
     expect(config.model).toBe("whisper-1");
     expect(config.baseUrl).toBe("https://gw.example/v1");
-    expect(config.keywords).toEqual(["piorbit"]);
+    expect(config.keywords).toEqual([PRODUCT_NAME]);
     // An empty array is "not configured", not "no languages".
     expect(config.languages).toBeUndefined();
   });

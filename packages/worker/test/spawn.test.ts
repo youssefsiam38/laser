@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Duplex } from "node:stream";
-import { LineDecoder, type JsonRpcMessage } from "@piorbit/protocol";
+import { LineDecoder, PRODUCT_NAME, type JsonRpcMessage } from "@piorbit/protocol";
 
 const MAIN = join(import.meta.dirname, "../dist/main.js");
 
@@ -17,7 +17,7 @@ let base: string;
 let child: ChildProcess | undefined;
 
 beforeEach(() => {
-  base = mkdtempSync(join(tmpdir(), "piorbit-spawn-"));
+  base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-spawn-`));
   for (const d of ["project", "agent"]) mkdirSync(join(base, d), { recursive: true });
 });
 

@@ -33,12 +33,13 @@
  *
  * Pure: no React, no DOM, no network. Tested in test/runtime/projection.test.ts.
  */
+import { namespaced } from "@piorbit/protocol";
 import type { ThreadMessageLike } from "@assistant-ui/react";
 import type { MessageSpeaker, StopReason, UiDialogRequest, Usage } from "@piorbit/protocol";
 import type { Block, SessionView } from "../store.js";
 
 /** `data` part name used for transcript notices. */
-export const NOTICE_DATA_PART = "piorbit-notice";
+export const NOTICE_DATA_PART = namespaced("notice");
 
 export type ProjectedContentPart = Exclude<ThreadMessageLike["content"], string>[number];
 export type ProjectedToolCallPart = Extract<ProjectedContentPart, { type: "tool-call" }>;

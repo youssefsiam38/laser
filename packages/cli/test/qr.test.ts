@@ -117,7 +117,7 @@ describe("encodeQr", () => {
 
 describe("renderQr", () => {
   it("packs two module rows into each line, with a light quiet zone", () => {
-    const symbol = encodeQr("piorbit", "L");
+    const symbol = encodeQr("hello", "L");
     const lines = renderQr(symbol, { quietZone: 2 });
     const width = symbol.size + 4;
     expect(lines).toHaveLength(Math.ceil(width / 2));
@@ -127,8 +127,8 @@ describe("renderQr", () => {
   });
 
   it("inverts for a light terminal", () => {
-    const plain = qrLines("piorbit", { ecc: "L", quietZone: 2 });
-    const inverted = qrLines("piorbit", { ecc: "L", quietZone: 2, invert: true });
+    const plain = qrLines("hello", { ecc: "L", quietZone: 2 });
+    const inverted = qrLines("hello", { ecc: "L", quietZone: 2, invert: true });
     expect(inverted[0]).toBe(" ".repeat((plain[0] as string).length));
     expect(inverted).not.toEqual(plain);
   });

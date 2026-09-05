@@ -16,7 +16,7 @@
  * decisions, pi/panel/read for refs. Everything a component needs comes
  * through {@link usePanelsState} and {@link usePanelActions}.
  */
-import { sliceUtf8 } from "@piorbit/protocol";
+import { PRODUCT_NAME, namespaced, sliceUtf8, storageKey } from "@piorbit/protocol";
 import type {
   HostNotificationMethod,
   HostNotifications,
@@ -147,7 +147,7 @@ function createRootStore(initial: PanelsRoot): RootStore {
 // Persistence (per browser session, DESIGN: "remembered per session")
 // ---------------------------------------------------------------------------
 
-const DOCK_STORAGE_KEY = "piorbit-dock:v1";
+const DOCK_STORAGE_KEY = storageKey("dock:v1");
 
 interface StoredDock {
   width?: number;
@@ -305,7 +305,7 @@ export function useDock(path: string | undefined): DockState {
 
 /** Where a pop-out lands. Handled by the Shell (`#/panel/<path>/<id>`). */
 export const POPOUT_HASH_PREFIX = "#/panel/";
-export const POPOUT_CHANNEL = "piorbit-panels";
+export const POPOUT_CHANNEL = `${PRODUCT_NAME}-panels`;
 
 export function popoutHash(path: string, id: string): string {
   return `${POPOUT_HASH_PREFIX}${encodeURIComponent(path)}/${encodeURIComponent(id)}`;
@@ -580,9 +580,9 @@ export function PanelsProvider({ children }: { children: ReactNode }): ReactNode
         const entry = read().panels.entries[key];
         if (!entry) return;
         const url = `${location.pathname}${location.search}${popoutHash(path, entry.panel.id)}`;
-        const handle = window.open(url, `piorbit-panel:${key}`);
+        const handle = window.open(url, namespaced(`panel:${key}`));
         if (!handle) {
-          app.toast("warning", "The browser blocked the new tab. Allow pop-ups for piorbit, or use maximize instead.");
+          app.toast("warning", `The browser blocked the new tab. Allow pop-ups for ${PRODUCT_NAME}, or use maximize instead.`);
           return;
         }
         popouts.current.set(key, handle);

@@ -13,6 +13,7 @@
  *
  * So: ship a binary, run it, and check what it says about itself.
  */
+import { ENV, PRODUCT_NAME } from "@piorbit/protocol";
 import { spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
@@ -53,7 +54,7 @@ const binaryName = process.platform === "win32" ? "node.exe" : "node";
 function candidates(options: { packaged: boolean; resourcesPath: string }): Array<{ path: string; source: NodeRuntime["source"] }> {
   const found: Array<{ path: string; source: NodeRuntime["source"] }> = [];
 
-  const override = process.env["PIORBIT_NODE"];
+  const override = process.env[ENV.node];
   if (override) found.push({ path: override, source: "override" });
 
   if (options.packaged) {
@@ -137,14 +138,14 @@ export function resolveNodeRuntime(options: { packaged: boolean; resourcesPath: 
 
   if (options.packaged) {
     throw new RuntimeError(
-      "piorbit could not find the Node runtime it ships with, so it cannot start the agent host.",
-      "This install is incomplete. Reinstall piorbit; if it happens again, please report it with the log above.",
+      `${PRODUCT_NAME} could not find the Node runtime it ships with, so it cannot start the agent host.`,
+      `This install is incomplete. Reinstall ${PRODUCT_NAME}; if it happens again, please report it with the log above.`,
     );
   }
   throw new RuntimeError(
     tried.length > 0
       ? `None of these ran as a plain Node: ${tried.join(", ")}.`
       : "No Node runtime was found for the development build.",
-    "Run `pnpm -F @piorbit/desktop runtime` to download the pinned Node, or set PIORBIT_NODE to a node binary.",
+    `Run \`pnpm -F @piorbit/desktop runtime\` to download the pinned Node, or set ${ENV.node} to a node binary.`,
   );
 }

@@ -50,6 +50,7 @@
  * it emits nothing rather than an id nobody else writes
  * ({@link completionEvent}).
  */
+import { WIRE_NAMESPACE } from "@piorbit/protocol";
 import {
   PANEL_ACTION_EVENT,
   PANEL_CLOSE_EVENT,
@@ -143,7 +144,7 @@ let requestCounter = 0;
  * identical from here.
  */
 function rpc(events: EventBusLike, method: string, params: unknown, timeoutMs = PROBE_TIMEOUT_MS): Promise<unknown> {
-  const requestId = `piorbit-${Date.now().toString(36)}-${(requestCounter += 1)}`;
+  const requestId = `${WIRE_NAMESPACE}-${Date.now().toString(36)}-${(requestCounter += 1)}`;
   return new Promise((resolve, reject) => {
     let settled = false;
     const off = events.on(`${RPC_REPLY_PREFIX}${requestId}`, (raw) => {
@@ -163,7 +164,7 @@ function rpc(events: EventBusLike, method: string, params: unknown, timeoutMs = 
     }, timeoutMs);
     timer.unref?.();
     try {
-      events.emit(RPC_REQUEST, { version: 1, requestId, method, params, source: { extension: "piorbit" } });
+      events.emit(RPC_REQUEST, { version: 1, requestId, method, params, source: { extension: WIRE_NAMESPACE } });
     } catch (error) {
       if (settled) return;
       settled = true;

@@ -16,7 +16,7 @@
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { ErrorCodes, ProtocolError, type ProjectInfo, type ProjectTrust } from "@piorbit/protocol";
+import { ErrorCodes, PRODUCT_NAME, ProtocolError, type ProjectInfo, type ProjectTrust } from "@piorbit/protocol";
 import type { SessionCatalog } from "./catalog.js";
 import { canonical, defaultProjectTrust, savedPiTrust, trustReasons } from "./trust.js";
 
@@ -207,7 +207,7 @@ export class ProjectRegistry {
       throw new ProtocolError(
         ErrorCodes.ProjectUntrusted,
         `${key} has project-local agent resources (${reasons.join(", ")}) and no trust decision. ` +
-          `Open piorbit and approve the project, or run \`pi\` there once and answer its trust prompt.`,
+          `Open ${PRODUCT_NAME} and approve the project, or run \`pi\` there once and answer its trust prompt.`,
         { cwd: key, reasons },
       );
     }

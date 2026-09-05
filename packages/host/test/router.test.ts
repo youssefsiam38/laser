@@ -9,6 +9,7 @@
  * session in the list forever, which is exactly the kind of bug a test is the
  * cheapest way to rule out.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -44,7 +45,7 @@ function state(path: string, cwd: string): SessionState {
 
 /** A Router with fakes for everything but the piece under test. */
 function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string, string[]> } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "piorbit-router-"));
+  const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-`));
   const catalogRows = options.catalogRows ?? [];
   const open = options.open ?? { [CWD_A]: [PATH_A] };
 

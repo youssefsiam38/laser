@@ -3,6 +3,7 @@
  * temporary repository — "since the session started" must count what the
  * session did, not what was already dirty when it opened.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -44,7 +45,7 @@ const haveGit = (() => {
 })();
 
 describe.skipIf(!haveGit)("GitService against a repository", () => {
-  const dir = mkdtempSync(join(tmpdir(), "piorbit-git-"));
+  const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-git-`));
   const git = (...args: string[]) =>
     execFileSync("git", args, {
       cwd: dir,
@@ -80,7 +81,7 @@ describe.skipIf(!haveGit)("GitService against a repository", () => {
   });
 
   it("reports a directory that is not a repository", async () => {
-    const plain = mkdtempSync(join(tmpdir(), "piorbit-plain-"));
+    const plain = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-plain-`));
     try {
       const service = new GitService({ cwd: plain, ttlMs: 0 });
       await service.baseline("/s/x.jsonl");

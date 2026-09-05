@@ -4,6 +4,7 @@
  * `up` is the command people type most, and the one that must never scold: if a
  * host is already listening it attaches, prints the URL, and exits 0.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { resolve } from "node:path";
 import type { HostNotifications } from "@piorbit/protocol";
 import { bool } from "../args.js";
@@ -50,12 +51,12 @@ export const upCommand: Command = {
   aliases: ["start"],
   group: "Host",
   summary: "start the host (or attach to a running one) and open the app",
-  usage: "piorbit up [--port <port>] [--no-open] [--foreground]",
+  usage: `${PRODUCT_NAME} up [--port <port>] [--no-open] [--foreground]`,
   description: `
-Starts the piorbit host on 127.0.0.1 and opens the app in your browser.
+Starts the ${PRODUCT_NAME} host on 127.0.0.1 and opens the app in your browser.
 
-Running it when a host is already up is not an error: piorbit attaches to it and
-prints the same URL. That makes \`piorbit up\` safe to put in a shell alias, a
+Running it when a host is already up is not an error: ${PRODUCT_NAME} attaches to it and
+prints the same URL. That makes \`${PRODUCT_NAME} up\` safe to put in a shell alias, a
 tmux startup script, or muscle memory.
 `,
   flags: {
@@ -66,24 +67,24 @@ tmux startup script, or muscle memory.
     },
   },
   examples: [
-    { note: "start it and open the app", command: "piorbit" },
-    { note: "start it on another port, headless", command: "piorbit up --port 41500 --no-open" },
-    { note: "watch it start, for debugging", command: "piorbit up --foreground" },
+    { note: "start it and open the app", command: PRODUCT_NAME },
+    { note: "start it on another port, headless", command: `${PRODUCT_NAME} up --port 41500 --no-open` },
+    { note: "watch it start, for debugging", command: `${PRODUCT_NAME} up --foreground` },
   ],
   async run({ term, paths, args }) {
     if (bool(args, "foreground")) {
       const running = await inspectHost(paths);
       if (running.state === "running") {
-        throw new CliError(`a piorbit host is already running at ${running.record.url} (pid ${running.record.pid})`, {
-          fix: "Stop it with `piorbit down` first, or use a different --port.",
+        throw new CliError(`a ${PRODUCT_NAME} host is already running at ${running.record.url} (pid ${running.record.pid})`, {
+          fix: `Stop it with \`${PRODUCT_NAME} down\` first, or use a different --port.`,
         });
       }
       if (await portInUse(paths.host, paths.port)) {
         throw new CliError(`port ${paths.port} is already in use`, {
-          fix: `Free it, or run \`piorbit up --foreground --port <port>\`.`,
+          fix: `Free it, or run \`${PRODUCT_NAME} up --foreground --port <port>\`.`,
         });
       }
-      term.note(`${term.err.dim("starting the piorbit host in the foreground; Ctrl-C stops it")}`);
+      term.note(`${term.err.dim(`starting the ${PRODUCT_NAME} host in the foreground; Ctrl-C stops it`)}`);
       await runDaemon({ paths });
       await new Promise<never>(() => {}); // runDaemon owns the process from here.
     }
@@ -108,7 +109,7 @@ tmux startup script, or muscle memory.
 
     term.note(
       started
-        ? `${term.err.green("started")} the piorbit host`
+        ? `${term.err.green("started")} the ${PRODUCT_NAME} host`
         : `${term.err.dim("already running")} — attached to the host that was already up`,
     );
     printRecord(term, record);
@@ -124,13 +125,13 @@ export const downCommand: Command = {
   aliases: ["stop-host"],
   group: "Host",
   summary: "stop the running host",
-  usage: "piorbit down",
+  usage: `${PRODUCT_NAME} down`,
   description: `
 Sends SIGTERM to the host, waits for it to close its sockets and retire its
 workers, and escalates to SIGKILL only if it does not go. Doing this when
 nothing is running succeeds quietly, so it is safe in teardown scripts.
 `,
-  examples: [{ note: "stop the host", command: "piorbit down" }],
+  examples: [{ note: "stop the host", command: `${PRODUCT_NAME} down` }],
   async run({ term, paths }) {
     const before = await inspectHost(paths);
     const result = await stopHost(paths);
@@ -145,11 +146,11 @@ nothing is running succeeds quietly, so it is safe in teardown scripts.
       return;
     }
     if (!result.stopped) {
-      term.note(`${term.err.dim("nothing to do")} — no piorbit host was running`);
+      term.note(`${term.err.dim("nothing to do")} — no ${PRODUCT_NAME} host was running`);
       return;
     }
     term.note(
-      `${term.err.green("stopped")} the piorbit host (pid ${result.pid})${result.forced ? term.err.yellow(" — it needed SIGKILL") : ""}`,
+      `${term.err.green("stopped")} the ${PRODUCT_NAME} host (pid ${result.pid})${result.forced ? term.err.yellow(" — it needed SIGKILL") : ""}`,
     );
   },
 };
@@ -158,19 +159,19 @@ export const statusCommand: Command = {
   name: "status",
   group: "Host",
   summary: "show whether the host is running, and what it is serving",
-  usage: "piorbit status",
+  usage: `${PRODUCT_NAME} status`,
   description: `
 Asks the host's /healthz endpoint rather than trusting the pid file, so a stale
 record left by a crash is reported as "not running" and cleaned up.
 
-Exits 3 when nothing is serving the port, so \`piorbit status >/dev/null ||
-piorbit up\` does the obvious thing. A host piorbit did not start (\`pnpm
+Exits 3 when nothing is serving the port, so \`${PRODUCT_NAME} status >/dev/null ||
+${PRODUCT_NAME} up\` does the obvious thing. A host ${PRODUCT_NAME} did not start (\`pnpm
 sandbox\`, the desktop app, one started by hand) counts as running — the
-session commands will use it — but \`piorbit down\` still refuses to stop it.
+session commands will use it — but \`${PRODUCT_NAME} down\` still refuses to stop it.
 `,
   examples: [
-    { note: "is it up?", command: "piorbit status" },
-    { note: "start it only if it is not", command: "piorbit status --json >/dev/null || piorbit up --no-open" },
+    { note: "is it up?", command: `${PRODUCT_NAME} status` },
+    { note: "start it only if it is not", command: `${PRODUCT_NAME} status --json >/dev/null || ${PRODUCT_NAME} up --no-open` },
   ],
   async run({ term, paths }) {
     const status = await inspectHost(paths);
@@ -189,14 +190,14 @@ session commands will use it — but \`piorbit down\` still refuses to stop it.
           foreignHost: foreign,
         });
       } else if (foreign) {
-        term.note(`${term.err.green("running")} ${term.err.dim("(not started by piorbit)")} — ${hostUrl(paths)}`);
+        term.note(`${term.err.green("running")} ${term.err.dim(`(not started by ${PRODUCT_NAME})`)} — ${hostUrl(paths)}`);
         term.note();
-        term.note(`  Session commands use it. ${term.err.bold("piorbit down")} will not stop it, because piorbit did not start it.`);
+        term.note(`  Session commands use it. ${term.err.bold(`${PRODUCT_NAME} down`)} will not stop it, because ${PRODUCT_NAME} did not start it.`);
       } else {
-        term.note(`${term.err.dim("not running")} — no piorbit host on ${hostUrl(paths)}`);
+        term.note(`${term.err.dim("not running")} — no ${PRODUCT_NAME} host on ${hostUrl(paths)}`);
         if (status.removedStaleRecord) term.note(`  ${term.err.dim("(removed a stale record left by a crashed host)")}`);
         term.note();
-        term.note(`  Start one with ${term.err.bold("piorbit up")}.`);
+        term.note(`  Start one with ${term.err.bold(`${PRODUCT_NAME} up`)}.`);
       }
       // A reachable host is a running host, whoever started it: exiting 3 here
       // would send `status || up` at a port that is already taken.
@@ -216,7 +217,7 @@ session commands will use it — but \`piorbit down\` still refuses to stop it.
           for (const line of tail) term.note(`    ${term.err.dim(line)}`);
         }
         term.note();
-        term.note(`  Stop it with ${term.err.bold("piorbit down")} and start again.`);
+        term.note(`  Stop it with ${term.err.bold(`${PRODUCT_NAME} down`)} and start again.`);
       }
       return ExitCode.Failure;
     }
@@ -259,16 +260,16 @@ export const restartCommand: Command = {
   name: "restart",
   group: "Host",
   summary: "stop the host and start it again",
-  usage: "piorbit restart [--port <port>] [--no-open]",
+  usage: `${PRODUCT_NAME} restart [--port <port>] [--no-open]`,
   description: `
-Equivalent to \`piorbit down && piorbit up --no-open\`, but it waits for the old
+Equivalent to \`${PRODUCT_NAME} down && ${PRODUCT_NAME} up --no-open\`, but it waits for the old
 process to actually exit before binding the port again, which is the part that
 goes wrong when you do it by hand.
 `,
   flags: {
     open: { type: "boolean", default: false, description: "Open the app in a browser afterwards" },
   },
-  examples: [{ note: "pick up a rebuilt host", command: "pnpm -r build && piorbit restart" }],
+  examples: [{ note: "pick up a rebuilt host", command: `pnpm -r build && ${PRODUCT_NAME} restart` }],
   async run({ term, paths, args }) {
     const stopped = await stopHost(paths);
     if (stopped.stopped) term.note(`${term.err.dim("stopped")} the old host (pid ${stopped.pid})`);
@@ -279,7 +280,7 @@ goes wrong when you do it by hand.
       term.data({ url: record.url, port: record.port, pid: record.pid, restarted: stopped.stopped, browserOpened: opened });
       return;
     }
-    term.note(`${term.err.green("started")} the piorbit host`);
+    term.note(`${term.err.green("started")} the ${PRODUCT_NAME} host`);
     printRecord(term, record);
   },
 };
@@ -290,7 +291,7 @@ export const daemonCommand: Command = {
   group: "Host",
   hidden: true,
   summary: "internal: run the host in this process",
-  usage: "piorbit __daemon",
+  usage: `${PRODUCT_NAME} __daemon`,
   async run({ paths }) {
     await runDaemon({ paths });
     await new Promise<never>(() => {});
@@ -302,10 +303,10 @@ export async function requireHost(paths: PiorbitPaths): Promise<HostRecord> {
   const status = await inspectHost(paths);
   if (status.state === "running") return status.record;
   if (status.state === "unreachable") {
-    throw new CliError("the piorbit host is not answering", {
+    throw new CliError(`the ${PRODUCT_NAME} host is not answering`, {
       details: [status.reason],
       exitCode: ExitCode.NoHost,
-      fix: "Run `piorbit restart`.",
+      fix: `Run \`${PRODUCT_NAME} restart\`.`,
     });
   }
   // No record of our own, but a piorbit host may still be serving this port —
@@ -315,9 +316,9 @@ export async function requireHost(paths: PiorbitPaths): Promise<HostRecord> {
   // to stop what it did not start; that check reads the record, not this.
   const adopted = await adoptForeignHost(paths);
   if (adopted) return adopted;
-  throw new CliError("no piorbit host is running", {
+  throw new CliError(`no ${PRODUCT_NAME} host is running`, {
     exitCode: ExitCode.NoHost,
-    fix: "Start one with `piorbit up` (add --no-open to skip the browser).",
+    fix: `Start one with \`${PRODUCT_NAME} up\` (add --no-open to skip the browser).`,
   });
 }
 
@@ -376,7 +377,7 @@ export async function connectForProject(
         rpc?.failPending(
           new CliError(`${shortCwd(ask.cwd)} has not been trusted yet, and this command cannot ask`, {
             exitCode: ExitCode.Usage,
-            fix: `It ships its own agent configuration (${ask.reasons.join(", ")}), which the agent would load and run with your permissions. Answer once with \`piorbit projects trust ${ask.cwd}\` (or \`--no\` to decline), then run this again.`,
+            fix: `It ships its own agent configuration (${ask.reasons.join(", ")}), which the agent would load and run with your permissions. Answer once with \`${PRODUCT_NAME} projects trust ${ask.cwd}\` (or \`--no\` to decline), then run this again.`,
           }),
         );
         return;

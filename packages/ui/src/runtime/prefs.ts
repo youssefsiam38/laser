@@ -23,7 +23,7 @@
  */
 import { useEffect } from "react";
 
-import { themeStore, type ThemeState } from "../theme/index.js";
+import { DEFAULT_STATE, themeStore, type ThemeState } from "../theme/index.js";
 import type { HostClient } from "../client.js";
 
 /** The namespace the theme lives in. Host-owned; not a Pi setting. */
@@ -85,11 +85,39 @@ export function useThemeSync(client: HostClient, connected: boolean): void {
         // The host has never been told about a theme, but this browser already
         // has one — the person themed the desktop before there was anywhere to
         // keep it. Hand it up rather than making them choose it again.
-        else push(themeStore.getState());
+        //
+        // Two conditions, both about not letting a forgotten tab speak for the
+        // person. A window that never had a theme has nothing to say, so it
+        // must not seed one (that is how a fresh install ends up with "follow
+        // the system" switched off by a browser left open on another port).
+        // And a window nobody is looking at is not where the answer lives, so
+        // it waits until it is: `visibilitychange` fires the moment it is.
+        else seedWhenVisible();
       } catch {
         /* not connected, or an older host: the local theme still applies */
       }
     })();
+
+    /** Hand this window's own theme up, but only once somebody is looking at it. */
+    let stopWatchingVisibility: (() => void) | undefined;
+    function seedWhenVisible(): void {
+      if (disposed || serialise(themeStore.getState()) === serialise(DEFAULT_STATE)) return;
+      const doc = globalThis.document as Document | undefined;
+      if (!doc || doc.visibilityState === "visible") {
+        push(themeStore.getState());
+        return;
+      }
+      const onVisible = (): void => {
+        if (doc.visibilityState !== "visible") return;
+        stopWatchingVisibility?.();
+        seedWhenVisible();
+      };
+      doc.addEventListener("visibilitychange", onVisible);
+      stopWatchingVisibility = () => {
+        doc.removeEventListener("visibilitychange", onVisible);
+        stopWatchingVisibility = undefined;
+      };
+    }
 
     const unsubscribeHost = client.subscribe((method, params) => {
       if (method !== "pi/prefs/updated") return;
@@ -103,6 +131,7 @@ export function useThemeSync(client: HostClient, connected: boolean): void {
     return () => {
       disposed = true;
       if (timer !== undefined) clearTimeout(timer);
+      stopWatchingVisibility?.();
       unsubscribeHost();
       unsubscribeStore();
     };

@@ -5,6 +5,7 @@
  * with `pi/*` namespaced extras. This package MUST NOT import anything from
  * `@earendil-works/*` or `pi-subagents` (enforced by the seam test, M0-T5).
  */
+export * from "./identity.js";
 export * from "./jsonrpc.js";
 export * from "./messages.js";
 export * from "./panels.js";

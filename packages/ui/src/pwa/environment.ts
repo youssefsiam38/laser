@@ -7,6 +7,7 @@
  * mobile surface asks it. Also: the install prompt, which has to be captured
  * before React mounts or it is gone.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { useSyncExternalStore } from "react";
 
 export type MobilePlatform = "ios" | "android" | "other";
@@ -201,10 +202,10 @@ export function insecureOriginAdvice(env: PwaEnvironment): InsecureOriginAdvice 
   const host = env.origin.replace(/^https?:\/\//, "");
   return {
     title: "This address can’t do everything",
-    body: `You opened piorbit over plain http at ${host}. Phones only allow installing, notifications, the microphone and offline use on a secure address.`,
+    body: `You opened ${PRODUCT_NAME} over plain http at ${host}. Phones only allow installing, notifications, the microphone and offline use on a secure address.`,
     missing: ["Install to home screen", "Notifications", "Microphone", "Works offline"],
     steps: [
-      "Open piorbit through its relay link instead — that address is https and pairs this phone with your desktop.",
+      `Open ${PRODUCT_NAME} through its relay link instead — that address is https and pairs this phone with your desktop.`,
       "Or trust a certificate for this address on the phone and open the https version.",
     ],
   };

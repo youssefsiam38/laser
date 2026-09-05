@@ -10,6 +10,7 @@
  * otherwise miss everything already written. Polling from a known id has no
  * such gap, and one query per second costs nothing against SQLite.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import type { LogEntry, LogLevel, LogSection } from "@piorbit/protocol";
 import { bool, list, num, str } from "../args.js";
 import type { Command } from "../command.js";
@@ -51,7 +52,7 @@ export const logsCommand: Command = {
   group: "Diagnostics",
   summary: "read the host's provider, tool and session logs",
   usage:
-    "piorbit logs [--follow] [--section <s,…>] [--level <l,…>] [--search <text>] " +
+    `${PRODUCT_NAME} logs [--follow] [--section <s,…>] [--level <l,…>] [--search <text>] ` +
     "[--session <id>] [--project <dir>] [--limit <n>] [--detail] [--stats] [--clear --yes]",
   description: `
 Every provider round-trip, tool execution, session event and worker line the
@@ -87,9 +88,9 @@ row per line. --clear deletes rows and needs --yes; it can only narrow by
     yes: { type: "boolean", short: "y", description: "Skip the confirmation --clear otherwise requires" },
   },
   examples: [
-    { note: "the last hundred rows", command: "piorbit logs" },
-    { note: "watch provider traffic live", command: "piorbit logs --follow --section provider" },
-    { note: "find a failing tool call", command: "piorbit logs --section tools --level error --detail" },
+    { note: "the last hundred rows", command: `${PRODUCT_NAME} logs` },
+    { note: "watch provider traffic live", command: `${PRODUCT_NAME} logs --follow --section provider` },
+    { note: "find a failing tool call", command: `${PRODUCT_NAME} logs --section tools --level error --detail` },
   ],
   async run({ term, paths, args }) {
     const sections = parseChoices(list(args, "section").flatMap((v) => v.split(",")).filter(Boolean), SECTIONS, "log section");
@@ -125,7 +126,7 @@ row per line. --clear deletes rows and needs --yes; it can only narrow by
         if (ignored.length > 0) {
           throw new CliError(`--clear cannot narrow by ${ignored.map((f) => `--${f}`).join(", ")}`, {
             exitCode: ExitCode.Usage,
-            fix: "The store only deletes whole sections: `piorbit logs --clear --section provider --yes`.",
+            fix: `The store only deletes whole sections: \`${PRODUCT_NAME} logs --clear --section provider --yes\`.`,
           });
         }
         const { stats } = await rpc.request("pi/logs/stats", {}).catch((error: unknown) => {
@@ -137,7 +138,7 @@ row per line. --clear deletes rows and needs --yes; it can only narrow by
         if (!bool(args, "yes")) {
           throw new CliError(`this would permanently delete ${doomed} log rows from ${scope}`, {
             exitCode: ExitCode.Usage,
-            fix: `Nothing was deleted. Re-run with --yes to confirm: \`piorbit logs --clear${
+            fix: `Nothing was deleted. Re-run with --yes to confirm: \`${PRODUCT_NAME} logs --clear${
               sections.length > 0 ? ` --section ${sections.join(",")}` : ""
             } --yes\`.`,
           });
@@ -192,7 +193,7 @@ row per line. --clear deletes rows and needs --yes; it can only narrow by
         if (page.entries.length === 0) {
           term.note("no log rows match");
           term.note();
-          term.note(`  The store fills as sessions run. ${term.err.bold("piorbit logs --stats")} shows what it holds.`);
+          term.note(`  The store fills as sessions run. ${term.err.bold(`${PRODUCT_NAME} logs --stats`)} shows what it holds.`);
         } else if (page.hasMore) {
           term.note(term.err.dim(`more rows exist before this page; raise --limit to see them`));
         }

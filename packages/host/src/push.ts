@@ -16,6 +16,7 @@
  * The encryption is checked against an independent decryption in
  * `test/push.test.ts` (RFC 8291 round trip, VAPID JWT verify, 410 eviction).
  */
+import { DATA_DIR_NAME, PRODUCT_NAME } from "@piorbit/protocol";
 import type { webcrypto } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -164,7 +165,7 @@ export class PushService {
 
   constructor(options: PushServiceOptions) {
     this.options = options;
-    this.file = join(options.agentDir, "piorbit", "push.json");
+    this.file = join(options.agentDir, DATA_DIR_NAME, "push.json");
     this.fetchImpl = options.fetch ?? fetch;
     this.log = options.log ?? (() => {});
   }
@@ -199,12 +200,12 @@ export class PushService {
         return this.store;
       }
       throw new Error(
-        `${this.file} was written by a different version of piorbit (version ${String(parsed.version ?? "unknown")}). ` +
-          `Notifications are off until this piorbit understands it. Move that file aside to start again — every device will then have to turn notifications on once more.`,
+        `${this.file} was written by a different version of ${PRODUCT_NAME} (version ${String(parsed.version ?? "unknown")}). ` +
+          `Notifications are off until this ${PRODUCT_NAME} understands it. Move that file aside to start again — every device will then have to turn notifications on once more.`,
       );
     }
     const vapid = await generateVapidKeys();
-    this.store = { version: 1, vapid, subject: this.options.subject ?? "mailto:piorbit@localhost", subscriptions: [] };
+    this.store = { version: 1, vapid, subject: this.options.subject ?? `mailto:${PRODUCT_NAME}@localhost`, subscriptions: [] };
     this.persist();
     this.log(`push: generated VAPID keys in ${this.file}`);
     return this.store;

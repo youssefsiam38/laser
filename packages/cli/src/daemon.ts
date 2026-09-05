@@ -12,8 +12,9 @@
  * carries an identity for this process (see `processIdentity`) so a file left
  * behind by a crash or a power cut cannot be mistaken for a live host.
  */
+import { ENV, PRODUCT_NAME } from "@piorbit/protocol";
 import { fromBase64Url, isAuthorized } from "@piorbit/crypto";
-import { HostServer, type HostRelayOptions } from "@piorbit/host";
+import { HostServer, migrateFormerIdentities, type HostRelayOptions } from "@piorbit/host";
 import type { PiorbitPaths } from "./config.js";
 import { clearHostFile, processIdentity, writeHostFile } from "./hostfile.js";
 import { deviceListOf, loadIdentity, loadStaticKey, readRelayConfig } from "./relay-config.js";
@@ -75,6 +76,11 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
   const { paths } = options;
   const log = options.log ?? ((line: string) => process.stderr.write(`${line}\n`));
 
+  // If this product was renamed, the person's sessions, settings and paired
+  // devices are still under the old directory name. Move them before anything
+  // opens a file (MX-T7, D-36). With no former names this does nothing.
+  for (const line of migrateFormerIdentities().lines) log(line);
+
   const relay = await relayOptions(paths, log);
 
   const server = new HostServer({
@@ -88,9 +94,9 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
     // The desktop shell sets this when the UI is served by a dev server: Vite
     // proxies the browser's own Origin through, and the host has never heard
     // of it. Absent in a packaged app, where the host serves the page itself.
-    ...(process.env["PIORBIT_ALLOWED_ORIGINS"]
+    ...(process.env[ENV.allowedOrigins]
       ? {
-          allowedOrigins: process.env["PIORBIT_ALLOWED_ORIGINS"]
+          allowedOrigins: (process.env[ENV.allowedOrigins] ?? "")
             .split(",")
             .map((origin) => origin.trim())
             .filter((origin) => origin.length > 0),
@@ -116,18 +122,18 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
     cliVersion: CLI_VERSION,
     ...(identity !== undefined ? { identity } : {}),
   });
-  log(`piorbit host ready at ${url} (pid ${process.pid})`);
+  log(`${PRODUCT_NAME} host ready at ${url} (pid ${process.pid})`);
   process.stdout.write(`${url}\n`);
 
   let closing = false;
   const shutdown = async (reason: string, code: number): Promise<void> => {
     if (closing) return;
     closing = true;
-    log(`piorbit host shutting down (${reason})`);
+    log(`${PRODUCT_NAME} host shutting down (${reason})`);
     try {
       await server.close();
     } catch (error) {
-      log(`piorbit host close failed: ${error instanceof Error ? error.message : String(error)}`);
+      log(`${PRODUCT_NAME} host close failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     clearHostFile(paths.hostFile);
     process.exit(code);
@@ -137,10 +143,10 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
     process.on(signal, () => void shutdown(signal, 0));
   }
   process.on("uncaughtException", (error) => {
-    log(`piorbit host crashed: ${error.stack ?? error.message}`);
+    log(`${PRODUCT_NAME} host crashed: ${error.stack ?? error.message}`);
     void shutdown("uncaughtException", 1);
   });
   process.on("unhandledRejection", (reason) => {
-    log(`piorbit host unhandled rejection: ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`);
+    log(`${PRODUCT_NAME} host unhandled rejection: ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`);
   });
 }

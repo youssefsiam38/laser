@@ -24,9 +24,9 @@
     "linux:assets": "node scripts/make-linux-assets.mjs",
     "runtime": "node scripts/fetch-node.mjs",
     "install:electron": "node node_modules/electron/install.js",
-    "prepack:app": "pnpm run build && pnpm run icons && node scripts/fetch-node.mjs --current",
+    "prepack:app": "pnpm run build && pnpm run icons && pnpm run linux:assets && node scripts/fetch-node.mjs --current",
     "pack": "pnpm run prepack:app && electron-builder --dir",
-    "dist": "pnpm run prepack:app && pnpm run linux:assets && electron-builder",
+    "dist": "pnpm run prepack:app && electron-builder",
     "dist:linux": "node scripts/build-linux.mjs"
   },
   "//optionalDependencies": [

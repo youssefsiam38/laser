@@ -2,6 +2,7 @@
  * The parser is the one piece of this package where a quiet mistake changes
  * what a command does rather than how it looks, so it gets a test.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { describe, expect, it } from "vitest";
 import { bool, list, num, parseArgs, str, type FlagSpecs } from "../src/args.js";
 import { scanLeadingGlobals } from "../src/cli.js";
@@ -83,7 +84,7 @@ describe("scanLeadingGlobals", () => {
     expect(index).toBe(3);
   });
 
-  it("stops at a flag that is not global, so `piorbit --no-open` still means `up`", () => {
+  it(`stops at a flag that is not global, so \`${PRODUCT_NAME} --no-open\` still means \`up\``, () => {
     const { leading, index } = scanLeadingGlobals(["--no-open"]);
     expect(leading).toEqual([]);
     expect(index).toBe(0);

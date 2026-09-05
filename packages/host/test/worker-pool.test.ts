@@ -5,6 +5,7 @@
  * the spawn, the pipe and the exit are the real ones) rather than the Pi
  * worker: this is the pool's state machine under test, not Pi.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -81,7 +82,7 @@ const runTimers = () => {
 };
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "piorbit-pool-"));
+  dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-pool-`));
   project = join(dir, "project");
   workerMain = join(dir, "fake-worker.mjs");
   writeFileSync(workerMain, FAKE_WORKER);

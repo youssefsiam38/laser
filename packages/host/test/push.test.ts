@@ -7,6 +7,7 @@
  * impossible to eyeball and silent when it is wrong (a push service answers
  * 201 for a message no device can decrypt).
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { describe, expect, it } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -58,7 +59,7 @@ describe("push encryption", () => {
     const { ua, uaPublic, auth, subscription } = await fakeSubscription();
     const message = JSON.stringify({
       web_push: 8030,
-      notification: { title: "piorbit needs you", navigate: "https://r.example/?decision=d1#/session/x" },
+      notification: { title: `${PRODUCT_NAME} needs you`, navigate: "https://r.example/?decision=d1#/session/x" },
     });
 
     const body = await encryptPushPayload(subscription, utf8(message));
@@ -122,7 +123,7 @@ describe("vapid", () => {
 describe("PushService", () => {
   it("keeps one row per endpoint, persists its keys, and drops a subscription the service says is gone", async () => {
     const { subscription } = await fakeSubscription();
-    const agentDir = mkdtempSync(join(tmpdir(), "piorbit-push-"));
+    const agentDir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-push-`));
     const calls: { headers: Record<string, string> }[] = [];
     const service = new PushService({
       agentDir,

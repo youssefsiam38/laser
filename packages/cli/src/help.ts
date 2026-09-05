@@ -2,6 +2,7 @@
  * Help output. Generated from the command table, never hand-maintained, so a
  * command that exists is a command that is documented.
  */
+import { DATA_DIR_NAME, ENV, ENV_PREFIX, PRODUCT_NAME } from "@piorbit/protocol";
 import type { FlagSpec, FlagSpecs } from "./args.js";
 import type { Command } from "./command.js";
 import { GLOBAL_FLAGS } from "./flags.js";
@@ -45,11 +46,11 @@ export function renderRootHelp(commands: readonly Command[], term: Terminal): vo
   const visible = commands.filter((command) => !command.hidden);
   const groups = ["Host", "Sessions", "Projects", "Relay", "Advanced", "Diagnostics", "Shell"] as const;
 
-  say(term, `${p.bold("piorbit")} ${p.dim(CLI_VERSION)} — start, inspect and drive piorbit from a terminal.`);
+  say(term, `${p.bold(`${PRODUCT_NAME}`)} ${p.dim(CLI_VERSION)} — start, inspect and drive ${PRODUCT_NAME} from a terminal.`);
   say(term);
   say(term, p.bold("USAGE"));
-  say(term, `  piorbit ${p.dim("[command] [options]")}`);
-  say(term, `  piorbit ${p.dim("with no command starts the host and opens the app")}`);
+  say(term, `  ${PRODUCT_NAME} ${p.dim("[command] [options]")}`);
+  say(term, `  ${PRODUCT_NAME} ${p.dim("with no command starts the host and opens the app")}`);
   say(term);
 
   for (const group of groups) {
@@ -70,8 +71,8 @@ export function renderRootHelp(commands: readonly Command[], term: Terminal): vo
   for (const line of flagLines(GLOBAL_FLAGS, p)) say(term, line);
   say(term);
   say(term, p.bold("LEARN MORE"));
-  say(term, `  piorbit <command> --help   ${p.dim("options and examples for one command")}`);
-  say(term, `  piorbit help <topic>       ${p.dim(`topics: ${TOPICS.map((topic) => topic.name).join(", ")}`)}`);
+  say(term, `  ${PRODUCT_NAME} <command> --help   ${p.dim("options and examples for one command")}`);
+  say(term, `  ${PRODUCT_NAME} help <topic>       ${p.dim(`topics: ${TOPICS.map((topic) => topic.name).join(", ")}`)}`);
 }
 
 export function renderCommandHelp(command: Command, term: Terminal): void {
@@ -80,7 +81,7 @@ export function renderCommandHelp(command: Command, term: Terminal): void {
   say(term);
   say(term, p.bold("USAGE"));
   say(term, `  ${command.usage}`);
-  if (command.aliases?.length) say(term, `  ${p.dim(`alias: ${command.aliases.map((a) => `piorbit ${a}`).join(", ")}`)}`);
+  if (command.aliases?.length) say(term, `  ${p.dim(`alias: ${command.aliases.map((a) => `${PRODUCT_NAME} ${a}`).join(", ")}`)}`);
   say(term);
 
   if (command.description) {
@@ -126,32 +127,41 @@ export interface Topic {
 }
 
 /** `piorbit help <topic>` — the things that do not belong to one command. */
+/**
+ * One row of the environment table, padded so the descriptions line up.
+ *
+ * The names come from product.json (MX-T7), so they are not known at the width
+ * the table was written to; padding here keeps the column straight whatever the
+ * prefix becomes.
+ */
+const envRow = (name: string, description: string): string => `  ${name.padEnd(30)} ${description}`;
+
 export const TOPICS: readonly Topic[] = [
   {
     name: "pi",
-    title: "Reaching Pi through piorbit",
+    title: `Reaching Pi through ${PRODUCT_NAME}`,
     body: `
-piorbit pins its own copy of Pi inside @piorbit/worker. That pinned copy is the
-one the app runs, and \`piorbit pi\` runs the same one, so what you see in a
+${PRODUCT_NAME} pins its own copy of Pi inside @piorbit/worker. That pinned copy is the
+one the app runs, and \`${PRODUCT_NAME} pi\` runs the same one, so what you see in a
 terminal and what you see in the app are the same agent at the same version.
 
-  piorbit pi                     start Pi's TUI in the current directory
-  piorbit pi --help              Pi's own help, verbatim
-  piorbit pi update --extensions Pi's own update verb, verbatim
-  piorbit pi models              Pi's own model list
+  ${PRODUCT_NAME} pi                     start Pi's TUI in the current directory
+  ${PRODUCT_NAME} pi --help              Pi's own help, verbatim
+  ${PRODUCT_NAME} pi update --extensions Pi's own update verb, verbatim
+  ${PRODUCT_NAME} pi models              Pi's own model list
 
-Everything after \`piorbit pi\` belongs to Pi, including --help and --version.
-piorbit only consumes flags that appear *before* the first Pi argument:
+Everything after \`${PRODUCT_NAME} pi\` belongs to Pi, including --help and --version.
+${PRODUCT_NAME} only consumes flags that appear *before* the first Pi argument:
 
   --global-pi              run the \`pi\` on your PATH instead of the pinned one
   --agent-dir <dir>        override the agent directory for this run
   --subagents-temp-root <dir>
 
 Children inherit PI_CODING_AGENT_DIR, PI_CODING_AGENT_SESSION_DIR and
-PI_SUBAGENTS_TEMP_ROOT from piorbit's resolution, which is why a background
+PI_SUBAGENTS_TEMP_ROOT from ${PRODUCT_NAME}'s resolution, which is why a background
 subagent run started this way shows up in the app.
 
-Exit codes and signals pass straight through: \`piorbit pi\` exits with Pi's
+Exit codes and signals pass straight through: \`${PRODUCT_NAME} pi\` exits with Pi's
 code, and a Pi killed by a signal kills the wrapper with the same signal.
 `,
   },
@@ -162,19 +172,19 @@ code, and a Pi killed by a signal kills the wrapper with the same signal.
 One host serves every project. It binds 127.0.0.1 only; remote access is the
 relay's job, never an open port.
 
-  piorbit up            start it (or attach if it is already up) and open the app
-  piorbit status        where it is, what it is serving, how long it has been up
-  piorbit down          stop it
-  piorbit restart       down, then up, keeping the same options
+  ${PRODUCT_NAME} up            start it (or attach if it is already up) and open the app
+  ${PRODUCT_NAME} status        where it is, what it is serving, how long it has been up
+  ${PRODUCT_NAME} down          stop it
+  ${PRODUCT_NAME} restart       down, then up, keeping the same options
 
 While it runs, \`<state-dir>/host.json\` holds its pid, port and the directories
 it was started with; \`<state-dir>/host.log\` holds its output. The state
-directory is \`~/.piorbit\` unless \`--state-dir\` or \`PIORBIT_STATE_DIR\` says
+directory is \`~/.${DATA_DIR_NAME}\` unless \`--state-dir\` or \`${ENV.stateDir}\` says
 otherwise. Both files are removed when the host exits cleanly.
 
 "Is it running" is always decided by asking /healthz, not by trusting the file.
 The record also carries an identity for the process itself, so a record that
-outlived a reboot is recognised as stale instead of pointing \`piorbit down\` at
+outlived a reboot is recognised as stale instead of pointing \`${PRODUCT_NAME} down\` at
 whatever program inherited the pid.
 `,
   },
@@ -183,17 +193,17 @@ whatever program inherited the pid.
     title: "Driving sessions from the terminal",
     body: `
 Session verbs talk to the running host over the same WebSocket JSON-RPC the app
-uses. They need a host: start one with \`piorbit up\`.
+uses. They need a host: start one with \`${PRODUCT_NAME} up\`.
 
 A session is identified by its file path. Any unambiguous suffix of that path,
 or the session id, also works:
 
-  piorbit sessions                       every session, newest first
-  piorbit sessions --project .           only this directory
-  piorbit new                            a session in the current directory
-  piorbit send "run the tests"           prompt the most recent session here
-  piorbit tail <id> --follow             watch it work
-  piorbit stop <id>                      abort the current turn
+  ${PRODUCT_NAME} sessions                       every session, newest first
+  ${PRODUCT_NAME} sessions --project .           only this directory
+  ${PRODUCT_NAME} new                            a session in the current directory
+  ${PRODUCT_NAME} send "run the tests"           prompt the most recent session here
+  ${PRODUCT_NAME} tail <id> --follow             watch it work
+  ${PRODUCT_NAME} stop <id>                      abort the current turn
 
 \`send\` waits for the agent to settle and streams the answer unless you pass
 --no-wait. \`--steer\` and \`--follow-up\` choose what happens when the agent is
@@ -204,15 +214,15 @@ already working: steer interrupts with new instructions, follow-up queues.
     name: "relay",
     title: "Reaching this desktop from a phone",
     body: `
-piorbit binds 127.0.0.1 and nothing else. A phone reaches it by meeting it on a
+${PRODUCT_NAME} binds 127.0.0.1 and nothing else. A phone reaches it by meeting it on a
 relay: a server that forwards bytes between exactly two sockets on one channel
 and can read none of them. It links no crypto library and never parses a
 payload, which is why "logging in" to one is a URL rather than a credential.
 
-  piorbit relay login wss://relay.example/ws --origin https://app.example
-  piorbit relay pair                 show a QR for a phone to scan
-  piorbit relay devices              what is linked
-  piorbit relay revoke <device>      unlink one
+  ${PRODUCT_NAME} relay login wss://relay.example/ws --origin https://app.example
+  ${PRODUCT_NAME} relay pair                 show a QR for a phone to scan
+  ${PRODUCT_NAME} relay devices              what is linked
+  ${PRODUCT_NAME} relay revoke <device>      unlink one
 
 Pairing runs Noise_IK against an ephemeral key carried in the QR’s fragment —
 which browsers never send to a server. Both screens then show six emoji derived
@@ -222,7 +232,7 @@ they match. There is no flag to skip that question.
 
 After pairing, each device gets a channel id only the two ends can compute
 (HKDF over their static-static Diffie-Hellman), and the host opens one outbound
-connection per device when it starts. So pair or revoke, then \`piorbit restart\`.
+connection per device when it starts. So pair or revoke, then \`${PRODUCT_NAME} restart\`.
 
 Three files in the state directory hold all of it: \`relay.json\` (the URL and
 the signed device list), \`identity.key\` (the Ed25519 root seed that signs that
@@ -236,13 +246,13 @@ every device, because every device verifies the list against it.
     name: "doctor",
     title: "What doctor checks",
     body: `
-\`piorbit doctor\` answers one question: would piorbit work right now, and if
+\`${PRODUCT_NAME} doctor\` answers one question: would ${PRODUCT_NAME} work right now, and if
 not, what is the smallest thing you could change.
 
 It checks the Node version, that the pinned Pi resolves and boots, that the
 agent and session directories are writable and have room, which providers have
 credentials (names only — it never reads or prints a secret), that a default
-model resolves, that the port is free or held by piorbit itself, and that the
+model resolves, that the port is free or held by ${PRODUCT_NAME} itself, and that the
 pi-subagents temp roots are usable. Finally it spawns a throwaway worker in a
 temporary directory and opens a session in it, which is the only check that
 proves the whole chain works.
@@ -255,26 +265,26 @@ worst is a WARN.
     name: "env",
     title: "Environment variables",
     body: `
-Read by piorbit:
+Read by ${PRODUCT_NAME}:
 
-  PIORBIT_AGENT_DIR              agent directory (same as --agent-dir)
-  PIORBIT_SESSION_DIR            session directory (same as --session-dir)
-  PIORBIT_SUBAGENTS_TEMP_ROOT    pi-subagents temp root
-  PIORBIT_PORT                   host port (same as --port)
-  PIORBIT_STATE_DIR              piorbit's own state directory (same as --state-dir)
-  NO_COLOR / FORCE_COLOR         colour, per no-color.org
-  PI_CODING_AGENT_DIR            used when PIORBIT_AGENT_DIR is unset
-  PI_CODING_AGENT_SESSION_DIR    used when PIORBIT_SESSION_DIR is unset
-  PI_SUBAGENTS_TEMP_ROOT         used when PIORBIT_SUBAGENTS_TEMP_ROOT is unset
+${envRow(ENV.agentDir, "agent directory (same as --agent-dir)")}
+${envRow(ENV.sessionDir, "session directory (same as --session-dir)")}
+${envRow(ENV.subagentsTempRoot, "pi-subagents temp root")}
+${envRow(ENV.port, "host port (same as --port)")}
+${envRow(ENV.stateDir, `${PRODUCT_NAME}'s own state directory (same as --state-dir)`)}
+${envRow("NO_COLOR / FORCE_COLOR", "colour, per no-color.org")}
+${envRow("PI_CODING_AGENT_DIR", `used when ${ENV.agentDir} is unset`)}
+${envRow("PI_CODING_AGENT_SESSION_DIR", `used when ${ENV.sessionDir} is unset`)}
+${envRow("PI_SUBAGENTS_TEMP_ROOT", `used when ${ENV.subagentsTempRoot} is unset`)}
 
-Set by piorbit for every Pi it starts (directly or through a worker):
+Set by ${PRODUCT_NAME} for every Pi it starts (directly or through a worker):
 
-  PI_CODING_AGENT_DIR, PI_CODING_AGENT_SESSION_DIR, PI_SUBAGENTS_TEMP_ROOT, PIORBIT=1
+  PI_CODING_AGENT_DIR, PI_CODING_AGENT_SESSION_DIR, PI_SUBAGENTS_TEMP_ROOT, ${ENV_PREFIX}=1
 `,
   },
   {
     name: "json",
-    title: "Scripting piorbit",
+    title: `Scripting ${PRODUCT_NAME}`,
     body: `
 Every command takes --json. The rules never change:
 
@@ -292,7 +302,7 @@ Exit codes:
   3  no host is running
   4  the host answered with an error
 
-\`piorbit pi\` is the exception: it exits with Pi's own code.
+\`${PRODUCT_NAME} pi\` is the exception: it exits with Pi's own code.
 `,
   },
 ];

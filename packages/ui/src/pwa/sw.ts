@@ -61,11 +61,20 @@ function isDeclarativePushPayload(value: unknown): value is { notification: Decl
 }
 
 /** Replaced at build time with the precache list (a JSON array of same-origin paths). */
-const PRECACHE: readonly string[] = "__PIORBIT_PRECACHE__" as unknown as readonly string[];
+const PRECACHE: readonly string[] = "__SW_PRECACHE__" as unknown as readonly string[];
 /** Replaced at build time with a hash of the precache list and this file. */
-const BUILD = "__PIORBIT_BUILD__";
+const BUILD = "__SW_BUILD__";
 
-const CACHE_PREFIX = "piorbit-shell-";
+/**
+ * Replaced at build time with the product's own cache prefix.
+ *
+ * This file is compiled on its own and may import nothing at runtime, so it
+ * cannot read `@piorbit/protocol`. `vite-plugin.ts` substitutes the value from
+ * product.json, which is why a rename still reaches the service worker.
+ */
+const CACHE_PREFIX = "__SW_CACHE_PREFIX__";
+/** Replaced at build time with the product's display name. */
+const PRODUCT = "__SW_PRODUCT_NAME__";
 const CACHE = `${CACHE_PREFIX}${BUILD}`;
 const SHELL = "/index.html";
 
@@ -152,7 +161,7 @@ function offlineFallback(): Response {
   // inlined. They are *compiled from the shipped presets* by `vite-plugin.ts`
   // and substituted for the placeholder below, so this page is the app's own
   // default light and dark rather than a palette frozen in this file.
-  const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>piorbit — offline</title><style>__PIORBIT_OFFLINE_STYLE__</style><main><h1>You’re offline</h1><p>piorbit could not load because this device has no connection and the app was not saved for offline use yet. Reconnect and open it again.</p></main>`;
+  const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>${PRODUCT} — offline</title><style>__SW_OFFLINE_STYLE__</style><main><h1>You’re offline</h1><p>${PRODUCT} could not load because this device has no connection and the app was not saved for offline use yet. Reconnect and open it again.</p></main>`;
   return new Response(html, { status: 503, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
 }
 
@@ -177,7 +186,7 @@ self.addEventListener("push", (event) => {
       }
       // Every push must be user-visible; an unexpected body still shows as itself.
       const text = event.data?.text() ?? "";
-      await show({ title: "piorbit", body: text.slice(0, 160), navigate: `${self.location.origin}/` });
+      await show({ title: PRODUCT, body: text.slice(0, 160), navigate: `${self.location.origin}/` });
     })(),
   );
 });

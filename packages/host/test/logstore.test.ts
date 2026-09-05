@@ -4,6 +4,7 @@
  * ref whose body was collected, a duration attributed to the wrong request),
  * so they are worth a test; the SQL itself is exercised through them.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,7 +16,7 @@ let base: string;
 let store: LogStore;
 
 beforeEach(() => {
-  base = mkdtempSync(join(tmpdir(), "piorbit-logs-"));
+  base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-logs-`));
   store = new LogStore({ file: join(base, "logs.db") });
 });
 

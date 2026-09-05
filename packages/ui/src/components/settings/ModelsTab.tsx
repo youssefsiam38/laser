@@ -8,6 +8,7 @@
  * happens here too (M10-T6): the same `ProviderStep` the first run uses, which
  * drives the agent's own login flow through `pi/providers/login/*`.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Eye, Loader2, RefreshCw, Sparkles } from "lucide-react";
 
@@ -167,7 +168,7 @@ export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
           </div>
           <p className="text-xs leading-5 text-ink-2">
             Which providers are signed in, and how. Pick one to sign in with an account or an API key, or to sign out.
-            piorbit never reads the credential itself.
+            {PRODUCT_NAME} never reads the credential itself.
           </p>
           <ProviderStep cwd={cwd} onConfigured={() => void load(false)} />
           {providers.length > 0 && (

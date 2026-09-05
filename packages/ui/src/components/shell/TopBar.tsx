@@ -43,7 +43,7 @@ import { shortCwd } from "@/format";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
 import { useDock, useIslandEntries, usePanelActions } from "@/panels";
-import { usePiorbitStable, usePiorbitState, usePiorbitView, useSessionMeta } from "@/runtime";
+import { sessionTitle, usePiorbitStable, usePiorbitState, usePiorbitView, useSessionMeta } from "@/runtime";
 
 import { InlineRename } from "./InlineRename.js";
 import { lastPromptEntryId, sessionStateLabel, sessionStatus, workerChip } from "./model.js";
@@ -54,6 +54,12 @@ import { errorText, useShell } from "./shell-context.js";
  * and the two panel toggles. Everything that changes the session lives in the
  * more menu; the composer owns model and thinking.
  */
+/** The transcript's first user line, for a session the catalog has not scanned yet. */
+const firstUserLine = (view: { blocks: readonly { kind: string; text?: string }[] }): string | undefined => {
+  for (const block of view.blocks) if (block.kind === "user" && block.text?.trim()) return block.text.replace(/\s+/g, " ").trim().slice(0, 60);
+  return undefined;
+};
+
 export function TopBar() {
   const { actions, client, currentProject } = usePiorbitStable();
   const view = usePiorbitView();
@@ -68,8 +74,9 @@ export function TopBar() {
   const status = sessionStatus(view, summary);
   const stateLabel = sessionStateLabel(view, meta.worker);
   const chip = workerChip(meta.worker);
-  const title = view ? (view.state.name ?? view.title ?? view.state.id.slice(0, 8)) : "New session";
-  const untitled = view ? !(view.state.name ?? view.title) : false;
+  // One rule for what a session is called, everywhere (runtime/threadList.ts).
+  const title = view ? (summary ? sessionTitle(summary, view) : (view.state.name ?? view.title ?? firstUserLine(view) ?? "New session")) : "New session";
+  const untitled = view ? title === "New session" : false;
   // Islands live in the dock; the toggle appears only when there is something to toggle.
   const islands = useIslandEntries(view?.path, "desktop");
   const dock = useDock(view?.path);
@@ -140,7 +147,7 @@ export function TopBar() {
           <h1
             className={cn(
               "min-w-0 truncate leading-5 select-none",
-              untitled ? "font-mono text-xs font-medium tracking-typed text-ink-2" : "text-sm font-semibold text-ink",
+              untitled ? "text-sm text-ink-2 italic" : "text-sm font-semibold text-ink",
             )}
             title={view ? `${view.path}\nDouble-click to rename` : undefined}
             onDoubleClick={() => view && setRenaming(true)}

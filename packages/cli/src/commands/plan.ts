@@ -9,6 +9,7 @@
  * guess as a fact would be worse than the app doing it, because people pipe
  * terminal output into other things.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import type { PlanPanel, PlanStep, SessionSummary } from "@piorbit/protocol";
 import type { Command } from "../command.js";
 import { CliError, ExitCode } from "../errors.js";
@@ -64,7 +65,7 @@ export const planCommand: Command = {
   name: "plan",
   group: "Sessions",
   summary: "show the shape of a multi-step run: phases, lanes and their steps",
-  usage: "piorbit plan <run> [--project <dir>] [--json]",
+  usage: `${PRODUCT_NAME} plan <run> [--project <dir>] [--json]`,
   description: `
 Prints the plan behind a workflow, chain or parallel run: its phases, the steps
 in each, which run each step became, and what they cost.
@@ -73,21 +74,21 @@ Structure the subagent extension persisted is shown as declared. Structure rebui
 from a scripted workflow's trace is labelled INFERRED, because that package
 persists no dependency graph and presenting one as fact would be a lie.
 
-<run> is any unambiguous part of a run id — the ids \`piorbit runs\` prints.`,
+<run> is any unambiguous part of a run id — the ids \`${PRODUCT_NAME} runs\` prints.`,
   positionals: [{ name: "run", description: "run id, or any unambiguous part of one" }],
   flags: {
     project: { type: "string", description: "only look in this project directory" },
   },
   examples: [
-    { command: "piorbit plan 9b65610d", note: "by the run id the subagent extension uses" },
-    { command: "piorbit plan 9b65610d --json", note: "steps, states and usage as data" },
+    { command: `${PRODUCT_NAME} plan 9b65610d`, note: "by the run id the subagent extension uses" },
+    { command: `${PRODUCT_NAME} plan 9b65610d --json`, note: "steps, states and usage as data" },
   ],
   async run(ctx) {
     const reference = ctx.args.positionals[0];
     if (reference === undefined) {
       throw new CliError("plan needs a run", {
         exitCode: ExitCode.Usage,
-        fix: "`piorbit runs` lists them; pass any unambiguous part of a run id.",
+        fix: `\`${PRODUCT_NAME} runs\` lists them; pass any unambiguous part of a run id.`,
       });
     }
 
@@ -101,8 +102,8 @@ persists no dependency graph and presenting one as fact would be a lie.
         const known = fleet.runs.some((row) => row.panel.id.includes(reference));
         throw new CliError(`no plan matches ${JSON.stringify(reference)}`, {
           fix: known
-            ? "That run is a single step, so it has no plan. `piorbit runs` shows it."
-            : "`piorbit runs` lists what the host can see. A run pruned by retention is gone.",
+            ? `That run is a single step, so it has no plan. \`${PRODUCT_NAME} runs\` shows it.`
+            : `\`${PRODUCT_NAME} runs\` lists what the host can see. A run pruned by retention is gone.`,
         });
       }
       if (matched.length > 1) {

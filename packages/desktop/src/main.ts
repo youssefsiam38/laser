@@ -14,10 +14,11 @@
  * fails, the same window shows a written explanation instead — a state that was
  * designed, not a blank page.
  */
+import { APP_ID, ENV, PRODUCT_NAME } from "@piorbit/protocol";
 import { BrowserWindow, Menu, app, dialog, ipcMain, nativeTheme, session, shell } from "electron";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolvePaths, type ParsedArgs, type PiorbitPaths } from "@piorbit/cli";
+import { migrateFormerIdentities, resolvePaths, type ParsedArgs, type PiorbitPaths } from "@piorbit/cli";
 import {
   DEEP_LINK_SCHEME,
   IPC,
@@ -46,7 +47,8 @@ import { chromeFor, WindowManager } from "./windows.js";
  * grants (microphone!), and the update feed. A new id is a new app that has to
  * ask for the microphone again and cannot update the old one.
  */
-const APP_ID = "dev.piorbit.desktop";
+// The app id is product.json's, through @piorbit/protocol: macOS keys TCC
+// grants on it and Windows keys the notification centre and taskbar on it.
 
 /** No flags: a GUI takes its configuration from the environment, not argv. */
 const NO_ARGS: ParsedArgs = { flags: {}, positionals: [], rest: [], hasRest: false };
@@ -58,12 +60,17 @@ const NO_ARGS: ParsedArgs = { flags: {}, positionals: [], rest: [], hasRest: fal
  * this process uses, the host it spawns, every worker under that host — is
  * resolved from this one environment. See `agent-home.ts` for why.
  */
+// Before any path is resolved: if this product was renamed, the person's data
+// is still under the old directory name and has to move first (MX-T7, D-36).
+const migration = migrateFormerIdentities(process.env);
+
 const environment = desktopEnv(process.env);
 const home = agentHome(process.env);
 const paths: PiorbitPaths = resolvePaths(NO_ARGS, environment);
 const log = new DesktopLog(join(paths.stateDir, "desktop.log"));
+for (const line of migration.lines) log.line(line);
 log.line(
-  `piorbit data directory: ${home.dataDir}${home.chosenByPerson ? " (set by PIORBIT_AGENT_DIR)" : ""}` +
+  `${PRODUCT_NAME} data directory: ${home.dataDir}${home.chosenByPerson ? ` (set by ${ENV.agentDir})` : ""}` +
     (home.ignored.length > 0 ? `; ignoring ${home.ignored.join(", ")} — those name another agent installation` : ""),
 );
 
@@ -72,7 +79,7 @@ log.line(
  * hot-reload while still driving a real host. Without it, the host serves the
  * built bundle, which is what a packaged app always does.
  */
-const devUiUrl = process.env["PIORBIT_UI_URL"];
+const devUiUrl = process.env[ENV.uiUrl];
 
 // ---------------------------------------------------------------- state ----
 
@@ -95,7 +102,7 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 app.setAppUserModelId(APP_ID);
-app.setName("piorbit");
+app.setName(PRODUCT_NAME);
 
 // ---------------------------------------------------------------- parts ----
 
@@ -128,7 +135,7 @@ const host = new HostProcess({
   // serves the page itself and this is empty. (Needs the one-line change to
   // @piorbit/cli's daemon listed under REQUESTS; the variable is set here so
   // nothing else has to change when it lands.)
-  ...(devUiUrl ? { env: { PIORBIT_ALLOWED_ORIGINS: originOf(devUiUrl) } } : {}),
+  ...(devUiUrl ? { env: { [ENV.allowedOrigins]: originOf(devUiUrl) } } : {}),
   onChange: (info) => onHostChanged(info),
 });
 
@@ -261,7 +268,7 @@ function routeMainWindow(): void {
   if (state === "failed") {
     windows.navigateMain(
       statusPageUrl({
-        title: "piorbit cannot start its agent host",
+        title: `${PRODUCT_NAME} cannot start its agent host`,
         message: hostInfo?.message ?? "Something stopped the host from starting.",
         logFile: hostInfo?.logFile ?? paths.logFile,
       }),
@@ -271,9 +278,9 @@ function routeMainWindow(): void {
   }
   windows.navigateMain(
     statusPageUrl({
-      title: "Starting piorbit",
+      title: `Starting ${PRODUCT_NAME}`,
       message:
-        "piorbit is starting the agent host that runs your sessions. This is only slow the first time after an update.",
+        `${PRODUCT_NAME} is starting the agent host that runs your sessions. This is only slow the first time after an update.`,
       logFile: hostInfo?.logFile ?? paths.logFile,
       busy: true,
     }),
@@ -417,7 +424,7 @@ function installMenu(): void {
     ...(isMac
       ? ([
           {
-            label: "piorbit",
+            label: PRODUCT_NAME,
             submenu: [
               { role: "about" },
               { type: "separator" },
@@ -427,7 +434,7 @@ function installMenu(): void {
               { role: "hideOthers" },
               { role: "unhide" },
               { type: "separator" },
-              { label: "Quit piorbit", accelerator: "Command+Q", click: () => void quit({}) },
+              { label: `Quit ${PRODUCT_NAME}`, accelerator: "Command+Q", click: () => void quit({}) },
             ],
           },
         ] as Electron.MenuItemConstructorOptions[])
@@ -435,9 +442,9 @@ function installMenu(): void {
     {
       label: "File",
       submenu: [
-        { label: "Open piorbit", accelerator: "CmdOrCtrl+Shift+O", click: () => openApp() },
+        { label: `Open ${PRODUCT_NAME}`, accelerator: "CmdOrCtrl+Shift+O", click: () => openApp() },
         { type: "separator" },
-        isMac ? { role: "close" } : { label: "Quit piorbit", accelerator: "Ctrl+Q", click: () => void quit({}) },
+        isMac ? { role: "close" } : { label: `Quit ${PRODUCT_NAME}`, accelerator: "Ctrl+Q", click: () => void quit({}) },
       ],
     },
     {
@@ -468,7 +475,7 @@ function installMenu(): void {
       role: "help",
       submenu: [
         { label: "Show the host log", click: () => void shell.openPath(paths.logFile) },
-        { label: "Show the piorbit log", click: () => void shell.openPath(join(paths.stateDir, "desktop.log")) },
+        { label: `Show the ${PRODUCT_NAME} log`, click: () => void shell.openPath(join(paths.stateDir, "desktop.log")) },
         { type: "separator" },
         { label: "Check for updates…", click: () => void updater.check() },
       ],
@@ -509,7 +516,7 @@ async function start(): Promise<void> {
     identity = secrets.summary;
     log.line(`identity ${secrets.summary.deviceId} from ${secrets.summary.storage}`);
   } catch (error) {
-    log.error("could not load the piorbit identity", error);
+    log.error(`could not load the ${PRODUCT_NAME} identity`, error);
     identity = undefined;
   }
 
@@ -518,11 +525,11 @@ async function start(): Promise<void> {
 }
 
 start().catch((error: unknown) => {
-  log.error("piorbit could not start", error);
+  log.error(`${PRODUCT_NAME} could not start`, error);
   // Nothing is on screen yet at this point, so a dialog is the only way to say
   // anything at all.
   dialog.showErrorBox(
-    "piorbit could not start",
+    `${PRODUCT_NAME} could not start`,
     `${error instanceof Error ? error.message : String(error)}\n\nThe log is at ${join(paths.stateDir, "desktop.log")}.`,
   );
   app.exit(1);

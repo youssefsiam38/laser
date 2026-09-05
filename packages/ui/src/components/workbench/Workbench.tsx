@@ -30,7 +30,7 @@ const TABS: Array<{ id: WorkbenchPage; label: string; icon: typeof SlidersHorizo
 ];
 
 export function Workbench() {
-  const { page, open, close } = useWorkbench();
+  const { page, tab: settingsTab, open, close } = useWorkbench();
   const { currentProject } = usePiorbitStable();
   const view = usePiorbitView();
   const cwd = currentProject ?? view?.state.cwd;
@@ -76,7 +76,7 @@ export function Workbench() {
 
       <div className="min-h-0 flex-1">
         <Suspense fallback={<ScreenSkeleton />}>
-          {page === "settings" ? <SettingsScreen cwd={cwd} /> : <LogsScreen cwd={cwd} />}
+          {page === "settings" ? <SettingsScreen cwd={cwd} initialTab={settingsTab} /> : <LogsScreen cwd={cwd} />}
         </Suspense>
       </div>
     </section>

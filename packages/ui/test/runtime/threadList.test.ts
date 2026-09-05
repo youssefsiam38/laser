@@ -98,17 +98,27 @@ describe("sortSessions", () => {
 });
 
 describe("titles and metadata", () => {
-  it("prefers the Pi name, then the extension title, then an id prefix", () => {
+  it("prefers the Pi name, then the extension title, then the first line the person typed", () => {
     expect(sessionTitle(summary({ path: "/a", id: "abcdefgh1234", name: "Refactor" }))).toBe("Refactor");
     expect(sessionTitle(summary({ path: "/a", id: "abcdefgh1234" }), view({ title: "From extension" }))).toBe(
       "From extension",
     );
-    expect(sessionTitle(summary({ path: "/a", id: "abcdefgh1234" }))).toBe("abcdefgh");
+    // Never the id: a hash names nothing a person can recognise.
+    expect(sessionTitle(summary({ path: "/a", id: "abcdefgh1234", firstMessage: "  Fix the\n  flaky test " }))).toBe("Fix the flaky test");
+    expect(sessionTitle(summary({ path: "/a", id: "abcdefgh1234" }))).toBe("New session");
+  });
+
+  it("clips a long first line on a word, and keeps it to one line", () => {
+    const long = `Please ${"refactor ".repeat(20)}everything`;
+    const title = sessionTitle(summary({ path: "/a", id: "x", firstMessage: long }));
+    expect(title.length).toBeLessThanOrEqual(61);
+    expect(title.endsWith("…")).toBe(true);
+    expect(title).not.toMatch(/\s…$/);
   });
 
   it("maps a summary onto RemoteThreadMetadata with the path as remoteId", () => {
     const metadata = toThreadMetadata(
-      summary({ path: "/a.jsonl", id: "abcdefgh", cwd: "/proj", modifiedAt: "2026-06-01T00:00:00.000Z", attention: "error" }),
+      summary({ path: "/a.jsonl", id: "abcdefgh", cwd: "/proj", modifiedAt: "2026-06-01T00:00:00.000Z", attention: "error", firstMessage: "Ship it" }),
       undefined,
       false,
     );
@@ -116,7 +126,7 @@ describe("titles and metadata", () => {
       status: "regular",
       remoteId: "/a.jsonl",
       externalId: "/a.jsonl",
-      title: "abcdefgh",
+      title: "Ship it",
       custom: { cwd: "/proj", attention: "error", modifiedAt: "2026-06-01T00:00:00.000Z" },
     });
     expect(metadata.lastMessageAt).toEqual(new Date("2026-06-01T00:00:00.000Z"));
@@ -177,7 +187,7 @@ describe("createThreadListAdapter", () => {
     const calls: string[] = [];
     const archive = createArchiveStore(null);
     const adapter = createThreadListAdapter({
-      sessions: () => [summary({ path: "/a.jsonl", id: "aaaabbbb", attention: "idle" })],
+      sessions: () => [summary({ path: "/a.jsonl", id: "aaaabbbb", attention: "idle", firstMessage: "Start here" })],
       views: () => ({}),
       archive,
       currentProject: () => "/proj",
@@ -199,7 +209,7 @@ describe("createThreadListAdapter", () => {
     const { adapter } = deps();
     const { threads } = await adapter.list();
     expect(threads).toHaveLength(1);
-    expect(threads[0]).toMatchObject({ remoteId: "/a.jsonl", externalId: "/a.jsonl", title: "aaaabbbb" });
+    expect(threads[0]).toMatchObject({ remoteId: "/a.jsonl", externalId: "/a.jsonl", title: "Start here" });
   });
 
   it("initialize creates a session in the current project", async () => {

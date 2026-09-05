@@ -41,6 +41,13 @@ const ARCH_NAMES = ["ia32", "x64", "armv7l", "arm64", "universal"];
 const AGENT_PACKAGE = "@earendil-works/pi-coding-agent";
 
 /**
+ * The product's identity (MX-T7). `product.mjs` is ESM and this hook is CJS, so
+ * it is loaded once at the top of the hook and read from module scope by the
+ * helpers below — one source, no second copy of the name.
+ */
+let identity;
+
+/**
  * Azure Trusted Signing, only when every value is there.
  *
  * electron-builder 26 reads the presence of `win.azureSignOptions` as "sign
@@ -51,21 +58,23 @@ const AGENT_PACKAGE = "@earendil-works/pi-coding-agent";
  */
 function configureWindowsSigning(context) {
   if (context.electronPlatformName !== "win32") return;
-  const publisherName = process.env.PIORBIT_AZURE_PUBLISHER_NAME;
-  const endpoint = process.env.PIORBIT_AZURE_ENDPOINT;
-  const codeSigningAccountName = process.env.PIORBIT_AZURE_ACCOUNT;
-  const certificateProfileName = process.env.PIORBIT_AZURE_PROFILE;
+  const { azurePublisherName, azureEndpoint, azureAccount, azureProfile } = identity.env;
+  const publisherName = process.env[azurePublisherName];
+  const endpoint = process.env[azureEndpoint];
+  const codeSigningAccountName = process.env[azureAccount];
+  const certificateProfileName = process.env[azureProfile];
   const win = context.packager?.platformSpecificBuildOptions;
   if (!win) return;
   if (!publisherName || !endpoint || !codeSigningAccountName || !certificateProfileName) {
     console.log(
-      "piorbit: no Azure Trusted Signing credentials in the environment; producing an UNSIGNED Windows installer. " +
-        "Set PIORBIT_AZURE_PUBLISHER_NAME, PIORBIT_AZURE_ENDPOINT, PIORBIT_AZURE_ACCOUNT and PIORBIT_AZURE_PROFILE to sign it.",
+      `${identity.name}: no Azure Trusted Signing credentials in the environment; producing an UNSIGNED ` +
+        `Windows installer. Set ${azurePublisherName}, ${azureEndpoint}, ${azureAccount} and ` +
+        `${azureProfile} to sign it.`,
     );
     return;
   }
   win.azureSignOptions = { publisherName, endpoint, codeSigningAccountName, certificateProfileName };
-  console.log(`piorbit: signing with Azure Trusted Signing (${endpoint})`);
+  console.log(`${identity.name}: signing with Azure Trusted Signing (${endpoint})`);
 }
 
 /** Every package directory under a `node_modules`, scoped names included. */
@@ -130,13 +139,13 @@ function assertTreeIsPackagable({ packagesDir, owner, subject, label, declareIn 
   const link = join(packagesDir, owner, "node_modules", ...subject.split("/"));
   if (!existsSync(link)) {
     throw new Error(
-      `piorbit: ${label} (${subject}) is not installed under packages/${owner}, so there is nothing to package.\n` +
+      `${identity.name}: ${label} (${subject}) is not installed under packages/${owner}, so there is nothing to package.\n` +
         `Run \`ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install\` at the repository root.`,
     );
   }
   const dir = realpathSync(link);
   if (!dir.includes(`${sep}.pnpm${sep}`)) {
-    console.log(`piorbit: not a pnpm virtual store; skipping the ${label} dependency-visibility check`);
+    console.log(`${identity.name}: not a pnpm virtual store; skipping the ${label} dependency-visibility check`);
     return;
   }
 
@@ -158,14 +167,14 @@ function assertTreeIsPackagable({ packagesDir, owner, subject, label, declareIn 
 
   if (invisible.length > 0) {
     throw new Error(
-      `piorbit: ${label} needs ${invisible.join(", ")}, which the installer supplies but no manifest declares.\n` +
+      `${identity.name}: ${label} needs ${invisible.join(", ")}, which the installer supplies but no manifest declares.\n` +
         `electron-builder walks manifests, so ${invisible.length === 1 ? "it" : "they"} would be missing from the ` +
         `packaged app and it would fail at runtime.\n` +
         `Fix: add ${invisible.map((name) => `"${name}": "<exact version>"`).join(", ")} to the dependencies of ` +
         `${declareIn}, then run \`ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install\`.`,
     );
   }
-  console.log(`piorbit: ${label} dependency tree is fully declared (${installed.length} packages)`);
+  console.log(`${identity.name}: ${label} dependency tree is fully declared (${installed.length} packages)`);
 }
 
 /**
@@ -182,7 +191,7 @@ function assertNativeBindingIsStaged(packageRoot, platform, arch) {
   const wanted = declared.filter((name) => name.endsWith(suffix));
   if (wanted.length === 0) {
     throw new Error(
-      `piorbit: packages/desktop declares no native binding for ${platform}-${arch}.\n` +
+      `${identity.name}: packages/desktop declares no native binding for ${platform}-${arch}.\n` +
         `The keychain is loaded from @napi-rs/keyring-${suffix}, and without it the app will not start.\n` +
         `Fix: add "@napi-rs/keyring-${suffix}" to the optionalDependencies of packages/desktop/package.json ` +
         `with the same exact version as "@napi-rs/keyring".`,
@@ -191,7 +200,7 @@ function assertNativeBindingIsStaged(packageRoot, platform, arch) {
   for (const name of wanted) {
     if (!existsSync(join(packageRoot, "node_modules", ...name.split("/")))) {
       throw new Error(
-        `piorbit: ${name} is declared but not installed, so the packaged app would have no keychain binding ` +
+        `${identity.name}: ${name} is declared but not installed, so the packaged app would have no keychain binding ` +
           `and would fail at startup with "Cannot find native binding".\n` +
           `This is what a cross-architecture build looks like: pnpm installs only the binding matching the ` +
           `machine it ran on. Build ${arch} on ${arch} hardware, or run ` +
@@ -199,7 +208,7 @@ function assertNativeBindingIsStaged(packageRoot, platform, arch) {
       );
     }
   }
-  console.log(`piorbit: native keychain binding for ${platform}-${arch} is declared and installed (${wanted.join(", ")})`);
+  console.log(`${identity.name}: native keychain binding for ${platform}-${arch} is declared and installed (${wanted.join(", ")})`);
 }
 
 /**
@@ -217,7 +226,7 @@ function assertStagedRuntimeIsPinned(packageRoot, target, binary) {
   const spec = pin.targets[target];
   if (!spec) {
     throw new Error(
-      `piorbit: no Node runtime is pinned for ${target}.\n` +
+      `${identity.name}: no Node runtime is pinned for ${target}.\n` +
         `Pinned targets: ${Object.keys(pin.targets).join(", ")}. Add one to runtime.json with its hash from ` +
         `https://nodejs.org/dist/v${pin.version}/SHASUMS256.txt.`,
     );
@@ -225,8 +234,8 @@ function assertStagedRuntimeIsPinned(packageRoot, target, binary) {
   const npmCli = join(packageRoot, "runtime", target, "npm", "bin", "npm-cli.js");
   if (!existsSync(npmCli)) {
     throw new Error(
-      `piorbit: the Node runtime staged for ${target} has no package manager beside it.\n` +
-        `piorbit installs extensions from Settings, and a person who installed the app has no npm on PATH — ` +
+      `${identity.name}: the Node runtime staged for ${target} has no package manager beside it.\n` +
+        `${identity.name} installs extensions from Settings, and a person who installed the app has no npm on PATH — ` +
         `so it ships the one out of the Node archive it already verified.\n` +
         `Fix: delete packages/desktop/runtime/${target} and run \`pnpm -F @piorbit/desktop runtime -- --target ${target}\`.`,
     );
@@ -234,14 +243,14 @@ function assertStagedRuntimeIsPinned(packageRoot, target, binary) {
   const stampPath = join(packageRoot, "runtime", target, ".pin.json");
   if (!existsSync(stampPath)) {
     throw new Error(
-      `piorbit: the Node runtime staged for ${target} has no provenance stamp, so nothing proves it is the pinned one.\n` +
+      `${identity.name}: the Node runtime staged for ${target} has no provenance stamp, so nothing proves it is the pinned one.\n` +
         `Fix: delete packages/desktop/runtime/${target} and run \`pnpm -F @piorbit/desktop runtime -- --target ${target}\`.`,
     );
   }
   const stamp = readJson(stampPath);
   if (stamp.version !== pin.version || stamp.sha256 !== spec.sha256) {
     throw new Error(
-      `piorbit: the Node runtime staged for ${target} is node ${stamp.version} (${stamp.sha256.slice(0, 12)}…), ` +
+      `${identity.name}: the Node runtime staged for ${target} is node ${stamp.version} (${stamp.sha256.slice(0, 12)}…), ` +
         `but runtime.json pins ${pin.version} (${spec.sha256.slice(0, 12)}…).\n` +
         `Fix: delete packages/desktop/runtime/${target} and run \`pnpm -F @piorbit/desktop runtime -- --target ${target}\`.`,
     );
@@ -249,7 +258,7 @@ function assertStagedRuntimeIsPinned(packageRoot, target, binary) {
   const binaryPath = join(packageRoot, "runtime", target, binary);
   if (typeof stamp.binarySha256 !== "string" || stamp.binarySha256 === "") {
     throw new Error(
-      `piorbit: the Node runtime staged for ${target} was written by an older fetch-node.mjs that did not record ` +
+      `${identity.name}: the Node runtime staged for ${target} was written by an older fetch-node.mjs that did not record ` +
         `the binary's own hash, so nothing here can prove the file is the one that came out of the pinned archive.\n` +
         `Fix: delete packages/desktop/runtime/${target} and run \`pnpm -F @piorbit/desktop runtime -- --target ${target}\`.`,
     );
@@ -257,19 +266,20 @@ function assertStagedRuntimeIsPinned(packageRoot, target, binary) {
   const actual = createHash("sha256").update(readFileSync(binaryPath)).digest("hex");
   if (actual !== stamp.binarySha256) {
     throw new Error(
-      `piorbit: ${binaryPath} is not the binary that was extracted from the pinned Node archive.\n` +
+      `${identity.name}: ${binaryPath} is not the binary that was extracted from the pinned Node archive.\n` +
         `  expected  ${stamp.binarySha256}\n` +
         `  got       ${actual}\n` +
         `Something replaced or truncated it after it was fetched. This build would have shipped that file to ` +
-        `everyone who installs piorbit.\n` +
+        `everyone who installs ${identity.name}.\n` +
         `Fix: delete packages/desktop/runtime/${target} and run \`pnpm -F @piorbit/desktop runtime -- --target ${target}\`.`,
     );
   }
-  console.log(`piorbit: staged node ${pin.version} for ${target}, binary re-hashed and matching the pinned archive`);
+  console.log(`${identity.name}: staged node ${pin.version} for ${target}, binary re-hashed and matching the pinned archive`);
   return binary;
 }
 
 exports.default = async function beforePack(context) {
+  identity ??= (await import("./linux/product.mjs")).identity;
   const packageRoot = join(__dirname, "..");
   configureWindowsSigning(context);
   const platform = context.electronPlatformName; // "darwin" | "win32" | "linux"
@@ -279,7 +289,7 @@ exports.default = async function beforePack(context) {
     // A universal macOS app would need a `lipo`-merged node. We ship separate
     // arm64 and x64 builds instead, which is also what the update feed expects.
     throw new Error(
-      "piorbit does not build a universal macOS app: build arm64 and x64 separately so each ships its own Node.",
+      `${identity.name} does not build a universal macOS app: build arm64 and x64 separately so each ships its own Node.`,
     );
   }
 
@@ -304,14 +314,14 @@ exports.default = async function beforePack(context) {
   const source = join(packageRoot, "runtime", target, binary);
 
   if (!existsSync(source)) {
-    console.log(`piorbit: fetching the pinned Node runtime for ${target}`);
+    console.log(`${identity.name}: fetching the pinned Node runtime for ${target}`);
     execFileSync(process.execPath, [join(packageRoot, "scripts", "fetch-node.mjs"), "--target", target], {
       stdio: "inherit",
       cwd: packageRoot,
     });
   }
   if (!existsSync(source)) {
-    throw new Error(`piorbit: no Node runtime at ${source}. Run \`pnpm -F @piorbit/desktop runtime\`.`);
+    throw new Error(`${identity.name}: no Node runtime at ${source}. Run \`pnpm -F @piorbit/desktop runtime\`.`);
   }
   assertStagedRuntimeIsPinned(packageRoot, target, binary);
 
@@ -325,5 +335,5 @@ exports.default = async function beforePack(context) {
   // PIORBIT_NPM_CLI at it, which is how Settings installs an extension on a
   // machine that has never had Node on it.
   cpSync(join(packageRoot, "runtime", target, "npm"), join(staging, "npm"), { recursive: true });
-  console.log(`piorbit: staged ${target} node and its package manager for packaging`);
+  console.log(`${identity.name}: staged ${target} node and its package manager for packaging`);
 };

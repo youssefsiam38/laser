@@ -15,6 +15,7 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
+    "@piorbit/protocol": "workspace:*",
     "ws": "8.18.3"
   },
   "devDependencies": {

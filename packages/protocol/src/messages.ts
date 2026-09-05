@@ -8,6 +8,7 @@
  * `seq`. Clients resume with `session/load { fromSeq }`.
  */
 
+import { WIRE_NAMESPACE } from "./identity.js";
 import type { PiExtensionMessage } from "./pi-extension.js";
 import type { PushConfig, PushDeviceInfo, PushSubscriptionJson } from "./push.js";
 
@@ -726,7 +727,7 @@ export interface CommandInfo {
   /** What a person types after the slash, without the slash. */
   name: string;
   description?: string;
-  source: "piorbit" | "extension" | "prompt" | "skill";
+  source: typeof WIRE_NAMESPACE | "extension" | "prompt" | "skill";
   /** e.g. `<provider/model>`; shown after the name, never sent. */
   argumentHint?: string;
   /** Package or file the command came from, for the row's second line. */

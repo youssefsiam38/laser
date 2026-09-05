@@ -1,3 +1,5 @@
+import { DESKTOP_BRIDGE } from "./api.js";
+import { PRODUCT_NAME } from "@piorbit/protocol";
 /**
  * The two screens that are not the app: "starting" and "cannot start".
  *
@@ -58,7 +60,7 @@ export function statusPageHtml({ title, message, logFile, busy = false }: Status
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
-<title>piorbit</title>
+<title>${PRODUCT_NAME}</title>
 <style>
   :root {
     --bg: #F5F7FA; --surface: #FFFFFF; --surface-2: #EEF2F6; --line: #D6DEE7;
@@ -148,7 +150,7 @@ export function statusPageHtml({ title, message, logFile, busy = false }: Status
 </head>
 <body>
 <main>
-  <p class="eyebrow">piorbit</p>
+  <p class="eyebrow">${PRODUCT_NAME}</p>
   <h1>${escapeHtml(title)}</h1>
   <p>${escapeHtml(message)}</p>
   ${action}
@@ -160,7 +162,7 @@ export function statusPageHtml({ title, message, logFile, busy = false }: Status
     button.addEventListener("click", () => {
       button.disabled = true;
       button.textContent = "Starting\\u2026";
-      window.piorbit?.retryHost?.();
+      window.${DESKTOP_BRIDGE}?.retryHost?.();
     });
   }
 </script>

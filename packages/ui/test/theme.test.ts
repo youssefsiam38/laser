@@ -1,3 +1,4 @@
+import { ENV } from "@piorbit/protocol";
 import { readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -178,11 +179,15 @@ describe("globals.css :root is the compiled default preset", () => {
     // Blank lines go in the filter below, which is where they belong.
     const actual = m ? m[1]!.split("\n").map((l) => l.replace(/\s+$/, "")).filter((l) => l.trim() && !l.trim().startsWith("/*")).join("\n") : "";
     if (actual !== expected) {
-      const out = process.env["PIORBIT_SCRATCH"] ?? "/tmp/claude-1000/-home-youssef-projects-piorbit/f5becb6f-83f1-4c52-8634-118bcac40929/scratchpad";
-      try {
-        writeFileSync(`${out}/theme-default-root.css`, expected + "\n");
-      } catch {
-        /* scratchpad not present in CI: the diff below is enough */
+      // Only when a scratch directory was asked for. A hardcoded path here
+      // would be one machine's, on every other machine a write that fails.
+      const out = process.env[ENV.scratch];
+      if (out !== undefined && out !== "") {
+        try {
+          writeFileSync(`${out}/theme-default-root.css`, expected + "\n");
+        } catch {
+          /* not writable: the diff below is enough */
+        }
       }
     }
     expect(actual).toBe(expected);

@@ -1,6 +1,9 @@
 #!/bin/sh
 # piorbit installer — one command, no root, no Node, no package manager.
 #
+# GENERATED from install.sh.tpl by `pnpm identity:generate`. Every name in this
+# file comes from product.json (MX-T7, D-36); edit the template, not this copy.
+#
 #   gh api repos/youssefsiam38/piorbit/contents/install.sh \
 #     -H 'Accept: application/vnd.github.raw' > piorbit-install.sh \
 #     && sh piorbit-install.sh
@@ -41,6 +44,10 @@ set -eu
 
 REPO_DEFAULT="youssefsiam38/piorbit"
 PRODUCT="piorbit"
+BINARY="piorbit"
+APP_ID="dev.piorbit.desktop"
+URL_SCHEME="piorbit"
+DESKTOP_NAME="piorbit.desktop"
 
 # Ed25519 public key, PEM, base64 of the DER SubjectPublicKeyInfo body, as
 # printed by `scripts/release/sign.sh --show-key`. Empty until a release key
@@ -57,6 +64,9 @@ MODE="install"
 REPO="${PIORBIT_REPO:-$REPO_DEFAULT}"
 TAG=""
 FORMAT="appimage"
+# 1 once `--format` was given. An explicit choice is an instruction, and nothing
+# below may quietly replace it with a different package and a sudo prompt.
+FORMAT_CHOSEN=0
 PREFIX="${HOME}/.local"
 FROM_DIR=""
 # Provenance is required by default. Only a release assembled by hand has none,
@@ -194,11 +204,15 @@ while [ $# -gt 0 ]; do
       ;;
     --version=*) TAG="${1#--version=}" ;;
     --format)
+      FORMAT_CHOSEN=1
       shift
       [ $# -gt 0 ] || die "--format needs a value: appimage, tar, deb or rpm"
       FORMAT="$1"
       ;;
-    --format=*) FORMAT="${1#--format=}" ;;
+    --format=*)
+      FORMAT="${1#--format=}"
+      FORMAT_CHOSEN=1
+      ;;
     --prefix)
       shift
       [ $# -gt 0 ] || die "--prefix needs a directory, for example --prefix \$HOME/.local"
@@ -241,7 +255,7 @@ case "$PREFIX" in
 esac
 
 BIN_DIR="$PREFIX/bin"
-LIB_DIR="$PREFIX/lib/piorbit"
+LIB_DIR="$PREFIX/lib/$BINARY"
 APPS_DIR="$PREFIX/share/applications"
 ICONS_DIR="$PREFIX/share/icons/hicolor"
 RECEIPT="$LIB_DIR/install-receipt"
@@ -260,8 +274,8 @@ detect_platform() {
     x86_64 | amd64) ARCH="x64" ;;
     aarch64 | arm64) ARCH="arm64" ;;
     *)
-      die "piorbit has no build for this processor: $machine" \
-        "piorbit is built for 64-bit Intel/AMD (x86_64) and 64-bit ARM (aarch64) only.
+      die "$PRODUCT has no build for this processor: $machine" \
+        "$PRODUCT is built for 64-bit Intel/AMD (x86_64) and 64-bit ARM (aarch64) only.
 32-bit and other architectures are not supported, and there is no workaround
 short of building from source."
       ;;
@@ -322,7 +336,7 @@ require_gh() {
   if ! have gh; then
     hint=$(gh_install_hint)
     if [ -n "$hint" ]; then
-      die "piorbit is published to a private repository, so this installer needs GitHub's \`gh\` command, and it is not installed" \
+      die "$PRODUCT is published to a private repository, so this installer needs GitHub's \`gh\` command, and it is not installed" \
         "Install it with:
 
   $hint
@@ -331,7 +345,7 @@ then run this script again. If that package is not found on your release, the
 per-distribution instructions are at
   https://github.com/cli/cli/blob/trunk/docs/install_linux.md"
     fi
-    die "piorbit is published to a private repository, so this installer needs GitHub's \`gh\` command, and it is not installed" \
+    die "$PRODUCT is published to a private repository, so this installer needs GitHub's \`gh\` command, and it is not installed" \
       "Install it for your distribution — the instructions are at
   https://github.com/cli/cli/blob/trunk/docs/install_linux.md
 — then run this script again."
@@ -357,7 +371,7 @@ sha256_of() {
     openssl dgst -sha256 "$1" | sed 's/.*= *//'
   else
     die "no way to compute a SHA-256 on this machine" \
-      "piorbit refuses to install a file it cannot verify. Install coreutils
+      "$PRODUCT refuses to install a file it cannot verify. Install coreutils
 (which provides sha256sum) or openssl, then run this script again."
   fi
 }
@@ -410,7 +424,7 @@ check_attestation() {
   if ! gh attestation --help >/dev/null 2>&1; then
     if [ "$REQUIRE_ATTESTATION" = 1 ]; then
       die "this copy of \`gh\` is too old to check the build provenance of a release" \
-        "piorbit verifies that a build came from its own release workflow before
+        "$PRODUCT verifies that a build came from its own release workflow before
 installing it, and this \`gh\` has no \`attestation\` command. Update it —
 
   gh version   (2.49 or newer has it)
@@ -433,7 +447,7 @@ checksum manifest travels in the same release as the file it describes:
     *no\ attestations\ found* | *No\ attestations\ found*)
       if [ "$REQUIRE_ATTESTATION" = 1 ]; then
         die "this release carries no GitHub build provenance, so nothing proves where it came from" \
-          "Every release built by piorbit's release workflow is attested: the
+          "Every release built by $PRODUCT's release workflow is attested: the
 signature binds the bytes to the workflow, the repository and the commit. This
 one was assembled by hand, and the checksum manifest cannot stand in for that —
 it travels in the same release as the file it describes.
@@ -473,7 +487,7 @@ incomplete or not the release it claims to be. Nothing was installed."
   fi
   if ! have openssl; then
     die "this installer pins a release signing key and openssl is not installed, so the signature cannot be checked" \
-      "Install openssl and run this script again. piorbit will not install a
+      "Install openssl and run this script again. $PRODUCT will not install a
 file whose signature it was told to check and could not."
   fi
   cs_key="$(scratch_dir)/release.pub.pem"
@@ -613,7 +627,7 @@ fetch_optional() {
 
 # The receipt is what makes the uninstall exact: it records every path this
 # script created, so removal is "undo what I did" and never "delete anything
-# that looks like piorbit".
+# that looks like the product".
 receipt_get() {
   [ -f "$RECEIPT" ] || return 1
   awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "$RECEIPT"
@@ -642,7 +656,7 @@ receipt_write() {
 # to a mount point that no longer exists.
 install_desktop_entry() {
   # install_desktop_entry <source.desktop> <exec-path>
-  ide_out="$APPS_DIR/${PRODUCT}.desktop"
+  ide_out="$APPS_DIR/$DESKTOP_NAME"
   if [ "$DRY_RUN" = 1 ]; then
     step "would: install $ide_out pointing at $2"
     receipt_add file "$ide_out"
@@ -655,7 +669,7 @@ install_desktop_entry() {
     sed -e "s|^Exec=.*|Exec=$2$ide_args|" \
       -e "s|^TryExec=.*|TryExec=$2|" \
       "$1"
-    grep -q '^MimeType=' "$1" || printf 'MimeType=x-scheme-handler/piorbit;\n'
+    grep -q '^MimeType=' "$1" || printf 'MimeType=x-scheme-handler/%s;\n' "$URL_SCHEME"
     # TryExec is what makes a menu hide an entry whose program is not there, so
     # a half-removed install shows nothing rather than a launcher that fails.
     grep -q '^TryExec=' "$1" || printf 'TryExec=%s\n' "$2"
@@ -706,7 +720,7 @@ refresh_desktop_caches() {
 # touch a file this script did not create.
 claim_url_scheme() {
   if have xdg-mime; then
-    run xdg-mime default "${PRODUCT}.desktop" x-scheme-handler/piorbit >/dev/null 2>&1 || true
+    run xdg-mime default "$DESKTOP_NAME" "x-scheme-handler/$URL_SCHEME" >/dev/null 2>&1 || true
   fi
 }
 
@@ -772,13 +786,13 @@ This is a mistake in the release rather than on your machine."
   # The launcher is a symlink and not a copy, so an upgrade never leaves a
   # stale binary behind on PATH.
   if [ "$DRY_RUN" = 1 ]; then
-    step "would: link $BIN_DIR/$PRODUCT -> $ia_apprun"
+    step "would: link $BIN_DIR/$BINARY -> $ia_apprun"
   else
     mkdir -p "$BIN_DIR"
-    rm -f "$BIN_DIR/$PRODUCT"
-    ln -s "$ia_apprun" "$BIN_DIR/$PRODUCT"
+    rm -f "$BIN_DIR/$BINARY"
+    ln -s "$ia_apprun" "$BIN_DIR/$BINARY"
   fi
-  receipt_add file "$BIN_DIR/$PRODUCT"
+  receipt_add file "$BIN_DIR/$BINARY"
   # The app is on disk and on PATH from here, so the receipt has to exist from
   # here: anything that fails below (a read-only share/applications, a full
   # disk while copying icons) must still leave `--uninstall` able to undo this.
@@ -803,8 +817,8 @@ This is a mistake in the release rather than on your machine."
     install_desktop_entry "$ia_desktop" "$ia_apprun"
     install_icons "$ia_target" "$ia_icon"
   else
-    warn "the build has no .desktop file, so piorbit will not appear in your application menu" \
-      "It is still installed, and \`$BIN_DIR/$PRODUCT\` starts it. This is a
+    warn "the build has no .desktop file, so $PRODUCT will not appear in your application menu" \
+      "It is still installed, and \`$BIN_DIR/$BINARY\` starts it. This is a
 mistake in the release rather than on your machine — please report it."
   fi
 }
@@ -892,6 +906,59 @@ that needs no root at all:
   esac
 }
 
+# The mirror of install_system_package, and the reason it exists: `--uninstall`
+# used to print `sudo apt remove …` for a person to run and then say the app was
+# removed, which was not true — and it deleted the receipt on the way out, so the
+# next `--uninstall` could no longer name the package. Putting the app there
+# already asked for sudo once; taking it away asks for the same thing.
+
+# The command to run by hand, when this script cannot do it itself. Kept next to
+# remove_system_package so the two can never name different package managers.
+package_remove_command() {
+  # package_remove_command <package>
+  if have apt; then
+    printf 'sudo apt remove %s' "$1"
+  elif have dnf; then
+    printf 'sudo dnf remove %s' "$1"
+  elif have zypper; then
+    printf 'sudo zypper remove %s' "$1"
+  elif have dpkg; then
+    printf 'sudo dpkg -r %s' "$1"
+  elif have rpm; then
+    printf 'sudo rpm -e %s' "$1"
+  else
+    printf 'remove the %s package with this machine%ss package manager' "$1" "'"
+  fi
+}
+
+# Returns non-zero if the package is still installed afterwards. The caller
+# keeps the receipt in that case, so a second run still knows what to remove.
+remove_system_package() {
+  # remove_system_package <package>
+  rsp_sudo=""
+  if [ "$(id -u)" != "0" ]; then
+    have sudo || return 1
+    rsp_sudo="sudo"
+  fi
+  # `--purge` is the flag that means "leave nothing of mine behind", so it also
+  # clears dpkg's own record. Without it `apt remove` leaves the package in
+  # `deinstall ok config-files`, which is right for a plain removal and wrong
+  # for the one the person asked to be complete.
+  if have apt; then
+    if [ "$PURGE_DATA" = 1 ]; then run $rsp_sudo apt purge -y "$1"; else run $rsp_sudo apt remove -y "$1"; fi
+  elif have dnf; then
+    run $rsp_sudo dnf remove -y "$1"
+  elif have zypper; then
+    run $rsp_sudo zypper --non-interactive remove "$1"
+  elif have dpkg; then
+    if [ "$PURGE_DATA" = 1 ]; then run $rsp_sudo dpkg -P "$1"; else run $rsp_sudo dpkg -r "$1"; fi
+  elif have rpm; then
+    run $rsp_sudo rpm -e "$1"
+  else
+    return 1
+  fi
+}
+
 # ------------------------------------------------------------- install ----
 
 do_install() {
@@ -910,24 +977,24 @@ do_install() {
 
   asset=$(select_asset)
   version=$(printf '%s' "$TAG" | sed 's/^v//')
-  # With --from there is no tag to read a version out of, and saying "piorbit
+  # With --from there is no tag to read a version out of, and saying "<product>
   # local is installed" is a placeholder in the last line a person reads. Every
   # artifact carries the version in its own name (electron-builder puts it
   # there), so take it from the file that is actually being installed. An
   # upgrade from an offline copy is then detected like any other.
   if [ "$version" = "local" ]; then
     from_name=$(printf '%s' "$asset" |
-      sed -n 's/^piorbit[-_]\([0-9][0-9A-Za-z.+-]*\)[-_.]\(x86_64\|amd64\|arm64\|aarch64\).*$/\1/p')
+      sed -n "s/^$BINARY[-_]\\([0-9][0-9A-Za-z.+-]*\\)[-_.]\\(x86_64\\|amd64\\|arm64\\|aarch64\\).*\$/\\1/p")
     [ -n "$from_name" ] && version="$from_name"
   fi
 
   say ""
   if [ -n "$previous_version" ] && [ "$previous_version" = "$version" ] && [ "$previous_format" = "$FORMAT" ]; then
-    say "piorbit $version is already installed; reinstalling it."
+    say "$PRODUCT $version is already installed; reinstalling it."
   elif [ -n "$previous_version" ]; then
-    say "Upgrading piorbit $previous_version -> $version ($ARCH, $FORMAT)."
+    say "Upgrading $PRODUCT $previous_version -> $version ($ARCH, $FORMAT)."
   else
-    say "Installing piorbit $version ($ARCH, $FORMAT)."
+    say "Installing $PRODUCT $version ($ARCH, $FORMAT)."
   fi
   [ "$DRY_RUN" = 1 ] && say "Dry run: nothing will be downloaded or changed."
   say ""
@@ -968,8 +1035,8 @@ do_install() {
     appimage | tar)
       if [ "$DRY_RUN" = 1 ]; then
         step "would: unpack it into $LIB_DIR/app"
-        step "would: link $BIN_DIR/$PRODUCT at the unpacked launcher"
-        step "would: install $APPS_DIR/${PRODUCT}.desktop and icons under $ICONS_DIR"
+        step "would: link $BIN_DIR/$BINARY at the unpacked launcher"
+        step "would: install $APPS_DIR/$DESKTOP_NAME and icons under $ICONS_DIR"
         step "would: refresh the desktop and icon caches if the tools are present"
         step "would: write the install receipt to $RECEIPT"
       else
@@ -986,14 +1053,14 @@ do_install() {
         # is really this file: piped in on stdin (`sh < install.sh`) $0 is the
         # shell itself, and copying /bin/sh here would record an "uninstaller"
         # that removes nothing.
-        if [ -f "$0" ] && head -n 2 "$0" 2>/dev/null | grep -q 'piorbit installer'; then
+        if [ -f "$0" ] && head -n 2 "$0" 2>/dev/null | grep -qF "$PROGRAM"; then
           cp "$0" "$LIB_DIR/install.sh" && receipt_add file "$LIB_DIR/install.sh"
         else
           warn "this script was read from a pipe, so no copy of it was kept beside the app" \
-            "piorbit is installed. To uninstall it later you will need this script again:
+            "$PRODUCT is installed. To uninstall it later you will need this script again:
 
-  gh api repos/$REPO/contents/install.sh -H 'Accept: application/vnd.github.raw' > piorbit-install.sh
-  sh piorbit-install.sh --uninstall"
+  gh api repos/$REPO/contents/install.sh -H 'Accept: application/vnd.github.raw' > $PRODUCT-install.sh
+  sh $PRODUCT-install.sh --uninstall"
         fi
         # Written before the desktop wiring, not after: if installing the menu
         # entry or the icons fails, the app is already on disk and `--uninstall`
@@ -1024,8 +1091,8 @@ do_install() {
     return 0
   fi
   case "$FORMAT" in
-    deb | rpm) say "piorbit $version is installed. Open it from your application menu." ;;
-    *) say "piorbit $version is installed. Open it from your application menu, or run: $BIN_DIR/$PRODUCT" ;;
+    deb | rpm) say "$PRODUCT $version is installed. Open it from your application menu." ;;
+    *) say "$PRODUCT $version is installed. Open it from your application menu, or run: $BIN_DIR/$BINARY" ;;
   esac
 }
 
@@ -1046,21 +1113,29 @@ check_sandbox_support() {
   esac
   apparmor_restricts_userns || return 0
   # A machine that also allows the app's own profile through is fine.
-  say "This system restricts unprivileged user namespaces (AppArmor), which is how a"
-  say "home-directory install sandboxes itself. Installed as $FORMAT, piorbit would"
-  say "refuse to start."
+  say "$PRODUCT would not open on this machine as a $FORMAT install."
   say ""
-  say "The .deb package installs the AppArmor profile and the sandbox helper that fix"
-  say "this. It asks for your password once, and it is the same build."
+  say "The reason: this system restricts unprivileged user namespaces (an AppArmor"
+  say "setting), and that is how a copy installed into your home directory sandboxes"
+  say "itself. Without it the app refuses to start rather than run unsandboxed."
   say ""
-  if [ "$DRY_RUN" = 0 ] && { have dpkg || have apt; }; then
+  say "The .deb package is the same build and carries the AppArmor profile and the"
+  say "sandbox helper that make it work. It asks for your password once."
+  say ""
+  # Two things this must not do. It must not override a format the person named
+  # on the command line — `--format tar` is an instruction, not a preference —
+  # and `--yes` must not answer it: `--yes` means "do not stop to ask me", and
+  # turning that into "and also install a system package with sudo" widens what
+  # was agreed to. Both cases fall through to the instructions below, which say
+  # exactly how to get the .deb on purpose.
+  if [ "$DRY_RUN" = 0 ] && [ "$FORMAT_CHOSEN" = 0 ] && [ "$ASSUME_YES" = 0 ] && { have dpkg || have apt; }; then
     if ask "Install the .deb instead?"; then
       FORMAT="deb"
       say ""
       return 0
     fi
   fi
-  say "Continuing with $FORMAT. If piorbit does not open, either install the .deb —"
+  say "Continuing with $FORMAT. If $PRODUCT does not open, either install the .deb —"
   say ""
   say "  sh install.sh --format deb"
   say ""
@@ -1083,7 +1158,7 @@ post_install_notes() {
   case ":${PATH}:" in
     *":$BIN_DIR:"*) ;;
     *)
-      say "Note: $BIN_DIR is not on your PATH, so typing \`piorbit\` will not find it."
+      say "Note: $BIN_DIR is not on your PATH, so typing \`$BINARY\` will not find it."
       say "      The application-menu entry works either way. To fix the shell too, add"
       say "      this line to ~/.profile (or ~/.bashrc, or ~/.zshrc) and open a new terminal:"
       say ""
@@ -1097,7 +1172,7 @@ post_install_notes() {
 
 do_uninstall() {
   if [ ! -f "$RECEIPT" ]; then
-    die "there is no record of a piorbit installation under $PREFIX" \
+    die "there is no record of a $PRODUCT installation under $PREFIX" \
       "This script only removes what it installed, and it keeps that list in
   $RECEIPT
 If you installed with a different --prefix, pass the same one here. If you
@@ -1107,16 +1182,25 @@ installed the .deb or .rpm, remove it with your package manager instead."
   version=$(receipt_get version || echo unknown)
   package=$(receipt_get package || true)
   say ""
-  say "Removing piorbit $version."
+  say "Removing $PRODUCT $version."
   [ "$DRY_RUN" = 1 ] && say "Dry run: nothing will be changed."
   say ""
 
+  # Before the data, and before the receipt is touched: if the package manager
+  # refuses, nothing else has changed and the receipt is still there to try again.
   if [ -n "$package" ]; then
-    say "  piorbit was installed as a system package."
-    say "  Remove it with your package manager, for example:"
+    step "removing the $package system package (this needs sudo)"
     say ""
-    if have apt; then say "    sudo apt remove $package"; else say "    sudo rpm -e $package"; fi
-    say ""
+    if remove_system_package "$package"; then
+      say ""
+    else
+      die "the package manager did not remove $package" \
+        "Nothing else was changed, and the record of this install is still at
+  $RECEIPT
+so you can run this again once the package is gone. To remove it by hand:
+
+  $(package_remove_command "$package")"
+    fi
   fi
 
   # Data first, while the receipt is still on disk. If this is interrupted, or
@@ -1187,11 +1271,11 @@ installed the .deb or .rpm, remove it with your package manager instead."
   if [ "$DRY_RUN" = 1 ]; then
     say "Dry run complete. Nothing on this machine changed."
   elif [ "$removed_data" = 1 ] && [ "$kept_data" = 0 ]; then
-    say "piorbit is removed, along with its settings, paired devices and logs."
+    say "$PRODUCT is removed, along with its settings, paired devices and logs."
   elif [ "$removed_data" = 1 ]; then
-    say "piorbit is removed, along with the data you chose to delete."
+    say "$PRODUCT is removed, along with the data you chose to delete."
   else
-    say "piorbit is removed. Your settings are still on disk, so reinstalling picks up where you left off."
+    say "$PRODUCT is removed. Your settings are still on disk, so reinstalling picks up where you left off."
   fi
 }
 
@@ -1202,7 +1286,7 @@ TRUST_SIGNATURE=""
 
 if [ "$PURGE_DATA" = 1 ] && [ "$MODE" != "uninstall" ]; then
   die "--purge only means something with --uninstall" \
-    "It deletes your settings, paired devices and logs while removing piorbit:
+    "It deletes your settings, paired devices and logs while removing $PRODUCT:
 
   sh install.sh --uninstall --purge"
 fi

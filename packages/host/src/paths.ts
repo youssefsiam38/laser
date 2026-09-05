@@ -23,19 +23,20 @@
  * deliberate lever for a person who genuinely wants both to share one
  * directory.
  */
+import { DATA_DIR_NAME } from "@piorbit/protocol";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 /** `$XDG_DATA_HOME/piorbit` and the platform equivalents. */
 export function piorbitDataDir(env: NodeJS.ProcessEnv = process.env): string {
   const home = env["HOME"] ?? homedir();
-  if (process.platform === "darwin") return join(home, "Library", "Application Support", "piorbit");
+  if (process.platform === "darwin") return join(home, "Library", "Application Support", DATA_DIR_NAME);
   if (process.platform === "win32") {
     const base = env["LOCALAPPDATA"] ?? env["APPDATA"];
-    return base ? join(base, "piorbit") : join(home, "AppData", "Local", "piorbit");
+    return base ? join(base, DATA_DIR_NAME) : join(home, "AppData", "Local", DATA_DIR_NAME);
   }
   const xdg = env["XDG_DATA_HOME"];
-  return xdg && xdg.trim() !== "" ? join(xdg, "piorbit") : join(home, ".local", "share", "piorbit");
+  return xdg && xdg.trim() !== "" ? join(xdg, DATA_DIR_NAME) : join(home, ".local", "share", DATA_DIR_NAME);
 }
 
 /** The agent directory piorbit gives the host and every worker. */

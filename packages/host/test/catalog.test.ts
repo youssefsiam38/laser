@@ -1,3 +1,4 @@
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -5,7 +6,7 @@ import { join } from "node:path";
 import { SessionCatalog } from "../src/catalog.js";
 
 let dir: string;
-beforeEach(() => (dir = mkdtempSync(join(tmpdir(), "piorbit-catalog-"))));
+beforeEach(() => (dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-catalog-`))));
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 function session(slug: string, name: string, header: object, when: Date) {

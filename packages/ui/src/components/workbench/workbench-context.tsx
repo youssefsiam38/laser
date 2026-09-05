@@ -12,9 +12,18 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 
 export type WorkbenchPage = "settings" | "logs";
 
+/**
+ * Which settings tab to land on. Only ever passed by something that already
+ * knows the fix — a rejected credential opening "Providers and models" — so the
+ * plain `open("settings")` still lands where it always did.
+ */
+export type SettingsTab = "settings" | "appearance" | "packages" | "models" | "keyboard" | "trust" | "device";
+
 export interface Workbench {
   page: WorkbenchPage | null;
-  open: (page: WorkbenchPage) => void;
+  /** Set only when the caller asked for a specific settings tab. */
+  tab: SettingsTab | undefined;
+  open: (page: WorkbenchPage, tab?: SettingsTab) => void;
   close: () => void;
 }
 
@@ -28,8 +37,12 @@ export function useWorkbench(): Workbench {
 
 export function WorkbenchProvider({ children }: { children: ReactNode }) {
   const [page, setPage] = useState<WorkbenchPage | null>(null);
+  const [tab, setTab] = useState<SettingsTab>();
 
-  const open = useCallback((next: WorkbenchPage) => setPage(next), []);
+  const open = useCallback((next: WorkbenchPage, nextTab?: SettingsTab) => {
+    setPage(next);
+    setTab(nextTab);
+  }, []);
   const close = useCallback(() => setPage(null), []);
 
   // Escape closes the workbench, but never while a dialog, popover or a
@@ -46,6 +59,6 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
     return () => document.removeEventListener("keydown", onKey);
   }, [page, close]);
 
-  const value = useMemo<Workbench>(() => ({ page, open, close }), [page, open, close]);
+  const value = useMemo<Workbench>(() => ({ page, tab, open, close }), [page, tab, open, close]);
   return <WorkbenchContext.Provider value={value}>{children}</WorkbenchContext.Provider>;
 }

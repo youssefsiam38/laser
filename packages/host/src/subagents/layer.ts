@@ -33,7 +33,7 @@
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { ErrorCodes, ProtocolError, type Panel, type PiExtensionMessage } from "@piorbit/protocol";
+import { ErrorCodes, PRODUCT_NAME, ProtocolError, type Panel, type PiExtensionMessage } from "@piorbit/protocol";
 import { ControlError, requestInterrupt, requestSteer, requestStop, steeringClosed } from "./control.js";
 import { asyncRunsDir, isRunnerAlive, subagentsTempRoots } from "./file-layer.js";
 import {
@@ -458,7 +458,7 @@ export class SubagentsLayer {
           return { delivered: true };
         }
         case "interrupt": {
-          requestInterrupt({ asyncDir: target.asyncDir, reason: "you interrupted it from piorbit" });
+          requestInterrupt({ asyncDir: target.asyncDir, reason: `you interrupted it from ${PRODUCT_NAME}` });
           return { delivered: true };
         }
         case "resume": {
@@ -694,6 +694,6 @@ function asProtocolError(error: unknown): ProtocolError {
   if (error instanceof ControlError) return new ProtocolError(ErrorCodes.InvalidParams, error.message);
   return new ProtocolError(
     ErrorCodes.Internal,
-    "piorbit could not reach that run's control inbox. Its temp directory may have been cleaned up.",
+    `${PRODUCT_NAME} could not reach that run's control inbox. Its temp directory may have been cleaned up.`,
   );
 }

@@ -1,3 +1,4 @@
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { BellRing, Download, Maximize2, Share, Zap } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 
@@ -21,8 +22,12 @@ export function InstallPrompt({ env }: { env: PwaEnvironment }) {
   const [dismissed, dismiss] = useDismissed(INSTALL_KEY);
   const canPrompt = useCanPromptInstall();
   const connection = usePiorbitState((s) => s.connection);
+  // Nothing has been done in the app yet: a sheet that says it "works best
+  // installed" before the person has seen it work is the first thing they meet,
+  // and it is an advert. It waits until there is a session to come back to.
+  const used = usePiorbitState((s) => s.sessions.length > 0 || Object.keys(s.open).length > 0);
   const [open, setOpen] = useState(false);
-  const eligible = env.secure && !env.standalone && env.touch && !dismissed;
+  const eligible = env.secure && !env.standalone && env.touch && !dismissed && used;
 
   useEffect(() => {
     if (!eligible || connection !== "open") return;
@@ -49,7 +54,7 @@ export function InstallPrompt({ env }: { env: PwaEnvironment }) {
         <div className="mx-auto flex w-full max-w-[76ch] flex-col gap-5 pt-3 pb-4">
           <div className="flex flex-col gap-1.5">
             <p className="eyebrow">Add to Home Screen</p>
-            <SheetTitle className="text-lg leading-lg">piorbit works best installed</SheetTitle>
+            <SheetTitle className="text-lg leading-lg">{PRODUCT_NAME} works best installed</SheetTitle>
             <SheetDescription className="text-sm text-ink-2">
               {env.platform === "ios"
                 ? "On iPhone, notifications only work from the home screen — Safari itself cannot deliver them."
@@ -72,7 +77,7 @@ export function InstallPrompt({ env }: { env: PwaEnvironment }) {
                 Choose <span className="font-medium">Add to Home Screen</span>
               </Step>
               <Step n={3}>
-                Tap <span className="font-medium">Add</span>, then open piorbit from the home screen
+                Tap <span className="font-medium">Add</span>, then open {PRODUCT_NAME} from the home screen
               </Step>
             </ol>
           ) : !canPrompt ? (

@@ -18,18 +18,7 @@
  *   pi/ui/response       every live worker (the worker that owns the dialog id
  *                        answers; the others ignore it)
  */
-import {
-  ErrorCodes,
-  ProtocolError,
-  decisionPushPayload,
-  parseClientRequest,
-  type JsonRpcError,
-  type JsonRpcResponse,
-  type SessionAttention,
-  type SessionState,
-  type SessionSummary,
-  type TypedClientRequest,
-} from "@piorbit/protocol";
+import { ErrorCodes, PRODUCT_NAME, ProtocolError, decisionPushPayload, parseClientRequest, type JsonRpcError, type JsonRpcResponse, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@piorbit/protocol";
 import type { AttentionTracker } from "./attention.js";
 import type { SessionCatalog } from "./catalog.js";
 import type { LogStore } from "./logstore.js";
@@ -380,13 +369,13 @@ export class Router {
           decisionPushPayload({
             origin,
             sessionPath: "",
-            projectName: "piorbit",
+            projectName: PRODUCT_NAME,
             decisionId: "test",
             title: "Notifications are working",
             message: "This is what a session waiting for you looks like.",
             yesNo: false,
           }),
-          { ttlSeconds: 60, topic: "piorbit_test" },
+          { ttlSeconds: 60, topic: `${PRODUCT_NAME}_test` },
         );
         return { delivered: sent.delivered, ...(sent.error !== undefined ? { error: sent.error } : {}) };
       }

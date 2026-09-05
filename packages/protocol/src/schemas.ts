@@ -20,6 +20,64 @@ import {
   type PanelCloseEvent,
 } from "./panels.js";
 
+// ---------- the product's identity ----------
+
+/**
+ * `product.json`, validated (MX-T7, D-36).
+ *
+ * The build reads that file with plain `JSON.parse` in four places — the
+ * generators, the drift check, the Linux packaging scripts and the TypeScript
+ * emitter — so this is where a malformed field becomes a named failure instead
+ * of a product that answers to two names. The rules are the ones the operating
+ * systems actually enforce: reverse-DNS with three segments for an app id
+ * (macOS keys TCC grants on it), RFC 3986 for a scheme, and a shell-safe
+ * upper-case prefix for environment variables.
+ */
+const formerIdentitySchema = z.union([
+  z.string().min(1),
+  z
+    .object({
+      name: z.string().min(1),
+      dirName: z.string().min(1).optional(),
+      storagePrefix: z.string().min(1).optional(),
+      envPrefix: z.string().regex(/^[A-Z][A-Z0-9_]*$/).optional(),
+      symbolPrefix: z.string().min(1).optional(),
+      appId: z.string().min(1).optional(),
+      urlScheme: z.string().min(1).optional(),
+    })
+    .strict(),
+]);
+
+export const productIdentitySchema = z
+  .object({
+    name: z.string().regex(/^[a-z][a-z0-9-]*$/, "lower case, starts with a letter, letters digits and hyphens only"),
+    displayName: z.string().min(1),
+    appId: z.string().regex(/^[A-Za-z][A-Za-z0-9-]*(\.[A-Za-z0-9-]+){2,}$/, "reverse-DNS with at least three segments"),
+    urlScheme: z.string().regex(/^[a-z][a-z0-9+.-]*$/, "RFC 3986: a-z, digits, + . -"),
+    envPrefix: z.string().regex(/^[A-Z][A-Z0-9_]*$/, "upper case, digits and underscores"),
+    dirName: z.string().min(1),
+    storagePrefix: z.string().min(1),
+    symbolPrefix: z.string().min(1),
+    binary: z.string().min(1),
+    repository: z.string().regex(/^[^/]+\/[^/]+$/, "owner/name"),
+    wireNamespace: z.string().min(1),
+    vendor: z.string().min(1).optional(),
+    maintainerEmail: z.string().optional(),
+    formerNames: z.array(formerIdentitySchema).optional(),
+    copy: z.record(z.string(), z.string()).optional(),
+    license: z.object({ project: z.string(), metadata: z.string() }).partial().optional(),
+    categories: z.array(z.string()).optional(),
+    webCategories: z.array(z.string()).optional(),
+    keywords: z.array(z.string()).optional(),
+    branding: z.record(z.string(), z.string()).optional(),
+    iconSizes: z.array(z.number().int().positive()).optional(),
+  })
+  // `$`-prefixed keys are product.json's comments, and `desktopFileName` and
+  // friends are what the generator adds when it hands the shape to TypeScript.
+  .passthrough();
+
+export type ProductIdentity = z.infer<typeof productIdentitySchema>;
+
 // ---------- values ----------
 
 export const contentBlockSchema = z.discriminatedUnion("type", [

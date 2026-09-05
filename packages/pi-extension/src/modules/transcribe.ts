@@ -30,6 +30,7 @@
  * hang.
  */
 
+import { PRODUCT_NAME, symbolKey } from "@piorbit/protocol";
 import type { ExtensionContext, SlashCommandInfo } from "@earendil-works/pi-coding-agent";
 import type { PiorbitModule } from "./index.js";
 
@@ -39,7 +40,7 @@ const PACKAGE_ID = "pi-gpt-transcribe";
 const COMMAND_NAME = "transcribe";
 
 /** Mirrors `packages/worker/src/transcribe.ts`. Both sides declare it; neither imports the other. */
-const BRIDGE_SYMBOL = Symbol.for("piorbit.transcribe.v1");
+const BRIDGE_SYMBOL = Symbol.for(symbolKey("transcribe.v1"));
 
 interface TranscribeBridge {
   isActive(sessionPath: string): boolean;
@@ -95,7 +96,7 @@ export const transcribeModule: PiorbitModule = {
       module: "transcribe",
       level: "info",
       message:
-        "pi-gpt-transcribe detected. piorbit dictates natively (browser microphone, worker transcription) and reads the package's config.json; its terminal path stays unused.",
+        `pi-gpt-transcribe detected. ${PRODUCT_NAME} dictates natively (browser microphone, worker transcription) and reads the package's config.json; its terminal path stays unused.`,
     });
 
     // Pi has no `off`: handlers live as long as the extension runner, which is

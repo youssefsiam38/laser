@@ -19,6 +19,7 @@
  * process. Scaling out needs a shared bus, which is a separate task, not a knob.
  * `sleepApplication` stays false: a sleeping relay is a desktop nobody can reach.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol/identity";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
@@ -207,7 +208,7 @@ export class RelayServer {
     this.timer = setInterval(() => this.sweep(), this.options.pingIntervalMs);
     this.timer.unref?.();
     const url = `http://${this.options.host}:${port}`;
-    this.log(`piorbit relay listening on ${url} (max ${this.options.maxChannels} channels)`);
+    this.log(`${PRODUCT_NAME} relay listening on ${url} (max ${this.options.maxChannels} channels)`);
     return { host: this.options.host, port, url };
   }
 
@@ -248,7 +249,7 @@ export class RelayServer {
     if (url.pathname === "/") {
       res
         .writeHead(200, { "content-type": "text/plain; charset=utf-8" })
-        .end("piorbit relay. It forwards encrypted bytes between two peers and can read none of them.\n");
+        .end(`${PRODUCT_NAME} relay. It forwards encrypted bytes between two peers and can read none of them.\n`);
       return;
     }
     res.writeHead(404, { "content-type": "text/plain; charset=utf-8" }).end("not found\n");
@@ -271,7 +272,7 @@ export class RelayServer {
         socket,
         400,
         "bad_channel",
-        "offer the channel as a Sec-WebSocket-Protocol value: piorbit.channel.<43 base64url characters>",
+        `offer the channel as a Sec-WebSocket-Protocol value: ${CHANNEL_PROTOCOL_PREFIX}<43 base64url characters>`,
       );
     }
     if (!this.connections.take(ip)) {
@@ -392,7 +393,7 @@ export class RelayServer {
     }
     if (this.options.enforceFrameSizes && !this.legalSizes.has(frame.length)) {
       if (peer.handshakeFrames <= 0) {
-        this.fail(peer, "bad_frame_size", `${frame.length} bytes is not a padded piorbit frame size`);
+        this.fail(peer, "bad_frame_size", `${frame.length} bytes is not a padded ${PRODUCT_NAME} frame size`);
         return;
       }
     }

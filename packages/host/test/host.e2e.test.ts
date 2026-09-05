@@ -4,6 +4,7 @@
  * and receives seq-numbered updates. Requires `pnpm -r build` (spawns the
  * worker's dist). Sandboxed dirs; never touches ~/.pi/agent.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -77,7 +78,7 @@ let stub: Awaited<ReturnType<typeof stubProvider>>;
 let logs: string[];
 
 beforeEach(async () => {
-  base = mkdtempSync(join(tmpdir(), "piorbit-host-"));
+  base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-host-`));
   for (const d of ["project", "agent"]) mkdirSync(join(base, d), { recursive: true });
   stub = await stubProvider();
   writeFileSync(

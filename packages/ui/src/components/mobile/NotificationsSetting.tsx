@@ -1,3 +1,4 @@
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { Bell, BellOff, BellRing, Send } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -36,7 +37,7 @@ export function NotificationsSetting({ className }: { className?: string }) {
         <p className="text-sm text-ink-2">{a.reason}</p>
       ) : a.state === "needs-home-screen" ? (
         <p className="text-sm text-ink-2">
-          On iPhone, notifications only work once piorbit is on the Home Screen. In Safari tap <span className="font-medium text-ink">Share</span>, then{" "}
+          On iPhone, notifications only work once {PRODUCT_NAME} is on the Home Screen. In Safari tap <span className="font-medium text-ink">Share</span>, then{" "}
           <span className="font-medium text-ink">Add to Home Screen</span>, and turn them on from there.
         </p>
       ) : a.state === "host-disabled" ? (
@@ -44,7 +45,7 @@ export function NotificationsSetting({ className }: { className?: string }) {
       ) : a.state === "denied" ? (
         <p className="text-sm text-ink-2">
           Notifications are blocked for this site. Allow them in{" "}
-          {env.platform === "ios" ? "Settings › Notifications › piorbit" : env.platform === "android" ? "the site settings behind the lock icon" : "your browser’s site settings"}, then come back.
+          {env.platform === "ios" ? `Settings › Notifications › ${PRODUCT_NAME}` : env.platform === "android" ? "the site settings behind the lock icon" : "your browser’s site settings"}, then come back.
         </p>
       ) : (
         <>

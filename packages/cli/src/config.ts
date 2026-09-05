@@ -29,6 +29,7 @@
  * different sessions from the window on the same machine — for exactly the
  * person who has both.
  */
+import { DATA_DIR_NAME, ENV, ENV_PREFIX, PRODUCT_NAME } from "@piorbit/protocol";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { HOST_BIND_ADDRESS, HOST_DEFAULT_PORT, defaultAgentDir, defaultStateDir, piorbitDataDir } from "@piorbit/host";
@@ -62,12 +63,12 @@ export interface PiorbitPaths {
 
 /** Flags that every command accepts, because every command resolves paths. */
 export const PATH_FLAGS: FlagSpecs = {
-  "agent-dir": { type: "string", description: "Agent directory (default <piorbit data dir>/agent)", placeholder: "<dir>" },
+  "agent-dir": { type: "string", description: `Agent directory (default <${PRODUCT_NAME} data dir>/agent)`, placeholder: "<dir>" },
   "session-dir": { type: "string", description: "Session storage directory (default <agent-dir>/sessions)", placeholder: "<dir>" },
-  "state-dir": { type: "string", description: "piorbit's own state directory (default <piorbit data dir>/state)", placeholder: "<dir>" },
+  "state-dir": { type: "string", description: `${PRODUCT_NAME}'s own state directory (default <${PRODUCT_NAME} data dir>/state)`, placeholder: "<dir>" },
   "subagents-temp-root": {
     type: "string",
-    description: "Subagent temp root piorbit pins for its children",
+    description: `Subagent temp root ${PRODUCT_NAME} pins for its children`,
     placeholder: "<dir>",
   },
 };
@@ -90,23 +91,23 @@ function pick(...candidates: Array<string | undefined>): string | undefined {
 }
 
 export function resolvePaths(parsed: ParsedArgs, env: NodeJS.ProcessEnv = process.env): PiorbitPaths {
-  const agentDirOverride = pick(str(parsed, "agent-dir"), env["PIORBIT_AGENT_DIR"]);
+  const agentDirOverride = pick(str(parsed, "agent-dir"), env[ENV.agentDir]);
   const agentDir = expandPath(agentDirOverride ?? defaultAgentDir(env));
   const sessionDir = expandPath(
-    pick(str(parsed, "session-dir"), env["PIORBIT_SESSION_DIR"]) ?? join(agentDir, "sessions"),
+    pick(str(parsed, "session-dir"), env[ENV.sessionDir]) ?? join(agentDir, "sessions"),
   );
   // An overridden agent dir means a sandbox: give it its own host record and
   // project list, so `piorbit up --agent-dir /tmp/x` cannot adopt or stop the
   // host serving the real one.
   const stateDir = expandPath(
-    pick(str(parsed, "state-dir"), env["PIORBIT_STATE_DIR"]) ??
-      (agentDirOverride ? join(agentDir, "piorbit") : defaultStateDir(env)),
+    pick(str(parsed, "state-dir"), env[ENV.stateDir]) ??
+      (agentDirOverride ? join(agentDir, DATA_DIR_NAME) : defaultStateDir(env)),
   );
   const subagentsTempRoot = expandPath(
-    pick(str(parsed, "subagents-temp-root"), env["PIORBIT_SUBAGENTS_TEMP_ROOT"]) ?? join(stateDir, "subagents"),
+    pick(str(parsed, "subagents-temp-root"), env[ENV.subagentsTempRoot]) ?? join(stateDir, "subagents"),
   );
   const portFlag = num(parsed, "port");
-  const portEnv = env["PIORBIT_PORT"] ? Number(env["PIORBIT_PORT"]) : undefined;
+  const portEnv = env[ENV.port] ? Number(env[ENV.port]) : undefined;
   const port = portFlag ?? (Number.isFinite(portEnv) ? (portEnv as number) : HOST_DEFAULT_PORT);
 
   return {
@@ -133,7 +134,7 @@ export function piEnv(paths: PiorbitPaths, base: NodeJS.ProcessEnv = process.env
     [PI_AGENT_DIR_ENV]: paths.agentDir,
     [PI_SESSION_DIR_ENV]: paths.sessionDir,
     [PI_SUBAGENTS_TEMP_ROOT_ENV]: paths.subagentsTempRoot,
-    PIORBIT: "1",
+    [ENV_PREFIX]: "1",
   };
 }
 

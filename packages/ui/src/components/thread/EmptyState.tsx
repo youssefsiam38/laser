@@ -1,3 +1,4 @@
+import { PRODUCT_DISPLAY_NAME } from "@piorbit/protocol";
 import { useAuiState } from "@assistant-ui/react";
 import { FolderGit2 } from "lucide-react";
 
@@ -46,7 +47,7 @@ export function EmptyState() {
   const shell = useShellOptional();
   const disabled = useAuiState((s) => s.thread.isDisabled);
   const cwd = session?.cwd ?? currentProject;
-  const name = cwd ? shortCwd(cwd) : "piorbit";
+  const name = cwd ? shortCwd(cwd) : PRODUCT_DISPLAY_NAME;
 
   if (!cwd) {
     return (

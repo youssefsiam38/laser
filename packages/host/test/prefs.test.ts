@@ -9,6 +9,7 @@
  *   - the revision only ever goes up, because that is what lets a client
  *     recognise the echo of its own write instead of fighting it.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { describe, expect, it } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,7 +17,7 @@ import { join } from "node:path";
 import type { PrefsEntry } from "@piorbit/protocol";
 import { PrefsStore } from "../src/prefs.js";
 
-const dir = (): string => mkdtempSync(join(tmpdir(), "piorbit-prefs-"));
+const dir = (): string => mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-prefs-`));
 
 describe("PrefsStore", () => {
   it("keeps a namespace, hands it back, and survives a restart", () => {

@@ -10,6 +10,7 @@
  * Resolving a path is not importing Pi. Nothing in this package imports
  * `@earendil-works/*`; it only asks Node where the worker's copy lives.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { spawn } from "node:child_process";
 import { accessSync, constants, existsSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -114,7 +115,7 @@ export function resolveGlobalPi(env: NodeJS.ProcessEnv = process.env): PiResolut
   const bin = which("pi", env);
   if (!bin) {
     throw new CliError("no `pi` found on PATH", {
-      fix: "Install Pi globally (`npm i -g @earendil-works/pi-coding-agent`), or drop --global-pi to use the Pi piorbit pins.",
+      fix: `Install Pi globally (\`npm i -g @earendil-works/pi-coding-agent\`), or drop --global-pi to use the Pi ${PRODUCT_NAME} pins.`,
       exitCode: ExitCode.Failure,
     });
   }
@@ -122,7 +123,7 @@ export function resolveGlobalPi(env: NodeJS.ProcessEnv = process.env): PiResolut
     bin,
     packageDir: dirname(bin),
     packageName: PI_PACKAGE,
-    version: "unknown (global install; run `piorbit pi --global-pi --version`)",
+    version: `unknown (global install; run \`${PRODUCT_NAME} pi --global-pi --version\`)`,
     source: "global",
   };
 }
@@ -208,7 +209,7 @@ export async function runPi(argv: readonly string[], options: RunPiOptions): Pro
           new CliError(`could not run the ${pi.source} Pi at ${pi.bin}: ${error.message}`, {
             fix:
               pi.source === "pinned"
-                ? "Run `piorbit doctor` — it checks that the pinned Pi resolves and boots."
+                ? `Run \`${PRODUCT_NAME} doctor\` — it checks that the pinned Pi resolves and boots.`
                 : "Check that `pi` on your PATH is executable.",
             cause: error,
           }),

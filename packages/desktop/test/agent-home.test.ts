@@ -1,3 +1,4 @@
+import { ENV } from "@piorbit/protocol";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -22,14 +23,14 @@ describe("desktopEnv", () => {
     expect(env["PI_CODING_AGENT_DIR"]).toBeUndefined();
     expect(env["PI_CODING_AGENT_SESSION_DIR"]).toBeUndefined();
     expect(env["PI_SUBAGENTS_TEMP_ROOT"]).toBeUndefined();
-    expect(env["PIORBIT_AGENT_DIR"]).toBe(join(piorbitDataDir({ HOME: home }), "agent"));
-    expect(env["PIORBIT_STATE_DIR"]).toBe(join(piorbitDataDir({ HOME: home }), "state"));
+    expect(env[ENV.agentDir]).toBe(join(piorbitDataDir({ HOME: home }), "agent"));
+    expect(env[ENV.stateDir]).toBe(join(piorbitDataDir({ HOME: home }), "state"));
   });
 
-  it("honours PIORBIT_AGENT_DIR, which is the deliberate lever", () => {
-    const env = desktopEnv({ HOME: home, PIORBIT_AGENT_DIR: "/home/example/.pi/agent" });
-    expect(env["PIORBIT_AGENT_DIR"]).toBe("/home/example/.pi/agent");
-    expect(agentHome({ HOME: home, PIORBIT_AGENT_DIR: "/home/example/.pi/agent" }).chosenByPerson).toBe(true);
+  it(`honours ${ENV.agentDir}, which is the deliberate lever`, () => {
+    const env = desktopEnv({ HOME: home, [ENV.agentDir]: "/home/example/.pi/agent" });
+    expect(env[ENV.agentDir]).toBe("/home/example/.pi/agent");
+    expect(agentHome({ HOME: home, [ENV.agentDir]: "/home/example/.pi/agent" }).chosenByPerson).toBe(true);
   });
 
   it("reports what it ignored, so a log can say so instead of a person guessing", () => {

@@ -2,12 +2,17 @@
 /**
  * Host entry. Args: [--port N] [--agent-dir D] [--session-dir D] [--ui-dir D]
  */
+import { migrateFormerIdentities } from "./identity-migration.js";
 import { HostServer } from "./server.js";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
   return i >= 0 ? process.argv[i + 1] : undefined;
 }
+
+// Before any path is resolved: if this product was renamed, the person's data
+// is still under the old name and has to move first (MX-T7).
+for (const line of migrateFormerIdentities().lines) console.error(line);
 
 const port = arg("port");
 const agentDir = arg("agent-dir");

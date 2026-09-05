@@ -3,6 +3,7 @@
  * the documented order (piorbit's own decision → Pi's `trust.json` → Pi's
  * `defaultProjectTrust` → ask a client).
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -43,7 +44,7 @@ function registry(options: Partial<ConstructorParameters<typeof ProjectRegistry>
 }
 
 beforeEach(() => {
-  base = mkdtempSync(join(tmpdir(), "piorbit-projects-"));
+  base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-projects-`));
   agentDir = join(base, "agent");
   sessionDir = join(base, "sessions");
   mkdirSync(agentDir, { recursive: true });

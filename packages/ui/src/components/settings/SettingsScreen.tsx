@@ -12,6 +12,7 @@
  * and pretending otherwise would put a per-device switch behind a project
  * scope that has nothing to do with it.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, RefreshCw, Search, Sparkles } from "lucide-react";
 
@@ -64,9 +65,11 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "device", label: "This device" },
 ];
 
-export function SettingsScreen({ cwd: project }: { cwd: string | undefined }) {
+export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | undefined; initialTab?: Tab | undefined }) {
   const { client, actions } = usePiorbitStable();
-  const [tab, setTab] = useState<Tab>("settings");
+  // `initialTab` is only ever set by something that already knows the fix — a
+  // rejected credential sending the person straight to Providers and models.
+  const [tab, setTab] = useState<Tab>(initialTab ?? "settings");
   const [setupCwd, setSetupCwd] = useState<string>();
   const [catalog, setCatalog] = useState<SettingsCatalog>();
   const [snapshot, setSnapshot] = useState<SettingsSnapshot>();
@@ -181,7 +184,7 @@ export function SettingsScreen({ cwd: project }: { cwd: string | undefined }) {
         {needsProject ? (
           <Empty
             title="Open a project first"
-            body="These settings are kept per project as well as globally, so piorbit needs to know which project you mean. Pick one in the rail, or add one. Extensions, Providers and models, Appearance, Keyboard, Trust and This device all work without one."
+            body={`These settings are kept per project as well as globally, so ${PRODUCT_NAME} needs to know which project you mean. Pick one in the rail, or add one. Extensions, Providers and models, Appearance, Keyboard, Trust and This device all work without one.`}
           />
         ) : (
           <>
@@ -230,7 +233,7 @@ function RunSetupAgain() {
     setRunning(true);
     try {
       await client.request("pi/setup/complete", { completed: false });
-      actions.toast("info", "Setup will start again the next time piorbit opens with no session.");
+      actions.toast("info", `Setup will start again the next time ${PRODUCT_NAME} opens with no session.`);
     } catch (error) {
       actions.toast("error", error instanceof Error ? error.message : String(error));
     } finally {
@@ -247,11 +250,13 @@ function RunSetupAgain() {
         </h3>
       </div>
       <p className="text-sm leading-6 text-ink-2">
-        The steps you saw the first time piorbit opened: connect a provider, choose a model, open a project. Nothing is
+        The steps you saw the first time {PRODUCT_NAME} opened: connect a provider, choose a model, open a project. Nothing is
         undone by running them again — anything already set up is skipped.
       </p>
       <div>
-        <Button type="button" size="sm" variant="ghost" disabled={running} onClick={() => void run()}>
+        {/* A button, not a line of text: this is the only way back to first run,
+            and a ghost control on a page of prose reads as a caption. */}
+        <Button type="button" size="sm" variant="secondary" disabled={running} onClick={() => void run()}>
           Run setup again
         </Button>
       </div>

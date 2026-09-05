@@ -7,6 +7,7 @@
  * point. If a future Pi moves `KeybindingsManager`, renames an action or
  * changes a default, this fails here rather than in a person's Settings screen.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,7 +17,7 @@ import { scoreMatch } from "../src/files.js";
 
 const dirs: string[] = [];
 const agentDir = (): string => {
-  const dir = mkdtempSync(join(tmpdir(), "piorbit-keys-"));
+  const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-keys-`));
   dirs.push(dir);
   return dir;
 };

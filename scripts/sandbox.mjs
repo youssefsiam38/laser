@@ -15,6 +15,7 @@
  * fence so streaming, markdown, and tool-free turns can be exercised.
  * Requires `pnpm -r build` first.
  */
+import { identity as product } from "./identity/identity.mjs";
 import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,12 +24,12 @@ import { HostServer } from "@piorbit/host";
 import { processIdentity, writeHostFile } from "@piorbit/cli";
 
 const PORT = Number(process.env.PORT ?? 41441);
-const base = mkdtempSync(join(tmpdir(), "piorbit-sandbox-"));
+const base = mkdtempSync(join(tmpdir(), `${product.name}-sandbox-`));
 const project = join(base, "project");
 const agentDir = join(base, "agent");
 mkdirSync(project, { recursive: true });
 mkdirSync(agentDir, { recursive: true });
-writeFileSync(join(project, "README.md"), "# Sandbox project\n\nA scratch project for piorbit demos.\n");
+writeFileSync(join(project, "README.md"), `# Sandbox project\n\nA scratch project for ${product.name} demos.\n`);
 
 // ---- fake OpenAI-compatible streaming provider ----
 const reply = (prompt) =>
@@ -148,7 +149,7 @@ writeFileSync(
       pi.events.emit("piorbit:panel", {
         v: 1, id: "sandbox:doc", kind: "document", intent: "follow",
         title: "README.md", source: "sandbox", mediaType: "text/markdown", renderable: true,
-        content: { inline: "# Sandbox project\n\nA scratch project for piorbit demos.\n\n- one\n- two\n" },
+        content: { inline: "# Sandbox project\n\nA scratch project for demos.\n\n- one\n- two\n" },
       });
       pi.events.emit("piorbit:panel", {
         v: 1, id: "sandbox:hits", kind: "collection", intent: "inline",
@@ -173,7 +174,7 @@ writeFileSync(
   };
 
   // Emitted at session start rather than behind a slash command: Pi's command
-  // registry belongs to its terminal editor, and piorbit never types into it,
+  // registry belongs to its terminal editor, and the app never types into it,
   // so a command handler here would be unreachable from the app. A demo host
   // should show the thing it exists to demonstrate.
   pi.on("session_start", () => { console.error("[sandbox-ext] session_start"); setTimeout(() => { try { emitPanels(); console.error("[sandbox-ext] panels emitted"); } catch (e) { console.error("[sandbox-ext] emit failed: " + e); } }, 400); });
@@ -227,7 +228,8 @@ writeHostFile(hostFile, {
 });
 
 console.log(
-  `piorbit sandbox\n  ui:       ${url}\n  project:  ${project}\n  agentDir: ${agentDir}\n  stateDir: ${stateDir}\n  provider: ${providerUrl}\n  cli:      PIORBIT_STATE_DIR=${stateDir} PIORBIT_AGENT_DIR=${agentDir} piorbit status`,
+  `${product.name} sandbox\n  ui:       ${url}\n  project:  ${project}\n  agentDir: ${agentDir}\n  stateDir: ${stateDir}\n  provider: ${providerUrl}\n` +
+    `  cli:      ${product.env.stateDir}=${stateDir} ${product.env.agentDir}=${agentDir} ${product.binary} status`,
 );
 
 // ---- demo panels, seeded from the host ----
@@ -273,7 +275,7 @@ function demoPanels() {
     {
       kind: "document", id: "sandbox:doc", source: "sandbox", title: "README.md", intent: "follow",
       mediaType: "text/markdown", renderable: true,
-      content: { inline: "# Sandbox project\n\nA scratch project for piorbit demos.\n\n- one\n- two\n" },
+      content: { inline: "# Sandbox project\n\nA scratch project for demos.\n\n- one\n- two\n" },
     },
     {
       kind: "collection", id: "sandbox:hits", source: "sandbox", title: '3 results for "noise protocol"',

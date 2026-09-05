@@ -22,6 +22,7 @@
  * electron-builder is pinned at 26.15.3 and the mac build is `hardenedRuntime`
  * with an explicit entitlements file.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { shell, systemPreferences, type Session } from "electron";
 import type { MicrophoneStatus } from "./api.js";
 import type { DesktopLog } from "./log.js";
@@ -51,14 +52,14 @@ export function installPermissionGates(target: Session, options: PermissionGateO
       // reviewed.
       const types = "mediaTypes" in details ? (details.mediaTypes ?? []) : [];
       if (types.length === 0 || types.some((type) => type !== "audio")) {
-        log.line(`refused a media request for [${types.join(", ")}]: piorbit only uses the microphone`);
+        log.line(`refused a media request for [${types.join(", ")}]: ${PRODUCT_NAME} only uses the microphone`);
         callback(false);
         return;
       }
       if (process.platform === "darwin" && systemPreferences.getMediaAccessStatus("microphone") !== "granted") {
         // Chromium would otherwise hand back a silent stream while macOS
         // quietly refuses. Better to say no and let the UI offer the fix.
-        log.line("refused the microphone: macOS has not granted piorbit microphone access");
+        log.line(`refused the microphone: macOS has not granted ${PRODUCT_NAME} microphone access`);
         callback(false);
         return;
       }

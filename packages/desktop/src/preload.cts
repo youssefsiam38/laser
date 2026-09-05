@@ -11,7 +11,7 @@
  * preload with full Node in it would put `child_process` one prototype away
  * from a bug in the markdown renderer.
  *
- * Everything is exposed under one frozen `window.piorbit`. The web build of the
+ * Everything is exposed under one frozen `window.desktop`. The web build of the
  * same UI simply does not have it, so every caller has to check — which is what
  * keeps the browser, the phone and this window on the same code path.
  */
@@ -62,9 +62,21 @@ interface Bootstrap {
   chrome: DesktopChrome;
 }
 
-/** Read one `--piorbit-<name>=<url-encoded json>` switch out of argv. */
+/**
+ * The two strings this file may not import.
+ *
+ * A sandboxed preload's `require` resolves only `electron` and a few Node
+ * builtins, so `@piorbit/protocol` is out of reach here. They are name-free for
+ * exactly that reason — an internal contract inside one build rather than the
+ * product's identity — and `src/api.ts` declares the same two values for
+ * everything that *can* import. `test/preload.test.ts` keeps them equal.
+ */
+const BRIDGE = "desktop";
+const ARGUMENT_PREFIX = "--desktop-";
+
+/** Read one `--desktop-<name>=<url-encoded json>` switch out of argv. */
 function readArgument<T>(name: string): T | undefined {
-  const prefix = `--piorbit-${name}=`;
+  const prefix = `${ARGUMENT_PREFIX}${name}=`;
   for (const argument of process.argv) {
     if (!argument.startsWith(prefix)) continue;
     try {
@@ -150,4 +162,4 @@ const api = {
   },
 };
 
-contextBridge.exposeInMainWorld("piorbit", api);
+contextBridge.exposeInMainWorld(BRIDGE, api);

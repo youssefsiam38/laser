@@ -277,7 +277,7 @@ function WorkerSection() {
   const worker = meta.worker;
   const tone = worker ? (WORKER_TONE[worker.status] ?? { color: "bg-ink-3", label: worker.status }) : undefined;
   return (
-    <Section title="Worker">
+    <Section title="Agent process">
       <div className="flex items-start gap-2">
         <span aria-hidden="true" className={cn("mt-[7px] size-2 shrink-0 rounded-full", tone?.color ?? "bg-line")} />
         <div className="min-w-0 flex-1">
@@ -286,7 +286,7 @@ function WorkerSection() {
             {view && <span className="ms-1.5 font-mono text-xs text-ink-3">{view.state.cwd.split("/").filter(Boolean).at(-1)}</span>}
           </p>
           {worker?.message && <p className="text-xs leading-4 break-words text-ink-2">{worker.message}</p>}
-          {!worker && <p className="text-xs leading-4 text-ink-3">One agent process per project directory.</p>}
+          {!worker && <p className="text-xs leading-4 text-ink-3">One agent runs per project directory.</p>}
         </div>
       </div>
     </Section>

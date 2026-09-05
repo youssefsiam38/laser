@@ -1,3 +1,4 @@
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { useEffect, useState } from "react";
 import { ShieldQuestionMark } from "lucide-react";
 
@@ -97,7 +98,7 @@ export function TrustDialog() {
             <span>
               Remember this decision for this directory.
               <span className="block text-xs text-ink-3">
-                Stored by piorbit, and only by piorbit. The agent&rsquo;s own trust list is left alone.
+                Stored by {PRODUCT_NAME}, and only by {PRODUCT_NAME}. The agent&rsquo;s own trust list is left alone.
               </span>
             </span>
           </label>

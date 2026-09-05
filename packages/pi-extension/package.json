@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "The one piorbit companion Pi extension, loaded into sessions the worker starts. Contains a module per supported community package; modules activate only when their package is present. Allowed to import Pi.",
+  "description": "The one companion Pi extension, loaded into sessions the worker starts. Contains a module per supported community package; modules activate only when their package is present. Allowed to import Pi.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

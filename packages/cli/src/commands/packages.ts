@@ -7,6 +7,7 @@
  * `pi/packages/progress` notifications and is printed as it happens rather than
  * leaving a person staring at a still cursor.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { resolve } from "node:path";
 import type { PackageEntry, PackageProgress, PackageScope } from "@piorbit/protocol";
 import { bool, str } from "../args.js";
@@ -26,7 +27,7 @@ function verbOf(positionals: readonly string[]): { verb: Verb; rest: string[] } 
   if ((VERBS as readonly string[]).includes(first)) return { verb: first as Verb, rest };
   throw new CliError(`unknown packages verb ${JSON.stringify(first)}`, {
     exitCode: ExitCode.Usage,
-    fix: `Use one of: ${VERBS.join(", ")}. \`piorbit packages\` on its own lists them.`,
+    fix: `Use one of: ${VERBS.join(", ")}. \`${PRODUCT_NAME} packages\` on its own lists them.`,
   });
 }
 
@@ -47,7 +48,7 @@ function printPackages(term: Terminal, packages: readonly PackageEntry[]): void 
   if (packages.length === 0) {
     term.note("no packages installed");
     term.note();
-    term.note(`  Install one with ${term.err.bold("piorbit packages install pi-web-access")}`);
+    term.note(`  Install one with ${term.err.bold(`${PRODUCT_NAME} packages install pi-web-access`)}`);
     return;
   }
   for (const line of table(
@@ -69,7 +70,7 @@ export const packagesCommand: Command = {
   name: "packages",
   group: "Projects",
   summary: "install, remove and update agent packages",
-  usage: "piorbit packages [list|install <source>|remove <source>|update [source]|check] [--scope <user|project>]",
+  usage: `${PRODUCT_NAME} packages [list|install <source>|remove <source>|update [source]|check] [--scope <user|project>]`,
   description: `
 Drives the agent's own package manager through the worker for a project — same
 install directory, same settings entry as the agent would use itself — and the
@@ -95,9 +96,9 @@ adds it to this project's own settings.
     progress: { type: "boolean", default: true, description: "Print progress while installing" },
   },
   examples: [
-    { note: "what is installed", command: "piorbit packages" },
-    { note: "add a package for every project", command: "piorbit packages install pi-web-access" },
-    { note: "check npm and git for newer versions", command: "piorbit packages check" },
+    { note: "what is installed", command: `${PRODUCT_NAME} packages` },
+    { note: "add a package for every project", command: `${PRODUCT_NAME} packages install pi-web-access` },
+    { note: "check npm and git for newer versions", command: `${PRODUCT_NAME} packages check` },
   ],
   async run({ term, paths, args }) {
     const { verb, rest } = verbOf(args.positionals);
@@ -151,7 +152,7 @@ adds it to this project's own settings.
           term.print(line);
         }
         term.note();
-        term.note(`  Update them all with ${term.err.bold("piorbit packages update")}`);
+        term.note(`  Update them all with ${term.err.bold(`${PRODUCT_NAME} packages update`)}`);
         return;
       }
 
@@ -175,7 +176,7 @@ adds it to this project's own settings.
       if (!source) {
         throw new CliError(`\`packages ${verb}\` needs a package source`, {
           exitCode: ExitCode.Usage,
-          fix: `Write it as \`piorbit packages ${verb} <npm-name-or-git-url>\`. \`piorbit packages\` lists what is installed.`,
+          fix: `Write it as \`${PRODUCT_NAME} packages ${verb} <npm-name-or-git-url>\`. \`${PRODUCT_NAME} packages\` lists what is installed.`,
         });
       }
       const scope = scopeOf(args);

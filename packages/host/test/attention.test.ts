@@ -2,6 +2,7 @@
  * M2-T2: the attention state machine and the part of it that has to survive a
  * reload. Pure logic with a temp file for the seen-map, no worker involved.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,7 +26,7 @@ function tracker(changes: AttentionSnapshot[] = [], storePath?: string): Attenti
 }
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "piorbit-attention-"));
+  dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-attention-`));
   clock = Date.parse("2026-09-05T10:00:00.000Z");
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));

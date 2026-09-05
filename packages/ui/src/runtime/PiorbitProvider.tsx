@@ -18,6 +18,7 @@
  * a small external store that this component keeps in sync, and reads no
  * closed-over state at all.
  */
+import { PRODUCT_NAME, storageKey } from "@piorbit/protocol";
 import {
   AssistantRuntimeProvider,
   useAui,
@@ -63,13 +64,24 @@ import {
   type ArchiveStore,
 } from "./threadList.js";
 
-export const PROJECT_STORAGE_KEY = "piorbit-project";
+export const PROJECT_STORAGE_KEY = storageKey("project");
 /**
  * Pre-M2 project list. Projects now live in the host (`pi/project/*`) so the
  * CLI, a second browser and a phone all see one list; this key is only read
  * once, to hand old local entries to the host, and then removed.
  */
-export const PROJECTS_STORAGE_KEY = "piorbit-projects";
+export const PROJECTS_STORAGE_KEY = storageKey("projects");
+
+/**
+ * The last session read in each project, so a reload comes back to it.
+ *
+ * Identity and position survive every transition (AGENTS.md, "Motion is a
+ * material"), and a browser reload is a transition like any other: coming back
+ * to "No session open" after refreshing is the app forgetting where the person
+ * was. Per project, because switching projects in the rail should land on that
+ * project's work, not on whatever was open last anywhere.
+ */
+export const SESSION_STORAGE_KEY = storageKey("session");
 
 /** A project-trust question the host is holding a worker start on (M2-T4). */
 export type TrustRequest = HostNotifications["pi/project/trust_request"];
@@ -295,6 +307,20 @@ const writeString = (key: string, value: string | undefined): void => {
     /* ignore */
   }
 };
+
+/** `{ "<project cwd>": "<session path>" }`, and never anything else. */
+const readStringMap = (key: string): Record<string, string> => {
+  try {
+    const parsed: unknown = JSON.parse(storage()?.getItem(key) ?? "{}");
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed as Record<string, unknown>).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+  } catch {
+    return {};
+  }
+};
+
+/** Last path segment, for a sentence about a directory. */
+const basenameOf = (cwd: string): string => cwd.replace(/[/\\]+$/, "").split(/[/\\]/).pop() || cwd;
 
 const readStringList = (key: string): string[] => {
   try {
@@ -795,7 +821,32 @@ export function PiorbitProvider({ children, url }: PiorbitProviderProps): ReactN
         guard(async () => {
           await client.request("pi/project/remove", { cwd });
           setProjectList((current) => current.filter((p) => p.cwd !== cwd || p.sessionCount > 0));
-          await refreshProjects();
+          const { projects: after } = await client.request("pi/project/list", {});
+          setProjectList(after);
+          // Removing unpins; it never deletes, and two things can keep the
+          // directory on screen anyway: the host still lists it because the
+          // session catalog has seen sessions there, or this client is holding
+          // one of its sessions open (a project whose session is open must
+          // never lose its rail icon — see `projectsKey`). Either way, a row
+          // that stays put after "Remove" reads as a button that does not work,
+          // so say which it is.
+          const still = after.find((project) => project.cwd === cwd);
+          const openHere = Object.values(readState().open).some((view) => view.state.cwd === cwd);
+          if (still) {
+            dispatch({
+              type: "toast",
+              level: "info",
+              text: `${basenameOf(cwd)} is still listed: ${still.sessionCount} session${still.sessionCount === 1 ? "" : "s"} saved there. Archive them to take it off the list; nothing was deleted.`,
+            });
+          } else if (openHere) {
+            dispatch({
+              type: "toast",
+              level: "info",
+              text: `${basenameOf(cwd)} is off the list. It stays in the rail while one of its sessions is open, so that session cannot go missing.`,
+            });
+          } else {
+            dispatch({ type: "toast", level: "info", text: `${basenameOf(cwd)} is off the list. Nothing on disk was deleted.` });
+          }
         }).then(() => undefined),
       refreshProjects,
       answerTrust: (cwd, trusted, remember) =>
@@ -858,6 +909,48 @@ export function PiorbitProvider({ children, url }: PiorbitProviderProps): ReactN
   }, [currentProject, projects, setCurrentProject]);
 
   /**
+   * Remember the session being read, per project.
+   *
+   * Written from the committed state rather than from the click, so it also
+   * follows a session opened by a deep link, by the command palette or by the
+   * sessions panel — there is one place a session becomes current, and this is
+   * downstream of it.
+   */
+  useEffect(() => {
+    const path = state.current;
+    if (!path) return;
+    const cwd = state.open[path]?.state.cwd;
+    if (!cwd) return;
+    const remembered = readStringMap(SESSION_STORAGE_KEY);
+    if (remembered[cwd] === path) return;
+    writeString(SESSION_STORAGE_KEY, JSON.stringify({ ...remembered, [cwd]: path }));
+  }, [state.current, state.open]);
+
+  /**
+   * Reopen it once, on the first connection, unless a deep link is asking for
+   * something else — that link is a deliberate instruction and this is a memory.
+   *
+   * A session that has since been deleted or archived simply does not come
+   * back: the entry is dropped and the landing screen stands. Nothing is said
+   * about it, because the person did not ask for it this time.
+   */
+  const restoredSession = useRef(false);
+  useEffect(() => {
+    if (restoredSession.current || state.connection !== "open") return;
+    if (/^#\/session\//.test(globalThis.location?.hash ?? "")) return;
+    restoredSession.current = true;
+    const cwd = projectRef.current;
+    if (!cwd) return;
+    const remembered = readStringMap(SESSION_STORAGE_KEY);
+    const path = remembered[cwd];
+    if (!path || readState().open[path]) return;
+    void openSession(path).catch(() => {
+      const { [cwd]: _gone, ...rest } = readStringMap(SESSION_STORAGE_KEY);
+      writeString(SESSION_STORAGE_KEY, JSON.stringify(rest));
+    });
+  }, [state.connection, openSession, readState]);
+
+  /**
    * Deep link: `piorbit open` / `piorbit new --open` send the browser to
    * `#/session/<encodeURIComponent(path)>`. Honour it once per hash, and clear
    * the fragment afterwards so a reload does not drag the user back to a
@@ -889,7 +982,7 @@ export function PiorbitProvider({ children, url }: PiorbitProviderProps): ReactN
         onError(
           new Error(
             `Could not open ${path} from the link: ${error instanceof Error ? error.message : String(error)}. ` +
-              `Run \`piorbit sessions\` to see what exists.`,
+              `Run \`${PRODUCT_NAME} sessions\` to see what exists.`,
           ),
         );
       })

@@ -1,3 +1,4 @@
+import { storageKey } from "@piorbit/protocol";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Dock } from "@/components/dock";
@@ -24,7 +25,7 @@ import { Toasts } from "./Toasts.js";
 import { TrustDialog } from "./TrustDialog.js";
 import { TopBar } from "./TopBar.js";
 
-export const PANELS_STORAGE_KEY = "piorbit-panels";
+export const PANELS_STORAGE_KEY = storageKey("panels");
 
 interface PanelPrefs {
   sessions?: boolean;
@@ -200,7 +201,7 @@ function ShellFrame() {
   const needYou = usePiorbitState((s) => needYouCount(mergeSessions(s.sessions, s.open), s.open));
   useEffect(() => {
     const summary = view ? sessions.find((s) => s.path === view.path) : undefined;
-    const title = view ? (summary ? sessionTitle(summary, view) : (view.state.name ?? view.title ?? view.state.id.slice(0, 8))) : undefined;
+    const title = view ? (summary ? sessionTitle(summary, view) : (view.state.name ?? view.title ?? "New session")) : undefined;
     document.title = documentTitle(title, needYou);
   }, [needYou, sessions, view]);
 

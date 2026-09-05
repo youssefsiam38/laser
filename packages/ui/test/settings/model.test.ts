@@ -3,6 +3,7 @@
  * Both are places where being quietly wrong would lose someone's edit, so they
  * are tested rather than eyeballed.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { describe, expect, it } from "vitest";
 import type { SettingDescriptor, SettingsCatalog, SettingsSnapshot } from "@piorbit/protocol";
 
@@ -105,7 +106,7 @@ describe("changesFromJson", () => {
     expect(changes).toEqual([{ path: "theme", op: "unset" }]);
   });
 
-  it("leaves keys piorbit does not know about exactly as they were", () => {
+  it(`leaves keys ${PRODUCT_NAME} does not know about exactly as they were`, () => {
     const current = { theme: "dark", futurePiSetting: { deep: 1 } };
     const edited = { theme: "light", futurePiSetting: { deep: 1 } };
     const { changes, unrepresentable } = changesFromJson(catalog, current, edited, "global");

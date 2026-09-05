@@ -1,3 +1,4 @@
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { BellRing, ChevronDown, RotateCw, ShieldOff, Sparkles, WifiOff, X } from "lucide-react";
 import { useState } from "react";
 
@@ -80,7 +81,7 @@ export function UpdateReady() {
   return (
     <StackRow tone="live" role="status">
       <Sparkles aria-hidden="true" className="size-3.5 shrink-0 text-live" />
-      <span className="min-w-0 flex-1 truncate font-medium">A new version of piorbit is ready</span>
+      <span className="min-w-0 flex-1 truncate font-medium">A new version of {PRODUCT_NAME} is ready</span>
       <Button size="xs" variant="secondary" className="-me-1" onClick={applyUpdate}>
         <RotateCw aria-hidden="true" />
         Reload

@@ -10,20 +10,7 @@
  * Pending extension dialogs are re-emitted on load for the same reason.
  */
 
-import {
-  ErrorCodes,
-  ProtocolError,
-  parseClientRequest,
-  type ClientRequests,
-  type ContentBlock,
-  type HostNotifications,
-  type JsonRpcMessage,
-  type JsonRpcResponse,
-  type PiExtensionModuleName,
-  type SessionState,
-  type SessionUpdateParams,
-  type TypedClientRequest,
-} from "@piorbit/protocol";
+import { ErrorCodes, PRODUCT_NAME, ProtocolError, parseClientRequest, type ClientRequests, type ContentBlock, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionState, type SessionUpdateParams, type TypedClientRequest } from "@piorbit/protocol";
 import { resolve } from "node:path";
 import type { DriverEvent, SessionDriver } from "./driver.js";
 import { ProjectFilesService } from "./files.js";
@@ -373,7 +360,7 @@ export class WorkerServer {
       case "pi/prefs/set":
         throw new ProtocolError(
           ErrorCodes.Unsupported,
-          `${req.method} is answered by the host: piorbit's own preferences are not per project and must outlive a sleeping worker`,
+          `${req.method} is answered by the host: ${PRODUCT_NAME}'s own preferences are not per project and must outlive a sleeping worker`,
         );
     }
   }

@@ -22,6 +22,7 @@
  * owning Pi session's bus (findings.md), so it is the module's job, not this
  * file's.
  */
+import { WIRE_NAMESPACE } from "@piorbit/protocol";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
@@ -30,7 +31,13 @@ import { basename, dirname, join } from "node:path";
 export const MAX_STEER_MESSAGE_BYTES = 128 * 1024;
 
 /** How piorbit names itself in a control request, so `subagent status` shows where it came from. */
-export const CONTROL_SOURCE = "piorbit";
+/**
+ * The `source` stamped on a control message pi-subagents reads back.
+ *
+ * The wire namespace, not the product name: it is written into files another
+ * process parses, so a rename must not make a run started before it unreadable.
+ */
+export const CONTROL_SOURCE: string = WIRE_NAMESPACE;
 
 export class ControlError extends Error {
   override readonly name = "ControlError";

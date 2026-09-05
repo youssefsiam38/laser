@@ -11,6 +11,7 @@
  * The dispatch table is nine lines of shell with no other way to check it, so
  * it is checked here against stubs that only record which one ran.
  */
+import { BINARY_NAME, ENV, PRODUCT_NAME, REAL_BINARY_NAME, URL_SCHEME_PREFIX } from "@piorbit/protocol";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -18,13 +19,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 
-const launcher = join(dirname(fileURLToPath(import.meta.url)), "..", "build", "linux", "launcher.sh");
-const root = mkdtempSync(join(tmpdir(), "piorbit-launcher-"));
+const launcher = join(dirname(fileURLToPath(import.meta.url)), "..", "build", "linux", "generated", "launcher.sh");
+const root = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-launcher-`));
 
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 /**
- * A fake install: the launcher, a `piorbit-bin` standing in for Electron, a
+ * A fake install: the launcher, the renamed Electron binary beside it, a
  * `node` standing in for the bundled runtime, and a CLI entry that exists only
  * so the launcher's existence check passes. Each stub writes what it was called
  * with to one file.
@@ -38,21 +39,21 @@ function install(): { dir: string; log: string } {
   writeFileSync(join(cliDir, "main.js"), "// stub\n");
 
   for (const [name, label] of [
-    [join(dir, "piorbit-bin"), "window"],
+    [join(dir, REAL_BINARY_NAME), "window"],
     [join(dir, "resources", "runtime", "node"), "command"],
   ] as const) {
     writeFileSync(name, `#!/bin/sh\nprintf '${label} %s\\n' "$*" > "${log}"\n`);
     chmodSync(name, 0o755);
   }
-  writeFileSync(join(dir, "piorbit"), readFileSync(launcher, "utf8"));
-  chmodSync(join(dir, "piorbit"), 0o755);
+  writeFileSync(join(dir, BINARY_NAME), readFileSync(launcher, "utf8"));
+  chmodSync(join(dir, BINARY_NAME), 0o755);
   return { dir, log };
 }
 
 function run(args: string[], env: Record<string, string> = {}, withAppRun = false): string {
   const { dir, log } = install();
   if (withAppRun) writeFileSync(join(dir, "AppRun"), "#!/usr/bin/env bash\n");
-  const result = spawnSync(join(dir, "piorbit"), args, {
+  const result = spawnSync(join(dir, BINARY_NAME), args, {
     encoding: "utf8",
     // No display and no Wayland, so the launcher adds no feature flag and the
     // recorded arguments are only the ones under test.
@@ -68,8 +69,8 @@ describe("the launcher decides between the window and the command", () => {
     expect(run([])).toMatch(/^window/);
   });
 
-  it("opens the window for a piorbit:// link, which is how the desktop hands one over", () => {
-    expect(run(["piorbit://session/abc"])).toBe("window piorbit://session/abc");
+  it(`opens the window for a ${URL_SCHEME_PREFIX} link, which is how the desktop hands one over`, () => {
+    expect(run([`${URL_SCHEME_PREFIX}session/abc`])).toBe(`window ${URL_SCHEME_PREFIX}session/abc`);
   });
 
   it("opens the window for Electron's own flags, which it passes to itself on relaunch", () => {
@@ -109,7 +110,7 @@ describe("the launcher decides between the window and the command", () => {
  */
 describe("what AppRun hands over", () => {
   it("drops the --no-sandbox a mounted AppImage's AppRun injected", () => {
-    expect(run(["--no-sandbox"], { APPIMAGE: "/tmp/piorbit.AppImage", APPDIR: "/anything" })).toBe("window");
+    expect(run(["--no-sandbox"], { APPIMAGE: `/tmp/${PRODUCT_NAME}.AppImage`, APPDIR: "/anything" })).toBe("window");
   });
 
   it("drops it on an extracted AppDir too, where AppRun exports nothing", () => {
@@ -121,7 +122,7 @@ describe("what AppRun hands over", () => {
   });
 
   it("honours an explicit opt-out rather than second-guessing it", () => {
-    expect(run(["--no-sandbox"], { APPDIR: "/anything", PIORBIT_DISABLE_SANDBOX: "1" })).toBe("window --no-sandbox");
+    expect(run(["--no-sandbox"], { APPDIR: "/anything", [ENV.disableSandbox]: "1" })).toBe("window --no-sandbox");
   });
 
   it("leaves a person's own --no-sandbox alone when there is no AppRun at all", () => {

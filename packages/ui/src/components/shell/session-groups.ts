@@ -6,6 +6,7 @@
  * piece and is module-level so `Rail` and `SessionsPanel` share it without a
  * context the shell would have to own.
  */
+import { storageKey } from "@piorbit/protocol";
 import { useSyncExternalStore } from "react";
 import type { SessionSummary } from "@piorbit/protocol";
 
@@ -127,7 +128,7 @@ export function groupDomId(cwd: string): string {
 // List state shared by the rail and the panel
 // ---------------------------------------------------------------------------
 
-export const SESSION_GROUPS_STORAGE_KEY = "piorbit-session-groups";
+export const SESSION_GROUPS_STORAGE_KEY = storageKey("session-groups");
 
 export interface SessionsListState {
   /** Only this project's group is shown; `undefined` = every project. */

@@ -1,3 +1,4 @@
+import { namespaced } from "@piorbit/protocol";
 import type * as React from "react";
 import { useEffect, useRef } from "react";
 import { CircleX, Info, TriangleAlert } from "lucide-react";
@@ -23,7 +24,7 @@ export function Toasts() {
       if (shown.current.has(t.id)) continue;
       shown.current.add(t.id);
       const show = t.level === "error" ? toast.error : t.level === "warning" ? toast.warning : toast.info;
-      show(t.text, { id: `piorbit-${t.id}`, duration: t.level === "error" ? 8000 : 4000 });
+      show(t.text, { id: namespaced(String(t.id)), duration: t.level === "error" ? 8000 : 4000 });
       dismiss(t.id);
     }
   }, [toasts, dismiss]);

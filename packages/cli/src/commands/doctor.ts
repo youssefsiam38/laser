@@ -19,6 +19,7 @@
  *     "check your configuration";
  *   - a check that cannot run says so (SKIP) instead of passing quietly.
  */
+import { ENV, PRODUCT_NAME } from "@piorbit/protocol";
 import { execFile } from "node:child_process";
 import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statfsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
@@ -53,16 +54,16 @@ const LOW_DISK_BYTES = 1024 * 1024 * 1024; // 1 GiB
 export const doctorCommand: Command = {
   name: "doctor",
   group: "Diagnostics",
-  summary: "check that piorbit can actually work, and say how to fix what cannot",
-  usage: "piorbit doctor [--skip-worker] [--timeout <seconds>]",
+  summary: `check that ${PRODUCT_NAME} can actually work, and say how to fix what cannot`,
+  usage: `${PRODUCT_NAME} doctor [--skip-worker] [--timeout <seconds>]`,
   description: `
-Checks the runtime piorbit ships, the agent piorbit ships (that it is there,
+Checks the runtime ${PRODUCT_NAME} ships, the agent ${PRODUCT_NAME} ships (that it is there,
 that it is the pinned version, and that the whole of it loads), the agent,
 session and state directories, provider credentials (names only — never a
 secret), the host port, the subagent temp roots, and finally spawns a throwaway
 worker in a temporary directory and opens a session in it.
 
-It also says whether this machine has an agent of its own — and that piorbit is
+It also says whether this machine has an agent of its own — and that ${PRODUCT_NAME} is
 not using it.
 
 Exits 1 if any check FAILs, 0 if the worst is a WARN, so it is safe in CI.
@@ -75,9 +76,9 @@ Exits 1 if any check FAILs, 0 if the worst is a WARN, so it is safe in CI.
     timeout: { type: "number", description: "Seconds to allow each spawned process", placeholder: "<seconds>", default: 60 },
   },
   examples: [
-    { note: "the usual", command: "piorbit doctor" },
-    { note: "fast checks only", command: "piorbit doctor --skip-worker" },
-    { note: "in CI", command: "piorbit doctor --json --no-color" },
+    { note: "the usual", command: `${PRODUCT_NAME} doctor` },
+    { note: "fast checks only", command: `${PRODUCT_NAME} doctor --skip-worker` },
+    { note: "in CI", command: `${PRODUCT_NAME} doctor --json --no-color` },
   ],
   async run({ term, paths, args }) {
     const timeoutMs = Math.max(1, args.flags["timeout"] === undefined ? 60 : Number(args.flags["timeout"])) * 1000;
@@ -103,7 +104,7 @@ Exits 1 if any check FAILs, 0 if the worst is a WARN, so it is safe in CI.
         name: "worker",
         status: "skip",
         detail: "skipped (--skip-worker)",
-        fix: "Run `piorbit doctor` without --skip-worker to prove a session really opens.",
+        fix: `Run \`${PRODUCT_NAME} doctor\` without --skip-worker to prove a session really opens.`,
       });
       checks.push({ name: "default model", status: "skip", detail: "needs the worker check" });
       checks.push({ name: "model auth", status: "skip", detail: "needs the worker check" });
@@ -111,7 +112,7 @@ Exits 1 if any check FAILs, 0 if the worst is a WARN, so it is safe in CI.
       checks.push({
         name: "worker",
         status: "skip",
-        detail: "skipped: the agent piorbit ships did not resolve",
+        detail: `skipped: the agent ${PRODUCT_NAME} ships did not resolve`,
         fix: "Fix the agent first; this check cannot run without it.",
       });
       checks.push({ name: "default model", status: "skip", detail: "needs the worker check" });
@@ -158,7 +159,7 @@ Exits 1 if any check FAILs, 0 if the worst is a WARN, so it is safe in CI.
       .filter(Boolean)
       .join(", ");
     term.note(summary);
-    if (failed === 0 && warned === 0) term.note(term.err.dim("piorbit is ready. `piorbit up` starts the app."));
+    if (failed === 0 && warned === 0) term.note(term.err.dim(`${PRODUCT_NAME} is ready. \`${PRODUCT_NAME} up\` starts the app.`));
     return failed === 0 ? ExitCode.Ok : ExitCode.Failure;
   },
 };
@@ -196,7 +197,7 @@ function checkRuntime(): Check {
   const major = Number(process.versions.node.split(".")[0]);
   const origin = runtimeOrigin();
   const where = origin.bundled
-    ? `the copy piorbit ships, at ${process.execPath} — not from this machine`
+    ? `the copy ${PRODUCT_NAME} ships, at ${process.execPath} — not from this machine`
     : `at ${process.execPath}`;
   const data = { version: process.versions.node, execPath: process.execPath, bundled: origin.bundled };
 
@@ -204,10 +205,10 @@ function checkRuntime(): Check {
     return {
       name: "runtime",
       status: "fail",
-      detail: `node ${process.version} ${where}; piorbit needs Node ${MIN_NODE_MAJOR} or newer`,
+      detail: `node ${process.version} ${where}; ${PRODUCT_NAME} needs Node ${MIN_NODE_MAJOR} or newer`,
       fix: origin.bundled
-        ? "This install is damaged — reinstall piorbit."
-        : `Run piorbit with Node ${MIN_NODE_MAJOR} or newer, or install the piorbit application, which brings its own.`,
+        ? `This install is damaged — reinstall ${PRODUCT_NAME}.`
+        : `Run ${PRODUCT_NAME} with Node ${MIN_NODE_MAJOR} or newer, or install the ${PRODUCT_NAME} application, which brings its own.`,
       data,
     };
   }
@@ -274,8 +275,8 @@ async function inspectBundledAgent(timeoutMs: number): Promise<AgentInspection> 
   } catch (error) {
     return {
       ok: false,
-      error: `piorbit cannot find its own worker package, so it cannot locate the agent (${messageOf(error)}).`,
-      fix: "This install is incomplete. Reinstall piorbit, or run `ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install` in a source checkout.",
+      error: `${PRODUCT_NAME} cannot find its own worker package, so it cannot locate the agent (${messageOf(error)}).`,
+      fix: `This install is incomplete. Reinstall ${PRODUCT_NAME}, or run \`ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install\` in a source checkout.`,
       machine: {},
     };
   }
@@ -283,7 +284,7 @@ async function inspectBundledAgent(timeoutMs: number): Promise<AgentInspection> 
     return {
       ok: false,
       error: `the agent resolver is missing at ${script}.`,
-      fix: "Build the workspace (`pnpm -r build`), or reinstall piorbit.",
+      fix: `Build the workspace (\`pnpm -r build\`), or reinstall ${PRODUCT_NAME}.`,
       machine: {},
     };
   }
@@ -300,8 +301,8 @@ async function inspectBundledAgent(timeoutMs: number): Promise<AgentInspection> 
   if (!report) {
     return {
       ok: false,
-      error: "the agent resolver gave no answer, so piorbit cannot say which agent it would run.",
-      fix: "Reinstall piorbit. If it happens again, please report it with the output of `piorbit doctor --json`.",
+      error: `the agent resolver gave no answer, so ${PRODUCT_NAME} cannot say which agent it would run.`,
+      fix: `Reinstall ${PRODUCT_NAME}. If it happens again, please report it with the output of \`${PRODUCT_NAME} doctor --json\`.`,
       machine: {},
     };
   }
@@ -337,13 +338,13 @@ function agentChecks(inspection: AgentInspection): Check[] {
     {
       name: "agent",
       status: "pass",
-      detail: `${agent.package} ${agent.version} — shipped inside piorbit at ${agent.packageDir}, not from this machine`,
+      detail: `${agent.package} ${agent.version} — shipped inside ${PRODUCT_NAME} at ${agent.packageDir}, not from this machine`,
       data: { package: agent.package, version: agent.version, packageDir: agent.packageDir, bin: agent.bin },
     },
     {
       name: "agent pin",
       status: "pass",
-      detail: `${agent.version} is exactly the version piorbit pins`,
+      detail: `${agent.version} is exactly the version ${PRODUCT_NAME} pins`,
       data: { version: agent.version, pinned: agent.pinned },
     },
     {
@@ -371,7 +372,7 @@ function checkMachineAgent(inspection: AgentInspection, paths: PiorbitPaths): Ch
     return {
       name: "this machine",
       status: "pass",
-      detail: "no agent of its own — piorbit does not need one",
+      detail: `no agent of its own — ${PRODUCT_NAME} does not need one`,
       data: { commandOnPath: null, homeAgentDir: null },
     };
   }
@@ -382,8 +383,8 @@ function checkMachineAgent(inspection: AgentInspection, paths: PiorbitPaths): Ch
     name: "this machine",
     status: "pass",
     detail: sharing
-      ? `${found.join(" and ")} — piorbit is currently sharing that directory (see the agent dir row)`
-      : `${found.join(" and ")} — piorbit runs neither`,
+      ? `${found.join(" and ")} — ${PRODUCT_NAME} is currently sharing that directory (see the agent dir row)`
+      : `${found.join(" and ")} — ${PRODUCT_NAME} runs neither`,
     data: {
       commandOnPath: machine.commandOnPath ?? null,
       homeAgentDir: machine.homeAgentDir ?? null,
@@ -408,9 +409,9 @@ function agentDirChecks(paths: PiorbitPaths): Check[] {
       status: check.status === "pass" ? "warn" : check.status,
       detail: `${check.detail} — this directory belongs to a separate agent installation`,
       fix:
-        `piorbit keeps its own settings, credentials and sessions apart from anything else on this machine, ` +
-        `and sharing this directory means two programs writing one settings file. Give piorbit its own by ` +
-        `setting PIORBIT_AGENT_DIR — the piorbit application does this for you.`,
+        `${PRODUCT_NAME} keeps its own settings, credentials and sessions apart from anything else on this machine, ` +
+        `and sharing this directory means two programs writing one settings file. Give ${PRODUCT_NAME} its own by ` +
+        `setting ${ENV.agentDir} — the ${PRODUCT_NAME} application does this for you.`,
     },
   ];
 }
@@ -439,14 +440,14 @@ async function checkAgentCommand(paths: PiorbitPaths, timeoutMs: number): Promis
       name: "agent command",
       status: "fail",
       detail: `it exited ${result.signal ?? result.code}: ${firstMeaningfulLine(result.stderr || result.stdout)}`,
-      fix: "This install is incomplete — reinstall piorbit. From a source checkout: `ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install`.",
+      fix: `This install is incomplete — reinstall ${PRODUCT_NAME}. From a source checkout: \`ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install\`.`,
     };
   } catch (error) {
     return {
       name: "agent command",
       status: "fail",
       detail: messageOf(error),
-      fix: "Try it by hand: `piorbit pi --version`.",
+      fix: `Try it by hand: \`${PRODUCT_NAME} pi --version\`.`,
     };
   }
 }
@@ -521,7 +522,7 @@ function checkProviders(paths: PiorbitPaths): Check {
         name: "providers",
         status: "fail",
         detail: `${authPath} is not readable as JSON: ${messageOf(error)}`,
-        fix: "Pi refuses to start with a broken auth.json. Re-authenticate with `piorbit pi` and its /login command.",
+        fix: `Pi refuses to start with a broken auth.json. Re-authenticate with \`${PRODUCT_NAME} pi\` and its /login command.`,
       };
     }
   }
@@ -545,8 +546,8 @@ function checkProviders(paths: PiorbitPaths): Check {
       status: "fail",
       detail: `no credentials in ${authPath} and no provider key in the environment`,
       fix:
-        "Open piorbit and sign in to a provider — the first-run flow asks for one, and " +
-        "Settings → Models can add one at any time. From a terminal: `piorbit pi`, then /login.",
+        `Open ${PRODUCT_NAME} and sign in to a provider — the first-run flow asks for one, and ` +
+        `Settings → Models can add one at any time. From a terminal: \`${PRODUCT_NAME} pi\`, then /login.`,
       data: { authPath, providers: [] },
     };
   }
@@ -560,7 +561,7 @@ function checkProviders(paths: PiorbitPaths): Check {
       name: "providers",
       status: "warn",
       detail: `${detail} — expired: ${expired.map((provider) => provider.id).join(", ")}`,
-      fix: "Re-authenticate the expired provider with `piorbit pi` and /login. Pi refreshes oauth tokens itself, so this may clear on its own.",
+      fix: `Re-authenticate the expired provider with \`${PRODUCT_NAME} pi\` and /login. Pi refreshes oauth tokens itself, so this may clear on its own.`,
       data: { authPath, providers },
     };
   }
@@ -573,7 +574,7 @@ async function checkPort(paths: PiorbitPaths): Promise<Check> {
     return {
       name: "port",
       status: "pass",
-      detail: `${paths.port} — held by the piorbit host (pid ${status.record.pid})`,
+      detail: `${paths.port} — held by the ${PRODUCT_NAME} host (pid ${status.record.pid})`,
       data: { port: paths.port, heldByPiorbit: true, pid: status.record.pid },
     };
   }
@@ -587,16 +588,16 @@ async function checkPort(paths: PiorbitPaths): Promise<Check> {
     return {
       name: "port",
       status: "warn",
-      detail: `${paths.port} — a piorbit host is serving here, but piorbit did not start it`,
-      fix: `Use it as it is (${hostUrl(paths)}), or stop it yourself; \`piorbit down\` only stops hosts it started.`,
+      detail: `${paths.port} — a ${PRODUCT_NAME} host is serving here, but ${PRODUCT_NAME} did not start it`,
+      fix: `Use it as it is (${hostUrl(paths)}), or stop it yourself; \`${PRODUCT_NAME} down\` only stops hosts it started.`,
       data: { port: paths.port, free: false, foreignPiorbit: true },
     };
   }
   return {
     name: "port",
     status: "fail",
-    detail: `${paths.host}:${paths.port} is in use by something that is not a piorbit host`,
-    fix: `See what holds it (\`lsof -nP -iTCP:${paths.port} -sTCP:LISTEN\`), or run piorbit on another port (\`--port\`).`,
+    detail: `${paths.host}:${paths.port} is in use by something that is not a ${PRODUCT_NAME} host`,
+    fix: `See what holds it (\`lsof -nP -iTCP:${paths.port} -sTCP:LISTEN\`), or run ${PRODUCT_NAME} on another port (\`--port\`).`,
     data: { port: paths.port, free: false },
   };
 }
@@ -639,7 +640,7 @@ async function checkSubagentRoots(paths: PiorbitPaths): Promise<Check[]> {
     status: "warn",
     detail: `roots for another uid exist: ${foreign.join(", ")}`,
     fix:
-      `Background subagent runs started under that uid are invisible to a piorbit running as uid ${uid}. ` +
+      `Background subagent runs started under that uid are invisible to a ${PRODUCT_NAME} running as uid ${uid}. ` +
       `Run everything as one user, or point both at one root with --subagents-temp-root.`,
     data: { uid, foreign },
   });
@@ -656,7 +657,7 @@ async function checkWorker(
   paths: PiorbitPaths,
   timeoutMs: number,
 ): Promise<{ check: Check; model: Check; auth: Check }> {
-  const root = mkdtempSync(join(tmpdir(), "piorbit-doctor-"));
+  const root = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-doctor-`));
   const cwd = join(root, "project");
   const sessionDir = join(root, "sessions");
   mkdirSync(cwd, { recursive: true });
@@ -730,7 +731,7 @@ async function checkWorker(
         detail: messageOf(error),
         fix: stderr.trim()
           ? `The worker said: ${firstMeaningfulLine(stderr)}`
-          : "Build the workspace (`pnpm -r build`), then run `piorbit doctor` again.",
+          : `Build the workspace (\`pnpm -r build\`), then run \`${PRODUCT_NAME} doctor\` again.`,
         data: { stderr: stderr.slice(-2000) },
       },
       model: { name: "default model", status: "skip", detail: "the worker did not start" },
@@ -777,7 +778,7 @@ async function checkModelAuth(paths: PiorbitPaths, model: ModelRef, timeoutMs: n
       name: "model auth",
       status: "fail",
       detail: `${model.provider} is ${parsed?.status ?? "not usable"}${parsed?.reason ? ` (${parsed.reason})` : ""}`,
-      fix: `Authenticate it: \`piorbit pi\` then /login, or export the provider's API key. Pi's own view: \`piorbit pi auth check --provider ${model.provider}\`.`,
+      fix: `Authenticate it: \`${PRODUCT_NAME} pi\` then /login, or export the provider's API key. Pi's own view: \`${PRODUCT_NAME} pi auth check --provider ${model.provider}\`.`,
       data: { provider: model.provider, ...(parsed ?? {}) },
     };
   } catch (error) {
@@ -785,7 +786,7 @@ async function checkModelAuth(paths: PiorbitPaths, model: ModelRef, timeoutMs: n
       name: "model auth",
       status: "warn",
       detail: `could not ask Pi about ${model.provider}: ${messageOf(error)}`,
-      fix: `Try it directly: \`piorbit pi auth check --provider ${model.provider}\`.`,
+      fix: `Try it directly: \`${PRODUCT_NAME} pi auth check --provider ${model.provider}\`.`,
     };
   }
 }

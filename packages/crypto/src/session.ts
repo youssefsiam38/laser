@@ -13,6 +13,7 @@
  * catches up by applying Noise Rekey() that many times. No clock agreement is
  * needed, and a peer that talks rarely never rekeys at all.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol/identity";
 import { concatBytes, readU32be, readU64be, u32be, u64be } from "./bytes.js";
 import {
   AEAD_TAG_BYTES,
@@ -190,7 +191,7 @@ export class NoiseSession {
     if (this.closed) throw new NoiseSessionError("session is closed");
     if (frame.length < FRAME_HEADER_BYTES + AEAD_TAG_BYTES + 1) {
       this.closed = true;
-      throw new NoiseSessionError(`frame is ${frame.length} bytes, too short to be a piorbit frame`);
+      throw new NoiseSessionError(`frame is ${frame.length} bytes, too short to be a ${PRODUCT_NAME} frame`);
     }
     const epoch = readU32be(frame, 0);
     const seq = readU64be(frame, 4);

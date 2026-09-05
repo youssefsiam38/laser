@@ -3,7 +3,7 @@
  * hash, both directions round-trip, and a stale intent is dropped.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { decisionNavigateUrl, decisionPushPayload } from "@piorbit/protocol";
+import { PRODUCT_NAME, decisionNavigateUrl, decisionPushPayload } from "@piorbit/protocol";
 import { LINK_TTL_MS, parseDecisionLink, pendingDecisionLink, rememberDecisionLink, resetDecisionLinks, stripDecisionParams } from "../../src/pwa/deep-link.js";
 
 const path = "/home/me/.pi/agent/sessions/x/2026 09 05.jsonl";
@@ -40,14 +40,14 @@ describe("decision links", () => {
 
 describe("decisionPushPayload", () => {
   it("is one declarative document with buttons only for yes/no", () => {
-    const yesNo = decisionPushPayload({ origin: "https://r.example", sessionPath: path, projectName: "piorbit", decisionId: "d1", title: "Allow bash?", message: "rm -rf dist", yesNo: true });
+    const yesNo = decisionPushPayload({ origin: "https://r.example", sessionPath: path, projectName: PRODUCT_NAME, decisionId: "d1", title: "Allow bash?", message: "rm -rf dist", yesNo: true });
     expect(yesNo.web_push).toBe(8030);
-    expect(yesNo.notification.title).toBe("piorbit needs you");
+    expect(yesNo.notification.title).toBe(`${PRODUCT_NAME} needs you`);
     expect(yesNo.notification.body).toBe("Allow bash? — rm -rf dist");
     expect(yesNo.notification.tag).toBe("decision:d1");
     expect(yesNo.notification.actions?.map((a) => a.action)).toEqual(["allow", "deny"]);
     expect(yesNo.notification.actions?.[0]?.navigate).toContain("answer=allow");
-    const pick = decisionPushPayload({ origin: "https://r.example", sessionPath: path, projectName: "piorbit", decisionId: "d2", title: "Pick one", yesNo: false });
+    const pick = decisionPushPayload({ origin: "https://r.example", sessionPath: path, projectName: PRODUCT_NAME, decisionId: "d2", title: "Pick one", yesNo: false });
     expect(pick.notification.actions).toBeUndefined();
     expect(pick.notification.body).toBe("Pick one");
   });

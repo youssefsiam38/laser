@@ -4,14 +4,7 @@
  * dropped socket is an error to report, not a state to recover from.
  */
 import { WebSocket } from "ws";
-import {
-  ErrorCodes,
-  type ClientMethod,
-  type ClientRequests,
-  type HostNotificationMethod,
-  type HostNotifications,
-  type JsonRpcMessage,
-} from "@piorbit/protocol";
+import { ErrorCodes, PRODUCT_NAME, type ClientMethod, type ClientRequests, type HostNotificationMethod, type HostNotifications, type JsonRpcMessage } from "@piorbit/protocol";
 import { CliError, ExitCode } from "./errors.js";
 
 export class HostRpcError extends Error {
@@ -64,9 +57,9 @@ export class HostRpc {
       const timer = setTimeout(() => {
         socket.terminate();
         reject(
-          new CliError(`timed out connecting to the piorbit host at ${options.url}`, {
+          new CliError(`timed out connecting to the ${PRODUCT_NAME} host at ${options.url}`, {
             exitCode: ExitCode.NoHost,
-            fix: "Check that it is running with `piorbit status`, or start it with `piorbit up`.",
+            fix: `Check that it is running with \`${PRODUCT_NAME} status\`, or start it with \`${PRODUCT_NAME} up\`.`,
           }),
         );
       }, timeoutMs);
@@ -77,12 +70,12 @@ export class HostRpc {
       socket.once("error", (error: NodeJS.ErrnoException) => {
         clearTimeout(timer);
         reject(
-          new CliError(`cannot reach the piorbit host at ${options.url}: ${error.message}`, {
+          new CliError(`cannot reach the ${PRODUCT_NAME} host at ${options.url}: ${error.message}`, {
             exitCode: ExitCode.NoHost,
             fix:
               error.code === "ECONNREFUSED"
-                ? "Start it with `piorbit up`."
-                : "Run `piorbit status` to see what the host is doing.",
+                ? `Start it with \`${PRODUCT_NAME} up\`.`
+                : `Run \`${PRODUCT_NAME} status\` to see what the host is doing.`,
           }),
         );
       });
@@ -93,9 +86,9 @@ export class HostRpc {
   request<M extends ClientMethod>(method: M, params: ClientRequests[M]["params"]): Promise<ClientRequests[M]["result"]> {
     if (this.socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(
-        new CliError("the connection to the piorbit host closed before the request was sent", {
+        new CliError(`the connection to the ${PRODUCT_NAME} host closed before the request was sent`, {
           exitCode: ExitCode.NoHost,
-          fix: "Run `piorbit status`; if the host died, `piorbit up` starts a new one.",
+          fix: `Run \`${PRODUCT_NAME} status\`; if the host died, \`${PRODUCT_NAME} up\` starts a new one.`,
         }),
       );
     }
@@ -109,7 +102,7 @@ export class HostRpc {
   close(): void {
     this.closing = true;
     for (const entry of this.pending.values()) {
-      entry.reject(new CliError("the piorbit host connection was closed", { exitCode: ExitCode.NoHost }));
+      entry.reject(new CliError(`the ${PRODUCT_NAME} host connection was closed`, { exitCode: ExitCode.NoHost }));
     }
     this.pending.clear();
     this.socket.close();
@@ -152,9 +145,9 @@ export class HostRpc {
   }
 
   private onClose(reason: string): void {
-    const error = new CliError(`the piorbit host connection closed (${reason})`, {
+    const error = new CliError(`the ${PRODUCT_NAME} host connection closed (${reason})`, {
       exitCode: ExitCode.NoHost,
-      fix: "Run `piorbit status`. The host log is at <agent-dir>/piorbit/host.log.",
+      fix: `Run \`${PRODUCT_NAME} status\`. The host log is at <agent-dir>/${PRODUCT_NAME}/host.log.`,
     });
     for (const entry of this.pending.values()) entry.reject(error);
     this.pending.clear();
@@ -169,13 +162,13 @@ export function describeRpcError(error: unknown, what: string): CliError {
     if (error.code === ErrorCodes.SessionNotFound) {
       return new CliError(`${what}: ${error.message}`, {
         exitCode: ExitCode.HostError,
-        fix: "Run `piorbit sessions` to see the sessions the host knows about, and pass one of those paths or ids.",
+        fix: `Run \`${PRODUCT_NAME} sessions\` to see the sessions the host knows about, and pass one of those paths or ids.`,
       });
     }
     if (error.isUnsupported) {
       return new CliError(`${what}: ${error.message}`, {
         exitCode: ExitCode.HostError,
-        fix: "This host build does not implement that call yet. Rebuild with `pnpm -r build` and restart it with `piorbit restart`.",
+        fix: `This host build does not implement that call yet. Rebuild with \`pnpm -r build\` and restart it with \`${PRODUCT_NAME} restart\`.`,
       });
     }
     return new CliError(`${what}: ${error.message}`, { exitCode: ExitCode.HostError });

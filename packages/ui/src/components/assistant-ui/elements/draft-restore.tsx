@@ -11,6 +11,7 @@
  *     when the same session opens with an empty composer.
  *   - `savedAt` is a real time, formatted relatively, not a string prop.
  */
+import { storageKey } from "@piorbit/protocol";
 import { useAui, useAuiState } from "@assistant-ui/react";
 import { PencilLineIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, useState, type ComponentProps } from "react";
@@ -63,7 +64,7 @@ export function DraftRestore({ draft, savedAt, onRestore, onDiscard, className, 
 // Runtime binding
 // ---------------------------------------------------------------------------
 
-export const DRAFT_STORAGE_PREFIX = "piorbit-draft:";
+export const DRAFT_STORAGE_PREFIX = storageKey("draft:");
 const SAVE_DEBOUNCE_MS = 300;
 
 interface SavedDraft {

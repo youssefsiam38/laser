@@ -10,8 +10,25 @@
  */
 import { fromBase64Url, toBase64Url, wipe } from "./bytes.js";
 import { generateRootSeed, rootIdentityFromSeed, type RootIdentity } from "./device-list.js";
+import { FORMER_NAMES, PRODUCT_NAME } from "@piorbit/protocol/identity";
 
-export const KEYCHAIN_SERVICE = "piorbit";
+/**
+ * The OS keychain service the root identity is stored under.
+ *
+ * Derived, so a rename renames it too — and `readEnv`-style fallbacks are not
+ * enough here: the entry itself moves. `identityStoreFormerServices` below is
+ * what a store consults before deciding a device has no identity yet.
+ */
+export const KEYCHAIN_SERVICE: string = PRODUCT_NAME;
+
+/**
+ * Keychain services this product used before it was renamed, newest first.
+ *
+ * A store reads the current service, then these, so a person who paired their
+ * phone under the old name keeps that pairing instead of silently becoming a
+ * new device.
+ */
+export const KEYCHAIN_FORMER_SERVICES: readonly string[] = FORMER_NAMES.map((former) => former.name);
 export const KEYCHAIN_ROOT_ACCOUNT = "root-identity";
 
 export class IdentityStoreError extends Error {

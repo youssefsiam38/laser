@@ -3,6 +3,7 @@
  * Everything is sandboxed in a temp dir (agentDir, sessionDir, cwd) so the
  * user's real ~/.pi/agent is never read or written.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,7 +15,7 @@ let base: string;
 let driver: StableSdkDriver;
 
 beforeEach(() => {
-  base = mkdtempSync(join(tmpdir(), "piorbit-sdk-"));
+  base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-sdk-`));
   mkdirSync(join(base, "project"), { recursive: true });
   mkdirSync(join(base, "agent"), { recursive: true });
   driver = new StableSdkDriver();

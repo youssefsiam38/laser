@@ -1,3 +1,6 @@
+# GENERATED from release.yml.tpl by `pnpm identity:generate`; every name in it
+# comes from product.json (MX-T7, D-36). Edit the template, not this file.
+#
 # A tag builds every Linux artifact for both architectures, hashes them into one
 # SHA256SUMS, attests them to this workflow, and publishes them as a release
 # with install.sh alongside.

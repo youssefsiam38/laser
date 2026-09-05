@@ -4,6 +4,7 @@
  * session, which is what keeps "what the CLI did" and "what the app shows" the
  * same thing.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { resolve } from "node:path";
 import type { SessionState, SessionSummary, SessionUpdateParams } from "@piorbit/protocol";
 import { bool, num, str } from "../args.js";
@@ -83,7 +84,7 @@ export const sessionsCommand: Command = {
   aliases: ["ls"],
   group: "Sessions",
   summary: "list sessions, newest first",
-  usage: "piorbit sessions [--project <dir>] [--limit <n>] [--all]",
+  usage: `${PRODUCT_NAME} sessions [--project <dir>] [--limit <n>] [--all]`,
   description: `
 Lists the sessions the host knows about, across every project unless --project
 narrows it. The ID column is short but usable: any unambiguous prefix works
@@ -95,9 +96,9 @@ wherever a command takes a session.
     all: { type: "boolean", short: "a", description: "Show every session, ignoring --limit" },
   },
   examples: [
-    { note: "everything, newest first", command: "piorbit sessions" },
-    { note: "just this directory", command: "piorbit sessions --project ." },
-    { note: "the newest session's path, for scripting", command: "piorbit sessions -n 1 --json | jq -r '.sessions[0].path'" },
+    { note: "everything, newest first", command: `${PRODUCT_NAME} sessions` },
+    { note: "just this directory", command: `${PRODUCT_NAME} sessions --project .` },
+    { note: "the newest session's path, for scripting", command: `${PRODUCT_NAME} sessions -n 1 --json | jq -r '.sessions[0].path'` },
   ],
   async run(context) {
     const { term } = context;
@@ -115,7 +116,7 @@ wherever a command takes a session.
       if (all.length === 0) {
         term.note(project ? `no sessions in ${project}` : "no sessions yet");
         term.note();
-        term.note(`  Start one with ${term.err.bold("piorbit new")}.`);
+        term.note(`  Start one with ${term.err.bold(`${PRODUCT_NAME} new`)}.`);
         return;
       }
       for (const line of table(
@@ -148,7 +149,7 @@ export const newCommand: Command = {
   name: "new",
   group: "Sessions",
   summary: "start a session in a project directory",
-  usage: "piorbit new [cwd]",
+  usage: `${PRODUCT_NAME} new [cwd]`,
   description: `
 Starts a session in a directory, through the host's worker for that
 directory. The session appears in the app immediately.
@@ -158,8 +159,8 @@ directory. The session appears in the app immediately.
     open: { type: "boolean", description: "Open the app at the new session" },
   },
   examples: [
-    { note: "a session here", command: "piorbit new" },
-    { note: "a session elsewhere, then prompt it", command: 'piorbit new ~/code/api && piorbit send -P ~/code/api "run the tests"' },
+    { note: "a session here", command: `${PRODUCT_NAME} new` },
+    { note: "a session elsewhere, then prompt it", command: `${PRODUCT_NAME} new ~/code/api && ${PRODUCT_NAME} send -P ~/code/api "run the tests"` },
   ],
   async run(context) {
     const { term } = context;
@@ -201,7 +202,7 @@ export const openCommand: Command = {
   name: "open",
   group: "Sessions",
   summary: "attach a session in the host and open it in the app",
-  usage: "piorbit open [session]",
+  usage: `${PRODUCT_NAME} open [session]`,
   description: `
 Loads the session in its worker (so it is live, not just a file on disk) and
 opens the app at it. With no argument it opens the newest session in the current
@@ -210,8 +211,8 @@ directory.
   positionals: [{ name: "session", description: "Session id or path", optional: true }],
   flags: { ...SESSION_FLAG, ...PROJECT_FLAG, open: { type: "boolean", default: true, description: "Open a browser" } },
   examples: [
-    { note: "open the newest session here", command: "piorbit open" },
-    { note: "open one by id", command: "piorbit open 0f3a91c2" },
+    { note: "open the newest session here", command: `${PRODUCT_NAME} open` },
+    { note: "open one by id", command: `${PRODUCT_NAME} open 0f3a91c2` },
   ],
   async run(context) {
     const { term } = context;
@@ -241,7 +242,7 @@ export const sendCommand: Command = {
   name: "send",
   group: "Sessions",
   summary: "send a prompt to a session and stream the answer",
-  usage: 'piorbit send <text...> [--session <id>] [--steer|--follow-up] [--no-wait]',
+  usage: `${PRODUCT_NAME} send <text...> [--session <id>] [--steer|--follow-up] [--no-wait]`,
   description: `
 Sends a prompt and, by default, streams the answer until the agent settles.
 
@@ -262,9 +263,9 @@ Pass \`-\` as the text to read the prompt from stdin.
     timeout: { type: "number", description: "Give up after this many seconds (0 = never)", placeholder: "<seconds>", default: 0 },
   },
   examples: [
-    { note: "prompt the newest session here", command: 'piorbit send "run the tests and fix what breaks"' },
-    { note: "interrupt a running agent", command: 'piorbit send --steer "stop, do the smaller version first"' },
-    { note: "fire and forget", command: 'piorbit send --no-wait "update the changelog"' },
+    { note: "prompt the newest session here", command: `${PRODUCT_NAME} send "run the tests and fix what breaks"` },
+    { note: "interrupt a running agent", command: `${PRODUCT_NAME} send --steer "stop, do the smaller version first"` },
+    { note: "fire and forget", command: `${PRODUCT_NAME} send --no-wait "update the changelog"` },
   ],
   async run(context) {
     const { term, args } = context;
@@ -318,7 +319,7 @@ async function promptText(positionals: readonly string[]): Promise<string> {
     if (process.stdin.isTTY) {
       throw new CliError("no prompt given", {
         exitCode: ExitCode.Usage,
-        fix: 'Write it inline (`piorbit send "..."`) or pipe it in (`echo ... | piorbit send -`).',
+        fix: `Write it inline (\`${PRODUCT_NAME} send "..."\`) or pipe it in (\`echo ... | ${PRODUCT_NAME} send -\`).`,
       });
     }
     const chunks: Buffer[] = [];
@@ -341,7 +342,7 @@ export const tailCommand: Command = {
   name: "tail",
   group: "Sessions",
   summary: "stream a session's output as it happens",
-  usage: "piorbit tail [session] [--follow] [--thinking]",
+  usage: `${PRODUCT_NAME} tail [session] [--follow] [--thinking]`,
   description: `
 Prints assistant text as it streams, tool calls with their durations, extension
 dialogs, and errors. Exits when the agent settles; --follow keeps watching for
@@ -361,9 +362,9 @@ With --json it emits NDJSON: one \`session/update\` params object per line.
     timeout: { type: "number", description: "Give up after this many seconds (0 = never)", placeholder: "<seconds>", default: 0 },
   },
   examples: [
-    { note: "watch the newest session here", command: "piorbit tail" },
-    { note: "keep watching, forever", command: "piorbit tail --follow" },
-    { note: "machine-readable stream", command: "piorbit tail --json | jq -r 'select(.update.kind==\"text_delta\").update.delta'" },
+    { note: "watch the newest session here", command: `${PRODUCT_NAME} tail` },
+    { note: "keep watching, forever", command: `${PRODUCT_NAME} tail --follow` },
+    { note: "machine-readable stream", command: `${PRODUCT_NAME} tail --json | jq -r 'select(.update.kind==\"text_delta\").update.delta'` },
   ],
   async run(context) {
     const stream = new SessionStream(context, context.args.positionals[0]);
@@ -390,14 +391,14 @@ export const stopCommand: Command = {
   name: "stop",
   group: "Sessions",
   summary: "abort a session's current turn",
-  usage: "piorbit stop [session]",
+  usage: `${PRODUCT_NAME} stop [session]`,
   description: `
 Aborts what the agent is doing now. The session stays open and keeps everything
 it has produced so far; this is Escape in the app, not a delete.
 `,
   positionals: [{ name: "session", description: "Session id or path", optional: true }],
   flags: { ...SESSION_FLAG, ...PROJECT_FLAG },
-  examples: [{ note: "stop the newest session here", command: "piorbit stop" }],
+  examples: [{ note: "stop the newest session here", command: `${PRODUCT_NAME} stop` }],
   async run(context) {
     const { term } = context;
     const rpc = await connect(context.paths);
@@ -426,11 +427,11 @@ export const entriesCommand: Command = {
   name: "entries",
   group: "Sessions",
   summary: "list a session's entries and their ids (what `fork` needs)",
-  usage: "piorbit entries [session] [--limit <n>]",
+  usage: `${PRODUCT_NAME} entries [session] [--limit <n>]`,
   description: `
 Prints the persisted entries of a session with their ids, newest last, so you
 can find the entry to fork from. Entry shapes come from the agent's own session
-file, not from piorbit; the preview column is best-effort.
+file, not from ${PRODUCT_NAME}; the preview column is best-effort.
 `,
   positionals: [{ name: "session", description: "Session id or path", optional: true }],
   flags: {
@@ -438,7 +439,7 @@ file, not from piorbit; the preview column is best-effort.
     ...PROJECT_FLAG,
     limit: { type: "number", short: "n", description: "Show only the last n entries", placeholder: "<n>", default: 30 },
   },
-  examples: [{ note: "find a fork point", command: "piorbit entries | tail -20" }],
+  examples: [{ note: "find a fork point", command: `${PRODUCT_NAME} entries | tail -20` }],
   async run(context) {
     const { term } = context;
     const rpc = await connect(context.paths);
@@ -521,27 +522,27 @@ export const forkCommand: Command = {
   name: "fork",
   group: "Sessions",
   summary: "fork a session before one of its entries",
-  usage: "piorbit fork <session> <entry>",
+  usage: `${PRODUCT_NAME} fork <session> <entry>`,
   description: `
 Creates a new session containing everything before \`entry\`. The text of that
 entry comes back so you can edit and resend it — the CLI prints it, and
 --json returns it as \`editorText\`.
 
-\`piorbit entries\` lists the entry ids.
+\`${PRODUCT_NAME} entries\` lists the entry ids.
 `,
   positionals: [
     { name: "session", description: "Session id or path" },
-    { name: "entry", description: "Entry id to fork before (see `piorbit entries`)" },
+    { name: "entry", description: `Entry id to fork before (see \`${PRODUCT_NAME} entries\`)` },
   ],
   flags: { ...PROJECT_FLAG },
-  examples: [{ note: "fork before an entry and see the text to edit", command: "piorbit fork 0f3a91c2 e_71f4" }],
+  examples: [{ note: "fork before an entry and see the text to edit", command: `${PRODUCT_NAME} fork 0f3a91c2 e_71f4` }],
   async run(context) {
     const { term } = context;
     const [reference, entryId] = context.args.positionals;
     if (!reference || !entryId) {
       throw new CliError("fork needs a session and an entry id", {
         exitCode: ExitCode.Usage,
-        fix: "Run `piorbit entries <session>` to see the entry ids, then `piorbit fork <session> <entry>`.",
+        fix: `Run \`${PRODUCT_NAME} entries <session>\` to see the entry ids, then \`${PRODUCT_NAME} fork <session> <entry>\`.`,
       });
     }
     const rpc = await connect(context.paths);
@@ -575,10 +576,10 @@ export const renameCommand: Command = {
   name: "rename",
   group: "Sessions",
   summary: "give a session a name",
-  usage: "piorbit rename [session] <name>",
+  usage: `${PRODUCT_NAME} rename [session] <name>`,
   description: `
 Names a session so it is findable in the app's sidebar and in
-\`piorbit sessions\`. With one argument, the newest session in this directory is
+\`${PRODUCT_NAME} sessions\`. With one argument, the newest session in this directory is
 renamed.
 `,
   positionals: [
@@ -587,8 +588,8 @@ renamed.
   ],
   flags: { ...SESSION_FLAG, ...PROJECT_FLAG },
   examples: [
-    { note: "name the newest session here", command: 'piorbit rename "relay spike"' },
-    { note: "name a specific one", command: 'piorbit rename 0f3a91c2 "relay spike"' },
+    { note: "name the newest session here", command: `${PRODUCT_NAME} rename "relay spike"` },
+    { note: "name a specific one", command: `${PRODUCT_NAME} rename 0f3a91c2 "relay spike"` },
   ],
   async run(context) {
     const { term } = context;
@@ -600,7 +601,7 @@ renamed.
     if (!name) {
       throw new CliError("rename needs a name", {
         exitCode: ExitCode.Usage,
-        fix: 'Write it as `piorbit rename "the new name"`, or `piorbit rename <session> "the new name"`.',
+        fix: `Write it as \`${PRODUCT_NAME} rename "the new name"\`, or \`${PRODUCT_NAME} rename <session> "the new name"\`.`,
       });
     }
     const rpc = await connect(context.paths);
@@ -624,7 +625,7 @@ export const compactCommand: Command = {
   name: "compact",
   group: "Sessions",
   summary: "compact a session's context",
-  usage: "piorbit compact [session] [--instructions <text>]",
+  usage: `${PRODUCT_NAME} compact [session] [--instructions <text>]`,
   description: `
 Asks the session to summarise its history so the context window has room again.
 Waits for the compaction to finish and reports whether it worked; --no-wait
@@ -641,8 +642,8 @@ reference and a sentence can never be confused for one another.
     instructions: { type: "string", description: "Compaction instructions", placeholder: "<text>" },
   },
   examples: [
-    { note: "compact the newest session here", command: "piorbit compact" },
-    { note: "compact with guidance", command: 'piorbit compact --instructions "keep the failing test output"' },
+    { note: "compact the newest session here", command: `${PRODUCT_NAME} compact` },
+    { note: "compact with guidance", command: `${PRODUCT_NAME} compact --instructions "keep the failing test output"` },
   ],
   async run(context) {
     const { term, args } = context;
@@ -750,7 +751,7 @@ class SessionStream {
     if (options.timeoutMs > 0) {
       timer = setTimeout(() => {
         this.failure = new CliError(`gave up after ${Math.round(options.timeoutMs / 1000)}s`, {
-          fix: "Raise --timeout, or pass --no-wait and watch with `piorbit tail --follow`.",
+          fix: `Raise --timeout, or pass --no-wait and watch with \`${PRODUCT_NAME} tail --follow\`.`,
         });
         this.finish();
       }, options.timeoutMs);

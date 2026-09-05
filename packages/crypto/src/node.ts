@@ -7,9 +7,10 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fromBase64Url, toBase64Url } from "./bytes.js";
 import { IdentityStoreError, type RootIdentityStore } from "./identity.js";
+import { DATA_DIR_NAME, ENV } from "@piorbit/protocol/identity";
 
 export function defaultIdentityPath(): string {
-  return join(process.env["PIORBIT_HOME"] ?? join(homedir(), ".piorbit"), "identity.key");
+  return join(process.env[ENV.home] ?? join(homedir(), `.${DATA_DIR_NAME}`), "identity.key");
 }
 
 /**

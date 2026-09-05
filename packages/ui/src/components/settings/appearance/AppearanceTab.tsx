@@ -25,6 +25,7 @@
  * which is the seam M11-T6 lands on: the same JSON travels through the
  * settings protocol once the host has somewhere to keep it.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { useCallback, useMemo, useState } from "react";
 import { ChevronRight, ClipboardPaste, Copy, RotateCcw } from "lucide-react";
 
@@ -133,6 +134,15 @@ export function AppearanceTab() {
 
   const issues = useMemo(() => checkTheme(theme), [theme]);
 
+  /**
+   * The person has not chosen a typeface yet, so a preset may bring its own —
+   * which is the whole point of "Midnight comes with Host Grotesk". The card's
+   * own caption says which of the two is happening, because a caption that
+   * promises "keeps your fonts" while the fonts change is the settings screen
+   * lying about itself.
+   */
+  const fontsAreOrigin = theme.fonts.sans === origin.fonts.sans && theme.fonts.mono === origin.fonts.mono;
+
   const liveHue = hueOf(theme.tokens.live);
   const attentionHue = hueOf(theme.tokens.attention);
 
@@ -141,10 +151,9 @@ export function AppearanceTab() {
       // Fonts belong to the person, not the preset, unless the person has not
       // touched them — then adopting the preset's pairing is the whole point of
       // "Midnight comes with Host Grotesk".
-      const untouched = theme.fonts.sans === origin.fonts.sans && theme.fonts.mono === origin.fonts.mono;
-      setPreset(id, { adoptFonts: untouched });
+      setPreset(id, { adoptFonts: fontsAreOrigin });
     },
-    [origin.fonts.mono, origin.fonts.sans, setPreset, theme.fonts.mono, theme.fonts.sans],
+    [fontsAreOrigin, setPreset],
   );
 
   /** Both status hues at once, so T3 can never be violated by an intermediate state. */
@@ -271,7 +280,15 @@ export function AppearanceTab() {
         {/* ------------------------------------------------------- theme -- */}
         <Group
           title="Theme"
-          detail="Each card is the preset, drawn in its own colours. Choosing one keeps your fonts and sizes."
+          detail={
+            fontsAreOrigin
+              ? followSystem
+                ? "Each card is the preset, drawn in its own colours, and brings its own type. Picking one sets the theme for that side of the pair — a dark card applies when your system is dark."
+                : "Each card is the preset, drawn in its own colours, and brings its own type. Once you change a font it is yours, and a preset stops replacing it."
+              : followSystem
+                ? "Each card is the preset, drawn in its own colours. Your fonts and sizes stay. Picking one sets the theme for that side of the pair — a dark card applies when your system is dark."
+                : "Each card is the preset, drawn in its own colours. Your fonts and sizes stay."
+          }
           onReset={resetTheme}
           resetDisabled={themeIsDefault}
           resetLabel={`Back to ${DEFAULT_PRESET.name}`}
@@ -543,7 +560,7 @@ function applyExported(text: string): string {
     return "That is not a theme — it is not JSON. Copy the whole block, including the braces.";
   }
   if (!themeStore.hydrate(parsed)) {
-    return "That JSON is not a piorbit theme, or one of its colours fails the contrast floor. Nothing changed.";
+    return `That JSON is not a ${PRODUCT_NAME} theme, or one of its colours fails the contrast floor. Nothing changed.`;
   }
   return "Theme applied.";
 }

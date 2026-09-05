@@ -33,7 +33,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { APP_ID, EXECUTABLE } from "../build/linux/product.mjs";
+import { METAINFO_FILE_NAME, EXECUTABLE, identity } from "../build/linux/product.mjs";
 
 const packageRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const outDir = join(packageRoot, "out");
@@ -56,7 +56,8 @@ function optionValue(name) {
 }
 
 function fail(message) {
-  process.stderr.write(`\npiorbit: ${message}\n\n`);
+  process.stderr.write(`
+${identity.name}: ${message}\n\n`);
   process.exit(1);
 }
 
@@ -168,7 +169,7 @@ function preflight() {
   const unavailable = VALIDATORS.filter((validator) => !has(validator.program));
   for (const validator of unavailable) {
     process.stdout.write(
-      `piorbit: ${validator.program} is not installed, so ${validator.checks} will not be checked ` +
+      `${identity.name}: ${validator.program} is not installed, so ${validator.checks} will not be checked ` +
         `(install the "${validator.package}" package to check it).\n`,
     );
   }
@@ -217,18 +218,18 @@ function validateDesktopFile(path, origin) {
   if (result.status !== 0) {
     problems.push(`${origin}: desktop-file-validate rejected it\n${result.stdout}${result.stderr}`.trimEnd());
   } else {
-    process.stdout.write(`piorbit: ${origin} — desktop entry valid\n`);
+    process.stdout.write(`${identity.name}: ${origin} — desktop entry valid\n`);
   }
 }
 
 function validateMetainfo() {
   if (!has("appstreamcli")) return;
-  const path = join(generatedDir, `${APP_ID}.metainfo.xml`);
+  const path = join(generatedDir, METAINFO_FILE_NAME);
   const result = spawnSync("appstreamcli", ["validate", "--no-net", path], { encoding: "utf8" });
   if (result.status !== 0) {
     problems.push(`AppStream metainfo: appstreamcli rejected it\n${result.stdout}${result.stderr}`.trimEnd());
   } else {
-    process.stdout.write("piorbit: AppStream metainfo valid\n");
+    process.stdout.write(`${identity.name}: AppStream metainfo valid\n`);
   }
 }
 
@@ -240,7 +241,7 @@ function validateMetainfo() {
 function validateShippedDeb() {
   const deb = readdirSync(outDir).find((file) => file.endsWith(".deb"));
   if (!deb || !has("dpkg-deb")) return;
-  const temp = mkdtempSync(join(tmpdir(), "piorbit-deb-"));
+  const temp = mkdtempSync(join(tmpdir(), `${identity.name}-deb-`));
   try {
     const payload = execFileSync("dpkg-deb", ["--fsys-tarfile", join(outDir, deb)], {
       maxBuffer: 1024 * 1024 * 1024,
@@ -261,12 +262,12 @@ function validateShippedDeb() {
 
     // The AppStream metainfo has to be at the system path, not only inside
     // /opt, or no store shows the application at all.
-    const metainfoPath = `./usr/share/metainfo/${APP_ID}.metainfo.xml`;
+    const metainfoPath = `./usr/share/metainfo/${METAINFO_FILE_NAME}`;
     if (!execFileSync("dpkg-deb", ["--contents", join(outDir, deb)], {
       encoding: "utf8",
       maxBuffer: 1024 * 1024 * 256,
     }).includes(metainfoPath)) {
-      problems.push(`${deb}: no ${metainfoPath}, so GNOME Software and KDE Discover would not list piorbit`);
+      problems.push(`${deb}: no ${metainfoPath}, so GNOME Software and KDE Discover would not list ${identity.name}`);
     }
 
     // The profile that lets the app open a user namespace on Ubuntu 24.04. A
@@ -281,7 +282,7 @@ function validateShippedDeb() {
       if (parsed.status !== 0) {
         problems.push(`${deb}: apparmor_parser rejected the bundled profile\n${parsed.stderr}`.trimEnd());
       } else {
-        process.stdout.write("piorbit: AppArmor profile parses\n");
+        process.stdout.write(`${identity.name}: AppArmor profile parses\n`);
       }
     }
   } catch (error) {
@@ -317,7 +318,7 @@ function report(found) {
   writeFileSync(join(outDir, "SHA256SUMS"), `${manifest}\n`);
 
   const width = Math.max(...found.map((a) => a.file.length));
-  process.stdout.write(`\npiorbit ${version} — Linux artifacts in ${outDir}\n\n`);
+  process.stdout.write(`\n${identity.name} ${version} — Linux artifacts in ${outDir}\n\n`);
   for (const artifact of found) {
     const megabytes = `${(artifact.size / 1024 / 1024).toFixed(1)} MB`.padStart(9);
     process.stdout.write(`  ${artifact.file.padEnd(width)}  ${megabytes}  ${artifact.sha256.slice(0, 16)}…\n`);
@@ -339,7 +340,8 @@ validateShippedDeb();
 report(artifacts());
 
 if (problems.length > 0) {
-  process.stderr.write(`\npiorbit: the packages were built, but ${problems.length} check did not pass:\n\n`);
+  process.stderr.write(`
+${identity.name}: the packages were built, but ${problems.length} check did not pass:\n\n`);
   for (const problem of problems) process.stderr.write(`  ${problem.split("\n").join("\n  ")}\n\n`);
   process.exit(1);
 }

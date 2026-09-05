@@ -18,6 +18,7 @@
  */
 
 import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
+import { WIRE_NAMESPACE } from "@piorbit/protocol";
 import {
   createPanelClaims,
   modules,
@@ -52,7 +53,14 @@ export interface PiorbitExtensionOptions {
   only?: ModuleName[];
 }
 
-export const PIORBIT_EXTENSION_NAME = "piorbit";
+/**
+ * The name Pi registers this extension under.
+ *
+ * The wire namespace rather than the product name: Pi writes it into session
+ * transcripts and a person's settings can filter on it, so renaming the product
+ * must not make an existing session's extension records unreadable.
+ */
+export const PIORBIT_EXTENSION_NAME: string = WIRE_NAMESPACE;
 
 export function createPiorbitExtension(options: PiorbitExtensionOptions): InlineExtension {
   return {

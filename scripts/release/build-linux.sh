@@ -11,6 +11,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 DESKTOP="$REPO_ROOT/packages/desktop"
+. "$REPO_ROOT/scripts/identity/identity.sh"
 
 ARCH=""
 OUT="$REPO_ROOT/release"
@@ -54,7 +55,7 @@ if [ -z "$ARCH" ]; then
 fi
 case "$ARCH" in
   x64 | arm64) ;;
-  *) die "unknown architecture: $ARCH" "piorbit builds x64 and arm64." ;;
+  *) die "unknown architecture: $ARCH" "$product_name builds x64 and arm64." ;;
 esac
 
 # electron-builder cross-compiles nothing useful here: the bundled Node, the
@@ -79,7 +80,7 @@ command -v pnpm >/dev/null 2>&1 || die "pnpm is not installed" "Install pnpm 10 
 VERSION="$(node -p "require('$DESKTOP/package.json').version")"
 [ -n "$VERSION" ] || die "packages/desktop/package.json has no version"
 
-printf '\npiorbit release build\n'
+printf '\n%s release build\n' "$product_name"
 printf '  version   %s\n' "$VERSION"
 printf '  arch      %s\n' "$ARCH"
 printf '  staging   %s\n\n' "$OUT"
@@ -154,13 +155,13 @@ if [ -n "$EXISTING_TARBALL" ]; then
   printf '==> tarball already built by the desktop package\n'
 elif [ -n "$APPIMAGE" ]; then
   printf '==> tarball from the AppImage\n'
-  TARBALL="$OUT/piorbit-$VERSION-linux-$ARCH.tar.gz"
+  TARBALL="$OUT/$product_binary-$VERSION-linux-$ARCH.tar.gz"
   work="$(mktemp -d)"
   trap 'rm -rf "$work"' EXIT
   chmod +x "$APPIMAGE"
   (cd "$work" && "$APPIMAGE" --appimage-extract >/dev/null)
-  mv "$work/squashfs-root" "$work/piorbit-$VERSION-linux-$ARCH"
-  tar -czf "$TARBALL" -C "$work" "piorbit-$VERSION-linux-$ARCH"
+  mv "$work/squashfs-root" "$work/$product_binary-$VERSION-linux-$ARCH"
+  tar -czf "$TARBALL" -C "$work" "$product_binary-$VERSION-linux-$ARCH"
   printf '    %s\n' "$(basename "$TARBALL")"
 fi
 

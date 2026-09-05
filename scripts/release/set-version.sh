@@ -2,7 +2,7 @@
 # Set one version across the whole workspace.
 #
 # Every package.json in this repository carries the same version, because they
-# are one product shipped as one artifact: `piorbit --version` reads the CLI's
+# are one product shipped as one artifact: the CLI's `--version` reads the CLI's
 # manifest, the AppStream release entry reads the desktop's, and the tag names
 # the release. Three answers to one question is how a bug report becomes
 # unreproducible, so there is one number and this is what sets it.
@@ -14,6 +14,9 @@
 # pinned on their own schedule and each has its own task.
 set -euo pipefail
 
+REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+. "$REPO_ROOT/scripts/identity/identity.sh"
+
 VERSION="${1-}"
 case "$VERSION" in
   "" | -h | --help)
@@ -23,17 +26,15 @@ case "$VERSION" in
 esac
 
 if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
-  printf 'piorbit: "%s" is not a version.\n' "$VERSION" >&2
+  printf '%s: "%s" is not a version.\n' "$product_name" "$VERSION" >&2
   printf 'Use MAJOR.MINOR.PATCH, for example 0.2.0 — the leading "v" belongs on the tag, not here.\n' >&2
   exit 2
 fi
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-
-node - "$REPO_ROOT" "$VERSION" <<'NODE'
+node - "$REPO_ROOT" "$VERSION" "$product_name" <<'NODE'
 const { readFileSync, writeFileSync, readdirSync } = require("node:fs");
 const { join } = require("node:path");
-const [root, version] = process.argv.slice(2);
+const [root, version, product] = process.argv.slice(2);
 
 const manifests = [join(root, "package.json")];
 for (const entry of readdirSync(join(root, "packages"), { withFileTypes: true })) {
@@ -46,7 +47,7 @@ for (const path of manifests) {
   // order, indentation and comment blocks. JSON.stringify would reformat all of
   // them and bury the one line that changed in a hundred that did not.
   if (!/("version":\s*)"[^"]*"/.test(before)) {
-    console.error(`piorbit: ${path} has no "version" field to set.`);
+    console.error(`${product}: ${path} has no "version" field to set.`);
     process.exit(1);
   }
   const after = before.replace(/("version":\s*)"[^"]*"/, `$1"${version}"`);

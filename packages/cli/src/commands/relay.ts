@@ -15,6 +15,7 @@
  * is deliberately no `--yes` for it: a flag that says "I compared the emoji"
  * without a person comparing the emoji is the whole attack.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { createInterface } from "node:readline/promises";
 import { hostname } from "node:os";
 
@@ -73,20 +74,20 @@ export const relayCommand: Command = {
   name: "relay",
   group: "Relay",
   summary: "link a phone to this desktop through a relay",
-  usage: "piorbit relay [status|login <url>|pair|devices|revoke <device>] [options]",
+  usage: `${PRODUCT_NAME} relay [status|login <url>|pair|devices|revoke <device>] [options]`,
   description: `
 A phone reaches this desktop through a relay that forwards bytes it cannot
 read. Pairing is a QR scan plus an emoji comparison; after that the two sides
 have a channel only they can compute, and the relay sees an opaque id.
 
-  piorbit relay login wss://relay.example/ws --origin https://app.example
-  piorbit relay pair --name "Youssef's iPhone"
-  piorbit relay devices
-  piorbit relay revoke iphone
+  ${PRODUCT_NAME} relay login wss://relay.example/ws --origin https://app.example
+  ${PRODUCT_NAME} relay pair --name "Youssef's iPhone"
+  ${PRODUCT_NAME} relay devices
+  ${PRODUCT_NAME} relay revoke iphone
 
 Nothing here contacts the relay except \`pair\`. \`login\` writes a URL, and
 the host opens its outbound connections when it next starts — so after pairing
-or revoking, restart it with \`piorbit restart\`.
+or revoking, restart it with \`${PRODUCT_NAME} restart\`.
 
 The root identity that signs the device list is created on first use and never
 rotated: every paired phone verifies the list against it, so replacing it
@@ -109,9 +110,9 @@ unlinks every device. It lives in the state directory, mode 0600.
     yes: { type: "boolean", short: "y", description: "`revoke`: skip the confirmation" },
   },
   examples: [
-    { note: "point this desktop at a relay", command: "piorbit relay login wss://relay.example/ws --origin https://app.example" },
-    { note: "link a phone", command: "piorbit relay pair --name \"Youssef's iPhone\"" },
-    { note: "unlink one", command: "piorbit relay revoke iphone" },
+    { note: "point this desktop at a relay", command: `${PRODUCT_NAME} relay login wss://relay.example/ws --origin https://app.example` },
+    { note: "link a phone", command: `${PRODUCT_NAME} relay pair --name \"Youssef's iPhone\"` },
+    { note: "unlink one", command: `${PRODUCT_NAME} relay revoke iphone` },
   ],
 
   async run(context) {
@@ -162,7 +163,7 @@ async function status({ term, paths }: CommandContext): Promise<void> {
     term.note("  A relay lets a phone reach this machine without opening a port on it.");
     term.note("  It forwards bytes it cannot read; nothing about your sessions passes through it in the clear.");
     term.note();
-    term.note(`  ${term.err.bold("piorbit relay login wss://relay.example/ws --origin https://app.example")}`);
+    term.note(`  ${term.err.bold(`${PRODUCT_NAME} relay login wss://relay.example/ws --origin https://app.example`)}`);
     return;
   }
 
@@ -176,7 +177,7 @@ async function status({ term, paths }: CommandContext): Promise<void> {
   }
   if (linked.length === 0) {
     term.note();
-    term.note(`  ${term.err.bold("piorbit relay pair")} shows a QR code for a phone to scan.`);
+    term.note(`  ${term.err.bold(`${PRODUCT_NAME} relay pair`)} shows a QR code for a phone to scan.`);
   } else if (!running) {
     term.note(term.err.dim("The host is not running, so no device is connected right now."));
   }
@@ -189,7 +190,7 @@ async function login({ term, paths, args }: CommandContext, url: string | undefi
   if (url === undefined && !existing) {
     throw new CliError("relay login needs the relay's WebSocket URL", {
       exitCode: ExitCode.Usage,
-      fix: "For example: `piorbit relay login wss://relay.example.com/ws`.",
+      fix: `For example: \`${PRODUCT_NAME} relay login wss://relay.example.com/ws\`.`,
     });
   }
 
@@ -234,11 +235,11 @@ async function login({ term, paths, args }: CommandContext, url: string | undefi
   }
   if (!publicOrigin) {
     term.note();
-    term.note(`  ${term.err.bold("--origin")} is not set, so ${term.err.bold("piorbit relay pair")} has no address to put in the QR.`);
-    term.note(`  Set it to wherever the app is served: \`piorbit relay login --origin https://app.example\`.`);
+    term.note(`  ${term.err.bold("--origin")} is not set, so ${term.err.bold(`${PRODUCT_NAME} relay pair`)} has no address to put in the QR.`);
+    term.note(`  Set it to wherever the app is served: \`${PRODUCT_NAME} relay login --origin https://app.example\`.`);
   }
   term.note();
-  term.note(`  Next: ${term.err.bold("piorbit relay pair")}`);
+  term.note(`  Next: ${term.err.bold(`${PRODUCT_NAME} relay pair`)}`);
 }
 
 /** A relay at `wss://relay.example/ws` usually serves the app at `https://relay.example`. */
@@ -260,24 +261,24 @@ async function pair(context: CommandContext): Promise<void> {
   if (!config) {
     throw new CliError("no relay is configured", {
       exitCode: ExitCode.Usage,
-      fix: "Run `piorbit relay login wss://relay.example/ws --origin https://app.example` first.",
+      fix: `Run \`${PRODUCT_NAME} relay login wss://relay.example/ws --origin https://app.example\` first.`,
     });
   }
   if (!config.publicOrigin) {
     throw new CliError("the QR needs an address for the phone to open", {
       details: ["The relay URL is where the two sides meet; the origin is where the app itself is served."],
-      fix: "Run `piorbit relay login --origin https://app.example`.",
+      fix: `Run \`${PRODUCT_NAME} relay login --origin https://app.example\`.`,
     });
   }
   if (term.json) {
-    throw new CliError("`piorbit relay pair` cannot run with --json", {
+    throw new CliError(`\`${PRODUCT_NAME} relay pair\` cannot run with --json`, {
       exitCode: ExitCode.Usage,
       details: ["Pairing needs a person to compare six emoji against the phone's screen; that is the security of it."],
-      fix: "Run it without --json, then use `piorbit relay devices --json` for the result.",
+      fix: `Run it without --json, then use \`${PRODUCT_NAME} relay devices --json\` for the result.`,
     });
   }
   if (!process.stdin.isTTY) {
-    throw new CliError("`piorbit relay pair` needs a terminal", {
+    throw new CliError(`\`${PRODUCT_NAME} relay pair\` needs a terminal`, {
       details: ["It shows a QR code and asks you to confirm the emoji the phone shows."],
       fix: "Run it in an interactive shell.",
     });
@@ -346,7 +347,7 @@ async function pair(context: CommandContext): Promise<void> {
   term.note();
   term.note(`${term.err.green("linked")} ${clip(sanitize(deviceName), 48)} ${term.err.dim(shortId(grant.deviceId))}`);
   term.note();
-  term.note(`  Restart the host so it opens a channel for it: ${term.err.bold("piorbit restart")}`);
+  term.note(`  Restart the host so it opens a channel for it: ${term.err.bold(`${PRODUCT_NAME} restart`)}`);
 }
 
 function addDeviceOrFail(list: DeviceListBody, entry: Omit<DeviceEntry, "id">): DeviceListBody {
@@ -356,7 +357,7 @@ function addDeviceOrFail(list: DeviceListBody, entry: Omit<DeviceEntry, "id">): 
     throw new CliError("that phone is already linked to this desktop", {
       cause: error,
       details: [`It is in the list as "${clip(sanitize(nameOfKey(list, entry.publicKey) ?? "?"), 40)}".`],
-      fix: "Revoke it first (`piorbit relay devices`, then `piorbit relay revoke <id>`) and pair again.",
+      fix: `Revoke it first (\`${PRODUCT_NAME} relay devices\`, then \`${PRODUCT_NAME} relay revoke <id>\`) and pair again.`,
     });
   }
 }
@@ -401,7 +402,7 @@ function waitForRequest(
       }
       reject(
         new CliError("the pairing code expired before a phone scanned it", {
-          fix: "Run `piorbit relay pair` again, or raise --timeout.",
+          fix: `Run \`${PRODUCT_NAME} relay pair\` again, or raise --timeout.`,
         }),
       );
     }, ttlMs);
@@ -435,7 +436,7 @@ function waitForRequest(
         new CliError(`could not reach the relay at ${relayUrl}`, {
           cause: error,
           details: [error.message],
-          fix: "Check the URL with `piorbit relay status`, and that this machine has a route to it.",
+          fix: `Check the URL with \`${PRODUCT_NAME} relay status\`, and that this machine has a route to it.`,
         }),
       );
     });
@@ -445,7 +446,7 @@ function waitForRequest(
       fail(
         new CliError(`the relay closed the connection (${code})`, {
           ...(reason.length > 0 ? { details: [reason.toString()] } : {}),
-          fix: "Run `piorbit relay pair` again.",
+          fix: `Run \`${PRODUCT_NAME} relay pair\` again.`,
         }),
       );
     });
@@ -459,7 +460,7 @@ function waitForRequest(
           if (message.t === "error") {
             fail(
               new CliError(`the relay refused this channel: ${message.message ?? "no reason given"}`, {
-                fix: "Run `piorbit relay pair` again to get a fresh code.",
+                fix: `Run \`${PRODUCT_NAME} relay pair\` again to get a fresh code.`,
               }),
             );
           }
@@ -500,7 +501,7 @@ function refusedByRelay(relayUrl: string, status: number, body: string): CliErro
   if (status === 409) {
     return new CliError("that pairing channel already has two connections", {
       details: [detail].filter(Boolean),
-      fix: "Someone else is on it, or an earlier attempt is still open. Run `piorbit relay pair` again for a fresh code.",
+      fix: `Someone else is on it, or an earlier attempt is still open. Run \`${PRODUCT_NAME} relay pair\` again for a fresh code.`,
     });
   }
   if (status === 429) {
@@ -511,7 +512,7 @@ function refusedByRelay(relayUrl: string, status: number, body: string): CliErro
   }
   return new CliError(`the relay at ${relayUrl} refused the connection (HTTP ${status})`, {
     details: [detail].filter(Boolean),
-    fix: "Check the URL with `piorbit relay status`.",
+    fix: `Check the URL with \`${PRODUCT_NAME} relay status\`.`,
   });
 }
 
@@ -550,7 +551,7 @@ async function devices({ term, paths }: CommandContext): Promise<void> {
   if (!list || list.devices.length === 0) {
     term.note("No devices linked.");
     term.note();
-    term.note(`  ${term.err.bold("piorbit relay pair")} shows a QR code to scan.`);
+    term.note(`  ${term.err.bold(`${PRODUCT_NAME} relay pair`)} shows a QR code to scan.`);
     return;
   }
 
@@ -588,7 +589,7 @@ async function revoke({ term, paths, args }: CommandContext, ref: string | undef
   if (ref === undefined) {
     throw new CliError("relay revoke needs a device", {
       exitCode: ExitCode.Usage,
-      fix: "Run `piorbit relay devices` for the ids, then `piorbit relay revoke <id>`.",
+      fix: `Run \`${PRODUCT_NAME} relay devices\` for the ids, then \`${PRODUCT_NAME} relay revoke <id>\`.`,
     });
   }
   const config = readRelayConfig(paths);
@@ -600,7 +601,7 @@ async function revoke({ term, paths, args }: CommandContext, ref: string | undef
     throw new CliError(`this would unlink "${clip(sanitize(device.name), 40)}"`, {
       exitCode: ExitCode.Usage,
       details: ["It stops connecting on its next attempt; it cannot be undone without pairing again."],
-      fix: `Nothing changed. Re-run with --yes: \`piorbit relay revoke ${shortId(device.id)} --yes\`.`,
+      fix: `Nothing changed. Re-run with --yes: \`${PRODUCT_NAME} relay revoke ${shortId(device.id)} --yes\`.`,
     });
   }
 
@@ -613,7 +614,7 @@ async function revoke({ term, paths, args }: CommandContext, ref: string | undef
   }
   term.note(`${term.err.green("revoked")} ${clip(sanitize(device.name), 40)} ${term.err.dim(shortId(device.id))}`);
   term.note();
-  term.note(`  It is refused on its next reconnect. To drop it now: ${term.err.bold("piorbit restart")}`);
+  term.note(`  It is refused on its next reconnect. To drop it now: ${term.err.bold(`${PRODUCT_NAME} restart`)}`);
 }
 
 /** Full id, short id, or an unambiguous piece of the name. */
@@ -639,7 +640,7 @@ function resolveDevice(list: DeviceListBody, ref: string): DeviceEntry {
       list.devices.length === 0
         ? ["Nothing is linked."]
         : list.devices.map((device) => `${shortId(device.id)}  ${clip(sanitize(device.name), 40)}`),
-    fix: "Run `piorbit relay devices`.",
+    fix: `Run \`${PRODUCT_NAME} relay devices\`.`,
   });
 }
 

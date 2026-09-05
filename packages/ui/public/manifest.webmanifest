@@ -2,7 +2,7 @@
   "id": "/",
   "name": "piorbit",
   "short_name": "piorbit",
-  "description": "Your Pi coding agents, from anywhere. Answer approvals, steer runs, watch every project.",
+  "description": "Your coding agents, from anywhere. Answer approvals, steer runs, watch every project.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

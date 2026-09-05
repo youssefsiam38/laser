@@ -19,6 +19,7 @@
  * who edits the tokens in Settings changes the code too. Shiki accepts
  * `var()` strings as theme colours and writes them into inline styles.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import type { FC } from "react";
 import { bundledLanguages } from "shiki";
 import { useShikiHighlighter, type ShikiHighlighterProps } from "react-shiki";
@@ -29,7 +30,7 @@ import { fenceClassName } from "./fence.js";
 
 /** A TextMate theme whose colours are the theme system's tokens. */
 export const PIORBIT_SHIKI_THEME = {
-  name: "piorbit",
+  name: PRODUCT_NAME,
   type: "dark" as const,
   fg: "var(--ink)",
   bg: "transparent",

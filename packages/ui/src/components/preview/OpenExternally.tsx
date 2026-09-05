@@ -13,6 +13,7 @@
  * `onOpen`; copying the path appears only when there is a path. Nothing is
  * rendered disabled with a shrug.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { Check, Copy, ExternalLink, FileQuestion } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -41,7 +42,9 @@ export function OpenExternally({ mediaType, path, onOpen, className }: OpenExter
     >
       <div className="flex max-w-[46ch] flex-col items-center gap-3 text-center">
         <FileQuestion aria-hidden="true" className="size-6 text-ink-3" />
-        <p className="text-md font-semibold text-ink">piorbit does not draw {format} files</p>
+        <p className="text-md font-semibold text-ink">
+          {PRODUCT_NAME} does not draw {format} files
+        </p>
         <p className="text-sm text-ink-2">
           Rather than show you a broken viewer, it stays out of the way. Open the file in the app that handles it.
         </p>

@@ -1,3 +1,4 @@
+import { PRODUCT_DISPLAY_NAME, PRODUCT_NAME } from "@piorbit/protocol";
 import { sep } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -15,12 +16,12 @@ const BEL = String.fromCharCode(7);
  */
 describe("unpacked", () => {
   it("rewrites a path inside app.asar to the unpacked copy", () => {
-    const inside = ["", "Applications", "piorbit.app", "Contents", "Resources", "app.asar", "node_modules", "@piorbit", "cli", "dist", "main.js"].join(sep);
+    const inside = ["", "Applications", `${PRODUCT_DISPLAY_NAME}.app`, "Contents", "Resources", "app.asar", "node_modules", "@piorbit", "cli", "dist", "main.js"].join(sep);
     expect(unpacked(inside)).toBe(inside.replace(`${sep}app.asar${sep}`, `${sep}app.asar.unpacked${sep}`));
   });
 
   it("leaves a development path alone", () => {
-    const dev = ["", "home", "me", "piorbit", "packages", "cli", "dist", "main.js"].join(sep);
+    const dev = ["", "home", "me", PRODUCT_NAME, "packages", "cli", "dist", "main.js"].join(sep);
     expect(unpacked(dev)).toBe(dev);
   });
 

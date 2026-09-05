@@ -1,3 +1,4 @@
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { describe, expect, it } from "vitest";
 import type { UiDialogRequest, UiFireAndForget } from "@piorbit/protocol";
 import { createUiBridge } from "../src/ui-bridge.js";
@@ -64,8 +65,8 @@ describe("ui bridge", () => {
 
     const i = ctx.input("Name?", "type here");
     expect(requests[0]).toMatchObject({ method: "input", title: "Name?", placeholder: "type here" });
-    bridge.respond({ id: requests[0]!.id, value: "piorbit" });
-    await expect(i).resolves.toBe("piorbit");
+    bridge.respond({ id: requests[0]!.id, value: PRODUCT_NAME });
+    await expect(i).resolves.toBe(PRODUCT_NAME);
 
     const e = ctx.editor("Edit", "line1\nline2");
     expect(requests[1]).toMatchObject({ method: "editor", prefill: "line1\nline2" });

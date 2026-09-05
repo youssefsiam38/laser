@@ -199,6 +199,7 @@ Depends on: M1.
 | M4-T5 | Log store: SQLite in host; capture `before_provider_request`, `after_provider_response`, assembled assistant message, tool events, session events | round-trips persist with cost |
 | M4-T6 | Logs page: tabs per section (provider, tools, session, subagents, host); paged views with byte budgets; copy buttons; search | copy of a full request payload works |
 | M4-T7 | Keybindings and trust store views (read, edit where Pi allows) | files edited through Pi's own managers only |
+| M4-T8 | "All settings" written for a person, not for `settings.json`: no raw Pi key names on screen, categories named for what they do, free-text provider/model fields replaced by the pickers that already exist, and the tab hidden behind an "Advanced" disclosure | a reader who has never seen Pi can tell what each row changes without leaving the screen; no key name appears as a label |
 
 ---
 

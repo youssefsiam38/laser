@@ -60,6 +60,9 @@ importers:
       '@noble/hashes':
         specifier: 1.8.0
         version: 1.8.0
+      '@piorbit/protocol':
+        specifier: workspace:*
+        version: link:../protocol
 
   packages/desktop:
     dependencies:
@@ -150,6 +153,9 @@ importers:
 
   packages/relay:
     dependencies:
+      '@piorbit/protocol':
+        specifier: workspace:*
+        version: link:../protocol
       ws:
         specifier: 8.18.3
         version: 8.18.3

@@ -11,6 +11,7 @@
  * Pi rather than piorbit: once the name is read, a passthrough command owns
  * every remaining token.
  */
+import { ENV, PRODUCT_NAME } from "@piorbit/protocol";
 import { distance, parseArgs, type ParsedArgs } from "./args.js";
 import { findCommand, type Command, type CommandContext } from "./command.js";
 import { resolvePaths } from "./config.js";
@@ -84,8 +85,8 @@ export async function run(argv: readonly string[]): Promise<number> {
     return fail(
       new CliError(`unknown command ${JSON.stringify(name)}`, {
         exitCode: ExitCode.Usage,
-        ...(suggest(name as string) ? { fix: `Did you mean \`piorbit ${suggest(name as string)}\`?` } : {}),
-        details: ["Run `piorbit --help` for the full list."],
+        ...(suggest(name as string) ? { fix: `Did you mean \`${PRODUCT_NAME} ${suggest(name as string)}\`?` } : {}),
+        details: [`Run \`${PRODUCT_NAME} --help\` for the full list.`],
       }),
       early(argv),
     );
@@ -97,9 +98,9 @@ export async function run(argv: readonly string[]): Promise<number> {
     try {
       const stray = leading.find((token) => token.startsWith("-") && !isPiPrefixFlag(token));
       if (stray) {
-        throw new CliError(`${stray} cannot be used before \`piorbit ${command.name}\``, {
+        throw new CliError(`${stray} cannot be used before \`${PRODUCT_NAME} ${command.name}\``, {
           exitCode: ExitCode.Usage,
-          fix: `Everything after \`${command.name}\` goes to Pi. Only ${[...PI_PREFIX_FLAGS].join(", ")} are piorbit's there.`,
+          fix: `Everything after \`${command.name}\` goes to Pi. Only ${[...PI_PREFIX_FLAGS].join(", ")} are ${PRODUCT_NAME}'s there.`,
         });
       }
       const result = await command.run({
@@ -232,7 +233,7 @@ function fail(error: unknown, term: Terminal): ExitCodeValue {
     if (cli?.fix) process.stderr.write(`      ${p.dim(`→ ${sanitize(cli.fix)}`)}\n`);
   }
 
-  if (!cli && process.env["PIORBIT_DEBUG"] && error instanceof Error && error.stack) {
+  if (!cli && process.env[ENV.debug] && error instanceof Error && error.stack) {
     process.stderr.write(`${error.stack}\n`);
   }
   return exitCode;

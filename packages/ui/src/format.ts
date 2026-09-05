@@ -24,7 +24,11 @@ export function duration(ms: number): string {
 export function tokens(n: number): string {
   if (n < 1000) return String(n);
   if (n < 100_000) return `${(n / 1000).toFixed(1)}k`;
-  return `${Math.round(n / 1000)}k`;
+  // A million-token context is a real model, and "1000k" is not how anyone
+  // writes it. Past a million the unit changes rather than the digits growing.
+  if (n < 1_000_000) return `${Math.round(n / 1000)}k`;
+  const millions = n / 1_000_000;
+  return `${millions < 10 ? millions.toFixed(millions % 1 === 0 ? 0 : 1) : Math.round(millions)}M`;
 }
 
 export function money(usd: number): string {

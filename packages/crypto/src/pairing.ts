@@ -27,6 +27,7 @@
  *              — only the two peers can compute it. This is the routing key for
  *                every reconnection, one per paired device.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol/identity";
 import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { selectBackend, type CryptoBackend, type KeyPair } from "./backend.js";
@@ -112,7 +113,9 @@ export function parsePairingLink(link: string): PairingLink {
   const fragment = hash >= 0 ? link.slice(hash + 1) : link;
   const parts = fragment.split(".");
   if (parts.length !== 3) {
-    throw new PairingError("this is not a piorbit pairing link — scan the QR shown by “Link a device” on the desktop");
+    throw new PairingError(
+      `this is not a ${PRODUCT_NAME} pairing link — scan the QR shown by “Link a device” on the desktop`,
+    );
   }
   const [version, relay, ephemeral] = parts as [string, string, string];
   if (version !== PAIRING_LINK_VERSION) {

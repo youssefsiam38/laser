@@ -6,6 +6,7 @@
  * piorbit consumes only the flags that appear *before* Pi's first argument, so
  * there is one simple rule to remember and no flag can ever be shadowed.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import type { ParsedArgs } from "../args.js";
 import type { Command } from "../command.js";
 import { resolvePaths } from "../config.js";
@@ -66,16 +67,16 @@ export const piCommand: Command = {
   name: "pi",
   group: "Advanced",
   passthrough: true,
-  summary: "run the Pi that piorbit pins, with piorbit's agent directory",
-  usage: "piorbit pi [--global-pi] [--agent-dir <dir>] [-- ] <pi arguments...>",
+  summary: `run the Pi that ${PRODUCT_NAME} pins, with ${PRODUCT_NAME}'s agent directory`,
+  usage: `${PRODUCT_NAME} pi [--global-pi] [--agent-dir <dir>] [-- ] <pi arguments...>`,
   description: `
 Runs the exact Pi that @piorbit/worker pins — the same copy the app runs — with
 PI_CODING_AGENT_DIR, PI_CODING_AGENT_SESSION_DIR and PI_SUBAGENTS_TEMP_ROOT set
-to piorbit's. A session or a background subagent run you start this way is
+to ${PRODUCT_NAME}'s. A session or a background subagent run you start this way is
 visible in the app.
 
 Everything after \`pi\` goes to Pi untouched, including --help and --version.
-piorbit only consumes the flags below, and only while they lead. Use \`--\` to
+${PRODUCT_NAME} only consumes the flags below, and only while they lead. Use \`--\` to
 pass one of them through to Pi instead.
 
 stdio is inherited, so the TUI works. Pi's exit code is this command's exit
@@ -86,9 +87,9 @@ code, and a Pi killed by a signal kills this wrapper with the same signal.
     "global-pi": { type: "boolean", description: "Use the `pi` on your PATH instead of the pinned one" },
   },
   examples: [
-    { note: "Pi's own help, from the pinned copy", command: "piorbit pi --help" },
-    { note: "update Pi's installed extensions", command: "piorbit pi update --extensions" },
-    { note: "one-shot prompt in this directory", command: 'piorbit pi -p "summarise the diff"' },
+    { note: "Pi's own help, from the pinned copy", command: `${PRODUCT_NAME} pi --help` },
+    { note: "update Pi's installed extensions", command: `${PRODUCT_NAME} pi update --extensions` },
+    { note: "one-shot prompt in this directory", command: `${PRODUCT_NAME} pi -p "summarise the diff"` },
   ],
   async run({ raw }) {
     const { global, overrides, rest } = splitPiArgs(raw);

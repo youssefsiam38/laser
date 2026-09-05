@@ -129,7 +129,7 @@ describe("relay", () => {
     expect(await a.control((m) => m.t === "peer")).toMatchObject({ t: "peer", present: true });
 
     const frame = Buffer.alloc(LEGAL_FRAME);
-    frame.write("piorbit", 12);
+    frame.write("payload", 12);
     a.ws.send(frame, { binary: true });
     expect(Buffer.compare(await b.firstBinary(), frame)).toBe(0);
     expect(relay.statistics().framesForwarded).toBe(1);
@@ -179,7 +179,7 @@ describe("relay", () => {
     expect((await a.firstBinary()).length).toBe(48);
   });
 
-  it("rejects a frame that is not a padded piorbit size, once the handshake is over", async () => {
+  it("rejects a frame that is not a padded size, once the handshake is over", async () => {
     const a = await connect(CHANNEL_A);
     const b = await connect(CHANNEL_A);
     await a.control((m) => m.t === "peer");

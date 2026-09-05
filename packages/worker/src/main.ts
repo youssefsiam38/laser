@@ -12,12 +12,12 @@
  *       [--subagents-temp-root <dir>] [--project-trusted yes|no]
  */
 import { Socket } from "node:net";
-import { LineDecoder, parseJsonLine, type JsonRpcMessage } from "@piorbit/protocol";
+import { ENV, LineDecoder, PRODUCT_NAME, parseJsonLine, type JsonRpcMessage } from "@piorbit/protocol";
 import { StableSdkDriver } from "./drivers/stable-sdk.js";
 import { AgentResolutionError, assertBundledAgent } from "./resolve-pi.js";
 import { WorkerServer } from "./server.js";
 
-const PROTOCOL_FD = Number(process.env["PIORBIT_WORKER_FD"] ?? 3);
+const PROTOCOL_FD = Number(process.env[ENV.workerFd] ?? 3);
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -46,7 +46,7 @@ async function main(): Promise<void> {
     assertBundledAgent();
   } catch (error) {
     if (error instanceof AgentResolutionError) {
-      console.error(`piorbit: ${error.message}`);
+      console.error(`${PRODUCT_NAME}: ${error.message}`);
       if (error.fix) console.error(error.fix);
       process.exit(2);
     }
@@ -59,7 +59,7 @@ async function main(): Promise<void> {
   const subagentsTempRoot = arg("subagents-temp-root");
   const projectTrusted = arg("project-trusted");
   if (projectTrusted !== undefined && projectTrusted !== "yes" && projectTrusted !== "no") {
-    console.error(`piorbit worker: --project-trusted must be "yes" or "no", got ${JSON.stringify(projectTrusted)}`);
+    console.error(`${PRODUCT_NAME} worker: --project-trusted must be "yes" or "no", got ${JSON.stringify(projectTrusted)}`);
     process.exit(2);
   }
 
@@ -67,7 +67,7 @@ async function main(): Promise<void> {
   // Only used when settings name none; malformed = absent.
   let npmCommand: string[] | undefined;
   try {
-    const parsed: unknown = JSON.parse(process.env["PIORBIT_NPM_COMMAND"] ?? "null");
+    const parsed: unknown = JSON.parse(process.env[ENV.npmCommand] ?? "null");
     if (Array.isArray(parsed) && parsed.length > 0 && parsed.every((part) => typeof part === "string")) npmCommand = parsed as string[];
   } catch {
     npmCommand = undefined;
@@ -128,6 +128,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error("piorbit worker failed:", error);
+  console.error(`${PRODUCT_NAME} worker failed:`, error);
   process.exit(1);
 });

@@ -22,11 +22,13 @@
  * so, in the UI, every time. A degraded security story that nobody is told
  * about is the actual failure.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Entry } from "@napi-rs/keyring";
 import {
+  KEYCHAIN_FORMER_SERVICES,
   KEYCHAIN_ROOT_ACCOUNT,
   KEYCHAIN_SERVICE,
   createKeyringRootIdentityStore,
@@ -98,9 +100,42 @@ class FileSecret {
   }
 }
 
+/**
+ * Move a keychain entry from a former product name onto the current one.
+ *
+ * The keychain service is the product's name, so a rename would make the
+ * device look brand new: a fresh root identity, and every paired phone
+ * orphaned with nothing on screen to say why (MX-T7, D-36). This copies the
+ * secret across before anything asks whether one exists, and removes the old
+ * entry only once the new one is written, so an interrupted migration leaves
+ * the secret exactly where it was.
+ *
+ * With no former names it does nothing. It never throws: a locked or absent
+ * keychain is the caller's own fallback path, not this function's problem.
+ */
+function adoptFormerKeychainEntry(account: string, log: DesktopLog): void {
+  if (KEYCHAIN_FORMER_SERVICES.length === 0) return;
+  try {
+    const current = new Entry(KEYCHAIN_SERVICE, account);
+    if (current.getPassword()) return;
+    for (const service of KEYCHAIN_FORMER_SERVICES) {
+      const previous = new Entry(service, account);
+      const secret = previous.getPassword();
+      if (!secret) continue;
+      current.setPassword(secret);
+      previous.deletePassword();
+      log.line(`moved the "${account}" keychain entry from "${service}" to "${KEYCHAIN_SERVICE}" — this product was renamed`);
+      return;
+    }
+  } catch (error) {
+    log.error(`could not check the keychain for an entry under an earlier product name`, error);
+  }
+}
+
 function loadHostToken(stateDir: string, degraded: boolean, log: DesktopLog): string {
   const fresh = (): string => randomBytes(32).toString("base64url");
   if (!degraded) {
+    adoptFormerKeychainEntry(HOST_TOKEN_ACCOUNT, log);
     const entry = new Entry(KEYCHAIN_SERVICE, HOST_TOKEN_ACCOUNT);
     try {
       const stored = entry.getPassword();
@@ -140,6 +175,7 @@ export async function loadSecrets(options: SecretsOptions): Promise<DesktopSecre
   if (unavailable) {
     store = new FileRootIdentityStore(join(stateDir, "identity.key"));
   } else {
+    adoptFormerKeychainEntry(KEYCHAIN_ROOT_ACCOUNT, log);
     store = createKeyringRootIdentityStore(
       new Entry(KEYCHAIN_SERVICE, KEYCHAIN_ROOT_ACCOUNT),
       process.platform === "darwin" ? "the macOS keychain" : process.platform === "win32" ? "Windows Credential Manager" : "the system keyring",
@@ -156,7 +192,7 @@ export async function loadSecrets(options: SecretsOptions): Promise<DesktopSecre
     ...(unavailable
       ? {
           degraded:
-            `This system has no keychain piorbit can use (${unavailable}), so its identity key is in a ` +
+            `This system has no keychain ${PRODUCT_NAME} can use (${unavailable}), so its identity key is in a ` +
             `0600 file at ${join(stateDir, "identity.key")}. Anything running as you can read it.`,
         }
       : {}),

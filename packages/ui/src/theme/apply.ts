@@ -10,10 +10,11 @@
  * The same shape is persisted for the inline boot script in `index.html`,
  * which replays it before first paint without knowing anything about themes.
  */
+import { dottedStorageKey, namespaced } from "@piorbit/protocol";
 import type { CompiledTheme, ThemeBase } from "./types.js";
 
-export const THEME_STYLE_ID = "piorbit-theme";
-export const THEME_STORAGE_KEY = "piorbit.theme";
+export const THEME_STYLE_ID = namespaced("theme");
+export const THEME_STORAGE_KEY = dottedStorageKey("theme");
 export const THEME_SELECTOR = ":root[data-theme]";
 
 /** What the boot script reads. Versioned so a stale blob is ignored, not misread. */

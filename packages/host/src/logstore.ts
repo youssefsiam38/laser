@@ -40,6 +40,7 @@
  * so the file is created 0600, and `providerPayloads: "summary"` drops the
  * bodies entirely for anyone who wants that trade.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -183,8 +184,8 @@ function openDatabase(file: string): Database {
     });
   } catch (error) {
     throw new LogStoreUnavailableError(
-      `This Node (${process.version}) has no node:sqlite, so piorbit cannot keep a log store. ` +
-        `Run the host on Node 22.5 or newer — Node 24 is what piorbit targets. ` +
+      `This Node (${process.version}) has no node:sqlite, so ${PRODUCT_NAME} cannot keep a log store. ` +
+        `Run the host on Node 22.5 or newer — Node 24 is what ${PRODUCT_NAME} targets. ` +
         `(${error instanceof Error ? error.message : String(error)})`,
     );
   }

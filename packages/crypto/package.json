@@ -24,6 +24,7 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
+    "@piorbit/protocol": "workspace:*",
     "@noble/ciphers": "1.3.0",
     "@noble/curves": "1.9.6",
     "@noble/hashes": "1.8.0"

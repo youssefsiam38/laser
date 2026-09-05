@@ -51,7 +51,7 @@ import {
   CommandSeparator,
 } from "@/components/ui/command";
 import { tokens } from "@/format";
-import { usePiorbitStable, useSessionMeta } from "@/runtime";
+import { usePiorbitStable, usePiorbitState, useSessionMeta } from "@/runtime";
 
 import { ErrorState } from "./error-state.js";
 import { GenerationLoader } from "./loading-state.js";
@@ -585,6 +585,11 @@ const defaultModelCache = new Map<string, Promise<ModelRef | null>>();
 
 function useProjectDefaultModel(cwd: string | undefined, enabled: boolean): { model: ModelRef | null; loading: boolean } {
   const { client } = usePiorbitStable();
+  // The catalogue answers "no default" while the project's worker is still
+  // starting, and that answer must not be the one this screen keeps. Re-asking
+  // when the worker's status changes is what turns "No model" back into the
+  // model, without a reload.
+  const workerStatus = usePiorbitState((s) => (cwd ? s.workers[cwd]?.status : undefined));
   const [fallback, setFallback] = useState<ModelRef | null>(null);
   // The catalogue is a thousand rows and the project's worker may still be
   // starting, so the first answer can take seconds. Saying "No model" during
@@ -611,8 +616,16 @@ function useProjectDefaultModel(cwd: string | undefined, enabled: boolean): { mo
         // saying "No model" would hide that rather than explain it.
         return { provider: defaultProvider, id: defaultModel, ...(entry?.name ? { name: entry.name } : {}) } as ModelRef;
       });
-      // A failed fetch must not poison the cache: the next mount retries.
-      void pending.catch(() => defaultModelCache.delete(cwd));
+      // Neither a failed fetch nor an empty answer may poison the cache. A
+      // `null` is "the worker has not said yet" as often as it is "there is no
+      // default", and caching it for the life of the page is how the composer
+      // ends up reading "No model" for minutes on the landing screen.
+      void pending.then(
+        (ref) => {
+          if (ref === null) defaultModelCache.delete(cwd);
+        },
+        () => defaultModelCache.delete(cwd),
+      );
       defaultModelCache.set(cwd, pending);
     }
     void pending.then(
@@ -630,7 +643,7 @@ function useProjectDefaultModel(cwd: string | undefined, enabled: boolean): { mo
     return () => {
       live = false;
     };
-  }, [client, cwd, enabled]);
+  }, [client, cwd, enabled, workerStatus]);
 
   return { model: fallback, loading };
 }

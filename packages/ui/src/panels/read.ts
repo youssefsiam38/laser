@@ -4,7 +4,7 @@
  * tail whenever the panel's `bytes` grows, so no polling is needed while the
  * producer keeps emitting. Client-local `inline:` refs resolve without the host.
  */
-import { PANEL_READ_MAX_BYTES } from "@piorbit/protocol";
+import { PANEL_READ_MAX_BYTES, PRODUCT_NAME } from "@piorbit/protocol";
 import { useEffect, useRef, useState } from "react";
 import { usePanelActions } from "./PanelsProvider.js";
 
@@ -108,7 +108,7 @@ export function useRefContent(path: string, ref: string | undefined, options: Us
 function readError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/websocket|socket|not connected|connection/i.test(message)) {
-    return "The host is not answering right now. piorbit is reconnecting; this reloads itself when it does.";
+    return `The host is not answering right now. ${PRODUCT_NAME} is reconnecting; this reloads itself when it does.`;
   }
   if (/timed out|timeout/i.test(message)) {
     return "The host did not answer in time. It may be busy; try again in a moment.";

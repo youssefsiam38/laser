@@ -1,3 +1,4 @@
+import { PRODUCT_DISPLAY_NAME } from "@piorbit/protocol";
 import { describe, expect, it } from "vitest";
 import type { SessionState, SessionSummary } from "@piorbit/protocol";
 
@@ -183,9 +184,9 @@ describe("session rows", () => {
   });
 
   it("builds the tab title", () => {
-    expect(documentTitle(undefined, 0)).toBe("piorbit");
-    expect(documentTitle("Refactor auth", 0)).toBe("Refactor auth · piorbit");
-    expect(documentTitle("Refactor auth", 2)).toBe("(2) Refactor auth · piorbit");
+    expect(documentTitle(undefined, 0)).toBe(PRODUCT_DISPLAY_NAME);
+    expect(documentTitle("Refactor auth", 0)).toBe(`Refactor auth · ${PRODUCT_DISPLAY_NAME}`);
+    expect(documentTitle("Refactor auth", 2)).toBe(`(2) Refactor auth · ${PRODUCT_DISPLAY_NAME}`);
   });
 });
 

@@ -1,3 +1,4 @@
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import type * as React from "react";
 import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import { FileClock, FolderPlus, Moon, Plus, Settings, Sun, X } from "lucide-react";
@@ -211,7 +212,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
             {groups.length === 0 ? (
               <EmptyState
                 title="No project yet"
-                body="Point piorbit at a directory. Sessions already saved there show up too."
+                body={`Point ${PRODUCT_NAME} at a directory. Sessions already saved there show up too.`}
                 action={
                   <Button size="sm" variant="outline" onClick={() => shell.setAddProjectOpen(true)}>
                     <FolderPlus />
@@ -263,7 +264,7 @@ function SheetFooter() {
       <TooltipIconButton tooltip="Settings" side="top" onClick={() => openWorkbench("settings")}>
         <Settings />
       </TooltipIconButton>
-      <span className="ms-auto pe-1 typed text-ink-3">piorbit</span>
+      <span className="ms-auto pe-1 typed text-ink-3">{PRODUCT_NAME}</span>
     </footer>
   );
 }

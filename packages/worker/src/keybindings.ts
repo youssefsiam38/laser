@@ -31,13 +31,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writ
 import { dirname, join, parse } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { getAgentDir, VERSION } from "@earendil-works/pi-coding-agent";
-import {
-  ErrorCodes,
-  ProtocolError,
-  type KeybindingChange,
-  type KeybindingDescriptor,
-  type KeybindingsSnapshot,
-} from "@piorbit/protocol";
+import { ErrorCodes, PRODUCT_NAME, ProtocolError, type KeybindingChange, type KeybindingDescriptor, type KeybindingsSnapshot } from "@piorbit/protocol";
 
 /** The half of Pi's `KeybindingsManager` this adapter uses. */
 interface PiKeybindingsManager {
@@ -149,7 +143,7 @@ export class KeybindingsAdapter {
       ...(unreadable !== undefined
         ? {
             reason:
-              `piorbit will not write ${this.file} because it cannot read it: ${unreadable} ` +
+              `${PRODUCT_NAME} will not write ${this.file} because it cannot read it: ${unreadable} ` +
               `Fix the file (or delete it to go back to the defaults) and reopen this screen.`,
             error: unreadable,
           }
@@ -183,7 +177,7 @@ export class KeybindingsAdapter {
     const unreadable = this.unreadable();
     if (unreadable !== undefined) {
       throw new KeybindingsError(
-        `piorbit will not overwrite ${this.file} because it cannot read it: ${unreadable} ` +
+        `${PRODUCT_NAME} will not overwrite ${this.file} because it cannot read it: ${unreadable} ` +
           `Nothing was changed. Fix the file, or delete it to go back to the agent's defaults.`,
       );
     }
@@ -250,7 +244,7 @@ export class KeybindingsAdapter {
         }
         if (Date.now() > deadline) {
           throw new KeybindingsError(
-            `Another copy of piorbit is saving keyboard shortcuts right now, so this change was not applied. ` +
+            `Another copy of ${PRODUCT_NAME} is saving keyboard shortcuts right now, so this change was not applied. ` +
               `Try again in a moment.`,
           );
         }
@@ -279,16 +273,16 @@ export class KeybindingsAdapter {
       module = (await import(pathToFileURL(piKeybindingsModulePath()).href)) as PiKeybindingsModule;
     } catch (error) {
       throw new KeybindingsError(
-        `This build of the agent (${VERSION}) does not put its keyboard shortcuts where piorbit can read them ` +
+        `This build of the agent (${VERSION}) does not put its keyboard shortcuts where ${PRODUCT_NAME} can read them ` +
           `(${error instanceof Error ? error.message : String(error)}), so shortcuts cannot be shown or changed here. ` +
-          `Nothing was changed. Edit ${this.file} by hand, or update piorbit for this agent version.`,
+          `Nothing was changed. Edit ${this.file} by hand, or update ${PRODUCT_NAME} for this agent version.`,
       );
     }
     if (typeof module?.KeybindingsManager?.create !== "function") {
       throw new KeybindingsError(
-        `This build of the agent (${VERSION}) exposes its keyboard shortcuts in a shape piorbit does not recognise, ` +
+        `This build of the agent (${VERSION}) exposes its keyboard shortcuts in a shape ${PRODUCT_NAME} does not recognise, ` +
           `so shortcuts cannot be shown or changed here. Nothing was changed. Edit ${this.file} by hand, or update ` +
-          `piorbit for this agent version.`,
+          `${PRODUCT_NAME} for this agent version.`,
       );
     }
     return module.KeybindingsManager.create(this.agentDir);

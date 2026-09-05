@@ -8,6 +8,7 @@
  * rows and `piorbit missions show <id>` asks the host to render one ledger —
  * the same action the app fires when you open a row.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import type { CollectionItem, CollectionPanel, DocumentPanel, SessionSummary } from "@piorbit/protocol";
 import type { Command } from "../command.js";
 import { CliError, ExitCode } from "../errors.js";
@@ -49,13 +50,13 @@ export const missionsCommand: Command = {
   name: "missions",
   group: "Sessions",
   summary: "list the mission ledger, and read one",
-  usage: "piorbit missions [list] [--project <dir>] | piorbit missions show <id> [--json]",
+  usage: `${PRODUCT_NAME} missions [list] [--project <dir>] | ${PRODUCT_NAME} missions show <id> [--json]`,
   description: `
 A mission is the durable record of a piece of work: its objective, the runs it
 spawned, the decisions taken along the way, the artifacts left behind, and the
 summary the agent wrote at the end.
 
-\`piorbit missions\` lists them. \`piorbit missions show <id>\` prints one ledger
+\`${PRODUCT_NAME} missions\` lists them. \`${PRODUCT_NAME} missions show <id>\` prints one ledger
 as markdown — the same document the app opens when you pick a row, rendered by
 the host, so the terminal and the window never disagree about what happened.
 
@@ -70,8 +71,8 @@ rather than state.`,
     project: { type: "string", description: "only missions in this project directory" },
   },
   examples: [
-    { command: "piorbit missions", note: "every mission the host can see" },
-    { command: "piorbit missions show 21507fe0", note: "one ledger, as markdown" },
+    { command: `${PRODUCT_NAME} missions`, note: "every mission the host can see" },
+    { command: `${PRODUCT_NAME} missions show 21507fe0`, note: "one ledger, as markdown" },
   ],
   async run(ctx) {
     const [first, second] = ctx.args.positionals;
@@ -81,7 +82,7 @@ rather than state.`,
     if (verb === "show" && reference === undefined) {
       throw new CliError("show needs a mission id", {
         exitCode: ExitCode.Usage,
-        fix: "`piorbit missions` lists them; any unambiguous part of an id works.",
+        fix: `\`${PRODUCT_NAME} missions\` lists them; any unambiguous part of an id works.`,
       });
     }
 
@@ -122,7 +123,7 @@ rather than state.`,
           ctx.term.print(line);
         }
         ctx.term.note("");
-        ctx.term.note(ctx.term.err.dim(`${plural(rows.length, "mission")} · \`piorbit missions show <id>\` reads one`));
+        ctx.term.note(ctx.term.err.dim(`${plural(rows.length, "mission")} · \`${PRODUCT_NAME} missions show <id>\` reads one`));
         return ExitCode.Ok;
       }
 
@@ -130,7 +131,7 @@ rather than state.`,
       const matched = rows.filter((row) => row.item.id === reference || row.item.id.startsWith(reference!));
       if (matched.length === 0) {
         throw new CliError(`no mission matches ${JSON.stringify(reference)}`, {
-          fix: "`piorbit missions` lists them. A mission whose session is gone is not listed.",
+          fix: `\`${PRODUCT_NAME} missions\` lists them. A mission whose session is gone is not listed.`,
         });
       }
       if (matched.length > 1) {
@@ -152,7 +153,7 @@ rather than state.`,
       });
       if (!delivered) {
         throw new CliError("the host would not open that mission", {
-          fix: "It may have just been pruned. Run `piorbit missions` again.",
+          fix: `It may have just been pruned. Run \`${PRODUCT_NAME} missions\` again.`,
         });
       }
 
@@ -164,7 +165,7 @@ rather than state.`,
       const inline = document?.content && "inline" in document.content ? document.content.inline : undefined;
       if (!inline) {
         throw new CliError("the host opened that mission but sent no text", {
-          fix: "Check the host log (`piorbit logs`); the ledger file may be unreadable.",
+          fix: `Check the host log (\`${PRODUCT_NAME} logs\`); the ledger file may be unreadable.`,
         });
       }
 

@@ -19,6 +19,7 @@
  * The check runs concurrently with the host's own start, so on a healthy
  * install it costs no wall-clock time at all.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -92,8 +93,8 @@ export function checkBundledAgent(options: {
   if (!script) {
     return Promise.resolve({
       ok: false,
-      message: "piorbit could not find the agent it ships with.",
-      fix: "This install is incomplete. Reinstall piorbit.",
+      message: `${PRODUCT_NAME} could not find the agent it ships with.`,
+      fix: `This install is incomplete. Reinstall ${PRODUCT_NAME}.`,
     });
   }
 
@@ -133,8 +134,8 @@ export function checkBundledAgent(options: {
         );
         settle({
           ok: false,
-          message: "piorbit could not check the agent it ships with, so it did not start it.",
-          fix: "Reinstall piorbit. If it happens again, please report it with the piorbit log.",
+          message: `${PRODUCT_NAME} could not check the agent it ships with, so it did not start it.`,
+          fix: `Reinstall ${PRODUCT_NAME}. If it happens again, please report it with the ${PRODUCT_NAME} log.`,
         });
       },
     );

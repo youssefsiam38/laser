@@ -1,12 +1,23 @@
 # Packaging (M5-T5). Every non-obvious line has a reason; see README.md.
 #
+# GENERATED from electron-builder.yml.tpl by `pnpm identity:generate`.
+# Every name in this file comes from product.json (MX-T7, D-36). Editing the
+# generated copy is caught by `pnpm identity:check`, which runs inside
+# `pnpm -r build` and `pnpm -r test`; edit the template instead.
+#
 # The three rules this file encodes:
 #   1. Nothing that must be *executed* may live inside app.asar. An asar is an
 #      archive, not a filesystem: the kernel cannot exec a path inside it, and a
 #      spawned process cannot use it as a working directory. So the bundled Node
 #      is an extraResource and the whole dependency tree is unpacked.
-#   2. The app id never changes. It keys macOS TCC grants (the microphone
-#      permission), the Windows notification centre, and the update feed.
+#   2. The app id may change exactly once — before anyone installs a build.
+#      It keys macOS TCC grants (the microphone permission), the Windows
+#      notification centre, and the update feed's identity, so changing it
+#      after distribution makes this a different application: the microphone
+#      permission is lost and the installed copy is orphaned rather than
+#      upgraded. D-36 says the product may still be renamed, which is why the
+#      value below is derived from product.json and why the rename has to
+#      happen before the first public artifact, not after.
 #   3. The bundled Node is signed with the app. An unsigned Mach-O inside a
 #      hardened-runtime bundle fails notarization, and on Windows an unsigned
 #      helper is what SmartScreen complains about.
@@ -91,17 +102,13 @@ mac:
   extendInfo:
     # Without this key macOS kills the process the moment it touches the
     # microphone — it is not a prompt string, it is the permission itself.
-    NSMicrophoneUsageDescription: >-
-      piorbit uses the microphone only while you are dictating a message to an
-      agent. Nothing is recorded or sent anywhere unless you start dictation.
-    # piorbit reads the directories you add as projects; macOS asks about the
+    NSMicrophoneUsageDescription: "piorbit uses the microphone only while you are dictating a
+      message to an agent. Nothing is recorded or sent anywhere unless you start dictation."
+    # The app reads the directories you add as projects; macOS asks about the
     # protected ones by name.
-    NSDesktopFolderUsageDescription: >-
-      piorbit needs access to open a project you keep on your Desktop.
-    NSDocumentsFolderUsageDescription: >-
-      piorbit needs access to open a project you keep in Documents.
-    NSDownloadsFolderUsageDescription: >-
-      piorbit needs access to open a project you keep in Downloads.
+    NSDesktopFolderUsageDescription: "piorbit needs access to open a project you keep on your Desktop."
+    NSDocumentsFolderUsageDescription: "piorbit needs access to open a project you keep in Documents."
+    NSDownloadsFolderUsageDescription: "piorbit needs access to open a project you keep in Downloads."
     # The window draws its own titlebar; this keeps the system chrome dark when
     # the app is dark.
     NSRequiresAquaSystemAppearance: false
@@ -139,9 +146,9 @@ nsis:
 
 # ---------------------------------------------------------------- Linux ----
 #
-# Four formats, two architectures, and one rule behind all of them: piorbit is
-# a self-contained application, so a person installs it and nothing else. That
-# makes the packaging the product's first impression, and the differences
+# Four formats, two architectures, and one rule behind all of them: the app is
+# self-contained, so a person installs it and nothing else. That makes the
+# packaging the product's first impression, and the differences
 # between the formats are differences in what the host machine has to provide.
 #
 #   AppImage   one file, no install, no root. Runs on any distribution.
@@ -164,9 +171,9 @@ nsis:
 # Root-level keys, written here because everything they change is Linux.
 
 # build/after-pack.cjs renames Electron's executable to `piorbit-bin` and puts
-# a POSIX shell launcher at `piorbit`, so the application menu, /usr/bin/piorbit,
-# a double-clicked AppImage and `./piorbit` from the tarball all run the same
-# code. That code makes one decision — which sandbox this kernel can offer — and
+# a POSIX shell launcher at `piorbit`, so the application menu, the
+# /usr/bin entry, a double-clicked AppImage and the tarball's own copy all run
+# the same code. That code makes one decision — which sandbox this kernel can offer — and
 # it never disables the sandbox on the person's behalf.
 afterPack: build/after-pack.cjs
 
@@ -195,26 +202,24 @@ linux:
     - target: rpm
       arch: [x64, arm64]
 
-  # The binary, the icon name and the .desktop basename. Pinned rather than
-  # derived, because build/after-pack.cjs and build/linux/apparmor.tpl both
-  # name `piorbit-bin` literally.
+  # The binary, the icon name and the .desktop basename, all one value from
+  # product.json. build/after-pack.cjs and build/linux/apparmor.tpl read the
+  # same file, so `piorbit-bin` is never spelled twice.
   executableName: piorbit
 
-  # Keep in step with build/linux/product.mjs, which is where the AppStream
-  # metainfo and the tarball's .desktop entry read the same words from.
-  # scripts/make-linux-assets.mjs fails the build if the two ever drift.
-  synopsis: A control room for coding agents
+  # product.json's copy.summary, the same words the AppStream metainfo and the
+  # tarball's .desktop entry use. scripts/make-linux-assets.mjs fails the build
+  # if this generated copy is edited in place and drifts.
+  synopsis: "A control room for coding agents"
   # One sentence on purpose: electron-builder always writes the .desktop
   # entry's `Comment` from this and ignores an override, and `Comment` is what
   # GNOME prints under the name in search results. The longer text lives in the
   # AppStream metainfo, which is the only surface with room for it.
-  description: >-
-    Runs coding agent sessions across every project on this machine, and
-    mirrors them to your phone.
+  description: "Runs coding agent sessions across every project on this machine, and mirrors them to your phone."
 
   # Becomes `Categories=Development;IDE;`. `IDE` is a registered additional
   # category under `Development`, and it is where a desktop menu files the kind
-  # of thing piorbit is.
+  # of thing this is.
   category: Development;IDE
 
   # fpm refuses to build a package without a maintainer, and it is right to:
@@ -244,7 +249,7 @@ linux:
       # What someone types into GNOME's overview or KDE's launcher when they
       # cannot remember the name.
       Keywords: agent;ai;assistant;coding;developer;automation;llm;chat;
-      # piorbit posts notifications when an agent needs an answer; GNOME uses
+      # The app posts notifications when an agent needs an answer; GNOME uses
       # this to offer per-app notification settings.
       X-GNOME-UsesNotifications: "true"
 
@@ -256,7 +261,7 @@ appImage:
 # Declared rather than guessed. electron-builder's defaults are a reasonable
 # list for Electron in general and wrong for this one in two directions: they
 # ask for libxss1 and libxtst6, which Electron 44 no longer links or dlopens,
-# and they omit libsecret, which it does dlopen and which piorbit needs for the
+# and they omit libsecret, which it does dlopen and which the app needs for the
 # keychain.
 #
 # The list is every DT_NEEDED entry of the shipped `electron` and `node`
@@ -293,7 +298,7 @@ deb:
     - Proprietary
     - build/linux/generated/dev.piorbit.desktop.metainfo.xml=/usr/share/metainfo/dev.piorbit.desktop.metainfo.xml
   # electron-builder's default pattern is `${name}_${version}_${arch}`, and
-  # `${name}` is this package's npm name — `@piorbit/desktop` — which fpm then
+  # `${name}` is this package's npm name — a scoped one — which fpm then
   # reads as a directory that does not exist. The file is named after the
   # program, the way `apt` and `dnf` name it in their own listings, and after
   # the architecture the way that format spells it: amd64 for Debian,

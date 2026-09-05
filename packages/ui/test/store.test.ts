@@ -107,4 +107,27 @@ describe("blocksFromEntries", () => {
     expect(blocks[1]).toMatchObject({ text: "ok", thinking: "t" });
     expect(blocks[2]).toMatchObject({ name: "bash", result: "a b", done: true });
   });
+
+  it("keeps a turn that ended short, even when it said nothing", () => {
+    // A provider that rejects the key writes an assistant entry with no
+    // content. Dropping it reloaded the session as a bare question with no
+    // answer and nothing to explain the silence.
+    const blocks = blocksFromEntries([
+      { type: "message", message: { role: "user", content: [{ type: "text", text: "hello" }] } },
+      { type: "message", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "401 invalid key" } },
+    ]);
+    expect(blocks.map((b) => b.kind)).toEqual(["user", "assistant"]);
+    expect(blocks[1]).toMatchObject({ text: "", stopReason: "error", errorMessage: "401 invalid key" });
+  });
+
+  it("draws no stopped row for the ordinary endings", () => {
+    for (const stopReason of ["stop", "toolUse", "pending"]) {
+      expect(blocksFromEntries([{ type: "message", message: { role: "assistant", content: [], stopReason } }])).toEqual([]);
+    }
+    const [block] = blocksFromEntries([
+      { type: "message", message: { role: "assistant", content: [{ type: "text", text: "done" }], stopReason: "stop" } },
+    ]);
+    expect(block).toMatchObject({ text: "done" });
+    expect(block).not.toHaveProperty("stopReason");
+  });
 });

@@ -6,6 +6,7 @@
  * host attaches to it and prints the URL, which is what a person means when
  * they type it a second time.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { sep } from "node:path";
@@ -67,11 +68,11 @@ export async function startHost(paths: PiorbitPaths, timeoutMs = 30_000): Promis
   const existing = await inspectHost(paths);
   if (existing.state === "running") return { record: existing.record, started: false };
   if (existing.state === "unreachable") {
-    throw new CliError(`a piorbit host is recorded as running but is not answering`, {
+    throw new CliError(`a ${PRODUCT_NAME} host is recorded as running but is not answering`, {
       details: [existing.reason],
       fix:
-        `Stop it with \`piorbit down\`, then run \`piorbit up\` again. ` +
-        `If piorbit refuses to signal it, check \`ps -p ${existing.record.pid} -o pid,lstart,command\` first — ` +
+        `Stop it with \`${PRODUCT_NAME} down\`, then run \`${PRODUCT_NAME} up\` again. ` +
+        `If ${PRODUCT_NAME} refuses to signal it, check \`ps -p ${existing.record.pid} -o pid,lstart,command\` first — ` +
         `a record can outlive a reboot and a pid can be reused.`,
     });
   }
@@ -101,22 +102,22 @@ export async function startHost(paths: PiorbitPaths, timeoutMs = 30_000): Promis
     const status = await inspectHost(paths, 1000);
     if (status.state === "running") return { record: status.record, started: true };
     if (spawnError) {
-      throw new CliError(`could not start the piorbit host: ${spawnError.message}`, {
-        fix: `piorbit tried to run: ${process.execPath} ${cliEntry()} __daemon`,
+      throw new CliError(`could not start the ${PRODUCT_NAME} host: ${spawnError.message}`, {
+        fix: `${PRODUCT_NAME} tried to run: ${process.execPath} ${cliEntry()} __daemon`,
         cause: spawnError,
       });
     }
     if (childExit) {
-      throw new CliError(`the piorbit host exited immediately (${childExit.signal ?? `code ${childExit.code}`})`, {
+      throw new CliError(`the ${PRODUCT_NAME} host exited immediately (${childExit.signal ?? `code ${childExit.code}`})`, {
         details: logTail(paths.logFile),
         fix: `Full log: ${paths.logFile}`,
       });
     }
     await sleep(200);
   }
-  throw new CliError(`the piorbit host did not answer on ${hostUrl(paths)} within ${Math.round(timeoutMs / 1000)}s`, {
+  throw new CliError(`the ${PRODUCT_NAME} host did not answer on ${hostUrl(paths)} within ${Math.round(timeoutMs / 1000)}s`, {
     details: logTail(paths.logFile),
-    fix: `Check ${paths.logFile}, then try \`piorbit up --foreground\` to watch it start.`,
+    fix: `Check ${paths.logFile}, then try \`${PRODUCT_NAME} up --foreground\` to watch it start.`,
   });
 }
 
@@ -145,14 +146,14 @@ async function assertPortIsOurs(paths: PiorbitPaths): Promise<void> {
   const url = hostUrl(paths);
   if (await probeHealth(url)) {
     // A piorbit host without a record: started by hand, or by another agent dir.
-    throw new CliError(`something is already serving a piorbit host on ${url}, but piorbit did not start it`, {
-      fix: `Use it as it is (open ${url}), or start yours elsewhere with \`piorbit up --port <port>\`.`,
+    throw new CliError(`something is already serving a ${PRODUCT_NAME} host on ${url}, but ${PRODUCT_NAME} did not start it`, {
+      fix: `Use it as it is (open ${url}), or start yours elsewhere with \`${PRODUCT_NAME} up --port <port>\`.`,
     });
   }
   throw new CliError(`port ${paths.port} on ${paths.host} is already in use by another program`, {
     fix:
       `Free it (\`lsof -nP -iTCP:${paths.port} -sTCP:LISTEN\` shows what holds it), ` +
-      `or pick another with \`piorbit up --port <port>\`.`,
+      `or pick another with \`${PRODUCT_NAME} up --port <port>\`.`,
   });
 }
 
@@ -173,15 +174,15 @@ export async function stopHost(paths: PiorbitPaths, graceMs = 10_000): Promise<S
   // that proof, SIGTERM-then-SIGKILL could land on an unrelated program that
   // inherited the pid, and there is no undoing that.
   if (status.state === "unreachable" && isRecordedProcess(status.record) !== true) {
-    throw new CliError(`piorbit cannot confirm that process ${pid} is still its host, so it will not signal it`, {
+    throw new CliError(`${PRODUCT_NAME} cannot confirm that process ${pid} is still its host, so it will not signal it`, {
       details: [
         status.reason,
-        `${paths.hostFile} was written by piorbit ${status.record.cliVersion} at ${status.record.startedAt || "an unknown time"}.`,
+        `${paths.hostFile} was written by ${PRODUCT_NAME} ${status.record.cliVersion} at ${status.record.startedAt || "an unknown time"}.`,
         "A pid is reused, so this record may point at an unrelated program.",
       ],
       fix:
-        `Check it yourself (\`ps -p ${pid} -o pid,lstart,command\`). If it is the piorbit host, ` +
-        `stop it with \`kill ${pid}\`; if it is not, delete ${paths.hostFile} and run \`piorbit up\`.`,
+        `Check it yourself (\`ps -p ${pid} -o pid,lstart,command\`). If it is the ${PRODUCT_NAME} host, ` +
+        `stop it with \`kill ${pid}\`; if it is not, delete ${paths.hostFile} and run \`${PRODUCT_NAME} up\`.`,
     });
   }
   try {
@@ -191,7 +192,7 @@ export async function stopHost(paths: PiorbitPaths, graceMs = 10_000): Promise<S
       clearHostFile(paths.hostFile);
       return { stopped: false, pid, forced: false };
     }
-    throw new CliError(`could not signal the piorbit host (pid ${pid}): ${(error as Error).message}`, {
+    throw new CliError(`could not signal the ${PRODUCT_NAME} host (pid ${pid}): ${(error as Error).message}`, {
       fix: "It may belong to another user. Stop it from the account that started it.",
       exitCode: ExitCode.Failure,
       cause: error,
@@ -215,7 +216,7 @@ export async function stopHost(paths: PiorbitPaths, graceMs = 10_000): Promise<S
   for (let i = 0; i < 30 && isProcessAlive(pid); i++) await sleep(100);
   clearHostFile(paths.hostFile);
   if (isProcessAlive(pid)) {
-    throw new CliError(`the piorbit host (pid ${pid}) ignored SIGTERM and SIGKILL`, {
+    throw new CliError(`the ${PRODUCT_NAME} host (pid ${pid}) ignored SIGTERM and SIGKILL`, {
       fix: `Investigate the process directly: \`ps -p ${pid} -o pid,stat,command\`.`,
     });
   }

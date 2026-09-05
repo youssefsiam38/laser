@@ -38,6 +38,19 @@ export interface ProviderStepProps {
 /** Above this many, a filter box appears; below it, the list is short enough to read. */
 const FILTER_THRESHOLD = 8;
 
+/**
+ * What we actually know about a credential.
+ *
+ * "signed in" is a claim about the provider having accepted something. That is
+ * true after an OAuth flow, which the provider itself completed. It is *not*
+ * true of a pasted API key: nothing has been sent anywhere yet, and a
+ * mistyped key wears a green tick right up until the first message fails with
+ * a 401. So a key says what is true — it is saved — and the transcript's error
+ * row is where a rejection gets explained.
+ */
+const credentialBadge = (provider: { oauth: boolean; source?: string | undefined }): string =>
+  provider.oauth || provider.source === "environment" || provider.source === "fallback" ? "signed in" : "key saved";
+
 export function ProviderStep({ cwd, onConfigured, onBusyChange }: ProviderStepProps) {
   const { client } = usePiorbitStable();
   const [providers, setProviders] = useState<ProviderAuthInfo[]>();
@@ -125,14 +138,14 @@ export function ProviderStep({ cwd, onConfigured, onBusyChange }: ProviderStepPr
           <p className="text-sm font-medium text-ink">{current.name}</p>
           {current.configured && (
             <Badge variant="ok" className="gap-1">
-              <Check /> signed in
+              <Check /> {credentialBadge(current)}
             </Badge>
           )}
         </div>
         {methods.length === 0 ? (
           <p className="text-sm leading-sm text-ink-2">
             {current.name} takes its credential from your environment rather than a sign-in, so there is nothing to do here.
-            {current.configured ? " It is already available." : " Set it up on this computer and it will appear as signed in."}
+            {current.configured ? " It is already available." : " Set it up on this computer and it will appear here."}
           </p>
         ) : (
           <div className="flex flex-col gap-1.5" role="group" aria-label={`How to sign in to ${current.name}`}>
@@ -193,7 +206,7 @@ export function ProviderStep({ cwd, onConfigured, onBusyChange }: ProviderStepPr
                   <span className="text-sm font-medium text-ink">{provider.name}</span>
                   {provider.configured && (
                     <Badge variant="ok" className="gap-1">
-                      <Check /> signed in
+                      <Check /> {credentialBadge(provider)}
                     </Badge>
                   )}
                 </span>

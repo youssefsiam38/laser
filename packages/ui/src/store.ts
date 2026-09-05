@@ -492,12 +492,28 @@ function stringify(value: unknown): string {
   }
 }
 
+/** The stop reasons that draw a stopped row; every other ending is an ordinary one. */
+const STOPPED_SHORT = new Set<string>(["aborted", "length", "error", "deferred"]);
+
 /** Rebuild blocks from persisted Pi entries (session-format.md). Unknown shapes are ignored. */
 export function blocksFromEntries(entries: unknown[]): Block[] {
   const blocks: Block[] = [];
   const toolIndex = new Map<string, number>();
   for (const raw of entries) {
-    const e = raw as { type?: string; timestamp?: unknown; message?: { role?: string; content?: unknown; toolCallId?: string; toolName?: string; isError?: boolean; timestamp?: unknown } };
+    const e = raw as {
+      type?: string;
+      timestamp?: unknown;
+      message?: {
+        role?: string;
+        content?: unknown;
+        toolCallId?: string;
+        toolName?: string;
+        isError?: boolean;
+        timestamp?: unknown;
+        stopReason?: unknown;
+        errorMessage?: unknown;
+      };
+    };
     if (e.type !== "message" || !e.message) continue;
     const m = e.message;
     const at = entryTimestamp(e.timestamp ?? m.timestamp);
@@ -507,7 +523,25 @@ export function blocksFromEntries(entries: unknown[]): Block[] {
       const parts = Array.isArray(m.content) ? (m.content as Array<{ type?: string; text?: string; thinking?: string; id?: string; name?: string; arguments?: unknown }>) : [];
       const text = parts.filter((p) => p.type === "text").map((p) => p.text ?? "").join("");
       const thinking = parts.filter((p) => p.type === "thinking").map((p) => p.thinking ?? "").join("");
-      if (text || thinking) blocks.push({ kind: "assistant", id: nextBlockId(), ...(at ? { at } : {}), text, thinking, streaming: false });
+      // A turn that ended short belongs in the transcript even when it said
+      // nothing: without this, an authentication failure reloads as a bare
+      // question with no answer under it and nothing to explain the silence.
+      // `stop`, `toolUse` and `pending` end a turn the ordinary way and draw no
+      // row — the same list `incompleteReason` in runtime/projection.ts uses.
+      const stopReason = STOPPED_SHORT.has(m.stopReason as string) ? (m.stopReason as StopReason) : undefined;
+      const errorMessage = typeof m.errorMessage === "string" && m.errorMessage !== "" ? m.errorMessage : undefined;
+      if (text || thinking || stopReason) {
+        blocks.push({
+          kind: "assistant",
+          id: nextBlockId(),
+          ...(at ? { at } : {}),
+          text,
+          thinking,
+          streaming: false,
+          ...(stopReason ? { stopReason } : {}),
+          ...(errorMessage ? { errorMessage } : {}),
+        });
+      }
       for (const p of parts) {
         if (p.type === "toolCall" && p.id) {
           toolIndex.set(p.id, blocks.length);

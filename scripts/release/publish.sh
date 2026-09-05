@@ -13,10 +13,14 @@ set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 HERE="$REPO_ROOT/scripts/release"
+. "$REPO_ROOT/scripts/identity/identity.sh"
 
 TAG=""
 DIR="$REPO_ROOT/release"
-REPO="${PIORBIT_REPO:-youssefsiam38/piorbit}"
+REPO="$(printenv "${product_env_prefix}_REPO" || true)"
+[ -n "$REPO" ] || REPO="$product_repo"
+RELEASE_KEY="$(printenv "${product_env_prefix}_RELEASE_KEY" || true)"
+[ -n "$RELEASE_KEY" ] || RELEASE_KEY="$HOME/.config/$product_dir/release-key.pem"
 DRAFT=0
 NOTES=""
 STAGE_ONLY=0
@@ -90,7 +94,7 @@ commit it, then tag:
 A release whose tag and version disagree cannot be reproduced from the tag."
 fi
 
-# …and every package it ships must agree with the app, because `piorbit
+# …and every package it ships must agree with the app, because the CLI's
 # --version` reads the CLI's manifest, the AppStream release entry reads the
 # desktop's, and a person comparing the two should not find two answers.
 DISAGREE="$(
@@ -111,7 +115,7 @@ fi
 printf '\n==> manifest\n'
 "$HERE/manifest.sh" --dir "$DIR"
 
-if [ -f "${PIORBIT_RELEASE_KEY:-$HOME/.config/piorbit/release-key.pem}" ]; then
+if [ -f "$RELEASE_KEY" ]; then
   printf '==> signing the manifest\n'
   "$HERE/sign.sh" --dir "$DIR"
 else
@@ -128,7 +132,7 @@ fi
 cp -f "$REPO_ROOT/install.sh" "$DIR/install.sh"
 # …which changes the directory, so the manifest is rewritten over the final set.
 "$HERE/manifest.sh" --dir "$DIR" >/dev/null
-if [ -f "${PIORBIT_RELEASE_KEY:-$HOME/.config/piorbit/release-key.pem}" ]; then
+if [ -f "$RELEASE_KEY" ]; then
   "$HERE/sign.sh" --dir "$DIR" >/dev/null
 fi
 
@@ -141,7 +145,7 @@ printf '==> uploading to %s %s\n\n' "$REPO" "$TAG"
 assets=()
 while IFS= read -r f; do assets+=("$f"); done < <(find "$DIR" -maxdepth 1 -type f | LC_ALL=C sort)
 
-create_args=(release create "$TAG" --repo "$REPO" --title "piorbit $VERSION")
+create_args=(release create "$TAG" --repo "$REPO" --title "$product_display $VERSION")
 [ "$DRAFT" = 1 ] && create_args+=(--draft)
 if [ -n "$NOTES" ]; then
   create_args+=(--notes "$NOTES")
@@ -157,5 +161,5 @@ else
 fi
 
 printf '\nPublished. Install it with:\n\n'
-printf '  gh api repos/%s/contents/install.sh -H '\''Accept: application/vnd.github.raw'\'' > piorbit-install.sh \\\n' "$REPO"
-printf '    && sh piorbit-install.sh\n\n'
+printf '  gh api repos/%s/contents/install.sh -H '\''Accept: application/vnd.github.raw'\'' > %s-install.sh \\\n' "$REPO" "$product_name"
+printf '    && sh %s-install.sh\n\n' "$product_name"

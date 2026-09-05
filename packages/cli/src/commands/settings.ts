@@ -9,6 +9,7 @@
  * Values are JSON. `--raw` accepts a bare string for the common case
  * (`piorbit settings set theme --raw dark`) so nobody has to quote `'"dark"'`.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { resolve } from "node:path";
 import type { SettingChange, SettingDescriptor, SettingsScope, SettingsSnapshot } from "@piorbit/protocol";
 import { bool, str } from "../args.js";
@@ -93,14 +94,14 @@ export const settingsCommand: Command = {
   name: "settings",
   group: "Projects",
   summary: "read and write agent settings for a project",
-  usage: "piorbit settings [get [key]|list|set <key> <json>|unset <key>] [--project <dir>] [--scope <global|project>]",
+  usage: `${PRODUCT_NAME} settings [get [key]|list|set <key> <json>|unset <key>] [--project <dir>] [--scope <global|project>]`,
   description: `
 Reads the effective settings for a project — your global file deep-merged with
 that project's own \`.pi/settings.json\` — and writes either scope under the
 agent's own lock, so a running session picks the change up.
 
-Values are JSON: \`piorbit settings set compaction.reserveTokens 8192\`,
-\`piorbit settings set hideThinkingBlock true\`. Use --raw for a plain string.
+Values are JSON: \`${PRODUCT_NAME} settings set compaction.reserveTokens 8192\`,
+\`${PRODUCT_NAME} settings set hideThinkingBlock true\`. Use --raw for a plain string.
 
 Writing project settings *creates* a trust-gated file. If the project is not
 trusted, the agent will ignore what you just wrote — this command says so rather
@@ -124,10 +125,10 @@ than letting the write quietly do nothing.
     all: { type: "boolean", description: "With `list`: include every setting, not just the ones a file sets" },
   },
   examples: [
-    { note: "everything in effect here", command: "piorbit settings" },
-    { note: "one key, and where it comes from", command: "piorbit settings theme" },
-    { note: "change a global setting", command: "piorbit settings set compaction.reserveTokens 8192" },
-    { note: "back to the default", command: "piorbit settings unset compaction.reserveTokens" },
+    { note: "everything in effect here", command: `${PRODUCT_NAME} settings` },
+    { note: "one key, and where it comes from", command: `${PRODUCT_NAME} settings theme` },
+    { note: "change a global setting", command: `${PRODUCT_NAME} settings set compaction.reserveTokens 8192` },
+    { note: "back to the default", command: `${PRODUCT_NAME} settings unset compaction.reserveTokens` },
   ],
   async run({ term, paths, args }) {
     const { verb, rest } = verbOf(args.positionals);
@@ -149,7 +150,7 @@ than letting the write quietly do nothing.
           if (value === undefined) {
             term.note(`${term.err.dim(key)} is not set; the agent's own default applies`);
             term.note();
-            term.note(`  See what is set with ${term.err.bold("piorbit settings list")}`);
+            term.note(`  See what is set with ${term.err.bold(`${PRODUCT_NAME} settings list`)}`);
             return;
           }
           term.print(render(value));
@@ -213,7 +214,7 @@ than letting the write quietly do nothing.
       if (!key) {
         throw new CliError(`\`settings ${verb}\` needs a key`, {
           exitCode: ExitCode.Usage,
-          fix: `Write it as \`piorbit settings ${verb} <key>${verb === "set" ? " <value>" : ""}\`. \`piorbit settings list\` shows the keys.`,
+          fix: `Write it as \`${PRODUCT_NAME} settings ${verb} <key>${verb === "set" ? " <value>" : ""}\`. \`${PRODUCT_NAME} settings list\` shows the keys.`,
         });
       }
 
@@ -225,7 +226,7 @@ than letting the write quietly do nothing.
         if (raw === "") {
           throw new CliError("`settings set` needs a value", {
             exitCode: ExitCode.Usage,
-            fix: `Write it as \`piorbit settings set ${key} <value>\` — JSON, or any text with --raw.`,
+            fix: `Write it as \`${PRODUCT_NAME} settings set ${key} <value>\` — JSON, or any text with --raw.`,
           });
         }
         change = { path: key, op: "set", value: bool(args, "raw") ? raw : parseJson(key, raw) };
@@ -234,9 +235,9 @@ than letting the write quietly do nothing.
       if (scope === "project") {
         const before = await snapshotOf(rpc, cwd);
         if (!before.projectTrust.writable) {
-          throw new CliError(`piorbit will not write project settings for ${cwd}`, {
+          throw new CliError(`${PRODUCT_NAME} will not write project settings for ${cwd}`, {
             exitCode: ExitCode.HostError,
-            fix: `${before.projectTrust.reason} Trust it with \`piorbit projects trust ${cwd}\`, or write the global scope instead.`,
+            fix: `${before.projectTrust.reason} Trust it with \`${PRODUCT_NAME} projects trust ${cwd}\`, or write the global scope instead.`,
           });
         }
       }
@@ -280,7 +281,7 @@ function parseJson(key: string, raw: string): unknown {
   } catch {
     throw new CliError(`${JSON.stringify(raw)} is not valid JSON`, {
       exitCode: ExitCode.Usage,
-      fix: `Quote strings (\`piorbit settings set ${key} '"value"'\`) or pass --raw to take it literally.`,
+      fix: `Quote strings (\`${PRODUCT_NAME} settings set ${key} '"value"'\`) or pass --raw to take it literally.`,
     });
   }
 }

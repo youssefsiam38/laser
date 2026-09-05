@@ -58,7 +58,7 @@ export function ConnectionState({ phase, attempt, first = false, onRetry, classN
           <CloudOffIcon aria-hidden="true" className="size-3.5 shrink-0 text-attention" />
           <span className="font-medium text-ink">Disconnected from the host</span>
           <span className="hidden min-w-0 flex-1 truncate text-ink-2 sm:inline">
-            Retrying in the background. Sessions keep running on the host.
+            Retrying in the background. Every session is saved on this computer as it goes, so nothing you have already seen is lost.
           </span>
           {onRetry && (
             <Button variant="outline" size="xs" onClick={onRetry} className="ms-auto shrink-0">

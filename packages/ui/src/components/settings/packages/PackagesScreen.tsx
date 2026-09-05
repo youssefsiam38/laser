@@ -14,6 +14,7 @@
  * Replaces `settings/PackagesTab.tsx`; same props, so the settings screen
  * swaps it in with one import.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, Loader2, Package, RefreshCw, Search as SearchIcon, Trash2 } from "lucide-react";
 
@@ -334,7 +335,7 @@ export function PackagesScreen({ cwd, snapshot, onSettingsChanged }: PackagesScr
         </div>
 
         {/* This machine cannot install: say it once, at the top, and hide the verb (R2). */}
-        {runtime && !runtime.ready && <ErrorState title="Extensions cannot be installed on this copy of piorbit" detail={runtime.reason} />}
+        {runtime && !runtime.ready && <ErrorState title={`Extensions cannot be installed on this copy of ${PRODUCT_NAME}`} detail={runtime.reason} />}
 
         {phase && <ProgressStrip phase={phase} />}
 

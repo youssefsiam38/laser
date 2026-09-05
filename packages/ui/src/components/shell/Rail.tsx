@@ -1,7 +1,9 @@
-import { useCallback } from "react";
-import { FileClock, FolderPlus, Moon, Settings, Sun } from "lucide-react";
+import { PRODUCT_DISPLAY_NAME } from "@piorbit/protocol";
+import { useCallback, useState } from "react";
+import { EyeOff, FileClock, FolderPlus, Moon, Settings, Sun } from "lucide-react";
 
 import { StatusRing, STATUS_LABEL } from "@/components/status";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useWorkbench } from "@/components/workbench";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
@@ -91,7 +93,7 @@ export function Rail() {
 }
 
 function ProjectList() {
-  const { projects, projectInfo, currentProject, setCurrentProject } = usePiorbitStable();
+  const { projects, projectInfo, currentProject, setCurrentProject, actions } = usePiorbitStable();
   const shell = useShell();
   const { filter } = useSessionsList();
   // Derived inside the selector so a streamed token that changes nothing the
@@ -124,6 +126,7 @@ function ProjectList() {
             active={project.cwd === currentProject}
             filtered={filter === project.cwd}
             onSelect={() => select(project.cwd)}
+            onRemove={() => void actions.removeProject(project.cwd)}
           />
         </li>
       ))}
@@ -145,7 +148,7 @@ function ProjectList() {
 /** The orbit mark: a ring with one body on it. Monochrome, 20px. */
 function Brand() {
   return (
-    <div className="flex size-10 items-center justify-center" aria-label="piorbit" role="img">
+    <div className="flex size-10 items-center justify-center" aria-label={PRODUCT_DISPLAY_NAME} role="img">
       <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" className="text-ink">
         <circle cx="10" cy="10" r="7.5" fill="none" stroke="currentColor" strokeWidth="1.5" opacity="0.55" />
         <circle cx="10" cy="10" r="2" fill="currentColor" />
@@ -161,17 +164,34 @@ interface ProjectButtonProps {
   /** The sessions list is showing only this project. */
   filtered: boolean;
   onSelect(): void;
+  /** Take it off the list. Never deletes anything on disk. */
+  onRemove(): void;
 }
 
-function ProjectButton({ project, active, filtered, onSelect }: ProjectButtonProps) {
+function ProjectButton({ project, active, filtered, onSelect, onRemove }: ProjectButtonProps) {
   const count = `${project.sessionCount} session${project.sessionCount === 1 ? "" : "s"}`;
   const trust = trustLabel(project.trust);
+  // The row's own menu, on right-click and on the keyboard's context key —
+  // taking a project off the list was otherwise only possible from a terminal.
+  const [menuOpen, setMenuOpen] = useState(false);
   return (
+    <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
     <Tooltip>
       <TooltipTrigger asChild>
+        <DropdownMenuTrigger asChild>
         <button
           type="button"
           onClick={onSelect}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            setMenuOpen(true);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+              event.preventDefault();
+              setMenuOpen(true);
+            }
+          }}
           aria-current={active ? "true" : undefined}
           aria-pressed={filtered}
           aria-label={`${project.name} — ${project.cwd}`}
@@ -200,6 +220,7 @@ function ProjectButton({ project, active, filtered, onSelect }: ProjectButtonPro
             </span>
           )}
         </button>
+        </DropdownMenuTrigger>
       </TooltipTrigger>
       <TooltipContent side="right" className="max-w-80 items-start py-1.5">
         <span className="flex min-w-0 flex-col gap-0.5">
@@ -215,5 +236,15 @@ function ProjectButton({ project, active, filtered, onSelect }: ProjectButtonPro
         </span>
       </TooltipContent>
     </Tooltip>
+    <DropdownMenuContent side="right" align="start" className="w-64">
+      <DropdownMenuItem onSelect={onRemove}>
+        <EyeOff />
+        <span className="flex min-w-0 flex-col">
+          <span>Remove from the list</span>
+          <span className="text-xs leading-4 text-ink-3">Nothing on disk is deleted.</span>
+        </span>
+      </DropdownMenuItem>
+    </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

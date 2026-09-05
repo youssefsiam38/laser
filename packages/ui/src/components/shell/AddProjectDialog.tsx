@@ -1,3 +1,4 @@
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { useMemo, useState } from "react";
 import { Folder } from "lucide-react";
 
@@ -52,7 +53,7 @@ export function AddProjectDialog() {
         <DialogHeader>
           <DialogTitle>Add a project</DialogTitle>
           <DialogDescription>
-            piorbit runs one agent per directory. Sessions you start here are saved under it.
+            {PRODUCT_NAME} runs one agent per directory. Sessions you start here are saved under it.
           </DialogDescription>
         </DialogHeader>
         <form
@@ -89,7 +90,7 @@ export function AddProjectDialog() {
           {recent.length > 0 && (
             <div className="flex flex-col gap-1.5">
               <span className="eyebrow">Recent directories</span>
-              <ul role="list" className="-mx-1 max-h-52 overflow-y-auto">
+              <ul role="list" className="-mx-1 max-h-52 min-w-0 overflow-x-hidden overflow-y-auto">
                 {recent.map((cwd) => (
                   <li key={cwd}>
                     <button

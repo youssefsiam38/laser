@@ -6,27 +6,31 @@
     <meta name="color-scheme" content="dark light" />
     <!-- The default preset's --bg; the boot script and the applier keep it on the active theme's ground. -->
     <meta name="theme-color" content="#0e0f11" />
-    <title>piorbit</title>
+    <title>%PRODUCT_DISPLAY_NAME%</title>
     <!-- PWA (M7-T1): installable on both platforms; the service worker is registered by src/pwa/boot.ts. -->
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
-    <meta name="application-name" content="piorbit" />
+    <meta name="application-name" content="%PRODUCT_DISPLAY_NAME%" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-title" content="piorbit" />
+    <meta name="apple-mobile-web-app-title" content="%PRODUCT_DISPLAY_NAME%" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="format-detection" content="telephone=no" />
     <script>
       // Theme boot (docs/ux-theme.md, T2 "no flash"). The store persists the
-      // compiled custom properties under "piorbit.theme"; this replays them
+      // compiled custom properties under the theme storage key; this replays them
       // before first paint in one style write. It knows nothing about themes:
       // no presets, no colours, no compiler — src/theme owns all of that and
       // re-applies through the same style element once it loads.
       (function () {
         try {
           var root = document.documentElement;
-          var raw = localStorage.getItem("piorbit.theme");
+          // Current key first, then any this product used under a former name:
+          // the boot script runs before the module that migrates them.
+          var keys = %THEME_STORAGE_KEYS%;
+          var raw = null;
+          for (var i = 0; i < keys.length && raw === null; i++) raw = localStorage.getItem(keys[i]);
           var blob = raw ? JSON.parse(raw) : null;
           var entry = null;
           if (blob && blob.v === 1) {
@@ -39,7 +43,7 @@
           }
           if (!entry || typeof entry.css !== "string") return; // no stored theme: the CSS default (the default preset) stands
           var style = document.createElement("style");
-          style.id = "piorbit-theme";
+          style.id = "%THEME_STYLE_ID%";
           style.textContent = ":root[data-theme] { " + entry.css + " }";
           document.head.appendChild(style);
           root.setAttribute("data-theme", entry.id);

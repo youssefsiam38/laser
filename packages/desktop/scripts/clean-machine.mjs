@@ -27,6 +27,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { identity } from "../../../scripts/identity/identity.mjs";
 
 const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -45,7 +46,7 @@ const PACKAGING_ROWS = new Set([
   "subagents root",
 ]);
 
-const DECOY_SETTINGS = JSON.stringify({ marker: "piorbit-clean-machine-decoy" }, null, 2);
+const DECOY_SETTINGS = JSON.stringify({ marker: `${identity.name}-clean-machine-decoy` }, null, 2);
 
 function parseArgv(argv) {
   let dir;
@@ -67,7 +68,7 @@ function defaultPackageDir() {
   const out = join(packageRoot, "out");
   const candidates =
     process.platform === "darwin"
-      ? [`mac-${process.arch}`, "mac", "mac-universal"].map((name) => join(out, name, "piorbit.app", "Contents"))
+      ? [`mac-${process.arch}`, "mac", "mac-universal"].map((name) => join(out, name, `${identity.displayName}.app`, "Contents"))
       : [join(out, `${process.platform === "win32" ? "win" : "linux"}-unpacked`)];
   return candidates.find((candidate) => existsSync(join(candidate, "resources"))) ?? candidates[0];
 }
@@ -218,14 +219,14 @@ const required = [
 ];
 const missing = required.filter((name) => !packageNames.includes(name));
 record(
-  "the agent and every piorbit package are packaged",
+  `the agent and every ${identity.name} package are packaged`,
   missing.length === 0,
   missing.length === 0 ? required.join(", ") : `missing: ${missing.join(", ")}`,
   "Declare the missing package as a dependency of a workspace package so the packager copies it, then rebuild.",
 );
 
 // 4 ── a bare environment: no node, npm, pnpm or agent anywhere on PATH ------
-const sandbox = mkdtempSync(join(tmpdir(), "piorbit-clean-"));
+const sandbox = mkdtempSync(join(tmpdir(), `${identity.name}-clean-`));
 const emptyBin = join(sandbox, "bin");
 const fakeHome = join(sandbox, "home");
 const decoyAgentDir = join(fakeHome, ".pi", "agent");
@@ -240,11 +241,11 @@ const bareEnv = {
   HOME: fakeHome,
   // Named explicitly so this run cannot land in the real one, and so the
   // decoy above is the only agent directory anywhere near it.
-  PIORBIT_AGENT_DIR: join(sandbox, "piorbit", "agent"),
-  PIORBIT_STATE_DIR: join(sandbox, "piorbit", "state"),
+  [identity.env.agentDir]: join(sandbox, identity.dirName, "agent"),
+  [identity.env.stateDir]: join(sandbox, identity.dirName, "state"),
   // A port nothing else is on, so "the port is busy" cannot masquerade as a
   // packaging failure.
-  PIORBIT_PORT: "47311",
+  [identity.env.port]: "47311",
 };
 const reachable = ["node", "npm", "pnpm", "pi"].filter((name) => existsSync(join(emptyBin, name)));
 record(
@@ -324,7 +325,7 @@ record(
   decoyAfter
     ? `${decoyPath} unchanged; ${readdirSync(decoyAgentDir).length} file(s) in that directory`
     : `${decoyPath} was deleted`,
-  "Something in piorbit wrote to another installation's agent directory. That is a bug, not a warning.",
+  `Something in ${identity.name} wrote to another installation's agent directory. That is a bug, not a warning.`,
 );
 
 // ---------------------------------------------------------------------- out

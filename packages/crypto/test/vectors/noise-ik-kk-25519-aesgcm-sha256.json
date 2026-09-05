@@ -1,6 +1,6 @@
 {
   "source": "https://github.com/mcginty/snow/blob/main/tests/vectors/cacophony.txt (the Noise project cacophony vectors, public domain)",
-  "note": "Only the two suites piorbit uses. handshake_hash is Noise h after the final handshake message; messages[0..1] are the handshake, the rest are transport frames alternating initiator -> responder first.",
+  "note": "Only the two suites this product uses. handshake_hash is Noise h after the final handshake message; messages[0..1] are the handshake, the rest are transport frames alternating initiator -> responder first.",
   "vectors": [
     {
       "protocol_name": "Noise_IK_25519_AESGCM_SHA256",

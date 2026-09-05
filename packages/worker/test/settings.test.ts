@@ -6,6 +6,7 @@
  * Everything runs against temp directories; the user's ~/.pi/agent is never
  * read or written.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -30,7 +31,7 @@ let cwd: string;
 let agentDir: string;
 
 beforeEach(() => {
-  base = mkdtempSync(join(tmpdir(), "piorbit-settings-"));
+  base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-settings-`));
   cwd = join(base, "project");
   agentDir = join(base, "agent");
   mkdirSync(cwd, { recursive: true });
@@ -50,7 +51,7 @@ function sampleFor(field: SettingDescriptor): unknown {
     case "boolean":
       return field.default === true ? false : true;
     case "text":
-      return `piorbit-${field.path}`;
+      return `${PRODUCT_NAME}-${field.path}`;
     case "number": {
       const min = type.min ?? 1;
       const max = type.max ?? min + 1000;

@@ -2,6 +2,7 @@
  * M6-T2's "done when": a photographed QR is useless after the pairing it
  * belongs to has been used.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol/identity";
 import { describe, expect, it } from "vitest";
 import {
   PairingError,
@@ -24,8 +25,8 @@ import {
   type PairingGrant,
 } from "../src/index.js";
 
-const RELAY = "wss://relay.piorbit.test/ws";
-const APP = "https://app.piorbit.test/link";
+const RELAY = "wss://relay.example.test/ws";
+const APP = "https://app.example.test/link";
 
 async function fullPairing() {
   const backend = nobleBackend;
@@ -223,7 +224,7 @@ describe("pairing", () => {
   });
 
   it("explains a bad link instead of throwing something opaque", () => {
-    expect(() => parsePairingLink("https://example.com/nope")).toThrow(/not a piorbit pairing link/);
+    expect(() => parsePairingLink("https://example.com/nope")).toThrow(new RegExp(`not a ${PRODUCT_NAME} pairing link`));
     expect(() => parsePairingLink("x#v9.aaaa.bbbb")).toThrow(/version v9 is not supported/);
     expect(() => parsePairingLink(`x#v1.${toBase64Url(utf8("wss://r/ws"))}.AAAA`)).toThrow(/expected 32/);
     expect(() => parsePairingLink(`x#v1.${toBase64Url(utf8("http://r"))}.${toBase64Url(new Uint8Array(32))}`)).toThrow(

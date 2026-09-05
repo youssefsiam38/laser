@@ -416,7 +416,7 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
             // The row's own title, so a name the column cuts is still readable
             // and still the accessible name (DESIGN.md, legibility floor).
             title={shownTitle}
-            className={cn("truncate leading-5", row.untitled ? "typed text-ink-2" : "text-sm font-medium text-ink", active && !row.untitled && "font-semibold")}
+            className={cn("truncate leading-5", row.untitled ? "text-sm text-ink-2 italic" : "text-sm font-medium text-ink", active && !row.untitled && "font-semibold")}
           >
             <ThreadListItemPrimitive.Title fallback={shownTitle} />
           </span>

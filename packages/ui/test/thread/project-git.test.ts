@@ -3,7 +3,7 @@ import { githubCompareUrl, parseGitHubRemote, pullRequestCommands } from "../../
 
 describe("parseGitHubRemote", () => {
   it("reads the three remote URL shapes and rejects the rest", () => {
-    expect(parseGitHubRemote("git@github.com:youssefsiam38/piorbit.git")).toEqual({ owner: "youssefsiam38", repo: "piorbit" });
+    expect(parseGitHubRemote("git@github.com:acme/widget.git")).toEqual({ owner: "acme", repo: "widget" });
     expect(parseGitHubRemote("https://github.com/o/r")).toEqual({ owner: "o", repo: "r" });
     expect(parseGitHubRemote("https://user@github.com/o/r.git/")).toEqual({ owner: "o", repo: "r" });
     expect(parseGitHubRemote("ssh://git@github.com/o/r.git")).toEqual({ owner: "o", repo: "r" });

@@ -1,3 +1,4 @@
+import { WIRE_NAMESPACE } from "@piorbit/protocol";
 import { MessagePrimitive, useAui, useAuiState, type MessageState } from "@assistant-ui/react";
 import type { ModelRef, ThinkingLevel } from "@piorbit/protocol";
 import { Info, TriangleAlert } from "lucide-react";
@@ -22,6 +23,8 @@ import { RegenerateMenu, type RegeneratePick } from "@/components/assistant-ui/e
 import { Sources } from "@/components/assistant-ui/elements/sources.aui";
 import { SpeakerIdentity, type Speaker } from "@/components/assistant-ui/elements/speaker-identity";
 import { StoppedRun } from "@/components/assistant-ui/elements/stopped-run";
+import { useWorkbench } from "@/components/workbench";
+import { readProviderFailure } from "./provider-error.js";
 import { StreamingCaret, StreamingText } from "@/components/assistant-ui/elements/streaming-text";
 import { ToolGroup } from "@/components/assistant-ui/elements/tool-group.aui";
 import { useCopy } from "@/hooks/use-copy";
@@ -43,7 +46,7 @@ interface PiorbitMeta {
 }
 
 const piorbitMeta = (message: MessageState): PiorbitMeta =>
-  ((message.metadata as { custom?: Record<string, unknown> } | undefined)?.custom?.["piorbit"] as PiorbitMeta | undefined) ?? {};
+  ((message.metadata as { custom?: Record<string, unknown> } | undefined)?.custom?.[WIRE_NAMESPACE] as PiorbitMeta | undefined) ?? {};
 
 const MESSAGE_ROOT = "[content-visibility:auto] [contain-intrinsic-size:auto_320px]";
 
@@ -311,11 +314,32 @@ export function AssistantMessage() {
 
 function AssistantStopped({ reason, detail, tone }: ReturnType<typeof stopReason>) {
   const { actions } = usePiorbitStable();
+  const workbench = useWorkbench();
   const running = useAuiState((s) => s.thread.isRunning);
   const disabled = useAuiState((s) => s.thread.isDisabled);
   const isLast = useAuiState((s) => s.message.isLast);
-  const onContinue = isLast && !running && !disabled ? () => void actions.send([{ type: "text", text: "Continue" }], "prompt") : undefined;
-  return <StoppedRun reason={reason} detail={detail} tone={tone} onContinue={onContinue} />;
+  // A provider payload is never the sentence a person reads: it becomes what
+  // happened, what to do, and — when the fix is in this app — the button that
+  // goes there. "Continue" is withheld when resending would only fail again in
+  // the same way, which is what a rejected key or an exhausted context does.
+  const failure = useMemo(() => (tone === "danger" ? readProviderFailure(detail) : undefined), [tone, detail]);
+  const canContinue = isLast && !running && !disabled && (failure?.retryable ?? true);
+  const onContinue = canContinue ? () => void actions.send([{ type: "text", text: "Continue" }], "prompt") : undefined;
+  const action =
+    failure?.destination !== undefined
+      ? { label: failure.destination === "models" ? "Open Providers and models" : "Open Extensions", onClick: () => workbench.open("settings", failure.destination) }
+      : undefined;
+  return (
+    <StoppedRun
+      reason={reason}
+      detail={failure?.headline ?? detail}
+      advice={failure?.next}
+      raw={failure?.raw}
+      action={action}
+      tone={tone}
+      onContinue={onContinue}
+    />
+  );
 }
 
 /**

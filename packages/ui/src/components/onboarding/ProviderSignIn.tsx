@@ -10,6 +10,7 @@
  * `loading-state` element; a secret is typed into a password field and sent
  * once. Cancelling tells the worker so nothing is left pending.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Check, Copy, ExternalLink, KeyRound } from "lucide-react";
 
@@ -285,7 +286,10 @@ export function ProviderSignIn({ cwd, provider, method, onDone, onCancel, classN
             </div>
           )}
           {flow.prompt.kind === "secret" && (
-            <p className="text-xs leading-4 text-ink-3">Kept on this computer only. piorbit never sees it after you press Continue.</p>
+            <p className="text-xs leading-4 text-ink-3">
+              Stored on this computer, by the agent, in the same place it keeps its other credentials. It is never sent anywhere except to the provider
+              itself, and {PRODUCT_NAME} never shows it again.
+            </p>
           )}
         </form>
       )}

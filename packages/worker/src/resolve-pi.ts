@@ -29,6 +29,7 @@
  * This module imports Pi only inside `--check`, and nothing else in it touches
  * the agent. It is deliberately dependency-free so it can be spawned on its own.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { accessSync, constants, existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { delimiter, dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -88,8 +89,8 @@ export function pinnedAgentVersion(workerDir = workerPackageDir()): string {
     manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { dependencies?: Record<string, string> };
   } catch (error) {
     throw new AgentResolutionError(
-      `piorbit cannot read its own manifest at ${manifestPath}, so it does not know which agent version it ships.`,
-      `This install is incomplete. Reinstall piorbit. (${messageOf(error)})`,
+      `${PRODUCT_NAME} cannot read its own manifest at ${manifestPath}, so it does not know which agent version it ships.`,
+      `This install is incomplete. Reinstall ${PRODUCT_NAME}. (${messageOf(error)})`,
     );
   }
   const pinned = manifest.dependencies?.[AGENT_PACKAGE];
@@ -141,8 +142,8 @@ export function resolveBundledAgent(workerDir = workerPackageDir()): BundledAgen
   const { dir: packageDir, searched } = findInNodeModules(workerDir, AGENT_PACKAGE);
   if (!packageDir) {
     throw new AgentResolutionError(
-      `piorbit could not find the agent it ships (${AGENT_PACKAGE} ${pinnedVersion}).`,
-      "This install is incomplete — reinstall piorbit. From a source checkout, run " +
+      `${PRODUCT_NAME} could not find the agent it ships (${AGENT_PACKAGE} ${pinnedVersion}).`,
+      `This install is incomplete — reinstall ${PRODUCT_NAME}. From a source checkout, run ` +
         "`ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install` at the repository root.",
     );
   }
@@ -154,28 +155,28 @@ export function resolveBundledAgent(workerDir = workerPackageDir()): BundledAgen
   } catch (error) {
     throw new AgentResolutionError(
       `the agent at ${packageDir} has an unreadable manifest.`,
-      `This install is damaged — reinstall piorbit. (${messageOf(error)})`,
+      `This install is damaged — reinstall ${PRODUCT_NAME}. (${messageOf(error)})`,
     );
   }
   const version = manifest.version ?? "";
   if (version === "") {
     throw new AgentResolutionError(
       `the agent at ${packageDir} does not say which version it is.`,
-      "This install is damaged — reinstall piorbit.",
+      `This install is damaged — reinstall ${PRODUCT_NAME}.`,
     );
   }
   const binField = typeof manifest.bin === "string" ? manifest.bin : manifest.bin?.["pi"];
   if (!binField) {
     throw new AgentResolutionError(
       `the agent at ${packageDir} ships no command to run.`,
-      "This install is damaged — reinstall piorbit.",
+      `This install is damaged — reinstall ${PRODUCT_NAME}.`,
     );
   }
   const bin = resolvePath(packageDir, binField);
   if (!existsSync(bin)) {
     throw new AgentResolutionError(
       `the agent is installed at ${packageDir} but its program file is missing (${bin}).`,
-      "This install is incomplete — reinstall piorbit. A packager that stored the tree as symlinks " +
+      `This install is incomplete — reinstall ${PRODUCT_NAME}. A packager that stored the tree as symlinks ` +
         "rather than files is the usual cause.",
     );
   }
@@ -191,8 +192,8 @@ export function assertBundledAgent(workerDir = workerPackageDir()): BundledAgent
   const agent = resolveBundledAgent(workerDir);
   if (agent.version !== agent.pinnedVersion) {
     throw new AgentResolutionError(
-      `piorbit ships agent ${agent.pinnedVersion}, but the copy in this install is ${agent.version}.`,
-      "Reinstall piorbit so the two match. From a source checkout, " +
+      `${PRODUCT_NAME} ships agent ${agent.pinnedVersion}, but the copy in this install is ${agent.version}.`,
+      `Reinstall ${PRODUCT_NAME} so the two match. From a source checkout, ` +
         "`ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install` at the repository root restores the pinned version.",
     );
   }
@@ -292,12 +293,12 @@ export async function agentReport(options: { check: boolean }): Promise<AgentRep
         return {
           ok: false,
           error: missing
-            ? `the agent piorbit ships is incomplete: it needs ${missing}, which is not in this install.`
-            : `the agent piorbit ships did not load: ${messageOf(error)}`,
+            ? `the agent ${PRODUCT_NAME} ships is incomplete: it needs ${missing}, which is not in this install.`
+            : `the agent ${PRODUCT_NAME} ships did not load: ${messageOf(error)}`,
           fix: missing
-            ? `Reinstall piorbit. If you are building it, ${missing} has to be a declared dependency of ` +
+            ? `Reinstall ${PRODUCT_NAME}. If you are building it, ${missing} has to be a declared dependency of ` +
               `@piorbit/worker so the packager copies it — a pnpm-only override is invisible to the packager.`
-            : "Reinstall piorbit. If it happens again, please report it with this message.",
+            : `Reinstall ${PRODUCT_NAME}. If it happens again, please report it with this message.`,
           runtime: runtimeOf(),
           machine: machineAgent(),
         };
@@ -326,7 +327,7 @@ export async function agentReport(options: { check: boolean }): Promise<AgentRep
     return {
       ok: false,
       error: messageOf(error),
-      fix: "Reinstall piorbit. If it happens again, please report it with this message.",
+      fix: `Reinstall ${PRODUCT_NAME}. If it happens again, please report it with this message.`,
       runtime: runtimeOf(),
       machine: machineAgent(),
     };

@@ -12,6 +12,7 @@
  * pi-subagents keeps its files; if the host cannot see a run, neither can the
  * terminal, and that is the correct answer rather than a second opinion.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import type { Panel, PlanPanel, RunPanel, SessionSummary } from "@piorbit/protocol";
 import { bool, str } from "../args.js";
 import type { Command, CommandContext } from "../command.js";
@@ -70,7 +71,7 @@ export async function readFleet(rpc: HostRpc, sessions: readonly SessionSummary[
 
   if (unsupported) {
     throw new CliError("this host does not keep panels, so it cannot list runs", {
-      fix: "Update the host (`piorbit restart` after an upgrade) and try again.",
+      fix: `Update the host (\`${PRODUCT_NAME} restart\` after an upgrade) and try again.`,
     });
   }
 
@@ -170,7 +171,7 @@ export async function sessionsInScope(rpc: HostRpc, ctx: CommandContext): Promis
   if (matched.length === 0) {
     throw new CliError(`no session matches ${JSON.stringify(reference)}`, {
       exitCode: ExitCode.Usage,
-      fix: "`piorbit sessions` lists them; any unambiguous id or path suffix works.",
+      fix: `\`${PRODUCT_NAME} sessions\` lists them; any unambiguous id or path suffix works.`,
     });
   }
   return matched;
@@ -180,7 +181,7 @@ export const runsCommand: Command = {
   name: "runs",
   group: "Sessions",
   summary: "list agent runs — subagents, workflows and background jobs",
-  usage: "piorbit runs [--project <dir>] [--session <ref>] [--running] [--json]",
+  usage: `${PRODUCT_NAME} runs [--project <dir>] [--session <ref>] [--running] [--json]`,
   description: `
 A run is one unit of agent work with a lifecycle: a subagent, a workflow lane,
 a background job, or a run another extension contributed. Children are listed
@@ -191,15 +192,15 @@ started from a terminal, which the host sees through the subagent extension's
 own files.
 
 Controls are honest: a run that cannot be steered from here is not offered a
-steer. Use \`piorbit plan\` for the shape of a multi-step run.`,
+steer. Use \`${PRODUCT_NAME} plan\` for the shape of a multi-step run.`,
   flags: {
     project: { type: "string", description: "only runs in this project directory" },
     session: { type: "string", description: "only runs in this session (id, path, or suffix)" },
     running: { type: "boolean", description: "only runs that are still going" },
   },
   examples: [
-    { command: "piorbit runs", note: "every run the host can see" },
-    { command: "piorbit runs --running --json", note: "machine-readable, live only" },
+    { command: `${PRODUCT_NAME} runs`, note: "every run the host can see" },
+    { command: `${PRODUCT_NAME} runs --running --json`, note: "machine-readable, live only" },
   ],
   async run(ctx) {
     const rpc = await connect(ctx.paths);

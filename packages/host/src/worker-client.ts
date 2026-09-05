@@ -7,15 +7,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 import type { Duplex } from "node:stream";
-import {
-  ErrorCodes,
-  LineDecoder,
-  isNotification,
-  isResponse,
-  type JsonRpcError,
-  type JsonRpcMessage,
-  type JsonRpcNotification,
-} from "@piorbit/protocol";
+import { ENV, ErrorCodes, LineDecoder, isNotification, isResponse, type JsonRpcError, type JsonRpcMessage, type JsonRpcNotification } from "@piorbit/protocol";
 
 export interface WorkerClientOptions {
   cwd: string;
@@ -76,7 +68,7 @@ export class WorkerClient {
 
     this.child = spawn(options.nodeBinary ?? process.execPath, args, {
       stdio: ["ignore", "pipe", "pipe", "pipe"],
-      env: { ...process.env, ...options.env, PIORBIT_WORKER_FD: "3" },
+      env: { ...process.env, ...options.env, [ENV.workerFd]: "3" },
     });
     this.pipe = this.child.stdio[3] as Duplex;
 

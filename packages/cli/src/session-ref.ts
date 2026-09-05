@@ -7,6 +7,7 @@
  * the path — and if it is ambiguous we say so and list the candidates rather
  * than guessing.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { basename, resolve } from "node:path";
 import type { SessionSummary } from "@piorbit/protocol";
 import { CliError, ExitCode } from "./errors.js";
@@ -61,7 +62,7 @@ export async function resolveSession(
     if (!options.allowLatest) {
       throw new CliError("this command needs a session", {
         exitCode: ExitCode.Usage,
-        fix: "Pass one: `piorbit sessions` lists them, and any unambiguous id or path suffix works.",
+        fix: `Pass one: \`${PRODUCT_NAME} sessions\` lists them, and any unambiguous id or path suffix works.`,
       });
     }
     const latest = sessions[0];
@@ -70,8 +71,8 @@ export async function resolveSession(
         options.cwd ? `no sessions found in ${options.cwd}` : "no sessions found",
         {
           fix: options.cwd
-            ? `Start one with \`piorbit new ${options.cwd}\`.`
-            : "Start one with `piorbit new`, or point at a project with --project.",
+            ? `Start one with \`${PRODUCT_NAME} new ${options.cwd}\`.`
+            : `Start one with \`${PRODUCT_NAME} new\`, or point at a project with --project.`,
         },
       );
     }
@@ -83,7 +84,7 @@ export async function resolveSession(
   if (matches.length === 0) {
     throw new CliError(`no session matches ${JSON.stringify(reference)}`, {
       exitCode: ExitCode.HostError,
-      fix: "Run `piorbit sessions` to see what the host knows about.",
+      fix: `Run \`${PRODUCT_NAME} sessions\` to see what the host knows about.`,
     });
   }
   throw new CliError(`${matches.length} sessions match ${JSON.stringify(reference)}`, {

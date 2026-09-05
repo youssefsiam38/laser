@@ -4,6 +4,7 @@
  * in the exact shape the pi-subagents runner reads, so a fixture is the only
  * honest proof — a mock of `fs` would only assert that we called ourselves.
  */
+import { PRODUCT_NAME, WIRE_NAMESPACE } from "@piorbit/protocol";
 import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,7 +27,7 @@ let sessionsDir: string;
 const SESSION: SessionRef = { path: "", cwd: "/project", modifiedAt: "2026-09-05T00:00:00.000Z" };
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "piorbit-subagents-"));
+  root = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-subagents-`));
   sessionsDir = join(root, "sessions", "--project--");
   mkdirSync(sessionsDir, { recursive: true });
   SESSION.path = join(sessionsDir, "a.jsonl");
@@ -170,7 +171,7 @@ describe("the control inbox", () => {
       id: "abc",
       ts: 1_700_000_000_000,
       message: "focus on the parser",
-      source: "piorbit",
+      source: WIRE_NAMESPACE,
     });
   });
 

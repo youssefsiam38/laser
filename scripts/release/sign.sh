@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sign SHA256SUMS with the piorbit release key, or create that key.
+# Sign SHA256SUMS with the release key, or create that key.
 #
 #   scripts/release/sign.sh --keygen                  make a key (once, ever)
 #   scripts/release/sign.sh --show-key                print the line install.sh pins
@@ -21,7 +21,9 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-KEY="${PIORBIT_RELEASE_KEY:-$HOME/.config/piorbit/release-key.pem}"
+. "$REPO_ROOT/scripts/identity/identity.sh"
+KEY="$(printenv "${product_env_prefix}_RELEASE_KEY" || true)"
+[ -n "$KEY" ] || KEY="$HOME/.config/$product_dir/release-key.pem"
 DIR="$REPO_ROOT/release"
 MODE="sign"
 
@@ -93,7 +95,7 @@ by hand first."
 
   scripts/release/sign.sh --keygen
 
-or point at an existing one with --key / PIORBIT_RELEASE_KEY. Releases can go
+or point at an existing one with --key / ${product_env_prefix}_RELEASE_KEY. Releases can go
 out unsigned — install.sh still verifies every file against SHA256SUMS and
 against GitHub's build provenance — but a signed one is stronger."
     [ -f "$DIR/SHA256SUMS" ] || die "$DIR/SHA256SUMS does not exist" \

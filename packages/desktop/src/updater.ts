@@ -17,6 +17,7 @@
  * restarts on its own. `autoInstallOnAppQuit` means the next ordinary quit
  * picks it up, which is the polite version of the same thing.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
@@ -72,7 +73,7 @@ export class Updater {
       // there is nothing to try. Say what is true instead.
       this.status = {
         state: "unsupported",
-        message: "This build has no update feed, so piorbit will not update itself. Download new versions from the releases page.",
+        message: `This build has no update feed, so ${PRODUCT_NAME} will not update itself. Download new versions from the releases page.`,
       };
     }
   }
@@ -103,7 +104,7 @@ export class Updater {
       this.options.log.error("checking for updates failed", error);
       this.publish({
         state: "error",
-        message: "piorbit could not check for updates. It will try again later.",
+        message: `${PRODUCT_NAME} could not check for updates. It will try again later.`,
       });
     }
     return this.status;
@@ -140,7 +141,7 @@ export class Updater {
 
       autoUpdater.on("checking-for-update", () => this.publish({ state: "checking" }));
       autoUpdater.on("update-not-available", () =>
-        this.publish({ state: "idle", message: "piorbit is up to date." }),
+        this.publish({ state: "idle", message: `${PRODUCT_NAME} is up to date.` }),
       );
       autoUpdater.on("update-available", (info: { version: string }) =>
         this.publish({ state: "available", version: info.version, message: `Version ${info.version} is downloading.` }),
@@ -152,12 +153,12 @@ export class Updater {
         this.publish({
           state: "ready",
           version: info.version,
-          message: `Version ${info.version} is ready. It installs the next time piorbit restarts.`,
+          message: `Version ${info.version} is ready. It installs the next time ${PRODUCT_NAME} restarts.`,
         }),
       );
       autoUpdater.on("error", (error: Error) => {
         this.options.log.error("updater", error);
-        this.publish({ state: "error", message: "piorbit could not download the update. It will try again later." });
+        this.publish({ state: "error", message: `${PRODUCT_NAME} could not download the update. It will try again later.` });
       });
 
       this.updater = autoUpdater;

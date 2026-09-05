@@ -27,6 +27,7 @@ import { deflateSync } from "node:zlib";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { identity } from "../../../scripts/identity/identity.mjs";
 
 const packageRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
@@ -308,5 +309,5 @@ mkdirSync(dirname(generated), { recursive: true });
 writeFileSync(generated, `${lines.join("\n")}\n`);
 
 process.stdout.write(
-  `piorbit icons: build/icon.png, build/icons/*.png, src/assets/icons.generated.ts\n`,
+  `${identity.name} icons: build/icon.png, build/icons/*.png, src/assets/icons.generated.ts\n`,
 );

@@ -24,6 +24,7 @@
  *   settings write it, and a person who genuinely wants both to share one
  *   directory sets it and gets exactly that.
  */
+import { ENV } from "@piorbit/protocol";
 import { join } from "node:path";
 import { piorbitDataDir } from "@piorbit/cli";
 
@@ -57,11 +58,11 @@ export { piorbitDataDir };
 
 export function agentHome(env: NodeJS.ProcessEnv = process.env): AgentHome {
   const dataDir = piorbitDataDir(env);
-  const chosen = (env["PIORBIT_AGENT_DIR"] ?? "").trim();
+  const chosen = (env[ENV.agentDir] ?? "").trim();
   return {
     dataDir,
     agentDir: chosen !== "" ? chosen : join(dataDir, "agent"),
-    stateDir: (env["PIORBIT_STATE_DIR"] ?? "").trim() || join(dataDir, "state"),
+    stateDir: (env[ENV.stateDir] ?? "").trim() || join(dataDir, "state"),
     chosenByPerson: chosen !== "",
     ignored: AGENT_ENV_VARS.filter((name) => (env[name] ?? "").trim() !== ""),
   };
@@ -76,7 +77,7 @@ export function desktopEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.Process
   const home = agentHome(env);
   const next: NodeJS.ProcessEnv = { ...env };
   for (const name of AGENT_ENV_VARS) delete next[name];
-  next["PIORBIT_AGENT_DIR"] = home.agentDir;
-  next["PIORBIT_STATE_DIR"] = home.stateDir;
+  next[ENV.agentDir] = home.agentDir;
+  next[ENV.stateDir] = home.stateDir;
   return next;
 }

@@ -24,7 +24,14 @@ describe("relay purity", () => {
     for (const name of Object.keys(packageJson.dependencies ?? {})) {
       for (const pattern of FORBIDDEN) expect(name, `dependency ${name}`).not.toMatch(pattern);
     }
-    expect(Object.keys(packageJson.dependencies ?? {})).toEqual(["ws"]);
+    // `ws` and nothing but the product's own identity. `@piorbit/protocol` is
+    // reached only through its `/identity` subpath — a dependency-free module of
+    // strings (MX-T7), so the relay still links no schema, no validator and no
+    // crypto, and the one thing it prints keeps the product's name after a
+    // rename instead of an old one.
+    expect(Object.keys(packageJson.dependencies ?? {}).sort()).toEqual(["@piorbit/protocol", "ws"]);
+    const identityOnly = sources.every(({ text }) => !/from "@piorbit\/protocol"/.test(text));
+    expect(identityOnly, "the relay imports @piorbit/protocol's identity subpath only").toBe(true);
   });
 
   it("imports no crypto library", () => {

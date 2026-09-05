@@ -3,6 +3,7 @@
  * order. A tiny local HTTP server speaks the OpenAI chat-completions streaming
  * format; Pi is pointed at it through a sandboxed models.json.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -60,7 +61,7 @@ let driver: StableSdkDriver;
 let stub: Awaited<ReturnType<typeof startStubProvider>>;
 
 beforeEach(async () => {
-  base = mkdtempSync(join(tmpdir(), "piorbit-prompt-"));
+  base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-prompt-`));
   mkdirSync(join(base, "project"), { recursive: true });
   mkdirSync(join(base, "agent"), { recursive: true });
   stub = await startStubProvider();

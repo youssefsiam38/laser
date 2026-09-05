@@ -1,0 +1,81 @@
+{
+  "$comment": [
+    "The product's identity, in one file (MX-T7, D-36).",
+    "",
+    "This is the ONLY place the product is named. Everything that carries the",
+    "name derives from here: the TypeScript constants in @piorbit/protocol, the",
+    "Node build scripts, the vite build, electron-builder.yml, the .desktop",
+    "entry, the AppStream metainfo, the web manifest and install.sh. Renaming",
+    "the product is one edit to this file plus `pnpm identity:generate`.",
+    "",
+    "Nothing else may write the name. `pnpm identity:check` runs inside",
+    "`pnpm -r build` and `pnpm -r test` and fails the build the moment a file",
+    "disagrees with this one.",
+    "",
+    "Copy strings may use {name}, {displayName}, {binary}, {scheme}, {appId},",
+    "{repository} and {homepage}; the identity module expands them.",
+    "",
+    "When the name changes, move the old identity into formerNames so an",
+    "existing install's directories and storage keys are migrated rather than",
+    "orphaned. See packages/host/src/identity-migration.ts."
+  ],
+
+  "name": "piorbit",
+  "displayName": "piorbit",
+  "appId": "dev.piorbit.desktop",
+  "urlScheme": "piorbit",
+  "envPrefix": "PIORBIT",
+  "dirName": "piorbit",
+  "storagePrefix": "piorbit",
+  "symbolPrefix": "piorbit",
+  "binary": "piorbit",
+  "repository": "youssefsiam38/piorbit",
+
+  "$wireNamespace": [
+    "The namespace on every wire contract, and the one value here that a rename",
+    "must NOT change.",
+    "",
+    "It appears in the relay's WebSocket subprotocol, the Pi event-bus event",
+    "names the companion extension listens on, the `<ns>/…` session-message",
+    "types, and the HKDF labels that derive a paired device's channel keys.",
+    "Renaming those would silently break every paired phone (two peers would",
+    "derive different keys and simply fail to connect), every third-party",
+    "extension that emits a panel, and every stored session already on disk.",
+    "",
+    "So it is frozen on purpose. When the product is renamed, `name` changes",
+    "and this does not; the day a protocol break is wanted, it gets a version",
+    "suffix rather than a new spelling."
+  ],
+  "wireNamespace": "piorbit",
+
+  "vendor": "{displayName} contributors",
+  "maintainerEmail": "ysiam@kwentra.com",
+
+  "formerNames": [],
+
+  "copy": {
+    "summary": "A control room for coding agents",
+    "description": "Runs coding agent sessions across every project on this machine, and mirrors them to your phone.",
+    "descriptionMore": "Everything is configured inside the window: providers, models, extensions and projects. {displayName} brings its own runtime and its own agent, so there is nothing to install first and nothing on your machine for it to disagree with.",
+    "descriptionRelay": "The phone is not a second application. It is the same interface, reached over an end-to-end encrypted relay that {displayName} runs itself, so a session left on the desktop is the session picked up on the train.",
+    "webDescription": "Your coding agents, from anywhere. Answer approvals, steer runs, watch every project."
+  },
+
+  "license": {
+    "project": "LicenseRef-proprietary",
+    "metadata": "CC0-1.0"
+  },
+
+  "categories": ["Development", "IDE"],
+  "webCategories": ["developer", "productivity", "utilities"],
+  "keywords": ["agent", "ai", "assistant", "coding", "developer", "automation", "llm", "chat"],
+
+  "branding": {
+    "light": "#4DA3FF",
+    "dark": "#0B0F14",
+    "webBackground": "#F5F7FA",
+    "webTheme": "#F5F7FA"
+  },
+
+  "iconSizes": [16, 32, 48, 64, 128, 256, 512]
+}

@@ -1,3 +1,4 @@
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,7 +22,7 @@ import {
 const roots: string[] = [];
 
 function fakeWorker(pin: string | undefined, agent?: { version?: string; bin?: string | null; writeBin?: boolean }) {
-  const root = mkdtempSync(join(tmpdir(), "piorbit-pin-"));
+  const root = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-pin-`));
   roots.push(root);
   writeFileSync(
     join(root, "package.json"),
@@ -84,7 +85,7 @@ describe("the agent pin", () => {
       expect.unreachable("should have thrown");
     } catch (error) {
       expect(error).toBeInstanceOf(AgentResolutionError);
-      expect((error as AgentResolutionError).fix).toMatch(/Reinstall piorbit/);
+      expect((error as AgentResolutionError).fix).toMatch(new RegExp(`Reinstall ${PRODUCT_NAME}`));
     }
   });
 });

@@ -16,14 +16,17 @@
  * Provider and model settings are global but every settings method is routed
  * by directory, so before a project exists they go through the directory the
  * host owns for that purpose (`SetupState.cwd`). The last step is the
- * `onboarding` element's three tips, whose action starts the first session.
+ * finish line: one card in the same frame as every other step, whose action
+ * starts the first session. It never describes a screen that is not on show —
+ * a second "1 of 3" tour about a composer the person cannot see yet was the
+ * app talking about itself instead of opening.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ArrowRight, MessageSquare } from "lucide-react";
 
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
-import { Onboarding, type OnboardingStep } from "@/components/assistant-ui/elements/onboarding";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { modKey, shortCwd } from "@/format";
@@ -125,8 +128,6 @@ export function FirstRunFlow({ setup, onFinished }: FirstRunFlowProps) {
   const [projectCwd, setProjectCwd] = useState<string>();
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string>();
-  /** The tips card's own page, on the last step. */
-  const [readyIndex, setReadyIndex] = useState(0);
   const [confirmSkip, setConfirmSkip] = useState(false);
   /** A provider sign-in is on screen and owns its own Continue. */
   const [signingIn, setSigningIn] = useState(false);
@@ -247,7 +248,7 @@ export function FirstRunFlow({ setup, onFinished }: FirstRunFlowProps) {
         <DialogHeader>
           <DialogTitle>Skip setting up?</DialogTitle>
           <DialogDescription>
-            piorbit cannot run an agent until a provider is connected and a project is open, so the app will be mostly empty
+            {PRODUCT_NAME} cannot run an agent until a provider is connected and a project is open, so the app will be mostly empty
             until you do those two things yourself. You can start this again any time from Settings → This device → Run setup
             again.
           </DialogDescription>
@@ -330,43 +331,40 @@ export function FirstRunFlow({ setup, onFinished }: FirstRunFlowProps) {
         )}
 
       {step === "ready" && (
-        <div className="flex w-full max-w-md flex-col gap-3">
-          <Onboarding
-            steps={readySteps(startSession, starting)}
-            index={readyIndex}
-            onIndexChange={setReadyIndex}
-            onSkip={skip}
-            skipLabel="Finish"
-          />
+        <SetupCard
+          index={index}
+          total={COUNTED_STEPS.length}
+          titles={TITLES}
+          title={STEP_TITLES.ready}
+          description={`A provider is connected, a model is chosen, and the folder ${shortCwd(projectCwd ?? currentProject ?? projects[0] ?? "")} is open. Everything else is in the app: extensions, more providers, keyboard shortcuts and how it looks.`}
+          actions={
+            <>
+              {back}
+              <Button variant="ghost" size="sm" onClick={() => void finish()}>
+                Not now
+              </Button>
+              <Button size="sm" disabled={starting} onClick={() => void startSession()}>
+                {starting ? "Starting…" : "Start a session"} <MessageSquare />
+              </Button>
+            </>
+          }
+        >
+          <ul className="flex flex-col gap-1.5 text-sm leading-6 text-ink-2">
+            <li>
+              <span className="font-medium text-ink">Type and press Enter.</span> While it works, Enter steers it mid-turn and {modKey()}+Enter queues a
+              follow-up for after.
+            </li>
+            <li>
+              <span className="font-medium text-ink">Every project in one list.</span> The sessions that need you sort to the top, across all of them.
+            </li>
+            <li>
+              <span className="font-medium text-ink">Nothing needs a terminal.</span> The gear in the rail opens settings, extensions and providers.
+            </li>
+          </ul>
           {startError && <ErrorState title="Could not start a session" detail={startError} onRetry={() => void startSession()} retryLabel="Try again" />}
-          <Button variant="ghost" size="sm" className="self-start" onClick={() => go("project")}>
-            <ArrowLeft /> Back
-          </Button>
-        </div>
+        </SetupCard>
       )}
     </div>
   );
 }
 
-function readySteps(startSession: () => Promise<void>, starting: boolean): OnboardingStep[] {
-  return [
-    {
-      title: "Talk to the agent",
-      body: `Type a message and press Enter. While it works, Enter steers it mid-turn and ${modKey()}+Enter queues a follow-up for after. The line above the composer always says what the session is doing.`,
-      example: "Read the failing test and fix the cause, not the assertion.",
-    },
-    {
-      title: "Watch many at once",
-      body: "Sessions across every project sit in one list, the ones that need you first. Subagents, plans and long outputs open as islands beside the conversation so you can keep typing.",
-    },
-    {
-      title: "Everything else is in Settings",
-      body: "Extensions, more providers, models, keyboard shortcuts and how the app looks — all from the gear in the rail. Nothing needs a terminal.",
-      action: {
-        label: starting ? "Starting…" : "Start a session",
-        icon: <MessageSquare />,
-        onClick: () => void startSession(),
-      },
-    },
-  ];
-}

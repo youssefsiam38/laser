@@ -47,13 +47,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inflateRawSync } from "node:zlib";
+import { identity } from "../../../scripts/identity/identity.mjs";
 
 const packageRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const runtimeDir = join(packageRoot, "runtime");
 const cacheDir = join(runtimeDir, ".cache");
 const pin = JSON.parse(readFileSync(join(packageRoot, "runtime.json"), "utf8"));
 
-const BASE_URL = process.env["PIORBIT_NODE_MIRROR"] ?? "https://nodejs.org/dist";
+const BASE_URL = process.env[identity.env.nodeMirror] ?? "https://nodejs.org/dist";
 
 function currentTarget() {
   return `${process.platform}-${process.arch}`;
@@ -80,7 +81,7 @@ function parseArgv(argv) {
 }
 
 function fail(message, fix) {
-  process.stderr.write(`\npiorbit runtime: ${message}\n`);
+  process.stderr.write(`\n${identity.name} runtime: ${message}\n`);
   if (fix) process.stderr.write(`${fix}\n`);
   process.exit(1);
 }
@@ -94,7 +95,7 @@ async function download(url) {
   if (!response.ok) {
     fail(
       `downloading ${url} answered ${response.status} ${response.statusText}`,
-      "Check the network, or set PIORBIT_NODE_MIRROR to a mirror of https://nodejs.org/dist.",
+      `Check the network, or set ${identity.env.nodeMirror} to a mirror of https://nodejs.org/dist.`,
     );
   }
   return Buffer.from(await response.arrayBuffer());
@@ -309,7 +310,7 @@ async function fetchTarget(target, verify) {
 
   const bytes = await archiveFor(target, spec);
   mkdirSync(destinationDir, { recursive: true });
-  const scratch = mkdtempSync(join(tmpdir(), "piorbit-runtime-"));
+  const scratch = mkdtempSync(join(tmpdir(), `${identity.name}-runtime-`));
   try {
     const scratchBinary = join(scratch, spec.binary);
     const scratchNpm = join(scratch, "npm");
@@ -373,5 +374,5 @@ function verifyBinary(target, binary) {
 }
 
 const { targets, verify } = parseArgv(process.argv.slice(2));
-process.stdout.write(`piorbit runtime: node ${pin.version}\n`);
+process.stdout.write(`${identity.name} runtime: node ${pin.version}\n`);
 for (const target of targets) await fetchTarget(target, verify);

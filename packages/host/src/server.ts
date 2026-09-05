@@ -29,7 +29,7 @@ import type { AddressInfo } from "node:net";
 import { basename, extname, join, normalize, resolve as resolvePath, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@piorbit/crypto";
-import { decisionPushPayload, type HostNotifications, type JsonRpcNotification, type LogEntry, type SessionUpdateParams } from "@piorbit/protocol";
+import { ENV, PRODUCT_NAME, decisionPushPayload, type HostNotifications, type JsonRpcNotification, type LogEntry, type SessionUpdateParams } from "@piorbit/protocol";
 import { AttentionTracker } from "./attention.js";
 import { PrefsStore } from "./prefs.js";
 import { SessionCatalog, defaultSessionDir } from "./catalog.js";
@@ -272,7 +272,7 @@ export class HostServer {
 
     const poolOptions: WorkerPoolOptions = {
       ...(options.agentDir ? { agentDir: options.agentDir } : {}),
-      ...(npmCommand ? { env: { PIORBIT_NPM_COMMAND: JSON.stringify(npmCommand) } } : {}),
+      ...(npmCommand ? { env: { [ENV.npmCommand]: JSON.stringify(npmCommand) } } : {}),
       ...(options.sessionDir ? { sessionDir: options.sessionDir } : {}),
       ...(options.subagentsTempRoot ? { subagentsTempRoot: options.subagentsTempRoot } : {}),
       ...(options.workerMain ? { workerMain: options.workerMain } : {}),
@@ -349,8 +349,8 @@ export class HostServer {
           done(true);
           return;
         }
-        this.log(`refused a WebSocket upgrade from origin ${origin}: not a piorbit origin`);
-        done(false, 403, "piorbit only accepts WebSocket connections from its own origin");
+        this.log(`refused a WebSocket upgrade from origin ${origin}: not a ${PRODUCT_NAME} origin`);
+        done(false, 403, `${PRODUCT_NAME} only accepts WebSocket connections from its own origin`);
       },
     });
     this.wss.on("connection", (ws) => this.onConnection(ws));
@@ -371,7 +371,7 @@ export class HostServer {
     const { port } = this.http.address() as AddressInfo;
     this.boundPort = port;
     const url = `http://${host}:${port}`;
-    this.log(`piorbit host listening on ${url}`);
+    this.log(`${PRODUCT_NAME} host listening on ${url}`);
     await this.startRelay();
     return { host, port, url };
   }
@@ -686,7 +686,7 @@ export class HostServer {
     } catch (error) {
       this.log(`http request failed: ${error instanceof Error ? error.message : String(error)}`);
       if (!res.headersSent) res.writeHead(500, { "content-type": "text/plain" });
-      res.end("piorbit could not serve that request");
+      res.end(`${PRODUCT_NAME} could not serve that request`);
     }
   }
 
@@ -699,7 +699,7 @@ export class HostServer {
     if (!this.uiDir) {
       res
         .writeHead(200, { "content-type": "text/html; charset=utf-8" })
-        .end("<!doctype html><title>piorbit</title><p>piorbit host is running. Build <code>@piorbit/ui</code> to serve the app.</p>");
+        .end(`<!doctype html><title>${PRODUCT_NAME}</title><p>${PRODUCT_NAME} host is running. Build <code>@piorbit/ui</code> to serve the app.</p>`);
       return;
     }
     // `/%25%` is a valid pathname and an invalid escape: decoding it throws.

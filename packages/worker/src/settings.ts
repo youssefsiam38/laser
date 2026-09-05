@@ -31,6 +31,7 @@
  * interleaved write by a terminal Pi loses nothing but the racing field.
  */
 
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import {
   CONFIG_DIR_NAME,
   ProjectTrustStore,
@@ -137,9 +138,9 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: "network", title: "Network", description: "Proxying and connection timeouts." },
   { id: "privacy", title: "Trust and telemetry", description: "Project trust fallback, install ping, analytics." },
   { id: "warnings", title: "Warnings", description: "Which advisory notices the agent shows." },
-  { id: "terminal", title: "Terminal display", description: "The agent's own terminal interface. piorbit does not read these; they change how the agent looks when it is run in a terminal." },
+  { id: "terminal", title: "Terminal display", description: `The agent's own terminal interface. ${PRODUCT_NAME} does not read these; they change how the agent looks when it is run in a terminal.` },
   { id: "markdown", title: "Markdown rendering", description: "How the agent renders markdown in a terminal." },
-  { id: "managed", title: "Managed by the agent", description: "Written by the agent itself. Shown for completeness; piorbit will not change them." },
+  { id: "managed", title: "Managed by the agent", description: `Written by the agent itself. Shown for completeness; ${PRODUCT_NAME} will not change them.` },
 ];
 
 const BOTH: SettingsScope[] = ["global", "project"];
@@ -258,7 +259,7 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     path: "theme",
     key: "theme",
     label: "Theme",
-    description: 'The agent\'s own terminal theme: "dark", "light", or a custom theme you loaded. piorbit\'s appearance is set in Settings → Appearance.',
+    description: `The agent\'s own terminal theme: "dark", "light", or a custom theme you loaded. ${PRODUCT_NAME}\'s appearance is set in Settings → Appearance.`,
     section: "interface",
     type: { control: "text", placeholder: "dark" },
     default: "dark",
@@ -1121,8 +1122,8 @@ function piSettingsStorage(manager: SettingsManager): PiSettingsStorage {
   const candidate = (manager as unknown as { storage?: unknown }).storage as PiSettingsStorage | undefined;
   if (!candidate || typeof candidate.withLock !== "function") {
     throw new SettingsError(
-      `piorbit cannot write settings safely with the agent it is running (${VERSION}), so nothing was changed. ` +
-        `Your settings file is untouched. Reinstall piorbit to get the agent it ships with; if this is a ` +
+      `${PRODUCT_NAME} cannot write settings safely with the agent it is running (${VERSION}), so nothing was changed. ` +
+        `Your settings file is untouched. Reinstall ${PRODUCT_NAME} to get the agent it ships with; if this is a ` +
         `development build, packages/worker/src/settings.ts needs updating for this version (task MX-T2).`,
     );
   }
@@ -1221,7 +1222,7 @@ export class SettingsAdapter {
     if (changes.length === 0) throw new SettingsError("No changes were given.");
     if (scope === "project" && !this.trust.writable) {
       throw new SettingsError(
-        `piorbit will not write ${this.projectPath}: ${this.trust.reason} ` +
+        `${PRODUCT_NAME} will not write ${this.projectPath}: ${this.trust.reason} ` +
           `Trust the project first, or make this change at global scope.`,
       );
     }
@@ -1234,7 +1235,7 @@ export class SettingsAdapter {
         );
       }
       if (field.managed) {
-        throw new SettingsError(`"${change.path}" is written by the agent itself, so piorbit will not change it.`);
+        throw new SettingsError(`"${change.path}" is written by the agent itself, so ${PRODUCT_NAME} will not change it.`);
       }
       if (!field.scopes.includes(scope)) {
         throw new SettingsError(
@@ -1262,7 +1263,7 @@ export class SettingsAdapter {
         } catch (error) {
           refused =
             `${target} is not valid JSON (${error instanceof Error ? error.message : String(error)}). ` +
-            `Nothing was written — piorbit will not overwrite a settings file it cannot read. Fix the file and try again.`;
+            `Nothing was written — ${PRODUCT_NAME} will not overwrite a settings file it cannot read. Fix the file and try again.`;
           return undefined;
         }
         if (!isPlainObject(parsed)) {
@@ -1324,7 +1325,7 @@ export class SettingsAdapter {
       return {
         trusted: false,
         writable: false,
-        reason: `You declined to trust this project, so the agent ignores ${this.projectPath} and piorbit will not edit it.`,
+        reason: `You declined to trust this project, so the agent ignores ${this.projectPath} and ${PRODUCT_NAME} will not edit it.`,
       };
     }
 

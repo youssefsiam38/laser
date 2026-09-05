@@ -109,7 +109,7 @@ if apparmor_status --enabled >/dev/null 2>&1; then
             apparmor_parser --replace --write-cache --skip-read-cache "$APPARMOR_TARGET" || true
         fi
     else
-        echo "piorbit: this version of AppArmor does not understand the bundled profile; skipping it."
+        echo "$EXE: this version of AppArmor does not understand the bundled profile; skipping it."
     fi
 fi
 

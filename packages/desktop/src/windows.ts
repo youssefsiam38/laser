@@ -22,6 +22,8 @@
  * it renders agent output, and a link the agent wrote must open in the person's
  * browser — never inside a window holding `window.piorbit`.
  */
+import { DESKTOP_ARGUMENT_PREFIX } from "./api.js";
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { BrowserWindow, clipboard, dialog, nativeTheme, screen, shell, type BrowserWindowConstructorOptions } from "electron";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -148,7 +150,7 @@ export interface WindowManagerOptions {
 
 /** `--piorbit-<name>=<url-encoded json>`, read back by the preload from argv. */
 function launchArgument(name: string, value: unknown): string {
-  return `--piorbit-${name}=${encodeURIComponent(JSON.stringify(value))}`;
+  return `${DESKTOP_ARGUMENT_PREFIX}${name}=${encodeURIComponent(JSON.stringify(value))}`;
 }
 
 /**
@@ -214,7 +216,7 @@ export class WindowManager {
       minWidth: MIN_WIDTH,
       minHeight: MIN_HEIGHT,
       show: false,
-      title: "piorbit",
+      title: PRODUCT_NAME,
       backgroundColor: nativeTheme.shouldUseDarkColors ? GROUND.dark : GROUND.light,
       webPreferences: this.webPreferences(),
     });
@@ -296,7 +298,7 @@ export class WindowManager {
       minWidth: 360,
       minHeight: 320,
       show: false,
-      title: plainText(descriptor.title, 80) || "piorbit",
+      title: plainText(descriptor.title, 80) || PRODUCT_NAME,
       backgroundColor: nativeTheme.shouldUseDarkColors ? GROUND.dark : GROUND.light,
       webPreferences: {
         ...this.webPreferences(),
@@ -411,10 +413,10 @@ export class WindowManager {
       void dialog
         .showMessageBox(window, {
           type: "warning",
-          title: "piorbit could not open your browser",
-          message: "piorbit could not open your browser",
+          title: `${PRODUCT_NAME} could not open your browser`,
+          message: `${PRODUCT_NAME} could not open your browser`,
           detail:
-            `This computer has no program registered to open web links, so piorbit could not hand this address over:\n\n${url}\n\n` +
+            `This computer has no program registered to open web links, so ${PRODUCT_NAME} could not hand this address over:\n\n${url}\n\n` +
             `Copy it and paste it into a browser to carry on.`,
           buttons: ["Copy the address", "Close"],
           defaultId: 0,

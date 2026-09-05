@@ -1,6 +1,6 @@
 {
   "$comment": [
-    "The stock Node runtime piorbit ships and spawns the host from (M5-T2).",
+    "The stock Node runtime the desktop app ships and spawns the host from (M5-T2).",
     "Pinned to the same Node line Electron 44 bundles (24.20), so the host, the",
     "workers and Electron's own renderer all agree about what `node` means.",
     "",
@@ -12,7 +12,7 @@
     "Bumping the version is a task with its own row: update `version`, replace",
     "every hash from the new SHASUMS256.txt, and re-run `pnpm -F @piorbit/desktop runtime`.",
     "",
-    "`npm` names the package manager inside the same archive. piorbit installs",
+    "`npm` names the package manager inside the same archive. The app installs",
     "extensions from Settings, which needs one, and a person who installed a",
     "desktop app has no npm on PATH and should never be asked to get one. It",
     "comes out of the archive whose hash is pinned above, so it is verified by",

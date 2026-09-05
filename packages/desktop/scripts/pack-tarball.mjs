@@ -4,21 +4,23 @@
  *
  * electron-builder can emit a `tar.gz` target, and it is not enough: it
  * archives the packed application directory and nothing else, so what comes out
- * is a folder of binaries with no menu entry, no icon, no piorbit:// handler
+ * is a folder of binaries with no menu entry, no icon, no URL-scheme handler
  * and no way to get any of them without knowing where freedesktop puts things.
  * A person who chooses the tarball is usually the person with the least help
  * available, which is the wrong moment to hand them the least finished artifact.
  *
  * So the tarball is assembled here instead, from the same packed directory:
  *
- *     piorbit-<version>-<arch>/
- *       piorbit                the launcher (build/linux/launcher.sh)
- *       piorbit-bin            Electron
+ *     <binary>-<version>-<arch>/
+ *       <binary>               the launcher (build/linux/launcher.sh)
+ *       <binary>-bin           Electron
  *       resources/, locales/…  the app
- *       usr/share/applications/piorbit.desktop
- *       usr/share/icons/hicolor/<size>x<size>/apps/piorbit.png
- *       usr/share/metainfo/dev.piorbit.desktop.metainfo.xml
- *       piorbit-setup.sh       registers the above for one user, no root
+ *       usr/share/applications/<binary>.desktop
+ *       usr/share/icons/hicolor/<size>x<size>/apps/<binary>.png
+ *       usr/share/metainfo/<appId>.metainfo.xml
+ *       <binary>-setup.sh      registers the above for one user, no root
+ *
+ * Every name above comes from product.json (MX-T7); none is written here.
  *
  * The archive is byte-for-byte reproducible: entries sorted, uid/gid zeroed,
  * every mtime pinned to SOURCE_DATE_EPOCH or the commit date, and gzip told not
@@ -33,7 +35,14 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } f
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { APP_ID, EXECUTABLE, ICON_SIZES } from "../build/linux/product.mjs";
+import {
+  DESKTOP_FILE_NAME,
+  EXECUTABLE,
+  ICON_SIZES,
+  METAINFO_FILE_NAME,
+  SETUP_SCRIPT_NAME,
+  identity,
+} from "../build/linux/product.mjs";
 
 const packageRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const version = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")).version;
@@ -70,29 +79,29 @@ function sourceDateEpoch() {
  * The files that belong in the tarball and nowhere else. They are staged
  * outside the packed application directory on purpose: dropping them in there
  * would put a second .desktop entry inside the AppImage and a stray
- * /opt/piorbit/usr/share tree inside the deb.
+ * /opt/<binary>/usr/share tree inside the deb.
  */
 function stageExtras() {
   const stage = join(generatedDir, "tarball-extra");
   rmSync(stage, { recursive: true, force: true });
 
-  const desktopSource = join(generatedDir, `${EXECUTABLE}.desktop`);
+  const desktopSource = join(generatedDir, DESKTOP_FILE_NAME);
   if (!existsSync(desktopSource)) {
     throw new Error(
-      `piorbit: ${desktopSource} is missing, so the tarball would have no menu entry.\n` +
+      `${identity.name}: ${desktopSource} is missing, so the tarball would have no menu entry.\n` +
         `Run \`pnpm -F @piorbit/desktop linux:assets\`.`,
     );
   }
 
   const applications = join(stage, "usr", "share", "applications");
   mkdirSync(applications, { recursive: true });
-  copyFileSync(desktopSource, join(applications, `${EXECUTABLE}.desktop`));
+  copyFileSync(desktopSource, join(applications, DESKTOP_FILE_NAME));
 
   for (const size of ICON_SIZES) {
     const icon = join(packageRoot, "build", "icons", `${size}x${size}.png`);
     if (!existsSync(icon)) {
       throw new Error(
-        `piorbit: ${icon} is missing, so the tarball would install a menu entry with no icon.\n` +
+        `${identity.name}: ${icon} is missing, so the tarball would install a menu entry with no icon.\n` +
           `Run \`pnpm -F @piorbit/desktop icons\`.`,
       );
     }
@@ -101,8 +110,8 @@ function stageExtras() {
     copyFileSync(icon, join(dir, `${EXECUTABLE}.png`));
   }
 
-  const installer = join(stage, "piorbit-setup.sh");
-  copyFileSync(join(packageRoot, "build", "linux", "piorbit-setup.sh"), installer);
+  const installer = join(stage, SETUP_SCRIPT_NAME);
+  copyFileSync(join(packageRoot, "build", "linux", "generated", SETUP_SCRIPT_NAME), installer);
   execFileSync("chmod", ["0755", installer]);
   return stage;
 }
@@ -113,11 +122,11 @@ function assertGnuTar() {
   try {
     banner = execFileSync("tar", ["--version"], { encoding: "utf8" });
   } catch {
-    throw new Error("piorbit: `tar` is not on PATH, so the .tar.gz cannot be built. Install GNU tar.");
+    throw new Error(`${identity.name}: \`tar\` is not on PATH, so the .tar.gz cannot be built. Install GNU tar.`);
   }
   if (!banner.includes("GNU tar")) {
     throw new Error(
-      "piorbit: the .tar.gz needs GNU tar for --transform and --sort, and `tar --version` reports:\n" +
+      `${identity.name}: the .tar.gz needs GNU tar for --transform and --sort, and \`tar --version\` reports:\n` +
         `  ${banner.split("\n")[0]}\n` +
         "Install GNU tar (`brew install gnu-tar` on macOS) and put it on PATH before this one.",
     );
@@ -136,10 +145,10 @@ function packOne(arch) {
   // The metainfo is already inside appDir at usr/share/metainfo/ — build/
   // after-pack.cjs put it there for the AppImage's AppDir, and the two trees
   // merge under one usr/share/ in the archive.
-  const metainfo = join(appDir, "usr", "share", "metainfo", `${APP_ID}.metainfo.xml`);
+  const metainfo = join(appDir, "usr", "share", "metainfo", METAINFO_FILE_NAME);
   if (!existsSync(metainfo)) {
     throw new Error(
-      `piorbit: ${metainfo} is missing from the packed application, so the tarball would install\n` +
+      `${identity.name}: ${metainfo} is missing from the packed application, so the tarball would install\n` +
         `nothing for GNOME Software or KDE Discover to show. Repack with \`pnpm -F @piorbit/desktop pack\`.`,
     );
   }
@@ -199,7 +208,7 @@ const requested = process.argv.includes("--arch")
 
 for (const arch of requested) {
   if (!UNPACKED_DIR[arch]) {
-    throw new Error(`piorbit: unknown --arch ${arch}. Use x64 or arm64.`);
+    throw new Error(`${identity.name}: unknown --arch ${arch}. Use x64 or arm64.`);
   }
 }
 
@@ -207,11 +216,11 @@ const built = requested.map(packOne).filter(Boolean);
 
 if (built.length === 0) {
   throw new Error(
-    `piorbit: nothing to archive — no packed application under ${outDir}.\n` +
+    `${identity.name}: nothing to archive — no packed application under ${outDir}.\n` +
       `Run \`pnpm -F @piorbit/desktop pack\` (or dist:linux, which does both) first.`,
   );
 }
 
 for (const artifact of built) {
-  process.stdout.write(`piorbit tarball: ${artifact.file} (${(artifact.size / 1024 / 1024).toFixed(1)} MB)\n`);
+  process.stdout.write(`${identity.name} tarball: ${artifact.file} (${(artifact.size / 1024 / 1024).toFixed(1)} MB)\n`);
 }

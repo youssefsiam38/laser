@@ -4,6 +4,7 @@
  * time. Three views share it — the two scopes, and "Effective", which is the
  * read-only diff of what Pi will actually use and where each value came from.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { useId, useMemo, useState } from "react";
 import { ChevronRight, FileJson, Info, RotateCcw, ShieldAlert, Terminal } from "lucide-react";
 
@@ -288,7 +289,7 @@ function FieldRowView({
                 </Badge>
               </TooltipTrigger>
               <TooltipContent side="top" className="max-w-72">
-                This setting only applies when the agent runs in a terminal. piorbit does not read it, so changing it
+                This setting only applies when the agent runs in a terminal. {PRODUCT_NAME} does not read it, so changing it
                 will not change how this app looks.
               </TooltipContent>
             </Tooltip>
@@ -406,9 +407,9 @@ function EffectiveView({ catalog, snapshot }: { catalog: SettingsCatalog; snapsh
 
         {unknownKeys.length > 0 && (
           <div className="rounded-lg bg-surface-2 px-3 py-2 text-xs leading-5 text-ink-2">
-            <p className="font-medium text-ink">Keys piorbit does not recognise</p>
+            <p className="font-medium text-ink">Keys {PRODUCT_NAME} does not recognise</p>
             <p className="mt-0.5">
-              These are in a settings file, but the agent ({catalog.piVersion}) does not define them. piorbit leaves
+              These are in a settings file, but the agent ({catalog.piVersion}) does not define them. {PRODUCT_NAME} leaves
               them exactly as they are and never rewrites them:{" "}
               <span className="font-mono text-ink-2">{unknownKeys.join(", ")}</span>
             </p>

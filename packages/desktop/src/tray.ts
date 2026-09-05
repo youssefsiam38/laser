@@ -14,6 +14,7 @@
  * tray menu is a fixed structure handed to the desktop environment — there is
  * nothing to mutate.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { Menu, Tray, nativeImage, type MenuItemConstructorOptions, type NativeImage } from "electron";
 import type { SessionAttention } from "@piorbit/protocol";
 import type { DeepLink, UpdateStatus } from "./api.js";
@@ -104,7 +105,7 @@ export class TrayController {
       this.options.onUnavailable?.(this.failure);
       return;
     }
-    this.tray.setToolTip("piorbit");
+    this.tray.setToolTip(PRODUCT_NAME);
     // Windows and Linux: a click is "show me the app". macOS: a click opens the
     // menu, which is what every menu-bar app does there.
     this.tray.on("click", () => {
@@ -165,10 +166,10 @@ export class TrayController {
   }
 
   private headline(): string {
-    if (this.hostMessage) return `piorbit — ${plainText(this.hostMessage, 80)}`;
-    if (!this.snapshot.connected) return "piorbit — connecting to the agent host…";
+    if (this.hostMessage) return `${PRODUCT_NAME} — ${plainText(this.hostMessage, 80)}`;
+    if (!this.snapshot.connected) return `${PRODUCT_NAME} — connecting to the agent host…`;
     const summary = fleetSummary(this.snapshot.running, this.snapshot.waiting);
-    return summary ? `piorbit — ${summary}` : "piorbit — nothing running";
+    return summary ? `${PRODUCT_NAME} — ${summary}` : `${PRODUCT_NAME} — nothing running`;
   }
 
   private template(): MenuItemConstructorOptions[] {
@@ -186,7 +187,7 @@ export class TrayController {
       }));
       if (project.sessions.length > SESSION_LIMIT) {
         submenu.push({ type: "separator" });
-        submenu.push({ label: `${project.sessions.length - SESSION_LIMIT} more in piorbit`, enabled: false });
+        submenu.push({ label: `${project.sessions.length - SESSION_LIMIT} more in ${PRODUCT_NAME}`, enabled: false });
       }
       submenu.push({ type: "separator" });
       submenu.push({
@@ -199,14 +200,14 @@ export class TrayController {
       });
     }
     if (projects.length > PROJECT_LIMIT) {
-      items.push({ label: `${projects.length - PROJECT_LIMIT} more projects in piorbit`, enabled: false });
+      items.push({ label: `${projects.length - PROJECT_LIMIT} more projects in ${PRODUCT_NAME}`, enabled: false });
     }
 
     items.push({ type: "separator" });
-    items.push({ label: "Open piorbit", click: () => this.options.onOpen() });
+    items.push({ label: `Open ${PRODUCT_NAME}`, click: () => this.options.onOpen() });
     items.push(...this.updateItems());
     items.push({ type: "separator" });
-    items.push({ label: "Quit piorbit", click: () => this.options.onQuit() });
+    items.push({ label: `Quit ${PRODUCT_NAME}`, click: () => this.options.onQuit() });
     return items;
   }
 

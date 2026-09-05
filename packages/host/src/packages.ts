@@ -41,21 +41,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
-import {
-  ErrorCodes,
-  ProtocolError,
-  type ClientMethod,
-  type ClientRequests,
-  type DirectoryEntry,
-  type DirectoryListing,
-  type PackageCatalogEntry,
-  type PackageEntry,
-  type PackageRecord,
-  type PackageRuntimeInfo,
-  type PackageScope,
-  type PackageUpdateInfo,
-  type SetupState,
-} from "@piorbit/protocol";
+import { ENV, ErrorCodes, PRODUCT_NAME, ProtocolError, type ClientMethod, type ClientRequests, type DirectoryEntry, type DirectoryListing, type PackageCatalogEntry, type PackageEntry, type PackageRecord, type PackageRuntimeInfo, type PackageScope, type PackageUpdateInfo, type SetupState } from "@piorbit/protocol";
 
 // ---------------------------------------------------------------------------
 // npm sources
@@ -427,7 +413,7 @@ export interface InstallRuntime extends PackageRuntimeInfo {
 }
 
 const NOT_READY =
-  "This copy of piorbit cannot install extensions: the installer it ships with is missing. Reinstall piorbit to restore it.";
+  `This copy of ${PRODUCT_NAME} cannot install extensions: the installer it ships with is missing. Reinstall ${PRODUCT_NAME} to restore it.`;
 
 /**
  * npm runs a package's `postinstall` as the person who is signed in, with their
@@ -472,7 +458,7 @@ export function detectInstallRuntime(
   const packaged = options.packaged ?? isPackagedInstall();
   const node = { version: process.version, path: execPath };
 
-  const configured = env["PIORBIT_NPM_CLI"];
+  const configured = env[ENV.npmCli];
   if (configured && exists(configured)) {
     return { ready: true, node, npm: { path: configured, source: "configured" }, command: [execPath, configured, ...NPM_SAFETY_FLAGS] };
   }
@@ -530,7 +516,7 @@ export function describeInstallFailure(name: string, raw: string): string {
     return say("the package registry could not be reached. Check your internet connection and try again.");
   }
   if (/\beacces\b|\beperm\b|permission denied/.test(lower)) {
-    return say("piorbit is not allowed to write to its extensions folder. Check the folder's permissions and try again.");
+    return say(`${PRODUCT_NAME} is not allowed to write to its extensions folder. Check the folder's permissions and try again.`);
   }
   if (/\benospc\b|no space left/.test(lower)) {
     return say("the disk is full.");
@@ -539,7 +525,7 @@ export function describeInstallFailure(name: string, raw: string): string {
     return say("this project is not trusted yet. Trust it first, or install for your user instead.");
   }
   if (/\benoent\b.*\bnpm\b|spawn .* enoent|command not found/.test(lower)) {
-    return say("the installer piorbit ships with could not be started. Reinstall piorbit to restore it.");
+    return say(`the installer ${PRODUCT_NAME} ships with could not be started. Reinstall ${PRODUCT_NAME} to restore it.`);
   }
   // Fall back to the first line that carries information, stripped of the
   // package manager's prefixes, capped so a stack never reaches the screen.

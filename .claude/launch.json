@@ -4,14 +4,33 @@
     {
       "name": "sandbox",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["scripts/sandbox.mjs"],
+      "runtimeArgs": [
+        "scripts/sandbox.mjs"
+      ],
       "port": 41441
     },
     {
       "name": "ui-dev",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["-F", "@piorbit/ui", "dev"],
+      "runtimeArgs": [
+        "-F",
+        "@piorbit/ui",
+        "dev"
+      ],
       "port": 5173
+    },
+    {
+      "name": "laser-site",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--dir",
+        "/home/youssef/projects/hubtrix_projects/laser_website",
+        "dev",
+        "--port",
+        "5180",
+        "--strictPort"
+      ],
+      "port": 5180
     }
   ]
 }

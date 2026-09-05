@@ -8,6 +8,7 @@
  * manifest on disk carries the pinned version, or nothing is kept — is the
  * supply-chain rule, so it is exercised end to end against a fake worker.
  */
+import { ENV, PRODUCT_NAME } from "@piorbit/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -117,19 +118,19 @@ describe("describeInstallFailure", () => {
 
 describe("detectInstallRuntime", () => {
   const exists = (set: Set<string>) => (p: string) => set.has(p);
-  const node = "/opt/piorbit/resources/runtime/node";
+  const node = `/opt/${PRODUCT_NAME}/resources/runtime/node`;
   /** What `build/before-pack.cjs` stages: the package manager beside the pinned Node. */
-  const packagedNpm = "/opt/piorbit/resources/runtime/npm/bin/npm-cli.js";
+  const packagedNpm = `/opt/${PRODUCT_NAME}/resources/runtime/npm/bin/npm-cli.js`;
 
   it("prefers the configured installer, then the packaged layout, then a stock Node's", () => {
-    const configured = detectInstallRuntime({ execPath: node, env: { PIORBIT_NPM_CLI: "/opt/npm/npm-cli.js", PATH: "" }, exists: exists(new Set(["/opt/npm/npm-cli.js"])) });
+    const configured = detectInstallRuntime({ execPath: node, env: { [ENV.npmCli]: "/opt/npm/npm-cli.js", PATH: "" }, exists: exists(new Set(["/opt/npm/npm-cli.js"])) });
     expect(configured).toMatchObject({ ready: true, npm: { source: "configured" }, command: [node, "/opt/npm/npm-cli.js", "--strict-allow-scripts"] });
     const stock = detectInstallRuntime({ execPath: "/opt/node/bin/node", env: { PATH: "" }, exists: exists(new Set(["/opt/node/lib/node_modules/npm/bin/npm-cli.js"])) });
     expect(stock).toMatchObject({ ready: true, npm: { source: "bundled" }, command: ["/opt/node/bin/node", "/opt/node/lib/node_modules/npm/bin/npm-cli.js", "--strict-allow-scripts"] });
   });
 
   /**
-   * The case the shell's `PIORBIT_NPM_CLI` does not reach: a person runs
+   * The case the shell's own installer variable does not reach: a person runs
    * `piorbit up` (or `piorbit doctor`) in a terminal first, and the window then
    * *adopts* that host. Both run on the same bundled Node, so the sibling
    * lookup is what makes Settings able to install for either of them.
@@ -153,7 +154,7 @@ describe("detectInstallRuntime", () => {
   it("says so when there is none", () => {
     const none = detectInstallRuntime({ execPath: node, env: { PATH: "/usr/bin" }, exists: () => false });
     expect(none.ready).toBe(false);
-    expect(none.reason).toMatch(/Reinstall piorbit/);
+    expect(none.reason).toMatch(new RegExp(`Reinstall ${PRODUCT_NAME}`));
     expect(none.command).toBeUndefined();
   });
 
@@ -164,7 +165,7 @@ describe("detectInstallRuntime", () => {
    */
   it("always turns an unreviewed install script into a hard failure", () => {
     for (const runtime of [
-      detectInstallRuntime({ execPath: node, env: { PIORBIT_NPM_CLI: "/n.js", PATH: "" }, exists: exists(new Set(["/n.js"])) }),
+      detectInstallRuntime({ execPath: node, env: { [ENV.npmCli]: "/n.js", PATH: "" }, exists: exists(new Set(["/n.js"])) }),
       detectInstallRuntime({ execPath: node, env: { PATH: "" }, exists: exists(new Set([packagedNpm])) }),
       detectInstallRuntime({ execPath: node, env: { PATH: "/usr/bin" }, exists: exists(new Set(["/usr/bin/npm"])), packaged: false }),
     ]) {
@@ -213,7 +214,7 @@ describe("PackageService.install", () => {
       stateDir: join(base, "state"),
       forward,
       fetch: fetchPackument,
-      env: { PIORBIT_NPM_CLI: join(base, "npm-cli.js"), PATH: "" },
+      env: { [ENV.npmCli]: join(base, "npm-cli.js"), PATH: "" },
       execPath: join(base, "node"),
       now: () => new Date("2026-09-05T12:00:00Z"),
     });
@@ -226,7 +227,7 @@ describe("PackageService.install", () => {
     );
 
   beforeEach(() => {
-    base = mkdtempSync(join(tmpdir(), "piorbit-packages-"));
+    base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-packages-`));
     agentDir = join(base, "agent");
     cwd = join(base, "project");
     mkdirSync(cwd, { recursive: true });
@@ -321,7 +322,7 @@ describe("PackageService.install", () => {
 describe("browseDirectories", () => {
   let base: string;
   beforeEach(() => {
-    base = mkdtempSync(join(tmpdir(), "piorbit-browse-"));
+    base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-browse-`));
     mkdirSync(join(base, "b-plain"));
     mkdirSync(join(base, "a-repo", ".git"), { recursive: true });
     mkdirSync(join(base, ".hidden"));

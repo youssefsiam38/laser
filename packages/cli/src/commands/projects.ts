@@ -6,6 +6,7 @@
  * host build predates those calls, the list is still shown — derived from the
  * session catalog — and only the mutating verbs refuse, with the reason.
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { resolve } from "node:path";
 import type { ProjectInfo, WorkerInfo } from "@piorbit/protocol";
 import { bool } from "../args.js";
@@ -26,7 +27,7 @@ function verbOf(positionals: readonly string[]): { verb: Verb; rest: string[] } 
   if ((VERBS as readonly string[]).includes(first)) return { verb: first as Verb, rest };
   throw new CliError(`unknown projects verb ${JSON.stringify(first)}`, {
     exitCode: ExitCode.Usage,
-    fix: `Use one of: ${VERBS.join(", ")}. \`piorbit projects\` on its own lists them.`,
+    fix: `Use one of: ${VERBS.join(", ")}. \`${PRODUCT_NAME} projects\` on its own lists them.`,
   });
 }
 
@@ -75,9 +76,9 @@ export const projectsCommand: Command = {
   name: "projects",
   group: "Projects",
   summary: "list, add and remove the projects the app shows",
-  usage: "piorbit projects [list|add <dir>|remove <dir>|trust <dir> [--no]]",
+  usage: `${PRODUCT_NAME} projects [list|add <dir>|remove <dir>|trust <dir> [--no]]`,
   description: `
-A project is a directory piorbit runs an agent in — one agent per directory,
+A project is a directory ${PRODUCT_NAME} runs an agent in — one agent per directory,
 never two. Adding one pins it so it stays in the sidebar even before it has any
 sessions.
 
@@ -94,9 +95,9 @@ declines.
     remember: { type: "boolean", default: true, description: "With `trust`: persist the answer" },
   },
   examples: [
-    { note: "what the app shows", command: "piorbit projects" },
-    { note: "pin this directory", command: "piorbit projects add ." },
-    { note: "trust a project's own .pi resources", command: "piorbit projects trust ~/code/api" },
+    { note: "what the app shows", command: `${PRODUCT_NAME} projects` },
+    { note: "pin this directory", command: `${PRODUCT_NAME} projects add .` },
+    { note: "trust a project's own .pi resources", command: `${PRODUCT_NAME} projects trust ~/code/api` },
   ],
   async run({ term, paths, args }) {
     const { verb, rest } = verbOf(args.positionals);
@@ -116,7 +117,7 @@ declines.
         if (projects.length === 0) {
           term.note("no projects yet");
           term.note();
-          term.note(`  Add one with ${term.err.bold("piorbit projects add .")}`);
+          term.note(`  Add one with ${term.err.bold(`${PRODUCT_NAME} projects add .`)}`);
           return;
         }
         for (const line of table(
@@ -139,7 +140,7 @@ declines.
       if (!dir) {
         throw new CliError(`\`projects ${verb}\` needs a directory`, {
           exitCode: ExitCode.Usage,
-          fix: `Write it as \`piorbit projects ${verb} <dir>\` (\`.\` for the current one).`,
+          fix: `Write it as \`${PRODUCT_NAME} projects ${verb} <dir>\` (\`.\` for the current one).`,
         });
       }
       const cwd = resolve(dir);
@@ -159,8 +160,19 @@ declines.
         await rpc.request("pi/project/remove", { cwd }).catch((error: unknown) => {
           throw describeRpcError(error, `could not remove ${cwd}`);
         });
-        if (term.json) term.data({ removed: cwd });
-        else term.note(`${term.err.green("removed")} ${shortCwd(cwd)} ${term.err.dim("(session files are untouched)")}`);
+        // Removing unpins; it never deletes. The list is pinned directories
+        // unioned with every directory the session catalog has seen, so a
+        // directory with sessions in it is still listed afterwards — and a bare
+        // "removed" would read as a command that did not work.
+        const { projects: after } = await rpc.request("pi/project/list", {}).catch(() => ({ projects: [] }));
+        const still = after.find((project) => project.cwd === cwd);
+        if (term.json) term.data({ removed: cwd, stillListed: still !== undefined, sessionCount: still?.sessionCount ?? 0 });
+        else if (still) {
+          term.note(
+            `${term.err.green("removed")} ${shortCwd(cwd)} ${term.err.dim("(session files are untouched)")}\n` +
+              `${term.err.dim(`still listed: ${plural(still.sessionCount, "session")} live there. Archive them to take the project off the list.`)}`,
+          );
+        } else term.note(`${term.err.green("removed")} ${shortCwd(cwd)} ${term.err.dim("(session files are untouched)")}`);
         return;
       }
 

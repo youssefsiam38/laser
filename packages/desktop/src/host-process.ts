@@ -22,6 +22,7 @@
  * rewrite, and the log line below records the exact command so a failed start
  * on someone else's machine is one line to read rather than a guess.
  */
+import { ENV, PRODUCT_NAME } from "@piorbit/protocol";
 import { type ChildProcess, spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync } from "node:fs";
 import { existsSync } from "node:fs";
@@ -122,8 +123,8 @@ export class HostProcess {
         state: "failed",
         startedByUs: false,
         message:
-          `piorbit found a copy of itself already running at ${existing.record.url}, but it has stopped answering. ` +
-          `Quit piorbit completely — including the icon in your system tray — and open it again. ` +
+          `${PRODUCT_NAME} found a copy of itself already running at ${existing.record.url}, but it has stopped answering. ` +
+          `Quit ${PRODUCT_NAME} completely — including the icon in your system tray — and open it again. ` +
           `If that does not help, restarting the computer will clear it.`,
       });
     }
@@ -157,7 +158,7 @@ export class HostProcess {
           log.line(
             `this machine also has an agent (${[result.machine.commandOnPath, result.machine.homeAgentDir]
               .filter(Boolean)
-              .join(", ")}); piorbit does not use it`,
+              .join(", ")}); ${PRODUCT_NAME} does not use it`,
           );
         }
       } else {
@@ -177,7 +178,7 @@ export class HostProcess {
       return this.publish({
         state: "failed",
         message:
-          "piorbit could not find the agent host it ships with. This install is incomplete — reinstall piorbit.",
+          `${PRODUCT_NAME} could not find the agent host it ships with. This install is incomplete — reinstall ${PRODUCT_NAME}.`,
       });
     }
 
@@ -186,11 +187,11 @@ export class HostProcess {
       return this.publish({
         state: "failed",
         message: theirs
-          ? `Another copy of piorbit is already running on this computer, at ${this.info.url}. ` +
-            `Switch to that window instead of opening a second one — look for piorbit in your system tray.`
-          : `Something else on this computer is already using the connection piorbit needs (port ${paths.port}). ` +
-            `Close whatever else is running and open piorbit again. If you know what it is and want to keep it, ` +
-            `piorbit can be moved to another port by setting PIORBIT_PORT before it starts.`,
+          ? `Another copy of ${PRODUCT_NAME} is already running on this computer, at ${this.info.url}. ` +
+            `Switch to that window instead of opening a second one — look for ${PRODUCT_NAME} in your system tray.`
+          : `Something else on this computer is already using the connection ${PRODUCT_NAME} needs (port ${paths.port}). ` +
+            `Close whatever else is running and open ${PRODUCT_NAME} again. If you know what it is and want to keep it, ` +
+            `${PRODUCT_NAME} can be moved to another port by setting ${ENV.port} before it starts.`,
       });
     }
 
@@ -275,7 +276,7 @@ export class HostProcess {
         log.error("could not spawn the host", spawnError);
         return this.publish({
           state: "failed",
-          message: `piorbit could not start its agent host (${spawnError.message}). The log is at ${paths.logFile}.`,
+          message: `${PRODUCT_NAME} could not start its agent host (${spawnError.message}). The log is at ${paths.logFile}.`,
         });
       }
       if (exited) {
@@ -304,7 +305,7 @@ export class HostProcess {
       this.publish({
         state: "failed",
         message:
-          `The agent host stopped ${this.restarts + 1} times, so piorbit stopped restarting it. ` +
+          `The agent host stopped ${this.restarts + 1} times, so ${PRODUCT_NAME} stopped restarting it. ` +
           `${lastLogLine(paths.logFile)} Full log: ${paths.logFile}`,
       });
       return;
@@ -360,7 +361,7 @@ export class HostProcess {
       // installs extensions with it, on a machine that has never had Node.
       // Absent in a development build that has not run `pnpm -F
       // @piorbit/desktop runtime`, and the host says so rather than guessing.
-      ...(this.runtime?.npmCli ? { PIORBIT_NPM_CLI: this.runtime.npmCli } : {}),
+      ...(this.runtime?.npmCli ? { [ENV.npmCli]: this.runtime.npmCli } : {}),
       ...this.options.env,
     };
   }

@@ -12,6 +12,8 @@
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "clean": "pnpm -r clean",
+    "identity:generate": "node scripts/identity/generate.mjs",
+    "identity:check": "node scripts/identity/check.mjs",
     "sandbox": "node scripts/sandbox.mjs",
     "verify": "pnpm -r build && pnpm -r typecheck && pnpm -r test",
     "verify:install": "bash scripts/release/verify-install.sh",

@@ -1,16 +1,19 @@
 #!/bin/sh
-# piorbit's Linux launcher.
+# {{displayName}}'s Linux launcher.
 #
-# `build/after-pack.cjs` renames Electron's own executable to `piorbit-bin` and
-# installs this script in its place, so that every route into the app runs it:
-# the application menu, /usr/bin/piorbit, a double-clicked AppImage, and
-# ./piorbit straight out of the tarball. It exists for exactly three decisions
-# that cannot be made at build time, and it makes no others.
+# GENERATED from build/linux/launcher.sh.tpl by scripts/make-linux-assets.mjs.
+# Every name comes from product.json (MX-T7); edit the template.
 #
-#   1. Window or command. One installed program is named `piorbit`, and a person
-#      who types `piorbit doctor` means the command, not the window.
+# `build/after-pack.cjs` renames Electron's own executable to `{{realBinary}}`
+# and installs this script in its place, so that every route into the app runs
+# it: the application menu, /usr/bin/{{binary}}, a double-clicked AppImage, and
+# ./{{binary}} straight out of the tarball. It exists for exactly three
+# decisions that cannot be made at build time, and it makes no others.
+#
+#   1. Window or command. One installed program is named `{{binary}}`, and a
+#      person who types `{{binary}} doctor` means the command, not the window.
 #   2. The sandbox. Chromium can only sandbox a renderer two ways on Linux, and
-#      which ones exist depends on the kernel and on how piorbit was installed.
+#      which ones exist depends on the kernel and on how the app was installed.
 #   3. Fractional scaling on Wayland, which needs one feature flag to stay sharp.
 #
 # It is POSIX sh, not bash: the tarball has to work on Alpine and on anything
@@ -18,18 +21,30 @@
 
 set -eu
 
+# --- identity, from product.json ---------------------------------------------
+product={{displayName|json}}
+binary={{binary|json}}
+real_binary={{realBinary|json}}
+scheme={{urlScheme|json}}
+env_prefix={{envPrefix|json}}
+# The one variable this script reads, resolved through the prefix so a rename
+# does not leave a person's shell profile pointing at a name nothing answers to.
+eval "disable_sandbox=\${${env_prefix}_DISABLE_SANDBOX-}"
+disable_sandbox_var="${env_prefix}_DISABLE_SANDBOX"
+# -----------------------------------------------------------------------------
+
 # ---------------------------------------------------------------- paths ----
 
-# $0 is a symlink on a deb/rpm install (/usr/bin/piorbit -> /opt/piorbit/piorbit),
+# $0 is a symlink on a deb/rpm install (/usr/bin/<name> -> /opt/<name>/<name>),
 # so resolve it before looking for anything next to it.
 self=$(readlink -f "$0" 2>/dev/null || echo "$0")
 here=$(dirname "$self")
-real="$here/piorbit-bin"
+real="$here/$real_binary"
 helper="$here/chrome-sandbox"
 
 if [ ! -x "$real" ]; then
-  echo "piorbit: the application files are incomplete — $real is missing." >&2
-  echo "Reinstall piorbit; if you unpacked a tarball, unpack it again without" >&2
+  echo "$product: the application files are incomplete — $real is missing." >&2
+  echo "Reinstall $product; if you unpacked a tarball, unpack it again without" >&2
   echo "excluding any files." >&2
   exit 1
 fi
@@ -78,14 +93,14 @@ done
 # fails, quietly *prepends* --no-sandbox before handing over to us. That is
 # a security decision made on the person's behalf without telling them, so we
 # undo it and make the same decision out loud further down. A person who really
-# wants no sandbox says so with PIORBIT_DISABLE_SANDBOX=1, which survives this.
-if [ "$from_apprun" -eq 1 ] && [ "${PIORBIT_DISABLE_SANDBOX-}" != "1" ]; then
+# wants no sandbox says so with that variable set to 1, which survives this.
+if [ "$from_apprun" -eq 1 ] && [ "$disable_sandbox" != "1" ]; then
   stripped=0
   # Rotate the argument list once: take the head off, and put it back on the
   # tail unless it is the flag we are dropping. The sentinel marks where the
   # original list ended, since sh has no arrays to copy into.
-  set -- ${1+"$@"} "--piorbit-end-of-args"
-  while [ "$1" != "--piorbit-end-of-args" ]; do
+  set -- ${1+"$@"} "--$binary-end-of-args"
+  while [ "$1" != "--$binary-end-of-args" ]; do
     arg=$1
     shift
     if [ "$arg" = "--no-sandbox" ]; then
@@ -97,15 +112,16 @@ if [ "$from_apprun" -eq 1 ] && [ "${PIORBIT_DISABLE_SANDBOX-}" != "1" ]; then
   shift # drop the sentinel
   if [ "$stripped" -eq 1 ]; then
     user_chose_sandbox=0
-    echo "piorbit: ignoring the AppImage runtime's --no-sandbox; deciding for ourselves." >&2
+    echo "$product: ignoring the AppImage runtime's --no-sandbox; deciding for ourselves." >&2
   fi
 fi
 
 # -------------------------------------------------- window or command ----
 
-# `~/.local/bin/piorbit` is the only thing on the person's PATH called piorbit,
-# and it has two jobs. The window is what a menu entry, a piorbit:// link and a
-# bare `piorbit` mean. A first argument that is an ordinary word — `doctor`,
+# `~/.local/bin/{{binary}}` is the only thing on the person's PATH called
+# {{binary}}, and it has two jobs. The window is what a menu entry, a
+# {{urlScheme}}:// link and a bare `{{binary}}` mean. A first argument that is
+# an ordinary word — `doctor`,
 # `sessions`, `up` — is a command, and it goes to the CLI running on the same
 # bundled Node the app itself uses, so a terminal and the window resolve the
 # same agent directory and show the same sessions.
@@ -116,15 +132,15 @@ fi
 #
 # This runs *after* AppRun's injected --no-sandbox has been stripped above, and
 # it has to: on an installed copy the argument list AppRun hands over starts
-# with that flag, so deciding here first would send `piorbit doctor` to the
+# with that flag, so deciding here first would send `{{binary}} doctor` to the
 # window and a person would get a staring match instead of a diagnosis.
 cli="$here/resources/app.asar.unpacked/node_modules/@piorbit/cli/dist/main.js"
 node="$here/resources/runtime/node"
 
 run_cli() {
   if [ ! -x "$node" ] || [ ! -f "$cli" ]; then
-    echo "piorbit: the piorbit command is missing from this installation." >&2
-    echo "Reinstall piorbit; the window may still open from your application menu." >&2
+    echo "$product: the $binary command is missing from this installation." >&2
+    echo "Reinstall $product; the window may still open from your application menu." >&2
     exit 1
   fi
   exec "$node" "$cli" ${1+"$@"}
@@ -132,7 +148,7 @@ run_cli() {
 
 case "${1-}" in
   "") ;;                        # the window
-  piorbit://*) ;;               # a link handed over by the desktop
+  "$scheme"://*) ;;             # a link handed over by the desktop
   --help | -h | --version | -v) run_cli ${1+"$@"} ;;
   -*) ;;                        # a Chromium or Electron flag: the window
   *) run_cli ${1+"$@"} ;;
@@ -198,9 +214,9 @@ report() {
   # loads the wrong libstdc++ and dies. Emptying it for the child is the fix.
   # shellcheck disable=SC1007
   if command -v zenity >/dev/null 2>&1; then
-    LD_LIBRARY_PATH= zenity --error --title=piorbit --width=520 --text "$1" 2>/dev/null || true
+    LD_LIBRARY_PATH= zenity --error --title="$product" --width=520 --text "$1" 2>/dev/null || true
   elif command -v kdialog >/dev/null 2>&1; then
-    LD_LIBRARY_PATH= kdialog --title piorbit --error "$1" 2>/dev/null || true
+    LD_LIBRARY_PATH= kdialog --title "$product" --error "$1" 2>/dev/null || true
   fi
 }
 
@@ -232,13 +248,13 @@ fi
 
 if [ "$user_chose_sandbox" -eq 0 ]; then
   if ! can_make_user_namespace && ! helper_is_installed_setuid; then
-    if [ "${PIORBIT_DISABLE_SANDBOX-}" = "1" ]; then
-      echo "piorbit: starting WITHOUT a sandbox because PIORBIT_DISABLE_SANDBOX=1." >&2
+    if [ "$disable_sandbox" = "1" ]; then
+      echo "$product: starting WITHOUT a sandbox because $disable_sandbox_var=1." >&2
       set -- --no-sandbox ${1+"$@"}
     else
-      report "piorbit cannot start, because this machine offers no way to sandbox it.
+      report "$product cannot start, because this machine offers no way to sandbox it.
 
-Every page piorbit renders — an agent's answer, a diff, a preview — runs inside
+Every page $product renders — an agent's answer, a diff, a preview — runs inside
 a sandbox so that it cannot reach the rest of your computer. Linux provides two
 ways to build one, and neither is available here:
 
@@ -257,9 +273,9 @@ Any one of these fixes it:
      depends on why they are off:
 $namespace_fix
 
-  3. Run this copy with no sandbox at all, accepting that anything piorbit
+  3. Run this copy with no sandbox at all, accepting that anything $product
      renders can read the files your account can read:
-        PIORBIT_DISABLE_SANDBOX=1 piorbit"
+        $disable_sandbox_var=1 $binary"
       exit 1
     fi
   fi

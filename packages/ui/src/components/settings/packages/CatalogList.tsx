@@ -6,6 +6,7 @@
  * install will pin — and one verb. Installed ones say so instead of offering
  * a second install (R2).
  */
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import { Check, Download, ExternalLink, Loader2, Sparkles } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -39,7 +40,7 @@ export function CatalogList({ entries, busy, canInstall, onInstall }: CatalogLis
                     {entry.name}
                   </span>
                   {entry.curated && (
-                    <Badge variant="outline" className="gap-1" title="Recommended by piorbit">
+                    <Badge variant="outline" className="gap-1" title={`Recommended by ${PRODUCT_NAME}`}>
                       <Sparkles /> recommended
                     </Badge>
                   )}

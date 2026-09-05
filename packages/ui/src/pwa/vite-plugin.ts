@@ -16,7 +16,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { transformWithEsbuild, type Plugin } from "vite";
-import { DECLARATIVE_WEB_PUSH_VERSION } from "@piorbit/protocol";
+import { DECLARATIVE_WEB_PUSH_VERSION, FORMER_NAMES, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, STORAGE_PREFIX, dottedStorageKey, storageKey } from "@piorbit/protocol";
 
 import { compileVars } from "../theme/compile.js";
 import { DEFAULT_LIGHT_PRESET_ID, DEFAULT_PRESET, getPreset } from "../theme/presets.js";
@@ -65,13 +65,17 @@ function offlineStyle(): string {
   ].join("");
 }
 
-const DEV_SW = `// piorbit dev: no app-shell caching on the dev server. A stale production worker
+/** The service worker's cache namespace, and this plugin's own name in errors. */
+const CACHE_PREFIX = `${STORAGE_PREFIX}-shell-`;
+const PLUGIN = `${PRODUCT_NAME}:pwa`;
+
+const devWorker = (cachePrefix: string): string => `// dev: no app-shell caching on the dev server. A stale production worker
 // on this origin would serve old bundles, so this one removes itself.
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
-      for (const name of await caches.keys()) if (name.startsWith("piorbit-shell-")) await caches.delete(name);
+      for (const name of await caches.keys()) if (name.startsWith("${cachePrefix}")) await caches.delete(name);
       await self.registration.unregister();
       const clients = await self.clients.matchAll({ type: "window" });
       for (const client of clients) client.navigate(client.url);
@@ -85,10 +89,49 @@ export interface PiorbitPwaOptions {
   bootModule?: string;
 }
 
+/**
+ * The product's identity, substituted into index.html at build time (MX-T7).
+ *
+ * `index.html` is the one file the app ships that cannot import anything: its
+ * boot script runs before any module, and it has to know the theme storage key
+ * to replay a stored theme before first paint. So the three names it needs are
+ * placeholders, filled from product.json here, and a rename reaches the title,
+ * the iOS home-screen name and the storage key with no second edit.
+ */
+export function productIdentityHtml(): Plugin {
+  const values: Record<string, string> = {
+    PRODUCT_DISPLAY_NAME,
+    THEME_STYLE_ID: storageKey("theme"),
+    // Current key first, then every former name's. `migrateFormerBrowserStorage`
+    // moves them, but it runs from a module and the boot script runs before any
+    // module loads — so without this the first frame after a rename is the
+    // default theme, on the one launch a person is most likely to be watching.
+    THEME_STORAGE_KEYS: JSON.stringify([
+      dottedStorageKey("theme"),
+      ...FORMER_NAMES.map((former) => `${former.storagePrefix}.theme`),
+    ]),
+  };
+  return {
+    name: `${PRODUCT_NAME}:identity`,
+    transformIndexHtml(html) {
+      return html.replace(/%([A-Z_]+)%/g, (match, key: string) => {
+        const value = values[key];
+        if (value === undefined) {
+          throw new Error(
+            `${PRODUCT_NAME}:identity — index.html asks for %${key}%, which product.json does not define. ` +
+              `Add it to productIdentityHtml() in src/pwa/vite-plugin.ts, or fix the placeholder.`,
+          );
+        }
+        return value;
+      });
+    },
+  };
+}
+
 export function piorbitPwa(options: PiorbitPwaOptions = {}): Plugin {
   const bootModule = options.bootModule ?? "/src/pwa/boot.ts";
   return {
-    name: "piorbit:pwa",
+    name: PLUGIN,
 
     transformIndexHtml: {
       order: "pre",
@@ -103,7 +146,7 @@ export function piorbitPwa(options: PiorbitPwaOptions = {}): Plugin {
         }
         res.setHeader("content-type", "text/javascript; charset=utf-8");
         res.setHeader("cache-control", "no-store");
-        res.end(DEV_SW);
+        res.end(devWorker(CACHE_PREFIX));
       });
     },
 
@@ -125,25 +168,27 @@ export function piorbitPwa(options: PiorbitPwaOptions = {}): Plugin {
       // whole worker. Its only `import` is `import type`, which esbuild drops.
       const worker = code;
       if (/^\s*import\s/m.test(worker)) {
-        throw new Error("piorbit:pwa — sw.ts must not import anything at runtime; /sw.js is emitted as one file");
+        throw new Error(`${PLUGIN} — sw.ts must not import anything at runtime; /sw.js is emitted as one file`);
       }
       // The worker restates the push document's shape because it cannot import
       // it. The version tag is the one part that could drift without anything
       // failing, so it is checked against the protocol here.
       if (!worker.includes(`DECLARATIVE_WEB_PUSH_VERSION = ${DECLARATIVE_WEB_PUSH_VERSION}`)) {
         throw new Error(
-          `piorbit:pwa — sw.ts declares a different DECLARATIVE_WEB_PUSH_VERSION than @piorbit/protocol (${DECLARATIVE_WEB_PUSH_VERSION})`,
+          `${PLUGIN} — sw.ts declares a different DECLARATIVE_WEB_PUSH_VERSION than @piorbit/protocol (${DECLARATIVE_WEB_PUSH_VERSION})`,
         );
       }
 
       const build = createHash("sha256").update(precache.join("\n")).update(worker).digest("hex").slice(0, 12);
       const style = offlineStyle();
       const out = worker
-        .replace('"__PIORBIT_PRECACHE__"', JSON.stringify(precache))
-        .replace("__PIORBIT_BUILD__", build)
-        .replace("__PIORBIT_OFFLINE_STYLE__", () => style);
-      if (!out.includes(JSON.stringify(precache))) throw new Error("piorbit:pwa — the precache placeholder was not found in sw.ts");
-      if (out.includes("__PIORBIT_OFFLINE_STYLE__")) throw new Error("piorbit:pwa — the offline-style placeholder was not found in sw.ts");
+        .replace('"__SW_PRECACHE__"', JSON.stringify(precache))
+        .replace("__SW_BUILD__", build)
+        .replace("__SW_CACHE_PREFIX__", CACHE_PREFIX)
+        .replace("__SW_PRODUCT_NAME__", PRODUCT_DISPLAY_NAME)
+        .replace("__SW_OFFLINE_STYLE__", () => style);
+      if (!out.includes(JSON.stringify(precache))) throw new Error(`${PLUGIN} — the precache placeholder was not found in sw.ts`);
+      if (out.includes("__SW_OFFLINE_STYLE__")) throw new Error(`${PLUGIN} — the offline-style placeholder was not found in sw.ts`);
       this.emitFile({ type: "asset", fileName: "sw.js", source: out });
     },
   };

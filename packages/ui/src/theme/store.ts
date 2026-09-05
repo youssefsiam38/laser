@@ -15,7 +15,7 @@
  * opens wearing what the desktop wears. `hydrate` and `subscribe` are the seam
  * the sync uses; see `runtime/prefs.ts`.
  */
-import { applyCompiled, bootEntry, readBootBlob, writeBootBlob, type BootBlob } from "./apply.js";
+import { THEME_STORAGE_KEY, applyCompiled, bootEntry, readBootBlob, type BootBlob, writeBootBlob } from "./apply.js";
 import { compileTheme } from "./compile.js";
 import { ensureFontLoaded } from "./fonts.js";
 import { isApplicable } from "./guard.js";
@@ -136,7 +136,7 @@ function wireGlobalListeners(): void {
     window.matchMedia(REDUCED_MOTION_QUERY).addEventListener("change", () => commit(state, false));
   }
   window.addEventListener("storage", (e) => {
-    if (e.key !== null && e.key !== "piorbit.theme") return;
+    if (e.key !== null && e.key !== THEME_STORAGE_KEY) return;
     const blob = readBootBlob();
     if (blob && isThemeState(blob.state)) commit(blob.state, false);
   });

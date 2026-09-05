@@ -102,7 +102,7 @@ export function ThreadSearch({ threads, query, activeId, onActiveChange, onSelec
                   )}
                 >
                   <StatusDot status={thread.status} size="sm" />
-                  <span className={cn("truncate leading-5", thread.untitled ? "typed text-ink-2" : "text-sm font-medium text-ink")} title={thread.title}>
+                  <span className={cn("truncate leading-5", thread.untitled ? "text-sm text-ink-2 italic" : "text-sm font-medium text-ink")} title={thread.title}>
                     {thread.title}
                   </span>
                   {thread.modifiedAt ? <span className="typed leading-5 text-ink-3">{relativeTime(thread.modifiedAt)}</span> : <span />}

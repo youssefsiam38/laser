@@ -1,3 +1,4 @@
+import { storageKey } from "@piorbit/protocol";
 import { useCallback, useSyncExternalStore } from "react";
 
 /**
@@ -55,7 +56,7 @@ export function useDismissed(key: string): [dismissed: boolean, dismiss: (ttlMs?
   return [dismissed, set];
 }
 
-export const INSECURE_KEY = (origin: string): string => `piorbit-mobile-insecure-dismissed:${origin}`;
-export const INSTALL_KEY = "piorbit-mobile-install-dismissed";
-export const NOTIFY_HINT_KEY = "piorbit-mobile-notify-hint-dismissed";
+export const INSECURE_KEY = (origin: string): string => storageKey(`mobile-insecure-dismissed:${origin}`);
+export const INSTALL_KEY = storageKey("mobile-install-dismissed");
+export const NOTIFY_HINT_KEY = storageKey("mobile-notify-hint-dismissed");
 export const FORTNIGHT_MS = 14 * 24 * 60 * 60 * 1000;

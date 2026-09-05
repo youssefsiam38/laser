@@ -222,7 +222,7 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ className, components }) => {
       componentsByLanguage={componentsByLanguage}
       smooth={false}
       defer
-      className={cn("piorbit-md max-w-[72ch] text-md break-words text-ink", "[&[data-status=running]>*:last-child]:caret", className)}
+      className={cn("md-body max-w-[72ch] text-md break-words text-ink", "[&[data-status=running]>*:last-child]:caret", className)}
     />
   );
 };

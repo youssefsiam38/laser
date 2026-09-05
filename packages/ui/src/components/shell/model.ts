@@ -2,8 +2,9 @@
  * Pure view-model helpers for the app shell. No React, no DOM.
  * Tested in test/shell/model.test.ts.
  */
+import { PRODUCT_DISPLAY_NAME } from "@piorbit/protocol";
 import type { ProjectInfo, ProjectTrust, SessionSummary } from "@piorbit/protocol";
-import { mergeSessions, sessionAttention, sortSessions } from "../../runtime/threadList.js";
+import { mergeSessions, sessionAttention, sessionTitle, sortSessions } from "../../runtime/threadList.js";
 import { textOf, type Block, type SessionView } from "../../store.js";
 import { shortCwd, summariseArgs } from "../../format.js";
 import { aggregateStatus, statusRank, type Status } from "../status/status.js";
@@ -146,9 +147,17 @@ export function sessionSubtitle(summary: SessionSummary, view: SessionView | und
   return { text: "No messages yet", mono: false, tone: "muted" };
 }
 
-/** True when the session has no Pi-given name and the row must show the id prefix. */
+/**
+ * True when nothing has named this session yet, so the row is showing the
+ * "New session" placeholder rather than a title anybody chose.
+ *
+ * It used to mean "showing the id prefix", and the rows styled it as typed
+ * mono for that reason. The fallback is now the first line the person typed,
+ * which is a sentence and is set in the text face like any other title; only
+ * the placeholder is still dimmed.
+ */
 export function isUntitled(summary: SessionSummary, view: SessionView | undefined): boolean {
-  return !(summary.name ?? view?.title);
+  return !(summary.name ?? view?.title ?? summary.firstMessage?.trim() ?? (view ? firstUserText(view.blocks) : undefined));
 }
 
 /** One vocabulary for the dot and the words next to it (DESIGN.md "Status language"). */
@@ -225,7 +234,7 @@ export function inboxRows(sessions: readonly SessionSummary[], open: Views, limi
         path: summary.path,
         cwd: summary.cwd,
         project: shortCwd(summary.cwd),
-        title: summary.name ?? view?.title ?? summary.id.slice(0, 8),
+        title: sessionTitle(summary, view),
         status: sessionStatus(view, summary),
         sub: sessionSubtitle(summary, view),
         modifiedAt: summary.modifiedAt,
@@ -243,7 +252,7 @@ export function inboxRows(sessions: readonly SessionSummary[], open: Views, limi
 /** Browser tab title: `(2) Session name · piorbit`. */
 export function documentTitle(sessionTitle: string | undefined, needYou: number): string {
   const prefix = needYou > 0 ? `(${needYou}) ` : "";
-  return sessionTitle ? `${prefix}${sessionTitle} · piorbit` : `${prefix}piorbit`;
+  return sessionTitle ? `${prefix}${sessionTitle} · ${PRODUCT_DISPLAY_NAME}` : `${prefix}${PRODUCT_DISPLAY_NAME}`;
 }
 
 // ---------------------------------------------------------------------------

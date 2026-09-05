@@ -15,6 +15,7 @@
  * themselves never leave the worker.
  */
 
+import { PRODUCT_NAME } from "@piorbit/protocol";
 import {
   DefaultPackageManager,
   ModelRuntime,
@@ -158,7 +159,7 @@ export class PackagesAdapter {
     const projectTrust = this.settings.projectTrust;
     if (!projectTrust.writable) {
       throw new PackagesError(
-        `piorbit cannot ${what}: ${projectTrust.reason} Trust the project first, or install it for your user instead.`,
+        `${PRODUCT_NAME} cannot ${what}: ${projectTrust.reason} Trust the project first, or install it for your user instead.`,
       );
     }
   }

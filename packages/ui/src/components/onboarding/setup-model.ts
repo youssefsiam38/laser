@@ -1,3 +1,4 @@
+import { PRODUCT_DISPLAY_NAME, storageKey } from "@piorbit/protocol";
 /**
  * Pure logic behind the first-run flow (M10-T6): the steps, and where to
  * resume from. The host remembers whether setup finished; the facts that
@@ -10,7 +11,7 @@ export type SetupStep = "welcome" | "provider" | "model" | "project" | "ready";
 export const SETUP_STEPS: readonly SetupStep[] = ["welcome", "provider", "model", "project", "ready"];
 
 export const STEP_TITLES: Record<SetupStep, string> = {
-  welcome: "Welcome to piorbit",
+  welcome: `Welcome to ${PRODUCT_DISPLAY_NAME}`,
   provider: "Connect a model provider",
   model: "Choose a default model",
   project: "Open a project",
@@ -64,7 +65,7 @@ export function previousStep(step: SetupStep): SetupStep {
   return SETUP_STEPS[Math.max(0, stepIndex(step) - 1)] ?? "welcome";
 }
 
-export const SETUP_STEP_KEY = "piorbit-setup-step";
+export const SETUP_STEP_KEY = storageKey("setup-step");
 
 export function readRememberedStep(): SetupStep | undefined {
   try {
