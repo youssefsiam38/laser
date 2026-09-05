@@ -12,7 +12,8 @@
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "clean": "pnpm -r clean",
-    "sandbox": "node scripts/sandbox.mjs"
+    "sandbox": "node scripts/sandbox.mjs",
+    "verify": "pnpm -r build && pnpm -r typecheck && pnpm -r test"
   },
   "dependencies": {
     "@piorbit/host": "workspace:*"

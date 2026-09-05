@@ -17,7 +17,7 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 | M0-T5 | `ChordDriver` stub + seam test | done | claude-2026-09-05-a | `pnpm -F @piorbit/worker test` → `test/seam.test.ts` 3 passed | see notes |
 | M0-T6 | Worker process entry + transport | done | claude-2026-09-05-a | `test/server.test.ts` (dispatch, seq, replay, dialogs, errors) + `test/spawn.test.ts` (real process over fd 3) | see notes |
 | M0-T7 | Extension UI bridge | done | claude-2026-09-05-a | `test/ui-bridge.test.ts` (select/confirm/input/editor round-trip, timeout, custom() resolves, unknown members no-op, dispose settles) | see notes |
-| M0-T8 | CI | done | claude-2026-09-05-b | `.github/workflows/ci.yml` (build + typecheck + test on Node 24 / pnpm 10) | user granted the `workflow` scope 2026-09-05; Electron binary download skipped in CI |
+| M0-T8 | CI | blocked | claude-2026-09-05-b | `.github/workflows/ci.yml` committed and correct | workflow scope granted, file installed, but GitHub refuses to start the job: "recent account payments have failed or your spending limit needs to be increased". Private repos bill Actions minutes. Unblock in GitHub Billing & plans; nothing to change in the repo. Local substitute: `pnpm verify`. |
 
 #### M0-T1 notes
 - 2026-09-05 claimed: create pnpm workspace with packages protocol, worker, subagents-bridge, host, ui, desktop, crypto, relay.
@@ -377,3 +377,4 @@ tw-glass are registry-only (not on npm) and are copied as source when needed.
   3. **`useIsTouch()` disagreed with assistant-ui.** Ours was `(pointer: coarse)`, the primitive's is `(pointer: coarse) and (not (any-pointer: fine))`. On a tablet with a trackpad our composer handler would bow out and the primitive would submit with no run config, losing the steer / follow-up choice. Aligned.
 - 2026-09-05 not defects, ruled out during verification: the repeated `WebSocket … failed` console lines are stale reconnect attempts from page loads before the host was listening (a 12 s probe recorded zero new sockets); Enter not submitting is an artifact of the automation harness's synthetic Return, confirmed working in real Chrome by the user.
 - 2026-09-05 known gaps, not blocking: main bundle is 1.0 MB / 303 kB gzip (no manual chunking yet); `SPEND` reads "No spend recorded" until Pi persists usage; worker status shows "No status yet" because the pool never emits `starting`.
+- 2026-09-05 · claude-2026-09-05-b · M0-T8: `workflow` scope granted and `.github/workflows/ci.yml` installed, but the first run was refused by GitHub billing (private repos bill Actions minutes). Added `pnpm verify` as the local equivalent. Blocked on the user's GitHub billing, not on code.
