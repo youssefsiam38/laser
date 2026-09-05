@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { textOf, type SessionView } from "../store.js";
 
 interface Entry {
@@ -18,17 +18,21 @@ interface Props {
   onClose: () => void;
 }
 
-/** Session history (M1-T9): persisted entries with fork / jump actions. Tree shape shown by indentation of branches. */
+/** Session history (M1-T9): persisted entries with fork / jump actions. Branches are indented. */
 export function History({ view, onRefresh, onFork, onJump, onClose }: Props) {
+  // Refresh once per session (and when it settles), not on every render: the
+  // callbacks change identity often and must not drive the effect.
+  const refresh = useRef(onRefresh);
+  refresh.current = onRefresh;
   useEffect(() => {
-    void onRefresh();
-  }, [onRefresh]);
+    void refresh.current();
+  }, [view.path, view.running]);
 
-  const entries = (view.entries as Entry[]).filter((e) => e.type === "message" || e.type === "label" || e.type === "compaction" || e.type === "branch_summary");
-  // Depth = number of ancestors that have more than one child (a branch point).
+  const all = view.entries as Entry[];
+  const entries = all.filter((e) => e.type === "message" || e.type === "label" || e.type === "compaction" || e.type === "branch_summary");
   const children = new Map<string | null, number>();
-  for (const e of view.entries as Entry[]) children.set(e.parentId, (children.get(e.parentId) ?? 0) + 1);
-  const byId = new Map((view.entries as Entry[]).map((e) => [e.id, e]));
+  for (const e of all) children.set(e.parentId, (children.get(e.parentId) ?? 0) + 1);
+  const byId = new Map(all.map((e) => [e.id, e]));
   const depth = (e: Entry): number => {
     let d = 0;
     let p = e.parentId;
@@ -60,8 +64,8 @@ export function History({ view, onRefresh, onFork, onJump, onClose }: Props) {
               <div className="history-text">{text.slice(0, 160) || <span className="muted">(no text)</span>}</div>
               {e.type === "message" && (
                 <div className="history-actions">
-                  <button className="link" onClick={() => void onFork(e.id)}>fork here</button>
-                  <button className="link" onClick={() => void onJump(e.id)}>jump here</button>
+                  <button className="link" onClick={() => void onFork(e.id)} title="New session with history up to here; this message goes to the composer">fork here</button>
+                  <button className="link" onClick={() => void onJump(e.id)} title="Move this session's cursor here">jump here</button>
                 </div>
               )}
             </div>

@@ -153,7 +153,8 @@ export interface ClientRequests {
   "pi/session/steer": { params: { path: string; content: ContentBlock[] }; result: {} };
   "pi/session/follow_up": { params: { path: string; content: ContentBlock[] }; result: {} };
   "pi/session/clear_queue": { params: { path: string }; result: { steering: string[]; followUp: string[] } };
-  "pi/session/fork": { params: { path: string; entryId: string }; result: { state: SessionState } };
+  /** Forks before `entryId` into a new session; `editorText` carries that entry's text back for editing and resending. */
+  "pi/session/fork": { params: { path: string; entryId: string }; result: { state: SessionState; editorText?: string } };
   "pi/session/navigate": {
     params: { path: string; entryId: string; summarize?: boolean; label?: string };
     result: { editorText?: string; cancelled: boolean };

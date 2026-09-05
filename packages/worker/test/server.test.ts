@@ -51,7 +51,7 @@ class FakeDriver implements SessionDriver {
   async setThinkingLevel(level: SessionState["thinkingLevel"]) { this.st = { ...this.st, thinkingLevel: level }; return this.st; }
   async rename() {} async compact() {}
   async navigateTree() { return { cancelled: false }; }
-  async fork(entryId: string) { this.st = { ...this.st, path: `/tmp/fake/fork-${entryId}.jsonl` }; return this.st; }
+  async fork(entryId: string) { this.st = { ...this.st, path: `/tmp/fake/fork-${entryId}.jsonl` }; return { state: this.st, editorText: "redo" }; }
   respondToUi(r: unknown) { this.answered.push(r); }
   pendingUi() { return this.pending; }
   async entries() { return []; }
@@ -146,7 +146,7 @@ describe("WorkerServer", () => {
     const h = harness();
     await h.call(1, "session/new", { cwd: "/tmp/fake" });
     const forked = await h.call(2, "pi/session/fork", { path: "/tmp/fake/s1.jsonl", entryId: "e9" });
-    expect(forked.result).toMatchObject({ state: { path: "/tmp/fake/fork-e9.jsonl" } });
+    expect(forked.result).toMatchObject({ state: { path: "/tmp/fake/fork-e9.jsonl" }, editorText: "redo" });
     expect(h.server.openSessions()).toEqual(["/tmp/fake/fork-e9.jsonl"]);
     const last = h.notifications("session/update").at(-1)!.params as { sessionPath: string; update: { kind: string } };
     expect(last).toMatchObject({ sessionPath: "/tmp/fake/fork-e9.jsonl", update: { kind: "state" } });

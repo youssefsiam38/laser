@@ -172,12 +172,15 @@ export function App() {
   const fork = useCallback(
     async (entryId: string) => {
       if (!currentPath) return;
-      const { state: s } = await client.request("pi/session/fork", { path: currentPath, entryId });
+      const { state: s, editorText } = await client.request("pi/session/fork", { path: currentPath, entryId });
       client.untrack(currentPath);
       client.track(s.path, 0);
       dispatch({ type: "forked", from: currentPath, state: s });
       const { entries } = await client.request("pi/session/entries", { path: s.path });
       dispatch({ type: "hydrate", path: s.path, entries });
+      if (editorText) {
+        dispatch({ type: "notification", method: "pi/ui/event", params: { path: s.path, method: "setEditorText", text: editorText } });
+      }
       void refreshSessions();
     },
     [client, currentPath, refreshSessions],
@@ -192,6 +195,11 @@ export function App() {
     },
     [client, currentPath],
   );
+
+  // Stable, guarded handlers for child components (effects may depend on them).
+  const onRefreshEntries = useCallback(() => guard(refreshEntries).then(() => {}), [guard, refreshEntries]);
+  const onFork = useCallback((id: string) => guard(() => fork(id)).then(() => {}), [guard, fork]);
+  const onJump = useCallback((id: string) => guard(() => jump(id)).then(() => {}), [guard, jump]);
 
   return (
     <div className={`app ${sidebarOpen ? "sidebar-open" : ""} ${historyOpen && current ? "history-open" : ""}`}>
@@ -246,13 +254,7 @@ export function App() {
         )}
       </main>
       {historyOpen && current && (
-        <History
-          view={current}
-          onRefresh={() => guard(refreshEntries).then(() => {})}
-          onFork={(id) => guard(() => fork(id)).then(() => {})}
-          onJump={(id) => guard(() => jump(id)).then(() => {})}
-          onClose={() => setHistoryOpen(false)}
-        />
+        <History view={current} onRefresh={onRefreshEntries} onFork={onFork} onJump={onJump} onClose={() => setHistoryOpen(false)} />
       )}
       {current && <Dialogs view={current} onAnswer={(r) => guard(() => answerDialog(r)).then(() => {})} />}
       <div className="toasts">

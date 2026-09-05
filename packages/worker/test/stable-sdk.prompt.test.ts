@@ -180,11 +180,12 @@ describe("StableSdkDriver.prompt", () => {
     const firstUser = entries.find((e) => e.type === "message" && e.message?.role === "user")!;
     expect(firstUser).toBeDefined();
 
-    const state = await driver.fork(firstUser.id);
+    const { state, editorText } = await driver.fork(firstUser.id);
     expect(state.path).not.toBe(first);
     expect(state.path.startsWith(join(base, "sessions"))).toBe(true);
-    // The fork keeps history up to the fork point (the first user message) and drops the rest.
+    // Fork happens before the entry: history up to it is kept, the entry's text comes back for editing.
     expect(state.messageCount).toBeLessThan(4);
+    expect(editorText).toBe("one");
 
     // The forked session is live: a new prompt streams into it.
     done = settled();

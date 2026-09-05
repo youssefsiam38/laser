@@ -121,7 +121,8 @@ export class WorkerServer {
         return this.live(req.params.path).driver.clearQueue();
       case "pi/session/fork": {
         const live = this.live(req.params.path);
-        const state = await live.driver.fork(req.params.entryId);
+        const forked = await live.driver.fork(req.params.entryId);
+        const { state } = forked;
         if (state.path !== live.path) {
           // The driver now serves the forked session file; re-key it so later
           // requests by the new path find it. Clients learn the new path from
@@ -131,7 +132,7 @@ export class WorkerServer {
           this.sessions.set(state.path, live);
         }
         this.onDriverEvent(live, { type: "update", update: { kind: "state", state } });
-        return { state } satisfies Result<"pi/session/fork">;
+        return forked satisfies Result<"pi/session/fork">;
       }
       case "pi/session/navigate": {
         const { driver } = this.live(req.params.path);

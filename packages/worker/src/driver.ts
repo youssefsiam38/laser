@@ -77,8 +77,8 @@ export interface SessionDriver {
   rename(name: string): Promise<void>;
   compact(instructions?: string): Promise<void>;
   navigateTree(entryId: string, options?: { summarize?: boolean; label?: string }): Promise<{ editorText?: string; cancelled: boolean }>;
-  /** Fork at an entry into a new session file. The driver now serves the new session; `state().path` changes. */
-  fork(entryId: string): Promise<SessionState>;
+  /** Fork before an entry into a new session file. The driver now serves the new session; `state().path` changes. */
+  fork(entryId: string): Promise<{ state: SessionState; editorText?: string }>;
 
   /** Answer a pending extension dialog raised via a `ui_request` event. */
   respondToUi(response: UiDialogResponse): void;

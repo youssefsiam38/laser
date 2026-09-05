@@ -72,6 +72,15 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => void shutdown(0));
   process.on("SIGINT", () => void shutdown(0));
 
+  // A worker must never outlive its host. If the host is killed hard the pipe
+  // may not signal `end`, so also watch for re-parenting (ppid becomes 1 or
+  // changes) and exit.
+  const parent = process.ppid;
+  const watchdog = setInterval(() => {
+    if (process.ppid !== parent) void shutdown(0);
+  }, 2000);
+  watchdog.unref();
+
   let closing = false;
   async function shutdown(code: number): Promise<void> {
     if (closing) return;
