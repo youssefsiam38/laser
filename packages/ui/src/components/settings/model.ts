@@ -9,7 +9,7 @@ import type {
   SettingsCatalog,
   SettingsScope,
   SettingsSnapshot,
-} from "@piorbit/protocol";
+} from "@lasercode/protocol";
 
 export type ValueOrigin = "project" | "global" | "default" | "unset";
 

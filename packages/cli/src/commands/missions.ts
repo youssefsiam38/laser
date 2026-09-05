@@ -8,8 +8,8 @@
  * rows and `piorbit missions show <id>` asks the host to render one ledger —
  * the same action the app fires when you open a row.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
-import type { CollectionItem, CollectionPanel, DocumentPanel, SessionSummary } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
+import type { CollectionItem, CollectionPanel, DocumentPanel, SessionSummary } from "@lasercode/protocol";
 import type { Command } from "../command.js";
 import { CliError, ExitCode } from "../errors.js";
 import { clip, plural, shortCwd } from "../format.js";
@@ -18,7 +18,7 @@ import { describeRpcError } from "../rpc.js";
 import { connect } from "./host.js";
 import { readFleet, sessionsInScope } from "./runs.js";
 
-/** The id the host gives a session's mission list. Matches `@piorbit/host` `missionCollectionId`. */
+/** The id the host gives a session's mission list. Matches `@lasercode/host` `missionCollectionId`. */
 const MISSIONS_PANEL_ID = "subagents:missions";
 const MISSION_DOCUMENT_PREFIX = "subagents:mission:";
 

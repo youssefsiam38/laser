@@ -28,7 +28,7 @@ import { RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SkeletonText } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import type { DocumentPanel } from "@piorbit/protocol";
+import type { DocumentPanel } from "@lasercode/protocol";
 
 import { DiffPreview } from "./DiffPreview.js";
 import { ImagePreview } from "./ImagePreview.js";

@@ -1,6 +1,6 @@
 # piorbit UI design spec
 
-This is the visual and interaction contract for `@piorbit/ui`. Every component
+This is the visual and interaction contract for `@lasercode/ui`. Every component
 derives its colors, type, spacing, and motion from here. Deviations need a
 decision in `STATUS_DETAILED.md`.
 

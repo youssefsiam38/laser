@@ -191,7 +191,7 @@ task lives directly under its milestone table:
 #### M1-T3 notes
 - 2026-09-05 claimed: wire ui-bridge select() to a dialog message
 - 2026-09-05 select/confirm/input work; editor needs a multi-line component
-- 2026-09-06 done, evidence: `pnpm -F @piorbit/worker test -- ui-bridge`
+- 2026-09-06 done, evidence: `pnpm -F @lasercode/worker test -- ui-bridge`
 ```
 
 Dates are ISO `YYYY-MM-DD`. They are for reading history, not for planning.
@@ -205,7 +205,7 @@ Append to the `## Handoffs` section:
 State of the work: parser done, watcher half-done in packages/host/src/subagents/watch.ts.
 Uncommitted: yes (git stash list: none; working tree has 3 modified files).
 What is broken: fs.watch fires twice on Linux; dedupe by (path, mtime) not yet written.
-Next concrete step: implement dedupe, then run `pnpm -F @piorbit/host test`.
+Next concrete step: implement dedupe, then run `pnpm -F @lasercode/host test`.
 Do not: rewrite the parser, it matches pi-subagents 0.65 status.json exactly.
 ```
 
@@ -248,7 +248,7 @@ adding dates or estimates, deleting done-when criteria. Any structural change to
 
 1. **Nothing above the worker imports Pi.** Only `packages/worker` and
    `packages/pi-extension` may import `@earendil-works/*` or `pi-subagents`.
-   Everything else speaks `@piorbit/protocol`. File watchers (pi-subagents runs,
+   Everything else speaks `@lasercode/protocol`. File watchers (pi-subagents runs,
    missions, session catalog) live in the host and parse JSON only, so
    terminal-started sessions stay visible without a worker.
 2. **The protocol is ACP-shaped.** `session/new`, `session/load`, `session/prompt`,
@@ -293,8 +293,8 @@ Read `docs/architecture.md` for the layer diagram and the driver seam.
 pnpm install                      # workspace install
 pnpm -r build                     # build all packages
 pnpm -r test                      # test all packages
-pnpm -F @piorbit/worker test      # one package
-pnpm -F @piorbit/worker dev       # run one package in watch mode
+pnpm -F @lasercode/worker test      # one package
+pnpm -F @lasercode/worker dev       # run one package in watch mode
 ```
 
 Conventions: TypeScript strict, ESM everywhere, relative imports use `.js`

@@ -40,7 +40,7 @@ import { clockTime } from "@/format";
 import { cn } from "@/lib/utils";
 import { usePanelActions } from "@/panels";
 import { usePiorbitStable, usePiorbitView } from "@/runtime";
-import type { LogEntry, LogLevel, LogSection, LogStats } from "@piorbit/protocol";
+import type { LogEntry, LogLevel, LogSection, LogStats } from "@lasercode/protocol";
 
 import { LogDetail } from "./LogDetail.js";
 import { appendRows, LOG_LEVELS, LOG_SECTIONS, matchesFilters, rowMetric, SECTION_TONE, spansFromEntries, toQuery, type LogFilters } from "./model.js";

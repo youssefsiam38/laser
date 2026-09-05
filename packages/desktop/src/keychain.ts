@@ -22,7 +22,7 @@
  * so, in the UI, every time. A degraded security story that nobody is told
  * about is the actual failure.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -36,8 +36,8 @@ import {
   loadOrCreateRootIdentity,
   type RootIdentity,
   type RootIdentityStore,
-} from "@piorbit/crypto";
-import { FileRootIdentityStore } from "@piorbit/crypto/node";
+} from "@lasercode/crypto";
+import { FileRootIdentityStore } from "@lasercode/crypto/node";
 import type { IdentitySummary } from "./api.js";
 import type { DesktopLog } from "./log.js";
 

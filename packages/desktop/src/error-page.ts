@@ -1,5 +1,5 @@
 import { DESKTOP_BRIDGE } from "./api.js";
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 /**
  * The two screens that are not the app: "starting" and "cannot start".
  *

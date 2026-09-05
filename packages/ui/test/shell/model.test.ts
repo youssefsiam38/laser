@@ -1,6 +1,6 @@
-import { PRODUCT_DISPLAY_NAME } from "@piorbit/protocol";
+import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
-import type { SessionState, SessionSummary } from "@piorbit/protocol";
+import type { SessionState, SessionSummary } from "@lasercode/protocol";
 
 import {
   documentTitle,

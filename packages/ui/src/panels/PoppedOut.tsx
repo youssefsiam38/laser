@@ -5,7 +5,7 @@
  * and state carried by the panel id. Tells the opener when it opens and
  * closes so the dock island can point at it and come back.
  */
-import { PRODUCT_DISPLAY_NAME } from "@piorbit/protocol";
+import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
 import { useEffect, useMemo } from "react";
 
 import { StatusRing } from "@/components/status";

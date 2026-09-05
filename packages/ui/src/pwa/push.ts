@@ -10,7 +10,7 @@
  * Platform truth (docs/mobile.md): Safari needs the app on the home screen
  * before `PushManager` exists at all; Android shows Allow / Deny buttons on
  * the notification, iOS shows one tap-to-open. The payload is one document
- * for both (`@piorbit/protocol`, `src/push.ts`).
+ * for both (`@lasercode/protocol`, `src/push.ts`).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { readEnvironment, type PwaEnvironment } from "./environment.js";

@@ -5,7 +5,7 @@
  * suite stays in the node environment.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HostNotificationMethod } from "@piorbit/protocol";
+import type { HostNotificationMethod } from "@lasercode/protocol";
 import { HostClient } from "../src/client.js";
 
 // --- stubs -----------------------------------------------------------------

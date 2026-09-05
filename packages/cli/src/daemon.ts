@@ -12,9 +12,9 @@
  * carries an identity for this process (see `processIdentity`) so a file left
  * behind by a crash or a power cut cannot be mistaken for a live host.
  */
-import { ENV, PRODUCT_NAME } from "@piorbit/protocol";
-import { fromBase64Url, isAuthorized } from "@piorbit/crypto";
-import { HostServer, migrateFormerIdentities, type HostRelayOptions } from "@piorbit/host";
+import { ENV, PRODUCT_NAME } from "@lasercode/protocol";
+import { fromBase64Url, isAuthorized } from "@lasercode/crypto";
+import { HostServer, migrateFormerIdentities, type HostRelayOptions } from "@lasercode/host";
 import type { PiorbitPaths } from "./config.js";
 import { clearHostFile, processIdentity, writeHostFile } from "./hostfile.js";
 import { deviceListOf, loadIdentity, loadStaticKey, readRelayConfig } from "./relay-config.js";

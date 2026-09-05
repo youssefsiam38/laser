@@ -3,7 +3,7 @@
  * hash, both directions round-trip, and a stale intent is dropped.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { PRODUCT_NAME, decisionNavigateUrl, decisionPushPayload } from "@piorbit/protocol";
+import { PRODUCT_NAME, decisionNavigateUrl, decisionPushPayload } from "@lasercode/protocol";
 import { LINK_TTL_MS, parseDecisionLink, pendingDecisionLink, rememberDecisionLink, resetDecisionLinks, stripDecisionParams } from "../../src/pwa/deep-link.js";
 
 const path = "/home/me/.pi/agent/sessions/x/2026 09 05.jsonl";

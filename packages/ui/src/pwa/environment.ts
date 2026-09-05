@@ -7,7 +7,7 @@
  * mobile surface asks it. Also: the install prompt, which has to be captured
  * before React mounts or it is gone.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { useSyncExternalStore } from "react";
 
 export type MobilePlatform = "ios" | "android" | "other";

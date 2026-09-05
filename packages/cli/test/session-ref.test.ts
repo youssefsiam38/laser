@@ -3,7 +3,7 @@
  * prompts the wrong agent, so the matching order is pinned here.
  */
 import { describe, expect, it } from "vitest";
-import type { SessionSummary } from "@piorbit/protocol";
+import type { SessionSummary } from "@lasercode/protocol";
 import { matchSessions } from "../src/session-ref.js";
 
 const session = (id: string, path: string, cwd = "/w"): SessionSummary => ({

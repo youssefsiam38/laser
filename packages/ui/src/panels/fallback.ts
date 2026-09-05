@@ -13,7 +13,7 @@
  * are namespaced `ui:` so the provider knows to answer them through
  * `pi/ui/response` rather than `pi/panel/action`.
  */
-import type { DecisionField, DecisionPanel, Panel, StreamPanel, UiDialogRequest, UiDialogResponse } from "@piorbit/protocol";
+import type { DecisionField, DecisionPanel, Panel, StreamPanel, UiDialogRequest, UiDialogResponse } from "@lasercode/protocol";
 import type { SessionView } from "../store.js";
 
 export const FALLBACK_SOURCE = "extension";

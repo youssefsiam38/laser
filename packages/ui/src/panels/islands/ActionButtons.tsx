@@ -1,4 +1,4 @@
-import type { Action } from "@piorbit/protocol";
+import type { Action } from "@lasercode/protocol";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";

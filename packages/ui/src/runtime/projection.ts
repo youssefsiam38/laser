@@ -33,9 +33,9 @@
  *
  * Pure: no React, no DOM, no network. Tested in test/runtime/projection.test.ts.
  */
-import { namespaced } from "@piorbit/protocol";
+import { namespaced } from "@lasercode/protocol";
 import type { ThreadMessageLike } from "@assistant-ui/react";
-import type { MessageSpeaker, StopReason, UiDialogRequest, Usage } from "@piorbit/protocol";
+import type { MessageSpeaker, StopReason, UiDialogRequest, Usage } from "@lasercode/protocol";
 import type { Block, SessionView } from "../store.js";
 
 /** `data` part name used for transcript notices. */

@@ -4,7 +4,7 @@
  * log viewer must never have.
  */
 import { describe, expect, it } from "vitest";
-import type { LogEntry } from "@piorbit/protocol";
+import type { LogEntry } from "@lasercode/protocol";
 
 import { appendRows, matchesFilters, rowMetric, toQuery, type LogFilters } from "../../src/components/logs/model.js";
 

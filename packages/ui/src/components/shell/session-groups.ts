@@ -6,9 +6,9 @@
  * piece and is module-level so `Rail` and `SessionsPanel` share it without a
  * context the shell would have to own.
  */
-import { storageKey } from "@piorbit/protocol";
+import { storageKey } from "@lasercode/protocol";
 import { useSyncExternalStore } from "react";
-import type { SessionSummary } from "@piorbit/protocol";
+import type { SessionSummary } from "@lasercode/protocol";
 
 import { shortCwd } from "../../format.js";
 import { mergeSessions, sessionTitle, sortSessions } from "../../runtime/threadList.js";

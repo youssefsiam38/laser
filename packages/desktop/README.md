@@ -1,6 +1,6 @@
-# @piorbit/desktop
+# @lasercode/desktop
 
-The Electron shell. It is not the app — `@piorbit/ui` is the app, and it is the
+The Electron shell. It is not the app — `@lasercode/ui` is the app, and it is the
 same bundle in this window, a browser tab and a phone. This package is
 everything a web page cannot do for itself: a process to run the agent host in,
 a tray that keeps counting while every window is closed, notifications that
@@ -15,7 +15,7 @@ deep-link back into a session, the OS keychain, and updates.
        │ spawn                 │ ws (read-only: sessions, attention)
 ┌──────▼───────────────────────▼──────────────┐
 │ resources/runtime/node   ← stock Node 24.20 │
-│   piorbit __daemon  =  @piorbit/host        │
+│   piorbit __daemon  =  @lasercode/host        │
 │     one worker per project, each with Pi    │
 └─────────────────────────────────────────────┘
        ▲ http
@@ -49,8 +49,8 @@ verifying a download against a checksum fetched from the same server at the same
 moment proves nothing.
 
 ```bash
-pnpm -F @piorbit/desktop runtime                    # every pinned platform
-pnpm -F @piorbit/desktop runtime -- --current --verify
+pnpm -F @lasercode/desktop runtime                    # every pinned platform
+pnpm -F @lasercode/desktop runtime -- --current --verify
 ```
 
 `--verify` runs the binary and asserts it reports itself as plain Node with its
@@ -76,10 +76,10 @@ unavailable and why rather than reaching for the machine's own.
 ## Development
 
 ```bash
-pnpm -F @piorbit/desktop install:electron   # once: fetch the Electron binary
-pnpm -F @piorbit/desktop runtime -- --current
+pnpm -F @lasercode/desktop install:electron   # once: fetch the Electron binary
+pnpm -F @lasercode/desktop runtime -- --current
 pnpm -r build
-pnpm -F @piorbit/desktop dev
+pnpm -F @lasercode/desktop dev
 ```
 
 `dev` starts (or attaches to) a host and loads the UI the host serves. The host
@@ -90,7 +90,7 @@ the app stops it only if the app started it.
 | --- | --- |
 | `PIORBIT_UI_URL` | Load this instead of the host's bundle — point it at Vite (`http://127.0.0.1:5173`) to hot-reload the UI. |
 | `PIORBIT_NODE` | Use this Node for the host instead of the bundled one. |
-| `PIORBIT_PORT`, `PIORBIT_AGENT_DIR`, `PIORBIT_STATE_DIR`, `PIORBIT_SESSION_DIR` | Resolved by `@piorbit/cli`, exactly as for the CLI. A GUI takes its configuration from the environment, never from argv. |
+| `PIORBIT_PORT`, `PIORBIT_AGENT_DIR`, `PIORBIT_STATE_DIR`, `PIORBIT_SESSION_DIR` | Resolved by `@lasercode/cli`, exactly as for the CLI. A GUI takes its configuration from the environment, never from argv. |
 
 Logs: `<state-dir>/desktop.log` (the shell) and `<state-dir>/host.log` (the
 host). Two files on purpose — when the app will not start, the only question is
@@ -99,17 +99,17 @@ which of the two failed.
 **Hot-reloading the UI.** Two terminals:
 
 ```bash
-pnpm -F @piorbit/ui dev                                                  # Vite on :5173
-PIORBIT_UI_URL=http://127.0.0.1:5173 pnpm -F @piorbit/desktop dev        # the shell, pointed at it
+pnpm -F @lasercode/ui dev                                                  # Vite on :5173
+PIORBIT_UI_URL=http://127.0.0.1:5173 pnpm -F @lasercode/desktop dev        # the shell, pointed at it
 ```
 
 The host refuses WebSocket upgrades from origins it does not recognise, and
 Vite forwards the browser's own `Origin` (`http://127.0.0.1:5173`). Nothing to
 do about it by hand: the shell passes `PIORBIT_ALLOWED_ORIGINS=<dev origin>`
 to the host it spawns (`src/main.ts`), and the daemon reads it into
-`HostServer({ allowedOrigins })` (`@piorbit/cli` `src/daemon.ts`).
+`HostServer({ allowedOrigins })` (`@lasercode/cli` `src/daemon.ts`).
 
-To run against the built bundle instead, `pnpm -F @piorbit/ui build` and drop
+To run against the built bundle instead, `pnpm -F @lasercode/ui build` and drop
 `PIORBIT_UI_URL`.
 
 Headless smoke test on Linux (no X server needed):
@@ -122,7 +122,7 @@ env -u DISPLAY -u WAYLAND_DISPLAY PIORBIT_STATE_DIR=/tmp/piorbit-smoke \
 ## What the renderer gets
 
 The preload exposes one frozen object, `window.piorbit`, typed by
-[`src/api.ts`](src/api.ts) (`@piorbit/desktop/api`). It is **absent in the web
+[`src/api.ts`](src/api.ts) (`@lasercode/desktop/api`). It is **absent in the web
 build**, so every caller has to check — which is what keeps the browser, the
 phone and this window on one code path.
 
@@ -146,8 +146,8 @@ draw. Give the strip `-webkit-app-region: drag` and every control inside it
 ## Packaging
 
 ```bash
-pnpm -F @piorbit/desktop pack     # unpacked app in out/, no installer
-pnpm -F @piorbit/desktop dist     # installers for the current platform
+pnpm -F @lasercode/desktop pack     # unpacked app in out/, no installer
+pnpm -F @lasercode/desktop dist     # installers for the current platform
 ```
 
 `beforePack` ([`build/before-pack.cjs`](build/before-pack.cjs)) resolves the
@@ -204,8 +204,8 @@ export APPLE_ID='you@example.com'
 export APPLE_APP_SPECIFIC_PASSWORD='abcd-efgh-ijkl-mnop'
 export APPLE_TEAM_ID=XXXXXXXXXX
 
-pnpm -F @piorbit/desktop dist -- --mac --arm64
-pnpm -F @piorbit/desktop dist -- --mac --x64
+pnpm -F @lasercode/desktop dist -- --mac --arm64
+pnpm -F @lasercode/desktop dist -- --mac --x64
 ```
 
 `electron-builder.yml` already sets `hardenedRuntime`, `notarize: true`, the
@@ -256,8 +256,8 @@ and never from a file:
 $env:AZURE_TENANT_ID="…"
 $env:AZURE_CLIENT_ID="…"
 $env:AZURE_CLIENT_SECRET="…"
-pnpm -F @piorbit/desktop dist -- --win --x64
-pnpm -F @piorbit/desktop dist -- --win --arm64
+pnpm -F @lasercode/desktop dist -- --win --x64
+pnpm -F @lasercode/desktop dist -- --win --arm64
 ```
 
 Verify with `signtool verify /pa /v out\piorbit-…-setup.exe`.
@@ -265,8 +265,8 @@ Verify with `signtool verify /pa /v out\piorbit-…-setup.exe`.
 ### Linux: four formats
 
 ```bash
-pnpm -F @piorbit/desktop dist:linux                        # every format, both arches
-pnpm -F @piorbit/desktop dist:linux -- --targets appimage,deb --arch x64
+pnpm -F @lasercode/desktop dist:linux                        # every format, both arches
+pnpm -F @lasercode/desktop dist:linux -- --targets appimage,deb --arch x64
 ```
 
 It prints a table of what it built and what each artifact needs from the host.
@@ -314,7 +314,7 @@ flag is the window. `test/launcher.test.ts` holds that table.
 The packaging claims are checked against the built tree, not asserted:
 
 ```bash
-pnpm -F @piorbit/desktop run pack        # note `run` — `pnpm pack` is a different command
+pnpm -F @lasercode/desktop run pack        # note `run` — `pnpm pack` is a different command
 node packages/desktop/scripts/clean-machine.mjs
 ```
 

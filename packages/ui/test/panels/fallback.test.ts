@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { SessionState } from "@piorbit/protocol";
+import type { SessionState } from "@lasercode/protocol";
 
 import { dialogPanel, fallbackPanels, inlineContent, uiResponseFor, widgetPanel } from "../../src/panels/fallback.js";
 import type { SessionView } from "../../src/store.js";

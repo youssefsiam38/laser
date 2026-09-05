@@ -33,7 +33,7 @@
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { ErrorCodes, PRODUCT_NAME, ProtocolError, type Panel, type PiExtensionMessage } from "@piorbit/protocol";
+import { ErrorCodes, PRODUCT_NAME, ProtocolError, type Panel, type PiExtensionMessage } from "@lasercode/protocol";
 import { ControlError, requestInterrupt, requestSteer, requestStop, steeringClosed } from "./control.js";
 import { asyncRunsDir, isRunnerAlive, subagentsTempRoots } from "./file-layer.js";
 import {

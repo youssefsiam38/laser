@@ -33,7 +33,7 @@ import {
   type ReactNode,
 } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
-import type { ModelRef } from "@piorbit/protocol";
+import type { ModelRef } from "@lasercode/protocol";
 import { CheckIcon, ChevronDownIcon, Cpu } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {

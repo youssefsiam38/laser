@@ -7,7 +7,7 @@
  * impossible to eyeball and silent when it is wrong (a push service answers
  * 201 for a message no device can decrypt).
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

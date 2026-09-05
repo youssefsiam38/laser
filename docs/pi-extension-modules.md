@@ -5,7 +5,7 @@ Status: **binding for `packages/pi-extension`** (M8-T5). Read
 this file is how you obey them in code.
 
 Support for a community package is **a module, never a package**. There is one
-Pi extension in this repo, `@piorbit/pi-extension`, and it carries one module
+Pi extension in this repo, `@lasercode/pi-extension`, and it carries one module
 per package it knows about. Adding pi-web-access support meant adding
 `src/modules/web-access.ts` and one line in `src/modules/index.ts`. That is the
 whole ceremony, and it is deliberate: a second extension would mean a second
@@ -45,7 +45,7 @@ Three rules, and they are not style:
 - **A module fails alone.** `createPiorbitExtension` wraps every `detect` and
   `activate` in a try/catch and reports failures in `piorbit/capabilities`
   under `failed`. Never let a module throw out of a Pi event handler.
-- **Nothing here reads files.** File watchers live in `@piorbit/host` so that
+- **Nothing here reads files.** File watchers live in `@lasercode/host` so that
   sessions started from a terminal — which have no worker and no extension —
   stay visible. If your integration is "watch a directory", it belongs in the
   host, not here.
@@ -162,7 +162,7 @@ Emit on Pi's event bus, exactly as a third-party extension that opted into the
 contract would:
 
 ```ts
-import { PANEL_EVENT, type PanelEvent } from "@piorbit/protocol";
+import { PANEL_EVENT, type PanelEvent } from "@lasercode/protocol";
 
 const panel: PanelEvent = {
   v: 1,
@@ -262,7 +262,7 @@ draw a PDF rather than showing a broken viewer.
 
 ## 6. Talking to the worker in the same process
 
-Both `@piorbit/pi-extension` and the module code run **inside the worker
+Both `@lasercode/pi-extension` and the module code run **inside the worker
 process**, but the dependency only points one way: the worker depends on this
 package, so this package can never import the worker.
 

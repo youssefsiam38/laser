@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { SessionState, SessionSummary } from "@piorbit/protocol";
+import type { SessionState, SessionSummary } from "@lasercode/protocol";
 import type { SessionView } from "../../src/store.js";
 import {
   ARCHIVE_STORAGE_KEY,

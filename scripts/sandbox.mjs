@@ -20,8 +20,8 @@ import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HostServer } from "@piorbit/host";
-import { processIdentity, writeHostFile } from "@piorbit/cli";
+import { HostServer } from "@lasercode/host";
+import { processIdentity, writeHostFile } from "@lasercode/cli";
 
 const PORT = Number(process.env.PORT ?? 41441);
 const base = mkdtempSync(join(tmpdir(), `${product.name}-sandbox-`));

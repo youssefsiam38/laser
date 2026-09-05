@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Duplex } from "node:stream";
-import { LineDecoder, PRODUCT_NAME, type JsonRpcMessage } from "@piorbit/protocol";
+import { LineDecoder, PRODUCT_NAME, type JsonRpcMessage } from "@lasercode/protocol";
 
 const MAIN = join(import.meta.dirname, "../dist/main.js");
 

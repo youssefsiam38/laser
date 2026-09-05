@@ -6,7 +6,7 @@
  * plausible-looking wrong path. Everything else in the shell needs an Electron
  * process to exercise; this does not.
  */
-import { PRODUCT_NAME, URL_SCHEME_PREFIX } from "@piorbit/protocol";
+import { PRODUCT_NAME, URL_SCHEME_PREFIX } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
 import { buildDeepLink, deepLinkFromArgv, parseDeepLink } from "../src/deep-links.js";
 

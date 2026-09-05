@@ -41,7 +41,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
-import { ENV, ErrorCodes, PRODUCT_NAME, ProtocolError, type ClientMethod, type ClientRequests, type DirectoryEntry, type DirectoryListing, type PackageCatalogEntry, type PackageEntry, type PackageRecord, type PackageRuntimeInfo, type PackageScope, type PackageUpdateInfo, type SetupState } from "@piorbit/protocol";
+import { ENV, ErrorCodes, PRODUCT_NAME, ProtocolError, type ClientMethod, type ClientRequests, type DirectoryEntry, type DirectoryListing, type PackageCatalogEntry, type PackageEntry, type PackageRecord, type PackageRuntimeInfo, type PackageScope, type PackageUpdateInfo, type SetupState } from "@lasercode/protocol";
 
 // ---------------------------------------------------------------------------
 // npm sources

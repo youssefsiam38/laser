@@ -17,7 +17,7 @@
  * message footer rather than a mono 11px badge in the action bar, our
  * tooltip is Radix (`asChild`), and tokens are shown alongside time.
  */
-import { WIRE_NAMESPACE } from "@piorbit/protocol";
+import { WIRE_NAMESPACE } from "@lasercode/protocol";
 import { useAuiState, useMessageTiming, type MessageState } from "@assistant-ui/react";
 import type { FC } from "react";
 

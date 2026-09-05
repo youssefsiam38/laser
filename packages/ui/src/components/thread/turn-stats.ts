@@ -9,7 +9,7 @@
  * what the status line shows — the input side of every round-trip repeats the
  * whole context, so summing it would dwarf the number that means "work done".
  */
-import type { SessionUpdate } from "@piorbit/protocol";
+import type { SessionUpdate } from "@lasercode/protocol";
 
 export interface TurnStats {
   /** Epoch ms the turn began; `undefined` before any turn was seen. */

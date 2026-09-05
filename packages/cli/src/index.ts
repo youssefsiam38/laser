@@ -1,14 +1,14 @@
 /**
- * @piorbit/cli — the `piorbit` command.
+ * @lasercode/cli — the `piorbit` command.
  *
  * Exported so other packages (the Electron shell, tests) can reuse the pieces
- * without shelling out. This package speaks @piorbit/protocol and never imports
- * Pi; it only resolves the path of the Pi that @piorbit/worker pins.
+ * without shelling out. This package speaks @lasercode/protocol and never imports
+ * Pi; it only resolves the path of the Pi that @lasercode/worker pins.
  */
 export { COMMANDS, run } from "./cli.js";
 export { parseArgs, bool, str, num, list, distance, type FlagSpec, type FlagSpecs, type ParsedArgs } from "./args.js";
 export { findCommand, type Command, type CommandContext, type CommandGroup } from "./command.js";
-export { piorbitDataDir, defaultAgentDir, defaultStateDir, migrateFormerIdentities } from "@piorbit/host";
+export { piorbitDataDir, defaultAgentDir, defaultStateDir, migrateFormerIdentities } from "@lasercode/host";
 export {
   expandPath,
   hostUrl,

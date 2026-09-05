@@ -1,4 +1,4 @@
-import { ENV } from "@piorbit/protocol";
+import { ENV } from "@lasercode/protocol";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 

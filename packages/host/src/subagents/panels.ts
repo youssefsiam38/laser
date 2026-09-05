@@ -45,7 +45,7 @@ import type {
   PlanStepState,
   RunLifecycle,
   RunPanel,
-} from "@piorbit/protocol";
+} from "@lasercode/protocol";
 import type { AcceptanceLedger, AsyncStatus, ForegroundChild, RunState, StatusStep, StepState } from "./status.js";
 
 export const PANEL_SOURCE = "pi-subagents";

@@ -333,7 +333,7 @@ function blobToBase64(blob: Blob): Promise<string> {
  * followed with a fast attack and a slow release, which makes a syllable read
  * as a spike instead of a flicker.
  *
- * The same four numbers appear in `@piorbit/worker`'s `transcribe.ts`, where
+ * The same four numbers appear in `@lasercode/worker`'s `transcribe.ts`, where
  * they document pi-gpt-transcribe's own widget contract. They are restated
  * here rather than imported because nothing above the worker may import it
  * (AGENTS.md invariant 1), and the browser is the side that owns the meter.

@@ -1,4 +1,4 @@
-import type { ProjectGitStatus } from "@piorbit/protocol";
+import type { ProjectGitStatus } from "@lasercode/protocol";
 import { ArrowDown, ArrowUp, Check, Copy, ExternalLink, GitBranch, GitPullRequestArrow } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 

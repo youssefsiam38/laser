@@ -17,7 +17,7 @@ export {
   type DeclarativePushPayload,
   type DecisionPushData,
   type DecisionPushInput,
-} from "@piorbit/protocol";
+} from "@lasercode/protocol";
 
 export {
   applyUpdate,

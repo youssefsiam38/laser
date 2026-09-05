@@ -2,7 +2,7 @@
  * Help output. Generated from the command table, never hand-maintained, so a
  * command that exists is a command that is documented.
  */
-import { DATA_DIR_NAME, ENV, ENV_PREFIX, PRODUCT_NAME } from "@piorbit/protocol";
+import { DATA_DIR_NAME, ENV, ENV_PREFIX, PRODUCT_NAME } from "@lasercode/protocol";
 import type { FlagSpec, FlagSpecs } from "./args.js";
 import type { Command } from "./command.js";
 import { GLOBAL_FLAGS } from "./flags.js";
@@ -141,7 +141,7 @@ export const TOPICS: readonly Topic[] = [
     name: "pi",
     title: `Reaching Pi through ${PRODUCT_NAME}`,
     body: `
-${PRODUCT_NAME} pins its own copy of Pi inside @piorbit/worker. That pinned copy is the
+${PRODUCT_NAME} pins its own copy of Pi inside @lasercode/worker. That pinned copy is the
 one the app runs, and \`${PRODUCT_NAME} pi\` runs the same one, so what you see in a
 terminal and what you see in the app are the same agent at the same version.
 

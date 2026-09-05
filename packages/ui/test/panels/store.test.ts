@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { RunPanel, StreamPanel } from "@piorbit/protocol";
+import type { RunPanel, StreamPanel } from "@lasercode/protocol";
 
 import {
   CLOSED_TTL_MS,

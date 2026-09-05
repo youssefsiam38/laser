@@ -1,4 +1,4 @@
-import type { DecisionField, DecisionPanel } from "@piorbit/protocol";
+import type { DecisionField, DecisionPanel } from "@lasercode/protocol";
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 
 import { ApprovalCard } from "@/components/assistant-ui/elements/approval-card";

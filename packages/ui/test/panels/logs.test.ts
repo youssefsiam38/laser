@@ -5,7 +5,7 @@
  * they are.
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import type { LogEntry } from "@piorbit/protocol";
+import type { LogEntry } from "@lasercode/protocol";
 import {
   LOG_MAX_LINES,
   logContent,

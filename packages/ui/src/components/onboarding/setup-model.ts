@@ -1,4 +1,4 @@
-import { PRODUCT_DISPLAY_NAME, storageKey } from "@piorbit/protocol";
+import { PRODUCT_DISPLAY_NAME, storageKey } from "@lasercode/protocol";
 /**
  * Pure logic behind the first-run flow (M10-T6): the steps, and where to
  * resume from. The host remembers whether setup finished; the facts that

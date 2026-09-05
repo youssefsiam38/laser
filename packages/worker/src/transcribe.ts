@@ -28,8 +28,8 @@
  * that hold; `modules/transcribe.ts` awaits it from Pi's `input` hook.
  */
 
-import { PRODUCT_NAME, symbolKey } from "@piorbit/protocol";
-import type { ProviderAuthInfo, TranscribeStatus } from "@piorbit/protocol";
+import { PRODUCT_NAME, symbolKey } from "@lasercode/protocol";
+import type { ProviderAuthInfo, TranscribeStatus } from "@lasercode/protocol";
 import { randomBytes } from "node:crypto";
 import {
   configPath as packageConfigPath,

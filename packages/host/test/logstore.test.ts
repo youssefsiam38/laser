@@ -4,12 +4,12 @@
  * ref whose body was collected, a duration attributed to the wrong request),
  * so they are worth a test; the SQL itself is exercised through them.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SessionUpdateParams } from "@piorbit/protocol";
+import type { SessionUpdateParams } from "@lasercode/protocol";
 import { LogStore, describeProviderRequest } from "../src/logstore.js";
 
 let base: string;

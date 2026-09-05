@@ -12,7 +12,7 @@
  *
  * Tested in test/panels/placement.test.ts.
  */
-import type { DecisionBlocking, Panel, PanelIntent, PanelKind } from "@piorbit/protocol";
+import type { DecisionBlocking, Panel, PanelIntent, PanelKind } from "@lasercode/protocol";
 
 export type Viewport = "desktop" | "tablet" | "mobile";
 export type Surface = "ambient" | "inline" | "dock" | "sheet" | "none";

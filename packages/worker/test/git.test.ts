@@ -3,7 +3,7 @@
  * temporary repository — "since the session started" must count what the
  * session did, not what was already dirty when it opened.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

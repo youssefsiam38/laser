@@ -11,7 +11,7 @@
  *     when the same session opens with an empty composer.
  *   - `savedAt` is a real time, formatted relatively, not a string prop.
  */
-import { storageKey } from "@piorbit/protocol";
+import { storageKey } from "@lasercode/protocol";
 import { useAui, useAuiState } from "@assistant-ui/react";
 import { PencilLineIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, useState, type ComponentProps } from "react";

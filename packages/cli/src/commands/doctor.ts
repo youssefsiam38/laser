@@ -19,7 +19,7 @@
  *     "check your configuration";
  *   - a check that cannot run says so (SKIP) instead of passing quietly.
  */
-import { ENV, PRODUCT_NAME } from "@piorbit/protocol";
+import { ENV, PRODUCT_NAME } from "@lasercode/protocol";
 import { execFile } from "node:child_process";
 import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statfsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
@@ -27,8 +27,8 @@ import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { WorkerClient } from "@piorbit/host";
-import type { ModelRef, SessionState } from "@piorbit/protocol";
+import { WorkerClient } from "@lasercode/host";
+import type { ModelRef, SessionState } from "@lasercode/protocol";
 import { bool } from "../args.js";
 import type { Command } from "../command.js";
 import { hostUrl, type PiorbitPaths } from "../config.js";
@@ -217,7 +217,7 @@ function checkRuntime(): Check {
 
 /**
  * Packaged, this file lives at
- * `<root>/resources/app.asar.unpacked/node_modules/@piorbit/cli/dist/…` and the
+ * `<root>/resources/app.asar.unpacked/node_modules/@lasercode/cli/dist/…` and the
  * runtime at `<root>/resources/runtime/node`. Sharing that prefix is what makes
  * "it came with the app" a fact rather than a hope.
  */
@@ -232,7 +232,7 @@ function runtimeOrigin(): { bundled: boolean; resources?: string } {
 
 // ---------------------------------------------------------- the bundled agent
 
-/** The JSON contract of `@piorbit/worker`'s `resolve-pi.js`. */
+/** The JSON contract of `@lasercode/worker`'s `resolve-pi.js`. */
 type AgentReport =
   | {
       ok: true;
@@ -270,7 +270,7 @@ type AgentInspection =
 async function inspectBundledAgent(timeoutMs: number): Promise<AgentInspection> {
   let script: string;
   try {
-    const workerManifest = createRequire(import.meta.url).resolve("@piorbit/worker/package.json");
+    const workerManifest = createRequire(import.meta.url).resolve("@lasercode/worker/package.json");
     script = join(dirname(workerManifest), "dist", "resolve-pi.js");
   } catch (error) {
     return {

@@ -18,8 +18,8 @@
  * `status.json` and the recorded runner pid, never through `lastUpdate` — see
  * docs/research/findings.md on the session-reaping hazard).
  */
-import type { HostNotifications, JsonRpcNotification, WorkerInfo, WorkerStatus } from "@piorbit/protocol";
-import { ErrorCodes, ProtocolError } from "@piorbit/protocol";
+import type { HostNotifications, JsonRpcNotification, WorkerInfo, WorkerStatus } from "@lasercode/protocol";
+import { ErrorCodes, ProtocolError } from "@lasercode/protocol";
 import { activeRuns, type ActiveRun } from "./subagents/file-layer.js";
 import { canonical } from "./trust.js";
 import { WorkerClient, type WorkerClientOptions } from "./worker-client.js";

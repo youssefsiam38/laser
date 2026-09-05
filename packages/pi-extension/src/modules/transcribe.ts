@@ -22,7 +22,7 @@
  *    that can hold the prompt open for the last phrase. Upstream does the same
  *    thing in the same hook; this is that behaviour, kept.
  *
- * Why a globalThis symbol and not an import: `@piorbit/worker` depends on this
+ * Why a globalThis symbol and not an import: `@lasercode/worker` depends on this
  * package, so this package cannot depend on it. The worker's `TranscribeService`
  * publishes a two-method handle under `Symbol.for("piorbit.transcribe.v1")` and
  * this module looks it up. Same shape pi-subagents uses for its in-process
@@ -30,7 +30,7 @@
  * hang.
  */
 
-import { PRODUCT_NAME, symbolKey } from "@piorbit/protocol";
+import { PRODUCT_NAME, symbolKey } from "@lasercode/protocol";
 import type { ExtensionContext, SlashCommandInfo } from "@earendil-works/pi-coding-agent";
 import type { PiorbitModule } from "./index.js";
 

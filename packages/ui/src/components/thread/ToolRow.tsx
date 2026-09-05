@@ -1,6 +1,6 @@
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { useAuiState } from "@assistant-ui/react";
-import type { UiDialogRequest } from "@piorbit/protocol";
+import type { UiDialogRequest } from "@lasercode/protocol";
 import { memo, useCallback, useMemo, useState } from "react";
 
 import { CodeDiff } from "@/components/assistant-ui/elements/code-diff";

@@ -4,7 +4,7 @@
  * lists. Nothing here says "npm" or shows a path; those belong to the
  * diagnostics disclosure alone.
  */
-import type { PackageCatalogEntry, PackageEntry, PackageProgress } from "@piorbit/protocol";
+import type { PackageCatalogEntry, PackageEntry, PackageProgress } from "@lasercode/protocol";
 
 /** `npm:@scope/name@1.2.3` → `@scope/name`; a git URL → its last path segment; a path → its last segment. */
 export function displayName(entry: Pick<PackageEntry, "source" | "name">): string {

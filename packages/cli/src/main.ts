@@ -7,8 +7,8 @@
  * come back here is `pi`, which replaces this process's exit status with the
  * child's (see src/pi.ts).
  */
-import { migrateFormerIdentities } from "@piorbit/host";
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { migrateFormerIdentities } from "@lasercode/host";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { run } from "./cli.js";
 
 // A closed pipe (`piorbit sessions | head`) is a normal end, not a crash.

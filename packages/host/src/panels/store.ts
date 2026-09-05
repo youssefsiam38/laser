@@ -10,7 +10,7 @@
  * Pure bookkeeping, no I/O. Dedupes identical upserts (R9) so the broadcast
  * carries changes only.
  */
-import { refsOf, type Panel, type Ref } from "@piorbit/protocol";
+import { refsOf, type Panel, type Ref } from "@lasercode/protocol";
 
 export interface RefGrant {
   /** Session the ref arrived on. */

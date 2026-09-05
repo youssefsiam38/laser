@@ -15,7 +15,7 @@
  *     the order within a column, so the caller passes steps, not coordinates.
  *   - A node linked to a run is a button that opens it.
  */
-import type { PlanStep, PlanStepState } from "@piorbit/protocol";
+import type { PlanStep, PlanStepState } from "@lasercode/protocol";
 import type { ComponentProps } from "react";
 
 import { cn } from "@/lib/utils";

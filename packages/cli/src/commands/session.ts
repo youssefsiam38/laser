@@ -4,9 +4,9 @@
  * session, which is what keeps "what the CLI did" and "what the app shows" the
  * same thing.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { resolve } from "node:path";
-import type { SessionState, SessionSummary, SessionUpdateParams } from "@piorbit/protocol";
+import type { SessionState, SessionSummary, SessionUpdateParams } from "@lasercode/protocol";
 import { bool, num, str } from "../args.js";
 import type { Command, CommandContext } from "../command.js";
 import { hostUrl } from "../config.js";

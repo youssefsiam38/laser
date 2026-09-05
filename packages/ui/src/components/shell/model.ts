@@ -2,8 +2,8 @@
  * Pure view-model helpers for the app shell. No React, no DOM.
  * Tested in test/shell/model.test.ts.
  */
-import { PRODUCT_DISPLAY_NAME } from "@piorbit/protocol";
-import type { ProjectInfo, ProjectTrust, SessionSummary } from "@piorbit/protocol";
+import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
+import type { ProjectInfo, ProjectTrust, SessionSummary } from "@lasercode/protocol";
 import { mergeSessions, sessionAttention, sessionTitle, sortSessions } from "../../runtime/threadList.js";
 import { textOf, type Block, type SessionView } from "../../store.js";
 import { shortCwd, summariseArgs } from "../../format.js";

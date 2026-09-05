@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "piorbit",
-  "short_name": "piorbit",
+  "name": "Laser",
+  "short_name": "Laser",
   "description": "Your coding agents, from anywhere. Answer approvals, steer runs, watch every project.",
   "start_url": "/",
   "scope": "/",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { PanelIntent, PanelKind } from "@piorbit/protocol";
+import type { PanelIntent, PanelKind } from "@lasercode/protocol";
 
 import { isIsland, placePanel, placementOf, wantsInspectSheet, type Placement } from "../../src/panels/placement.js";
 

@@ -45,7 +45,7 @@ export const RelayClose = {
 
 /**
  * Legal on-the-wire frame sizes: 12-byte header + padded bucket + 16-byte tag,
- * mirroring `@piorbit/crypto`'s `framing.ts`. Duplicated as plain numbers on
+ * mirroring `@lasercode/crypto`'s `framing.ts`. Duplicated as plain numbers on
  * purpose — the relay must not depend on the crypto package.
  */
 export const FRAME_HEADER_BYTES = 12;

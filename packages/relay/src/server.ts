@@ -19,7 +19,7 @@
  * process. Scaling out needs a shared bus, which is a separate task, not a knob.
  * `sleepApplication` stays false: a sleeping relay is a desktop nobody can reach.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol/identity";
+import { PRODUCT_NAME } from "@lasercode/protocol/identity";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";

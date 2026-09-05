@@ -29,10 +29,10 @@
  * different sessions from the window on the same machine — for exactly the
  * person who has both.
  */
-import { DATA_DIR_NAME, ENV, ENV_PREFIX, PRODUCT_NAME } from "@piorbit/protocol";
+import { DATA_DIR_NAME, ENV, ENV_PREFIX, PRODUCT_NAME } from "@lasercode/protocol";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { HOST_BIND_ADDRESS, HOST_DEFAULT_PORT, defaultAgentDir, defaultStateDir, piorbitDataDir } from "@piorbit/host";
+import { HOST_BIND_ADDRESS, HOST_DEFAULT_PORT, defaultAgentDir, defaultStateDir, piorbitDataDir } from "@lasercode/host";
 import type { FlagSpecs, ParsedArgs } from "./args.js";
 import { num, str } from "./args.js";
 

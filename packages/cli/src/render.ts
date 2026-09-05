@@ -10,7 +10,7 @@
  *    escape sequence into a terminal is the CLI's version of rendering agent
  *    output as HTML (AGENTS.md invariant 9).
  */
-import type { SessionUpdate, UiDialogRequest, UiFireAndForget } from "@piorbit/protocol";
+import type { SessionUpdate, UiDialogRequest, UiFireAndForget } from "@lasercode/protocol";
 import { sanitize, type Painter } from "./output.js";
 
 export function formatDuration(ms: number): string {

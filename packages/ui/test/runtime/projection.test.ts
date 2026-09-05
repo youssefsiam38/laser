@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { SessionState, SessionUpdate, UiDialogRequest } from "@piorbit/protocol";
+import type { SessionState, SessionUpdate, UiDialogRequest } from "@lasercode/protocol";
 import { applyUpdate, reduce, initialState, type Block, type SessionView } from "../../src/store.js";
 import {
   NOTICE_DATA_PART,

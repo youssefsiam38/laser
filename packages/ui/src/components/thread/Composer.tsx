@@ -1,5 +1,5 @@
 import { ComposerPrimitive, useAui, useAuiState, unstable_useMentionAdapter, unstable_useSlashCommandAdapter } from "@assistant-ui/react";
-import type { CommandInfo, ProjectFile } from "@piorbit/protocol";
+import type { CommandInfo, ProjectFile } from "@lasercode/protocol";
 import { AtSign, Bot, FileText, FolderOpen, GitFork, History, ListX, Pencil, Plus, Puzzle, Shrink, SlashSquare, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 

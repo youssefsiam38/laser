@@ -33,7 +33,7 @@ import {
   useAui,
   useAuiState,
 } from "@assistant-ui/react";
-import type { SessionAttention } from "@piorbit/protocol";
+import type { SessionAttention } from "@lasercode/protocol";
 import { Archive, ArchiveRestore, ChevronRight, Copy, EllipsisVertical, Pencil, Plus } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type FC } from "react";
 

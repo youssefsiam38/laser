@@ -16,7 +16,7 @@
  * notification is a door, not an announcement.
  */
 import { Notification } from "electron";
-import type { SessionAttention } from "@piorbit/protocol";
+import type { SessionAttention } from "@lasercode/protocol";
 import type { DeepLink } from "./api.js";
 import type { AttentionChange } from "./fleet.js";
 import { shouldNotify } from "./fleet.js";

@@ -1,7 +1,7 @@
 /**
  * The push and dictation RPCs, as the page calls them.
  *
- * The shapes themselves live in `@piorbit/protocol` — the host answers push,
+ * The shapes themselves live in `@lasercode/protocol` — the host answers push,
  * the worker answers dictation, and both are in the schema map the router
  * validates against. This file is what is left once that happened: the two
  * value types the page re-exports for convenience, and a thin typed `request`
@@ -11,14 +11,14 @@
  * also works through the relay — there is no second HTTP channel a phone would
  * have to reach.
  */
-import type { ClientRequests } from "@piorbit/protocol";
+import type { ClientRequests } from "@lasercode/protocol";
 
 export type {
   PushConfig,
   PushDeviceInfo,
   PushSubscriptionJson,
   TranscribeStatus,
-} from "@piorbit/protocol";
+} from "@lasercode/protocol";
 
 /** The methods this layer uses. A subset of `ClientRequests`, named for the call sites. */
 export type MobileMethod = Extract<keyof ClientRequests, `pi/push/${string}` | `pi/transcribe/${string}`>;

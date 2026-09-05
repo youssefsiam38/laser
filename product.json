@@ -3,7 +3,7 @@
     "The product's identity, in one file (MX-T7, D-36).",
     "",
     "This is the ONLY place the product is named. Everything that carries the",
-    "name derives from here: the TypeScript constants in @piorbit/protocol, the",
+    "name derives from here: the TypeScript constants in @lasercode/protocol, the",
     "Node build scripts, the vite build, electron-builder.yml, the .desktop",
     "entry, the AppStream metainfo, the web manifest and install.sh. Renaming",
     "the product is one edit to this file plus `pnpm identity:generate`.",
@@ -20,16 +20,16 @@
     "orphaned. See packages/host/src/identity-migration.ts."
   ],
 
-  "name": "piorbit",
-  "displayName": "piorbit",
-  "appId": "dev.piorbit.desktop",
-  "urlScheme": "piorbit",
-  "envPrefix": "PIORBIT",
-  "dirName": "piorbit",
-  "storagePrefix": "piorbit",
-  "symbolPrefix": "piorbit",
-  "binary": "piorbit",
-  "repository": "youssefsiam38/piorbit",
+  "name": "laser",
+  "displayName": "Laser",
+  "appId": "com.hubtrix.laser",
+  "urlScheme": "laser",
+  "envPrefix": "LASER",
+  "dirName": "laser",
+  "storagePrefix": "laser",
+  "symbolPrefix": "laser",
+  "binary": "laser",
+  "repository": "youssefsiam38/laser",
 
   "$wireNamespace": [
     "The namespace on every wire contract, and the one value here that a rename",
@@ -51,7 +51,7 @@
   "vendor": "{displayName} contributors",
   "maintainerEmail": "ysiam@kwentra.com",
 
-  "formerNames": [],
+  "formerNames": ["piorbit"],
 
   "copy": {
     "summary": "A control room for coding agents",

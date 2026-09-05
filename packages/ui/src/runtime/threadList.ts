@@ -4,7 +4,7 @@
  *
  * Identity: a thread's `remoteId` (and `externalId`) is the Pi **session file
  * path**. Ids are only unique per cwd, so the path is the one stable handle
- * (`@piorbit/protocol` SessionSummary.path).
+ * (`@lasercode/protocol` SessionSummary.path).
  *
  * Archiving is client-local for now: piorbit's protocol has no archive verb, so
  * an archived path is remembered in `localStorage` under
@@ -13,9 +13,9 @@
  *
  * The builders below are pure and tested in test/runtime/threadList.test.ts.
  */
-import { PRODUCT_NAME, storageKey } from "@piorbit/protocol";
+import { PRODUCT_NAME, storageKey } from "@lasercode/protocol";
 import type { RemoteThreadListAdapter } from "@assistant-ui/react";
-import type { SessionAttention, SessionSummary } from "@piorbit/protocol";
+import type { SessionAttention, SessionSummary } from "@lasercode/protocol";
 import type { SessionView } from "../store.js";
 
 /**

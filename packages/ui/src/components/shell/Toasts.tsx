@@ -1,4 +1,4 @@
-import { namespaced } from "@piorbit/protocol";
+import { namespaced } from "@lasercode/protocol";
 import type * as React from "react";
 import { useEffect, useRef } from "react";
 import { CircleX, Info, TriangleAlert } from "lucide-react";

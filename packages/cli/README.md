@@ -155,7 +155,7 @@ Exit code 1, because a row FAILed. `--json` gives the same rows with their
 
 ## `piorbit pi`
 
-`piorbit pi` runs the Pi that `@piorbit/worker` pins — the same copy the app
+`piorbit pi` runs the Pi that `@lasercode/worker` pins — the same copy the app
 runs — not whatever `pi` is on your `PATH`. It sets:
 
 | Variable | To |
@@ -246,7 +246,7 @@ Pi's, and guessing at them would be wrong.
   the completion generators and the QR encoder (`src/qr.ts`, pinned against an
   independent implementation in `test/qr.test.ts`) are all in this package.
   `ws` is the only third-party runtime dependency, and it is the one the host
-  already uses; `@piorbit/crypto` is a workspace package, and the pairing
+  already uses; `@lasercode/crypto` is a workspace package, and the pairing
   handshake lives there rather than being reimplemented here.
 - **One description per command.** `Command` in `src/command.ts` drives parsing,
   `--help`, completions and dispatch. There is nowhere for them to disagree.
@@ -256,12 +256,12 @@ Pi's, and guessing at them would be wrong.
   or an extension goes through `sanitize()` first: no escape sequence from an
   agent reaches your terminal. It is AGENTS.md invariant 9, applied to stdout.
 - **This package never imports Pi.** It resolves the pinned Pi's *path* through
-  `@piorbit/worker` and spawns it. A test asserts both halves of that.
+  `@lasercode/worker` and spawns it. A test asserts both halves of that.
 
 ## Development
 
 ```bash
-pnpm -F @piorbit/cli build
-pnpm -F @piorbit/cli test
+pnpm -F @lasercode/cli build
+pnpm -F @lasercode/cli test
 node packages/cli/dist/main.js --help      # without installing the bin
 ```

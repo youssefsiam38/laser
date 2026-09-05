@@ -1,5 +1,5 @@
 {
-  "name": "@piorbit/host",
+  "name": "@lasercode/host",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -11,7 +11,7 @@
     }
   },
   "bin": {
-    "piorbit-host": "./dist/main.js"
+    "laser-host": "./dist/main.js"
   },
   "files": [
     "dist"
@@ -24,10 +24,10 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@piorbit/crypto": "workspace:*",
-    "@piorbit/protocol": "workspace:*",
-    "@piorbit/ui": "workspace:*",
-    "@piorbit/worker": "workspace:*",
+    "@lasercode/crypto": "workspace:*",
+    "@lasercode/protocol": "workspace:*",
+    "@lasercode/ui": "workspace:*",
+    "@lasercode/worker": "workspace:*",
     "ws": "8.18.3"
   },
   "devDependencies": {

@@ -1,4 +1,4 @@
-import { storageKey } from "@piorbit/protocol";
+import { storageKey } from "@lasercode/protocol";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Dock } from "@/components/dock";

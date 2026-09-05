@@ -16,7 +16,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { transformWithEsbuild, type Plugin } from "vite";
-import { DECLARATIVE_WEB_PUSH_VERSION, FORMER_NAMES, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, STORAGE_PREFIX, dottedStorageKey, storageKey } from "@piorbit/protocol";
+import { DECLARATIVE_WEB_PUSH_VERSION, FORMER_NAMES, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, STORAGE_PREFIX, dottedStorageKey, storageKey } from "@lasercode/protocol";
 
 import { compileVars } from "../theme/compile.js";
 import { DEFAULT_LIGHT_PRESET_ID, DEFAULT_PRESET, getPreset } from "../theme/presets.js";
@@ -175,7 +175,7 @@ export function piorbitPwa(options: PiorbitPwaOptions = {}): Plugin {
       // failing, so it is checked against the protocol here.
       if (!worker.includes(`DECLARATIVE_WEB_PUSH_VERSION = ${DECLARATIVE_WEB_PUSH_VERSION}`)) {
         throw new Error(
-          `${PLUGIN} — sw.ts declares a different DECLARATIVE_WEB_PUSH_VERSION than @piorbit/protocol (${DECLARATIVE_WEB_PUSH_VERSION})`,
+          `${PLUGIN} — sw.ts declares a different DECLARATIVE_WEB_PUSH_VERSION than @lasercode/protocol (${DECLARATIVE_WEB_PUSH_VERSION})`,
         );
       }
 

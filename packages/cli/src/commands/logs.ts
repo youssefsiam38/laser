@@ -10,8 +10,8 @@
  * otherwise miss everything already written. Polling from a known id has no
  * such gap, and one query per second costs nothing against SQLite.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
-import type { LogEntry, LogLevel, LogSection } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
+import type { LogEntry, LogLevel, LogSection } from "@lasercode/protocol";
 import { bool, list, num, str } from "../args.js";
 import type { Command } from "../command.js";
 import { CliError, ExitCode } from "../errors.js";

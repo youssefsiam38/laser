@@ -1,9 +1,9 @@
 {
-  "name": "@piorbit/cli",
+  "name": "@lasercode/cli",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "The command-line entry point: host lifecycle, session verbs, pinned-Pi passthrough, doctor. Speaks @piorbit/protocol; never imports Pi.",
+  "description": "The command-line entry point: host lifecycle, session verbs, pinned-Pi passthrough, doctor. Speaks @lasercode/protocol; never imports Pi.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -11,7 +11,7 @@
     }
   },
   "bin": {
-    "piorbit": "./dist/main.js"
+    "laser": "./dist/main.js"
   },
   "files": [
     "dist"
@@ -24,10 +24,10 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@piorbit/crypto": "workspace:*",
-    "@piorbit/host": "workspace:*",
-    "@piorbit/protocol": "workspace:*",
-    "@piorbit/worker": "workspace:*",
+    "@lasercode/crypto": "workspace:*",
+    "@lasercode/host": "workspace:*",
+    "@lasercode/protocol": "workspace:*",
+    "@lasercode/worker": "workspace:*",
     "ws": "8.18.3"
   },
   "devDependencies": {

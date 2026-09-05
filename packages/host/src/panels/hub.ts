@@ -11,7 +11,7 @@
  * where extension messages are seen, `list` and `read` in the router, and
  * `sessionClosed` when a worker drops a session.
  */
-import type { HostNotifications, Panel, PanelReadResult, PiExtensionMessage } from "@piorbit/protocol";
+import type { HostNotifications, Panel, PanelReadResult, PiExtensionMessage } from "@lasercode/protocol";
 import { RefReader, type RefReaderDeps } from "./refs.js";
 import { PanelStore } from "./store.js";
 

@@ -11,7 +11,7 @@
  * Pi rather than piorbit: once the name is read, a passthrough command owns
  * every remaining token.
  */
-import { ENV, PRODUCT_NAME } from "@piorbit/protocol";
+import { ENV, PRODUCT_NAME } from "@lasercode/protocol";
 import { distance, parseArgs, type ParsedArgs } from "./args.js";
 import { findCommand, type Command, type CommandContext } from "./command.js";
 import { resolvePaths } from "./config.js";

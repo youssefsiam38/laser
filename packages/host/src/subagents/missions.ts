@@ -24,7 +24,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { defaultAgentDir } from "../paths.js";
-import type { CollectionItem, CollectionPanel, DocumentPanel } from "@piorbit/protocol";
+import type { CollectionItem, CollectionPanel, DocumentPanel } from "@lasercode/protocol";
 import { PANEL_ID_PREFIX, PANEL_SOURCE } from "./panels.js";
 
 export const REDACTED = "[prompt redacted]";

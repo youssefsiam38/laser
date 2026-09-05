@@ -100,17 +100,17 @@ fi
 printf '==> pnpm -r build\n'
 (cd "$REPO_ROOT" && pnpm -r build)
 
-# @piorbit/desktop owns how the Linux formats are produced. When it exposes a
+# @lasercode/desktop owns how the Linux formats are produced. When it exposes a
 # `dist:linux` script — the one that also builds the tarball, which
 # electron-builder cannot make on its own — that is the build. Otherwise fall
 # back to electron-builder's own Linux targets. Either way this script only
 # collects and hashes; it never second-guesses the packaging.
 if node -e "process.exit(require('$DESKTOP/package.json').scripts['dist:linux'] ? 0 : 1)"; then
-  printf '==> pnpm -F @piorbit/desktop dist:linux --%s\n' "$ARCH"
-  (cd "$REPO_ROOT" && pnpm -F @piorbit/desktop dist:linux -- --arch "$ARCH")
+  printf '==> pnpm -F @lasercode/desktop dist:linux --%s\n' "$ARCH"
+  (cd "$REPO_ROOT" && pnpm -F @lasercode/desktop dist:linux -- --arch "$ARCH")
 else
   printf '==> electron-builder --linux --%s\n' "$ARCH"
-  (cd "$REPO_ROOT" && pnpm -F @piorbit/desktop dist -- --linux "--$ARCH" --publish never)
+  (cd "$REPO_ROOT" && pnpm -F @lasercode/desktop dist -- --linux "--$ARCH" --publish never)
 fi
 
 # The packaged tree, checked the way a stranger's machine will use it: nothing

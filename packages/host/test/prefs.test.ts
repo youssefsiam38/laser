@@ -9,12 +9,12 @@
  *   - the revision only ever goes up, because that is what lets a client
  *     recognise the echo of its own write instead of fighting it.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { PrefsEntry } from "@piorbit/protocol";
+import type { PrefsEntry } from "@lasercode/protocol";
 import { PrefsStore } from "../src/prefs.js";
 
 const dir = (): string => mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-prefs-`));

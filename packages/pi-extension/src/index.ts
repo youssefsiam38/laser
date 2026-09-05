@@ -1,5 +1,5 @@
 /**
- * @piorbit/pi-extension — the single companion extension (D-13).
+ * @lasercode/pi-extension — the single companion extension (D-13).
  *
  * The worker passes `createPiorbitExtension({ send })` as an inline extension
  * factory when it builds the session's ResourceLoader. Inside the Pi process
@@ -12,13 +12,13 @@
  * Rules:
  *   - One module per community package under ./modules. Modules never import
  *     each other. A module that fails to activate is reported, not fatal.
- *   - Nothing that reads files lives here; file watchers are in @piorbit/host so
+ *   - Nothing that reads files lives here; file watchers are in @lasercode/host so
  *     terminal-started sessions (no worker, no extension) stay visible.
  *   - Never load inside pi-subagents child sessions (PI_SUBAGENT_CHILD guard).
  */
 
 import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
-import { WIRE_NAMESPACE } from "@piorbit/protocol";
+import { WIRE_NAMESPACE } from "@lasercode/protocol";
 import {
   createPanelClaims,
   modules,

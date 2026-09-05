@@ -31,7 +31,7 @@ import {
   sliceUtf8,
   type PanelReadResult,
   type Ref,
-} from "@piorbit/protocol";
+} from "@lasercode/protocol";
 import type { RefGrant } from "./store.js";
 
 export interface RefReaderDeps {

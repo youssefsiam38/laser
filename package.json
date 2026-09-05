@@ -1,5 +1,5 @@
 {
-  "name": "piorbit",
+  "name": "laser",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -20,8 +20,8 @@
     "version:set": "bash scripts/release/set-version.sh"
   },
   "dependencies": {
-    "@piorbit/cli": "workspace:*",
-    "@piorbit/host": "workspace:*"
+    "@lasercode/cli": "workspace:*",
+    "@lasercode/host": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",

@@ -9,9 +9,9 @@
  * Values are JSON. `--raw` accepts a bare string for the common case
  * (`piorbit settings set theme --raw dark`) so nobody has to quote `'"dark"'`.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { resolve } from "node:path";
-import type { SettingChange, SettingDescriptor, SettingsScope, SettingsSnapshot } from "@piorbit/protocol";
+import type { SettingChange, SettingDescriptor, SettingsScope, SettingsSnapshot } from "@lasercode/protocol";
 import { bool, str } from "../args.js";
 import type { Command, CommandContext } from "../command.js";
 import { CliError, ExitCode } from "../errors.js";

@@ -7,7 +7,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 import type { Duplex } from "node:stream";
-import { ENV, ErrorCodes, LineDecoder, isNotification, isResponse, type JsonRpcError, type JsonRpcMessage, type JsonRpcNotification } from "@piorbit/protocol";
+import { ENV, ErrorCodes, LineDecoder, isNotification, isResponse, type JsonRpcError, type JsonRpcMessage, type JsonRpcNotification } from "@lasercode/protocol";
 
 export interface WorkerClientOptions {
   cwd: string;
@@ -21,7 +21,7 @@ export interface WorkerClientOptions {
    * default, which is "trusted".
    */
   projectTrusted?: boolean;
-  /** Path to the worker entry; defaults to the workspace `@piorbit/worker` build. */
+  /** Path to the worker entry; defaults to the workspace `@lasercode/worker` build. */
   workerMain?: string;
   /** Node binary to run the worker with; defaults to the current one. */
   nodeBinary?: string;
@@ -40,7 +40,7 @@ export class WorkerRpcError extends Error {
 }
 
 export function defaultWorkerMain(): string {
-  return createRequire(import.meta.url).resolve("@piorbit/worker/main");
+  return createRequire(import.meta.url).resolve("@lasercode/worker/main");
 }
 
 export class WorkerClient {

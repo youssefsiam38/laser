@@ -89,7 +89,7 @@ function stageExtras() {
   if (!existsSync(desktopSource)) {
     throw new Error(
       `${identity.name}: ${desktopSource} is missing, so the tarball would have no menu entry.\n` +
-        `Run \`pnpm -F @piorbit/desktop linux:assets\`.`,
+        `Run \`pnpm -F @lasercode/desktop linux:assets\`.`,
     );
   }
 
@@ -102,7 +102,7 @@ function stageExtras() {
     if (!existsSync(icon)) {
       throw new Error(
         `${identity.name}: ${icon} is missing, so the tarball would install a menu entry with no icon.\n` +
-          `Run \`pnpm -F @piorbit/desktop icons\`.`,
+          `Run \`pnpm -F @lasercode/desktop icons\`.`,
       );
     }
     const dir = join(stage, "usr", "share", "icons", "hicolor", `${size}x${size}`, "apps");
@@ -149,7 +149,7 @@ function packOne(arch) {
   if (!existsSync(metainfo)) {
     throw new Error(
       `${identity.name}: ${metainfo} is missing from the packed application, so the tarball would install\n` +
-        `nothing for GNOME Software or KDE Discover to show. Repack with \`pnpm -F @piorbit/desktop pack\`.`,
+        `nothing for GNOME Software or KDE Discover to show. Repack with \`pnpm -F @lasercode/desktop pack\`.`,
     );
   }
 
@@ -217,7 +217,7 @@ const built = requested.map(packOne).filter(Boolean);
 if (built.length === 0) {
   throw new Error(
     `${identity.name}: nothing to archive — no packed application under ${outDir}.\n` +
-      `Run \`pnpm -F @piorbit/desktop pack\` (or dist:linux, which does both) first.`,
+      `Run \`pnpm -F @lasercode/desktop pack\` (or dist:linux, which does both) first.`,
   );
 }
 

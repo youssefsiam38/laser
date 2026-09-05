@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import type { UiDialogRequest } from "@piorbit/protocol";
+import type { UiDialogRequest } from "@lasercode/protocol";
 import { PendingToolCallTracker, StableSdkDriver } from "../src/drivers/stable-sdk.js";
 import type { DriverEvent } from "../src/driver.js";
 

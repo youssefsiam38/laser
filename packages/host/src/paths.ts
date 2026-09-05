@@ -23,7 +23,7 @@
  * deliberate lever for a person who genuinely wants both to share one
  * directory.
  */
-import { DATA_DIR_NAME } from "@piorbit/protocol";
+import { DATA_DIR_NAME } from "@lasercode/protocol";
 import { homedir } from "node:os";
 import { join } from "node:path";
 

@@ -22,7 +22,7 @@
  * electron-builder is pinned at 26.15.3 and the mac build is `hardenedRuntime`
  * with an explicit entitlements file.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { shell, systemPreferences, type Session } from "electron";
 import type { MicrophoneStatus } from "./api.js";
 import type { DesktopLog } from "./log.js";

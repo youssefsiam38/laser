@@ -24,9 +24,9 @@
  *   settings write it, and a person who genuinely wants both to share one
  *   directory sets it and gets exactly that.
  */
-import { ENV } from "@piorbit/protocol";
+import { ENV } from "@lasercode/protocol";
 import { join } from "node:path";
-import { piorbitDataDir } from "@piorbit/cli";
+import { piorbitDataDir } from "@lasercode/cli";
 
 /** Pi's own variable names. In a GUI they describe the *other* installation. */
 const AGENT_ENV_VARS = ["PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR", "PI_SUBAGENTS_TEMP_ROOT"] as const;
@@ -50,7 +50,7 @@ export interface AgentHome {
 /**
  * `$XDG_DATA_HOME/piorbit` and the platform equivalents.
  *
- * Re-exported rather than defined here: `@piorbit/host` owns the answer, and
+ * Re-exported rather than defined here: `@lasercode/host` owns the answer, and
  * the CLI resolves its own paths from the same function, so the window, a
  * terminal `piorbit sessions` and the host they both talk to cannot disagree.
  */

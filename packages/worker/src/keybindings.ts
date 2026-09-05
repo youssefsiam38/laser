@@ -31,7 +31,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writ
 import { dirname, join, parse } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { getAgentDir, VERSION } from "@earendil-works/pi-coding-agent";
-import { ErrorCodes, PRODUCT_NAME, ProtocolError, type KeybindingChange, type KeybindingDescriptor, type KeybindingsSnapshot } from "@piorbit/protocol";
+import { ErrorCodes, PRODUCT_NAME, ProtocolError, type KeybindingChange, type KeybindingDescriptor, type KeybindingsSnapshot } from "@lasercode/protocol";
 
 /** The half of Pi's `KeybindingsManager` this adapter uses. */
 interface PiKeybindingsManager {

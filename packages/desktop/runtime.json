@@ -10,7 +10,7 @@
     "tampered mirror fails the build instead of shipping.",
     "",
     "Bumping the version is a task with its own row: update `version`, replace",
-    "every hash from the new SHASUMS256.txt, and re-run `pnpm -F @piorbit/desktop runtime`.",
+    "every hash from the new SHASUMS256.txt, and re-run `pnpm -F @lasercode/desktop runtime`.",
     "",
     "`npm` names the package manager inside the same archive. The app installs",
     "extensions from Settings, which needs one, and a person who installed a",

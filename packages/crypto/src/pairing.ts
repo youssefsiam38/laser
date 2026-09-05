@@ -27,7 +27,7 @@
  *              — only the two peers can compute it. This is the routing key for
  *                every reconnection, one per paired device.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol/identity";
+import { PRODUCT_NAME } from "@lasercode/protocol/identity";
 import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { selectBackend, type CryptoBackend, type KeyPair } from "./backend.js";

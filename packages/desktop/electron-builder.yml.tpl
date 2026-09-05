@@ -129,7 +129,7 @@ win:
   # turns a missing credential into a broken `--win` target rather than an
   # unsigned installer.
   #
-  # To sign, export all four before `pnpm -F @piorbit/desktop dist -- --win`:
+  # To sign, export all four before `pnpm -F @lasercode/desktop dist -- --win`:
   #   {{env.azurePublisherName}}    the CN in the certificate profile
   #   {{env.azureEndpoint}}          https://<region>.codesigning.azure.net
   #   {{env.azureAccount}}           the code-signing account name
@@ -164,7 +164,7 @@ nsis:
 #              tarball also has to carry usr/share/{applications,icons,metainfo}
 #              and a way to register them.
 #
-# `pnpm -F @piorbit/desktop dist:linux` builds all of them and prints the
+# `pnpm -F @lasercode/desktop dist:linux` builds all of them and prints the
 # artifact table. `electron-builder --linux` still works and builds the three
 # formats below.
 

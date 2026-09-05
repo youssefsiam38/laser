@@ -4,9 +4,9 @@
  * `up` is the command people type most, and the one that must never scold: if a
  * host is already listening it attaches, prints the URL, and exits 0.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { resolve } from "node:path";
-import type { HostNotifications } from "@piorbit/protocol";
+import type { HostNotifications } from "@lasercode/protocol";
 import { bool } from "../args.js";
 import type { Command } from "../command.js";
 import { hostUrl, type PiorbitPaths } from "../config.js";

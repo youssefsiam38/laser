@@ -4,7 +4,7 @@
  * tail whenever the panel's `bytes` grows, so no polling is needed while the
  * producer keeps emitting. Client-local `inline:` refs resolve without the host.
  */
-import { PANEL_READ_MAX_BYTES, PRODUCT_NAME } from "@piorbit/protocol";
+import { PANEL_READ_MAX_BYTES, PRODUCT_NAME } from "@lasercode/protocol";
 import { useEffect, useRef, useState } from "react";
 import { usePanelActions } from "./PanelsProvider.js";
 

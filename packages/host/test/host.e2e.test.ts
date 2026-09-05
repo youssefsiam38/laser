@@ -4,7 +4,7 @@
  * and receives seq-numbered updates. Requires `pnpm -r build` (spawns the
  * worker's dist). Sandboxed dirs; never touches ~/.pi/agent.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -12,7 +12,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
-import type { JsonRpcMessage, SessionState, SessionUpdateParams } from "@piorbit/protocol";
+import type { JsonRpcMessage, SessionState, SessionUpdateParams } from "@lasercode/protocol";
 import { HostServer, defaultWorkerMain } from "../src/index.js";
 
 const REPLY = ["Hi ", "from ", "host"];

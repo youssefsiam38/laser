@@ -19,11 +19,11 @@
  * The check runs concurrently with the host's own start, so on a healthy
  * install it costs no wall-clock time at all.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { cliEntry, unpacked } from "@piorbit/cli";
+import { cliEntry, unpacked } from "@lasercode/cli";
 import type { DesktopLog } from "./log.js";
 
 /** What the bundled Node reported about the agent it found. */
@@ -72,7 +72,7 @@ const CHECK_TIMEOUT_MS = 60_000;
 export function agentCheckScript(): string | undefined {
   let dir = resolve(dirname(cliEntry()));
   for (;;) {
-    const candidate = join(dir, "node_modules", "@piorbit", "worker", "dist", "resolve-pi.js");
+    const candidate = join(dir, "node_modules", "@lasercode", "worker", "dist", "resolve-pi.js");
     if (existsSync(unpacked(candidate))) return unpacked(candidate);
     const parent = dirname(dir);
     if (parent === dir) return undefined;
@@ -158,7 +158,7 @@ function parseReport(stdout: string): AgentReportWire | undefined {
 }
 
 /**
- * The shape `@piorbit/worker`'s `resolve-pi.js` prints. Declared here rather
+ * The shape `@lasercode/worker`'s `resolve-pi.js` prints. Declared here rather
  * than imported because this package must not depend on the worker: it is the
  * *contract* of a child process, and a child process contract is data.
  */

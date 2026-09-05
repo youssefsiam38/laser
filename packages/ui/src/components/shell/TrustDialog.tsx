@@ -1,4 +1,4 @@
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { useEffect, useState } from "react";
 import { ShieldQuestionMark } from "lucide-react";
 

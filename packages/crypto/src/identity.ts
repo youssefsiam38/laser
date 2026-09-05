@@ -4,13 +4,13 @@
  * The seed never touches a piorbit file on disk. On the desktop it goes into the
  * OS keychain through `@napi-rs/keyring` (keytar is archived and unmaintained,
  * so it is not an option). This module deliberately does NOT depend on that
- * package: `@piorbit/crypto` also runs in a browser, where a native addon cannot
+ * package: `@lasercode/crypto` also runs in a browser, where a native addon cannot
  * be resolved. The desktop injects a keyring entry that satisfies
  * `KeyringEntryLike`, which is exactly the shape of `@napi-rs/keyring`'s `Entry`.
  */
 import { fromBase64Url, toBase64Url, wipe } from "./bytes.js";
 import { generateRootSeed, rootIdentityFromSeed, type RootIdentity } from "./device-list.js";
-import { FORMER_NAMES, PRODUCT_NAME } from "@piorbit/protocol/identity";
+import { FORMER_NAMES, PRODUCT_NAME } from "@lasercode/protocol/identity";
 
 /**
  * The OS keychain service the root identity is stored under.

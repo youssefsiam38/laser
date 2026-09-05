@@ -1,4 +1,4 @@
-import { PRODUCT_DISPLAY_NAME } from "@piorbit/protocol";
+import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
 import { useCallback, useState } from "react";
 import { EyeOff, FileClock, FolderPlus, Moon, Settings, Sun } from "lucide-react";
 

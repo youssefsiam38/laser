@@ -1,4 +1,4 @@
-import type { DocumentPanel } from "@piorbit/protocol";
+import type { DocumentPanel } from "@lasercode/protocol";
 import { Check, Copy } from "lucide-react";
 import { useState } from "react";
 

@@ -25,7 +25,7 @@
  * which is the seam M11-T6 lands on: the same JSON travels through the
  * settings protocol once the host has somewhere to keep it.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { useCallback, useMemo, useState } from "react";
 import { ChevronRight, ClipboardPaste, Copy, RotateCcw } from "lucide-react";
 

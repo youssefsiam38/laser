@@ -13,7 +13,7 @@ import { DataTable, type DataTableColumn } from "@/components/assistant-ui/eleme
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import type { PackageEntry } from "@piorbit/protocol";
+import type { PackageEntry } from "@lasercode/protocol";
 
 import { displayName, originLabel, versionLabel, type BusyKey } from "./model.js";
 

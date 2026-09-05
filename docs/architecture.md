@@ -5,7 +5,7 @@
 ```
 ┌─ packages/ui ──────────────────────────────────────────────┐
 │  One web bundle: Electron renderer, browser tab, PWA.      │
-│  Speaks @piorbit/protocol over WebSocket (local or relay). │
+│  Speaks @lasercode/protocol over WebSocket (local or relay). │
 └───────────────▲────────────────────────────────────────────┘
                 │ protocol (JSON-RPC, seq-numbered updates)
 ┌───────────────┴────────────────────────────────────────────┐
@@ -34,7 +34,7 @@ packages/desktop ← Electron main: tray, keychain, updater, bundled Node
 ## The driver seam
 
 `SessionDriver` (`packages/worker/src/driver.ts`) is the migration boundary.
-Everything above it sees only `@piorbit/protocol` types. The seam test (M0-T5)
+Everything above it sees only `@lasercode/protocol` types. The seam test (M0-T5)
 asserts that the protocol package's module graph contains no `@earendil-works/*`
 import and that both drivers satisfy the interface.
 

@@ -1,4 +1,4 @@
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
 import * as runtime from "../../src/runtime/index.js";
 

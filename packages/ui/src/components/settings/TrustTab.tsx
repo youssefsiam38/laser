@@ -24,7 +24,7 @@ import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { shortCwd } from "@/format";
 import { cn } from "@/lib/utils";
 import { usePiorbitStable } from "@/runtime";
-import type { ProjectInfo, ProjectTrust } from "@piorbit/protocol";
+import type { ProjectInfo, ProjectTrust } from "@lasercode/protocol";
 
 import { Empty, SearchInput } from "./SettingsScreen.js";
 

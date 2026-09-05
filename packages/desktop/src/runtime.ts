@@ -13,7 +13,7 @@
  *
  * So: ship a binary, run it, and check what it says about itself.
  */
-import { ENV, PRODUCT_NAME } from "@piorbit/protocol";
+import { ENV, PRODUCT_NAME } from "@lasercode/protocol";
 import { spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
@@ -146,6 +146,6 @@ export function resolveNodeRuntime(options: { packaged: boolean; resourcesPath: 
     tried.length > 0
       ? `None of these ran as a plain Node: ${tried.join(", ")}.`
       : "No Node runtime was found for the development build.",
-    `Run \`pnpm -F @piorbit/desktop runtime\` to download the pinned Node, or set ${ENV.node} to a node binary.`,
+    `Run \`pnpm -F @lasercode/desktop runtime\` to download the pinned Node, or set ${ENV.node} to a node binary.`,
   );
 }

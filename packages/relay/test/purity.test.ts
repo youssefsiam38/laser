@@ -17,25 +17,25 @@ const packageJson = JSON.parse(readFileSync(fileURLToPath(new URL("../package.js
 };
 
 /** Anything that could decrypt, sign, or hold key material. */
-const FORBIDDEN = [/@piorbit\/crypto/, /@noble\//, /tweetnacl/, /libsodium/, /sodium-native/, /noise-/, /jose/, /openpgp/];
+const FORBIDDEN = [/@lasercode\/crypto/, /@noble\//, /tweetnacl/, /libsodium/, /sodium-native/, /noise-/, /jose/, /openpgp/];
 
 describe("relay purity", () => {
   it("declares no crypto dependency", () => {
     for (const name of Object.keys(packageJson.dependencies ?? {})) {
       for (const pattern of FORBIDDEN) expect(name, `dependency ${name}`).not.toMatch(pattern);
     }
-    // `ws` and nothing but the product's own identity. `@piorbit/protocol` is
+    // `ws` and nothing but the product's own identity. `@lasercode/protocol` is
     // reached only through its `/identity` subpath — a dependency-free module of
     // strings (MX-T7), so the relay still links no schema, no validator and no
     // crypto, and the one thing it prints keeps the product's name after a
     // rename instead of an old one.
-    expect(Object.keys(packageJson.dependencies ?? {}).sort()).toEqual(["@piorbit/protocol", "ws"]);
-    const identityOnly = sources.every(({ text }) => !/from "@piorbit\/protocol"/.test(text));
-    expect(identityOnly, "the relay imports @piorbit/protocol's identity subpath only").toBe(true);
+    expect(Object.keys(packageJson.dependencies ?? {}).sort()).toEqual(["@lasercode/protocol", "ws"]);
+    const identityOnly = sources.every(({ text }) => !/from "@lasercode\/protocol"/.test(text));
+    expect(identityOnly, "the relay imports @lasercode/protocol's identity subpath only").toBe(true);
   });
 
   it("imports no crypto library", () => {
-    // Match module specifiers only: prose may name @piorbit/crypto (protocol.ts
+    // Match module specifiers only: prose may name @lasercode/crypto (protocol.ts
     // explains which of its constants it mirrors) without importing it.
     const specifier = /(?:^|\n)\s*(?:import|export)[^;]*?from\s+"([^"]+)"|\bimport\("([^"]+)"\)|\brequire\("([^"]+)"\)/g;
     for (const { name, text } of sources) {

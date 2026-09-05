@@ -17,7 +17,7 @@ import { Input } from "@/components/ui/input";
 import { shortCwd } from "@/format";
 import { cn } from "@/lib/utils";
 import { usePiorbitState, usePiorbitStable } from "@/runtime";
-import type { DirectoryListing } from "@piorbit/protocol";
+import type { DirectoryListing } from "@lasercode/protocol";
 
 import { recentCwds } from "@/components/shell/model";
 

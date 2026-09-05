@@ -18,7 +18,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { tokens } from "@/format";
 import { cn } from "@/lib/utils";
 import { usePiorbitStable } from "@/runtime";
-import type { ModelCatalogEntry, ProviderAuthInfo } from "@piorbit/protocol";
+import type { ModelCatalogEntry, ProviderAuthInfo } from "@lasercode/protocol";
 
 export interface ModelStepProps {
   cwd: string;

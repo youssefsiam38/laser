@@ -17,7 +17,7 @@ import type {
   HostNotifications,
   JsonRpcMessage,
   SessionUpdateParams,
-} from "@piorbit/protocol";
+} from "@lasercode/protocol";
 
 export type NotificationHandler = <M extends HostNotificationMethod>(method: M, params: HostNotifications[M]) => void;
 

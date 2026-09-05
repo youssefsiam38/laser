@@ -15,7 +15,7 @@
  * is deliberately no `--yes` for it: a flag that says "I compared the emoji"
  * without a person comparing the emoji is the whole attack.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { createInterface } from "node:readline/promises";
 import { hostname } from "node:os";
 
@@ -30,7 +30,7 @@ import {
   type DeviceEntry,
   type DeviceListBody,
   type PairingGrant,
-} from "@piorbit/crypto";
+} from "@lasercode/crypto";
 import WebSocket from "ws";
 
 import { bool, num, str } from "../args.js";
@@ -54,7 +54,7 @@ import {
 import { readHostFile } from "../hostfile.js";
 import type { PiorbitPaths } from "../config.js";
 
-/** Mirrors `CHANNEL_PROTOCOL_PREFIX` in `@piorbit/relay`, as the host does. */
+/** Mirrors `CHANNEL_PROTOCOL_PREFIX` in `@lasercode/relay`, as the host does. */
 const CHANNEL_PROTOCOL_PREFIX = "piorbit.channel.";
 
 const VERBS = ["status", "login", "pair", "devices", "revoke"] as const;

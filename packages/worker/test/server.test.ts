@@ -4,7 +4,7 @@
  * by stable-sdk.*.test.ts.
  */
 import { describe, expect, it } from "vitest";
-import type { JsonRpcMessage, SessionState, UiDialogRequest } from "@piorbit/protocol";
+import type { JsonRpcMessage, SessionState, UiDialogRequest } from "@lasercode/protocol";
 import { WorkerServer } from "../src/server.js";
 import type { DriverEvent, DriverListener, SessionDriver } from "../src/driver.js";
 

@@ -1,4 +1,4 @@
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { BellRing, ChevronDown, RotateCw, ShieldOff, Sparkles, WifiOff, X } from "lucide-react";
 import { useState } from "react";
 

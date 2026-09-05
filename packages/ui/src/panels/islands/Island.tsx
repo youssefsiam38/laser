@@ -16,7 +16,7 @@
  * everything happens, instantly. Type never goes below 12px; touch targets
  * reach 44px through the hit-area pseudo-element, not by growing the pill.
  */
-import type { Action } from "@piorbit/protocol";
+import type { Action } from "@lasercode/protocol";
 import { ChevronsDownUp, Ellipsis, ExternalLink, Maximize2, Minimize2, MoveDiagonal, X } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 

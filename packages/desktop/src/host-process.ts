@@ -18,15 +18,15 @@
  * about which host is running.
  *
  * Rule 1 has a second half that is easy to miss: the *script* has to be outside
- * `app.asar` too, not only the binary. `cliEntry()` (`@piorbit/cli`) does that
+ * `app.asar` too, not only the binary. `cliEntry()` (`@lasercode/cli`) does that
  * rewrite, and the log line below records the exact command so a failed start
  * on someone else's machine is one line to read rather than a guess.
  */
-import { ENV, PRODUCT_NAME } from "@piorbit/protocol";
+import { ENV, PRODUCT_NAME } from "@lasercode/protocol";
 import { type ChildProcess, spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync } from "node:fs";
 import { existsSync } from "node:fs";
-import { cliEntry, daemonArgs, inspectHost, logTail, piEnv, portInUse, probeHealth, type PiorbitPaths } from "@piorbit/cli";
+import { cliEntry, daemonArgs, inspectHost, logTail, piEnv, portInUse, probeHealth, type PiorbitPaths } from "@lasercode/cli";
 import { checkBundledAgent, type AgentCheck } from "./agent.js";
 import type { DesktopHostInfo } from "./api.js";
 import type { DesktopLog } from "./log.js";
@@ -360,7 +360,7 @@ export class HostProcess {
       // The package manager that came out of the pinned Node archive. Settings
       // installs extensions with it, on a machine that has never had Node.
       // Absent in a development build that has not run `pnpm -F
-      // @piorbit/desktop runtime`, and the host says so rather than guessing.
+      // @lasercode/desktop runtime`, and the host says so rather than guessing.
       ...(this.runtime?.npmCli ? { [ENV.npmCli]: this.runtime.npmCli } : {}),
       ...this.options.env,
     };

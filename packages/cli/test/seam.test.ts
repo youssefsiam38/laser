@@ -1,5 +1,5 @@
 /**
- * AGENTS.md invariant 1, for this package: the CLI speaks @piorbit/protocol and
+ * AGENTS.md invariant 1, for this package: the CLI speaks @lasercode/protocol and
  * never imports Pi. It resolves the pinned Pi's *path* (src/pi.ts) and spawns
  * it as a process — that is allowed, and importing it is not.
  */

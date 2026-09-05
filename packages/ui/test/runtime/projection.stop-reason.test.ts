@@ -6,9 +6,9 @@
  * the test proves the whole path — the reducer folding `message_end` and the
  * projection turning it into the status and metadata the components read.
  */
-import { WIRE_NAMESPACE } from "@piorbit/protocol";
+import { WIRE_NAMESPACE } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
-import type { SessionState, SessionUpdate } from "@piorbit/protocol";
+import type { SessionState, SessionUpdate } from "@lasercode/protocol";
 import { applyUpdate, type SessionView } from "../../src/store.js";
 import { incompleteReason, projectSessionView } from "../../src/runtime/projection.js";
 

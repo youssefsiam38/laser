@@ -19,7 +19,7 @@
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { ErrorCodes, PREFS_MAX_BYTES, ProtocolError, type PrefsEntry } from "@piorbit/protocol";
+import { ErrorCodes, PREFS_MAX_BYTES, ProtocolError, type PrefsEntry } from "@lasercode/protocol";
 
 interface Stored {
   value: unknown;

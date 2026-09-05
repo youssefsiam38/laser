@@ -3,7 +3,7 @@
  * order. A tiny local HTTP server speaks the OpenAI chat-completions streaming
  * format; Pi is pointed at it through a sandboxed models.json.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -12,7 +12,7 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { StableSdkDriver } from "../src/drivers/stable-sdk.js";
 import type { DriverEvent } from "../src/driver.js";
-import type { SessionUpdate } from "@piorbit/protocol";
+import type { SessionUpdate } from "@lasercode/protocol";
 
 const REPLY = ["Hel", "lo ", "from ", "stub"];
 

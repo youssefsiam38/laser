@@ -23,7 +23,7 @@
  * browser — never inside a window holding `window.piorbit`.
  */
 import { DESKTOP_ARGUMENT_PREFIX } from "./api.js";
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { BrowserWindow, clipboard, dialog, nativeTheme, screen, shell, type BrowserWindowConstructorOptions } from "electron";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";

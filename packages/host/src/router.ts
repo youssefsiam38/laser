@@ -18,7 +18,7 @@
  *   pi/ui/response       every live worker (the worker that owns the dialog id
  *                        answers; the others ignore it)
  */
-import { ErrorCodes, PRODUCT_NAME, ProtocolError, decisionPushPayload, parseClientRequest, type JsonRpcError, type JsonRpcResponse, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@piorbit/protocol";
+import { ErrorCodes, PRODUCT_NAME, ProtocolError, decisionPushPayload, parseClientRequest, type JsonRpcError, type JsonRpcResponse, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
 import type { AttentionTracker } from "./attention.js";
 import type { SessionCatalog } from "./catalog.js";
 import type { LogStore } from "./logstore.js";

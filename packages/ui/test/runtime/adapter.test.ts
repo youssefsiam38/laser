@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AppendMessage } from "@assistant-ui/react";
-import type { ClientMethod, ClientRequests, SessionState } from "@piorbit/protocol";
+import type { ClientMethod, ClientRequests, SessionState } from "@lasercode/protocol";
 import type { Action, SessionView } from "../../src/store.js";
 import {
   composerSendPlan,

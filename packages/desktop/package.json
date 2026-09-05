@@ -1,11 +1,11 @@
 {
-  "name": "@piorbit/desktop",
+  "name": "@lasercode/desktop",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "Electron shell: main process, tray, notifications, keychain, updater. Spawns the host from a bundled stock Node placed outside asar (M5-T2). Must not import Pi.",
-  "homepage": "https://github.com/youssefsiam38/piorbit",
-  "desktopName": "piorbit.desktop",
+  "homepage": "https://github.com/youssefsiam38/laser",
+  "desktopName": "laser.desktop",
   "main": "dist/main.js",
   "exports": {
     "./api": {
@@ -55,9 +55,9 @@
   },
   "dependencies": {
     "@napi-rs/keyring": "2.0.0",
-    "@piorbit/cli": "workspace:*",
-    "@piorbit/crypto": "workspace:*",
-    "@piorbit/protocol": "workspace:*",
+    "@lasercode/cli": "workspace:*",
+    "@lasercode/crypto": "workspace:*",
+    "@lasercode/protocol": "workspace:*",
     "electron-updater": "6.8.9",
     "ws": "8.18.3"
   },

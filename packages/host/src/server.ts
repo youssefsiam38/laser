@@ -28,8 +28,8 @@ import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import { basename, extname, join, normalize, resolve as resolvePath, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
-import { channelIdFor, type KeyPair } from "@piorbit/crypto";
-import { ENV, PRODUCT_NAME, decisionPushPayload, type HostNotifications, type JsonRpcNotification, type LogEntry, type SessionUpdateParams } from "@piorbit/protocol";
+import { channelIdFor, type KeyPair } from "@lasercode/crypto";
+import { ENV, PRODUCT_NAME, decisionPushPayload, type HostNotifications, type JsonRpcNotification, type LogEntry, type SessionUpdateParams } from "@lasercode/protocol";
 import { AttentionTracker } from "./attention.js";
 import { PrefsStore } from "./prefs.js";
 import { SessionCatalog, defaultSessionDir } from "./catalog.js";
@@ -54,7 +54,7 @@ export interface HostServerOptions {
   subagentsTempRoot?: string;
   workerMain?: string;
   nodeBinary?: string;
-  /** Directory of the built UI; defaults to the workspace `@piorbit/ui/dist` if present. */
+  /** Directory of the built UI; defaults to the workspace `@lasercode/ui/dist` if present. */
   uiDir?: string;
   /** Where piorbit keeps its own state (projects, attention). Default `~/.piorbit`. */
   stateDir?: string;
@@ -143,7 +143,7 @@ const MIME: Record<string, string> = {
 
 export function defaultUiDir(): string | undefined {
   try {
-    const pkg = createRequire(import.meta.url).resolve("@piorbit/ui/package.json");
+    const pkg = createRequire(import.meta.url).resolve("@lasercode/ui/package.json");
     const dir = join(pkg, "..", "dist");
     return existsSync(join(dir, "index.html")) ? dir : undefined;
   } catch {
@@ -699,7 +699,7 @@ export class HostServer {
     if (!this.uiDir) {
       res
         .writeHead(200, { "content-type": "text/html; charset=utf-8" })
-        .end(`<!doctype html><title>${PRODUCT_NAME}</title><p>${PRODUCT_NAME} host is running. Build <code>@piorbit/ui</code> to serve the app.</p>`);
+        .end(`<!doctype html><title>${PRODUCT_NAME}</title><p>${PRODUCT_NAME} host is running. Build <code>@lasercode/ui</code> to serve the app.</p>`);
       return;
     }
     // `/%25%` is a valid pathname and an invalid escape: decoding it throws.

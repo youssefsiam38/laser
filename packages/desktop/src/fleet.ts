@@ -13,7 +13,7 @@
  * notification must fire on the *edge* into "needs you", never on a repeat, and
  * a reconnect that re-lists every session must not fire one per session.
  */
-import { ATTENTION_RANK, type ProjectInfo, type SessionAttention, type SessionSummary } from "@piorbit/protocol";
+import { ATTENTION_RANK, type ProjectInfo, type SessionAttention, type SessionSummary } from "@lasercode/protocol";
 
 export interface FleetSession {
   path: string;

@@ -1,7 +1,7 @@
 /**
  * Small pure helpers the `decision` kind needs on top of its payload.
  *
- * The payload itself is `DecisionPanel` in `@piorbit/protocol`, and Pi's four
+ * The payload itself is `DecisionPanel` in `@lasercode/protocol`, and Pi's four
  * dialogs are mapped onto it in `fallback.ts`. What is left here is the one
  * judgement a renderer has to make that the payload cannot carry: some options
  * do not answer this question, they change how the session asks from now on,

@@ -23,7 +23,7 @@ import { useCopy } from "@/hooks";
 import { dateTime, duration } from "@/format";
 import { cn } from "@/lib/utils";
 import { usePiorbitStable } from "@/runtime";
-import type { LogEntry } from "@piorbit/protocol";
+import type { LogEntry } from "@lasercode/protocol";
 
 import { SECTION_TONE } from "./model.js";
 

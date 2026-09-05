@@ -7,9 +7,9 @@
  * `pi/packages/progress` notifications and is printed as it happens rather than
  * leaving a person staring at a still cursor.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { resolve } from "node:path";
-import type { PackageEntry, PackageProgress, PackageScope } from "@piorbit/protocol";
+import type { PackageEntry, PackageProgress, PackageScope } from "@lasercode/protocol";
 import { bool, str } from "../args.js";
 import type { Command, CommandContext } from "../command.js";
 import { CliError, ExitCode } from "../errors.js";

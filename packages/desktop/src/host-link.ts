@@ -15,7 +15,7 @@
  * an update, `piorbit restart`) and the tray has to come back on its own.
  */
 import { WebSocket } from "ws";
-import type { HostNotificationMethod, HostNotifications, JsonRpcMessage, ProjectInfo, SessionSummary } from "@piorbit/protocol";
+import type { HostNotificationMethod, HostNotifications, JsonRpcMessage, ProjectInfo, SessionSummary } from "@lasercode/protocol";
 import type { AttentionChange, FleetSnapshot } from "./fleet.js";
 import { FleetModel } from "./fleet.js";
 import type { DesktopLog } from "./log.js";

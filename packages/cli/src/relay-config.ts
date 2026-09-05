@@ -22,7 +22,7 @@
  * `FileRootIdentityStore` is the store the crypto package ships for exactly
  * that case.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -38,8 +38,8 @@ import {
   type KeyPair,
   type RootIdentity,
   type SignedDeviceList,
-} from "@piorbit/crypto";
-import { FileRootIdentityStore } from "@piorbit/crypto/node";
+} from "@lasercode/crypto";
+import { FileRootIdentityStore } from "@lasercode/crypto/node";
 
 import { CliError, ExitCode } from "./errors.js";
 import type { PiorbitPaths } from "./config.js";

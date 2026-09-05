@@ -10,7 +10,7 @@
  * `loading-state` element; a secret is typed into a password field and sent
  * once. Cancelling tells the worker so nothing is left pending.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Check, Copy, ExternalLink, KeyRound } from "lucide-react";
 
@@ -21,7 +21,7 @@ import { Input } from "@/components/ui/input";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
 import { usePiorbitStable } from "@/runtime";
-import type { ProviderAuthInfo, ProviderLoginEvent, ProviderLoginMethod, ProviderLoginPrompt } from "@piorbit/protocol";
+import type { ProviderAuthInfo, ProviderLoginEvent, ProviderLoginMethod, ProviderLoginPrompt } from "@lasercode/protocol";
 
 export interface ProviderSignInProps {
   cwd: string;

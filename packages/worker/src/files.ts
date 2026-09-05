@@ -20,7 +20,7 @@ import { execFile } from "node:child_process";
 import type { Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
-import type { ProjectFile, ProjectFiles } from "@piorbit/protocol";
+import type { ProjectFile, ProjectFiles } from "@lasercode/protocol";
 
 /** How long one scan is reused. Long enough for a burst of keystrokes. */
 const CACHE_MS = 5_000;

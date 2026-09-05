@@ -18,7 +18,7 @@ import type {
   UiDialogRequest,
   UiFireAndForget,
   Usage,
-} from "@piorbit/protocol";
+} from "@lasercode/protocol";
 
 /**
  * `at` is the ISO timestamp the block first appeared (from the notification's

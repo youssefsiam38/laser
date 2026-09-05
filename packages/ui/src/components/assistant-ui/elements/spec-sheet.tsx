@@ -11,7 +11,7 @@
  * the tooltip, and a row with nothing to say is not drawn rather than drawn
  * as "—" (R3).
  */
-import type { RunPanel } from "@piorbit/protocol";
+import type { RunPanel } from "@lasercode/protocol";
 import type { ComponentProps } from "react";
 
 import { shortCwd, tokens } from "@/format";

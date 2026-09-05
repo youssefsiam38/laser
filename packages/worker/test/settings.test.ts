@@ -6,13 +6,13 @@
  * Everything runs against temp directories; the user's ~/.pi/agent is never
  * read or written.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
-import type { SettingDescriptor, SettingsScope } from "@piorbit/protocol";
+import type { SettingDescriptor, SettingsScope } from "@lasercode/protocol";
 import {
   PI_SETTINGS_TOP_LEVEL_KEYS,
   SETTINGS_FIELDS,

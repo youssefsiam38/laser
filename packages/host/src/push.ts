@@ -8,7 +8,7 @@
  * HKDF, ECDH and AES-GCM, all of which `globalThis.crypto.subtle` has.
  *
  * One payload for both platforms: the Declarative Web Push document from
- * `@piorbit/protocol` (`src/push.ts`), which the page and the service worker
+ * `@lasercode/protocol` (`src/push.ts`), which the page and the service worker
  * read from the same file. Sent with
  * `Content-Type: application/notification+json` so Safari renders it without
  * a service worker; Chromium's worker renders the same JSON.
@@ -16,11 +16,11 @@
  * The encryption is checked against an independent decryption in
  * `test/push.test.ts` (RFC 8291 round trip, VAPID JWT verify, 410 eviction).
  */
-import { DATA_DIR_NAME, PRODUCT_NAME } from "@piorbit/protocol";
+import { DATA_DIR_NAME, PRODUCT_NAME } from "@lasercode/protocol";
 import type { webcrypto } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { PushConfig, PushDeviceInfo, PushSubscriptionJson } from "@piorbit/protocol";
+import type { PushConfig, PushDeviceInfo, PushSubscriptionJson } from "@lasercode/protocol";
 
 export interface StoredPushSubscription {
   id: string;

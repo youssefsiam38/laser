@@ -1,4 +1,4 @@
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { BellRing, Download, Maximize2, Share, Zap } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 

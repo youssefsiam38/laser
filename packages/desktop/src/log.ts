@@ -24,7 +24,7 @@ export class DesktopLog {
 
   line(message: string): void {
     const stamped = `${new Date().toISOString()} ${message}`;
-    // stderr as well as the file: `pnpm -F @piorbit/desktop dev` should show
+    // stderr as well as the file: `pnpm -F @lasercode/desktop dev` should show
     // everything without anyone having to find a path first.
     process.stderr.write(`${stamped}\n`);
     if (this.failed) return;

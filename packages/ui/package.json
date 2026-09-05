@@ -1,9 +1,9 @@
 {
-  "name": "@piorbit/ui",
+  "name": "@lasercode/ui",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "The one web app: Electron renderer, browser tab, and PWA. Speaks @piorbit/protocol over WebSocket. React 19 + Vite + assistant-ui + Tailwind v4 (D-15, D-16). Every browser dependency is a devDependency on purpose: the built bundle in dist/ is the artifact, and nothing imports this package's source at runtime (`exports` offers only package.json, which the host resolves to find dist/). As dependencies they were copied into every installer twice, once inside app.asar and again in app.asar.unpacked, for nothing.",
+  "description": "The one web app: Electron renderer, browser tab, and PWA. Speaks @lasercode/protocol over WebSocket. React 19 + Vite + assistant-ui + Tailwind v4 (D-15, D-16). Every browser dependency is a devDependency on purpose: the built bundle in dist/ is the artifact, and nothing imports this package's source at runtime (`exports` offers only package.json, which the host resolves to find dist/). As dependencies they were copied into every installer twice, once inside app.asar and again in app.asar.unpacked, for nothing.",
   "exports": {
     "./package.json": "./package.json"
   },
@@ -15,7 +15,7 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@piorbit/protocol": "workspace:*",
+    "@lasercode/protocol": "workspace:*",
     "cmdk": "1.1.1"
   },
   "devDependencies": {

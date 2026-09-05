@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { SessionState, SessionUpdate } from "@piorbit/protocol";
+import type { SessionState, SessionUpdate } from "@lasercode/protocol";
 import { applyUpdate, blocksFromEntries, initialState, reduce, type SessionView } from "../src/store.js";
 
 const state: SessionState = {

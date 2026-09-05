@@ -33,8 +33,8 @@ import {
   fromUtf8,
   type CryptoBackend,
   type KeyPair,
-} from "@piorbit/crypto";
-import { ErrorCodes, type JsonRpcNotification, type JsonRpcResponse, type SessionUpdateParams } from "@piorbit/protocol";
+} from "@lasercode/crypto";
+import { ErrorCodes, type JsonRpcNotification, type JsonRpcResponse, type SessionUpdateParams } from "@lasercode/protocol";
 import WebSocket from "ws";
 
 export type RelayClientState =
@@ -48,7 +48,7 @@ export type RelayClientState =
 export interface RelayClientOptions {
   /** Relay base URL ending in the WebSocket path, e.g. `wss://relay.example/ws`. */
   relayUrl: string;
-  /** 32 bytes. `channelIdFor(desktopStatic, devicePublicKey)` from @piorbit/crypto. */
+  /** 32 bytes. `channelIdFor(desktopStatic, devicePublicKey)` from @lasercode/crypto. */
   channelId: Uint8Array;
   /** This desktop's durable X25519 static key. */
   staticKeyPair: KeyPair;
@@ -110,7 +110,7 @@ const MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
 /** What the relay advertises today; replaced by the real value from `hello`. */
 const DEFAULT_RELAY_MAX_FRAME_BYTES = 65_536;
 /**
- * Mirrors `CHANNEL_PROTOCOL_PREFIX` in `@piorbit/relay`. Duplicated as a plain
+ * Mirrors `CHANNEL_PROTOCOL_PREFIX` in `@lasercode/relay`. Duplicated as a plain
  * string on purpose: the host does not depend on the relay package, exactly as
  * the relay does not depend on the crypto package.
  */

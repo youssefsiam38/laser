@@ -6,7 +6,7 @@
  * host attaches to it and prints the URL, which is what a person means when
  * they type it a second time.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { sep } from "node:path";
@@ -29,7 +29,7 @@ import {
  *
  * Inside a packaged Electron app this module resolves under `app.asar`, which
  * is an archive rather than a directory: the bundled stock Node that runs the
- * daemon (`@piorbit/desktop` `runtime.ts` — deliberately a plain node with no
+ * daemon (`@lasercode/desktop` `runtime.ts` — deliberately a plain node with no
  * asar patch) cannot open a path inside it, and the spawn dies immediately
  * with "cannot find module". electron-builder writes a second, real copy of
  * the dependency tree to `app.asar.unpacked` (`asarUnpack: node_modules/**`),

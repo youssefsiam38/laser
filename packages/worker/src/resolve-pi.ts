@@ -29,7 +29,7 @@
  * This module imports Pi only inside `--check`, and nothing else in it touches
  * the agent. It is deliberately dependency-free so it can be spawned on its own.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { accessSync, constants, existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { delimiter, dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -70,7 +70,7 @@ export class AgentResolutionError extends Error {
   }
 }
 
-/** The worker package this file was built into: `<…>/@piorbit/worker`. */
+/** The worker package this file was built into: `<…>/@lasercode/worker`. */
 export function workerPackageDir(): string {
   // `dist/resolve-pi.js` → the package root. `rootDir: src` / `outDir: dist`
   // makes this one level in both the source tree and the built one.
@@ -115,7 +115,7 @@ export function pinnedAgentVersion(workerDir = workerPackageDir()): string {
  * a manifest. Works for a flat tree (what the packaged app has), for pnpm's
  * symlinked one, and for a yarn node-modules linker alike.
  *
- * Deliberately duplicated from `@piorbit/cli`: the CLI depends on this package,
+ * Deliberately duplicated from `@lasercode/cli`: the CLI depends on this package,
  * so this package cannot depend on the CLI, and the resolution that decides
  * which agent a worker loads must live next to the worker.
  */
@@ -297,7 +297,7 @@ export async function agentReport(options: { check: boolean }): Promise<AgentRep
             : `the agent ${PRODUCT_NAME} ships did not load: ${messageOf(error)}`,
           fix: missing
             ? `Reinstall ${PRODUCT_NAME}. If you are building it, ${missing} has to be a declared dependency of ` +
-              `@piorbit/worker so the packager copies it — a pnpm-only override is invisible to the packager.`
+              `@lasercode/worker so the packager copies it — a pnpm-only override is invisible to the packager.`
             : `Reinstall ${PRODUCT_NAME}. If it happens again, please report it with this message.`,
           runtime: runtimeOf(),
           machine: machineAgent(),

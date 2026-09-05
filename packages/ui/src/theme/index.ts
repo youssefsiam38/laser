@@ -1,5 +1,5 @@
 /**
- * @piorbit/ui theme system — public surface. docs/ux-theme.md is the spec.
+ * @lasercode/ui theme system — public surface. docs/ux-theme.md is the spec.
  *
  * Components read CSS custom properties, never this module. Settings, the
  * rail toggle and the highlighter read the store or the hook. Presets and

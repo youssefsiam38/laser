@@ -1,11 +1,11 @@
 {
-  "name": "@piorbit/relay",
+  "name": "@lasercode/relay",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "Railway byte forwarder. Two sockets per channel id, nothing else. Links NO crypto library (AGENTS.md invariant 7).",
   "bin": {
-    "piorbit-relay": "./dist/main.js"
+    "laser-relay": "./dist/main.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -15,7 +15,7 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@piorbit/protocol": "workspace:*",
+    "@lasercode/protocol": "workspace:*",
     "ws": "8.18.3"
   },
   "devDependencies": {

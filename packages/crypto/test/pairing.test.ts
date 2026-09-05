@@ -2,7 +2,7 @@
  * M6-T2's "done when": a photographed QR is useless after the pairing it
  * belongs to has been used.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol/identity";
+import { PRODUCT_NAME } from "@lasercode/protocol/identity";
 import { describe, expect, it } from "vitest";
 import {
   PairingError,

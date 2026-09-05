@@ -31,7 +31,7 @@
  * interleaved write by a terminal Pi loses nothing but the racing field.
  */
 
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import {
   CONFIG_DIR_NAME,
   ProjectTrustStore,
@@ -49,7 +49,7 @@ import type {
   SettingsScope,
   SettingsSection,
   SettingsSnapshot,
-} from "@piorbit/protocol";
+} from "@lasercode/protocol";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 

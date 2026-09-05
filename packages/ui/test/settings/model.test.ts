@@ -3,9 +3,9 @@
  * Both are places where being quietly wrong would lose someone's edit, so they
  * are tested rather than eyeballed.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
-import type { SettingDescriptor, SettingsCatalog, SettingsSnapshot } from "@piorbit/protocol";
+import type { SettingDescriptor, SettingsCatalog, SettingsSnapshot } from "@lasercode/protocol";
 
 import { changesFromJson, effectiveDiff, rowFor, searchFields } from "../../src/components/settings/model.js";
 

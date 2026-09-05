@@ -23,7 +23,7 @@ import type {
   SessionState,
   ThinkingLevel,
   UiDialogResponse,
-} from "@piorbit/protocol";
+} from "@lasercode/protocol";
 import {
   DriverUnavailableError,
   type DriverListener,

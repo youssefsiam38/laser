@@ -15,7 +15,7 @@
  * themselves never leave the worker.
  */
 
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import {
   DefaultPackageManager,
   ModelRuntime,
@@ -32,7 +32,7 @@ import type {
   ProviderLoginEvent,
   ProviderLoginMethod,
   ThinkingLevel,
-} from "@piorbit/protocol";
+} from "@lasercode/protocol";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import type { SettingsAdapter } from "./settings.js";

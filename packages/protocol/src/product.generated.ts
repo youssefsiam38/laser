@@ -8,69 +8,78 @@
  */
 
 export const PRODUCT = {
-  "name": "piorbit",
-  "displayName": "piorbit",
-  "appId": "dev.piorbit.desktop",
-  "developerId": "dev.piorbit",
-  "urlScheme": "piorbit",
+  "name": "laser",
+  "displayName": "Laser",
+  "appId": "com.hubtrix.laser",
+  "developerId": "com.hubtrix",
+  "urlScheme": "laser",
   "wireNamespace": "piorbit",
-  "envPrefix": "PIORBIT",
-  "dirName": "piorbit",
-  "storagePrefix": "piorbit",
-  "symbolPrefix": "piorbit",
-  "binary": "piorbit",
-  "realBinary": "piorbit-bin",
-  "repository": "youssefsiam38/piorbit",
-  "homepage": "https://github.com/youssefsiam38/piorbit",
-  "issuesUrl": "https://github.com/youssefsiam38/piorbit/issues",
-  "vendor": "piorbit contributors",
+  "envPrefix": "LASER",
+  "dirName": "laser",
+  "storagePrefix": "laser",
+  "symbolPrefix": "laser",
+  "binary": "laser",
+  "realBinary": "laser-bin",
+  "repository": "youssefsiam38/laser",
+  "homepage": "https://github.com/youssefsiam38/laser",
+  "issuesUrl": "https://github.com/youssefsiam38/laser/issues",
+  "vendor": "Laser contributors",
   "copy": {
     "summary": "A control room for coding agents",
     "description": "Runs coding agent sessions across every project on this machine, and mirrors them to your phone.",
-    "descriptionMore": "Everything is configured inside the window: providers, models, extensions and projects. piorbit brings its own runtime and its own agent, so there is nothing to install first and nothing on your machine for it to disagree with.",
-    "descriptionRelay": "The phone is not a second application. It is the same interface, reached over an end-to-end encrypted relay that piorbit runs itself, so a session left on the desktop is the session picked up on the train.",
+    "descriptionMore": "Everything is configured inside the window: providers, models, extensions and projects. Laser brings its own runtime and its own agent, so there is nothing to install first and nothing on your machine for it to disagree with.",
+    "descriptionRelay": "The phone is not a second application. It is the same interface, reached over an end-to-end encrypted relay that Laser runs itself, so a session left on the desktop is the session picked up on the train.",
     "webDescription": "Your coding agents, from anywhere. Answer approvals, steer runs, watch every project."
   },
-  "desktopFileName": "piorbit.desktop",
-  "metainfoFileName": "dev.piorbit.desktop.metainfo.xml",
-  "formerNames": []
+  "desktopFileName": "laser.desktop",
+  "metainfoFileName": "com.hubtrix.laser.metainfo.xml",
+  "formerNames": [
+    {
+      "name": "piorbit",
+      "dirName": "piorbit",
+      "storagePrefix": "piorbit",
+      "envPrefix": "PIORBIT",
+      "symbolPrefix": "piorbit",
+      "urlScheme": "piorbit"
+    }
+  ]
 } as const;
 
 /**
  * Every environment variable the product reads, by its unprefixed name.
  *
  * Emitted rather than composed at runtime so that the full name is a literal
- * type: `ENV.agentDir` is `"PIORBIT_AGENT_DIR"`, and a typo is a compile error
+ * type: `ENV.agentDir` is `"LASER_AGENT_DIR"`, and a typo is a compile error
  * rather than a variable nobody sets.
  */
 export const ENV = {
-  "agentDir": "PIORBIT_AGENT_DIR",
-  "allowedOrigins": "PIORBIT_ALLOWED_ORIGINS",
-  "arch": "PIORBIT_ARCH",
-  "debug": "PIORBIT_DEBUG",
-  "disableSandbox": "PIORBIT_DISABLE_SANDBOX",
-  "extensionName": "PIORBIT_EXTENSION_NAME",
-  "home": "PIORBIT_HOME",
-  "node": "PIORBIT_NODE",
-  "nodeMirror": "PIORBIT_NODE_MIRROR",
-  "npmCli": "PIORBIT_NPM_CLI",
-  "npmCommand": "PIORBIT_NPM_COMMAND",
-  "port": "PIORBIT_PORT",
-  "releaseKey": "PIORBIT_RELEASE_KEY",
-  "releaseKeyPem": "PIORBIT_RELEASE_KEY_PEM",
-  "repo": "PIORBIT_REPO",
-  "scratch": "PIORBIT_SCRATCH",
-  "screenshotBaseUrl": "PIORBIT_SCREENSHOT_BASE_URL",
-  "sessionDir": "PIORBIT_SESSION_DIR",
-  "stateDir": "PIORBIT_STATE_DIR",
-  "subagentsTempRoot": "PIORBIT_SUBAGENTS_TEMP_ROOT",
-  "tag": "PIORBIT_TAG",
-  "uiUrl": "PIORBIT_UI_URL",
-  "workerFd": "PIORBIT_WORKER_FD",
-  "azureAccount": "PIORBIT_AZURE_ACCOUNT",
-  "azureEndpoint": "PIORBIT_AZURE_ENDPOINT",
-  "azureProfile": "PIORBIT_AZURE_PROFILE",
-  "azurePublisherName": "PIORBIT_AZURE_PUBLISHER_NAME"
+  "agentDir": "LASER_AGENT_DIR",
+  "allowedOrigins": "LASER_ALLOWED_ORIGINS",
+  "arch": "LASER_ARCH",
+  "debug": "LASER_DEBUG",
+  "disableSandbox": "LASER_DISABLE_SANDBOX",
+  "extensionName": "LASER_EXTENSION_NAME",
+  "home": "LASER_HOME",
+  "node": "LASER_NODE",
+  "nodeMirror": "LASER_NODE_MIRROR",
+  "npmCli": "LASER_NPM_CLI",
+  "npmCommand": "LASER_NPM_COMMAND",
+  "port": "LASER_PORT",
+  "releaseKey": "LASER_RELEASE_KEY",
+  "releaseKeyPem": "LASER_RELEASE_KEY_PEM",
+  "repo": "LASER_REPO",
+  "scratch": "LASER_SCRATCH",
+  "screenshotBaseUrl": "LASER_SCREENSHOT_BASE_URL",
+  "sessionDir": "LASER_SESSION_DIR",
+  "stateDir": "LASER_STATE_DIR",
+  "subagentsTempRoot": "LASER_SUBAGENTS_TEMP_ROOT",
+  "tag": "LASER_TAG",
+  "uiUrl": "LASER_UI_URL",
+  "workerFd": "LASER_WORKER_FD",
+  "azureAccount": "LASER_AZURE_ACCOUNT",
+  "azureEndpoint": "LASER_AZURE_ENDPOINT",
+  "azureProfile": "LASER_AZURE_PROFILE",
+  "azurePublisherName": "LASER_AZURE_PUBLISHER_NAME"
 } as const;
 
 export type Product = typeof PRODUCT;

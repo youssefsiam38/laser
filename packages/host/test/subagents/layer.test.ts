@@ -4,12 +4,12 @@
  * in the exact shape the pi-subagents runner reads, so a fixture is the only
  * honest proof — a mock of `fs` would only assert that we called ourselves.
  */
-import { PRODUCT_NAME, WIRE_NAMESPACE } from "@piorbit/protocol";
+import { PRODUCT_NAME, WIRE_NAMESPACE } from "@lasercode/protocol";
 import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Panel } from "@piorbit/protocol";
+import type { Panel } from "@lasercode/protocol";
 import {
   ControlError,
   requestInterrupt,

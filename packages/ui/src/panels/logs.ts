@@ -16,8 +16,8 @@
  * The ref is `inline:logs:<section>` so the panel store answers reads locally,
  * the same way it does for a `setWidget` panel.
  */
-import { WIRE_NAMESPACE } from "@piorbit/protocol";
-import type { LogEntry, LogSection, StreamPanel } from "@piorbit/protocol";
+import { WIRE_NAMESPACE } from "@lasercode/protocol";
+import type { LogEntry, LogSection, StreamPanel } from "@lasercode/protocol";
 
 import { clockTime } from "../format.js";
 

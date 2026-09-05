@@ -5,12 +5,12 @@
  * the spawn, the pipe and the exit are the real ones) rather than the Pi
  * worker: this is the pool's state machine under test, not Pi.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { JsonRpcNotification, WorkerInfo } from "@piorbit/protocol";
+import type { JsonRpcNotification, WorkerInfo } from "@lasercode/protocol";
 import { WorkerPool } from "../src/worker-pool.js";
 
 /**

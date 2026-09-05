@@ -40,7 +40,7 @@ Related: `AGENTS.md` invariants 7 and 9, `docs/architecture.md`,
 
 ## 3. The cryptographic core
 
-`@piorbit/crypto` implements the Noise Protocol Framework (revision 34) with
+`@lasercode/crypto` implements the Noise Protocol Framework (revision 34) with
 patterns **IK** and **KK** over `25519_AESGCM_SHA256`.
 
 - **Why Noise and not TLS.** TLS terminates at the relay. We need a channel the
@@ -218,10 +218,10 @@ list:
   client for its channel, and `RelayClient.isAuthorized` is re-checked on every
   reconnection attempt.
 
-`@piorbit/crypto` deliberately does **not** depend on `@napi-rs/keyring` — it also
+`@lasercode/crypto` deliberately does **not** depend on `@napi-rs/keyring` — it also
 runs in a browser, where a native addon cannot resolve. The desktop injects a
 keyring entry satisfying `KeyringEntryLike`. A `FileRootIdentityStore`
-(mode 0600, atomic write) exists in `@piorbit/crypto/node` for headless hosts
+(mode 0600, atomic write) exists in `@lasercode/crypto/node` for headless hosts
 with no Secret Service.
 
 Rotating the root identity invalidates every pairing. That is stated by

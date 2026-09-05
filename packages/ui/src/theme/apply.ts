@@ -10,7 +10,7 @@
  * The same shape is persisted for the inline boot script in `index.html`,
  * which replays it before first paint without knowing anything about themes.
  */
-import { dottedStorageKey, namespaced } from "@piorbit/protocol";
+import { dottedStorageKey, namespaced } from "@lasercode/protocol";
 import type { CompiledTheme, ThemeBase } from "./types.js";
 
 export const THEME_STYLE_ID = namespaced("theme");

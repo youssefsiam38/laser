@@ -1,7 +1,7 @@
 /**
  * The contract between the Electron shell and the one web app.
  *
- * `@piorbit/ui` is the same bundle in a browser tab, a phone, and this window.
+ * `@lasercode/ui` is the same bundle in a browser tab, a phone, and this window.
  * So everything here is **additive and optional**: the shell exposes
  * `window.piorbit`, and the web build simply does not have it. A feature that
  * only works on the desktop must degrade to something that works everywhere —
@@ -12,8 +12,8 @@
  * process, by the preload bridge, and (for types) by the renderer, so it must
  * stay free of any `electron` import.
  */
-import { PRODUCT_NAME, URL_SCHEME } from "@piorbit/protocol";
-import type { PanelKind } from "@piorbit/protocol";
+import { PRODUCT_NAME, URL_SCHEME } from "@lasercode/protocol";
+import type { PanelKind } from "@lasercode/protocol";
 
 export type DesktopPlatform = "darwin" | "win32" | "linux";
 
@@ -213,7 +213,7 @@ export const DEEP_LINK_SCHEME = URL_SCHEME;
  *
  * Deliberately name-free. `src/preload.cts` runs in a *sandboxed* preload,
  * where `require` resolves only `electron` and a handful of Node builtins — it
- * cannot import `@piorbit/protocol`, so anything it names has to be a literal
+ * cannot import `@lasercode/protocol`, so anything it names has to be a literal
  * in that file. Rather than leave the product's name written twice, the two
  * strings say what they are instead of who they belong to: they are an internal
  * contract inside one build, never stored, never seen by a person, and a

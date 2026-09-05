@@ -11,7 +11,7 @@
  * The dispatch table is nine lines of shell with no other way to check it, so
  * it is checked here against stubs that only record which one ran.
  */
-import { BINARY_NAME, ENV, PRODUCT_NAME, REAL_BINARY_NAME, URL_SCHEME_PREFIX } from "@piorbit/protocol";
+import { BINARY_NAME, ENV, PRODUCT_NAME, REAL_BINARY_NAME, URL_SCHEME_PREFIX } from "@lasercode/protocol";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -33,7 +33,7 @@ afterAll(() => rmSync(root, { recursive: true, force: true }));
 function install(): { dir: string; log: string } {
   const dir = mkdtempSync(join(root, "app-"));
   const log = join(dir, "called");
-  const cliDir = join(dir, "resources", "app.asar.unpacked", "node_modules", "@piorbit", "cli", "dist");
+  const cliDir = join(dir, "resources", "app.asar.unpacked", "node_modules", "@lasercode", "cli", "dist");
   mkdirSync(cliDir, { recursive: true });
   mkdirSync(join(dir, "resources", "runtime"), { recursive: true });
   writeFileSync(join(cliDir, "main.js"), "// stub\n");

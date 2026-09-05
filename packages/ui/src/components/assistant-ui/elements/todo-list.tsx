@@ -14,7 +14,7 @@
  *   - The arrival animation is gone; steps are replaced by index (R10), so a
  *     slide-in on every re-emit would be motion without meaning.
  */
-import type { PlanStepState } from "@piorbit/protocol";
+import type { PlanStepState } from "@lasercode/protocol";
 import { Check, CircleAlert, Minus } from "lucide-react";
 import type { ComponentProps } from "react";
 

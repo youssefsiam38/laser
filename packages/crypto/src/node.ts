@@ -1,13 +1,13 @@
 /**
  * Node-only helpers. Importing this from a browser bundle will fail at build
- * time, which is the point: `@piorbit/crypto` proper stays portable.
+ * time, which is the point: `@lasercode/crypto` proper stays portable.
  */
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fromBase64Url, toBase64Url } from "./bytes.js";
 import { IdentityStoreError, type RootIdentityStore } from "./identity.js";
-import { DATA_DIR_NAME, ENV } from "@piorbit/protocol/identity";
+import { DATA_DIR_NAME, ENV } from "@lasercode/protocol/identity";
 
 export function defaultIdentityPath(): string {
   return join(process.env[ENV.home] ?? join(homedir(), `.${DATA_DIR_NAME}`), "identity.key");

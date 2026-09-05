@@ -1,4 +1,4 @@
-import { PRODUCT_DISPLAY_NAME } from "@piorbit/protocol";
+import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
 import { useAuiState } from "@assistant-ui/react";
 import { FolderGit2 } from "lucide-react";
 

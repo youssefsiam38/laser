@@ -7,9 +7,9 @@
  * the path — and if it is ambiguous we say so and list the candidates rather
  * than guessing.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { basename, resolve } from "node:path";
-import type { SessionSummary } from "@piorbit/protocol";
+import type { SessionSummary } from "@lasercode/protocol";
 import { CliError, ExitCode } from "./errors.js";
 import type { HostRpc } from "./rpc.js";
 import { describeRpcError } from "./rpc.js";

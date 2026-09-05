@@ -11,7 +11,7 @@
  *   assets/*     cache first (content-hashed names never change meaning)
  *   anything     network only
  *
- * Push: one Declarative Web Push document per event (`@piorbit/protocol`,
+ * Push: one Declarative Web Push document per event (`@lasercode/protocol`,
  * `src/push.ts`). Safari renders it itself; here, for Chromium, we render it.
  * A tap focuses an open piorbit window and hands it the URL, or opens one.
  *
@@ -22,7 +22,7 @@
  * It imports nothing: `/sw.js` is emitted as one standalone file, so the
  * notification shape is restated here as a structural type and a three-line
  * guard rather than shipping a bundler to inline one module. The document it
- * describes is `DeclarativePushPayload` in `@piorbit/protocol`; the plugin
+ * describes is `DeclarativePushPayload` in `@lasercode/protocol`; the plugin
  * refuses to emit a worker whose `DECLARATIVE_WEB_PUSH_VERSION` disagrees
  * with the protocol's, which is the one value that could drift silently.
  */
@@ -30,7 +30,7 @@ import type { ServiceWorkerScope, WindowClientLike, WorkerNotificationOptions } 
 
 declare const self: ServiceWorkerScope;
 
-/** Mirrors `DeclarativePushNotification` in @piorbit/protocol. */
+/** Mirrors `DeclarativePushNotification` in @lasercode/protocol. */
 interface DeclarativePushNotification {
   title: string;
   body?: string;
@@ -69,7 +69,7 @@ const BUILD = "__SW_BUILD__";
  * Replaced at build time with the product's own cache prefix.
  *
  * This file is compiled on its own and may import nothing at runtime, so it
- * cannot read `@piorbit/protocol`. `vite-plugin.ts` substitutes the value from
+ * cannot read `@lasercode/protocol`. `vite-plugin.ts` substitutes the value from
  * product.json, which is why a rename still reaches the service worker.
  */
 const CACHE_PREFIX = "__SW_CACHE_PREFIX__";

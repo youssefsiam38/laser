@@ -1,4 +1,4 @@
-import type { PanelUsage, RunPanel } from "@piorbit/protocol";
+import type { PanelUsage, RunPanel } from "@lasercode/protocol";
 
 import { AgentHandoff } from "@/components/assistant-ui/elements/agent-handoff";
 import { ArtifactCard } from "@/components/assistant-ui/elements/artifact-card";

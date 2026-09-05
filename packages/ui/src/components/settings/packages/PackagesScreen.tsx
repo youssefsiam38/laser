@@ -14,7 +14,7 @@
  * Replaces `settings/PackagesTab.tsx`; same props, so the settings screen
  * swaps it in with one import.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, Loader2, Package, RefreshCw, Search as SearchIcon, Trash2 } from "lucide-react";
 
@@ -42,7 +42,7 @@ import type {
   PackageRuntimeInfo,
   PackageScope,
   SettingsSnapshot,
-} from "@piorbit/protocol";
+} from "@lasercode/protocol";
 
 import { SearchInput } from "../SettingsScreen.js";
 import { CatalogList } from "./CatalogList.js";

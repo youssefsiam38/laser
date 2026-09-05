@@ -18,7 +18,7 @@
  * a small external store that this component keeps in sync, and reads no
  * closed-over state at all.
  */
-import { PRODUCT_NAME, storageKey } from "@piorbit/protocol";
+import { PRODUCT_NAME, storageKey } from "@lasercode/protocol";
 import {
   AssistantRuntimeProvider,
   useAui,
@@ -40,7 +40,7 @@ import type {
   UiDialogRequest,
   UiDialogResponse,
   WorkerInfo,
-} from "@piorbit/protocol";
+} from "@lasercode/protocol";
 import {
   createContext,
   useCallback,

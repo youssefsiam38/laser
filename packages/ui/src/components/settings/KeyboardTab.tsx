@@ -25,7 +25,7 @@ import {
   type ReactNode,
 } from "react";
 import { AlertTriangle, Keyboard, RotateCcw } from "lucide-react";
-import type { KeybindingsSnapshot } from "@piorbit/protocol";
+import type { KeybindingsSnapshot } from "@lasercode/protocol";
 
 import { Button } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";

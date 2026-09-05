@@ -3,7 +3,7 @@
  * predicate the host applies, so a live row appended over the socket lands
  * exactly where a re-query would put it), and how a row is labelled.
  */
-import type { LogEntry, LogLevel, LogQuery, LogSection } from "@piorbit/protocol";
+import type { LogEntry, LogLevel, LogQuery, LogSection } from "@lasercode/protocol";
 
 export interface LogFilters {
   section: LogSection | "all";

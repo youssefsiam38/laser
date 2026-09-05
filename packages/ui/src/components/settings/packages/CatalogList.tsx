@@ -6,14 +6,14 @@
  * install will pin — and one verb. Installed ones say so instead of offering
  * a second install (R2).
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { Check, Download, ExternalLink, Loader2, Sparkles } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { relativeTime } from "@/format";
 import { cn } from "@/lib/utils";
-import type { PackageCatalogEntry } from "@piorbit/protocol";
+import type { PackageCatalogEntry } from "@lasercode/protocol";
 
 import type { BusyKey } from "./model.js";
 

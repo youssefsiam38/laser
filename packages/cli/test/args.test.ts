@@ -2,7 +2,7 @@
  * The parser is the one piece of this package where a quiet mistake changes
  * what a command does rather than how it looks, so it gets a test.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
 import { bool, list, num, parseArgs, str, type FlagSpecs } from "../src/args.js";
 import { scanLeadingGlobals } from "../src/cli.js";

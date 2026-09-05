@@ -13,7 +13,7 @@
  * catches up by applying Noise Rekey() that many times. No clock agreement is
  * needed, and a peer that talks rarely never rekeys at all.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol/identity";
+import { PRODUCT_NAME } from "@lasercode/protocol/identity";
 import { concatBytes, readU32be, readU64be, u32be, u64be } from "./bytes.js";
 import {
   AEAD_TAG_BYTES,

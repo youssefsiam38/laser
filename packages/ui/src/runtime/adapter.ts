@@ -28,7 +28,7 @@ import type {
   QueueItemState,
   ThreadMessageLike,
 } from "@assistant-ui/react";
-import type { ContentBlock, ImageContent, UiDialogResponse } from "@piorbit/protocol";
+import type { ContentBlock, ImageContent, UiDialogResponse } from "@lasercode/protocol";
 import type { HostClient } from "../client.js";
 import { asRawClient, getMobileDictationAdapter } from "../pwa/index.js";
 import { newBlockId, type Action, type SessionView } from "../store.js";

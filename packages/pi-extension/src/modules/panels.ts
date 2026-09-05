@@ -17,7 +17,7 @@
  * is deliberately NOT here: Pi hands every extension its own `ctx.ui`, so the
  * only place that sees all of them is the worker's ui-bridge, and the client
  * derives the fallback panels from the `pi/ui/*` stream it already receives
- * (`@piorbit/ui` src/panels/fallback.ts).
+ * (`@lasercode/ui` src/panels/fallback.ts).
  */
 import {
   PANEL_ACTION_EVENT,
@@ -26,7 +26,7 @@ import {
   validatePanelClose,
   validatePanelEvent,
   type PanelActionEvent,
-} from "@piorbit/protocol";
+} from "@lasercode/protocol";
 import type { PiorbitModule } from "./index.js";
 
 /** Ids remembered for dedupe and for answering "is anyone still holding this panel?". */

@@ -13,7 +13,7 @@
  * actually see. Ordering is creation order, never attention order — a strip
  * that reshuffles is a strip you cannot learn.
  */
-import { ATTENTION_RANK, highestAttention, type Attention, type Panel } from "@piorbit/protocol";
+import { ATTENTION_RANK, highestAttention, type Attention, type Panel } from "@lasercode/protocol";
 import { attentionOfEntry, elapsedOf, type PanelEntry } from "@/panels";
 
 export interface RunNode {

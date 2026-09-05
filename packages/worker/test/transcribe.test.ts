@@ -4,8 +4,8 @@
  * transform's race — a phrase claimed by a prompt while it is in flight must
  * reach the prompt and must not also reach the composer.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
-import type { ProviderAuthInfo } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
+import type { ProviderAuthInfo } from "@lasercode/protocol";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

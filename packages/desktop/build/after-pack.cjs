@@ -36,7 +36,7 @@ exports.default = async function afterPack(context) {
   if (!existsSync(launcherSource)) {
     throw new Error(
       `${identity.name}: ${launcherSource} is missing, so the packaged app would start Electron ` +
-        `directly and make no decision about the sandbox.\nRun \`pnpm -F @piorbit/desktop linux:assets\`.`,
+        `directly and make no decision about the sandbox.\nRun \`pnpm -F @lasercode/desktop linux:assets\`.`,
     );
   }
 
@@ -68,7 +68,7 @@ exports.default = async function afterPack(context) {
   if (!existsSync(metainfoSource)) {
     throw new Error(
       `${identity.name}: ${metainfoSource} is missing, so GNOME Software and KDE Discover would show this ` +
-        `package with no name and no description.\nRun \`pnpm -F @piorbit/desktop linux:assets\`.`,
+        `package with no name and no description.\nRun \`pnpm -F @lasercode/desktop linux:assets\`.`,
     );
   }
   const metainfoTarget = join(appOutDir, "usr", "share", "metainfo", METAINFO_FILE_NAME);
@@ -99,6 +99,6 @@ function assertFpmPathsResolve(context, identity, metainfoFileName) {
     `${identity.name}: the .deb and .rpm hand fpm the path "${relative}", and from this working directory\n` +
       `  ${process.cwd()}\n` +
       `it does not resolve. Build them from the desktop package instead:\n` +
-      `  pnpm -F @piorbit/desktop dist:linux`,
+      `  pnpm -F @lasercode/desktop dist:linux`,
   );
 }

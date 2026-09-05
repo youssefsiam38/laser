@@ -1,6 +1,6 @@
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
-import type { UiDialogRequest, UiFireAndForget } from "@piorbit/protocol";
+import type { UiDialogRequest, UiFireAndForget } from "@lasercode/protocol";
 import { createUiBridge } from "../src/ui-bridge.js";
 
 type DialogOptions = { signal?: AbortSignal; timeout?: number };

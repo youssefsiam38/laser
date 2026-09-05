@@ -9,8 +9,8 @@
  * guess as a fact would be worse than the app doing it, because people pipe
  * terminal output into other things.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
-import type { PlanPanel, PlanStep, SessionSummary } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
+import type { PlanPanel, PlanStep, SessionSummary } from "@lasercode/protocol";
 import type { Command } from "../command.js";
 import { CliError, ExitCode } from "../errors.js";
 import { clip, plural } from "../format.js";

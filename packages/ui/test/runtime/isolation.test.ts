@@ -7,7 +7,7 @@
  * must leave untouched views referentially identical.
  */
 import { describe, expect, it } from "vitest";
-import type { SessionState } from "@piorbit/protocol";
+import type { SessionState } from "@lasercode/protocol";
 import { reduce, type AppState } from "../../src/store.js";
 
 const sessionState = (path: string): SessionState => ({

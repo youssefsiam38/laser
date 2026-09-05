@@ -1,4 +1,4 @@
-import { utf8Length, type StreamEncoding, type StreamPanel } from "@piorbit/protocol";
+import { utf8Length, type StreamEncoding, type StreamPanel } from "@lasercode/protocol";
 import { ArrowDownToLine, Pause, Play } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type UIEvent } from "react";
 

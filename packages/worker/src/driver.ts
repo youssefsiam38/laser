@@ -1,7 +1,7 @@
 /**
  * SessionDriver — the migration seam (AGENTS.md invariant 3, decisions D-6/D-8).
  *
- * Everything above the worker sees only @piorbit/protocol types. A driver
+ * Everything above the worker sees only @lasercode/protocol types. A driver
  * turns protocol-level intents into calls on some Pi runtime and turns that
  * runtime's events into protocol `SessionUpdate`s.
  *
@@ -30,7 +30,7 @@ import type {
   UiDialogRequest,
   UiDialogResponse,
   UiFireAndForget,
-} from "@piorbit/protocol";
+} from "@lasercode/protocol";
 
 export interface DriverOpenOptions {
   cwd: string;

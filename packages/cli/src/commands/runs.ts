@@ -12,8 +12,8 @@
  * pi-subagents keeps its files; if the host cannot see a run, neither can the
  * terminal, and that is the correct answer rather than a second opinion.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
-import type { Panel, PlanPanel, RunPanel, SessionSummary } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
+import type { Panel, PlanPanel, RunPanel, SessionSummary } from "@lasercode/protocol";
 import { bool, str } from "../args.js";
 import type { Command, CommandContext } from "../command.js";
 import { CliError, ExitCode } from "../errors.js";

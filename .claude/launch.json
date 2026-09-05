@@ -14,23 +14,10 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": [
         "-F",
-        "@piorbit/ui",
+        "@lasercode/ui",
         "dev"
       ],
       "port": 5173
-    },
-    {
-      "name": "laser-site",
-      "runtimeExecutable": "pnpm",
-      "runtimeArgs": [
-        "--dir",
-        "/home/youssef/projects/hubtrix_projects/laser_website",
-        "dev",
-        "--port",
-        "5180",
-        "--strictPort"
-      ],
-      "port": 5180
     }
   ]
 }

@@ -85,14 +85,14 @@ Goal: the repo, the protocol, and the driver seam exist and are exercised by tes
 Done when: `pnpm -r build && pnpm -r test` passes; a worker can open a pinned Pi
 session in a temp directory, send one prompt to a fake model, and stream events
 as protocol messages to a test client; `ChordDriver` compiles against the same
-interface and its seam test proves no Pi type leaks through `@piorbit/protocol`.
+interface and its seam test proves no Pi type leaks through `@lasercode/protocol`.
 
 Depends on: nothing.
 
 | ID | Task | Done when |
 | --- | --- | --- |
 | M0-T1 | Workspace scaffold (pnpm, TS strict, ESM, per-package build/test) | `pnpm install && pnpm -r build` passes on a clean clone |
-| M0-T2 | `@piorbit/protocol`: message schemas (ACP core + `pi/*` extras), JSON-RPC envelope, sequence numbers, runtime validation | schema tests pass; a message round-trips through encode/validate/decode |
+| M0-T2 | `@lasercode/protocol`: message schemas (ACP core + `pi/*` extras), JSON-RPC envelope, sequence numbers, runtime validation | schema tests pass; a message round-trips through encode/validate/decode |
 | M0-T3 | `SessionDriver` interface and `DriverEvent` union | interface reviewed against Pi SDK 0.85 events; documented in `docs/architecture.md` |
 | M0-T4 | `StableSdkDriver` opens a session via `createAgentSessionRuntime` with pinned Pi, maps events to protocol messages | test: prompt against a stub provider yields `session/update` messages in order |
 | M0-T5 | `ChordDriver` stub + seam test | compiles; test asserts the driver module graph does not import Pi types into protocol |
@@ -116,7 +116,7 @@ Depends on: M0.
 
 | ID | Task | Done when |
 | --- | --- | --- |
-| M1-T1 | `@piorbit/host`: spawn and supervise one worker, route JSON-RPC, expose local WebSocket on 127.0.0.1 | UI connects and lists sessions |
+| M1-T1 | `@lasercode/host`: spawn and supervise one worker, route JSON-RPC, expose local WebSocket on 127.0.0.1 | UI connects and lists sessions |
 | M1-T2 | Session catalog: scan `SessionManager.listAll()` with a cache keyed by (path, size, mtime) | list of past sessions across projects renders in under a second on the user's machine |
 | M1-T3 | UI shell: sidebar (projects, sessions), main pane (transcript), composer | keyboard-only navigation works |
 | M1-T4 | Transcript renderer: streaming markdown by blocks, tool call cards, thinking blocks, diffs | no flicker on streamed text; code fences highlight after close |
@@ -232,14 +232,14 @@ Done when: a browser on another network pairs by QR, shows the same UI, answers 
 dialog, and is revoked from the desktop; the relay process links no crypto
 library; a tampered frame is rejected.
 
-Depends on: M1, `@piorbit/crypto`.
+Depends on: M1, `@lasercode/crypto`.
 
 | ID | Task | Done when |
 | --- | --- | --- |
-| M6-T1 | `@piorbit/crypto`: Noise IK and KK over `25519_AESGCM_SHA256` using WebCrypto (non-extractable keys) with `@noble` fallback; prologue = channel id; AAD = channel ‖ direction ‖ seq; rekey | test vectors pass in Node and browser |
+| M6-T1 | `@lasercode/crypto`: Noise IK and KK over `25519_AESGCM_SHA256` using WebCrypto (non-extractable keys) with `@noble` fallback; prologue = channel id; AAD = channel ‖ direction ‖ seq; rekey | test vectors pass in Node and browser |
 | M6-T2 | Pairing: ephemeral key in QR URL fragment, explicit "Link a device" screen, SAS display, channel id = HKDF(shared, "relay_token") | photographed QR after use is useless (test) |
 | M6-T3 | Device list: desktop root key signs versioned list; revoke = re-sign; phone verifies | revoked device cannot reconnect |
-| M6-T4 | `@piorbit/relay`: WebSocket byte forwarder, exactly two sockets per channel, per-IP creation limits, cookies under load, padded buckets, no deflate, 20 s ping | Railway deploy config; load test |
+| M6-T4 | `@lasercode/relay`: WebSocket byte forwarder, exactly two sockets per channel, per-IP creation limits, cookies under load, padded buckets, no deflate, 20 s ping | Railway deploy config; load test |
 | M6-T5 | Host relay client: outbound only, reconnect, resume from seq | desktop sleep/wake recovers |
 | M6-T6 | Keystroke timing defense: 20 ms send grid plus chaff tail on the phone client | traffic capture shows fixed cadence |
 | M6-T7 | Threat model document and residual-metadata list | `docs/security.md` |
@@ -323,7 +323,7 @@ of its own and M3, M4's logs page and M8's previews all land on it (D-27).
 
 | ID | Task | Done when |
 | --- | --- | --- |
-| MP-T1 | Payload types, the bus protocol and the `pi/panel/*` wire in `@piorbit/protocol`, with schemas that refuse presentation keys anywhere in `data` | a panel with a `className` is rejected by name |
+| MP-T1 | Payload types, the bus protocol and the `pi/panel/*` wire in `@lasercode/protocol`, with schemas that refuse presentation keys anywhere in `data` | a panel with a `className` is rejected by name |
 | MP-T2 | Companion `panels` module: validate, dedupe identical re-emits, forward, replay actions | an extension that emits `piorbit:panel` reaches the dock unchanged |
 | MP-T3 | Host panel hub: memory per session, ref grants, ranged reads, attention from a blocking decision | a ref no panel carried is refused |
 | MP-T4 | The island: one element, four sizes, the morph between them, a body per kind | third expansion shrinks the least recently watched to minimal |

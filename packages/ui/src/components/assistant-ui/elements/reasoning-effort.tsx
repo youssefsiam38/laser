@@ -21,7 +21,7 @@
  *     not reason at all the control is gone, with the reason in a tooltip
  *     where it would have been (docs/ux-panels.md R2).
  */
-import type { ModelCatalogEntry, ThinkingLevel } from "@piorbit/protocol";
+import type { ModelCatalogEntry, ThinkingLevel } from "@lasercode/protocol";
 import { Brain } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ComponentProps, type KeyboardEvent } from "react";
 

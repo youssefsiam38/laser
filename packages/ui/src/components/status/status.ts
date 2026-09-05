@@ -1,4 +1,4 @@
-import type { SessionAttention } from "@piorbit/protocol";
+import type { SessionAttention } from "@lasercode/protocol";
 
 /** The one status vocabulary (DESIGN.md "Status language"). */
 export type Status = SessionAttention;

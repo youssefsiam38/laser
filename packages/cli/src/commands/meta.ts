@@ -2,7 +2,7 @@
  * `help` and `completions` — both generated from the command table, so they
  * cannot drift from the commands they describe.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import type { FlagSpecs } from "../args.js";
 import type { Command } from "../command.js";
 import { findCommand } from "../command.js";

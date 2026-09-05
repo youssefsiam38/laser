@@ -4,7 +4,7 @@
  * optimistic user block's reconciliation and rollback.
  */
 import { describe, expect, it } from "vitest";
-import type { SessionState, SessionUpdate } from "@piorbit/protocol";
+import type { SessionState, SessionUpdate } from "@lasercode/protocol";
 import { initialState, reduce, type Action, type AppState, type SessionView } from "../../src/store.js";
 
 const sessionState: SessionState = {

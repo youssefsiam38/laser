@@ -8,7 +8,7 @@
  * happens here too (M10-T6): the same `ProviderStep` the first run uses, which
  * drives the agent's own login flow through `pi/providers/login/*`.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Eye, Loader2, RefreshCw, Sparkles } from "lucide-react";
 
@@ -28,7 +28,7 @@ import type {
   SettingsScope,
   SettingsSnapshot,
   ThinkingLevel,
-} from "@piorbit/protocol";
+} from "@lasercode/protocol";
 
 import { ProviderStep } from "@/components/onboarding";
 

@@ -16,7 +16,7 @@
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { ErrorCodes, PRODUCT_NAME, ProtocolError, type ProjectInfo, type ProjectTrust } from "@piorbit/protocol";
+import { ErrorCodes, PRODUCT_NAME, ProtocolError, type ProjectInfo, type ProjectTrust } from "@lasercode/protocol";
 import type { SessionCatalog } from "./catalog.js";
 import { canonical, defaultProjectTrust, savedPiTrust, trustReasons } from "./trust.js";
 

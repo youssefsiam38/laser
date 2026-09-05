@@ -1,7 +1,7 @@
 /**
  * The two URL normalisers, which are the only part of `relay-config.ts` with
  * a decision in it: everything else is a file read or a delegation to
- * `@piorbit/crypto` (already tested there).
+ * `@lasercode/crypto` (already tested there).
  *
  * They matter because both refusals are security answers, not tidiness.
  * `ws://` to a remote host leaks the channel id — a bearer capability for one

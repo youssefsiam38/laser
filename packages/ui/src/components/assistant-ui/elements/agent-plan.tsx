@@ -22,7 +22,7 @@
  * the thin real progress bar (done/total is the one honest progress a plan
  * has), and the `data-slot`.
  */
-import type { PlanPanel, PlanStep } from "@piorbit/protocol";
+import type { PlanPanel, PlanStep } from "@lasercode/protocol";
 import { Check, ChevronRight, CircleAlert, Link2 } from "lucide-react";
 import { useMemo, useState, type ComponentProps, type ReactNode } from "react";
 

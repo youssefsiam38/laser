@@ -31,7 +31,7 @@
  */
 
 import type { ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
-import { PANEL_EVENT, type CollectionItem, type PanelEvent } from "@piorbit/protocol";
+import { PANEL_EVENT, type CollectionItem, type PanelEvent } from "@lasercode/protocol";
 import type { PiorbitModule } from "./index.js";
 
 /** As it appears in `sourceInfo.source` (`npm:pi-web-access`) and in the resolved path. */

@@ -32,7 +32,7 @@ import {
   type ExtensionError,
   type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
-import { createCommandBus, createPiorbitExtension } from "@piorbit/pi-extension";
+import { createCommandBus, createPiorbitExtension } from "@lasercode/pi-extension";
 import type {
   CommandInfo,
   ContentBlock,
@@ -48,7 +48,7 @@ import type {
   UiDialogRequest,
   UiDialogResponse,
   Usage,
-} from "@piorbit/protocol";
+} from "@lasercode/protocol";
 import {
   DriverUnavailableError,
   type DriverEvent,

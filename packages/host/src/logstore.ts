@@ -40,7 +40,7 @@
  * so the file is created 0600, and `providerPayloads: "summary"` drops the
  * bodies entirely for anyone who wants that trade.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -56,7 +56,7 @@ import type {
   PiExtensionMessage,
   SessionUpdateParams,
   WorkerInfo,
-} from "@piorbit/protocol";
+} from "@lasercode/protocol";
 
 /** Payloads at or below this go inline in the page; larger ones become a ref. */
 const INLINE_LIMIT = 2048;

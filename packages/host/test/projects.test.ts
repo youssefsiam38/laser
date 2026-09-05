@@ -3,12 +3,12 @@
  * the documented order (piorbit's own decision → Pi's `trust.json` → Pi's
  * `defaultProjectTrust` → ask a client).
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ProjectInfo } from "@piorbit/protocol";
+import type { ProjectInfo } from "@lasercode/protocol";
 import { SessionCatalog } from "../src/catalog.js";
 import { ProjectRegistry, type TrustRequest } from "../src/projects.js";
 

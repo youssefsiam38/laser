@@ -3,7 +3,7 @@
  * piorbit. Getting it wrong is invisible until someone's `--help` goes to the
  * wrong program, so it is pinned here.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
 import { splitPiArgs } from "../src/commands/pi.js";
 

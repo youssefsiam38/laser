@@ -1,4 +1,4 @@
-import type { CollectionItem, CollectionPanel } from "@piorbit/protocol";
+import type { CollectionItem, CollectionPanel } from "@lasercode/protocol";
 import { Ellipsis, FileText } from "lucide-react";
 import { useMemo } from "react";
 

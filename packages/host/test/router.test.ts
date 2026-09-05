@@ -9,12 +9,12 @@
  * session in the list forever, which is exactly the kind of bug a test is the
  * cheapest way to rule out.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SessionState, SessionSummary } from "@piorbit/protocol";
+import type { SessionState, SessionSummary } from "@lasercode/protocol";
 import { AttentionTracker } from "../src/attention.js";
 import { SessionCatalog } from "../src/catalog.js";
 import { ProjectRegistry } from "../src/projects.js";

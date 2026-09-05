@@ -4,7 +4,7 @@
  * time. Three views share it — the two scopes, and "Effective", which is the
  * read-only diff of what Pi will actually use and where each value came from.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { useId, useMemo, useState } from "react";
 import { ChevronRight, FileJson, Info, RotateCcw, ShieldAlert, Terminal } from "lucide-react";
 
@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import type { SettingChange, SettingDescriptor, SettingsCatalog, SettingsScope, SettingsSnapshot } from "@piorbit/protocol";
+import type { SettingChange, SettingDescriptor, SettingsCatalog, SettingsScope, SettingsSnapshot } from "@lasercode/protocol";
 
 import { SettingField } from "./fields.js";
 import { JsonView } from "./JsonView.js";

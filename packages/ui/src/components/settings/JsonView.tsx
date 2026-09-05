@@ -8,14 +8,14 @@
  * a known setting is refused by name rather than dropped — the one failure mode
  * a raw editor must not have.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { useEffect, useMemo, useState } from "react";
 import { Check, Copy, RotateCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
-import type { SettingChange, SettingsCatalog, SettingsScope, SettingsSnapshot } from "@piorbit/protocol";
+import type { SettingChange, SettingsCatalog, SettingsScope, SettingsSnapshot } from "@lasercode/protocol";
 
 import { changesFromJson } from "./model.js";
 

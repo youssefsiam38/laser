@@ -11,7 +11,7 @@
  * the producing tool call is still running. Domains draw as a letter, never
  * a fetched favicon (a diagram of what the agent read must not phone home).
  */
-import type { CollectionItem, CollectionPanel } from "@piorbit/protocol";
+import type { CollectionItem, CollectionPanel } from "@lasercode/protocol";
 import { ExternalLink, Search } from "lucide-react";
 import type { ComponentProps } from "react";
 

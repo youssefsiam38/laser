@@ -21,7 +21,7 @@
  * a second "1 of 3" tour about a composer the person cannot see yet was the
  * app talking about itself instead of opening.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ArrowRight, MessageSquare } from "lucide-react";
 
@@ -31,7 +31,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { modKey, shortCwd } from "@/format";
 import { usePiorbitStable, usePiorbitState } from "@/runtime";
-import type { SetupState } from "@piorbit/protocol";
+import type { SetupState } from "@lasercode/protocol";
 
 import { ModelStep } from "./ModelStep.js";
 import { ProjectStep } from "./ProjectStep.js";

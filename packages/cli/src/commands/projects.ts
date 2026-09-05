@@ -6,9 +6,9 @@
  * host build predates those calls, the list is still shown — derived from the
  * session catalog — and only the mutating verbs refuse, with the reason.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { resolve } from "node:path";
-import type { ProjectInfo, WorkerInfo } from "@piorbit/protocol";
+import type { ProjectInfo, WorkerInfo } from "@lasercode/protocol";
 import { bool } from "../args.js";
 import type { Command } from "../command.js";
 import { CliError, ExitCode } from "../errors.js";

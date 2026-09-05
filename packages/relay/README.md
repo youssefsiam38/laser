@@ -1,4 +1,4 @@
-# @piorbit/relay
+# @lasercode/relay
 
 A WebSocket byte forwarder. It routes on an opaque 43-character channel id and
 does nothing else: it links no crypto library, holds no key belonging to any
@@ -93,7 +93,7 @@ Railway's proxy handles it badly besides.
 ## Local run
 
 ```bash
-pnpm -F @piorbit/relay build
-PORT=8080 pnpm -F @piorbit/relay start
+pnpm -F @lasercode/relay build
+PORT=8080 pnpm -F @lasercode/relay start
 curl -s localhost:8080/healthz | jq
 ```

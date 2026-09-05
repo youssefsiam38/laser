@@ -22,7 +22,7 @@
  * owning Pi session's bus (findings.md), so it is the module's job, not this
  * file's.
  */
-import { WIRE_NAMESPACE } from "@piorbit/protocol";
+import { WIRE_NAMESPACE } from "@lasercode/protocol";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";

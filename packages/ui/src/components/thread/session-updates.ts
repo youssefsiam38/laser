@@ -4,7 +4,7 @@
  * "did this turn touch files"). Listeners are called in arrival order, after
  * the store has folded the same update.
  */
-import type { SessionUpdateParams } from "@piorbit/protocol";
+import type { SessionUpdateParams } from "@lasercode/protocol";
 import { useEffect, useRef } from "react";
 
 import { usePiorbitStable } from "@/runtime";

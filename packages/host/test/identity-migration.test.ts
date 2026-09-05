@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { DATA_DIR_NAME, PRODUCT_NAME } from "@piorbit/protocol";
+import { DATA_DIR_NAME, PRODUCT_NAME } from "@lasercode/protocol";
 import { migrateFormerIdentities, ownedDirectories, piorbitDataDir } from "../src/index.js";
 
 const root = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-migration-`));

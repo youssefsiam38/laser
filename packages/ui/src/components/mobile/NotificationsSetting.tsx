@@ -1,4 +1,4 @@
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { Bell, BellOff, BellRing, Send } from "lucide-react";
 
 import { Button } from "@/components/ui/button";

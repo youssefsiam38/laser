@@ -2,8 +2,8 @@
 /**
  * Build every Linux package format, check the result, and say what came out.
  *
- *   pnpm -F @piorbit/desktop dist:linux
- *   pnpm -F @piorbit/desktop dist:linux -- --targets appimage,deb --arch x64
+ *   pnpm -F @lasercode/desktop dist:linux
+ *   pnpm -F @lasercode/desktop dist:linux -- --targets appimage,deb --arch x64
  *
  * Four formats and two architectures need four different toolchains, and three
  * of those toolchains are not installed on a typical machine. The important
@@ -161,7 +161,7 @@ function preflight() {
     fail(
       `this machine cannot build every target you asked for.\n\n${lines.join("\n\n")}\n\n` +
         (remaining.length > 0
-          ? `To build the rest now:\n      pnpm -F @piorbit/desktop dist:linux -- --targets ${remaining.join(",")}`
+          ? `To build the rest now:\n      pnpm -F @lasercode/desktop dist:linux -- --targets ${remaining.join(",")}`
           : `Install the programs above, or build on a machine that has them.`),
     );
   }

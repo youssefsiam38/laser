@@ -1,5 +1,5 @@
 /**
- * The relay client end to end: a "phone" drives @piorbit/crypto over a socket
+ * The relay client end to end: a "phone" drives @lasercode/crypto over a socket
  * that speaks the relay's control protocol, and the host answers real JSON-RPC.
  *
  * The relay itself is stubbed here (30 lines) rather than imported, so the host
@@ -19,11 +19,11 @@ import {
   utf8,
   fromUtf8,
   type KeyPair,
-} from "@piorbit/crypto";
-import type { JsonRpcNotification, JsonRpcResponse } from "@piorbit/protocol";
+} from "@lasercode/crypto";
+import type { JsonRpcNotification, JsonRpcResponse } from "@lasercode/protocol";
 import { RelayClient } from "../src/relay-client.js";
 
-/** Mirrors `CHANNEL_PROTOCOL_PREFIX` in @piorbit/relay; see the note above. */
+/** Mirrors `CHANNEL_PROTOCOL_PREFIX` in @lasercode/relay; see the note above. */
 const CHANNEL_PROTOCOL_PREFIX = "piorbit.channel.";
 
 /** Just enough relay: two sockets per channel, `hello`/`peer`, binary passthrough. */

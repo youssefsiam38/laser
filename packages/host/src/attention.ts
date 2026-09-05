@@ -22,7 +22,7 @@
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { SessionAttention, SessionSummary } from "@piorbit/protocol";
+import type { SessionAttention, SessionSummary } from "@lasercode/protocol";
 
 /** Live, per-session, in-memory. Everything here is lost on a host restart. */
 interface Live {

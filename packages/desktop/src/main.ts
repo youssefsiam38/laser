@@ -14,11 +14,11 @@
  * fails, the same window shows a written explanation instead — a state that was
  * designed, not a blank page.
  */
-import { APP_ID, ENV, PRODUCT_NAME } from "@piorbit/protocol";
+import { APP_ID, ENV, PRODUCT_NAME } from "@lasercode/protocol";
 import { BrowserWindow, Menu, app, dialog, ipcMain, nativeTheme, session, shell } from "electron";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { migrateFormerIdentities, resolvePaths, type ParsedArgs, type PiorbitPaths } from "@piorbit/cli";
+import { migrateFormerIdentities, resolvePaths, type ParsedArgs, type PiorbitPaths } from "@lasercode/cli";
 import {
   DEEP_LINK_SCHEME,
   IPC,
@@ -47,7 +47,7 @@ import { chromeFor, WindowManager } from "./windows.js";
  * grants (microphone!), and the update feed. A new id is a new app that has to
  * ask for the microphone again and cannot update the old one.
  */
-// The app id is product.json's, through @piorbit/protocol: macOS keys TCC
+// The app id is product.json's, through @lasercode/protocol: macOS keys TCC
 // grants on it and Windows keys the notification centre and taskbar on it.
 
 /** No flags: a GUI takes its configuration from the environment, not argv. */
@@ -133,7 +133,7 @@ const host = new HostProcess({
   // Development against Vite: the page's origin is the dev server's, and the
   // host has never heard of it. Harmless in a packaged app, where the host
   // serves the page itself and this is empty. (Needs the one-line change to
-  // @piorbit/cli's daemon listed under REQUESTS; the variable is set here so
+  // @lasercode/cli's daemon listed under REQUESTS; the variable is set here so
   // nothing else has to change when it lands.)
   ...(devUiUrl ? { env: { [ENV.allowedOrigins]: originOf(devUiUrl) } } : {}),
   onChange: (info) => onHostChanged(info),

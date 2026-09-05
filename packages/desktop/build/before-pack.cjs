@@ -237,14 +237,14 @@ function assertStagedRuntimeIsPinned(packageRoot, target, binary) {
       `${identity.name}: the Node runtime staged for ${target} has no package manager beside it.\n` +
         `${identity.name} installs extensions from Settings, and a person who installed the app has no npm on PATH — ` +
         `so it ships the one out of the Node archive it already verified.\n` +
-        `Fix: delete packages/desktop/runtime/${target} and run \`pnpm -F @piorbit/desktop runtime -- --target ${target}\`.`,
+        `Fix: delete packages/desktop/runtime/${target} and run \`pnpm -F @lasercode/desktop runtime -- --target ${target}\`.`,
     );
   }
   const stampPath = join(packageRoot, "runtime", target, ".pin.json");
   if (!existsSync(stampPath)) {
     throw new Error(
       `${identity.name}: the Node runtime staged for ${target} has no provenance stamp, so nothing proves it is the pinned one.\n` +
-        `Fix: delete packages/desktop/runtime/${target} and run \`pnpm -F @piorbit/desktop runtime -- --target ${target}\`.`,
+        `Fix: delete packages/desktop/runtime/${target} and run \`pnpm -F @lasercode/desktop runtime -- --target ${target}\`.`,
     );
   }
   const stamp = readJson(stampPath);
@@ -252,7 +252,7 @@ function assertStagedRuntimeIsPinned(packageRoot, target, binary) {
     throw new Error(
       `${identity.name}: the Node runtime staged for ${target} is node ${stamp.version} (${stamp.sha256.slice(0, 12)}…), ` +
         `but runtime.json pins ${pin.version} (${spec.sha256.slice(0, 12)}…).\n` +
-        `Fix: delete packages/desktop/runtime/${target} and run \`pnpm -F @piorbit/desktop runtime -- --target ${target}\`.`,
+        `Fix: delete packages/desktop/runtime/${target} and run \`pnpm -F @lasercode/desktop runtime -- --target ${target}\`.`,
     );
   }
   const binaryPath = join(packageRoot, "runtime", target, binary);
@@ -260,7 +260,7 @@ function assertStagedRuntimeIsPinned(packageRoot, target, binary) {
     throw new Error(
       `${identity.name}: the Node runtime staged for ${target} was written by an older fetch-node.mjs that did not record ` +
         `the binary's own hash, so nothing here can prove the file is the one that came out of the pinned archive.\n` +
-        `Fix: delete packages/desktop/runtime/${target} and run \`pnpm -F @piorbit/desktop runtime -- --target ${target}\`.`,
+        `Fix: delete packages/desktop/runtime/${target} and run \`pnpm -F @lasercode/desktop runtime -- --target ${target}\`.`,
     );
   }
   const actual = createHash("sha256").update(readFileSync(binaryPath)).digest("hex");
@@ -271,7 +271,7 @@ function assertStagedRuntimeIsPinned(packageRoot, target, binary) {
         `  got       ${actual}\n` +
         `Something replaced or truncated it after it was fetched. This build would have shipped that file to ` +
         `everyone who installs ${identity.name}.\n` +
-        `Fix: delete packages/desktop/runtime/${target} and run \`pnpm -F @piorbit/desktop runtime -- --target ${target}\`.`,
+        `Fix: delete packages/desktop/runtime/${target} and run \`pnpm -F @lasercode/desktop runtime -- --target ${target}\`.`,
     );
   }
   console.log(`${identity.name}: staged node ${pin.version} for ${target}, binary re-hashed and matching the pinned archive`);
@@ -321,7 +321,7 @@ exports.default = async function beforePack(context) {
     });
   }
   if (!existsSync(source)) {
-    throw new Error(`${identity.name}: no Node runtime at ${source}. Run \`pnpm -F @piorbit/desktop runtime\`.`);
+    throw new Error(`${identity.name}: no Node runtime at ${source}. Run \`pnpm -F @lasercode/desktop runtime\`.`);
   }
   assertStagedRuntimeIsPinned(packageRoot, target, binary);
 

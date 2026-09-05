@@ -7,7 +7,7 @@
  * through the generated `product.generated.ts` next door and this module's
  * derived constants and helpers.
  *
- * Why it lives in `@piorbit/protocol`: it is the one package every other
+ * Why it lives in `@lasercode/protocol`: it is the one package every other
  * package already depends on, and it imports nothing. The host, the worker, the
  * CLI, the desktop shell and the browser bundle all get the same answer, which
  * is the point — a window and a terminal that disagree about the data directory

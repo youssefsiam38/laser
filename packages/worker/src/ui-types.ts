@@ -6,4 +6,4 @@ export type {
   ExtensionUIContext,
   ExtensionUIDialogOptions,
 } from "@earendil-works/pi-coding-agent";
-export type { UiDialogRequest, UiDialogResponse, UiFireAndForget } from "@piorbit/protocol";
+export type { UiDialogRequest, UiDialogResponse, UiFireAndForget } from "@lasercode/protocol";

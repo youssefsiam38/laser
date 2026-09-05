@@ -1,4 +1,4 @@
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import type * as React from "react";
 import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import { FileClock, FolderPlus, Moon, Plus, Settings, Sun, X } from "lucide-react";

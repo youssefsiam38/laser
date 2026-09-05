@@ -16,7 +16,7 @@
  * decisions, pi/panel/read for refs. Everything a component needs comes
  * through {@link usePanelsState} and {@link usePanelActions}.
  */
-import { PRODUCT_NAME, namespaced, sliceUtf8, storageKey } from "@piorbit/protocol";
+import { PRODUCT_NAME, namespaced, sliceUtf8, storageKey } from "@lasercode/protocol";
 import type {
   HostNotificationMethod,
   HostNotifications,
@@ -24,7 +24,7 @@ import type {
   Panel,
   PanelReadResult,
   UiDialogRequest,
-} from "@piorbit/protocol";
+} from "@lasercode/protocol";
 import {
   createContext,
   useCallback,

@@ -2,7 +2,7 @@
  * A tap on a notification lands here.
  *
  * The URL is `/?decision=<id>[&answer=allow|deny]#/session/<path>`
- * (`@piorbit/protocol`, `src/push.ts`). The app's provider already consumes `#/session/…`; this
+ * (`@lasercode/protocol`, `src/push.ts`). The app's provider already consumes `#/session/…`; this
  * module owns the query string: it remembers the decision at boot (before the
  * provider strips anything), accepts the same URL from the service worker
  * when the app was already open, and hands the decision surface

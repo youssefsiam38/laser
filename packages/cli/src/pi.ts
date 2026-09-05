@@ -1,7 +1,7 @@
 /**
  * Reaching Pi without leaving piorbit's world.
  *
- * `piorbit pi ...` runs the Pi that `@piorbit/worker` pins (AGENTS.md invariant
+ * `piorbit pi ...` runs the Pi that `@lasercode/worker` pins (AGENTS.md invariant
  * 4), not whatever `pi` happens to be on `$PATH`, and runs it with piorbit's
  * agent dir and pi-subagents temp root. That is the whole point: a session you
  * start from the terminal this way shows up in the app, and a background
@@ -10,7 +10,7 @@
  * Resolving a path is not importing Pi. Nothing in this package imports
  * `@earendil-works/*`; it only asks Node where the worker's copy lives.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { spawn } from "node:child_process";
 import { accessSync, constants, existsSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -33,16 +33,16 @@ const PI_PACKAGE = "@earendil-works/pi-coding-agent";
 const signals = osConstants.signals as unknown as Record<string, number>;
 
 /**
- * The pinned Pi: resolved *through* `@piorbit/worker`, so it is by construction
+ * The pinned Pi: resolved *through* `@lasercode/worker`, so it is by construction
  * the same copy a worker loads. Resolving from this package instead would find
  * a hoisted or global one.
  */
 export function resolvePinnedPi(): PiResolution {
   let workerPackageJson: string;
   try {
-    workerPackageJson = createRequire(import.meta.url).resolve("@piorbit/worker/package.json");
+    workerPackageJson = createRequire(import.meta.url).resolve("@lasercode/worker/package.json");
   } catch (error) {
-    throw new CliError("cannot find @piorbit/worker, so the pinned Pi cannot be located", {
+    throw new CliError("cannot find @lasercode/worker, so the pinned Pi cannot be located", {
       fix: "Run `pnpm install` at the repo root, then `pnpm -r build`.",
       cause: error,
     });

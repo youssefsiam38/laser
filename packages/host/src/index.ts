@@ -1,6 +1,6 @@
 /**
- * @piorbit/host — supervisor. Must not import Pi; it talks to workers only
- * through @piorbit/protocol over an fd-3 pipe.
+ * @lasercode/host — supervisor. Must not import Pi; it talks to workers only
+ * through @lasercode/protocol over an fd-3 pipe.
  */
 export {
   HostServer,

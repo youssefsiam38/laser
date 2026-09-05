@@ -1,6 +1,6 @@
-import { WIRE_NAMESPACE } from "@piorbit/protocol";
+import { WIRE_NAMESPACE } from "@lasercode/protocol";
 import { MessagePrimitive, useAui, useAuiState, type MessageState } from "@assistant-ui/react";
-import type { ModelRef, ThinkingLevel } from "@piorbit/protocol";
+import type { ModelRef, ThinkingLevel } from "@lasercode/protocol";
 import { Info, TriangleAlert } from "lucide-react";
 import { memo, useMemo, useState } from "react";
 

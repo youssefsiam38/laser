@@ -40,7 +40,7 @@
 import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, rmdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { DATA_DIR_NAME, FORMER_NAMES, PRODUCT_NAME } from "@piorbit/protocol";
+import { DATA_DIR_NAME, FORMER_NAMES, PRODUCT_NAME } from "@lasercode/protocol";
 
 /** One directory that moved, or refused to. */
 export interface IdentityMigrationStep {

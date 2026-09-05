@@ -1,6 +1,6 @@
 /**
  * Messages produced inside a Pi session by the piorbit companion extension
- * (`@piorbit/pi-extension`). They live here, not in that package, so the worker
+ * (`@lasercode/pi-extension`). They live here, not in that package, so the worker
  * and host can reference them without importing anything Pi-flavoured
  * (AGENTS.md invariant 2: protocol first, then implementation).
  */

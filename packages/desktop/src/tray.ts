@@ -14,9 +14,9 @@
  * tray menu is a fixed structure handed to the desktop environment — there is
  * nothing to mutate.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { Menu, Tray, nativeImage, type MenuItemConstructorOptions, type NativeImage } from "electron";
-import type { SessionAttention } from "@piorbit/protocol";
+import type { SessionAttention } from "@lasercode/protocol";
 import type { DeepLink, UpdateStatus } from "./api.js";
 import type { FleetSnapshot } from "./fleet.js";
 import {

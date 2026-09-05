@@ -12,7 +12,7 @@
  * `pnpm` and no agent to fall back on, and a throwaway `HOME` containing a
  * decoy agent directory the app must find, name, and leave completely alone.
  *
- *   pnpm -F @piorbit/desktop run pack
+ *   pnpm -F @lasercode/desktop run pack
  *   node packages/desktop/scripts/clean-machine.mjs
  *
  *   --dir <path>   a packaged directory other than out/<platform>-unpacked
@@ -178,7 +178,7 @@ const resources = join(appDir, "resources");
 if (!existsSync(resources)) {
   process.stderr.write(
     `clean-machine: no packaged build at ${appDir}.\n` +
-      `Build one first: pnpm -F @piorbit/desktop run pack\n`,
+      `Build one first: pnpm -F @lasercode/desktop run pack\n`,
   );
   process.exit(2);
 }
@@ -211,11 +211,11 @@ record(
 // 3 ── the agent and every workspace package are in it -----------------------
 const required = [
   "@earendil-works/pi-coding-agent",
-  "@piorbit/cli",
-  "@piorbit/host",
-  "@piorbit/worker",
-  "@piorbit/protocol",
-  "@piorbit/pi-extension",
+  "@lasercode/cli",
+  "@lasercode/host",
+  "@lasercode/worker",
+  "@lasercode/protocol",
+  "@lasercode/pi-extension",
 ];
 const missing = required.filter((name) => !packageNames.includes(name));
 record(
@@ -262,11 +262,11 @@ record(
   "the bundled runtime runs with nothing on PATH",
   Boolean(probed) && probed.el === false && probed.e === nodeBinary,
   probed ? `node ${probed.v}, process.execPath = ${probed.e}` : `it did not answer: ${probe.stderr.trim() || "no output"}`,
-  "The shipped binary is not a usable plain Node. Re-stage it: pnpm -F @piorbit/desktop runtime -- --current.",
+  "The shipped binary is not a usable plain Node. Re-stage it: pnpm -F @lasercode/desktop runtime -- --current.",
 );
 
 // 6 ── the agent resolves from inside the package, and all of it loads -------
-const resolver = join(modules, "@piorbit", "worker", "dist", "resolve-pi.js");
+const resolver = join(modules, "@lasercode", "worker", "dist", "resolve-pi.js");
 const agentRun = runBare(nodeBinary, [resolver, "--check"], bareEnv);
 const agentReport = lastJsonLine(agentRun.stdout);
 const insidePackage = (path) => typeof path === "string" && path.startsWith(`${appDir}${sep}`);
@@ -299,7 +299,7 @@ record(
 );
 
 // 8 ── doctor, from inside the package, with nothing on PATH ----------------
-const cli = join(modules, "@piorbit", "cli", "dist", "main.js");
+const cli = join(modules, "@lasercode", "cli", "dist", "main.js");
 const doctorRun = runBare(nodeBinary, [cli, "doctor", "--skip-worker", "--json", "--no-color"], bareEnv);
 const doctorReport = lastJsonLine(doctorRun.stdout);
 const rows = doctorReport?.checks ?? [];

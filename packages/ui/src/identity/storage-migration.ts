@@ -23,7 +23,7 @@
  *
  * With no former names it does nothing, which is today's answer.
  */
-import { FORMER_NAMES, STORAGE_PREFIX } from "@piorbit/protocol";
+import { FORMER_NAMES, STORAGE_PREFIX } from "@lasercode/protocol";
 
 export interface StorageMigrationResult {
   /** Keys moved onto the current prefix. */

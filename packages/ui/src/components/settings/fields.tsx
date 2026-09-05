@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import type { SettingDescriptor, SettingOption } from "@piorbit/protocol";
+import type { SettingDescriptor, SettingOption } from "@lasercode/protocol";
 
 export interface FieldProps {
   field: SettingDescriptor;

@@ -1,5 +1,5 @@
 /**
- * @piorbit/crypto — everything the relay is deliberately unable to do.
+ * @lasercode/crypto — everything the relay is deliberately unable to do.
  *
  * Fixed design (D-10, docs/research/findings.md "Relay and mobile"):
  *  - Noise_IK for first contact after a QR scan; Noise_KK once both statics are known.
@@ -11,7 +11,7 @@
  *    real key material to it. A photographed QR is useless after use.
  *  - Device list: desktop root Ed25519 key signs { version, devices[] }; revoke = re-sign.
  *
- * This entry point is browser-safe. Node-only stores live in `@piorbit/crypto/node`.
+ * This entry point is browser-safe. Node-only stores live in `@lasercode/crypto/node`.
  */
 export * from "./bytes.js";
 export * from "./backend.js";

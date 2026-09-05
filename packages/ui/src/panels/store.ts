@@ -15,7 +15,7 @@ import {
   type Attention,
   type Panel,
   type PanelKind,
-} from "@piorbit/protocol";
+} from "@lasercode/protocol";
 
 export interface Snapshot {
   /** Epoch ms. */

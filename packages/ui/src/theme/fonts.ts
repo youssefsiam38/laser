@@ -18,7 +18,7 @@
  * swap does not reflow. The overrides are injected as a `<family> Fallback`
  * face and the stack lists it right after the real family.
  */
-import { namespaced } from "@piorbit/protocol";
+import { namespaced } from "@lasercode/protocol";
 import type { FontChoice } from "./types.js";
 
 export type FontKind = "sans" | "mono";

@@ -12,7 +12,7 @@
  * and pretending otherwise would put a per-device switch behind a project
  * scope that has nothing to do with it.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, RefreshCw, Search, Sparkles } from "lucide-react";
 
@@ -23,7 +23,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { cn } from "@/lib/utils";
 import { usePiorbitStable } from "@/runtime";
-import type { SettingsCatalog, SettingsScope, SettingsSnapshot } from "@piorbit/protocol";
+import type { SettingsCatalog, SettingsScope, SettingsSnapshot } from "@lasercode/protocol";
 
 import { NotificationsSetting } from "@/components/mobile";
 

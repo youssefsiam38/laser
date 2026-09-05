@@ -7,7 +7,7 @@
  * point. If a future Pi moves `KeybindingsManager`, renames an action or
  * changes a default, this fails here rather than in a person's Settings screen.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

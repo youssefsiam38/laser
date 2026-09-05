@@ -5,7 +5,7 @@
  *
  * pi-subagents 0.65 has no sockets and no IPC, so almost everything a person
  * wants to see lives in files under `$PI_SUBAGENTS_TEMP_ROOT`. Those are read
- * by `@piorbit/host` (`src/subagents/`), not here, because a session started
+ * by `@lasercode/host` (`src/subagents/`), not here, because a session started
  * from a terminal has no worker and no extension and must still be visible
  * (AGENTS.md invariant 1: "nothing that reads files lives here").
  *
@@ -38,10 +38,10 @@
  * ## Panel ids are shared with the host on purpose
  *
  * `runPanelId` and friends below produce byte-identical ids to
- * `@piorbit/host` `src/subagents/panels.ts`. That is what makes "a child seen
+ * `@lasercode/host` `src/subagents/panels.ts`. That is what makes "a child seen
  * by both paths appears exactly once" true by construction: two producers, one
  * id, one panel, replaced in place (R6/R9). They are duplicated rather than
- * imported because this package may only depend on `@piorbit/protocol`; the
+ * imported because this package may only depend on `@lasercode/protocol`; the
  * REQUEST to move them into the protocol package is in the lane report.
  *
  * The rule that keeps it true: this module emits a panel only when it can
@@ -50,14 +50,14 @@
  * it emits nothing rather than an id nobody else writes
  * ({@link completionEvent}).
  */
-import { WIRE_NAMESPACE } from "@piorbit/protocol";
+import { WIRE_NAMESPACE } from "@lasercode/protocol";
 import {
   PANEL_ACTION_EVENT,
   PANEL_CLOSE_EVENT,
   PANEL_EVENT,
   type PanelEvent,
   type RunLifecycle,
-} from "@piorbit/protocol";
+} from "@lasercode/protocol";
 import type { ModuleContext, PiorbitModule } from "./index.js";
 
 // ---------------------------------------------------------------------------

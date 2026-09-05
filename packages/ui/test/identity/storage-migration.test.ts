@@ -11,7 +11,7 @@
  * the day it has three.
  */
 import { describe, expect, it } from "vitest";
-import { STORAGE_PREFIX } from "@piorbit/protocol";
+import { STORAGE_PREFIX } from "@lasercode/protocol";
 import { migrateStorageKeys } from "../../src/identity/storage-migration.js";
 
 const OLD = [{ storagePrefix: "previous" }];

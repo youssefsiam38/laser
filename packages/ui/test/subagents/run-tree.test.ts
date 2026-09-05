@@ -3,7 +3,7 @@
  * level per strip, depth in the breadcrumb, attention rolling up, and focus
  * that survives a run being pruned underneath it.
  */
-import type { Panel, RunPanel } from "@piorbit/protocol";
+import type { Panel, RunPanel } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
 import type { PanelEntry } from "../../src/panels/store.js";
 import {

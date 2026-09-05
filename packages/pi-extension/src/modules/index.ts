@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { PiExtensionCommand, PiExtensionMessage, PiExtensionModuleName } from "@piorbit/protocol";
+import type { PiExtensionCommand, PiExtensionMessage, PiExtensionModuleName } from "@lasercode/protocol";
 import { panelsModule } from "./panels.js";
 import { providerLogModule } from "./provider-log.js";
 import { subagentsModule } from "./subagents.js";

@@ -1,4 +1,4 @@
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,7 +26,7 @@ function fakeWorker(pin: string | undefined, agent?: { version?: string; bin?: s
   roots.push(root);
   writeFileSync(
     join(root, "package.json"),
-    JSON.stringify({ name: "@piorbit/worker", dependencies: pin === undefined ? {} : { [AGENT_PACKAGE]: pin } }),
+    JSON.stringify({ name: "@lasercode/worker", dependencies: pin === undefined ? {} : { [AGENT_PACKAGE]: pin } }),
   );
   if (agent) {
     const dir = join(root, "node_modules", ...AGENT_PACKAGE.split("/"));

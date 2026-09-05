@@ -1,7 +1,7 @@
-# @piorbit/ui
+# @lasercode/ui
 
 The one web app: Electron renderer, browser tab, and PWA. It speaks
-`@piorbit/protocol` over a WebSocket to `@piorbit/host` and renders Pi sessions
+`@lasercode/protocol` over a WebSocket to `@lasercode/host` and renders Pi sessions
 through [assistant-ui](https://assistant-ui.com) 0.15.
 
 The visual and interaction contract is **[DESIGN.md](./DESIGN.md)** — colors,
@@ -59,7 +59,7 @@ matches `state.current`.
 
 ## Running it
 
-Build everything once (`@piorbit/host` serves `packages/ui/dist`):
+Build everything once (`@lasercode/host` serves `packages/ui/dist`):
 
 ```bash
 pnpm -r build
@@ -77,15 +77,15 @@ PORT=41442 node scripts/sandbox.mjs
 Start the sandbox (or a real host) on that port first, then:
 
 ```bash
-pnpm -F @piorbit/ui dev             # http://127.0.0.1:5173
+pnpm -F @lasercode/ui dev             # http://127.0.0.1:5173
 ```
 
 **Checks**
 
 ```bash
-pnpm -F @piorbit/ui typecheck
-pnpm -F @piorbit/ui test
-pnpm -F @piorbit/ui build
+pnpm -F @lasercode/ui typecheck
+pnpm -F @lasercode/ui test
+pnpm -F @lasercode/ui build
 ```
 
 ## Invariants
@@ -97,4 +97,4 @@ pnpm -F @piorbit/ui build
   `attention`, `danger`, `ok`), never raw hex.
 - Both themes are defined on the tokens; `.dark` on `<html>` is set pre-paint by
   a script in `index.html` from `localStorage["piorbit-theme"]`.
-- Nothing here imports Pi. The UI speaks only `@piorbit/protocol`.
+- Nothing here imports Pi. The UI speaks only `@lasercode/protocol`.

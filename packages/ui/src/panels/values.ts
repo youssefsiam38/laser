@@ -3,7 +3,7 @@
  * (docs/ux-panels.md "The legibility floor"): minimal shows exactly one,
  * compact up to three. Pure; the caller passes `now` and re-renders on a tick.
  */
-import type { Panel, PanelUsage } from "@piorbit/protocol";
+import type { Panel, PanelUsage } from "@lasercode/protocol";
 import { duration, money, tokens } from "../format.js";
 import { elapsedOf, velocityOf, type PanelEntry } from "./store.js";
 

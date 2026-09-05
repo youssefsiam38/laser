@@ -15,7 +15,7 @@
  *     optional secondary (Back, or the rejection label), Cancel.
  *   - No card chrome; the surface supplies it.
  */
-import type { DecisionField } from "@piorbit/protocol";
+import type { DecisionField } from "@lasercode/protocol";
 import { MessageSquareText } from "lucide-react";
 import { useId, type ComponentProps, type ReactNode } from "react";
 

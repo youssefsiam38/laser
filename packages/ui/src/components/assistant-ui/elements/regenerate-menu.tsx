@@ -9,7 +9,7 @@
  * collision-aware) rather than an inline list toggled by a button; two groups
  * (models, thinking) instead of one flat list; the menu names the fork.
  */
-import type { ModelRef, ThinkingLevel } from "@piorbit/protocol";
+import type { ModelRef, ThinkingLevel } from "@lasercode/protocol";
 import { RefreshCw } from "lucide-react";
 import { useState } from "react";
 

@@ -12,7 +12,7 @@
  *       [--subagents-temp-root <dir>] [--project-trusted yes|no]
  */
 import { Socket } from "node:net";
-import { ENV, LineDecoder, PRODUCT_NAME, parseJsonLine, type JsonRpcMessage } from "@piorbit/protocol";
+import { ENV, LineDecoder, PRODUCT_NAME, parseJsonLine, type JsonRpcMessage } from "@lasercode/protocol";
 import { StableSdkDriver } from "./drivers/stable-sdk.js";
 import { AgentResolutionError, assertBundledAgent } from "./resolve-pi.js";
 import { WorkerServer } from "./server.js";

@@ -1,4 +1,4 @@
-import { ENV } from "@piorbit/protocol";
+import { ENV } from "@lasercode/protocol";
 import { readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 

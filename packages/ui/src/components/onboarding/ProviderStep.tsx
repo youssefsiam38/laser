@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { usePiorbitStable } from "@/runtime";
-import type { ProviderAuthInfo, ProviderLoginMethod } from "@piorbit/protocol";
+import type { ProviderAuthInfo, ProviderLoginMethod } from "@lasercode/protocol";
 
 import { ProviderSignIn } from "./ProviderSignIn.js";
 import { sortProviders } from "./setup-model.js";

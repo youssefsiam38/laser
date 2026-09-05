@@ -6,7 +6,7 @@
  * count that keeps saying "2 running" after the host went away.
  */
 import { describe, expect, it } from "vitest";
-import type { ProjectInfo, SessionSummary } from "@piorbit/protocol";
+import type { ProjectInfo, SessionSummary } from "@lasercode/protocol";
 import { FleetModel, shouldNotify, type AttentionChange } from "../src/fleet.js";
 
 function summary(overrides: Partial<SessionSummary> & Pick<SessionSummary, "path" | "cwd">): SessionSummary {

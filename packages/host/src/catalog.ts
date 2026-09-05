@@ -19,7 +19,7 @@
 import { closeSync, openSync, readSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { defaultAgentDir } from "./paths.js";
-import type { SessionSummary } from "@piorbit/protocol";
+import type { SessionSummary } from "@lasercode/protocol";
 
 export interface CatalogEntry extends SessionSummary {
   size: number;

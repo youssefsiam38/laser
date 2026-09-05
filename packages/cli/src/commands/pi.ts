@@ -6,7 +6,7 @@
  * piorbit consumes only the flags that appear *before* Pi's first argument, so
  * there is one simple rule to remember and no flag can ever be shadowed.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import type { ParsedArgs } from "../args.js";
 import type { Command } from "../command.js";
 import { resolvePaths } from "../config.js";
@@ -70,7 +70,7 @@ export const piCommand: Command = {
   summary: `run the Pi that ${PRODUCT_NAME} pins, with ${PRODUCT_NAME}'s agent directory`,
   usage: `${PRODUCT_NAME} pi [--global-pi] [--agent-dir <dir>] [-- ] <pi arguments...>`,
   description: `
-Runs the exact Pi that @piorbit/worker pins — the same copy the app runs — with
+Runs the exact Pi that @lasercode/worker pins — the same copy the app runs — with
 PI_CODING_AGENT_DIR, PI_CODING_AGENT_SESSION_DIR and PI_SUBAGENTS_TEMP_ROOT set
 to ${PRODUCT_NAME}'s. A session or a background subagent run you start this way is
 visible in the app.

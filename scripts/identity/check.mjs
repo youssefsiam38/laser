@@ -4,7 +4,7 @@
  *
  *   pnpm identity:check
  *
- * It runs inside `pnpm -r build` (as @piorbit/protocol's prebuild) and inside
+ * It runs inside `pnpm -r build` (as @lasercode/protocol's prebuild) and inside
  * `pnpm -r test`, so a hand-edited `appId` in electron-builder.yml, a stale
  * generated manifest, or a fresh `"piorbit"` typed into a component, all stop
  * the build with the file and line rather than shipping a product that answers
@@ -102,7 +102,7 @@ const ANY_ENV_PREFIX = [identity.envPrefix, ...identity.formerNames.map((former)
   .map(escape)
   .join("|");
 
-/** `@piorbit/host`, `"@piorbit/protocol": "workspace:*"` — the npm scope, not the product. */
+/** `@lasercode/host`, `"@lasercode/protocol": "workspace:*"` — the npm scope, not the product. */
 const SCOPE = new RegExp(`@(${ANY_NAME})(/[a-z0-9-]+)?`, "g");
 
 /**

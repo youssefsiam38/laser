@@ -134,7 +134,7 @@ fi
 # it has to: on an installed copy the argument list AppRun hands over starts
 # with that flag, so deciding here first would send `{{binary}} doctor` to the
 # window and a person would get a staring match instead of a diagnosis.
-cli="$here/resources/app.asar.unpacked/node_modules/@piorbit/cli/dist/main.js"
+cli="$here/resources/app.asar.unpacked/node_modules/@lasercode/cli/dist/main.js"
 node="$here/resources/runtime/node"
 
 run_cli() {

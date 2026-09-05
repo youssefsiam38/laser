@@ -13,7 +13,7 @@
  * `onOpen`; copying the path appears only when there is a path. Nothing is
  * rendered disabled with a shrug.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { Check, Copy, ExternalLink, FileQuestion } from "lucide-react";
 
 import { Button } from "@/components/ui/button";

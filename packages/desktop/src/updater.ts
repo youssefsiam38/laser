@@ -17,7 +17,7 @@
  * restarts on its own. `autoInstallOnAppQuit` means the next ordinary quit
  * picks it up, which is the polite version of the same thing.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";

@@ -4,7 +4,7 @@
  * dropped socket is an error to report, not a state to recover from.
  */
 import { WebSocket } from "ws";
-import { ErrorCodes, PRODUCT_NAME, type ClientMethod, type ClientRequests, type HostNotificationMethod, type HostNotifications, type JsonRpcMessage } from "@piorbit/protocol";
+import { ErrorCodes, PRODUCT_NAME, type ClientMethod, type ClientRequests, type HostNotificationMethod, type HostNotifications, type JsonRpcMessage } from "@lasercode/protocol";
 import { CliError, ExitCode } from "./errors.js";
 
 export class HostRpcError extends Error {

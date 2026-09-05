@@ -2,12 +2,12 @@
  * M2-T2: the attention state machine and the part of it that has to survive a
  * reload. Pure logic with a temp file for the seen-map, no worker involved.
  */
-import { PRODUCT_NAME } from "@piorbit/protocol";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SessionAttention } from "@piorbit/protocol";
+import type { SessionAttention } from "@lasercode/protocol";
 import { AttentionTracker, type AttentionSnapshot } from "../src/attention.js";
 
 let dir: string;

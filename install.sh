@@ -1,12 +1,12 @@
 #!/bin/sh
-# piorbit installer — one command, no root, no Node, no package manager.
+# laser installer — one command, no root, no Node, no package manager.
 #
 # GENERATED from install.sh.tpl by `pnpm identity:generate`. Every name in this
 # file comes from product.json (MX-T7, D-36); edit the template, not this copy.
 #
-#   gh api repos/youssefsiam38/piorbit/contents/install.sh \
-#     -H 'Accept: application/vnd.github.raw' > piorbit-install.sh \
-#     && sh piorbit-install.sh
+#   gh api repos/youssefsiam38/laser/contents/install.sh \
+#     -H 'Accept: application/vnd.github.raw' > laser-install.sh \
+#     && sh laser-install.sh
 #
 # What this script is allowed to assume about the machine: a POSIX shell, the
 # GNU/BusyBox coreutils every distribution ships, and `gh`. Nothing else. In
@@ -42,12 +42,12 @@ set -eu
 
 # --------------------------------------------------------------- config ----
 
-REPO_DEFAULT="youssefsiam38/piorbit"
-PRODUCT="piorbit"
-BINARY="piorbit"
-APP_ID="dev.piorbit.desktop"
-URL_SCHEME="piorbit"
-DESKTOP_NAME="piorbit.desktop"
+REPO_DEFAULT="youssefsiam38/laser"
+PRODUCT="laser"
+BINARY="laser"
+APP_ID="com.hubtrix.laser"
+URL_SCHEME="laser"
+DESKTOP_NAME="laser.desktop"
 
 # Ed25519 public key, PEM, base64 of the DER SubjectPublicKeyInfo body, as
 # printed by `scripts/release/sign.sh --show-key`. Empty until a release key
@@ -57,11 +57,11 @@ RELEASE_PUBKEY=""
 
 # ------------------------------------------------------------- plumbing ----
 
-PROGRAM="piorbit installer"
+PROGRAM="laser installer"
 DRY_RUN=0
 ASSUME_YES=0
 MODE="install"
-REPO="${PIORBIT_REPO:-$REPO_DEFAULT}"
+REPO="${LASER_REPO:-$REPO_DEFAULT}"
 TAG=""
 FORMAT="appimage"
 # 1 once `--format` was given. An explicit choice is an instruction, and nothing
@@ -116,7 +116,7 @@ run() {
 # place. Anything that ends the script in that window — ENOSPC on a cross-device
 # move, a Ctrl-C, a killed terminal — has to put the working copy back, or the
 # person is left with a receipt describing an app that is not there, a dangling
-# `piorbit` on PATH, and a menu entry that TryExec hides.
+# `laser` on PATH, and a menu entry that TryExec hides.
 ROLLBACK_APP=""
 
 cleanup() {
@@ -131,7 +131,7 @@ trap cleanup EXIT HUP INT TERM
 
 scratch_dir() {
   if [ -z "$SCRATCH" ]; then
-    SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/piorbit-install.XXXXXX") ||
+    SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/laser-install.XXXXXX") ||
       die "could not create a temporary directory under ${TMPDIR:-/tmp}" \
         "Set TMPDIR to a directory you can write to and run this again."
   fi
@@ -158,7 +158,7 @@ ask() {
 
 usage() {
   cat <<'EOF'
-piorbit installer — installs the piorbit desktop app for the current user.
+laser installer — installs the Laser desktop app for the current user.
 
   sh install.sh                     install or upgrade to the latest release
   sh install.sh --uninstall         remove exactly what a previous run installed
@@ -221,7 +221,7 @@ while [ $# -gt 0 ]; do
     --prefix=*) PREFIX="${1#--prefix=}" ;;
     --repo)
       shift
-      [ $# -gt 0 ] || die "--repo needs an owner/name, for example --repo youssefsiam38/piorbit"
+      [ $# -gt 0 ] || die "--repo needs an owner/name, for example --repo youssefsiam38/laser"
       REPO="$1"
       ;;
     --repo=*) REPO="${1#--repo=}" ;;
@@ -412,7 +412,7 @@ if it fails a second time, do not install it, and report it."
 # Verified -> say so. Anything else is fatal unless --allow-unattested was
 # given *and* the reason is that there is no attestation at all.
 #
-# --signer-workflow is what makes this mean "built by piorbit's release
+# --signer-workflow is what makes this mean "built by laser's release
 # workflow" rather than "built by some workflow in that repository": without
 # it, anyone who can push a workflow file to the repo can mint provenance for
 # bytes of their own choosing and this check would pass.
@@ -650,7 +650,7 @@ receipt_write() {
 # ------------------------------------------------------- desktop wiring ----
 
 # Reuse the .desktop file the app was packaged with rather than inventing one:
-# it already carries the MimeType line that makes piorbit:// links work, the
+# it already carries the MimeType line that makes laser:// links work, the
 # StartupWMClass that stops the window from getting its own taskbar group, and
 # the translated names. Only the paths are rewritten, because they were relative
 # to a mount point that no longer exists.
@@ -673,7 +673,7 @@ install_desktop_entry() {
     # TryExec is what makes a menu hide an entry whose program is not there, so
     # a half-removed install shows nothing rather than a launcher that fails.
     grep -q '^TryExec=' "$1" || printf 'TryExec=%s\n' "$2"
-    printf 'X-Piorbit-Installed-By=install.sh\n'
+    printf 'X-Laser-Installed-By=install.sh\n'
   } >"$ide_out.new"
   mv "$ide_out.new" "$ide_out"
   chmod 644 "$ide_out"
@@ -715,7 +715,7 @@ refresh_desktop_caches() {
   fi
 }
 
-# Claim piorbit:// links. Install only — on uninstall the entry is gone and the
+# Claim laser:// links. Install only — on uninstall the entry is gone and the
 # association goes with it, and rewriting the mimeapps list on the way out would
 # touch a file this script did not create.
 claim_url_scheme() {
@@ -736,17 +736,17 @@ install_appdir() {
   # install_appdir <path to an unpacked app directory>
   ia_new="$1"
   ia_target="$LIB_DIR/app"
-  # piorbit's own launcher is the entry point, in every format. An AppImage
+  # laser's own launcher is the entry point, in every format. An AppImage
   # also carries electron-builder's AppRun, and that one must NOT be used here:
   #
   #   - it is the AppImage *runtime's* wrapper, written for a mounted image. It
   #     assigns APPDIR without exporting it, so nothing downstream can tell it
   #     ran, and when its `unshare -Ur true` probe fails — or `unshare` is
   #     simply absent — it silently prepends --no-sandbox. On an extracted copy
-  #     that means piorbit starts unsandboxed and says nothing;
+  #     that means laser starts unsandboxed and says nothing;
   #   - it is `#!/usr/bin/env bash`, so a machine without bash cannot start the
   #     app at all;
-  #   - it rewrites PATH, LD_LIBRARY_PATH and XDG_DATA_DIRS for piorbit and for
+  #   - it rewrites PATH, LD_LIBRARY_PATH and XDG_DATA_DIRS for laser and for
   #     every process the agent goes on to spawn.
   #
   # The launcher beside it does the same three jobs deliberately and says what
@@ -1207,7 +1207,7 @@ so you can run this again once the package is gone. To remove it by hand:
   # the answer is no, a re-run still finds an installation to remove.
   removed_data=0
   kept_data=0
-  for data_dir in "$HOME/.config/piorbit" "$HOME/.local/share/piorbit" "$HOME/.piorbit"; do
+  for data_dir in "$HOME/.config/laser" "$HOME/.local/share/laser" "$HOME/.laser" "$HOME/.config/piorbit" "$HOME/.local/share/piorbit" "$HOME/.piorbit"; do
     [ -d "$data_dir" ] || continue
     # `--yes` means "do not stop to ask me", not "delete my data". Settings,
     # the device identity and every pairing are not recoverable, so deleting
