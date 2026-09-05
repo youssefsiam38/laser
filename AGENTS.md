@@ -47,6 +47,19 @@ and a phone width, in both themes, and look at it the way a demanding
 designer would. "It builds" is not the bar. "I would show this to someone I
 respect" is.
 
+**Use the `/assistant-ui` skill for every piece of UI work, everywhere.** It
+is rich and current, and it covers far more than the thread: elements,
+primitives, the runtime and `aui` client, tools and approvals, generative
+UI, streaming, thread lists, markdown, observability, mobile. Invoke it with
+the `Skill` tool (`assistant-ui`) before touching any component, and read the
+relevant sub-skill under `~/.claude/skills/assistant-ui/` — `elements` before
+building a surface, `primitives` before composing one, `runtime` before
+touching the adapter, `tools` before any approval or tool UI, `markdown`
+before any renderer, `thread-list` before the sessions panel. Prefer an
+assistant-ui element or primitive over hand-rolling; style it to `DESIGN.md`
+rather than rebuilding it. Its guidance is secondary only to the installed
+`.d.ts` when the two disagree.
+
 This file is the contract for every agent (human or model) working here. Read it
 fully before touching anything. The three planning files it governs are:
 
