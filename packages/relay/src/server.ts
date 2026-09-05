@@ -26,9 +26,10 @@ import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { CookieJar, COOKIE_ROTATION_MS } from "./cookie.js";
 import { LoadWindow, TokenBucket } from "./limits.js";
 import {
+  CHANNEL_PROTOCOL_PREFIX,
   RelayClose,
+  channelIdFromProtocols,
   legalFrameSizes,
-  isChannelId,
   type RelayControl,
   type RelayErrorCode,
 } from "./protocol.js";
@@ -183,7 +184,17 @@ export class RelayServer {
     // any WebSocket state exists. permessage-deflate is off: it is a CRIME-class
     // compression oracle over payloads we deliberately pad, and Railway's proxy
     // handles it badly besides.
-    this.wss = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload: this.options.maxFrameBytes });
+    this.wss = new WebSocketServer({
+      noServer: true,
+      perMessageDeflate: false,
+      maxPayload: this.options.maxFrameBytes,
+      // Echo the channel subprotocol back, or the client's handshake fails.
+      // Anything else a client offers is ignored, never selected.
+      handleProtocols: (protocols) => {
+        for (const protocol of protocols) if (protocol.startsWith(CHANNEL_PROTOCOL_PREFIX)) return protocol;
+        return false;
+      },
+    });
     this.http.on("upgrade", (req, socket, head) => this.onUpgrade(req, socket, head));
   }
 
@@ -248,13 +259,20 @@ export class RelayServer {
   private onUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     const ip = this.clientIp(req);
     const url = new URL(req.url ?? "/", "http://relay.invalid");
-    const match = /^\/ws\/([^/]+)$/.exec(url.pathname);
     this.load.record();
 
-    if (!match) return this.refuseUpgrade(socket, 404, "not_found", "expected /ws/<channel-id>");
-    const channelId = match[1]!;
-    if (!isChannelId(channelId)) {
-      return this.refuseUpgrade(socket, 400, "bad_channel", "channel id must be 43 base64url characters");
+    if (!/^\/ws\/?$/.test(url.pathname)) {
+      return this.refuseUpgrade(socket, 404, "not_found", "expected /ws with the channel as a subprotocol");
+    }
+    // The channel id is a header, not a path segment: see CHANNEL_PROTOCOL_PREFIX.
+    const channelId = channelIdFromProtocols(req.headers["sec-websocket-protocol"]);
+    if (channelId === undefined) {
+      return this.refuseUpgrade(
+        socket,
+        400,
+        "bad_channel",
+        "offer the channel as a Sec-WebSocket-Protocol value: piorbit.channel.<43 base64url characters>",
+      );
     }
     if (!this.connections.take(ip)) {
       const retry = this.connections.retryAfterSeconds(ip);

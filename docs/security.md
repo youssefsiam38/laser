@@ -156,6 +156,15 @@ traffic is never routed anywhere near another's. `epoch` exists so a later task
 can rotate the id on an agreed schedule; today it is always 0, which is why
 linkability is on the residual list (§5).
 
+Being uncomputable is not the same as being unobservable, so the id is treated
+as a **bearer capability** and kept out of anything that gets logged. It travels
+as `Sec-WebSocket-Protocol: piorbit.channel.<id>`, never as a URL path segment:
+a request line is written to the platform edge's logs, any TLS-terminating
+proxy's logs and the relay's own, and a channel holds exactly two sockets — so
+one disclosed id is enough to squat a slot and lock the real phone out of its own
+channel until the pairing is replaced. Rotation (advancing `epoch`) is still the
+answer to a *disclosed* id, and is not implemented yet.
+
 ## 5. What the relay can and cannot see
 
 **Cannot** (`packages/relay` links no crypto library — asserted by

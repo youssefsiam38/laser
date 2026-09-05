@@ -20,8 +20,15 @@ so it cannot drift.
 ```
 GET  /healthz                aggregate counters, no per-channel data
 GET  /                       one line of prose
-WS   /ws/<channel-id>        the channel; optional ?cookie=<value> under load
+WS   /ws                     the channel; optional ?cookie=<value> under load
+     Sec-WebSocket-Protocol: piorbit.channel.<channel-id>
 ```
+
+The channel id is a **header, never a path segment**. A request line is written
+to every access log between the client and this process, and the id is a bearer
+capability: a channel holds two sockets, so anyone who reads one id can occupy a
+slot and lock the real device out of its own channel. The relay still treats the
+value as an opaque route and selects it back verbatim as the subprotocol.
 
 Relay → client (text):
 

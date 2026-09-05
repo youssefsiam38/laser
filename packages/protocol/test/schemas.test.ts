@@ -27,6 +27,7 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/session/navigate": { path: "/s.jsonl", entryId: "abc", summarize: true, label: "x" },
   "pi/session/rename": { path: "/s.jsonl", name: "feature" },
   "pi/session/entries": { path: "/s.jsonl" },
+  "pi/session/detach": { path: "/s.jsonl" },
   "pi/session/compact": { path: "/s.jsonl" },
   "pi/model/list": { path: "/s.jsonl" },
   "pi/model/set": { path: "/s.jsonl", model: { provider: "stub", id: "stub-1" } },

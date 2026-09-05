@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { RelayServer } from "../src/server.js";
-import { RelayClose, type RelayControl } from "../src/protocol.js";
+import { RelayClose, channelSubprotocol, type RelayControl } from "../src/protocol.js";
 
 const CHANNEL_A = "A".repeat(43);
 const CHANNEL_B = "B".repeat(43);
@@ -66,7 +66,7 @@ class Peer {
 }
 
 function connect(channel: string, query = "", origin = base): Promise<Peer> {
-  const ws = new WebSocket(`${origin}/ws/${channel}${query}`);
+  const ws = new WebSocket(`${origin}/ws${query}`, [channelSubprotocol(channel)]);
   const peer = new Peer(ws);
   open.push(peer);
   return new Promise((resolve, reject) => {
@@ -202,7 +202,7 @@ describe("relay", () => {
     try {
       const open = (channel: string, forwarded: string): Promise<void> =>
         new Promise((resolve, reject) => {
-          const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/${channel}`, {
+          const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, [channelSubprotocol(channel)], {
             headers: { "x-forwarded-for": forwarded },
           });
           ws.once("open", () => {
@@ -229,6 +229,35 @@ describe("relay", () => {
 
   it("rejects a malformed channel id before any WebSocket state exists", async () => {
     await expect(connect("short")).rejects.toMatchObject({ status: 400 });
+    expect(relay.statistics().channels).toBe(0);
+  });
+
+  it("routes on the subprotocol and refuses a channel id in the request line", async () => {
+    // The request line is logged by every intermediary, and the channel id is a
+    // bearer capability: whoever reads one can squat a slot on that channel.
+    await expect(
+      new Promise((resolve, reject) => {
+        const ws = new WebSocket(`${base}/ws/${CHANNEL_A}`);
+        ws.once("open", () => {
+          ws.close();
+          resolve("opened");
+        });
+        ws.once("unexpected-response", (_req, res) => reject(new Error(`HTTP ${res.statusCode}`)));
+        ws.once("error", reject);
+      }),
+    ).rejects.toThrow(/HTTP 404/);
+    // …and without any channel subprotocol at all there is nothing to route on.
+    await expect(
+      new Promise((resolve, reject) => {
+        const ws = new WebSocket(`${base}/ws`);
+        ws.once("open", () => {
+          ws.close();
+          resolve("opened");
+        });
+        ws.once("unexpected-response", (_req, res) => reject(new Error(`HTTP ${res.statusCode}`)));
+        ws.once("error", reject);
+      }),
+    ).rejects.toThrow(/HTTP 400/);
     expect(relay.statistics().channels).toBe(0);
   });
 

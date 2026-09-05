@@ -109,6 +109,16 @@ const DEFAULT_MAX_BACKOFF_MS = 30_000;
 const MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
 /** What the relay advertises today; replaced by the real value from `hello`. */
 const DEFAULT_RELAY_MAX_FRAME_BYTES = 65_536;
+/**
+ * Mirrors `CHANNEL_PROTOCOL_PREFIX` in `@piorbit/relay`. Duplicated as a plain
+ * string on purpose: the host does not depend on the relay package, exactly as
+ * the relay does not depend on the crypto package.
+ */
+const CHANNEL_PROTOCOL_PREFIX = "piorbit.channel.";
+
+function channelSubprotocol(channelIdText: string): string {
+  return `${CHANNEL_PROTOCOL_PREFIX}${channelIdText}`;
+}
 
 export class RelayClient {
   private readonly options: RelayClientOptions;
@@ -223,7 +233,10 @@ export class RelayClient {
     this.setState("connecting");
 
     const url = this.socketUrl();
-    const ws = new this.WS(url, { perMessageDeflate: false, maxPayload: MAX_MESSAGE_BYTES });
+    const ws = new this.WS(url, [channelSubprotocol(this.channelIdText)], {
+      perMessageDeflate: false,
+      maxPayload: MAX_MESSAGE_BYTES,
+    });
     this.ws = ws;
 
     ws.on("open", () => {
@@ -262,10 +275,16 @@ export class RelayClient {
     });
   }
 
+  /**
+   * The channel id is deliberately **not** in this URL. It is a bearer
+   * capability — a channel holds two sockets, so anyone who reads one id can
+   * squat a slot and lock the phone out — and a request line is logged by every
+   * intermediary between here and the relay. It travels as a subprotocol
+   * (`channelSubprotocol`), which is a header, instead.
+   */
   private socketUrl(): string {
     const base = this.options.relayUrl.replace(/\/+$/, "");
-    const query = this.cookie ? `?cookie=${encodeURIComponent(this.cookie)}` : "";
-    return `${base}/${this.channelIdText}${query}`;
+    return this.cookie ? `${base}?cookie=${encodeURIComponent(this.cookie)}` : base;
   }
 
   private onUpgradeRefused(status: number, body: string): void {

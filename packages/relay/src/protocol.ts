@@ -71,3 +71,38 @@ const CHANNEL_ID = /^[A-Za-z0-9_-]{43}$/;
 export function isChannelId(value: string): boolean {
   return CHANNEL_ID.test(value);
 }
+
+/**
+ * The channel id travels as a WebSocket **subprotocol**, never in the request
+ * line.
+ *
+ * A URL path is written to every access log on the way — the platform edge, any
+ * TLS-terminating proxy, the relay's own logs — and the channel id is a bearer
+ * capability: a channel holds exactly two sockets, so whoever reads one id can
+ * occupy a slot and lock the real phone out of its own channel for good.
+ * `Sec-WebSocket-Protocol` is a header, so it stays out of request lines, and
+ * the relay still treats the value as an opaque route (AGENTS.md invariant 7).
+ */
+export const CHANNEL_PROTOCOL_PREFIX = "piorbit.channel.";
+
+/** The `Sec-WebSocket-Protocol` value a client offers for one channel. */
+export function channelSubprotocol(channelId: string): string {
+  return `${CHANNEL_PROTOCOL_PREFIX}${channelId}`;
+}
+
+/**
+ * The channel id offered in a `Sec-WebSocket-Protocol` header, or `undefined`
+ * when the client offered none that names a channel. The header is a
+ * comma-separated list and may be repeated.
+ */
+export function channelIdFromProtocols(header: string | string[] | undefined): string | undefined {
+  if (header === undefined) return undefined;
+  const values = (Array.isArray(header) ? header : [header]).flatMap((line) => line.split(","));
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed.startsWith(CHANNEL_PROTOCOL_PREFIX)) continue;
+    const id = trimmed.slice(CHANNEL_PROTOCOL_PREFIX.length);
+    if (isChannelId(id)) return id;
+  }
+  return undefined;
+}

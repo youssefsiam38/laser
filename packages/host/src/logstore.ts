@@ -86,9 +86,17 @@ export interface LogStoreOptions {
   providerPayloads?: "full" | "summary";
 }
 
-/** Field names whose values never belong in a log row. */
+/**
+ * Field names whose values never belong in a log row.
+ *
+ * Anchored, with up to two vendor prefix segments (`x-api-key`,
+ * `anthropic-api-key`, `x-goog-api-key`) — deliberately not a substring match,
+ * because Pi's own payloads are full of `max_tokens`, `reserveTokens` and
+ * `thinkingBudgets`, and redacting those would make every row a lie in the other
+ * direction.
+ */
 const SECRET_KEY =
-  /^(authorization|proxy-authorization|www-authenticate|api[-_]?key|x-api-key|apikey|access[-_]?token|refresh[-_]?token|id[-_]?token|secret|client[-_]?secret|password|passwd|cookie|set-cookie|session[-_]?token|auth[-_]?token|bearer)$/i;
+  /^([a-z0-9]+[-_]){0,2}(authorization|proxy-authorization|www-authenticate|api[-_]?key|apikey|access[-_]?token|refresh[-_]?token|id[-_]?token|secret|client[-_]?secret|password|passwd|cookie|set-cookie|session[-_]?token|auth[-_]?token|bearer|credential|credentials)$/i;
 
 /** Deepest structure walked when redacting; a payload is JSON, not a graph. */
 const REDACT_MAX_DEPTH = 12;

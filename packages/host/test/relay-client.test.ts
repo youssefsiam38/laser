@@ -23,6 +23,9 @@ import {
 import type { JsonRpcNotification, JsonRpcResponse } from "@piorbit/protocol";
 import { RelayClient } from "../src/relay-client.js";
 
+/** Mirrors `CHANNEL_PROTOCOL_PREFIX` in @piorbit/relay; see the note above. */
+const CHANNEL_PROTOCOL_PREFIX = "piorbit.channel.";
+
 /** Just enough relay: two sockets per channel, `hello`/`peer`, binary passthrough. */
 class StubRelay {
   private readonly http: Server;
@@ -32,9 +35,23 @@ class StubRelay {
 
   constructor() {
     this.http = createServer((_req, res) => res.writeHead(404).end());
-    this.wss = new WebSocketServer({ server: this.http, perMessageDeflate: false });
+    // Like the real relay: the channel is a subprotocol, never a path segment.
+    this.wss = new WebSocketServer({
+      server: this.http,
+      perMessageDeflate: false,
+      handleProtocols: (protocols) => {
+        for (const protocol of protocols) if (protocol.startsWith(CHANNEL_PROTOCOL_PREFIX)) return protocol;
+        return false;
+      },
+    });
     this.wss.on("connection", (ws, req) => {
-      const channel = (req.url ?? "/").split("?")[0]!.split("/").pop()!;
+      const offered = req.headers["sec-websocket-protocol"] ?? "";
+      const channel = (Array.isArray(offered) ? offered.join(",") : offered)
+        .split(",")
+        .map((value) => value.trim())
+        .find((value) => value.startsWith(CHANNEL_PROTOCOL_PREFIX))
+        ?.slice(CHANNEL_PROTOCOL_PREFIX.length);
+      if (channel === undefined) return ws.close(4400, "no channel subprotocol");
       const peers = this.channels.get(channel) ?? [];
       this.channels.set(channel, peers);
       if (peers.length >= 2) return ws.close(4409, "channel full");
@@ -97,7 +114,9 @@ class Phone {
       remoteStaticPublicKey: theirs,
       backend: nobleBackend,
     });
-    const ws = new WebSocket(`${url}/${toBase64Url(channelId)}`, { perMessageDeflate: false });
+    const ws = new WebSocket(url, [`${CHANNEL_PROTOCOL_PREFIX}${toBase64Url(channelId)}`], {
+      perMessageDeflate: false,
+    });
     const phone = new Phone(ws);
 
     let peerSeen = false;

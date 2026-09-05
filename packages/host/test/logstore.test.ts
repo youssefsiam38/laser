@@ -242,6 +242,23 @@ describe("retention", () => {
       expect(detail).toContain("[redacted]");
       expect(detail).toContain("hello"); // everything else survives intact
       expect((entry.detail as { piorbitRedactedFields?: number }).piorbitRedactedFields).toBe(2);
+
+      // A gateway names its key with a vendor prefix; Pi's own payloads are full
+      // of token *budgets*, which must survive or every row lies the other way.
+      const vendor = store.record({
+        section: "provider",
+        kind: "provider_request",
+        summary: "req",
+        detail: {
+          headers: { "x-goog-api-key": "goog-secret", "anthropic-api-key": "anthropic-secret" },
+          body: { max_tokens: 8192, reserveTokens: 4096 },
+        },
+      })!;
+      const vendorDetail = JSON.stringify(vendor.detail);
+      expect(vendorDetail).not.toContain("goog-secret");
+      expect(vendorDetail).not.toContain("anthropic-secret");
+      expect(vendorDetail).toContain("8192");
+      expect(vendorDetail).toContain("4096");
     } finally {
       store.close();
     }
