@@ -6,6 +6,47 @@ subagents (pi-subagents), settings, and low-level logs, and exposes the same UI
 to phones through an end-to-end encrypted relay. It builds on the community's
 packages; it does not replace them.
 
+## The bar: the Apple of coding agents
+
+piorbit is not a dashboard over Pi. It is meant to be the experience that
+makes developers choose an agent because of how it feels to work with, the
+way people choose hardware because of how it feels in the hand. Pi owns the
+logic; we own the experience, and the experience is the product.
+
+That sets the bar for every screen, every command and every transition:
+
+- **Nothing ships as a placeholder.** Empty states, loading states, error
+  states and the first-run moment are designed with the same care as the
+  main path. If a state exists, it was drawn on purpose.
+- **Motion is a material, not a garnish.** Things morph, they do not pop.
+  The same element grows and shrinks; identity, position and scroll survive
+  every transition. Sixty frames, no layout shift, and every motion has a
+  `prefers-reduced-motion` fallback that loses nothing but the movement.
+- **Legibility is a floor, not a goal.** No data below 12px, no overflow, no
+  clipped text, no horizontal page scroll, ever. A component that cannot fit
+  its content shows less content, never smaller text.
+- **The details are the design.** Optical alignment of icons to text, a real
+  type scale, tabular numerals wherever digits line up, spacing on a grid,
+  hover and focus and pressed states on everything interactive, keyboard
+  paths for everything the mouse can do.
+- **Errors are written for a person.** What went wrong, and what to do next.
+  No stack traces in the UI, no apologies, no vagueness.
+- **Both themes, both pointers, both widths.** Dark and light with equal
+  care; mouse and touch; a phone and a wide desktop. Not one first and the
+  rest adapted.
+
+Three documents are the constitution for this, and they are binding on
+every UI change: [`packages/ui/DESIGN.md`](packages/ui/DESIGN.md) for the
+visual system, [`docs/ux-panels.md`](docs/ux-panels.md) for how anything
+renders, and [`docs/ux-agent-work.md`](docs/ux-agent-work.md) for the model
+behind agent work. A UI change that does not fit them is either a bug or a
+decision recorded in `STATUS_DETAILED.md` — never a quiet exception.
+
+Before any UI task is marked done, run it in the browser at a desktop width
+and a phone width, in both themes, and look at it the way a demanding
+designer would. "It builds" is not the bar. "I would show this to someone I
+respect" is.
+
 This file is the contract for every agent (human or model) working here. Read it
 fully before touching anything. The three planning files it governs are:
 
