@@ -1,0 +1,24 @@
+name: ci
+on:
+  push:
+  pull_request:
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - run: pnpm -r test
+
+# Not installed at .github/workflows/ci.yml yet: the current gh token lacks the
+# `workflow` scope, so pushing that path is rejected. To install:
+#   gh auth refresh -s workflow
+#   mkdir -p .github/workflows && git mv ci/github-workflow.yml .github/workflows/ci.yml

@@ -1,0 +1,25 @@
+{
+  "name": "@piorbit/ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The one web app: Electron renderer, browser tab, and PWA. Speaks @piorbit/protocol over WebSocket. Framework choice pending Q-2 (default React + Vite).",
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "dev": "vite",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@piorbit/protocol": "workspace:*",
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
+  },
+  "devDependencies": {
+    "@types/react": "19.1.12",
+    "@types/react-dom": "19.1.9",
+    "@vitejs/plugin-react": "5.0.2",
+    "vite": "7.1.5"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "@piorbit/host",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Supervisor: one worker per project, session catalog, local WebSocket for the UI, relay client, log store. Must not import Pi.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "piorbit-host": "./dist/main.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "dev": "tsc -p tsconfig.json --watch",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@piorbit/protocol": "workspace:*",
+    "ws": "8.18.3"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.1"
+  }
+}

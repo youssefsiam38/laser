@@ -1,0 +1,29 @@
+{
+  "name": "@piorbit/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Per-project Pi host. The only package (with pi-extension) allowed to import Pi. Pi version is PINNED here (see AGENTS.md invariant 4).",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "piorbit-worker": "./dist/main.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "dev": "tsc -p tsconfig.json --watch",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.0",
+    "@piorbit/pi-extension": "workspace:*",
+    "@piorbit/protocol": "workspace:*"
+  }
+}

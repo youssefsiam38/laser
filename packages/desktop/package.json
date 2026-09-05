@@ -1,0 +1,20 @@
+{
+  "name": "@piorbit/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Electron shell: main process, tray, notifications, keychain, updater. Spawns the host from a bundled stock Node placed outside asar (M5-T2). Must not import Pi.",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist *.tsbuildinfo out"
+  },
+  "dependencies": {
+    "@piorbit/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "electron": "44.2.0"
+  }
+}
