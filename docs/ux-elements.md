@@ -217,6 +217,37 @@ the components: they show a model composing UI from a fixed vocabulary, which
 is exactly what `docs/ux-panels.md` specifies for extensions. Read them before
 finalising the declared protocol's payload shapes.
 
+
+## Beyond the published catalog
+
+The published elements page lists ~121 items. The registry source has **125
+element files**, and twelve of them are not on that page. They were found by
+listing
+`packages/ui/src/components/react/assistant-ui/elements/` in the assistant-ui
+checkout, which is the authoritative list. Each is claimed here too.
+
+| Element | Exports | piorbit surface |
+| --- | --- | --- |
+| `surfaces` | `paper`, `floating`, `field`, `fieldInteractive` | **The shared style vocabulary every other element builds on.** Adopt this FIRST and map its tokens onto DESIGN.md, or each adopted element brings its own surface treatment and the app looks assembled rather than designed |
+| `shimmer-labels` | shimmer helpers | The label that shimmers while a run streams; replaces the shimmer CSS we hand-wrote for the reasoning header |
+| `reasoning-panel` | `ReasoningPanel` | The expanded reasoning body, distinct from the `reasoning` collapsible header |
+| `suggestions` | `Suggestions` | Empty-state and post-turn suggestions, the props-driven sibling of `follow-up-suggestions` |
+| `quote-reply` | `QuoteReply` | The quoted block shown on the message you are replying to, paired with `quote` in the composer |
+| `message-attachment` | `MessageAttachments` | Attachments on a sent message, distinct from `attachment` in the composer |
+| `model-picker` | `ModelPicker` | The props-driven picker; compare against the runtime-bound `model-selector` and keep whichever fits our host-supplied model list |
+| `threadlist-sidebar` | `ThreadListSidebar` | The real filename behind "Thread list sidebar" — the sessions panel |
+| `voice` | `VoiceOrb`, `VoiceControl`, `VoiceStatusDot`, `deriveVoiceOrbState` | `VoiceStatusDot` and `deriveVoiceOrbState` are reusable beyond voice: the dictation button state for `pi-gpt-transcribe` (M8-T2) and the mobile mic (M7-T6) |
+| `flow` | `Flow`, `FlowLLM` | A declared workflow graph; `FlowLLM` renders an LLM step |
+| `flow-canvas` | `FlowCanvas` | The pan/zoom surface a maximized plan island uses when a workflow graph is declared |
+| `flow-expand` | `FlowExpand` | Expanding a node in that graph |
+
+Eight names on the published page have no file of their own because they are
+**sub-features composed inside another element**, not separate installs:
+`composer-slash-commands`, `composer-mentions`, `composer-attachments`,
+`composer-model-picker`, `composer-voice` and `composer-context` all live
+inside `composer`; `orb` lives inside `voice`; `thread-list-sidebar` is
+`threadlist-sidebar`. Install the parent and configure the feature.
+
 ## How this interacts with the panel contract
 
 The panel contract says *where* something renders and *who decides*. This
