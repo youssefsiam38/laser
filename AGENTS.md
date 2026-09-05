@@ -191,6 +191,17 @@ adding dates or estimates, deleting done-when criteria. Any structural change to
 6. **Extension UI: portable surface only.** `select`, `confirm`, `input`, `editor`,
    `notify`, `setStatus`, `setWidget` (string lines), `setTitle`, `setEditorText`.
    Anything else cancels safely (never hangs). `custom()` is not emulated.
+6a. **Pi owns the logic, piorbit owns the experience.** Anything an extension
+   wants to show renders through the panel contract in
+   [`docs/ux-panels.md`](docs/ux-panels.md): six kinds (`run`, `plan`,
+   `document`, `stream`, `collection`, `decision`), four surfaces (ambient,
+   inline, dock, sheet), and a placement table that piorbit owns. An extension
+   declares a kind and an intent; it never names a surface and never ships
+   presentation. Do not invent a bespoke view for one package — either it maps
+   onto an existing kind, or adding a kind is a decision recorded in
+   `STATUS_DETAILED.md`. Agent work (subagents, workflows, missions) has a
+   domain model of its own in [`docs/ux-agent-work.md`](docs/ux-agent-work.md):
+   runs, plans and ledgers, which feed the `run` and `plan` kinds.
 7. **The relay is a byte forwarder.** `packages/relay` links no crypto library and
    never parses payloads beyond the channel id.
 8. **Never two writers on one Pi session file.**
