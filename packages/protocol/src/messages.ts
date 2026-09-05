@@ -75,7 +75,8 @@ export interface SessionState {
   autoCompactionEnabled: boolean;
   messageCount: number;
   pendingMessageCount: number;
-  contextUsage?: { tokens: number; contextWindow: number; percent: number };
+  /** `tokens`/`percent` are null right after compaction, before the next response. */
+  contextUsage?: { tokens: number | null; contextWindow: number; percent: number | null };
 }
 
 // ---------- Session updates (host → client notifications) ----------
@@ -101,6 +102,7 @@ export type SessionUpdate =
   | { kind: "compaction_end"; ok: boolean }
   | { kind: "auto_retry_start"; attempt: number; maxAttempts: number }
   | { kind: "auto_retry_end"; ok: boolean }
+  /** Only for custom entries appended by extensions (pi.appendEntry); regular messages do not produce this. */
   | { kind: "entry_appended"; entry: unknown }
   | { kind: "state"; state: SessionState }
   | { kind: "extension_error"; extension: string; message: string };

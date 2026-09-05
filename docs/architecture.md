@@ -50,7 +50,7 @@ Mapping to Pi's stable SDK (0.85):
 | `compact` | `session.compact()` |
 | `navigateTree` | `session.navigateTree()` |
 | `fork`, `newSession`, `switchSession` | on `AgentSessionRuntime` |
-| `events()` | `session.subscribe()` → `AgentSessionEvent`, plus `entry_appended` for persistence |
+| `events()` | `session.subscribe()` → `AgentSessionEvent`. Transcript state comes from `message_*`/`tool_execution_*`; `entry_appended` fires only for extension custom entries (verified 0.85.0) |
 | dialogs | `session.bindExtensions({ mode: "rpc", uiContext })` |
 
 Mapping to the experimental Chord services, for when `ChordDriver` becomes real:

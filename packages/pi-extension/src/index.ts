@@ -20,7 +20,7 @@
 import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
 import { modules, type ModuleContext, type ModuleName, type OutboundMessage } from "./modules/index.js";
 
-export type { ModuleName, OutboundMessage } from "./modules/index.js";
+export type { ModuleName, OutboundMessage, ModuleContext, PiorbitModule } from "./modules/index.js";
 
 export interface PiorbitExtensionOptions {
   /** Delivers messages to the worker (in-process callback). */

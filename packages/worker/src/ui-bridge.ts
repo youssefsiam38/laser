@@ -1,17 +1,19 @@
 /**
- * UI bridge — turns Pi's ExtensionUIContext calls into protocol messages.
+ * UI bridge (M0-T7) — turns Pi's ExtensionUIContext calls into protocol messages.
  *
- * Status: skeleton (M0-T7). Implements the portable surface only (D-2):
- *   dialogs: select, confirm, input, editor  → ui_request, resolved by respond()
- *   fire-and-forget: notify, setStatus, setWidget(string[]), setTitle, setEditorText
- * Everything else must cancel safely (resolve undefined / false / no-op), never hang.
+ * Portable surface only (D-2): select, confirm, input, editor round-trip to the
+ * client; notify, setStatus, setWidget(string[]), setTitle, setEditorText are
+ * fire-and-forget. Everything else must degrade safely and never hang, which is
+ * what Pi's own RPC mode does.
  *
- * Pattern to follow (from @jmfederico/pi-web): build a Proxy over Pi's own
- * no-op UI context so any method we did not override degrades exactly as Pi's
- * RPC mode does. Pi types are used internally only; nothing Pi-typed is exported.
+ * Two layers of safety:
+ *   1. Explicit implementations for every member we support or must neutralise.
+ *   2. A Proxy fallback, so a member Pi adds in a future release returns a
+ *      harmless no-op function instead of `undefined` (which would throw inside
+ *      the extension and take the turn down).
  */
 
-import type { UiDialogRequest, UiDialogResponse, UiFireAndForget } from "@piorbit/protocol";
+import type { ExtensionUIContext, UiDialogRequest, UiDialogResponse, UiFireAndForget } from "./ui-types.js";
 
 export interface UiBridgeHandlers {
   onRequest: (request: UiDialogRequest) => void;
@@ -19,10 +21,10 @@ export interface UiBridgeHandlers {
 }
 
 export interface UiBridge {
-  /** The object to pass as `uiContext` in `session.bindExtensions({ mode: "rpc", uiContext })`. */
-  readonly context: unknown;
+  /** Pass as `uiContext` to `session.bindExtensions({ mode: "rpc", uiContext })`. */
+  readonly context: ExtensionUIContext;
   respond(response: UiDialogResponse): void;
-  /** Number of dialogs waiting for an answer (for reattach: re-emit them). */
+  /** Dialogs still waiting for an answer; re-emit these when a client reattaches. */
   pending(): UiDialogRequest[];
   dispose(): void;
 }
@@ -36,16 +38,20 @@ interface Pending {
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 type UiDialogRequestInput = DistributiveOmit<UiDialogRequest, "id">;
 
+const NOT_AVAILABLE = "UI not available";
+
 export function createUiBridge(handlers: UiBridgeHandlers): UiBridge {
   const pending = new Map<string, Pending>();
   let counter = 0;
+  let disposed = false;
 
   function ask<T>(request: UiDialogRequestInput, onTimeout: T): Promise<T | undefined> {
+    if (disposed) return Promise.resolve(onTimeout);
     const id = `ui-${++counter}-${Date.now().toString(36)}`;
     const full = { ...request, id } as UiDialogRequest;
     return new Promise<T | undefined>((resolve) => {
       const entry: Pending = { request: full, resolve: resolve as (v: unknown) => void };
-      if (full.timeoutMs) {
+      if (full.timeoutMs !== undefined) {
         entry.timer = setTimeout(() => {
           pending.delete(id);
           resolve(onTimeout);
@@ -56,37 +62,80 @@ export function createUiBridge(handlers: UiBridgeHandlers): UiBridge {
     });
   }
 
-  // TODO(M0-T7): wrap Pi's noOp context in a Proxy and override the portable methods below.
-  const context = {
+  const emit = (event: UiFireAndForget): void => {
+    if (!disposed) handlers.onEvent(event);
+  };
+
+  /** Members we implement. Anything absent is handled by the Proxy below. */
+  const impl: Partial<Record<keyof ExtensionUIContext, unknown>> = {
+    // --- dialogs (round-trip) ---
     select: (title: string, options: string[], opts?: { timeout?: number }) =>
-      ask<undefined>({ method: "select", title, options, ...(opts?.timeout ? { timeoutMs: opts.timeout } : {}) }, undefined),
-    confirm: (title: string, message?: string, opts?: { timeout?: number }) =>
-      ask<false>({ method: "confirm", title, ...(message ? { message } : {}), ...(opts?.timeout ? { timeoutMs: opts.timeout } : {}) }, false),
+      ask<string>(
+        { method: "select", title, options, ...(opts?.timeout !== undefined ? { timeoutMs: opts.timeout } : {}) },
+        undefined as unknown as string,
+      ),
+    confirm: (title: string, message: string, opts?: { timeout?: number }) =>
+      ask<boolean>(
+        { method: "confirm", title, message, ...(opts?.timeout !== undefined ? { timeoutMs: opts.timeout } : {}) },
+        false,
+      ).then((v) => v ?? false),
     input: (title: string, placeholder?: string, opts?: { timeout?: number }) =>
-      ask<undefined>({ method: "input", title, ...(placeholder ? { placeholder } : {}), ...(opts?.timeout ? { timeoutMs: opts.timeout } : {}) }, undefined),
+      ask<string>(
+        {
+          method: "input",
+          title,
+          ...(placeholder !== undefined ? { placeholder } : {}),
+          ...(opts?.timeout !== undefined ? { timeoutMs: opts.timeout } : {}),
+        },
+        undefined as unknown as string,
+      ),
     editor: (title: string, prefill?: string) =>
-      ask<undefined>({ method: "editor", title, ...(prefill ? { prefill } : {}) }, undefined),
-    notify: (message: string, level: "info" | "warning" | "error" = "info") =>
-      handlers.onEvent({ method: "notify", message, level }),
-    setStatus: (key: string, text?: string) => handlers.onEvent({ method: "setStatus", key, ...(text !== undefined ? { text } : {}) }),
-    setWidget: (key: string, lines?: string[] | unknown, opts?: { placement?: "aboveEditor" | "belowEditor" }) =>
-      handlers.onEvent({
+      ask<string>(
+        { method: "editor", title, ...(prefill !== undefined ? { prefill } : {}) },
+        undefined as unknown as string,
+      ),
+
+    // --- fire-and-forget ---
+    notify: (message: string, type: "info" | "warning" | "error" = "info") =>
+      emit({ method: "notify", message, level: type }),
+    setStatus: (key: string, text: string | undefined) =>
+      emit({ method: "setStatus", key, ...(text !== undefined ? { text } : {}) }),
+    setWidget: (key: string, content: unknown, options?: { placement?: "aboveEditor" | "belowEditor" }) =>
+      emit({
         method: "setWidget",
         key,
-        ...(Array.isArray(lines) ? { lines: lines as string[] } : {}),
-        placement: opts?.placement ?? "aboveEditor",
+        // Component factories cannot cross the wire; only string lines are forwarded.
+        ...(Array.isArray(content) ? { lines: content as string[] } : {}),
+        placement: options?.placement ?? "aboveEditor",
       }),
-    setTitle: (title: string) => handlers.onEvent({ method: "setTitle", title }),
-    setEditorText: (text: string) => handlers.onEvent({ method: "setEditorText", text }),
-    // Non-portable surface: cancel safely.
-    custom: () => undefined,
+    setTitle: (title: string) => emit({ method: "setTitle", title }),
+    setEditorText: (text: string) => emit({ method: "setEditorText", text }),
+    pasteToEditor: (text: string) => emit({ method: "setEditorText", text }),
+
+    // --- not portable: cancel safely, never hang ---
+    custom: () => Promise.resolve(undefined),
     getEditorText: () => "",
     getToolsExpanded: () => false,
     getAllThemes: () => [],
     getTheme: () => undefined,
-    setTheme: () => ({ success: false, error: "UI not available" }),
+    setTheme: () => ({ success: false, error: NOT_AVAILABLE }),
     onTerminalInput: () => () => {},
-    pasteToEditor: (text: string) => handlers.onEvent({ method: "setEditorText", text }),
+    addAutocompleteProvider: () => {},
+  };
+
+  const context = new Proxy(impl, {
+    get(target, prop) {
+      if (prop in target) return target[prop as keyof ExtensionUIContext];
+      // Unknown member (e.g. added by a newer Pi): a no-op function is the only
+      // safe answer. Returning undefined would throw inside the extension.
+      return () => undefined;
+    },
+    has: () => true,
+  }) as unknown as ExtensionUIContext;
+
+  const settle = (entry: Pending): void => {
+    if (entry.timer) clearTimeout(entry.timer);
+    entry.resolve(entry.request.method === "confirm" ? false : undefined);
   };
 
   return {
@@ -106,10 +155,8 @@ export function createUiBridge(handlers: UiBridgeHandlers): UiBridge {
     },
     pending: () => [...pending.values()].map((p) => p.request),
     dispose() {
-      for (const p of pending.values()) {
-        if (p.timer) clearTimeout(p.timer);
-        p.resolve(p.request.method === "confirm" ? false : undefined);
-      }
+      disposed = true;
+      for (const entry of pending.values()) settle(entry);
       pending.clear();
     },
   };

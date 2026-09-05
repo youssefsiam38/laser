@@ -5,7 +5,7 @@ import { createUiBridge } from "../src/ui-bridge.js";
 type Ctx = {
   select: (title: string, options: string[], opts?: { timeout?: number }) => Promise<string | undefined>;
   confirm: (title: string, message?: string) => Promise<boolean>;
-  custom: () => unknown;
+  custom: () => Promise<unknown>;
   notify: (message: string, level?: "info" | "warning" | "error") => void;
 };
 
@@ -25,9 +25,40 @@ describe("ui bridge", () => {
     bridge.respond({ id: requests[1]!.id, cancelled: true });
     await expect(c).resolves.toBe(false);
 
-    expect(ctx.custom()).toBeUndefined();
+    await expect(ctx.custom()).resolves.toBeUndefined();
     ctx.notify("hi", "warning");
     expect(events).toEqual([{ method: "notify", message: "hi", level: "warning" }]);
+  });
+
+  it("input and editor round-trip; unknown members are safe no-ops", async () => {
+    const requests: UiDialogRequest[] = [];
+    const bridge = createUiBridge({ onRequest: (r) => requests.push(r), onEvent: () => {} });
+    const ctx = bridge.context as Ctx & {
+      input: (title: string, placeholder?: string) => Promise<string | undefined>;
+      editor: (title: string, prefill?: string) => Promise<string | undefined>;
+      someFutureMethod?: () => unknown;
+    };
+
+    const i = ctx.input("Name?", "type here");
+    expect(requests[0]).toMatchObject({ method: "input", title: "Name?", placeholder: "type here" });
+    bridge.respond({ id: requests[0]!.id, value: "piorbit" });
+    await expect(i).resolves.toBe("piorbit");
+
+    const e = ctx.editor("Edit", "line1\nline2");
+    expect(requests[1]).toMatchObject({ method: "editor", prefill: "line1\nline2" });
+    bridge.respond({ id: requests[1]!.id, value: "edited" });
+    await expect(e).resolves.toBe("edited");
+
+    // A member added by a future Pi release must not throw inside an extension.
+    expect(typeof ctx.someFutureMethod).toBe("function");
+    expect(ctx.someFutureMethod?.()).toBeUndefined();
+
+    // Pending dialogs are visible for reattach, and dispose settles them safely.
+    const p = ctx.select("Pick", ["a"]);
+    expect(bridge.pending()).toHaveLength(1);
+    bridge.dispose();
+    await expect(p).resolves.toBeUndefined();
+    expect(bridge.pending()).toHaveLength(0);
   });
 
   it("times out to the safe default", async () => {

@@ -1,2 +1,12 @@
 packages:
   - "packages/*"
+
+# Workaround for an upstream packaging bug in @earendil-works/pi-coding-agent 0.85.0:
+# `dist/main.js` -> `dist/experimental/server.js` imports `@earendil-works/pi-server`,
+# but the package does not declare it. It only resolves under npm's flat hoisting, so a
+# strict installer (pnpm, yarn PnP) fails at import time with ERR_MODULE_NOT_FOUND.
+# Tracked in docs/upstream.md. Remove this block once upstream declares the dependency.
+packageExtensions:
+  "@earendil-works/pi-coding-agent":
+    dependencies:
+      "@earendil-works/pi-server": "0.85.0"

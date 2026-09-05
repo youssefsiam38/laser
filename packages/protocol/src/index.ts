@@ -7,3 +7,4 @@
  */
 export * from "./jsonrpc.js";
 export * from "./messages.js";
+export * from "./pi-extension.js";

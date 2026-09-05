@@ -20,6 +20,7 @@
 import type {
   ContentBlock,
   ModelRef,
+  PiExtensionMessage,
   SessionState,
   SessionUpdate,
   ThinkingLevel,
@@ -36,6 +37,8 @@ export interface DriverOpenOptions {
   parentSessionPath?: string;
   /** Override of Pi's agent dir (default ~/.pi/agent). */
   agentDir?: string;
+  /** Override of the session storage dir (default <agentDir>/sessions). */
+  sessionDir?: string;
   /** Where pi-subagents should keep its file layer for this worker. */
   subagentsTempRoot?: string;
 }
@@ -44,6 +47,8 @@ export type DriverEvent =
   | { type: "update"; update: SessionUpdate }
   | { type: "ui_request"; request: UiDialogRequest }
   | { type: "ui_event"; event: UiFireAndForget }
+  /** Emitted by the piorbit companion extension running inside the session. */
+  | { type: "extension"; message: PiExtensionMessage }
   | { type: "closed"; reason: string };
 
 export type DriverListener = (event: DriverEvent) => void;

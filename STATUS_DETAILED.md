@@ -12,12 +12,12 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 | --- | --- | --- | --- | --- | --- |
 | M0-T1 | Workspace scaffold | done | claude-2026-09-05-a | `ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install && pnpm -r build && pnpm -r test` passes (2026-09-05) | see notes |
 | M0-T2 | `@piorbit/protocol` schemas + envelope + seq | in-progress | claude-2026-09-05-a | `packages/protocol/test/jsonrpc.test.ts` passes | TS types + LineDecoder done; zod schemas + validation still todo |
-| M0-T3 | `SessionDriver` interface + `DriverEvent` | in-progress | claude-2026-09-05-a | `packages/worker/src/driver.ts` | drafted; needs review against Pi 0.85 event list |
-| M0-T4 | `StableSdkDriver` | todo | — | — | skeleton in `packages/worker/src/drivers/stable-sdk.ts`; every method throws DriverUnavailableError |
+| M0-T3 | `SessionDriver` interface + `DriverEvent` | done | claude-2026-09-05-a | `packages/worker/src/driver.ts`; exercised by `test/stable-sdk.*.test.ts` | see notes |
+| M0-T4 | `StableSdkDriver` | done | claude-2026-09-05-a | `pnpm -F @piorbit/worker test` → `test/stable-sdk.prompt.test.ts` (stub provider, ordered updates) + `test/stable-sdk.open.test.ts` + `test/map-event.test.ts` | see notes |
 | M0-T5 | `ChordDriver` stub + seam test | done | claude-2026-09-05-a | `pnpm -F @piorbit/worker test` → `test/seam.test.ts` 3 passed | see notes |
 | M0-T6 | Worker process entry + transport | todo | — | — | stdin LineDecoder loop in `packages/worker/src/main.ts`; no dispatch yet |
-| M0-T7 | Extension UI bridge | in-progress | claude-2026-09-05-a | `test/ui-bridge.test.ts` 2 passed | see notes |
-| M0-T8 | CI | todo | — | — | `.github/workflows/ci.yml` written, never run (no remote yet) |
+| M0-T7 | Extension UI bridge | done | claude-2026-09-05-a | `test/ui-bridge.test.ts` (select/confirm/input/editor round-trip, timeout, custom() resolves, unknown members no-op, dispose settles) | see notes |
+| M0-T8 | CI | blocked | — | `ci/github-workflow.yml` | blocked: gh token lacks `workflow` scope; unblock with `gh auth refresh -s workflow` then move the file to `.github/workflows/ci.yml` |
 
 #### M0-T1 notes
 - 2026-09-05 claimed: create pnpm workspace with packages protocol, worker, subagents-bridge, host, ui, desktop, crypto, relay.
@@ -29,14 +29,21 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 - 2026-09-05 TypeScript types for the ACP core, `pi/*` extras, `SessionUpdate`, UI dialogs, and the JSON-RPC envelope are in `messages.ts` / `jsonrpc.ts`. `LineDecoder` tested. Still needed: zod schemas for runtime validation at the host boundary, and a round-trip test per message.
 
 #### M0-T3 notes
-- 2026-09-05 drafted the interface with open/prompt/steer/followUp/abort/setModel/setThinkingLevel/compact/navigateTree/dispose and an event stream. Event names mirror Pi SDK 0.85 `AgentSessionEvent` plus `pi/ui/request`. Review pending.
+- 2026-09-05 drafted the interface with open/prompt/steer/followUp/abort/setModel/setThinkingLevel/compact/navigateTree/dispose and an event stream. Event names mirror Pi SDK 0.85 `AgentSessionEvent` plus `pi/ui/request`.
+- 2026-09-05 reviewed against the real 0.85 types while implementing M0-T4. Added `sessionDir` to `DriverOpenOptions` (tests must never touch `~/.pi/agent`) and an `extension` DriverEvent for companion-extension messages. Done.
+
+#### M0-T4 notes
+- 2026-09-05 implemented on `createAgentSessionRuntime` + `createAgentSessionServices({ resourceLoaderOptions: { extensionFactories: [piorbit] } })`; `bindExtensions({ mode: "rpc", uiContext })`; event mapping in `mapEvent()`.
+- 2026-09-05 found Pi 0.85.0 packaging bug: `dist/main.js` imports `@earendil-works/pi-server` which is undeclared; only resolves under npm hoisting. Fixed locally with `packageExtensions` in `pnpm-workspace.yaml`. Logged in `docs/upstream.md`.
+- 2026-09-05 verified by test: `entry_appended` fires only for extension `pi.appendEntry`, not message persistence; user message_start/end precede the assistant stream; `isStreaming` flips after `prompt()` yields, so busy is caught from Pi's error. All recorded in the driver header comment and `docs/research/findings.md`.
+- 2026-09-05 done: stub OpenAI-compatible SSE provider via sandboxed `models.json`; prompt yields agent_start → turn_start → text_delta… → message_end → agent_end → agent_settled; deltas reassemble; session file persisted with user+assistant entries.
 
 #### M0-T5 notes
 - 2026-09-05 seam test checks real import statements only (comments may mention Pi). Asserts protocol has no Pi imports, `driver.ts` has no Pi imports, and `ChordDriver` fails closed with `DriverUnavailableError`.
 
 #### M0-T7 notes
 - 2026-09-05 portable surface implemented in `ui-bridge.ts`: select/confirm/input/editor with timeouts, fire-and-forget events, `custom()` → undefined. Tests: select round-trip, confirm cancel → false, timeout → safe default.
-- 2026-09-05 still todo: wrap Pi's own no-op UI context in a Proxy (pi-web pattern) so anything not overridden degrades exactly like RPC mode; editor round-trip test; wire into `StableSdkDriver.open()` via `bindExtensions({ mode: "rpc", uiContext })`.
+- 2026-09-05 done: context is typed as Pi's `ExtensionUIContext` with a Proxy fallback (unknown members return a no-op function, never undefined); wired into `StableSdkDriver.applySession()`; input/editor round-trip, pending() for reattach, dispose settles all dialogs. Pi's internal noOp context is not exported, so we implement every member explicitly rather than proxying over it.
 
 ---
 
@@ -253,6 +260,21 @@ Consequences: see `AGENTS.md` §6.
 Decision: no dates, estimates, or deadlines in PLAN/STATUS files.
 Why: coding agents do not work on human timelines; dates rot and mislead.
 
+### D-14 · 2026-09-05 · Q-1 closed for now
+Decision: do not wait on Earendil's plans for the experimental server. D-6
+(stable SDK now, migrate later) already answers what to build; the question
+only informs MX-T1 monitoring. Reopen only if a Pi release ships a usable
+`pi-server` with extensions and cwd.
+
+### D-15 · 2026-09-05 · UI framework is React + Vite
+Decision: `@piorbit/ui` is React 19 + Vite. Matches the streaming-markdown
+prior art (Streamdown, AI SDK), pi-gui, and pi-web-ui.
+
+### D-16 · 2026-09-05 · Full autonomy on non-breaking decisions
+Decision: agents make routine and architectural-but-reversible decisions
+without asking, record them here, and only stop for the user when genuinely
+blocked or when a decision would be hard to reverse.
+
 ### D-13 · 2026-09-05 · One companion extension with a module per package
 Decision: all in-process glue for community packages lives in one Pi extension,
 `packages/pi-extension`, with one module per package under `src/modules/`.
@@ -273,9 +295,9 @@ reworded; M8-T5 added (module authoring guide).
 
 | ID | Question | Blocks | Asked of |
 | --- | --- | --- | --- |
-| Q-1 | What will Pi's experimental server and Radius relay become, and will today's `ExtensionAPI` extensions run under the future web presentation? | nothing now; informs MX-T1 | Earendil (not yet asked) |
-| Q-2 | UI framework: React + Vite is the default assumption (matches streaming-markdown prior art). Confirm or change before M1-T3. | M1-T3 | user |
-| Q-3 | Which Pi release to pin next, and cadence of MX-T2 bumps. | MX-T2 | user |
+| Q-1 | What will Pi's experimental server become? | — | answered by D-14: not blocking, monitor via MX-T1 |
+| Q-2 | UI framework? | — | answered by D-15: React + Vite |
+| Q-3 | Which Pi release to pin next, and cadence of MX-T2 bumps. | MX-T2 | agent decides per release (D-16); default: bump when a release fixes something we hit or adds an SDK capability we need |
 
 ---
 
@@ -284,3 +306,4 @@ reworded; M8-T5 added (module authoring guide).
 - 2026-09-05 · claude-2026-09-05-a · created ledger, M0-T1 done, M0-T3 in-progress, D-1..D-12 recorded.
 - 2026-09-05 · claude-2026-09-05-a · install/build/test verified; M0-T1 evidence, M0-T5 done, M0-T2 and M0-T7 in-progress with tests.
 - 2026-09-05 · claude-2026-09-05-a · D-13: subagents-bridge replaced by pi-extension with modules; file layer moved to host; M3/M8 rows updated; M8-T5 added.
+- 2026-09-05 · claude-2026-09-05-a · M0-T3, M0-T4, M0-T7 done with tests; M0-T8 blocked on gh `workflow` scope; D-14..D-16; Q-1/Q-2 answered; upstream packaging bug logged; repo on GitHub (private), branch `main`.
