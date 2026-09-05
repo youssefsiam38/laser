@@ -46,6 +46,7 @@ packages/ui               the one web app (desktop renderer, browser, PWA)
 packages/desktop          Electron shell: main process, tray, notifications, keychain, updater, bundled Node
 packages/crypto           Noise handshake, pairing, device list (browser + Node)
 packages/relay            Railway byte forwarder (no crypto library)
+packages/cli              the `piorbit` command: host lifecycle, session verbs, Pi passthrough, doctor
 docs/                     architecture, research findings, upstream log
 ```
 
@@ -60,7 +61,8 @@ M0 Foundation
      ├─ M5 Desktop shell
      ├─ M6 Relay and pairing
      │    └─ M7 Mobile PWA
-     └─ M8 Package support (transcribe, web-access, native replacements)
+     ├─ M8 Package support (transcribe, web-access, native replacements)
+     └─ M9 CLI (host lifecycle, session verbs, Pi passthrough, doctor)
 MX Cross-cutting (migration readiness, upstream, security) — runs alongside
 ```
 
@@ -272,6 +274,31 @@ Depends on: M1 (M3 for subagents).
 | M8-T3 | Native markdown preview and image display replacing TUI-only packages | preview pane for any markdown file |
 | M8-T4 | `web-access` module: detection and native rendering of pi-web-access widgets | search results widget renders |
 | M8-T5 | Module authoring guide for future packages (`docs/pi-extension-modules.md`) | a new module can be added from the guide alone |
+
+---
+
+## M9 · CLI
+
+Goal: `piorbit` is the way a developer starts, inspects, and drives the product
+from a terminal, and the way they reach Pi without leaving piorbit's world.
+
+Done when: `piorbit` with no arguments starts the host and opens the app;
+`piorbit pi --help` reaches the pinned Pi; `piorbit sessions` and
+`piorbit send` work against a running host; `piorbit doctor` explains a broken
+setup; every command has `--json`.
+
+Depends on: M1 (host), M2 (projects), M4 (settings) for the richer subcommands.
+
+| ID | Task | Done when |
+| --- | --- | --- |
+| M9-T1 | `packages/cli` package, `piorbit` bin, subcommand router, `--json` everywhere, `--help` per command, colored output that degrades when not a TTY | `piorbit --help` lists every command |
+| M9-T2 | `piorbit` / `piorbit up`: start the host (or attach to a running one), print the URL, open the browser unless `--no-open`; `--port`, `--agent-dir`, `--session-dir`; `piorbit down`, `piorbit status` | starting twice attaches instead of failing |
+| M9-T3 | `piorbit pi [...]`: pass through to the PINNED Pi with piorbit's env (`PI_CODING_AGENT_DIR`, `PI_SUBAGENTS_TEMP_ROOT`), inheriting stdio and the exit code; `piorbit pi update --extensions` and other Pi verbs work unchanged; `--global-pi` opts into the user's own install | `piorbit pi --help` prints Pi's help; exit codes propagate |
+| M9-T4 | Session commands against a running host over the protocol: `sessions [--project P]`, `open <id>`, `new [cwd]`, `send <text> [--session S] [--steer\|--follow-up]`, `tail <id>` (stream updates), `stop <id>`, `fork <id> <entry>`, `rename`, `compact` | `piorbit tail` streams a live run |
+| M9-T5 | `piorbit projects` add/remove/list; `piorbit packages` list/install/remove/update through the worker's package manager; `piorbit settings get\|set\|list` (global and project scope) | installing a package from the CLI shows up in the app |
+| M9-T6 | `piorbit doctor`: Node version, pinned Pi resolvable, agent dir, auth per provider, model resolvable, worker spawn smoke test, port availability, pi-subagents temp roots, disk for sessions. Exit non-zero on a real problem | a broken setup prints the fix |
+| M9-T7 | `piorbit relay login\|pair\|devices\|revoke` (M6) and `piorbit logs [--follow] [--section provider\|tools\|session]` (M4) | pairing from the CLI produces a QR |
+| M9-T8 | Shell completions (`piorbit completions bash\|zsh\|fish`) and a man-style `piorbit help <topic>` | completions install cleanly |
 
 ---
 

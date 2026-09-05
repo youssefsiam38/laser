@@ -1,24 +1,37 @@
 name: ci
+
 on:
   push:
+    branches: [main]
   pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-test:
     runs-on: ubuntu-latest
+    env:
+      # The desktop package pins Electron for its build config; CI never launches
+      # it, and the binary download is ~120 MB per run.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
       - uses: actions/checkout@v4
+
       - uses: pnpm/action-setup@v4
         with:
           version: 10
+
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm -r build
-      - run: pnpm -r test
 
-# Not installed at .github/workflows/ci.yml yet: the current gh token lacks the
-# `workflow` scope, so pushing that path is rejected. To install:
-#   gh auth refresh -s workflow
-#   mkdir -p .github/workflows && git mv ci/github-workflow.yml .github/workflows/ci.yml
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm -r build
+
+      - run: pnpm -r typecheck
+
+      - run: pnpm -r test

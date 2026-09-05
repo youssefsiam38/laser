@@ -17,7 +17,7 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 | M0-T5 | `ChordDriver` stub + seam test | done | claude-2026-09-05-a | `pnpm -F @piorbit/worker test` → `test/seam.test.ts` 3 passed | see notes |
 | M0-T6 | Worker process entry + transport | done | claude-2026-09-05-a | `test/server.test.ts` (dispatch, seq, replay, dialogs, errors) + `test/spawn.test.ts` (real process over fd 3) | see notes |
 | M0-T7 | Extension UI bridge | done | claude-2026-09-05-a | `test/ui-bridge.test.ts` (select/confirm/input/editor round-trip, timeout, custom() resolves, unknown members no-op, dispose settles) | see notes |
-| M0-T8 | CI | blocked | — | `ci/github-workflow.yml` | blocked: gh token lacks `workflow` scope; unblock with `gh auth refresh -s workflow` then move the file to `.github/workflows/ci.yml` |
+| M0-T8 | CI | done | claude-2026-09-05-b | `.github/workflows/ci.yml` (build + typecheck + test on Node 24 / pnpm 10) | user granted the `workflow` scope 2026-09-05; Electron binary download skipped in CI |
 
 #### M0-T1 notes
 - 2026-09-05 claimed: create pnpm workspace with packages protocol, worker, subagents-bridge, host, ui, desktop, crypto, relay.
