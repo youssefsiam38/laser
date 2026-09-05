@@ -164,6 +164,77 @@ a `stream` panel with monospace text, its `setStatus` as an ambient line, its
 dialogs as `decision` panels. Adopting the contract is an upgrade, never a
 requirement.
 
+## The conformance test
+
+A standard with one implementation is a description of that implementation.
+The test is therefore:
+
+> Install every Pi extension that does agent work — `pi-background-tasks`,
+> `feynman`, `@tintinweb/pi-subagents`, `pi-subagents` — at the same time.
+> All of them must render as `run` panels with the same shape, the same
+> status vocabulary, the same controls in the same place, and the same
+> keyboard path. Nothing about piorbit's chrome should reveal which extension
+> produced which panel — except one deliberate badge saying which did.
+
+Four independent implementations of "background agent work", built by people
+who never coordinated, is the hardest input this contract will get. If the
+`run` kind survives it, it will survive the fifth.
+
+### What the test forces on the design
+
+**Actions are data, not an enum.** One extension has stop and resume, another
+has pause, another has steer and interrupt and consume. A fixed action enum
+would be obsolete the moment a fifth extension appears. So `actions` is an
+open list of `{ id, label, confirm?, destructive? }` and piorbit renders them
+in a consistent place with consistent styling. piorbit knows *how a control
+looks*; it does not need to know what the control means.
+
+**Every adapter declares a state mapping.** Each extension has its own state
+names — `queued`, `paused`, `blocked`, `awaiting-approval`, `settled`. The
+adapter is responsible for mapping them into the five states in `DESIGN.md`,
+and that mapping is part of the adapter, reviewed like code. Where a state
+genuinely has no home, that is a finding about the vocabulary, not a licence
+to invent a sixth colour.
+
+**Progress is optional and typed.** Some extensions report `3 of 7 steps`,
+some report a spinner, some report nothing. The schema carries
+`progress?: { done, total } | "indeterminate"`, and a panel with no progress
+simply has none — it does not get a fake bar.
+
+**Cost is optional but never faked.** Only some track tokens and spend.
+Absent means absent; the card shows no cost row rather than a zero.
+
+**Provenance is always visible.** Same shape does not mean anonymous. Every
+run panel carries a `source` badge naming the extension that produced it,
+because "stop this task" must never stop the wrong thing, and because when
+one extension misbehaves you need to know which to remove.
+
+### The `run` payload
+
+The shape all four must fit through:
+
+```ts
+type RunPanel = {
+  kind: "run";
+  id: string;                       // stable; re-emit to update in place
+  source: string;                   // extension id — always shown as a badge
+  title: string;                    // "worker#2", "build docs"
+  status: "working" | "waiting_for_input" | "error" | "finished_unread" | "idle";
+  activity?: string;                // one line, the agent's own words
+  origin?: string;                  // who started it
+  parentId?: string;                // nesting; the tab strip reads this
+  startedAt?: string;
+  endedAt?: string;
+  progress?: { done: number; total: number } | "indeterminate";
+  cost?: { tokens?: number; usd?: number };
+  actions?: Array<{ id: string; label: string; confirm?: string; destructive?: boolean }>;
+  error?: string;
+};
+```
+
+Everything an extension cannot fill is omitted, and an omitted field renders
+as nothing rather than as an empty state.
+
 ## The rules
 
 **R1 · One status vocabulary.** The five states in `DESIGN.md` — working,
