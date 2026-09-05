@@ -130,6 +130,26 @@ describe("WorkerServer", () => {
     expect(d.answered).toEqual([{ id: "ui-1", confirmed: true }]);
   });
 
+  it("routes a ui response only to the session that raised the dialog", async () => {
+    const h = harness();
+    await h.call(1, "session/new", { cwd: "/tmp/fake" });
+    await h.call(2, "session/load", { path: "/tmp/fake/s2.jsonl" });
+    const [a, b] = h.drivers as [FakeDriver, FakeDriver];
+    expect(h.drivers).toHaveLength(2);
+
+    a.pending = [{ method: "confirm", id: "ui-aaaaaa-1", title: "A?" }];
+    b.pending = [{ method: "confirm", id: "ui-bbbbbb-1", title: "B?" }];
+
+    await h.call(3, "pi/ui/response", { id: "ui-bbbbbb-1", confirmed: true });
+    expect(a.answered).toEqual([]);
+    expect(b.answered).toEqual([{ id: "ui-bbbbbb-1", confirmed: true }]);
+
+    // An id no session owns is dropped, not broadcast.
+    await h.call(4, "pi/ui/response", { id: "ui-zzzzzz-9", confirmed: false });
+    expect(a.answered).toEqual([]);
+    expect(b.answered).toHaveLength(1);
+  });
+
   it("maps protocol and dispatch failures to JSON-RPC errors", async () => {
     const h = harness();
     expect((await h.call(1, "nope/x", {})).error?.code).toBe(-32601);

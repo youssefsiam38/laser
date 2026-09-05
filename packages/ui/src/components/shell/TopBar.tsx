@@ -1,0 +1,303 @@
+import { useMemo, useState } from "react";
+import {
+  ChevronLeft,
+  Copy,
+  Ellipsis,
+  GitBranch,
+  GitFork,
+  PanelLeft,
+  PanelLeftClose,
+  PanelRight,
+  PanelRightClose,
+  Pencil,
+  Shrink,
+  SquarePen,
+} from "lucide-react";
+
+import { StatusDot, StatusRing } from "@/components/status";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
+import { percent, shortCwd, tokens } from "@/format";
+import { useCopy } from "@/hooks";
+import { cn } from "@/lib/utils";
+import { useExtensionUi, usePiorbitStable, usePiorbitState, usePiorbitView, useSessionMeta } from "@/runtime";
+
+import { InlineRename } from "./InlineRename.js";
+import { lastPromptEntryId, sessionStateLabel, sessionStatus, workerChip } from "./model.js";
+import { errorText, useShell } from "./shell-context.js";
+
+/**
+ * Sticky row above the thread: what session this is, what state it is in,
+ * and the two panel toggles. Everything that changes the session lives in the
+ * more menu; the composer owns model and thinking.
+ */
+export function TopBar() {
+  const { actions, client, currentProject } = usePiorbitStable();
+  const view = usePiorbitView();
+  const sessions = usePiorbitState((s) => s.sessions);
+  const meta = useSessionMeta();
+  const { statuses } = useExtensionUi();
+  const shell = useShell();
+  const { copy } = useCopy();
+  const [renaming, setRenaming] = useState(false);
+  const [compactOpen, setCompactOpen] = useState(false);
+
+  const summary = useMemo(() => (view ? sessions.find((s) => s.path === view.path) : undefined), [sessions, view]);
+  const status = sessionStatus(view, summary);
+  const stateLabel = sessionStateLabel(view, meta.worker);
+  const chip = workerChip(meta.worker);
+  const title = view ? (view.state.name ?? view.title ?? view.state.id.slice(0, 8)) : "New session";
+  const untitled = view ? !(view.state.name ?? view.title) : false;
+  const pills = useMemo(() => Object.entries(statuses).slice(0, 2), [statuses]);
+  const usage = meta.contextUsage;
+  const busy = meta.running || meta.compacting;
+
+  const copyPath = async () => {
+    if (!view) return;
+    const ok = await copy(view.path);
+    actions.toast(ok ? "info" : "error", ok ? "Session path copied" : "Could not copy the path");
+  };
+
+  const forkFromLastPrompt = async () => {
+    if (!view) return;
+    try {
+      const { entries } = await client.request("pi/session/entries", { path: view.path });
+      const entryId = lastPromptEntryId(entries);
+      if (!entryId) {
+        actions.toast("warning", "Nothing to fork yet: this session has no prompt.");
+        return;
+      }
+      await actions.fork(entryId);
+    } catch (error) {
+      actions.toast("error", errorText(error));
+    }
+  };
+
+  return (
+    <header
+      className={cn(
+        "flex h-[calc(48px+env(safe-area-inset-top))] shrink-0 items-center gap-1 bg-bg px-2 pt-[env(safe-area-inset-top)] hairline-b",
+      )}
+    >
+      {shell.layout === "mobile" ? (
+        <TooltipIconButton tooltip="Sessions" size="icon" onClick={() => shell.setSessionsOpen(true)}>
+          <ChevronLeft />
+        </TooltipIconButton>
+      ) : (
+        <TooltipIconButton
+          tooltip={shell.sessionsOpen ? "Hide sessions" : "Show sessions"}
+          shortcut="["
+          aria-pressed={shell.sessionsOpen}
+          onClick={shell.toggleSessions}
+        >
+          {shell.sessionsOpen ? <PanelLeftClose /> : <PanelLeft />}
+        </TooltipIconButton>
+      )}
+
+      <div className="group flex min-w-0 flex-1 items-center gap-2 ps-1">
+        {view ? (
+          <StatusDot status={status} size="md" label={stateLabel} />
+        ) : (
+          currentProject && <span className="eyebrow hidden sm:inline">{shortCwd(currentProject)}</span>
+        )}
+
+        {renaming && view ? (
+          <InlineRename
+            initial={view.state.name ?? ""}
+            className="max-w-sm"
+            onCommit={(name) => {
+              setRenaming(false);
+              void actions.rename(name);
+            }}
+            onCancel={() => setRenaming(false)}
+          />
+        ) : (
+          <h1
+            className={cn(
+              "min-w-0 truncate leading-5 select-none",
+              untitled ? "font-mono text-xs font-medium tracking-[0.01em] text-ink-2" : "text-sm font-semibold text-ink",
+            )}
+            title={view ? `${view.path}\nDouble-click to rename` : undefined}
+            onDoubleClick={() => view && setRenaming(true)}
+          >
+            {title}
+          </h1>
+        )}
+
+        {view && !renaming && (
+          <TooltipIconButton
+            tooltip="Rename session"
+            size="icon-xs"
+            className="text-ink-3 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100"
+            onClick={() => setRenaming(true)}
+          >
+            <Pencil />
+          </TooltipIconButton>
+        )}
+
+        {view && stateLabel && (
+          <span className="hidden shrink-0 text-xs leading-4 text-ink-2 sm:inline" aria-live="polite">
+            {stateLabel}
+          </span>
+        )}
+
+        {chip && (
+          <Badge variant={chip.tone === "muted" ? "outline" : chip.tone} className="shrink-0">
+            {chip.label}
+          </Badge>
+        )}
+
+        {pills.map(([key, text]) => (
+          <Badge key={key} variant="mono" className="hidden max-w-48 truncate lg:inline-flex" title={`${key}: ${text}`}>
+            {text}
+          </Badge>
+        ))}
+      </div>
+
+      <div className="flex shrink-0 items-center gap-0.5">
+        {meta.model && (
+          <span
+            className="me-1.5 hidden max-w-40 truncate font-mono text-[11px] text-ink-3 xl:inline"
+            title={`${meta.model.provider}/${meta.model.id}`}
+          >
+            {meta.model.id}
+          </span>
+        )}
+
+        {usage && usage.percent !== null && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="me-1 inline-flex rounded-full outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live" tabIndex={0}>
+                <StatusRing percent={usage.percent} size={20} thickness={2} showLabel={false} label={`Context ${percent(usage.percent)} used`} />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>
+              Context {percent(usage.percent)}
+              <span className="font-mono text-[11px] opacity-80 tnum">
+                {usage.tokens === null ? "—" : tokens(usage.tokens)} / {tokens(usage.contextWindow)}
+              </span>
+            </TooltipContent>
+          </Tooltip>
+        )}
+
+        <TooltipIconButton
+          tooltip={shell.telemetryOpen ? "Hide telemetry" : "Show telemetry"}
+          shortcut="]"
+          aria-pressed={shell.telemetryOpen}
+          onClick={shell.toggleTelemetry}
+        >
+          {shell.telemetryOpen ? <PanelRightClose /> : <PanelRight />}
+        </TooltipIconButton>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <TooltipIconButton tooltip="More">
+              <Ellipsis />
+            </TooltipIconButton>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-60">
+            <DropdownMenuItem disabled={!view || busy} onSelect={() => void actions.compact()}>
+              <Shrink />
+              Compact context
+            </DropdownMenuItem>
+            <DropdownMenuItem disabled={!view || busy} onSelect={() => setCompactOpen(true)}>
+              <SquarePen />
+              Compact with instructions…
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem disabled={!view || meta.running} onSelect={() => void forkFromLastPrompt()}>
+              <GitFork />
+              Fork from last prompt
+            </DropdownMenuItem>
+            <DropdownMenuItem disabled={!view} onSelect={() => void copyPath()}>
+              <Copy />
+              Copy session path
+            </DropdownMenuItem>
+            <DropdownMenuItem disabled={!view} onSelect={shell.openHistory}>
+              <GitBranch />
+              Open history
+              <DropdownMenuShortcut>]</DropdownMenuShortcut>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      <CompactDialog open={compactOpen} onOpenChange={setCompactOpen} />
+    </header>
+  );
+}
+
+function CompactDialog({ open, onOpenChange }: { open: boolean; onOpenChange(open: boolean): void }) {
+  const { actions } = usePiorbitStable();
+  const [instructions, setInstructions] = useState("");
+  const submit = () => {
+    const text = instructions.trim();
+    void actions.compact(text ? text : undefined);
+    onOpenChange(false);
+    setInstructions("");
+  };
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Compact context</DialogTitle>
+          <DialogDescription>
+            Pi summarises the conversation so far and keeps working from the summary. Tell it what must survive.
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          className="flex flex-col gap-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            submit();
+          }}
+        >
+          <label className="flex flex-col gap-1.5">
+            <span className="eyebrow">Instructions · optional</span>
+            <Textarea
+              autoFocus
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value)}
+              placeholder="Keep the list of files we changed and the failing test names."
+              className="max-h-40 min-h-20 text-sm"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  submit();
+                }
+              }}
+            />
+          </label>
+          <DialogFooter>
+            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit">
+              <Shrink />
+              Compact
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}

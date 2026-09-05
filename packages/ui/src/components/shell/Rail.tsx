@@ -1,0 +1,165 @@
+import { useCallback } from "react";
+import { FolderPlus, Moon, Settings, Sun } from "lucide-react";
+
+import { StatusRing, STATUS_LABEL } from "@/components/status";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
+import { initials } from "@/format";
+import { useTheme } from "@/hooks";
+import { cn } from "@/lib/utils";
+import { usePiorbitStable, usePiorbitState } from "@/runtime";
+
+import { projectSummaries, type ProjectSummary } from "./model.js";
+import { useShell } from "./shell-context.js";
+
+/** Two summary lists are the same when every rendered field is. */
+const sameSummaries = (a: readonly ProjectSummary[], b: readonly ProjectSummary[]): boolean =>
+  a.length === b.length &&
+  a.every((p, i) => {
+    const q = b[i]!;
+    return (
+      p.cwd === q.cwd &&
+      p.status === q.status &&
+      p.sessionCount === q.sessionCount &&
+      p.needYou === q.needYou &&
+      p.worker?.status === q.worker?.status
+    );
+  });
+
+/**
+ * The 56px project rail. One ring per directory: the ring is the project's
+ * aggregate status (live while any session works, attention while any waits,
+ * danger when a worker crashed), the count is how many sessions need you.
+ */
+export function Rail() {
+  const { projects, currentProject, setCurrentProject } = usePiorbitStable();
+  const shell = useShell();
+  const { theme, toggle } = useTheme();
+  // Derived inside the selector so a streamed token that changes nothing the
+  // rail shows does not re-render it (or its Radix tooltips).
+  const summaries = usePiorbitState(
+    useCallback((s) => projectSummaries(projects, s.sessions, s.open, s.workers), [projects]),
+    sameSummaries,
+  );
+
+  return (
+    <nav
+      aria-label="Projects"
+      className="flex h-full w-14 shrink-0 flex-col items-center bg-surface-2 pt-[calc(env(safe-area-inset-top)+8px)] pb-[calc(env(safe-area-inset-bottom)+8px)] hairline-r"
+    >
+      <Brand />
+      <ul role="list" className="mt-2 flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto py-1 scrollbar-none">
+        {summaries.map((project) => (
+          <li key={project.cwd}>
+            <ProjectButton
+              project={project}
+              active={project.cwd === currentProject}
+              onSelect={() => setCurrentProject(project.cwd)}
+            />
+          </li>
+        ))}
+        <li>
+          <TooltipIconButton
+            tooltip="Add project"
+            side="right"
+            size="icon"
+            className="text-ink-3 hover:text-ink"
+            onClick={() => shell.setAddProjectOpen(true)}
+          >
+            <FolderPlus />
+          </TooltipIconButton>
+        </li>
+      </ul>
+      <div className="mt-auto flex flex-col items-center gap-1 pt-2">
+        <TooltipIconButton
+          tooltip={theme === "dark" ? "Light theme" : "Dark theme"}
+          side="right"
+          size="icon"
+          className="text-ink-3 hover:text-ink"
+          onClick={toggle}
+        >
+          {theme === "dark" ? <Sun /> : <Moon />}
+        </TooltipIconButton>
+        <TooltipIconButton
+          tooltip="Settings · arrives in M4"
+          side="right"
+          size="icon"
+          aria-disabled="true"
+          className="cursor-not-allowed text-ink-3 opacity-45 hover:bg-transparent hover:text-ink-3 active:translate-y-0"
+        >
+          <Settings />
+        </TooltipIconButton>
+      </div>
+    </nav>
+  );
+}
+
+/** The orbit mark: a ring with one body on it. Monochrome, 20px. */
+function Brand() {
+  return (
+    <div className="flex size-10 items-center justify-center" aria-label="piorbit" role="img">
+      <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" className="text-ink">
+        <circle cx="10" cy="10" r="7.5" fill="none" stroke="currentColor" strokeWidth="1.5" opacity="0.55" />
+        <circle cx="10" cy="10" r="2" fill="currentColor" />
+        <circle cx="15.3" cy="4.7" r="2" fill="currentColor" />
+      </svg>
+    </div>
+  );
+}
+
+interface ProjectButtonProps {
+  project: ProjectSummary;
+  active: boolean;
+  onSelect(): void;
+}
+
+function ProjectButton({ project, active, onSelect }: ProjectButtonProps) {
+  const count = `${project.sessionCount} session${project.sessionCount === 1 ? "" : "s"}`;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={onSelect}
+          aria-current={active ? "true" : undefined}
+          aria-label={`${project.name} — ${project.cwd}`}
+          className={cn(
+            "relative flex size-10 items-center justify-center rounded-lg",
+            "transition-[background-color,color] duration-75 outline-none",
+            "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live",
+            active
+              ? "bg-surface text-ink"
+              : "text-ink-2 hover:bg-[color-mix(in_oklab,var(--surface)_65%,transparent)] hover:text-ink active:translate-y-px",
+            // Selection bar on the rail's outer edge (8px outside the 40px button).
+            "before:absolute before:-start-2 before:top-2.5 before:bottom-2.5 before:w-0.5 before:rounded-e-full before:bg-ink",
+            "before:opacity-0 before:transition-opacity before:duration-75",
+            active && "before:opacity-100",
+          )}
+        >
+          <StatusRing status={project.status} size={32} thickness={2} aria-hidden="true">
+            <span className="font-mono text-[11px] font-medium tracking-[0.02em]">{initials(project.name)}</span>
+          </StatusRing>
+          {project.needYou > 0 && (
+            <span
+              aria-hidden="true"
+              className="absolute -top-0.5 -end-0.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-attention px-1 font-mono text-2xs leading-none font-medium text-on-attention tnum ring-2 ring-surface-2"
+            >
+              {project.needYou}
+            </span>
+          )}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="right" className="max-w-80 items-start py-1.5">
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <span className="font-semibold">{project.name}</span>
+          <span className="font-mono text-[11px] leading-4 break-all opacity-80">{project.cwd}</span>
+          <span className="text-[11px] leading-4 opacity-70">
+            {count}
+            {project.status !== "idle" ? ` · ${STATUS_LABEL[project.status]}` : ""}
+            {project.worker && project.worker.status !== "ready" ? ` · worker ${project.worker.status}` : ""}
+          </span>
+        </span>
+      </TooltipContent>
+    </Tooltip>
+  );
+}

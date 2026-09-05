@@ -113,6 +113,7 @@ Depends on: M0.
 | M1-T7 | Model and thinking controls, session name, compaction trigger | state reflected from `pi/state` messages |
 | M1-T8 | Resume and reattach: sequence numbers on every update; client resumes from last seq on reconnect | tab reload loses nothing |
 | M1-T9 | Session tree: fork, navigate, labels (from Pi's tree entries) | `/tree` equivalent works in UI |
+| M1-T10 | Visual design pass: token system, self-hosted typefaces, icon rail, session cards with status, context ring, tool rows with timing, per-turn usage, highlighted code blocks with copy, floating composer, empty state, motion | the app reads as a finished product in both themes; user signs off on the look |
 
 ---
 

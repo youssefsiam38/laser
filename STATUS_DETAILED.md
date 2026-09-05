@@ -65,6 +65,7 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 | M1-T6 | Extension dialogs in UI | done | claude-2026-09-05-a | browser: sandbox extension `/ask` → `ctx.ui.select` rendered, answered, `notify` toast + `setStatus` pill arrived; `test/store.test.ts` | see notes |
 | M1-T7 | Model/thinking/name/compaction controls | done | claude-2026-09-05-a | `TopBar.tsx`: model picker, thinking select, context % pill that compacts on click, double-click title to rename (`pi/session/rename`) | browser-verified model/thinking; rename/compact wired to tested worker methods |
 | M1-T8 | Resume and reattach with seq | done | claude-2026-09-05-a | `client.ts` (track/resume on reconnect + visibilitychange); host e2e resume test; browser: reload → session listed → transcript hydrated via `pi/session/entries` | — |
+| M1-T10 | Visual design pass (now: assistant-ui adoption, D-17) | done | claude-2026-09-05-b | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (172 tests); browser: streaming, highlighted code, dark+light, mobile+desktop layouts | user feedback 2026-09-05: "looks very basic, should be impressive"; rebuilt on assistant-ui per `packages/ui/DESIGN.md`; browser sign-off pending |
 | M1-T9 | Session tree | done | claude-2026-09-05-a | driver `fork()` via `AgentSessionRuntime.fork` (test: `stable-sdk.prompt.test.ts` forks at a user entry into a new file and keeps serving); worker re-keys the session (`server.test.ts`); `History.tsx` panel with fork/jump, branch depth by indentation; browser-verified | see notes |
 
 #### M1-T1 notes
@@ -320,6 +321,31 @@ reworded; M8-T5 added (module authoring guide).
 
 ---
 
+### D-17 · 2026-09-05 · UI rebuilt on assistant-ui + Tailwind v4; react-pi evaluated and rejected
+Decision: `@piorbit/ui` is rebuilt on `@assistant-ui/react` 0.15.18 using the
+ExternalStore + RemoteThreadList runtime over piorbit's existing HostClient,
+reducer, and protocol (adapter in `packages/ui/src/runtime/`). Styling is
+Tailwind v4 with registry components copied from the MIT clone (Radix flavor)
+and the visual contract in `packages/ui/DESIGN.md` ("Ground Station").
+`@assistant-ui/react-pi` was read in full and NOT adopted: its `PiClient`
+contract needs full-message `message_update`s (we stream deltas), drops live
+events after a seq restart, uses index-based message ids (we need Pi entry ids
+for fork/jump), lacks `max` thinking, fork, navigate, and refetches the whole
+thread on unknown events. Its patterns are borrowed: tool-associated dialog
+classification (worker stamps `toolCallId` when exactly one tool runs),
+assistant+tool turns merged into one message with steps, free-standing
+dialogs as a side channel.
+Why: the user asked to learn assistant-ui and use it, and to push the UI
+further than the plain-CSS M1 UI. assistant-ui gives primitives, branching,
+queue, tool/approval seams, markdown/highlighting, and a registry of
+coding-agent elements; keeping our runtime layer preserves invariants 1, 2, 8.
+Consequences: protocol gained `UiDialogRequest.toolCallId?` and
+`UiFireAndForget dialogResolved`; M1-T10 is redefined as this adoption; old
+components, marked, and dompurify are removed; `@assistant-ui/ui`, tw-shimmer,
+tw-glass are registry-only (not on npm) and are copied as source when needed.
+
+---
+
 ## Open questions
 
 | ID | Question | Blocks | Asked of |
@@ -340,3 +366,14 @@ reworded; M8-T5 added (module authoring guide).
 - 2026-09-05 · claude-2026-09-05-a · M1-T1 and M1-T2 done (host e2e through a real worker and stub provider; catalog timed on the real dir). 31 tests green.
 - 2026-09-05 · claude-2026-09-05-a · M1-T3/T4/T5/T6/T8 done, T7 in-progress; UI verified in the browser against the sandbox (streaming markdown, hydration after reload, extension select dialog round trip). `pnpm sandbox` added.
 - 2026-09-05 · claude-2026-09-05-a · M1-T7 and M1-T9 done (fork on the real SDK, history panel, rename, compact). M1 complete. 39 tests green.
+- 2026-09-05 · claude-2026-09-05-b · D-17 recorded (assistant-ui adoption, react-pi rejected); protocol gained toolCallId + dialogResolved; UI rebuild in progress (workflow).
+- 2026-09-05 · claude-2026-09-05-b · M1-T10 done. UI rebuilt on assistant-ui 0.15.18 + Tailwind v4 (D-17): runtime adapter (`src/runtime/`), thread (`src/components/thread/`), shell (`src/components/shell/`), design system (`src/components/ui`, `src/components/status`, `globals.css`). Old plain-CSS components, `markdown.tsx`, marked and dompurify removed. Worker now stamps `toolCallId` on dialogs raised under single-tool causality and emits `dialogResolved`. 172 tests green.
+
+#### M1-T10 notes
+- 2026-09-05 built by a 10-agent workflow (design system + thread + shell on Fable, runtime/worker/integration/review/fix on Opus), then verified in the browser against `pnpm sandbox`.
+- 2026-09-05 three defects found in browser verification that the agents' own reviews missed, all fixed here:
+  1. **Blank screen on the first send in any project.** `threadList.initialize()` refreshed the catalog, which changed the thread-list signature and fired `runtime.threads.reload()` while assistant-ui was still adopting the thread it had just initialized; every later render threw `useClientLookup: key "<path>" not found`. Fixed with a `beginInitialize`/`endInitialize` bracket that gates the reload, and the refresh inside `initialize` dropped. Regression tests cover both the call order and the bracket closing on failure.
+  2. **Code blocks never tokenized.** `react-syntax-highlighter`'s `light-async` registers a language from a dynamic import but highlights on the same render, so the first paint runs through an unregistered language and nothing re-renders afterwards; the highlighter, hljs core and the `typescript` chunk all fetched 200 and the `<code>` still had zero spans. Switched to the sync `light` build with 28 languages registered at module load. Also collapsed 195 language chunks into one 132 kB lazy chunk.
+  3. **`useIsTouch()` disagreed with assistant-ui.** Ours was `(pointer: coarse)`, the primitive's is `(pointer: coarse) and (not (any-pointer: fine))`. On a tablet with a trackpad our composer handler would bow out and the primitive would submit with no run config, losing the steer / follow-up choice. Aligned.
+- 2026-09-05 not defects, ruled out during verification: the repeated `WebSocket … failed` console lines are stale reconnect attempts from page loads before the host was listening (a 12 s probe recorded zero new sockets); Enter not submitting is an artifact of the automation harness's synthetic Return, confirmed working in real Chrome by the user.
+- 2026-09-05 known gaps, not blocking: main bundle is 1.0 MB / 303 kB gzip (no manual chunking yet); `SPEND` reads "No spend recorded" until Pi persists usage; worker status shows "No status yet" because the pool never emits `starting`.

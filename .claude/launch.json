@@ -6,6 +6,12 @@
       "runtimeExecutable": "node",
       "runtimeArgs": ["scripts/sandbox.mjs"],
       "port": 41441
+    },
+    {
+      "name": "ui-dev",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["-F", "@piorbit/ui", "dev"],
+      "port": 5173
     }
   ]
 }

@@ -59,15 +59,21 @@ export class StableSdkDriver implements SessionDriver {
 
   private readonly listeners = new Set<DriverListener>();
   private readonly ui: UiBridge;
+  /** Fallback for `AgentState.pendingToolCalls`, derived from the event stream. */
+  private readonly toolCalls = new PendingToolCallTracker();
   private runtime: AgentSessionRuntime | undefined;
   private unsubscribe: (() => void) | undefined;
   private cwd = "";
 
   constructor() {
-    this.ui = createUiBridge({
-      onRequest: (request) => this.emit({ type: "ui_request", request }),
-      onEvent: (event) => this.emit({ type: "ui_event", event }),
-    });
+    this.ui = createUiBridge(
+      {
+        onRequest: (request) => this.emit({ type: "ui_request", request }),
+        onEvent: (event) => this.emit({ type: "ui_event", event }),
+      },
+      // Lazy: the bridge outlives every session, and no session exists yet here.
+      { pendingToolCallId: () => this.currentToolCallId() },
+    );
   }
 
   // ---------------------------------------------------------------- lifecycle
@@ -123,6 +129,8 @@ export class StableSdkDriver implements SessionDriver {
   private async applySession(): Promise<void> {
     const session = this.session();
     this.unsubscribe?.();
+    // A replaced runtime carries none of the old session's in-flight tool calls.
+    this.toolCalls.clear();
     await session.bindExtensions({
       mode: "rpc",
       uiContext: this.ui.context,
@@ -136,6 +144,7 @@ export class StableSdkDriver implements SessionDriver {
   async dispose(): Promise<void> {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
+    this.toolCalls.clear();
     this.ui.dispose();
     await this.runtime?.dispose();
     this.runtime = undefined;
@@ -296,6 +305,28 @@ export class StableSdkDriver implements SessionDriver {
     return this.runtime.session;
   }
 
+  /**
+   * The tool call a dialog raised right now belongs to, or undefined.
+   *
+   * Single-tool causality (react-pi's rule): Pi hands extension dialogs no tool
+   * call id, so the only sound attribution is "exactly one tool call is
+   * executing". Zero or several running tools ⇒ free-standing dialog.
+   *
+   * Source of truth is Pi's own `AgentState.pendingToolCalls`
+   * (pi-agent-core types.d.ts: `readonly pendingToolCalls: ReadonlySet<string>`).
+   * If a Pi release stops exposing it, the tracker fed from
+   * `tool_execution_start` / `tool_execution_end` answers instead.
+   */
+  private currentToolCallId(): string | undefined {
+    let live: ReadonlySet<string> | undefined;
+    try {
+      live = asIdSet(this.runtime?.session.state.pendingToolCalls);
+    } catch {
+      live = undefined;
+    }
+    return singleId(live ?? this.toolCalls.ids());
+  }
+
   private emit(event: DriverEvent): void {
     for (const listener of this.listeners) listener(event);
   }
@@ -305,6 +336,7 @@ export class StableSdkDriver implements SessionDriver {
   }
 
   private onSessionEvent(event: AgentSessionEvent): void {
+    this.toolCalls.note(event);
     const update = mapEvent(event);
     if (update) this.push(update);
     // These change visible session state, so follow them with a state snapshot.
@@ -318,6 +350,69 @@ export class StableSdkDriver implements SessionDriver {
       this.push({ kind: "state", state: this.state() });
     }
   }
+}
+
+// -------------------------------------------------------- pending tool calls
+
+/**
+ * Tool call ids in flight, derived from the session event stream.
+ *
+ * Pi 0.85 already publishes this as `AgentState.pendingToolCalls`, which the
+ * driver prefers. This tracker exists so dialog↔tool attribution keeps working
+ * if a future Pi drops or renames that state, and so the rule is unit-testable
+ * without a live agent. Exported for tests.
+ */
+export class PendingToolCallTracker {
+  private readonly running = new Set<string>();
+
+  /** Feed every `AgentSessionEvent` the driver sees. Unknown events are ignored. */
+  note(event: AgentSessionEvent): void {
+    switch (event.type) {
+      case "tool_execution_start":
+        this.running.add(event.toolCallId);
+        return;
+      case "tool_execution_end":
+        this.running.delete(event.toolCallId);
+        return;
+      // Pi's own `finishRun()` empties `pendingToolCalls` when the run ends, so
+      // mirror that: drop ids whose `tool_execution_end` never arrived (abort,
+      // crash, retry). Nothing can be executing once the run is over.
+      case "agent_end":
+      case "agent_settled":
+        this.running.clear();
+        return;
+      default:
+        return;
+    }
+  }
+
+  ids(): ReadonlySet<string> {
+    return this.running;
+  }
+
+  /** The id when exactly one tool call is executing, else undefined. */
+  single(): string | undefined {
+    return singleId(this.running);
+  }
+
+  clear(): void {
+    this.running.clear();
+  }
+}
+
+/** The only member of a one-element set; undefined for zero or many. */
+function singleId(ids: ReadonlySet<string>): string | undefined {
+  if (ids.size !== 1) return undefined;
+  for (const id of ids) return id;
+  return undefined;
+}
+
+/** Duck-typed `ReadonlySet<string>` check — Pi may hand back a Set-like view. */
+function asIdSet(value: unknown): ReadonlySet<string> | undefined {
+  const candidate = value as { size?: unknown; [Symbol.iterator]?: unknown } | null | undefined;
+  if (!candidate || typeof candidate.size !== "number") return undefined;
+  if (typeof candidate[Symbol.iterator] !== "function") return undefined;
+  return value as ReadonlySet<string>;
 }
 
 // ------------------------------------------------------------------- mapping

@@ -6,6 +6,9 @@
  * socket (laptop sleep, phone lock, host restart) loses no output. Also
  * reconnects proactively on `visibilitychange` because iOS closes sockets on
  * lock without always firing `close` (docs/research/findings.md).
+ *
+ * `session/update` notifications are coalesced to one flush per animation
+ * frame; every other message flushes the buffer first, so order is preserved.
  */
 import type {
   ClientMethod,
@@ -24,7 +27,20 @@ export interface HostClientOptions {
   url?: string;
   onNotification: NotificationHandler;
   onConnection?: (state: ConnectionState) => void;
+  /**
+   * Result of a resume `session/load`. `replayFrom` below the seq we hold means
+   * the worker restarted its counter and the app must adopt the new epoch.
+   */
+  onResume?: (path: string, replayFrom: number) => void;
+  /**
+   * Asked before a resume. Returning false drops the path instead of re-opening
+   * a Pi session the app no longer shows.
+   */
+  shouldResume?: (path: string) => boolean;
 }
+
+/** Backstop flush cadence when `requestAnimationFrame` is absent or paused. */
+const FLUSH_INTERVAL_MS = 33;
 
 export function defaultHostUrl(): string {
   const loc = globalThis.location;
@@ -40,22 +56,41 @@ export class HostClient {
   private readonly attached = new Map<string, number>(); // session path → last seq seen
   private backoffMs = 500;
   private closedByUser = false;
+  private listening = false;
   private state: ConnectionState = "closed";
+  private frameHandle: number | undefined;
+  private timerHandle: ReturnType<typeof setTimeout> | undefined;
+  /** Transcript deltas waiting for the next frame, in arrival (seq) order. */
+  private readonly pendingUpdates: SessionUpdateParams[] = [];
 
   constructor(private readonly options: HostClientOptions) {}
+
+  /**
+   * One handler, registered once and removed in `close()`. A per-`connect()`
+   * closure would outlive the client and resurrect it on the next tab focus.
+   */
+  private readonly onVisible = (): void => {
+    if (this.closedByUser) return;
+    if (document.visibilityState === "visible" && this.state !== "open") this.open();
+  };
 
   connect(): void {
     this.closedByUser = false;
     this.open();
-    if (typeof document !== "undefined") {
-      document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "visible" && this.state !== "open") this.open();
-      });
+    if (typeof document !== "undefined" && !this.listening) {
+      this.listening = true;
+      document.addEventListener("visibilitychange", this.onVisible);
     }
   }
 
   close(): void {
     this.closedByUser = true;
+    if (this.listening) {
+      this.listening = false;
+      document.removeEventListener("visibilitychange", this.onVisible);
+    }
+    this.pendingUpdates.length = 0;
+    this.flushUpdates(); // clears the scheduled frame; the buffer is already empty
     this.ws?.close();
   }
 
@@ -70,6 +105,11 @@ export class HostClient {
 
   untrack(path: string): void {
     this.attached.delete(path);
+  }
+
+  /** Adopt a worker's fresh `seq` epoch (see `HostClientOptions.onResume`). */
+  resync(path: string, seq: number): void {
+    if (this.attached.has(path)) this.attached.set(path, seq);
   }
 
   request<M extends ClientMethod>(method: M, params: ClientRequests[M]["params"]): Promise<ClientRequests[M]["result"]> {
@@ -96,12 +136,22 @@ export class HostClient {
     ws.onopen = () => {
       this.backoffMs = 500;
       this.setState("open");
-      for (const [path, seq] of this.attached) {
-        this.request("session/load", { path, fromSeq: seq }).catch(() => {});
+      for (const [path, seq] of [...this.attached]) {
+        // A session the app has dropped must not be re-opened in a worker.
+        if (this.options.shouldResume && !this.options.shouldResume(path)) {
+          this.attached.delete(path);
+          continue;
+        }
+        this.request("session/load", { path, fromSeq: seq })
+          .then((result) => {
+            this.options.onResume?.(path, result.replayFrom);
+          })
+          .catch(() => {});
       }
     };
     ws.onmessage = (event) => this.onMessage(JSON.parse(String(event.data)) as JsonRpcMessage);
     ws.onclose = () => {
+      this.flushUpdates();
       this.setState("closed");
       for (const p of this.pending.values()) p.reject(new Error("connection closed"));
       this.pending.clear();
@@ -113,8 +163,48 @@ export class HostClient {
     ws.onerror = () => ws.close();
   }
 
+  /**
+   * Transcript deltas arrive one WebSocket message per token, each its own
+   * macrotask, so React cannot batch them: one render + one forced reflow per
+   * character. Buffer them and hand the whole burst over once per frame.
+   * Everything else (dialogs, worker status, RPC replies) flushes the buffer
+   * first and then passes straight through, so relative order never changes.
+   */
+  private queueUpdate(params: SessionUpdateParams): void {
+    this.pendingUpdates.push(params);
+    // A hidden tab never paints, so rAF alone would buffer forever: the timer
+    // is the backstop, and whichever fires first cancels the other.
+    if (this.frameHandle === undefined && typeof globalThis.requestAnimationFrame === "function") {
+      this.frameHandle = globalThis.requestAnimationFrame(() => {
+        this.frameHandle = undefined;
+        this.flushUpdates();
+      });
+    }
+    if (this.timerHandle === undefined) {
+      this.timerHandle = setTimeout(() => {
+        this.timerHandle = undefined;
+        this.flushUpdates();
+      }, FLUSH_INTERVAL_MS);
+    }
+  }
+
+  private flushUpdates(): void {
+    if (this.frameHandle !== undefined) {
+      globalThis.cancelAnimationFrame?.(this.frameHandle);
+      this.frameHandle = undefined;
+    }
+    if (this.timerHandle !== undefined) {
+      clearTimeout(this.timerHandle);
+      this.timerHandle = undefined;
+    }
+    if (this.pendingUpdates.length === 0) return;
+    const batch = this.pendingUpdates.splice(0, this.pendingUpdates.length);
+    for (const params of batch) this.options.onNotification("session/update", params);
+  }
+
   private onMessage(message: JsonRpcMessage): void {
     if ("id" in message && !("method" in message)) {
+      this.flushUpdates();
       const entry = this.pending.get(Number(message.id));
       if (!entry) return;
       this.pending.delete(Number(message.id));
@@ -127,7 +217,10 @@ export class HostClient {
       if (method === "session/update") {
         const params = message.params as SessionUpdateParams;
         if (this.attached.has(params.sessionPath)) this.attached.set(params.sessionPath, params.seq);
+        this.queueUpdate(params);
+        return;
       }
+      this.flushUpdates();
       this.options.onNotification(method, message.params as never);
     }
   }

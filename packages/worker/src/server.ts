@@ -158,8 +158,11 @@ export class WorkerServer {
           state: await this.live(req.params.path).driver.setThinkingLevel(req.params.level),
         } satisfies Result<"pi/thinking/set">;
       case "pi/ui/response": {
-        // The dialog id is unique across sessions in this worker; find its owner.
-        for (const live of this.sessions.values()) live.driver.respondToUi(req.params);
+        // Answer only the session that raised the dialog: ids are minted per
+        // UI bridge, so broadcasting could settle another session's dialog with
+        // an answer the user never gave it.
+        const owner = this.ownerOfDialog(req.params.id);
+        owner?.driver.respondToUi(req.params);
         return {};
       }
     }
@@ -227,6 +230,23 @@ export class WorkerServer {
     const live = this.sessions.get(path);
     if (!live) throw new ProtocolError(ErrorCodes.SessionNotFound, `session ${path} is not open in this worker`);
     return live;
+  }
+
+  /**
+   * The session whose UI bridge is holding `id`. Drivers that cannot report
+   * their pending dialogs (the stub) fall back to the only open session, so a
+   * single-session worker keeps working.
+   */
+  private ownerOfDialog(id: string): Live | undefined {
+    for (const live of this.sessions.values()) {
+      const pendingUi = (live.driver as { pendingUi?: () => Array<{ id: string }> }).pendingUi;
+      if (typeof pendingUi === "function" && pendingUi.call(live.driver).some((request) => request.id === id)) {
+        return live;
+      }
+    }
+    // No driver claims it. With one session there is no ambiguity, so deliver
+    // anyway (a driver may not expose `pendingUi`); with several, drop it.
+    return this.sessions.size === 1 ? this.sessions.values().next().value : undefined;
   }
 
   private onDriverEvent(live: Live, event: DriverEvent): void {

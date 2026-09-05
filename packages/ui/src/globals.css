@@ -1,0 +1,439 @@
+/*
+ * piorbit — "Ground Station" design tokens and base styles.
+ * Contract: packages/ui/DESIGN.md. Tailwind v4 entry.
+ */
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+@custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
+@custom-variant data-closed (&:where([data-state="closed"], [data-closed]:not([data-closed="false"])));
+
+/* ---------------------------------------------------------------------------
+ * Raw tokens (DESIGN.md, verbatim). Light on :root, dark on .dark.
+ * ------------------------------------------------------------------------- */
+:root {
+  --bg: #f5f7fa;
+  --surface: #ffffff;
+  --surface-2: #eef2f6;
+  --line: #d6dee7;
+  --ink: #131a22;
+  --ink-2: #4a5866;
+  --ink-3: #5f6d7b;
+  --live: #1f6feb;
+  --attention: #8f5d14;
+  --danger: #c53030;
+  --ok: #15803d;
+
+  /* text that sits on a filled status color */
+  --on-live: #ffffff;
+  --on-attention: #ffffff;
+  --on-danger: #ffffff;
+  --on-ok: #ffffff;
+
+  /* terminal block: dark ground in both themes */
+  --terminal-bg: #0b0f14;
+  --terminal-ink: #e6edf3;
+  --terminal-ink-2: #9fb0c0;
+  --terminal-line: #263140;
+
+  --radius: 8px;
+  --kb: 0px;
+
+  --float-shadow:
+    0 1px 2px rgb(19 26 34 / 0.06),
+    0 8px 24px -8px rgb(19 26 34 / 0.18);
+  --float-shadow-sm: 0 1px 2px rgb(19 26 34 / 0.08), 0 4px 12px -4px rgb(19 26 34 / 0.14);
+
+  color-scheme: light;
+}
+
+.dark {
+  --bg: #0b0f14;
+  --surface: #121821;
+  --surface-2: #1a222d;
+  --line: #263140;
+  --ink: #e6edf3;
+  --ink-2: #9fb0c0;
+  --ink-3: #8393a3;
+  --live: #4da3ff;
+  --attention: #f5b849;
+  --danger: #ff6b6b;
+  --ok: #4ade80;
+
+  --on-live: #0b0f14;
+  --on-attention: #0b0f14;
+  --on-danger: #0b0f14;
+  --on-ok: #0b0f14;
+
+  --float-shadow:
+    0 1px 2px rgb(0 0 0 / 0.4),
+    0 12px 32px -8px rgb(0 0 0 / 0.6);
+  --float-shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4), 0 4px 14px -4px rgb(0 0 0 / 0.5);
+
+  color-scheme: dark;
+}
+
+/* ---------------------------------------------------------------------------
+ * Tailwind theme: map DESIGN.md tokens onto the shadcn/assistant-ui names,
+ * expose our own names as first-class colors, and define the type scale.
+ * ------------------------------------------------------------------------- */
+@theme inline {
+  --font-sans:
+    "Host Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+  --font-mono:
+    "Martian Mono", ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, "Liberation Mono",
+    monospace;
+
+  --radius-xs: calc(var(--radius) - 6px);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 2px);
+  --radius-2xl: calc(var(--radius) + 4px);
+
+  /* shadcn / assistant-ui names */
+  --color-background: var(--bg);
+  --color-foreground: var(--ink);
+  --color-card: var(--surface);
+  --color-card-foreground: var(--ink);
+  --color-popover: var(--surface);
+  --color-popover-foreground: var(--ink);
+  --color-primary: var(--live);
+  --color-primary-foreground: var(--on-live);
+  --color-secondary: var(--surface-2);
+  --color-secondary-foreground: var(--ink);
+  --color-muted: var(--surface-2);
+  --color-muted-foreground: var(--ink-2);
+  --color-accent: var(--surface-2);
+  --color-accent-foreground: var(--ink);
+  --color-destructive: var(--danger);
+  --color-destructive-foreground: var(--on-danger);
+  --color-border: var(--line);
+  --color-input: var(--line);
+  --color-ring: var(--live);
+  --color-sidebar: var(--surface);
+  --color-sidebar-foreground: var(--ink);
+  --color-sidebar-primary: var(--live);
+  --color-sidebar-primary-foreground: var(--on-live);
+  --color-sidebar-accent: var(--surface-2);
+  --color-sidebar-accent-foreground: var(--ink);
+  --color-sidebar-border: var(--line);
+  --color-sidebar-ring: var(--live);
+
+  /* piorbit names */
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-live: var(--live);
+  --color-attention: var(--attention);
+  --color-danger: var(--danger);
+  --color-ok: var(--ok);
+  --color-on-live: var(--on-live);
+  --color-on-attention: var(--on-attention);
+  --color-on-danger: var(--on-danger);
+  --color-on-ok: var(--on-ok);
+  --color-terminal: var(--terminal-bg);
+  --color-terminal-ink: var(--terminal-ink);
+  --color-terminal-ink-2: var(--terminal-ink-2);
+  --color-terminal-line: var(--terminal-line);
+
+  --shadow-float: var(--float-shadow);
+  --shadow-float-sm: var(--float-shadow-sm);
+
+  /* Type scale: 11 / 12 / 13 / 14 / 15 / 18 / 22 */
+  --text-2xs: 11px;
+  --text-2xs--line-height: 16px;
+  --text-xs: 12px;
+  --text-xs--line-height: 16px;
+  --text-sm: 13px;
+  --text-sm--line-height: 18px;
+  --text-base: 14px;
+  --text-base--line-height: 21px;
+  --text-md: 15px;
+  --text-md--line-height: 24px;
+  --text-lg: 18px;
+  --text-lg--line-height: 26px;
+  --text-xl: 22px;
+  --text-xl--line-height: 28px;
+
+  --tracking-eyebrow: 0.08em;
+
+  --animate-sweep: radar-sweep 2s linear infinite;
+  --animate-attention: attention-pulse 1.6s ease-in-out infinite;
+  --animate-caret: caret-blink 1s steps(2, jump-none) infinite;
+  --animate-shimmer: shimmer 1.8s linear infinite;
+
+  @keyframes radar-sweep {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @keyframes attention-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.6;
+    }
+  }
+  @keyframes caret-blink {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0;
+    }
+  }
+  @keyframes shimmer {
+    from {
+      background-position: 200% 0;
+    }
+    to {
+      background-position: -200% 0;
+    }
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Base
+ * ------------------------------------------------------------------------- */
+@layer base {
+  *,
+  ::before,
+  ::after {
+    border-color: var(--line);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    font-feature-settings: "kern", "liga", "calt";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    overscroll-behavior: none;
+    overflow: hidden; /* the thread viewport scrolls; the body never does */
+  }
+
+  /* Typed things: paths, ids, commands, numbers. */
+  code,
+  kbd,
+  pre,
+  samp {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "calt" 0;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    color: inherit;
+    letter-spacing: inherit;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--live);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--live) 24%, transparent);
+  }
+
+  ::placeholder {
+    color: var(--ink-3);
+    opacity: 1;
+  }
+
+  /* Thin, quiet scrollbars. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--line);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    ::before,
+    ::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Touch: 16px inputs so iOS does not zoom on focus (DESIGN.md "Layout").
+ *
+ * Deliberately unlayered: inside `@layer base` this loses to every `text-sm` /
+ * `text-base` utility on the element regardless of specificity, and the
+ * composer textarea measured 14px under `pointer: coarse`.
+ * ------------------------------------------------------------------------- */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]),
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Utilities
+ * ------------------------------------------------------------------------- */
+
+/* Eyebrow: Martian Mono 11px uppercase, tracked, tertiary ink. */
+@utility eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 500;
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+/* Typed value: Martian Mono 12px, tabular. */
+@utility typed {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+@utility tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Hairline dividers instead of boxes. */
+@utility hairline-t {
+  border-top: 1px solid var(--line);
+}
+@utility hairline-b {
+  border-bottom: 1px solid var(--line);
+}
+@utility hairline-l {
+  border-left: 1px solid var(--line);
+}
+@utility hairline-r {
+  border-right: 1px solid var(--line);
+}
+
+/* Terminal ground: dark in both themes. */
+@utility terminal {
+  background: var(--terminal-bg);
+  color: var(--terminal-ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+  color-scheme: dark;
+}
+
+/* Shimmering label (reasoning while streaming). Holds still under reduced motion. */
+@utility shimmer-text {
+  color: transparent;
+  background-image: linear-gradient(
+    90deg,
+    var(--ink-3) 0%,
+    var(--ink-3) 35%,
+    var(--ink) 50%,
+    var(--ink-3) 65%,
+    var(--ink-3) 100%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  animation: var(--animate-shimmer);
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+    color: var(--ink-2);
+    background: none;
+  }
+}
+
+/* Streaming caret on the last text part. */
+@utility caret {
+  &::after {
+    content: "";
+    display: inline-block;
+    width: 2px;
+    height: 1.05em;
+    margin-left: 2px;
+    vertical-align: -0.15em;
+    background: var(--live);
+    border-radius: 1px;
+    animation: var(--animate-caret);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    &::after {
+      animation: none;
+    }
+  }
+}
+
+/* Keyboard / safe-area bottom inset for fixed composers (never `+`). */
+@utility pb-kb {
+  padding-bottom: max(env(safe-area-inset-bottom), var(--kb));
+}
+@utility mb-kb {
+  margin-bottom: max(env(safe-area-inset-bottom), var(--kb));
+}
+@utility bottom-kb {
+  bottom: max(env(safe-area-inset-bottom), var(--kb));
+}
+
+/* Hide scrollbar while keeping the region scrollable. */
+@utility scrollbar-none {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}

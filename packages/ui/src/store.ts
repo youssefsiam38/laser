@@ -16,11 +16,16 @@ import type {
   UiFireAndForget,
 } from "@piorbit/protocol";
 
+/**
+ * `at` is the ISO timestamp the block first appeared (from the notification's
+ * `at`, or the persisted entry's `timestamp`). Optional: a block assembled by
+ * `applyUpdate` outside the reducer has none.
+ */
 export type Block =
-  | { kind: "user"; id: string; text: string; images: number; optimistic?: boolean }
-  | { kind: "assistant"; id: string; text: string; thinking: string; streaming: boolean }
-  | { kind: "tool"; id: string; name: string; args: unknown; partial?: string; result?: unknown; isError?: boolean; done: boolean }
-  | { kind: "notice"; id: string; level: "info" | "warning" | "error"; text: string };
+  | { kind: "user"; id: string; at?: string; text: string; images: number; optimistic?: boolean }
+  | { kind: "assistant"; id: string; at?: string; text: string; thinking: string; streaming: boolean }
+  | { kind: "tool"; id: string; at?: string; name: string; args: unknown; partial?: string; result?: unknown; isError?: boolean; done: boolean }
+  | { kind: "notice"; id: string; at?: string; level: "info" | "warning" | "error"; text: string };
 
 export interface SessionView {
   path: string;
@@ -34,6 +39,13 @@ export interface SessionView {
   widgets: Record<string, { lines: string[]; placement: "aboveEditor" | "belowEditor" }>;
   title?: string;
   editorText?: string;
+  /**
+   * When this view was first opened. Stands in for `createdAt`/`modifiedAt`
+   * while the session is not yet in the catalog (Pi writes the file on the
+   * first message); a wall-clock read at use time would make every derived
+   * list — and the thread-list signature — change on every render.
+   */
+  openedAt: string;
   hydrated: boolean;
   /** Raw persisted entries (for the history/tree panel). */
   entries: unknown[];
@@ -42,6 +54,8 @@ export interface SessionView {
 export interface AppState {
   connection: "connecting" | "open" | "closed";
   sessions: SessionSummary[];
+  /** True once a `pi/session/list` has landed, so an empty list is real. */
+  sessionsLoaded: boolean;
   open: Record<string, SessionView>;
   current: string | undefined;
   workers: Record<string, { status: string; message?: string }>;
@@ -51,6 +65,7 @@ export interface AppState {
 export const initialState: AppState = {
   connection: "closed",
   sessions: [],
+  sessionsLoaded: false,
   open: {},
   current: undefined,
   workers: {},
@@ -63,11 +78,25 @@ export type Action =
   | { type: "opened"; state: SessionState }
   | { type: "select"; path: string | undefined }
   | { type: "closeView"; path: string }
-  | { type: "hydrate"; path: string; entries: unknown[] }
+  /**
+   * Replace the transcript from a persisted snapshot. `expectSeq` guards the
+   * round trip: when live updates advanced `lastSeq` while `pi/session/entries`
+   * was in flight the snapshot is stale, so only `entries` is refreshed and the
+   * live blocks are kept.
+   */
+  | { type: "hydrate"; path: string; entries: unknown[]; expectSeq?: number }
   | { type: "entries"; path: string; entries: unknown[] }
+  /**
+   * The worker that owns this session restarted its per-process `seq` counter
+   * (worker crash, host restart). Adopt the new epoch and re-hydrate, or every
+   * later update is deduped away as a "replay" (see `applyNotification`).
+   */
+  | { type: "resync"; path: string; lastSeq: number }
   | { type: "forked"; from: string; state: SessionState }
-  | { type: "optimisticUser"; path: string; text: string; images: number }
-  | { type: "dialogAnswered"; id: string }
+  | { type: "optimisticUser"; path: string; text: string; images: number; id?: string }
+  /** A prompt never reached the worker: drop the block that stood in for it. */
+  | { type: "optimisticFailed"; path: string; id: string }
+  | { type: "dialogAnswered"; id: string; path?: string }
   | { type: "toast"; level: "info" | "warning" | "error"; text: string }
   | { type: "notification"; method: HostNotificationMethod; params: HostNotifications[HostNotificationMethod] }
   | { type: "dismissToast"; id: number };
@@ -76,12 +105,20 @@ let blockCounter = 0;
 let toastCounter = 0;
 const nextBlockId = () => `b${++blockCounter}`;
 
+/**
+ * Mint a block id outside the reducer, so a caller that dispatches an
+ * optimistic block can also address it later (`optimisticFailed`).
+ */
+export function newBlockId(): string {
+  return nextBlockId();
+}
+
 export function reduce(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "connection":
       return { ...state, connection: action.state };
     case "sessions":
-      return { ...state, sessions: action.sessions };
+      return { ...state, sessions: action.sessions, sessionsLoaded: true };
     case "opened": {
       const existing = state.open[action.state.path];
       const view: SessionView = existing
@@ -96,6 +133,7 @@ export function reduce(state: AppState, action: Action): AppState {
             dialogs: [],
             statuses: {},
             widgets: {},
+            openedAt: new Date().toISOString(),
             hydrated: false,
             entries: [],
           };
@@ -107,7 +145,7 @@ export function reduce(state: AppState, action: Action): AppState {
       const { [action.from]: _gone, ...rest } = state.open;
       const view: SessionView = old
         ? { ...old, path: action.state.path, state: action.state, lastSeq: 0, hydrated: false, entries: [] }
-        : { path: action.state.path, state: action.state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, dialogs: [], statuses: {}, widgets: {}, hydrated: false, entries: [] };
+        : { path: action.state.path, state: action.state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, dialogs: [], statuses: {}, widgets: {}, openedAt: new Date().toISOString(), hydrated: false, entries: [] };
       return { ...state, open: { ...rest, [view.path]: view }, current: view.path };
     }
     case "select":
@@ -117,23 +155,44 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, open: rest, current: state.current === action.path ? undefined : state.current };
     }
     case "hydrate":
-      return updateView(state, action.path, (v) => ({ ...v, blocks: blocksFromEntries(action.entries), entries: action.entries, hydrated: true }));
+      return updateView(state, action.path, (v) =>
+        // Live updates landed while the snapshot was in flight: they already
+        // carry what the snapshot has, plus what it does not.
+        action.expectSeq !== undefined && v.lastSeq !== action.expectSeq
+          ? { ...v, entries: action.entries, hydrated: true }
+          : { ...v, blocks: blocksFromEntries(action.entries), entries: action.entries, hydrated: true },
+      );
     case "entries":
       return updateView(state, action.path, (v) => ({ ...v, entries: action.entries }));
+    case "resync":
+      return updateView(state, action.path, (v) =>
+        v.lastSeq <= action.lastSeq ? v : { ...v, lastSeq: action.lastSeq, hydrated: false },
+      );
     case "optimisticUser":
       return updateView(state, action.path, (v) => ({
         ...v,
-        blocks: [...v.blocks, { kind: "user", id: nextBlockId(), text: action.text, images: action.images, optimistic: true }],
+        blocks: [
+          ...v.blocks,
+          { kind: "user", id: action.id ?? nextBlockId(), text: action.text, images: action.images, optimistic: true },
+        ],
       }));
+    case "optimisticFailed":
+      return updateView(state, action.path, (v) => {
+        const index = v.blocks.findIndex((b) => b.id === action.id && b.kind === "user" && b.optimistic === true);
+        return index === -1 ? v : { ...v, blocks: [...v.blocks.slice(0, index), ...v.blocks.slice(index + 1)] };
+      });
     case "dismissToast":
       return { ...state, toasts: state.toasts.filter((t) => t.id !== action.id) };
     case "toast":
       return pushToast(state, action.level, action.text);
     case "dialogAnswered": {
+      const drop = (v: SessionView): SessionView =>
+        v.dialogs.some((d) => d.id === action.id) ? { ...v, dialogs: v.dialogs.filter((d) => d.id !== action.id) } : v;
+      // Dialog ids are only unique per session; scope the removal when the
+      // caller knows which session raised it.
+      if (action.path !== undefined) return updateView(state, action.path, drop);
       const open: Record<string, SessionView> = {};
-      for (const [path, v] of Object.entries(state.open)) {
-        open[path] = v.dialogs.some((d) => d.id === action.id) ? { ...v, dialogs: v.dialogs.filter((d) => d.id !== action.id) } : v;
-      }
+      for (const [path, v] of Object.entries(state.open)) open[path] = drop(v);
       return { ...state, open };
     }
     case "notification":
@@ -153,7 +212,8 @@ function applyNotification(state: AppState, method: HostNotificationMethod, para
       const p = params as HostNotifications["session/update"];
       return updateView(state, p.sessionPath, (v) => {
         if (p.seq <= v.lastSeq) return v; // replayed duplicate
-        return { ...applyUpdate(v, p.update), lastSeq: p.seq };
+        const next = applyUpdate(v, p.update);
+        return { ...next, blocks: stampNewBlocks(v.blocks, next.blocks, p.at), lastSeq: p.seq };
       });
     }
     case "pi/ui/request": {
@@ -185,12 +245,37 @@ function applyNotification(state: AppState, method: HostNotificationMethod, para
   }
 }
 
+/**
+ * Stamp `at` on blocks the update just appended. Blocks are append-only, so the
+ * only candidates are the ones past `before.length`; the common delta (same
+ * length, same tail id) does no work at all.
+ */
+function stampNewBlocks(before: Block[], after: Block[], at: string): Block[] {
+  if (before === after || !at) return after;
+  if (after.length <= before.length) return after;
+  let changed = false;
+  const next = after.slice();
+  for (let i = before.length; i < next.length; i++) {
+    const b = next[i]!;
+    if (b.at !== undefined) continue;
+    next[i] = { ...b, at };
+    changed = true;
+  }
+  return changed ? next : after;
+}
+
 function pushToast(state: AppState, level: "info" | "warning" | "error", text: string): AppState {
   return { ...state, toasts: [...state.toasts, { id: ++toastCounter, level, text }] };
 }
 
 function applyUiEvent(state: AppState, path: string, event: UiFireAndForget): AppState {
   switch (event.method) {
+    // The worker settled a pending dialog without us (timeout, abort, session
+    // end). Drop it so the card/tool footer disappears instead of hanging.
+    case "dialogResolved":
+      return updateView(state, path, (v) =>
+        v.dialogs.some((d) => d.id === event.id) ? { ...v, dialogs: v.dialogs.filter((d) => d.id !== event.id) } : v,
+      );
     case "notify":
       return pushToast(state, event.level, event.message);
     case "setStatus":
@@ -223,6 +308,25 @@ function replaceLast(blocks: Block[], block: Block): Block[] {
   return [...blocks.slice(0, -1), block];
 }
 
+function replaceAt(blocks: Block[], index: number, block: Block): Block[] {
+  const next = blocks.slice();
+  next[index] = block;
+  return next;
+}
+
+/**
+ * Index of the newest block still standing in for a prompt we sent. A refused
+ * prompt steers instead, so assistant deltas can land between the optimistic
+ * block and the real user `message_start`: only a backwards scan finds it.
+ */
+function lastOptimisticUserIndex(blocks: Block[]): number {
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const b = blocks[i]!;
+    if (b.kind === "user" && b.optimistic === true) return i;
+  }
+  return -1;
+}
+
 export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
   switch (u.kind) {
     case "agent_start":
@@ -235,7 +339,7 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
     case "message_start": {
       if (u.role === "user") {
         // An optimistic block already stands in for this message.
-        if (v.blocks.at(-1)?.kind === "user" && (v.blocks.at(-1) as { optimistic?: boolean }).optimistic) return v;
+        if (lastOptimisticUserIndex(v.blocks) !== -1) return v;
         return { ...v, blocks: [...v.blocks, { kind: "user", id: nextBlockId(), text: "", images: 0 }] };
       }
       if (u.role === "assistant") {
@@ -256,10 +360,12 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
     case "message_end": {
       const msg = u.message as { role?: string; content?: unknown } | undefined;
       if (msg?.role === "user") {
-        const last = v.blocks.at(-1);
         const text = textOf(msg.content);
-        if (last?.kind === "user") return { ...v, blocks: replaceLast(v.blocks, { ...last, text: text || last.text, optimistic: false }) };
-        return v;
+        const optimistic = lastOptimisticUserIndex(v.blocks);
+        const index = optimistic !== -1 ? optimistic : v.blocks.at(-1)?.kind === "user" ? v.blocks.length - 1 : -1;
+        if (index === -1) return v;
+        const block = v.blocks[index] as Extract<Block, { kind: "user" }>;
+        return { ...v, blocks: replaceAt(v.blocks, index, { ...block, text: text || block.text, optimistic: false }) };
       }
       if (msg?.role === "assistant") {
         const a = lastAssistant(v.blocks);
@@ -325,20 +431,21 @@ export function blocksFromEntries(entries: unknown[]): Block[] {
   const blocks: Block[] = [];
   const toolIndex = new Map<string, number>();
   for (const raw of entries) {
-    const e = raw as { type?: string; message?: { role?: string; content?: unknown; toolCallId?: string; toolName?: string; isError?: boolean } };
+    const e = raw as { type?: string; timestamp?: unknown; message?: { role?: string; content?: unknown; toolCallId?: string; toolName?: string; isError?: boolean; timestamp?: unknown } };
     if (e.type !== "message" || !e.message) continue;
     const m = e.message;
+    const at = entryTimestamp(e.timestamp ?? m.timestamp);
     if (m.role === "user") {
-      blocks.push({ kind: "user", id: nextBlockId(), text: textOf(m.content), images: countImages(m.content) });
+      blocks.push({ kind: "user", id: nextBlockId(), ...(at ? { at } : {}), text: textOf(m.content), images: countImages(m.content) });
     } else if (m.role === "assistant") {
       const parts = Array.isArray(m.content) ? (m.content as Array<{ type?: string; text?: string; thinking?: string; id?: string; name?: string; arguments?: unknown }>) : [];
       const text = parts.filter((p) => p.type === "text").map((p) => p.text ?? "").join("");
       const thinking = parts.filter((p) => p.type === "thinking").map((p) => p.thinking ?? "").join("");
-      if (text || thinking) blocks.push({ kind: "assistant", id: nextBlockId(), text, thinking, streaming: false });
+      if (text || thinking) blocks.push({ kind: "assistant", id: nextBlockId(), ...(at ? { at } : {}), text, thinking, streaming: false });
       for (const p of parts) {
         if (p.type === "toolCall" && p.id) {
           toolIndex.set(p.id, blocks.length);
-          blocks.push({ kind: "tool", id: p.id, name: p.name ?? "tool", args: p.arguments, done: false });
+          blocks.push({ kind: "tool", id: p.id, ...(at ? { at } : {}), name: p.name ?? "tool", args: p.arguments, done: false });
         }
       }
     } else if (m.role === "toolResult" && m.toolCallId) {
@@ -351,6 +458,16 @@ export function blocksFromEntries(entries: unknown[]): Block[] {
     }
   }
   return blocks;
+}
+
+/** Pi entries stamp `timestamp` as epoch ms or an ISO string; both become ISO. */
+function entryTimestamp(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return new Date(value).toISOString();
+  if (typeof value === "string") {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+  }
+  return undefined;
 }
 
 function countImages(content: unknown): number {

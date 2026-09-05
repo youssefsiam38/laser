@@ -4,8 +4,29 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F5F7FA" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0B0F14" />
     <title>piorbit</title>
-    <link rel="stylesheet" href="/src/styles.css" />
+    <script>
+      // Apply the persisted theme before first paint so there is no flash.
+      (function () {
+        try {
+          var pref = localStorage.getItem("piorbit-theme");
+          var dark =
+            pref === "dark" ||
+            (pref !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          var root = document.documentElement;
+          root.classList.toggle("dark", dark);
+          root.style.colorScheme = dark ? "dark" : "light";
+        } catch (_) {}
+      })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Host+Grotesk:wght@400;500;600&family=Martian+Mono:wght@400;500&display=swap"
+    />
   </head>
   <body>
     <div id="root"></div>

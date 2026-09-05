@@ -118,11 +118,16 @@ export interface SessionUpdateParams {
 
 // ---------- Extension UI (host → client requests; mirrors Pi RPC extension_ui_request) ----------
 
+/**
+ * `toolCallId` is stamped by the worker when the dialog was raised while exactly
+ * one tool call was executing, so the UI can render it inside that tool's row
+ * (approval / interrupt). Absent = free-standing dialog (render above composer).
+ */
 export type UiDialogRequest =
-  | { method: "select"; id: string; title: string; options: string[]; timeoutMs?: number }
-  | { method: "confirm"; id: string; title: string; message?: string; timeoutMs?: number }
-  | { method: "input"; id: string; title: string; placeholder?: string; timeoutMs?: number }
-  | { method: "editor"; id: string; title: string; prefill?: string; timeoutMs?: number };
+  | { method: "select"; id: string; title: string; options: string[]; timeoutMs?: number; toolCallId?: string }
+  | { method: "confirm"; id: string; title: string; message?: string; timeoutMs?: number; toolCallId?: string }
+  | { method: "input"; id: string; title: string; placeholder?: string; timeoutMs?: number; toolCallId?: string }
+  | { method: "editor"; id: string; title: string; prefill?: string; timeoutMs?: number; toolCallId?: string };
 
 export type UiDialogResponse =
   | { id: string; value: string }
@@ -130,6 +135,8 @@ export type UiDialogResponse =
   | { id: string; cancelled: true };
 
 export type UiFireAndForget =
+  /** A pending dialog was settled without a client answer (timeout, abort, session end). */
+  | { method: "dialogResolved"; id: string }
   | { method: "notify"; message: string; level: "info" | "warning" | "error" }
   | { method: "setStatus"; key: string; text?: string }
   | { method: "setWidget"; key: string; lines?: string[]; placement: "aboveEditor" | "belowEditor" }

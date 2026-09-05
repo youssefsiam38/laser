@@ -1,0 +1,12 @@
+export { Shell, PANELS_STORAGE_KEY } from "./Shell.js";
+export { Rail } from "./Rail.js";
+export { SessionsPanel, type SessionsPanelProps } from "./SessionsPanel.js";
+export { TopBar } from "./TopBar.js";
+export { TelemetryPanel, type TelemetryPanelProps } from "./TelemetryPanel.js";
+export { HistoryTree, type HistoryTreeProps } from "./HistoryTree.js";
+export { AddProjectDialog } from "./AddProjectDialog.js";
+export { ConnectionBanner } from "./ConnectionBanner.js";
+export { Toasts } from "./Toasts.js";
+export { InlineRename, type InlineRenameProps } from "./InlineRename.js";
+export { ShellContext, useShell, isEditableTarget, type ShellContextValue, type ShellLayout } from "./shell-context.js";
+export * from "./model.js";

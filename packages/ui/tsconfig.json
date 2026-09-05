@@ -3,7 +3,10 @@
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "dist-types",
+    "baseUrl": ".",
+    "paths": { "@/*": ["./src/*"] },
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"],
     "jsx": "react-jsx",
     "module": "ESNext",
     "moduleResolution": "Bundler",
