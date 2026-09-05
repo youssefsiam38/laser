@@ -59,18 +59,29 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 | --- | --- | --- | --- | --- | --- |
 | M1-T1 | Host: worker supervision + local WS | done | claude-2026-09-05-a | `pnpm -F @piorbit/host test` → `test/host.e2e.test.ts` (WS client → host → spawned worker → Pi → stub provider; resume from seq; one worker per cwd) | see notes |
 | M1-T2 | Session catalog with cache | done | claude-2026-09-05-a | `test/catalog.test.ts`; real dir (read-only): 42 sessions / 3 projects, 13.1 ms cold, 0.2 ms warm | see notes |
-| M1-T3 | UI shell | todo | — | — | — |
-| M1-T4 | Transcript renderer | todo | — | — | — |
-| M1-T5 | Composer | todo | — | — | — |
-| M1-T6 | Extension dialogs in UI | todo | — | — | — |
-| M1-T7 | Model/thinking/name/compaction controls | todo | — | — | — |
-| M1-T8 | Resume and reattach with seq | todo | — | — | — |
-| M1-T9 | Session tree | todo | — | — | — |
+| M1-T3 | UI shell | done | claude-2026-09-05-a | `packages/ui/src/{App,client,store}.ts*`, `components/*`; verified in the browser via `pnpm sandbox` | see notes |
+| M1-T4 | Transcript renderer | done | claude-2026-09-05-a | `markdown.tsx` (block-split, index keys, DOMPurify, open-fence guard); browser: list + code fence streamed from the sandbox provider | thinking blocks and tool cards render; syntax highlighting deferred (see notes) |
+| M1-T5 | Composer | done | claude-2026-09-05-a | `components/Composer.tsx`; browser: send, steer/follow-up/stop while running, queue chips, image paste | — |
+| M1-T6 | Extension dialogs in UI | done | claude-2026-09-05-a | browser: sandbox extension `/ask` → `ctx.ui.select` rendered, answered, `notify` toast + `setStatus` pill arrived; `test/store.test.ts` | see notes |
+| M1-T7 | Model/thinking/name/compaction controls | in-progress | claude-2026-09-05-a | model picker + thinking select in `TopBar.tsx` (browser-verified) | rename and compaction trigger not in the UI yet |
+| M1-T8 | Resume and reattach with seq | done | claude-2026-09-05-a | `client.ts` (track/resume on reconnect + visibilitychange); host e2e resume test; browser: reload → session listed → transcript hydrated via `pi/session/entries` | — |
+| M1-T9 | Session tree | todo | — | — | worker returns Unsupported for fork; navigate is wired |
 
 #### M1-T1 notes
 - 2026-09-05 done: `WorkerClient` (spawn over fd 3, id correlation, ready/exit), `WorkerPool` (one per cwd, shared in-flight spawn, crash → `pi/worker/status crashed`), `Router` (session/new by cwd; path-bearing methods by pool memory then catalog header; `pi/session/list` from catalog; `pi/ui/response` fanned to all workers), `HostServer` (HTTP static UI with SPA fallback + `/healthz`, WS `/ws`, broadcast notifications to every client). Loopback only.
 - 2026-09-05 host resolves the worker entry via `createRequire().resolve("@piorbit/worker/main")` — a dependency for path resolution only, no code import, seam intact.
 - 2026-09-05 known gaps for later tasks: notifications broadcast to all clients (per-session subscription is M2-T3); no auth on the local socket (loopback; relay auth is M6).
+
+#### M1-T3 notes
+- 2026-09-05 React 19 + Vite. `HostClient` (JSON-RPC over WS, reconnect with backoff, per-session seq tracking, `session/load { fromSeq }` on reconnect, `visibilitychange` reconnect). `store.ts` is a pure reducer (tested). Layout: sidebar (projects → sessions, new session by cwd), top bar (model picker, thinking level, context %), transcript, composer, dialogs, toasts. Mobile: sidebar becomes a drawer under 800px; safe-area insets; `--kb` inset variable reserved for M7-T2.
+- 2026-09-05 `scripts/sandbox.mjs` (`pnpm sandbox`) gives any agent a demo: temp Pi dirs, fake streaming provider, a dialog-test extension, host with the built UI on 41441. `.claude/launch.json` config `sandbox`.
+- 2026-09-05 host resolves the UI bundle via `@piorbit/ui/package.json` (dependency for path resolution only).
+
+#### M1-T4 notes
+- 2026-09-05 marked + DOMPurify; blocks keyed by index; last block during streaming with an unclosed fence renders as plain `<pre>` until it closes. Syntax highlighting is deferred: shiki is 1.2 MB gzip; plan is `@shikijs/stream` or a lezer-based highlighter behind a lazy import when M4/M7 budgets are known. Not blocking.
+
+#### M1-T6 notes
+- 2026-09-05 verified with a real Pi extension inside the sandbox worker. Found and fixed: the store never removed an answered dialog (`dialogAnswered` action). Extension commands keep `session/prompt` pending until their dialog resolves, so the composer now clears optimistically and restores on failure.
 
 #### M1-T2 notes
 - 2026-09-05 catalog reads only the first line (header) + stat per file, cached by (size, mtime). Handles Pi's slug-subdir layout (default dir) and the flat layout Pi uses for an explicit `--session-dir` (found by the e2e test). `messageCount` is not computed yet (would need a full read; defer to a background pass or Pi's own `SessionInfo` cache format).
@@ -324,3 +335,4 @@ reworded; M8-T5 added (module authoring guide).
 - 2026-09-05 · claude-2026-09-05-a · M0-T3, M0-T4, M0-T7 done with tests; M0-T8 blocked on gh `workflow` scope; D-14..D-16; Q-1/Q-2 answered; upstream packaging bug logged; repo on GitHub (private), branch `main`.
 - 2026-09-05 · claude-2026-09-05-a · M0-T2 and M0-T6 done; M0 complete except CI. 26 tests green.
 - 2026-09-05 · claude-2026-09-05-a · M1-T1 and M1-T2 done (host e2e through a real worker and stub provider; catalog timed on the real dir). 31 tests green.
+- 2026-09-05 · claude-2026-09-05-a · M1-T3/T4/T5/T6/T8 done, T7 in-progress; UI verified in the browser against the sandbox (streaming markdown, hydration after reload, extension select dialog round trip). `pnpm sandbox` added.

@@ -59,6 +59,7 @@ export const clientParamsSchemas = {
     .object({ path: sessionPath, entryId: z.string().min(1), summarize: z.boolean().optional(), label: z.string().optional() })
     .strict(),
   "pi/session/rename": z.object({ path: sessionPath, name: z.string() }).strict(),
+  "pi/session/entries": z.object({ path: sessionPath }).strict(),
   "pi/session/compact": z.object({ path: sessionPath, instructions: z.string().optional() }).strict(),
   "pi/model/list": z.object({ path: sessionPath }).strict(),
   "pi/model/set": z.object({ path: sessionPath, model: modelRefSchema }).strict(),

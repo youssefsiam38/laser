@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@piorbit/protocol": "workspace:*",
+    "@piorbit/ui": "workspace:*",
     "@piorbit/worker": "workspace:*",
     "ws": "8.18.3"
   },

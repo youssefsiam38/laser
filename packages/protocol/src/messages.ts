@@ -159,6 +159,8 @@ export interface ClientRequests {
     result: { editorText?: string; cancelled: boolean };
   };
   "pi/session/rename": { params: { path: string; name: string }; result: {} };
+  /** Persisted Pi session entries (opaque; see Pi's session-format.md) for transcript hydration. */
+  "pi/session/entries": { params: { path: string }; result: { entries: unknown[] } };
   "pi/session/compact": { params: { path: string; instructions?: string }; result: {} };
   "pi/model/list": { params: { path: string }; result: { models: ModelRef[] } };
   "pi/model/set": { params: { path: string; model: ModelRef }; result: { state: SessionState } };

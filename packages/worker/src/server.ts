@@ -131,6 +131,8 @@ export class WorkerServer {
       case "pi/session/rename":
         await this.live(req.params.path).driver.rename(req.params.name);
         return {};
+      case "pi/session/entries":
+        return { entries: await this.live(req.params.path).driver.entries() } satisfies Result<"pi/session/entries">;
       case "pi/session/compact":
         await this.live(req.params.path).driver.compact(req.params.instructions);
         return {};

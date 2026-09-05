@@ -1,14 +1,188 @@
-/**
- * App shell placeholder (M1-T3). Layout rules that already apply:
- *  - one bundle for desktop renderer, browser, PWA
- *  - safe areas via env(); keyboard inset via visualViewport (M7-T2), never `+` with safe-area
- *  - everything rendered from agent output is escaped (AGENTS.md invariant 9)
- */
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import type { ContentBlock, SessionState, ThinkingLevel, UiDialogResponse } from "@piorbit/protocol";
+import { HostClient } from "./client.js";
+import { initialState, reduce, type AppState } from "./store.js";
+import { Sidebar } from "./components/Sidebar.js";
+import { Transcript } from "./components/Transcript.js";
+import { Composer } from "./components/Composer.js";
+import { Dialogs } from "./components/Dialogs.js";
+import { TopBar } from "./components/TopBar.js";
+
 export function App() {
+  const [state, dispatch] = useReducer(reduce, initialState);
+  const stateRef = useRef<AppState>(state);
+  stateRef.current = state;
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const client = useMemo(
+    () =>
+      new HostClient({
+        onNotification: (method, params) => dispatch({ type: "notification", method, params }),
+        onConnection: (s) => dispatch({ type: "connection", state: s }),
+      }),
+    [],
+  );
+
+  const refreshSessions = useCallback(async () => {
+    try {
+      const { sessions } = await client.request("pi/session/list", {});
+      dispatch({ type: "sessions", sessions });
+    } catch {
+      /* not connected yet */
+    }
+  }, [client]);
+
+  useEffect(() => {
+    client.connect();
+    return () => client.close();
+  }, [client]);
+
+  useEffect(() => {
+    if (state.connection === "open") void refreshSessions();
+  }, [state.connection, refreshSessions]);
+
+  // Pi creates the session file on the first message and renames happen
+  // mid-session, so refresh the catalog whenever a session settles and on a
+  // slow poll while connected.
+  const runningCount = Object.values(state.open).filter((v) => v.running).length;
+  useEffect(() => {
+    if (state.connection === "open") void refreshSessions();
+  }, [runningCount, state.connection, refreshSessions]);
+  useEffect(() => {
+    if (state.connection !== "open") return;
+    const t = setInterval(() => void refreshSessions(), 20_000);
+    return () => clearInterval(t);
+  }, [state.connection, refreshSessions]);
+
+  const openSession = useCallback(
+    async (path: string) => {
+      const view = stateRef.current.open[path];
+      const { state: s } = await client.request("session/load", { path, fromSeq: view?.lastSeq ?? 0 });
+      client.track(path, view?.lastSeq ?? 0);
+      dispatch({ type: "opened", state: s });
+      if (!view?.hydrated) {
+        const { entries } = await client.request("pi/session/entries", { path });
+        dispatch({ type: "hydrate", path, entries });
+      }
+      setSidebarOpen(false);
+    },
+    [client],
+  );
+
+  const newSession = useCallback(
+    async (cwd: string) => {
+      const { state: s } = await client.request("session/new", { cwd });
+      client.track(s.path, 0);
+      dispatch({ type: "opened", state: s });
+      dispatch({ type: "hydrate", path: s.path, entries: [] });
+      setSidebarOpen(false);
+      void refreshSessions();
+    },
+    [client, refreshSessions],
+  );
+
+  const current = state.current ? state.open[state.current] : undefined;
+
+  const send = useCallback(
+    async (content: ContentBlock[], behavior: "prompt" | "steer" | "followUp") => {
+      if (!current) return;
+      const text = content.filter((c) => c.type === "text").map((c) => (c as { text: string }).text).join("\n");
+      const images = content.filter((c) => c.type === "image").length;
+      if (behavior === "prompt") {
+        dispatch({ type: "optimisticUser", path: current.path, text, images });
+        const r = await client.request("session/prompt", { path: current.path, content });
+        if (!r.accepted) {
+          await client.request("pi/session/steer", { path: current.path, content });
+        }
+      } else if (behavior === "steer") {
+        await client.request("pi/session/steer", { path: current.path, content });
+      } else {
+        await client.request("pi/session/follow_up", { path: current.path, content });
+      }
+    },
+    [client, current],
+  );
+
+  const abort = useCallback(async () => {
+    if (current) await client.request("session/cancel", { path: current.path });
+  }, [client, current]);
+
+  const answerDialog = useCallback(
+    async (response: UiDialogResponse) => {
+      dispatch({ type: "dialogAnswered", id: response.id });
+      await client.request("pi/ui/response", response);
+    },
+    [client],
+  );
+
+  const setModel = useCallback(
+    async (model: SessionState["model"]) => {
+      if (!current || !model) return;
+      const { state: s } = await client.request("pi/model/set", { path: current.path, model: { provider: model.provider, id: model.id } });
+      dispatch({ type: "opened", state: s });
+    },
+    [client, current],
+  );
+
+  const setThinking = useCallback(
+    async (level: ThinkingLevel) => {
+      if (!current) return;
+      const { state: s } = await client.request("pi/thinking/set", { path: current.path, level });
+      dispatch({ type: "opened", state: s });
+    },
+    [client, current],
+  );
+
+  const listModels = useCallback(async () => {
+    if (!current) return [];
+    const { models } = await client.request("pi/model/list", { path: current.path });
+    return models;
+  }, [client, current]);
+
   return (
-    <main style={{ fontFamily: "system-ui, sans-serif", padding: 24 }}>
-      <h1>piorbit</h1>
-      <p>UI scaffold. See PLAN.md M1.</p>
-    </main>
+    <div className={`app ${sidebarOpen ? "sidebar-open" : ""}`}>
+      <Sidebar
+        sessions={state.sessions}
+        open={state.open}
+        current={state.current}
+        connection={state.connection}
+        onOpen={openSession}
+        onNew={newSession}
+        onSelect={(path) => {
+          dispatch({ type: "select", path });
+          setSidebarOpen(false);
+        }}
+        onClose={() => setSidebarOpen(false)}
+      />
+      <main className="main">
+        <TopBar
+          view={current}
+          connection={state.connection}
+          onMenu={() => setSidebarOpen((v) => !v)}
+          onSetModel={setModel}
+          onSetThinking={setThinking}
+          onListModels={listModels}
+        />
+        {current ? (
+          <>
+            <Transcript view={current} />
+            <Composer view={current} onSend={send} onAbort={abort} />
+          </>
+        ) : (
+          <div className="empty">
+            <h1>piorbit</h1>
+            <p>Pick a session on the left, or start a new one in a project.</p>
+          </div>
+        )}
+      </main>
+      {current && <Dialogs view={current} onAnswer={answerDialog} />}
+      <div className="toasts">
+        {state.toasts.map((t) => (
+          <div key={t.id} className={`toast toast-${t.level}`} onClick={() => dispatch({ type: "dismissToast", id: t.id })}>
+            {t.text}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
