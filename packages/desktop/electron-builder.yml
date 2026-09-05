@@ -29,6 +29,12 @@ files:
   - "!**/*.map"
   - "!**/node_modules/**/{test,tests,__tests__,example,examples,docs,doc}/**"
   - "!**/node_modules/**/*.{md,markdown,ts,map,flow}"
+  # Prebuilt native audio bindings for every platform, ~28 MB, reachable from
+  # exactly one function: pi-gpt-transcribe's openMic. Nothing here opens a
+  # microphone — the browser does the capture and the worker only makes the
+  # request — so this is weight with no code path to it. It is an optional
+  # dependency of that package precisely so a consumer can leave it out.
+  - "!**/node_modules/{decibri,@decibri}/**"
 
 extraResources:
   # The stock Node the host is spawned from (M5-T2).

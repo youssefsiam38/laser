@@ -30,19 +30,41 @@
 
 import type { ProviderAuthInfo, TranscribeStatus } from "@piorbit/protocol";
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import {
+  configPath as packageConfigPath,
+  loadConfig as loadPackageConfig,
+  CONFIG_DIR_NAME,
+  DEFAULT_API_KEY_ENV,
+  DEFAULT_BASE_URL,
+  DEFAULT_MODEL,
+  PACKAGE_NAME,
+  PACKAGE_VERSION,
+  type DictationState,
+} from "pi-gpt-transcribe/core";
 
 // ---------------------------------------------------------------------------
 // Configuration — read from pi-gpt-transcribe's own file, so one edit serves
-// the terminal and piorbit. Every value is optional; the defaults work.
+// the terminal and piorbit.
+//
+// The parsing is the package's, not ours. It is the package's file format, and
+// a second parser for it is a copy that drifts silently: a key added on that
+// side keeps parsing here, it just stops meaning anything. Importing the
+// definitions turns that into a build error, which is why the package now
+// publishes its terminal-free half as `pi-gpt-transcribe/core`.
+//
+// The *shape* stays ours. The package's config carries terminal concerns —
+// hotkey, voice-activity thresholds, segment lengths — that belong to the
+// side doing the capture, and here that is the browser.
 // ---------------------------------------------------------------------------
 
-export const TRANSCRIBE_CONFIG_DIR_NAME = "pi-gpt-transcribe";
-export const DEFAULT_TRANSCRIBE_MODEL = "gpt-transcribe";
-export const DEFAULT_TRANSCRIBE_BASE_URL = "https://api.openai.com/v1";
-export const DEFAULT_TRANSCRIBE_KEY_ENV = "OPENAI_API_KEY";
+/** The pinned copy, reported by `doctor` and in the capability report. */
+export const TRANSCRIBE_PACKAGE_VERSION = PACKAGE_VERSION;
+
+export const TRANSCRIBE_CONFIG_DIR_NAME = CONFIG_DIR_NAME;
+export const TRANSCRIBE_PACKAGE_NAME = PACKAGE_NAME;
+export const DEFAULT_TRANSCRIBE_MODEL = DEFAULT_MODEL;
+export const DEFAULT_TRANSCRIBE_BASE_URL = DEFAULT_BASE_URL;
+export const DEFAULT_TRANSCRIBE_KEY_ENV = DEFAULT_API_KEY_ENV;
 
 /** The provider whose credential the audio endpoint accepts. Never the session's model provider. */
 export const TRANSCRIBE_PROVIDER = "openai";
@@ -64,8 +86,7 @@ export interface TranscribeConfig {
 }
 
 export function transcribeConfigPath(env: NodeJS.ProcessEnv = process.env): string {
-  const base = env["XDG_CONFIG_HOME"]?.trim() || join(homedir(), ".config");
-  return join(base, TRANSCRIBE_CONFIG_DIR_NAME, "config.json");
+  return packageConfigPath(env);
 }
 
 const str = (value: unknown): string | undefined =>
@@ -84,28 +105,19 @@ const strArray = (value: unknown): readonly string[] | undefined => {
  * setting that was typed wrong.
  */
 export function loadTranscribeConfig(env: NodeJS.ProcessEnv = process.env): TranscribeConfig {
-  const configPath = transcribeConfigPath(env);
-  let raw: Record<string, unknown> = {};
-  try {
-    if (existsSync(configPath)) {
-      const parsed: unknown = JSON.parse(readFileSync(configPath, "utf8"));
-      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-        raw = parsed as Record<string, unknown>;
-      }
-    }
-  } catch {
-    // Defaults. The person finds out when the setting they edited has no
-    // effect, which is the cheaper failure.
-  }
+  // Every value is optional and a malformed file resolves to defaults — the
+  // package guarantees that, because an extension that throws on a typo takes
+  // its own command down with it.
+  const parsed = loadPackageConfig(env);
   return {
-    model: str(raw["model"]) ?? DEFAULT_TRANSCRIBE_MODEL,
-    baseUrl: (str(raw["baseUrl"]) ?? DEFAULT_TRANSCRIBE_BASE_URL).replace(/\/+$/, ""),
-    apiKey: str(raw["apiKey"]),
-    apiKeyEnv: str(raw["apiKeyEnv"]) ?? DEFAULT_TRANSCRIBE_KEY_ENV,
-    prompt: str(raw["prompt"]),
-    keywords: strArray(raw["keywords"]),
-    languages: strArray(raw["languages"]),
-    configPath,
+    model: parsed.model,
+    baseUrl: parsed.baseUrl,
+    apiKey: parsed.apiKey,
+    apiKeyEnv: parsed.apiKeyEnv,
+    prompt: parsed.prompt,
+    keywords: parsed.keywords,
+    languages: parsed.languages,
+    configPath: packageConfigPath(env),
   };
 }
 
@@ -803,13 +815,9 @@ export function transcribeBridge(): TranscribeBridge | undefined {
  * rather than a flicker. Speech sits around −30 to −20 dBFS, which is 0.03 to
  * 0.1 as raw RMS — the bottom tenth of a linear bar.
  */
-export interface WidgetState {
-  level: number;
-  pending: number;
-  inserted: number;
-  error: string | undefined;
-  startedAt: number;
-}
+/** The package's own session shape, so the native waveform shows exactly what
+ *  the terminal one shows rather than a second vocabulary for the same facts. */
+export type WidgetState = DictationState;
 
 export const WAVE_FLOOR_DB = -60;
 export const WAVE_CEIL_DB = -8;

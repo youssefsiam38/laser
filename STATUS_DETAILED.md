@@ -528,6 +528,11 @@ Decision: `publish: null` in electron-builder, stated explicitly rather than inf
 Why: the repo is private, so a GitHub release feed cannot be read by an installed app. An updater that retries a feed it can never reach reports a permanent error for a condition that is not an error.
 Consequences: M10-T7 must choose a real feed. Until then the app says updates are unavailable and why, which is true.
 
+### D-32 · 2026-09-05 · The worker imports pi-gpt-transcribe's config parser rather than owning a second one
+Decision: `packages/worker/src/transcribe.ts` reads the dictation config through `pi-gpt-transcribe/core`, pinned to the tag `v0.4.0`. `WidgetState` is the package's `DictationState`. The transport stays ours: the injectable fetch and the `no_key` / `oauth_key` / `audio_rejected` taxonomy are piorbit's, not a copy of anything.
+Why: D-23 kept the package as the configuration source but re-derived the parser here, and a second parser for someone else's file format drifts without failing. A key added on that side still parses here, it just stops meaning anything.
+Consequences: the package gained a terminal-free entry point to make this possible (0.3.0), made its native audio bindings optional (0.3.1), and stopped hardcoding the WAV container so the browser's Opus can be sent as it is (0.4.0). The desktop build excludes `decibri`, which nothing on this side can reach. Pinned by git tag because the package is not on npm.
+
 ### D-26 · 2026-09-05 · The host's log sections are `stream` panels too
 Decision: the logs page keeps search and paging; "Watch" sends one section to the dock as a client-local `stream` island fed from `pi/logs/append` (`packages/ui/src/panels/logs.ts`).
 Why: the contract's reach is the point — the provider log and a package's `setWidget` output should be the same island. Rebuilding the logs page out of panels would have thrown away virtualization, search and paging for nothing.
@@ -574,3 +579,4 @@ Consequences: the buffer is bounded (2000 lines per section) and client-local; i
 - 2026-09-05 · claude-2026-09-05-c · wave 1 landed (`7841860`, `958bfb1`): M2-T1..T4, M4-T1..T6, M6-T1..T7, M9-T1..T4, M9-T6 done; 39 review findings applied (37 already in HEAD, 2 real fixes + protocol sample); D-21, D-22. 385 tests green.
 - 2026-09-05 · claude-2026-09-05-c · wave 2 landed: MP (panel system) complete, M5 desktop shell, M7 mobile PWA, M8 packages, M3 subagent tabs, D-20 transcript polish. 40 review findings applied across three lenses (panel contract, platform, design), 1 deferred. D-28..D-31. 599 tests green across 69 files.
 - 2026-09-05 · claude-2026-09-05-c · M10 (self-contained distribution) and M11 (theme system) added to PLAN.md; `docs/ux-theme.md` written and binding; AGENTS.md gains the no-static-visual-values rule and the never-needs-a-terminal rule.
+- 2026-09-05 · claude-2026-09-05-c · pi-gpt-transcribe 0.3.0/0.3.1/0.4.0 released (the user maintains it); worker pinned to v0.4.0 and now imports the config parser instead of duplicating it. D-32. 599 tests green.

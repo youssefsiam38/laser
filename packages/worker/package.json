@@ -15,7 +15,9 @@
   "bin": {
     "piorbit-worker": "./dist/main.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -26,6 +28,7 @@
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.85.0",
     "@piorbit/pi-extension": "workspace:*",
-    "@piorbit/protocol": "workspace:*"
+    "@piorbit/protocol": "workspace:*",
+    "pi-gpt-transcribe": "github:youssefsiam38/pi-gpt-transcribe#v0.4.0"
   }
 }
