@@ -97,11 +97,28 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
-| M2-T1 | Worker pool | todo | — | — | — |
-| M2-T2 | Attention model + inbox | todo | — | — | — |
-| M2-T3 | Fast switching | todo | — | — | — |
-| M2-T4 | Project management + trust | todo | — | — | — |
-| M2-T5 | Desktop notifications | todo | — | — | — |
+| M2-T1 | Worker pool | done | claude-2026-09-05-laneA | `pnpm -F @piorbit/host test` (test/worker-pool.test.ts, 6 tests) | see notes |
+| M2-T2 | Attention model + inbox | done | claude-2026-09-05-laneA | `pnpm -F @piorbit/host test` (test/attention.test.ts) + `pnpm -F @piorbit/ui test` (inbox rows) | see notes |
+| M2-T3 | Fast switching | done | claude-2026-09-05-laneA | `packages/host/src/views.ts`; `packages/ui/test/runtime/isolation.test.ts` | see notes |
+| M2-T4 | Project management + trust | done | claude-2026-09-05-laneA | `pnpm -F @piorbit/host test` (test/projects.test.ts, 7 tests) | see notes; needs the worker patch in the handoff |
+| M2-T5 | Desktop notifications | todo | — | — | needs M5 (Electron) for real notifications |
+
+#### M2-T1 notes
+- 2026-09-05 claimed: rewrite `worker-pool.ts` with lifecycle states (starting/ready/crashed/retired), backoff restart, idle retire gated on attached clients + live pi-subagents runs, duplicate-cwd refusal.
+- 2026-09-05 done. `pi/worker/status` now carries a `WorkerInfo` (pid, restarts, since, retryAt, canRestart, reopened); the pool emits `starting` itself (it never did) and re-emits the worker's own `ready`/`retired` enriched. Crash → exponential backoff (1s doubling, 30s cap, 5 attempts) and the sessions that were open are re-loaded, which the UI adopts through the existing seq-epoch resync. The crash counter resets only after 60s of healthy uptime, so a crash loop still reaches the cap instead of restarting forever. Retirement requires: idle 10 min, no attached client, no running agent, and no live pi-subagents run — the last read from each run's `status.json` + `process.kill(pid, 0)`, never `lastUpdate` (findings.md reaping hazard); an unreadable temp root counts as "work in flight".
+
+#### M2-T2 notes
+- 2026-09-05 claimed: derive `SessionAttention` in the host from worker events; persist "seen" so `finished_unread` survives a reload; add `pi/session/attention` and an attention-sorted inbox query.
+- 2026-09-05 done. `packages/host/src/attention.ts`. Durable state is a timestamp, not a seq (seqs restart with each worker), so `finished_unread` = the session file changed after the last `pi/session/seen`, which also catches sessions driven from a terminal. A session nobody ever opened here is `idle`, not unread — otherwise first launch marks the whole history unread. The host clears a dialog on a client's `pi/ui/response` itself: the worker's UI bridge deliberately emits no `dialogResolved` when a client answered, so without that the row stayed "waiting for you" forever.
+
+#### M2-T3 notes
+- 2026-09-05 claimed: host-side hydrated-view cache (LRU) serving `pi/session/entries` without a worker round trip, validated by (size, mtime).
+- 2026-09-05 done. `packages/host/src/views.ts` (last 8 transcripts, validated by the file's own size+mtime so a terminal-driven session invalidates it the same way). Catalog metadata is now populated incrementally: substring-filtered line scan continuing from the last byte offset, so a growing transcript is read once. Measured on the real `~/.pi/agent/sessions`: 42 sessions, 22.7 MB, 78 ms cold, 0.36 ms warm. Per-session UI isolation verified in `packages/ui/test/runtime/isolation.test.ts` (a delta in A leaves B's view referentially identical, which is what the per-thread `useSyncExternalStore` keys on).
+
+#### M2-T4 notes
+- 2026-09-05 claimed: server-side project registry (persisted) + project-trust gate. Found: Pi's `SettingsManager.fromStorageWithPaths` defaults `projectTrusted` to **true**, and the SDK never runs the trust flow (only `main.ts`/`package-manager-cli.ts` call `resolveProjectTrusted`), so piorbit has been loading project-local settings/extensions/skills with no prompt. The host now resolves trust and passes it to the worker.
+- 2026-09-05 done on the host side. `packages/host/src/projects.ts` + `trust.ts`: the list is persisted in `<stateDir>/projects.json` (default `~/.piorbit`) and the UI migrates its old localStorage list into it once. Trust resolves in the order piorbit decision → Pi's `trust.json` (nearest ancestor, read-only) → `defaultProjectTrust` → ask the clients, and the worker start is held until an answer (2 min, then declined for that run). Reading Pi's trust store but never writing it keeps `docs/architecture.md`'s "data we read" list true; a remembered answer goes into piorbit's own store and the dialog says so.
+- 2026-09-05 handoff: the flag reaches the worker as `--project-trusted yes|no` but the worker does not consume it yet (that package is another lane's this session). Until the four-line patch in H-1 lands, Pi still runs every project trusted. The host side is inert-but-correct: unknown args are ignored by the worker's arg parser.
 
 ---
 
@@ -200,7 +217,23 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 
 ## Handoffs
 
-(none yet)
+### H-1 · M2-T4 · 2026-09-05 · claude-2026-09-05-laneA
+State of the work: the host resolves project trust and passes it to the worker as
+`--project-trusted yes|no` (`packages/host/src/worker-client.ts`). The worker
+ignores the flag, so Pi still runs with `projectTrusted: true` (its default).
+Uncommitted: yes (host, protocol, ui).
+What is missing: four edits in `packages/worker` (owned by another lane this
+session), listed in the lane report:
+1. `src/driver.ts` — `projectTrusted?: boolean` on `DriverOpenOptions`.
+2. `src/main.ts` — parse `--project-trusted`, pass it to `WorkerServer`.
+3. `src/server.ts` — carry it through `commonOpen()`.
+4. `src/drivers/stable-sdk.ts` — build `SettingsManager.create(cwd, agentDir,
+   { projectTrusted })` and hand it to `createAgentSessionServices`; a cwd other
+   than the one the host decided about is untrusted.
+Do not: write `~/.pi/agent/trust.json` from the host. It has Pi's own lock
+protocol (`withTrustFileLock`) and the host must not become a second writer.
+Mirroring a remembered decision into it belongs in the worker (which may import
+Pi) as a follow-up task.
 
 ---
 
@@ -344,6 +377,39 @@ Consequences: protocol gained `UiDialogRequest.toolCallId?` and
 components, marked, and dompurify are removed; `@assistant-ui/ui`, tw-shimmer,
 tw-glass are registry-only (not on npm) and are copied as source when needed.
 
+### D-18 · 2026-09-05 · The panel contract is decided, all leans accepted
+Decision: `docs/ux-panels.md` is binding. Pi owns the logic, piorbit owns the
+experience. Six closed kinds (run, plan, document, stream, collection,
+decision); metrics live in the telemetry rail and embeds are out of scope.
+Four surfaces (ambient, inline, dock, sheet) with a placement table piorbit
+owns; the extension declares kind + intent only. Panels are islands that
+morph through minimal / compact / expanded / maximized with continuous
+identity; at most two expanded; a third shrinks the least recently watched
+to minimal — nothing is parked. No auto-open except a decision that blocks
+the turn. The declared `piorbit:panel` protocol ships in v1 and is used for
+our own pi-subagents adapter. The fallback (widget lines → stream, status →
+ambient, dialogs → decision) is the floor. Minimal islands wrap horizontally
+before ever scrolling. Maximize is full takeover with Esc to return.
+Legibility floor: no data below 12px, fixed content budget per size,
+truncate never scale, nothing overflows, 44px touch targets.
+Why: stress-tested against pi-subagents (nicobailon and tintinweb),
+pi-background-tasks and feynman; the four disagree exactly where a
+single-implementation design would have been wrong. Adapters carry
+references and generic shapes, never domain values (R12a).
+Consequences: the panel system is a prerequisite for M3, for M4's logs page
+(stream), M8's previews (document) and every extension dialog (decision).
+Supersedes: the chip-bar / eviction model in the first draft.
+
+### D-19 · 2026-09-05 · Runs, plans and ledgers decided, all leans accepted
+Decision: `docs/ux-agent-work.md` is binding. Background children appear
+only inside their parent and in the fleet sheet, never in the session list.
+An orphaned background run lives in the fleet sheet with its project ring
+lit; opening it reopens the parent read-only. No full-screen fleet board.
+Scheduled runs deferred. The CLI uses the same nouns (`piorbit runs`,
+`piorbit plan`, `piorbit missions`). Foreground children ship read-only and
+the upstream index patch is written to `docs/upstream.md`.
+Consequences: unblocks M3.
+
 ---
 
 ## Open questions
@@ -353,6 +419,8 @@ tw-glass are registry-only (not on npm) and are copied as source when needed.
 | Q-1 | What will Pi's experimental server become? | — | answered by D-14: not blocking, monitor via MX-T1 |
 | Q-2 | UI framework? | — | answered by D-15: React + Vite |
 | Q-3 | Which Pi release to pin next, and cadence of MX-T2 bumps. | MX-T2 | agent decides per release (D-16); default: bump when a release fixes something we hit or adds an SDK capability we need |
+| Q-4 | Panel contract (7 questions in docs/ux-panels.md) | M3, M4-T6, M8 | answered by D-18: all leans |
+| Q-5 | Agent-work model (6 questions in docs/ux-agent-work.md) | M3 | answered by D-19: all leans |
 
 ---
 
@@ -378,3 +446,4 @@ tw-glass are registry-only (not on npm) and are copied as source when needed.
 - 2026-09-05 not defects, ruled out during verification: the repeated `WebSocket … failed` console lines are stale reconnect attempts from page loads before the host was listening (a 12 s probe recorded zero new sockets); Enter not submitting is an artifact of the automation harness's synthetic Return, confirmed working in real Chrome by the user.
 - 2026-09-05 known gaps, not blocking: main bundle is 1.0 MB / 303 kB gzip (no manual chunking yet); `SPEND` reads "No spend recorded" until Pi persists usage; worker status shows "No status yet" because the pool never emits `starting`.
 - 2026-09-05 · claude-2026-09-05-b · M0-T8: `workflow` scope granted and `.github/workflows/ci.yml` installed, but the first run was refused by GitHub billing (private repos bill Actions minutes). Added `pnpm verify` as the local equivalent. Blocked on the user's GitHub billing, not on code.
+- 2026-09-05 · claude-2026-09-05-b · D-18 and D-19: panel contract and agent-work model decided (all leans). M3 unblocked; the panel system becomes a prerequisite lane in wave 2.

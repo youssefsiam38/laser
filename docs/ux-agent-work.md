@@ -1,6 +1,6 @@
-# Runs, plans and ledgers — the domain model for agent work (proposal)
+# Runs, plans and ledgers — the domain model for agent work
 
-Status: **proposal, not yet decided.** M3 is blocked on agreeing this.
+Status: **decided 2026-09-05 (D-19).** M3 builds on this. Every question below was resolved to its stated lean.
 
 ## How this relates to the panel contract
 
@@ -110,7 +110,7 @@ not. Inferred connectors are dashed and labelled `inferred` (R3).
 - **Two navigation models to maintain**, the tab strip and the breadcrumb,
   though they share one data model.
 
-## Open questions — these need your call
+## Decisions (each resolved to its lean, D-19)
 
 1. **Do background children ever appear in the session list?** They are real
    Pi sessions with real files. *Lean: no — only inside their parent and in the

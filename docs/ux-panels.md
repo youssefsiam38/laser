@@ -1,8 +1,8 @@
-# The panel contract — how anything renders in piorbit (proposal)
+# The panel contract — how anything renders in piorbit
 
-Status: **proposal, not yet decided.** M3 and the rest of the extension work
-are blocked on agreeing this. Once decided it becomes a contract as binding
-as `packages/ui/DESIGN.md`.
+Status: **decided 2026-09-05 (D-18).** Binding on every surface, as
+`packages/ui/DESIGN.md` is. Every open question below was resolved to its
+stated lean; the questions are kept as the record of what was weighed.
 
 ## The thesis
 
@@ -655,7 +655,7 @@ Costs: six kinds will not fit everything, and the pressure to add a seventh
 will be constant. We render less than some extensions could express. And we
 carry adapters for packages that do not know we exist.
 
-## Open questions — these need your call
+## Decisions (each resolved to its lean, D-18)
 
 1. **Are six kinds the right six?** The candidates I dropped were `metric`
    (folded into the telemetry rail) and `embed` (a browser pane, out of scope).
