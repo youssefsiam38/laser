@@ -69,7 +69,7 @@ export const planCommand: Command = {
 Prints the plan behind a workflow, chain or parallel run: its phases, the steps
 in each, which run each step became, and what they cost.
 
-Structure that pi-subagents persisted is shown as declared. Structure rebuilt
+Structure the subagent extension persisted is shown as declared. Structure rebuilt
 from a scripted workflow's trace is labelled INFERRED, because that package
 persists no dependency graph and presenting one as fact would be a lie.
 
@@ -79,7 +79,7 @@ persists no dependency graph and presenting one as fact would be a lie.
     project: { type: "string", description: "only look in this project directory" },
   },
   examples: [
-    { command: "piorbit plan 9b65610d", note: "by the run id pi-subagents uses" },
+    { command: "piorbit plan 9b65610d", note: "by the run id the subagent extension uses" },
     { command: "piorbit plan 9b65610d --json", note: "steps, states and usage as data" },
   ],
   async run(ctx) {

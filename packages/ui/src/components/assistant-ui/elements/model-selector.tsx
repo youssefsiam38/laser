@@ -571,14 +571,86 @@ export function modelOption(model: ModelRef): ModelOption {
 }
 
 /**
+ * The model a project's next session will start with, when no session is open.
+ *
+ * Without this the chip read "No model" on the screen a person lands on the
+ * moment they finish setup — directly after a step whose whole purpose was
+ * choosing one. It was not wrong about the *session* (there is none yet) and it
+ * was badly wrong about the person's situation.
+ *
+ * Cached per project, because the catalogue is over a thousand rows and this
+ * runs on an idle screen.
+ */
+const defaultModelCache = new Map<string, Promise<ModelRef | null>>();
+
+function useProjectDefaultModel(cwd: string | undefined, enabled: boolean): { model: ModelRef | null; loading: boolean } {
+  const { client } = usePiorbitStable();
+  const [fallback, setFallback] = useState<ModelRef | null>(null);
+  // The catalogue is a thousand rows and the project's worker may still be
+  // starting, so the first answer can take seconds. Saying "No model" during
+  // those seconds is the same false claim this hook exists to remove, one state
+  // earlier — so the wait is its own state and says nothing at all.
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!enabled || !cwd) {
+      setFallback(null);
+      setLoading(false);
+      return;
+    }
+    let live = true;
+    setLoading(true);
+    let pending = defaultModelCache.get(cwd);
+    if (!pending) {
+      pending = client.request("pi/models/catalog", { cwd }).then((catalog) => {
+        const { defaultProvider, defaultModel } = catalog;
+        if (!defaultProvider || !defaultModel) return null;
+        const entry = catalog.models.find((m) => m.provider === defaultProvider && m.id === defaultModel);
+        // Named even when the catalogue does not carry it: a default that
+        // resolves to nothing on this machine is still what settings say, and
+        // saying "No model" would hide that rather than explain it.
+        return { provider: defaultProvider, id: defaultModel, ...(entry?.name ? { name: entry.name } : {}) } as ModelRef;
+      });
+      // A failed fetch must not poison the cache: the next mount retries.
+      void pending.catch(() => defaultModelCache.delete(cwd));
+      defaultModelCache.set(cwd, pending);
+    }
+    void pending.then(
+      (ref) => {
+        if (!live) return;
+        setFallback(ref);
+        setLoading(false);
+      },
+      () => {
+        if (!live) return;
+        setFallback(null);
+        setLoading(false);
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [client, cwd, enabled]);
+
+  return { model: fallback, loading };
+}
+
+/**
  * Model picker bound to the open session. The list arrives from
  * `pi/model/list` the first time the popover opens (Pi's catalogue can run to
  * a thousand rows, so it is not fetched on every render), grouped by
  * provider; a pick calls `pi/model/set`.
+ *
+ * With no session open it shows the project's default instead, disabled and
+ * labelled as what a new session will start with.
  */
 export function SessionModelSelector({ className }: { className?: string | undefined }) {
-  const { actions } = usePiorbitStable();
-  const { model, session } = useSessionMeta();
+  const { actions, currentProject } = usePiorbitStable();
+  const { model: sessionModel, session } = useSessionMeta();
+  const { model: projectDefault, loading: defaultLoading } = useProjectDefaultModel(session?.cwd ?? currentProject, !session);
+  const model = sessionModel ?? (session ? null : projectDefault);
+  /** No session, and we do not know its default yet: claim nothing. */
+  const unknown = !session && !model && defaultLoading;
   const [open, setOpen] = useState(false);
   const [models, setModels] = useState<ModelRef[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -630,7 +702,16 @@ export function SessionModelSelector({ className }: { className?: string | undef
         variant="ghost"
         size="sm"
         disabled={!session}
-        aria-label={`Model: ${model ? (model.name ?? model.id) : "none"}`}
+        aria-label={
+          session
+            ? `Model: ${model ? (model.name ?? model.id) : "none"}`
+            : unknown
+              ? "Checking which model a new session starts with"
+              : model
+                ? `New sessions start with ${model.name ?? model.id}`
+                : "No model chosen"
+        }
+        title={session ? undefined : model ? "What a new session starts with. Change it in Settings → Models." : undefined}
         className={cn("min-w-0 max-w-56 shrink gap-1.5 text-ink-2", className)}
       >
         {model ? (
@@ -643,7 +724,7 @@ export function SessionModelSelector({ className }: { className?: string | undef
         ) : (
           <span className="flex items-center gap-1.5 text-ink-3">
             <Cpu aria-hidden="true" className="size-3.5" />
-            <span className="typed">No model</span>
+            {unknown ? null : <span className="typed">No model</span>}
           </span>
         )}
       </ModelSelectorTrigger>
@@ -655,7 +736,7 @@ export function SessionModelSelector({ className }: { className?: string | undef
             // the detail, never the headline, and Retry re-asks.
             <ErrorState
               className="m-2"
-              title="Couldn’t load Pi’s models"
+              title="Couldn’t load the model list"
               detail={error}
               onRetry={() => {
                 setError(null);
@@ -664,7 +745,7 @@ export function SessionModelSelector({ className }: { className?: string | undef
             />
           ) : models === null ? (
             <div className="px-3 py-3">
-              <GenerationLoader label="Asking Pi for its models" layout="inline" />
+              <GenerationLoader label="Loading models" layout="inline" />
             </div>
           ) : (
             <>

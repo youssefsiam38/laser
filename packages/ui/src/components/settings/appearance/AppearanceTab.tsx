@@ -479,7 +479,7 @@ export function AppearanceTab() {
           </div>
           <p className="text-xs leading-4 text-ink-3">
             {transfer ??
-              "A theme is data. Copy it to move it to another machine; it will travel with your settings once the host keeps them."}
+              "Your theme is saved on this desktop, so a paired phone opens wearing it too. Copy it to move it to a different machine."}
           </p>
         </div>
       </div>

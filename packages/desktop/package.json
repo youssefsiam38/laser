@@ -1,9 +1,11 @@
 {
   "name": "@piorbit/desktop",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "Electron shell: main process, tray, notifications, keychain, updater. Spawns the host from a bundled stock Node placed outside asar (M5-T2). Must not import Pi.",
+  "homepage": "https://github.com/youssefsiam38/piorbit",
+  "desktopName": "piorbit.desktop",
   "main": "dist/main.js",
   "exports": {
     "./api": {
@@ -16,14 +18,40 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "clean": "rm -rf dist *.tsbuildinfo out build/icon.png build/icons",
+    "clean": "rm -rf dist *.tsbuildinfo out build/icon.png build/icons build/linux/generated",
     "dev": "tsc -p tsconfig.json && electron dist/main.js --dev",
     "icons": "node scripts/make-icons.mjs",
+    "linux:assets": "node scripts/make-linux-assets.mjs",
     "runtime": "node scripts/fetch-node.mjs",
     "install:electron": "node node_modules/electron/install.js",
     "prepack:app": "pnpm run build && pnpm run icons && node scripts/fetch-node.mjs --current",
     "pack": "pnpm run prepack:app && electron-builder --dir",
-    "dist": "pnpm run prepack:app && electron-builder"
+    "dist": "pnpm run prepack:app && pnpm run linux:assets && electron-builder",
+    "dist:linux": "node scripts/build-linux.mjs"
+  },
+  "//optionalDependencies": [
+    "@napi-rs/keyring resolves its native binding with a bare `require()` of a",
+    "per-platform sibling package, declared as an optionalDependency of the",
+    "keyring package itself. electron-builder builds the packaged node_modules",
+    "tree by walking *manifests*, and under pnpm's isolated store it does not",
+    "follow that hop: the packaged app got `@napi-rs/keyring` and no binding,",
+    "and died at startup with `Cannot find native binding` — after a twenty",
+    "minute build, on a machine that developed and tested perfectly.",
+    "",
+    "Declaring the bindings here makes them the desktop package's own direct",
+    "dependencies, so the walker sees them, they carry exact pins like",
+    "everything else piorbit ships, and `build/before-pack.cjs` can check them.",
+    "They are optional and carry `os`/`cpu` fields, so each build machine",
+    "installs only its own — which is why a release builds each architecture on",
+    "a runner of that architecture rather than cross-compiling."
+  ],
+  "optionalDependencies": {
+    "@napi-rs/keyring-darwin-arm64": "2.0.0",
+    "@napi-rs/keyring-darwin-x64": "2.0.0",
+    "@napi-rs/keyring-linux-arm64-gnu": "2.0.0",
+    "@napi-rs/keyring-linux-x64-gnu": "2.0.0",
+    "@napi-rs/keyring-win32-arm64-msvc": "2.0.0",
+    "@napi-rs/keyring-win32-x64-msvc": "2.0.0"
   },
   "dependencies": {
     "@napi-rs/keyring": "2.0.0",

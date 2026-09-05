@@ -52,7 +52,7 @@ export function AddProjectDialog() {
         <DialogHeader>
           <DialogTitle>Add a project</DialogTitle>
           <DialogDescription>
-            piorbit runs one Pi worker per directory. Sessions you start here are saved under it.
+            piorbit runs one agent per directory. Sessions you start here are saved under it.
           </DialogDescription>
         </DialogHeader>
         <form

@@ -4,21 +4,34 @@
  * One resolution order, used by every command so `piorbit doctor`, `piorbit up`
  * and `piorbit pi` can never disagree about which agent directory is in play:
  *
- *   agent dir          --agent-dir  ▸ PIORBIT_AGENT_DIR ▸ PI_CODING_AGENT_DIR ▸ ~/.pi/agent
- *   session dir        --session-dir ▸ PIORBIT_SESSION_DIR ▸ PI_CODING_AGENT_SESSION_DIR ▸ <agent>/sessions
- *   state dir          --state-dir ▸ PIORBIT_STATE_DIR ▸ ~/.piorbit, or <agent>/piorbit
+ *   agent dir          --agent-dir  ▸ PIORBIT_AGENT_DIR ▸ <data>/agent
+ *   session dir        --session-dir ▸ PIORBIT_SESSION_DIR ▸ <agent>/sessions
+ *   state dir          --state-dir ▸ PIORBIT_STATE_DIR ▸ <data>/state, or <agent>/piorbit
  *                      when --agent-dir/PIORBIT_AGENT_DIR names a non-default agent
  *                      directory, so two agent directories never share one host
- *   subagents root     --subagents-temp-root ▸ PIORBIT_SUBAGENTS_TEMP_ROOT ▸ PI_SUBAGENTS_TEMP_ROOT ▸ <state>/subagents
+ *   subagents root     --subagents-temp-root ▸ PIORBIT_SUBAGENTS_TEMP_ROOT ▸ <state>/subagents
  *   port               --port ▸ PIORBIT_PORT ▸ 41441
  *
+ * `<data>` is `piorbitDataDir()`: `$XDG_DATA_HOME/piorbit` on Linux and the
+ * platform equivalents elsewhere. It is piorbit's own directory, not the
+ * agent's — a person who already runs the underlying agent from a terminal
+ * keeps their `~/.pi/agent` untouched, and the desktop app and this command
+ * resolve to the same place so they can never show different sessions.
+ *
  * `PI_CODING_AGENT_DIR` and `PI_CODING_AGENT_SESSION_DIR` are Pi 0.85's own
- * variable names (`config.js`: `ENV_AGENT_DIR`, `ENV_SESSION_DIR`), so a Pi we
- * spawn lands in exactly the directories the host is watching.
+ * variable names (`config.js`: `ENV_AGENT_DIR`, `ENV_SESSION_DIR`). They are
+ * *written* by `piEnv()` below, so a Pi we spawn lands in exactly the
+ * directories the host is watching — and they are deliberately **not read**
+ * here. In a desktop session those variables mean "the agent I use in my
+ * shell", which is the one installation piorbit must never adopt: the app
+ * strips them (`packages/desktop/src/agent-home.ts`), so a CLI that honoured
+ * them would show a different agent directory, different settings and
+ * different sessions from the window on the same machine — for exactly the
+ * person who has both.
  */
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { HOST_BIND_ADDRESS, HOST_DEFAULT_PORT, defaultStateDir } from "@piorbit/host";
+import { HOST_BIND_ADDRESS, HOST_DEFAULT_PORT, defaultAgentDir, defaultStateDir, piorbitDataDir } from "@piorbit/host";
 import type { FlagSpecs, ParsedArgs } from "./args.js";
 import { num, str } from "./args.js";
 
@@ -49,12 +62,12 @@ export interface PiorbitPaths {
 
 /** Flags that every command accepts, because every command resolves paths. */
 export const PATH_FLAGS: FlagSpecs = {
-  "agent-dir": { type: "string", description: "Pi agent directory (default ~/.pi/agent)", placeholder: "<dir>" },
+  "agent-dir": { type: "string", description: "Agent directory (default <piorbit data dir>/agent)", placeholder: "<dir>" },
   "session-dir": { type: "string", description: "Session storage directory (default <agent-dir>/sessions)", placeholder: "<dir>" },
-  "state-dir": { type: "string", description: "piorbit's own state directory (default ~/.piorbit)", placeholder: "<dir>" },
+  "state-dir": { type: "string", description: "piorbit's own state directory (default <piorbit data dir>/state)", placeholder: "<dir>" },
   "subagents-temp-root": {
     type: "string",
-    description: "pi-subagents temp root piorbit pins for its children",
+    description: "Subagent temp root piorbit pins for its children",
     placeholder: "<dir>",
   },
 };
@@ -77,24 +90,20 @@ function pick(...candidates: Array<string | undefined>): string | undefined {
 }
 
 export function resolvePaths(parsed: ParsedArgs, env: NodeJS.ProcessEnv = process.env): PiorbitPaths {
-  const agentDirOverride = pick(str(parsed, "agent-dir"), env["PIORBIT_AGENT_DIR"], env[PI_AGENT_DIR_ENV]);
-  const agentDir = expandPath(agentDirOverride ?? join(homedir(), ".pi", "agent"));
+  const agentDirOverride = pick(str(parsed, "agent-dir"), env["PIORBIT_AGENT_DIR"]);
+  const agentDir = expandPath(agentDirOverride ?? defaultAgentDir(env));
   const sessionDir = expandPath(
-    pick(str(parsed, "session-dir"), env["PIORBIT_SESSION_DIR"], env[PI_SESSION_DIR_ENV]) ?? join(agentDir, "sessions"),
+    pick(str(parsed, "session-dir"), env["PIORBIT_SESSION_DIR"]) ?? join(agentDir, "sessions"),
   );
   // An overridden agent dir means a sandbox: give it its own host record and
   // project list, so `piorbit up --agent-dir /tmp/x` cannot adopt or stop the
   // host serving the real one.
   const stateDir = expandPath(
     pick(str(parsed, "state-dir"), env["PIORBIT_STATE_DIR"]) ??
-      (agentDirOverride ? join(agentDir, "piorbit") : defaultStateDir()),
+      (agentDirOverride ? join(agentDir, "piorbit") : defaultStateDir(env)),
   );
   const subagentsTempRoot = expandPath(
-    pick(
-      str(parsed, "subagents-temp-root"),
-      env["PIORBIT_SUBAGENTS_TEMP_ROOT"],
-      env[PI_SUBAGENTS_TEMP_ROOT_ENV],
-    ) ?? join(stateDir, "subagents"),
+    pick(str(parsed, "subagents-temp-root"), env["PIORBIT_SUBAGENTS_TEMP_ROOT"]) ?? join(stateDir, "subagents"),
   );
   const portFlag = num(parsed, "port");
   const portEnv = env["PIORBIT_PORT"] ? Number(env["PIORBIT_PORT"]) : undefined;

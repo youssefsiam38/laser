@@ -29,6 +29,10 @@ export {
   type PackagesAdapterOptions,
 } from "./packages.js";
 
+// M4-T7 · the agent's own keybindings, and the `@` popover's file list.
+export { KeybindingsAdapter, KeybindingsError } from "./keybindings.js";
+export { ProjectFilesService, scoreMatch } from "./files.js";
+
 // M8-T2 · dictation. The service the server owns, and the contracts the UI's
 // level meter and the companion extension share with it.
 export {
@@ -59,3 +63,4 @@ export {
   type TranscribeServiceOptions,
   type WidgetState,
 } from "./transcribe.js";
+export * from "./resolve-pi.js";

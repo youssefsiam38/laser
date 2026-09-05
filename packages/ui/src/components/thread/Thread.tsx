@@ -37,7 +37,7 @@ export interface ThreadProps {
  */
 const FOLLOW_UPS = AuiConfig({
   suggestions: Suggestions([
-    { title: "Run the tests", label: "pnpm test", prompt: "Run the test suite and fix anything that fails." },
+    { title: "Run the tests", label: "the test suite", prompt: "Run the test suite and fix anything that fails." },
     { title: "Show the diff", label: "git diff", prompt: "Show me the diff of everything you changed in this session, file by file." },
     { title: "Commit", label: "git commit", prompt: "Commit the changes from this session with a clear, conventional commit message." },
   ]),

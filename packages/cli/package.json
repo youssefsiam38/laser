@@ -1,6 +1,6 @@
 {
   "name": "@piorbit/cli",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "The `piorbit` command: host lifecycle, session verbs, pinned-Pi passthrough, doctor. Speaks @piorbit/protocol; never imports Pi.",

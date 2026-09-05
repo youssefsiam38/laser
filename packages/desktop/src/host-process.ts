@@ -26,6 +26,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync } from "node:fs";
 import { existsSync } from "node:fs";
 import { cliEntry, daemonArgs, inspectHost, logTail, piEnv, portInUse, probeHealth, type PiorbitPaths } from "@piorbit/cli";
+import { checkBundledAgent, type AgentCheck } from "./agent.js";
 import type { DesktopHostInfo } from "./api.js";
 import type { DesktopLog } from "./log.js";
 import { resolveNodeRuntime, RuntimeError, type NodeRuntime } from "./runtime.js";
@@ -42,6 +43,12 @@ export interface HostProcessOptions {
   packaged: boolean;
   resourcesPath: string;
   log: DesktopLog;
+  /**
+   * The environment children inherit, before piorbit's own pins are applied.
+   * The shell hands in a scrubbed copy (see `agent-home.ts`) so a variable that
+   * points at the person's *own* agent installation cannot reach a worker.
+   */
+  baseEnv?: NodeJS.ProcessEnv;
   /**
    * Extra environment for the host. Used for `PIORBIT_ALLOWED_ORIGINS` when the
    * UI is served by a dev server: the host refuses WebSocket upgrades from an
@@ -65,6 +72,11 @@ interface HostInfoPatch {
 export class HostProcess {
   private child: ChildProcess | undefined;
   private runtime: NodeRuntime | undefined;
+  /**
+   * Started next to the daemon spawn and awaited before "ready", so proving the
+   * bundled agent costs nothing on a healthy install and is never skipped.
+   */
+  private agentCheck: Promise<AgentCheck> | undefined;
   private restarts = 0;
   private stopping = false;
   private info: DesktopHostInfo;
@@ -110,8 +122,9 @@ export class HostProcess {
         state: "failed",
         startedByUs: false,
         message:
-          `A piorbit host is recorded at ${existing.record.url} but is not answering. ` +
-          `Stop it with \`piorbit down\` and open piorbit again.`,
+          `piorbit found a copy of itself already running at ${existing.record.url}, but it has stopped answering. ` +
+          `Quit piorbit completely — including the icon in your system tray — and open it again. ` +
+          `If that does not help, restarting the computer will clear it.`,
       });
     }
 
@@ -128,6 +141,30 @@ export class HostProcess {
       `host runtime: ${this.runtime.binary} (${this.runtime.version}, ${this.runtime.source}), ` +
         `process.execPath = ${this.runtime.execPath}`,
     );
+    this.agentCheck ??= checkBundledAgent({
+      nodeBinary: this.runtime.binary,
+      env: this.hostEnv(),
+      log,
+    }).then((result) => {
+      if (result.ok) {
+        log.line(
+          `bundled agent: ${result.agent.package} ${result.agent.version} (pinned ${result.agent.pinned}) ` +
+            `at ${result.agent.packageDir}, loaded in ${result.agent.loadMs ?? 0}ms`,
+        );
+        // Said out loud because it is the claim this whole design makes: an
+        // agent the person installed themselves is found and left alone.
+        if (result.machine.commandOnPath || result.machine.homeAgentDir) {
+          log.line(
+            `this machine also has an agent (${[result.machine.commandOnPath, result.machine.homeAgentDir]
+              .filter(Boolean)
+              .join(", ")}); piorbit does not use it`,
+          );
+        }
+      } else {
+        log.line(`bundled agent check failed: ${result.message}`);
+      }
+      return result;
+    });
 
     // `cliEntry()` already rewrites `app.asar` to `app.asar.unpacked`, which is
     // the path the bundled Node can actually open — Electron's own `fs` is
@@ -149,8 +186,11 @@ export class HostProcess {
       return this.publish({
         state: "failed",
         message: theirs
-          ? `Another piorbit host is already serving ${this.info.url}. Open that one, or set PIORBIT_PORT and try again.`
-          : `Port ${paths.port} is already taken by another program. Set PIORBIT_PORT to a free port and open piorbit again.`,
+          ? `Another copy of piorbit is already running on this computer, at ${this.info.url}. ` +
+            `Switch to that window instead of opening a second one — look for piorbit in your system tray.`
+          : `Something else on this computer is already using the connection piorbit needs (port ${paths.port}). ` +
+            `Close whatever else is running and open piorbit again. If you know what it is and want to keep it, ` +
+            `piorbit can be moved to another port by setting PIORBIT_PORT before it starts.`,
       });
     }
 
@@ -166,7 +206,7 @@ export class HostProcess {
     // The daemon's own stdout and stderr go straight to the host log, the same
     // file `piorbit up` uses, so both ways of starting leave one trail.
     const logFd = openSync(paths.logFile, "a");
-    const env = { ...piEnv(paths, this.electronFreeEnv()), ...this.options.env };
+    const env = this.hostEnv();
     let child: ChildProcess;
     try {
       log.line(`spawning the host: ${runtime.binary} ${cliEntry()} __daemon`);
@@ -196,6 +236,16 @@ export class HostProcess {
     while (Date.now() < deadline) {
       const status = await inspectHost(paths, 1000);
       if (status.state === "running") {
+        // The host answers; the agent it will load is the last thing to prove.
+        // Running an agent nobody pinned, or one that cannot load, is worse
+        // than not starting — and it must be said now rather than at the first
+        // prompt, when a person is already typing.
+        const agent = await (this.agentCheck ?? Promise.resolve(undefined));
+        if (agent && !agent.ok) {
+          await this.stop();
+          this.stopping = false;
+          return this.publish({ state: "failed", message: `${agent.message} ${agent.fix}` });
+        }
         this.restarts = 0;
         log.line(`host ready at ${status.record.url} (pid ${status.record.pid})`);
         return this.publish({
@@ -204,7 +254,20 @@ export class HostProcess {
           wsUrl: `ws://${status.record.host}:${status.record.port}/ws`,
           port: status.record.port,
           startedByUs: true,
-          runtime: { binary: runtime.binary, version: runtime.version, execPath: runtime.execPath },
+          runtime: {
+            binary: runtime.binary,
+            version: runtime.version,
+            execPath: runtime.execPath,
+            ...(agent?.ok
+              ? {
+                  agent: {
+                    package: agent.agent.package,
+                    version: agent.agent.version,
+                    packageDir: agent.agent.packageDir,
+                  },
+                }
+              : {}),
+          },
           message: null,
         });
       }
@@ -286,12 +349,29 @@ export class HostProcess {
   }
 
   /**
+   * The environment every child of this shell gets: the host, and the agent
+   * check that has to see exactly what the host will see. One function, so the
+   * thing we verify and the thing we run can never diverge.
+   */
+  private hostEnv(): NodeJS.ProcessEnv {
+    return {
+      ...piEnv(this.options.paths, this.electronFreeEnv()),
+      // The package manager that came out of the pinned Node archive. Settings
+      // installs extensions with it, on a machine that has never had Node.
+      // Absent in a development build that has not run `pnpm -F
+      // @piorbit/desktop runtime`, and the host says so rather than guessing.
+      ...(this.runtime?.npmCli ? { PIORBIT_NPM_CLI: this.runtime.npmCli } : {}),
+      ...this.options.env,
+    };
+  }
+
+  /**
    * Electron sets variables that would confuse a plain Node child (and
    * `ELECTRON_RUN_AS_NODE` would change what our own binary means). The host
    * gets a clean environment plus the piorbit path pins.
    */
   private electronFreeEnv(): NodeJS.ProcessEnv {
-    const env = { ...process.env };
+    const env = { ...(this.options.baseEnv ?? process.env) };
     for (const key of Object.keys(env)) {
       if (key.startsWith("ELECTRON_")) delete env[key];
     }

@@ -187,7 +187,8 @@ a background job, or a run another extension contributed. Children are listed
 under the session that started them, not as sessions of their own.
 
 Reads the host's panels, so this is exactly what the app shows — including runs
-started from a terminal, which the host sees through pi-subagents' files.
+started from a terminal, which the host sees through the subagent extension's
+own files.
 
 Controls are honest: a run that cannot be steered from here is not offered a
 steer. Use \`piorbit plan\` for the shape of a multi-step run.`,

@@ -27,6 +27,7 @@ import {
   type PanelDescriptor,
   type UpdateStatus,
 } from "./api.js";
+import { agentHome, desktopEnv } from "./agent-home.js";
 import { deepLinkFromArgv, parseDeepLink } from "./deep-links.js";
 import { statusPageUrl } from "./error-page.js";
 import type { AttentionChange, FleetSnapshot } from "./fleet.js";
@@ -50,8 +51,21 @@ const APP_ID = "dev.piorbit.desktop";
 /** No flags: a GUI takes its configuration from the environment, not argv. */
 const NO_ARGS: ParsedArgs = { flags: {}, positionals: [], rest: [], hasRest: false };
 
-const paths: PiorbitPaths = resolvePaths(NO_ARGS, process.env);
+/**
+ * piorbit's own home, not the agent's (M10-T3). `desktopEnv` removes the
+ * variables that describe the person's *own* agent installation and pins
+ * piorbit's directories in their place, and everything downstream — the paths
+ * this process uses, the host it spawns, every worker under that host — is
+ * resolved from this one environment. See `agent-home.ts` for why.
+ */
+const environment = desktopEnv(process.env);
+const home = agentHome(process.env);
+const paths: PiorbitPaths = resolvePaths(NO_ARGS, environment);
 const log = new DesktopLog(join(paths.stateDir, "desktop.log"));
+log.line(
+  `piorbit data directory: ${home.dataDir}${home.chosenByPerson ? " (set by PIORBIT_AGENT_DIR)" : ""}` +
+    (home.ignored.length > 0 ? `; ignoring ${home.ignored.join(", ")} — those name another agent installation` : ""),
+);
 
 /**
  * A development run points at Vite when `PIORBIT_UI_URL` is set, so the UI can
@@ -108,6 +122,7 @@ const host = new HostProcess({
   packaged: app.isPackaged,
   resourcesPath: process.resourcesPath,
   log,
+  baseEnv: environment,
   // Development against Vite: the page's origin is the dev server's, and the
   // host has never heard of it. Harmless in a packaged app, where the host
   // serves the page itself and this is empty. (Needs the one-line change to

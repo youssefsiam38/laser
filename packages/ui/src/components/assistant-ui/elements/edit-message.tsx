@@ -33,7 +33,7 @@ export function EditMessage({ value, onValueChange, onSend, onCancel, laterMessa
     <div data-slot="edit-message" className={cn(paper, "flex w-full flex-col gap-3 rounded-2xl p-3", className)} {...props}>
       <div className="flex items-baseline justify-between gap-3">
         <span className="text-sm font-medium text-ink">Edit and resend from a fork</span>
-        <span className={cn(mono, "text-ink-3")}>Pi cannot rewrite history</span>
+        <span className={cn(mono, "text-ink-3")}>the agent cannot rewrite history</span>
       </div>
       <Textarea
         value={value}

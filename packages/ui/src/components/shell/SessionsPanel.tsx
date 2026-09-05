@@ -211,7 +211,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
             {groups.length === 0 ? (
               <EmptyState
                 title="No project yet"
-                body="Point piorbit at a directory. Sessions Pi already has there show up too."
+                body="Point piorbit at a directory. Sessions already saved there show up too."
                 action={
                   <Button size="sm" variant="outline" onClick={() => shell.setAddProjectOpen(true)}>
                     <FolderPlus />

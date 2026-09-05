@@ -7,7 +7,6 @@ export { TelemetryPanel, type TelemetryPanelProps } from "./TelemetryPanel.js";
 export { AddProjectDialog } from "./AddProjectDialog.js";
 export { HostConnectionState as ConnectionBanner } from "@/components/assistant-ui/elements/connection-state";
 export { CommandPaletteDialog } from "./CommandPalette.js";
-export { FirstRun, FIRST_RUN_DISMISSED_KEY } from "./FirstRun.js";
 export { Toasts } from "./Toasts.js";
 export { InlineRename, type InlineRenameProps } from "./InlineRename.js";
 export { ShellContext, useShell, isEditableTarget, type ShellContextValue, type ShellLayout } from "./shell-context.js";

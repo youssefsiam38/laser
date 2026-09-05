@@ -13,8 +13,9 @@
  *   ~/.pi/agent/missions/{index,projects}/**                                             (missions)
  */
 import { readFileSync, readdirSync } from "node:fs";
-import { homedir, tmpdir, userInfo } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { basename, join } from "node:path";
+import { defaultAgentDir } from "../paths.js";
 
 /** pi-subagents' own index of runs it believes are active. */
 export const ACTIVE_RUN_INDEX = ".active-runs";
@@ -32,7 +33,7 @@ export function asyncRunsDir(root: string): string {
   return join(root, "async-subagent-runs");
 }
 
-export function missionsDir(agentDir = join(homedir(), ".pi", "agent")): string {
+export function missionsDir(agentDir = defaultAgentDir()): string {
   return join(agentDir, "missions");
 }
 

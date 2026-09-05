@@ -77,12 +77,13 @@ export const projectsCommand: Command = {
   summary: "list, add and remove the projects the app shows",
   usage: "piorbit projects [list|add <dir>|remove <dir>|trust <dir> [--no]]",
   description: `
-A project is a directory piorbit runs a Pi worker in — one worker per directory,
+A project is a directory piorbit runs an agent in — one agent per directory,
 never two. Adding one pins it so it stays in the sidebar even before it has any
 sessions.
 
-\`trust\` answers Pi's project-trust question for a directory: whether Pi may
-load that project's own \`.pi\` resources. \`--no\` declines.
+\`trust\` answers the project-trust question for a directory: whether the agent
+may load that project's own configuration, extensions and skills. \`--no\`
+declines.
 `,
   positionals: [
     { name: "verb", description: "list (default), add, remove, trust", optional: true },

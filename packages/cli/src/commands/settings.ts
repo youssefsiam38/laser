@@ -92,19 +92,19 @@ function origin(snapshot: SettingsSnapshot, path: string): string {
 export const settingsCommand: Command = {
   name: "settings",
   group: "Projects",
-  summary: "read and write Pi settings for a project",
+  summary: "read and write agent settings for a project",
   usage: "piorbit settings [get [key]|list|set <key> <json>|unset <key>] [--project <dir>] [--scope <global|project>]",
   description: `
-Reads the effective settings for a project — Pi's global file deep-merged with
-that project's own \`.pi/settings.json\` — and writes either scope through Pi's
-own lock, so a running session picks the change up.
+Reads the effective settings for a project — your global file deep-merged with
+that project's own \`.pi/settings.json\` — and writes either scope under the
+agent's own lock, so a running session picks the change up.
 
 Values are JSON: \`piorbit settings set compaction.reserveTokens 8192\`,
 \`piorbit settings set hideThinkingBlock true\`. Use --raw for a plain string.
 
 Writing project settings *creates* a trust-gated file. If the project is not
-trusted, Pi will ignore what you just wrote — this command says so rather than
-letting the write quietly do nothing.
+trusted, the agent will ignore what you just wrote — this command says so rather
+than letting the write quietly do nothing.
 `,
   positionals: [
     { name: "verb", description: "get (default), list, set, unset — or a key to read", optional: true },
@@ -127,7 +127,7 @@ letting the write quietly do nothing.
     { note: "everything in effect here", command: "piorbit settings" },
     { note: "one key, and where it comes from", command: "piorbit settings theme" },
     { note: "change a global setting", command: "piorbit settings set compaction.reserveTokens 8192" },
-    { note: "back to Pi's default", command: "piorbit settings unset compaction.reserveTokens" },
+    { note: "back to the default", command: "piorbit settings unset compaction.reserveTokens" },
   ],
   async run({ term, paths, args }) {
     const { verb, rest } = verbOf(args.positionals);
@@ -147,7 +147,7 @@ letting the write quietly do nothing.
             return;
           }
           if (value === undefined) {
-            term.note(`${term.err.dim(key)} is not set; Pi's own default applies`);
+            term.note(`${term.err.dim(key)} is not set; the agent's own default applies`);
             term.note();
             term.note(`  See what is set with ${term.err.bold("piorbit settings list")}`);
             return;
@@ -177,7 +177,7 @@ letting the write quietly do nothing.
         const extra = unknownKeys(snapshot, known).map((path) => ({
           path,
           value: valueAt(snapshot.effective, path),
-          origin: `${origin(snapshot, path)} (not a Pi setting)`,
+          origin: `${origin(snapshot, path)} (not a known setting)`,
         }));
         rows.push(...extra);
 
@@ -190,7 +190,7 @@ letting the write quietly do nothing.
         if (snapshot.global.error) term.warn(`global settings: ${sanitize(snapshot.global.error)}`);
         if (snapshot.project.error) term.warn(`project settings: ${sanitize(snapshot.project.error)}`);
         if (rows.length === 0) {
-          term.note("no settings are set; every value is Pi's default");
+          term.note("no settings are set; every value is the agent's default");
           return;
         }
         for (const line of table(

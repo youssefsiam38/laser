@@ -19,6 +19,13 @@
  *   identity stable.
  * - Only the LAST text/reasoning part of the LAST message may report a
  *   `running` status, and an empty text part is never emitted.
+ * - A turn that ended for any reason other than "it finished" or "it wants to
+ *   run tools" projects as an `incomplete` status carrying that reason, which
+ *   is what `stopped-run` draws. Pi's vocabulary is mapped onto assistant-ui's
+ *   once, here, so no component has to know both.
+ * - The turn's own token counts and the speaker of a child run ride on
+ *   `metadata.custom.piorbit`, where `message-timing` and `speaker-identity`
+ *   already look for them.
  * - Dialogs raised while exactly one tool ran carry that `toolCallId`: a
  *   `confirm` projects onto the tool call as a native `approval`, and
  *   `select`/`input`/`editor` as a native `interrupt`. Everything else stays
@@ -27,7 +34,7 @@
  * Pure: no React, no DOM, no network. Tested in test/runtime/projection.test.ts.
  */
 import type { ThreadMessageLike } from "@assistant-ui/react";
-import type { UiDialogRequest } from "@piorbit/protocol";
+import type { MessageSpeaker, StopReason, UiDialogRequest, Usage } from "@piorbit/protocol";
 import type { Block, SessionView } from "../store.js";
 
 /** `data` part name used for transcript notices. */
@@ -97,6 +104,40 @@ export function dialogActionReason(dialog: UiDialogRequest): "tool-calls" | "int
   return dialog.method === "confirm" ? "tool-calls" : "interrupt";
 }
 
+/**
+ * Pi's stop reason → assistant-ui's `incomplete` reason, or undefined when the
+ * turn ended the ordinary way.
+ *
+ * `stop` is a finished reply and `toolUse` is "it wants to run tools next" —
+ * both are complete turns and neither draws a stopped row. `pending` is a turn
+ * still in flight, which the running status already covers. Everything left is
+ * a turn that ended short, and R3 says the reason is never lost: `deferred`
+ * has no assistant-ui name of its own, so it maps to `other`, which the
+ * transcript renders as "Stopped" with the detail beside it.
+ */
+export function incompleteReason(
+  stopReason: StopReason | undefined,
+): "cancelled" | "length" | "error" | "other" | undefined {
+  switch (stopReason) {
+    case "aborted":
+      return "cancelled";
+    case "length":
+      return "length";
+    case "error":
+      return "error";
+    case "deferred":
+      return "other";
+    default:
+      return undefined;
+  }
+}
+
+/** The turn's token counts, in the shape `message-timing` reads. */
+function usageMeta(usage: Usage | undefined): Record<string, number> | undefined {
+  if (!usage) return undefined;
+  return { input: usage.input, output: usage.output, cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite };
+}
+
 /** The status a tool row should show. Exported because `ThreadMessageLike` has no per-tool status field. */
 export function toolStatus(block: Extract<Block, { kind: "tool" }>, messageRunning: boolean): ProjectedToolStatus {
   if (block.done) return "complete";
@@ -129,6 +170,14 @@ const imagesNote = (count: number): string => (count === 1 ? "1 image attached" 
 
 const isTurnBlock = (block: Block): block is Extract<Block, { kind: "assistant" | "tool" }> =>
   block.kind === "assistant" || block.kind === "tool";
+
+/**
+ * Who a block belongs to, for grouping. Tool rows inherit whoever is speaking
+ * — a subagent's tools belong under its header, not the parent's — so they
+ * answer `undefined` and never break a group on their own.
+ */
+const speakerKey = (block: Extract<Block, { kind: "assistant" | "tool" }>): string | undefined =>
+  block.kind === "assistant" && block.speaker ? `${block.speaker.kind}:${block.speaker.name}` : undefined;
 
 // ---------------------------------------------------------------------------
 // Per-block part cache
@@ -262,21 +311,60 @@ const turnMessage = (
     }
   }
 
+  // The last assistant block is the one that ended the turn; the counts are
+  // summed across the group because one message here may be several of Pi's.
+  let stopReason: StopReason | undefined;
+  let stopError: string | undefined;
+  let speaker: MessageSpeaker | undefined;
+  let usage: Usage | undefined;
+  for (const block of group) {
+    if (block.kind !== "assistant") continue;
+    speaker ??= block.speaker;
+    if (block.stopReason !== undefined) {
+      stopReason = block.stopReason;
+      stopError = block.errorMessage;
+    }
+    if (block.usage) {
+      usage = usage
+        ? {
+            input: usage.input + block.usage.input,
+            output: usage.output + block.usage.output,
+            cacheRead: usage.cacheRead + block.usage.cacheRead,
+            cacheWrite: usage.cacheWrite + block.usage.cacheWrite,
+            totalTokens: usage.totalTokens + block.usage.totalTokens,
+          }
+        : block.usage;
+    }
+  }
+  const incomplete = running ? undefined : incompleteReason(stopReason);
+
   const status: ProjectedMessageStatus = pendingDialog
     ? { type: "requires-action", reason: dialogActionReason(pendingDialog) }
     : running
       ? { type: "running" }
-      : { type: "complete", reason: "stop" };
+      : incomplete
+        ? { type: "incomplete", reason: incomplete, ...(stopError ? { error: stopError } : {}) }
+        : { type: "complete", reason: "stop" };
 
   const head = group[0]!;
   const createdAt = createdAtOf(head);
+  const usageCustom = usageMeta(usage);
   return {
     id: head.id,
     role: "assistant",
     content: parts,
     status,
     ...(createdAt ? { createdAt } : {}),
-    metadata: { custom: { piorbit: { kind: "turn", blockIds: group.map((b) => b.id) } } },
+    metadata: {
+      custom: {
+        piorbit: {
+          kind: "turn",
+          blockIds: group.map((b) => b.id),
+          ...(usageCustom ? { usage: usageCustom } : {}),
+          ...(speaker ? { speaker } : {}),
+        },
+      },
+    },
   };
 };
 
@@ -297,6 +385,9 @@ export function projectMessages(input: ProjectionInput): ProjectionResult {
 
   for (const block of input.blocks) {
     if (isTurnBlock(block)) {
+      // A change of speaker ends the group: a child run's words are its own
+      // message with its own header, never folded into the reply above them.
+      if (group.length > 0 && speakerKey(block) !== speakerKey(group[0]!)) flush(false);
       group.push(block);
       continue;
     }

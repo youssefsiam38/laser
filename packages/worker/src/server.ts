@@ -26,7 +26,9 @@ import {
 } from "@piorbit/protocol";
 import { resolve } from "node:path";
 import type { DriverEvent, SessionDriver } from "./driver.js";
+import { ProjectFilesService } from "./files.js";
 import { GitService } from "./git.js";
+import { KeybindingsAdapter } from "./keybindings.js";
 import { ModelsAdapter, PackagesAdapter } from "./packages.js";
 import { SettingsAdapter } from "./settings.js";
 import { TranscribeService } from "./transcribe.js";
@@ -42,6 +44,8 @@ export interface WorkerServerOptions {
   projectTrusted?: boolean;
   /** Updates kept per session for `fromSeq` replay. */
   replayBuffer?: number;
+  /** The package manager to run when settings name none (M10-T5): the one the host bundles. */
+  npmCommand?: string[];
 }
 
 interface Live {
@@ -76,6 +80,9 @@ export class WorkerServer {
   private modelsAdapter: ModelsAdapter | undefined;
   /** M2-T6 git line. Built on first use like the adapters above. */
   private gitService: GitService | undefined;
+  /** M4-T7 keybindings, and the `@` popover's file list. Both built on first use. */
+  private keybindingsAdapter: KeybindingsAdapter | undefined;
+  private filesService: ProjectFilesService | undefined;
   /** M8-T2 dictation. Built on first use; `register()` publishes drain() in-process. */
   private transcribeService: TranscribeService | undefined;
   /** The companion extension's last capability report; features gate on it (M8-T1). */
@@ -269,6 +276,29 @@ export class WorkerServer {
         return (await git.status(req.params.path)) satisfies Result<"pi/project/git">;
       }
 
+      // -------------------------------------------------- M4-T7 keys ---
+      case "pi/keybindings/get":
+        this.assertCwd(req.params.cwd);
+        return { keybindings: await this.keybindings().snapshot() } satisfies Result<"pi/keybindings/get">;
+      case "pi/keybindings/set":
+        this.assertCwd(req.params.cwd);
+        return {
+          keybindings: await this.keybindings().apply(req.params.changes),
+        } satisfies Result<"pi/keybindings/set">;
+
+      // ------------------------------------------- composer sources ---
+      case "pi/commands/list":
+        return { commands: await this.live(req.params.path).driver.commands() } satisfies Result<"pi/commands/list">;
+      case "pi/prompts/list":
+        return { prompts: await this.live(req.params.path).driver.prompts() } satisfies Result<"pi/prompts/list">;
+      case "pi/project/files": {
+        this.assertCwd(req.params.cwd);
+        return (await this.files().list({
+          ...(req.params.query !== undefined ? { query: req.params.query } : {}),
+          ...(req.params.limit !== undefined ? { limit: req.params.limit } : {}),
+        })) satisfies Result<"pi/project/files">;
+      }
+
       // ----------------------------------------------------------- M4 ---
       case "pi/settings/list":
         this.assertCwd(req.params.cwd);
@@ -307,6 +337,25 @@ export class WorkerServer {
       case "pi/providers/list":
         this.assertCwd(req.params.cwd);
         return (await this.modelCatalog().providers()) satisfies Result<"pi/providers/list">;
+      case "pi/providers/login/start": {
+        this.assertCwd(req.params.cwd);
+        const provider = req.params.provider;
+        const id = await this.modelCatalog().loginStart(provider, req.params.method, (loginId, event) =>
+          this.notify("pi/providers/login/event", { cwd: this.options.cwd, id: loginId, provider, event }),
+        );
+        return { id } satisfies Result<"pi/providers/login/start">;
+      }
+      case "pi/providers/login/answer":
+        this.assertCwd(req.params.cwd);
+        this.modelCatalog().loginAnswer(req.params.id, req.params.promptId, req.params.value);
+        return {} satisfies Result<"pi/providers/login/answer">;
+      case "pi/providers/login/cancel":
+        this.assertCwd(req.params.cwd);
+        this.modelCatalog().loginCancel(req.params.id);
+        return {} satisfies Result<"pi/providers/login/cancel">;
+      case "pi/providers/logout":
+        this.assertCwd(req.params.cwd);
+        return { providers: await this.modelCatalog().logout(req.params.provider) } satisfies Result<"pi/providers/logout">;
       case "pi/models/catalog":
         this.assertCwd(req.params.cwd);
         return (await this.modelCatalog().catalog(req.params.refresh ?? false)) satisfies Result<"pi/models/catalog">;
@@ -318,6 +367,13 @@ export class WorkerServer {
         throw new ProtocolError(
           ErrorCodes.Unsupported,
           `${req.method} is answered by the host's log store, not a worker`,
+        );
+
+      case "pi/prefs/get":
+      case "pi/prefs/set":
+        throw new ProtocolError(
+          ErrorCodes.Unsupported,
+          `${req.method} is answered by the host: piorbit's own preferences are not per project and must outlive a sleeping worker`,
         );
     }
   }
@@ -345,6 +401,7 @@ export class WorkerServer {
       ...(this.options.agentDir ? { agentDir: this.options.agentDir } : {}),
       settings: this.settings(),
       onProgress: (event) => this.notify("pi/packages/progress", { cwd: this.options.cwd, ...event }),
+      ...(this.options.npmCommand ? { npmCommand: this.options.npmCommand } : {}),
     });
     return this.packagesAdapter;
   }
@@ -352,6 +409,18 @@ export class WorkerServer {
   private git(): GitService {
     this.gitService ??= new GitService({ cwd: this.options.cwd });
     return this.gitService;
+  }
+
+  private keybindings(): KeybindingsAdapter {
+    this.keybindingsAdapter ??= new KeybindingsAdapter({
+      ...(this.options.agentDir ? { agentDir: this.options.agentDir } : {}),
+    });
+    return this.keybindingsAdapter;
+  }
+
+  private files(): ProjectFilesService {
+    this.filesService ??= new ProjectFilesService({ cwd: this.options.cwd });
+    return this.filesService;
   }
 
   private transcribe(): TranscribeService {

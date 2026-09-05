@@ -376,7 +376,7 @@ export async function connectForProject(
         rpc?.failPending(
           new CliError(`${shortCwd(ask.cwd)} has not been trusted yet, and this command cannot ask`, {
             exitCode: ExitCode.Usage,
-            fix: `It ships its own Pi configuration (${ask.reasons.join(", ")}), which Pi would load and run with your permissions. Answer once with \`piorbit projects trust ${ask.cwd}\` (or \`--no\` to decline), then run this again.`,
+            fix: `It ships its own agent configuration (${ask.reasons.join(", ")}), which the agent would load and run with your permissions. Answer once with \`piorbit projects trust ${ask.cwd}\` (or \`--no\` to decline), then run this again.`,
           }),
         );
         return;

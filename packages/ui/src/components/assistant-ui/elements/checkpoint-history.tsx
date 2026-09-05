@@ -45,7 +45,7 @@ export interface CheckpointHistoryProps extends Omit<ComponentProps<"ol">, "chil
 
 export function CheckpointHistory({ rows, currentId, onFork, onJump, busy, className, ...props }: CheckpointHistoryProps) {
   if (rows.length === 0) {
-    return <p className="px-4 pb-4 text-xs leading-xs text-ink-3">Nothing persisted yet. Pi writes the session file on the first message.</p>;
+    return <p className="px-4 pb-4 text-xs leading-xs text-ink-3">Nothing saved yet. The session file is written on the first message.</p>;
   }
   const current = currentId ?? [...rows].reverse().find((r) => r.canJump)?.id;
   return (

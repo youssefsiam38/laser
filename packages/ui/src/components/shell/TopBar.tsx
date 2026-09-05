@@ -175,7 +175,7 @@ export function TopBar() {
               <TooltipContent className="max-w-80 items-start">
                 {chip.detail ?? chip.label}
                 <span className="text-xs opacity-70">
-                  One Pi worker runs each project directory. Its sessions are safe on disk either way.
+                  One agent process runs each project directory. Its sessions are safe on disk either way.
                 </span>
               </TooltipContent>
             </Tooltip>
@@ -281,7 +281,7 @@ function CompactDialog({ open, onOpenChange }: { open: boolean; onOpenChange(ope
         <DialogHeader>
           <DialogTitle>Compact context</DialogTitle>
           <DialogDescription>
-            Pi summarises the conversation so far and keeps working from the summary. Tell it what must survive.
+            The agent summarises the conversation so far and keeps working from the summary. Tell it what must survive.
           </DialogDescription>
         </DialogHeader>
         <form

@@ -14,6 +14,7 @@
 import { Socket } from "node:net";
 import { LineDecoder, parseJsonLine, type JsonRpcMessage } from "@piorbit/protocol";
 import { StableSdkDriver } from "./drivers/stable-sdk.js";
+import { AgentResolutionError, assertBundledAgent } from "./resolve-pi.js";
 import { WorkerServer } from "./server.js";
 
 const PROTOCOL_FD = Number(process.env["PIORBIT_WORKER_FD"] ?? 3);
@@ -37,6 +38,21 @@ function openTransport(): { input: NodeJS.ReadableStream; write: (line: string) 
 }
 
 async function main(): Promise<void> {
+  // Belt and braces. The desktop shell and `piorbit doctor` both check the pin
+  // before a worker is ever spawned, so in a shipped app this cannot fail —
+  // but this is the process that actually imports the agent, and a worker that
+  // loads a version nobody pinned is worse than one that refuses to start.
+  try {
+    assertBundledAgent();
+  } catch (error) {
+    if (error instanceof AgentResolutionError) {
+      console.error(`piorbit: ${error.message}`);
+      if (error.fix) console.error(error.fix);
+      process.exit(2);
+    }
+    throw error;
+  }
+
   const cwd = arg("cwd") ?? process.cwd();
   const agentDir = arg("agent-dir");
   const sessionDir = arg("session-dir");
@@ -45,6 +61,16 @@ async function main(): Promise<void> {
   if (projectTrusted !== undefined && projectTrusted !== "yes" && projectTrusted !== "no") {
     console.error(`piorbit worker: --project-trusted must be "yes" or "no", got ${JSON.stringify(projectTrusted)}`);
     process.exit(2);
+  }
+
+  // The host's bundled package manager, `[command, ...args]` as JSON (M10-T5).
+  // Only used when settings name none; malformed = absent.
+  let npmCommand: string[] | undefined;
+  try {
+    const parsed: unknown = JSON.parse(process.env["PIORBIT_NPM_COMMAND"] ?? "null");
+    if (Array.isArray(parsed) && parsed.length > 0 && parsed.every((part) => typeof part === "string")) npmCommand = parsed as string[];
+  } catch {
+    npmCommand = undefined;
   }
 
   const transport = openTransport();
@@ -58,6 +84,7 @@ async function main(): Promise<void> {
     ...(sessionDir ? { sessionDir } : {}),
     ...(subagentsTempRoot ? { subagentsTempRoot } : {}),
     ...(projectTrusted !== undefined ? { projectTrusted: projectTrusted === "yes" } : {}),
+    ...(npmCommand ? { npmCommand } : {}),
   });
 
   const decoder = new LineDecoder();

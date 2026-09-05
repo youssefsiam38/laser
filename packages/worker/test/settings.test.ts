@@ -211,7 +211,7 @@ describe("SettingsAdapter round-trip", () => {
 describe("SettingsAdapter refusals", () => {
   it("rejects an unknown key and names the catalogue", async () => {
     await expect(adapter().apply("global", [{ path: "notASetting", op: "set", value: 1 }])).rejects.toThrow(
-      /Unknown setting "notASetting".*pi\/settings\/list/s,
+      /Unknown setting "notASetting".*Settings screen/s,
     );
   });
 
@@ -221,9 +221,9 @@ describe("SettingsAdapter refusals", () => {
     ).rejects.toThrow(/only be set at global scope/);
   });
 
-  it("refuses to write a key Pi manages itself", async () => {
+  it("refuses to write a key the agent manages itself", async () => {
     await expect(adapter().apply("global", [{ path: "trackingId", op: "set", value: "x" }])).rejects.toThrow(
-      /written by Pi itself/,
+      /written by the agent itself/,
     );
   });
 

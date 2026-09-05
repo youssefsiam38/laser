@@ -169,7 +169,11 @@ const Items: FC<ItemsProps> = ({
                     {item.label}
                   </span>
                   {item.description && (
-                    <span className="ms-5.5 text-xs leading-xs text-ink-2">
+                    // Two lines and no more: a skill's own description can run
+                    // to a paragraph, and one row must never push the rest of
+                    // the list off the screen. The full text is one keystroke
+                    // away — this is a picker, not a reference.
+                    <span className="ms-5.5 line-clamp-2 text-xs leading-xs text-ink-2" title={item.description}>
                       {item.description}
                     </span>
                   )}

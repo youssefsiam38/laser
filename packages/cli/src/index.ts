@@ -8,6 +8,7 @@
 export { COMMANDS, run } from "./cli.js";
 export { parseArgs, bool, str, num, list, distance, type FlagSpec, type FlagSpecs, type ParsedArgs } from "./args.js";
 export { findCommand, type Command, type CommandContext, type CommandGroup } from "./command.js";
+export { piorbitDataDir, defaultAgentDir, defaultStateDir } from "@piorbit/host";
 export {
   expandPath,
   hostUrl,

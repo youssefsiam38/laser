@@ -38,6 +38,7 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/project/remove": { cwd: "/p" },
   "pi/project/trust": { cwd: "/p", trusted: true, remember: true },
   "pi/project/git": { cwd: "/p", path: "/s.jsonl" },
+  "pi/project/browse": { path: "/home/me/code" },
   "pi/worker/list": {},
   "pi/worker/restart": { cwd: "/p" },
   "pi/worker/stop": { cwd: "/p" },
@@ -47,7 +48,16 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/settings/get": { cwd: "/p" },
   "pi/settings/set": { cwd: "/p", scope: "global", changes: [{ path: "compaction.reserveTokens", op: "set", value: 8192 }] },
   "pi/packages/list": { cwd: "/p" },
-  "pi/packages/install": { cwd: "/p", source: "pi-web-access", scope: "user" },
+  "pi/packages/install": { cwd: "/p", source: "pi-web-access", scope: "user", version: "1.4.2" },
+  "pi/packages/catalog": { cwd: "/p", query: "web", limit: 40 },
+  "pi/packages/runtime": {},
+  "pi/packages/records": { cwd: "/p" },
+  "pi/providers/login/start": { cwd: "/p", provider: "anthropic", method: "oauth" },
+  "pi/providers/login/answer": { cwd: "/p", id: "login-1", promptId: "p-1", value: "sk-…" },
+  "pi/providers/login/cancel": { cwd: "/p", id: "login-1" },
+  "pi/providers/logout": { cwd: "/p", provider: "anthropic" },
+  "pi/setup/state": {},
+  "pi/setup/complete": { completed: true },
   "pi/packages/remove": { cwd: "/p", source: "pi-web-access", scope: "project" },
   "pi/packages/update": { cwd: "/p", source: "pi-web-access" },
   "pi/packages/check_updates": { cwd: "/p" },
@@ -62,6 +72,19 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/panel/action": { path: "/s.jsonl", id: "web-access:search:42", actionId: "open", value: "https://example.com" },
   "pi/panel/read": { path: "/tmp/session.jsonl", ref: "file:/tmp/run/events.jsonl", from: 0, to: 65536 },
   "pi/panel/list": { path: "/s.jsonl" },
+
+  // --- M11 prefs ---
+  "pi/prefs/get": { namespace: "theme" },
+  "pi/prefs/set": { namespace: "theme", value: { followSystem: false, theme: { id: "graphite", base: "dark" } } },
+
+  // --- M4-T7 keybindings ---
+  "pi/keybindings/get": { cwd: "/p" },
+  "pi/keybindings/set": { cwd: "/p", changes: [{ id: "app.interrupt", op: "set", keys: ["ctrl+c"] }, { id: "tui.editor.undo", op: "reset" }] },
+
+  // --- composer sources ---
+  "pi/commands/list": { path: "/s.jsonl" },
+  "pi/prompts/list": { path: "/s.jsonl" },
+  "pi/project/files": { cwd: "/p", query: "srcidx", limit: 50 },
 
   // --- M7 push ---
   "pi/push/config": {},
@@ -107,6 +130,41 @@ describe("client request schemas", () => {
     expect(() =>
       clientParamsSchemas["pi/settings/set"].parse({ cwd: "/p", scope: "user", changes: [{ path: "theme", op: "unset" }] }),
     ).toThrow();
+  });
+
+  it("refuses a preference namespace that is not a flat lower-case id, and an oversized value", () => {
+    for (const namespace of ["Theme", "a/b", "a.b", "", "-x", "théme"]) {
+      expect(() => clientParamsSchemas["pi/prefs/set"].parse({ namespace, value: 1 })).toThrow();
+    }
+    expect(() => clientParamsSchemas["pi/prefs/set"].parse({ namespace: "theme" })).toThrow();
+    expect(() =>
+      clientParamsSchemas["pi/prefs/set"].parse({ namespace: "theme", value: { big: "x".repeat(300_000) } }),
+    ).toThrow();
+    // Clearing a namespace is a real edit, not a missing value.
+    expect(clientParamsSchemas["pi/prefs/set"].parse({ namespace: "theme", value: null })).toEqual({
+      namespace: "theme",
+      value: null,
+    });
+  });
+
+  it("refuses a keybinding id or key the agent could not parse", () => {
+    const set = (change: unknown) => () => clientParamsSchemas["pi/keybindings/set"].parse({ cwd: "/p", changes: [change] });
+    expect(set({ id: "app.interrupt", op: "set", keys: [] })).toThrow();
+    expect(set({ id: "app.interrupt", op: "set", keys: ["ctrl + c"] })).toThrow();
+    expect(set({ id: "app/interrupt", op: "set", keys: ["ctrl+c"] })).toThrow();
+    expect(set({ id: "__proto__", op: "reset" })).toThrow();
+    expect(set({ id: "app.interrupt", op: "reset", keys: ["ctrl+c"] })).toThrow();
+  });
+
+  it("refuses an install version that is a range rather than a release", () => {
+    for (const version of ["^1.2.3", "latest", "1.2", "1.2.x", ">=1"]) {
+      expect(() =>
+        clientParamsSchemas["pi/packages/install"].parse({ cwd: "/p", source: "x", scope: "user", version }),
+      ).toThrow();
+    }
+    expect(() =>
+      clientParamsSchemas["pi/packages/install"].parse({ cwd: "/p", source: "x", scope: "user", version: "1.2.3-rc.1" }),
+    ).not.toThrow();
   });
 
   it("refuses a log content ref that is not a sha256", () => {

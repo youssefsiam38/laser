@@ -104,7 +104,7 @@ rather than state.`,
           })),
         });
         if (rows.length === 0) {
-          ctx.term.print("No missions. pi-subagents writes one when an agent starts a piece of work with `mission.create`.");
+          ctx.term.print("No missions. One is written whenever an agent starts a named piece of work.");
           return ExitCode.Ok;
         }
         for (const line of table(

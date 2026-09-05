@@ -4,12 +4,12 @@
  *
  * Auth status comes from Pi's own `ModelRuntime`, so what is shown here is
  * exactly what a session will be able to use. No credential value ever crosses
- * the protocol — only whether one resolved and where it came from. Logging in
- * is deliberately not offered: Pi's OAuth flows want a terminal, and pretending
- * otherwise would be worse than pointing at the command that works.
+ * the protocol — only whether one resolved and where it came from. Signing in
+ * happens here too (M10-T6): the same `ProviderStep` the first run uses, which
+ * drives the agent's own login flow through `pi/providers/login/*`.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CheckCircle2, Circle, Eye, Loader2, RefreshCw, Sparkles } from "lucide-react";
+import { Eye, Loader2, RefreshCw, Sparkles } from "lucide-react";
 
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
 import { DataTable, type DataTableColumn } from "@/components/assistant-ui/elements/data-table";
@@ -28,6 +28,8 @@ import type {
   SettingsSnapshot,
   ThinkingLevel,
 } from "@piorbit/protocol";
+
+import { ProviderStep } from "@/components/onboarding";
 
 import { SettingField } from "./fields.js";
 import { SearchInput } from "./SettingsScreen.js";
@@ -164,44 +166,15 @@ export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
             </Button>
           </div>
           <p className="text-xs leading-5 text-ink-2">
-            Whether Pi can resolve a credential right now, and where it found it. piorbit never reads the credential
-            itself. To sign in or out, run <code className="font-mono">pi</code> in a terminal and use{" "}
-            <code className="font-mono">/login</code> — Pi's OAuth flows need one.
+            Which providers are signed in, and how. Pick one to sign in with an account or an API key, or to sign out.
+            piorbit never reads the credential itself.
           </p>
-          <ul className="grid gap-1 sm:grid-cols-2">
-            {providers.map((provider) => (
-              <li
-                key={provider.id}
-                className="flex items-start gap-2 rounded-lg border border-line px-3 py-2"
-              >
-                {provider.configured ? (
-                  <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-ok" aria-label="configured" />
-                ) : (
-                  <Circle className="mt-0.5 size-4 shrink-0 text-ink-3" aria-label="not configured" />
-                )}
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="text-sm font-medium text-ink">{provider.name}</span>
-                    <span className="font-mono text-xs text-ink-3">{provider.id}</span>
-                    {provider.oauth && <Badge variant="live">oauth</Badge>}
-                    {provider.subscription && <Badge variant="attention">subscription</Badge>}
-                  </div>
-                  <p className="mt-0.5 text-xs leading-4 text-ink-3">
-                    {provider.configured
-                      ? `${provider.source ?? "configured"}${provider.label ? ` · ${provider.label}` : ""}`
-                      : "no credential"}
-                    {" · "}
-                    {provider.modelCount} model{provider.modelCount === 1 ? "" : "s"}
-                  </p>
-                  {provider.baseUrl && (
-                    <p className="mt-0.5 truncate font-mono text-xs text-ink-3" title={provider.baseUrl}>
-                      {provider.baseUrl}
-                    </p>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
+          <ProviderStep cwd={cwd} onConfigured={() => void load(false)} />
+          {providers.length > 0 && (
+            <p className="text-xs leading-4 text-ink-3">
+              {providers.filter((p) => p.configured).length} of {providers.length} signed in.
+            </p>
+          )}
           {errors.length > 0 && (
             <div className="rounded-lg bg-[color-mix(in_oklab,var(--attention)_12%,transparent)] px-3 py-2 text-xs leading-5 text-attention">
               <p className="font-medium">Some catalogues could not be refreshed</p>
@@ -217,8 +190,8 @@ export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
         <section className="flex flex-col gap-2">
           <h2 className="text-sm font-semibold text-ink">Which models are offered</h2>
           <p className="text-xs leading-5 text-ink-2">
-            Patterns in <code className="font-mono">enabledModels</code> limit the models Pi cycles through and the
-            model picker offers. Leave it empty to offer everything Pi knows. Written to your global settings.
+            Patterns in <code className="font-mono">enabledModels</code> limit the models the agent cycles through and
+            the model picker offers. Leave it empty to offer every model available. Written to your global settings.
           </p>
           <SettingField
             field={ENABLED_MODELS_FIELD as never}
@@ -257,7 +230,7 @@ export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
 
           {models.length === 0 && !loading && (
             <p className="rounded-lg border border-line px-3 py-6 text-center text-sm text-ink-2">
-              Pi knows no models. Configure a provider credential, or point{" "}
+              No models are available. Add a provider credential above, or point{" "}
               <code className="font-mono">models.json</code> at a local server.
             </p>
           )}
@@ -265,7 +238,7 @@ export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
           {/* The model catalogue as the `data-table` element (docs/ux-elements.md
               "Structured output"); the filter is the way through a thousand rows. */}
           <DataTable
-            caption="Models Pi knows, with their context window, thinking levels and startup level"
+            caption="Every available model, with its context window, thinking levels and startup level"
             columns={modelColumns(setThinking)}
             rows={shown}
             rowKey={(model) => `${model.provider}/${model.id}`}

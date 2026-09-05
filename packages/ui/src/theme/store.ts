@@ -7,9 +7,13 @@
  * it does. Knobs (fonts, text size, density, corners, contrast, motion) belong
  * to the person, not the preset: switching presets keeps them.
  *
- * Persistence today is `localStorage` (`piorbit.theme`), in the shape the boot
- * script replays. `hydrate` and `subscribe` are the seam for M11-T6, where
- * the same state travels with settings through the relay.
+ * Persistence is in two places, on purpose. `localStorage` (`piorbit.theme`)
+ * holds the shape the boot script in `index.html` replays before first paint,
+ * so a reload never flashes. The host holds the same state in its own
+ * `theme` preference namespace (`pi/prefs/*`, M11-T6), which is what makes the
+ * theme a property of your piorbit rather than of one browser: a paired phone
+ * opens wearing what the desktop wears. `hydrate` and `subscribe` are the seam
+ * the sync uses; see `runtime/prefs.ts`.
  */
 import { applyCompiled, bootEntry, readBootBlob, writeBootBlob, type BootBlob } from "./apply.js";
 import { compileTheme } from "./compile.js";
@@ -24,9 +28,16 @@ export type ThemeState = {
   pair: { dark: string; light: string };
 };
 
+/**
+ * `followSystem: true` is the default because a person who has set their
+ * desktop to light has already answered this question. Opening piorbit for the
+ * first time on a light desktop and getting a dark window is the app telling
+ * them their preference does not count. Picking a preset in Settings turns it
+ * off (`setPreset`), which is the moment they *did* answer it here.
+ */
 export const DEFAULT_STATE: ThemeState = {
   theme: stripTagline(DEFAULT_PRESET),
-  followSystem: false,
+  followSystem: true,
   pair: { dark: DEFAULT_PRESET_ID, light: DEFAULT_LIGHT_PRESET_ID },
 };
 

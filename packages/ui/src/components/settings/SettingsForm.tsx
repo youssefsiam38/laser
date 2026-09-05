@@ -175,9 +175,9 @@ export function SettingsForm({ catalog, snapshot, onApply }: SettingsFormProps) 
 
 function ScopeSwitch({ view, onChange }: { view: View; onChange: (view: View) => void }) {
   const options: Array<{ id: View; label: string; hint: string }> = [
-    { id: "global", label: "Global", hint: "~/.pi/agent/settings.json — every project" },
-    { id: "project", label: "Project", hint: ".pi/settings.json — this directory only" },
-    { id: "effective", label: "Effective", hint: "What Pi will use, and which file it came from" },
+    { id: "global", label: "Global", hint: "Your settings, in every project on this machine" },
+    { id: "project", label: "Project", hint: "Settings that ship with this directory, and apply only here" },
+    { id: "effective", label: "Effective", hint: "What the agent will use, and which file it came from" },
   ];
   return (
     <div role="tablist" aria-label="Settings scope" className="flex items-center gap-0.5 rounded-lg bg-surface-2 p-0.5">
@@ -230,7 +230,7 @@ function ProjectTrustNotice({ snapshot }: { snapshot: SettingsSnapshot }) {
   const title = !writable
     ? "This project's settings are read-only"
     : !trusted
-      ? "Pi is ignoring this project's settings"
+      ? "This project's settings are not being used"
       : "Project settings and trust";
   return (
     <div
@@ -279,7 +279,7 @@ function FieldRowView({
           <label htmlFor={controlId} className="text-sm font-medium text-ink">
             {field.label}
           </label>
-          {field.managed && <Badge variant="outline">managed by Pi</Badge>}
+          {field.managed && <Badge variant="outline">managed by the agent</Badge>}
           {field.terminalOnly && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -288,8 +288,8 @@ function FieldRowView({
                 </Badge>
               </TooltipTrigger>
               <TooltipContent side="top" className="max-w-72">
-                Pi honours this in its own terminal UI. piorbit does not read it — changing it will not change how this
-                app looks.
+                This setting only applies when the agent runs in a terminal. piorbit does not read it, so changing it
+                will not change how this app looks.
               </TooltipContent>
             </Tooltip>
           )}
@@ -328,7 +328,7 @@ function FieldRowView({
               )}
               {field.default !== undefined && (
                 <span>
-                  Pi default: <ValueChip value={field.default} />
+                  Default: <ValueChip value={field.default} />
                 </span>
               )}
               {writable && (
@@ -372,15 +372,15 @@ function EffectiveView({ catalog, snapshot }: { catalog: SettingsCatalog; snapsh
     <ScrollArea className="min-h-0 flex-1">
       <div className="mx-auto flex max-w-240 flex-col gap-3 px-4 py-4">
         <p className="text-xs leading-5 text-ink-2">
-          Everything either file sets, and what Pi ends up using. Nested objects merge; arrays replace whole.
+          Everything either file sets, and what the agent ends up using. Nested objects merge; arrays replace whole.
           {snapshot.projectTrust.trusted
             ? ""
-            : " Project values are shown but greyed out — Pi is not loading that file (see the Project tab)."}
+            : " Project values are shown but greyed out — the agent is not loading that file (see the Project tab)."}
         </p>
 
         {rows.length === 0 && (
           <p className="py-8 text-center text-sm text-ink-2">
-            Neither settings file sets anything. Pi is running entirely on its defaults.
+            Neither settings file sets anything. The agent is running entirely on its defaults.
           </p>
         )}
 
@@ -408,8 +408,8 @@ function EffectiveView({ catalog, snapshot }: { catalog: SettingsCatalog; snapsh
           <div className="rounded-lg bg-surface-2 px-3 py-2 text-xs leading-5 text-ink-2">
             <p className="font-medium text-ink">Keys piorbit does not recognise</p>
             <p className="mt-0.5">
-              These are in a settings file but are not part of Pi {catalog.piVersion}'s settings. piorbit leaves them
-              exactly as they are and never rewrites them:{" "}
+              These are in a settings file, but the agent ({catalog.piVersion}) does not define them. piorbit leaves
+              them exactly as they are and never rewrites them:{" "}
               <span className="font-mono text-ink-2">{unknownKeys.join(", ")}</span>
             </p>
           </div>

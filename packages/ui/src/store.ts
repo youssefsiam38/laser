@@ -9,12 +9,15 @@
 import type {
   HostNotificationMethod,
   HostNotifications,
+  MessageSpeaker,
   PiExtensionModuleName,
   SessionState,
   SessionSummary,
   SessionUpdate,
+  StopReason,
   UiDialogRequest,
   UiFireAndForget,
+  Usage,
 } from "@piorbit/protocol";
 
 /**
@@ -24,7 +27,26 @@ import type {
  */
 export type Block =
   | { kind: "user"; id: string; at?: string; text: string; images: number; optimistic?: boolean }
-  | { kind: "assistant"; id: string; at?: string; text: string; thinking: string; streaming: boolean }
+  | {
+      kind: "assistant";
+      id: string;
+      at?: string;
+      text: string;
+      thinking: string;
+      streaming: boolean;
+      /**
+       * Why this turn ended, from `message_end`. `stop` and `toolUse` are the
+       * ordinary endings; anything else is a turn that stopped short and the
+       * transcript says so out loud.
+       */
+      stopReason?: StopReason;
+      /** The provider's own words when `stopReason` is `error`. */
+      errorMessage?: string;
+      /** This one turn's token counts. Never a running total. */
+      usage?: Usage;
+      /** Set only when something other than the session's own agent spoke. */
+      speaker?: MessageSpeaker;
+    }
   | { kind: "tool"; id: string; at?: string; name: string; args: unknown; partial?: string; result?: unknown; isError?: boolean; done: boolean }
   | { kind: "notice"; id: string; at?: string; level: "info" | "warning" | "error"; text: string };
 
@@ -364,6 +386,20 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
       if (u.role === "assistant") {
         return { ...v, blocks: [...closeStreaming(v.blocks), { kind: "assistant", id: nextBlockId(), text: "", thinking: "", streaming: true }] };
       }
+      // A custom message with a speaker is a child run talking into this
+      // session — the one case where words arrive that the session's own agent
+      // did not say. It gets a block of its own so the transcript can put a
+      // name over it; a custom message with no speaker is Pi's internal
+      // bookkeeping and stays invisible, as before.
+      if (u.role === "custom" && u.speaker) {
+        return {
+          ...v,
+          blocks: [
+            ...closeStreaming(v.blocks),
+            { kind: "assistant", id: nextBlockId(), text: "", thinking: "", streaming: true, speaker: u.speaker },
+          ],
+        };
+      }
       return v;
     }
     case "text_delta": {
@@ -386,11 +422,22 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
         const block = v.blocks[index] as Extract<Block, { kind: "user" }>;
         return { ...v, blocks: replaceAt(v.blocks, index, { ...block, text: text || block.text, optimistic: false }) };
       }
-      if (msg?.role === "assistant") {
+      if (msg?.role === "assistant" || (msg?.role === "custom" && u.speaker)) {
         const a = lastAssistant(v.blocks);
         if (!a) return v;
         const finalText = textOf(msg.content);
-        return { ...v, blocks: replaceLast(v.blocks, { ...a, text: finalText || a.text, streaming: false }) };
+        return {
+          ...v,
+          blocks: replaceLast(v.blocks, {
+            ...a,
+            text: finalText || a.text,
+            streaming: false,
+            ...(u.stopReason !== undefined ? { stopReason: u.stopReason } : {}),
+            ...(u.errorMessage !== undefined ? { errorMessage: u.errorMessage } : {}),
+            ...(u.usage !== undefined ? { usage: u.usage } : {}),
+            ...(u.speaker !== undefined ? { speaker: u.speaker } : {}),
+          }),
+        };
       }
       return v;
     }

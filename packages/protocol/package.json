@@ -1,6 +1,6 @@
 {
   "name": "@piorbit/protocol",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "ACP-shaped JSON-RPC messages for piorbit, plus pi/* extras. Imports nothing from Pi.",

@@ -1,0 +1,40 @@
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+
+import { agentHome, desktopEnv, piorbitDataDir } from "../src/agent-home.js";
+
+/**
+ * This is the whole "piorbit never touches your own agent" guarantee, and it is
+ * one function. The failure it prevents is silent in both directions: piorbit
+ * quietly writing another program's settings file, or a person's shell variable
+ * quietly deciding where the app keeps its credentials.
+ */
+describe("desktopEnv", () => {
+  const home = "/home/example";
+
+  it("removes the variables that name another agent installation", () => {
+    const env = desktopEnv({
+      HOME: home,
+      PI_CODING_AGENT_DIR: "/home/example/.pi/agent",
+      PI_CODING_AGENT_SESSION_DIR: "/home/example/.pi/agent/sessions",
+      PI_SUBAGENTS_TEMP_ROOT: "/tmp/theirs",
+    });
+    expect(env["PI_CODING_AGENT_DIR"]).toBeUndefined();
+    expect(env["PI_CODING_AGENT_SESSION_DIR"]).toBeUndefined();
+    expect(env["PI_SUBAGENTS_TEMP_ROOT"]).toBeUndefined();
+    expect(env["PIORBIT_AGENT_DIR"]).toBe(join(piorbitDataDir({ HOME: home }), "agent"));
+    expect(env["PIORBIT_STATE_DIR"]).toBe(join(piorbitDataDir({ HOME: home }), "state"));
+  });
+
+  it("honours PIORBIT_AGENT_DIR, which is the deliberate lever", () => {
+    const env = desktopEnv({ HOME: home, PIORBIT_AGENT_DIR: "/home/example/.pi/agent" });
+    expect(env["PIORBIT_AGENT_DIR"]).toBe("/home/example/.pi/agent");
+    expect(agentHome({ HOME: home, PIORBIT_AGENT_DIR: "/home/example/.pi/agent" }).chosenByPerson).toBe(true);
+  });
+
+  it("reports what it ignored, so a log can say so instead of a person guessing", () => {
+    expect(agentHome({ HOME: home, PI_CODING_AGENT_DIR: "/elsewhere" }).ignored).toEqual(["PI_CODING_AGENT_DIR"]);
+    expect(agentHome({ HOME: home, PI_CODING_AGENT_DIR: "  " }).ignored).toEqual([]);
+    expect(agentHome({ HOME: home }).ignored).toEqual([]);
+  });
+});

@@ -47,6 +47,27 @@ export interface Usage {
   cost?: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
 }
 
+/**
+ * Why an assistant message stopped, mirroring the pinned Pi's own `StopReason`
+ * one-for-one so the driver never has to invent a vocabulary. `stop` is the
+ * ordinary end of a reply and `toolUse` is "it wants to run tools next";
+ * everything else is a turn that ended short and the UI says so out loud.
+ */
+export type StopReason = "pending" | "stop" | "length" | "toolUse" | "error" | "aborted" | "deferred";
+
+/**
+ * Who produced a message, when it was not the session's own agent speaking.
+ * Absent means "this session's own voice", which is the common case: the
+ * transcript shows no header for it.
+ */
+export interface MessageSpeaker {
+  kind: "user" | "agent" | "subagent" | "tool";
+  /** Display name: `@auth-audit`, `orchestrator`, a tool's name. */
+  name: string;
+  /** Model, handle or role, shown after the name. */
+  detail?: string;
+}
+
 /** Attention state for the sidebar/inbox (M2-T2). */
 export type SessionAttention = "idle" | "working" | "waiting_for_input" | "error" | "finished_unread";
 
@@ -165,11 +186,33 @@ export type SessionUpdate =
   | { kind: "agent_settled" }
   | { kind: "turn_start" }
   | { kind: "turn_end" }
-  | { kind: "message_start"; role: "user" | "assistant" | "tool" | "custom"; messageId?: string }
+  | {
+      kind: "message_start";
+      role: "user" | "assistant" | "tool" | "custom";
+      messageId?: string;
+      /** Set only when something other than this session's own agent is speaking. */
+      speaker?: MessageSpeaker;
+    }
   | { kind: "text_delta"; delta: string; contentIndex: number }
   | { kind: "thinking_delta"; delta: string; contentIndex: number }
   | { kind: "toolcall_delta"; delta: string; contentIndex: number }
-  | { kind: "message_end"; message: unknown }
+  /**
+   * A message was finalised. `message` is Pi's own entry, opaque by design;
+   * the named fields beside it are the parts the UI must not have to guess at.
+   * `stopReason` is what ended an assistant turn (a stopped run renders from
+   * it) and `usage` is that one turn's token counts — not a running total.
+   */
+  | {
+      kind: "message_end";
+      message: unknown;
+      role?: "user" | "assistant" | "tool" | "custom";
+      speaker?: MessageSpeaker;
+      stopReason?: StopReason;
+      /** The provider's own words when `stopReason` is `error`. */
+      errorMessage?: string;
+      /** This turn's usage. Absent when the provider reported none. */
+      usage?: Usage;
+    }
   | { kind: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown }
   | { kind: "tool_execution_update"; toolCallId: string; partial: unknown }
   /**
@@ -335,6 +378,17 @@ export interface PackageEntry {
   type?: "npm" | "git";
   /** Only set after `pi/packages/check_updates`. */
   updateAvailable?: boolean;
+  // --- M10-T5: filled in by the host's PackageService, which reads manifests and its own lock. ---
+  /** The registry name for an npm source (`npm:@scope/name@1.2.3` → `@scope/name`). */
+  name?: string;
+  /** The version actually on disk, read from the installed manifest. */
+  version?: string;
+  /** The exact version the source pins (`npm:name@1.2.3`), when it pins one. */
+  pinnedVersion?: string;
+  /** Newest version the registry offers; only set after `pi/packages/check_updates`. */
+  latestVersion?: string;
+  /** Subresource integrity of the tarball this install was recorded with. */
+  integrity?: string;
 }
 
 export interface PackageUpdateInfo {
@@ -342,6 +396,59 @@ export interface PackageUpdateInfo {
   displayName: string;
   type: "npm" | "git";
   scope: PackageScope;
+  /** For npm sources: what is on disk and what the registry has now. */
+  installedVersion?: string;
+  latestVersion?: string;
+}
+
+/**
+ * A package the person can install from Settings (M10-T5): a row of
+ * piorbit's curated list, or a hit from a live registry search. Metadata
+ * only; installing pins `version` and verifies the download.
+ */
+export interface PackageCatalogEntry {
+  /** The registry name. Doubles as the install source (`npm:<name>@<version>`). */
+  name: string;
+  description?: string;
+  /** Newest exact version on the registry. Installing pins it. Absent while the registry has not answered. */
+  version?: string;
+  homepage?: string;
+  publishedAt?: string;
+  keywords?: string[];
+  /** From piorbit's own list rather than a live search. */
+  curated: boolean;
+  /** Set when a configured package already provides this name. */
+  installed?: { source: string; scope: PackageScope; version?: string };
+}
+
+/** Whether this machine can install packages at all, and with what (M10-T5). */
+export interface PackageRuntimeInfo {
+  ready: boolean;
+  node: { version: string; path: string };
+  npm?: { path: string; source: "bundled" | "configured" | "path" };
+  /** Why installs cannot run, written for a person. Only set when `ready` is false. */
+  reason?: string;
+}
+
+/**
+ * One line of piorbit's package lock: what was installed, at which exact
+ * version, with which tarball integrity. Enough to reproduce the same set
+ * and to notice when the registry hands back different bytes for the same
+ * version.
+ */
+export interface PackageRecord {
+  name: string;
+  version: string;
+  scope: PackageScope;
+  /** Only for project scope: the directory the package was installed for. */
+  cwd?: string;
+  /** `sha512-…` from the registry manifest at install time. */
+  integrity?: string;
+  /** Tarball URL the version resolved to. */
+  resolved?: string;
+  /** The source string as written to settings, e.g. `npm:pi-web-access@1.4.2`. */
+  source: string;
+  installedAt: string;
 }
 
 /** Streamed from `DefaultPackageManager`'s progress callback while work runs. */
@@ -366,6 +473,72 @@ export interface ProviderAuthInfo {
   oauth: boolean;
   subscription: boolean;
   modelCount: number;
+  /** Sign-in methods this provider supports from the UI (M10-T6). Absent when the worker predates it. */
+  methods?: ProviderLoginMethod[];
+  /** The provider's own wording for its account sign-in, e.g. "Sign in with SuperGrok or X Premium". */
+  oauthLabel?: string;
+}
+
+// --- M10-T6: signing in to a provider from the UI ---------------------------
+
+export type ProviderLoginMethod = "oauth" | "api_key";
+
+/** A question the provider's login flow asks; answered with `pi/providers/login/answer`. */
+export interface ProviderLoginPrompt {
+  id: string;
+  kind: "text" | "secret" | "select" | "manual_code";
+  message: string;
+  placeholder?: string;
+  /** Only for `select`. The answer is an option `id`. */
+  options?: Array<{ id: string; label: string; description?: string }>;
+}
+
+/**
+ * What a login flow tells the person while it runs. Mirrors the agent's own
+ * login callbacks one for one, so a provider that adds a step is not silently
+ * unsupported; the terminal states are `done`, `error` and `cancelled`.
+ */
+export type ProviderLoginEvent =
+  | { type: "info"; message: string; links?: Array<{ url: string; label?: string }> }
+  | { type: "auth_url"; url: string; instructions?: string }
+  | { type: "device_code"; userCode: string; verificationUri: string; intervalSeconds?: number; expiresInSeconds?: number }
+  | { type: "progress"; message: string }
+  | { type: "prompt"; prompt: ProviderLoginPrompt }
+  | { type: "done"; method: ProviderLoginMethod }
+  | { type: "error"; message: string }
+  | { type: "cancelled" };
+
+// --- M10-T6: first run --------------------------------------------------------
+
+/**
+ * Where first-run setup stands, kept by the host so it survives a quit and is
+ * the same on every device. `cwd` is a directory the host owns with no project
+ * in it: provider and model settings are global, but every settings method is
+ * routed by directory, and this is the one to use before any project exists.
+ */
+export interface SetupState {
+  cwd: string;
+  completed: boolean;
+  completedAt?: string;
+}
+
+/** One directory in a `pi/project/browse` listing. */
+export interface DirectoryEntry {
+  name: string;
+  path: string;
+  /** Looks like a code project (has `.git`, `.pi`, or a manifest). Display hint only. */
+  project: boolean;
+}
+
+export interface DirectoryListing {
+  path: string;
+  /** Absent at the filesystem root. */
+  parent?: string;
+  home: string;
+  entries: DirectoryEntry[];
+  truncated: boolean;
+  /** Set when the directory could not be read; `entries` is then empty. */
+  error?: string;
 }
 
 export interface ModelCatalogEntry extends ModelRef {
@@ -464,6 +637,138 @@ export interface LogStats {
 // end M4 block
 // ===========================================================================
 
+// ===========================================================================
+// M11 · Host-owned preferences (`pi/prefs/*`).
+//
+// Pi's settings file belongs to Pi: `pi/settings/set` refuses any key the
+// pinned agent does not define, and it is right to. piorbit's own preferences
+// — the theme first among them — therefore need a store of their own, keyed by
+// namespace, persisted beside the host's other state and never inside the
+// agent's settings. Because it lives in the host and not in a browser, a theme
+// chosen on the desktop is the theme a paired phone opens with.
+// ===========================================================================
+
+/**
+ * One namespace of host-owned preferences. The value is whatever JSON the
+ * owning feature stores there; the host never interprets it, it only keeps it
+ * and tells every connected client when it changes.
+ */
+export interface PrefsEntry {
+  namespace: string;
+  /** `null` means the namespace has been cleared, which is not the same as never set. */
+  value: unknown;
+  /** Bumped on every accepted write, across all namespaces. Use it to ignore your own echo. */
+  revision: number;
+  at: string;
+}
+
+/** Largest single namespace, serialised. A preference is small by definition. */
+export const PREFS_MAX_BYTES = 256 * 1024;
+
+// ===========================================================================
+// M4-T7 · Keybindings (`pi/keybindings/*`), over the agent's own manager.
+// ===========================================================================
+
+/**
+ * One action the agent can be told to bind. `id` is the agent's own binding id
+ * (`app.interrupt`, `tui.editor.undo`); `keys` is what is in force right now,
+ * which is the person's override when there is one and the default otherwise.
+ */
+export interface KeybindingDescriptor {
+  id: string;
+  description: string;
+  /** What the pinned agent ships. Resetting restores exactly this. */
+  defaultKeys: string[];
+  keys: string[];
+  /** The person's file sets this one, so "Reset" has something to do. */
+  overridden: boolean;
+  /**
+   * `app` is the agent's own actions, `tui` its editor and list keys. Sections
+   * are derived from the id's first segment, so a new one shows up as itself
+   * rather than disappearing.
+   */
+  section: string;
+}
+
+/** Two actions that answer to the same key. The agent resolves them in id order. */
+export interface KeybindingConflict {
+  key: string;
+  ids: string[];
+}
+
+export interface KeybindingsSnapshot {
+  /** The file the agent reads them from. Shown so a person can find it. */
+  path: string;
+  /** Version of the agent the ids and defaults came from. */
+  piVersion: string;
+  bindings: KeybindingDescriptor[];
+  conflicts: KeybindingConflict[];
+  /** False when piorbit will not write the file; `reason` says why, for a person. */
+  writable: boolean;
+  reason?: string;
+  /** Set when the file exists but could not be read; the defaults are shown instead. */
+  error?: string;
+}
+
+/** One rebinding. `reset` removes the override so the agent's default applies again. */
+export type KeybindingChange = { id: string; op: "set"; keys: string[] } | { id: string; op: "reset" };
+
+// ===========================================================================
+// Composer sources: `/` commands, `@` files, and the prompt library.
+// ===========================================================================
+
+/**
+ * Something `/` can run. `source` says where it came from so the popover can
+ * group it: `piorbit` is the app's own, `extension` a package's registered
+ * command, `prompt` a prompt template, `skill` a skill file.
+ */
+export interface CommandInfo {
+  /** What a person types after the slash, without the slash. */
+  name: string;
+  description?: string;
+  source: "piorbit" | "extension" | "prompt" | "skill";
+  /** e.g. `<provider/model>`; shown after the name, never sent. */
+  argumentHint?: string;
+  /** Package or file the command came from, for the row's second line. */
+  origin?: string;
+}
+
+/** A prompt template the agent loaded from disk (the prompt library). */
+export interface PromptInfo {
+  name: string;
+  description: string;
+  argumentHint?: string;
+  /** Absolute path of the markdown file, so a person can find and edit it. */
+  filePath: string;
+  /** Where it came from: `global`, `project`, or a package's name. */
+  origin: string;
+  /** First lines of the template, for the row's preview. Never the whole file. */
+  preview: string;
+}
+
+/** One file in the project, for the composer's `@` popover. */
+export interface ProjectFile {
+  /** Posix-separated, relative to the project directory. */
+  path: string;
+  /** Last segment, for the row's title. */
+  name: string;
+  /** Tracked by git in this project. */
+  tracked: boolean;
+}
+
+export interface ProjectFiles {
+  cwd: string;
+  files: ProjectFile[];
+  /** More matched than `limit`; narrow the query. */
+  truncated: boolean;
+  /**
+   * How the list was produced: `git` respects `.gitignore` exactly, `walk` is
+   * a bounded directory scan for a project that is not a repository. The UI
+   * says which when it matters.
+   */
+  source: "git" | "walk";
+}
+
 // ---------- Method catalogue ----------
 
 /** Client → host requests. */
@@ -547,6 +852,12 @@ export interface ClientRequests {
    * worker uses the baseline of the first session it opened.
    */
   "pi/project/git": { params: { cwd: string; path?: string }; result: ProjectGitStatus };
+  /**
+   * Subdirectories of `path` (the home directory when omitted), for picking a
+   * project without typing a path (M10-T6). Directories only, hidden ones
+   * excluded. Answered by the host.
+   */
+  "pi/project/browse": { params: { path?: string }; result: DirectoryListing };
 
   // --- workers (M2-T1) ---
   "pi/worker/list": { params: {}; result: { workers: WorkerInfo[] } };
@@ -576,8 +887,13 @@ export interface ClientRequests {
   "pi/packages/list": { params: { cwd: string }; result: { packages: PackageEntry[] } };
   /** Installs and adds the source to settings at `scope`. Progress arrives as `pi/packages/progress`. */
   "pi/packages/install": {
-    params: { cwd: string; source: string; scope: PackageScope };
-    result: { packages: PackageEntry[] };
+    /**
+     * `version` pins an exact release of an npm source; without it the host
+     * resolves the newest and pins that. Either way the source written to
+     * settings carries the exact version (M10-T5).
+     */
+    params: { cwd: string; source: string; scope: PackageScope; version?: string };
+    result: { packages: PackageEntry[]; record?: PackageRecord };
   };
   "pi/packages/remove": {
     params: { cwd: string; source: string; scope: PackageScope };
@@ -606,6 +922,43 @@ export interface ClientRequests {
     };
   };
 
+  // ------------------------------------------------------------- M10-T5 --
+  // Package management from Settings. Answered by the host's PackageService,
+  // which resolves and pins versions and keeps the lock; the worker does the
+  // installing through the agent's own package manager.
+
+  /**
+   * Packages a person can install: piorbit's curated list when `query` is
+   * empty, a live registry search otherwise. With `cwd`, entries that are
+   * already configured for that project say so.
+   */
+  "pi/packages/catalog": {
+    params: { cwd?: string; query?: string; limit?: number };
+    result: { entries: PackageCatalogEntry[]; source: "curated" | "search"; truncated: boolean; error?: string };
+  };
+  /** Can this machine install packages, and with what. Diagnostics; paths appear here and nowhere else. */
+  "pi/packages/runtime": { params: {}; result: PackageRuntimeInfo };
+  /** The lock: every install the host recorded. `cwd` limits project-scope records to one project. */
+  "pi/packages/records": { params: { cwd?: string }; result: { records: PackageRecord[] } };
+
+  // ------------------------------------------------------------- M10-T6 --
+  // Provider sign-in from the UI. The worker drives the agent's own login
+  // flow; every step reaches the person as a `pi/providers/login/event`.
+
+  /** Begin signing in. Events for `id` follow; `answer` replies to prompts. */
+  "pi/providers/login/start": {
+    params: { cwd: string; provider: string; method: ProviderLoginMethod };
+    result: { id: string };
+  };
+  "pi/providers/login/answer": { params: { cwd: string; id: string; promptId: string; value: string }; result: {} };
+  "pi/providers/login/cancel": { params: { cwd: string; id: string }; result: {} };
+  /** Forget the stored credential for a provider. */
+  "pi/providers/logout": { params: { cwd: string; provider: string }; result: { providers: ProviderAuthInfo[] } };
+
+  /** First-run setup state, kept by the host. */
+  "pi/setup/state": { params: {}; result: SetupState };
+  "pi/setup/complete": { params: { completed: boolean }; result: SetupState };
+
   /** Paged read of the host log store, oldest first, bounded by a byte budget. */
   "pi/logs/query": { params: LogQuery; result: LogPage };
   /** Fetch a payload referenced by `LogEntry.detailRef`. */
@@ -616,6 +969,41 @@ export interface ClientRequests {
   "pi/logs/stats": { params: {}; result: { stats: LogStats } };
   /** Delete rows. Omit `sections` to clear everything. */
   "pi/logs/clear": { params: { sections?: LogSection[] }; result: { deleted: number } };
+
+  // ---------------------------------------------------- M11 · preferences --
+  // Answered by the host, not a worker: these are piorbit's own, they are not
+  // per project, and they must survive a worker that is asleep.
+
+  /** Every namespace, or one when `namespace` names it. */
+  "pi/prefs/get": { params: { namespace?: string }; result: { entries: PrefsEntry[]; revision: number } };
+  /**
+   * Replace one namespace. `value: null` clears it. The write is broadcast to
+   * every connected client as `pi/prefs/updated`, including the one that sent
+   * it — compare `revision` with the one you got back to ignore your own echo.
+   */
+  "pi/prefs/set": { params: { namespace: string; value: unknown }; result: { entry: PrefsEntry } };
+
+  // ---------------------------------------------------- M4-T7 · keybindings --
+  // The agent's own `keybindings.json`, read and written through its
+  // `KeybindingsManager`. `cwd` only picks the worker; the file is global.
+
+  "pi/keybindings/get": { params: { cwd: string }; result: { keybindings: KeybindingsSnapshot } };
+  /** Apply `changes` and answer with the file as it now stands. */
+  "pi/keybindings/set": {
+    params: { cwd: string; changes: KeybindingChange[] };
+    result: { keybindings: KeybindingsSnapshot };
+  };
+
+  // -------------------------------------------------- composer sources --
+  /** Everything `/` can run in this session: extension commands, prompts, skills. */
+  "pi/commands/list": { params: { path: string }; result: { commands: CommandInfo[] } };
+  /** The prompt library the agent loaded for this session. */
+  "pi/prompts/list": { params: { path: string }; result: { prompts: PromptInfo[] } };
+  /**
+   * Files in a project, for `@`. `query` is a case-insensitive subsequence
+   * match over the relative path; omit it for the first `limit` files.
+   */
+  "pi/project/files": { params: { cwd: string; query?: string; limit?: number }; result: ProjectFiles };
 
   // --- M7 · push. Answered by the host itself; the phone is the only caller. ---
 
@@ -700,8 +1088,14 @@ export interface HostNotifications {
   // ------------------------------------------------------------------ M4 --
   /** `DefaultPackageManager` progress, forwarded while an install/remove/update runs. */
   "pi/packages/progress": PackageProgress;
+  /** One step of a provider sign-in started with `pi/providers/login/start` (M10-T6). */
+  "pi/providers/login/event": { cwd: string; id: string; provider: string; event: ProviderLoginEvent };
   /** New rows in the log store, for live follow. Batched per host tick. */
   "pi/logs/append": { entries: LogEntry[] };
+
+  // ----------------------------------------------------------------- M11 --
+  /** A host-owned preference namespace changed, on any device. */
+  "pi/prefs/updated": PrefsEntry;
 }
 
 export type ClientMethod = keyof ClientRequests;

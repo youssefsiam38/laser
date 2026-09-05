@@ -64,6 +64,8 @@ export {
   type ThreadAdapterDeps,
 } from "./adapter.js";
 
+export { THEME_PREFS_NAMESPACE, useThemeSync } from "./prefs.js";
+
 export {
   PROJECTS_STORAGE_KEY,
   PROJECT_STORAGE_KEY,

@@ -18,8 +18,10 @@
  */
 
 import type {
+  CommandInfo,
   ContentBlock,
   ModelRef,
+  PromptInfo,
   PiExtensionCommand,
   PiExtensionMessage,
   SessionState,
@@ -98,6 +100,15 @@ export interface SessionDriver {
    * extension, so it has nothing to deliver to.
    */
   deliverExtensionCommand?(command: PiExtensionCommand): boolean;
+
+  /**
+   * Everything `/` can run in this session — the packages' registered commands,
+   * the prompt library and the skills — and the prompt library on its own. Both
+   * are per session because a session's resources are what its project and its
+   * packages loaded, not a global list.
+   */
+  commands(): Promise<CommandInfo[]>;
+  prompts(): Promise<PromptInfo[]>;
 
   /** Replay persisted entries (for reattach). Returns entries and the seq they were last emitted at. */
   entries(): Promise<unknown[]>;

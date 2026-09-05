@@ -1,6 +1,6 @@
 {
   "name": "@piorbit/pi-extension",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "The one piorbit companion Pi extension, loaded into sessions the worker starts. Contains a module per supported community package; modules activate only when their package is present. Allowed to import Pi.",

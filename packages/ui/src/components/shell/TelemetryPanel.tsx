@@ -204,7 +204,7 @@ function UsageSection() {
           </Stats>
         </div>
       ) : (
-        <p className="text-xs leading-4 text-ink-3">No spend recorded. Totals appear once Pi persists a response.</p>
+        <p className="text-xs leading-4 text-ink-3">No spend recorded. Totals appear after the agent's first response.</p>
       )}
     </Section>
   );
@@ -286,7 +286,7 @@ function WorkerSection() {
             {view && <span className="ms-1.5 font-mono text-xs text-ink-3">{view.state.cwd.split("/").filter(Boolean).at(-1)}</span>}
           </p>
           {worker?.message && <p className="text-xs leading-4 break-words text-ink-2">{worker.message}</p>}
-          {!worker && <p className="text-xs leading-4 text-ink-3">One Pi process per project directory.</p>}
+          {!worker && <p className="text-xs leading-4 text-ink-3">One agent process per project directory.</p>}
         </div>
       </div>
     </Section>

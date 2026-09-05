@@ -1,6 +1,6 @@
 {
   "name": "@piorbit/crypto",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "Noise IK/KK over 25519_AESGCM_SHA256 (WebCrypto first, @noble fallback), pairing, signed device list. Runs in Node and the browser.",

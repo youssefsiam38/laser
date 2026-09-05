@@ -14,7 +14,7 @@ import { mergeSessions, sessionTitle, usePiorbitStable, usePiorbitState, usePior
 import { AddProjectDialog } from "./AddProjectDialog.js";
 import { HostConnectionState } from "@/components/assistant-ui/elements/connection-state";
 import { CommandPaletteDialog } from "./CommandPalette.js";
-import { FirstRun } from "./FirstRun.js";
+import { FirstRunFlow, useSetupPending } from "@/components/onboarding";
 import { documentTitle, needYouCount } from "./model.js";
 import { Rail } from "./Rail.js";
 import { SessionsPanel } from "./SessionsPanel.js";
@@ -103,7 +103,9 @@ function ShellFrame() {
   const [addProjectOpen, setAddProjectOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const sessionsLoaded = usePiorbitState((s) => s.sessionsLoaded);
-  const { projects } = usePiorbitStable();
+  // First run (M10-T6): the host says whether setup is still pending; the
+  // flow takes the conversation's place until it is finished or skipped.
+  const setup = useSetupPending();
 
   // Sheets belong to the compact layouts; a resize to desktop drops them.
   useEffect(() => {
@@ -202,6 +204,12 @@ function ShellFrame() {
     document.title = documentTitle(title, needYou);
   }, [needYou, sessions, view]);
 
+  /**
+   * Nothing has been set up yet and there is no session to look at. Hooks all
+   * run above this line, so the branch below is a render decision only.
+   */
+  const firstRun = sessionsLoaded && !view && setup.pending === true;
+
   const shell = useMemo<ShellContextValue>(
     () => ({
       layout,
@@ -238,6 +246,29 @@ function ShellFrame() {
     ],
   );
 
+  // First run (M10-T6) owns the whole window.
+  //
+  // It used to render *inside* the shell, and the result argued with itself:
+  // the card said "step 4 of 5: open a project" while the left panel said "No
+  // project yet — [Add project]", the right panel said "Nothing to measure",
+  // the top bar offered "New session", and on a phone a back chevron led
+  // nowhere. Four empty states, four vocabularies, and two of them bypassed
+  // the flow entirely. A person setting up for the first time should have one
+  // thing on screen and one next step.
+  //
+  // `HostConnectionState` stays: if the host goes away mid-setup, that is the
+  // only thing worth saying, and the flow cannot continue without it.
+  if (firstRun) {
+    return (
+      <TooltipProvider>
+        <div className="flex h-full w-full flex-col overflow-hidden bg-bg text-ink">
+          <HostConnectionState />
+          <FirstRunFlow setup={setup} />
+        </div>
+      </TooltipProvider>
+    );
+  }
+
   return (
     <TooltipProvider>
       <PanelsProvider>
@@ -259,10 +290,7 @@ function ShellFrame() {
               {/* The thread's sticky footer owns the keyboard/safe-area inset
                   (Thread.tsx); adding it here too lifted the composer twice. */}
               <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-                {/* First run: the host answered and knows no project. The
-                    onboarding steps take the conversation's place until one
-                    exists (docs/ux-elements.md "Onboarding"). */}
-                {sessionsLoaded && projects.length === 0 && !view ? <FirstRun /> : <Thread statusSlot={<PanelAmbient />} />}
+                <Thread statusSlot={<PanelAmbient />} />
               </div>
             </main>
             {layout !== "mobile" && <Dock path={view?.path} />}

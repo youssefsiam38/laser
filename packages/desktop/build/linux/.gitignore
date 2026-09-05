@@ -1,0 +1,7 @@
+# Written by `pnpm -F @piorbit/desktop linux:assets` (scripts/make-linux-assets.mjs)
+# from build/linux/product.mjs and package.json's version. The inputs are
+# committed; the output is not, the same way build/icons/ is not.
+#
+# The rule lives here rather than in packages/desktop/.gitignore so that
+# everything the Linux packaging owns stays in one directory.
+generated/

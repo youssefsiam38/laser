@@ -28,6 +28,58 @@ the contract renders natively. That contract is
 - Architecture: [`docs/architecture.md`](docs/architecture.md)
 - Research: [`docs/research/findings.md`](docs/research/findings.md)
 
+## Install
+
+One command. It needs [`gh`](https://cli.github.com) signed in to an account
+with access to this repository, and nothing else — no Node, no npm, no package
+manager, no agent. The app carries its own runtime.
+
+```bash
+gh api repos/youssefsiam38/piorbit/contents/install.sh \
+  -H 'Accept: application/vnd.github.raw' > piorbit-install.sh \
+  && sh piorbit-install.sh
+```
+
+That downloads the release for your architecture, checks it against the
+checksums published with it **and** against GitHub's build provenance — the
+Sigstore signature binding those bytes to piorbit's release workflow, this
+repository and the commit it was built from — then unpacks it under `~/.local`
+and puts piorbit in your application menu. No root, and nothing outside your
+home directory. Run it again any time to upgrade; it says which version it
+moved from and to, and an upgrade that is interrupted puts the version you had
+back.
+
+Provenance is required, not advisory. A build with none is refused, and a build
+whose provenance does not verify is refused with no flag to override it. Only a
+release assembled by hand has no provenance, and installing one is a sentence
+you type on purpose: `--allow-unattested`.
+
+The script is downloaded and then read from disk rather than piped into a
+shell, so you can look at it first. That is the point of the two halves of the
+command, and `sh piorbit-install.sh --dry-run` prints every action it would take
+without taking any of them.
+
+```bash
+sh piorbit-install.sh --help                     # --version, --format, --prefix, --dry-run
+sh ~/.local/lib/piorbit/install.sh --uninstall   # removes exactly what it installed
+sh ~/.local/lib/piorbit/install.sh --uninstall --purge   # …and deletes your settings too
+```
+
+`piorbit` on your PATH is both things: on its own it opens the window, and with
+a word after it — `piorbit doctor`, `piorbit sessions` — it is the command
+below, running on the same bundled runtime as the app, against the same
+directory. Nothing about the app requires it.
+
+Uninstalling asks before it deletes your settings and paired devices, and
+leaves them alone if you say no — or if there is nobody to ask. `--yes` means
+"do not stop to ask me", never "delete my data"; deleting it is `--purge`, on
+its own, because a device identity and every pairing do not come back.
+
+Everything after that is inside the window: providers, models, projects,
+extensions and themes are all installed and configured from Settings. See
+[`scripts/release/README.md`](scripts/release/README.md) for how a release is
+built and what it contains.
+
 ## Layout
 
 ```

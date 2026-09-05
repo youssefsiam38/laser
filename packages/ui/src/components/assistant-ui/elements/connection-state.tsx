@@ -72,7 +72,7 @@ export function ConnectionState({ phase, attempt, first = false, onRetry, classN
           <StatusDot status="working" size="sm" label="Connecting" />
           <span className="font-medium text-ink">{first ? "Connecting to the host…" : "Reconnecting to the host…"}</span>
           <span className="hidden min-w-0 flex-1 truncate text-ink-2 sm:inline">
-            {first ? "The desktop host serves this page and runs Pi." : "Sessions resume from where they left off."}
+            {first ? "The desktop host serves this page and runs the agent." : "Sessions resume from where they left off."}
           </span>
           {attempt !== undefined && attempt > 1 && (
             <span className={cn(mono, "ms-auto shrink-0 text-ink-3")}>attempt {attempt}</span>

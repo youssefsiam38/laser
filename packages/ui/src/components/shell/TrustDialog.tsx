@@ -67,8 +67,8 @@ export function TrustDialog() {
             Trust {shortCwd(request.cwd)}?
           </DialogTitle>
           <DialogDescription>
-            This directory ships its own Pi configuration. Trusting it lets Pi load and run these files, with your
-            permissions, in every session you start here.
+            This directory ships its own agent configuration. Trusting it lets the agent load and run these files,
+            with your permissions, in every session you start here.
           </DialogDescription>
         </DialogHeader>
 
@@ -97,14 +97,14 @@ export function TrustDialog() {
             <span>
               Remember this decision for this directory.
               <span className="block text-xs text-ink-3">
-                Stored by piorbit. Pi&rsquo;s own <span className="font-mono">trust.json</span> is left alone.
+                Stored by piorbit, and only by piorbit. The agent&rsquo;s own trust list is left alone.
               </span>
             </span>
           </label>
 
           <p className="text-xs leading-4 text-ink-3">
-            Not now keeps the session working: Pi simply ignores this directory&rsquo;s settings, extensions, skills and
-            prompts.
+            Not now keeps the session working: the agent simply ignores this directory&rsquo;s settings, extensions,
+            skills and prompts.
           </p>
         </div>
 

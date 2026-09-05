@@ -21,7 +21,7 @@ page about something that spans commands.
   positionals: [{ name: "command|topic", description: "What to explain", optional: true }],
   examples: [
     { note: "everything piorbit can do", command: "piorbit help" },
-    { note: "how the Pi passthrough works", command: "piorbit help pi" },
+    { note: "how the `piorbit pi` passthrough works", command: "piorbit help pi" },
     { note: "what doctor checks", command: "piorbit help doctor" },
   ],
   async run({ term, args, commands }) {

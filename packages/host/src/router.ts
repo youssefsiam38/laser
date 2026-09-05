@@ -33,7 +33,9 @@ import {
 import type { AttentionTracker } from "./attention.js";
 import type { SessionCatalog } from "./catalog.js";
 import type { LogStore } from "./logstore.js";
+import { browseDirectories, type PackageService, type SetupService } from "./packages.js";
 import type { PanelHub } from "./panels/hub.js";
+import type { PrefsStore } from "./prefs.js";
 import type { ProjectRegistry } from "./projects.js";
 import type { PushService } from "./push.js";
 import type { SubagentsLayer } from "./subagents/layer.js";
@@ -70,6 +72,16 @@ export interface RouterDeps {
   subagents?: SubagentsLayer | undefined;
   /** Web Push (M7-T5). */
   push?: PushService | undefined;
+  /**
+   * Package policy (M10-T5): pins versions, verifies installs, keeps the lock,
+   * answers the catalog. When present it answers every `pi/packages/*` and
+   * forwards the mechanics to the worker itself; absent, they route as before.
+   */
+  packages?: PackageService | undefined;
+  /** First-run state (M10-T6). */
+  setup?: SetupService | undefined;
+  /** piorbit's own preferences (M11-T6). Host-owned; never Pi's settings file. */
+  prefs?: PrefsStore | undefined;
   /** The origin a phone opens, for the URLs inside a notification. */
   publicOrigin?: (() => string) | undefined;
 }
@@ -86,6 +98,18 @@ const CWD_ROUTED = new Set([
   "pi/packages/check_updates",
   "pi/providers/list",
   "pi/models/catalog",
+  // Signing in (M10-T6): every message names the cwd so the worker that holds
+  // the flow is the one that hears the answer.
+  "pi/providers/login/start",
+  "pi/providers/login/answer",
+  "pi/providers/login/cancel",
+  "pi/providers/logout",
+  // The keybindings file is global, not per project; `cwd` only picks a worker
+  // (the host imports no Pi, so only a worker can read the agent's own manager).
+  "pi/keybindings/get",
+  "pi/keybindings/set",
+  // The `@` popover's file list, answered by the worker that owns the directory.
+  "pi/project/files",
   // Dictation is per project: `status` and `begin` name a cwd; the id-carrying
   // chunk/end/cancel are routed by the upload table below.
   "pi/transcribe/status",
@@ -127,6 +151,18 @@ export class Router {
     } catch (error) {
       return { jsonrpc: "2.0", id, error: toRpcError(error) };
     }
+  }
+
+  private packages(): PackageService {
+    if (!this.deps.packages) {
+      throw new ProtocolError(ErrorCodes.Unsupported, "this host was started without package management");
+    }
+    return this.deps.packages;
+  }
+
+  private setup(): SetupService {
+    if (!this.deps.setup) throw new ProtocolError(ErrorCodes.Unsupported, "this host keeps no first-run state");
+    return this.deps.setup;
   }
 
   /** Catalog rows with attention (and `seenAt`) filled in, plus sessions no worker has persisted yet. */
@@ -261,6 +297,40 @@ export class Router {
           project: this.deps.projects.setTrust(req.params.cwd, req.params.trusted, req.params.remember ?? false),
         };
 
+      case "pi/project/browse":
+        return browseDirectories(req.params.path);
+
+      // ------------------------------------------------------------ M10-T5
+      // Packages: the host decides, the worker does. Without a PackageService
+      // the five original methods fall through to the worker unchanged.
+      case "pi/packages/catalog":
+        return this.packages().catalog(req.params);
+      case "pi/packages/runtime":
+        return this.packages().runtime();
+      case "pi/packages/records":
+        return { records: this.packages().records(req.params.cwd) };
+      case "pi/packages/install":
+        if (this.deps.packages) return this.deps.packages.install(req.params);
+        break;
+      case "pi/packages/remove":
+        if (this.deps.packages) return this.deps.packages.remove(req.params);
+        break;
+      case "pi/packages/update":
+        if (this.deps.packages) return this.deps.packages.update(req.params);
+        break;
+      case "pi/packages/check_updates":
+        if (this.deps.packages) return this.deps.packages.checkUpdates(req.params);
+        break;
+      case "pi/packages/list":
+        if (this.deps.packages) return this.deps.packages.list(req.params.cwd);
+        break;
+
+      // ------------------------------------------------------------ M10-T6
+      case "pi/setup/state":
+        return this.setup().state();
+      case "pi/setup/complete":
+        return this.setup().complete(req.params.completed);
+
       // ---------------------------------------------------------- workers
       case "pi/worker/list":
         return { workers: this.pool.workers() };
@@ -282,6 +352,17 @@ export class Router {
         return { stats: this.logs().stats() };
       case "pi/logs/clear":
         return { deleted: this.logs().clear(req.params.sections) };
+
+      // ------------------------------------------------------- preferences
+      case "pi/prefs/get": {
+        const store = this.prefs();
+        return {
+          entries: store.get(req.params.namespace),
+          revision: store.currentRevision,
+        };
+      }
+      case "pi/prefs/set":
+        return { entry: this.prefs().set(req.params.namespace, req.params.value) };
 
       // ------------------------------------------------------------ push
       case "pi/push/config":
@@ -318,7 +399,18 @@ export class Router {
       // `pi/panel/action` carries a session path and falls through to the
       // default: the worker that owns the session delivers it to the extension.
 
-      default: {
+      default:
+        break;
+    }
+    return this.forwardToWorker(req);
+  }
+
+  /**
+   * Anything the host does not answer itself goes to a worker: by `cwd` for the
+   * per-project methods, by upload id for dictation chunks, by session path
+   * for everything else.
+   */
+  private async forwardToWorker(req: TypedClientRequest): Promise<unknown> {
         // Settings, packages, providers and models are per project, not per
         // session: they name a cwd and go to that project's worker.
         if (CWD_ROUTED.has(req.method)) {
@@ -372,8 +464,6 @@ export class Router {
           }
         }
         return result;
-      }
-    }
   }
 
   /** The panel hub, or an error a person can act on. */
@@ -385,6 +475,17 @@ export class Router {
       );
     }
     return this.deps.panels;
+  }
+
+  /** The preference store, or an error a person can act on. */
+  private prefs(): PrefsStore {
+    if (!this.deps.prefs) {
+      throw new ProtocolError(
+        ErrorCodes.Unsupported,
+        "This host is running without a preference store, so it cannot remember settings like the theme.",
+      );
+    }
+    return this.deps.prefs;
   }
 
   /** The push service, or an error a person can act on. */

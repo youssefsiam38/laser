@@ -61,7 +61,7 @@ export function JsonView({ catalog, snapshot, scope, onApply }: JsonViewProps) {
     );
     if (unrepresentable.length > 0) {
       setProblem(
-        `piorbit can only write settings Pi ${catalog.piVersion} defines, and cannot apply your edits to ` +
+        `piorbit can only write settings the agent (${catalog.piVersion}) defines, and cannot apply your edits to ` +
           `${unrepresentable.slice(0, 6).join(", ")}${unrepresentable.length > 6 ? ", …" : ""}. ` +
           `Nothing was saved. Undo those edits, or edit ${file.path} directly.`,
       );
@@ -102,7 +102,7 @@ export function JsonView({ catalog, snapshot, scope, onApply }: JsonViewProps) {
 
       {file.error && (
         <p className="rounded-lg bg-[color-mix(in_oklab,var(--danger)_10%,transparent)] px-3 py-2 text-xs leading-5 text-danger">
-          Pi could not parse this file: {file.error}. piorbit will not overwrite a settings file it cannot read — fix it
+          This settings file is not valid JSON: {file.error}. piorbit will not overwrite a file it cannot read — fix it
           here or in your editor, then reload.
         </p>
       )}
@@ -132,7 +132,7 @@ export function JsonView({ catalog, snapshot, scope, onApply }: JsonViewProps) {
       />
       <p className="text-xs leading-4 text-ink-3">
         Saving sends only the settings that changed. Keys piorbit does not recognise are never rewritten, so a file
-        edited by a newer Pi stays intact.
+        edited by a newer version of the agent stays intact.
       </p>
     </div>
   );

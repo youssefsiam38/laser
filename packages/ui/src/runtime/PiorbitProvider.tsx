@@ -54,6 +54,7 @@ import {
 import { HostClient } from "../client.js";
 import { initialState, reduce, type Action, type AppState, type SessionView } from "../store.js";
 import { createThreadAdapter, sendToSession, type SendBehavior } from "./adapter.js";
+import { useThemeSync } from "./prefs.js";
 import { projectSessionView, shareProjectedMessages, splitDialogs } from "./projection.js";
 import {
   createArchiveStore,
@@ -387,6 +388,10 @@ export function PiorbitProvider({ children, url }: PiorbitProviderProps): ReactN
     client.connect();
     return () => client.close();
   }, [client]);
+
+  // The theme is host-owned (M11-T6): it arrives on connect and any device's
+  // change reaches the others, so a phone opens wearing what the desktop wears.
+  useThemeSync(client, state.connection === "open");
 
   const refreshSessions = useCallback(async () => {
     try {

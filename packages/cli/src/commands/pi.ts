@@ -64,7 +64,7 @@ export function splitPiArgs(raw: readonly string[]): PiPrefix {
 
 export const piCommand: Command = {
   name: "pi",
-  group: "Pi",
+  group: "Advanced",
   passthrough: true,
   summary: "run the Pi that piorbit pins, with piorbit's agent directory",
   usage: "piorbit pi [--global-pi] [--agent-dir <dir>] [-- ] <pi arguments...>",

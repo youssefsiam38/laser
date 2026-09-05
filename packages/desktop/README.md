@@ -59,6 +59,20 @@ own path as `process.execPath`. That assertion is M5-T2.
 To bump the version: change `version` in `runtime.json`, replace **every** hash
 from the new `SHASUMS256.txt`, delete `runtime/`, and re-run the command above.
 
+### …and the package manager inside it
+
+Settings installs extensions, which needs a package manager, and a person who
+installed a desktop app has no npm on PATH and must never be told to go and get
+one. So the same script lifts the npm that ships **inside that archive** into
+`runtime/<platform>-<arch>/npm/`, and `before-pack` stages it beside the binary.
+It is covered by the hash already pinned in `runtime.json`: one download, one
+check, nothing else to trust, and no second version to keep in step.
+
+`host-process.ts` sets `PIORBIT_NPM_CLI` to it, which is what the host's
+`detectInstallRuntime()` looks for first. In a development build that has not
+staged a runtime there is none, and the Extensions screen says installs are
+unavailable and why rather than reaching for the machine's own.
+
 ## Development
 
 ```bash
@@ -140,17 +154,33 @@ pnpm -F @piorbit/desktop dist     # installers for the current platform
 target's Node from `runtime/<platform>-<arch>/` into `build/runtime/`,
 downloading it if needed, so a clean build agent works.
 
-Two hard prerequisites:
+One hard prerequisite:
 
-1. **Build each platform on that platform.** `@napi-rs/keyring` installs a
-   prebuilt binary for the host platform only, and signing needs the platform's
-   own toolchain anyway. There is deliberately no macOS universal target: a
-   universal app would need a `lipo`-merged Node, and the update feed expects
-   per-architecture artifacts.
-2. **pnpm's isolated `node_modules` and electron-builder disagree.** Package
-   from a hoisted tree — `node-linker=hoisted` in `.npmrc` on the build agent,
-   or `pnpm deploy` into a staging directory — otherwise the symlinked store
-   produces an app whose dependencies do not resolve.
+**Build each platform and each architecture on hardware of that kind.** The
+bundled Node, the AppImage runtime and `@napi-rs/keyring`'s prebuilt binding are
+all per-target, and pnpm installs only the binding matching the machine it ran
+on. `scripts/release/build-linux.sh` refuses a cross-architecture build by name
+rather than producing an artifact that cannot start. There is deliberately no
+macOS universal target either: a universal app would need a `lipo`-merged Node.
+
+There used to be a second one — "package from a hoisted tree, because pnpm's
+isolated `node_modules` and electron-builder disagree". That was wrong, and
+believing it hid two real bugs for a while. electron-builder resolves pnpm's
+store into real files perfectly well (177 packages, zero symlinks); what it does
+not do is follow a dependency **no manifest declares**. Two of those were
+shipping:
+
+- `@earendil-works/pi-server`, which the agent's own bundle imports without
+  declaring — `pnpm-workspace.yaml`'s `packageExtensions` makes it *resolve*,
+  and only the installer understands that;
+- `@napi-rs/keyring`'s native binding, reached by a bare `require()` of a
+  per-platform sibling, which pnpm 10 does not hoist into view.
+
+Both are now declared (`packages/worker/package.json` and this package's
+`optionalDependencies`), and [`build/before-pack.cjs`](build/before-pack.cjs)
+fails the build for anything else of the same shape. A release is therefore
+built from a plain `pnpm install --frozen-lockfile` — the same tree the tests
+ran against, which is what "reproducible from a tag" has to mean.
 
 `appId` is `dev.piorbit.desktop` and **must never change**: it keys the macOS
 TCC grants (including the microphone), the Windows notification centre, and the
@@ -232,34 +262,91 @@ pnpm -F @piorbit/desktop dist -- --win --arm64
 
 Verify with `signtool verify /pa /v out\piorbit-…-setup.exe`.
 
-### Linux: AppImage
+### Linux: four formats
 
 ```bash
-pnpm -F @piorbit/desktop dist -- --linux --x64
+pnpm -F @piorbit/desktop dist:linux                        # every format, both arches
+pnpm -F @piorbit/desktop dist:linux -- --targets appimage,deb --arch x64
 ```
 
-No signing. `piorbit://` links come from the `.desktop` entry's
-`MimeType=x-scheme-handler/piorbit;`, which the AppImage registers when it is
-integrated with the desktop (AppImageLauncher, or a manual `.desktop` file). A
-`chmod +x` AppImage run straight from `~/Downloads` will not have deep links
-until it is integrated — that is the format, not a bug in piorbit.
+It prints a table of what it built and what each artifact needs from the host.
+`.rpm` needs `rpmbuild` (`sudo apt-get install rpm`); the script says so before
+it builds anything rather than failing an hour in.
+
+| Format | Root? | What the host must already have |
+| --- | --- | --- |
+| AppImage | no | a working FUSE and a `fusermount`/`fusermount3` |
+| `.deb` / `.rpm` | at install time | the declared shared libraries |
+| `.tar.gz` | no | glibc and the same libraries the deb names |
+
+**libfuse2 is not required.** `toolsets.appimage: "1.0.3"` is the current
+statically linked type-2 runtime, which links libfuse3 itself. On a host with no
+FUSE at all the runtime still cannot mount, and nothing inside an AppImage can
+help with that because the runtime is what runs first — `APPIMAGE_EXTRACT_AND_RUN=1`
+is the escape hatch, and the `.deb`, `.rpm` or tarball is the better answer.
+This is also why the root `install.sh` *extracts* an AppImage rather than
+installing the single file: `--appimage-extract` needs no FUSE at all.
+
+`piorbit://` works out of the box from the `.deb` and `.rpm` (their post-install
+runs `update-desktop-database`) and from the tarball once `piorbit-setup.sh` has
+run. A `chmod +x` AppImage started straight out of `~/Downloads` has no
+`.desktop` entry, so it has no deep links until it is integrated — that is the
+format, not a bug in piorbit. The one-line installer sidesteps it entirely by
+writing the entry itself.
+
+**The sandbox contract.** [`build/linux/launcher.sh`](build/linux/launcher.sh)
+is installed as `piorbit`, with Electron's own binary renamed `piorbit-bin`, so
+the menu entry, `/usr/bin/piorbit`, the AppImage's `AppRun` and `./piorbit` out
+of the tarball all run the same code. It never passes `--no-sandbox` on the
+person's behalf — it strips the one the AppImage runtime injects — and if the
+kernel offers no user namespace *and* there is no setuid helper it refuses to
+start with a written explanation (on stderr, and in a zenity/kdialog box when
+there is no terminal to read). `PIORBIT_DISABLE_SANDBOX=1` is the explicit, loud
+override.
+
+That launcher is also what decides **window or command**: a first argument that
+is an ordinary word goes to the bundled CLI on the bundled Node, so `piorbit
+doctor` typed in a terminal is the command and a `piorbit://` link or a Chromium
+flag is the window. `test/launcher.test.ts` holds that table.
+
+### The clean-machine check
+
+The packaging claims are checked against the built tree, not asserted:
+
+```bash
+pnpm -F @piorbit/desktop run pack        # note `run` — `pnpm pack` is a different command
+node packages/desktop/scripts/clean-machine.mjs
+```
+
+It empties `PATH`, points `HOME` at a throwaway directory containing a **decoy**
+agent installation, and then proves ten things: the runtime is a real file
+inside the package, the dependency tree is files rather than links, the agent
+resolves from inside the package and its whole graph loads, the version on disk
+is the one pinned in git, the decoy is found, named and left byte-identical, and
+`doctor`'s packaging rows all pass with nothing on PATH.
+
+`scripts/release/build-linux.sh` runs it as a gate before it copies a single
+artifact out. Both of the packaging bugs above were invisible to `pnpm -r test`
+and to `doctor` run from a checkout; only this found them.
+
+The app keeps everything in its own directory — `$XDG_DATA_HOME/piorbit` on
+Linux, `~/Library/Application Support/piorbit` on macOS, `%LOCALAPPDATA%\piorbit`
+on Windows. It never reads or writes a global agent directory: `PI_CODING_AGENT_DIR`
+and its siblings are *deleted* from the inherited environment rather than
+honoured, because in a desktop session they name the agent the person uses in
+their shell — the one thing piorbit must not adopt. `PIORBIT_AGENT_DIR` still
+wins, and that is the lever for someone who genuinely wants both to share.
 
 ### Updates
 
-`electron-updater` against GitHub Releases (`publish:` in
-`electron-builder.yml`). Publishing needs `GH_TOKEN` with `repo` scope:
-
-```bash
-GH_TOKEN=… pnpm -F @piorbit/desktop dist -- --publish always
-```
-
-Both `dmg` **and** `zip` are built for macOS: the updater needs the zip, people
+`electron-updater` against a feed named by `publish:` in
+`electron-builder.yml`. Both `dmg` **and** `zip` are built for macOS: the updater needs the zip, people
 download the dmg. The app checks 20 s after launch and every six hours,
 downloads quietly, and **never restarts by itself** — an agent may be mid-turn.
 The tray offers "Restart to update", and `autoInstallOnAppQuit` picks it up on
 the next ordinary quit.
 
-**Updates are off until a public feed exists.** `publish` is `null` in
+**Updates are off until a public feed exists (D-31, D-35, M10-T10).** `publish` is `null` in
 `electron-builder.yml`, so no `app-update.yml` ships and the app reports
 `unsupported` — "this build has no update feed" — rather than an error it
 cannot recover from. The feed it used to name is this private repository, and
@@ -283,3 +370,10 @@ platform in question and is untested:
   unit tests);
 - the tray's appearance in a real menu bar, notification banners, and updating
   from version A to version B.
+
+Linux **is** verified, on this machine: the four formats build, the clean-machine
+check passes against the packaged tree, `install.sh` installs the real artifact
+into a throwaway prefix and the app launches from the entry it wrote. What is
+not verified on Linux is the arm64 half of every artifact (no arm64 hardware
+here) and `extractZipDir` in `scripts/fetch-node.mjs`, which only the Windows
+archives take.

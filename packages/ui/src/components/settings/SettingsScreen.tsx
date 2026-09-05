@@ -13,7 +13,7 @@
  * scope that has nothing to do with it.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, RefreshCw, Search } from "lucide-react";
+import { AlertTriangle, RefreshCw, Search, Sparkles } from "lucide-react";
 
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
 import { Badge } from "@/components/ui/badge";
@@ -29,7 +29,7 @@ import { NotificationsSetting } from "@/components/mobile";
 import { AppearanceTab } from "./appearance/AppearanceTab.js";
 import { KeyboardTab } from "./KeyboardTab.js";
 import { ModelsTab } from "./ModelsTab.js";
-import { PackagesTab } from "./PackagesTab.js";
+import { PackagesScreen } from "./packages/PackagesScreen.js";
 import { SettingsForm } from "./SettingsForm.js";
 import { TrustTab } from "./TrustTab.js";
 
@@ -43,23 +43,54 @@ type Tab = "settings" | "appearance" | "packages" | "models" | "keyboard" | "tru
  */
 const PROJECTLESS: readonly Tab[] = ["appearance", "keyboard", "trust", "device"];
 
+/**
+ * Extensions "for every project" and the provider/model settings are global —
+ * they are only *routed* by directory, because every settings method is. So
+ * before a project exists they go through the directory the host keeps for
+ * exactly that purpose (`pi/setup/state`, the same one the first-run flow
+ * uses). Without this, the person most likely to want them — someone who has
+ * just installed piorbit and has no project yet — is the one person who
+ * cannot reach them.
+ */
+const GLOBAL_THROUGH_SETUP: readonly Tab[] = ["packages", "models"];
+
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "settings", label: "All settings" },
   { id: "appearance", label: "Appearance" },
-  { id: "packages", label: "Packages" },
+  { id: "packages", label: "Extensions" },
   { id: "models", label: "Providers and models" },
   { id: "keyboard", label: "Keyboard" },
   { id: "trust", label: "Trust" },
   { id: "device", label: "This device" },
 ];
 
-export function SettingsScreen({ cwd }: { cwd: string | undefined }) {
+export function SettingsScreen({ cwd: project }: { cwd: string | undefined }) {
   const { client, actions } = usePiorbitStable();
   const [tab, setTab] = useState<Tab>("settings");
+  const [setupCwd, setSetupCwd] = useState<string>();
   const [catalog, setCatalog] = useState<SettingsCatalog>();
   const [snapshot, setSnapshot] = useState<SettingsSnapshot>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
+
+  // The host's project-less directory, fetched once and only when it is needed.
+  useEffect(() => {
+    if (project || setupCwd) return;
+    let cancelled = false;
+    void client
+      .request("pi/setup/state", {})
+      .then((state) => {
+        if (!cancelled) setSetupCwd(state.cwd);
+      })
+      .catch(() => {
+        // An older host has no setup state; the tabs then say a project is needed.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, project, setupCwd]);
+
+  const cwd = project ?? (GLOBAL_THROUGH_SETUP.includes(tab) ? setupCwd : undefined);
 
   const load = useCallback(async () => {
     if (!cwd) return;
@@ -149,8 +180,8 @@ export function SettingsScreen({ cwd }: { cwd: string | undefined }) {
       <div className="min-h-0 flex-1">
         {needsProject ? (
           <Empty
-            title="No project selected"
-            body="Pi keeps settings per project as well as globally, so piorbit needs to know which project you mean. Pick one in the rail, or add a directory. Appearance, Keyboard, Trust and This device do not need one."
+            title="Open a project first"
+            body="These settings are kept per project as well as globally, so piorbit needs to know which project you mean. Pick one in the rail, or add one. Extensions, Providers and models, Appearance, Keyboard, Trust and This device all work without one."
           />
         ) : (
           <>
@@ -158,9 +189,9 @@ export function SettingsScreen({ cwd }: { cwd: string | undefined }) {
               <SettingsForm catalog={catalog} snapshot={snapshot} onApply={apply} />
             )}
             {tab === "appearance" && <AppearanceTab />}
-            {tab === "packages" && cwd && <PackagesTab cwd={cwd} snapshot={snapshot} onSettingsChanged={load} />}
+            {tab === "packages" && cwd && <PackagesScreen cwd={cwd} snapshot={snapshot} onSettingsChanged={load} />}
             {tab === "models" && cwd && <ModelsTab cwd={cwd} snapshot={snapshot} onApply={apply} />}
-            {tab === "keyboard" && <KeyboardTab />}
+            {tab === "keyboard" && <KeyboardTab cwd={cwd} />}
             {tab === "trust" && <TrustTab />}
             {tab === "device" && <DeviceTab />}
           </>
@@ -171,17 +202,60 @@ export function SettingsScreen({ cwd }: { cwd: string | undefined }) {
 }
 
 /**
- * Settings that belong to this browser rather than to a project. Today that is
- * notifications; anything else per-device lands here rather than growing a
- * fourth place to look.
+ * Settings that belong to this browser rather than to a project: notifications,
+ * and the way back into first-run setup.
  */
 function DeviceTab() {
   return (
     <ScrollArea className="h-full">
       <div className="mx-auto flex max-w-160 flex-col gap-6 px-6 py-6">
         <NotificationsSetting />
+        <RunSetupAgain />
       </div>
     </ScrollArea>
+  );
+}
+
+/**
+ * The way back in. "Skip setup" on the welcome screen used to be permanent —
+ * the flow is gated on one flag on the host and nothing in the app ever
+ * cleared it — so one mis-click meant a new person never saw the onboarding
+ * again. This clears it; the shell picks the change up on its next read.
+ */
+function RunSetupAgain() {
+  const { client, actions } = usePiorbitStable();
+  const [running, setRunning] = useState(false);
+
+  const run = async () => {
+    setRunning(true);
+    try {
+      await client.request("pi/setup/complete", { completed: false });
+      actions.toast("info", "Setup will start again the next time piorbit opens with no session.");
+    } catch (error) {
+      actions.toast("error", error instanceof Error ? error.message : String(error));
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <section data-slot="run-setup-again" aria-labelledby="setup-again-title" className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <Sparkles aria-hidden="true" className="size-4 text-ink-3" />
+        <h3 id="setup-again-title" className="text-base font-medium text-ink">
+          Setup
+        </h3>
+      </div>
+      <p className="text-sm leading-6 text-ink-2">
+        The steps you saw the first time piorbit opened: connect a provider, choose a model, open a project. Nothing is
+        undone by running them again — anything already set up is skipped.
+      </p>
+      <div>
+        <Button type="button" size="sm" variant="ghost" disabled={running} onClick={() => void run()}>
+          Run setup again
+        </Button>
+      </div>
+    </section>
   );
 }
 
@@ -230,6 +304,6 @@ export function SearchInput({
 export function OriginBadge({ origin }: { origin: "project" | "global" | "default" | "unset" }) {
   if (origin === "project") return <Badge variant="live">project</Badge>;
   if (origin === "global") return <Badge variant="outline">global</Badge>;
-  if (origin === "default") return <Badge variant="default">Pi default</Badge>;
+  if (origin === "default") return <Badge variant="default">default</Badge>;
   return <Badge variant="outline">not set</Badge>;
 }

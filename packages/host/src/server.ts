@@ -26,15 +26,17 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
-import { homedir } from "node:os";
 import { basename, extname, join, normalize, resolve as resolvePath, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@piorbit/crypto";
 import { decisionPushPayload, type HostNotifications, type JsonRpcNotification, type LogEntry, type SessionUpdateParams } from "@piorbit/protocol";
 import { AttentionTracker } from "./attention.js";
+import { PrefsStore } from "./prefs.js";
 import { SessionCatalog, defaultSessionDir } from "./catalog.js";
 import { LogStore } from "./logstore.js";
+import { PackageService, SetupService } from "./packages.js";
 import { PanelHub } from "./panels/hub.js";
+import { defaultAgentDir, defaultStateDir } from "./paths.js";
 import { ProjectRegistry } from "./projects.js";
 import { PushService } from "./push.js";
 import { subagentsTempRoots } from "./subagents/file-layer.js";
@@ -149,15 +151,14 @@ export function defaultUiDir(): string | undefined {
   }
 }
 
-export function defaultStateDir(): string {
-  return join(homedir(), ".piorbit");
-}
-
 export class HostServer {
   readonly pool: WorkerPool;
   readonly catalog: SessionCatalog;
   readonly attention: AttentionTracker;
   readonly projects: ProjectRegistry;
+  /** Package policy (M10-T5) and first-run state (M10-T6). */
+  readonly packages: PackageService;
+  readonly setup: SetupService;
   readonly views: ViewCache;
   /** M4 log store, or undefined when it could not be opened (see `logsUnavailable`). */
   readonly logs: LogStore | undefined;
@@ -168,6 +169,8 @@ export class HostServer {
   readonly subagents: SubagentsLayer;
   /** Web Push to paired phones (M7-T5). Inert until a device subscribes. */
   readonly push: PushService;
+  /** piorbit's own preferences (M11-T6) — the theme among them. */
+  readonly prefs: PrefsStore;
   readonly router: Router;
   private readonly http: Server;
   private readonly wss: WebSocketServer;
@@ -189,7 +192,7 @@ export class HostServer {
   constructor(private readonly options: HostServerOptions = {}) {
     this.log = options.log ?? (() => {});
     this.uiDir = options.uiDir ?? defaultUiDir();
-    const agentDir = options.agentDir ?? join(homedir(), ".pi", "agent");
+    const agentDir = options.agentDir ?? defaultAgentDir();
     const stateDir = options.stateDir ?? defaultStateDir();
 
     // The log store is a nice-to-have: a host that cannot open SQLite still
@@ -247,8 +250,29 @@ export class HostServer {
 
     this.push = new PushService({ agentDir, log: (line) => this.log(line) });
 
+    // Host-owned, so a theme chosen on the desktop is the theme a paired phone
+    // opens with. Every client hears the change, including the one that made it.
+    this.prefs = new PrefsStore({
+      storePath: join(stateDir, "prefs.json"),
+      onChange: (entry) => this.notify("pi/prefs/updated", entry),
+    });
+
+    // The host resolves the package manager the workers should use — the one
+    // the packaged app bundles, or the one on PATH on a developer machine —
+    // and hands it down as environment (M10-T5). Settings still win inside.
+    this.packages = new PackageService({
+      agentDir,
+      stateDir,
+      forward: async (cwd, method, params) => (await this.pool.get(cwd)).request(method, params),
+      log: (line) => this.log(line),
+    });
+    this.setup = new SetupService({ stateDir });
+    const npmCommand = this.packages.npmCommand();
+    this.log(npmCommand ? `packages: installer ${npmCommand.join(" ")}` : "packages: no installer found; installs will be refused with a reason");
+
     const poolOptions: WorkerPoolOptions = {
       ...(options.agentDir ? { agentDir: options.agentDir } : {}),
+      ...(npmCommand ? { env: { PIORBIT_NPM_COMMAND: JSON.stringify(npmCommand) } } : {}),
       ...(options.sessionDir ? { sessionDir: options.sessionDir } : {}),
       ...(options.subagentsTempRoot ? { subagentsTempRoot: options.subagentsTempRoot } : {}),
       ...(options.workerMain ? { workerMain: options.workerMain } : {}),
@@ -310,7 +334,10 @@ export class HostServer {
       panels: this.panels,
       subagents: this.subagents,
       push: this.push,
+      prefs: this.prefs,
       publicOrigin: () => this.publicOrigin(),
+      packages: this.packages,
+      setup: this.setup,
     });
 
     this.http = createServer((req, res) => this.serveHttp(req, res));
@@ -410,6 +437,7 @@ export class HostServer {
     this.logs?.close();
     this.projects.close();
     this.attention.close();
+    this.prefs.close();
     for (const ws of this.clients) ws.close(1001, "host shutting down");
     this.clients.clear();
     this.attached.clear();

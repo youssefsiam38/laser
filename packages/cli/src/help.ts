@@ -43,7 +43,7 @@ function flagLines(specs: FlagSpecs, paint: Painter): string[] {
 export function renderRootHelp(commands: readonly Command[], term: Terminal): void {
   const p = term.out;
   const visible = commands.filter((command) => !command.hidden);
-  const groups = ["Host", "Sessions", "Projects", "Relay", "Pi", "Diagnostics", "Shell"] as const;
+  const groups = ["Host", "Sessions", "Projects", "Relay", "Advanced", "Diagnostics", "Shell"] as const;
 
   say(term, `${p.bold("piorbit")} ${p.dim(CLI_VERSION)} — start, inspect and drive piorbit from a terminal.`);
   say(term);

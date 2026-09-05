@@ -22,7 +22,7 @@
  * it renders agent output, and a link the agent wrote must open in the person's
  * browser — never inside a window holding `window.piorbit`.
  */
-import { BrowserWindow, nativeTheme, screen, shell, type BrowserWindowConstructorOptions } from "electron";
+import { BrowserWindow, clipboard, dialog, nativeTheme, screen, shell, type BrowserWindowConstructorOptions } from "electron";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -395,6 +395,40 @@ export class WindowManager {
   }
 
   /**
+   * Hand a link to the person's browser, and say so when that fails.
+   *
+   * `shell.openExternal` rejects on a machine with no `xdg-open` and no portal
+   * — a minimal desktop, a container, a kiosk. Dropping that rejection is how
+   * provider sign-in becomes a dead end: the person clicks "Sign in", nothing
+   * appears, and there is no URL anywhere to paste into a browser by hand. So
+   * the failure gets a dialog with the address in it and a button that copies
+   * it, which is the one thing that still lets them finish.
+   */
+  private openInBrowser(window: BrowserWindow, url: string): void {
+    void shell.openExternal(url).catch((error: unknown) => {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.options.log.line(`could not open ${url.slice(0, 120)} in a browser: ${reason}`);
+      void dialog
+        .showMessageBox(window, {
+          type: "warning",
+          title: "piorbit could not open your browser",
+          message: "piorbit could not open your browser",
+          detail:
+            `This computer has no program registered to open web links, so piorbit could not hand this address over:\n\n${url}\n\n` +
+            `Copy it and paste it into a browser to carry on.`,
+          buttons: ["Copy the address", "Close"],
+          defaultId: 0,
+          cancelId: 1,
+          noLink: true,
+        })
+        .then((answer) => {
+          if (answer.response === 0) clipboard.writeText(url);
+        })
+        .catch(() => {});
+    });
+  }
+
+  /**
    * Everything a window is not allowed to do. `setWindowOpenHandler` and
    * `will-navigate` together mean a link in agent output opens in the person's
    * browser and can never take over a window that has `window.piorbit`.
@@ -402,7 +436,7 @@ export class WindowManager {
   private harden(window: BrowserWindow): void {
     const { log } = this.options;
     window.webContents.setWindowOpenHandler(({ url }) => {
-      if (/^https?:/i.test(url)) void shell.openExternal(url);
+      if (/^https?:/i.test(url)) this.openInBrowser(window, url);
       else log.line(`refused to open ${url.slice(0, 120)}`);
       return { action: "deny" };
     });
@@ -415,7 +449,7 @@ export class WindowManager {
       // the whole `window.piorbit` bridge.
       if (origin && sameOrigin(url, origin)) return;
       event.preventDefault();
-      if (/^https?:/i.test(url)) void shell.openExternal(url);
+      if (/^https?:/i.test(url)) this.openInBrowser(window, url);
       else log.line(`refused navigation to ${url.slice(0, 120)}`);
     });
     // Reload a crashed renderer, but only once in a while: a page that crashes

@@ -34,15 +34,20 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { createCommandBus, createPiorbitExtension } from "@piorbit/pi-extension";
 import type {
+  CommandInfo,
   ContentBlock,
   ImageContent,
+  MessageSpeaker,
   ModelRef,
   PiExtensionCommand,
+  PromptInfo,
   SessionState,
   SessionUpdate,
+  StopReason,
   ThinkingLevel,
   UiDialogRequest,
   UiDialogResponse,
+  Usage,
 } from "@piorbit/protocol";
 import {
   DriverUnavailableError,
@@ -64,7 +69,7 @@ export class StableSdkDriver implements SessionDriver {
   /** Fallback for `AgentState.pendingToolCalls`, derived from the event stream. */
   private readonly toolCalls = new PendingToolCallTracker();
   /** Worker → companion extension. `deliver` answers whether a module took it. */
-  private readonly commands = createCommandBus();
+  private readonly extensionBus = createCommandBus();
   private runtime: AgentSessionRuntime | undefined;
   private unsubscribe: (() => void) | undefined;
   private cwd = "";
@@ -90,7 +95,7 @@ export class StableSdkDriver implements SessionDriver {
     const agentDir = options.agentDir ?? getAgentDir();
     const piorbit = createPiorbitExtension({
       send: (message) => this.emit({ type: "extension", message }),
-      commands: this.commands,
+      commands: this.extensionBus,
     });
 
     const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
@@ -310,8 +315,64 @@ export class StableSdkDriver implements SessionDriver {
     this.ui.respond(response);
   }
 
+  /**
+   * Everything `/` can run here. Three sources, in the order the popover
+   * groups them: the commands packages registered (`pi.registerCommand`), the
+   * prompt templates loaded from disk, and the skills.
+   *
+   * Pi's own `BUILTIN_SLASH_COMMANDS` (`/model`, `/settings`, `/tree`,
+   * `/thinking`) are deliberately not here: they open Pi's terminal pickers,
+   * which this app never runs. piorbit has its own controls for every one of
+   * them and offers those instead, rather than a row that would do nothing.
+   */
+  async commands(): Promise<CommandInfo[]> {
+    const session = this.session();
+    const commands: CommandInfo[] = [];
+    for (const command of session.extensionRunner.getRegisteredCommands()) {
+      commands.push({
+        name: command.invocationName,
+        source: "extension",
+        ...(command.description ? { description: command.description } : {}),
+        ...(originOf(command.sourceInfo) ? { origin: originOf(command.sourceInfo)! } : {}),
+      });
+    }
+    for (const prompt of session.promptTemplates) {
+      commands.push({
+        name: prompt.name,
+        source: "prompt",
+        ...(prompt.description ? { description: prompt.description } : {}),
+        ...(prompt.argumentHint ? { argumentHint: prompt.argumentHint } : {}),
+        ...(originOf(prompt.sourceInfo) ? { origin: originOf(prompt.sourceInfo)! } : {}),
+      });
+    }
+    for (const skill of session.resourceLoader.getSkills().skills) {
+      // Pi invokes a skill as `/skill:<name>`; the popover shows exactly what
+      // gets typed, so what a person reads is what the agent receives.
+      if (skill.disableModelInvocation) continue;
+      commands.push({
+        name: `skill:${skill.name}`,
+        source: "skill",
+        ...(skill.description ? { description: skill.description } : {}),
+        ...(originOf(skill.sourceInfo) ? { origin: originOf(skill.sourceInfo)! } : {}),
+      });
+    }
+    return commands;
+  }
+
+  /** The prompt library: the markdown templates Pi loaded for this session. */
+  async prompts(): Promise<PromptInfo[]> {
+    return this.session().promptTemplates.map((prompt) => ({
+      name: prompt.name,
+      description: prompt.description,
+      ...(prompt.argumentHint ? { argumentHint: prompt.argumentHint } : {}),
+      filePath: prompt.filePath,
+      origin: originOf(prompt.sourceInfo) ?? "prompt",
+      preview: preview(prompt.content),
+    }));
+  }
+
   deliverExtensionCommand(command: PiExtensionCommand): boolean {
-    return this.commands.deliver(command);
+    return this.extensionBus.deliver(command);
   }
 
   /** Dialogs still waiting for an answer, for replay after a client reconnect. */
@@ -470,6 +531,85 @@ function roleOf(message: unknown): "user" | "assistant" | "tool" | "custom" {
   return "custom";
 }
 
+/**
+ * Where a command, prompt or skill came from, in words a person can read.
+ *
+ * Pi's `SourceInfo` is built for Pi: `source` is the package name for a
+ * package and an internal marker ("auto") otherwise, and `scope` is
+ * user/project/temporary. A row in a popover wants the package's name when
+ * there is one and "yours" or "this project" when there is not — never
+ * "auto", which tells the reader nothing.
+ */
+function originOf(sourceInfo: unknown): string | undefined {
+  const info = sourceInfo as { source?: unknown; scope?: unknown; origin?: unknown } | null;
+  const source = typeof info?.source === "string" ? info.source.trim() : "";
+  if (info?.origin === "package" && source !== "") return source;
+  if (info?.scope === "project") return "this project";
+  if (info?.scope === "user") return "yours";
+  return undefined;
+}
+
+/** The first few lines of a template, for the row's second line. Never the file. */
+function preview(content: string): string {
+  return content.replace(/\s+/g, " ").trim().slice(0, 300);
+}
+
+/**
+ * Why an assistant turn ended, straight off Pi's `AssistantMessage`.
+ *
+ * `stopReason` is Pi's own vocabulary and the protocol mirrors it name for
+ * name, so the only work here is refusing a value we do not recognise rather
+ * than putting a string on the wire that the schema never promised.
+ */
+const STOP_REASONS = new Set<StopReason>(["pending", "stop", "length", "toolUse", "error", "aborted", "deferred"]);
+
+function stopReasonOf(message: unknown): StopReason | undefined {
+  const reason = (message as { stopReason?: unknown } | null)?.stopReason;
+  return typeof reason === "string" && STOP_REASONS.has(reason as StopReason) ? (reason as StopReason) : undefined;
+}
+
+/**
+ * This turn's token counts. Pi's `Usage` is a superset of the protocol's, so
+ * the extra fields (`reasoning`, `cacheWrite1h`) are dropped rather than
+ * smuggled through as unknown keys.
+ */
+function usageOf(message: unknown): Usage | undefined {
+  const usage = (message as { usage?: unknown } | null)?.usage;
+  if (!usage || typeof usage !== "object") return undefined;
+  const u = usage as Partial<Usage> & { cost?: Usage["cost"] };
+  const n = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) ? value : 0);
+  return {
+    input: n(u.input),
+    output: n(u.output),
+    cacheRead: n(u.cacheRead),
+    cacheWrite: n(u.cacheWrite),
+    totalTokens: n(u.totalTokens),
+    ...(u.cost ? { cost: u.cost } : {}),
+  };
+}
+
+/**
+ * Who is speaking, when it is not this session's own agent.
+ *
+ * Pi 0.85 has exactly one way for a child run to put words into a session it
+ * did not start: `pi.sendMessage()`, which lands as a `CustomMessage` carrying
+ * a `customType` and free-form `details`. pi-subagents names the child agent in
+ * there, so that is what this reads. An assistant or user message is the
+ * session's own voice and carries no speaker at all — the transcript draws no
+ * header for it, which is the behaviour `speaker-identity` documents.
+ */
+function speakerOf(message: unknown): MessageSpeaker | undefined {
+  const m = message as { role?: string; customType?: string; details?: unknown } | null;
+  if (m?.role !== "custom") return undefined;
+  const details = (m.details ?? {}) as Record<string, unknown>;
+  const str = (value: unknown): string | undefined =>
+    typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+  const name = str(details["agent"]) ?? str(details["handle"]) ?? str(details["subagent"]) ?? str(details["name"]);
+  if (!name) return undefined;
+  const detail = str(details["model"]) ?? str(details["role"]) ?? str(details["runId"]);
+  return { kind: "subagent", name, ...(detail !== undefined ? { detail } : {}) };
+}
+
 /** Pi event → protocol update. Returns undefined for events with no wire form. Exported for tests. */
 export function mapEvent(event: AgentSessionEvent): SessionUpdate | undefined {
   switch (event.type) {
@@ -483,10 +623,28 @@ export function mapEvent(event: AgentSessionEvent): SessionUpdate | undefined {
       return { kind: "turn_start" };
     case "turn_end":
       return { kind: "turn_end" };
-    case "message_start":
-      return { kind: "message_start", role: roleOf(event.message) };
-    case "message_end":
-      return { kind: "message_end", message: event.message };
+    case "message_start": {
+      const speaker = speakerOf(event.message);
+      return { kind: "message_start", role: roleOf(event.message), ...(speaker ? { speaker } : {}) };
+    }
+    case "message_end": {
+      // The named fields are the ones the UI must not have to dig for: why the
+      // turn stopped (the stopped-run row), what it cost (the turn's usage) and
+      // who said it. `message` still carries Pi's whole entry beside them.
+      const speaker = speakerOf(event.message);
+      const stopReason = stopReasonOf(event.message);
+      const usage = usageOf(event.message);
+      const errorMessage = (event.message as { errorMessage?: unknown }).errorMessage;
+      return {
+        kind: "message_end",
+        message: event.message,
+        role: roleOf(event.message),
+        ...(speaker ? { speaker } : {}),
+        ...(stopReason !== undefined ? { stopReason } : {}),
+        ...(typeof errorMessage === "string" && errorMessage !== "" ? { errorMessage } : {}),
+        ...(usage ? { usage } : {}),
+      };
+    }
     case "message_update": {
       // Serialized updates carry deltas only; clients assemble text themselves.
       const inner = event.assistantMessageEvent;

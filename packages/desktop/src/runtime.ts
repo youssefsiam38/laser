@@ -15,7 +15,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export interface NodeRuntime {
@@ -25,6 +25,16 @@ export interface NodeRuntime {
   execPath: string;
   /** Where it came from, for the log and for the settings screen. */
   source: "bundled" | "override" | "path";
+  /**
+   * The package manager staged beside it, when there is one.
+   *
+   * piorbit installs extensions from Settings, and the person who installed a
+   * desktop app has no npm on PATH. `build/before-pack.cjs` stages the one that
+   * ships inside the pinned Node archive next to the binary, so this is a
+   * sibling lookup rather than a search: found here, or the app says installs
+   * are unavailable and why, and never quietly reaches for the machine's own.
+   */
+  npmCli?: string;
 }
 
 export class RuntimeError extends Error {
@@ -50,11 +60,17 @@ function candidates(options: { packaged: boolean; resourcesPath: string }): Arra
     // electron-builder copies runtime/<platform>-<arch>/ to resources/runtime/,
     // outside app.asar — an archive is not something a kernel can execute.
     found.push({ path: join(options.resourcesPath, "runtime", binaryName), source: "bundled" });
-  } else {
-    const devRuntime = fileURLToPath(new URL("../runtime/", import.meta.url));
-    found.push({ path: join(devRuntime, `${process.platform}-${process.arch}`, binaryName), source: "bundled" });
+    // …and nothing else. The whole claim of a packaged build is that it
+    // resolves no runtime from the machine it lands on: an app that quietly
+    // fell back to whatever `node` is on PATH would run the agent on an
+    // unpinned version, and the person would never be told. If the bundled one
+    // is missing the install is broken, and `resolveNodeRuntime` says exactly
+    // that. `PIORBIT_NODE` above stays the deliberate override.
+    return found;
   }
 
+  const devRuntime = fileURLToPath(new URL("../runtime/", import.meta.url));
+  found.push({ path: join(devRuntime, `${process.platform}-${process.arch}`, binaryName), source: "bundled" });
   for (const dir of (process.env["PATH"] ?? "").split(delimiter)) {
     if (dir) found.push({ path: join(dir, binaryName), source: "path" });
   }
@@ -109,7 +125,14 @@ export function resolveNodeRuntime(options: { packaged: boolean; resourcesPath: 
     const report = probeNode(candidate.path);
     if (!report) continue;
     if (report.electron) continue; // Electron pretending to be node: exactly what we must not use.
-    return { binary: candidate.path, version: report.version, execPath: report.execPath, source: candidate.source };
+    const npmCli = join(dirname(candidate.path), "npm", "bin", "npm-cli.js");
+    return {
+      binary: candidate.path,
+      version: report.version,
+      execPath: report.execPath,
+      source: candidate.source,
+      ...(existsSync(npmCli) ? { npmCli } : {}),
+    };
   }
 
   if (options.packaged) {

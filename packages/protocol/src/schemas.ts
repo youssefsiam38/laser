@@ -8,6 +8,7 @@
  */
 import { z } from "zod";
 import { ErrorCodes, type JsonRpcRequest } from "./jsonrpc.js";
+import { PREFS_MAX_BYTES } from "./messages.js";
 import type { ClientMethod, ClientRequests } from "./messages.js";
 import {
   DEFAULT_INTENT,
@@ -54,6 +55,13 @@ const cwd = z.string().min(1);
 export const settingsScopeSchema = z.enum(["global", "project"]);
 export const packageScopeSchema = z.enum(["user", "project"]);
 export const logSectionSchema = z.enum(["provider", "tools", "session", "subagents", "host"]);
+export const providerLoginMethodSchema = z.enum(["oauth", "api_key"]);
+/** An exact release: `1.2.3`, `1.2.3-beta.1`. Ranges are the host's job to resolve, never a caller's to send. */
+export const exactVersion = z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/, {
+  message: "must be an exact version such as 1.2.3",
+});
+const providerId = z.string().min(1).max(100);
+const loginId = z.string().min(1).max(100);
 export const logLevelSchema = z.enum(["debug", "info", "warn", "error"]);
 
 /**
@@ -437,6 +445,65 @@ const uploadId = z.string().min(1).max(80);
 /** 32 KiB decoded is ~43.7 KiB of base64; the cap leaves room for the envelope. */
 const audioChunk = z.string().max(64 * 1024);
 
+// ---------- M11 prefs / M4-T7 keybindings / composer sources ----------
+
+/**
+ * A preference namespace is a short, flat, lower-case id. Flat on purpose: a
+ * namespace is a filing drawer, not a path, so there is nothing here that could
+ * ever be mistaken for a filesystem or a prototype chain.
+ */
+export const prefsNamespaceSchema = z
+  .string()
+  .min(1)
+  .max(40)
+  .regex(/^[a-z][a-z0-9-]*$/, { message: "must be lower-case letters, digits and dashes, starting with a letter" });
+
+/**
+ * The value is whatever the owning feature stores; the host never reads inside
+ * it. What is checked is that it is JSON at all and that it is small — a
+ * preference that does not fit in a quarter of a megabyte is not a preference.
+ */
+export const prefsValueSchema = z.unknown().superRefine((value, ctx) => {
+  if (value === undefined) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "must be JSON, or null to clear the namespace" });
+    return;
+  }
+  let text: string;
+  try {
+    text = JSON.stringify(value) ?? "";
+  } catch {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "must be JSON (it could not be serialised)" });
+    return;
+  }
+  if (Buffer.byteLength(text, "utf8") > PREFS_MAX_BYTES) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: `must be at most ${PREFS_MAX_BYTES} bytes of JSON` });
+  }
+});
+
+/** A binding id as the agent spells it: dotted, lower-case-ish, no separators of its own. */
+export const keybindingIdSchema = z
+  .string()
+  .min(1)
+  .max(120)
+  .regex(/^[A-Za-z][A-Za-z0-9]*(\.[A-Za-z][A-Za-z0-9]*)*$/, { message: "must be a dotted binding id such as app.interrupt" });
+
+/**
+ * One chord as the agent writes it: `ctrl+shift+f`, `enter`, `alt+backspace`.
+ * Refusing anything else here means the writer never puts a string the agent
+ * cannot parse into the person's keybindings file.
+ */
+export const keyIdSchema = z
+  .string()
+  .min(1)
+  .max(60)
+  // Printable ASCII with no spaces: `ctrl+shift+f`, `alt+backspace`, `ctrl+]`.
+  .regex(/^[!-~]+$/, { message: "must be a key such as ctrl+shift+f, with no spaces" });
+
+export const keybindingChangeSchema = z.union([
+  z.object({ id: keybindingIdSchema, op: z.literal("set"), keys: z.array(keyIdSchema).min(1).max(8) }).strict(),
+  z.object({ id: keybindingIdSchema, op: z.literal("reset") }).strict(),
+]);
+
 // ---------- client → host request params, one per method ----------
 
 export const clientParamsSchemas = {
@@ -476,6 +543,7 @@ export const clientParamsSchemas = {
     .object({ cwd: z.string().min(1), trusted: z.boolean(), remember: z.boolean().optional() })
     .strict(),
   "pi/project/git": z.object({ cwd: z.string().min(1), path: sessionPath.optional() }).strict(),
+  "pi/project/browse": z.object({ path: z.string().min(1).max(4096).optional() }).strict(),
 
   "pi/worker/list": z.object({}).strict(),
   "pi/worker/restart": z.object({ cwd: z.string().min(1) }).strict(),
@@ -489,13 +557,30 @@ export const clientParamsSchemas = {
     .strict(),
 
   "pi/packages/list": z.object({ cwd }).strict(),
-  "pi/packages/install": z.object({ cwd, source: z.string().min(1).max(500), scope: packageScopeSchema }).strict(),
+  "pi/packages/install": z
+    .object({ cwd, source: z.string().min(1).max(500), scope: packageScopeSchema, version: exactVersion.optional() })
+    .strict(),
   "pi/packages/remove": z.object({ cwd, source: z.string().min(1).max(500), scope: packageScopeSchema }).strict(),
   "pi/packages/update": z.object({ cwd, source: z.string().min(1).max(500).optional() }).strict(),
   "pi/packages/check_updates": z.object({ cwd }).strict(),
 
+  "pi/packages/catalog": z
+    .object({ cwd: cwd.optional(), query: z.string().max(200).optional(), limit: z.number().int().positive().max(200).optional() })
+    .strict(),
+  "pi/packages/runtime": z.object({}).strict(),
+  "pi/packages/records": z.object({ cwd: cwd.optional() }).strict(),
+
   "pi/providers/list": z.object({ cwd }).strict(),
   "pi/models/catalog": z.object({ cwd, refresh: z.boolean().optional() }).strict(),
+  "pi/providers/login/start": z.object({ cwd, provider: providerId, method: providerLoginMethodSchema }).strict(),
+  "pi/providers/login/answer": z
+    .object({ cwd, id: loginId, promptId: z.string().min(1).max(100), value: z.string().max(16 * 1024) })
+    .strict(),
+  "pi/providers/login/cancel": z.object({ cwd, id: loginId }).strict(),
+  "pi/providers/logout": z.object({ cwd, provider: providerId }).strict(),
+
+  "pi/setup/state": z.object({}).strict(),
+  "pi/setup/complete": z.object({ completed: z.boolean() }).strict(),
 
   "pi/logs/query": logQuerySchema,
   "pi/logs/content": z
@@ -510,6 +595,21 @@ export const clientParamsSchemas = {
     .strict(),
   "pi/panel/read": panelReadParamsSchema,
   "pi/panel/list": z.object({ path: sessionPath }).strict(),
+
+  // --- M11 prefs (host-owned; never Pi's settings file) ---
+  "pi/prefs/get": z.object({ namespace: prefsNamespaceSchema.optional() }).strict(),
+  "pi/prefs/set": z.object({ namespace: prefsNamespaceSchema, value: prefsValueSchema }).strict(),
+
+  // --- M4-T7 keybindings ---
+  "pi/keybindings/get": z.object({ cwd }).strict(),
+  "pi/keybindings/set": z.object({ cwd, changes: z.array(keybindingChangeSchema).min(1).max(200) }).strict(),
+
+  // --- composer sources ---
+  "pi/commands/list": z.object({ path: sessionPath }).strict(),
+  "pi/prompts/list": z.object({ path: sessionPath }).strict(),
+  "pi/project/files": z
+    .object({ cwd, query: z.string().max(200).optional(), limit: z.number().int().positive().max(2000).optional() })
+    .strict(),
 
   // --- M7 push. Endpoints are absolute https URLs from the browser. ---
   "pi/push/config": z.object({}).strict(),

@@ -22,8 +22,8 @@
  * 65 document islands would not), and one `document` per mission on demand.
  */
 import { readFileSync, readdirSync } from "node:fs";
-import { homedir } from "node:os";
 import { basename, join } from "node:path";
+import { defaultAgentDir } from "../paths.js";
 import type { CollectionItem, CollectionPanel, DocumentPanel } from "@piorbit/protocol";
 import { PANEL_ID_PREFIX, PANEL_SOURCE } from "./panels.js";
 
@@ -71,7 +71,7 @@ export interface Mission {
   workflowChildren: Array<{ childId?: string; agent?: string; state?: string }>;
 }
 
-export function missionsDirOf(agentDir: string = join(homedir(), ".pi", "agent")): string {
+export function missionsDirOf(agentDir: string = defaultAgentDir()): string {
   return join(agentDir, "missions");
 }
 

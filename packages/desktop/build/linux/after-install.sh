@@ -1,0 +1,116 @@
+#!/bin/bash
+# Runs as root after the deb or the rpm has unpacked its files.
+# fpm turns this into Debian's `postinst` and RPM's `%post`, so it has to be
+# correct under both: dpkg passes `configure <old-version>`, rpm passes `1` for
+# a first install and `2` for an upgrade. Nothing below depends on which.
+#
+# It does four things and nothing else, so that after-remove.sh can undo
+# exactly this list:
+#
+#   1. put `piorbit` on PATH
+#   2. give Chromium a usable sandbox on kernels that need the setuid helper
+#   3. refresh the three caches that make the menu entry, its icon and the
+#      piorbit:// handler appear without a logout
+#   4. install the AppArmor profile that lets the app open a user namespace on
+#      Ubuntu 24.04 and later
+#
+# Every step is guarded: a machine without `gtk-update-icon-cache` or without
+# AppArmor installs cleanly, it just does not get that step.
+
+set -e
+
+APP_DIR='/opt/${sanitizedProductName}'
+EXE='${executable}'
+BIN="$APP_DIR/$EXE"
+
+# ------------------------------------------------------------ 1. PATH ----
+
+if type update-alternatives >/dev/null 2>&1; then
+    # A previous version may have left a plain symlink where update-alternatives
+    # now wants to manage one; remove it first or the install below is ignored.
+    if [ -L "/usr/bin/$EXE" ] && [ -e "/usr/bin/$EXE" ] &&
+        [ "$(readlink "/usr/bin/$EXE")" != "/etc/alternatives/$EXE" ]; then
+        rm -f "/usr/bin/$EXE"
+    fi
+    update-alternatives --install "/usr/bin/$EXE" "$EXE" "$BIN" 100 ||
+        ln -sf "$BIN" "/usr/bin/$EXE"
+else
+    ln -sf "$BIN" "/usr/bin/$EXE"
+fi
+
+# --------------------------------------------------------- 2. sandbox ----
+
+# Chromium sandboxes each renderer in a user namespace and needs no privileges
+# to do it. The setuid helper is the fallback for kernels that refuse an
+# unprivileged process a namespace, and it is only worth the extra attack
+# surface of a setuid binary on exactly those kernels.
+#
+# The obvious test — "can I unshare a user namespace?" — is worthless here,
+# because this script runs as root and root always can. So ask the two kernel
+# knobs that switch the feature off for everybody instead. That is the state
+# the person's own account will meet when they start the app.
+needs_setuid_helper() {
+    if [ -r /proc/sys/kernel/unprivileged_userns_clone ] &&
+        [ "$(cat /proc/sys/kernel/unprivileged_userns_clone)" = "0" ]; then
+        return 0
+    fi
+    if [ -r /proc/sys/user/max_user_namespaces ] &&
+        [ "$(cat /proc/sys/user/max_user_namespaces)" = "0" ]; then
+        return 0
+    fi
+    return 1
+}
+
+if [ -e "$APP_DIR/chrome-sandbox" ]; then
+    if needs_setuid_helper; then
+        chown root:root "$APP_DIR/chrome-sandbox" || true
+        chmod 4755 "$APP_DIR/chrome-sandbox" || true
+    else
+        chmod 0755 "$APP_DIR/chrome-sandbox" || true
+    fi
+fi
+
+# ---------------------------------------------------------- 3. caches ----
+
+# update-desktop-database is what registers piorbit:// : it reads the
+# MimeType= line out of the .desktop entry and writes the mimeinfo cache the
+# desktop environment consults when something opens a piorbit:// link.
+if hash update-desktop-database 2>/dev/null; then
+    update-desktop-database /usr/share/applications || true
+fi
+
+if hash update-mime-database 2>/dev/null && [ -d /usr/share/mime ]; then
+    update-mime-database /usr/share/mime || true
+fi
+
+# Without this the menu entry appears with a generic gear until the next login.
+if hash gtk-update-icon-cache 2>/dev/null && [ -d /usr/share/icons/hicolor ]; then
+    gtk-update-icon-cache --force --quiet --ignore-theme-index /usr/share/icons/hicolor || true
+fi
+
+# -------------------------------------------------------- 4. AppArmor ----
+
+# Ubuntu 23.10 and later refuse an unconfined program its own user namespace
+# unless a profile grants `userns`. Without this, Chromium falls back to the
+# setuid helper — which step 2 deliberately did not install on these kernels,
+# because they *can* do namespaces. The profile is what closes that circle.
+#
+# The dry run guards Ubuntu 22.04 and Debian 12, whose AppArmor does not know
+# abi/4.0: there the profile is skipped and the app runs fine without it.
+if apparmor_status --enabled >/dev/null 2>&1; then
+    APPARMOR_SOURCE="$APP_DIR/resources/apparmor-profile"
+    APPARMOR_TARGET="/etc/apparmor.d/$EXE"
+    if [ -f "$APPARMOR_SOURCE" ] &&
+        apparmor_parser --skip-kernel-load --debug "$APPARMOR_SOURCE" >/dev/null 2>&1; then
+        cp -f "$APPARMOR_SOURCE" "$APPARMOR_TARGET"
+        # Loading a policy into the running kernel is meaningless inside a
+        # chroot (image builders), so skip it there and let the next boot do it.
+        if ! { [ -x /usr/bin/ischroot ] && /usr/bin/ischroot; } && hash apparmor_parser 2>/dev/null; then
+            apparmor_parser --replace --write-cache --skip-read-cache "$APPARMOR_TARGET" || true
+        fi
+    else
+        echo "piorbit: this version of AppArmor does not understand the bundled profile; skipping it."
+    fi
+fi
+
+exit 0

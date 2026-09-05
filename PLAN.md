@@ -349,15 +349,22 @@ T10 turns the in-app updater on once the repo can serve a feed an installed
 app may read, and T9 adds the system's own updater after that. Until T10 the
 app says updates are unavailable and why, which is true (D-31).
 
-Depends on: M5 (desktop shell), M9 (CLI).
+**T1–T8 are done.** One more thing has to land before a build is put in front
+of anyone else, and it is not in this milestone: **MX-T7**. D-36 records that
+the product may be renamed, and `appId`, the `piorbit://` scheme, the data
+directory and every storage key are free to change today and stop being free
+the moment someone installs a build. Tag and publish after MX-T7, not before.
+
+Depends on: M5 (desktop shell), M9 (CLI). Blocks nothing; blocked for
+*distribution* by MX-T7.
 
 | ID | Task | Done when |
 | --- | --- | --- |
-| M10-T1 | `install.sh` at the repo root, fetched and run through `gh` from the private repo. Detects arch, verifies a checksum, downloads the release asset, installs per-user under `~/.local`, registers a `.desktop` entry and icons, and prints one line saying what to do next. Idempotent; re-running upgrades | `gh api ... \| sh` on a clean box ends with a launchable app |
-| M10-T2 | One command in the README, copy-pasteable, using `gh` so the private repo needs no token juggling. An `--uninstall` flag that removes everything it created | the command works for a collaborator with repo access and nothing else |
+| M10-T1 | `install.sh` at the repo root, fetched and run through `gh` from the private repo. Detects arch, verifies a checksum **and GitHub build provenance**, downloads the release asset, installs per-user under `~/.local`, registers a `.desktop` entry and icons, and prints one line saying what to do next. Idempotent; re-running upgrades, and an interrupted upgrade leaves the version that was working | `gh api ... \| sh` on a clean box ends with a launchable app |
+| M10-T2 | One command in the README, copy-pasteable, using `gh` so the private repo needs no token juggling. An `--uninstall` flag that removes everything it created, and a separate `--purge` for the data it did not | the command works for a collaborator with repo access and nothing else |
 | M10-T3 | The app bundles its own runtime and agent: stock Node unpacked outside asar, the pinned Pi and its dependency tree vendored into the package. Nothing resolves from the user's machine, and the user's own global Pi (if any) is never touched | `doctor` inside the packaged app reports the bundled Node and the bundled pinned Pi, on a machine with neither installed |
 | M10-T4 | Package for every Linux distribution: AppImage (universal), `.deb`, `.rpm`, and a plain tarball. Desktop entry, MIME handler for `piorbit://`, icons at every size, and a post-install that does not require root for the AppImage path | each artifact installs and launches on its target |
-| M10-T5 | Extension and package management entirely from Settings: browse, install, update, remove, with progress and a readable failure. Installs go into piorbit's own agent directory, never the user's global one | a package is installed from the UI on a machine with no npm on `PATH` |
+| M10-T5 | Extension and package management entirely from Settings: browse, install, update, remove, with progress and a readable failure. Installs go into piorbit's own agent directory, never the user's global one, run on the npm the app ships rather than the machine's, and refuse to run an unreviewed install script | a package is installed from the UI on a machine with no npm on `PATH` |
 | M10-T6 | First-run experience inside the app: pick a provider, sign in, pick a model, add a project — all in the UI. No config file, no environment variable, no terminal | a new user reaches a working session without leaving the window |
 | M10-T7 | Release pipeline: a tagged build produces every artifact plus a checksum manifest, and the app's updater points at it. Versions pinned end to end — Node, Pi, every workspace package | a release is reproducible from a tag |
 | M10-T8 | Product language: the UI never requires knowing Pi exists. "Agent", "model", "extension", "session" — Pi is named only in advanced settings and diagnostics, where it is the truth | a reader of every visible string could not tell which agent runs underneath |

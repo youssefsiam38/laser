@@ -44,7 +44,16 @@ export interface DesktopHostInfo {
   /** False when we attached to a host somebody else (`piorbit up`) started. */
   startedByUs: boolean;
   /** The stock Node the host runs on, and its own `process.execPath` (M5-T2). */
-  runtime?: { binary: string; version: string; execPath: string };
+  runtime?: {
+    binary: string;
+    version: string;
+    execPath: string;
+    /**
+     * The agent piorbit ships, as the *bundled* Node resolved it — never
+     * anything installed on this machine (M10-T3).
+     */
+    agent?: { package: string; version: string; packageDir: string };
+  };
   /** Where the host writes its log, for an error state that needs a next step. */
   logFile: string;
 }

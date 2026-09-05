@@ -8,12 +8,13 @@ export {
   type HostRelayOptions,
   type HostRelayDevice,
   defaultUiDir,
-  defaultStateDir,
 } from "./server.js";
+export { piorbitDataDir, defaultAgentDir, defaultStateDir } from "./paths.js";
 export { WorkerPool, type WorkerPoolOptions } from "./worker-pool.js";
 export { WorkerClient, WorkerRpcError, defaultWorkerMain, type WorkerClientOptions } from "./worker-client.js";
 export { SessionCatalog, defaultSessionDir, type CatalogEntry } from "./catalog.js";
 export { AttentionTracker, type AttentionSnapshot, type AttentionTrackerOptions } from "./attention.js";
+export { PrefsStore, type PrefsStoreOptions } from "./prefs.js";
 export { ProjectRegistry, type ProjectRegistryOptions, type TrustRequest } from "./projects.js";
 export { ViewCache } from "./views.js";
 export {
@@ -33,6 +34,22 @@ export {
   type LogStoreOptions,
 } from "./logstore.js";
 export { Router, type RouterDeps } from "./router.js";
+export {
+  CURATED_PACKAGES,
+  PackageLock,
+  PackageService,
+  PackageServiceError,
+  SetupService,
+  browseDirectories,
+  describeInstallFailure,
+  detectInstallRuntime,
+  parseNpmSource,
+  resolveFromPackument,
+  type InstallRuntime,
+  type NpmSource,
+  type PackageServiceOptions,
+  type SetupServiceOptions,
+} from "./packages.js";
 export {
   RelayClient,
   type RelayClientOptions,

@@ -39,6 +39,15 @@ export function useShell(): ShellContextValue {
   return value;
 }
 
+/**
+ * The same, for a component that also renders outside the shell — a popped-out
+ * panel window, a test harness. It offers the shell's verbs when they are
+ * there and hides them when they are not, rather than throwing.
+ */
+export function useShellOptional(): ShellContextValue | undefined {
+  return useContext(ShellContext) ?? undefined;
+}
+
 /** True when a keyboard event originates from something that eats keystrokes. */
 export function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;

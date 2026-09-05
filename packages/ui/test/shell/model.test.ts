@@ -143,7 +143,7 @@ describe("session rows", () => {
   it("worker chip only speaks when something is off", () => {
     expect(workerChip(undefined)).toBeUndefined();
     expect(workerChip({ status: "ready" })).toBeUndefined();
-    expect(workerChip({ status: "starting" })).toEqual({ label: "Starting Pi", tone: "attention", canRetry: false });
+    expect(workerChip({ status: "starting" })).toEqual({ label: "Starting the agent", tone: "attention", canRetry: false });
     expect(workerChip({ status: "crashed", message: "exit 1" })).toEqual({
       label: "Worker crashed",
       tone: "danger",

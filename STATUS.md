@@ -3,31 +3,35 @@
 Regenerated at the end of every work session from `STATUS_DETAILED.md`.
 Rules in `AGENTS.md` §3.5. No dates or estimates here except "Last updated".
 
-**Last updated:** 2026-09-05 · claude-2026-09-05-e · commit: `6c2a029`
+**Last updated:** 2026-09-05 · claude-2026-09-05-review4 · commit: `2329142`
 
-**Current focus:** Wave 3's review findings are applied — `pnpm -r build`,
-`-r typecheck` and `-r test` all exit 0 with **688 tests**. Two real defects
-in the seq/resume layer are fixed and covered: a restarted worker's epoch was
-undetectable (`replayFloor` never capped at the worker's own seq), and a
-healthy reconnect rewound the dedupe watermark because `onResume` read live
-state after the replay had been flushed. On the surfaces: Enter no longer
-grants on any approval, the thinking control offers only the levels the
-session's model accepts, overflowed islands are `inert` rather than merely
-invisible, OS reduced motion now reaches the motion tokens, and there is one
-loading vocabulary and one context ring. `DESIGN.md` is now the *shape* and
-`docs/ux-theme.md` the *values* (D-33); the phone's two-instance island is a
-recorded exception (D-34).
+**Current focus:** M10 reviewed three ways — clean machine, supply chain,
+first five minutes — and the findings applied. `pnpm -r build`, `-r typecheck`
+and `-r test` exit 0 with **760 tests**; `scripts/release/verify-install.sh`
+now runs **63** installer assertions. The workspace is at **0.1.0**, one
+version everywhere, enforced by `scripts/release/publish.sh`.
 
-**Wave 3 has now been looked at in a browser** (sandbox, 1440px and 375px,
-both themes). The theme system holds end to end: a cleared profile lands on
-graphite dark with Inter, Appearance carries every control the contract names,
-a preset change applies live with no reload and reaches the app behind the
-panel, the light theme is clean, and the phone width has no overflow and
-nothing under 12px. Zero console errors. Two suspected defects were chased
-and both were artifacts of this session rather than bugs: a dark-on-dark row
-was a mid-transition frame, and the "a new version is ready" prompt was a real
-leftover worker from rebuilding mid-session — two settled loads show neither.
-T1 holds: no hex, `oklch()` or raw px font size survives outside the palette.
+The review found one thing that made the headline claim false: `install.sh`
+preferred electron-builder's `AppRun` over piorbit's own launcher, so on an
+*installed* copy the launcher's `--no-sandbox` strip could never fire. piorbit
+started unsandboxed with no message, and `piorbit doctor` opened a window
+instead of printing a diagnosis. The installer now points at the launcher in
+every format (D-43), and the fixture in `verify-install.sh` grew the shape a
+real AppDir has, so the assertions test what ships.
+
+Trust got stricter rather than more talkative. Build provenance is now
+**required**: a release with none is refused unless the person types
+`--allow-unattested`, the verify call names the release workflow rather than
+accepting any workflow in the repository, and an old `gh` is a refusal instead
+of a silent pass (D-42). Every action in the release workflow is pinned to a
+commit SHA, and no `${{ }}` reaches a `run:` block.
+
+Three holes closed around installing extensions: the bundled npm is found
+beside the runtime whether the shell or a terminal `piorbit up` started the
+host, a packaged build never reaches for the machine's own npm, and every
+install runs with `--strict-allow-scripts` so a stranger's `postinstall` fails
+by name instead of running (D-44). The `sha512` Settings prints is now one that
+was actually checked against what npm installed (D-45).
 
 ## Milestones
 
@@ -38,36 +42,85 @@ T1 holds: no hex, `oklch()` or raw px font size survives outside the palette.
 | MP Panel system | done | the contract in `docs/ux-panels.md` is implemented and everything draws through it |
 | M2 Many sessions, many projects | in-progress | T1–T4, T6 done; T5 needs a real desktop session to fire a notification |
 | M3 Subagent tabs | in-progress | T1–T3, T5–T8 done; T4 resume needs a live bus; T9 upstream PRs unfiled |
-| M4 Settings and logs | in-progress | T1–T6 done; T7 trust and keyboard views shipped read-only, rebinding needs `pi/keybindings/*` |
+| M4 Settings and logs | done | T7 closed: keybindings are editable through `pi/keybindings/*` |
 | M5 Desktop shell | in-progress | T1–T3 done and proven on this machine; T4/T5 need macOS, Windows and credentials |
 | M6 Relay and pairing | done | channel id via subprotocol (D-21); rotation deferred (D-22) |
 | M7 Mobile PWA | in-progress | T1–T4 done; T5 push and T6 mic complete in code, unproven without a phone |
 | M8 Package support | in-progress | T1, T3–T5 done; T2 dictation wired but this machine has only OAuth providers |
 | M9 CLI | in-progress | T1–T8 done, `relay` proven end to end against a real relay |
-| M11 Theme system | in-progress | T1–T5, T7, T8 done; T6 blocked on a host-owned preference channel |
-| MX Cross-cutting | in-progress | T6 element inventory done; seam green; pin 0.85.0; upstream patches written, none filed |
+| M10 Self-contained distribution | in-progress | **T1–T8 done, walked end to end, and reviewed three ways (D-42..D-47).** T9/T10 are updating, deliberately staged (D-31, D-35) |
+| M11 Theme system | in-progress | T1–T4, T6–T8 done; T5 needs a network trace to close |
+| MX Cross-cutting | in-progress | T6 done; **T7 now gates distribution** (see Blockers); seam green; pin 0.85.0 |
 
 ## Blockers
 
-- **M11-T6 themes persist**: `pi/settings/set` refuses any key the pinned Pi does not define, and there is no host-owned preference channel. Needs `pi/prefs/get|set` (protocol first). The theme lives in `localStorage` today.
-- **M4-T7 keybindings**: rebinding needs `pi/keybindings/get|set` over Pi's own `KeybindingsManager`. The view ships read-only and says so rather than offering a dead control.
-- **Stopped run / speaker identity**: both components are finished and mounted but can never render — no session update carries a stop reason or a child-run speaker. Protocol first.
-- M0-T8 CI: GitHub Actions refused to start (account billing). `pnpm verify` locally.
-- M7-T5 push: needs `HostRelayOptions.publicOrigin`; nothing sets it, so a notification's link points at loopback.
-- M8-T2 dictation: needs a platform OpenAI API key; every provider signed in here is OAuth-backed.
+- **MX-T7 gates the first release, and nothing else does.** D-36 says the
+  product may be renamed. `appId`, the `piorbit://` scheme, the data directory
+  and every storage key are free today and stop being free the moment somebody
+  installs a build — `appId` keys macOS TCC grants and the update feed's
+  identity, so a rename afterwards orphans the install. Tag `v0.1.0` **after**
+  one module defines the identity, not before.
+- **No release signing key exists yet.** `RELEASE_PUBKEY` is empty on purpose
+  (a fake key would turn "not configured" into "verification passed"), so the
+  third trust layer is inert until `scripts/release/sign.sh --keygen` is run and
+  the printed line is pinned. Provenance (layer 1) is required and carries the
+  chain in the meantime.
+- **No arm64 hardware here.** Every arm64 artifact is built by config and by
+  the release matrix, and none has been run. The build refuses a cross-arch
+  build by name rather than producing one that cannot start.
+- `.rpm` builds on this machine but has not been installed on a Fedora/RHEL
+  box; the deb, AppImage and tarball paths were installed and launched.
+- M0-T8 CI: GitHub Actions refused to start (account billing). `pnpm verify`
+  and `pnpm verify:install` locally.
+- M7-T5 push: needs `HostRelayOptions.publicOrigin`; nothing sets it, so a
+  notification's link points at loopback.
+- M8-T2 dictation: needs a platform OpenAI API key; every provider signed in
+  here is OAuth-backed.
+- AppStream screenshots are deliberately absent: they are HTTPS URLs and there
+  is no public host. `PIORBIT_SCREENSHOT_BASE_URL` picks them up with no code
+  change.
 
 ## Next up (dependencies satisfied)
 
-1. **M10 self-contained distribution** — the one-command install, every Linux package format, the bundled runtime and agent proven on a machine with nothing on it, and packages installed from Settings.
-2. **The three protocol gaps that already have finished UI waiting**: a stop reason and per-turn usage on `message_end`, a child-run speaker, and `pi/prefs/*` for M11-T6.
-3. `pi/commands/list`, `pi/project/files`, `pi/prompts/list` — the composer's `/` and `@` popovers and the prompt library are built and adapter-shaped for them.
-4. A real phone and a real desktop session: push delivery, dictation end to end, and a transcript exercised against a live provider — the sandbox has no credentials, so no message, tool row or run island has been seen with real content.
+1. **MX-T7 product identity from one module**, then generate a release key,
+   pin it in `install.sh`, tag `v0.1.0` and run the release workflow for real —
+   the only step of the pipeline never executed is `gh release create`.
+2. **Rebuild and re-walk the installed app.** Everything below was fixed in
+   source and verified against the *stale* 0.1.0 artifact in
+   `packages/desktop/out/`; the packaged asar still carries the old host and UI.
+   One `dist:linux` and one install closes that gap.
+3. **M10-T10** once the repository (or a releases repository) is public: set
+   `publish`, and prove an AppImage self-updates in place. **M10-T9** after it.
+4. A real phone and a real desktop session: push delivery, dictation end to
+   end, and a transcript against a live provider. The sandbox has no
+   credentials, so no message, tool row or run island has been seen with real
+   content.
 
 ## Recently done
 
-- **Wave 3 integration** — twelve adopted-but-unmounted elements wired, eight homeless ones deleted with the reason in their inventory row, one styling pass across the whole UI. Evidence: 686 tests, exit 0.
-- **The theme system made live** (M11-T1, M11-T8) — `globals.css` now carries the compiled default preset and no stale `.dark` palette; the type scale, both font stacks and the float shadows resolve through `var()` at runtime instead of being baked into the utilities; Inter and JetBrains Mono finally have `@font-face` rules, so the documented defaults load.
-- **Three silent defects fixed** — regenerate and fork-with-edit were dead on every message (a raw NUL byte in `messages.tsx` split on a separator the writer never wrote); `piorbit settings` hung for two minutes against any untrusted directory and now says what to run; a ring's percentage could draw below the 12px floor.
-- **M9-T7 `piorbit relay`** — pair / devices / revoke proven end to end against a real relay, including the six-emoji SAS and a from-scratch QR encoder checked module-for-module against `qrcode@1.5.4`.
-- **M11-T4 Settings → Appearance** — presets, hues, fonts, text size, density, corners, contrast, motion and a token editor with a live contrast readout per row. Verified in a browser: live, instant, no reload.
-- **pi-gpt-transcribe 0.3.0 / 0.3.1 / 0.4.0 released** and the worker pinned to `v0.4.0` (D-32) — the package now publishes its terminal-free core, so the dictation config is parsed once, by its owner, instead of twice.
+- **The installed copy runs piorbit's launcher, not AppRun** (D-43) — proved on
+  the real 0.1.0 AppImage: `bin/piorbit`, `Exec=` and `TryExec=` all name
+  `app/piorbit`, and `piorbit doctor` prints a diagnosis instead of opening a
+  window. That also drops an accidental `bash` requirement and stops AppRun
+  rewriting `PATH` and `LD_LIBRARY_PATH` for the agent and everything it spawns.
+- **Provenance is required, and bound to this workflow** (D-42) — plus every
+  release action pinned to a commit SHA and no `${{ }}` inside a `run:`, so the
+  job holding the signing key and the Sigstore token cannot be steered by a
+  dispatch input or a moved tag.
+- **Extensions install safely and actually install** (D-44, D-45) — the bundled
+  npm is found by sibling lookup for a terminal-started host too, a packaged
+  build never uses the machine's npm, `--strict-allow-scripts` turns an
+  unreviewed install script into a named failure, and a recorded `sha512` means
+  it was checked against what npm wrote.
+- **An interrupted upgrade puts the working version back**, the receipt is
+  written the moment the app lands on disk, and `--yes` no longer deletes
+  settings, the device identity or any pairing — that is `--purge`, on its own.
+- **First run owns the window** (D-47) — one screen with one next step instead
+  of four empty states in four vocabularies, skipping asks first, and
+  Settings → This device → "Run setup again" is the way back. With no project
+  the composer says so and is disabled, rather than swallowing a message that
+  can never be sent.
+- **The CLI and the window agree about the agent directory** (D-46) — the CLI
+  no longer reads `PI_CODING_AGENT_DIR`, which the desktop deliberately strips,
+  so `piorbit sessions` and the window can no longer show different sessions to
+  the one person who has both installed.

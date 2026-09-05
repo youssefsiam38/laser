@@ -17,8 +17,8 @@
  *   {"type":"session","version":3,"id","timestamp","cwd","parentSession"?}
  */
 import { closeSync, openSync, readSync, readdirSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { defaultAgentDir } from "./paths.js";
 import type { SessionSummary } from "@piorbit/protocol";
 
 export interface CatalogEntry extends SessionSummary {
@@ -46,7 +46,7 @@ const CHUNK = 256 * 1024;
 /** A row shows one line; keep the rest out of memory and off the wire. */
 const FIRST_MESSAGE_MAX = 200;
 
-export function defaultSessionDir(agentDir = join(homedir(), ".pi", "agent")): string {
+export function defaultSessionDir(agentDir = defaultAgentDir()): string {
   return join(agentDir, "sessions");
 }
 

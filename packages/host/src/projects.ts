@@ -206,7 +206,7 @@ export class ProjectRegistry {
     if (this.options.hasClients && !this.options.hasClients()) {
       throw new ProtocolError(
         ErrorCodes.ProjectUntrusted,
-        `${key} has project-local Pi resources (${reasons.join(", ")}) and no trust decision. ` +
+        `${key} has project-local agent resources (${reasons.join(", ")}) and no trust decision. ` +
           `Open piorbit and approve the project, or run \`pi\` there once and answer its trust prompt.`,
         { cwd: key, reasons },
       );

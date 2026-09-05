@@ -30,6 +30,8 @@ export interface WorkerPoolOptions {
   subagentsTempRoot?: string;
   workerMain?: string;
   nodeBinary?: string;
+  /** Extra environment for every worker (the bundled package manager, M10-T5). */
+  env?: Readonly<Record<string, string>>;
   onNotification: (cwd: string, notification: JsonRpcNotification) => void;
   onStderr?: (cwd: string, text: string) => void;
   /** Called for every lifecycle change, after the notification is sent. */
@@ -296,7 +298,7 @@ export class WorkerPool {
     if (this.closed) throw new ProtocolError(ErrorCodes.DriverUnavailable, "the host is shutting down");
     if (entry.stopped) throw retiringError(entry.cwd);
 
-    this.setStatus(entry, "starting", entry.restarts > 0 ? `restarting (attempt ${entry.restarts})` : "starting Pi");
+    this.setStatus(entry, "starting", entry.restarts > 0 ? `restarting (attempt ${entry.restarts})` : "starting the agent");
 
     let projectTrusted: boolean | undefined;
     if (this.options.resolveTrust) {
@@ -331,6 +333,7 @@ export class WorkerPool {
       ...(this.options.subagentsTempRoot ? { subagentsTempRoot: this.options.subagentsTempRoot } : {}),
       ...(this.options.workerMain ? { workerMain: this.options.workerMain } : {}),
       ...(this.options.nodeBinary ? { nodeBinary: this.options.nodeBinary } : {}),
+      ...(this.options.env ? { env: this.options.env } : {}),
       ...(projectTrusted !== undefined ? { projectTrusted } : {}),
       onNotification: (n) => this.onWorkerNotification(entry, n),
       onExit: (code, signal) => this.onExit(entry, client, code, signal),

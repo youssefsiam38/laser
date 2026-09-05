@@ -402,7 +402,7 @@ const NoticeImpl = ({ data }: { data: unknown }) => {
   if (level === "error") {
     // `extension_error` arrives as "extension: message" (store.ts).
     const at = text.indexOf(": ");
-    const title = at > 0 ? `${text.slice(0, at)} failed` : "Something went wrong";
+    const title = at > 0 ? `${text.slice(0, at)} failed` : "An extension reported an error";
     const detail = at > 0 ? text.slice(at + 2) : text;
     return <ErrorState title={title} detail={detail} className="my-1" />;
   }

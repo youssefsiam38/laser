@@ -184,7 +184,7 @@ export function workerChip(worker: WorkerInfo | undefined): WorkerChip | undefin
   const detail = worker.message ? { detail: worker.message } : {};
   switch (worker.status) {
     case "starting":
-      return { label: "Starting Pi", tone: "attention", canRetry: false, ...detail };
+      return { label: "Starting the agent", tone: "attention", canRetry: false, ...detail };
     case "crashed":
       return { label: "Worker crashed", tone: "danger", canRetry: true, ...detail };
     case "retired":
@@ -504,7 +504,7 @@ export function lastPromptEntryId(entries: readonly unknown[]): string | undefin
 
 export const HISTORY_KIND_LABEL: Record<HistoryKind, string> = {
   user: "You",
-  assistant: "Pi",
+  assistant: "Agent",
   tool: "Tool",
   compaction: "Compaction",
   branch: "Branch summary",

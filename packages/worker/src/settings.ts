@@ -127,19 +127,19 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: "model", title: "Model and thinking", description: "Which model starts a session, and how hard it thinks." },
   { id: "interface", title: "Interface", description: "Theme, editor, and startup behaviour." },
   { id: "delivery", title: "Message delivery", description: "How steering and follow-up messages reach a running turn, and which transport carries them." },
-  { id: "context", title: "Context and compaction", description: "When Pi summarizes history to make room." },
+  { id: "context", title: "Context and compaction", description: "When the agent summarizes history to make room." },
   { id: "retry", title: "Retry", description: "What happens when a provider request fails." },
   { id: "tools", title: "Tools", description: "Which built-in tools a session starts with." },
-  { id: "shell", title: "Shell and npm", description: "How Pi runs commands and installs packages." },
+  { id: "shell", title: "Shell and npm", description: "How the agent runs commands and installs packages." },
   { id: "resources", title: "Packages and resources", description: "Where extensions, skills, prompts and themes are loaded from." },
   { id: "sessions", title: "Sessions", description: "Where session transcripts are stored." },
   { id: "images", title: "Images", description: "What happens to images before they reach the model." },
   { id: "network", title: "Network", description: "Proxying and connection timeouts." },
   { id: "privacy", title: "Trust and telemetry", description: "Project trust fallback, install ping, analytics." },
-  { id: "warnings", title: "Warnings", description: "Which advisory notices Pi shows." },
-  { id: "terminal", title: "Terminal display", description: "Pi's own TUI. piorbit does not read these; they change how `pi` looks in a terminal." },
-  { id: "markdown", title: "Markdown rendering", description: "How Pi's terminal renders markdown." },
-  { id: "managed", title: "Managed by Pi", description: "Written by Pi itself. Shown for completeness; piorbit will not change them." },
+  { id: "warnings", title: "Warnings", description: "Which advisory notices the agent shows." },
+  { id: "terminal", title: "Terminal display", description: "The agent's own terminal interface. piorbit does not read these; they change how the agent looks when it is run in a terminal." },
+  { id: "markdown", title: "Markdown rendering", description: "How the agent renders markdown in a terminal." },
+  { id: "managed", title: "Managed by the agent", description: "Written by the agent itself. Shown for completeness; piorbit will not change them." },
 ];
 
 const BOTH: SettingsScope[] = ["global", "project"];
@@ -191,9 +191,9 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     path: "enabledModels",
     key: "enabledModels",
     label: "Enabled models",
-    description: "Glob patterns limiting which models are offered. Unset means every model Pi knows.",
+    description: "Glob patterns limiting which models are offered. Unset means every model that is available.",
     section: "model",
-    type: { control: "string-list", placeholder: "claude-*", hint: "Same format as Pi's --models flag. The list replaces the global one; it does not extend it." },
+    type: { control: "string-list", placeholder: "claude-*", hint: "One glob per line. The list replaces the global one; it does not extend it." },
     scopes: BOTH,
   },
   {
@@ -258,7 +258,7 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     path: "theme",
     key: "theme",
     label: "Theme",
-    description: 'Pi\'s theme name: "dark", "light", or a custom theme you loaded.',
+    description: 'The agent\'s own terminal theme: "dark", "light", or a custom theme you loaded. piorbit\'s appearance is set in Settings → Appearance.',
     section: "interface",
     type: { control: "text", placeholder: "dark" },
     default: "dark",
@@ -268,7 +268,7 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     path: "externalEditor",
     key: "externalEditor",
     label: "External editor",
-    description: 'Command for Pi\'s Ctrl+G external editor. Takes precedence over $VISUAL and $EDITOR. Include a wait flag, e.g. "code --wait".',
+    description: 'Command for the agent\'s Ctrl+G external editor in a terminal. Takes precedence over $VISUAL and $EDITOR. Include a wait flag, e.g. "code --wait".',
     section: "interface",
     type: { control: "text", placeholder: "code --wait" },
     scopes: BOTH,
@@ -277,7 +277,7 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     path: "quietStartup",
     key: "quietStartup",
     label: "Quiet startup",
-    description: "Hide Pi's startup header.",
+    description: "Hide the agent's startup header in a terminal.",
     section: "interface",
     type: { control: "boolean" },
     default: false,
@@ -287,7 +287,7 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     path: "collapseChangelog",
     key: "collapseChangelog",
     label: "Collapse changelog",
-    description: "Show a condensed changelog after Pi updates.",
+    description: "Show a condensed changelog after the agent updates.",
     section: "interface",
     type: { control: "boolean" },
     default: false,
@@ -297,7 +297,7 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     path: "doubleEscapeAction",
     key: "doubleEscapeAction",
     label: "Double-escape action",
-    description: "What double-escape does in Pi's terminal UI.",
+    description: "What double-escape does in the agent's terminal interface.",
     section: "interface",
     type: {
       control: "enum",
@@ -315,7 +315,7 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     path: "treeFilterMode",
     key: "treeFilterMode",
     label: "Tree filter",
-    description: "Default filter for Pi's /tree view.",
+    description: "Default filter for the agent's /tree view in a terminal.",
     section: "interface",
     type: {
       control: "enum",
@@ -490,7 +490,7 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     path: "retry.provider.maxRetries",
     key: "retry",
     label: "Provider retries",
-    description: "SDK-level retries. Keep this at 0 unless you need it: above 0 the SDK can swallow out-of-quota errors before Pi sees them and block the agent until the quota resets.",
+    description: "SDK-level retries. Keep this at 0 unless you need it: above 0 the SDK can swallow out-of-quota errors before the agent sees them and block it until the quota resets.",
     section: "retry",
     type: { control: "number", min: 0, max: 10, integer: true },
     default: 0,
@@ -501,7 +501,7 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     path: "retry.provider.maxRetryDelayMs",
     key: "retry",
     label: "Max server-requested delay",
-    description: "Longest retry delay Pi will wait when a provider asks for one. Beyond it the request fails with an explanation instead of stalling. 0 removes the limit.",
+    description: "Longest retry delay the agent will wait when a provider asks for one. Beyond it the request fails with an explanation instead of stalling. 0 removes the limit.",
     section: "retry",
     type: { control: "number", min: 0, integer: true, unit: "ms" },
     default: 60_000,
@@ -514,7 +514,7 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     path: "defaultTools",
     key: "defaultTools",
     label: "Default built-in tools",
-    description: "Built-in tools enabled at startup. Unset uses Pi's standard defaults; an empty list starts with no built-ins but keeps extension and SDK tools.",
+    description: "Built-in tools enabled at startup. Unset uses the standard defaults; an empty list starts with no built-ins but keeps extension and SDK tools.",
     section: "tools",
     type: {
       control: "string-list",
@@ -653,7 +653,7 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     path: "httpProxy",
     key: "httpProxy",
     label: "HTTP proxy",
-    description: "Proxy URL applied as HTTP_PROXY and HTTPS_PROXY. Pi treats this as a global setting only.",
+    description: "Proxy URL applied as HTTP_PROXY and HTTPS_PROXY. This is a global setting only; a project cannot override it.",
     section: "network",
     type: { control: "text", placeholder: "http://127.0.0.1:7890" },
     scopes: GLOBAL_ONLY,
@@ -681,7 +681,7 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     path: "enableInstallTelemetry",
     key: "enableInstallTelemetry",
     label: "Install telemetry",
-    description: "Send Pi's anonymous install/update ping and provider attribution headers. Does not control update checks.",
+    description: "Send the agent's anonymous install/update ping and provider attribution headers. Does not control update checks.",
     section: "privacy",
     type: { control: "boolean" },
     default: true,
@@ -691,7 +691,7 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     path: "enableAnalytics",
     key: "enableAnalytics",
     label: "Analytics",
-    description: "Opt in to Pi's analytics. Turning it on generates a tracking id.",
+    description: "Opt in to the agent's analytics. Turning it on generates a tracking id.",
     section: "privacy",
     type: { control: "boolean" },
     default: false,
@@ -701,7 +701,7 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     path: "trackingId",
     key: "trackingId",
     label: "Tracking id",
-    description: "Generated by Pi the first time analytics is enabled.",
+    description: "Generated the first time analytics is enabled.",
     section: "managed",
     type: { control: "text" },
     scopes: GLOBAL_ONLY,
@@ -758,7 +758,7 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     path: "terminal.showTerminalProgress",
     key: "terminal",
     label: "Terminal progress reports",
-    description: "Emit OSC 9;4 progress while working. Present in Pi 0.85's settings type but not in its settings documentation.",
+    description: "Emit OSC 9;4 progress while working. Present in the agent's settings type but not in its settings documentation.",
     section: "terminal",
     type: { control: "boolean" },
     scopes: BOTH,
@@ -788,7 +788,7 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     path: "terminal.images",
     key: "terminal",
     label: "Image protocol",
-    description: "Override the inline-image protocol Pi detects.",
+    description: "Override the inline-image protocol the agent detects.",
     section: "terminal",
     type: {
       control: "enum",
@@ -827,7 +827,7 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     path: "editorPaddingX",
     key: "editorPaddingX",
     label: "Editor horizontal padding",
-    description: "Horizontal padding of Pi's input editor.",
+    description: "Horizontal padding of the agent's input editor in a terminal.",
     section: "terminal",
     type: { control: "number", min: 0, max: 3, integer: true },
     default: 0,
@@ -855,7 +855,7 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     path: "autocompleteMaxVisible",
     key: "autocompleteMaxVisible",
     label: "Autocomplete rows",
-    description: "How many items Pi's autocomplete dropdown shows.",
+    description: "How many items the agent's autocomplete dropdown shows in a terminal.",
     section: "terminal",
     type: { control: "number", min: 3, max: 20, integer: true },
     default: 5,
@@ -877,7 +877,7 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     path: "tuiMode",
     key: "tuiMode",
     label: "TUI mode",
-    description: "Pi's interactive mode. --tui-mode overrides it at startup.",
+    description: "The agent's interactive mode in a terminal. --tui-mode overrides it at startup.",
     section: "terminal",
     type: {
       control: "enum",
@@ -894,7 +894,7 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     path: "fullscreenExitOutput",
     key: "fullscreenExitOutput",
     label: "Fullscreen exit output",
-    description: "What Pi leaves on screen when it exits fullscreen mode.",
+    description: "What the agent leaves on screen when it exits fullscreen mode.",
     section: "terminal",
     type: {
       control: "enum",
@@ -942,7 +942,7 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     path: "markdown.codeBlockIndent",
     key: "markdown",
     label: "Code block indent",
-    description: "Indentation Pi puts in front of rendered code blocks.",
+    description: "Indentation the agent puts in front of rendered code blocks.",
     section: "markdown",
     type: { control: "text", placeholder: "  " },
     default: "  ",
@@ -953,7 +953,7 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     path: "markdown.mermaid",
     key: "markdown",
     label: "Mermaid rendering",
-    description: "How Pi renders mermaid diagrams.",
+    description: "How the agent renders mermaid diagrams.",
     section: "markdown",
     type: {
       control: "enum",
@@ -973,7 +973,7 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     path: "lastChangelogVersion",
     key: "lastChangelogVersion",
     label: "Last changelog version",
-    description: "Pi records the version whose changelog it last showed you.",
+    description: "The version whose changelog you were last shown.",
     section: "managed",
     type: { control: "text" },
     scopes: GLOBAL_ONLY,
@@ -1121,9 +1121,9 @@ function piSettingsStorage(manager: SettingsManager): PiSettingsStorage {
   const candidate = (manager as unknown as { storage?: unknown }).storage as PiSettingsStorage | undefined;
   if (!candidate || typeof candidate.withLock !== "function") {
     throw new SettingsError(
-      `This build of Pi (${VERSION}) does not expose SettingsManager's storage, so piorbit cannot write settings ` +
-        `without risking a corrupted file. Nothing was changed. Edit the JSON directly, or update piorbit's settings ` +
-        `adapter for this Pi version (see packages/worker/src/settings.ts and task MX-T2).`,
+      `piorbit cannot write settings safely with the agent it is running (${VERSION}), so nothing was changed. ` +
+        `Your settings file is untouched. Reinstall piorbit to get the agent it ships with; if this is a ` +
+        `development build, packages/worker/src/settings.ts needs updating for this version (task MX-T2).`,
     );
   }
   return candidate;
@@ -1230,15 +1230,15 @@ export class SettingsAdapter {
       const field = FIELD_BY_PATH.get(change.path);
       if (!field) {
         throw new SettingsError(
-          `Unknown setting "${change.path}". Pi ${VERSION} has no such key; pi/settings/list returns the full catalogue.`,
+          `Unknown setting "${change.path}". The agent (${VERSION}) has no such key; the Settings screen lists every one it does have.`,
         );
       }
       if (field.managed) {
-        throw new SettingsError(`"${change.path}" is written by Pi itself and is read-only in piorbit.`);
+        throw new SettingsError(`"${change.path}" is written by the agent itself, so piorbit will not change it.`);
       }
       if (!field.scopes.includes(scope)) {
         throw new SettingsError(
-          `"${change.path}" can only be set at ${field.scopes.join(" or ")} scope in Pi ${VERSION}.`,
+          `"${change.path}" can only be set at ${field.scopes.join(" or ")} scope.`,
         );
       }
       if (change.op === "set") {
@@ -1317,14 +1317,14 @@ export class SettingsAdapter {
       return {
         trusted: true,
         writable: true,
-        reason: `You trusted this project, so Pi loads ${this.projectPath}.`,
+        reason: `You trusted this project, so the agent loads ${this.projectPath}.`,
       };
     }
     if (decision === false) {
       return {
         trusted: false,
         writable: false,
-        reason: `You declined to trust this project, so Pi ignores ${this.projectPath} and piorbit will not edit it.`,
+        reason: `You declined to trust this project, so the agent ignores ${this.projectPath} and piorbit will not edit it.`,
       };
     }
 
@@ -1338,7 +1338,7 @@ export class SettingsAdapter {
       return {
         trusted: true,
         writable: true,
-        reason: 'No saved trust decision for this project, and defaultProjectTrust is "always", so Pi loads it.',
+        reason: 'No saved trust decision for this project, and defaultProjectTrust is "always", so the agent loads it.',
       };
     }
     if (!requiresTrust) {
@@ -1347,7 +1347,7 @@ export class SettingsAdapter {
         writable: true,
         reason:
           `This directory has no trust-gated .pi resources yet. Creating ${this.projectPath} makes it one, and ` +
-          `because defaultProjectTrust is "${fallback}" Pi will then ignore it until this project is trusted.`,
+          `because defaultProjectTrust is "${fallback}" the agent will then ignore it until this project is trusted.`,
       };
     }
     return {
@@ -1355,7 +1355,7 @@ export class SettingsAdapter {
       writable: true,
       reason:
         `This project has trust-gated .pi resources, nobody has decided about it, and defaultProjectTrust is ` +
-        `"${fallback}" — so Pi ignores ${this.projectPath}. Trust the project, or set defaultProjectTrust to "always".`,
+        `"${fallback}" — so the agent ignores ${this.projectPath}. Trust the project, or set defaultProjectTrust to "always".`,
     };
   }
 }

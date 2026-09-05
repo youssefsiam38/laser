@@ -242,7 +242,7 @@ export function createThreadListAdapter(deps: ThreadListDeps): RemoteThreadListA
 
     delete: async () => {
       throw new Error(
-        "piorbit does not delete Pi sessions: the transcript file is the user's history. Archive the session instead.",
+        "piorbit does not delete sessions: the transcript file is your history. Archive the session instead.",
       );
     },
 

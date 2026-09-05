@@ -193,7 +193,7 @@ export async function resolveTranscriptionKey(config: TranscribeConfig, sources:
   if (openai?.configured && openai.oauth) {
     throw new TranscribeError(
       "oauth_key",
-      `Pi's ${TRANSCRIBE_PROVIDER} credential is an OAuth token, and ${config.baseUrl}/audio/transcriptions only accepts a platform API key. ${fix}`,
+      `The ${TRANSCRIBE_PROVIDER} credential on this machine is an OAuth token, and ${config.baseUrl}/audio/transcriptions only accepts a platform API key. ${fix}`,
     );
   }
   if (oauthOnly.length > 0) {

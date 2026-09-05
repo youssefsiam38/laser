@@ -2,9 +2,15 @@
  * `piorbit doctor` — the command that has to earn trust.
  *
  * Every check answers a question a broken setup actually raises, in the order a
- * failure would cascade: the runtime, the pinned Pi, the directories, the
+ * failure would cascade: the runtime, the bundled agent, the directories, the
  * credentials, the port, the subagent roots, and finally a real worker with a
  * real session, which is the only check that proves the whole chain.
+ *
+ * The first two rows exist to make one claim checkable rather than marketing:
+ * **nothing piorbit runs comes from this machine.** The runtime is the Node
+ * binary shipped inside the application; the agent is the exact version pinned
+ * in git, resolved from inside the package. If a person has their own agent
+ * installed, doctor finds it, names it, and says it is not being used.
  *
  * Rules this file keeps:
  *   - no check ever prints a secret; credentials are reported by provider name,
@@ -13,10 +19,13 @@
  *     "check your configuration";
  *   - a check that cannot run says so (SKIP) instead of passing quietly.
  */
+import { execFile } from "node:child_process";
 import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statfsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { createRequire } from "node:module";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { WorkerClient } from "@piorbit/host";
 import type { ModelRef, SessionState } from "@piorbit/protocol";
 import { bool } from "../args.js";
@@ -25,7 +34,7 @@ import { hostUrl, type PiorbitPaths } from "../config.js";
 import { ExitCode, messageOf } from "../errors.js";
 import { inspectHost, portInUse, probeHealth } from "../hostfile.js";
 import type { Painter, Terminal } from "../output.js";
-import { resolvePinnedPi, runPi } from "../pi.js";
+import { runPi } from "../pi.js";
 import { formatDuration } from "../render.js";
 
 type Status = "pass" | "warn" | "fail" | "skip";
@@ -47,10 +56,14 @@ export const doctorCommand: Command = {
   summary: "check that piorbit can actually work, and say how to fix what cannot",
   usage: "piorbit doctor [--skip-worker] [--timeout <seconds>]",
   description: `
-Checks the Node version, the pinned Pi (that it resolves, and that it boots),
-the agent, session and state directories, provider credentials (names only —
-never a secret), the host port, the pi-subagents temp roots, and finally spawns
-a throwaway worker in a temporary directory and opens a session in it.
+Checks the runtime piorbit ships, the agent piorbit ships (that it is there,
+that it is the pinned version, and that the whole of it loads), the agent,
+session and state directories, provider credentials (names only — never a
+secret), the host port, the subagent temp roots, and finally spawns a throwaway
+worker in a temporary directory and opens a session in it.
+
+It also says whether this machine has an agent of its own — and that piorbit is
+not using it.
 
 Exits 1 if any check FAILs, 0 if the worst is a WARN, so it is safe in CI.
 `,
@@ -70,11 +83,15 @@ Exits 1 if any check FAILs, 0 if the worst is a WARN, so it is safe in CI.
     const timeoutMs = Math.max(1, args.flags["timeout"] === undefined ? 60 : Number(args.flags["timeout"])) * 1000;
     const checks: Check[] = [];
 
-    checks.push(checkNode());
-    const pi = checkPinnedPi();
-    checks.push(pi.check);
-    if (pi.bin) checks.push(await checkPiBoots(paths, timeoutMs));
-    checks.push(checkWritableDir("agent dir", paths.agentDir, false, "--agent-dir"));
+    // One child process answers for the runtime and the agent together: it is
+    // the *bundled* Node resolving the agent from the *worker's* own directory,
+    // which is the only place the answer means anything.
+    const agent = await inspectBundledAgent(timeoutMs);
+    checks.push(checkRuntime());
+    checks.push(...agentChecks(agent));
+    if (agent.ok) checks.push(await checkAgentCommand(paths, timeoutMs));
+    checks.push(checkMachineAgent(agent, paths));
+    checks.push(...agentDirChecks(paths));
     checks.push(checkWritableDir("session dir", paths.sessionDir, true, "--session-dir"));
     checks.push(checkWritableDir("state dir", paths.stateDir, true, "--state-dir"));
     checks.push(checkProviders(paths));
@@ -90,12 +107,12 @@ Exits 1 if any check FAILs, 0 if the worst is a WARN, so it is safe in CI.
       });
       checks.push({ name: "default model", status: "skip", detail: "needs the worker check" });
       checks.push({ name: "model auth", status: "skip", detail: "needs the worker check" });
-    } else if (!pi.bin) {
+    } else if (!agent.ok) {
       checks.push({
         name: "worker",
         status: "skip",
-        detail: "skipped: the pinned Pi did not resolve",
-        fix: "Fix the pinned Pi first; this check cannot run without it.",
+        detail: "skipped: the agent piorbit ships did not resolve",
+        fix: "Fix the agent first; this check cannot run without it.",
       });
       checks.push({ name: "default model", status: "skip", detail: "needs the worker check" });
       checks.push({ name: "model auth", status: "skip", detail: "needs the worker check" });
@@ -116,6 +133,9 @@ Exits 1 if any check FAILs, 0 if the worst is a WARN, so it is safe in CI.
           fail: failed,
           skip: checks.filter((check) => check.status === "skip").length,
         },
+        bundled: agent.ok
+          ? { runtime: agent.report.runtime, agent: agent.report.agent, machine: agent.report.machine }
+          : { runtime: { execPath: process.execPath, version: process.version }, error: agent.error },
         paths: {
           agentDir: paths.agentDir,
           sessionDir: paths.sessionDir,
@@ -167,51 +187,240 @@ function badge(status: Status, p: Painter): string {
 
 // ------------------------------------------------------------------- checks
 
-function checkNode(): Check {
+/**
+ * The Node this command is running on — which, launched from the installed
+ * application, *is* the Node piorbit ships. Reported with its path so the claim
+ * is checkable rather than asserted.
+ */
+function checkRuntime(): Check {
   const major = Number(process.versions.node.split(".")[0]);
-  if (major >= MIN_NODE_MAJOR) {
-    return { name: "node", status: "pass", detail: `v${process.versions.node}`, data: { version: process.versions.node } };
-  }
-  return {
-    name: "node",
-    status: "fail",
-    detail: `v${process.versions.node}; piorbit needs Node ${MIN_NODE_MAJOR} or newer`,
-    fix: `Install Node ${MIN_NODE_MAJOR} (\`nvm install ${MIN_NODE_MAJOR}\`) and run piorbit with it.`,
-    data: { version: process.versions.node },
-  };
-}
+  const origin = runtimeOrigin();
+  const where = origin.bundled
+    ? `the copy piorbit ships, at ${process.execPath} — not from this machine`
+    : `at ${process.execPath}`;
+  const data = { version: process.versions.node, execPath: process.execPath, bundled: origin.bundled };
 
-function checkPinnedPi(): { check: Check; bin?: string } {
-  try {
-    const pi = resolvePinnedPi();
+  if (major < MIN_NODE_MAJOR) {
     return {
-      bin: pi.bin,
-      check: {
-        name: "pinned pi",
-        status: "pass",
-        detail: `${pi.version} at ${pi.packageDir}`,
-        data: { version: pi.version, packageDir: pi.packageDir, bin: pi.bin },
-      },
-    };
-  } catch (error) {
-    return {
-      check: {
-        name: "pinned pi",
-        status: "fail",
-        detail: messageOf(error),
-        fix: "Run `ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install` at the repo root, then `pnpm -r build`.",
-      },
+      name: "runtime",
+      status: "fail",
+      detail: `node ${process.version} ${where}; piorbit needs Node ${MIN_NODE_MAJOR} or newer`,
+      fix: origin.bundled
+        ? "This install is damaged — reinstall piorbit."
+        : `Run piorbit with Node ${MIN_NODE_MAJOR} or newer, or install the piorbit application, which brings its own.`,
+      data,
     };
   }
+  return { name: "runtime", status: "pass", detail: `node ${process.version} — ${where}`, data };
 }
 
 /**
- * Booting Pi is a separate check from resolving it because the failure that
- * bites here is a *packaging* one: 0.85.0's bundle imports a package it does
- * not declare, which resolves under npm's hoisting and not under pnpm's
- * (docs/research/findings.md). Only running it catches that.
+ * Packaged, this file lives at
+ * `<root>/resources/app.asar.unpacked/node_modules/@piorbit/cli/dist/…` and the
+ * runtime at `<root>/resources/runtime/node`. Sharing that prefix is what makes
+ * "it came with the app" a fact rather than a hope.
  */
-async function checkPiBoots(paths: PiorbitPaths, timeoutMs: number): Promise<Check> {
+function runtimeOrigin(): { bundled: boolean; resources?: string } {
+  const marker = `${sep}resources${sep}app.asar.unpacked${sep}`;
+  const here = fileURLToPath(import.meta.url);
+  const at = here.indexOf(marker);
+  if (at < 0) return { bundled: false };
+  const resources = here.slice(0, at + `${sep}resources`.length);
+  return { bundled: process.execPath.startsWith(`${resources}${sep}`), resources };
+}
+
+// ---------------------------------------------------------- the bundled agent
+
+/** The JSON contract of `@piorbit/worker`'s `resolve-pi.js`. */
+type AgentReport =
+  | {
+      ok: true;
+      agent: {
+        package: string;
+        version: string;
+        pinned: string;
+        packageDir: string;
+        bin: string;
+        loaded?: boolean;
+        loadMs?: number;
+      };
+      runtime: { execPath: string; version: string };
+      worker: { dir: string; searched: string[] };
+      machine: { commandOnPath?: string; homeAgentDir?: string };
+    }
+  | {
+      ok: false;
+      error: string;
+      fix: string;
+      runtime: { execPath: string; version: string };
+      machine: { commandOnPath?: string; homeAgentDir?: string };
+    };
+
+type AgentInspection =
+  | { ok: true; report: Extract<AgentReport, { ok: true }> }
+  | { ok: false; error: string; fix: string; machine: { commandOnPath?: string; homeAgentDir?: string } };
+
+/**
+ * Ask the worker's own resolver, in a child process, with this Node. Spawning
+ * rather than importing is the point: the answer has to come from the place a
+ * worker will really load the agent from, and `--check` imports it so a missing
+ * transitive package is caught here instead of at somebody's first prompt.
+ */
+async function inspectBundledAgent(timeoutMs: number): Promise<AgentInspection> {
+  let script: string;
+  try {
+    const workerManifest = createRequire(import.meta.url).resolve("@piorbit/worker/package.json");
+    script = join(dirname(workerManifest), "dist", "resolve-pi.js");
+  } catch (error) {
+    return {
+      ok: false,
+      error: `piorbit cannot find its own worker package, so it cannot locate the agent (${messageOf(error)}).`,
+      fix: "This install is incomplete. Reinstall piorbit, or run `ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install` in a source checkout.",
+      machine: {},
+    };
+  }
+  if (!existsSync(script)) {
+    return {
+      ok: false,
+      error: `the agent resolver is missing at ${script}.`,
+      fix: "Build the workspace (`pnpm -r build`), or reinstall piorbit.",
+      machine: {},
+    };
+  }
+
+  const stdout = await new Promise<string>((settle) => {
+    execFile(
+      process.execPath,
+      [script, "--check"],
+      { timeout: timeoutMs, encoding: "utf8", maxBuffer: 1024 * 1024 },
+      (_error, out) => settle(out),
+    );
+  });
+  const report = parseAgentReport(stdout);
+  if (!report) {
+    return {
+      ok: false,
+      error: "the agent resolver gave no answer, so piorbit cannot say which agent it would run.",
+      fix: "Reinstall piorbit. If it happens again, please report it with the output of `piorbit doctor --json`.",
+      machine: {},
+    };
+  }
+  if (!report.ok) return { ok: false, error: report.error, fix: report.fix, machine: report.machine ?? {} };
+  return { ok: true, report };
+}
+
+function parseAgentReport(stdout: string): AgentReport | undefined {
+  for (const line of stdout.split("\n").reverse()) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("{")) continue;
+    try {
+      const parsed = JSON.parse(trimmed) as AgentReport;
+      if (typeof parsed?.ok === "boolean") return parsed;
+    } catch {
+      // Not the report line; keep looking backwards.
+    }
+  }
+  return undefined;
+}
+
+/** Three rows from one answer: it is there, it is the pinned one, it loads. */
+function agentChecks(inspection: AgentInspection): Check[] {
+  if (!inspection.ok) {
+    return [
+      { name: "agent", status: "fail", detail: inspection.error, fix: inspection.fix },
+      { name: "agent pin", status: "skip", detail: "needs the agent" },
+      { name: "agent loads", status: "skip", detail: "needs the agent" },
+    ];
+  }
+  const { agent } = inspection.report;
+  return [
+    {
+      name: "agent",
+      status: "pass",
+      detail: `${agent.package} ${agent.version} — shipped inside piorbit at ${agent.packageDir}, not from this machine`,
+      data: { package: agent.package, version: agent.version, packageDir: agent.packageDir, bin: agent.bin },
+    },
+    {
+      name: "agent pin",
+      status: "pass",
+      detail: `${agent.version} is exactly the version piorbit pins`,
+      data: { version: agent.version, pinned: agent.pinned },
+    },
+    {
+      name: "agent loads",
+      status: "pass",
+      detail: `the whole agent loaded in ${formatDuration(agent.loadMs ?? 0)}`,
+      data: { loadMs: agent.loadMs ?? 0 },
+    },
+  ];
+}
+
+/**
+ * The row that makes "piorbit ignores your own agent" visible. It is a PASS
+ * whether or not one is installed: finding one is not a problem, it is the
+ * proof that piorbit left it alone.
+ */
+function checkMachineAgent(inspection: AgentInspection, paths: PiorbitPaths): Check {
+  const machine = inspection.ok ? inspection.report.machine : inspection.machine;
+  const found = [
+    machine.commandOnPath ? `a command at ${machine.commandOnPath}` : "",
+    machine.homeAgentDir ? `a directory at ${machine.homeAgentDir}` : "",
+  ].filter(Boolean);
+
+  if (found.length === 0) {
+    return {
+      name: "this machine",
+      status: "pass",
+      detail: "no agent of its own — piorbit does not need one",
+      data: { commandOnPath: null, homeAgentDir: null },
+    };
+  }
+  // Never a warning of its own: the sharing case is one condition, and the
+  // `agent dir` row owns it. Two warnings for one problem is noise.
+  const sharing = machine.homeAgentDir !== undefined && paths.agentDir === machine.homeAgentDir;
+  return {
+    name: "this machine",
+    status: "pass",
+    detail: sharing
+      ? `${found.join(" and ")} — piorbit is currently sharing that directory (see the agent dir row)`
+      : `${found.join(" and ")} — piorbit runs neither`,
+    data: {
+      commandOnPath: machine.commandOnPath ?? null,
+      homeAgentDir: machine.homeAgentDir ?? null,
+      shared: sharing,
+    },
+  };
+}
+
+/**
+ * The agent directory, plus one thing `checkWritableDir` cannot know: whether
+ * it belongs to piorbit at all. A directory shared with another installation is
+ * usable, and it is also how two programs end up fighting over one settings
+ * file, so it is said out loud.
+ */
+function agentDirChecks(paths: PiorbitPaths): Check[] {
+  const check = checkWritableDir("agent dir", paths.agentDir, false, "--agent-dir");
+  const stock = join(homedir(), ".pi", "agent");
+  if (paths.agentDir !== stock || check.status === "fail") return [check];
+  return [
+    {
+      ...check,
+      status: check.status === "pass" ? "warn" : check.status,
+      detail: `${check.detail} — this directory belongs to a separate agent installation`,
+      fix:
+        `piorbit keeps its own settings, credentials and sessions apart from anything else on this machine, ` +
+        `and sharing this directory means two programs writing one settings file. Give piorbit its own by ` +
+        `setting PIORBIT_AGENT_DIR — the piorbit application does this for you.`,
+    },
+  ];
+}
+
+/**
+ * Running the agent's own command, which is a different code path from loading
+ * it as a library: `piorbit pi` and the `piorbit packages` verbs go through the
+ * command, workers go through the library, and either can be broken alone.
+ */
+async function checkAgentCommand(paths: PiorbitPaths, timeoutMs: number): Promise<Check> {
   const started = Date.now();
   try {
     const result = await withTimeout(
@@ -219,22 +428,22 @@ async function checkPiBoots(paths: PiorbitPaths, timeoutMs: number): Promise<Che
       // broken, and a missing cwd would fail the spawn for the wrong reason.
       runPi(["--version"], { paths, global: false, stdio: "pipe", cwd: tmpdir() }),
       timeoutMs,
-      `Pi did not answer \`--version\` within ${Math.round(timeoutMs / 1000)}s`,
+      `the agent did not answer \`--version\` within ${Math.round(timeoutMs / 1000)}s`,
     );
     const took = formatDuration(Date.now() - started);
     if (result.code === 0) {
       const version = result.stdout.trim().split("\n")[0] ?? "";
-      return { name: "pi boots", status: "pass", detail: `${version || "ok"} (${took})`, data: { took } };
+      return { name: "agent command", status: "pass", detail: `${version || "ok"} (${took})`, data: { took } };
     }
     return {
-      name: "pi boots",
+      name: "agent command",
       status: "fail",
-      detail: `\`pi --version\` exited ${result.signal ?? result.code}: ${firstMeaningfulLine(result.stderr || result.stdout)}`,
-      fix: "If it cannot find a module, reinstall from the repo root: `ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install`.",
+      detail: `it exited ${result.signal ?? result.code}: ${firstMeaningfulLine(result.stderr || result.stdout)}`,
+      fix: "This install is incomplete — reinstall piorbit. From a source checkout: `ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install`.",
     };
   } catch (error) {
     return {
-      name: "pi boots",
+      name: "agent command",
       status: "fail",
       detail: messageOf(error),
       fix: "Try it by hand: `piorbit pi --version`.",
@@ -335,7 +544,9 @@ function checkProviders(paths: PiorbitPaths): Check {
       name: "providers",
       status: "fail",
       detail: `no credentials in ${authPath} and no provider key in the environment`,
-      fix: "Run `piorbit pi` and use its /login command, or export a provider API key.",
+      fix:
+        "Open piorbit and sign in to a provider — the first-run flow asks for one, and " +
+        "Settings → Models can add one at any time. From a terminal: `piorbit pi`, then /login.",
       data: { authPath, providers: [] },
     };
   }
@@ -496,7 +707,9 @@ async function checkWorker(
           name: "default model",
           status: "fail",
           detail: "a session opened but no model resolved",
-          fix: "Set one in Pi's settings (`piorbit pi` → /model), or check that the provider it names has credentials.",
+          fix:
+            "Choose a default model in Settings → Models. If one is already chosen, the provider it " +
+            "names has no credentials — sign in to that provider on the same screen.",
           data: { available: models.length },
         },
         auth: { name: "model auth", status: "skip", detail: "no model to check" },

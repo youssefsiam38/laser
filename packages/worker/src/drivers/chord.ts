@@ -15,7 +15,15 @@
  *   keyed dialog services  → ui_request / respondToUi
  */
 
-import type { ContentBlock, ModelRef, SessionState, ThinkingLevel, UiDialogResponse } from "@piorbit/protocol";
+import type {
+  CommandInfo,
+  ContentBlock,
+  ModelRef,
+  PromptInfo,
+  SessionState,
+  ThinkingLevel,
+  UiDialogResponse,
+} from "@piorbit/protocol";
 import {
   DriverUnavailableError,
   type DriverListener,
@@ -46,6 +54,8 @@ export class ChordDriver implements SessionDriver {
   async navigateTree(entryId: string, options?: { summarize?: boolean; label?: string }): Promise<{ editorText?: string; cancelled: boolean }> { void entryId; void options; throw new DriverUnavailableError(this.kind, NOT_YET); }
   async fork(entryId: string): Promise<{ state: SessionState; editorText?: string }> { void entryId; throw new DriverUnavailableError(this.kind, NOT_YET); }
   respondToUi(response: UiDialogResponse): void { void response; }
+  async commands(): Promise<CommandInfo[]> { throw new DriverUnavailableError(this.kind, NOT_YET); }
+  async prompts(): Promise<PromptInfo[]> { throw new DriverUnavailableError(this.kind, NOT_YET); }
   async entries(): Promise<unknown[]> { throw new DriverUnavailableError(this.kind, NOT_YET); }
   async dispose(): Promise<void> { this.listeners.clear(); }
 }

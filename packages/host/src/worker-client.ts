@@ -33,6 +33,8 @@ export interface WorkerClientOptions {
   workerMain?: string;
   /** Node binary to run the worker with; defaults to the current one. */
   nodeBinary?: string;
+  /** Extra environment for the worker, on top of the host's own. */
+  env?: Readonly<Record<string, string>>;
   onNotification: (notification: JsonRpcNotification) => void;
   onExit: (code: number | null, signal: NodeJS.Signals | null) => void;
   onStderr?: (text: string) => void;
@@ -74,7 +76,7 @@ export class WorkerClient {
 
     this.child = spawn(options.nodeBinary ?? process.execPath, args, {
       stdio: ["ignore", "pipe", "pipe", "pipe"],
-      env: { ...process.env, PIORBIT_WORKER_FD: "3" },
+      env: { ...process.env, ...options.env, PIORBIT_WORKER_FD: "3" },
     });
     this.pipe = this.child.stdio[3] as Duplex;
 

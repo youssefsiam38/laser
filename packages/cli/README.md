@@ -21,6 +21,24 @@ Two rules hold everywhere:
 Colour turns itself off when stdout is not a terminal, when `NO_COLOR` is set,
 and when you pass `--no-color`.
 
+## One name, two programs
+
+On a machine where piorbit was installed with the one-line installer,
+`~/.local/bin/piorbit` is the app's launcher, and it dispatches:
+
+| What you type | What runs |
+| --- | --- |
+| `piorbit` | the window |
+| `piorbit://…` | the window, on that link |
+| `piorbit doctor`, `piorbit sessions`, any ordinary word | this command |
+| `piorbit --help`, `-h`, `--version`, `-v` | this command |
+| anything else starting with `-` | the window — those are Chromium's flags, and the app passes them to itself when it relaunches |
+
+The command runs on the same bundled runtime as the app and resolves the same
+directories, so a terminal and the window can never show different sessions.
+Nothing about using piorbit requires this command; it is here for the things a
+window is the wrong shape for.
+
 ---
 
 ## Commands
@@ -166,11 +184,22 @@ Resolution order, used identically by every command:
 
 | Thing | Order |
 | --- | --- |
-| agent dir | `--agent-dir` → `PIORBIT_AGENT_DIR` → `PI_CODING_AGENT_DIR` → `~/.pi/agent` |
+| agent dir | `--agent-dir` → `PIORBIT_AGENT_DIR` → `PI_CODING_AGENT_DIR` → `<data>/agent` |
 | session dir | `--session-dir` → `PIORBIT_SESSION_DIR` → `PI_CODING_AGENT_SESSION_DIR` → `<agent>/sessions` |
-| state dir | `--state-dir` → `PIORBIT_STATE_DIR` → `~/.piorbit`, or `<agent>/piorbit` when the agent dir was overridden |
+| state dir | `--state-dir` → `PIORBIT_STATE_DIR` → `<data>/state`, or `<agent>/piorbit` when the agent dir was overridden |
 | subagents root | `--subagents-temp-root` → `PIORBIT_SUBAGENTS_TEMP_ROOT` → `PI_SUBAGENTS_TEMP_ROOT` → `<state>/subagents` |
 | port | `--port` → `PIORBIT_PORT` → `41441` |
+
+`<data>` is piorbit's own directory — `$XDG_DATA_HOME/piorbit` (usually
+`~/.local/share/piorbit`) on Linux, `~/Library/Application Support/piorbit` on
+macOS, `%LOCALAPPDATA%\piorbit` on Windows. It is **not** the agent's. If you
+already run the underlying agent from a terminal, its `~/.pi/agent` is never
+opened and never written: uninstalling piorbit cannot damage it, and it cannot
+break piorbit. `PIORBIT_AGENT_DIR` (or `--agent-dir`) is the lever if you
+genuinely want both to share one directory.
+
+The app resolves the same directories from the same function, so a terminal and
+the window always agree about which sessions exist.
 
 An overridden agent directory gets its own state directory, so
 `piorbit up --agent-dir /tmp/sandbox` can never adopt or stop the host serving

@@ -68,14 +68,14 @@ function printPackages(term: Terminal, packages: readonly PackageEntry[]): void 
 export const packagesCommand: Command = {
   name: "packages",
   group: "Projects",
-  summary: "install, remove and update Pi packages",
+  summary: "install, remove and update agent packages",
   usage: "piorbit packages [list|install <source>|remove <source>|update [source]|check] [--scope <user|project>]",
   description: `
-Drives Pi's own package manager through the worker for a project, so the result
-is identical to running \`pi\`'s package commands — same install directory, same
-settings entry — and the app sees it immediately.
+Drives the agent's own package manager through the worker for a project — same
+install directory, same settings entry as the agent would use itself — and the
+app sees the result immediately.
 
-A source is an npm package name or a git URL, exactly as Pi accepts it.
+A source is an npm package name or a git URL.
 --scope user (the default) makes it available in every project; --scope project
 adds it to this project's own settings.
 `,

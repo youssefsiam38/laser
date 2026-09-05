@@ -150,7 +150,7 @@ export const newCommand: Command = {
   summary: "start a session in a project directory",
   usage: "piorbit new [cwd]",
   description: `
-Starts a Pi session in a directory, through the host's worker for that
+Starts a session in a directory, through the host's worker for that
 directory. The session appears in the app immediately.
 `,
   positionals: [{ name: "cwd", description: "Project directory", optional: true }],
@@ -429,8 +429,8 @@ export const entriesCommand: Command = {
   usage: "piorbit entries [session] [--limit <n>]",
   description: `
 Prints the persisted entries of a session with their ids, newest last, so you
-can find the entry to fork from. Entry shapes are Pi's, not piorbit's; the
-preview column is best-effort.
+can find the entry to fork from. Entry shapes come from the agent's own session
+file, not from piorbit; the preview column is best-effort.
 `,
   positionals: [{ name: "session", description: "Session id or path", optional: true }],
   flags: {

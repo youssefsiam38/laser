@@ -7,7 +7,7 @@ import type { FlagSpecs, ParsedArgs } from "./args.js";
 import type { PiorbitPaths } from "./config.js";
 import type { Terminal } from "./output.js";
 
-export type CommandGroup = "Host" | "Sessions" | "Projects" | "Relay" | "Pi" | "Diagnostics" | "Shell";
+export type CommandGroup = "Host" | "Sessions" | "Projects" | "Relay" | "Advanced" | "Diagnostics" | "Shell";
 
 export interface PositionalSpec {
   name: string;
