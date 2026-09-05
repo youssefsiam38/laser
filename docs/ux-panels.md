@@ -91,7 +91,10 @@ The mental model is Apple's Dynamic Island rather than a set of window
 panes. There is **one element per panel** that grows and shrinks through four
 sizes, keeping its identity, position and state the whole way. It is never
 destroyed and re-created at a different size, and it never becomes a
-different kind of object on the way.
+different kind of object on the way. **One exception, recorded (D-34):** on a
+phone, opening an island into the bottom sheet does re-create it, because the
+expanded island's DOM has to live inside the sheet. Everywhere else — every
+size change in the dock, including maximize — it is one element for life.
 
 Three consequences, and they are the whole difference from a pane system:
 
@@ -139,7 +142,8 @@ Rules for the geometry:
   pane still shows its status dot and title, so a collapsed run that starts
   waiting for you still lights up (R5).
 - On a phone the island sits above the composer: minimal by default, tapping
-  it expands to a sheet. Same element, same four sizes, less room.
+  it expands to a sheet. Same component, same four sizes, less room — and the
+  one place a panel is re-created rather than morphed (D-34).
 
 
 ### The legibility floor

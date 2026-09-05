@@ -290,7 +290,9 @@ function Overflow({ nodes, first = false, onFocus, onReveal }: { nodes: readonly
         {nodes.map((node) => (
           <DropdownMenuItem key={node.id} onSelect={() => (node.children.length > 0 ? onFocus(node.id) : onReveal(node))}>
             <StatusDot status={node.attention} size="sm" />
-            <span className="min-w-0 flex-1 truncate">{node.title}</span>
+            <span className="min-w-0 flex-1 truncate" title={node.title}>
+              {node.title}
+            </span>
             {node.elapsedMs !== undefined && <span className="typed text-ink-3 tabular-nums">{formatElapsed(node.elapsedMs)}</span>}
           </DropdownMenuItem>
         ))}
@@ -346,7 +348,9 @@ function MobileStrip({ tree, row, onFocus }: StripProps) {
         )}
         <span className="flex min-w-0 flex-1 items-center gap-1.5">
           {here && <StatusDot status={here.attention} size="sm" />}
-          <span className="min-w-0 truncate text-xs text-ink">{here ? here.title : "Agent work"}</span>
+          <span className="min-w-0 truncate text-xs text-ink" title={here ? here.title : "Agent work"}>
+            {here ? here.title : "Agent work"}
+          </span>
         </span>
         <button
           type="button"
@@ -378,7 +382,9 @@ function MobileStrip({ tree, row, onFocus }: StripProps) {
                   className="flex min-h-11 min-w-0 flex-1 items-center gap-2 px-4 text-start outline-none focus-visible:outline-solid focus-visible:outline-2 -outline-offset-2 focus-visible:outline-live"
                 >
                   <StatusDot status={node.attention} size="sm" />
-                  <span className="min-w-0 flex-1 truncate text-sm text-ink">{node.title}</span>
+                  <span className="min-w-0 flex-1 truncate text-sm text-ink" title={node.title}>
+                    {node.title}
+                  </span>
                   {node.elapsedMs !== undefined && (
                     <span className="typed shrink-0 text-ink-3 tabular-nums">{formatElapsed(node.elapsedMs)}</span>
                   )}

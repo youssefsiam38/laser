@@ -3,7 +3,7 @@
  * Markdown as a document-panel body (M8-T3), the native replacement for
  * pi-markdown-preview, which is terminal-only (docs/research/findings.md).
  *
- * It is the transcript's own `MarkdownText` — the same component map, the same
+ * It is the transcript's own `markdown-text` element — the same component map, the same
  * type scale, the same code headers and highlighting — put in front of a string
  * instead of a streaming message part. `TextMessagePartProvider` is the seam
  * assistant-ui provides for exactly this: it publishes a completed text part on
@@ -26,7 +26,7 @@
  */
 import { TextMessagePartProvider } from "@assistant-ui/react";
 
-import { MarkdownText } from "@/components/thread/MarkdownText";
+import { MarkdownText } from "@/components/assistant-ui/elements/markdown-text";
 import { cn } from "@/lib/utils";
 
 export interface MarkdownPreviewProps {

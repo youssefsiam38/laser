@@ -1,118 +1,57 @@
-import { useCallback, useSyncExternalStore } from "react";
+/**
+ * Compatibility view of the theme store for the rail toggle, sonner and the
+ * highlighter: a two-state "dark" | "light" plus a toggle. The real system is
+ * `@/theme` (docs/ux-theme.md); new code should import `useTheme` from there.
+ */
+import { useCallback } from "react";
+
+import { themeStore } from "@/theme/store";
+import { useTheme as useFullTheme } from "@/theme/use-theme";
 
 export type Theme = "light" | "dark";
 export type ThemePreference = Theme | "system";
 
-export const THEME_STORAGE_KEY = "piorbit-theme";
+export { THEME_STORAGE_KEY } from "@/theme/apply";
 
-const DARK_QUERY = "(prefers-color-scheme: dark)";
-const listeners = new Set<() => void>();
-
-function hasDom(): boolean {
-  return typeof window !== "undefined" && typeof document !== "undefined";
+/** Resolved base currently applied. */
+export function resolveTheme(): Theme {
+  return themeStore.getTheme().base;
 }
 
-/** Persisted preference; "system" when nothing (valid) is stored. */
+/** "system" while following the OS, otherwise the applied base. */
 export function getThemePreference(): ThemePreference {
-  if (!hasDom()) return "system";
-  try {
-    const raw = window.localStorage.getItem(THEME_STORAGE_KEY);
-    return raw === "dark" || raw === "light" ? raw : "system";
-  } catch {
-    return "system";
-  }
+  const s = themeStore.getState();
+  return s.followSystem ? "system" : s.theme.base;
 }
 
-function systemTheme(): Theme {
-  if (!hasDom() || typeof window.matchMedia !== "function") return "light";
-  return window.matchMedia(DARK_QUERY).matches ? "dark" : "light";
-}
-
-/** Resolved theme: the preference, or the OS theme when the preference is "system". */
-export function resolveTheme(pref: ThemePreference = getThemePreference()): Theme {
-  return pref === "system" ? systemTheme() : pref;
-}
-
-/** Applies `.dark` on <html> and syncs `color-scheme`. Idempotent. */
-export function applyTheme(theme: Theme): void {
-  if (!hasDom()) return;
-  const root = document.documentElement;
-  root.classList.toggle("dark", theme === "dark");
-  root.style.colorScheme = theme;
-}
-
-function emit(): void {
-  for (const l of listeners) l();
-}
-
-/** Persists the preference ("system" clears storage), applies it, notifies subscribers. */
 export function setThemePreference(pref: ThemePreference): void {
-  try {
-    if (pref === "system") window.localStorage.removeItem(THEME_STORAGE_KEY);
-    else window.localStorage.setItem(THEME_STORAGE_KEY, pref);
-  } catch {
-    /* storage unavailable: still apply for this page */
+  if (pref === "system") {
+    themeStore.setFollowSystem(true);
+    return;
   }
-  applyTheme(resolveTheme(pref));
-  emit();
+  const s = themeStore.getState();
+  if (s.followSystem) themeStore.setFollowSystem(false);
+  if (themeStore.getTheme().base !== pref) themeStore.toggleBase();
 }
 
-/** Flips light <-> dark from the currently resolved theme. */
 export function toggleTheme(): Theme {
-  const next: Theme = resolveTheme() === "dark" ? "light" : "dark";
-  setThemePreference(next);
-  return next;
-}
-
-let wired = false;
-function wireGlobalListeners(): void {
-  if (wired || !hasDom()) return;
-  wired = true;
-  // OS theme changes matter only while the preference is "system".
-  if (typeof window.matchMedia === "function") {
-    window.matchMedia(DARK_QUERY).addEventListener("change", () => {
-      if (getThemePreference() === "system") applyTheme(systemTheme());
-      emit();
-    });
-  }
-  // Another tab changed the stored preference.
-  window.addEventListener("storage", (e) => {
-    if (e.key === THEME_STORAGE_KEY || e.key === null) {
-      applyTheme(resolveTheme());
-      emit();
-    }
-  });
-}
-
-function subscribe(cb: () => void): () => void {
-  wireGlobalListeners();
-  listeners.add(cb);
-  return () => listeners.delete(cb);
+  return themeStore.toggleBase();
 }
 
 export interface UseTheme {
-  /** Resolved theme currently applied. */
+  /** Resolved base currently applied. */
   theme: Theme;
-  /** Persisted preference. */
+  /** "system" while following the OS. */
   preference: ThemePreference;
   setTheme: (pref: ThemePreference) => void;
   toggle: () => void;
 }
 
-/**
- * Theme state for the rail toggle. `index.html` applies the class before first
- * paint; this hook keeps it in sync afterwards (OS changes, other tabs).
- */
 export function useTheme(): UseTheme {
-  const theme = useSyncExternalStore(subscribe, resolveTheme, () => "light" as Theme);
-  const preference = useSyncExternalStore(
-    subscribe,
-    getThemePreference,
-    () => "system" as ThemePreference,
-  );
+  const { base, followSystem, toggleBase } = useFullTheme();
   const setTheme = useCallback((pref: ThemePreference) => setThemePreference(pref), []);
   const toggle = useCallback(() => {
-    toggleTheme();
-  }, []);
-  return { theme, preference, setTheme, toggle };
+    toggleBase();
+  }, [toggleBase]);
+  return { theme: base, preference: followSystem ? "system" : base, setTheme, toggle };
 }

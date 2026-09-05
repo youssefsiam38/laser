@@ -12,9 +12,11 @@
  * carries an identity for this process (see `processIdentity`) so a file left
  * behind by a crash or a power cut cannot be mistaken for a live host.
  */
-import { HostServer } from "@piorbit/host";
+import { fromBase64Url, isAuthorized } from "@piorbit/crypto";
+import { HostServer, type HostRelayOptions } from "@piorbit/host";
 import type { PiorbitPaths } from "./config.js";
 import { clearHostFile, processIdentity, writeHostFile } from "./hostfile.js";
+import { deviceListOf, loadIdentity, loadStaticKey, readRelayConfig } from "./relay-config.js";
 import { CLI_VERSION } from "./version.js";
 
 export interface DaemonOptions {
@@ -23,9 +25,57 @@ export interface DaemonOptions {
   log?: (line: string) => void;
 }
 
+/**
+ * Outbound relay channels for the phones `piorbit relay pair` has linked
+ * (M9-T7). Absent unless `relay.json` exists **and** names at least one
+ * device: with no relay configured the host makes no outbound connection at
+ * all, which is what makes piorbit a local app by default.
+ *
+ * `isAuthorized` re-reads nothing — it closes over the list this process
+ * started with, and `piorbit relay revoke` tells the person to restart. That
+ * is deliberate: a host that re-read a file on every reconnect would be a
+ * second reader of state the CLI owns, and the failure mode (a revoked phone
+ * reconnecting until the next restart) is stated where it happens instead of
+ * being hidden behind a watcher.
+ */
+async function relayOptions(paths: PiorbitPaths, log: (line: string) => void): Promise<HostRelayOptions | undefined> {
+  let config;
+  try {
+    config = readRelayConfig(paths);
+  } catch (error) {
+    log(`relay: ignoring the relay configuration — ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
+  }
+  if (!config?.deviceList) return undefined;
+
+  try {
+    const { identity } = await loadIdentity(paths);
+    const list = deviceListOf(config, identity);
+    if (list.devices.length === 0) return undefined;
+    const { keyPair } = await loadStaticKey(paths);
+    log(`relay: ${list.devices.length} linked device(s) on ${config.relayUrl}`);
+    return {
+      url: config.relayUrl,
+      staticKeyPair: keyPair,
+      devices: list.devices.map((device) => ({
+        id: device.id,
+        name: device.name,
+        publicKey: fromBase64Url(device.publicKey),
+      })),
+      isAuthorized: (publicKey) => isAuthorized(list, publicKey),
+      ...(config.publicOrigin !== undefined ? { publicOrigin: config.publicOrigin } : {}),
+    };
+  } catch (error) {
+    log(`relay: not connecting — ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
+  }
+}
+
 export async function runDaemon(options: DaemonOptions): Promise<void> {
   const { paths } = options;
   const log = options.log ?? ((line: string) => process.stderr.write(`${line}\n`));
+
+  const relay = await relayOptions(paths, log);
 
   const server = new HostServer({
     host: paths.host,
@@ -46,6 +96,7 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
             .filter((origin) => origin.length > 0),
         }
       : {}),
+    ...(relay ? { relay } : {}),
     log,
   });
 

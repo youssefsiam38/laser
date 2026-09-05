@@ -21,7 +21,7 @@ const badgeVariants = cva(
       variant: {
         default: "bg-surface-2 text-ink-2",
         outline: "border-line bg-transparent text-ink-2",
-        mono: "border-line bg-transparent px-1.5 font-mono text-xs tracking-[0.01em] text-ink-2 tnum",
+        mono: "border-line bg-transparent px-1.5 font-mono text-xs tracking-typed text-ink-2 tnum",
         live: "bg-[color-mix(in_oklab,var(--live)_12%,transparent)] text-live",
         attention: "bg-[color-mix(in_oklab,var(--attention)_14%,transparent)] text-attention",
         danger: "bg-[color-mix(in_oklab,var(--danger)_12%,transparent)] text-danger",

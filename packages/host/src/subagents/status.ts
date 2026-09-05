@@ -466,9 +466,20 @@ function workflowGraph(v: unknown): WorkflowGraph | undefined {
   };
 }
 
+/**
+ * Caps on what one `status.json` can turn into. They exist so a corrupt or
+ * hostile file cannot make the host allocate without bound — not to trim a
+ * real run, which is why they sit far above any plausible one. The trace is
+ * cumulative and decides lane order (`traceOrder`), and a truncated step list
+ * loses whole child panels, so both would present a guess as a fact (R3, R7)
+ * if the cap were anywhere near a working number.
+ */
+const MAX_TRACE_ENTRIES = 20_000;
+const MAX_STEPS = 5_000;
+
 export function workflowTrace(v: unknown): WorkflowTraceEntry[] | undefined {
   const out = arr(v)
-    .slice(0, 256)
+    .slice(0, MAX_TRACE_ENTRIES)
     .map((raw): WorkflowTraceEntry | undefined => {
       const o = rec(raw);
       if (!o) return undefined;
@@ -496,7 +507,7 @@ export function parseStatus(raw: unknown, dir: string, fallbackRunId: string): A
   if (!state || !RUN_STATES.has(state)) return undefined;
   const mode = str(o.mode);
   const steps = arr(o.steps)
-    .slice(0, 256)
+    .slice(0, MAX_STEPS)
     .map(step)
     .filter((s): s is StatusStep => s !== undefined);
   const workflow = rec(o.workflow);

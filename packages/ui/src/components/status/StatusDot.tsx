@@ -47,7 +47,7 @@ function StatusDot({ status, size = "sm", label, className, style, ...props }: S
         <span
           aria-hidden="true"
           className={cn(
-            "absolute -inset-[3px] rounded-full motion-safe:animate-sweep",
+            "absolute -inset-0.75 rounded-full motion-safe:animate-sweep",
             "bg-[conic-gradient(from_0deg,transparent_0deg,transparent_250deg,color-mix(in_oklab,var(--dot)_55%,transparent)_360deg)]",
             "[mask:radial-gradient(farthest-side,transparent_calc(100%-2px),#000_calc(100%-2px))]",
             "motion-reduce:hidden",

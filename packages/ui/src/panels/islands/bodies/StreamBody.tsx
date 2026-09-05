@@ -5,7 +5,8 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type UIEvent 
 import { Button } from "@/components/ui/button";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { cn } from "@/lib/utils";
-import { cssColor, parseAnsi, stripAnsi, type AnsiSpan } from "../../ansi.js";
+import { AnsiText } from "@/components/assistant-ui/elements/ansi-text";
+import { stripAnsi } from "../../ansi.js";
 import { useRefContent } from "../../read.js";
 import { panelKey, type PanelEntry, velocityOf } from "../../store.js";
 import { formatBytes, formatRate } from "../../values.js";
@@ -189,7 +190,7 @@ function EncodingSwitch({ value, onChange }: { value: StreamEncoding; onChange(v
           aria-checked={value === encoding}
           size="xs"
           variant="ghost"
-          className={cn("h-5 rounded-[5px] px-1.5 font-mono text-xs uppercase tracking-[0.06em]", value === encoding && "bg-surface text-ink shadow-float-sm")}
+          className={cn("h-5 rounded-md px-1.5 font-mono text-xs uppercase tracking-eyebrow", value === encoding && "bg-surface text-ink shadow-float-sm")}
           onClick={() => onChange(encoding)}
         >
           {encoding}
@@ -197,29 +198,6 @@ function EncodingSwitch({ value, onChange }: { value: StreamEncoding; onChange(v
       ))}
     </div>
   );
-}
-
-function AnsiText({ text }: { text: string }) {
-  const spans = useMemo(() => parseAnsi(text).spans, [text]);
-  return (
-    <>
-      {spans.map((span, i) => (
-        <span key={i} style={styleOf(span)} className={cn(span.bold && "font-semibold", span.dim && "opacity-60", span.italic && "italic", span.underline && "underline", span.strike && "line-through")}>
-          {span.text}
-        </span>
-      ))}
-    </>
-  );
-}
-
-function styleOf(span: AnsiSpan): CSSProperties | undefined {
-  const fg = cssColor(span.inverse ? span.bg : span.fg);
-  const bg = cssColor(span.inverse ? span.fg : span.bg);
-  if (!fg && !bg && !span.inverse) return undefined;
-  return {
-    ...(fg ? { color: fg } : span.inverse ? { color: "var(--terminal-bg)" } : {}),
-    ...(bg ? { backgroundColor: bg } : span.inverse ? { backgroundColor: "var(--terminal-ink)" } : {}),
-  };
 }
 
 /**

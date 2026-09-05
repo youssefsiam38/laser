@@ -72,6 +72,17 @@ describe("the legibility floor and the palette", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("animates only with the app's own keyframes, never Tailwind's defaults", () => {
+    // `animate-spin`, `animate-pulse` and `animate-bounce` carry Tailwind's
+    // built-in durations and easings, which no `--motion-*` token can reach —
+    // the assertion above cannot see them, which is why they get their own.
+    // The app's animations are declared in `globals.css` beside each other:
+    // sweep, attention, caret, shimmer, busy.
+    const defaultAnimation = /\banimate-(?:spin|pulse|bounce)\b/;
+    const offenders = sources.filter(({ text }) => defaultAnimation.test(text)).map(({ name }) => name);
+    expect(offenders).toEqual([]);
+  });
+
   it("takes every colour from the palette, not from a literal", () => {
     // Hex, rgb() and hsl() literals in a class or a style. `globals.css` is
     // where the palette is defined and is not scanned; the two documented
@@ -82,6 +93,11 @@ describe("the legibility floor and the palette", () => {
       "components/status/StatusRing.tsx",
       // The offline page renders when the stylesheet itself did not load.
       "pwa/sw.ts",
+      // docs/ux-theme.md T1: "the only literals allowed are in the primitive
+      // scales and the preset definitions". These two files are that place —
+      // scanning them is scanning the palette for being a palette.
+      "theme/primitives.ts",
+      "theme/presets.ts",
     ]);
     const offenders = sources.filter(({ name, text }) => !allowed.has(name) && literal.test(text)).map(({ name }) => name);
     expect(offenders).toEqual([]);

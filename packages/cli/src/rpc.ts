@@ -115,6 +115,21 @@ export class HostRpc {
     this.socket.close();
   }
 
+  /**
+   * Reject everything in flight with `error` and hang up.
+   *
+   * For the case where the host is waiting on an answer this client cannot
+   * give. The host holds a worker start behind a question and keeps holding
+   * it; without this the request simply never returns, which in a terminal is
+   * indistinguishable from a hang.
+   */
+  failPending(error: Error): void {
+    this.closing = true;
+    for (const entry of this.pending.values()) entry.reject(error);
+    this.pending.clear();
+    this.socket.close();
+  }
+
   private onMessage(line: string): void {
     let message: JsonRpcMessage;
     try {

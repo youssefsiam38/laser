@@ -17,7 +17,7 @@ import { resolvePaths } from "./config.js";
 import { CliError, ExitCode, messageOf, type ExitCodeValue } from "./errors.js";
 import { colorMode, flagsFor, GLOBAL_FLAGS } from "./flags.js";
 import { renderCommandHelp, renderRootHelp, TOPICS } from "./help.js";
-import { sanitize, Terminal } from "./output.js";
+import { sanitize, Terminal, type ColorMode } from "./output.js";
 import { doctorCommand } from "./commands/doctor.js";
 import { hostCommands } from "./commands/host.js";
 import { logsCommand } from "./commands/logs.js";
@@ -27,6 +27,7 @@ import { packagesCommand } from "./commands/packages.js";
 import { planCommand } from "./commands/plan.js";
 import { piCommand } from "./commands/pi.js";
 import { projectsCommand } from "./commands/projects.js";
+import { relayCommand } from "./commands/relay.js";
 import { runsCommand } from "./commands/runs.js";
 import { sessionCommands } from "./commands/session.js";
 import { settingsCommand } from "./commands/settings.js";
@@ -41,6 +42,7 @@ export const COMMANDS: readonly Command[] = [
   projectsCommand,
   settingsCommand,
   packagesCommand,
+  relayCommand,
   piCommand,
   doctorCommand,
   logsCommand,
@@ -52,10 +54,16 @@ const EMPTY_ARGS: ParsedArgs = { flags: {}, positionals: [], rest: [], hasRest: 
 export async function run(argv: readonly string[]): Promise<number> {
   const first = argv[0];
 
+  // Before parsing, a failure can still honour the two flags that decide how
+  // it is *printed*. A wrapper that pipes stderr into a JSON parser breaks on
+  // exactly the errors it is most likely to hit otherwise.
+  const early = (tokens: readonly string[]): Terminal =>
+    new Terminal({ json: earlyJson(tokens), color: earlyColor(tokens) });
+
   // `--help` with no command is the only help path handled here; `piorbit help`
   // is a real command, so it can honour --color and the rest.
   if (first === "--help" || first === "-h") {
-    renderRootHelp(COMMANDS, new Terminal({ json: false, color: "auto" }));
+    renderRootHelp(COMMANDS, new Terminal({ json: false, color: earlyColor(argv) }));
     return ExitCode.Ok;
   }
   if (first === "--version" || first === "-V") {
@@ -79,7 +87,7 @@ export async function run(argv: readonly string[]): Promise<number> {
         ...(suggest(name as string) ? { fix: `Did you mean \`piorbit ${suggest(name as string)}\`?` } : {}),
         details: ["Run `piorbit --help` for the full list."],
       }),
-      new Terminal({ json: false, color: "auto" }),
+      early(argv),
     );
   }
 
@@ -111,8 +119,8 @@ export async function run(argv: readonly string[]): Promise<number> {
   try {
     args = parseArgs(rest, flagsFor(command.flags));
   } catch (error) {
-    const term = new Terminal({ json: false, color: "auto" });
-    term.note(term.err.dim(`usage: ${command.usage}`));
+    const term = early(rest);
+    if (!term.json) term.note(term.err.dim(`usage: ${command.usage}`));
     return fail(error, term);
   }
 
@@ -228,4 +236,22 @@ function fail(error: unknown, term: Terminal): ExitCodeValue {
     process.stderr.write(`${error.stack}\n`);
   }
   return exitCode;
+}
+
+/**
+ * `--color`/`--no-color` and `--json` read straight off `argv`, for the two
+ * moments a failure can happen before the parser has run.
+ */
+function earlyColor(tokens: readonly string[], env: NodeJS.ProcessEnv = process.env): ColorMode {
+  if (tokens.includes("--no-color")) return "never";
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i] as string;
+    const value = token.startsWith("--color=") ? token.slice("--color=".length) : token === "--color" ? tokens[i + 1] : undefined;
+    if (value === "always" || value === "never" || value === "auto") return value;
+  }
+  return env["NO_COLOR"] !== undefined && env["NO_COLOR"] !== "" ? "never" : "auto";
+}
+
+function earlyJson(tokens: readonly string[]): boolean {
+  return tokens.includes("--json") || tokens.includes("--json=true");
 }

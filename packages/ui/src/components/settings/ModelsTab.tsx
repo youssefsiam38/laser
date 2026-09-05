@@ -11,11 +11,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CheckCircle2, Circle, Eye, Loader2, RefreshCw, Sparkles } from "lucide-react";
 
+import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
+import { DataTable, type DataTableColumn } from "@/components/assistant-ui/elements/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { tokens } from "@/format";
+import { money, tokens } from "@/format";
 import { cn } from "@/lib/utils";
 import { usePiorbitStable } from "@/runtime";
 import type {
@@ -150,7 +152,7 @@ export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
         <section className="flex flex-col gap-2">
           <div className="flex items-center gap-2">
             <h2 className="text-sm font-semibold text-ink">Providers</h2>
-            {loading && <Loader2 className="size-3.5 animate-spin text-ink-3" />}
+            {loading && <GenerationLoader label="Loading providers" layout="inline" />}
             <Button
               variant="secondary"
               size="sm"
@@ -158,7 +160,7 @@ export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
               disabled={refreshing}
               onClick={() => void load(true)}
             >
-              {refreshing ? <Loader2 className="animate-spin" /> : <RefreshCw />} Refresh catalogue
+              {refreshing ? <Loader2 className="motion-safe:animate-busy" /> : <RefreshCw />} Refresh catalogue
             </Button>
           </div>
           <p className="text-xs leading-5 text-ink-2">
@@ -260,84 +262,17 @@ export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
             </p>
           )}
 
-          <div className="overflow-x-auto rounded-lg border border-line">
-            <table className="w-full min-w-180 border-collapse text-sm">
-              <thead>
-                <tr className="eyebrow bg-surface-2">
-                  <th className="px-3 py-2 text-start font-medium">Model</th>
-                  <th className="px-3 py-2 text-start font-medium">Context</th>
-                  <th className="px-3 py-2 text-start font-medium">Thinking levels</th>
-                  <th className="px-3 py-2 text-start font-medium">Startup level</th>
-                </tr>
-              </thead>
-              <tbody>
-                {shown.map((model) => (
-                  <tr key={`${model.provider}/${model.id}`} className={cn("border-t border-line align-top", !model.enabled && "opacity-45")}>
-                    <td className="px-3 py-2">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="font-mono text-xs text-ink">
-                          {model.provider}/{model.id}
-                        </span>
-                        {model.vision && (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Badge variant="outline" className="gap-1">
-                                <Eye />
-                              </Badge>
-                            </TooltipTrigger>
-                            <TooltipContent side="top">accepts images</TooltipContent>
-                          </Tooltip>
-                        )}
-                        {model.reasoning && (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Badge variant="outline" className="gap-1">
-                                <Sparkles />
-                              </Badge>
-                            </TooltipTrigger>
-                            <TooltipContent side="top">supports thinking</TooltipContent>
-                          </Tooltip>
-                        )}
-                        {!model.enabled && <Badge variant="default">excluded by enabledModels</Badge>}
-                      </div>
-                      {model.name && model.name !== model.id && (
-                        <p className="mt-0.5 text-xs text-ink-3">{model.name}</p>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 font-mono text-xs text-ink-2 tnum">
-                      {model.contextWindow ? tokens(model.contextWindow) : "—"}
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="flex flex-wrap gap-1">
-                        {model.thinkingLevels.map((level) => (
-                          <Badge key={level} variant="outline">
-                            {level}
-                          </Badge>
-                        ))}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2">
-                      <select
-                        aria-label={`Startup thinking level for ${model.provider}/${model.id}`}
-                        value={model.thinkingLevel ?? ""}
-                        onChange={(event) =>
-                          setThinking(model, event.target.value === "" ? undefined : (event.target.value as ThinkingLevel))
-                        }
-                        className="h-7 rounded-md border border-line bg-surface px-1.5 text-xs text-ink outline-none focus-visible:border-live"
-                      >
-                        <option value="">— session default —</option>
-                        {model.thinkingLevels.map((level) => (
-                          <option key={level} value={level}>
-                            {level}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          {/* The model catalogue as the `data-table` element (docs/ux-elements.md
+              "Structured output"); the filter is the way through a thousand rows. */}
+          <DataTable
+            caption="Models Pi knows, with their context window, thinking levels and startup level"
+            columns={modelColumns(setThinking)}
+            rows={shown}
+            rowKey={(model) => `${model.provider}/${model.id}`}
+            rowClassName={(model) => (model.enabled ? undefined : "opacity-45")}
+            minWidth="44rem"
+            emptyMessage={loading ? "Reading the catalogue…" : "No model matches the filter."}
+          />
           {hidden > 0 && (
             <p className="text-xs text-ink-3">
               Showing the first {MODEL_ROW_LIMIT} of {matching.length} matching models. Type in the filter to narrow
@@ -348,4 +283,111 @@ export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
       </div>
     </ScrollArea>
   );
+}
+
+function modelColumns(setThinking: (model: ModelCatalogEntry, level: ThinkingLevel | undefined) => void): DataTableColumn<ModelCatalogEntry>[] {
+  return [
+    {
+      key: "model",
+      label: "Model",
+      render: (model) => (
+        <div className="flex flex-col gap-0.5">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="typed text-ink">
+              {model.provider}/{model.id}
+            </span>
+            {model.vision && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge variant="outline" className="gap-1">
+                    <Eye />
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent side="top">accepts images</TooltipContent>
+              </Tooltip>
+            )}
+            {model.reasoning && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge variant="outline" className="gap-1">
+                    <Sparkles />
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent side="top">supports thinking</TooltipContent>
+              </Tooltip>
+            )}
+            {!model.enabled && <Badge variant="default">excluded by enabledModels</Badge>}
+          </div>
+          {model.name && model.name !== model.id && <p className="text-xs text-ink-3">{model.name}</p>}
+        </div>
+      ),
+    },
+    {
+      key: "context",
+      label: "Context",
+      mono: true,
+      align: "end",
+      width: "6rem",
+      render: (model) => (model.contextWindow ? tokens(model.contextWindow) : "—"),
+    },
+    {
+      // The catalogue is the only place cost crosses the protocol, and it is
+      // what a person actually weighs a model by. Priced per million tokens,
+      // as Pi reports it; a model the catalogue prices only partly shows the
+      // half it knows, and one it does not price shows an em dash rather than
+      // a zero, which would read as "free" (R8).
+      key: "cost",
+      label: "Cost / M",
+      mono: true,
+      align: "end",
+      width: "9rem",
+      optional: true,
+      render: (model) => {
+        const { input, output } = model.cost ?? {};
+        if (input === undefined && output === undefined) return "—";
+        return (
+          <span className="whitespace-nowrap">
+            {input === undefined ? "—" : money(input)}
+            <span className="text-ink-3"> in / </span>
+            {output === undefined ? "—" : money(output)}
+            <span className="text-ink-3"> out</span>
+          </span>
+        );
+      },
+    },
+    {
+      key: "levels",
+      label: "Thinking levels",
+      optional: true,
+      render: (model) => (
+        <div className="flex flex-wrap gap-1">
+          {model.thinkingLevels.map((level) => (
+            <Badge key={level} variant="outline">
+              {level}
+            </Badge>
+          ))}
+        </div>
+      ),
+    },
+    {
+      key: "startup",
+      label: "Startup level",
+      width: "11rem",
+      render: (model) => (
+        <select
+          aria-label={`Startup thinking level for ${model.provider}/${model.id}`}
+          value={model.thinkingLevel ?? ""}
+          onChange={(event) => setThinking(model, event.target.value === "" ? undefined : (event.target.value as ThinkingLevel))}
+          className="h-7 rounded-md border border-line bg-surface px-1.5 text-xs text-ink outline-none focus-visible:border-live"
+        >
+          <option value="">— session default —</option>
+          {model.thinkingLevels.map((level) => (
+            <option key={level} value={level}>
+              {level}
+            </option>
+          ))}
+        </select>
+      ),
+    },
+  ];
 }

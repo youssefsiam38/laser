@@ -12,7 +12,9 @@ import { FleetSheet, RunTabs } from "@/components/subagents";
 import { mergeSessions, sessionTitle, usePiorbitStable, usePiorbitState, usePiorbitView } from "@/runtime";
 
 import { AddProjectDialog } from "./AddProjectDialog.js";
-import { ConnectionBanner } from "./ConnectionBanner.js";
+import { HostConnectionState } from "@/components/assistant-ui/elements/connection-state";
+import { CommandPaletteDialog } from "./CommandPalette.js";
+import { FirstRun } from "./FirstRun.js";
 import { documentTitle, needYouCount } from "./model.js";
 import { Rail } from "./Rail.js";
 import { SessionsPanel } from "./SessionsPanel.js";
@@ -97,7 +99,11 @@ function ShellFrame() {
   const [prefs, setPrefs] = useState<PanelPrefs>(readPrefs);
   const [sheets, setSheets] = useState({ sessions: false, telemetry: false });
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const sessionsLoaded = usePiorbitState((s) => s.sessionsLoaded);
+  const { projects } = usePiorbitStable();
 
   // Sheets belong to the compact layouts; a resize to desktop drops them.
   useEffect(() => {
@@ -157,11 +163,17 @@ function ShellFrame() {
     }
   }, [actions, connection, currentProject, view?.state.cwd]);
 
-  // Keyboard: [ ] toggle rails, Cmd/Ctrl+N new session. Esc is handled by the
-  // overlays themselves (Radix) and by the inline rename fields.
+  // Keyboard: [ ] toggle rails, Cmd/Ctrl+N new session, Cmd/Ctrl+K the
+  // palette. Esc is handled by the overlays themselves (Radix) and by the
+  // inline rename fields.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
+      if (mod && !e.shiftKey && !e.altKey && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        setPaletteOpen((open) => !open);
+        return;
+      }
       if (mod && !e.shiftKey && !e.altKey && (e.key === "n" || e.key === "N")) {
         e.preventDefault();
         void newSession();
@@ -202,6 +214,8 @@ function ShellFrame() {
       historyOpen,
       setHistoryOpen,
       openHistory,
+      toolsOpen,
+      setToolsOpen,
       addProjectOpen,
       setAddProjectOpen,
       newSession,
@@ -218,6 +232,7 @@ function ShellFrame() {
       setSessionsOpen,
       setTelemetryOpen,
       telemetryOpen,
+      toolsOpen,
       toggleSessions,
       toggleTelemetry,
     ],
@@ -240,11 +255,14 @@ function ShellFrame() {
                   (docs/ux-agent-work.md). Renders nothing when the session has
                   no agent work. */}
               <RunTabs />
-              <ConnectionBanner />
+              <HostConnectionState />
               {/* The thread's sticky footer owns the keyboard/safe-area inset
                   (Thread.tsx); adding it here too lifted the composer twice. */}
               <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-                <Thread statusSlot={<PanelAmbient />} />
+                {/* First run: the host answered and knows no project. The
+                    onboarding steps take the conversation's place until one
+                    exists (docs/ux-elements.md "Onboarding"). */}
+                {sessionsLoaded && projects.length === 0 && !view ? <FirstRun /> : <Thread statusSlot={<PanelAmbient />} />}
               </div>
             </main>
             {layout !== "mobile" && <Dock path={view?.path} />}
@@ -273,6 +291,7 @@ function ShellFrame() {
         )}
 
         <AddProjectDialog />
+        <CommandPaletteDialog open={paletteOpen} onOpenChange={setPaletteOpen} />
         <TrustDialog />
         <PanelDecisionSheet />
         <FleetSheet />

@@ -13,27 +13,43 @@
  * scope that has nothing to do with it.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Loader2, RefreshCw, Search } from "lucide-react";
+import { AlertTriangle, RefreshCw, Search } from "lucide-react";
 
+import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { cn } from "@/lib/utils";
 import { usePiorbitStable } from "@/runtime";
 import type { SettingsCatalog, SettingsScope, SettingsSnapshot } from "@piorbit/protocol";
 
 import { NotificationsSetting } from "@/components/mobile";
 
+import { AppearanceTab } from "./appearance/AppearanceTab.js";
+import { KeyboardTab } from "./KeyboardTab.js";
 import { ModelsTab } from "./ModelsTab.js";
 import { PackagesTab } from "./PackagesTab.js";
 import { SettingsForm } from "./SettingsForm.js";
+import { TrustTab } from "./TrustTab.js";
 
-type Tab = "settings" | "packages" | "models" | "device";
+type Tab = "settings" | "appearance" | "packages" | "models" | "keyboard" | "trust" | "device";
+
+/**
+ * Four of these are per project and three are not. `PROJECTLESS` is the list
+ * of the three, so a screen that has nothing to do with a project directory
+ * stays reachable before one is chosen: how the app looks, which keys it
+ * answers to, and what this browser is allowed to do.
+ */
+const PROJECTLESS: readonly Tab[] = ["appearance", "keyboard", "trust", "device"];
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "settings", label: "All settings" },
+  { id: "appearance", label: "Appearance" },
   { id: "packages", label: "Packages" },
   { id: "models", label: "Providers and models" },
+  { id: "keyboard", label: "Keyboard" },
+  { id: "trust", label: "Trust" },
   { id: "device", label: "This device" },
 ];
 
@@ -88,40 +104,39 @@ export function SettingsScreen({ cwd }: { cwd: string | undefined }) {
     [client, cwd, actions],
   );
 
-  // "This device" is not about a project, so it stays reachable without one.
-  if (!cwd && tab !== "device") {
-    return (
-      <Empty
-        title="No project selected"
-        body="Pi keeps settings per project as well as globally, so piorbit needs to know which project you mean. Pick one in the rail, or add a directory."
-      />
-    );
-  }
+  // "No project" is a state of one tab, not of the screen: the tab strip has
+  // to stay on screen or Appearance, Keyboard, Trust and This device become
+  // unreachable on a machine with no project yet — which is every first run.
+  const needsProject = !cwd && !PROJECTLESS.includes(tab);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center gap-1 px-3 py-2 hairline-b">
-        {TABS.map((entry) => (
-          <Button
-            key={entry.id}
-            variant="ghost"
-            size="sm"
-            onClick={() => setTab(entry.id)}
-            aria-current={tab === entry.id ? "page" : undefined}
-            className={cn(tab === entry.id && "bg-surface-2 text-ink")}
-          >
-            {entry.label}
-          </Button>
-        ))}
+        {/* Seven tabs do not fit a phone. The strip scrolls inside itself
+            rather than the page scrolling sideways (DESIGN.md, the floor). */}
+        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+          {TABS.map((entry) => (
+            <Button
+              key={entry.id}
+              variant="ghost"
+              size="sm"
+              onClick={() => setTab(entry.id)}
+              aria-current={tab === entry.id ? "page" : undefined}
+              className={cn("shrink-0", tab === entry.id && "bg-surface-2 text-ink")}
+            >
+              {entry.label}
+            </Button>
+          ))}
+        </div>
         <div className="ms-auto flex items-center gap-2">
-          {loading && <Loader2 className="size-3.5 animate-spin text-ink-3" aria-label="Loading" />}
-          <Button variant="ghost" size="icon-sm" onClick={() => void load()} aria-label="Reload settings">
+          {loading && <GenerationLoader label="Loading settings" layout="inline" />}
+          <TooltipIconButton tooltip="Reload settings" onClick={() => void load()}>
             <RefreshCw />
-          </Button>
+          </TooltipIconButton>
         </div>
       </div>
 
-      {error && (
+      {error && !needsProject && (
         <div className="m-3 flex items-start gap-2 rounded-lg bg-[color-mix(in_oklab,var(--danger)_10%,transparent)] px-3 py-2 text-sm text-danger">
           <AlertTriangle className="mt-0.5 size-4 shrink-0" />
           <div className="min-w-0">
@@ -132,12 +147,24 @@ export function SettingsScreen({ cwd }: { cwd: string | undefined }) {
       )}
 
       <div className="min-h-0 flex-1">
-        {tab === "settings" && catalog && snapshot && (
-          <SettingsForm catalog={catalog} snapshot={snapshot} onApply={apply} />
+        {needsProject ? (
+          <Empty
+            title="No project selected"
+            body="Pi keeps settings per project as well as globally, so piorbit needs to know which project you mean. Pick one in the rail, or add a directory. Appearance, Keyboard, Trust and This device do not need one."
+          />
+        ) : (
+          <>
+            {tab === "settings" && catalog && snapshot && (
+              <SettingsForm catalog={catalog} snapshot={snapshot} onApply={apply} />
+            )}
+            {tab === "appearance" && <AppearanceTab />}
+            {tab === "packages" && cwd && <PackagesTab cwd={cwd} snapshot={snapshot} onSettingsChanged={load} />}
+            {tab === "models" && cwd && <ModelsTab cwd={cwd} snapshot={snapshot} onApply={apply} />}
+            {tab === "keyboard" && <KeyboardTab />}
+            {tab === "trust" && <TrustTab />}
+            {tab === "device" && <DeviceTab />}
+          </>
         )}
-        {tab === "packages" && cwd && <PackagesTab cwd={cwd} snapshot={snapshot} onSettingsChanged={load} />}
-        {tab === "models" && cwd && <ModelsTab cwd={cwd} snapshot={snapshot} onApply={apply} />}
-        {tab === "device" && <DeviceTab />}
       </div>
     </div>
   );

@@ -15,7 +15,7 @@ import { CliError, ExitCode } from "../errors.js";
 import { plural, shortCwd } from "../format.js";
 import { sanitize, table, type Terminal } from "../output.js";
 import { describeRpcError } from "../rpc.js";
-import { connect } from "./host.js";
+import { connectForProject } from "./host.js";
 
 const VERBS = ["list", "install", "remove", "update", "check"] as const;
 type Verb = (typeof VERBS)[number];
@@ -104,7 +104,7 @@ adds it to this project's own settings.
     const cwd = resolve(str(args, "project") ?? process.cwd());
     const showProgress = bool(args, "progress") && !term.json;
 
-    const rpc = await connect(paths, (method, params) => {
+    const rpc = await connectForProject(paths, cwd, (method, params) => {
       if (method !== "pi/packages/progress" || !showProgress) return;
       const progress = params as PackageProgress;
       if (progress.cwd !== cwd) return;

@@ -22,9 +22,10 @@
  * Mounted by `Thread.tsx` between the transcript and the footer: panels arrive
  * during a turn, so the tail of the transcript *is* the point they happened.
  */
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, FileQuestion, FileText } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { ArtifactCard } from "@/components/assistant-ui/elements/artifact-card";
 import { StatusDot } from "@/components/status";
 import { Badge } from "@/components/ui/badge";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
@@ -36,7 +37,7 @@ import { Island, PanelBody, PRESSED } from "./islands/Island.js";
 import { placementOf, wantsInspectSheet, type InlineMode, type Viewport } from "./placement.js";
 import { usePanelEntries, usePanelsState } from "./PanelsProvider.js";
 import { attentionOfEntry, openDecisionIds, type PanelEntry } from "./store.js";
-import { liveValues } from "./values.js";
+import { liveValues, shortMediaType } from "./values.js";
 
 function useViewport(): Viewport {
   return useIsMobile() ? "mobile" : "desktop";
@@ -91,6 +92,29 @@ function InlineCard({ item }: { item: InlineEntry }) {
   const attention = attentionOfEntry(entry, decisions);
   const values = liveValues(entry, Date.now());
   const value = values[0];
+
+  // A document you have not opened is a tangible object in the transcript —
+  // the artifact card (docs/ux-elements.md "Artifact card": a `document` panel
+  // shown as a card). Opening it turns the card into the reading surface below;
+  // the same entry, one identity (R6).
+  if (entry.panel.kind === "document" && !open) {
+    const doc = entry.panel;
+    const meta = [shortMediaType(doc.mediaType), doc.version ? `v · ${doc.version.label}` : undefined, doc.path, entry.closed ? `ended · ${entry.closed.reason}` : undefined]
+      .filter(Boolean)
+      .join(" · ");
+    return (
+      <ArtifactCard
+        data-slot="inline-panel"
+        data-kind="document"
+        aria-label={`${doc.title} — open`}
+        title={doc.title}
+        meta={meta}
+        icon={doc.renderable ? FileText : FileQuestion}
+        onClick={() => setOpen(true)}
+        className="w-full rounded-xl"
+      />
+    );
+  }
 
   return (
     <article

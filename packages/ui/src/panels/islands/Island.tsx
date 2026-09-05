@@ -20,8 +20,8 @@ import type { Action } from "@piorbit/protocol";
 import { ChevronsDownUp, Ellipsis, ExternalLink, Maximize2, Minimize2, MoveDiagonal, X } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 
-import { StatusDot } from "@/components/status";
-import { Badge } from "@/components/ui/badge";
+import { AgentPlan } from "@/components/assistant-ui/elements/agent-plan";
+import { AgentStatus } from "@/components/assistant-ui/elements/agent-status";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import {
@@ -40,11 +40,11 @@ import type { Rect } from "../layout.js";
 import { usePanelActions, usePanelsState } from "../PanelsProvider.js";
 import { attentionOfEntry, openDecisionIds, panelKey, type PanelEntry } from "../store.js";
 import { accessibleSummary, liveValues, type LiveValue } from "../values.js";
+import { ActionButtons } from "./ActionButtons.js";
 import { CollectionBody } from "./bodies/CollectionBody.js";
 import { DecisionBody } from "./bodies/DecisionBody.js";
 import { DocumentBody } from "./bodies/DocumentBody.js";
-import { PlanBody } from "./bodies/PlanBody.js";
-import { RunBody } from "./bodies/RunBody.js";
+import { RunBody, UsageRow } from "./bodies/RunBody.js";
 import { StreamBody } from "./bodies/StreamBody.js";
 
 export interface IslandProps {
@@ -116,7 +116,11 @@ function IslandImpl({ entry, size, rect, hidden = false, poppedOut = false, fram
       data-kind={panel.kind}
       data-attention={attention}
       aria-label={size === "minimal" ? accessibleSummary(panel.title, values) : panel.title}
-      aria-hidden={hidden || undefined}
+      // Folded into the dock's "+N": `inert` takes the whole subtree out of
+      // focus, pointer and the accessibility tree in one attribute. `aria-hidden`
+      // alone left the header's buttons in the tab order, so focus could park
+      // on a control nobody can see, inside a subtree a screen reader ignores.
+      inert={hidden || undefined}
       onKeyDown={onKeyDown}
       onDoubleClick={(e) => {
         if (frame !== "dock" || !expanded) return;
@@ -133,10 +137,10 @@ function IslandImpl({ entry, size, rect, hidden = false, poppedOut = false, fram
         frame === "dock" && size !== "maximized" && "shadow-none",
         frame === "dock" && size === "maximized" && "fixed inset-0 z-40 rounded-none border-0",
         frame !== "dock" && "relative h-full w-full border-0",
-        size === "minimal" ? "rounded-[14px]" : "rounded-xl",
+        size === "minimal" ? "rounded-2xl" : "rounded-xl",
         attention === "waiting_for_input" && size !== "maximized" && frame === "dock" && "border-attention/60",
         attention === "error" && size !== "maximized" && frame === "dock" && "border-danger/50",
-        hidden && "pointer-events-none opacity-0",
+        hidden && "opacity-0",
         // The morph: the rectangle, the radius and the border move together.
         "transition-[top,left,width,height,border-radius,opacity,border-color] duration-(--motion-morph) ease-morph motion-reduce:transition-none data-[morphing]:transition-none",
       )}
@@ -178,24 +182,6 @@ export const Island = memo(IslandImpl);
 // ---------------------------------------------------------------------------
 // The header — one element, three budgets
 // ---------------------------------------------------------------------------
-
-const VALUE_TONE: Record<NonNullable<LiveValue["tone"]>, string> = {
-  attention: "text-attention",
-  danger: "text-danger",
-  muted: "text-ink-3",
-};
-
-function Value({ value, className }: { value: LiveValue; className?: string | undefined }) {
-  return (
-    <span
-      className={cn("typed shrink-0 text-ink-2 tnum", value.tone && VALUE_TONE[value.tone], className)}
-      title={`${value.label}: ${value.text}`}
-      aria-label={`${value.label} ${value.text}`}
-    >
-      {value.text}
-    </span>
-  );
-}
 
 /**
  * One header for all four sizes.
@@ -264,8 +250,7 @@ function IslandHeader({
         maximized && "h-12 border-b border-line px-4",
       )}
     >
-      <button
-        type="button"
+      <AgentStatus
         data-island-toggle
         // Expanded, the title is not a control: it is taken out of the tab
         // order and stops swallowing pointer events, so double-click-to-
@@ -280,46 +265,14 @@ function IslandHeader({
               ? `${panel.title} · ${value.label}: ${value.text}`
               : panel.title
         }
-        className={cn(
-          "relative flex h-full min-w-0 flex-1 items-center gap-2 text-start outline-none",
-          "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
-          "transition-colors duration-(--motion-instant)",
-          size === "minimal" && `rounded-full px-2.5 hover:bg-surface-2 ${PRESSED}`,
-          size === "compact" && `rounded-md ${PRESSED}`,
-          // Expanded: the title is not a control, so the header behind it is
-          // what double-click-to-maximize lands on.
-          expanded && "pointer-events-none cursor-default",
-          entry.closed && size === "minimal" && "opacity-70",
-          // 44px of hit area on a coarse pointer, without the pill growing.
-          "[@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-y-2 [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:content-['']",
-        )}
-      >
-        <StatusDot status={attention} size={expanded ? "md" : "sm"} />
-        {expanded && (
-          <Badge variant="mono" className="hidden shrink-0 @[360px]:inline-flex" title={`From ${panel.source}`}>
-            {panel.source}
-          </Badge>
-        )}
-        <span
-          className={cn(
-            "min-w-0 truncate text-ink",
-            size === "minimal" && "flex-1 text-xs font-medium leading-4",
-            size === "compact" && "text-sm font-medium leading-5",
-            expanded && "flex-1 text-sm font-semibold leading-5",
-          )}
-        >
-          {panel.title}
-        </span>
-        {size === "minimal" && poppedOut ? (
-          <ExternalLink className="size-3 shrink-0 text-ink-3" aria-label="Open in another tab" />
-        ) : (
-          <span className="flex min-w-0 shrink items-center gap-2 overflow-hidden">
-            {shown.map((v, i) => (
-              <Value key={`${v.label}-${i}`} value={v} className={cn(v.ticking && "min-w-[3.5ch] text-end", size === "compact" && "truncate")} />
-            ))}
-          </span>
-        )}
-      </button>
+        state={attention}
+        label={panel.title}
+        values={shown}
+        size={expanded ? "expanded" : size}
+        source={panel.source}
+        poppedOut={poppedOut}
+        dimmed={entry.closed !== undefined && size === "minimal"}
+      />
 
       {maximized && (
         <span className="hidden items-center gap-1 text-xs text-ink-3 md:inline-flex" aria-hidden="true">
@@ -507,7 +460,16 @@ export function PanelBody({ entry, size, now, decisions }: { entry: PanelEntry; 
       body = <RunBody entry={entry} panel={panel} now={now} onAct={act} onOpenRef={openRef} />;
       break;
     case "plan":
-      body = <PlanBody entry={entry} panel={panel} maximized={size === "maximized"} openDecisions={decisions} onAct={act} onOpenRun={openRun} />;
+      body = (
+        <AgentPlan
+          panel={panel}
+          maximized={size === "maximized"}
+          awaiting={panel.approval !== undefined && decisions.has(panel.approval.decisionId)}
+          onOpenRun={openRun}
+          usage={<UsageRow usage={panel.usage} compact />}
+          footer={<ActionButtons actions={panel.actions} onAct={act} />}
+        />
+      );
       break;
     case "document":
       body = <DocumentBody entry={entry} panel={panel} onAct={act} />;
@@ -545,12 +507,16 @@ export function PanelBody({ entry, size, now, decisions }: { entry: PanelEntry; 
  * no animation, the frame simply changes.
  */
 function useMaximizeMorph(root: React.RefObject<HTMLElement | null>, maximized: boolean, rect: Rect | undefined) {
-  const previous = useRef<{ maximized: boolean; box: DOMRect | undefined }>({ maximized, box: undefined });
+  // `radius` is carried with the box because the docked radius is a token the
+  // Corners setting moves — reading it after the flip would read the
+  // maximized 0, and a literal would jump at both ends of the morph (T1).
+  const previous = useRef<{ maximized: boolean; box: DOMRect | undefined; radius: string }>({ maximized, box: undefined, radius: "0px" });
   useLayoutEffect(() => {
     const el = root.current;
     if (!el) return;
     const was = previous.current;
-    previous.current = { maximized, box: el.getBoundingClientRect() };
+    const radius = getComputedStyle(el).borderRadius || "0px";
+    previous.current = { maximized, box: el.getBoundingClientRect(), radius };
     if (was.maximized === maximized) return;
     // The frame flip is one motion (the animation below), so the rectangle's
     // own CSS transition sits out for its duration or the two would fight.
@@ -568,8 +534,8 @@ function useMaximizeMorph(root: React.RefObject<HTMLElement | null>, maximized: 
     const dy = from.top - to.top;
     el.animate(
       [
-        { transformOrigin: "top left", transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`, borderRadius: maximized ? "12px" : "0px" },
-        { transformOrigin: "top left", transform: "none", borderRadius: maximized ? "0px" : "12px" },
+        { transformOrigin: "top left", transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`, borderRadius: was.radius },
+        { transformOrigin: "top left", transform: "none", borderRadius: radius },
       ],
       { duration: morphMs, easing: motionEase(), fill: "none" },
     );

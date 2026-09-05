@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { cn } from "@/lib/utils";
 import { applyUpdate, asRawClient, insecureOriginAdvice, useEnvironment, usePush, useServiceWorker, type PwaEnvironment } from "@/pwa";
 import { usePiorbitStable, usePiorbitState, usePiorbitView } from "@/runtime";
@@ -31,9 +32,9 @@ export function InsecureOriginNotice({ env }: { env: PwaEnvironment }) {
               <ChevronDown aria-hidden="true" className={cn("transition-transform duration-(--motion-slow)", open && "rotate-180")} />
             </Button>
           </CollapsibleTrigger>
-          <Button variant="ghost" size="icon-xs" aria-label="Dismiss for this address" className="-me-2 text-ink-3" onClick={() => dismiss()}>
+          <TooltipIconButton tooltip="Dismiss for this address" size="icon-xs" side="top" className="-me-2 text-ink-3" onClick={() => dismiss()}>
             <X />
-          </Button>
+          </TooltipIconButton>
         </div>
         <CollapsibleContent>
           <div className="flex flex-col gap-3 px-3 pt-1">

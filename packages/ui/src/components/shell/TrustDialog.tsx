@@ -13,6 +13,22 @@ import { useTrustPrompts } from "@/runtime";
  * is the only thing standing between a cloned repository and its `.pi`
  * extensions running on this machine. It is modal on purpose: a worker start is
  * blocked behind the answer, and there is no safe default to pick silently.
+ *
+ * Why this is not the `permission-grant` element (docs/ux-elements.md claims
+ * that element for this surface, and it is used for the in-thread case in
+ * `panels/islands/bodies/DecisionBody.tsx`). Two things it cannot express, and
+ * both of them matter more here than the shared drawing does:
+ *
+ *   1. It puts `data-autofocus` on its FIRST option — the granting one. On
+ *      this prompt focus must sit on the safe answer, because Enter on a
+ *      security question must never be the keystroke that grants. Adopting it
+ *      here would be a real regression, not a restyle.
+ *   2. Its `message` is a single string. This question is not answerable
+ *      without seeing the directory it is about and which files in it are
+ *      trust-gated, so the body needs the path and the reason chips below.
+ *
+ * Everything else follows the element: the same eyebrow → title → message
+ * order, the same "this grants" idea spelled out on the Remember control.
  */
 export function TrustDialog() {
   const { requests, answer } = useTrustPrompts();

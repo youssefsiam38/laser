@@ -1,8 +1,21 @@
-# piorbit UI design spec — "Ground Station"
+# piorbit UI design spec
 
 This is the visual and interaction contract for `@piorbit/ui`. Every component
 derives its colors, type, spacing, and motion from here. Deviations need a
 decision in `STATUS_DETAILED.md`.
+
+> **The palette and the fonts moved (D-33).** Colour, type, spacing, radius,
+> shadow and motion are no longer values written in this file: they are
+> **tokens the person can change in Settings**, compiled from a preset by
+> `src/theme/`, and their contract is [`docs/ux-theme.md`](../../docs/ux-theme.md).
+> The default preset is *graphite*, not the "Ground Station" palette below,
+> and the default faces are Inter and JetBrains Mono, not Host Grotesk and
+> Martian Mono. The tables in "Tokens" and the family names in "Type" are kept
+> as the **reference preset** — the proportions, roles and contrast floors
+> every preset must still satisfy — and are no longer the shipped values. What
+> is binding here and everywhere is the *shape*: which token carries which
+> meaning, the legibility floor, the status language, the layout, and the
+> motion budget below.
 
 ## Concept
 
@@ -11,9 +24,13 @@ calm, dense where it counts, quiet everywhere else. One accent means "live".
 One warm hue means "needs you". Nothing else competes for attention. It must
 read as a finished product, not a terminal costume and not a docs site.
 
-## Tokens (CSS variables on `:root`, dark on `.dark`)
+## Tokens (the reference preset)
 
-Light (`:root`):
+The names are binding; the hexes are the reference preset the contrast floors
+were measured against. The shipped values come from `theme/presets.ts` and
+land on `:root[data-theme]` (see `docs/ux-theme.md`).
+
+Light:
 
 | token | value | use |
 | --- | --- | --- |
@@ -29,7 +46,7 @@ Light (`:root`):
 | `--danger` | `#C53030` | errors |
 | `--ok` | `#15803D` | success |
 
-Dark (`.dark`):
+Dark:
 
 | token | value |
 | --- | --- |
@@ -55,8 +72,10 @@ unmodified. Radius: `--radius: 8px`. Hairlines are 1px `--line`; no drop
 shadows on flat panels; a single soft shadow only on floating things
 (composer, popovers, sheets).
 
-Theme switching: `.dark` class on `<html>`, default from `prefers-color-scheme`,
-persisted in localStorage, toggle in the rail. Both themes get equal care.
+Theme switching: `data-theme="dark" | "light"` on `<html>`, written by
+`theme/apply.ts`; the default follows `prefers-color-scheme` when "follow the
+system" is on, persisted in localStorage, changed in Settings → Appearance.
+There is no `.dark` class. Both themes get equal care.
 
 `--ink-3` (both themes) and light `--attention` were darkened from their first
 values (`#7B8895` / `#6B7A8A` / `#B7791F`) because they carry running text —
@@ -67,14 +86,17 @@ timestamps, hints, durations, the "waiting for you" subtitle — and measured
 
 ## Type
 
-- UI and body: **Host Grotesk** (Google Fonts), 14px base, 1.5 line height,
-  transcript prose 15px at max 72ch.
-- Typed things (paths, ids, commands, eyebrows, numbers): **Martian Mono**,
-  11–12px, `font-variant-numeric: tabular-nums`, eyebrows uppercase with
-  `0.08em` tracking.
-- Display (empty states, project names in the rail tooltip): Host Grotesk 600.
-- Load both from `fonts.googleapis.com` with `display=swap` and real fallback
-  stacks.
+- UI and body: the theme's `--font-sans` (**Inter** by default; the reference
+  preset above is Host Grotesk), 14px base, 1.5 line height, transcript prose
+  15px at max 72ch.
+- Typed things (paths, ids, commands, eyebrows, numbers): the theme's
+  `--font-mono` (**JetBrains Mono** by default), 11–12px,
+  `font-variant-numeric: tabular-nums`, eyebrows uppercase with `0.08em`
+  tracking (`--tracking-eyebrow`).
+- Display (empty states, project names in the rail tooltip): `--font-sans` 600.
+- Faces are chosen in Settings → Appearance and loaded with `display=swap`
+  behind real fallback stacks (`theme/fonts.ts`); a face is never named in a
+  component.
 
 
 ## Legibility floor (binding everywhere, not just panels)
@@ -105,7 +127,7 @@ Desktop (≥1024px), four columns left to right:
    idle, then by modified). One scrolling list, so quick navigation across
    projects never requires switching first (D-20). Each group header: project
    name, a `+` for a new session there, a collapse chevron. Each row: status
-   dot, title (Martian Mono id prefix when untitled), relative time, last tool
+   dot, title (`--font-mono` id prefix when untitled), relative time, last tool
    or "waiting for you" subtitle. The rail's project icons jump to and filter
    that group rather than replacing the list. Collapsible to 0 with `[`.
 3. **Thread** (flex): the assistant-ui thread. Max width 76ch centered, sticky
@@ -113,7 +135,7 @@ Desktop (≥1024px), four columns left to right:
    composer at the bottom with queue chips above it.
 4. **Telemetry** (320px, collapsible with `]`): context ring with tokens,
    cost/turn usage, model and thinking, worker status, extension status pills,
-   extension widgets (string lines rendered in Martian Mono), history/tree
+   extension widgets (string lines rendered in `--font-mono`), history/tree
    panel (fork, jump, labels). Hidden by default under 1280px.
 
 Tablet (768–1023px): rail + thread; sessions and telemetry become sheets.
@@ -149,9 +171,8 @@ by color and an `aria-label`.
 - Tool calls: **consecutive calls collapse into one summary row** by default
   — "Ran 2 commands", "Edited 3 files", "Read 5 files" — with a chevron that
   expands to the individual rows (D-20). Each individual row: `[icon] verb
-  path/or/summary ····· 120ms`. Verb in Host Grotesk 500, path in Martian
-  Mono. Rows expand to show args and result. `bash` expands into a terminal block (dark ground in
-  both themes, Martian Mono, stdout/stderr). `edit`/`write` show a diff. Errors
+  path/or/summary ····· 120ms`. Verb in `--font-sans` 500, path in `--font-mono`. Rows expand to show args and result. `bash` expands into a terminal block (dark ground in
+  both themes, `--font-mono`, stdout/stderr). `edit`/`write` show a diff. Errors
   get a `--danger` left hairline and the error text.
 - Tool-associated dialogs (approval/select/input/editor raised while exactly
   one tool runs) render as a non-modal footer inside that tool row. "No" is
@@ -177,19 +198,44 @@ Below the composer, a **project line**: git branch, `+added −removed` since
 the session started, and a "Create PR" action when there is something to
 push. Tabular numerals; hidden entirely when the project is not a repo.
 
-Floating card, 12px radius, `--surface` on `--bg`, one soft shadow. Textarea
+Floating card, `--radius-xl`, `--surface` on `--bg`, one soft shadow. Textarea
 autosizes to 8 lines. Left: attach image (paste also works). Right: model
-selector (popover with search), thinking level slider (7 levels incl. `max`),
-send/stop. Enter = prompt when idle, steer when running; Shift+Enter =
-newline; Cmd/Ctrl+Enter = follow-up when running. Queue chips above the
+selector (popover with search), thinking level (the levels this model accepts,
+of Pi's seven incl. `max`; hidden when the model does not reason), send/stop.
+
+Three keys, and only three: **Enter** = prompt when idle, steer when running;
+**Shift+Enter** = newline; **Cmd/Ctrl+Enter** = follow-up when running. On a
+touch keyboard plain Enter is a newline and Send submits. Any other Enter
+combination is swallowed on purpose (`composerSendPlan`), so no fourth binding
+can arrive from a library default. Queue chips above the
 composer: steer = solid `--live` outline, follow-up = dashed; "clear queue"
 restores text into the composer.
 
 ## Motion
 
-Only three moments: the status sweep, the streaming caret on the last text
-part, and panel slide for sheets (200ms, ease-out). Everything else is
-instant. No page-load choreography.
+The budget, in full. Everything not on this list is instant, and every entry
+takes its duration and easing from a `--motion-*` token — never a number in a
+component — with a `prefers-reduced-motion` fallback that loses the movement
+and nothing else. The OS switch reaches the tokens themselves
+(`theme/store.ts`), so "reduced" is one value change, not a branch per
+component.
+
+1. **The status sweep** — a run that is working (`StatusDot`, `StatusRing`).
+2. **The streaming caret** on the last text part.
+3. **The morph** — a panel changing size or moving between the dock and the
+   full window. One element, never destroyed and re-created: rectangle,
+   radius and border move together (`--motion-morph`).
+4. **Arrival** — an island appearing plays a short scale-in once, so a panel
+   that opens itself is noticed rather than found later.
+5. **Sheets and popovers** — slide and fade in `--motion-slow`.
+6. **Collapsibles** — a measured height, played by `--motion-fast`.
+7. **Digit rolls** — a number that changes rolls rather than jumps
+   (`NumberTicker`), so a value that moves is legible while it moves.
+8. **The first screen** — the empty state's greeting and its suggestions
+   arrive on a short stagger. This is the one page-load motion there is, and
+   it is the only one: nothing else animates because a page loaded.
+9. **Shimmer** on a label that is waiting, and the attention pulse on a
+   question that is blocking.
 
 ## Accessibility
 
@@ -201,7 +247,8 @@ themes.
 ## Do not
 
 - Do not add gradients, glass, or colored card borders as decoration.
-- Do not use Inter, Geist, or Space Grotesk.
+- Do not name a typeface, a colour, a size, a radius or a duration in a
+  component. Every one of them is a token (`docs/ux-theme.md` T1).
 - Do not center the transcript column's text.
 - Do not use emoji as icons; use lucide.
 - Do not render any transcript string as HTML.

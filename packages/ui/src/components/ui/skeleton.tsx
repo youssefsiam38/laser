@@ -28,7 +28,7 @@ function SkeletonText({
 }: React.ComponentProps<"div"> & { width?: string | number }) {
   return (
     <Skeleton
-      className={cn("h-3.5 rounded-[3px]", className)}
+      className={cn("h-3.5 rounded-xs", className)}
       style={{ width, ...props.style }}
       {...props}
     />

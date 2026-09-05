@@ -162,6 +162,11 @@ describe("composerSendPlan", () => {
 
   it("Shift+Enter is a newline and other keys are ignored", () => {
     expect(composerSendPlan(key({ shiftKey: true }), true).action).toBe("newline");
+    // Cmd/Ctrl+Shift+Enter is not one of the three bindings, and the
+    // primitive's own handler reads it as "send with steer" — so it is
+    // swallowed rather than passed through.
+    expect(composerSendPlan(key({ shiftKey: true, metaKey: true }), true).action).toBe("suppress");
+    expect(composerSendPlan(key({ shiftKey: true, ctrlKey: true }), false).action).toBe("suppress");
     expect(composerSendPlan(key({ key: "a" }), true).action).toBe("ignore");
   });
 

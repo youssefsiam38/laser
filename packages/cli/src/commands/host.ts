@@ -4,11 +4,14 @@
  * `up` is the command people type most, and the one that must never scold: if a
  * host is already listening it attaches, prints the URL, and exits 0.
  */
+import { resolve } from "node:path";
+import type { HostNotifications } from "@piorbit/protocol";
 import { bool } from "../args.js";
 import type { Command } from "../command.js";
 import { hostUrl, type PiorbitPaths } from "../config.js";
 import { runDaemon } from "../daemon.js";
 import { CliError, ExitCode } from "../errors.js";
+import { shortCwd } from "../format.js";
 import { logTail, openBrowser, startHost, stopHost } from "../host-control.js";
 import { inspectHost, portInUse, probeHealth, type HostRecord } from "../hostfile.js";
 import type { Terminal } from "../output.js";
@@ -343,6 +346,46 @@ export async function connect(paths: PiorbitPaths, onNotification?: Notification
     url: `ws://${record.host}:${record.port}/ws`,
     ...(onNotification ? { onNotification } : {}),
   });
+}
+
+/**
+ * `connect`, for a command that is about to touch one project.
+ *
+ * Anything that starts a worker (settings, packages, a session) can make the
+ * host discover that the directory has trust-gated resources in it. The host
+ * then holds the worker start and asks its clients
+ * (`pi/project/trust_request`), and keeps holding it until one answers. A
+ * terminal cannot answer: there is no modal, and answering from a flag would
+ * be a security decision made by a flag. Before this, the command simply
+ * never returned — the failure mode was an unexplained hang, which is the one
+ * thing a CLI must never do.
+ *
+ * So the question is turned into an error that says what was asked and how to
+ * answer it, and the command exits.
+ */
+export async function connectForProject(
+  paths: PiorbitPaths,
+  cwd: string,
+  onNotification?: NotificationHandler,
+): Promise<HostRpc> {
+  let rpc: HostRpc | undefined;
+  const handler: NotificationHandler = (method, params) => {
+    if (method === "pi/project/trust_request") {
+      const ask = params as HostNotifications["pi/project/trust_request"];
+      if (resolve(ask.cwd) === resolve(cwd)) {
+        rpc?.failPending(
+          new CliError(`${shortCwd(ask.cwd)} has not been trusted yet, and this command cannot ask`, {
+            exitCode: ExitCode.Usage,
+            fix: `It ships its own Pi configuration (${ask.reasons.join(", ")}), which Pi would load and run with your permissions. Answer once with \`piorbit projects trust ${ask.cwd}\` (or \`--no\` to decline), then run this again.`,
+          }),
+        );
+        return;
+      }
+    }
+    onNotification?.(method, params as never);
+  };
+  rpc = await connect(paths, handler);
+  return rpc;
 }
 
 export const hostCommands: readonly Command[] = [upCommand, downCommand, statusCommand, restartCommand, daemonCommand];

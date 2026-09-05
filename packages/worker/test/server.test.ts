@@ -154,6 +154,21 @@ describe("WorkerServer", () => {
     expect(reachable.result).toMatchObject({ replayFrom: 9 });
   });
 
+  it("reports a restarted worker's epoch even once its buffer is no longer empty", async () => {
+    // What `WorkerPool.reopen` actually does after a crash: a brand-new worker
+    // process re-loads the session while the client still holds the old
+    // epoch's seq. The first driver event lands in the buffer before the UI
+    // asks, so the empty-buffer branch is not the one that runs.
+    const fresh = harness();
+    await fresh.call(1, "session/new", { cwd: "/tmp/fake" });
+    fresh.drivers[0]!.emit({ type: "update", update: { kind: "turn_start" } }); // seq 1
+
+    const resumed = await fresh.call(2, "session/load", { path: "/tmp/fake/s1.jsonl", fromSeq: 9 });
+    // Not 9: this process never had a seq 9, and answering 9 would make the
+    // client dedupe every update it is about to receive.
+    expect(resumed.result).toMatchObject({ replayFrom: 1 });
+  });
+
   it("forwards ui and extension events, routes ui responses to drivers", async () => {
     const h = harness();
     await h.call(1, "session/new", { cwd: "/tmp/fake" });

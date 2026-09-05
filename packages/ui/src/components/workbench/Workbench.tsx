@@ -10,7 +10,7 @@ import { FileClock, SlidersHorizontal, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { shortCwd } from "@/format";
 import { cn } from "@/lib/utils";
 import { usePiorbitStable, usePiorbitView } from "@/runtime";
@@ -65,14 +65,12 @@ export function Workbench() {
         )}
         <div className="ms-auto flex items-center gap-2">
           <Kbd className="hidden sm:inline-flex">Esc</Kbd>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon-sm" onClick={close} aria-label="Close">
-                <X />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Back to the session</TooltipContent>
-          </Tooltip>
+          {/* One label for everyone: `TooltipIconButton` derives the
+              accessible name from the tooltip, so a screen reader and a
+              sighted user cannot be told two different things. */}
+          <TooltipIconButton tooltip="Back to the session" onClick={close}>
+            <X />
+          </TooltipIconButton>
         </div>
       </header>
 

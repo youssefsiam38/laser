@@ -1,0 +1,89 @@
+"use client";
+/**
+ * `elements-tool-call` (assistant-ui registry), de-demoed and restyled: the
+ * tool row itself (docs/ux-elements.md "Tool call").
+ *
+ * The registry copy is a specimen — `label`/`activeLabel`/`query` strings, a
+ * `max-w-sm`, a request/result pair of paragraphs. Here it is the row grammar
+ * DESIGN.md specifies, `[icon] verb summary ····· duration ›`, composed from
+ * the `tool-fallback` parts so an unknown tool and a known one are the same
+ * row with different bodies. The body is whatever the caller renders as
+ * children (a terminal block, a diff, args and result); `footer` is where an
+ * approval, an interrupt or a declared decision goes, outside the collapsible
+ * so a question is never hidden behind a chevron.
+ */
+import type { ComponentType, ReactNode, SVGProps } from "react";
+
+import { cn } from "@/lib/utils";
+
+import {
+  ToolFallbackContent,
+  ToolFallbackRoot,
+  ToolFallbackTrigger,
+  type ToolRowState,
+} from "./tool-fallback.aui.js";
+
+export type { ToolRowState } from "./tool-fallback.aui.js";
+
+export interface ToolCallProps {
+  icon?: ComponentType<SVGProps<SVGSVGElement>> | undefined;
+  verb: string;
+  summary?: string | undefined;
+  detail?: string | undefined;
+  state: ToolRowState;
+  /** Wall-clock elapsed, when the caller keeps the clock; otherwise the runtime's. */
+  elapsedMs?: number | undefined;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Rendered under the header while collapsed: an error excerpt, a hint. */
+  peek?: ReactNode;
+  /** The expanded body. Absent → the row is not expandable. */
+  children?: ReactNode;
+  /** Approval, interrupt or decision — always visible, never inside the fold. */
+  footer?: ReactNode;
+  toolName?: string | undefined;
+  className?: string | undefined;
+}
+
+export function ToolCall({
+  icon,
+  verb,
+  summary,
+  detail,
+  state,
+  elapsedMs,
+  open,
+  onOpenChange,
+  peek,
+  children,
+  footer,
+  toolName,
+  className,
+}: ToolCallProps) {
+  const expandable = children !== undefined && children !== null && children !== false;
+  const tone = state === "failed" ? "danger" : state === "awaiting" ? "attention" : undefined;
+  return (
+    <ToolFallbackRoot
+      data-slot="tool-call"
+      data-tool={toolName}
+      data-state-row={state}
+      open={open}
+      onOpenChange={onOpenChange}
+      tone={tone}
+      className={cn(className)}
+    >
+      <ToolFallbackTrigger
+        verb={verb}
+        summary={summary}
+        detail={detail}
+        icon={icon}
+        state={state}
+        elapsedMs={elapsedMs}
+        expandable={expandable}
+      />
+      {!open && peek ? <div className="mb-1.5 ms-6">{peek}</div> : null}
+      {expandable ? <ToolFallbackContent>{children}</ToolFallbackContent> : null}
+      {footer}
+    </ToolFallbackRoot>
+  );
+}

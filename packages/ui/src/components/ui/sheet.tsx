@@ -118,7 +118,7 @@ function SheetTitle({ className, ...props }: React.ComponentProps<typeof SheetPr
   return (
     <SheetPrimitive.Title
       data-slot="sheet-title"
-      className={cn("text-base leading-5 font-semibold tracking-[-0.01em] text-ink", className)}
+      className={cn("text-base leading-5 font-semibold tracking-title text-ink", className)}
       {...props}
     />
   );

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
+import { NumberTicker } from "@/components/assistant-ui/elements/number-ticker";
 import { StatusDot } from "@/components/status";
 import type { Status } from "@/components/status/status";
 import { duration, tokens } from "@/format";
@@ -97,23 +98,25 @@ export function StatusLine() {
       data-slot="status-line"
       className="flex h-5 min-w-0 items-center justify-between gap-3 px-1 text-xs leading-4 whitespace-nowrap text-ink-2"
     >
-      <div className="flex min-w-0 items-center gap-2" role="status" aria-live="polite" aria-atomic="true">
+      <div className="flex min-w-0 items-center gap-2">
+        {/* The live region is the *words* only. It used to wrap the clock and
+            the token count, which re-render every second, so a screen reader
+            read the whole line out again on every tick. The numbers stay
+            visible and stay in the accessible name of their own labels. */}
         {words ? (
-          <>
+          <span className="flex min-w-0 items-center gap-2" role="status" aria-live="polite" aria-atomic="true">
             <StatusDot status={words.status} size="sm" label={words.text} />
             <span className={cn("truncate", words.status === "waiting_for_input" && "font-medium text-attention", words.status === "error" && "text-danger")}>
               {words.text}
             </span>
-          </>
+          </span>
         ) : null}
         {hasTurn && elapsed !== undefined ? (
           <>
             <span aria-hidden="true" className="text-ink-3">
               ·
             </span>
-            <span className={cn("typed shrink-0 tnum", ticking ? "text-live" : "text-ink-3")} aria-label={`Turn time ${duration(elapsed)}`}>
-              {duration(elapsed)}
-            </span>
+            <NumberTicker value={duration(elapsed)} label="Turn time" className={cn("typed shrink-0", ticking ? "text-live" : "text-ink-3")} />
           </>
         ) : null}
         {hasTurn && (stats.rounds > 0 || stats.output > 0) ? (
@@ -121,8 +124,9 @@ export function StatusLine() {
             <span aria-hidden="true" className="text-ink-3">
               ·
             </span>
-            <span className="typed shrink-0 tnum text-ink-3" title={usageTitle}>
-              {tokens(stats.output)} tokens
+            <span className="typed inline-flex shrink-0 items-baseline gap-1 text-ink-3" title={usageTitle}>
+              <NumberTicker value={tokens(stats.output)} label="Output tokens this turn" />
+              tokens
             </span>
           </>
         ) : null}

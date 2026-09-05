@@ -348,8 +348,15 @@ export function PiorbitProvider({ children, url }: PiorbitProviderProps): ReactN
       // A worker that restarted numbers its updates from 1 again; without this
       // the reducer would dedupe every one of them as a replay and the session
       // would look alive but render nothing.
-      onResume: (path, replayFrom) => {
-        if (replayFrom < (readState().open[path]?.lastSeq ?? 0)) {
+      // Compared against the watermark the *request* carried, never against
+      // live state: the worker sends its replayed updates from inside the
+      // `session/load` handler, so they are already flushed into the store by
+      // the time this runs. Reading `lastSeq` here would see the replay's own
+      // tail and rewind the dedupe watermark on every healthy reconnect —
+      // which duplicates the transcript on the next one.
+      onResume: (path, replayFrom, sentFromSeq) => {
+        if (replayFrom !== sentFromSeq) {
+          seenSeq.current.delete(path);
           created.resync(path, replayFrom);
           dispatch({ type: "resync", path, lastSeq: replayFrom });
         }

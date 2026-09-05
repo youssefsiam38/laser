@@ -20,7 +20,10 @@
  * gets, so there is one thing to learn and one place live output appears.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronUp, Layers, Loader2, Pause, Play, Trash2 } from "lucide-react";
+import { ChartGantt, ChevronUp, Layers, Loader2, Pause, Play, Trash2 } from "lucide-react";
+
+import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
+import { TraceWaterfall } from "@/components/assistant-ui/elements/trace-waterfall";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -40,7 +43,7 @@ import { usePiorbitStable, usePiorbitView } from "@/runtime";
 import type { LogEntry, LogLevel, LogSection, LogStats } from "@piorbit/protocol";
 
 import { LogDetail } from "./LogDetail.js";
-import { appendRows, LOG_LEVELS, LOG_SECTIONS, matchesFilters, rowMetric, SECTION_TONE, toQuery, type LogFilters } from "./model.js";
+import { appendRows, LOG_LEVELS, LOG_SECTIONS, matchesFilters, rowMetric, SECTION_TONE, spansFromEntries, toQuery, type LogFilters } from "./model.js";
 
 /** Rows kept in memory. Beyond this the oldest are dropped; paging refetches. */
 const ROW_CAP = 5000;
@@ -71,6 +74,8 @@ export function LogsScreen({ cwd }: { cwd: string | undefined }) {
   const [levels, setLevels] = useState<LogLevel[] | null>(null);
   const [scoped, setScoped] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
+  /** Timing view: the loaded rows paired into spans on one axis. */
+  const [timing, setTiming] = useState(false);
 
   // A query per keystroke is two round-trips per character against SQLite.
   useEffect(() => {
@@ -186,6 +191,8 @@ export function LogsScreen({ cwd }: { cwd: string | undefined }) {
         stats={stats}
         loading={loading}
         onClear={() => setConfirmClear(true)}
+        timing={timing}
+        onTiming={setTiming}
       />
 
       <ClearDialog
@@ -204,6 +211,9 @@ export function LogsScreen({ cwd }: { cwd: string | undefined }) {
 
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          {timing ? (
+            <TimingView entries={entries} selectedId={selected?.id} onSelect={(id) => setSelected(entries.find((e) => e.id === id))} />
+          ) : (
           <LogList
             entries={entries}
             selectedId={selected?.id}
@@ -215,6 +225,7 @@ export function LogsScreen({ cwd }: { cwd: string | undefined }) {
             loading={loading}
             failed={error !== undefined}
           />
+          )}
         </div>
         {/* `min-w-0` matters: the payload block is `whitespace-pre`, and without
             it the pane's intrinsic width is the longest line — which pushed the
@@ -245,6 +256,8 @@ function Toolbar({
   stats,
   loading,
   onClear,
+  timing,
+  onTiming,
 }: {
   section: LogSection | "all";
   onSection: (section: LogSection | "all") => void;
@@ -260,6 +273,8 @@ function Toolbar({
   stats: LogStats | undefined;
   loading: boolean;
   onClear: () => void;
+  timing: boolean;
+  onTiming: (timing: boolean) => void;
 }) {
   return (
     <div className="flex shrink-0 flex-col gap-2 px-3 py-2 hairline-b">
@@ -292,8 +307,19 @@ function Toolbar({
             </TooltipContent>
           </Tooltip>
         ))}
-        {loading && <Loader2 className="size-3.5 animate-spin text-ink-3" aria-label="Loading" />}
+        {loading && <GenerationLoader label="Loading log pages" layout="inline" />}
         <span className="flex-1" />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="ghost" size="sm" aria-pressed={timing} className={cn("gap-1.5", timing && "bg-surface-2 text-ink")} onClick={() => onTiming(!timing)}>
+              <ChartGantt />
+              Timing
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-72">
+            The loaded rows on one time axis: each provider request from send to response, each tool from start to end.
+          </TooltipContent>
+        </Tooltip>
         <WatchInDock section={section} />
       </div>
 
@@ -529,7 +555,7 @@ function LogList({
       {hasOlder && (
         <div className="flex justify-center p-2">
           <Button variant="secondary" size="sm" disabled={loadingOlder} onClick={onLoadOlder} className="gap-1.5">
-            {loadingOlder ? <Loader2 className="animate-spin" /> : <ChevronUp />} Load older
+            {loadingOlder ? <Loader2 className="motion-safe:animate-busy" /> : <ChevronUp />} Load older
           </Button>
         </div>
       )}
@@ -649,5 +675,24 @@ function ClearDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * The trace waterfall (docs/ux-elements.md "Observability") over the rows on
+ * screen. Spans come from `spansFromEntries`; picking one selects its log row.
+ */
+function TimingView({ entries, selectedId, onSelect }: { entries: LogEntry[]; selectedId: number | undefined; onSelect: (id: number) => void }) {
+  const { spans, totalMs } = useMemo(() => spansFromEntries(entries), [entries]);
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto py-3">
+      <TraceWaterfall
+        spans={spans}
+        totalMs={totalMs}
+        selectedId={selectedId === undefined ? undefined : String(selectedId)}
+        onSelect={(id) => onSelect(Number(id))}
+        title={`${spans.length} span${spans.length === 1 ? "" : "s"}`}
+      />
+    </div>
   );
 }

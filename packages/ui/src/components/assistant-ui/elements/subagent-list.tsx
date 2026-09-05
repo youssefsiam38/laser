@@ -1,0 +1,143 @@
+"use client";
+/**
+ * Subagent list — THE fleet sheet's list (docs/ux-elements.md "Agents":
+ * "every run across projects"). Installed from `elements-subagent-list` and
+ * fed the run tree of every session that has panels: a section per session,
+ * attention-first inside it, each row a run.
+ *
+ * Divergences from the registry copy, which was a stack of name / model /
+ * fake-percentage cards:
+ *   - A row IS the island the dock uses, at compact size, expanding in place.
+ *     Same element, same four sizes, less room — the shape of the whole panel
+ *     system, with no second implementation of a run here. The compact header
+ *     already carries the model-free honest values: elapsed, phase, cost.
+ *   - No progress bars: none of the run producers has a percentage
+ *     (docs/ux-panels.md "Nobody has a progress percentage"); a run that
+ *     declares `progress` draws it inside its own body when expanded.
+ *   - Indentation carries depth, because this list is flattened and the
+ *     strip's one-level rule does not apply.
+ *   - A session that is closed here but whose runs kept going says so.
+ */
+import { useEffect, useRef, useState, type ComponentProps } from "react";
+
+import { shortCwd } from "@/format";
+import { cn } from "@/lib/utils";
+import { Island } from "@/panels/islands/Island";
+import type { RunNode } from "@/components/subagents/run-tree";
+
+export interface FleetGroup {
+  path: string;
+  cwd: string;
+  title: string;
+  /** The session is not open in this client: its runs kept going without it. */
+  orphaned: boolean;
+  nodes: RunNode[];
+  running: number;
+}
+
+const COLLAPSED_H = 44;
+/**
+ * How tall an expanded row grows: as much of the sheet as it can have, bounded
+ * by what a run's body needs to lay out (the usage row, the output tail and its
+ * encoding tabs) and by leaving the list itself visible above and below.
+ *
+ * A constant would be wrong at both ends — 440px inside an 85dvh sheet on a
+ * 667px phone leaves about 130px for the header and every other row, and on a
+ * 1200px monitor it wastes the rest of the sheet.
+ */
+const EXPANDED_MIN_H = 260;
+const EXPANDED_MAX_H = 520;
+/** Room kept for the sheet header and at least a couple of collapsed rows. */
+const RESERVED_H = 180;
+
+/** How tall an expanded row may grow in this window, kept between its bounds. */
+function useExpandedHeight(): number {
+  const [height, setHeight] = useState(EXPANDED_MIN_H);
+  useEffect(() => {
+    const measure = () => {
+      const sheet = (globalThis.innerHeight ?? 0) * 0.85;
+      setHeight(Math.round(Math.min(EXPANDED_MAX_H, Math.max(EXPANDED_MIN_H, sheet - RESERVED_H))));
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+  return height;
+}
+
+export function SubagentList({
+  groups,
+  expandedId,
+  onToggle,
+  className,
+  ...props
+}: Omit<ComponentProps<"div">, "children" | "onToggle"> & {
+  groups: readonly FleetGroup[];
+  /** The panel id whose row is open, if any. */
+  expandedId: string | undefined;
+  onToggle(id: string): void;
+}) {
+  const expandedHeight = useExpandedHeight();
+  return (
+    <div data-slot="subagent-list" className={cn("flex flex-col", className)} {...props}>
+      {groups.map((group) => (
+        <section key={group.path} aria-label={group.title}>
+          {/* Opaque: DESIGN.md keeps glass out of the system, and a blurred
+              header over a scrolling list is exactly the decoration it names. */}
+          <header className="sticky top-0 z-10 flex items-baseline gap-2 bg-bg px-4 py-1.5 hairline-b">
+            <h3 className="min-w-0 truncate text-xs font-medium text-ink">{group.title}</h3>
+            {group.cwd && <span className="eyebrow shrink-0">{shortCwd(group.cwd)}</span>}
+            {group.orphaned && (
+              <span className="shrink-0 text-xs text-ink-3" title="This session is closed here; its runs kept going.">
+                session closed
+              </span>
+            )}
+          </header>
+          <ul role="list" className="flex flex-col gap-1.5 px-2 py-2">
+            {group.nodes.map((node) => (
+              <SubagentRow key={node.key} node={node} expanded={expandedId === node.id} expandedHeight={expandedHeight} onToggle={() => onToggle(node.id)} />
+            ))}
+          </ul>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * One run. The island keeps its identity across the size change, so the dot
+ * keeps ticking and the body keeps its scroll when you collapse it again.
+ */
+function SubagentRow({ node, expanded, onToggle, expandedHeight }: { node: RunNode; expanded: boolean; onToggle(): void; expandedHeight: number }) {
+  const ref = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    if (expanded) ref.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [expanded]);
+  return (
+    <li
+      ref={ref}
+      data-slot="subagent-row"
+      style={{ marginInlineStart: Math.min(node.depth, 3) * 12, height: expanded ? expandedHeight : COLLAPSED_H }}
+      className="rounded-xl border border-line transition-[height] duration-(--motion-morph) ease-morph motion-reduce:transition-none"
+      onClickCapture={(event) => {
+        // The island's own header button toggles size inside the dock; in a
+        // list the row owns that, so a click on the island's toggle — and on
+        // the inert header behind it — collapses or expands here instead.
+        //
+        // Every *other* control has to survive: a compact island's primary
+        // action is a Button with a `title` and no `aria-label`, so an
+        // exclusion written in terms of `aria-label` swallowed Stop and toggled
+        // the row instead. The test is the island's own toggle, by its marker.
+        const target = event.target as HTMLElement;
+        if (!target.closest("[data-island-header]")) return;
+        const isToggle = target.closest("[data-island-toggle]") !== null;
+        const isControl = target.closest("button, a, input, textarea, select, [role='menuitem']") !== null;
+        if (!isToggle && isControl) return;
+        event.stopPropagation();
+        onToggle();
+      }}
+    >
+      <Island entry={node.entry} size={expanded ? "expanded" : "compact"} frame="sheet" />
+    </li>
+  );
+}

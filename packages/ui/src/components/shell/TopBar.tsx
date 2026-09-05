@@ -16,7 +16,8 @@ import {
   SquarePen,
 } from "lucide-react";
 
-import { StatusDot, StatusRing } from "@/components/status";
+import { ContextRingButton } from "@/components/assistant-ui/elements/context-display";
+import { StatusDot } from "@/components/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -38,7 +39,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
-import { percent, shortCwd, tokens } from "@/format";
+import { shortCwd } from "@/format";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
 import { useDock, useIslandEntries, usePanelActions } from "@/panels";
@@ -74,7 +75,6 @@ export function TopBar() {
   const dock = useDock(view?.path);
   const panelActions = usePanelActions();
   const dockable = shell.layout !== "mobile" && islands.some((e) => !dock.dismissed.includes(e.key));
-  const usage = meta.contextUsage;
   const busy = meta.running || meta.compacting;
 
   const copyPath = async () => {
@@ -101,7 +101,7 @@ export function TopBar() {
   return (
     <header
       className={cn(
-        "flex h-[calc(48px+env(safe-area-inset-top))] shrink-0 items-center gap-1 bg-bg px-2 pt-[env(safe-area-inset-top)] hairline-b",
+        "flex h-[calc(var(--spacing)*12+env(safe-area-inset-top))] shrink-0 items-center gap-1 bg-bg px-2 pt-[env(safe-area-inset-top)] hairline-b",
       )}
     >
       {shell.layout === "mobile" ? (
@@ -140,7 +140,7 @@ export function TopBar() {
           <h1
             className={cn(
               "min-w-0 truncate leading-5 select-none",
-              untitled ? "font-mono text-xs font-medium tracking-[0.01em] text-ink-2" : "text-sm font-semibold text-ink",
+              untitled ? "font-mono text-xs font-medium tracking-typed text-ink-2" : "text-sm font-semibold text-ink",
             )}
             title={view ? `${view.path}\nDouble-click to rename` : undefined}
             onDoubleClick={() => view && setRenaming(true)}
@@ -205,21 +205,9 @@ export function TopBar() {
           </span>
         )}
 
-        {usage && usage.percent !== null && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="me-1 inline-flex rounded-full outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live" tabIndex={0}>
-                <StatusRing percent={usage.percent} size={20} thickness={2} showLabel={false} label={`Context ${percent(usage.percent)} used`} />
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>
-              Context {percent(usage.percent)}
-              <span className="font-mono text-xs opacity-80 tnum">
-                {usage.tokens === null ? "—" : tokens(usage.tokens)} / {tokens(usage.contextWindow)}
-              </span>
-            </TooltipContent>
-          </Tooltip>
-        )}
+        {/* The context ring (docs/ux-elements.md "Context display"); the
+            composer carries the same element next to Send. */}
+        <ContextRingButton side="bottom" className="me-1" />
 
         {dockable && (
           <TooltipIconButton

@@ -443,6 +443,14 @@ export class WorkerServer {
    */
   private replayFloor(live: Live, fromSeq: number | undefined): number {
     const asked = fromSeq ?? 0;
+    // A restarted worker numbers from 1 again, so a client holding seq 40 is
+    // asking about an epoch this process never had. Answering `asked` would
+    // tell it "you missed nothing" and every update we then send would be
+    // deduped away as a replay: alive-looking, rendering nothing. Checked
+    // before the buffer, because the buffer is usually non-empty already —
+    // `WorkerPool.reopen` re-loads the session right after the crash and the
+    // first driver event lands in it.
+    if (asked > live.seq) return live.seq;
     const oldest = live.buffer[0]?.seq;
     // Nothing buffered: nothing after `live.seq` can be replayed either.
     if (oldest === undefined) return live.seq;

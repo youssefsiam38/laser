@@ -44,10 +44,11 @@ and when you pass `--no-color`.
 | `piorbit projects [list\|add\|remove\|trust] [dir]` | The project list the app shows, plus each project's worker status |
 | `piorbit settings [get\|list\|set\|unset] […]` | Read and write Pi settings for a project. `--project`, `--scope <global\|project>`, `--raw`, `--all` |
 | `piorbit packages [list\|install\|remove\|update\|check] […]` | Pi's package manager. `--project`, `--scope <user\|project>`, `--no-progress` |
+| `piorbit relay [status\|login\|pair\|devices\|revoke]` | Link a phone to this desktop through a relay. `--origin`, `--name`, `--timeout`, `--invert`, `--yes` |
 | `piorbit logs […]` | The host's provider, tool and session log store. `--follow`, `--section`, `--level`, `--search`, `--session`, `--project`, `--limit`, `--detail`, `--stats`, `--clear --yes` |
 | `piorbit pi […]` | Run the pinned Pi with piorbit's environment. `--global-pi` |
 | `piorbit doctor` | Check everything and print a fix for what fails. `--skip-worker`, `--timeout` |
-| `piorbit help [command\|topic]` | Topics: `pi`, `host`, `sessions`, `doctor`, `env`, `json` |
+| `piorbit help [command\|topic]` | Topics: `pi`, `host`, `sessions`, `relay`, `doctor`, `env`, `json` |
 | `piorbit completions <bash\|zsh\|fish>` | A completion script, generated from the command table |
 
 Global options — accepted before or after the command name: `--json`,
@@ -60,7 +61,7 @@ error. `piorbit pi` exits with Pi's own code instead.
 
 ---
 
-## Three real examples
+## Four real examples
 
 ### 1. Prompt a project from a script and act on the answer
 
@@ -88,7 +89,25 @@ piorbit tail 01a06fd7 --follow        # every token, tool call and duration
 `tail` exits when the agent settles; `--follow` keeps watching for the next
 turn. An idle session with no `--follow` says so and exits instead of hanging.
 
-### 3. Diagnose a machine where nothing works
+### 3. Link a phone and reach the desktop from anywhere
+
+```bash
+piorbit relay login wss://relay.example.com/ws --origin https://app.example.com
+piorbit relay pair --name "Youssef's iPhone"
+```
+
+`pair` prints a QR code in the terminal and waits. The phone scans it, both
+screens show six emoji, and you answer `y` only if they are the same six — that
+comparison is what stops a relay that also got hold of the QR from sitting in
+the middle, and there is no flag to skip it. Then:
+
+```bash
+piorbit restart                 # the host opens the device's channel on start
+piorbit relay devices           # what is linked
+piorbit relay revoke iphone -y  # unlink it again
+```
+
+### 4. Diagnose a machine where nothing works
 
 ```bash
 $ piorbit doctor
@@ -167,6 +186,14 @@ In the state directory:
 - `cli-recent-sessions.json` — the last session started per project. Pi writes a
   session file lazily, so a session created a second ago is not in the catalog
   yet; this is how `piorbit new && piorbit send …` finds it.
+- `relay.json` — the relay URL, the origin the phone opens, and the **signed**
+  device list. Public by design: the list is signed rather than hidden, and a
+  list that does not verify is refused rather than replaced.
+- `identity.key` — the Ed25519 root seed that signs that list, mode 0600.
+  Created on first use and never rotated here: every paired phone verifies the
+  list against it, so replacing it unlinks every device.
+- `relay-static.key` — the durable X25519 key each device runs its Noise_KK
+  handshake against, mode 0600.
 
 ---
 
@@ -186,9 +213,12 @@ Pi's, and guessing at them would be wrong.
 
 ## Design notes
 
-- **No dependency budget.** The parser, the colour helper, the table renderer
-  and the completion generators are all in this package. `ws` is the only
-  runtime dependency, and it is the one the host already uses.
+- **No dependency budget.** The parser, the colour helper, the table renderer,
+  the completion generators and the QR encoder (`src/qr.ts`, pinned against an
+  independent implementation in `test/qr.test.ts`) are all in this package.
+  `ws` is the only third-party runtime dependency, and it is the one the host
+  already uses; `@piorbit/crypto` is a workspace package, and the pairing
+  handshake lives there rather than being reimplemented here.
 - **One description per command.** `Command` in `src/command.ts` drives parsing,
   `--help`, completions and dispatch. There is nowhere for them to disagree.
 - **No second path into a session.** Session verbs speak the same WebSocket

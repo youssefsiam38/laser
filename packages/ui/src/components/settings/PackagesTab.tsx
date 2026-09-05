@@ -8,6 +8,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { ArrowUpCircle, Check, Loader2, Package, RefreshCw, Trash2 } from "lucide-react";
 
+import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
+import { StatusDot } from "@/components/status";
+import { DataTable, type DataTableColumn } from "@/components/assistant-ui/elements/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -166,7 +169,7 @@ export function PackagesTab({ cwd, snapshot, onSettingsChanged }: PackagesTabPro
               </option>
             </select>
             <Button disabled={source.trim() === "" || busy !== undefined} onClick={install}>
-              {busy?.startsWith("install:") ? <Loader2 className="animate-spin" /> : <Package />} Install
+              {busy?.startsWith("install:") ? <Loader2 className="motion-safe:animate-busy" /> : <Package />} Install
             </Button>
           </div>
           {!projectWritable && snapshot && (
@@ -190,7 +193,7 @@ export function PackagesTab({ cwd, snapshot, onSettingsChanged }: PackagesTabPro
             <Badge variant="outline">{packages.length}</Badge>
             <SearchInput value={filter} onChange={setFilter} placeholder="Filter" className="ms-auto w-44" />
             <Button variant="secondary" size="sm" disabled={checking} onClick={() => void checkUpdates()}>
-              {checking ? <Loader2 className="animate-spin" /> : <RefreshCw />} Check for updates
+              {checking ? <Loader2 className="motion-safe:animate-busy" /> : <RefreshCw />} Check for updates
             </Button>
             <Button
               variant="ghost"
@@ -207,9 +210,9 @@ export function PackagesTab({ cwd, snapshot, onSettingsChanged }: PackagesTabPro
           {/* An empty state that flashes on every open is a lie about the data;
               this project's worker may still be starting Pi. */}
           {loading && packages.length === 0 && (
-            <p className="flex items-center justify-center gap-2 rounded-lg border border-line px-3 py-6 text-sm text-ink-3">
-              <Loader2 className="size-3.5 animate-spin" /> Reading this project&rsquo;s packages…
-            </p>
+            <div className="flex items-center justify-center rounded-lg border border-line px-3 py-6">
+              <GenerationLoader label="Reading this project’s packages" layout="inline" />
+            </div>
           )}
           {!loading && packages.length === 0 && (
             <p className="rounded-lg border border-line px-3 py-6 text-center text-sm text-ink-2">
@@ -218,64 +221,21 @@ export function PackagesTab({ cwd, snapshot, onSettingsChanged }: PackagesTabPro
             </p>
           )}
 
-          <ul className="flex flex-col gap-1">
-            {shown.map((pkg) => (
-              <li
-                key={`${pkg.scope}:${pkg.source}`}
-                className="flex flex-wrap items-center gap-2 rounded-lg border border-line px-3 py-2"
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="font-mono text-sm text-ink">{pkg.source}</span>
-                    <Badge variant={pkg.scope === "project" ? "live" : "outline"}>{pkg.scope}</Badge>
-                    {pkg.type && <Badge variant="default">{pkg.type}</Badge>}
-                    {pkg.filtered && (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Badge variant="default">filtered</Badge>
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="max-w-72">
-                          Its settings entry lists which extensions, skills, prompts or themes to load, instead of
-                          loading everything the package ships.
-                        </TooltipContent>
-                      </Tooltip>
-                    )}
-                    {pkg.updateAvailable && (
-                      <Badge variant="attention" className="gap-1">
-                        <ArrowUpCircle /> update
-                      </Badge>
-                    )}
-                  </div>
-                  {pkg.installedPath && (
-                    <p className="mt-0.5 truncate font-mono text-xs text-ink-3" title={pkg.installedPath}>
-                      {pkg.installedPath}
-                    </p>
-                  )}
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={busy !== undefined}
-                  onClick={() =>
-                    void run(
-                      `update:${pkg.source}`,
-                      async () => (await client.request("pi/packages/update", { cwd, source: pkg.source })).packages,
-                    )
-                  }
-                >
-                  {busy === `update:${pkg.source}` ? <Loader2 className="animate-spin" /> : null} Update
-                </Button>
-                <Button
-                  variant="destructive-ghost"
-                  size="sm"
-                  disabled={busy !== undefined}
-                  onClick={() => setConfirmRemove(pkg)}
-                >
-                  {busy === `remove:${pkg.source}` ? <Loader2 className="animate-spin" /> : <Trash2 />} Remove
-                </Button>
-              </li>
-            ))}
-          </ul>
+          {(loading || packages.length > 0) && (
+            <DataTable
+              caption="Packages configured for this project"
+              columns={packageColumns({
+                busy,
+                update: (pkg) =>
+                  void run(`update:${pkg.source}`, async () => (await client.request("pi/packages/update", { cwd, source: pkg.source })).packages),
+                remove: setConfirmRemove,
+              })}
+              rows={shown}
+              rowKey={(pkg) => `${pkg.scope}:${pkg.source}`}
+              minWidth="36rem"
+              emptyMessage={packages.length > 0 ? "No package matches the filter." : undefined}
+            />
+          )}
         </section>
 
         <p className="text-xs leading-4 text-ink-3">
@@ -348,10 +308,78 @@ function ProgressStrip({ progress }: { progress: PackageProgress }) {
             : "bg-surface-2 text-ink-2",
       )}
     >
-      {done ? <Check className="size-3.5" /> : failed ? null : <Loader2 className="size-3.5 animate-spin" />}
+      {done ? <Check className="size-3.5" /> : failed ? null : <StatusDot status="working" size="sm" label="In progress" />}
       <span className="font-medium">{progress.action}</span>
       <span className="font-mono text-xs">{progress.source}</span>
       {progress.message && <span className="min-w-0 truncate opacity-90">{progress.message}</span>}
     </div>
   );
+}
+
+function packageColumns({
+  busy,
+  update,
+  remove,
+}: {
+  busy: string | undefined;
+  update: (pkg: PackageEntry) => void;
+  remove: (pkg: PackageEntry) => void;
+}): DataTableColumn<PackageEntry>[] {
+  return [
+    {
+      key: "source",
+      label: "Package",
+      render: (pkg) => (
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="typed text-ink">{pkg.source}</span>
+            {pkg.type && <Badge variant="default">{pkg.type}</Badge>}
+            {pkg.filtered && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge variant="default">filtered</Badge>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-72">
+                  Its settings entry lists which extensions, skills, prompts or themes to load, instead of loading
+                  everything the package ships.
+                </TooltipContent>
+              </Tooltip>
+            )}
+            {pkg.updateAvailable && (
+              <Badge variant="attention" className="gap-1">
+                <ArrowUpCircle /> update
+              </Badge>
+            )}
+          </div>
+          {pkg.installedPath && (
+            <p className="truncate typed text-ink-3" title={pkg.installedPath}>
+              {pkg.installedPath}
+            </p>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: "scope",
+      label: "Scope",
+      width: "6rem",
+      render: (pkg) => <Badge variant={pkg.scope === "project" ? "live" : "outline"}>{pkg.scope}</Badge>,
+    },
+    {
+      key: "actions",
+      label: "Actions",
+      align: "end",
+      width: "11rem",
+      render: (pkg) => (
+        <div className="flex justify-end gap-1">
+          <Button variant="ghost" size="sm" disabled={busy !== undefined} onClick={() => update(pkg)}>
+            {busy === `update:${pkg.source}` ? <Loader2 className="motion-safe:animate-busy" /> : null} Update
+          </Button>
+          <Button variant="destructive-ghost" size="sm" disabled={busy !== undefined} onClick={() => remove(pkg)}>
+            {busy === `remove:${pkg.source}` ? <Loader2 className="motion-safe:animate-busy" /> : <Trash2 />} Remove
+          </Button>
+        </div>
+      ),
+    },
+  ];
 }

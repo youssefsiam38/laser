@@ -148,10 +148,11 @@ async function cacheFirst(request: Request): Promise<Response> {
  */
 function offlineFallback(): Response {
   // The offline page cannot reach the app's stylesheet — it is what renders
-  // when the app itself did not load — so it restates DESIGN.md's ground, ink
-  // and secondary ink for both themes inline. The only place in the UI with
-  // literal colours, and the reason is that it has no other option.
-  const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>piorbit — offline</title><style>:root{color-scheme:light dark}body{margin:0;min-height:100dvh;display:grid;place-items:center;font:14px/1.5 "Host Grotesk",system-ui,sans-serif;background:#F5F7FA;color:#131A22;padding:max(24px,env(safe-area-inset-top)) 24px max(24px,env(safe-area-inset-bottom))}@media(prefers-color-scheme:dark){body{background:#0B0F14;color:#E6EDF3}}main{max-width:36ch}h1{font-size:22px;line-height:28px;margin:0 0 8px}p{margin:0;color:#4A5866}@media(prefers-color-scheme:dark){p{color:#9FB0C0}}</style><main><h1>You’re offline</h1><p>piorbit could not load because this device has no connection and the app was not saved for offline use yet. Reconnect and open it again.</p></main>`;
+  // when the app itself did not load — so its ground, ink and typeface are
+  // inlined. They are *compiled from the shipped presets* by `vite-plugin.ts`
+  // and substituted for the placeholder below, so this page is the app's own
+  // default light and dark rather than a palette frozen in this file.
+  const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>piorbit — offline</title><style>__PIORBIT_OFFLINE_STYLE__</style><main><h1>You’re offline</h1><p>piorbit could not load because this device has no connection and the app was not saved for offline use yet. Reconnect and open it again.</p></main>`;
   return new Response(html, { status: 503, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
 }
 

@@ -37,13 +37,15 @@ page about something that spans commands.
     // A name that is both (pi, doctor) gets the topic, which is the longer read,
     // plus a pointer to the command's own flags.
     if (topic) {
-      term.note(term.err.bold(topic.title));
-      for (const line of topic.body.trim().split("\n")) term.note(line);
+      // Help is the answer to `piorbit help`, so it goes to stdout and can
+      // be piped, the same as the generated command help.
+      term.write(`${term.out.bold(topic.title)}\n`);
+      for (const body of topic.body.trim().split("\n")) term.write(`${body}\n`);
       // A passthrough command's own `--help` belongs to the tool it wraps, so
       // pointing at it here would send the reader to the wrong help.
       if (command && !command.passthrough) {
-        term.note();
-        term.note(term.err.dim(`Options: piorbit ${command.name} --help`));
+        term.write("\n");
+        term.write(`${term.out.dim(`Options: piorbit ${command.name} --help`)}\n`);
       }
       return;
     }

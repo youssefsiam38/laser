@@ -6,15 +6,18 @@ export { ThreadSlotsProvider, useThreadSlots, type ThreadSlots } from "./thread-
 export { Composer } from "./Composer.js";
 export { StatusLine } from "./StatusLine.js";
 export { ProjectLine } from "./ProjectLine.js";
-export { ToolGroup, type ToolGroupProps } from "./ToolGroup.js";
+export { ToolGroup, type ToolGroupProps } from "@/components/assistant-ui/elements/tool-group.aui";
 export { EmptyState } from "./EmptyState.js";
-export { QueueChips } from "./QueueChips.js";
-export { ModelSelector } from "./ModelSelector.js";
-export { ThinkingButton, ThinkingSlider, THINKING_LEVELS } from "./ThinkingSlider.js";
-export { MarkdownText } from "./MarkdownText.js";
+// The queue chips, the model picker and the thinking control are catalog
+// elements now (docs/ux-elements.md): `elements/message-queue`,
+// `elements/model-selector`, `elements/reasoning-effort`.
+export { ComposerQueue, MessageQueue, QueuedChip } from "@/components/assistant-ui/elements/message-queue";
+export { SessionModelSelector } from "@/components/assistant-ui/elements/model-selector";
+export { ReasoningEffort, ThinkingEffort, THINKING_LEVELS } from "@/components/assistant-ui/elements/reasoning-effort";
+export { MarkdownText } from "@/components/assistant-ui/elements/markdown-text";
 export { ToolRow } from "./ToolRow.js";
-export { TerminalBlock, type TerminalBlockProps } from "./TerminalBlock.js";
-export { DiffBlock, type DiffBlockProps } from "./DiffBlock.js";
+export { TerminalBlock, type TerminalBlockProps } from "@/components/assistant-ui/elements/terminal-block";
+export { CodeDiff, CodeDiffRows, DiffStat, type CodeDiffProps } from "@/components/assistant-ui/elements/code-diff";
 export { AssistantMessage, Notice, ThreadMessage, UserMessage } from "./messages.js";
 export {
   MAX_DIFF_LINES,
@@ -60,3 +63,4 @@ export {
   type GitHubRemote,
 } from "./project-git.js";
 export { useSessionUpdates } from "./session-updates.js";
+export { continuationsOf, laterUserMessages, leafOf, userEntryAt, userEntryIds, type EntryLike } from "./entries.js";

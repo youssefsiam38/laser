@@ -8,6 +8,15 @@ import { GLOBAL_FLAGS } from "./flags.js";
 import type { Painter, Terminal } from "./output.js";
 import { CLI_VERSION } from "./version.js";
 
+/**
+ * Help is the *result* of asking for help, not progress: it goes to stdout so
+ * `piorbit --help | less` and `piorbit help > cmds.txt` produce something.
+ * `write` rather than `print` so `--help` still answers under `--json`.
+ */
+function say(term: Terminal, text = ""): void {
+  term.write(`${text}\n`);
+}
+
 function flagLabel(name: string, spec: FlagSpec): string {
   const short = spec.short ? `-${spec.short}, ` : "    ";
   const value =
@@ -32,78 +41,80 @@ function flagLines(specs: FlagSpecs, paint: Painter): string[] {
 }
 
 export function renderRootHelp(commands: readonly Command[], term: Terminal): void {
-  const p = term.err;
+  const p = term.out;
   const visible = commands.filter((command) => !command.hidden);
-  const groups = ["Host", "Sessions", "Projects", "Pi", "Diagnostics", "Shell"] as const;
+  const groups = ["Host", "Sessions", "Projects", "Relay", "Pi", "Diagnostics", "Shell"] as const;
 
-  term.note(`${p.bold("piorbit")} ${p.dim(CLI_VERSION)} — start, inspect and drive piorbit from a terminal.`);
-  term.note();
-  term.note(p.bold("USAGE"));
-  term.note(`  piorbit ${p.dim("[command] [options]")}`);
-  term.note(`  piorbit ${p.dim("with no command starts the host and opens the app")}`);
-  term.note();
+  say(term, `${p.bold("piorbit")} ${p.dim(CLI_VERSION)} — start, inspect and drive piorbit from a terminal.`);
+  say(term);
+  say(term, p.bold("USAGE"));
+  say(term, `  piorbit ${p.dim("[command] [options]")}`);
+  say(term, `  piorbit ${p.dim("with no command starts the host and opens the app")}`);
+  say(term);
 
   for (const group of groups) {
     const inGroup = visible.filter((command) => command.group === group);
     if (inGroup.length === 0) continue;
-    term.note(p.bold(group.toUpperCase()));
+    say(term, p.bold(group.toUpperCase()));
     const pad = Math.max(...inGroup.map((command) => command.name.length));
     for (const command of inGroup) {
-      const alias = command.aliases?.length ? p.dim(` (${command.aliases.join(", ")})`) : "";
-      term.note(`  ${command.name.padEnd(pad)}  ${command.summary}${alias}`);
+      say(term, `  ${command.name.padEnd(pad)}  ${command.summary}`);
+      // Its own line, not a trailing parenthetical: read inline, an alias
+      // list looks like a second clause of the summary.
+      if (command.aliases?.length) say(term, `  ${" ".repeat(pad)}  ${p.dim(`aliases: ${command.aliases.join(", ")}`)}`);
     }
-    term.note();
+    say(term);
   }
 
-  term.note(p.bold("GLOBAL OPTIONS"));
-  for (const line of flagLines(GLOBAL_FLAGS, p)) term.note(line);
-  term.note();
-  term.note(p.bold("LEARN MORE"));
-  term.note(`  piorbit <command> --help   ${p.dim("options and examples for one command")}`);
-  term.note(`  piorbit help <topic>       ${p.dim(`topics: ${TOPICS.map((topic) => topic.name).join(", ")}`)}`);
+  say(term, p.bold("GLOBAL OPTIONS"));
+  for (const line of flagLines(GLOBAL_FLAGS, p)) say(term, line);
+  say(term);
+  say(term, p.bold("LEARN MORE"));
+  say(term, `  piorbit <command> --help   ${p.dim("options and examples for one command")}`);
+  say(term, `  piorbit help <topic>       ${p.dim(`topics: ${TOPICS.map((topic) => topic.name).join(", ")}`)}`);
 }
 
 export function renderCommandHelp(command: Command, term: Terminal): void {
-  const p = term.err;
-  term.note(`${p.bold(`piorbit ${command.name}`)} — ${command.summary}`);
-  term.note();
-  term.note(p.bold("USAGE"));
-  term.note(`  ${command.usage}`);
-  if (command.aliases?.length) term.note(`  ${p.dim(`alias: ${command.aliases.map((a) => `piorbit ${a}`).join(", ")}`)}`);
-  term.note();
+  const p = term.out;
+  say(term, `${p.bold(`piorbit ${command.name}`)} — ${command.summary}`);
+  say(term);
+  say(term, p.bold("USAGE"));
+  say(term, `  ${command.usage}`);
+  if (command.aliases?.length) say(term, `  ${p.dim(`alias: ${command.aliases.map((a) => `piorbit ${a}`).join(", ")}`)}`);
+  say(term);
 
   if (command.description) {
-    for (const line of command.description.trim().split("\n")) term.note(`  ${line}`);
-    term.note();
+    for (const line of command.description.trim().split("\n")) say(term, `  ${line}`);
+    say(term);
   }
 
   if (command.positionals?.length) {
-    term.note(p.bold("ARGUMENTS"));
+    say(term, p.bold("ARGUMENTS"));
     const pad = Math.max(...command.positionals.map((positional) => positional.name.length));
     for (const positional of command.positionals) {
       const optional = positional.optional ? p.dim(" (optional)") : "";
-      term.note(`  ${positional.name.padEnd(pad)}  ${positional.description}${optional}`);
+      say(term, `  ${positional.name.padEnd(pad)}  ${positional.description}${optional}`);
     }
-    term.note();
+    say(term);
   }
 
   const own = flagLines(command.flags ?? {}, p);
   if (own.length > 0) {
-    term.note(p.bold("OPTIONS"));
-    for (const line of own) term.note(line);
-    term.note();
+    say(term, p.bold("OPTIONS"));
+    for (const line of own) say(term, line);
+    say(term);
   }
 
-  term.note(p.bold("GLOBAL OPTIONS"));
-  for (const line of flagLines(GLOBAL_FLAGS, p)) term.note(line);
+  say(term, p.bold("GLOBAL OPTIONS"));
+  for (const line of flagLines(GLOBAL_FLAGS, p)) say(term, line);
 
   if (command.examples?.length) {
-    term.note();
-    term.note(p.bold("EXAMPLES"));
+    say(term);
+    say(term, p.bold("EXAMPLES"));
     for (const example of command.examples) {
-      term.note(`  ${p.dim(`# ${example.note}`)}`);
-      term.note(`  ${example.command}`);
-      term.note();
+      say(term, `  ${p.dim(`# ${example.note}`)}`);
+      say(term, `  ${example.command}`);
+      say(term);
     }
   }
 }
@@ -187,6 +198,38 @@ or the session id, also works:
 \`send\` waits for the agent to settle and streams the answer unless you pass
 --no-wait. \`--steer\` and \`--follow-up\` choose what happens when the agent is
 already working: steer interrupts with new instructions, follow-up queues.
+`,
+  },
+  {
+    name: "relay",
+    title: "Reaching this desktop from a phone",
+    body: `
+piorbit binds 127.0.0.1 and nothing else. A phone reaches it by meeting it on a
+relay: a server that forwards bytes between exactly two sockets on one channel
+and can read none of them. It links no crypto library and never parses a
+payload, which is why "logging in" to one is a URL rather than a credential.
+
+  piorbit relay login wss://relay.example/ws --origin https://app.example
+  piorbit relay pair                 show a QR for a phone to scan
+  piorbit relay devices              what is linked
+  piorbit relay revoke <device>      unlink one
+
+Pairing runs Noise_IK against an ephemeral key carried in the QR’s fragment —
+which browsers never send to a server. Both screens then show six emoji derived
+from the handshake. Compare them: they are what stops a relay that also got hold
+of the QR from sitting in the middle, and nothing is disclosed until you say
+they match. There is no flag to skip that question.
+
+After pairing, each device gets a channel id only the two ends can compute
+(HKDF over their static-static Diffie-Hellman), and the host opens one outbound
+connection per device when it starts. So pair or revoke, then \`piorbit restart\`.
+
+Three files in the state directory hold all of it: \`relay.json\` (the URL and
+the signed device list), \`identity.key\` (the Ed25519 root seed that signs that
+list) and \`relay-static.key\` (the transport key), the last two mode 0600.
+Revocation is a re-signed list with the device gone — there is no revocation
+list to distribute and no server to ask. Replacing the root identity unlinks
+every device, because every device verifies the list against it.
 `,
   },
   {

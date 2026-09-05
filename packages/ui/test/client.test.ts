@@ -239,7 +239,10 @@ describe("reconnect resume", () => {
     socket.deliver({ jsonrpc: "2.0", id: load.id, result: { state: {}, replayFrom: 0 } });
 
     return Promise.resolve().then(() => {
-      expect(onResume).toHaveBeenCalledWith("/s.jsonl", 0);
+      // The third argument is the `fromSeq` this very request carried, which
+      // is the only watermark the caller may compare against: the replayed
+      // updates are flushed before the response resolves.
+      expect(onResume).toHaveBeenCalledWith("/s.jsonl", 0, 87);
       client.resync("/s.jsonl", 0);
       // The next reconnect asks from the adopted epoch, not the stale one.
       FakeSocket.instances[1]!.close();

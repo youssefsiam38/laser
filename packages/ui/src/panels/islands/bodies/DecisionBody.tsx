@@ -1,10 +1,11 @@
 import type { DecisionField, DecisionPanel } from "@piorbit/protocol";
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 
+import { ApprovalCard } from "@/components/assistant-ui/elements/approval-card";
+import { ElicitationForm, type FieldValues } from "@/components/assistant-ui/elements/elicitation-form";
+import { PermissionGrant } from "@/components/assistant-ui/elements/permission-grant";
 import { useCountdown } from "@/components/thread/timing";
-import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
-import { Textarea } from "@/components/ui/textarea";
 import { modKey } from "@/format";
 import { cn } from "@/lib/utils";
 import { isModeChangingOption } from "../../decision.js";
@@ -29,29 +30,22 @@ export interface DecisionBodyProps {
   className?: string | undefined;
 }
 
-type Values = Record<string, string | boolean>;
-
 /**
  * Something blocking on you: a field list, its blocking scope, and a
  * rejection field that opens on "No" so declining is never a dead end.
  *
- * The one decision renderer in the app. A tool-row footer, a card above the
- * composer and a session-blocking sheet are this component in three places,
- * which is why a question never looks like three different things.
- * Keyboard-first: Enter submits a one-line field, ⌘/Ctrl+Enter a long one,
- * Esc cancels, arrows move between choices.
+ * The one decision *controller* in the app. A tool-row footer, a card above
+ * the composer and a session-blocking sheet are this component in three
+ * places, which is why a question never looks like three different things.
+ * What it draws is the catalog's (docs/ux-elements.md): a one-question
+ * approval is `ApprovalCard`; a choice that widens scope is `PermissionGrant`;
+ * anything with fields to fill — including the rejection reason — is
+ * `ElicitationForm`. Keyboard-first: Enter submits a one-line field,
+ * ⌘/Ctrl+Enter a long one, Esc cancels, arrows move between choices.
  */
-export function DecisionBody({
-  panel,
-  onAnswer,
-  variant = "card",
-  touch = false,
-  initialDeclining = false,
-  autoFocus = true,
-  className,
-}: DecisionBodyProps) {
+export function DecisionBody({ panel, onAnswer, variant = "card", touch = false, initialDeclining = false, autoFocus = true, className }: DecisionBodyProps) {
   const id = useId();
-  const [values, setValues] = useState<Values>(() => defaults(panel.fields));
+  const [values, setValues] = useState<FieldValues>(() => defaults(panel.fields));
   const [declining, setDeclining] = useState(initialDeclining);
   const [busy, setBusy] = useState(false);
   const secondsLeft = useCountdown(panel.timeoutMs);
@@ -72,7 +66,7 @@ export function DecisionBody({
     rootRef.current?.querySelector<HTMLElement>("[data-rejection]")?.focus({ preventScroll: true });
   }, [declining]);
 
-  const submit = async (override?: Values): Promise<void> => {
+  const submit = async (override?: FieldValues): Promise<void> => {
     const next = { ...values, ...override };
     for (const field of visible) {
       if (field.required && field.type !== "confirm" && !String(next[field.id] ?? "").trim()) {
@@ -116,207 +110,115 @@ export function DecisionBody({
     }
   };
 
-  const mod = modKey();
-  // One place decides the control geometry, so the two shapes cannot drift.
-  const btn = touch ? ("lg" as const) : ("sm" as const);
-  const tall = touch ? "h-12 text-base" : "";
-  const row = touch ? "flex-col" : "flex-wrap";
+  const header = {
+    titleId: `${id}-title`,
+    eyebrow: `${panel.source} · ${blockingWords(panel.blocking)}`,
+    title: panel.title,
+    message: panel.message,
+    secondsLeft,
+    large: variant === "sheet",
+  };
+  const setValue = (fieldId: string, value: string | boolean) => setValues((s) => ({ ...s, [fieldId]: value }));
+  const hint = (long: boolean) =>
+    touch ? null : (
+      <span className="ms-auto hidden items-center gap-1 text-xs text-ink-3 sm:inline-flex" aria-hidden="true">
+        {long ? (
+          <>
+            <Kbd>{modKey()}</Kbd>
+            <Kbd>⏎</Kbd>
+          </>
+        ) : (
+          <Kbd>⏎</Kbd>
+        )}
+        <span className="ms-0.5">submit</span>
+      </span>
+    );
+
+  let body: React.ReactNode;
+  if (declining && rejectionField) {
+    // "No" opened its field: the reason, and "<No> and send".
+    body = (
+      <ElicitationForm
+        {...header}
+        touch={touch}
+        busy={busy}
+        fields={[rejectionField]}
+        values={values}
+        onChange={setValue}
+        onSubmit={() => void submit(onlyConfirm ? { [single!.id]: false } : {})}
+        submitLabel={`${panel.rejection?.label ?? "No"} and send`}
+        destructive
+        secondary={{ label: "Back", onClick: () => setDeclining(false) }}
+        onCancel={cancel}
+        focusMarker="data-rejection"
+        hint={hint(true)}
+      />
+    );
+  } else if (single?.type === "choice") {
+    const options = single.options ?? [];
+    const widens = options.some(isModeChangingOption);
+    body = widens ? (
+      <PermissionGrant
+        {...header}
+        touch={touch}
+        busy={busy}
+        options={options.map((label) => ({ label, modeChanging: isModeChangingOption(label) }))}
+        onGrant={(option) => void submit({ [single.id]: option })}
+        declineLabel={panel.rejection && rejectionField ? panel.rejection.label : undefined}
+        onDecline={panel.rejection && rejectionField ? decline : undefined}
+        onCancel={cancel}
+      />
+    ) : (
+      <ApprovalCard
+        {...header}
+        touch={touch}
+        busy={busy}
+        choices={options}
+        onChoose={(option) => void submit({ [single.id]: option })}
+        declineLabel={panel.rejection?.label ?? "Cancel"}
+        onDecline={decline}
+        onCancel={panel.rejection && rejectionField ? undefined : cancel}
+        modeChanging={isModeChangingOption}
+      />
+    );
+  } else if (onlyConfirm) {
+    body = (
+      <ApprovalCard
+        {...header}
+        touch={touch}
+        busy={busy}
+        onAllow={() => void submit({ [single!.id]: true })}
+        declineLabel={panel.rejection?.label ?? "No"}
+        onDecline={decline}
+      />
+    );
+  } else {
+    body = (
+      <ElicitationForm
+        {...header}
+        touch={touch}
+        busy={busy}
+        fields={visible}
+        values={values}
+        onChange={setValue}
+        onSubmit={() => void submit()}
+        submitLabel="Submit"
+        secondary={panel.rejection && rejectionField ? { label: panel.rejection.label, onClick: decline } : undefined}
+        onCancel={cancel}
+        hint={hint(visible.some((f) => f.type === "longtext"))}
+      />
+    );
+  }
 
   return (
-    <div ref={rootRef} role="group" aria-labelledby={`${id}-title`} onKeyDown={onKeyDown} className={cn("flex flex-col gap-3", className)}>
-      <div className="flex items-start gap-3">
-        <div className="min-w-0 flex-1">
-          <p className="eyebrow mb-1">
-            {panel.source} · {blockingWords(panel.blocking)}
-          </p>
-          <p id={`${id}-title`} className={cn("font-medium text-ink", variant === "sheet" ? "text-base" : "text-sm")}>
-            {panel.title}
-          </p>
-          {panel.message && <p className="mt-1 text-sm whitespace-pre-wrap text-ink-2">{panel.message}</p>}
-        </div>
-        {secondsLeft !== undefined && (
-          <span className={cn("typed shrink-0 pt-0.5", secondsLeft <= 5 ? "text-attention" : "text-ink-3")} aria-live="polite">
-            {secondsLeft}s
-          </span>
-        )}
-      </div>
-
-      {/* One choice field: the options are the answer. */}
-      {single?.type === "choice" && !declining ? (
-        <div className={cn("flex gap-2", row)} role="group" aria-label={single.label}>
-          {(single.options ?? []).map((option, i) => {
-            const modeChanging = isModeChangingOption(option);
-            return (
-              <Button
-                key={`${i}-${option}`}
-                variant="outline"
-                size={btn}
-                data-option
-                {...(i === 0 ? { "data-autofocus": true } : {})}
-                disabled={busy}
-                onClick={() => void submit({ [single.id]: option })}
-                className={cn(
-                  // Choosing this changes how the session asks from now on, so
-                  // it is marked before it is pressed, not explained after.
-                  modeChanging && "border-[color-mix(in_oklab,var(--attention)_45%,var(--line))]",
-                  touch && "h-auto min-h-12 w-full flex-col items-start gap-0.5 py-2.5 text-start text-base whitespace-normal",
-                )}
-              >
-                <span className={cn(touch && "w-full wrap-break-word")}>{option}</span>
-                {modeChanging && (
-                  <span className={cn("font-normal text-attention", touch ? "text-xs" : "sr-only")}>
-                    Changes how this session asks from now on
-                  </span>
-                )}
-              </Button>
-            );
-          })}
-          {panel.rejection && rejectionField ? (
-            <Button variant="ghost" size={btn} className={cn(touch && "h-11 text-base text-ink-2")} onClick={decline}>
-              {panel.rejection.label}
-            </Button>
-          ) : (
-            <Button variant="ghost" size={btn} className={cn(touch && "h-11 text-base text-ink-2")} onClick={cancel}>
-              Cancel
-            </Button>
-          )}
-        </div>
-      ) : onlyConfirm && !declining ? (
-        // On a phone the primary sits on the right, wider, where the thumb is.
-        <div className={cn("flex gap-2", touch ? "" : "flex-wrap")}>
-          <Button
-            variant="outline"
-            size={btn}
-            className={cn(tall, touch && "flex-1")}
-            onClick={decline}
-          >
-            {panel.rejection?.label ?? "No"}
-          </Button>
-          <Button size={btn} data-autofocus disabled={busy} className={cn(tall, touch && "flex-[1.6]")} onClick={() => void submit({ [single!.id]: true })}>
-            Yes
-          </Button>
-        </div>
-      ) : (
-        <form
-          className="flex flex-col gap-3"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void submit(onlyConfirm ? { [single!.id]: false } : {});
-          }}
-        >
-          {!declining &&
-            visible.map((field, i) => (
-              <Field key={field.id} field={field} value={values[field.id]} first={i === 0} onChange={(v) => setValues((s) => ({ ...s, [field.id]: v }))} onSubmit={() => void submit()} />
-            ))}
-          {declining && rejectionField && (
-            <Field field={rejectionField} value={values[rejectionField.id]} first rejection onChange={(v) => setValues((s) => ({ ...s, [rejectionField.id]: v }))} onSubmit={() => void submit(onlyConfirm ? { [single!.id]: false } : {})} />
-          )}
-          <div className={cn("flex items-center gap-2", touch ? "" : "flex-wrap")}>
-            {declining ? (
-              <Button type="button" variant="ghost" size={btn} className={cn(tall, touch && "flex-1")} onClick={() => setDeclining(false)}>
-                Back
-              </Button>
-            ) : panel.rejection && rejectionField && !onlyConfirm ? (
-              <Button type="button" variant="ghost" size={btn} className={cn(tall, touch && "flex-1")} onClick={decline}>
-                {panel.rejection.label}
-              </Button>
-            ) : null}
-            <Button type="submit" size={btn} disabled={busy} variant={declining ? "destructive" : "default"} className={cn(tall, touch && "flex-[1.6]")}>
-              {declining ? `${panel.rejection?.label ?? "No"} and send` : "Submit"}
-            </Button>
-            {!touch && (
-              <Button type="button" variant="ghost" size="sm" onClick={cancel}>
-                Cancel
-              </Button>
-            )}
-            <span className="ms-auto hidden items-center gap-1 text-xs text-ink-3 sm:inline-flex" aria-hidden="true">
-              {visible.some((f) => f.type === "longtext") || declining ? (
-                <>
-                  <Kbd>{mod}</Kbd>
-                  <Kbd>⏎</Kbd>
-                </>
-              ) : (
-                <Kbd>⏎</Kbd>
-              )}
-              <span className="ms-0.5">submit</span>
-            </span>
-          </div>
-        </form>
-      )}
+    <div ref={rootRef} role="group" aria-labelledby={`${id}-title`} onKeyDown={onKeyDown} className={cn("flex flex-col", className)}>
+      {body}
     </div>
   );
 }
 
-function defaults(fields: readonly DecisionField[]): Values {
-  const out: Values = {};
+function defaults(fields: readonly DecisionField[]): FieldValues {
+  const out: FieldValues = {};
   for (const field of fields) if (field.default !== undefined) out[field.id] = field.default;
   return out;
-}
-
-interface FieldProps {
-  field: DecisionField;
-  value: string | boolean | undefined;
-  first: boolean;
-  rejection?: boolean;
-  onChange(value: string | boolean): void;
-  onSubmit(): void;
-}
-
-function Field({ field, value, first, rejection = false, onChange, onSubmit }: FieldProps) {
-  const id = useId();
-  const focus = first ? (rejection ? { "data-rejection": true } : { "data-autofocus": true }) : {};
-  const inputClass = cn(
-    "h-8 min-w-0 w-full rounded-lg border border-line bg-surface px-3 text-base text-ink outline-none",
-    "placeholder:text-ink-3 hover:border-[color-mix(in_oklab,var(--line)_60%,var(--ink-3))]",
-    "focus-visible:border-live focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-live/25",
-  );
-  switch (field.type) {
-    case "confirm":
-      return (
-        <label className="flex items-center gap-2 text-sm text-ink">
-          <input type="checkbox" data-field={field.id} {...focus} checked={value === true} onChange={(e) => onChange(e.currentTarget.checked)} className="size-4 accent-(--live)" />
-          {field.label}
-        </label>
-      );
-    case "choice":
-      return (
-        <fieldset className="flex flex-col gap-1.5">
-          <legend className="mb-1 text-xs text-ink-2">{field.label}</legend>
-          <div className="flex flex-wrap gap-2" data-field={field.id}>
-            {(field.options ?? []).map((option, i) => (
-              <Button key={`${i}-${option}`} type="button" size="sm" variant={value === option ? "default" : "outline"} aria-pressed={value === option} data-option {...(i === 0 ? focus : {})} onClick={() => onChange(option)}>
-                {option}
-              </Button>
-            ))}
-          </div>
-        </fieldset>
-      );
-    case "text":
-      return (
-        <label className="flex flex-col gap-1.5">
-          <span className="text-xs text-ink-2">{field.label}</span>
-          <input id={id} data-field={field.id} {...focus} value={typeof value === "string" ? value : ""} required={field.required} onChange={(e) => onChange(e.currentTarget.value)} className={inputClass} />
-        </label>
-      );
-    case "longtext":
-      return (
-        <label className="flex flex-col gap-1.5">
-          <span className="text-xs text-ink-2">{field.label}</span>
-          <Textarea
-            data-field={field.id}
-            {...focus}
-            value={typeof value === "string" ? value : ""}
-            onChange={(e) => onChange(e.currentTarget.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                onSubmit();
-              }
-            }}
-            className="max-h-72 min-h-24 text-sm"
-            spellCheck={!rejection ? false : true}
-          />
-        </label>
-      );
-  }
 }

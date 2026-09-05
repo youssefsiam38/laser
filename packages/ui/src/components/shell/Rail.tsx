@@ -189,12 +189,12 @@ function ProjectButton({ project, active, filtered, onSelect }: ProjectButtonPro
           )}
         >
           <StatusRing status={project.status} size={32} thickness={2} aria-hidden="true">
-            <span className="font-mono text-xs font-medium tracking-[0.02em]">{initials(project.name)}</span>
+            <span className="font-mono text-xs font-medium tracking-typed">{initials(project.name)}</span>
           </StatusRing>
           {project.needYou > 0 && (
             <span
               aria-hidden="true"
-              className="absolute -top-0.5 -end-0.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-attention px-1 font-mono text-xs leading-none font-medium text-on-attention tnum ring-2 ring-surface-2"
+              className="absolute -top-0.5 -end-0.5 flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-attention px-1 font-mono text-xs leading-none font-medium text-on-attention tnum ring-2 ring-surface-2"
             >
               {project.needYou}
             </span>

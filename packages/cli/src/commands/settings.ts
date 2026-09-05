@@ -17,7 +17,7 @@ import { CliError, ExitCode } from "../errors.js";
 import { clip, shortCwd } from "../format.js";
 import { sanitize, table } from "../output.js";
 import { describeRpcError, type HostRpc } from "../rpc.js";
-import { connect } from "./host.js";
+import { connectForProject } from "./host.js";
 
 const VERBS = ["get", "list", "set", "unset"] as const;
 type Verb = (typeof VERBS)[number];
@@ -132,7 +132,9 @@ letting the write quietly do nothing.
   async run({ term, paths, args }) {
     const { verb, rest } = verbOf(args.positionals);
     const cwd = resolve(str(args, "project") ?? process.cwd());
-    const rpc = await connect(paths);
+    // Touching settings starts a worker for `cwd`; an untrusted project would
+    // otherwise leave this command waiting on a question only the UI can answer.
+    const rpc = await connectForProject(paths, cwd);
     try {
       if (verb === "get" || verb === "list") {
         const snapshot = await snapshotOf(rpc, cwd);

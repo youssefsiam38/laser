@@ -28,10 +28,15 @@ export interface HostClientOptions {
   onNotification: NotificationHandler;
   onConnection?: (state: ConnectionState) => void;
   /**
-   * Result of a resume `session/load`. `replayFrom` below the seq we hold means
-   * the worker restarted its counter and the app must adopt the new epoch.
+   * Result of a resume `session/load`. `replayFrom` is the earliest seq the
+   * worker can actually replay; `sentFromSeq` is the watermark we asked from.
+   * Anything other than equality means the transcript has to be re-read: below
+   * is a restarted worker's fresh epoch, above is a replay buffer that no
+   * longer reaches back to us. The caller must compare against `sentFromSeq`
+   * and not against live state — the replayed notifications are flushed before
+   * this response resolves, so live state has already moved on.
    */
-  onResume?: (path: string, replayFrom: number) => void;
+  onResume?: (path: string, replayFrom: number, sentFromSeq: number) => void;
   /**
    * Asked before a resume. Returning false drops the path instead of re-opening
    * a Pi session the app no longer shows.
@@ -199,7 +204,7 @@ export class HostClient {
         }
         this.request("session/load", { path, fromSeq: seq })
           .then((result) => {
-            this.options.onResume?.(path, result.replayFrom);
+            this.options.onResume?.(path, result.replayFrom, seq);
           })
           .catch(() => {});
       }

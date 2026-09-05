@@ -2,23 +2,21 @@
 /**
  * A unified diff as a document-panel body (M8-T3).
  *
- * The transcript already draws diffs, in `DiffBlock` — but as a *card*: a
- * bordered box capped at 24rem that sits inside a tool row. A document panel is
- * the opposite shape: no box (the island is the box), and it fills its share of
- * the dock with its own scroll. Both read from the same pure `diff.ts`, so the
- * colours, the gutter and the line semantics cannot drift; only the geometry
- * differs, which is the thing that actually has to.
+ * The transcript draws diffs through the `code-diff` element — as a *card*, a
+ * bordered box capped at 24rem inside a tool row. A document panel is the
+ * opposite shape: no box (the island is the box), and it fills its share of
+ * the dock with its own scroll. Both draw the same `CodeDiffRows` from the
+ * same pure `diff.ts`, so the colours, the gutter and the line semantics
+ * cannot drift; only the geometry differs, which is the thing that actually
+ * has to.
  *
  * Wide lines scroll inside the table, never the page (R13, DESIGN.md
- * "Legibility floor"): each row keeps its content on one line and the body owns
- * the horizontal scrollbar, because a diff whose lines wrap is a diff you
- * cannot read alignment in.
- *
- * Content that does not parse as a unified patch is shown as text with a line
- * saying so, rather than as an empty diff.
+ * "Legibility floor"). Content that does not parse as a unified patch is shown
+ * as text with a line saying so, rather than as an empty diff.
  */
 import { useMemo } from "react";
 
+import { CodeDiffRows, DiffStat } from "@/components/assistant-ui/elements/code-diff";
 import { diffStats, parseUnifiedPatch, type DiffHunk } from "@/components/thread/diff";
 import { cn } from "@/lib/utils";
 
@@ -42,10 +40,10 @@ export function DiffPreview({ patch, path, truncated, className }: DiffPreviewPr
   if (hunks.length === 0) {
     return (
       <div data-slot="diff-preview" className={cn("flex min-h-0 flex-col", className)}>
-        <p className="typed shrink-0 px-4 py-2 text-ink-2 hairline-b">
-          This is not a unified diff, so it is shown as text.
-        </p>
-        <pre data-island-scroll className="min-h-0 flex-1 overflow-auto px-4 py-3 font-mono text-xs leading-sm text-ink">{patch}</pre>
+        <p className="typed shrink-0 px-4 py-2 text-ink-2 hairline-b">This is not a unified diff, so it is shown as text.</p>
+        <pre data-island-scroll className="min-h-0 flex-1 overflow-auto px-4 py-3 font-mono text-xs leading-sm text-ink">
+          {patch}
+        </pre>
       </div>
     );
   }
@@ -56,22 +54,11 @@ export function DiffPreview({ patch, path, truncated, className }: DiffPreviewPr
         <span className="typed min-w-0 flex-1 truncate text-ink-2" title={path}>
           {path ?? "diff"}
         </span>
-        <span className="typed shrink-0 tnum">
-          {added > 0 ? <span className="text-ok">+{added}</span> : null}
-          {added > 0 && removed > 0 ? " " : null}
-          {removed > 0 ? <span className="text-danger">−{removed}</span> : null}
-          {added === 0 && removed === 0 ? <span className="text-ink-3">no changes</span> : null}
-        </span>
+        <DiffStat added={added} removed={removed} />
       </div>
 
       <div data-island-scroll className="min-h-0 flex-1 overflow-auto">
-        <table className="w-full border-collapse font-mono text-xs leading-sm">
-          <tbody>
-            {hunks.map((hunk, i) => (
-              <Hunk key={`${hunk.header}-${i}`} hunk={hunk} showHeader={hunks.length > 1 || i > 0} />
-            ))}
-          </tbody>
-        </table>
+        <CodeDiffRows hunks={hunks} inset="px-4" stickyHeaders />
         {clipped || truncated ? (
           <p className="typed px-4 py-2 text-ink-3 hairline-t">
             {clipped ? `Showing the first ${MAX_LINES.toLocaleString()} of ${total.toLocaleString()} lines. ` : null}
@@ -80,56 +67,6 @@ export function DiffPreview({ patch, path, truncated, className }: DiffPreviewPr
         ) : null}
       </div>
     </div>
-  );
-}
-
-function Hunk({ hunk, showHeader }: { hunk: DiffHunk; showHeader: boolean }) {
-  return (
-    <>
-      {showHeader ? (
-        <tr>
-          {/* Sticky so you always know which lines you are looking at in a long diff. */}
-          <td colSpan={3} className="sticky top-0 z-10 bg-surface-2 px-4 py-0.5 text-ink-3 hairline-b">
-            {hunk.header}
-          </td>
-        </tr>
-      ) : null}
-      {hunk.lines.map((line, i) => (
-        <tr
-          key={i}
-          data-kind={line.kind}
-          className={cn(
-            line.kind === "add" && "bg-[color-mix(in_oklab,var(--ok)_10%,transparent)] text-ink",
-            line.kind === "del" && "bg-[color-mix(in_oklab,var(--danger)_10%,transparent)] text-ink",
-            line.kind === "ctx" && "text-ink-2",
-          )}
-        >
-          <td className="w-10 select-none pe-2 ps-4 text-end align-top text-ink-3 tnum">{line.oldNo ?? ""}</td>
-          <td className="w-10 select-none pe-2 text-end align-top text-ink-3 tnum">{line.newNo ?? ""}</td>
-          {/*
-            `whitespace-pre` on the cell, not only on the text: a line break is
-            legal between an atomic inline (the +/− marker) and the text after
-            it, so without this a long line starts on the row below its own
-            marker. The transcript's card does not hit this because its text
-            wraps; a diff body must not wrap, or the columns stop lining up.
-          */}
-          <td className="w-full whitespace-pre pe-4 align-top">
-            <span
-              aria-hidden="true"
-              className={cn(
-                "me-2 inline-block w-2 select-none",
-                line.kind === "add" && "text-ok",
-                line.kind === "del" && "text-danger",
-                line.kind === "ctx" && "text-transparent",
-              )}
-            >
-              {line.kind === "add" ? "+" : line.kind === "del" ? "−" : " "}
-            </span>
-            <span className="whitespace-pre">{line.text}</span>
-          </td>
-        </tr>
-      ))}
-    </>
   );
 }
 

@@ -18,6 +18,10 @@ import { fileURLToPath } from "node:url";
 import { transformWithEsbuild, type Plugin } from "vite";
 import { DECLARATIVE_WEB_PUSH_VERSION } from "@piorbit/protocol";
 
+import { compileVars } from "../theme/compile.js";
+import { DEFAULT_LIGHT_PRESET_ID, DEFAULT_PRESET, getPreset } from "../theme/presets.js";
+import type { Theme, ThemePreset } from "../theme/types.js";
+
 /** Shell files copied from `public/`; they never appear in the Rollup bundle. */
 const PUBLIC_SHELL = [
   "/manifest.webmanifest",
@@ -33,6 +37,33 @@ const PUBLIC_SHELL = [
   "/fonts/martian-mono-latin.woff2",
   "/fonts/martian-mono-latin-ext.woff2",
 ];
+
+/**
+ * The offline page's colours and typeface, compiled from the shipped presets
+ * at build time rather than restated as hex literals. It cannot reach the
+ * app's stylesheet — it is what renders when the app did not load — so the
+ * handful of values it needs are inlined here, from the same compiler every
+ * other surface uses.
+ */
+function offlineStyle(): string {
+  const asTheme = (preset: ThemePreset): Theme => {
+    const { tagline: _tagline, ...theme } = preset;
+    return theme;
+  };
+  const dark = compileVars(asTheme(DEFAULT_PRESET));
+  const light = compileVars(asTheme(getPreset(DEFAULT_LIGHT_PRESET_ID) ?? DEFAULT_PRESET));
+  const pick = (vars: Record<string, string>, name: string): string => vars[name] ?? "";
+  return [
+    ":root{color-scheme:light dark}",
+    `body{margin:0;min-height:100dvh;display:grid;place-items:center;font:14px/1.5 ${pick(light, "--font-sans")};`,
+    `background:${pick(light, "--bg")};color:${pick(light, "--ink")};`,
+    "padding:max(24px,env(safe-area-inset-top)) 24px max(24px,env(safe-area-inset-bottom))}",
+    `@media(prefers-color-scheme:dark){body{background:${pick(dark, "--bg")};color:${pick(dark, "--ink")}}}`,
+    "main{max-width:36ch}h1{font-size:22px;line-height:28px;margin:0 0 8px}",
+    `p{margin:0;color:${pick(light, "--ink-2")}}`,
+    `@media(prefers-color-scheme:dark){p{color:${pick(dark, "--ink-2")}}}`,
+  ].join("");
+}
 
 const DEV_SW = `// piorbit dev: no app-shell caching on the dev server. A stale production worker
 // on this origin would serve old bundles, so this one removes itself.
@@ -106,8 +137,13 @@ export function piorbitPwa(options: PiorbitPwaOptions = {}): Plugin {
       }
 
       const build = createHash("sha256").update(precache.join("\n")).update(worker).digest("hex").slice(0, 12);
-      const out = worker.replace('"__PIORBIT_PRECACHE__"', JSON.stringify(precache)).replace("__PIORBIT_BUILD__", build);
+      const style = offlineStyle();
+      const out = worker
+        .replace('"__PIORBIT_PRECACHE__"', JSON.stringify(precache))
+        .replace("__PIORBIT_BUILD__", build)
+        .replace("__PIORBIT_OFFLINE_STYLE__", () => style);
       if (!out.includes(JSON.stringify(precache))) throw new Error("piorbit:pwa — the precache placeholder was not found in sw.ts");
+      if (out.includes("__PIORBIT_OFFLINE_STYLE__")) throw new Error("piorbit:pwa — the offline-style placeholder was not found in sw.ts");
       this.emitFile({ type: "asset", fileName: "sw.js", source: out });
     },
   };

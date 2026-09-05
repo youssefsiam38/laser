@@ -4,10 +4,15 @@
  * the composer: minimal by default, tapping it expands to a sheet. Same
  * element, same four sizes, less room").
  *
- * "Same element" is literal: the strip renders `<Island size="minimal">` and
- * the sheet renders the same component at `size="expanded"`, so the phone gets
- * the island's budgets, its live values, its hit areas and its truncation
- * rules rather than a look-alike written twice.
+ * Same *component*, not the same instance — the one place in the app where a
+ * panel is re-created rather than morphed, and it is a recorded exception
+ * (D-34), not an oversight. The strip renders `<Island size="minimal">` and
+ * the sheet renders a second `<Island size="expanded">` inside `SheetContent`,
+ * because the expanded island's DOM has to live in the sheet and the entries
+ * behind "+N more" have no strip node to lift out of. What the phone still
+ * gets is the island's budgets, live values, hit areas and truncation rules
+ * rather than a look-alike written twice; what it does not get is a morph —
+ * the sweep restarts and body scroll is not carried across.
  *
  * The strip wraps and only folds into `+N` past **two rows**, measured — not
  * at a fixed count, which on a 320px screen is two rows of two and on a 430px
@@ -87,9 +92,10 @@ export function MobileIslands({ className }: { className?: string | undefined })
           <SheetDescription className="sr-only">A panel from {open?.panel.source ?? "an extension"}.</SheetDescription>
           {open && (
             <div className="flex min-h-0 flex-1 flex-col pt-1">
-              {/* The same component, one size up, with the way out in its own
-                  header: a bottom sheet has no swipe-to-dismiss, and the 15%
-                  of overlay above it is not a control. */}
+              {/* The same component, one size up (a second instance — D-34),
+                  with the way out in its own header: a bottom sheet has no
+                  swipe-to-dismiss, and the 15% of overlay above it is not a
+                  control. */}
               <Island entry={open} size="expanded" frame="sheet" onClose={() => setOpenKey(undefined)} />
             </div>
           )}

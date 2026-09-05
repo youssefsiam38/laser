@@ -270,6 +270,8 @@ interface RawEntry {
     toolName?: string;
     usage?: RawUsage;
     stopReason?: string;
+    provider?: string;
+    model?: string;
   };
   usage?: RawUsage;
   summary?: string;
@@ -315,6 +317,46 @@ export function usageFromEntries(entries: readonly unknown[]): UsageTotals | und
     if (e.type === "message") totals.turns++;
   }
   return seen ? totals : undefined;
+}
+
+export interface ModelUsageLine {
+  model: string;
+  input: number;
+  output: number;
+  cost: number;
+}
+
+/**
+ * Spend per model, most expensive first, from the assistant messages that
+ * carry a `model` (Pi stamps provider and model on each). Compactions and
+ * branch summaries have no model and fold into the session total only.
+ */
+export function usageByModel(entries: readonly unknown[]): ModelUsageLine[] {
+  const byModel = new Map<string, ModelUsageLine>();
+  for (const raw of entries) {
+    const e = raw as RawEntry;
+    if (e.type !== "message" || e.message?.role !== "assistant" || !e.message.usage) continue;
+    const model = e.message.model ? (e.message.provider ? `${e.message.provider}/${e.message.model}` : e.message.model) : "unknown model";
+    const line = byModel.get(model) ?? { model, input: 0, output: 0, cost: 0 };
+    line.input += num(e.message.usage.input);
+    line.output += num(e.message.usage.output);
+    line.cost += num(e.message.usage.cost?.total);
+    byModel.set(model, line);
+  }
+  return [...byModel.values()].sort((a, b) => b.cost - a.cost);
+}
+
+/** Cumulative cost after each assistant turn, in file order. */
+export function spendSeries(entries: readonly unknown[]): number[] {
+  const series: number[] = [];
+  let total = 0;
+  for (const raw of entries) {
+    const e = raw as RawEntry;
+    if (e.type !== "message" || e.message?.role !== "assistant" || !e.message.usage) continue;
+    total += num(e.message.usage.cost?.total);
+    series.push(total);
+  }
+  return series;
 }
 
 export type HistoryKind =

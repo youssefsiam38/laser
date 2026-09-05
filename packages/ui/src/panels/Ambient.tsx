@@ -58,10 +58,17 @@ export function PanelAmbient({ className }: PanelAmbientProps) {
           onClick={() => openFleet()}
           className={cn(
             "relative inline-flex h-4 shrink-0 items-center gap-1 rounded-full px-1.5 text-xs font-medium leading-none outline-none",
-            "hover:brightness-110 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live",
+            // The app's own hover and pressed vocabulary, not a filter: a
+            // `brightness()` over a `color-mix` ground drifts the pill's hue
+            // toward the accent under some themes. Hover deepens the tint it
+            // already has, and there is a pressed state like everywhere else.
+            "transition-[background-color,transform] duration-(--motion-instant) active:translate-y-px motion-reduce:transition-none",
+            "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live",
             // 44px hit area on a 16px pill: the hit area grows, not the paint.
             "after:absolute after:-inset-x-2 after:-inset-y-3.5 after:content-['']",
-            fleet.needsYou > 0 ? "bg-[color-mix(in_oklab,var(--attention)_14%,transparent)] text-attention" : "bg-[color-mix(in_oklab,var(--live)_12%,transparent)] text-live",
+            fleet.needsYou > 0
+              ? "bg-[color-mix(in_oklab,var(--attention)_14%,transparent)] text-attention hover:bg-[color-mix(in_oklab,var(--attention)_24%,transparent)]"
+              : "bg-[color-mix(in_oklab,var(--live)_12%,transparent)] text-live hover:bg-[color-mix(in_oklab,var(--live)_22%,transparent)]",
           )}
           title="Every run, in every project"
         >

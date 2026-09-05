@@ -12,7 +12,9 @@
 import { useEffect, useId, useState } from "react";
 import { Plus, RotateCcw, X } from "lucide-react";
 
+import { SettingsSwitch } from "@/components/assistant-ui/elements/settings-panel";
 import { Button } from "@/components/ui/button";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import type { SettingDescriptor, SettingOption } from "@piorbit/protocol";
@@ -79,23 +81,13 @@ function BooleanField({ field, value, disabled, onCommit, id }: FieldProps) {
   const controlId = id ?? fallbackId;
   const set = value !== undefined;
   const on = set ? value === true : field.default === true;
+  // The `settings-panel` element's switch (docs/ux-elements.md "Thread" →
+  // Settings): a real switch with a sliding thumb, `--live` when on.
   return (
-    <label
-      htmlFor={controlId}
-      className={cn("inline-flex items-center gap-2 text-sm", disabled ? "opacity-60" : "cursor-pointer")}
-    >
-      <input
-        id={controlId}
-        type="checkbox"
-        role="switch"
-        aria-label={field.label}
-        checked={on}
-        disabled={disabled}
-        onChange={(event) => onCommit(event.currentTarget.checked)}
-        className="size-4 accent-live"
-      />
+    <span className="inline-flex items-center gap-2 text-sm">
+      <SettingsSwitch id={controlId} checked={on} disabled={disabled} aria-label={field.label} onCheckedChange={(next) => onCommit(next)} />
       <span className={set ? "text-ink" : "text-ink-3"}>{on ? "on" : "off"}</span>
-    </label>
+    </span>
   );
 }
 
@@ -277,15 +269,14 @@ function StringListField({
                 onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()}
                 className={cn(inputClass, "font-mono text-sm")}
               />
-              <Button
-                variant="ghost"
-                size="icon-sm"
+              <TooltipIconButton
+                tooltip={`Remove ${item}`}
+                side="top"
                 disabled={disabled}
-                aria-label={`Remove ${item}`}
                 onClick={() => replace(list.filter((_, i) => i !== index))}
               >
                 <X />
-              </Button>
+              </TooltipIconButton>
             </li>
           ))}
         </ul>
@@ -307,18 +298,17 @@ function StringListField({
           }}
           className={cn(inputClass, "font-mono text-sm")}
         />
-        <Button
-          variant="ghost"
-          size="icon-sm"
+        <TooltipIconButton
+          tooltip="Add entry"
+          side="top"
           disabled={disabled || draft.trim() === ""}
-          aria-label="Add entry"
           onClick={() => {
             replace([...list, draft.trim()]);
             setDraft("");
           }}
         >
           <Plus />
-        </Button>
+        </TooltipIconButton>
       </div>
       {items !== undefined && list.length === 0 && (
         <p className="text-xs text-ink-3">
@@ -370,11 +360,10 @@ function EnumMapField({
               </option>
             ))}
           </select>
-          <Button
-            variant="ghost"
-            size="icon-sm"
+          <TooltipIconButton
+            tooltip={`Remove ${entryKey}`}
+            side="top"
             disabled={disabled}
-            aria-label={`Remove ${entryKey}`}
             onClick={() => {
               const next = { ...map };
               delete next[entryKey];
@@ -382,7 +371,7 @@ function EnumMapField({
             }}
           >
             <X />
-          </Button>
+          </TooltipIconButton>
         </div>
       ))}
       <div className="flex items-center gap-1">
@@ -396,18 +385,17 @@ function EnumMapField({
           onChange={(event) => setKey(event.target.value)}
           className={cn(inputClass, "flex-1 font-mono text-sm")}
         />
-        <Button
-          variant="ghost"
-          size="icon-sm"
+        <TooltipIconButton
+          tooltip="Add entry"
+          side="top"
           disabled={disabled || key.trim() === ""}
-          aria-label="Add entry"
           onClick={() => {
             replace({ ...map, [key.trim()]: spec.options[0]!.value });
             setKey("");
           }}
         >
           <Plus />
-        </Button>
+        </TooltipIconButton>
       </div>
     </div>
   );

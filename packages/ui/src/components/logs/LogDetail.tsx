@@ -12,8 +12,10 @@
  * "HTTP 200" and no body deserves to be told why rather than left guessing.
  */
 import { useEffect, useState } from "react";
-import { Check, Copy, Download, Info, Loader2 } from "lucide-react";
+import { Check, Copy, Download, Info } from "lucide-react";
 
+import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
+import { AnsiText } from "@/components/assistant-ui/elements/ansi-text";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -48,6 +50,16 @@ function Detail({ entry }: { entry: LogEntry }) {
   const { copied, copy } = useCopy();
 
   const ref = entry.detailRef;
+
+  // Rows whose payload is a captured stream rather than a structured record.
+  // Matched on the kind's shape, not an exhaustive list, because `kind` is an
+  // open vocabulary the host and its extensions extend (`worker_stderr`,
+  // `tool_stderr`, …) and a new one should read correctly on the day it
+  // appears rather than the day someone remembers to add it here. A payload
+  // that came back as JSON is never terminal output whatever its kind says.
+  const terminalOutput = !ref
+    ? false
+    : /(^|_)(stderr|stdout|output|console)$/.test(entry.kind);
 
   useEffect(() => {
     if (!ref) {
@@ -139,11 +151,7 @@ function Detail({ entry }: { entry: LogEntry }) {
           </p>
         )}
 
-        {loading && (
-          <p className="flex items-center gap-2 text-xs text-ink-3">
-            <Loader2 className="size-3.5 animate-spin" /> Fetching the payload…
-          </p>
-        )}
+        {loading && <GenerationLoader label="Fetching the payload" layout="inline" />}
         {error && (
           <p className="rounded-lg bg-[color-mix(in_oklab,var(--danger)_10%,transparent)] px-3 py-2 text-xs leading-5 text-danger">
             {error}
@@ -158,14 +166,27 @@ function Detail({ entry }: { entry: LogEntry }) {
                 {copied ? <Check /> : <Copy />} {copied ? "Copied" : "Copy"}
               </Button>
             </div>
-            <pre
-              className={cn(
-                "max-h-[60vh] w-full min-w-0 overflow-auto rounded-lg bg-surface-2 p-3",
-                "font-mono text-xs leading-sm whitespace-pre text-ink-2",
-              )}
-            >
-              {body}
-            </pre>
+            {/* Captured process output is terminal output: it arrives with SGR
+                escapes in it, and a plain `<pre>` renders those as literal
+                `ESC[31m` noise in front of the very line a reader opened the
+                row to read. Those rows get the terminal ground and the
+                decoder every other stream in the app uses; everything else
+                (a JSON body, a request record) stays on the surface ground,
+                where it is structured data rather than a console. */}
+            {terminalOutput ? (
+              <pre className="terminal max-h-[60vh] w-full min-w-0 overflow-auto rounded-lg border border-terminal-line p-3 whitespace-pre">
+                <AnsiText text={body} />
+              </pre>
+            ) : (
+              <pre
+                className={cn(
+                  "max-h-[60vh] w-full min-w-0 overflow-auto rounded-lg bg-surface-2 p-3",
+                  "font-mono text-xs leading-sm whitespace-pre text-ink-2",
+                )}
+              >
+                {body}
+              </pre>
+            )}
           </div>
         )}
 

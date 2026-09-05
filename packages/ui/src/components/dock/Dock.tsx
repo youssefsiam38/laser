@@ -6,14 +6,20 @@
  * per column with a draggable divider; resizable by its left edge; two
  * columns past ~640px of dock or a 1600px window. The islands are absolutely
  * positioned children of one container so each is one element for life.
+ *
+ * The frame — the pane and its resize divider — is the catalog's canvas-split
+ * element (`components/assistant-ui/elements/canvas-split.tsx`); this file is
+ * the layout engine inside it.
  */
 import { Layers } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 
+import { CanvasSplitDivider, CanvasSplitPane } from "@/components/assistant-ui/elements/canvas-split";
 import { StatusDot } from "@/components/status";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { columnsFor, defaultDockWidth, DOCK_DEFAULT_WIDTH, DOCK_MIN_WIDTH, renderedSize, type DockState } from "@/panels/dock-state";
+import { motionMs } from "@/motion";
+import { columnsFor, DOCK_MIN_WIDTH, renderedSize, type DockState } from "@/panels/dock-state";
 import { Island } from "@/panels/islands/Island";
 import { dividerRatio, layoutDock, type DockLayout } from "@/panels/layout";
 import { useDock, useIslandEntries, usePanelActions, usePanelsState } from "@/panels/PanelsProvider";
@@ -59,7 +65,9 @@ function DockFrame({ path, dock, visible, className }: { path: string; dock: Doc
     for (const e of visible) known.current.add(e.key);
     if (next.size > 0) {
       setFresh(next);
-      const t = setTimeout(() => setFresh(new Set()), 400);
+      // The arrival is one morph plus a beat, read from the tokens rather
+      // than a constant, so it stays in step with the Motion setting (T1).
+      const t = setTimeout(() => setFresh(new Set()), motionMs("--motion-morph") + motionMs("--motion-slow"));
       return () => clearTimeout(t);
     }
     return;
@@ -98,52 +106,16 @@ function DockFrame({ path, dock, visible, className }: { path: string; dock: Doc
     return () => window.removeEventListener("keydown", onKey);
   }, [actions, dock.maximized, path]);
 
-  const onResizeStart = useCallback(
-    (e: PointerEvent<HTMLDivElement>) => {
-      const startX = e.clientX;
-      const startWidth = aside.current?.getBoundingClientRect().width ?? dock.width;
-      const max = Math.max(DOCK_MIN_WIDTH, Math.floor(window.innerWidth * 0.6));
-      const target = e.currentTarget;
-      target.setPointerCapture(e.pointerId);
-      const move = (ev: globalThis.PointerEvent) => actions.setWidth(startWidth + (startX - ev.clientX), max);
-      const up = () => {
-        target.removeEventListener("pointermove", move);
-        target.removeEventListener("pointerup", up);
-        target.removeEventListener("pointercancel", up);
-      };
-      target.addEventListener("pointermove", move);
-      target.addEventListener("pointerup", up);
-      target.addEventListener("pointercancel", up);
-    },
-    [actions, dock.width],
-  );
-
-  const onResizeKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    const step = e.shiftKey ? 64 : 16;
-    const max = Math.max(DOCK_MIN_WIDTH, Math.floor(window.innerWidth * 0.6));
-    if (e.key === "ArrowLeft") actions.setWidth(dock.width + step, max);
-    else if (e.key === "ArrowRight") actions.setWidth(dock.width - step, max);
-    else return;
-    e.preventDefault();
-  };
+  const maxWidth = () => Math.max(DOCK_MIN_WIDTH, Math.floor(window.innerWidth * 0.6));
 
   return (
-    <aside
-      ref={aside}
-      aria-label="Panels"
-      style={{ width: dock.width }}
-      className={cn("relative flex h-full min-h-0 shrink-0 flex-col bg-bg hairline-l", className)}
-    >
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize the dock"
-        aria-valuenow={dock.width}
-        aria-valuemin={DOCK_MIN_WIDTH}
-        tabIndex={0}
-        onPointerDown={onResizeStart}
-        onKeyDown={onResizeKey}
-        className="absolute inset-y-0 -start-1 z-10 w-2 cursor-col-resize touch-none outline-none hover:bg-live/30 focus-visible:bg-live/40 [@media(pointer:coarse)]:-start-2 [@media(pointer:coarse)]:w-4"
+    <CanvasSplitPane ref={aside} aria-label="Panels" width={dock.width} className={className}>
+      <CanvasSplitDivider
+        width={dock.width}
+        min={DOCK_MIN_WIDTH}
+        max={maxWidth()}
+        measure={() => aside.current?.getBoundingClientRect().width ?? dock.width}
+        onChange={(width) => actions.setWidth(width, maxWidth())}
       />
       <div ref={body} className="relative min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
         <div className="relative" style={{ height: Math.max(size.height, layout.contentHeight) }}>
@@ -181,7 +153,7 @@ function DockFrame({ path, dock, visible, className }: { path: string; dock: Doc
           ))}
         </div>
       </div>
-    </aside>
+    </CanvasSplitPane>
   );
 }
 

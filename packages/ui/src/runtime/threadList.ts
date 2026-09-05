@@ -287,8 +287,8 @@ export function threadListSignature(
   return merged
     .map((s) =>
       [s.path, sessionTitle(s, views[s.path]), sessionAttention(s, views[s.path]), s.modifiedAt, archive.has(s.path) ? "a" : "r"].join(
-        "",
+        "\u0001",
       ),
     )
-    .join("");
+    .join("\u0002");
 }

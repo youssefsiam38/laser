@@ -159,8 +159,12 @@ export interface ComposerKeyState {
 }
 
 export interface ComposerSendPlan {
-  /** `newline` means: let the textarea handle the key. */
-  readonly action: "newline" | "send" | "ignore";
+  /**
+   * `newline` means: let the textarea handle the key. `suppress` means:
+   * swallow it — the app has no binding here, and the primitive's own handler
+   * must not get a turn either.
+   */
+  readonly action: "newline" | "send" | "ignore" | "suppress";
   readonly behavior: SendBehavior;
   /** Pass to `aui.composer.send(...)`. */
   readonly sendOptions: { steer: boolean };
@@ -171,10 +175,17 @@ export interface ComposerSendPlan {
 /**
  * Enter = prompt when idle / steer while running; Shift+Enter = newline;
  * Cmd/Ctrl+Enter = follow-up while running (a plain prompt when idle).
+ * Those three are the whole contract (DESIGN.md "Composer") and the whole of
+ * the composer's key legend.
+ *
+ * Cmd/Ctrl+Shift+Enter is `suppress`, not `newline`: assistant-ui's own
+ * `ComposerInput` handler treats it as "send with steer" whenever a queue
+ * exists, which ours always supplies — so leaving the event un-prevented
+ * shipped a fourth, undocumented binding that fired even on an idle thread.
  */
 export function composerSendPlan(event: ComposerKeyState, running: boolean): ComposerSendPlan {
   if (event.key !== "Enter") return plan("ignore", "prompt");
-  if (event.shiftKey) return plan("newline", "prompt");
+  if (event.shiftKey) return plan(event.metaKey || event.ctrlKey ? "suppress" : "newline", "prompt");
   const followUp = event.metaKey || event.ctrlKey;
   if (!running) return plan("send", "prompt");
   return plan("send", followUp ? "followUp" : "steer");

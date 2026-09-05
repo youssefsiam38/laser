@@ -2,6 +2,11 @@ import type * as React from "react";
 import { useEffect, useMemo, useRef } from "react";
 import { Brain, ChevronRight, Cpu, PanelRightClose, RefreshCw, Shrink } from "lucide-react";
 
+import { Chart } from "@/components/assistant-ui/elements/chart";
+import { ContextRingButton } from "@/components/assistant-ui/elements/context-display";
+import { CostMeter } from "@/components/assistant-ui/elements/cost-meter";
+import { FileTree, useSessionFileChanges } from "@/components/assistant-ui/elements/file-tree";
+import { ToolTimeline, useThreadToolTimeline } from "@/components/assistant-ui/elements/tool-timeline";
 import { StatusRing } from "@/components/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,8 +16,8 @@ import { money, tokens } from "@/format";
 import { cn } from "@/lib/utils";
 import { usePiorbitStable, usePiorbitView, useSessionMeta } from "@/runtime";
 
-import { HistoryTree } from "./HistoryTree.js";
-import { historyRows, usageFromEntries, type UsageTotals } from "./model.js";
+import { CheckpointHistory } from "@/components/assistant-ui/elements/checkpoint-history";
+import { historyRows, spendSeries, usageByModel, usageFromEntries, type UsageTotals } from "./model.js";
 import { useShell } from "./shell-context.js";
 
 export interface TelemetryPanelProps {
@@ -56,6 +61,8 @@ export function TelemetryPanel({ variant }: TelemetryPanelProps) {
             <ContextSection />
             <UsageSection />
             <ModelSection />
+            <FilesSection />
+            <ToolsSection />
             <WorkerSection />
             <HistorySection />
           </>
@@ -121,7 +128,6 @@ function ContextSection() {
   const view = usePiorbitView();
   const meta = useSessionMeta();
   const usage = meta.contextUsage;
-  const pct = usage?.percent ?? null;
   const busy = meta.running || meta.compacting;
   return (
     <Section
@@ -134,15 +140,16 @@ function ContextSection() {
       }
     >
       <div className="flex items-center gap-4">
-        <StatusRing
-          percent={pct ?? 0}
-          size={64}
-          thickness={3}
-          showLabel={pct !== null}
-          label={pct === null ? "Context usage unknown" : `${Math.round(pct)}% of context used`}
-        >
-          {pct === null ? <span className="text-ink-3">—</span> : undefined}
-        </StatusRing>
+        {/* The one context ring in the app, drawn large. Same component the
+            composer and the top bar mount (docs/ux-elements.md "Context
+            display"); the rail was the third hand-drawn copy. */}
+        {usage ? (
+          <ContextRingButton size={64} stroke={3} showLabel side="left" />
+        ) : (
+          <StatusRing status="idle" size={64} thickness={3} label="Context usage unknown" aria-hidden="true">
+            <span className="text-sm text-ink-3">—</span>
+          </StatusRing>
+        )}
         <div className="min-w-0 flex-1">
           {usage ? (
             <Stats>
@@ -163,18 +170,39 @@ function UsageSection() {
   const view = usePiorbitView();
   const entries = view?.entries;
   const usage = useMemo<UsageTotals | undefined>(() => (entries ? usageFromEntries(entries) : undefined), [entries]);
+  const lines = useMemo(() => (entries ? usageByModel(entries) : []), [entries]);
+  const series = useMemo(() => (entries ? spendSeries(entries) : []), [entries]);
+  const lastTurn = series.length > 1 ? series[series.length - 1]! - series[series.length - 2]! : series[0];
   return (
     <Section title="Spend">
       {usage ? (
-        <Stats>
-          <Stat label="Input" value={tokens(usage.input)} />
-          <Stat label="Output" value={tokens(usage.output)} />
-          <Stat label="Cache read" value={tokens(usage.cacheRead)} />
-          <Stat label="Cache write" value={tokens(usage.cacheWrite)} />
-          <Stat label="Total tokens" value={tokens(usage.total)} />
-          <Stat label="Cost" value={money(usage.cost)} strong />
-          <Stat label="Per turn" value={usage.turns > 0 ? money(usage.cost / usage.turns) : "—"} />
-        </Stats>
+        <div className="flex flex-col gap-4">
+          {/* The cost meter and the spend chart (docs/ux-elements.md
+              "Observability" and "Structured output"), from the usage blocks
+              Pi persists on the session file. */}
+          <CostMeter
+            sessionCostUsd={usage.cost}
+            runCostUsd={lastTurn}
+            turns={usage.turns}
+            lines={lines.map((line) => ({ model: line.model, inputTokens: line.input, outputTokens: line.output, costUsd: line.cost }))}
+          />
+          {series.length > 1 && (
+            <Chart
+              label="Spend over turns"
+              value={money(series[series.length - 1] ?? 0)}
+              delta={lastTurn !== undefined ? `+${money(lastTurn)} last` : undefined}
+              points={series}
+              pointLabel={(v, i) => `turn ${i + 1}: ${money(v)}`}
+            />
+          )}
+          <Stats>
+            <Stat label="Input" value={tokens(usage.input)} />
+            <Stat label="Output" value={tokens(usage.output)} />
+            <Stat label="Cache read" value={tokens(usage.cacheRead)} />
+            <Stat label="Cache write" value={tokens(usage.cacheWrite)} />
+            <Stat label="Total tokens" value={tokens(usage.total)} strong />
+          </Stats>
+        </div>
       ) : (
         <p className="text-xs leading-4 text-ink-3">No spend recorded. Totals appear once Pi persists a response.</p>
       )}
@@ -215,6 +243,33 @@ const WORKER_TONE: Record<string, { color: string; label: string }> = {
   crashed: { color: "bg-danger", label: "Crashed" },
   retired: { color: "bg-ink-3", label: "Retired" },
 };
+
+/**
+ * What this session touched on disk, as a tree. Both this and the tool
+ * timeline below read the thread's own parts (`useSessionFileChanges`,
+ * `useThreadToolTimeline`) rather than new protocol: the tool calls are
+ * already in the transcript, so this is a second reading of data the panel
+ * can see, not a second source of truth.
+ */
+function FilesSection() {
+  const changes = useSessionFileChanges();
+  return (
+    <Section title="Files changed">
+      <FileTree changes={changes} />
+    </Section>
+  );
+}
+
+/** Every tool call this session made, in order, with the running one live. */
+function ToolsSection() {
+  const timeline = useThreadToolTimeline();
+  const shell = useShell();
+  return (
+    <Section title="Tools">
+      <ToolTimeline timeline={timeline} open={shell.toolsOpen} onOpenChange={shell.setToolsOpen} />
+    </Section>
+  );
+}
 
 function WorkerSection() {
   const meta = useSessionMeta();
@@ -284,7 +339,7 @@ function HistorySection() {
           )}
         </div>
         <CollapsibleContent>
-          <HistoryTree
+          <CheckpointHistory
             rows={rows}
             busy={meta.running || meta.compacting}
             onFork={(id) => void actions.fork(id)}

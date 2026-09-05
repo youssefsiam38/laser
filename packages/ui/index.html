@@ -1,11 +1,11 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="graphite" data-base="dark" class="dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
-    <meta name="color-scheme" content="light dark" />
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F5F7FA" />
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0B0F14" />
+    <meta name="color-scheme" content="dark light" />
+    <!-- The default preset's --bg; the boot script and the applier keep it on the active theme's ground. -->
+    <meta name="theme-color" content="#0e0f11" />
     <title>piorbit</title>
     <!-- PWA (M7-T1): installable on both platforms; the service worker is registered by src/pwa/boot.ts. -->
     <link rel="manifest" href="/manifest.webmanifest" />
@@ -18,31 +18,53 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="format-detection" content="telephone=no" />
     <script>
-      // Apply the persisted theme before first paint so there is no flash.
+      // Theme boot (docs/ux-theme.md, T2 "no flash"). The store persists the
+      // compiled custom properties under "piorbit.theme"; this replays them
+      // before first paint in one style write. It knows nothing about themes:
+      // no presets, no colours, no compiler — src/theme owns all of that and
+      // re-applies through the same style element once it loads.
       (function () {
         try {
-          var pref = localStorage.getItem("piorbit-theme");
-          var dark =
-            pref === "dark" ||
-            (pref !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
           var root = document.documentElement;
-          root.classList.toggle("dark", dark);
-          root.style.colorScheme = dark ? "dark" : "light";
+          var raw = localStorage.getItem("piorbit.theme");
+          var blob = raw ? JSON.parse(raw) : null;
+          var entry = null;
+          if (blob && blob.v === 1) {
+            if (blob.followSystem) {
+              var dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+              entry = dark ? blob.dark : blob.light;
+            } else {
+              entry = blob.active;
+            }
+          }
+          if (!entry || typeof entry.css !== "string") return; // no stored theme: the CSS default (the default preset) stands
+          var style = document.createElement("style");
+          style.id = "piorbit-theme";
+          style.textContent = ":root[data-theme] { " + entry.css + " }";
+          document.head.appendChild(style);
+          root.setAttribute("data-theme", entry.id);
+          root.setAttribute("data-base", entry.base);
+          root.classList.toggle("dark", entry.base === "dark");
+          if (entry.bg) {
+            var meta = document.querySelector('meta[name="theme-color"]');
+            if (meta) meta.setAttribute("content", entry.bg);
+          }
         } catch (_) {}
       })();
     </script>
     <!--
-      The two families are served from /fonts by the host itself (see
-      src/globals.css). Self-hosted rather than a CDN stylesheet for three
-      reasons: the service worker can precache them, so the offline shell
-      renders in the real typeface instead of the fallback stack; a render
-      blocking cross-origin request cannot stall the first paint on a flaky or
-      captive network; and a product whose point is an end-to-end encrypted
-      relay should not have every phone announce itself to a font CDN before
-      it has drawn anything.
+      The default faces are served from /fonts by the host itself (see
+      src/globals.css and src/theme/fonts.ts). Self-hosted rather than a CDN
+      stylesheet for three reasons: the service worker can precache them, so
+      the offline shell renders in the real typeface instead of the fallback
+      stack; a render-blocking cross-origin request cannot stall the first
+      paint on a flaky or captive network; and a product whose point is an
+      end-to-end encrypted relay should not have every phone announce itself
+      to a font CDN before it has drawn anything. Families chosen in Settings
+      beyond these load on demand, and only then.
     -->
-    <link rel="preload" as="font" type="font/woff2" href="/fonts/host-grotesk-latin.woff2" crossorigin />
-    <link rel="preload" as="font" type="font/woff2" href="/fonts/martian-mono-latin.woff2" crossorigin />
+    <link rel="preload" as="font" type="font/woff2" href="/fonts/inter-latin.woff2" crossorigin />
+    <link rel="preload" as="font" type="font/woff2" href="/fonts/jetbrains-mono-latin.woff2" crossorigin />
   </head>
   <body>
     <div id="root"></div>
