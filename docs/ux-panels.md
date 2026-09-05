@@ -68,26 +68,56 @@ Where a panel can appear. Also closed.
 | **Dock** | the right side, at most **two** stacked panes | something you want to keep watching while you keep working |
 | **Sheet** | overlay, focused, dismissible | something you are doing *instead of* the conversation |
 
-The dock is the Claude Code idea, kept deliberately small: two panes, never
-three. A third promotion evicts the least recently used pane, and the evicted
-panel stays reachable from the panel bar rather than disappearing.
+The dock holds at most two **expanded** islands, never three. A third does not
+evict anything — it shrinks the least recently watched one to minimal, where
+it keeps ticking. Nothing is ever parked in a drawer, because there is no
+drawer: minimal is a size, not a storage location.
 
-### Dock geometry
+### Panels are islands, not boxes
 
-Panes are not fixed boxes. A pane has four states, and the dock always shows
-the most useful arrangement of what is open:
+The mental model is Apple's Dynamic Island rather than a set of window
+panes. There is **one element per panel** that grows and shrinks through four
+sizes, keeping its identity, position and state the whole way. It is never
+destroyed and re-created at a different size, and it never becomes a
+different kind of object on the way.
+
+Three consequences, and they are the whole difference from a pane system:
+
+1. **The minimal state is live, not a bookmark.** A collapsed island is not a
+   tab waiting to be reopened. It shows its status dot, its elapsed time
+   ticking, and a progress arc when there is one. You should be able to leave
+   everything collapsed and still know what is happening — that is the point
+   of the shape.
+2. **The morph is the motion.** This is where an animation earns its place:
+   the same element changing size, not a panel fading out and another fading
+   in. It is one of the few motions in the app for exactly that reason.
+3. **Position is fixed so your eye learns it.** Islands always live at the
+   top of the dock, in creation order, and they do not reshuffle when one
+   grows. On a phone they live directly above the composer.
+
+Two islands can be compact side by side, the way the Dynamic Island holds a
+leading and a trailing activity, which is the same constraint as the
+two-pane dock seen from the other end.
+
+### The four sizes
+
+Every island is in exactly one of these, and moves between them by growing:
 
 | State | What it looks like | How you get there |
 | --- | --- | --- |
-| **Solo** | one pane, the full height of the dock | it is the only pane open, or you collapsed the other |
-| **Split** | two panes stacked, with a draggable divider | a second panel is promoted to `follow` |
-| **Collapsed** | header row only, content hidden | you collapse it to keep it without giving it space |
-| **Maximized** | the pane takes the whole window; rail, thread and dock are hidden | the maximize control, or double-click its header |
+| **Minimal** | a pill: dot, name, one live number | it is not being watched right now |
+| **Compact** | a header row with live state, no body | you collapsed it, or two others are expanded |
+| **Expanded** | full content, alone or in a split with a draggable divider | you are watching it |
+| **Maximized** | the whole window; rail, thread and dock hidden | the maximize control, or double-click the header |
 
 Rules for the geometry:
 
-- **Solo is the default, not a degraded split.** One panel gets the whole
-  dock. The split only exists when two things are genuinely being watched.
+- **Expanded-alone is the default, not a degraded split.** One island gets the
+  whole dock. The split exists only when two things are genuinely being
+  watched.
+- **Minimal still carries information.** Never a bare label. A run shows
+  elapsed time, a stream shows bytes, a plan shows steps done. If a kind has
+  no live number, it does not belong in the dock at all.
 - **The divider is draggable and remembered per session**, snapping to a
   50/50 midpoint. A pane never shrinks below its header.
 - **Maximize is reversible and never destructive.** `Esc` restores, the
@@ -96,8 +126,8 @@ Rules for the geometry:
 - **Collapse is how you keep something without paying for it.** A collapsed
   pane still shows its status dot and title, so a collapsed run that starts
   waiting for you still lights up (R5).
-- On a phone none of this applies: `follow` is a sheet, and a maximized sheet
-  is just a sheet.
+- On a phone the island sits above the composer: minimal by default, tapping
+  it expands to a sheet. Same element, same four sizes, less room.
 
 ## Placement is piorbit's decision, not the extension's
 
@@ -535,8 +565,9 @@ what needs you by walking down the attention.
 place. Re-emitting must never stack duplicates, and moving between surfaces
 must never lose scroll position or state.
 
-**R7 · Nothing vanishes silently.** Evicted from the dock, pruned by
-retention, closed by its extension — the panel bar says which. Never an empty
+**R7 · Nothing vanishes silently, and nothing is parked.** An island shrinks
+to minimal, it is never filed away. When one genuinely ends — pruned by
+retention, closed by its extension — it says which as it goes. Never an empty
 space where something was.
 
 **R8 · Cost is visible wherever work is spawned.** Fan-out is how surprise
@@ -595,9 +626,9 @@ carry adapters for packages that do not know we exist.
 5. **Is the fallback good enough** that an unaware extension feels
    first-class, or does that undersell the contract? *Lean: good enough, and
    the gap is the incentive to adopt.*
-6. **Where does the panel bar live** on desktop — a strip at the dock's top,
-   or docked to the right edge like a rail? *Lean: a strip at the top of the
-   dock, so it disappears entirely when nothing is open.*
+6. **Do minimal islands stack vertically or run as a horizontal strip** at the
+   top of the dock? *Lean: horizontal while there are few, wrapping to a
+   second row before ever scrolling, so position stays learnable.*
 7. **Does maximize hide the thread entirely, or split with it?** Full takeover
    is simpler and matches "I am doing this instead of the conversation".
    *Lean: full takeover, with `Esc` to return, because a half-maximized pane is
