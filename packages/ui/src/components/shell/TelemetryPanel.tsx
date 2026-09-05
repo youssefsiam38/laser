@@ -9,7 +9,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { money, tokens } from "@/format";
 import { cn } from "@/lib/utils";
-import { useExtensionUi, usePiorbitStable, usePiorbitView, useSessionMeta } from "@/runtime";
+import { usePiorbitStable, usePiorbitView, useSessionMeta } from "@/runtime";
 
 import { HistoryTree } from "./HistoryTree.js";
 import { historyRows, usageFromEntries, type UsageTotals } from "./model.js";
@@ -35,7 +35,7 @@ export function TelemetryPanel({ variant }: TelemetryPanelProps) {
       <header className={cn("flex h-12 shrink-0 items-center gap-2 px-4 hairline-b", variant === "sheet" && "pe-12")}>
         <h2 className="eyebrow">Telemetry</h2>
         {view && (
-          <span className="truncate font-mono text-[11px] text-ink-3" title={view.path}>
+          <span className="truncate font-mono text-xs text-ink-3" title={view.path}>
             {view.state.id.slice(0, 8)}
           </span>
         )}
@@ -57,7 +57,6 @@ export function TelemetryPanel({ variant }: TelemetryPanelProps) {
             <UsageSection />
             <ModelSection />
             <WorkerSection />
-            <ExtensionsSection />
             <HistorySection />
           </>
         ) : (
@@ -88,7 +87,7 @@ function Stat({ label, value, strong }: { label: string; value: React.ReactNode;
   return (
     <>
       <dt className="text-xs leading-5 text-ink-2">{label}</dt>
-      <dd className={cn("text-end font-mono text-[11px] leading-5 tnum", strong ? "font-medium text-ink" : "text-ink")}>
+      <dd className={cn("text-end font-mono text-xs leading-5 tnum", strong ? "font-medium text-ink" : "text-ink")}>
         {value}
       </dd>
     </>
@@ -103,7 +102,7 @@ function NoSession() {
   return (
     <div className="flex h-full min-h-48 flex-col items-center justify-center gap-3 px-6 text-center">
       <StatusRing status="idle" size={40} thickness={2} aria-hidden="true">
-        <span className="font-mono text-[11px] text-ink-3">—</span>
+        <span className="font-mono text-xs text-ink-3">—</span>
       </StatusRing>
       <div className="max-w-52">
         <p className="text-sm font-semibold text-ink">Nothing to measure</p>
@@ -191,7 +190,7 @@ function ModelSection() {
         <li className="flex items-center gap-2 text-xs leading-5">
           <Cpu className="size-3.5 shrink-0 text-ink-3" aria-hidden="true" />
           {meta.model ? (
-            <span className="truncate font-mono text-[11px] text-ink" title={`${meta.model.provider}/${meta.model.id}`}>
+            <span className="truncate font-mono text-xs text-ink" title={`${meta.model.provider}/${meta.model.id}`}>
               <span className="text-ink-3">{meta.model.provider}/</span>
               {meta.model.id}
             </span>
@@ -205,7 +204,7 @@ function ModelSection() {
           <Badge variant="mono">{meta.thinkingLevel ?? "—"}</Badge>
         </li>
       </ul>
-      <p className="mt-2 text-[11px] leading-4 text-ink-3">Change both from the composer.</p>
+      <p className="mt-2 text-xs leading-4 text-ink-3">Change both from the composer.</p>
     </Section>
   );
 }
@@ -229,56 +228,20 @@ function WorkerSection() {
         <div className="min-w-0 flex-1">
           <p className="text-xs leading-5 text-ink">
             {tone ? tone.label : "No status yet"}
-            {view && <span className="ms-1.5 font-mono text-[11px] text-ink-3">{view.state.cwd.split("/").filter(Boolean).at(-1)}</span>}
+            {view && <span className="ms-1.5 font-mono text-xs text-ink-3">{view.state.cwd.split("/").filter(Boolean).at(-1)}</span>}
           </p>
-          {worker?.message && <p className="text-[11px] leading-4 break-words text-ink-2">{worker.message}</p>}
-          {!worker && <p className="text-[11px] leading-4 text-ink-3">One Pi process per project directory.</p>}
+          {worker?.message && <p className="text-xs leading-4 break-words text-ink-2">{worker.message}</p>}
+          {!worker && <p className="text-xs leading-4 text-ink-3">One Pi process per project directory.</p>}
         </div>
       </div>
     </Section>
   );
 }
 
-function ExtensionsSection() {
-  const { statuses, widgets } = useExtensionUi();
-  const pills = Object.entries(statuses);
-  const widgetEntries = Object.entries(widgets);
-  if (pills.length === 0 && widgetEntries.length === 0) return null;
-  const groups = (["aboveEditor", "belowEditor"] as const).map((placement) => ({
-    placement,
-    label: placement === "aboveEditor" ? "Above editor" : "Below editor",
-    items: widgetEntries.filter(([, w]) => w.placement === placement),
-  }));
-  return (
-    <Section title="Extensions">
-      {pills.length > 0 && (
-        <ul role="list" className="flex flex-wrap gap-1.5">
-          {pills.map(([key, text]) => (
-            <li key={key}>
-              <Badge variant="mono" title={key} className="max-w-full truncate">
-                {text}
-              </Badge>
-            </li>
-          ))}
-        </ul>
-      )}
-      {groups.map(
-        (group) =>
-          group.items.length > 0 && (
-            <div key={group.placement} className={cn("flex flex-col gap-2", pills.length > 0 && "mt-3")}>
-              <span className="eyebrow">{group.label}</span>
-              {group.items.map(([key, widget]) => (
-                <div key={key} className="rounded-md bg-surface-2 px-2.5 py-2">
-                  <div className="mb-1 truncate font-mono text-2xs leading-4 text-ink-3">{key}</div>
-                  <pre className="typed break-words whitespace-pre-wrap text-ink-2">{widget.lines.join("\n")}</pre>
-                </div>
-              ))}
-            </div>
-          ),
-      )}
-    </Section>
-  );
-}
+// Extension output is not a rail section any more: `setWidget` lines render as
+// `stream` islands in the dock (or as pills above the composer on a phone) and
+// `setStatus` as entries in the status line, both through the panel contract's
+// fallback (docs/ux-panels.md, src/panels/fallback.ts).
 
 function HistorySection() {
   const { actions } = usePiorbitStable();
@@ -307,11 +270,11 @@ function HistorySection() {
               className="group -ms-1 flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-md ps-1 text-start outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live"
             >
               <ChevronRight
-                className="size-3.5 shrink-0 text-ink-3 transition-transform duration-75 group-aria-expanded:rotate-90"
+                className="size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-instant) group-aria-expanded:rotate-90"
                 aria-hidden="true"
               />
               <span className="eyebrow">History</span>
-              {rows.length > 0 && <span className="font-mono text-[11px] text-ink-3 tnum">{rows.length}</span>}
+              {rows.length > 0 && <span className="font-mono text-xs text-ink-3 tnum">{rows.length}</span>}
             </button>
           </CollapsibleTrigger>
           {shell.historyOpen && (

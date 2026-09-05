@@ -96,7 +96,7 @@ export function SettingsForm({ catalog, snapshot, onApply }: SettingsFormProps) 
                         aria-current={entry.id === activeSection ? "true" : undefined}
                         className={cn(
                           "flex w-full items-center gap-1 rounded-md px-2 py-1.5 text-start text-sm",
-                          "outline-none transition-colors duration-75",
+                          "outline-none transition-colors duration-(--motion-instant)",
                           "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
                           entry.id === activeSection
                             ? "bg-surface-2 font-medium text-ink"
@@ -145,7 +145,7 @@ export function SettingsForm({ catalog, snapshot, onApply }: SettingsFormProps) 
                 <SectionHeading section={sections.find((s) => s.id === activeSection)} />
               )}
               {searching && (
-                <p className="pb-2 text-2xs text-ink-3">
+                <p className="pb-2 text-xs text-ink-3">
                   {shown.length} setting{shown.length === 1 ? "" : "s"} match “{query.trim()}”
                 </p>
               )}
@@ -190,7 +190,7 @@ function ScopeSwitch({ view, onChange }: { view: View; onChange: (view: View) =>
               aria-selected={view === option.id}
               onClick={() => onChange(option.id)}
               className={cn(
-                "rounded-md px-2.5 py-1 text-xs font-medium outline-none transition-colors duration-75",
+                "rounded-md px-2.5 py-1 text-xs font-medium outline-none transition-colors duration-(--motion-instant)",
                 "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-live",
                 view === option.id ? "bg-surface text-ink" : "text-ink-2 hover:text-ink",
               )}
@@ -245,7 +245,7 @@ function ProjectTrustNotice({ snapshot }: { snapshot: SettingsSnapshot }) {
       <div className="min-w-0">
         <p className={cn("font-medium", tone === "quiet" && "text-ink")}>{title}</p>
         <p className="mt-0.5 leading-5 opacity-90">{reason}</p>
-        <p className="mt-1 font-mono text-2xs leading-4 opacity-80">{snapshot.project.path}</p>
+        <p className="mt-1 font-mono text-xs leading-4 opacity-80">{snapshot.project.path}</p>
       </div>
     </div>
   );
@@ -294,7 +294,7 @@ function FieldRowView({
             </Tooltip>
           )}
         </div>
-        <p className="mt-0.5 font-mono text-2xs text-ink-3">
+        <p className="mt-0.5 font-mono text-xs text-ink-3">
           {showSection && section ? `${section.title} · ` : ""}
           {field.path}
         </p>
@@ -313,7 +313,7 @@ function FieldRowView({
             ])
           }
         />
-        <div className="flex flex-wrap items-center gap-2 text-2xs text-ink-3">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-ink-3">
           {scoped === undefined ? (
             <span className="inline-flex items-center gap-1">
               <Info className="size-3" />
@@ -353,7 +353,7 @@ function ValueChip({ value }: { value: unknown }) {
   if (value === undefined) return <span className="font-mono text-ink-3">—</span>;
   const text = typeof value === "string" ? value : JSON.stringify(value);
   return (
-    <code className="rounded bg-surface-2 px-1 font-mono text-[11px] text-ink-2">
+    <code className="rounded bg-surface-2 px-1 font-mono text-xs text-ink-2">
       {text.length > 60 ? `${text.slice(0, 59)}…` : text}
     </code>
   );
@@ -388,7 +388,7 @@ function EffectiveView({ catalog, snapshot }: { catalog: SettingsCatalog; snapsh
           <div className="overflow-x-auto rounded-lg border border-line">
             <table className="w-full min-w-160 border-collapse text-sm">
               <thead>
-                <tr className="bg-surface-2 text-start font-mono text-2xs tracking-[0.08em] text-ink-3 uppercase">
+                <tr className="eyebrow bg-surface-2 text-start">
                   <th className="px-3 py-2 text-start font-medium">Setting</th>
                   <th className="px-3 py-2 text-start font-medium">Global</th>
                   <th className="px-3 py-2 text-start font-medium">Project</th>
@@ -424,15 +424,15 @@ function EffectiveRow({ row, trusted }: { row: FieldRow; trusted: boolean }) {
   return (
     <tr className="border-t border-line align-top">
       <td className="px-3 py-2">
-        <span className="font-mono text-[12px] text-ink">{row.field.path}</span>
-        <p className="mt-0.5 text-2xs text-ink-3">{row.field.label}</p>
+        <span className="font-mono text-xs text-ink">{row.field.path}</span>
+        <p className="mt-0.5 text-xs text-ink-3">{row.field.label}</p>
       </td>
       <td className={cn("px-3 py-2", projectWins && "opacity-50")}>
         <ValueChip value={row.global} />
       </td>
       <td className={cn("px-3 py-2", !trusted && "opacity-40")}>
         <ValueChip value={row.project} />
-        {!trusted && row.project !== undefined && <p className="mt-0.5 text-2xs text-ink-3">ignored (untrusted)</p>}
+        {!trusted && row.project !== undefined && <p className="mt-0.5 text-xs text-ink-3">ignored (untrusted)</p>}
       </td>
       <td className="px-3 py-2">
         <div className="flex flex-wrap items-center gap-1.5">

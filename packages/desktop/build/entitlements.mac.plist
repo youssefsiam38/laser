@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Hardened-runtime entitlements (M5-T4, M5-T5).
+
+  Each one is here because something breaks without it:
+
+    allow-jit / allow-unsigned-executable-memory
+        V8. Chromium will not start under the hardened runtime without them.
+    allow-dyld-environment-variables
+        Electron sets DYLD_* for its own frameworks.
+    disable-library-validation
+        piorbit spawns the stock Node it ships, which loads its own dynamic
+        libraries and any native addon a Pi package pulls in. Library
+        validation would refuse anything not signed by our team id.
+    device.audio-input
+        Dictation. Paired with NSMicrophoneUsageDescription in Info.plist —
+        the key without the entitlement, or the entitlement without the key,
+        both end in a process that is killed rather than prompted.
+
+  There is deliberately no App Sandbox: piorbit runs a coding agent over the
+  user's own source tree, which the sandbox exists to prevent.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+</dict>
+</plist>

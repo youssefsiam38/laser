@@ -27,6 +27,7 @@ export { GLOBAL_FLAGS, colorMode, flagsFor } from "./flags.js";
 export { TOPICS, findTopic, renderCommandHelp, renderRootHelp, type Topic } from "./help.js";
 export {
   cliEntry,
+  unpacked,
   daemonArgs,
   logTail,
   openBrowser,
@@ -39,7 +40,9 @@ export {
   clearHostFile,
   inspectHost,
   isProcessAlive,
+  isRecordedProcess,
   portInUse,
+  processIdentity,
   probeHealth,
   readHostFile,
   writeHostFile,

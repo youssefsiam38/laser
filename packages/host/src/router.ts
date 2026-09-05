@@ -21,6 +21,7 @@
 import {
   ErrorCodes,
   ProtocolError,
+  decisionPushPayload,
   parseClientRequest,
   type JsonRpcError,
   type JsonRpcResponse,
@@ -32,7 +33,10 @@ import {
 import type { AttentionTracker } from "./attention.js";
 import type { SessionCatalog } from "./catalog.js";
 import type { LogStore } from "./logstore.js";
+import type { PanelHub } from "./panels/hub.js";
 import type { ProjectRegistry } from "./projects.js";
+import type { PushService } from "./push.js";
+import type { SubagentsLayer } from "./subagents/layer.js";
 import type { ViewCache } from "./views.js";
 import type { WorkerPool } from "./worker-pool.js";
 import { WorkerRpcError } from "./worker-client.js";
@@ -56,6 +60,18 @@ export interface RouterDeps {
   logs?: LogStore | undefined;
   /** Why the log store is missing, so `pi/logs/*` can say so instead of 404ing. */
   logsUnavailable?: string | undefined;
+  /** The panel hub (docs/ux-panels.md): answers `pi/panel/list` and `pi/panel/read`. */
+  panels?: PanelHub | undefined;
+  /**
+   * The pi-subagents file layer. It owns the panels it discovered on disk, so
+   * it also answers their actions: a terminal-started session has no worker to
+   * route `pi/panel/action` to, and steering one is a file, not an RPC.
+   */
+  subagents?: SubagentsLayer | undefined;
+  /** Web Push (M7-T5). */
+  push?: PushService | undefined;
+  /** The origin a phone opens, for the URLs inside a notification. */
+  publicOrigin?: (() => string) | undefined;
 }
 
 /** Methods answered by the worker that owns `params.cwd` (M4). */
@@ -70,7 +86,17 @@ const CWD_ROUTED = new Set([
   "pi/packages/check_updates",
   "pi/providers/list",
   "pi/models/catalog",
+  // Dictation is per project: `status` and `begin` name a cwd; the id-carrying
+  // chunk/end/cancel are routed by the upload table below.
+  "pi/transcribe/status",
+  "pi/transcribe/begin",
+  // The git status of a project. The UI always sends a `path` as well, but the
+  // CLI and any cwd-only caller must still reach the right worker.
+  "pi/project/git",
 ]);
+
+/** Dictation methods that carry only an upload id, routed by `uploads`. */
+const UPLOAD_ROUTED = new Set(["pi/transcribe/chunk", "pi/transcribe/end", "pi/transcribe/cancel"]);
 
 export class Router {
   /**
@@ -82,6 +108,9 @@ export class Router {
    * closes it, so nothing here can outlive the real session.
    */
   private readonly unwritten = new Map<string, SessionSummary>();
+
+  /** Dictation upload id → cwd, so a chunk reaches the worker that opened it. */
+  private readonly uploads = new Map<string, string>();
 
   constructor(
     private readonly pool: WorkerPool,
@@ -144,6 +173,11 @@ export class Router {
   }
 
   private async dispatch(req: TypedClientRequest): Promise<unknown> {
+    // Panels the host discovered itself are answered by the host. Checked
+    // before the switch so everything else still routes to a worker unchanged.
+    if (req.method === "pi/panel/action" && this.deps.subagents?.handles(req.params.id)) {
+      return this.deps.subagents.act(req.params);
+    }
     switch (req.method) {
       case "pi/session/list":
         return { sessions: this.sessions(req.params.cwd) };
@@ -249,13 +283,68 @@ export class Router {
       case "pi/logs/clear":
         return { deleted: this.logs().clear(req.params.sections) };
 
+      // ------------------------------------------------------------ push
+      case "pi/push/config":
+        return this.push().config();
+      case "pi/push/subscribe":
+        return this.push().subscribe(req.params.subscription, req.params.device);
+      case "pi/push/unsubscribe": {
+        await this.push().unsubscribe(req.params.endpoint);
+        return {};
+      }
+      case "pi/push/test": {
+        const origin = this.deps.publicOrigin?.() ?? "http://127.0.0.1";
+        const sent = await this.push().send(
+          req.params.endpoint,
+          decisionPushPayload({
+            origin,
+            sessionPath: "",
+            projectName: "piorbit",
+            decisionId: "test",
+            title: "Notifications are working",
+            message: "This is what a session waiting for you looks like.",
+            yesNo: false,
+          }),
+          { ttlSeconds: 60, topic: "piorbit_test" },
+        );
+        return { delivered: sent.delivered, ...(sent.error !== undefined ? { error: sent.error } : {}) };
+      }
+
+      // ---------------------------------------------------------- panels
+      case "pi/panel/list":
+        return this.panels().list(req.params.path);
+      case "pi/panel/read":
+        return this.panels().read(req.params);
+      // `pi/panel/action` carries a session path and falls through to the
+      // default: the worker that owns the session delivers it to the extension.
+
       default: {
         // Settings, packages, providers and models are per project, not per
         // session: they name a cwd and go to that project's worker.
         if (CWD_ROUTED.has(req.method)) {
           const { cwd } = req.params as { cwd: string };
           const worker = await this.pool.get(cwd);
-          return worker.request(req.method, req.params);
+          const result = await worker.request(req.method, req.params);
+          // Remember which worker opened this upload: the chunks that follow
+          // carry an id and nothing else.
+          if (req.method === "pi/transcribe/begin") {
+            const id = (result as { id?: string } | null)?.id;
+            if (id) this.uploads.set(id, cwd);
+          }
+          return result;
+        }
+
+        if (UPLOAD_ROUTED.has(req.method)) {
+          const { id } = req.params as { id: string };
+          const cwd = this.uploads.get(id);
+          if (!cwd) {
+            throw new ProtocolError(
+              ErrorCodes.InvalidParams,
+              "that recording is no longer open — start dictating again",
+            );
+          }
+          if (req.method !== "pi/transcribe/chunk") this.uploads.delete(id);
+          return (await this.pool.get(cwd)).request(req.method, req.params);
         }
 
         const path = (req.params as { path: string }).path;
@@ -285,6 +374,28 @@ export class Router {
         return result;
       }
     }
+  }
+
+  /** The panel hub, or an error a person can act on. */
+  private panels(): PanelHub {
+    if (!this.deps.panels) {
+      throw new ProtocolError(
+        ErrorCodes.Unsupported,
+        "This host is running without the panel hub, so panels cannot be listed or read.",
+      );
+    }
+    return this.deps.panels;
+  }
+
+  /** The push service, or an error a person can act on. */
+  private push(): PushService {
+    if (!this.deps.push) {
+      throw new ProtocolError(
+        ErrorCodes.Unsupported,
+        "This host is running without push, so it cannot send notifications to a phone.",
+      );
+    }
+    return this.deps.push;
   }
 
   /** The log store, or an error a person can act on. */

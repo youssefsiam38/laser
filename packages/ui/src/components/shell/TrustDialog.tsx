@@ -58,10 +58,10 @@ export function TrustDialog() {
 
         <div className="flex flex-col gap-3">
           <div className="rounded-lg border border-line bg-surface-2 px-3 py-2">
-            <p className="font-mono text-[11px] break-all text-ink-2">{request.cwd}</p>
+            <p className="font-mono text-xs break-all text-ink-2">{request.cwd}</p>
             <ul role="list" className="mt-1.5 flex flex-wrap gap-1.5">
               {request.reasons.map((reason) => (
-                <li key={reason} className="rounded-md bg-surface px-1.5 py-0.5 font-mono text-[11px] text-ink">
+                <li key={reason} className="rounded-md bg-surface px-1.5 py-0.5 font-mono text-xs text-ink">
                   {reason}
                 </li>
               ))}

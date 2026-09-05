@@ -9,6 +9,7 @@
 import type {
   HostNotificationMethod,
   HostNotifications,
+  PiExtensionModuleName,
   SessionState,
   SessionSummary,
   SessionUpdate,
@@ -49,6 +50,12 @@ export interface SessionView {
   hydrated: boolean;
   /** Raw persisted entries (for the history/tree panel). */
   entries: unknown[];
+  /**
+   * Companion-extension modules active in this session, from
+   * `piorbit/capabilities`. Features that only exist where their package does
+   * gate on this and are hidden, never disabled, when it is absent (R2).
+   */
+  capabilities: PiExtensionModuleName[];
 }
 
 export interface AppState {
@@ -136,6 +143,7 @@ export function reduce(state: AppState, action: Action): AppState {
             openedAt: new Date().toISOString(),
             hydrated: false,
             entries: [],
+            capabilities: [],
           };
       return { ...state, open: { ...state.open, [view.path]: view }, current: view.path };
     }
@@ -145,7 +153,7 @@ export function reduce(state: AppState, action: Action): AppState {
       const { [action.from]: _gone, ...rest } = state.open;
       const view: SessionView = old
         ? { ...old, path: action.state.path, state: action.state, lastSeq: 0, hydrated: false, entries: [] }
-        : { path: action.state.path, state: action.state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, dialogs: [], statuses: {}, widgets: {}, openedAt: new Date().toISOString(), hydrated: false, entries: [] };
+        : { path: action.state.path, state: action.state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, dialogs: [], statuses: {}, widgets: {}, openedAt: new Date().toISOString(), hydrated: false, entries: [], capabilities: [] };
       return { ...state, open: { ...rest, [view.path]: view }, current: view.path };
     }
     case "select":
@@ -233,6 +241,14 @@ function applyNotification(state: AppState, method: HostNotificationMethod, para
     }
     case "pi/extension/message": {
       const p = params as HostNotifications["pi/extension/message"];
+      if (p.message.type === "piorbit/capabilities") {
+        const active = p.message.active;
+        return updateView(state, p.path, (v) =>
+          v.capabilities.length === active.length && active.every((m, i) => v.capabilities[i] === m)
+            ? v
+            : { ...v, capabilities: [...active] },
+        );
+      }
       if (p.message.type === "piorbit/module/log" && p.message.level === "error") {
         return pushToast(state, "error", `${p.message.module}: ${p.message.message}`);
       }

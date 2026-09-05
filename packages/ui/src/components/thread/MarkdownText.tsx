@@ -125,7 +125,7 @@ const components = memoizeMarkdownComponents({
   pre: ({ className, ...props }) => (
     <pre
       className={cn(
-        "mb-4 overflow-x-auto rounded-b-lg border border-line bg-surface-2 font-mono text-xs leading-[18px] text-ink last:mb-0 [&>code]:block [&>code]:p-3.5",
+        "mb-4 overflow-x-auto rounded-b-lg border border-line bg-surface-2 font-mono text-xs leading-sm text-ink last:mb-0 [&>code]:block [&>code]:p-3.5",
         className,
       )}
       {...props}

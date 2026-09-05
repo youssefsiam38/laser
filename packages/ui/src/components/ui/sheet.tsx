@@ -30,7 +30,7 @@ function SheetOverlay({
       data-slot="sheet-overlay"
       className={cn(
         "fixed inset-0 z-50 bg-[color-mix(in_oklab,var(--ink)_28%,transparent)]",
-        "animate-in fade-in-0 duration-200 data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
+        "animate-in fade-in-0 duration-(--motion-slow) data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
         className,
       )}
       {...props}
@@ -60,15 +60,15 @@ function SheetContent({
         data-side={side}
         className={cn(
           "fixed z-50 flex flex-col bg-surface text-sm text-ink shadow-float outline-none",
-          "duration-200 ease-out animate-in data-[state=closed]:animate-out",
+          "duration-(--motion-slow) ease-out animate-in data-[state=closed]:animate-out",
           side === "right" &&
             "inset-y-0 end-0 h-full w-[min(88vw,320px)] border-s border-line pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] slide-in-from-right data-[state=closed]:slide-out-to-right",
           side === "left" &&
             "inset-y-0 start-0 h-full w-[min(88vw,320px)] border-e border-line pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] slide-in-from-left data-[state=closed]:slide-out-to-left",
           side === "top" &&
-            "inset-x-0 top-0 h-auto max-h-[85dvh] rounded-b-2xl border-b border-line pt-[env(safe-area-inset-top)] slide-in-from-top data-[state=closed]:slide-out-to-top",
+            "inset-x-0 top-0 h-auto max-h-[min(85dvh,calc(var(--vvh,100dvh)-24px))] rounded-b-2xl border-b border-line pt-[env(safe-area-inset-top)] slide-in-from-top data-[state=closed]:slide-out-to-top",
           side === "bottom" &&
-            "inset-x-0 bottom-0 h-auto max-h-[85dvh] rounded-t-2xl border-t border-line pb-[max(env(safe-area-inset-bottom),var(--kb))] slide-in-from-bottom data-[state=closed]:slide-out-to-bottom",
+            "inset-x-0 bottom-0 h-auto max-h-[min(85dvh,calc(var(--vvh,100dvh)-24px))] rounded-t-2xl border-t border-line pb-[max(env(safe-area-inset-bottom),var(--kb))] slide-in-from-bottom data-[state=closed]:slide-out-to-bottom",
           className,
         )}
         {...props}

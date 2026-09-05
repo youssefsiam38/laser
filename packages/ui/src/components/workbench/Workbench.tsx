@@ -59,7 +59,7 @@ export function Workbench() {
           ))}
         </nav>
         {cwd && (
-          <span className="ms-2 min-w-0 truncate font-mono text-[11px] text-ink-3" title={cwd}>
+          <span className="ms-2 min-w-0 truncate font-mono text-xs text-ink-3" title={cwd}>
             {shortCwd(cwd)}
           </span>
         )}

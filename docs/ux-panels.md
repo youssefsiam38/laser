@@ -372,7 +372,7 @@ type RunPanel = {
   attention?: Attention;           // derived by the adapter; the dot reads this
 
   activity?: string;               // one line, the agent's own words
-  phase?: { label: string; index?: number; total?: number };
+  phase?: { label: string; index?: number; total?: number };   // index is 1-based
   progress?: { done: number; total: number } | "indeterminate";
 
   origin?: string;                 // who started it
@@ -698,3 +698,29 @@ carry adapters for packages that do not know we exist.
   domain model behind the `run` and `plan` kinds.
 - [`packages/ui/DESIGN.md`](../packages/ui/DESIGN.md) — the visual system these
   panels are drawn in.
+
+## Implementation map
+
+Where the contract lives in code (lane P, wave 2). Paths are relative to the repo root.
+
+| Piece | File | Notes |
+| --- | --- | --- |
+| Payload types (`RunPanel`, `PlanPanel`, `DocumentPanel`, `StreamPanel`, `CollectionPanel`, `DecisionPanel`, `Action`, `PanelUsage`, `Ref`, `PanelIntent`, `Attention`) | `packages/protocol/src/panels.ts` | `Usage` is exported as `PanelUsage` (messages.ts already owns a `Usage`). `attentionOf` / `highestAttention` are R1; `refsOf` is what the host grants reads for. |
+| Bus protocol constants and event shapes (`piorbit:panel`, `piorbit:panel:close`, `piorbit:panel:action`) | `packages/protocol/src/panels.ts` | `DEFAULT_INTENT` fills a missing `intent` per kind. |
+| Wire: `pi/panel/upsert`, `pi/panel/close` (host → client), `pi/panel/action`, `pi/panel/read`, `pi/panel/list` (client → host) | `packages/protocol/src/panels.ts` (module augmentation of `ClientRequests` / `HostNotifications`), schemas in `packages/protocol/src/schemas.ts` | `panelSchema` is strict at every level; `validatePanelEvent` refuses presentation keys (`PRESENTATION_KEYS`) anywhere in `data` and names the field. |
+| Companion module (declared protocol on Pi's bus) | `packages/pi-extension/src/modules/panels.ts` | Validates, dedupes identical re-emits (R9), forwards as `piorbit/panel/upsert` / `piorbit/panel/close`; replays `pi/panel/action` on `piorbit:panel:action` through the module `CommandBus` (`modules/index.ts`). |
+| Host: panel memory, ref grants, ranged reads, attention | `packages/host/src/panels/{store,refs,hub}.ts` | `PanelHub.observeExtensionMessage` turns extension messages into broadcasts; `list` and `read` answer the router; a blocking `decision` raises attention like a dialog (R5). Only refs a panel carried are readable. |
+| Fallback (`setWidget` → `stream`, `setStatus` → ambient, dialogs → `decision`) | `packages/ui/src/panels/fallback.ts` | Derived client-side from the `pi/ui/*` stream; ids are `ui:*` and answer through `pi/ui/response`. |
+| Panel store (entries, liveness ring, velocity, seen, closed notices, reconcile) | `packages/ui/src/panels/store.ts` | Pure. Tested in `packages/ui/test/panels/store.test.ts`. |
+| Placement table (kind × intent × viewport → surface) | `packages/ui/src/panels/placement.ts` | Pure; the table is the test in `test/panels/placement.test.ts`. A placement carries `via`, so `inspect` and a phone's `follow` — which both read `sheet` — are told apart. |
+| The inline surface, and the sheet `inspect` opens | `packages/ui/src/panels/InlinePanels.tsx` | `PanelInlineCards` sits at the tail of the transcript; `PanelInspectSheet` opens once per panel. Both draw the island's own bodies (`PanelBody`). |
+| A `decision` in its tool row | `packages/ui/src/panels/DecisionSurfaces.tsx` (`PanelToolDecision`), rows register in `packages/ui/src/panels/tool-rows.ts` | The tool-row column is only chosen while that row is on screen; otherwise the question falls back to the card. |
+| Dock geometry (four sizes, two expanded per column, LRU shrink, columns, dividers, maximize, pop out, dismiss) | `packages/ui/src/panels/dock-state.ts`, layout in `packages/ui/src/panels/layout.ts` | Pure; tested in `test/panels/dock-state.test.ts`. `stripBudget` is shared with the phone's strip so both fold into `+N` at the same place. |
+| ANSI interpreter | `packages/ui/src/panels/ansi.ts` | SGR → spans, everything else stripped; tested. |
+| The island (one element, four sizes, morph, bodies per kind) | `packages/ui/src/panels/islands/Island.tsx`, `islands/bodies/*.tsx`, `islands/ActionButtons.tsx` | One header for all four sizes, so the dot, the title and the controls keep their identity through a morph. Document and diff rendering lives in `components/preview/*`. Live values per size budget in `panels/values.ts`; ranged reads in `panels/read.ts`. |
+| The dock | `packages/ui/src/components/dock/Dock.tsx` | Mounted by `Shell.tsx` right of the thread on tablet and desktop. |
+| Ambient (fleet pill, glance panels, statuses) | `packages/ui/src/panels/Ambient.tsx` | Fills the status line's trailing slot: `<Thread statusSlot={<PanelAmbient />} />`. |
+| Decision surfaces (cards above the composer, session-blocking sheet) | `packages/ui/src/panels/DecisionSurfaces.tsx` | `PanelDecisionCards` goes in the thread footer; `PanelDecisionSheet` in the shell. |
+| Phone islands (pills above the composer, sheet on tap) | `packages/ui/src/panels/MobileIslands.tsx` | Goes in the thread footer, above the composer. |
+| Popped-out panel page | `packages/ui/src/panels/PoppedOut.tsx` | `#/panel/<path>/<id>`, routed by `Shell.tsx`; announces itself on the `piorbit-panels` BroadcastChannel. |
+| Provider and hooks | `packages/ui/src/panels/PanelsProvider.tsx` | `PanelsProvider`, `usePanelsState`, `usePanelActions`, `usePanelEntries`, `useIslandEntries`, `useDock`. |

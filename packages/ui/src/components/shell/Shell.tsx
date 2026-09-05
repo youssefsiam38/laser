@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { Dock } from "@/components/dock";
+import { MobileSurfaces } from "@/components/mobile";
 import { Thread } from "@/components/thread/Thread";
 import { Workbench, WorkbenchProvider } from "@/components/workbench";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useBreakpoint, useIsWide, useKeyboardInset } from "@/hooks";
+import { PanelAmbient, PanelDecisionSheet, PanelsProvider, POPOUT_HASH_PREFIX, PoppedOutPanel } from "@/panels";
+import { FleetSheet, RunTabs } from "@/components/subagents";
 import { mergeSessions, sessionTitle, usePiorbitStable, usePiorbitState, usePiorbitView } from "@/runtime";
 
 import { AddProjectDialog } from "./AddProjectDialog.js";
@@ -55,7 +59,32 @@ const writePrefs = (prefs: PanelPrefs): void => {
  * thread viewport does, and on mobile the main column keeps its bottom edge
  * above the on-screen keyboard through `--kb`.
  */
+/** The location hash, live. A popped-out panel is a whole page of its own. */
+function useHash(): string {
+  const [hash, setHash] = useState(() => globalThis.location?.hash ?? "");
+  useEffect(() => {
+    const onChange = () => setHash(globalThis.location?.hash ?? "");
+    window.addEventListener("hashchange", onChange);
+    return () => window.removeEventListener("hashchange", onChange);
+  }, []);
+  return hash;
+}
+
 export function Shell() {
+  const hash = useHash();
+  if (hash.startsWith(POPOUT_HASH_PREFIX)) {
+    return (
+      <TooltipProvider>
+        <PanelsProvider>
+          <PoppedOutPanel hash={hash} />
+        </PanelsProvider>
+      </TooltipProvider>
+    );
+  }
+  return <ShellFrame />;
+}
+
+function ShellFrame() {
   useKeyboardInset();
   const layout = useBreakpoint();
   const isWide = useIsWide();
@@ -196,6 +225,7 @@ export function Shell() {
 
   return (
     <TooltipProvider>
+      <PanelsProvider>
       <WorkbenchProvider>
       <ShellContext.Provider value={shell}>
         <div className="flex h-full w-full overflow-hidden bg-bg text-ink">
@@ -206,13 +236,18 @@ export function Shell() {
             {desktop && sessionsOpen && <SessionsPanel variant="panel" />}
             <main className="flex min-h-0 min-w-0 flex-1 flex-col">
               <TopBar />
+              {/* The run tree: one level of children of whatever is focused
+                  (docs/ux-agent-work.md). Renders nothing when the session has
+                  no agent work. */}
+              <RunTabs />
               <ConnectionBanner />
               {/* The thread's sticky footer owns the keyboard/safe-area inset
                   (Thread.tsx); adding it here too lifted the composer twice. */}
               <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-                <Thread />
+                <Thread statusSlot={<PanelAmbient />} />
               </div>
             </main>
+            {layout !== "mobile" && <Dock path={view?.path} />}
             {desktop && telemetryOpen && <TelemetryPanel variant="panel" />}
             <Workbench />
           </div>
@@ -223,7 +258,7 @@ export function Shell() {
             <Sheet open={sheets.sessions} onOpenChange={(open) => setSheets((s) => ({ ...s, sessions: open }))}>
               <SheetContent side="left" className="w-[min(88vw,288px)]">
                 <SheetTitle className="sr-only">Sessions</SheetTitle>
-                <SheetDescription className="sr-only">Sessions in the selected project.</SheetDescription>
+                <SheetDescription className="sr-only">Every project’s sessions, attention first.</SheetDescription>
                 <SessionsPanel variant="sheet" />
               </SheetContent>
             </Sheet>
@@ -239,9 +274,15 @@ export function Shell() {
 
         <AddProjectDialog />
         <TrustDialog />
+        <PanelDecisionSheet />
+        <FleetSheet />
         <Toasts />
+        {/* The reconnect guard and service-worker plumbing on every width; the
+            phone's notices and install sheet only under 768px. */}
+        <MobileSurfaces />
       </ShellContext.Provider>
       </WorkbenchProvider>
+      </PanelsProvider>
     </TooltipProvider>
   );
 }

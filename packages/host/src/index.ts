@@ -39,7 +39,19 @@ export {
   type RelayClientState,
   type RelayClientStats,
 } from "./relay-client.js";
-export * from "./subagents/file-layer.js";
+export * from "./subagents/index.js";
+export * from "./panels/index.js";
+export {
+  PushService,
+  b64url,
+  encryptPushPayload,
+  generateVapidKeys,
+  vapidAuthorization,
+  type PushSendResult,
+  type PushServiceOptions,
+  type StoredPushSubscription,
+  type VapidKeys,
+} from "./push.js";
 
 export const HOST_DEFAULT_PORT = 41_441;
 export const HOST_BIND_ADDRESS = "127.0.0.1";

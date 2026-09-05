@@ -101,7 +101,8 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 | M2-T2 | Attention model + inbox | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | host attention model, persisted seen watermark, inbox |
 | M2-T3 | Fast switching | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | hydrated-view cache in host; per-path selectors verified |
 | M2-T4 | Project management + trust | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | server-side projects with Pi trust gate passed through as a dialog |
-| M2-T5 | Desktop notifications | todo | — | — | needs M5 (Electron) for real notifications |
+| M2-T5 | Desktop notifications | in-progress | lane-B | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration) | tray + edge-gated notifications written (`packages/desktop/src/notifications.ts`); never fired on a real desktop session here |
+| M2-T6 | Status line, project line, tool groups | done | lane-F | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration); `pnpm -F @piorbit/worker test -- git`, `pnpm -F @piorbit/ui test -- thread` | D-20 §4/§5/§6: consecutive tool calls collapse; one status line above the composer; git branch and `+a −r` since the session opened, with Create PR |
 
 #### M2-T1 notes
 - 2026-09-05 claimed: rewrite `worker-pool.ts` with lifecycle states (starting/ready/crashed/retired), backoff restart, idle retire gated on attached clients + live pi-subagents runs, duplicate-cwd refusal.
@@ -126,15 +127,15 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
-| M3-T1 | `subagents` module (in-process bus) | todo | — | — | stub in `packages/pi-extension/src/modules/subagents.ts` with registry-symbol detection |
-| M3-T2 | Host file layer watcher | todo | — | — | paths in `packages/host/src/subagents/file-layer.ts` |
-| M3-T3 | Foreground children via transcripts | todo | — | — | — |
-| M3-T4 | Control: steer/stop/resume | todo | — | — | — |
-| M3-T5 | Tab group UI | todo | — | — | — |
-| M3-T6 | Workflow view | todo | — | — | — |
-| M3-T7 | Missions view | todo | — | — | — |
-| M3-T8 | Acceptance + watchdog chips | todo | — | — | — |
-| M3-T9 | Upstream PRs | todo | — | — | list in `docs/upstream.md` |
+| M3-T1 | `subagents` module (in-process bus) | done | lane-E | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration) | `packages/pi-extension/src/modules/subagents.ts`; capability probe with a timeout (R11), emits only through `piorbit:panel` |
+| M3-T2 | Host file layer watcher | done | lane-E | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration); 43 tests in `packages/host/test/subagents/` | `packages/host/src/subagents/{status,panels,layer}.ts`; 1 s stat-and-compare poll, not fs.watch (see the file header) |
+| M3-T3 | Foreground children via transcripts | done | lane-E | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration) | read-only cards, attributed by directory mtime; upstream patch 3 in `docs/upstream.md` fixes attribution at the source |
+| M3-T4 | Control: steer/stop/resume | in-progress | lane-E | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration); control-inbox bytes verified against the runner's format | steer/stop/interrupt are files and work for terminal-started runs; resume needs the owning session's bus and is only offered while a live module announced it |
+| M3-T5 | Tab group UI | done | lane-E | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration); 15 run-tree tests | `packages/ui/src/components/subagents/RunTabs.tsx` under the top bar; one level, breadcrumb for depth |
+| M3-T6 | Workflow view | done | lane-E | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration) | plans render as `plan` panels; phases collapsible, `inferred` marked (R3) |
+| M3-T7 | Missions view | done | lane-E | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration) | `packages/host/src/subagents/missions.ts` → collection + document panels; `piorbit missions` |
+| M3-T8 | Acceptance + watchdog chips | done | lane-E | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration) | acceptance and watchdog become `collection` panels (`checksPanel`) |
+| M3-T9 | Upstream PRs | todo | — | — | four patches written out in `docs/upstream.md`; none filed |
 
 ---
 
@@ -147,7 +148,7 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 | M4-T3 | Package manager UI | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | PackagesAdapter over DefaultPackageManager with progress notifications |
 | M4-T4 | Providers and models | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | ModelsAdapter: provider auth, catalog, thinking levels |
 | M4-T5 | Log store | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | SQLite log store (node:sqlite): content-addressed payloads, byte-budgeted paging, retention; Authorization/API-key headers redacted incl. vendor prefixes |
-| M4-T6 | Logs page | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | logs screen: section tabs, search, follow, virtualized list, detail with copy; provider-response ceiling stated |
+| M4-T6 | Logs page | done | claude-2026-09-05-c, integrator | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1`; `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration); 6 tests in `packages/ui/test/panels/logs.test.ts` | logs screen: section tabs, search, follow, virtualized list, detail with copy; provider-response ceiling stated. Wave 2: "Watch" sends a section to the dock as a `stream` island (`src/panels/logs.ts`), so live host output is the same island an extension gets |
 | M4-T7 | Keybindings + trust views | todo | — | — | keybindings/trust views not built in wave 1 |
 
 ---
@@ -156,11 +157,11 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
-| M5-T1 | Electron main | todo | — | — | — |
-| M5-T2 | Bundled runtime outside asar | todo | — | — | — |
-| M5-T3 | Keychain | todo | — | — | — |
-| M5-T4 | Notifications + mic permission | todo | — | — | — |
-| M5-T5 | Packaging, signing, updates | todo | — | — | — |
+| M5-T1 | Electron main | done | lane-B | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration); headless Electron 44.2.0 boot on this machine | `packages/desktop/src/main.ts`; single-instance lock, deep links, tray, window state |
+| M5-T2 | Bundled runtime outside asar | done | lane-B | `/proc/<host pid>/exe` = `runtime/linux-x64/node` (v24.20.0) | Node pinned in `packages/desktop/runtime.json` with official SHA-256s; `scripts/fetch-node.mjs --verify` refuses an Electron runtime |
+| M5-T3 | Keychain | done | lane-B | root identity read back from the system keyring across a restart | `@napi-rs/keyring`; reported 0600 fallback (`identity().degraded`) |
+| M5-T4 | Notifications + mic permission | in-progress | lane-B | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration); 30 desktop tests | gates and copy written; macOS TCC and real banners need the platform |
+| M5-T5 | Packaging, signing, updates | in-progress | lane-B | `packages/desktop/electron-builder.yml` + `README.md` | no signing possible here; Azure fields are `CHANGE-ME`; needs per-platform agents |
 
 ---
 
@@ -182,12 +183,12 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
-| M7-T1 | Manifest, SW, secure context | todo | — | — | — |
-| M7-T2 | Layout + keyboard inset | todo | — | — | — |
-| M7-T3 | Reconnect + resume | todo | — | — | — |
-| M7-T4 | Approval UI | todo | — | — | — |
-| M7-T5 | Push | todo | — | — | — |
-| M7-T6 | Mobile mic | todo | — | — | — |
+| M7-T1 | Manifest, SW, secure context | done | lane-C | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration); `/sw.js` and `/manifest.webmanifest` served by the sandbox host | `packages/ui/public/` + `src/pwa/{sw,vite-plugin}.ts`; the worker imports nothing and the plugin refuses to emit one that does |
+| M7-T2 | Layout + keyboard inset | done | lane-C | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration) | `--kb` from visualViewport, re-measured on pageshow/visibilitychange; sheets bounded by `--vvh` |
+| M7-T3 | Reconnect + resume | done | lane-C, integrator | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration) | `HostClient.reconnect(reason)` detaches the dead socket before closing, so its late `close` cannot reject the new socket's requests |
+| M7-T4 | Approval UI | done | lane-C, integrator | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration); answered in a browser against the sandbox | one decision surface on every width (`PanelDecisionCards`), touch-sized on a coarse pointer, mode-changing options marked |
+| M7-T5 | Push | in-progress | lane-C, integrator | `pnpm -F @piorbit/host test` → `test/push.test.ts` (RFC 8291 round trip, VAPID verify, 410 eviction); `pi/push/config` answered live with a generated key | `packages/host/src/push.ts`; `HostRelayOptions.publicOrigin` is what makes the links work off this machine, and nothing sets it yet |
+| M7-T6 | Mobile mic | in-progress | lane-C, lane-D, integrator | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration); `pi/transcribe/status` answers with a reason live | end to end in code (browser → host router → worker `TranscribeService`); no device and no API key here, so no phrase has been transcribed |
 
 ---
 
@@ -195,11 +196,11 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
-| M8-T1 | Capability detection | in-progress | claude-2026-09-05-a | `packages/pi-extension/src/index.ts` | extension emits `piorbit/capabilities` at session_start; UI side todo |
-| M8-T2 | `transcribe` module + desktop path | todo | — | — | module stub; detect returns false |
-| M8-T3 | Native markdown preview + image display | todo | — | — | — |
-| M8-T4 | `web-access` module | todo | — | — | module stub; detect returns false |
-| M8-T5 | Module authoring guide | todo | — | — | — |
+| M8-T1 | Capability detection | done | lane-D, integrator | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration) | `piorbit/capabilities` → `SessionView.capabilities`; the microphone is hidden, not disabled, where the package is absent (R2) |
+| M8-T2 | `transcribe` module + desktop path | in-progress | lane-D, integrator | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration); 21 transcribe tests | worker service, routing and composer are wired; this machine has only OAuth providers, so `status` correctly refuses by name |
+| M8-T3 | Native markdown preview + image display | done | lane-D, integrator | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration); markdown rendered in a dock island in a browser | `packages/ui/src/components/preview/**` is the one document renderer; the panel body delegates to it |
+| M8-T4 | `web-access` module | done | lane-D | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration) | search / fetch / source-check → `collection` panels |
+| M8-T5 | Module authoring guide | done | lane-D | `docs/pi-extension-modules.md` | — |
 
 ---
 
@@ -218,6 +219,20 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 
 ---
 
+## MP · Panel system
+
+| ID | Task | State | Owner | Evidence | Notes |
+| --- | --- | --- | --- | --- | --- |
+| MP-T1 | Protocol: payloads, bus events, `pi/panel/*` | done | lane-P | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration); 9 tests in `packages/protocol/test/panels.test.ts` | `packages/protocol/src/panels.ts`; `validatePanelEvent` names the presentation key it refused |
+| MP-T2 | Companion `panels` module | done | lane-P, integrator | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration) | dedupes identical re-emits (R9); a module claims an id namespace (`PanelClaims`) so an action for a panel the *host* discovered still reaches it |
+| MP-T3 | Host panel hub | done | lane-P, integrator | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration); live: five kinds through `pi/panel/list`, a blocking decision raised `waiting_for_input`, `pi/panel/read` refused `file:/etc/passwd` | `packages/host/src/panels/{store,refs,hub}.ts`, wired in `server.ts` and `router.ts` |
+| MP-T4 | The island | done | lane-P, integrator | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration); browser: three expansions, LRU shrink, morph, both themes | `packages/ui/src/panels/islands/**`; narrow islands drop pop-out and maximize into the menu rather than the title (R13) |
+| MP-T5 | The dock | done | lane-P, integrator | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration); 11 dock tests; browser at 1860px: two columns, four panels, none narrow | D-25 fixed the two-column rule; `packages/ui/src/components/dock/Dock.tsx` |
+| MP-T6 | Placement, ambient, phone islands, decision surfaces | done | lane-P, integrator | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration); 4 placement tests | one decision surface on every width (D-24); the fleet pill opens the fleet sheet |
+| MP-T7 | Fallback | done | lane-P | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration); 3 fallback tests | `packages/ui/src/panels/fallback.ts`; the telemetry rail's extension section is gone, and widgets are islands |
+
+---
+
 ## MX · Cross-cutting
 
 | ID | Task | State | Owner | Evidence | Notes |
@@ -227,6 +242,18 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 | MX-T3 | Upstream log | todo | — | — | `docs/upstream.md` created empty |
 | MX-T4 | Security review | todo | — | — | before M6 ships |
 | MX-T5 | Accessibility pass | todo | — | — | — |
+| MX-T6 | Element inventory reconciliation | todo | — | — | `docs/ux-elements.md` became binding (`b888960`, `239d93f`) after the wave-2 lanes had written their components, so most panel bodies, the dock and the run tabs were hand-rolled against a rule that did not exist yet. Nothing was rebuilt at integration time: swapping a working, verified surface for a registry element is a design pass, not a merge. Walk the inventory row by row. |
+
+---
+
+#### Wave 2 integration notes (2026-09-05, claude-2026-09-05-integrator)
+- Six lanes (panels, desktop, mobile, packages, transcript polish, subagents) were merged into one protocol and one shell. Every REQUEST in the six lane reports was applied, except where two lanes had solved the same thing twice — see D-23, D-24, D-25, D-26 for what was kept and why.
+- One protocol vocabulary: `pi/panel/*` (lane P), `pi/push/*` and `pi/transcribe/*` (lanes C and D, reconciled onto the worker-owned dictation service), `pi/project/git` (lane F). Every method has a zod schema and a sample, which the completeness test enforces.
+- The push payload moved from `packages/ui/src/pwa/push-payload.ts` into `packages/protocol/src/push.ts`, so the host that sends it and the page that reads it share one definition. The service worker restates the shape because `/sw.js` is emitted as one standalone file; the build refuses to emit a worker whose `DECLARATIVE_WEB_PUSH_VERSION` disagrees with the protocol's.
+- Bespoke rendering removed: `HostUiCards.tsx` and `DialogBody.tsx` (dialogs are decision panels everywhere, including inside a tool row), the telemetry rail's extension section (widgets are dock islands, statuses are status-line entries), and `panels/islands/Markdown.tsx` (the preview package is the one document renderer, so `react-markdown` left the dependency list).
+- Legibility floor enforced mechanically: `text-2xs` (11px) and `text-[11px]` are gone from every component, `--text-2xs` is now consumed only by the `eyebrow` utility, and the ANSI palette moved into `globals.css` as `--ansi-0…15`. `test/design-system.test.ts` fails the build if either rule is broken again — checked by breaking it on purpose and watching both guards fire.
+- Two real defects found in the browser and fixed: the two-column dock rule (D-25) and a run island whose state line ran under its elapsed time in a narrow dock. A third, "the first session click after a reload does nothing", turned out to be a coordinate-scaling artefact of the test harness — but it exposed that `SessionsPanel` swallowed `openSession` failures entirely, so that click now reports, and `HostClient.whenConnected` keeps a click made during the socket's first second from being dropped.
+- The sandbox (`scripts/sandbox.mjs`) now records itself the way `piorbit up` does, so the CLI can be pointed at it, and seeds one panel of every kind. Pre-existing limitation found while doing that: Pi 0.85 builds a session's extension set from its package manager, so the sandbox's demo extension in `<agentDir>/extensions/` was never loaded by any lane — the demo panels are seeded through the host's own hub instead, and say `source: "sandbox"` so nobody mistakes them for an extension that ran.
 
 ---
 
@@ -460,6 +487,52 @@ Consequences: epoch rotation and squatter eviction for a disclosed id are design
 - The host WebSocket has an Origin allowlist but no token; any local process can drive the agent. Token in host.json is a follow-up task.
 - No wave-1 UI was seen rendered by its authors; the orchestrator's browser pass is the only visual check so far.
 
+### D-23 · 2026-09-05 · piorbit reimplements dictation rather than driving pi-gpt-transcribe
+Decision: `packages/worker/src/transcribe.ts` owns dictation. pi-gpt-transcribe's `config.json`, its `WidgetState` and its pre-send behaviour are kept as contracts; the implementation is ours.
+Why: the package is a terminal program — it opens the microphone inside the Pi process, ships a TUI component and calls `pasteToEditor`. None of that reaches a browser, and the microphone that matters is the one in the phone.
+Consequences: the non-tui patch in `docs/upstream.md` is a courtesy, not a dependency. The browser records, the host routes by upload id, the worker transcribes, and Pi's `input` hook folds in a phrase still in flight.
+
+### D-24 · 2026-09-05 · One decision surface, on every width
+Decision: a question that blocks the turn renders as a card above the composer on every width (`panels/DecisionSurfaces.tsx` → `DecisionBody`), with larger controls on a coarse pointer. The phone-only pill-and-sheet island built in wave 2 was dropped, and its one-hand ergonomics moved into that one body.
+Why: two lanes built a decision surface. The placement table already answers where a decision goes — tool row, card, or sheet when it blocks everything — and a second phone-only surface meant two components, two mappings from Pi's dialogs, and two places for "No" to stop being a dead end.
+Consequences: `components/mobile/DecisionIsland.tsx` and `pwa/decision.ts`'s duplicate mapping are gone; `isModeChangingOption` survives in `panels/decision.ts`. The notification deep link (`?decision=…&answer=allow|deny`) now drives the card.
+Supersedes: nothing; it resolves an overlap between two wave-2 lanes.
+
+### D-25 · 2026-09-05 · Two dock columns follow the dock's width, never the window's
+Decision: `columnsFor` splits the dock into two columns at 640px **of dock**. A window of 1600px and up makes the dock *open* wider (`defaultDockWidth`), which is what D-20 meant by "the dock grows with the window".
+Why: the original rule split on either, so a 1860px window with a 384px dock produced two 180px columns — narrower than one column at any width, with island titles truncated to a single character. That is R13 inverted.
+Consequences: a person who drags the dock narrow keeps one column; a wide monitor still gets four expanded panels without any of them getting narrow. Seen working at 1860px.
+
+### D-27 · 2026-09-05 · The panel system is its own milestone, MP
+Decision: `PLAN.md` gains `MP · Panel system` (MP-T1…MP-T7), placed before M3 in the milestone map.
+Why: D-18 said the panel system becomes "a prerequisite lane in wave 2" but left it with no ID, so seven tasks' worth of work had nowhere to be recorded and M3, M4-T6 and M8-T3 all depend on it. AGENTS.md §3.7 allows adding a milestone at the end with a decision; this is that decision.
+Consequences: no existing ID moved. The map shows MP between M1 and M3.
+
+### D-28 · 2026-09-05 · A plan's phase index is 1-based, and the schema enforces it
+Decision: `RunPanel.phase.index` counts from 1. `docs/ux-panels.md`, `packages/protocol/src/panels.ts` and the zod schema all say so, and the schema rejects `0`.
+Why: the host emitted 1-based and both UI consumers added another 1, so a three-phase run displayed "4/3". A stepper that can read past its own total is a contract that never said which end it counted from.
+Consequences: breaking for any producer that sent 0-based. Nothing outside this repo produces panels yet.
+
+### D-29 · 2026-09-05 · Close shrinks a live island; only its producer can remove it
+Decision: Close on a running panel collapses it to a minimal pill. A panel leaves the dock only when the thing that made it closes it.
+Why: R7. Dismissing a run from the dock does not stop the run, so removing the island hides work that is still happening, and the person has no way back to it.
+Consequences: the dock cannot be emptied of live work by hand. The pill is the floor, and it stays legible.
+
+### D-30 · 2026-09-05 · The in-process bus stands down for multi-child completions
+Decision: when pi-subagents' `subagent:async-complete` covers more than one child, the companion module emits nothing and lets the file layer own those panels.
+Why: that event fires per run and carries no child identity, so synthesising a child id from the array position mints a panel the file layer will never match. A phantom island costs more than the second of latency the bus was buying.
+Consequences: multi-child runs surface a beat later, through the file layer. If pi-subagents ever puts a `childId` on `results[]`, the fast path returns.
+
+### D-31 · 2026-09-05 · No update feed until there is a public one
+Decision: `publish: null` in electron-builder, stated explicitly rather than inferred, and the updater reports `unsupported` with a reason.
+Why: the repo is private, so a GitHub release feed cannot be read by an installed app. An updater that retries a feed it can never reach reports a permanent error for a condition that is not an error.
+Consequences: M10-T7 must choose a real feed. Until then the app says updates are unavailable and why, which is true.
+
+### D-26 · 2026-09-05 · The host's log sections are `stream` panels too
+Decision: the logs page keeps search and paging; "Watch" sends one section to the dock as a client-local `stream` island fed from `pi/logs/append` (`packages/ui/src/panels/logs.ts`).
+Why: the contract's reach is the point — the provider log and a package's `setWidget` output should be the same island. Rebuilding the logs page out of panels would have thrown away virtualization, search and paging for nothing.
+Consequences: the buffer is bounded (2000 lines per section) and client-local; it is a tail to watch, not a second logs page.
+
 ---
 
 ## Open questions
@@ -499,3 +572,5 @@ Consequences: epoch rotation and squatter eviction for a disclosed id are design
 - 2026-09-05 · claude-2026-09-05-b · D-18 and D-19: panel contract and agent-work model decided (all leans). M3 unblocked; the panel system becomes a prerequisite lane in wave 2.
 - 2026-09-05 · claude-2026-09-05-b · D-20: seven amendments adopted from Claude Code's desktop UI; M2-T6 added; docs updated.
 - 2026-09-05 · claude-2026-09-05-c · wave 1 landed (`7841860`, `958bfb1`): M2-T1..T4, M4-T1..T6, M6-T1..T7, M9-T1..T4, M9-T6 done; 39 review findings applied (37 already in HEAD, 2 real fixes + protocol sample); D-21, D-22. 385 tests green.
+- 2026-09-05 · claude-2026-09-05-c · wave 2 landed: MP (panel system) complete, M5 desktop shell, M7 mobile PWA, M8 packages, M3 subagent tabs, D-20 transcript polish. 40 review findings applied across three lenses (panel contract, platform, design), 1 deferred. D-28..D-31. 599 tests green across 69 files.
+- 2026-09-05 · claude-2026-09-05-c · M10 (self-contained distribution) and M11 (theme system) added to PLAN.md; `docs/ux-theme.md` written and binding; AGENTS.md gains the no-static-visual-values rule and the never-needs-a-terminal rule.

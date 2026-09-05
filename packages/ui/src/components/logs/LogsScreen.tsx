@@ -13,9 +13,14 @@
  * no raw-response hook, so the model's actual output is the transcript, which
  * is a parsed view of the same bytes. `ProviderCeilingNote` says exactly that
  * on every provider response row.
+ *
+ * This screen is for *searching* the record. Watching one section while you
+ * keep working is what the dock is for: "Watch" opens that section as a
+ * `stream` island (docs/ux-panels.md), the same island an extension's output
+ * gets, so there is one thing to learn and one place live output appears.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronUp, Loader2, Pause, Play, Trash2 } from "lucide-react";
+import { ChevronUp, Layers, Loader2, Pause, Play, Trash2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,7 +35,8 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { clockTime } from "@/format";
 import { cn } from "@/lib/utils";
-import { usePiorbitStable } from "@/runtime";
+import { usePanelActions } from "@/panels";
+import { usePiorbitStable, usePiorbitView } from "@/runtime";
 import type { LogEntry, LogLevel, LogSection, LogStats } from "@piorbit/protocol";
 
 import { LogDetail } from "./LogDetail.js";
@@ -277,7 +283,7 @@ function Toolbar({
                 )}
                 {entry.label}
                 {stats && entry.id !== "all" && stats.bySection[entry.id] > 0 && (
-                  <span className="font-mono text-2xs text-ink-3 tnum">{stats.bySection[entry.id]}</span>
+                  <span className="font-mono text-xs text-ink-3 tnum">{stats.bySection[entry.id]}</span>
                 )}
               </Button>
             </TooltipTrigger>
@@ -287,6 +293,8 @@ function Toolbar({
           </Tooltip>
         ))}
         {loading && <Loader2 className="size-3.5 animate-spin text-ink-3" aria-label="Loading" />}
+        <span className="flex-1" />
+        <WatchInDock section={section} />
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -315,7 +323,7 @@ function Toolbar({
                   onLevels(next.length === LOG_LEVELS.length || next.length === 0 ? null : next);
                 }}
                 className={cn(
-                  "rounded-md px-1.5 py-1 font-mono text-2xs outline-none transition-colors duration-75",
+                  "rounded-md px-1.5 py-1 font-mono text-xs outline-none transition-colors duration-(--motion-instant)",
                   "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-live",
                   on ? "bg-surface text-ink" : "text-ink-3 hover:text-ink-2",
                 )}
@@ -363,6 +371,31 @@ function Toolbar({
   );
 }
 
+/**
+ * Send this section to the dock as a `stream` island, so it keeps arriving
+ * next to the conversation. Hidden with no session open (there is no dock to
+ * put it in) and for "All", which is a query, not a stream.
+ */
+function WatchInDock({ section }: { section: LogSection | "all" }) {
+  const view = usePiorbitView();
+  const actions = usePanelActions();
+  if (!view || section === "all") return null;
+  const label = LOG_SECTIONS.find((entry) => entry.id === section)?.label ?? section;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => actions.watchLogs(view.path, section)}>
+          <Layers />
+          Watch
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" className="max-w-72">
+        Keeps the {label.toLowerCase()} beside the conversation, in the dock, while you work.
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} kB`;
@@ -371,7 +404,7 @@ function formatSize(bytes: number): string {
 
 function StatsLine({ stats }: { stats: LogStats }) {
   return (
-    <p className="font-mono text-2xs leading-4 text-ink-3">
+    <p className="font-mono text-xs leading-4 text-ink-3">
       {stats.total.toLocaleString()} rows · {formatSize(stats.bytes)} · keeps{" "}
       {stats.retention.maxRows.toLocaleString()} rows or {stats.retention.maxAgeDays} days, whichever comes first
       {stats.oldestAt ? ` · oldest ${new Date(stats.oldestAt).toLocaleString()}` : ""}
@@ -535,7 +568,7 @@ function LogRow({
         onClick={() => onSelect(entry)}
         className={cn(
           "flex h-full w-full cursor-default items-center gap-2 px-3 text-start",
-          "transition-colors duration-75",
+          "transition-colors duration-(--motion-instant)",
           selected ? "bg-surface-2" : "hover:bg-[color-mix(in_oklab,var(--surface-2)_55%,transparent)]",
         )}
       >
@@ -544,18 +577,18 @@ function LogRow({
           className="size-1.5 shrink-0 rounded-full"
           style={{ background: SECTION_TONE[entry.section] }}
         />
-        <span className="w-16 shrink-0 font-mono text-2xs whitespace-nowrap text-ink-3 tnum">
+        <span className="w-16 shrink-0 font-mono text-xs whitespace-nowrap text-ink-3 tnum">
           {clockTime(entry.at)}
         </span>
         <span
           className={cn(
-            "w-36 shrink-0 truncate font-mono text-2xs",
+            "w-36 shrink-0 truncate font-mono text-xs",
             entry.level === "error" ? "text-danger" : entry.level === "warn" ? "text-attention" : "text-ink-3",
           )}
         >
           {entry.kind}
         </span>
-        <span className="min-w-0 flex-1 truncate text-[13px] text-ink-2">{entry.summary}</span>
+        <span className="min-w-0 flex-1 truncate text-sm text-ink-2">{entry.summary}</span>
         {entry.detailRef && (
           <Badge variant="outline" className="shrink-0">
             {(entry.detailRef.bytes / 1024).toFixed(0)} kB
@@ -564,7 +597,7 @@ function LogRow({
         {metric && (
           <span
             className={cn(
-              "w-14 shrink-0 text-end font-mono text-2xs tnum",
+              "w-14 shrink-0 text-end font-mono text-xs tnum",
               entry.status !== undefined && entry.status >= 400 ? "text-danger" : "text-ink-3",
             )}
           >

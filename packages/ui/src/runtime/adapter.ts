@@ -30,6 +30,7 @@ import type {
 } from "@assistant-ui/react";
 import type { ContentBlock, ImageContent, UiDialogResponse } from "@piorbit/protocol";
 import type { HostClient } from "../client.js";
+import { asRawClient, getMobileDictationAdapter } from "../pwa/index.js";
 import { newBlockId, type Action, type SessionView } from "../store.js";
 import { projectSessionView, type ProjectionResult } from "./projection.js";
 
@@ -355,7 +356,13 @@ export function createThreadAdapter(deps: ThreadAdapterDeps): ExternalStoreAdapt
     unstable_capabilities: { copy: true },
     // Enables ComposerPrimitive.AddAttachment and paste-to-attach; the pending
     // image parts land back here through contentBlocksFromAppendMessage.
-    adapters: { attachments: attachmentAdapter },
+    // Attachments enable AddAttachment and paste-to-attach; dictation drives
+    // ComposerPrimitive.Dictate from the composer's microphone button. The
+    // dictation adapter is memoised per client, so this is safe every render.
+    adapters: {
+      attachments: attachmentAdapter,
+      dictation: getMobileDictationAdapter(asRawClient(deps.client)),
+    },
 
     onNew: async (message) => {
       try {

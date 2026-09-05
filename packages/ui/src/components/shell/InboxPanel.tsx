@@ -47,7 +47,7 @@ export const InboxPanel = memo(function InboxPanel({ onOpen }: { onOpen(row: Inb
         aria-expanded={!collapsed}
         className={cn(
           "flex w-full items-center gap-2 px-3 py-2 text-start outline-none",
-          "transition-colors duration-75 hover:bg-[color-mix(in_oklab,var(--surface-2)_70%,transparent)]",
+          "transition-colors duration-(--motion-instant) hover:bg-[color-mix(in_oklab,var(--surface-2)_70%,transparent)]",
           "focus-visible:-outline-offset-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live",
         )}
       >
@@ -58,10 +58,10 @@ export const InboxPanel = memo(function InboxPanel({ onOpen }: { onOpen(row: Inb
             {waiting}
           </Badge>
         ) : (
-          <span className="font-mono text-2xs leading-4 text-ink-3 tnum">{rows.length}</span>
+          <span className="font-mono text-xs leading-4 text-ink-3 tnum">{rows.length}</span>
         )}
         <ChevronRight
-          className={cn("size-3.5 shrink-0 text-ink-3 transition-transform duration-100", !collapsed && "rotate-90")}
+          className={cn("size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-instant)", !collapsed && "rotate-90")}
           aria-hidden="true"
         />
       </button>
@@ -76,7 +76,7 @@ export const InboxPanel = memo(function InboxPanel({ onOpen }: { onOpen(row: Inb
                 title={`${row.path}\n${STATUS_LABEL[row.status]}`}
                 className={cn(
                   "grid w-full grid-cols-[8px_minmax(0,1fr)_auto] items-center gap-x-2.5 px-3 py-1.5 text-start",
-                  "transition-colors duration-75 outline-none",
+                  "transition-colors duration-(--motion-instant) outline-none",
                   "hover:bg-[color-mix(in_oklab,var(--surface-2)_70%,transparent)] active:bg-surface-2",
                   "focus-visible:-outline-offset-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live",
                 )}
@@ -85,13 +85,13 @@ export const InboxPanel = memo(function InboxPanel({ onOpen }: { onOpen(row: Inb
                 <span className="truncate text-sm leading-5 font-medium text-ink">{row.title}</span>
                 <time
                   dateTime={row.modifiedAt}
-                  className="font-mono text-[11px] leading-5 text-ink-3 tnum"
+                  className="font-mono text-xs leading-5 text-ink-3 tnum"
                 >
                   {relativeTime(row.modifiedAt)}
                 </time>
                 <span aria-hidden="true" />
                 <span className="col-span-2 flex min-w-0 items-baseline gap-1.5 leading-4">
-                  <span className="shrink-0 font-mono text-[11px] text-ink-3">{row.project}</span>
+                  <span className="shrink-0 font-mono text-xs text-ink-3">{row.project}</span>
                   <span
                     className={cn(
                       "min-w-0 truncate text-xs",

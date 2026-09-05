@@ -415,6 +415,10 @@ describe("RelayClient", () => {
     let attempts = 0;
     http.on("upgrade", (_req, socket) => {
       attempts++;
+      // The client destroys its half as soon as it has read the 409, which
+      // arrives here as ECONNRESET. Without a listener that is an unhandled
+      // 'error' on the socket and takes the whole test run with it.
+      socket.on("error", () => {});
       const payload = JSON.stringify({ error: "channel_full", message: "that channel already has two peers" });
       socket.end(
         `HTTP/1.1 409 Conflict\r\ncontent-type: application/json\r\ncontent-length: ${payload.length}\r\nconnection: close\r\n\r\n${payload}`,

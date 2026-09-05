@@ -81,12 +81,12 @@ function HistoryRowView({
             {HISTORY_KIND_LABEL[row.kind]}
           </span>
           {row.tools > 0 && (
-            <span className="font-mono text-2xs leading-4 text-ink-3 tnum">
+            <span className="font-mono text-xs leading-4 text-ink-3 tnum">
               · {row.tools} tool{row.tools === 1 ? "" : "s"}
             </span>
           )}
           {row.label && (
-            <Badge variant="live" className="h-[18px] gap-1 px-1.5 text-2xs leading-none">
+            <Badge variant="live" className="h-[18px] gap-1 px-1.5 text-xs leading-none">
               <Tag className="size-2.5" aria-hidden="true" />
               {row.label}
             </Badge>
@@ -96,7 +96,7 @@ function HistoryRowView({
               <time
                 dateTime={row.at}
                 title={dateTime(row.at)}
-                className="font-mono text-2xs leading-4 text-ink-3 tnum group-hover:hidden group-focus-within:hidden [@media(pointer:coarse)]:hidden"
+                className="font-mono text-xs leading-4 text-ink-3 tnum group-hover:hidden group-focus-within:hidden [@media(pointer:coarse)]:hidden"
               >
                 {clockTime(row.at)}
               </time>
@@ -135,7 +135,7 @@ function HistoryRowView({
           className={cn(
             "mt-0.5 line-clamp-2 text-xs leading-4 break-words",
             primary ? "text-ink" : "text-ink-2",
-            meta && "font-mono text-[11px]",
+            meta && "font-mono text-xs",
           )}
         >
           {row.text || <span className="text-ink-3">{row.tools > 0 ? "Tool calls only" : "No text"}</span>}

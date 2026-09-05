@@ -9,6 +9,7 @@
  */
 
 import type { PiExtensionMessage } from "./pi-extension.js";
+import type { PushConfig, PushDeviceInfo, PushSubscriptionJson } from "./push.js";
 
 // ---------- Shared value types (no Pi types allowed here) ----------
 
@@ -73,6 +74,31 @@ export interface ProjectInfo {
   pinned: boolean;
   /** Sessions in the catalog for this directory. */
   sessionCount: number;
+}
+
+/**
+ * Git state of a project directory, for the project line under the composer
+ * (D-20 §7, M2-T6). `added`/`removed` are lines changed in the working tree
+ * since the baseline the worker captured when the session opened — a
+ * tracked-file diff plus the lines of files created since — not since HEAD.
+ * `ahead`/`behind` are counted against the upstream branch, or the remote's
+ * default branch when the current branch has never been pushed; both are 0
+ * when neither exists. Everything but `isRepo` is meaningless when it is false.
+ */
+export interface ProjectGitStatus {
+  isRepo: boolean;
+  /** Branch name, or a short commit hash when HEAD is detached. */
+  branch: string;
+  ahead: number;
+  behind: number;
+  added: number;
+  removed: number;
+  /** Uncommitted changes exist (tracked modifications or untracked files). */
+  dirty: boolean;
+  /** `origin/main`-style ref `ahead`/`behind` were counted against, when one exists. */
+  upstream?: string;
+  /** URL of the remote the upstream lives on, for building a compare link. */
+  remoteUrl?: string;
 }
 
 export type WorkerStatus = "starting" | "ready" | "crashed" | "retired";
@@ -514,6 +540,13 @@ export interface ClientRequests {
     params: { cwd: string; trusted: boolean; remember?: boolean };
     result: { project: ProjectInfo };
   };
+  /**
+   * Git state of a project, answered by that project's worker (which runs
+   * `git` in `cwd` with a short cache). `path` names the open session whose
+   * open-time baseline `added`/`removed` are counted from; without it the
+   * worker uses the baseline of the first session it opened.
+   */
+  "pi/project/git": { params: { cwd: string; path?: string }; result: ProjectGitStatus };
 
   // --- workers (M2-T1) ---
   "pi/worker/list": { params: {}; result: { workers: WorkerInfo[] } };
@@ -583,6 +616,47 @@ export interface ClientRequests {
   "pi/logs/stats": { params: {}; result: { stats: LogStats } };
   /** Delete rows. Omit `sections` to clear everything. */
   "pi/logs/clear": { params: { sections?: LogSection[] }; result: { deleted: number } };
+
+  // --- M7 · push. Answered by the host itself; the phone is the only caller. ---
+
+  /** Can this host send notifications, and with which application server key. */
+  "pi/push/config": { params: {}; result: PushConfig };
+  /** Upsert by `endpoint`. Idempotent: pages re-send their subscription on every start. */
+  "pi/push/subscribe": {
+    params: { subscription: PushSubscriptionJson; device: PushDeviceInfo };
+    result: { id: string };
+  };
+  "pi/push/unsubscribe": { params: { endpoint: string }; result: {} };
+  /** Send a test notification to one endpoint, so a person can watch it arrive. */
+  "pi/push/test": { params: { endpoint: string }; result: { delivered: boolean; error?: string } };
+
+  // --- M8 · dictation. The browser owns the microphone; the worker transcribes. ---
+
+  /** Can this project dictate, and if not, why — in words for a person. */
+  "pi/transcribe/status": { params: { cwd: string }; result: TranscribeStatus };
+  /**
+   * Open an upload. `path` binds the recording to a session so a phrase still
+   * in flight when Enter is pressed reaches that prompt; `cwd` alone still
+   * works but cannot hold a prompt open.
+   */
+  "pi/transcribe/begin": {
+    params: { cwd: string; mimeType: string; language?: string; path?: string };
+    result: { id: string };
+  };
+  /** One base64 chunk, at most 32 KiB decoded, in order. Sized to fit a relayed frame. */
+  "pi/transcribe/chunk": { params: { id: string; data: string }; result: {} };
+  /** `text` is "" when the phrase was claimed by a prompt while still in flight. */
+  "pi/transcribe/end": { params: { id: string }; result: { text: string } };
+  "pi/transcribe/cancel": { params: { id: string }; result: {} };
+}
+
+/** Answer to `pi/transcribe/status`. */
+export interface TranscribeStatus {
+  available: boolean;
+  /** Which backend answers, e.g. `pi-gpt-transcribe`. */
+  provider?: string;
+  /** Why `available` is false, in words a person can act on. */
+  reason?: string;
 }
 
 /** Host → client requests (client must answer). */

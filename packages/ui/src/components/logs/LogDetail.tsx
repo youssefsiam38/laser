@@ -89,7 +89,7 @@ function Detail({ entry }: { entry: LogEntry }) {
               className="size-1.5 rounded-full"
               style={{ background: SECTION_TONE[entry.section] }}
             />
-            <span className="font-mono text-[13px] text-ink">{entry.kind}</span>
+            <span className="font-mono text-sm text-ink">{entry.kind}</span>
             <Badge variant={entry.level === "error" ? "danger" : entry.level === "warn" ? "attention" : "outline"}>
               {entry.level}
             </Badge>
@@ -99,7 +99,7 @@ function Detail({ entry }: { entry: LogEntry }) {
             {entry.durationMs !== undefined && <Badge variant="default">{duration(entry.durationMs)}</Badge>}
           </div>
           <p className="text-sm leading-5 text-ink">{entry.summary}</p>
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 font-mono text-2xs text-ink-3">
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 font-mono text-xs text-ink-3">
             <dt>time</dt>
             <dd className="text-ink-2">{dateTime(entry.at)}</dd>
             <dt>id</dt>
@@ -132,7 +132,7 @@ function Detail({ entry }: { entry: LogEntry }) {
         {entry.kind === "provider_response" && <ProviderCeilingNote />}
 
         {ref && (
-          <p className="flex items-center gap-1.5 font-mono text-2xs text-ink-3">
+          <p className="flex items-center gap-1.5 font-mono text-xs text-ink-3">
             <Download className="size-3" />
             {(ref.bytes / 1024).toFixed(1)} kB payload · sha256 {ref.ref.slice(0, 12)}…
             {truncated ? " · truncated for display" : ""}
@@ -153,7 +153,7 @@ function Detail({ entry }: { entry: LogEntry }) {
         {body !== undefined && (
           <div className="flex min-w-0 flex-col gap-1.5">
             <div className="flex items-center gap-2">
-              <span className="font-mono text-2xs tracking-[0.08em] text-ink-3 uppercase">payload</span>
+              <span className="eyebrow">payload</span>
               <Button variant="ghost" size="xs" className="ms-auto gap-1" onClick={() => void copy(body)}>
                 {copied ? <Check /> : <Copy />} {copied ? "Copied" : "Copy"}
               </Button>
@@ -161,7 +161,7 @@ function Detail({ entry }: { entry: LogEntry }) {
             <pre
               className={cn(
                 "max-h-[60vh] w-full min-w-0 overflow-auto rounded-lg bg-surface-2 p-3",
-                "font-mono text-[11px] leading-[17px] whitespace-pre text-ink-2",
+                "font-mono text-xs leading-sm whitespace-pre text-ink-2",
               )}
             >
               {body}
@@ -189,7 +189,7 @@ function ProviderCeilingNote() {
       <p>
         <span className="font-medium text-ink">There is no response body here, and there cannot be.</span> Pi 0.85 gives
         an extension the complete provider <em>request</em>, but its{" "}
-        <code className="font-mono text-[11px]">after_provider_response</code> hook carries only the HTTP status and the
+        <code className="font-mono text-xs">after_provider_response</code> hook carries only the HTTP status and the
         response headers — it exposes no hook for the raw stream. The model's actual output is reconstructed from
         session events and shown in the transcript.
       </p>

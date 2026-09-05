@@ -75,7 +75,7 @@ export function AddProjectDialog() {
               aria-invalid={invalid ? true : undefined}
               className={cn(
                 "h-9 w-full rounded-lg border border-line bg-surface px-3 font-mono text-xs text-ink",
-                "transition-[border-color] duration-75 outline-none placeholder:text-ink-3",
+                "transition-[border-color] duration-(--motion-instant) outline-none placeholder:text-ink-3",
                 "hover:border-[color-mix(in_oklab,var(--line)_60%,var(--ink-3))]",
                 "focus-visible:border-live focus-visible:ring-2 focus-visible:ring-live/25",
                 "aria-invalid:border-danger aria-invalid:focus-visible:ring-danger/25",
@@ -97,13 +97,13 @@ export function AddProjectDialog() {
                       onClick={() => choose(cwd)}
                       className={cn(
                         "flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-start",
-                        "transition-colors duration-75 outline-none hover:bg-surface-2 active:bg-[color-mix(in_oklab,var(--surface-2)_80%,var(--ink))]",
+                        "transition-colors duration-(--motion-instant) outline-none hover:bg-surface-2 active:bg-[color-mix(in_oklab,var(--surface-2)_80%,var(--ink))]",
                         "focus-visible:-outline-offset-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live",
                       )}
                     >
                       <Folder className="size-3.5 shrink-0 text-ink-3" aria-hidden="true" />
                       <span className="shrink-0 text-sm font-medium text-ink">{shortCwd(cwd)}</span>
-                      <span className="min-w-0 flex-1 truncate text-end font-mono text-[11px] text-ink-3">{cwd}</span>
+                      <span className="min-w-0 flex-1 truncate text-end font-mono text-xs text-ink-3">{cwd}</span>
                     </button>
                   </li>
                 ))}

@@ -5,7 +5,9 @@
  * (AGENTS.md invariant 2: protocol first, then implementation).
  */
 
-export type PiExtensionModuleName = "provider-log" | "subagents" | "transcribe" | "web-access";
+import type { Panel } from "./panels.js";
+
+export type PiExtensionModuleName = "provider-log" | "subagents" | "transcribe" | "web-access" | "panels";
 
 export interface ProviderRequestRecord {
   at: string;
@@ -28,6 +30,9 @@ export type PiExtensionMessage =
   | ({ type: "piorbit/provider/request" } & ProviderRequestRecord)
   | ({ type: "piorbit/provider/response" } & ProviderResponseRecord)
   | { type: "piorbit/subagents/event"; event: unknown }
+  /** The `panels` module: a validated `piorbit:panel` event, or a close (docs/ux-panels.md). */
+  | { type: "piorbit/panel/upsert"; panel: Panel }
+  | { type: "piorbit/panel/close"; id: string; reason?: string }
   | {
       type: "piorbit/module/log";
       module: PiExtensionModuleName;

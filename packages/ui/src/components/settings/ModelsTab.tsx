@@ -135,7 +135,7 @@ export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
       <ScrollArea className="h-full">
         <div className="mx-auto max-w-140 px-4 py-12 text-center">
           <p className="text-sm font-medium text-ink">Could not read the model catalogue.</p>
-          <p className="mt-1 font-mono text-2xs leading-4 break-words text-danger">{fatal}</p>
+          <p className="mt-1 font-mono text-xs leading-4 break-words text-danger">{fatal}</p>
           <Button className="mt-4" variant="secondary" size="sm" onClick={() => void load(false)}>
             Try again
           </Button>
@@ -180,11 +180,11 @@ export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-1.5">
                     <span className="text-sm font-medium text-ink">{provider.name}</span>
-                    <span className="font-mono text-2xs text-ink-3">{provider.id}</span>
+                    <span className="font-mono text-xs text-ink-3">{provider.id}</span>
                     {provider.oauth && <Badge variant="live">oauth</Badge>}
                     {provider.subscription && <Badge variant="attention">subscription</Badge>}
                   </div>
-                  <p className="mt-0.5 text-2xs leading-4 text-ink-3">
+                  <p className="mt-0.5 text-xs leading-4 text-ink-3">
                     {provider.configured
                       ? `${provider.source ?? "configured"}${provider.label ? ` · ${provider.label}` : ""}`
                       : "no credential"}
@@ -192,7 +192,7 @@ export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
                     {provider.modelCount} model{provider.modelCount === 1 ? "" : "s"}
                   </p>
                   {provider.baseUrl && (
-                    <p className="mt-0.5 truncate font-mono text-2xs text-ink-3" title={provider.baseUrl}>
+                    <p className="mt-0.5 truncate font-mono text-xs text-ink-3" title={provider.baseUrl}>
                       {provider.baseUrl}
                     </p>
                   )}
@@ -263,7 +263,7 @@ export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
           <div className="overflow-x-auto rounded-lg border border-line">
             <table className="w-full min-w-180 border-collapse text-sm">
               <thead>
-                <tr className="bg-surface-2 font-mono text-2xs tracking-[0.08em] text-ink-3 uppercase">
+                <tr className="eyebrow bg-surface-2">
                   <th className="px-3 py-2 text-start font-medium">Model</th>
                   <th className="px-3 py-2 text-start font-medium">Context</th>
                   <th className="px-3 py-2 text-start font-medium">Thinking levels</th>
@@ -275,7 +275,7 @@ export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
                   <tr key={`${model.provider}/${model.id}`} className={cn("border-t border-line align-top", !model.enabled && "opacity-45")}>
                     <td className="px-3 py-2">
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="font-mono text-[12px] text-ink">
+                        <span className="font-mono text-xs text-ink">
                           {model.provider}/{model.id}
                         </span>
                         {model.vision && (
@@ -301,10 +301,10 @@ export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
                         {!model.enabled && <Badge variant="default">excluded by enabledModels</Badge>}
                       </div>
                       {model.name && model.name !== model.id && (
-                        <p className="mt-0.5 text-2xs text-ink-3">{model.name}</p>
+                        <p className="mt-0.5 text-xs text-ink-3">{model.name}</p>
                       )}
                     </td>
-                    <td className="px-3 py-2 font-mono text-[12px] text-ink-2 tnum">
+                    <td className="px-3 py-2 font-mono text-xs text-ink-2 tnum">
                       {model.contextWindow ? tokens(model.contextWindow) : "—"}
                     </td>
                     <td className="px-3 py-2">
@@ -339,7 +339,7 @@ export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
             </table>
           </div>
           {hidden > 0 && (
-            <p className="text-2xs text-ink-3">
+            <p className="text-xs text-ink-3">
               Showing the first {MODEL_ROW_LIMIT} of {matching.length} matching models. Type in the filter to narrow
               them.
             </p>

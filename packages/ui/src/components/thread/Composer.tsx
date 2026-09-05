@@ -8,16 +8,18 @@ import {
 import { ArrowUp, Paperclip, Square, X } from "lucide-react";
 import { useEffect, useState, type KeyboardEvent } from "react";
 
+import { DictateButton } from "@/components/mobile";
 import { StatusRing } from "@/components/status";
 import { Kbd } from "@/components/ui/kbd";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
-import { tokens } from "@/format";
+import { modKey, tokens } from "@/format";
 import { useIsTouch } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
 import { composerSendPlan, usePiorbitStable, useSessionMeta } from "@/runtime";
-import { isMac } from "./DialogBody.js";
 import { ModelSelector } from "./ModelSelector.js";
+import { ProjectLine } from "./ProjectLine.js";
 import { QueueChips } from "./QueueChips.js";
+import { StatusLine } from "./StatusLine.js";
 import { ThinkingButton, ThinkingSlider } from "./ThinkingSlider.js";
 
 /**
@@ -25,16 +27,20 @@ import { ThinkingButton, ThinkingSlider } from "./ThinkingSlider.js";
  * `--bg`, one soft shadow. Enter = prompt when idle / steer while running,
  * Shift+Enter = newline, Cmd/Ctrl+Enter = follow-up while running — decided
  * by `composerSendPlan` from the runtime module.
+ *
+ * Above the card: queue chips, then the status line (D-20 §5). Below it: the
+ * project's git line on the left and the key legend on the right.
  */
 export function Composer() {
   return (
     <ComposerPrimitive.Root data-slot="composer" className="flex flex-col gap-2">
       <QueueChips />
+      <StatusLine />
       <ComposerPrimitive.AttachmentDropzone asChild>
         <div
           data-slot="composer-card"
           className={cn(
-            "flex flex-col rounded-2xl border border-line bg-surface shadow-float transition-[border-color] duration-75",
+            "flex flex-col rounded-2xl border border-line bg-surface shadow-float transition-[border-color] duration-(--motion-instant)",
             "focus-within:border-[color-mix(in_oklab,var(--line)_40%,var(--ink-3))]",
             "data-[dragging=true]:border-dashed data-[dragging=true]:border-live",
           )}
@@ -44,7 +50,7 @@ export function Composer() {
           <ComposerBar />
         </div>
       </ComposerPrimitive.AttachmentDropzone>
-      <ComposerHints />
+      <ComposerFooterLine />
     </ComposerPrimitive.Root>
   );
 }
@@ -83,7 +89,7 @@ function ComposerInput() {
       unstable_insertNewlineOnTouchEnter
       onKeyDown={onKeyDown}
       className={cn(
-        "w-full resize-none bg-transparent px-4 pt-3.5 pb-1 text-base leading-[21px] text-ink outline-none",
+        "w-full resize-none bg-transparent px-4 pt-3.5 pb-1 text-base leading-base text-ink outline-none",
         "placeholder:text-ink-3 disabled:cursor-not-allowed",
       )}
     />
@@ -173,6 +179,7 @@ function ComposerBar() {
   return (
     <div className="flex items-center gap-1 px-2 pt-1 pb-2">
       <AttachButton />
+      <DictateButton />
       <ModelSelector />
       <span className="flex-1" />
       <ThinkingSlider className="hidden sm:flex" />
@@ -247,24 +254,17 @@ function SendOrStop() {
 }
 
 // ---------------------------------------------------------------------------
-// Hints: connection reason on the left, key legend on the right
+// Under the card: project line on the left, key legend on the right (md+).
+// The connection state moved up into the status line with the other words.
 // ---------------------------------------------------------------------------
 
-function ComposerHints() {
-  const { connection, running } = useSessionMeta();
-  const mod = isMac() ? "⌘" : "Ctrl";
-  const offline = connection !== "open";
+function ComposerFooterLine() {
+  const { running } = useSessionMeta();
+  const mod = modKey();
   return (
-    <div className="flex h-4 items-center justify-between px-1 text-2xs text-ink-3">
-      <span className="flex items-center gap-1.5" role={offline ? "status" : undefined}>
-        {offline ? (
-          <>
-            <span aria-hidden="true" className="size-1.5 rounded-full bg-danger" />
-            {connection === "connecting" ? "Connecting to the host… composer paused" : "Disconnected from the host… composer paused"}
-          </>
-        ) : null}
-      </span>
-      <span className="hidden items-center gap-2 md:flex" aria-hidden="true">
+    <div className="flex h-5 min-w-0 items-center justify-between gap-3 px-1 text-xs text-ink-3">
+      <ProjectLine className="min-w-0 flex-1" />
+      <span className="hidden shrink-0 items-center gap-2 leading-4 md:flex" aria-hidden="true">
         <span className="flex items-center gap-1">
           <Kbd>⏎</Kbd> {running ? "steer" : "send"}
         </span>

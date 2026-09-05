@@ -8,7 +8,7 @@ const buttonVariants = cva(
   [
     "inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap select-none",
     "rounded-lg text-sm font-medium leading-none",
-    "transition-[background-color,color,border-color,opacity,transform] duration-75 ease-out",
+    "transition-[background-color,color,border-color,opacity,transform] duration-(--motion-instant) ease-out",
     "outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live",
     "active:translate-y-px disabled:pointer-events-none disabled:opacity-45",
     "aria-invalid:border-danger",

@@ -2,7 +2,6 @@ import {
   ActionBarPrimitive,
   AuiIf,
   MessagePrimitive,
-  groupPartByType,
   useAuiState,
   type MessageState,
 } from "@assistant-ui/react";
@@ -17,6 +16,8 @@ import { cn } from "@/lib/utils";
 import { NOTICE_DATA_PART } from "@/runtime";
 import { MarkdownText } from "./MarkdownText.js";
 import { useElapsed } from "./timing.js";
+import { ToolGroup } from "./ToolGroup.js";
+import { toolGroupKey } from "./tool-groups.js";
 import { ToolRow } from "./ToolRow.js";
 
 /** `metadata.custom.piorbit` the projection stamps on every message. */
@@ -60,7 +61,7 @@ export function UserMessage() {
         <ActionBarPrimitive.Root
           hideWhenRunning
           autohide="always"
-          className="mb-1 flex opacity-0 transition-opacity duration-75 group-hover/message:opacity-100 focus-within:opacity-100 [@media(pointer:coarse)]:opacity-100"
+          className="mb-1 flex opacity-0 transition-opacity duration-(--motion-instant) group-hover/message:opacity-100 focus-within:opacity-100 [@media(pointer:coarse)]:opacity-100"
         >
           <ActionBarPrimitive.Copy asChild>
             <TooltipIconButton tooltip="Copy" size="icon-xs" className="text-ink-3">
@@ -97,11 +98,19 @@ export function UserMessage() {
 // Assistant
 // ---------------------------------------------------------------------------
 
-const groupBy = groupPartByType({
-  reasoning: ["group-reasoning"],
-  "tool-call": ["group-tool"],
-  "standalone-tool-call": [],
-});
+/**
+ * Consecutive reasoning parts coalesce; consecutive tool calls coalesce **per
+ * family** (reads, edits, commands, searches…), so a summary row is always
+ * specific — "Edited 2 files" then "Ran 2 commands", never "Used 5 tools" for
+ * a run that a person would describe as two things. A tool with a registered
+ * standalone UI is left alone so it can draw itself.
+ */
+type GroupKey = `group-${string}`;
+const groupBy = (part: { type: string; toolName?: string }): GroupKey[] => {
+  if (part.type === "reasoning") return ["group-reasoning"];
+  if (part.type === "tool-call") return [`group-tool-${toolGroupKey(part.toolName ?? "")}`];
+  return [];
+};
 
 export function AssistantMessage() {
   const streaming = useAuiState((s) => s.message.role === "assistant" && s.message.status.type === "running");
@@ -131,8 +140,6 @@ export function AssistantMessage() {
                   {children}
                 </ReasoningGroup>
               );
-            case "group-tool":
-              return <div className="my-2 flex flex-col first:mt-0 last:mb-0">{children}</div>;
             case "text":
               return (
                 <div className="my-3 first:mt-0 last:mb-0">
@@ -151,6 +158,15 @@ export function AssistantMessage() {
                 <span role="status" aria-label="Working" className="caret inline-block h-6 text-md" />
               );
             default:
+              // Consecutive calls of one family collapse into one summary row
+              // (D-20 §4); a group of one is just that call's row.
+              if (part.type.startsWith("group-tool")) {
+                return (
+                  <div className="my-2 flex flex-col first:mt-0 last:mb-0">
+                    <ToolGroup part={part as MessagePrimitive.GroupedParts.GroupPart}>{children}</ToolGroup>
+                  </div>
+                );
+              }
               return null;
           }
         }}
@@ -165,7 +181,7 @@ function AssistantActionBar() {
     <ActionBarPrimitive.Root
       hideWhenRunning
       autohide="not-last"
-      className="-ms-1.5 mt-1 flex h-7 items-center opacity-0 transition-opacity duration-75 group-hover/message:opacity-100 focus-within:opacity-100 data-[floating]:opacity-100 [@media(pointer:coarse)]:opacity-100"
+      className="-ms-1.5 mt-1 flex h-7 items-center opacity-0 transition-opacity duration-(--motion-instant) group-hover/message:opacity-100 focus-within:opacity-100 data-[floating]:opacity-100 [@media(pointer:coarse)]:opacity-100"
     >
       <ActionBarPrimitive.Copy asChild>
         <TooltipIconButton tooltip="Copy" size="icon-xs" className="text-ink-3">
@@ -202,7 +218,7 @@ function ReasoningGroup({ timingKey, running, children }: { timingKey: string; r
       <CollapsibleTrigger asChild>
         <button
           type="button"
-          className="group/reasoning -mx-2 flex h-7 items-center gap-2 rounded-md px-2 text-sm outline-none transition-colors duration-75 hover:bg-surface-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-live"
+          className="group/reasoning -mx-2 flex h-7 items-center gap-2 rounded-md px-2 text-sm outline-none transition-colors duration-(--motion-instant) hover:bg-surface-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-live"
         >
           <ChevronRight
             aria-hidden="true"

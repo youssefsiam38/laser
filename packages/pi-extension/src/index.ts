@@ -18,13 +18,36 @@
  */
 
 import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
-import { modules, type ModuleContext, type ModuleName, type OutboundMessage } from "./modules/index.js";
+import {
+  createPanelClaims,
+  modules,
+  type CommandBus,
+  type ModuleContext,
+  type ModuleName,
+  type OutboundMessage,
+} from "./modules/index.js";
 
-export type { ModuleName, OutboundMessage, ModuleContext, PiorbitModule } from "./modules/index.js";
+export { createCommandBus, createPanelClaims } from "./modules/index.js";
+export type {
+  CommandBus,
+  CommandHandler,
+  PanelClaims,
+  ModuleName,
+  OutboundMessage,
+  ModuleContext,
+  PiorbitModule,
+} from "./modules/index.js";
 
 export interface PiorbitExtensionOptions {
   /** Delivers messages to the worker (in-process callback). */
   send: (message: OutboundMessage) => void;
+  /**
+   * Worker → extension commands (a panel action a person pressed). Create one
+   * with `createCommandBus()`, pass it here, and call its `deliver()` from the
+   * driver. Optional, so a worker that has no inbound path still loads the
+   * extension unchanged.
+   */
+  commands?: CommandBus;
   /** Restrict activation to these modules; default all. */
   only?: ModuleName[];
 }
@@ -37,7 +60,12 @@ export function createPiorbitExtension(options: PiorbitExtensionOptions): Inline
     factory: (pi: ExtensionAPI) => {
       if (process.env["PI_SUBAGENT_CHILD"] === "1") return;
       const disposers: Array<() => void> = [];
-      const ctx: ModuleContext = { pi, send: options.send };
+      const ctx: ModuleContext = {
+        pi,
+        send: options.send,
+        panels: createPanelClaims(),
+        ...(options.commands ? { commands: options.commands } : {}),
+      };
       const wanted = new Set<ModuleName>(options.only ?? modules.map((m) => m.name));
 
       // Detection runs at session_start so extensions loaded after us are visible.

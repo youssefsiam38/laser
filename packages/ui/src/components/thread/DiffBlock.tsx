@@ -24,7 +24,7 @@ export function DiffBlock({ view, className }: DiffBlockProps) {
         </span>
       </div>
       <div className="max-h-96 overflow-auto bg-surface">
-        <table className="w-full border-collapse font-mono text-xs leading-[18px]">
+        <table className="w-full border-collapse font-mono text-xs leading-sm">
           <tbody>
             {view.hunks.map((hunk, i) => (
               <Hunk key={i} hunk={hunk} showHeader={view.hunks.length > 1 || i > 0} />

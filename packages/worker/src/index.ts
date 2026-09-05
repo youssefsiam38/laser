@@ -28,3 +28,34 @@ export {
   type ModelsAdapterOptions,
   type PackagesAdapterOptions,
 } from "./packages.js";
+
+// M8-T2 · dictation. The service the server owns, and the contracts the UI's
+// level meter and the companion extension share with it.
+export {
+  DEFAULT_DRAIN_TIMEOUT_MS,
+  MAX_UPLOADS_IN_FLIGHT,
+  MAX_UPLOAD_BYTES,
+  TRANSCRIBE_BRIDGE_KEY,
+  TRANSCRIBE_BRIDGE_SYMBOL,
+  TranscribeError,
+  TranscribeService,
+  WAVE_ATTACK,
+  WAVE_CEIL_DB,
+  WAVE_FLOOR_DB,
+  WAVE_RELEASE,
+  audioExtensionFor,
+  followEnvelope,
+  levelToUnit,
+  loadTranscribeConfig,
+  resolveTranscriptionKey,
+  transcribeAudio,
+  transcribeBridge,
+  transcribeConfigPath,
+  type BeginUpload,
+  type KeySources,
+  type TranscribeBridge,
+  type TranscribeConfig,
+  type TranscribeErrorReason,
+  type TranscribeServiceOptions,
+  type WidgetState,
+} from "./transcribe.js";

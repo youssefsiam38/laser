@@ -2,10 +2,15 @@
 /**
  * Settings (M4-T2, M4-T3, M4-T4).
  *
- * Three screens behind one header: every Pi setting as a form, the package
- * manager, and providers/models. All three are per project, because Pi's
- * settings are per project: the scope switch is not decoration, it decides
- * which of the two files a change lands in.
+ * Four screens behind one header: every Pi setting as a form, the package
+ * manager, providers/models, and this device.
+ *
+ * The first three are per project, because Pi's settings are per project: the
+ * scope switch is not decoration, it decides which of the two files a change
+ * lands in. "This device" is the exception and says so — a notification
+ * permission belongs to the browser on this phone or laptop, not to a project,
+ * and pretending otherwise would put a per-device switch behind a project
+ * scope that has nothing to do with it.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Loader2, RefreshCw, Search } from "lucide-react";
@@ -17,16 +22,19 @@ import { cn } from "@/lib/utils";
 import { usePiorbitStable } from "@/runtime";
 import type { SettingsCatalog, SettingsScope, SettingsSnapshot } from "@piorbit/protocol";
 
+import { NotificationsSetting } from "@/components/mobile";
+
 import { ModelsTab } from "./ModelsTab.js";
 import { PackagesTab } from "./PackagesTab.js";
 import { SettingsForm } from "./SettingsForm.js";
 
-type Tab = "settings" | "packages" | "models";
+type Tab = "settings" | "packages" | "models" | "device";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "settings", label: "All settings" },
   { id: "packages", label: "Packages" },
   { id: "models", label: "Providers and models" },
+  { id: "device", label: "This device" },
 ];
 
 export function SettingsScreen({ cwd }: { cwd: string | undefined }) {
@@ -80,7 +88,8 @@ export function SettingsScreen({ cwd }: { cwd: string | undefined }) {
     [client, cwd, actions],
   );
 
-  if (!cwd) {
+  // "This device" is not about a project, so it stays reachable without one.
+  if (!cwd && tab !== "device") {
     return (
       <Empty
         title="No project selected"
@@ -117,7 +126,7 @@ export function SettingsScreen({ cwd }: { cwd: string | undefined }) {
           <AlertTriangle className="mt-0.5 size-4 shrink-0" />
           <div className="min-w-0">
             <p className="font-medium">Could not read settings for this project.</p>
-            <p className="mt-0.5 font-mono text-2xs leading-4 break-words opacity-90">{error}</p>
+            <p className="mt-0.5 font-mono text-xs leading-4 break-words opacity-90">{error}</p>
           </div>
         </div>
       )}
@@ -126,10 +135,26 @@ export function SettingsScreen({ cwd }: { cwd: string | undefined }) {
         {tab === "settings" && catalog && snapshot && (
           <SettingsForm catalog={catalog} snapshot={snapshot} onApply={apply} />
         )}
-        {tab === "packages" && <PackagesTab cwd={cwd} snapshot={snapshot} onSettingsChanged={load} />}
-        {tab === "models" && <ModelsTab cwd={cwd} snapshot={snapshot} onApply={apply} />}
+        {tab === "packages" && cwd && <PackagesTab cwd={cwd} snapshot={snapshot} onSettingsChanged={load} />}
+        {tab === "models" && cwd && <ModelsTab cwd={cwd} snapshot={snapshot} onApply={apply} />}
+        {tab === "device" && <DeviceTab />}
       </div>
     </div>
+  );
+}
+
+/**
+ * Settings that belong to this browser rather than to a project. Today that is
+ * notifications; anything else per-device lands here rather than growing a
+ * fourth place to look.
+ */
+function DeviceTab() {
+  return (
+    <ScrollArea className="h-full">
+      <div className="mx-auto flex max-w-160 flex-col gap-6 px-6 py-6">
+        <NotificationsSetting />
+      </div>
+    </ScrollArea>
   );
 }
 
@@ -167,7 +192,7 @@ export function SearchInput({
         onChange={(event) => onChange(event.target.value)}
         className={cn(
           "h-8 w-full rounded-lg border border-line bg-surface ps-7 pe-2 text-sm text-ink",
-          "placeholder:text-ink-3 outline-none transition-[border-color] duration-75",
+          "placeholder:text-ink-3 outline-none transition-[border-color] duration-(--motion-instant)",
           "focus-visible:border-live focus-visible:ring-2 focus-visible:ring-live/25",
         )}
       />

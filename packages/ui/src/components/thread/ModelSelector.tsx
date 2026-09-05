@@ -151,7 +151,7 @@ export function ModelSelector() {
                       onMouseEnter={() => setActive(index)}
                       onClick={() => select(m)}
                       className={cn(
-                        "flex cursor-pointer items-center gap-3 px-3 py-1.5 transition-colors duration-75",
+                        "flex cursor-pointer items-center gap-3 px-3 py-1.5 transition-colors duration-(--motion-instant)",
                         "data-active:bg-surface-2",
                       )}
                     >
@@ -187,7 +187,7 @@ function Flag({ label, children }: { label: string; children: string }) {
       role="img"
       aria-label={label}
       title={label}
-      className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-[4px] border border-line px-1 font-mono text-2xs leading-none text-ink-2"
+      className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-[4px] border border-line px-1 font-mono text-xs leading-none text-ink-2"
     >
       {children}
     </span>

@@ -53,7 +53,7 @@ export function EmptyState() {
               type="button"
               disabled={disabled}
               onClick={() => send(s.prompt)}
-              className="group/suggestion -mx-2 flex w-[calc(100%+16px)] items-center gap-3 rounded-md px-2 py-3 text-start outline-none transition-colors duration-75 hover:bg-surface-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-live disabled:cursor-not-allowed disabled:opacity-50"
+              className="group/suggestion -mx-2 flex w-[calc(100%+16px)] items-center gap-3 rounded-md px-2 py-3 text-start outline-none transition-colors duration-(--motion-instant) hover:bg-surface-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-live disabled:cursor-not-allowed disabled:opacity-50"
             >
               <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <span className="text-base font-medium text-ink">{s.title}</span>

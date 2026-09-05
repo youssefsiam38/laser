@@ -96,6 +96,28 @@ export function sanitize(text: string): string {
   return text.replace(CONTROL, "");
 }
 
+/**
+ * The same rule, applied to a whole structure.
+ *
+ * Panels are agent-authored all the way down — a run's title, a plan step's
+ * label, a mission's ledger — and sanitizing them one field at a time at the
+ * point of printing is a rule that holds only until the next column is added.
+ * One pass at the boundary is the version that stays true: `\u001b]0;…\u0007`
+ * in a subagent's task string retitles the terminal, `\u001b]52;c;…\u0007`
+ * writes the clipboard, and `piorbit runs` is the command people put in a
+ * loop.
+ */
+export function sanitizeDeep<T>(value: T): T {
+  if (typeof value === "string") return sanitize(value) as unknown as T;
+  if (Array.isArray(value)) return value.map((item: unknown) => sanitizeDeep(item)) as unknown as T;
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) out[sanitize(key)] = sanitizeDeep(item);
+    return out as T;
+  }
+  return value;
+}
+
 export interface Column<Row> {
   header: string;
   get: (row: Row) => string;

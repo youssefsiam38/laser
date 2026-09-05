@@ -12,9 +12,9 @@ function Textarea({ className, ...props }: React.ComponentProps<"textarea">) {
       data-slot="textarea"
       className={cn(
         "field-sizing-content min-h-16 w-full min-w-0 resize-none rounded-lg",
-        "border border-line bg-surface px-3 py-2 text-base leading-[21px] text-ink",
+        "border border-line bg-surface px-3 py-2 text-base leading-base text-ink",
         "placeholder:text-ink-3",
-        "transition-[border-color,background-color] duration-75 outline-none",
+        "transition-[border-color,background-color] duration-(--motion-instant) outline-none",
         "hover:border-[color-mix(in_oklab,var(--line)_60%,var(--ink-3))]",
         "focus-visible:border-live focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-live/25",
         "aria-invalid:border-danger aria-invalid:focus-visible:ring-danger/25",

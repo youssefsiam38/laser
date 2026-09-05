@@ -28,7 +28,7 @@ function PopoverContent({
         className={cn(
           "z-50 flex w-72 origin-(--radix-popover-content-transform-origin) flex-col gap-2 p-3",
           "rounded-xl border border-line bg-surface text-sm text-ink shadow-float outline-none",
-          "animate-in fade-in-0 duration-75 data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
+          "animate-in fade-in-0 duration-(--motion-instant) data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
           className,
         )}
         {...props}

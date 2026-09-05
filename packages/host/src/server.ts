@@ -27,14 +27,18 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import { homedir } from "node:os";
-import { extname, join, normalize, resolve as resolvePath, sep } from "node:path";
+import { basename, extname, join, normalize, resolve as resolvePath, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@piorbit/crypto";
-import type { HostNotifications, JsonRpcNotification, LogEntry, SessionUpdateParams } from "@piorbit/protocol";
+import { decisionPushPayload, type HostNotifications, type JsonRpcNotification, type LogEntry, type SessionUpdateParams } from "@piorbit/protocol";
 import { AttentionTracker } from "./attention.js";
 import { SessionCatalog, defaultSessionDir } from "./catalog.js";
 import { LogStore } from "./logstore.js";
+import { PanelHub } from "./panels/hub.js";
 import { ProjectRegistry } from "./projects.js";
+import { PushService } from "./push.js";
+import { subagentsTempRoots } from "./subagents/file-layer.js";
+import { SubagentsLayer } from "./subagents/layer.js";
 import { RelayClient, type RelayClientState, type RelayClientStats } from "./relay-client.js";
 import { Router } from "./router.js";
 import { ViewCache } from "./views.js";
@@ -98,6 +102,12 @@ export interface HostRelayOptions {
   isAuthorized?: (devicePublicKey: Uint8Array) => boolean;
   /** Pad and grid outbound frames. Off by default; see RelayClientOptions. */
   shapeTiming?: boolean;
+  /**
+   * The https origin a phone actually opens (the relay's device link). Push
+   * notifications carry an absolute URL, so without this they point at
+   * `http://127.0.0.1:<port>`, which only helps a browser on this machine.
+   */
+  publicOrigin?: string;
   onStateChange?: (device: HostRelayDevice, state: RelayClientState, detail?: string) => void;
 }
 
@@ -152,6 +162,12 @@ export class HostServer {
   /** M4 log store, or undefined when it could not be opened (see `logsUnavailable`). */
   readonly logs: LogStore | undefined;
   readonly logsUnavailable: string | undefined;
+  /** Panels declared by extensions, per session (docs/ux-panels.md). */
+  readonly panels: PanelHub;
+  /** Runs, plans and missions read off disk — including sessions with no worker (M3). */
+  readonly subagents: SubagentsLayer;
+  /** Web Push to paired phones (M7-T5). Inert until a device subscribes. */
+  readonly push: PushService;
   readonly router: Router;
   private readonly http: Server;
   private readonly wss: WebSocketServer;
@@ -223,6 +239,14 @@ export class HostServer {
       hasClients: () => this.clients.size > 0,
     });
 
+    this.panels = new PanelHub({
+      notify: (method, params) => this.notify(method, params),
+      attention: this.attention,
+      ...(this.logs ? { logContent: (ref, maxBytes) => this.logs!.content(ref, maxBytes) } : {}),
+    });
+
+    this.push = new PushService({ agentDir, log: (line) => this.log(line) });
+
     const poolOptions: WorkerPoolOptions = {
       ...(options.agentDir ? { agentDir: options.agentDir } : {}),
       ...(options.sessionDir ? { sessionDir: options.sessionDir } : {}),
@@ -239,9 +263,14 @@ export class HostServer {
         this.logs?.observeWorkerStderr(cwd, text);
       },
       onStatus: (info) => {
-        if (info.status === "crashed") this.attention.workerCrashed(info.cwd, info.message ?? "worker crashed");
-        else if (info.status === "ready") this.attention.workerRecovered(info.cwd);
-        else if (info.status === "retired") this.attention.workerRetired(info.cwd);
+        if (info.status === "crashed") {
+          this.attention.workerCrashed(info.cwd, info.message ?? "worker crashed");
+          this.forgetSessionsOf(info.cwd, "the worker stopped");
+        } else if (info.status === "ready") this.attention.workerRecovered(info.cwd);
+        else if (info.status === "retired") {
+          this.attention.workerRetired(info.cwd);
+          this.forgetSessionsOf(info.cwd, "the worker went to sleep");
+        }
         this.logs?.observeWorkerStatus(info);
       },
       resolveTrust: (cwd) => this.projects.ensureTrusted(cwd),
@@ -249,12 +278,39 @@ export class HostServer {
       sessionIds: (cwd) => this.sessionIds(cwd),
     };
     this.pool = new WorkerPool(poolOptions);
+
+    this.subagents = new SubagentsLayer({
+      sink: {
+        upsert: (cwd, path, panel) => this.panels.upsert(cwd, path, panel),
+        close: (path, id, reason) => this.panels.close(path, id, reason),
+      },
+      // The catalog is the host's list of every session on disk, which is what
+      // lets a run started from a terminal find the session that owns it.
+      sessions: () =>
+        this.catalog.list().map((entry) => ({ path: entry.path, cwd: entry.cwd, modifiedAt: entry.modifiedAt })),
+      ...(options.agentDir ? { agentDir: options.agentDir } : {}),
+      ...(options.subagentsTempRoot ? { roots: [options.subagentsTempRoot, ...subagentsTempRoots()] } : {}),
+      // Resume is the one control that is not a file: it goes back through the
+      // owning session's bus, which means through that session's worker.
+      forward: async (path, command) => {
+        const cwd = this.pool.cwdOfSession(path) ?? this.catalog.cwdOf(path);
+        if (!cwd) return false;
+        const worker = await this.pool.get(cwd);
+        const result = await worker.request<{ delivered?: boolean }>("pi/panel/action", { path, ...command });
+        return result?.delivered === true;
+      },
+    });
+
     this.router = new Router(this.pool, this.catalog, {
       attention: this.attention,
       projects: this.projects,
       views: this.views,
       logs: this.logs,
       logsUnavailable: this.logsUnavailable,
+      panels: this.panels,
+      subagents: this.subagents,
+      push: this.push,
+      publicOrigin: () => this.publicOrigin(),
     });
 
     this.http = createServer((req, res) => this.serveHttp(req, res));
@@ -277,7 +333,13 @@ export class HostServer {
     const host = this.options.host ?? "127.0.0.1";
     await new Promise<void>((resolve, reject) => {
       this.http.once("error", reject);
-      this.http.listen(this.options.port ?? 0, host, () => resolve());
+      this.http.listen(this.options.port ?? 0, host, () => {
+        // Only once the port is bound: the layer's first tick emits panels,
+        // and a panel emitted before there is a server to broadcast from is
+        // just work thrown away.
+        this.subagents.start();
+        resolve();
+      });
     });
     const { port } = this.http.address() as AddressInfo;
     this.boundPort = port;
@@ -341,6 +403,7 @@ export class HostServer {
     await Promise.all(this.relayClients.map((client) => client.stop("host shutting down").catch(() => {})));
     this.relayClients.length = 0;
     this.notificationListeners.clear();
+    this.subagents.stop();
     if (this.logFlush) clearTimeout(this.logFlush);
     this.logFlush = undefined;
     this.pendingLogRows = [];
@@ -353,6 +416,28 @@ export class HostServer {
     await this.pool.stopAll();
     await new Promise<void>((resolve) => this.wss.close(() => resolve()));
     await new Promise<void>((resolve) => this.http.close(() => resolve()));
+  }
+
+  /**
+   * A worker went away. Its panels end (saying which way, R7) and the sessions
+   * it held stop offering the controls that need a live bus.
+   */
+  private forgetSessionsOf(cwd: string, reason: string): void {
+    const paths = this.pool.openSessions(cwd);
+    this.panels.workerLost(paths, reason);
+    for (const path of paths) this.subagents.sessionClosed(path);
+  }
+
+  /**
+   * The origin a device opens. The relay link when there is one, else this
+   * host's own loopback address — which is right for a local browser and
+   * useless to a phone, so `HostRelayOptions.publicOrigin` is what makes push
+   * links work off this machine.
+   */
+  private publicOrigin(): string {
+    const configured = this.options.relay?.publicOrigin;
+    if (configured) return configured.replace(/\/$/, "");
+    return `http://${this.options.host ?? "127.0.0.1"}:${this.boundPort ?? this.options.port ?? 0}`;
   }
 
   /** Send one host notification to every connected client. */
@@ -385,6 +470,23 @@ export class HostServer {
       case "pi/ui/request": {
         const params = notification.params as HostNotifications["pi/ui/request"];
         this.attention.dialogRaised(params.path, cwd, params.id);
+        // One notification per question, tagged by dialog id so a re-send
+        // replaces rather than stacks. Fire and forget: a phone that is not
+        // subscribed costs nothing, and a push failure must never block a turn.
+        void this.push
+          .sendToAll(
+            decisionPushPayload({
+              origin: this.publicOrigin(),
+              sessionPath: params.path,
+              projectName: basename(cwd),
+              decisionId: params.id,
+              title: params.title ?? "A session needs you",
+              ...(params.method === "confirm" && params.message !== undefined ? { message: params.message } : {}),
+              yesNo: params.method === "confirm",
+            }),
+            { topic: `decision:${params.id}`, ttlSeconds: 3600, urgency: "high" },
+          )
+          .catch(() => {});
         return;
       }
       case "pi/ui/event": {
@@ -394,6 +496,12 @@ export class HostServer {
       }
       case "pi/extension/message": {
         const params = notification.params as HostNotifications["pi/extension/message"];
+        // The subagents layer listens for the module's capability announcement
+        // (that is what makes Resume appear) and for panels it also owns, so
+        // one id stays one panel (R9).
+        this.subagents.observeExtensionMessage(params.path, params.message);
+        // Panel messages become `pi/panel/*` broadcasts; nothing else needs them.
+        if (this.panels.observeExtensionMessage(cwd, params.path, params.message)) return;
         this.logs?.observeExtensionMessage(cwd, params.path, params.message);
         return;
       }

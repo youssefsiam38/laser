@@ -1,23 +1,12 @@
 import type * as React from "react";
 import { memo, useCallback, useEffect, useReducer, useState } from "react";
-import { ChevronDown, Copy, EllipsisVertical, FileClock, FolderPlus, Moon, Pencil, Plus, Settings, Sun } from "lucide-react";
+import { ChevronRight, Copy, EllipsisVertical, FileClock, FolderPlus, Moon, Pencil, Plus, Settings, Sun, X } from "lucide-react";
 import { ContextMenu } from "radix-ui";
-import type { SessionSummary } from "@piorbit/protocol";
 
 import { StatusDot, StatusRing } from "@/components/status";
-import type { Status } from "@/components/status/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Kbd } from "@/components/ui/kbd";
 import { Skeleton, SkeletonText } from "@/components/ui/skeleton";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
@@ -25,12 +14,21 @@ import { useWorkbench } from "@/components/workbench";
 import { dateTime, relativeTime, shortCwd, shortcutLabel } from "@/format";
 import { useCopy, useTheme } from "@/hooks";
 import { cn } from "@/lib/utils";
-import { sessionTitle, usePiorbitStable, usePiorbitState } from "@/runtime";
+import { usePiorbitStable, usePiorbitState } from "@/runtime";
 import type { AppState } from "@/store";
 
 import { InboxPanel } from "./InboxPanel.js";
 import { InlineRename } from "./InlineRename.js";
-import { isUntitled, sessionStatus, sessionSubtitle, sessionsForProject, type InboxRow, type SessionSubtitle } from "./model.js";
+import type { InboxRow } from "./model.js";
+import {
+  groupDomId,
+  groupsFor,
+  sameGroups,
+  sessionsList,
+  useSessionsList,
+  type SessionGroupModel,
+  type SessionRowModel,
+} from "./session-groups.js";
 import { errorText, useShell } from "./shell-context.js";
 
 export interface SessionsPanelProps {
@@ -47,78 +45,80 @@ function useClock(ms = 30_000): void {
   }, [ms]);
 }
 
+const prefersReducedMotion = (): boolean =>
+  typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
 /**
- * Everything a row renders, flattened out of the catalog and the live view, so
- * the panel can subscribe to a value that only changes when a row does — not
- * on every streamed token.
+ * Every project as a collapsible group in one scrolling list, attention-sorted
+ * inside each group (D-20 §6). The rail filters and jumps to a group rather
+ * than replacing the list, so moving between projects never means switching
+ * first. `+` on a group header starts a session there.
  */
-interface Row {
-  path: string;
-  summary: SessionSummary;
-  status: Status;
-  title: string;
-  untitled: boolean;
-  sub: SessionSubtitle;
+export function SessionsPanel({ variant }: SessionsPanelProps) {
+  const { projects } = usePiorbitStable();
+  // `usePiorbitState` caches by store state, so a selector that also closes
+  // over `projects` (React state, not store state) would keep answering from a
+  // stale project list until the next store change. Remounting on the list
+  // key gives the hook a fresh cache the moment a project is added or removed.
+  return <SessionsPanelBody key={projects.join("\n")} variant={variant} />;
 }
 
-const rowsFor = (cwd: string | undefined, state: AppState): Row[] =>
-  sessionsForProject(cwd, state.sessions, state.open).map((summary) => {
-    const view = state.open[summary.path];
-    return {
-      path: summary.path,
-      summary,
-      status: sessionStatus(view, summary),
-      title: sessionTitle(summary, view),
-      untitled: isUntitled(summary, view),
-      sub: sessionSubtitle(summary, view),
-    };
-  });
-
-const sameRow = (a: Row, b: Row): boolean =>
-  a.path === b.path &&
-  a.status === b.status &&
-  a.title === b.title &&
-  a.untitled === b.untitled &&
-  a.sub.text === b.sub.text &&
-  a.sub.mono === b.sub.mono &&
-  a.sub.tone === b.sub.tone &&
-  a.summary.modifiedAt === b.summary.modifiedAt &&
-  a.summary.name === b.summary.name;
-
-const sameRows = (a: readonly Row[], b: readonly Row[]): boolean =>
-  a.length === b.length && a.every((row, i) => sameRow(row, b[i]!));
-
-export function SessionsPanel({ variant }: SessionsPanelProps) {
-  const { currentProject, setCurrentProject, actions, client } = usePiorbitStable();
+function SessionsPanelBody({ variant }: SessionsPanelProps) {
+  const { projects, currentProject, setCurrentProject, actions, client } = usePiorbitStable();
   const shell = useShell();
   const { copy } = useCopy();
+  const list = useSessionsList();
   useClock();
 
-  const rows = usePiorbitState(
-    useCallback((s: AppState) => rowsFor(currentProject, s), [currentProject]),
-    sameRows,
+  const groups = usePiorbitState(
+    useCallback((s: AppState) => groupsFor(projects, s), [projects]),
+    sameGroups,
   );
   const sessionsLoaded = usePiorbitState((s) => s.sessionsLoaded);
+  const connection = usePiorbitState((s) => s.connection);
   const current = usePiorbitState((s) => s.current);
-  const needYou = rows.filter((r) => r.status === "waiting_for_input").length;
-  const loading = !sessionsLoaded && rows.length === 0 && currentProject !== undefined;
   const [editing, setEditing] = useState<string | undefined>();
 
+  const visible = list.filter ? groups.filter((g) => g.cwd === list.filter) : groups;
+  const total = groups.reduce((n, g) => n + g.rows.length, 0);
+  const needYou = groups.reduce((n, g) => n + g.needYou, 0);
+  const loading = !sessionsLoaded && total === 0 && groups.length > 0;
+  const filteredName = list.filter ? shortCwd(list.filter) : undefined;
+
+  // The rail asked for a group: bring its header to the top of the list.
+  useEffect(() => {
+    if (!list.jump) return;
+    const el = document.getElementById(groupDomId(list.jump.cwd));
+    el?.scrollIntoView({ block: "start", behavior: prefersReducedMotion() ? "auto" : "smooth" });
+  }, [list.jump]);
+
   const open = useCallback(
-    (path: string) => {
-      void actions.openSession(path);
+    (path: string, cwd: string) => {
+      if (cwd !== currentProject) setCurrentProject(cwd);
+      // Never a silent failure: a click that cannot open a session says why.
+      void actions.openSession(path).catch((error: unknown) => actions.toast("error", errorText(error)));
       if (variant === "sheet") shell.setSessionsOpen(false);
     },
-    [actions, shell, variant],
+    [actions, currentProject, setCurrentProject, shell, variant],
   );
 
-  /** An inbox row can live in another project; follow it there. */
-  const openFromInbox = useCallback(
-    (row: InboxRow) => {
-      if (row.cwd !== currentProject) setCurrentProject(row.cwd);
-      open(row.path);
+  const openFromInbox = useCallback((row: InboxRow) => open(row.path, row.cwd), [open]);
+
+  const newSessionIn = useCallback(
+    async (cwd: string) => {
+      setCurrentProject(cwd);
+      if (connection !== "open") {
+        actions.toast("warning", "Not connected to the host yet.");
+        return;
+      }
+      try {
+        await actions.newSession(cwd);
+        if (variant === "sheet") shell.setSessionsOpen(false);
+      } catch (error) {
+        actions.toast("error", errorText(error));
+      }
     },
-    [currentProject, open, setCurrentProject],
+    [actions, connection, setCurrentProject, shell, variant],
   );
 
   const rename = useCallback(
@@ -135,9 +135,7 @@ export function SessionsPanel({ variant }: SessionsPanelProps) {
 
   const copyPath = useCallback(
     (path: string) => {
-      void copy(path).then((ok) =>
-        actions.toast(ok ? "info" : "error", ok ? "Session path copied" : "Could not copy the path"),
-      );
+      void copy(path).then((ok) => actions.toast(ok ? "info" : "error", ok ? "Session path copied" : "Could not copy the path"));
     },
     [actions, copy],
   );
@@ -151,30 +149,17 @@ export function SessionsPanel({ variant }: SessionsPanelProps) {
   );
   const cancelRename = useCallback(() => setEditing(undefined), []);
 
-  const projectName = currentProject ? shortCwd(currentProject) : undefined;
-
   return (
     <section
       aria-label="Sessions"
       className={cn("flex h-full min-h-0 flex-col bg-surface", variant === "panel" && "w-72 shrink-0 hairline-r")}
     >
       {/* 48px, one row: the sessions hairline has to land on the same y as the
-          top bar's and the telemetry header's (DESIGN.md "Layout"). The cwd
-          lives in the title attribute and in the rail tooltip. */}
+          top bar's and the telemetry header's (DESIGN.md "Layout"). */}
       <header className={cn("flex h-12 shrink-0 items-center gap-2 px-3 hairline-b", variant === "sheet" && "pe-12")}>
-        <div className="min-w-0 flex-1">
-          {variant === "sheet" ? (
-            <ProjectSwitcher />
-          ) : (
-            <div className="flex items-baseline gap-2">
-              <h2 className="truncate text-sm leading-5 font-semibold text-ink" title={currentProject}>
-                {projectName ?? "No project"}
-              </h2>
-              {rows.length > 0 && (
-                <span className="shrink-0 font-mono text-2xs leading-4 text-ink-3 tnum">{rows.length}</span>
-              )}
-            </div>
-          )}
+        <div className="flex min-w-0 flex-1 items-baseline gap-2">
+          <h2 className="truncate text-sm leading-5 font-semibold text-ink">Sessions</h2>
+          {total > 0 && <span className="shrink-0 font-mono text-xs leading-4 text-ink-3 tnum">{total}</span>}
         </div>
         {needYou > 0 && (
           <Badge variant="attention" className="tnum">
@@ -183,7 +168,7 @@ export function SessionsPanel({ variant }: SessionsPanelProps) {
         )}
         {variant === "panel" && (
           <TooltipIconButton
-            tooltip="New session"
+            tooltip={currentProject ? `New session in ${shortCwd(currentProject)}` : "New session"}
             shortcut={shortcutLabel("N")}
             onClick={() => void shell.newSession()}
             disabled={!shell.canCreate}
@@ -203,15 +188,28 @@ export function SessionsPanel({ variant }: SessionsPanelProps) {
             disabled={!shell.canCreate}
           >
             <Plus />
-            New session
+            <span className="truncate">New session{currentProject ? ` in ${shortCwd(currentProject)}` : ""}</span>
             <Kbd className="ms-auto">{shortcutLabel("N")}</Kbd>
+          </Button>
+        </div>
+      )}
+
+      {filteredName !== undefined && (
+        <div className="flex h-8 shrink-0 items-center gap-2 px-3 hairline-b" role="status">
+          <span className="eyebrow shrink-0">Showing</span>
+          <span className="min-w-0 truncate text-xs leading-4 font-medium text-ink" title={list.filter}>
+            {filteredName}
+          </span>
+          <Button variant="ghost" size="xs" className="-me-2 ms-auto shrink-0" onClick={() => sessionsList.clearFilter(list.filter)}>
+            <X />
+            Show all
           </Button>
         </div>
       )}
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <InboxPanel onOpen={openFromInbox} />
-        {!currentProject ? (
+        {groups.length === 0 ? (
           <EmptyState
             title="No project yet"
             body="Point piorbit at a directory. Sessions Pi already has there show up too."
@@ -223,40 +221,28 @@ export function SessionsPanel({ variant }: SessionsPanelProps) {
             }
           />
         ) : loading ? (
-          <LoadingRows />
-        ) : rows.length === 0 ? (
-          <EmptyState
-            title="No sessions yet"
-            body={
-              <>
-                Start one in <span className="font-medium text-ink">{projectName}</span>. Sessions started from a terminal
-                appear here as well.
-              </>
-            }
-            action={
-              <Button size="sm" variant="outline" onClick={() => void shell.newSession()} disabled={!shell.canCreate}>
-                <Plus />
-                New session
-                <Kbd>{shortcutLabel("N")}</Kbd>
-              </Button>
-            }
-          />
+          <LoadingGroups names={visible.map((g) => g.name)} />
         ) : (
-          <ul role="list" className="py-1">
-            {rows.map((row) => (
-              <SessionRow
-                key={row.path}
-                row={row}
-                active={row.path === current}
-                editing={editing === row.path}
+          <div className="pb-2">
+            {visible.map((group, index) => (
+              <SessionGroup
+                key={group.cwd}
+                group={group}
+                first={index === 0}
+                collapsed={list.collapsed.has(group.cwd)}
+                isCurrent={group.cwd === currentProject}
+                canCreate={connection === "open"}
+                current={current}
+                editing={editing}
                 onOpen={open}
+                onNewSession={newSessionIn}
                 onRename={setEditing}
                 onCommitRename={commitRename}
                 onCancelRename={cancelRename}
                 onCopyPath={copyPath}
               />
             ))}
-          </ul>
+          </div>
         )}
       </div>
 
@@ -266,15 +252,140 @@ export function SessionsPanel({ variant }: SessionsPanelProps) {
 }
 
 // ---------------------------------------------------------------------------
+// Groups
+// ---------------------------------------------------------------------------
+
+interface SessionGroupProps {
+  group: SessionGroupModel;
+  /** The first group needs no rule above it. */
+  first: boolean;
+  collapsed: boolean;
+  /** New sessions from the header's `+` start here; also the target of Cmd+N. */
+  isCurrent: boolean;
+  canCreate: boolean;
+  current: string | undefined;
+  editing: string | undefined;
+  onOpen(path: string, cwd: string): void;
+  onNewSession(cwd: string): Promise<void>;
+  onRename(path: string): void;
+  onCommitRename(path: string, name: string): void;
+  onCancelRename(): void;
+  onCopyPath(path: string): void;
+}
+
+const SessionGroup = memo(function SessionGroup({
+  group,
+  first,
+  collapsed,
+  isCurrent,
+  canCreate,
+  current,
+  editing,
+  onOpen,
+  onNewSession,
+  onRename,
+  onCommitRename,
+  onCancelRename,
+  onCopyPath,
+}: SessionGroupProps) {
+  const id = groupDomId(group.cwd);
+  const listId = `${id}-list`;
+  const count = group.rows.length;
+  return (
+    <section
+      aria-labelledby={`${id}-name`}
+      data-cwd={group.cwd}
+      data-current={isCurrent || undefined}
+      className={cn("group/project", !first && "hairline-t")}
+    >
+      <div id={id} className="sticky top-0 z-10 flex h-9 items-center gap-1 bg-surface ps-3 pe-1.5">
+        <button
+          type="button"
+          onClick={() => sessionsList.toggleCollapsed(group.cwd)}
+          aria-expanded={!collapsed}
+          aria-controls={listId}
+          title={`${group.cwd}${isCurrent ? "\nCurrent project: new sessions start here" : ""}`}
+          className={cn(
+            "flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md text-start outline-none",
+            "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
+          )}
+        >
+          <StatusDot status={group.status} size="sm" label={`${group.name}: ${group.status.replace(/_/g, " ")}`} />
+          <span
+            id={`${id}-name`}
+            className={cn("min-w-0 truncate text-sm leading-5", isCurrent ? "font-semibold text-ink" : "font-medium text-ink-2")}
+          >
+            {group.name}
+          </span>
+          <span className="shrink-0 font-mono text-xs leading-4 text-ink-3 tnum">{count}</span>
+          {group.needYou > 0 && collapsed ? (
+            <Badge variant="attention" className="tnum">
+              {group.needYou}
+            </Badge>
+          ) : null}
+        </button>
+        <TooltipIconButton
+          tooltip={`New session in ${group.name}`}
+          size="icon-xs"
+          className="text-ink-3 opacity-0 group-hover/project:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100 [@media(pointer:coarse)]:opacity-100"
+          disabled={!canCreate}
+          onClick={() => void onNewSession(group.cwd)}
+        >
+          <Plus />
+        </TooltipIconButton>
+        <TooltipIconButton
+          tooltip={collapsed ? "Expand" : "Collapse"}
+          size="icon-xs"
+          className="text-ink-3"
+          aria-expanded={!collapsed}
+          aria-controls={listId}
+          onClick={() => sessionsList.toggleCollapsed(group.cwd)}
+        >
+          <ChevronRight className={cn("transition-transform duration-(--motion-fast) ease-out motion-reduce:transition-none", !collapsed && "rotate-90")} />
+        </TooltipIconButton>
+      </div>
+
+      {!collapsed &&
+        (count === 0 ? (
+          <div className="flex items-center gap-2 px-3 pt-1 pb-3 text-xs leading-4 text-ink-3">
+            <span>No sessions yet.</span>
+            <Button variant="link" size="xs" className="text-xs" disabled={!canCreate} onClick={() => void onNewSession(group.cwd)}>
+              Start one
+            </Button>
+          </div>
+        ) : (
+          <ul id={listId} role="list" className="pb-1">
+            {group.rows.map((row) => (
+              <SessionRow
+                key={row.path}
+                row={row}
+                cwd={group.cwd}
+                active={row.path === current}
+                editing={editing === row.path}
+                onOpen={onOpen}
+                onRename={onRename}
+                onCommitRename={onCommitRename}
+                onCancelRename={onCancelRename}
+                onCopyPath={onCopyPath}
+              />
+            ))}
+          </ul>
+        ))}
+    </section>
+  );
+});
+
+// ---------------------------------------------------------------------------
 // Rows
 // ---------------------------------------------------------------------------
 
 interface SessionRowProps {
-  row: Row;
+  row: SessionRowModel;
+  cwd: string;
   active: boolean;
   editing: boolean;
   /** Stable callbacks, so `memo` actually holds. */
-  onOpen(path: string): void;
+  onOpen(path: string, cwd: string): void;
   onRename(path: string): void;
   onCommitRename(path: string, name: string): void;
   onCancelRename(): void;
@@ -284,7 +395,7 @@ interface SessionRowProps {
 const menuContentClass = cn(
   "z-50 min-w-[10rem] overflow-hidden p-1",
   "rounded-lg border border-line bg-surface text-ink shadow-float outline-none",
-  "animate-in fade-in-0 duration-75 data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
+  "animate-in fade-in-0 duration-(--motion-instant) data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
 );
 const menuItemClass = cn(
   "relative flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm leading-4 outline-hidden select-none",
@@ -294,6 +405,7 @@ const menuItemClass = cn(
 
 const SessionRow = memo(function SessionRow({
   row,
+  cwd,
   active,
   editing,
   onOpen,
@@ -325,7 +437,7 @@ const SessionRow = memo(function SessionRow({
           ) : (
             <button
               type="button"
-              onClick={() => onOpen(summary.path)}
+              onClick={() => onOpen(summary.path, cwd)}
               onDoubleClick={(e) => {
                 e.preventDefault();
                 onRename(summary.path);
@@ -338,7 +450,7 @@ const SessionRow = memo(function SessionRow({
               }
               className={cn(
                 "grid w-full grid-cols-[8px_minmax(0,1fr)_auto] items-center gap-x-2.5 px-3 py-2 text-start",
-                "transition-colors duration-75 outline-none",
+                "transition-colors duration-(--motion-instant) outline-none",
                 "hover:bg-[color-mix(in_oklab,var(--surface-2)_70%,transparent)] active:bg-surface-2",
                 "focus-visible:-outline-offset-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live",
               )}
@@ -356,15 +468,15 @@ const SessionRow = memo(function SessionRow({
               <time
                 dateTime={summary.modifiedAt}
                 title={dateTime(summary.modifiedAt)}
-                className="font-mono text-[11px] leading-5 text-ink-3 tnum"
+                className="font-mono text-xs leading-5 text-ink-3 tnum"
               >
                 {relativeTime(summary.modifiedAt)}
               </time>
               <span aria-hidden="true" />
               <span
                 className={cn(
-                  "col-span-2 truncate pe-6 leading-4",
-                  sub.mono ? "font-mono text-[11px]" : "text-xs",
+                  "col-span-2 truncate pe-6 text-xs leading-4",
+                  sub.mono && "font-mono",
                   sub.tone === "attention" ? "font-medium text-attention" : sub.tone === "muted" ? "text-ink-3" : "text-ink-2",
                 )}
               >
@@ -376,7 +488,7 @@ const SessionRow = memo(function SessionRow({
           {!editing && (
             <div
               className={cn(
-                "absolute end-2 bottom-1.5 opacity-0 transition-opacity duration-75",
+                "absolute end-2 bottom-1.5 opacity-0 transition-opacity duration-(--motion-instant)",
                 "group-hover:opacity-100 group-focus-within:opacity-100 has-[[data-state=open]]:opacity-100",
                 "[@media(pointer:coarse)]:opacity-100",
               )}
@@ -415,51 +527,9 @@ const SessionRow = memo(function SessionRow({
 });
 
 // ---------------------------------------------------------------------------
-// Header pieces
+// Sheet footer (mobile only: what the rail would have offered)
 // ---------------------------------------------------------------------------
 
-/** Inside the sheet there is no rail, so the project switcher lives here. */
-function ProjectSwitcher() {
-  const { projects, currentProject, setCurrentProject } = usePiorbitStable();
-  const shell = useShell();
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className={cn(
-            "-ms-1.5 flex max-w-full items-center gap-1 rounded-md px-1.5 py-0.5 text-sm leading-5 font-semibold text-ink",
-            "outline-none hover:bg-surface-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live data-[state=open]:bg-surface-2",
-          )}
-          aria-label="Switch project"
-        >
-          <span className="truncate">{currentProject ? shortCwd(currentProject) : "Choose a project"}</span>
-          <ChevronDown className="size-3.5 shrink-0 text-ink-3" aria-hidden="true" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="min-w-56">
-        <DropdownMenuLabel>Projects</DropdownMenuLabel>
-        <DropdownMenuRadioGroup value={currentProject ?? ""} onValueChange={(cwd) => setCurrentProject(cwd)}>
-          {projects.map((cwd) => (
-            <DropdownMenuRadioItem key={cwd} value={cwd}>
-              <span className="flex min-w-0 flex-col">
-                <span className="truncate font-medium">{shortCwd(cwd)}</span>
-                <span className="truncate font-mono text-[11px] text-ink-3">{cwd}</span>
-              </span>
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-        {projects.length > 0 && <DropdownMenuSeparator />}
-        <DropdownMenuItem onSelect={() => shell.setAddProjectOpen(true)}>
-          <FolderPlus />
-          Add project…
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-/** Mobile only: what the rail would have offered. */
 function SheetFooter() {
   const { theme, toggle } = useTheme();
   const shell = useShell();
@@ -483,7 +553,7 @@ function SheetFooter() {
       <TooltipIconButton tooltip="Settings" side="top" onClick={() => openWorkbench("settings")}>
         <Settings />
       </TooltipIconButton>
-      <span className="ms-auto pe-1 font-mono text-[11px] text-ink-3">piorbit</span>
+      <span className="ms-auto pe-1 font-mono text-xs text-ink-3">piorbit</span>
     </footer>
   );
 }
@@ -507,18 +577,29 @@ function EmptyState({ title, body, action }: { title: string; body: React.ReactN
   );
 }
 
-function LoadingRows() {
+/** The catalog is still scanning: the groups are known, their rows are not. */
+function LoadingGroups({ names }: { names: readonly string[] }) {
   return (
-    <ul role="list" aria-busy="true" aria-label="Loading sessions" className="py-1">
-      {[72, 56, 64, 48].map((w, i) => (
-        <li key={i} className="grid grid-cols-[8px_minmax(0,1fr)_auto] items-center gap-x-2.5 px-3 py-2">
-          <Skeleton className="size-2 rounded-full" />
-          <SkeletonText width={`${w}%`} className="my-[3px]" />
-          <SkeletonText width={28} className="my-[3px] h-3" />
-          <span />
-          <SkeletonText width={`${Math.min(92, w + 24)}%`} className="col-span-2 my-0.5 h-3" />
-        </li>
+    <div aria-busy="true" aria-label="Loading sessions">
+      {names.map((name, g) => (
+        <section key={name} className={cn(g > 0 && "hairline-t")}>
+          <div className="flex h-9 items-center gap-2 px-3">
+            <Skeleton className="size-2 rounded-full" />
+            <span className="text-sm leading-5 font-medium text-ink-2">{name}</span>
+          </div>
+          <ul role="list" className="pb-1">
+            {[72, 56].map((w, i) => (
+              <li key={i} className="grid grid-cols-[8px_minmax(0,1fr)_auto] items-center gap-x-2.5 px-3 py-2">
+                <Skeleton className="size-2 rounded-full" />
+                <SkeletonText width={`${w}%`} className="my-[3px]" />
+                <SkeletonText width={28} className="my-[3px] h-3" />
+                <span />
+                <SkeletonText width={`${Math.min(92, w + 24)}%`} className="col-span-2 my-0.5 h-3" />
+              </li>
+            ))}
+          </ul>
+        </section>
       ))}
-    </ul>
+    </div>
   );
 }

@@ -37,6 +37,7 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/project/add": { cwd: "/p" },
   "pi/project/remove": { cwd: "/p" },
   "pi/project/trust": { cwd: "/p", trusted: true, remember: true },
+  "pi/project/git": { cwd: "/p", path: "/s.jsonl" },
   "pi/worker/list": {},
   "pi/worker/restart": { cwd: "/p" },
   "pi/worker/stop": { cwd: "/p" },
@@ -56,6 +57,27 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/logs/content": { ref: "a".repeat(64), maxBytes: 4096 },
   "pi/logs/stats": {},
   "pi/logs/clear": { sections: ["tools", "provider"] },
+
+  // --- panels ---
+  "pi/panel/action": { path: "/s.jsonl", id: "web-access:search:42", actionId: "open", value: "https://example.com" },
+  "pi/panel/read": { path: "/tmp/session.jsonl", ref: "file:/tmp/run/events.jsonl", from: 0, to: 65536 },
+  "pi/panel/list": { path: "/s.jsonl" },
+
+  // --- M7 push ---
+  "pi/push/config": {},
+  "pi/push/subscribe": {
+    subscription: { endpoint: "https://push.example.com/abc", keys: { p256dh: "BJ...", auth: "sO..." } },
+    device: { label: "iPhone · Safari", platform: "ios", standalone: true },
+  },
+  "pi/push/unsubscribe": { endpoint: "https://push.example.com/abc" },
+  "pi/push/test": { endpoint: "https://push.example.com/abc" },
+
+  // --- M8 dictation ---
+  "pi/transcribe/status": { cwd: "/tmp/p" },
+  "pi/transcribe/begin": { cwd: "/tmp/p", mimeType: "audio/webm;codecs=opus", path: "/s.jsonl" },
+  "pi/transcribe/chunk": { id: "upload-1", data: "AAAA" },
+  "pi/transcribe/end": { id: "upload-1" },
+  "pi/transcribe/cancel": { id: "upload-1" },
 };
 
 describe("client request schemas", () => {

@@ -85,6 +85,34 @@ export class HostClient {
     }
   }
 
+  /**
+   * Replace the socket now, without waiting for the dead one to admit it.
+   *
+   * A phone that was locked comes back with a socket still in `OPEN` that will
+   * never deliver anything; the guard in `pwa/reconnect.ts` detects that with a
+   * probe and calls this. The old socket's handlers are detached first, so its
+   * late `close` cannot reject the *new* socket's in-flight requests — they
+   * share one `pending` map, and that was the bug this method exists to avoid.
+   */
+  reconnect(reason: string): void {
+    const dead = this.ws;
+    this.ws = undefined;
+    if (dead) {
+      dead.onopen = dead.onmessage = dead.onclose = dead.onerror = null;
+      try {
+        dead.close(4000, reason.slice(0, 120));
+      } catch {
+        /* already gone */
+      }
+    }
+    this.flushUpdates();
+    for (const p of this.pending.values()) p.reject(new Error(`reconnecting: ${reason}`));
+    this.pending.clear();
+    this.backoffMs = 500;
+    this.setState("closed");
+    if (!this.closedByUser) this.open();
+  }
+
   close(): void {
     this.closedByUser = true;
     if (this.listening) {
@@ -114,9 +142,34 @@ export class HostClient {
     if (this.attached.has(path)) this.attached.set(path, seq);
   }
 
+  /**
+   * Resolve once the socket is open, or reject after `timeoutMs` saying so.
+   *
+   * The page and the socket come up together, so the first thing a person
+   * clicks can easily land in the gap. Rejecting instantly made that click do
+   * nothing at all; waiting a moment makes it work, and the timeout keeps the
+   * failure a sentence rather than a hang.
+   */
+  whenConnected(timeoutMs = 5000): Promise<void> {
+    if (this.ws?.readyState === WebSocket.OPEN) return Promise.resolve();
+    if (this.closedByUser) return Promise.reject(new Error("Not connected to the host."));
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        clearInterval(poll);
+        reject(new Error("The desktop is not answering yet. It may still be starting."));
+      }, timeoutMs);
+      const poll = setInterval(() => {
+        if (this.ws?.readyState !== WebSocket.OPEN) return;
+        clearInterval(poll);
+        clearTimeout(timer);
+        resolve();
+      }, 50);
+    });
+  }
+
   request<M extends ClientMethod>(method: M, params: ClientRequests[M]["params"]): Promise<ClientRequests[M]["result"]> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      return Promise.reject(new Error("not connected"));
+      return Promise.reject(new Error("Not connected to the host."));
     }
     const id = this.nextId++;
     this.ws.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));

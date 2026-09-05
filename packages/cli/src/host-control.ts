@@ -8,6 +8,7 @@
  */
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
+import { sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PiorbitPaths } from "./config.js";
 import { hostUrl } from "./config.js";
@@ -22,9 +23,29 @@ import {
   type HostRecord,
 } from "./hostfile.js";
 
-/** Absolute path to this CLI's entry, for re-executing ourselves as the host. */
+/**
+ * Absolute path to this CLI's entry, for re-executing ourselves as the host.
+ *
+ * Inside a packaged Electron app this module resolves under `app.asar`, which
+ * is an archive rather than a directory: the bundled stock Node that runs the
+ * daemon (`@piorbit/desktop` `runtime.ts` — deliberately a plain node with no
+ * asar patch) cannot open a path inside it, and the spawn dies immediately
+ * with "cannot find module". electron-builder writes a second, real copy of
+ * the dependency tree to `app.asar.unpacked` (`asarUnpack: node_modules/**`),
+ * so that is the path to hand to `spawn`.
+ *
+ * `existsSync` cannot catch this from the Electron main process: its `fs` is
+ * asar-aware and answers `true` for the archive path, which is why the rewrite
+ * happens here, once, at the only place the path is produced.
+ */
 export function cliEntry(): string {
-  return fileURLToPath(new URL("./main.js", import.meta.url));
+  return unpacked(fileURLToPath(new URL("./main.js", import.meta.url)));
+}
+
+/** `…/app.asar/x` → `…/app.asar.unpacked/x`; anything else is returned as it came. */
+export function unpacked(file: string): string {
+  const marker = `${sep}app.asar${sep}`;
+  return file.includes(marker) ? file.replace(marker, `${sep}app.asar.unpacked${sep}`) : file;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));

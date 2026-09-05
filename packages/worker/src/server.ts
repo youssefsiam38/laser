@@ -15,17 +15,21 @@ import {
   ProtocolError,
   parseClientRequest,
   type ClientRequests,
+  type ContentBlock,
   type HostNotifications,
   type JsonRpcMessage,
   type JsonRpcResponse,
+  type PiExtensionModuleName,
   type SessionState,
   type SessionUpdateParams,
   type TypedClientRequest,
 } from "@piorbit/protocol";
 import { resolve } from "node:path";
 import type { DriverEvent, SessionDriver } from "./driver.js";
+import { GitService } from "./git.js";
 import { ModelsAdapter, PackagesAdapter } from "./packages.js";
 import { SettingsAdapter } from "./settings.js";
+import { TranscribeService } from "./transcribe.js";
 
 export interface WorkerServerOptions {
   cwd: string;
@@ -70,6 +74,12 @@ export class WorkerServer {
   private settingsAdapter: SettingsAdapter | undefined;
   private packagesAdapter: PackagesAdapter | undefined;
   private modelsAdapter: ModelsAdapter | undefined;
+  /** M2-T6 git line. Built on first use like the adapters above. */
+  private gitService: GitService | undefined;
+  /** M8-T2 dictation. Built on first use; `register()` publishes drain() in-process. */
+  private transcribeService: TranscribeService | undefined;
+  /** The companion extension's last capability report; features gate on it (M8-T1). */
+  private activeModules = new Set<PiExtensionModuleName>();
 
   constructor(private readonly options: WorkerServerOptions) {
     this.replayBuffer = options.replayBuffer ?? 5000;
@@ -103,6 +113,8 @@ export class WorkerServer {
   }
 
   async dispose(): Promise<void> {
+    this.transcribeService?.dispose();
+    this.transcribeService = undefined;
     for (const live of this.sessions.values()) {
       live.unsubscribe();
       await live.driver.dispose().catch(() => {});
@@ -139,10 +151,13 @@ export class WorkerServer {
           "pi/session/detach is host bookkeeping; a worker has nothing to detach from",
         );
       case "pi/session/steer":
-        await this.live(req.params.path).driver.steer(req.params.content);
+        // steer/follow_up call the runtime directly and so bypass Pi's `input`
+        // hook, where the companion extension folds in a phrase still being
+        // transcribed. Doing it here keeps the three send paths identical.
+        await this.live(req.params.path).driver.steer(await this.withDictation(req.params.path, req.params.content));
         return {};
       case "pi/session/follow_up":
-        await this.live(req.params.path).driver.followUp(req.params.content);
+        await this.live(req.params.path).driver.followUp(await this.withDictation(req.params.path, req.params.content));
         return {};
       case "pi/session/clear_queue":
         return this.live(req.params.path).driver.clearQueue();
@@ -192,6 +207,66 @@ export class WorkerServer {
         if (!owner) return { delivered: false } satisfies Result<"pi/ui/response">;
         owner.driver.respondToUi(req.params);
         return { delivered: true } satisfies Result<"pi/ui/response">;
+      }
+
+      // -------------------------------------------------------- panels ---
+      case "pi/panel/action": {
+        // The extension that declared the panel answers on Pi's bus; `false`
+        // means nobody holds that id any more (it closed, or the session
+        // restarted), which the client turns into a sentence.
+        const { driver } = this.live(req.params.path);
+        const delivered =
+          driver.deliverExtensionCommand?.({
+            type: "piorbit/panel/action",
+            id: req.params.id,
+            actionId: req.params.actionId,
+            ...(req.params.value !== undefined ? { value: req.params.value } : {}),
+          }) ?? false;
+        return { delivered } satisfies Result<"pi/panel/action">;
+      }
+      case "pi/panel/list":
+      case "pi/panel/read":
+        throw new ProtocolError(
+          ErrorCodes.Unsupported,
+          `${req.method} is answered by the host's panel hub, not a worker`,
+        );
+
+      // ---------------------------------------------------- M8 dictation ---
+      case "pi/transcribe/status":
+        this.assertCwd(req.params.cwd);
+        return (await this.transcribe().status()) satisfies Result<"pi/transcribe/status">;
+      case "pi/transcribe/begin":
+        this.assertCwd(req.params.cwd);
+        return this.transcribe().begin({
+          mimeType: req.params.mimeType,
+          ...(req.params.language !== undefined ? { language: req.params.language } : {}),
+          ...(req.params.path !== undefined ? { sessionPath: req.params.path } : {}),
+        }) satisfies Result<"pi/transcribe/begin">;
+      case "pi/transcribe/chunk":
+        this.transcribe().chunk(req.params.id, req.params.data);
+        return {};
+      case "pi/transcribe/end":
+        return (await this.transcribe().end(req.params.id)) satisfies Result<"pi/transcribe/end">;
+      case "pi/transcribe/cancel":
+        this.transcribe().cancel(req.params.id);
+        return {};
+
+      // ------------------------------------------------------ host-only ---
+      case "pi/push/config":
+      case "pi/push/subscribe":
+      case "pi/push/unsubscribe":
+      case "pi/push/test":
+        throw new ProtocolError(ErrorCodes.Unsupported, `${req.method} is answered by the host, not a worker`);
+
+      // -------------------------------------------------------- M2-T6 ---
+      case "pi/project/git": {
+        this.assertCwd(req.params.cwd);
+        const git = this.git();
+        // A session loaded before this worker knew about git lines (or a
+        // caller naming a session this worker never opened) still gets a
+        // baseline from now on, so the numbers start counting at first ask.
+        if (req.params.path !== undefined && this.sessions.has(req.params.path)) await git.baseline(req.params.path);
+        return (await git.status(req.params.path)) satisfies Result<"pi/project/git">;
       }
 
       // ----------------------------------------------------------- M4 ---
@@ -272,6 +347,42 @@ export class WorkerServer {
       onProgress: (event) => this.notify("pi/packages/progress", { cwd: this.options.cwd, ...event }),
     });
     return this.packagesAdapter;
+  }
+
+  private git(): GitService {
+    this.gitService ??= new GitService({ cwd: this.options.cwd });
+    return this.gitService;
+  }
+
+  private transcribe(): TranscribeService {
+    if (!this.transcribeService) {
+      const service = new TranscribeService({
+        keys: {
+          providerKey: (provider) => this.modelCatalog().apiKeyForProvider(provider),
+          providers: async () => (await this.modelCatalog().providers()).providers,
+        },
+        packagePresent: () => this.activeModules.has("transcribe"),
+      });
+      // Publishes drain() to the companion extension in this process, so Pi's
+      // own `input` hook can pick up a phrase still in flight.
+      service.register();
+      this.transcribeService = service;
+    }
+    return this.transcribeService;
+  }
+
+  /**
+   * Append a phrase the microphone was still transcribing to the text being
+   * sent, so pressing Enter mid-sentence does not lose the tail.
+   */
+  private async withDictation(path: string, content: ContentBlock[]): Promise<ContentBlock[]> {
+    if (!this.transcribeService?.isActive(path)) return content;
+    const tail = await this.transcribeService.drain(path);
+    if (tail === "") return content;
+    const last = content.at(-1);
+    if (last?.type !== "text") return [...content, { type: "text", text: tail }];
+    const joined = last.text === "" || /\s$/.test(last.text) ? `${last.text}${tail}` : `${last.text} ${tail}`;
+    return [...content.slice(0, -1), { type: "text", text: joined }];
   }
 
   private modelCatalog(): ModelsAdapter {
@@ -363,6 +474,9 @@ export class WorkerServer {
       this.sessions.set(state.path, live);
       ready = true;
       for (const event of queued) this.onDriverEvent(live, event);
+      // Capture "since the session started" for the git line. Fire and forget:
+      // a failure here means the line shows nothing, never that the open fails.
+      void this.git().baseline(state.path);
       return state;
     } catch (error) {
       live.unsubscribe();
@@ -433,11 +547,15 @@ export class WorkerServer {
         this.notify("pi/ui/event", { path: live.path, ...event.event });
         return;
       case "extension":
+        // The capability report is what gates the microphone and everything
+        // else that is only offered where its package is (M8-T1).
+        if (event.message.type === "piorbit/capabilities") this.activeModules = new Set(event.message.active);
         this.notify("pi/extension/message", { path: live.path, message: event.message });
         return;
       case "closed":
         live.unsubscribe();
         this.sessions.delete(live.path);
+        this.gitService?.forget(live.path);
         return;
     }
   }

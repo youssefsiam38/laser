@@ -462,6 +462,9 @@ export function PiorbitProvider({ children, url }: PiorbitProviderProps): ReactN
       const running = openInFlight.current.get(path);
       if (running) return running;
       const work = (async () => {
+        // The page and the socket come up together: without this the first
+        // session someone clicks after a reload was a dead click.
+        await client.whenConnected();
         const view = readState().open[path];
         const hydrated = view?.hydrated === true;
         // Not hydrated yet: the snapshot below carries the whole transcript, so

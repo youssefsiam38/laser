@@ -120,7 +120,7 @@ function StatusRing({
             strokeWidth={thickness}
             strokeLinecap={isPercent && clamped > 0 && clamped < 100 ? "round" : "butt"}
             strokeDasharray={`${dash} ${c}`}
-            className="transition-[stroke-dasharray,stroke] duration-200 ease-out"
+            className="transition-[stroke-dasharray,stroke] duration-(--motion-slow) ease-out"
             {...(status === "finished_unread" && !isPercent ? { strokeOpacity: 0.55 } : {})}
           />
         )}
@@ -133,6 +133,8 @@ function StatusRing({
             "bg-[conic-gradient(from_0deg,transparent_0deg,transparent_240deg,color-mix(in_oklab,var(--ring)_70%,transparent)_360deg)]",
           )}
           style={{
+            // A mask's colour is its alpha channel, never something a person
+            // sees: opaque black means "keep these pixels".
             mask: `radial-gradient(farthest-side, transparent calc(100% - ${thickness + 1}px), #000 calc(100% - ${thickness}px))`,
             WebkitMask: `radial-gradient(farthest-side, transparent calc(100% - ${thickness + 1}px), #000 calc(100% - ${thickness}px))`,
           }}

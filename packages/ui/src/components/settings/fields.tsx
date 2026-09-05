@@ -44,7 +44,7 @@ interface ControlProps {
 
 const inputClass = [
   "h-8 w-full min-w-0 rounded-lg border border-line bg-surface px-2.5 text-sm text-ink",
-  "placeholder:text-ink-3 transition-[border-color] duration-75 outline-none",
+  "placeholder:text-ink-3 transition-[border-color] duration-(--motion-instant) outline-none",
   "hover:border-[color-mix(in_oklab,var(--line)_60%,var(--ink-3))]",
   "focus-visible:border-live focus-visible:ring-2 focus-visible:ring-live/25",
   "disabled:cursor-not-allowed disabled:bg-surface-2 disabled:opacity-60",
@@ -179,9 +179,9 @@ function NumberField({
           onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()}
           className={cn(inputClass, "w-40 font-mono tnum", error && "border-danger")}
         />
-        {spec.unit && <span className="font-mono text-2xs text-ink-3">{spec.unit}</span>}
+        {spec.unit && <span className="font-mono text-xs text-ink-3">{spec.unit}</span>}
       </div>
-      {error && <p className="text-2xs text-danger">{error}</p>}
+      {error && <p className="text-xs text-danger">{error}</p>}
     </div>
   );
 }
@@ -228,7 +228,7 @@ function TextField({
       onChange={(event) => setDraft(event.target.value)}
       onBlur={commit}
       onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()}
-      className={cn(inputClass, "max-w-96 font-mono text-[13px]")}
+      className={cn(inputClass, "max-w-96 font-mono text-sm")}
     />
   );
 }
@@ -275,7 +275,7 @@ function StringListField({
                   if (editing) replace(editing.filter((entry, i) => entry !== "" || i !== index));
                 }}
                 onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()}
-                className={cn(inputClass, "font-mono text-[13px]")}
+                className={cn(inputClass, "font-mono text-sm")}
               />
               <Button
                 variant="ghost"
@@ -305,7 +305,7 @@ function StringListField({
             replace([...list, draft.trim()]);
             setDraft("");
           }}
-          className={cn(inputClass, "font-mono text-[13px]")}
+          className={cn(inputClass, "font-mono text-sm")}
         />
         <Button
           variant="ghost"
@@ -321,7 +321,7 @@ function StringListField({
         </Button>
       </div>
       {items !== undefined && list.length === 0 && (
-        <p className="text-2xs text-ink-3">
+        <p className="text-xs text-ink-3">
           An empty list is a real value here, and means something different from not setting the key.{" "}
           <button type="button" className="text-live underline-offset-2 hover:underline" onClick={() => onCommit(undefined)}>
             Unset it
@@ -329,7 +329,7 @@ function StringListField({
           .
         </p>
       )}
-      {spec.hint && <p className="text-2xs text-ink-3">{spec.hint}</p>}
+      {spec.hint && <p className="text-xs text-ink-3">{spec.hint}</p>}
     </div>
   );
 }
@@ -354,7 +354,7 @@ function EnumMapField({
     <div className="flex min-w-0 max-w-140 flex-col gap-1.5">
       {entries.map(([entryKey, entryValue]) => (
         <div key={entryKey} className="flex items-center gap-1">
-          <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-ink" title={entryKey}>
+          <span className="min-w-0 flex-1 truncate font-mono text-sm text-ink" title={entryKey}>
             {entryKey}
           </span>
           <select
@@ -394,7 +394,7 @@ function EnumMapField({
           disabled={disabled}
           placeholder={spec.keyPlaceholder ?? "key"}
           onChange={(event) => setKey(event.target.value)}
-          className={cn(inputClass, "flex-1 font-mono text-[13px]")}
+          className={cn(inputClass, "flex-1 font-mono text-sm")}
         />
         <Button
           variant="ghost"
@@ -446,7 +446,7 @@ function JsonField({ hint, value, disabled, onCommit, id, label }: ControlProps 
         spellCheck={false}
         placeholder="not set"
         onChange={(event) => setDraft(event.target.value)}
-        className={cn("max-h-72 min-h-24 font-mono text-[12px] leading-5", error && "border-danger")}
+        className={cn("max-h-72 min-h-24 font-mono text-xs leading-5", error && "border-danger")}
       />
       <div className="flex items-center gap-2">
         <Button size="xs" variant="secondary" disabled={disabled || !dirty} onClick={commit}>
@@ -457,16 +457,16 @@ function JsonField({ hint, value, disabled, onCommit, id, label }: ControlProps 
             <RotateCcw /> Discard
           </Button>
         )}
-        {error && <span className="text-2xs text-danger">{error}</span>}
+        {error && <span className="text-xs text-danger">{error}</span>}
       </div>
-      {hint && <p className="text-2xs text-ink-3">{hint}</p>}
+      {hint && <p className="text-xs text-ink-3">{hint}</p>}
     </div>
   );
 }
 
 function UnrepresentableNote({ value }: { value: unknown }) {
   return (
-    <p className="max-w-120 rounded-lg bg-surface-2 px-2 py-1.5 font-mono text-2xs leading-4 text-ink-2">
+    <p className="max-w-120 rounded-lg bg-surface-2 px-2 py-1.5 font-mono text-xs leading-4 text-ink-2">
       This file holds a value this control cannot show: <span className="text-attention">{JSON.stringify(value)}</span>.
       Edit it in the JSON view, or in the settings file directly.
     </p>

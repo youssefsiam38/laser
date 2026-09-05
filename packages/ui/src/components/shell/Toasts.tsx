@@ -45,7 +45,7 @@ export function Toasts() {
       }}
       toastOptions={{
         classNames: {
-          toast: "font-sans text-sm leading-[18px] shadow-float! rounded-xl! border-line! items-start!",
+          toast: "font-sans text-sm leading-sm shadow-float! rounded-xl! border-line! items-start!",
           title: "font-medium text-ink",
           description: "text-ink-2",
           closeButton: "bg-surface! border-line! text-ink-2! hover:bg-surface-2! hover:text-ink!",

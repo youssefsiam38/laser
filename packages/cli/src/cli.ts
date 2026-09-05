@@ -17,14 +17,17 @@ import { resolvePaths } from "./config.js";
 import { CliError, ExitCode, messageOf, type ExitCodeValue } from "./errors.js";
 import { colorMode, flagsFor, GLOBAL_FLAGS } from "./flags.js";
 import { renderCommandHelp, renderRootHelp, TOPICS } from "./help.js";
-import { Terminal } from "./output.js";
+import { sanitize, Terminal } from "./output.js";
 import { doctorCommand } from "./commands/doctor.js";
 import { hostCommands } from "./commands/host.js";
 import { logsCommand } from "./commands/logs.js";
 import { metaCommands } from "./commands/meta.js";
+import { missionsCommand } from "./commands/missions.js";
 import { packagesCommand } from "./commands/packages.js";
+import { planCommand } from "./commands/plan.js";
 import { piCommand } from "./commands/pi.js";
 import { projectsCommand } from "./commands/projects.js";
+import { runsCommand } from "./commands/runs.js";
 import { sessionCommands } from "./commands/session.js";
 import { settingsCommand } from "./commands/settings.js";
 import { CLI_VERSION } from "./version.js";
@@ -32,6 +35,9 @@ import { CLI_VERSION } from "./version.js";
 export const COMMANDS: readonly Command[] = [
   ...hostCommands,
   ...sessionCommands,
+  runsCommand,
+  planCommand,
+  missionsCommand,
   projectsCommand,
   settingsCommand,
   packagesCommand,
@@ -210,9 +216,12 @@ function fail(error: unknown, term: Terminal): ExitCodeValue {
     );
   } else {
     const p = term.err;
-    process.stderr.write(`${p.red("error")} ${message}\n`);
-    for (const line of cli?.details ?? []) process.stderr.write(`      ${p.dim(line)}\n`);
-    if (cli?.fix) process.stderr.write(`      ${p.dim(`→ ${cli.fix}`)}\n`);
+    // An error message routinely quotes the host, a tool result or a file the
+    // agent named, so it is untrusted bytes like anything else that reaches a
+    // terminal (render.ts). JSON above escapes control characters itself.
+    process.stderr.write(`${p.red("error")} ${sanitize(message)}\n`);
+    for (const line of cli?.details ?? []) process.stderr.write(`      ${p.dim(sanitize(line))}\n`);
+    if (cli?.fix) process.stderr.write(`      ${p.dim(`→ ${sanitize(cli.fix)}`)}\n`);
   }
 
   if (!cli && process.env["PIORBIT_DEBUG"] && error instanceof Error && error.stack) {

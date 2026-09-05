@@ -1,4 +1,5 @@
 import { useAuiState, type ToolCallMessagePartProps } from "@assistant-ui/react";
+import type { UiDialogRequest } from "@piorbit/protocol";
 import {
   ChevronRight,
   CircleAlert,
@@ -19,8 +20,9 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Textarea } from "@/components/ui/textarea";
 import { duration } from "@/format";
 import { cn } from "@/lib/utils";
+import { useIsTouch } from "@/hooks/use-mobile";
+import { DecisionBody, dialogPanel, PanelToolDecision, uiResponseFor, useRegisterToolRow } from "@/panels";
 import { usePiorbitStable } from "@/runtime";
-import { DialogBody, type DialogSpec } from "./DialogBody.js";
 import { DiffBlock } from "./DiffBlock.js";
 import { diffViewForTool } from "./diff.js";
 import { TerminalBlock } from "./TerminalBlock.js";
@@ -50,8 +52,15 @@ const ICONS: Record<ToolKind, Icon> = {
 };
 
 /** Shape of `interrupt.payload` the projection builds for select/input/editor dialogs. */
-interface InterruptPayload extends DialogSpec {
+interface InterruptPayload {
   readonly requestId: string;
+  readonly method: "select" | "confirm" | "input" | "editor";
+  readonly title: string;
+  readonly message?: string | undefined;
+  readonly options?: readonly string[] | undefined;
+  readonly placeholder?: string | undefined;
+  readonly prefill?: string | undefined;
+  readonly timeoutMs?: number | undefined;
 }
 
 const isInterruptPayload = (payload: unknown): payload is InterruptPayload => {
@@ -69,6 +78,9 @@ const isInterruptPayload = (payload: unknown): payload is InterruptPayload => {
 function ToolRowImpl(props: ToolCallMessagePartProps) {
   const { toolCallId, toolName, args, result, isError, status, approval, interrupt, timing } = props;
   const [open, setOpen] = useState(false);
+  // While this row is on screen, a decision that names it renders inside it
+  // rather than as a card above the composer (docs/ux-panels.md).
+  useRegisterToolRow(toolCallId);
 
   const summary = useMemo(() => summarizeTool(toolName, args), [toolName, args]);
   const kind = summary.kind;
@@ -112,7 +124,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
           type="button"
           className={cn(
             "flex h-7 w-full min-w-0 items-center gap-2 rounded-md text-start outline-none",
-            "transition-colors duration-75 hover:bg-surface-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-live",
+            "transition-colors duration-(--motion-instant) hover:bg-surface-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-live",
             "disabled:cursor-default disabled:hover:bg-transparent",
           )}
           aria-label={`${summary.verb} ${summary.summary}`.trim()}
@@ -138,7 +150,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
           {summary.detail ? <span className="typed shrink-0 text-ink-3">{summary.detail}</span> : null}
           <span
             aria-hidden="true"
-            className="mt-px min-w-3 flex-1 self-center border-b border-dotted border-line transition-colors duration-75 group-hover/tool:border-ink-3"
+            className="mt-px min-w-3 flex-1 self-center border-b border-dotted border-line transition-colors duration-(--motion-instant) group-hover/tool:border-ink-3"
           />
           {elapsed !== undefined ? (
             <span className={cn("typed shrink-0 tnum", running ? "text-live" : "text-ink-3")}>
@@ -183,6 +195,11 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
       {interrupt && isInterruptPayload(interrupt.payload) ? (
         <InterruptFooter payload={interrupt.payload} resume={props.resume} />
       ) : null}
+      {/* A declared `decision` panel that names this tool call. The table gives
+          `decision × inline` one cell — "inline, in its tool row" — and this is
+          it; the row registers itself above so the placement is only chosen
+          while there is a row to choose it for. */}
+      <PanelToolDecision toolCallId={toolCallId} />
     </Collapsible>
   );
 }
@@ -220,7 +237,7 @@ function TypedPre({ text, danger, className }: { text: string; danger?: boolean;
     <div className="flex flex-col gap-1">
       <pre
         className={cn(
-          "max-h-80 overflow-auto rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs leading-[18px] wrap-break-word whitespace-pre-wrap",
+          "max-h-80 overflow-auto rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs leading-sm wrap-break-word whitespace-pre-wrap",
           danger ? "text-danger" : "text-ink-2",
           className,
         )}
@@ -241,7 +258,7 @@ function ArgsList({ args }: { args: unknown }) {
   const entries = Object.entries(args as Record<string, unknown>);
   if (entries.length === 0) return null;
   return (
-    <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1 font-mono text-xs leading-[18px]">
+    <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1 font-mono text-xs leading-sm">
       {entries.map(([k, v]) => (
         <div key={k} className="contents">
           <dt className="text-ink-3">{k}</dt>
@@ -401,15 +418,48 @@ function ApprovalFooter({
 // Interrupt footer — select / input / editor raised while this tool runs
 // ---------------------------------------------------------------------------
 
+/**
+ * A question raised while exactly one tool runs renders inside that tool's row
+ * (docs/ux-panels.md: `decision` × `blocking: "tool"`). It is the same
+ * `DecisionBody` as the card above the composer and the session-blocking
+ * sheet — one renderer, so a question never looks like two different things
+ * depending on where it happened to be asked.
+ *
+ * It answers through assistant-ui's `resume` rather than the panel store,
+ * because the payload reached this row through the tool call, not the panel
+ * stream — the store deliberately leaves a dialog alone once its tool row has
+ * it (`fallbackPanels`).
+ */
 function InterruptFooter({ payload, resume }: { payload: InterruptPayload; resume: (payload: unknown) => void }) {
+  const panel = useMemo(
+    () =>
+      dialogPanel(
+        {
+          id: payload.requestId,
+          method: payload.method,
+          title: payload.title,
+          ...(payload.message !== undefined ? { message: payload.message } : {}),
+          ...(payload.options !== undefined ? { options: [...payload.options] } : {}),
+          ...(payload.placeholder !== undefined ? { placeholder: payload.placeholder } : {}),
+          ...(payload.prefill !== undefined ? { prefill: payload.prefill } : {}),
+          ...(payload.timeoutMs !== undefined ? { timeoutMs: payload.timeoutMs } : {}),
+        } as UiDialogRequest,
+        false,
+      ),
+    [payload],
+  );
+  const touch = useIsTouch();
   return (
     <div data-slot="interrupt-footer" className="mb-2 ms-6 border-s-2 border-attention py-1 ps-3">
-      <DialogBody
-        variant="footer"
-        dialog={payload}
-        onValue={(value) => resume({ requestId: payload.requestId, value })}
-        onConfirm={(confirmed) => resume({ requestId: payload.requestId, value: confirmed ? "yes" : "no" })}
-        onCancel={() => resume({ requestId: payload.requestId, cancelled: true })}
+      <DecisionBody
+        panel={panel}
+        touch={touch}
+        onAnswer={async (values: Record<string, string | boolean> | undefined) => {
+          const response = uiResponseFor(payload.requestId, payload.method, values);
+          if ("cancelled" in response) resume({ requestId: payload.requestId, cancelled: true });
+          else if ("confirmed" in response) resume({ requestId: payload.requestId, value: response.confirmed ? "yes" : "no" });
+          else resume({ requestId: payload.requestId, value: response.value });
+        }}
       />
     </div>
   );

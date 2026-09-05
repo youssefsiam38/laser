@@ -5,16 +5,37 @@
   "type": "module",
   "description": "Electron shell: main process, tray, notifications, keychain, updater. Spawns the host from a bundled stock Node placed outside asar (M5-T2). Must not import Pi.",
   "main": "dist/main.js",
+  "exports": {
+    "./api": {
+      "types": "./dist/api.d.ts",
+      "import": "./dist/api.js"
+    },
+    "./package.json": "./package.json"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests",
-    "clean": "rm -rf dist *.tsbuildinfo out"
+    "test": "vitest run",
+    "clean": "rm -rf dist *.tsbuildinfo out build/icon.png build/icons",
+    "dev": "tsc -p tsconfig.json && electron dist/main.js --dev",
+    "icons": "node scripts/make-icons.mjs",
+    "runtime": "node scripts/fetch-node.mjs",
+    "install:electron": "node node_modules/electron/install.js",
+    "prepack:app": "pnpm run build && pnpm run icons && node scripts/fetch-node.mjs --current",
+    "pack": "pnpm run prepack:app && electron-builder --dir",
+    "dist": "pnpm run prepack:app && electron-builder"
   },
   "dependencies": {
-    "@piorbit/protocol": "workspace:*"
+    "@napi-rs/keyring": "2.0.0",
+    "@piorbit/cli": "workspace:*",
+    "@piorbit/crypto": "workspace:*",
+    "@piorbit/protocol": "workspace:*",
+    "electron-updater": "6.8.9",
+    "ws": "8.18.3"
   },
   "devDependencies": {
-    "electron": "44.2.0"
+    "@types/ws": "8.18.1",
+    "electron": "44.2.0",
+    "electron-builder": "26.15.3"
   }
 }

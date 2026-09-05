@@ -1,0 +1,178 @@
+# Packaging (M5-T5). Every non-obvious line has a reason; see README.md.
+#
+# The three rules this file encodes:
+#   1. Nothing that must be *executed* may live inside app.asar. An asar is an
+#      archive, not a filesystem: the kernel cannot exec a path inside it, and a
+#      spawned process cannot use it as a working directory. So the bundled Node
+#      is an extraResource and the whole dependency tree is unpacked.
+#   2. The app id never changes. It keys macOS TCC grants (the microphone
+#      permission), the Windows notification centre, and the update feed.
+#   3. The bundled Node is signed with the app. An unsigned Mach-O inside a
+#      hardened-runtime bundle fails notarization, and on Windows an unsigned
+#      helper is what SmartScreen complains about.
+
+appId: dev.piorbit.desktop
+productName: piorbit
+copyright: Copyright © piorbit contributors
+
+directories:
+  output: out
+  buildResources: build
+
+# Resolves runtime/<platform>-<arch>/node into build/runtime/, downloading it
+# if it is missing. See build/before-pack.cjs.
+beforePack: build/before-pack.cjs
+
+files:
+  - dist/**/*
+  - package.json
+  - "!**/*.map"
+  - "!**/node_modules/**/{test,tests,__tests__,example,examples,docs,doc}/**"
+  - "!**/node_modules/**/*.{md,markdown,ts,map,flow}"
+
+extraResources:
+  # The stock Node the host is spawned from (M5-T2).
+  - from: build/runtime
+    to: runtime
+
+asar: true
+asarUnpack:
+  # The host, the worker, the CLI, Pi and everything they load run in the
+  # bundled Node — a separate process that knows nothing about asar. All of it
+  # has to be real files on disk.
+  - node_modules/**/*
+
+# @napi-rs/keyring ships prebuilt N-API binaries, and N-API is ABI-stable
+# across Electron and Node, so there is nothing to rebuild. Rebuilding would
+# only introduce a toolchain requirement on every build agent.
+npmRebuild: false
+buildDependenciesFromSource: false
+
+protocols:
+  - name: piorbit
+    schemes: [piorbit]
+
+# ---------------------------------------------------------------- macOS ----
+mac:
+  category: public.app-category.developer-tools
+  darkModeSupport: true
+  # dmg is what people download; zip is what electron-updater needs to apply
+  # a delta, so both are published.
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # Signed as well as the app itself: an unsigned Mach-O anywhere in a hardened
+  # bundle is a notarization failure.
+  binaries:
+    - Contents/Resources/runtime/node
+  # electron-builder >= 26 notarizes with the notarytool credentials in the
+  # environment (APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID, or
+  # APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER).
+  notarize: true
+  extendInfo:
+    # Without this key macOS kills the process the moment it touches the
+    # microphone — it is not a prompt string, it is the permission itself.
+    NSMicrophoneUsageDescription: >-
+      piorbit uses the microphone only while you are dictating a message to an
+      agent. Nothing is recorded or sent anywhere unless you start dictation.
+    # piorbit reads the directories you add as projects; macOS asks about the
+    # protected ones by name.
+    NSDesktopFolderUsageDescription: >-
+      piorbit needs access to open a project you keep on your Desktop.
+    NSDocumentsFolderUsageDescription: >-
+      piorbit needs access to open a project you keep in Documents.
+    NSDownloadsFolderUsageDescription: >-
+      piorbit needs access to open a project you keep in Downloads.
+    # The window draws its own titlebar; this keeps the system chrome dark when
+    # the app is dark.
+    NSRequiresAquaSystemAppearance: false
+
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+# -------------------------------------------------------------- Windows ----
+win:
+  target:
+    - target: nsis
+      arch: [x64, arm64]
+  # Azure Trusted Signing (formerly Azure Code Signing) is configured in
+  # `build/before-pack.cjs`, from the environment, and only when all four
+  # values are present. It is deliberately NOT written here: electron-builder
+  # treats the presence of `azureSignOptions` as "sign with Azure" and fails
+  # the build when the endpoint does not resolve, so a committed placeholder
+  # turns a missing credential into a broken `--win` target rather than an
+  # unsigned installer.
+  #
+  # To sign, export all four before `pnpm -F @piorbit/desktop dist -- --win`:
+  #   PIORBIT_AZURE_PUBLISHER_NAME    the CN in the certificate profile
+  #   PIORBIT_AZURE_ENDPOINT          https://<region>.codesigning.azure.net
+  #   PIORBIT_AZURE_ACCOUNT           the code-signing account name
+  #   PIORBIT_AZURE_PROFILE           the certificate profile name
+  # plus the credentials electron-builder reads itself: AZURE_TENANT_ID,
+  # AZURE_CLIENT_ID, AZURE_CLIENT_SECRET.
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: piorbit
+  artifactName: ${productName}-${version}-${arch}-setup.${ext}
+
+# ---------------------------------------------------------------- Linux ----
+linux:
+  target:
+    - target: AppImage
+      arch: [x64, arm64]
+  category: Development
+  synopsis: A control room for Pi coding agents
+  description: >-
+    piorbit runs and watches Pi coding agent sessions across every project on
+    this machine, and mirrors the same interface to your phone over an
+    end-to-end encrypted relay.
+  desktop:
+    entry:
+      # Registers piorbit:// links with the desktop environment.
+      MimeType: x-scheme-handler/piorbit;
+      StartupWMClass: piorbit
+
+appImage:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+# --------------------------------------------------------------- Updates ----
+# Deliberately unset, and the app says so: `Updater` reports `unsupported`
+# ("this build has no update feed") rather than an error, because a check that
+# structurally cannot succeed must not be reported as a check that failed.
+#
+# It was `provider: github, owner: youssefsiam38, repo: piorbit`, which does
+# not work: that repository is private, and electron-updater fetches
+# `…/releases/download/<tag>/latest.yml` unauthenticated, so every installed
+# copy would get a 404 forever. The only supported alternative for a private
+# repo is `private: true` plus a token baked into `app-update.yml` inside the
+# shipped app, which is a credential in an artifact and a non-starter.
+#
+# Two ways to turn updates on, either of which makes the feed public:
+#
+#   1. A public releases repository (the usual split when the source stays
+#      private):
+#        publish:
+#          provider: github
+#          owner: youssefsiam38
+#          repo: piorbit-releases
+#          releaseType: release
+#
+#   2. Any public feed URL:
+#        publish:
+#          provider: generic
+#          url: https://downloads.example.com/piorbit/${channel}
+#
+# Until one of those is true, README.md's "publish version A, install it,
+# publish version B" cannot pass, and the app is honest about why. `null` is
+# explicit rather than absent so electron-builder does not infer a GitHub feed
+# from a `repository` field somebody adds to package.json later.
+publish: null

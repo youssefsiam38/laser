@@ -7,5 +7,8 @@
  */
 export * from "./jsonrpc.js";
 export * from "./messages.js";
+export * from "./panels.js";
 export * from "./pi-extension.js";
+export * from "./push.js";
 export * from "./schemas.js";
+export * from "./utf8.js";

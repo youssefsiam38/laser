@@ -6,6 +6,11 @@
  *   pnpm sandbox            # http://127.0.0.1:41441
  *   PORT=5000 pnpm sandbox
  *
+ * It records itself in its own state dir the way `piorbit up` does, so the CLI
+ * can be pointed at it:
+ *
+ *   PIORBIT_STATE_DIR=<the state dir it prints> piorbit status
+ *
  * The fake provider ("stub/stub-1") echoes a short markdown reply with a code
  * fence so streaming, markdown, and tool-free turns can be exercised.
  * Requires `pnpm -r build` first.
@@ -15,6 +20,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HostServer } from "@piorbit/host";
+import { processIdentity, writeHostFile } from "@piorbit/cli";
 
 const PORT = Number(process.env.PORT ?? 41441);
 const base = mkdtempSync(join(tmpdir(), "piorbit-sandbox-"));
@@ -67,12 +73,22 @@ writeFileSync(
     2,
   ),
 );
-writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ defaultProvider: "stub", defaultModel: "stub-1", theme: "dark" }, null, 2));
-
 // ---- a tiny extension that exercises every portable UI surface ----
+//
+// It is listed in `settings.extensions` rather than only dropped in
+// `<agentDir>/extensions/`: Pi 0.85 builds its extension set from the package
+// manager's resolved paths, so a file sitting in that directory with nothing
+// pointing at it is never loaded. (`discoverAndLoadExtensions` still exists and
+// does scan the directory, but the session's resource loader does not call it.)
+const extensionFile = join(agentDir, "extensions", "sandbox-dialogs.ts");
+writeFileSync(
+  join(agentDir, "settings.json"),
+  JSON.stringify({ defaultProvider: "stub", defaultModel: "stub-1", theme: "dark", extensions: [extensionFile] }, null, 2),
+);
+
 mkdirSync(join(agentDir, "extensions"), { recursive: true });
 writeFileSync(
-  join(agentDir, "extensions", "sandbox-dialogs.ts"),
+  extensionFile,
   `export default function (pi) {
   pi.registerCommand("ask", {
     description: "sandbox: select dialog",
@@ -103,6 +119,73 @@ writeFileSync(
       ctx.ui.setTitle("sandbox title");
     },
   });
+
+  // The declared panel protocol (docs/ux-panels.md). One of each kind, so the
+  // dock, the phone strip and the popped-out page all have something real to
+  // draw without pi-subagents being installed.
+  const emitPanels = () => {
+      const now = Date.now();
+      pi.events.emit("piorbit:panel", {
+        v: 1, id: "sandbox:run", kind: "run", intent: "follow",
+        title: "worker#2", source: "sandbox", handle: "@sandbox",
+        lifecycle: "running", activity: "reading the repository",
+        phase: { label: "survey", index: 1, total: 3 },
+        startedAt: new Date(now - 42_000).toISOString(),
+        usage: { input: 84_800, output: 7_000, cacheRead: 328_000, cacheWrite: 0, costUsd: 0.032 },
+        actions: [{ id: "stop", label: "Stop", destructive: true, confirm: "Stop worker#2?" }],
+      });
+      pi.events.emit("piorbit:panel", {
+        v: 1, id: "sandbox:plan", kind: "plan", intent: "follow",
+        title: "Workflow · 2 lanes", source: "sandbox", objective: "Ship the sandbox demo",
+        inferred: true,
+        steps: [
+          { id: "s1", label: "survey", phase: "preflight", state: "done" },
+          { id: "s2", label: "patch", phase: "work", state: "running", runId: "sandbox:run" },
+          { id: "s3", label: "verify", phase: "work", state: "pending" },
+        ],
+        usage: null,
+      });
+      pi.events.emit("piorbit:panel", {
+        v: 1, id: "sandbox:doc", kind: "document", intent: "follow",
+        title: "README.md", source: "sandbox", mediaType: "text/markdown", renderable: true,
+        content: { inline: "# Sandbox project\n\nA scratch project for piorbit demos.\n\n- one\n- two\n" },
+      });
+      pi.events.emit("piorbit:panel", {
+        v: 1, id: "sandbox:hits", kind: "collection", intent: "inline",
+        title: '3 results for "noise protocol"', source: "sandbox", layout: "list",
+        items: [
+          { id: "a", primary: "Noise Protocol Framework", secondary: "The specification", meta: [{ label: "url", value: "https://noiseprotocol.org" }] },
+          { id: "b", primary: "Noise_KK", secondary: "Both parties know each other's static key" },
+          { id: "c", primary: "Noise explained", secondary: "A walkthrough" },
+        ],
+        total: 3,
+      });
+      pi.events.emit("piorbit:panel", {
+        v: 1, id: "sandbox:ask", kind: "decision", intent: "inspect",
+        title: "Publish the sandbox build?", source: "sandbox", blocking: "turn",
+        message: "Nothing is published; this only shows a toast.",
+        fields: [
+          { id: "confirm", label: "Publish the sandbox build?", type: "confirm" },
+          { id: "why", label: "Tell the sandbox why", type: "longtext" },
+        ],
+        rejection: { label: "No", field: "why" },
+      });
+  };
+
+  // Emitted at session start rather than behind a slash command: Pi's command
+  // registry belongs to its terminal editor, and piorbit never types into it,
+  // so a command handler here would be unreachable from the app. A demo host
+  // should show the thing it exists to demonstrate.
+  pi.on("session_start", () => { console.error("[sandbox-ext] session_start"); setTimeout(() => { try { emitPanels(); console.error("[sandbox-ext] panels emitted"); } catch (e) { console.error("[sandbox-ext] emit failed: " + e); } }, 400); });
+
+  pi.registerCommand("panels", { description: "sandbox: re-emit the demo panels", handler: async () => emitPanels() });
+
+  // Answering closes the question, which is what makes "delivered" true rather
+  // than a claim. The stream kind is covered by /widget, whose lines the host
+  // turns into a stream panel through the fallback.
+  pi.events.on("piorbit:panel:action", (event) => {
+    if (event.id === "sandbox:ask") pi.events.emit("piorbit:panel:close", { id: "sandbox:ask", reason: "answered" });
+  });
 }
 `,
 );
@@ -110,15 +193,108 @@ writeFileSync(
 // ---- host ----
 // `stateDir` keeps the sandbox's projects, attention and log store inside the
 // temp dir; without it a demo run would write to the real ~/.piorbit.
+const sessionDir = join(base, "sessions");
+const stateDir = join(base, "state");
+const subagentsTempRoot = join(stateDir, "subagents");
 const host = new HostServer({
   port: PORT,
   agentDir,
-  sessionDir: join(base, "sessions"),
-  stateDir: join(base, "state"),
+  sessionDir,
+  stateDir,
+  subagentsTempRoot,
   log: (l) => console.error(l),
 });
-const { url } = await host.listen();
-console.log(`piorbit sandbox\n  ui:       ${url}\n  project:  ${project}\n  agentDir: ${agentDir}\n  provider: ${providerUrl}`);
+const { url, port } = await host.listen();
+
+// The same record `piorbit up` writes. Without it the CLI has no way to find
+// this host, and half of what the CLI does could not be tried against a
+// sandbox at all.
+const hostFile = join(stateDir, "host.json");
+mkdirSync(stateDir, { recursive: true });
+const identity = processIdentity(process.pid);
+writeHostFile(hostFile, {
+  pid: process.pid,
+  host: "127.0.0.1",
+  port,
+  url,
+  agentDir,
+  sessionDir,
+  stateDir,
+  subagentsTempRoot,
+  startedAt: new Date().toISOString(),
+  cliVersion: "sandbox",
+  ...(identity ? { identity } : {}),
+});
+
+console.log(
+  `piorbit sandbox\n  ui:       ${url}\n  project:  ${project}\n  agentDir: ${agentDir}\n  stateDir: ${stateDir}\n  provider: ${providerUrl}\n  cli:      PIORBIT_STATE_DIR=${stateDir} PIORBIT_AGENT_DIR=${agentDir} piorbit status`,
+);
+
+// ---- demo panels, seeded from the host ----
+//
+// The extension above emits the same five panels on Pi's bus, which is the
+// path a real package takes. It is registered in `settings.extensions`, but Pi
+// 0.85 builds a session's extension set from its *package manager*, so a bare
+// path there is not enough to load it and the demo would be empty. Seeding the
+// panel hub directly keeps the sandbox honest — it is the same hub, the same
+// broadcast and the same panels a client would receive — and it is marked
+// `source: "sandbox"` so nobody mistakes it for an extension that ran.
+const seeded = new Set();
+setInterval(() => {
+  for (const worker of host.pool.workers()) {
+    for (const path of host.pool.openSessions(worker.cwd)) {
+      if (seeded.has(path)) continue;
+      seeded.add(path);
+      for (const panel of demoPanels()) host.panels.upsert(worker.cwd, path, panel);
+    }
+  }
+}, 1000).unref();
+
+function demoPanels() {
+  const now = Date.now();
+  return [
+    {
+      kind: "run", id: "sandbox:run", source: "sandbox", title: "worker#2", intent: "follow", handle: "@sandbox",
+      lifecycle: "running", activity: "reading the repository",
+      phase: { label: "survey", index: 1, total: 3 },
+      startedAt: new Date(now - 42_000).toISOString(),
+      usage: { input: 84_800, output: 7_000, cacheRead: 328_000, cacheWrite: 0, costUsd: 0.032 },
+      actions: [{ id: "stop", label: "Stop", destructive: true, confirm: "Stop worker#2?" }],
+    },
+    {
+      kind: "plan", id: "sandbox:plan", source: "sandbox", title: "Workflow · 2 lanes", intent: "follow",
+      objective: "Ship the sandbox demo", inferred: true, usage: null,
+      steps: [
+        { id: "s1", label: "survey", phase: "preflight", state: "done" },
+        { id: "s2", label: "patch", phase: "work", state: "running", runId: "sandbox:run" },
+        { id: "s3", label: "verify", phase: "work", state: "pending" },
+      ],
+    },
+    {
+      kind: "document", id: "sandbox:doc", source: "sandbox", title: "README.md", intent: "follow",
+      mediaType: "text/markdown", renderable: true,
+      content: { inline: "# Sandbox project\n\nA scratch project for piorbit demos.\n\n- one\n- two\n" },
+    },
+    {
+      kind: "collection", id: "sandbox:hits", source: "sandbox", title: '3 results for "noise protocol"',
+      intent: "inline", layout: "list", total: 3,
+      items: [
+        { id: "a", primary: "Noise Protocol Framework", secondary: "The specification", meta: [{ label: "url", value: "https://noiseprotocol.org" }] },
+        { id: "b", primary: "Noise_KK", secondary: "Both parties know each other's static key" },
+        { id: "c", primary: "Noise explained", secondary: "A walkthrough" },
+      ],
+    },
+    {
+      kind: "decision", id: "sandbox:ask", source: "sandbox", title: "Publish the sandbox build?", intent: "inspect",
+      blocking: "turn", message: "Nothing is published; this only shows a card.",
+      fields: [
+        { id: "confirm", label: "Publish the sandbox build?", type: "confirm" },
+        { id: "why", label: "Tell the sandbox why", type: "longtext" },
+      ],
+      rejection: { label: "No", field: "why" },
+    },
+  ];
+}
 
 const stop = async () => {
   await host.close();

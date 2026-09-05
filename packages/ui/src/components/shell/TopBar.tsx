@@ -5,6 +5,7 @@ import {
   Ellipsis,
   GitBranch,
   GitFork,
+  Layers,
   PanelLeft,
   PanelLeftClose,
   PanelRight,
@@ -40,7 +41,8 @@ import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { percent, shortCwd, tokens } from "@/format";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
-import { useExtensionUi, usePiorbitStable, usePiorbitState, usePiorbitView, useSessionMeta } from "@/runtime";
+import { useDock, useIslandEntries, usePanelActions } from "@/panels";
+import { usePiorbitStable, usePiorbitState, usePiorbitView, useSessionMeta } from "@/runtime";
 
 import { InlineRename } from "./InlineRename.js";
 import { lastPromptEntryId, sessionStateLabel, sessionStatus, workerChip } from "./model.js";
@@ -56,7 +58,6 @@ export function TopBar() {
   const view = usePiorbitView();
   const sessions = usePiorbitState((s) => s.sessions);
   const meta = useSessionMeta();
-  const { statuses } = useExtensionUi();
   const shell = useShell();
   const { copy } = useCopy();
   const [renaming, setRenaming] = useState(false);
@@ -68,7 +69,11 @@ export function TopBar() {
   const chip = workerChip(meta.worker);
   const title = view ? (view.state.name ?? view.title ?? view.state.id.slice(0, 8)) : "New session";
   const untitled = view ? !(view.state.name ?? view.title) : false;
-  const pills = useMemo(() => Object.entries(statuses).slice(0, 2), [statuses]);
+  // Islands live in the dock; the toggle appears only when there is something to toggle.
+  const islands = useIslandEntries(view?.path, "desktop");
+  const dock = useDock(view?.path);
+  const panelActions = usePanelActions();
+  const dockable = shell.layout !== "mobile" && islands.some((e) => !dock.dismissed.includes(e.key));
   const usage = meta.contextUsage;
   const busy = meta.running || meta.compacting;
 
@@ -155,11 +160,9 @@ export function TopBar() {
           </TooltipIconButton>
         )}
 
-        {view && stateLabel && (
-          <span className="hidden shrink-0 text-xs leading-4 text-ink-2 sm:inline" aria-live="polite">
-            {stateLabel}
-          </span>
-        )}
+        {/* The session's state in words lives in the status line above the
+            composer (D-20 §5), where a phone and a desktop both find it in the
+            same place. Here it is only the dot's accessible name. */}
 
         {chip && meta.session && (
           <span className="flex shrink-0 items-center gap-1">
@@ -171,7 +174,7 @@ export function TopBar() {
               </TooltipTrigger>
               <TooltipContent className="max-w-80 items-start">
                 {chip.detail ?? chip.label}
-                <span className="text-[11px] opacity-70">
+                <span className="text-xs opacity-70">
                   One Pi worker runs each project directory. Its sessions are safe on disk either way.
                 </span>
               </TooltipContent>
@@ -190,17 +193,12 @@ export function TopBar() {
           </span>
         )}
 
-        {pills.map(([key, text]) => (
-          <Badge key={key} variant="mono" className="hidden max-w-48 truncate lg:inline-flex" title={`${key}: ${text}`}>
-            {text}
-          </Badge>
-        ))}
       </div>
 
       <div className="flex shrink-0 items-center gap-0.5">
         {meta.model && (
           <span
-            className="me-1.5 hidden max-w-40 truncate font-mono text-[11px] text-ink-3 xl:inline"
+            className="me-1.5 hidden max-w-40 truncate font-mono text-xs text-ink-3 xl:inline"
             title={`${meta.model.provider}/${meta.model.id}`}
           >
             {meta.model.id}
@@ -216,11 +214,21 @@ export function TopBar() {
             </TooltipTrigger>
             <TooltipContent>
               Context {percent(usage.percent)}
-              <span className="font-mono text-[11px] opacity-80 tnum">
+              <span className="font-mono text-xs opacity-80 tnum">
                 {usage.tokens === null ? "—" : tokens(usage.tokens)} / {tokens(usage.contextWindow)}
               </span>
             </TooltipContent>
           </Tooltip>
+        )}
+
+        {dockable && (
+          <TooltipIconButton
+            tooltip={dock.hidden ? `Show panels (${islands.length})` : "Hide panels"}
+            aria-pressed={!dock.hidden}
+            onClick={() => panelActions.setHidden(!dock.hidden)}
+          >
+            <Layers />
+          </TooltipIconButton>
         )}
 
         <TooltipIconButton

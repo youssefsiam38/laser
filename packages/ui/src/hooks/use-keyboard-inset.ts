@@ -40,6 +40,11 @@ function wire(): void {
   vv.addEventListener("resize", update);
   vv.addEventListener("scroll", update);
   window.addEventListener("orientationchange", update);
+  // Coming back from the background (iOS bfcache, or a tab switch) restores a
+  // viewport that may no longer match what was measured before it left; both
+  // events fire before the first paint of the restored page.
+  window.addEventListener("pageshow", update);
+  document.addEventListener("visibilitychange", update);
   update();
 }
 

@@ -329,6 +329,7 @@ of its own and M3, M4's logs page and M8's previews all land on it (D-27).
 | MP-T5 | The dock: columns, dividers, maximize, pop out, dismiss, the `+N` overflow | a wide monitor gets four expanded panels, none of them narrow |
 | MP-T6 | Placement table, ambient line, phone islands, decision surfaces | the table is the test |
 | MP-T7 | Fallback so nothing regresses: `setWidget` → stream, `setStatus` → ambient, dialogs → decision | an unaware extension looks first-class |
+| MP-T8 | The two surfaces the placement table names but nothing rendered: `inline` panels as cards at the transcript tail, and `inspect` as a sheet on any width | every cell of the placement table draws something |
 
 ---
 

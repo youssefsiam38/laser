@@ -32,11 +32,12 @@ import {
   type ExtensionError,
   type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
-import { createPiorbitExtension } from "@piorbit/pi-extension";
+import { createCommandBus, createPiorbitExtension } from "@piorbit/pi-extension";
 import type {
   ContentBlock,
   ImageContent,
   ModelRef,
+  PiExtensionCommand,
   SessionState,
   SessionUpdate,
   ThinkingLevel,
@@ -62,6 +63,8 @@ export class StableSdkDriver implements SessionDriver {
   private readonly ui: UiBridge;
   /** Fallback for `AgentState.pendingToolCalls`, derived from the event stream. */
   private readonly toolCalls = new PendingToolCallTracker();
+  /** Worker → companion extension. `deliver` answers whether a module took it. */
+  private readonly commands = createCommandBus();
   private runtime: AgentSessionRuntime | undefined;
   private unsubscribe: (() => void) | undefined;
   private cwd = "";
@@ -87,6 +90,7 @@ export class StableSdkDriver implements SessionDriver {
     const agentDir = options.agentDir ?? getAgentDir();
     const piorbit = createPiorbitExtension({
       send: (message) => this.emit({ type: "extension", message }),
+      commands: this.commands,
     });
 
     const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
@@ -304,6 +308,10 @@ export class StableSdkDriver implements SessionDriver {
 
   respondToUi(response: UiDialogResponse): void {
     this.ui.respond(response);
+  }
+
+  deliverExtensionCommand(command: PiExtensionCommand): boolean {
+    return this.commands.deliver(command);
   }
 
   /** Dialogs still waiting for an answer, for replay after a client reconnect. */

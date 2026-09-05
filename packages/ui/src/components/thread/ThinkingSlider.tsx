@@ -75,7 +75,7 @@ export function ThinkingSlider({ className }: { className?: string | undefined }
                     aria-hidden="true"
                     style={{ height: HEIGHTS[i] }}
                     className={cn(
-                      "w-0.5 rounded-full transition-[background-color] duration-75",
+                      "w-0.5 rounded-full transition-[background-color] duration-(--motion-instant)",
                       active ? "bg-live" : filled ? "bg-ink-2" : "bg-line group-hover/tick:bg-ink-3",
                     )}
                   />

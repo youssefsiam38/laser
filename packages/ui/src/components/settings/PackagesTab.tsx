@@ -151,7 +151,7 @@ export function PackagesTab({ cwd, snapshot, onSettingsChanged }: PackagesTabPro
               onChange={(event) => setSource(event.target.value)}
               onKeyDown={(event) => event.key === "Enter" && install()}
               className={cn(
-                "h-8 min-w-64 flex-1 rounded-lg border border-line bg-surface px-2.5 font-mono text-[13px] text-ink",
+                "h-8 min-w-64 flex-1 rounded-lg border border-line bg-surface px-2.5 font-mono text-sm text-ink",
                 "placeholder:text-ink-3 outline-none focus-visible:border-live focus-visible:ring-2 focus-visible:ring-live/25",
               )}
             />
@@ -170,7 +170,7 @@ export function PackagesTab({ cwd, snapshot, onSettingsChanged }: PackagesTabPro
             </Button>
           </div>
           {!projectWritable && snapshot && (
-            <p className="text-2xs leading-4 text-ink-3">
+            <p className="text-xs leading-4 text-ink-3">
               Project scope is unavailable: {snapshot.projectTrust.reason}
             </p>
           )}
@@ -226,7 +226,7 @@ export function PackagesTab({ cwd, snapshot, onSettingsChanged }: PackagesTabPro
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="font-mono text-[13px] text-ink">{pkg.source}</span>
+                    <span className="font-mono text-sm text-ink">{pkg.source}</span>
                     <Badge variant={pkg.scope === "project" ? "live" : "outline"}>{pkg.scope}</Badge>
                     {pkg.type && <Badge variant="default">{pkg.type}</Badge>}
                     {pkg.filtered && (
@@ -247,7 +247,7 @@ export function PackagesTab({ cwd, snapshot, onSettingsChanged }: PackagesTabPro
                     )}
                   </div>
                   {pkg.installedPath && (
-                    <p className="mt-0.5 truncate font-mono text-2xs text-ink-3" title={pkg.installedPath}>
+                    <p className="mt-0.5 truncate font-mono text-xs text-ink-3" title={pkg.installedPath}>
                       {pkg.installedPath}
                     </p>
                   )}
@@ -278,7 +278,7 @@ export function PackagesTab({ cwd, snapshot, onSettingsChanged }: PackagesTabPro
           </ul>
         </section>
 
-        <p className="text-2xs leading-4 text-ink-3">
+        <p className="text-xs leading-4 text-ink-3">
           A newly installed package's extensions load when a session starts. Open a new session, or restart the worker
           for this project, to use it.
         </p>
@@ -350,7 +350,7 @@ function ProgressStrip({ progress }: { progress: PackageProgress }) {
     >
       {done ? <Check className="size-3.5" /> : failed ? null : <Loader2 className="size-3.5 animate-spin" />}
       <span className="font-medium">{progress.action}</span>
-      <span className="font-mono text-[11px]">{progress.source}</span>
+      <span className="font-mono text-xs">{progress.source}</span>
       {progress.message && <span className="min-w-0 truncate opacity-90">{progress.message}</span>}
     </div>
   );

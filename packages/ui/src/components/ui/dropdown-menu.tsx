@@ -42,7 +42,7 @@ function DropdownMenuContent({
         className={cn(
           "z-50 max-h-(--radix-dropdown-menu-content-available-height) min-w-[10rem] origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto p-1",
           "rounded-lg border border-line bg-surface text-ink shadow-float outline-none",
-          "animate-in fade-in-0 duration-75 data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
+          "animate-in fade-in-0 duration-(--motion-instant) data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
           className,
         )}
         {...props}
@@ -169,7 +169,7 @@ function DropdownMenuShortcut({ className, ...props }: React.ComponentProps<"spa
   return (
     <span
       data-slot="dropdown-menu-shortcut"
-      className={cn("ms-auto ps-4 font-mono text-[11px] tracking-[0.02em] text-ink-3 tnum", className)}
+      className={cn("ms-auto ps-4 font-mono text-xs tracking-[0.02em] text-ink-3 tnum", className)}
       {...props}
     />
   );
@@ -210,7 +210,7 @@ function DropdownMenuSubContent({
       className={cn(
         "z-50 min-w-[8rem] origin-(--radix-dropdown-menu-content-transform-origin) overflow-hidden p-1",
         "rounded-lg border border-line bg-surface text-ink shadow-float outline-none",
-        "animate-in fade-in-0 duration-75 data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
+        "animate-in fade-in-0 duration-(--motion-instant) data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
         className,
       )}
       {...props}

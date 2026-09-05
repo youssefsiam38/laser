@@ -41,7 +41,7 @@ function TooltipContent({
           "z-50 inline-flex w-fit max-w-64 items-center gap-2 rounded-md px-2 py-1",
           "bg-ink text-bg text-xs font-medium leading-4",
           "shadow-float-sm select-none",
-          "animate-in fade-in-0 duration-75 data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
+          "animate-in fade-in-0 duration-(--motion-instant) data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
           "[&_[data-slot=kbd]]:border-bg/20 [&_[data-slot=kbd]]:bg-bg/15 [&_[data-slot=kbd]]:text-bg",
           className,
         )}

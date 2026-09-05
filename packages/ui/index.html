@@ -7,6 +7,16 @@
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F5F7FA" />
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0B0F14" />
     <title>piorbit</title>
+    <!-- PWA (M7-T1): installable on both platforms; the service worker is registered by src/pwa/boot.ts. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
+    <meta name="application-name" content="piorbit" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="piorbit" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="format-detection" content="telephone=no" />
     <script>
       // Apply the persisted theme before first paint so there is no flash.
       (function () {
@@ -21,12 +31,18 @@
         } catch (_) {}
       })();
     </script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Host+Grotesk:wght@400;500;600&family=Martian+Mono:wght@400;500&display=swap"
-    />
+    <!--
+      The two families are served from /fonts by the host itself (see
+      src/globals.css). Self-hosted rather than a CDN stylesheet for three
+      reasons: the service worker can precache them, so the offline shell
+      renders in the real typeface instead of the fallback stack; a render
+      blocking cross-origin request cannot stall the first paint on a flaky or
+      captive network; and a product whose point is an end-to-end encrypted
+      relay should not have every phone announce itself to a font CDN before
+      it has drawn anything.
+    -->
+    <link rel="preload" as="font" type="font/woff2" href="/fonts/host-grotesk-latin.woff2" crossorigin />
+    <link rel="preload" as="font" type="font/woff2" href="/fonts/martian-mono-latin.woff2" crossorigin />
   </head>
   <body>
     <div id="root"></div>

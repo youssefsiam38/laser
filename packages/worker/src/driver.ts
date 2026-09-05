@@ -20,6 +20,7 @@
 import type {
   ContentBlock,
   ModelRef,
+  PiExtensionCommand,
   PiExtensionMessage,
   SessionState,
   SessionUpdate,
@@ -89,6 +90,14 @@ export interface SessionDriver {
 
   /** Answer a pending extension dialog raised via a `ui_request` event. */
   respondToUi(response: UiDialogResponse): void;
+
+  /**
+   * Hand a command to the companion extension — a panel action a person
+   * pressed (docs/ux-panels.md). Returns true when a module took it; false
+   * means nobody still holds that panel id. Optional: the stub driver loads no
+   * extension, so it has nothing to deliver to.
+   */
+  deliverExtensionCommand?(command: PiExtensionCommand): boolean;
 
   /** Replay persisted entries (for reattach). Returns entries and the seq they were last emitted at. */
   entries(): Promise<unknown[]>;

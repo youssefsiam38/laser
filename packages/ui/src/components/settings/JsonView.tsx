@@ -83,7 +83,7 @@ export function JsonView({ catalog, snapshot, scope, onApply }: JsonViewProps) {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 p-3">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="min-w-0 flex-1 truncate font-mono text-2xs text-ink-3" title={file.path}>
+        <span className="min-w-0 flex-1 truncate font-mono text-xs text-ink-3" title={file.path}>
           {file.path}
           {file.exists ? "" : " · does not exist yet"}
         </span>
@@ -125,12 +125,12 @@ export function JsonView({ catalog, snapshot, scope, onApply }: JsonViewProps) {
         onChange={(event) => setDraft(event.target.value)}
         className={cn(
           "min-h-0 flex-1 w-full resize-none rounded-lg border border-line bg-surface p-3",
-          "font-mono text-[12px] leading-5 text-ink outline-none",
+          "font-mono text-xs leading-5 text-ink outline-none",
           "focus-visible:border-live focus-visible:ring-2 focus-visible:ring-live/25",
           readOnly && "bg-surface-2 opacity-80",
         )}
       />
-      <p className="text-2xs leading-4 text-ink-3">
+      <p className="text-xs leading-4 text-ink-3">
         Saving sends only the settings that changed. Keys piorbit does not recognise are never rewritten, so a file
         edited by a newer Pi stays intact.
       </p>

@@ -6,6 +6,49 @@
 @import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
+
+/* ---------------------------------------------------------------------------
+ * Typefaces, served from this origin (public/fonts, precached by the service
+ * worker). Both are variable-weight, so one file per subset covers 400-600.
+ * Host Grotesk and Martian Mono are SIL OFL 1.1; see public/fonts/README.md.
+ * ------------------------------------------------------------------------- */
+@font-face {
+  font-family: "Host Grotesk";
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url("/fonts/host-grotesk-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308,
+    U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Host Grotesk";
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url("/fonts/host-grotesk-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Martian Mono";
+  font-style: normal;
+  font-weight: 400 500;
+  font-display: swap;
+  src: url("/fonts/martian-mono-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308,
+    U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Martian Mono";
+  font-style: normal;
+  font-weight: 400 500;
+  font-display: swap;
+  src: url("/fonts/martian-mono-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
 @custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
 @custom-variant data-closed (&:where([data-state="closed"], [data-closed]:not([data-closed="false"])));
 
@@ -25,6 +68,19 @@
   --danger: #c53030;
   --ok: #15803d;
 
+  /* Motion (AGENTS.md: "no static visual values, ever"; docs/ux-theme.md
+   * --motion-*). Four durations and one easing, so a component never spells a
+   * number: `duration-(--motion-instant)` for press and hover feedback,
+   * `--motion-fast` for a small reveal, `--motion-slow` for a sheet, and
+   * `--motion-morph` for the one motion that carries meaning — an island
+   * changing size. Under reduced motion every duration collapses to zero, so
+   * nothing in a component has to know which mode it is in. */
+  --motion-instant: 75ms;
+  --motion-fast: 150ms;
+  --motion-slow: 200ms;
+  --motion-morph: 260ms;
+  --motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+
   /* text that sits on a filled status color */
   --on-live: #ffffff;
   --on-attention: #ffffff;
@@ -36,6 +92,29 @@
   --terminal-ink: #e6edf3;
   --terminal-ink-2: #9fb0c0;
   --terminal-line: #263140;
+
+  /* The 16 named ANSI colours, for terminal blocks and `stream` panels whose
+   * encoding is `ansi`. They live here rather than in a component so the whole
+   * palette is one place, and they are tuned for `--terminal-bg` (dark in both
+   * themes): every normal colour is ≥ 4.5:1 on it, and the bright set brighter
+   * still. `--ansi-0` is a readable grey, not black, because black on a black
+   * ground is what makes agent output disappear. */
+  --ansi-0: #9fb0c0;
+  --ansi-1: #ff7b72;
+  --ansi-2: #7ee787;
+  --ansi-3: #e3b341;
+  --ansi-4: #79c0ff;
+  --ansi-5: #d2a8ff;
+  --ansi-6: #56d4dd;
+  --ansi-7: #e6edf3;
+  --ansi-8: #8393a3;
+  --ansi-9: #ffa198;
+  --ansi-10: #a5f3b8;
+  --ansi-11: #f2cc60;
+  --ansi-12: #a5d6ff;
+  --ansi-13: #e2c5ff;
+  --ansi-14: #9ee7ec;
+  --ansi-15: #ffffff;
 
   --radius: 8px;
   --kb: 0px;
@@ -146,7 +225,13 @@
   --shadow-float: var(--float-shadow);
   --shadow-float-sm: var(--float-shadow-sm);
 
-  /* Type scale: 11 / 12 / 13 / 14 / 15 / 18 / 22 */
+  /* Type scale: 11 / 12 / 13 / 14 / 15 / 18 / 22.
+   *
+   * 11px is the eyebrow size and nothing else. The legibility floor (AGENTS.md,
+   * DESIGN.md, docs/ux-panels.md R13) is 12px for anything a person reads as
+   * information, so `--text-2xs` is consumed only by the `eyebrow` utility
+   * below — uppercase, tracked, a category label, never a value. Do not add a
+   * `text-2xs` class: a component that cannot fit at 12px shows less content. */
   --text-2xs: 11px;
   --text-2xs--line-height: 16px;
   --text-xs: 12px;
@@ -162,7 +247,18 @@
   --text-xl: 22px;
   --text-xl--line-height: 28px;
 
+  /* Line heights, named for the size they pair with, so a component never
+   * spells one either. A bare `leading-[18px]` is the same bug as a bare
+   * `text-[13px]`: it does not move when the text-size setting does. */
+  --leading-xs: 16px;
+  --leading-sm: 18px;
+  --leading-base: 21px;
+  --leading-md: 24px;
+  --leading-lg: 26px;
+
   --tracking-eyebrow: 0.08em;
+
+  --ease-morph: var(--motion-ease);
 
   --animate-sweep: radar-sweep 2s linear infinite;
   --animate-attention: attention-pulse 1.6s ease-in-out infinite;
@@ -202,6 +298,18 @@
     to {
       background-position: -200% 0;
     }
+  }
+}
+
+/* Reduced motion is a token change, not a per-component branch: every
+ * `duration-(--motion-*)` in the app becomes instant, and the one WAAPI
+ * animation (the island's maximize hop) reads the same token and skips. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-instant: 0ms;
+    --motion-fast: 0ms;
+    --motion-slow: 0ms;
+    --motion-morph: 0ms;
   }
 }
 
@@ -329,11 +437,12 @@
  * Utilities
  * ------------------------------------------------------------------------- */
 
-/* Eyebrow: Martian Mono 11px uppercase, tracked, tertiary ink. */
+/* Eyebrow: Martian Mono 11px uppercase, tracked, tertiary ink. The one place
+ * type goes below the 12px floor, and only ever for a category label. */
 @utility eyebrow {
   font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 16px;
+  font-size: var(--text-2xs);
+  line-height: var(--text-2xs--line-height);
   font-weight: 500;
   letter-spacing: var(--tracking-eyebrow);
   text-transform: uppercase;

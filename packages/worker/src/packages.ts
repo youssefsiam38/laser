@@ -254,6 +254,24 @@ export class ModelsAdapter {
     return { providers, ...(error !== undefined ? { error } : {}) };
   }
 
+  /**
+   * Pi's own resolved API key for one provider, or undefined when it has none.
+   *
+   * Dictation needs the *platform* key, so the caller checks `oauth` on the
+   * provider first: `getAuth` happily hands back an OAuth bearer, which the
+   * audio endpoint rejects with a 401 halfway through a sentence.
+   */
+  async apiKeyForProvider(providerId: string): Promise<string | undefined> {
+    const runtime = await this.models;
+    try {
+      const auth = await runtime.getAuth(providerId);
+      return auth?.auth.apiKey;
+    } catch {
+      // No credential, or a provider Pi does not know: the caller says so.
+      return undefined;
+    }
+  }
+
   async catalog(refresh = false): Promise<ModelCatalogResult> {
     const runtime = await this.models;
     const errors: string[] = [];
