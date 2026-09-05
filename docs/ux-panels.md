@@ -129,6 +129,47 @@ Rules for the geometry:
 - On a phone the island sits above the composer: minimal by default, tapping
   it expands to a sheet. Same element, same four sizes, less room.
 
+
+### The legibility floor
+
+An island shrinks by **dropping content, never by shrinking type**. This is
+the constraint that makes the four sizes real rather than decorative, and it
+is not negotiable.
+
+**Type never goes below 12px for information.** The 11px size in `DESIGN.md`
+is permitted only for an uppercase eyebrow with `0.08em` tracking — a
+category label, never a value. No panel, at any size, on any device, renders
+data smaller than 12px. If something does not fit at 12px, it does not fit.
+
+**Each size has a fixed content budget.** The budget is the design; fitting
+more is not an option that exists.
+
+| Size | What it may contain | Height |
+| --- | --- | --- |
+| Minimal | status dot · name · **exactly one** live value | 28px |
+| Compact | status dot · name · up to **three** values · one action, rest in a menu | 36px |
+| Expanded | everything, with its own internal scroll | fills its share |
+| Maximized | everything | the window |
+
+**Truncate, never scale.** A long name ends in an ellipsis at a fixed width,
+with the full text in the accessible name and the tooltip. Nothing is ever
+condensed, letter-spaced tighter, or scaled down to make it fit.
+
+**Nothing overflows its container, ever.** The page body never scrolls
+sideways. Wide content inside an expanded island — a table, a code block, a
+diagram, a diff — gets its own `overflow-x: auto` container and scrolls
+within itself. A minimal island that would exceed its max width truncates its
+name; it does not grow, and it does not clip.
+
+**Minimal islands wrap, they do not scroll.** More islands than fit the width
+wrap to a second row. Past two rows, and only then, the remainder collapses
+into a single `+N` island that opens the full list. A horizontally scrolling
+strip of live indicators is a strip you stop reading.
+
+**Touch targets stay 44px** on coarse pointers even when the island is 28px
+tall: the hit area extends beyond the visible pill rather than the pill
+growing.
+
 ## Placement is piorbit's decision, not the extension's
 
 An extension declares a **kind** and an **intent**. piorbit maps that, plus
@@ -586,6 +627,11 @@ exactly this.
 docs call its protocol version nearly meaningless because four behaviours
 shipped without a bump. And a session that filtered an extension out looks
 exactly like that extension being absent, so discovery always has a timeout.
+
+**R13 · Shrink by dropping content, never by shrinking type.** No data below
+12px anywhere, at any size, on any device. Each size has a fixed content
+budget; a long value truncates with the full text in the tooltip. Nothing
+overflows its container and the body never scrolls sideways.
 
 **R12a · Adapters carry references and generic shapes, never domain values.**
 The moment a payload names something from one producer's world — a URL field

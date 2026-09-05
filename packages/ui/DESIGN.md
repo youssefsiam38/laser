@@ -76,6 +76,23 @@ timestamps, hints, durations, the "waiting for you" subtitle — and measured
 - Load both from `fonts.googleapis.com` with `display=swap` and real fallback
   stacks.
 
+
+## Legibility floor (binding everywhere, not just panels)
+
+- **No data below 12px.** The 11px size is for uppercase eyebrows with
+  `0.08em` tracking only — a category label, never a value. This holds at
+  every viewport and inside every island, card and rail.
+- **Shrink by dropping content, never by shrinking type.** A component that
+  cannot fit its content at 12px shows less content, not smaller text.
+- **Truncate, never condense.** A long value ends in an ellipsis at a fixed
+  width with the full text in the tooltip and the accessible name. Never
+  tighter tracking, never a condensed face, never a scale transform.
+- **Nothing overflows its container.** The page body never scrolls sideways.
+  Tables, code blocks, diffs and diagrams each get their own
+  `overflow-x: auto` container.
+- **Touch targets stay 44px** on coarse pointers even where the visible
+  control is smaller; the hit area extends past the paint.
+
 ## Layout
 
 Desktop (≥1024px), four columns left to right:
