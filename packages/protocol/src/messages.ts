@@ -8,6 +8,8 @@
  * `seq`. Clients resume with `session/load { fromSeq }`.
  */
 
+import type { PiExtensionMessage } from "./pi-extension.js";
+
 // ---------- Shared value types (no Pi types allowed here) ----------
 
 export interface ImageContent {
@@ -170,13 +172,19 @@ export interface HostRequests {
     params: { path: string; toolCallId: string; toolName: string; args: unknown; options: string[] };
     result: { choice: string } | { cancelled: true };
   };
-  "pi/ui/request": { params: { path: string } & UiDialogRequest; result: UiDialogResponse };
 }
 
-/** Host → client notifications. */
+/**
+ * Host → client notifications. Extension dialogs travel as a notification
+ * (`pi/ui/request`) answered by a client request (`pi/ui/response`), the same
+ * shape Pi's own RPC mode uses, so a dialog survives a client reconnect: the
+ * worker re-emits pending requests on `session/load`.
+ */
 export interface HostNotifications {
   "session/update": SessionUpdateParams;
+  "pi/ui/request": { path: string } & UiDialogRequest;
   "pi/ui/event": { path: string } & UiFireAndForget;
+  "pi/extension/message": { path: string; message: PiExtensionMessage };
   "pi/worker/status": { cwd: string; status: "starting" | "ready" | "crashed" | "retired"; message?: string };
 }
 

@@ -11,11 +11,11 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
 | M0-T1 | Workspace scaffold | done | claude-2026-09-05-a | `ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install && pnpm -r build && pnpm -r test` passes (2026-09-05) | see notes |
-| M0-T2 | `@piorbit/protocol` schemas + envelope + seq | in-progress | claude-2026-09-05-a | `packages/protocol/test/jsonrpc.test.ts` passes | TS types + LineDecoder done; zod schemas + validation still todo |
+| M0-T2 | `@piorbit/protocol` schemas + envelope + seq | done | claude-2026-09-05-a | `pnpm -F @piorbit/protocol test` → `test/schemas.test.ts` (every method round-trips; error codes) + `test/jsonrpc.test.ts` | see notes |
 | M0-T3 | `SessionDriver` interface + `DriverEvent` | done | claude-2026-09-05-a | `packages/worker/src/driver.ts`; exercised by `test/stable-sdk.*.test.ts` | see notes |
 | M0-T4 | `StableSdkDriver` | done | claude-2026-09-05-a | `pnpm -F @piorbit/worker test` → `test/stable-sdk.prompt.test.ts` (stub provider, ordered updates) + `test/stable-sdk.open.test.ts` + `test/map-event.test.ts` | see notes |
 | M0-T5 | `ChordDriver` stub + seam test | done | claude-2026-09-05-a | `pnpm -F @piorbit/worker test` → `test/seam.test.ts` 3 passed | see notes |
-| M0-T6 | Worker process entry + transport | todo | — | — | stdin LineDecoder loop in `packages/worker/src/main.ts`; no dispatch yet |
+| M0-T6 | Worker process entry + transport | done | claude-2026-09-05-a | `test/server.test.ts` (dispatch, seq, replay, dialogs, errors) + `test/spawn.test.ts` (real process over fd 3) | see notes |
 | M0-T7 | Extension UI bridge | done | claude-2026-09-05-a | `test/ui-bridge.test.ts` (select/confirm/input/editor round-trip, timeout, custom() resolves, unknown members no-op, dispose settles) | see notes |
 | M0-T8 | CI | blocked | — | `ci/github-workflow.yml` | blocked: gh token lacks `workflow` scope; unblock with `gh auth refresh -s workflow` then move the file to `.github/workflows/ci.yml` |
 
@@ -26,7 +26,13 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 - 2026-09-05 done, evidence recorded in the row.
 
 #### M0-T2 notes
-- 2026-09-05 TypeScript types for the ACP core, `pi/*` extras, `SessionUpdate`, UI dialogs, and the JSON-RPC envelope are in `messages.ts` / `jsonrpc.ts`. `LineDecoder` tested. Still needed: zod schemas for runtime validation at the host boundary, and a round-trip test per message.
+- 2026-09-05 TypeScript types for the ACP core, `pi/*` extras, `SessionUpdate`, UI dialogs, and the JSON-RPC envelope are in `messages.ts` / `jsonrpc.ts`. `LineDecoder` tested.
+- 2026-09-05 done: `schemas.ts` with zod per client method (`clientParamsSchemas satisfies Record<ClientMethod, …>` so a new method without a schema fails to compile), `parseClientRequest` → `ProtocolError` with JSON-RPC codes, `parseJsonLine`. Hand-written types remain the TS source of truth; schemas guard the process boundary. `pi/ui/request` moved to a notification (Pi RPC shape) so dialogs survive reconnects; `pi/extension/message` notification added.
+
+#### M0-T6 notes
+- 2026-09-05 done: `WorkerServer` (transport-agnostic dispatch, per-session `seq`, bounded replay buffer, `session/load { fromSeq }` replay, pending-dialog re-emit, error mapping) + `main.ts` (protocol on fd 3 so Pi/extension stdout cannot corrupt the stream; stdio fallback redirects console to stderr).
+- 2026-09-05 bug found and fixed: server must subscribe to the driver *before* `open()`; the companion extension reports capabilities during `session_start`, inside open. Events are queued until the session path is known.
+- 2026-09-05 `session/set_mode`, `pi/session/fork`, `pi/session/list` return `Unsupported` for now (fork → M1-T9, list → host catalog M1-T2).
 
 #### M0-T3 notes
 - 2026-09-05 drafted the interface with open/prompt/steer/followUp/abort/setModel/setThinkingLevel/compact/navigateTree/dispose and an event stream. Event names mirror Pi SDK 0.85 `AgentSessionEvent` plus `pi/ui/request`.
@@ -307,3 +313,4 @@ reworded; M8-T5 added (module authoring guide).
 - 2026-09-05 · claude-2026-09-05-a · install/build/test verified; M0-T1 evidence, M0-T5 done, M0-T2 and M0-T7 in-progress with tests.
 - 2026-09-05 · claude-2026-09-05-a · D-13: subagents-bridge replaced by pi-extension with modules; file layer moved to host; M3/M8 rows updated; M8-T5 added.
 - 2026-09-05 · claude-2026-09-05-a · M0-T3, M0-T4, M0-T7 done with tests; M0-T8 blocked on gh `workflow` scope; D-14..D-16; Q-1/Q-2 answered; upstream packaging bug logged; repo on GitHub (private), branch `main`.
+- 2026-09-05 · claude-2026-09-05-a · M0-T2 and M0-T6 done; M0 complete except CI. 26 tests green.

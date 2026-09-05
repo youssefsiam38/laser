@@ -39,6 +39,7 @@ import type {
   SessionState,
   SessionUpdate,
   ThinkingLevel,
+  UiDialogRequest,
   UiDialogResponse,
 } from "@piorbit/protocol";
 import {
@@ -157,7 +158,8 @@ export class StableSdkDriver implements SessionDriver {
       id: session.sessionId,
       cwd: this.cwd,
       ...(session.sessionName !== undefined ? { name: session.sessionName } : {}),
-      model: session.model ? toModelRef(session.model) : null,
+      // With no configured auth Pi substitutes an "unknown/unknown" placeholder; report it as no model.
+      model: session.model && session.model.provider !== "unknown" ? toModelRef(session.model) : null,
       thinkingLevel: session.thinkingLevel as ThinkingLevel,
       isStreaming: session.isStreaming,
       isCompacting: session.isCompacting,
@@ -271,6 +273,11 @@ export class StableSdkDriver implements SessionDriver {
 
   respondToUi(response: UiDialogResponse): void {
     this.ui.respond(response);
+  }
+
+  /** Dialogs still waiting for an answer, for replay after a client reconnect. */
+  pendingUi(): UiDialogRequest[] {
+    return this.ui.pending();
   }
 
   // ------------------------------------------------------------------ internals
