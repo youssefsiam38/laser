@@ -8,7 +8,9 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./main": "./dist/main.js",
+    "./package.json": "./package.json"
   },
   "bin": {
     "piorbit-worker": "./dist/main.js"

@@ -57,8 +57,8 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
-| M1-T1 | Host: worker supervision + local WS | todo | — | — | — |
-| M1-T2 | Session catalog with cache | todo | — | — | — |
+| M1-T1 | Host: worker supervision + local WS | done | claude-2026-09-05-a | `pnpm -F @piorbit/host test` → `test/host.e2e.test.ts` (WS client → host → spawned worker → Pi → stub provider; resume from seq; one worker per cwd) | see notes |
+| M1-T2 | Session catalog with cache | done | claude-2026-09-05-a | `test/catalog.test.ts`; real dir (read-only): 42 sessions / 3 projects, 13.1 ms cold, 0.2 ms warm | see notes |
 | M1-T3 | UI shell | todo | — | — | — |
 | M1-T4 | Transcript renderer | todo | — | — | — |
 | M1-T5 | Composer | todo | — | — | — |
@@ -66,6 +66,15 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 | M1-T7 | Model/thinking/name/compaction controls | todo | — | — | — |
 | M1-T8 | Resume and reattach with seq | todo | — | — | — |
 | M1-T9 | Session tree | todo | — | — | — |
+
+#### M1-T1 notes
+- 2026-09-05 done: `WorkerClient` (spawn over fd 3, id correlation, ready/exit), `WorkerPool` (one per cwd, shared in-flight spawn, crash → `pi/worker/status crashed`), `Router` (session/new by cwd; path-bearing methods by pool memory then catalog header; `pi/session/list` from catalog; `pi/ui/response` fanned to all workers), `HostServer` (HTTP static UI with SPA fallback + `/healthz`, WS `/ws`, broadcast notifications to every client). Loopback only.
+- 2026-09-05 host resolves the worker entry via `createRequire().resolve("@piorbit/worker/main")` — a dependency for path resolution only, no code import, seam intact.
+- 2026-09-05 known gaps for later tasks: notifications broadcast to all clients (per-session subscription is M2-T3); no auth on the local socket (loopback; relay auth is M6).
+
+#### M1-T2 notes
+- 2026-09-05 catalog reads only the first line (header) + stat per file, cached by (size, mtime). Handles Pi's slug-subdir layout (default dir) and the flat layout Pi uses for an explicit `--session-dir` (found by the e2e test). `messageCount` is not computed yet (would need a full read; defer to a background pass or Pi's own `SessionInfo` cache format).
+- 2026-09-05 done: measured against `~/.pi/agent/sessions` read-only: 42 sessions, 3 projects, 13.1 ms cold scan, 0.2 ms warm. Well under the one-second done-when.
 
 ---
 
@@ -314,3 +323,4 @@ reworded; M8-T5 added (module authoring guide).
 - 2026-09-05 · claude-2026-09-05-a · D-13: subagents-bridge replaced by pi-extension with modules; file layer moved to host; M3/M8 rows updated; M8-T5 added.
 - 2026-09-05 · claude-2026-09-05-a · M0-T3, M0-T4, M0-T7 done with tests; M0-T8 blocked on gh `workflow` scope; D-14..D-16; Q-1/Q-2 answered; upstream packaging bug logged; repo on GitHub (private), branch `main`.
 - 2026-09-05 · claude-2026-09-05-a · M0-T2 and M0-T6 done; M0 complete except CI. 26 tests green.
+- 2026-09-05 · claude-2026-09-05-a · M1-T1 and M1-T2 done (host e2e through a real worker and stub provider; catalog timed on the real dir). 31 tests green.

@@ -47,6 +47,9 @@ importers:
       '@piorbit/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@piorbit/worker':
+        specifier: workspace:*
+        version: link:../worker
       ws:
         specifier: 8.18.3
         version: 8.18.3

@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Supervisor: one worker per project, session catalog, local WebSocket for the UI, relay client, log store. Must not import Pi.",
+  "description": "Supervisor: one worker per project, session catalog, local WebSocket for the UI, relay client, log store. Must not import Pi (it only resolves the worker's entry path).",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -17,12 +17,13 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "dev": "tsc -p tsconfig.json --watch",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
     "@piorbit/protocol": "workspace:*",
+    "@piorbit/worker": "workspace:*",
     "ws": "8.18.3"
   },
   "devDependencies": {
