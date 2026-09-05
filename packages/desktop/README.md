@@ -15,13 +15,13 @@ deep-link back into a session, the OS keychain, and updates.
        │ spawn                 │ ws (read-only: sessions, attention)
 ┌──────▼───────────────────────▼──────────────┐
 │ resources/runtime/node   ← stock Node 24.20 │
-│   piorbit __daemon  =  @lasercode/host        │
+│   laser __daemon  =  @lasercode/host        │
 │     one worker per project, each with Pi    │
 └─────────────────────────────────────────────┘
        ▲ http
 ┌──────┴──────────────────────────────────────┐
 │ BrowserWindow → the host's own UI bundle    │
-│   preload exposes window.piorbit            │
+│   preload exposes window.laser            │
 └─────────────────────────────────────────────┘
 ```
 
@@ -68,7 +68,7 @@ one. So the same script lifts the npm that ships **inside that archive** into
 It is covered by the hash already pinned in `runtime.json`: one download, one
 check, nothing else to trust, and no second version to keep in step.
 
-`host-process.ts` sets `PIORBIT_NPM_CLI` to it, which is what the host's
+`host-process.ts` sets `LASER_NPM_CLI` to it, which is what the host's
 `detectInstallRuntime()` looks for first. In a development build that has not
 staged a runtime there is none, and the Extensions screen says installs are
 unavailable and why rather than reaching for the machine's own.
@@ -83,14 +83,14 @@ pnpm -F @lasercode/desktop dev
 ```
 
 `dev` starts (or attaches to) a host and loads the UI the host serves. The host
-is a real one: `piorbit status` sees it, `piorbit down` stops it, and closing
+is a real one: `laser status` sees it, `laser down` stops it, and closing
 the app stops it only if the app started it.
 
 | Variable | Effect |
 | --- | --- |
-| `PIORBIT_UI_URL` | Load this instead of the host's bundle — point it at Vite (`http://127.0.0.1:5173`) to hot-reload the UI. |
-| `PIORBIT_NODE` | Use this Node for the host instead of the bundled one. |
-| `PIORBIT_PORT`, `PIORBIT_AGENT_DIR`, `PIORBIT_STATE_DIR`, `PIORBIT_SESSION_DIR` | Resolved by `@lasercode/cli`, exactly as for the CLI. A GUI takes its configuration from the environment, never from argv. |
+| `LASER_UI_URL` | Load this instead of the host's bundle — point it at Vite (`http://127.0.0.1:5173`) to hot-reload the UI. |
+| `LASER_NODE` | Use this Node for the host instead of the bundled one. |
+| `LASER_PORT`, `LASER_AGENT_DIR`, `LASER_STATE_DIR`, `LASER_SESSION_DIR` | Resolved by `@lasercode/cli`, exactly as for the CLI. A GUI takes its configuration from the environment, never from argv. |
 
 Logs: `<state-dir>/desktop.log` (the shell) and `<state-dir>/host.log` (the
 host). Two files on purpose — when the app will not start, the only question is
@@ -100,28 +100,28 @@ which of the two failed.
 
 ```bash
 pnpm -F @lasercode/ui dev                                                  # Vite on :5173
-PIORBIT_UI_URL=http://127.0.0.1:5173 pnpm -F @lasercode/desktop dev        # the shell, pointed at it
+LASER_UI_URL=http://127.0.0.1:5173 pnpm -F @lasercode/desktop dev        # the shell, pointed at it
 ```
 
 The host refuses WebSocket upgrades from origins it does not recognise, and
 Vite forwards the browser's own `Origin` (`http://127.0.0.1:5173`). Nothing to
-do about it by hand: the shell passes `PIORBIT_ALLOWED_ORIGINS=<dev origin>`
+do about it by hand: the shell passes `LASER_ALLOWED_ORIGINS=<dev origin>`
 to the host it spawns (`src/main.ts`), and the daemon reads it into
 `HostServer({ allowedOrigins })` (`@lasercode/cli` `src/daemon.ts`).
 
 To run against the built bundle instead, `pnpm -F @lasercode/ui build` and drop
-`PIORBIT_UI_URL`.
+`LASER_UI_URL`.
 
 Headless smoke test on Linux (no X server needed):
 
 ```bash
-env -u DISPLAY -u WAYLAND_DISPLAY PIORBIT_STATE_DIR=/tmp/piorbit-smoke \
+env -u DISPLAY -u WAYLAND_DISPLAY LASER_STATE_DIR=/tmp/laser-smoke \
   ./node_modules/electron/dist/electron --ozone-platform=headless --disable-gpu dist/main.js
 ```
 
 ## What the renderer gets
 
-The preload exposes one frozen object, `window.piorbit`, typed by
+The preload exposes one frozen object, `window.laser`, typed by
 [`src/api.ts`](src/api.ts) (`@lasercode/desktop/api`). It is **absent in the web
 build**, so every caller has to check — which is what keeps the browser, the
 phone and this window on one code path.
@@ -132,7 +132,7 @@ phone and this window on one code path.
 | `panel` | The `PanelDescriptor` when this window *is* a popped-out panel; `null` in the app window. Available before first paint. |
 | `host()`, `onHost()`, `retryHost()` | The host's state, url and ws url. |
 | `popOutPanel(descriptor)`, `closePanelWindow()` | docs/ux-panels.md D-20. Asking twice for one panel id focuses the window that exists rather than opening a second copy. On the web, the UI opens a tab instead. |
-| `onDeepLink()`, `pendingDeepLinks()` | `piorbit://session/<path>`, `piorbit://project/<cwd>`, `piorbit://open`. Call `pendingDeepLinks()` once on mount: it drains links that arrived before the UI was listening (a cold start from a notification) **and** is how the shell learns the UI is ready. |
+| `onDeepLink()`, `pendingDeepLinks()` | `laser://session/<path>`, `laser://project/<cwd>`, `laser://open`. Call `pendingDeepLinks()` once on mount: it drains links that arrived before the UI was listening (a cold start from a notification) **and** is how the shell learns the UI is ready. |
 | `window.*` | minimise / toggle maximise / close, and the maximised-fullscreen-focused state, for the custom titlebar. |
 | `setTheme("light" \| "dark")` | Keeps the native frame in step; call it whenever the UI's theme changes. |
 | `microphone.*` | `status()`, `request()` (prompts once), `openSettings()` (the only way back after a refusal). |
@@ -182,7 +182,7 @@ fails the build for anything else of the same shape. A release is therefore
 built from a plain `pnpm install --frozen-lockfile` — the same tree the tests
 ran against, which is what "reproducible from a tag" has to mean.
 
-`appId` is `dev.piorbit.desktop` and **must never change**: it keys the macOS
+`appId` is `dev.laser.desktop` and **must never change**: it keys the macOS
 TCC grants (including the microphone), the Windows notification centre, and the
 update feed. A new id is a new app that has to ask for permissions again and
 cannot update the old one.
@@ -222,11 +222,11 @@ build and conclude the code is broken.
 Verify a finished build:
 
 ```bash
-codesign -dv --verbose=4 out/mac-arm64/piorbit.app
-codesign --verify --deep --strict out/mac-arm64/piorbit.app
-spctl -a -vvv -t install out/mac-arm64/piorbit.app     # expect "accepted … Notarized Developer ID"
-xcrun stapler validate out/mac-arm64/piorbit.app
-codesign -dv out/mac-arm64/piorbit.app/Contents/Resources/runtime/node
+codesign -dv --verbose=4 out/mac-arm64/laser.app
+codesign --verify --deep --strict out/mac-arm64/laser.app
+spctl -a -vvv -t install out/mac-arm64/laser.app     # expect "accepted … Notarized Developer ID"
+xcrun stapler validate out/mac-arm64/laser.app
+codesign -dv out/mac-arm64/laser.app/Contents/Resources/runtime/node
 ```
 
 ### Windows: Azure Trusted Signing
@@ -244,10 +244,10 @@ broken `--win` target instead of an unsigned installer. With none of these set,
 
 | Variable | Where it comes from |
 | --- | --- |
-| `PIORBIT_AZURE_PUBLISHER_NAME` | The subject name on the certificate profile — must match exactly. |
-| `PIORBIT_AZURE_ENDPOINT` | `https://<region>.codesigning.azure.net`, from the account overview. |
-| `PIORBIT_AZURE_ACCOUNT` | The Trusted Signing account name. |
-| `PIORBIT_AZURE_PROFILE` | The profile inside that account. |
+| `LASER_AZURE_PUBLISHER_NAME` | The subject name on the certificate profile — must match exactly. |
+| `LASER_AZURE_ENDPOINT` | `https://<region>.codesigning.azure.net`, from the account overview. |
+| `LASER_AZURE_ACCOUNT` | The Trusted Signing account name. |
+| `LASER_AZURE_PROFILE` | The profile inside that account. |
 
 The credentials electron-builder reads itself come from the environment too,
 and never from a file:
@@ -260,7 +260,7 @@ pnpm -F @lasercode/desktop dist -- --win --x64
 pnpm -F @lasercode/desktop dist -- --win --arm64
 ```
 
-Verify with `signtool verify /pa /v out\piorbit-…-setup.exe`.
+Verify with `signtool verify /pa /v out\laser-…-setup.exe`.
 
 ### Linux: four formats
 
@@ -287,26 +287,26 @@ is the escape hatch, and the `.deb`, `.rpm` or tarball is the better answer.
 This is also why the root `install.sh` *extracts* an AppImage rather than
 installing the single file: `--appimage-extract` needs no FUSE at all.
 
-`piorbit://` works out of the box from the `.deb` and `.rpm` (their post-install
+`laser://` works out of the box from the `.deb` and `.rpm` (their post-install
 runs `update-desktop-database`) and from the tarball once its `<binary>-setup.sh` has
 run. A `chmod +x` AppImage started straight out of `~/Downloads` has no
 `.desktop` entry, so it has no deep links until it is integrated — that is the
-format, not a bug in piorbit. The one-line installer sidesteps it entirely by
+format, not a bug in laser. The one-line installer sidesteps it entirely by
 writing the entry itself.
 
 **The sandbox contract.** [`build/linux/launcher.sh.tpl`](build/linux/launcher.sh.tpl), rendered into `build/linux/generated/launcher.sh` from `product.json` (MX-T7),
-is installed as `piorbit`, with Electron's own binary renamed `piorbit-bin`, so
-the menu entry, `/usr/bin/piorbit`, the AppImage's `AppRun` and `./piorbit` out
+is installed as `laser`, with Electron's own binary renamed `laser-bin`, so
+the menu entry, `/usr/bin/laser`, the AppImage's `AppRun` and `./laser` out
 of the tarball all run the same code. It never passes `--no-sandbox` on the
 person's behalf — it strips the one the AppImage runtime injects — and if the
 kernel offers no user namespace *and* there is no setuid helper it refuses to
 start with a written explanation (on stderr, and in a zenity/kdialog box when
-there is no terminal to read). `PIORBIT_DISABLE_SANDBOX=1` is the explicit, loud
+there is no terminal to read). `LASER_DISABLE_SANDBOX=1` is the explicit, loud
 override.
 
 That launcher is also what decides **window or command**: a first argument that
-is an ordinary word goes to the bundled CLI on the bundled Node, so `piorbit
-doctor` typed in a terminal is the command and a `piorbit://` link or a Chromium
+is an ordinary word goes to the bundled CLI on the bundled Node, so `laser
+doctor` typed in a terminal is the command and a `laser://` link or a Chromium
 flag is the window. `test/launcher.test.ts` holds that table.
 
 ### The clean-machine check
@@ -329,12 +329,12 @@ is the one pinned in git, the decoy is found, named and left byte-identical, and
 artifact out. Both of the packaging bugs above were invisible to `pnpm -r test`
 and to `doctor` run from a checkout; only this found them.
 
-The app keeps everything in its own directory — `$XDG_DATA_HOME/piorbit` on
-Linux, `~/Library/Application Support/piorbit` on macOS, `%LOCALAPPDATA%\piorbit`
+The app keeps everything in its own directory — `$XDG_DATA_HOME/laser` on
+Linux, `~/Library/Application Support/laser` on macOS, `%LOCALAPPDATA%\laser`
 on Windows. It never reads or writes a global agent directory: `PI_CODING_AGENT_DIR`
 and its siblings are *deleted* from the inherited environment rather than
 honoured, because in a desktop session they name the agent the person uses in
-their shell — the one thing piorbit must not adopt. `PIORBIT_AGENT_DIR` still
+their shell — the one thing laser must not adopt. `LASER_AGENT_DIR` still
 wins, and that is the lever for someone who genuinely wants both to share.
 
 ### Updates

@@ -19,7 +19,7 @@ things*. Its output feeds two of the six kinds:
 | a **ledger** | rendered as `document` (missions) and `collection` (history) |
 
 Read the panel contract first. This one exists because agent work is the
-richest domain piorbit has, and without a model for it the `run` and `plan`
+richest domain laser has, and without a model for it the `run` and `plan`
 panels would be a grab bag.
 
 ## The problem
@@ -133,7 +133,7 @@ scripted workflows we do not. Inferred connectors are dashed and labelled
    *Lean: the dock and a sheet are enough; revisit if you run many at once.*
 4. **Do scheduled runs exist in v1?** Project-local files, and you have none.
    *Lean: defer. Add the noun when you have a use for it.*
-5. **Does the CLI speak these nouns** (`piorbit runs`, `piorbit plan`)?
+5. **Does the CLI speak these nouns** (`laser runs`, `laser plan`)?
    *Lean: yes — different vocabulary in the terminal and the app would make it
    feel like two products.*
 6. **Are read-only foreground children acceptable?** You decided to support

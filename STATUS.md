@@ -13,12 +13,12 @@ The identity check now scans **every name the product has answered to**, the
 today's name and only quoted strings, which meant it reported success on a
 half-finished rename and blanked seventeen sentences on the first-run flow, the
 sign-in sheet, the trust dialog and the update banner. 24 real strays were found
-and fixed — one of which (`appId: "piorbit"` in a test) would have failed
+and fixed — one of which (`appId: "laser"` in a test) would have failed
 `pnpm -r build` and `pnpm -r test` on the first commit, because the new files
 were still untracked and invisible to `git ls-files`.
 
 A rename also can no longer orphan anyone: an **empty** destination directory is
-treated as no destination (one `piorbit doctor` before first start used to make
+treated as no destination (one `laser doctor` before first start used to make
 the migration refuse forever), the cross-filesystem copy stages into a sibling
 this process owns rather than into the destination, and the **CLI** migrates as
 well as the daemon.
@@ -72,7 +72,7 @@ home install into a sudo one. All fixed.
 - M8-T2 dictation: needs a platform OpenAI API key; every provider signed in
   here is OAuth-backed.
 - AppStream screenshots are deliberately absent: they are HTTPS URLs and there
-  is no public host. `PIORBIT_SCREENSHOT_BASE_URL` picks them up with no code
+  is no public host. `LASER_SCREENSHOT_BASE_URL` picks them up with no code
   change.
 
 ## Next up (dependencies satisfied)
@@ -108,7 +108,7 @@ home install into a sudo one. All fixed.
 - **A rename cannot orphan anyone's data.** The host moves a former name's
   directories on start, the browser moves its storage keys on boot without ever
   throwing, and the desktop adopts a keychain entry from a former service name.
-- **The installed copy runs piorbit's launcher, not AppRun** (D-43) — proved on
+- **The installed copy runs laser's launcher, not AppRun** (D-43) — proved on
   the real 0.1.0 AppImage.
 - **First run owns the window** (D-47) — one screen with one next step, and the
   finish line is now the same card as every other step rather than a second

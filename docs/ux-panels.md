@@ -1,4 +1,4 @@
-# The panel contract — how anything renders in piorbit
+# The panel contract — how anything renders in laser
 
 Status: **decided 2026-09-05 (D-18).** Binding on every surface, as
 `packages/ui/DESIGN.md` is. Every open question below was resolved to its
@@ -6,7 +6,7 @@ stated lean; the questions are kept as the record of what was weighed.
 
 ## The thesis
 
-**Pi owns the logic. piorbit owns the experience.**
+**Pi owns the logic. laser owns the experience.**
 
 Pi deliberately ships almost nothing: no MCP, no subagents, no plan mode, no
 todos, no background bash. Everything is an extension, and every extension
@@ -15,8 +15,8 @@ surface is lines of text. In a GUI it is a disaster: five extensions doing
 structurally similar things — a list of results, a running job, a document —
 would each render differently, and the app would look like five apps.
 
-So piorbit does not pass presentation through. Extensions declare **what they
-have**; piorbit decides **how it looks and where it goes**. An extension
+So laser does not pass presentation through. Extensions declare **what they
+have**; laser decides **how it looks and where it goes**. An extension
 never ships a component, a colour, or a layout.
 
 ## What extensions can say today
@@ -186,9 +186,9 @@ strip of live indicators is a strip you stop reading.
 tall: the hit area extends beyond the visible pill rather than the pill
 growing.
 
-## Placement is piorbit's decision, not the extension's
+## Placement is laser's decision, not the extension's
 
-An extension declares a **kind** and an **intent**. piorbit maps that, plus
+An extension declares a **kind** and an **intent**. laser maps that, plus
 the viewport, onto a surface. The extension never names a surface.
 
 Intents:
@@ -215,7 +215,7 @@ table, and it is why the table exists rather than each panel deciding.
 
 ## The contract
 
-Four ways a panel reaches piorbit.
+Four ways a panel reaches laser.
 
 **1. Adapters we write.** Our companion extension already has a module per
 supported package. A module translates that package's private world into
@@ -227,18 +227,18 @@ package stays untouched and unaware.
 Pi's event bus, so a terminal Pi ignores it and nothing breaks:
 
 ```ts
-pi.events.emit("piorbit:panel", {
+pi.events.emit("laser:panel", {
   v: 1,
   id: "web-access:search:42",        // stable; re-emit to update in place
   kind: "collection",
   intent: "inline",
   title: "8 results for \"noise protocol\"",
   data: { items: [{ title, url, snippet }] },   // strict JSON, kind-specific
-  actions: [{ id: "open", label: "Open" }],     // piorbit renders the controls
+  actions: [{ id: "open", label: "Open" }],     // laser renders the controls
 });
 ```
 
-piorbit answers on `piorbit:panel:action` with `{ id, actionId, value }`.
+laser answers on `piorbit:panel:action` with `{ id, actionId, value }`.
 `piorbit:panel:close` retires a panel. That is the whole API.
 
 The rule that makes it work: **the payload is data, never presentation.** No
@@ -247,12 +247,12 @@ different look is asking for a new `kind`, which is a conversation.
 
 **3. A local service adapter.** Not everything in this ecosystem is an
 extension. `feynman` bundles Pi and ships its own HTTP server with an SSE
-stream; piorbit renders its runs and plans as panels by talking to that API,
+stream; laser renders its runs and plans as panels by talking to that API,
 loading nothing into Pi at all. Any peer tool with a local API can be adapted
 the same way.
 
 **4. Fallback, so nothing regresses.** An extension that knows nothing about
-piorbit still works exactly as well as today: its `setWidget` lines render as
+laser still works exactly as well as today: its `setWidget` lines render as
 a `stream` panel with monospace text, its `setStatus` as an ambient line, its
 dialogs as `decision` panels. Adopting the contract is an upgrade, never a
 requirement.
@@ -264,7 +264,7 @@ So every panel kind is designed against **imagined competing
 implementations** — three or four independent ways someone might build the
 same thing — and the payload keeps only what survives all of them.
 
-This is a design lens, not a support commitment. piorbit does not promise to
+This is a design lens, not a support commitment. laser does not promise to
 ship an adapter for every package below. Their value is that they are real,
 they disagree, and designing against that disagreement is what keeps an
 adapter interface flexible enough to absorb the fifth implementation nobody
@@ -355,8 +355,8 @@ has a timeout.
 
 Feynman is not a plugin — it is a peer application with a local HTTP API. So
 alongside our adapters, the declared protocol and the fallback, there is a
-**local service adapter**: piorbit renders another tool's runs and plans as
-panels by talking to its API. That is how piorbit stays a citizen of an
+**local service adapter**: laser renders another tool's runs and plans as
+panels by talking to its API. That is how laser stays a citizen of an
 ecosystem where not everything is an extension.
 
 ### The `run` payload
@@ -662,7 +662,7 @@ later is a bug that costs the user money.
 
 ## What this buys, and what it costs
 
-Buys: every extension looks like piorbit. A new community package gets a
+Buys: every extension looks like laser. A new community package gets a
 designed surface for free, and a package that opts into the contract gets a
 native one. We can redesign the whole app without touching a single
 extension.
@@ -710,7 +710,7 @@ Where the contract lives in code (lane P, wave 2). Paths are relative to the rep
 | Piece | File | Notes |
 | --- | --- | --- |
 | Payload types (`RunPanel`, `PlanPanel`, `DocumentPanel`, `StreamPanel`, `CollectionPanel`, `DecisionPanel`, `Action`, `PanelUsage`, `Ref`, `PanelIntent`, `Attention`) | `packages/protocol/src/panels.ts` | `Usage` is exported as `PanelUsage` (messages.ts already owns a `Usage`). `attentionOf` / `highestAttention` are R1; `refsOf` is what the host grants reads for. |
-| Bus protocol constants and event shapes (`piorbit:panel`, `piorbit:panel:close`, `piorbit:panel:action`) | `packages/protocol/src/panels.ts` | `DEFAULT_INTENT` fills a missing `intent` per kind. |
+| Bus protocol constants and event shapes (`laser:panel`, `piorbit:panel:close`, `piorbit:panel:action`) | `packages/protocol/src/panels.ts` | `DEFAULT_INTENT` fills a missing `intent` per kind. |
 | Wire: `pi/panel/upsert`, `pi/panel/close` (host → client), `pi/panel/action`, `pi/panel/read`, `pi/panel/list` (client → host) | `packages/protocol/src/panels.ts` (module augmentation of `ClientRequests` / `HostNotifications`), schemas in `packages/protocol/src/schemas.ts` | `panelSchema` is strict at every level; `validatePanelEvent` refuses presentation keys (`PRESENTATION_KEYS`) anywhere in `data` and names the field. |
 | Companion module (declared protocol on Pi's bus) | `packages/pi-extension/src/modules/panels.ts` | Validates, dedupes identical re-emits (R9), forwards as `piorbit/panel/upsert` / `piorbit/panel/close`; replays `pi/panel/action` on `piorbit:panel:action` through the module `CommandBus` (`modules/index.ts`). |
 | Host: panel memory, ref grants, ranged reads, attention | `packages/host/src/panels/{store,refs,hub}.ts` | `PanelHub.observeExtensionMessage` turns extension messages into broadcasts; `list` and `read` answer the router; a blocking `decision` raises attention like a dialog (R5). Only refs a panel carried are readable. |
@@ -726,5 +726,5 @@ Where the contract lives in code (lane P, wave 2). Paths are relative to the rep
 | Ambient (fleet pill, glance panels, statuses) | `packages/ui/src/panels/Ambient.tsx` | Fills the status line's trailing slot: `<Thread statusSlot={<PanelAmbient />} />`. |
 | Decision surfaces (cards above the composer, session-blocking sheet) | `packages/ui/src/panels/DecisionSurfaces.tsx` | `PanelDecisionCards` goes in the thread footer; `PanelDecisionSheet` in the shell. |
 | Phone islands (pills above the composer, sheet on tap) | `packages/ui/src/panels/MobileIslands.tsx` | Goes in the thread footer, above the composer. |
-| Popped-out panel page | `packages/ui/src/panels/PoppedOut.tsx` | `#/panel/<path>/<id>`, routed by `Shell.tsx`; announces itself on the `piorbit-panels` BroadcastChannel. |
+| Popped-out panel page | `packages/ui/src/panels/PoppedOut.tsx` | `#/panel/<path>/<id>`, routed by `Shell.tsx`; announces itself on the `laser-panels` BroadcastChannel. |
 | Provider and hooks | `packages/ui/src/panels/PanelsProvider.tsx` | `PanelsProvider`, `usePanelsState`, `usePanelActions`, `usePanelEntries`, `useIslandEntries`, `useDock`. |

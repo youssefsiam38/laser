@@ -1,4 +1,4 @@
-# piorbit UI design spec
+# laser UI design spec
 
 This is the visual and interaction contract for `@lasercode/ui`. Every component
 derives its colors, type, spacing, and motion from here. Deviations need a

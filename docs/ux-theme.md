@@ -6,7 +6,7 @@ token, and every token is settable by the person using the app.
 
 ## Why
 
-piorbit is a tool people stare at for hours. The right type size, contrast
+laser is a tool people stare at for hours. The right type size, contrast
 and hue are personal and situational — a bright room, a dim room, a projector,
 low vision, a preference for warm greys over cool. A design system that bakes
 those in is a design system that is wrong for most people most of the time.

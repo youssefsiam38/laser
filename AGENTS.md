@@ -1,6 +1,6 @@
 # AGENTS.md — how to work in this repo
 
-piorbit is a web-tech desktop app and remote-control relay layered on top of the
+laser is a web-tech desktop app and remote-control relay layered on top of the
 Pi coding agent (`@earendil-works/pi-coding-agent`). It visualizes Pi sessions,
 subagents (pi-subagents), settings, and low-level logs, and exposes the same UI
 to phones through an end-to-end encrypted relay. It builds on the community's
@@ -8,7 +8,7 @@ packages; it does not replace them.
 
 ## The bar: the Apple of coding agents
 
-piorbit is not a dashboard over Pi. It is meant to be the experience that
+laser is not a dashboard over Pi. It is meant to be the experience that
 makes developers choose an agent because of how it feels to work with, the
 way people choose hardware because of how it feels in the hand. Pi owns the
 logic; we own the experience, and the experience is the product.
@@ -73,7 +73,7 @@ rather than rebuilding it. Its guidance is secondary only to the installed
 
 **Every element in the catalog is already claimed.** Before writing any
 component, check [`docs/ux-elements.md`](docs/ux-elements.md): it maps all
-~120 assistant-ui elements onto a piorbit surface, or states why one does not
+~120 assistant-ui elements onto a laser surface, or states why one does not
 apply. If the thing you are about to build has a row there, install that
 element (`npx assistant-ui@latest add <name>`) and restyle it. Editing the
 copied source is expected; starting from an empty file is not. Standalone
@@ -266,11 +266,11 @@ adding dates or estimates, deleting done-when criteria. Any structural change to
 6. **Extension UI: portable surface only.** `select`, `confirm`, `input`, `editor`,
    `notify`, `setStatus`, `setWidget` (string lines), `setTitle`, `setEditorText`.
    Anything else cancels safely (never hangs). `custom()` is not emulated.
-6a. **Pi owns the logic, piorbit owns the experience.** Anything an extension
+6a. **Pi owns the logic, laser owns the experience.** Anything an extension
    wants to show renders through the panel contract in
    [`docs/ux-panels.md`](docs/ux-panels.md): six kinds (`run`, `plan`,
    `document`, `stream`, `collection`, `decision`), four surfaces (ambient,
-   inline, dock, sheet), and a placement table that piorbit owns. An extension
+   inline, dock, sheet), and a placement table that laser owns. An extension
    declares a kind and an intent; it never names a surface and never ships
    presentation. Do not invent a bespoke view for one package — either it maps
    onto an existing kind, or adding a kind is a decision recorded in
@@ -345,4 +345,4 @@ each other, detect their package at `session_start`, and fail individually
 - Do not use the user's global Pi as the runtime.
 - Do not write to `~/.pi/agent/settings.json` while a Pi process may be running
   it, except through `SettingsManager` (it takes the lock).
-- Do not run two piorbit workers against the same project directory.
+- Do not run two laser workers against the same project directory.

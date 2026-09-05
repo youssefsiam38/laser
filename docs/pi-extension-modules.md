@@ -16,7 +16,7 @@ whole ceremony, and it is deliberate: a second extension would mean a second
 ## 1. What a module is
 
 ```ts
-export interface PiorbitModule {
+export interface LaserModule {
   name: ModuleName;
   /** True if the package this module bridges is present in this session. */
   detect(ctx: ModuleContext): boolean | Promise<boolean>;
@@ -42,7 +42,7 @@ Three rules, and they are not style:
   its own file under `src/`, or — better — each keeps its own copy of the eight
   lines it actually needs. Coupling two modules means one package's absence can
   break another's.
-- **A module fails alone.** `createPiorbitExtension` wraps every `detect` and
+- **A module fails alone.** `createLaserExtension` wraps every `detect` and
   `activate` in a try/catch and reports failures in `piorbit/capabilities`
   under `failed`. Never let a module throw out of a Pi event handler.
 - **Nothing here reads files.** File watchers live in `@lasercode/host` so that
@@ -99,7 +99,7 @@ not there anyway, a wrong "yes" costs a button that fails when it is pressed.
 
 ### How detection reaches the UI
 
-`createPiorbitExtension` sends one message at `session_start`:
+`createLaserExtension` sends one message at `session_start`:
 
 ```ts
 { type: "piorbit/capabilities", active: ModuleName[], failed: [{ module, error }] }
@@ -152,10 +152,10 @@ ends up in *that* prompt rather than the next one. If you do this:
 
 ## 4. Showing something: the panel contract
 
-**An extension declares a kind and an intent. piorbit decides how it looks and
+**An extension declares a kind and an intent. laser decides how it looks and
 where it goes.** Read [`docs/ux-panels.md`](ux-panels.md) — six kinds
 (`run`, `plan`, `document`, `stream`, `collection`, `decision`), four surfaces,
-and a placement table that piorbit owns. A module never ships a component, a
+and a placement table that laser owns. A module never ships a component, a
 colour or a width.
 
 Emit on Pi's event bus, exactly as a third-party extension that opted into the
@@ -239,7 +239,7 @@ For those, the module does **not** bridge. It does two things:
 2. **Keeps the package's contract**, so the native implementation and the
    terminal one stay the same product.
 
-pi-gpt-transcribe is the worked example. piorbit reimplements dictation —
+pi-gpt-transcribe is the worked example. laser reimplements dictation —
 microphone and meter in the browser, key and network call in
 `packages/worker/src/transcribe.ts` — and keeps three things from the package:
 its `config.json` (one edit serves both), its `WidgetState`
@@ -291,7 +291,7 @@ Rules for a bridge:
 1. Add the name to `PiExtensionModuleName` in
    `packages/protocol/src/pi-extension.ts`.
 2. Create `packages/pi-extension/src/modules/<name>.ts` exporting a
-   `PiorbitModule`.
+   `LaserModule`.
 3. Register it in `packages/pi-extension/src/modules/index.ts` — import and add
    to the `modules` array. Order is for log readability only.
 4. Write `detect` against Pi's registries, returning `false` on any throw.
@@ -310,7 +310,7 @@ Rules for a bridge:
 | Module | Bridges | Detection | What it produces |
 | --- | --- | --- | --- |
 | `provider-log` | Pi's own provider hooks | always | `piorbit/provider/*` for the logs page |
-| `panels` | the declared panel protocol | always | validates `piorbit:panel` → `piorbit/panel/upsert` |
+| `panels` | the declared panel protocol | always | validates `laser:panel` → `piorbit/panel/upsert` |
 | `subagents` | pi-subagents registries and its rpc bus | `globalThis` symbols | `piorbit/subagents/event` |
 | `transcribe` | pi-gpt-transcribe | the `/transcribe` command | detection + the pre-send transform |
 | `web-access` | pi-web-access | its registered tools | `collection` panels for searches, fetches and source checks |

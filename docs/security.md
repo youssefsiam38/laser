@@ -1,6 +1,6 @@
 # Security model
 
-piorbit gives a phone the same control over a coding agent that the desktop has:
+laser gives a phone the same control over a coding agent that the desktop has:
 reading the transcript, sending prompts, approving tool calls. That is a large
 amount of authority to carry over the public internet, so the relay is built on
 the assumption that it will eventually be hostile — compromised, subpoenaed, or
@@ -57,7 +57,7 @@ patterns **IK** and **KK** over `25519_AESGCM_SHA256`.
 - **Conformance.** `test/vectors/noise-ik-kk-25519-aesgcm-sha256.json` holds the
   Noise project's own cacophony vectors for exactly these two suites. The tests
   check every handshake message, every transport message, and the handshake hash.
-  A Noise bug is silent by nature; this is the one place in piorbit where broad
+  A Noise bug is silent by nature; this is the one place in laser where broad
   test automation earns its keep.
 
 ### 3.1 Handshake
@@ -145,7 +145,7 @@ Defences, in order of strength:
 After pairing, the routing key is
 
 ```
-channel_id = HKDF(salt = "piorbit-channel-v1",
+channel_id = HKDF(salt = "laser-channel-v1",
                   ikm  = X25519(device static, desktop static),
                   info = "relay_token" ‖ epoch)
 ```
@@ -158,7 +158,7 @@ linkability is on the residual list (§5).
 
 Being uncomputable is not the same as being unobservable, so the id is treated
 as a **bearer capability** and kept out of anything that gets logged. It travels
-as `Sec-WebSocket-Protocol: piorbit.channel.<id>`, never as a URL path segment:
+as `Sec-WebSocket-Protocol: laser.channel.<id>`, never as a URL path segment:
 a request line is written to the platform edge's logs, any TLS-terminating
 proxy's logs and the relay's own, and a channel holds exactly two sockets — so
 one disclosed id is enough to squat a slot and lock the real phone out of its own
@@ -302,6 +302,6 @@ pub/sub or equivalent) and is a separate task, not a configuration change.
 
 ## 11. Reporting
 
-Security issues in piorbit go to the repository owner privately, not to a public
+Security issues in laser go to the repository owner privately, not to a public
 issue. Findings from the pre-ship review (MX-T4) are tracked in
 `STATUS_DETAILED.md` against MX-T4 and must be closed before M6 ships.

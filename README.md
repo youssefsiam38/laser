@@ -1,4 +1,4 @@
-# piorbit
+# laser
 
 A visualization and control layer on top of the [Pi coding agent](https://github.com/earendil-works/pi):
 a web-tech desktop app with multi-project, multi-session navigation, subagent tab
@@ -7,17 +7,17 @@ end-to-end encrypted relay so phones get the same UI.
 
 Builds on the community's packages; does not replace them.
 
-## Pi owns the logic, piorbit owns the experience
+## Pi owns the logic, laser owns the experience
 
 Pi ships almost nothing on purpose: no MCP, no subagents, no plan mode, no
 todos, no background bash. Everything is an extension, and in a terminal every
 extension invents its own presentation, because the only surface is lines of
 text. In a GUI that would produce five apps in one window.
 
-So piorbit does not pass presentation through. An extension declares **what it
-has** — one of six panel kinds — and piorbit decides **how it looks and where
+So laser does not pass presentation through. An extension declares **what it
+has** — one of six panel kinds — and laser decides **how it looks and where
 it goes**. Extensions never ship a component, a colour, or a layout. A package
-that knows nothing about piorbit still renders correctly; one that opts into
+that knows nothing about laser still renders correctly; one that opts into
 the contract renders natively. That contract is
 [`docs/ux-panels.md`](docs/ux-panels.md), and it is binding on every surface.
 
@@ -35,16 +35,16 @@ with access to this repository, and nothing else — no Node, no npm, no package
 manager, no agent. The app carries its own runtime.
 
 ```bash
-gh api repos/youssefsiam38/piorbit/contents/install.sh \
-  -H 'Accept: application/vnd.github.raw' > piorbit-install.sh \
-  && sh piorbit-install.sh
+gh api repos/youssefsiam38/laser/contents/install.sh \
+  -H 'Accept: application/vnd.github.raw' > laser-install.sh \
+  && sh laser-install.sh
 ```
 
 That downloads the release for your architecture, checks it against the
 checksums published with it **and** against GitHub's build provenance — the
-Sigstore signature binding those bytes to piorbit's release workflow, this
+Sigstore signature binding those bytes to laser's release workflow, this
 repository and the commit it was built from — then unpacks it under `~/.local`
-and puts piorbit in your application menu. No root, and nothing outside your
+and puts laser in your application menu. No root, and nothing outside your
 home directory. Run it again any time to upgrade; it says which version it
 moved from and to, and an upgrade that is interrupted puts the version you had
 back.
@@ -56,17 +56,17 @@ you type on purpose: `--allow-unattested`.
 
 The script is downloaded and then read from disk rather than piped into a
 shell, so you can look at it first. That is the point of the two halves of the
-command, and `sh piorbit-install.sh --dry-run` prints every action it would take
+command, and `sh laser-install.sh --dry-run` prints every action it would take
 without taking any of them.
 
 ```bash
-sh piorbit-install.sh --help                     # --version, --format, --prefix, --dry-run
+sh laser-install.sh --help                     # --version, --format, --prefix, --dry-run
 sh ~/.local/lib/piorbit/install.sh --uninstall   # removes exactly what it installed
 sh ~/.local/lib/piorbit/install.sh --uninstall --purge   # …and deletes your settings too
 ```
 
-`piorbit` on your PATH is both things: on its own it opens the window, and with
-a word after it — `piorbit doctor`, `piorbit sessions` — it is the command
+`laser` on your PATH is both things: on its own it opens the window, and with
+a word after it — `laser doctor`, `laser sessions` — it is the command
 below, running on the same bundled runtime as the app, against the same
 directory. Nothing about the app requires it.
 
@@ -91,24 +91,24 @@ packages/ui                the one web app (desktop renderer, browser, PWA)
 packages/desktop           Electron shell with bundled Node
 packages/crypto            Noise handshake, pairing, device list
 packages/relay             Railway byte forwarder (no crypto library)
-packages/cli               the `piorbit` command: host lifecycle, session verbs, pinned-Pi passthrough, doctor
+packages/cli               the `laser` command: host lifecycle, session verbs, pinned-Pi passthrough, doctor
 ```
 
-## The `piorbit` command
+## The `laser` command
 
 ```bash
 pnpm install && pnpm -r build
 
-piorbit                 # start the host and open the app (attaches if one is already up)
-piorbit doctor          # check Node, the pinned Pi, credentials, ports, subagent roots — with fixes
-piorbit sessions        # every session, newest first
-piorbit send "run the tests"     # prompt the newest session here and stream the answer
-piorbit tail --follow            # watch it work
-piorbit pi --help                # Pi's own help, from the copy piorbit pins
+laser                 # start the host and open the app (attaches if one is already up)
+laser doctor          # check Node, the pinned Pi, credentials, ports, subagent roots — with fixes
+laser sessions        # every session, newest first
+laser send "run the tests"     # prompt the newest session here and stream the answer
+laser tail --follow            # watch it work
+laser pi --help                # Pi's own help, from the copy laser pins
 ```
 
-`piorbit pi` runs the **pinned** Pi — the same copy the app runs — with
-piorbit's `PI_CODING_AGENT_DIR` and `PI_SUBAGENTS_TEMP_ROOT`, so a session or a
+`laser pi` runs the **pinned** Pi — the same copy the app runs — with
+laser's `PI_CODING_AGENT_DIR` and `PI_SUBAGENTS_TEMP_ROOT`, so a session or a
 background subagent run started from a terminal shows up in the app. Every
 command takes `--json`; data goes to stdout and everything else to stderr.
 
@@ -123,7 +123,7 @@ pnpm -r build
 pnpm -r test
 ```
 
-`pnpm install` links the `piorbit` bin into `node_modules/.bin`, so
-`pnpm exec piorbit …` works from the repo root after a build.
+`pnpm install` links the `laser` bin into `node_modules/.bin`, so
+`pnpm exec laser …` works from the repo root after a build.
 
 Node 24, pnpm 10, TypeScript strict, ESM.

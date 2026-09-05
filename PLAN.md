@@ -1,10 +1,10 @@
-# PLAN.md — piorbit
+# PLAN.md — laser
 
 Dependency-ordered plan. No dates, no estimates. A milestone is a set of tasks
 with a "done when" that can be checked. Task IDs are permanent. Status lives in
 `STATUS.md` (summary) and `STATUS_DETAILED.md` (ledger). Read `AGENTS.md` first.
 
-## What piorbit is
+## What laser is
 
 A visualization and control layer on top of the Pi coding agent:
 
@@ -36,7 +36,7 @@ A visualization and control layer on top of the Pi coding agent:
 - Portable extension UI surface only; native replacements for TUI-only extensions.
 - pi-subagents foreground and background children both supported, including
   sessions started from a terminal.
-- Herdr is out; piorbit tab groups replace project panes.
+- Herdr is out; laser tab groups replace project panes.
 - Phone client is a PWA only.
 - Relay trust: QR carries an ephemeral public key; a desktop root key signs a
   versioned device list; explicit "Link a device" screen.
@@ -52,7 +52,7 @@ packages/ui               the one web app (desktop renderer, browser, PWA)
 packages/desktop          Electron shell: main process, tray, notifications, keychain, updater, bundled Node
 packages/crypto           Noise handshake, pairing, device list (browser + Node)
 packages/relay            Railway byte forwarder (no crypto library)
-packages/cli              the `piorbit` command: host lifecycle, session verbs, Pi passthrough, doctor
+packages/cli              the `laser` command: host lifecycle, session verbs, Pi passthrough, doctor
 docs/                     architecture, research findings, upstream log
 ```
 
@@ -104,7 +104,7 @@ Depends on: nothing.
 
 ## M1 · Local loop
 
-Goal: a person can use piorbit in a browser tab for one project: see the
+Goal: a person can use laser in a browser tab for one project: see the
 transcript stream, send prompts, steer, abort, answer extension dialogs, switch
 model and thinking level, and resume a past session.
 
@@ -155,7 +155,7 @@ Depends on: M1.
 
 Goal: pi-subagents children shown as tab groups under their parent session,
 interactive (steer, stop, resume where allowed), with workflow, mission, and
-acceptance views. Works for sessions piorbit started and for sessions started
+acceptance views. Works for sessions laser started and for sessions started
 from a terminal.
 
 Done when: a background run from the user's orchestrator prompt appears as a tab
@@ -270,7 +270,7 @@ Depends on: M6.
 
 ## M8 · Package support
 
-Goal: the community packages the user relies on work inside piorbit.
+Goal: the community packages the user relies on work inside laser.
 
 Done when: pi-web-access dialogs and widgets render; pi-gpt-transcribe dictates
 into the composer on desktop with a native waveform; markdown preview and image
@@ -291,26 +291,26 @@ Depends on: M1 (M3 for subagents).
 
 ## M9 · CLI
 
-Goal: `piorbit` is the way a developer starts, inspects, and drives the product
-from a terminal, and the way they reach Pi without leaving piorbit's world.
+Goal: `laser` is the way a developer starts, inspects, and drives the product
+from a terminal, and the way they reach Pi without leaving laser's world.
 
-Done when: `piorbit` with no arguments starts the host and opens the app;
-`piorbit pi --help` reaches the pinned Pi; `piorbit sessions` and
-`piorbit send` work against a running host; `piorbit doctor` explains a broken
+Done when: `laser` with no arguments starts the host and opens the app;
+`laser pi --help` reaches the pinned Pi; `laser sessions` and
+`laser send` work against a running host; `laser doctor` explains a broken
 setup; every command has `--json`.
 
 Depends on: M1 (host), M2 (projects), M4 (settings) for the richer subcommands.
 
 | ID | Task | Done when |
 | --- | --- | --- |
-| M9-T1 | `packages/cli` package, `piorbit` bin, subcommand router, `--json` everywhere, `--help` per command, colored output that degrades when not a TTY | `piorbit --help` lists every command |
-| M9-T2 | `piorbit` / `piorbit up`: start the host (or attach to a running one), print the URL, open the browser unless `--no-open`; `--port`, `--agent-dir`, `--session-dir`; `piorbit down`, `piorbit status` | starting twice attaches instead of failing |
-| M9-T3 | `piorbit pi [...]`: pass through to the PINNED Pi with piorbit's env (`PI_CODING_AGENT_DIR`, `PI_SUBAGENTS_TEMP_ROOT`), inheriting stdio and the exit code; `piorbit pi update --extensions` and other Pi verbs work unchanged; `--global-pi` opts into the user's own install | `piorbit pi --help` prints Pi's help; exit codes propagate |
-| M9-T4 | Session commands against a running host over the protocol: `sessions [--project P]`, `open <id>`, `new [cwd]`, `send <text> [--session S] [--steer\|--follow-up]`, `tail <id>` (stream updates), `stop <id>`, `fork <id> <entry>`, `rename`, `compact` | `piorbit tail` streams a live run |
-| M9-T5 | `piorbit projects` add/remove/list; `piorbit packages` list/install/remove/update through the worker's package manager; `piorbit settings get\|set\|list` (global and project scope) | installing a package from the CLI shows up in the app |
-| M9-T6 | `piorbit doctor`: Node version, pinned Pi resolvable, agent dir, auth per provider, model resolvable, worker spawn smoke test, port availability, pi-subagents temp roots, disk for sessions. Exit non-zero on a real problem | a broken setup prints the fix |
-| M9-T7 | `piorbit relay login\|pair\|devices\|revoke` (M6) and `piorbit logs [--follow] [--section provider\|tools\|session]` (M4) | pairing from the CLI produces a QR |
-| M9-T8 | Shell completions (`piorbit completions bash\|zsh\|fish`) and a man-style `piorbit help <topic>` | completions install cleanly |
+| M9-T1 | `packages/cli` package, `laser` bin, subcommand router, `--json` everywhere, `--help` per command, colored output that degrades when not a TTY | `laser --help` lists every command |
+| M9-T2 | `laser` / `laser up`: start the host (or attach to a running one), print the URL, open the browser unless `--no-open`; `--port`, `--agent-dir`, `--session-dir`; `laser down`, `laser status` | starting twice attaches instead of failing |
+| M9-T3 | `laser pi [...]`: pass through to the PINNED Pi with laser's env (`PI_CODING_AGENT_DIR`, `PI_SUBAGENTS_TEMP_ROOT`), inheriting stdio and the exit code; `laser pi update --extensions` and other Pi verbs work unchanged; `--global-pi` opts into the user's own install | `laser pi --help` prints Pi's help; exit codes propagate |
+| M9-T4 | Session commands against a running host over the protocol: `sessions [--project P]`, `open <id>`, `new [cwd]`, `send <text> [--session S] [--steer\|--follow-up]`, `tail <id>` (stream updates), `stop <id>`, `fork <id> <entry>`, `rename`, `compact` | `laser tail` streams a live run |
+| M9-T5 | `laser projects` add/remove/list; `laser packages` list/install/remove/update through the worker's package manager; `laser settings get\|set\|list` (global and project scope) | installing a package from the CLI shows up in the app |
+| M9-T6 | `laser doctor`: Node version, pinned Pi resolvable, agent dir, auth per provider, model resolvable, worker spawn smoke test, port availability, pi-subagents temp roots, disk for sessions. Exit non-zero on a real problem | a broken setup prints the fix |
+| M9-T7 | `laser relay login\|pair\|devices\|revoke` (M6) and `laser logs [--follow] [--section provider\|tools\|session]` (M4) | pairing from the CLI produces a QR |
+| M9-T8 | Shell completions (`laser completions bash\|zsh\|fish`) and a man-style `laser help <topic>` | completions install cleanly |
 
 ---
 
@@ -324,7 +324,7 @@ of its own and M3, M4's logs page and M8's previews all land on it (D-27).
 | ID | Task | Done when |
 | --- | --- | --- |
 | MP-T1 | Payload types, the bus protocol and the `pi/panel/*` wire in `@lasercode/protocol`, with schemas that refuse presentation keys anywhere in `data` | a panel with a `className` is rejected by name |
-| MP-T2 | Companion `panels` module: validate, dedupe identical re-emits, forward, replay actions | an extension that emits `piorbit:panel` reaches the dock unchanged |
+| MP-T2 | Companion `panels` module: validate, dedupe identical re-emits, forward, replay actions | an extension that emits `laser:panel` reaches the dock unchanged |
 | MP-T3 | Host panel hub: memory per session, ref grants, ranged reads, attention from a blocking decision | a ref no panel carried is refused |
 | MP-T4 | The island: one element, four sizes, the morph between them, a body per kind | third expansion shrinks the least recently watched to minimal |
 | MP-T5 | The dock: columns, dividers, maximize, pop out, dismiss, the `+N` overflow | a wide monitor gets four expanded panels, none of them narrow |
@@ -336,7 +336,7 @@ of its own and M3, M4's logs page and M8's previews all land on it (D-27).
 
 ## M10 · Self-contained distribution
 
-Goal: a person installs piorbit with one command and never touches a terminal
+Goal: a person installs laser with one command and never touches a terminal
 again. They do not install Node, or Pi, or anything else, and they need not
 know Pi exists.
 
@@ -352,7 +352,7 @@ app says updates are unavailable and why, which is true (D-31).
 
 **T1–T8 are done.** One more thing has to land before a build is put in front
 of anyone else, and it is not in this milestone: **MX-T7**. D-36 records that
-the product may be renamed, and `appId`, the `piorbit://` scheme, the data
+the product may be renamed, and `appId`, the `laser://` scheme, the data
 directory and every storage key are free to change today and stop being free
 the moment someone installs a build. Tag and publish after MX-T7, not before.
 
@@ -364,8 +364,8 @@ Depends on: M5 (desktop shell), M9 (CLI). Blocks nothing; blocked for
 | M10-T1 | `install.sh` at the repo root, fetched and run through `gh` from the private repo. Detects arch, verifies a checksum **and GitHub build provenance**, downloads the release asset, installs per-user under `~/.local`, registers a `.desktop` entry and icons, and prints one line saying what to do next. Idempotent; re-running upgrades, and an interrupted upgrade leaves the version that was working | `gh api ... \| sh` on a clean box ends with a launchable app |
 | M10-T2 | One command in the README, copy-pasteable, using `gh` so the private repo needs no token juggling. An `--uninstall` flag that removes everything it created, and a separate `--purge` for the data it did not | the command works for a collaborator with repo access and nothing else |
 | M10-T3 | The app bundles its own runtime and agent: stock Node unpacked outside asar, the pinned Pi and its dependency tree vendored into the package. Nothing resolves from the user's machine, and the user's own global Pi (if any) is never touched | `doctor` inside the packaged app reports the bundled Node and the bundled pinned Pi, on a machine with neither installed |
-| M10-T4 | Package for every Linux distribution: AppImage (universal), `.deb`, `.rpm`, and a plain tarball. Desktop entry, MIME handler for `piorbit://`, icons at every size, and a post-install that does not require root for the AppImage path | each artifact installs and launches on its target |
-| M10-T5 | Extension and package management entirely from Settings: browse, install, update, remove, with progress and a readable failure. Installs go into piorbit's own agent directory, never the user's global one, run on the npm the app ships rather than the machine's, and refuse to run an unreviewed install script | a package is installed from the UI on a machine with no npm on `PATH` |
+| M10-T4 | Package for every Linux distribution: AppImage (universal), `.deb`, `.rpm`, and a plain tarball. Desktop entry, MIME handler for `laser://`, icons at every size, and a post-install that does not require root for the AppImage path | each artifact installs and launches on its target |
+| M10-T5 | Extension and package management entirely from Settings: browse, install, update, remove, with progress and a readable failure. Installs go into laser's own agent directory, never the user's global one, run on the npm the app ships rather than the machine's, and refuse to run an unreviewed install script | a package is installed from the UI on a machine with no npm on `PATH` |
 | M10-T6 | First-run experience inside the app: pick a provider, sign in, pick a model, add a project — all in the UI. No config file, no environment variable, no terminal | a new user reaches a working session without leaving the window |
 | M10-T7 | Release pipeline: a tagged build produces every artifact plus a checksum manifest, and the app's updater points at it. Versions pinned end to end — Node, Pi, every workspace package | a release is reproducible from a tag |
 | M10-T8 | Product language: the UI never requires knowing Pi exists. "Agent", "model", "extension", "session" — Pi is named only in advanced settings and diagnostics, where it is the truth | a reader of every visible string could not tell which agent runs underneath |

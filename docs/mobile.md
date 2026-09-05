@@ -1,4 +1,4 @@
-# piorbit on a phone
+# laser on a phone
 
 The phone client is the same web bundle the desktop uses, installed as a PWA
 (D-9: no native shell, ever). This page is the honest version: how to install
@@ -6,7 +6,7 @@ it, what it does, and exactly where the platforms stop us.
 
 ## Install
 
-piorbit must be opened from a **secure address**. Your desktop's LAN address
+laser must be opened from a **secure address**. Your desktop's LAN address
 (`http://192.168.1.20:41441`) is not one: browsers refuse a service worker,
 push, the microphone and installing on plain `http`. Two ways to get a secure
 address:
@@ -28,13 +28,13 @@ and why. Dismiss it once per address.
 1. Open the address in **Safari** (not an in-app browser).
 2. Tap **Share** (the square with the arrow) in the toolbar.
 3. Choose **Add to Home Screen**, then **Add**.
-4. Open piorbit **from the home screen**. Notifications can only be turned on
+4. Open laser **from the home screen**. Notifications can only be turned on
    from there — Safari itself cannot deliver them.
 
 ### Android (Chrome, Edge, Samsung Internet)
 
 1. Open the address.
-2. When piorbit offers it, tap **Install**; or use the browser menu →
+2. When laser offers it, tap **Install**; or use the browser menu →
    **Install app** / **Add to Home screen**.
 
 ### Desktop browsers

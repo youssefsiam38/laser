@@ -18,7 +18,7 @@ small and self-contained (`AGENTS.md` §6).
 
 Written and reviewed here, **not filed**. Each is small, self-contained, and
 justified on the upstream project's own terms (extensibility, headless-host
-support) — never on ours. Nothing about piorbit appears in a patch, a commit
+support) — never on ours. Nothing about laser appears in a patch, a commit
 message or a PR body.
 
 ### pi-gpt-transcribe · a non-tui entry point (M8-T2)
@@ -152,7 +152,7 @@ there and cannot use `openMic` at all — which is why part (1) exports
 those are the pieces a remote front end needs, and they carry no assumption
 about where the audio came from.
 
-**Not blocking.** piorbit does not need this patch: it reimplements dictation
+**Not blocking.** laser does not need this patch: it reimplements dictation
 against the package's `WidgetState` and `config.json` rather than driving the
 package. The patch is worth filing because every other GUI host will otherwise
 fork the same three files, and because `WidgetState` deserves to be a published

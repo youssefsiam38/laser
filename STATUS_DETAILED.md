@@ -420,6 +420,14 @@ Pi) as a follow-up task.
 
 ## Decisions log (append-only)
 
+> **The product was renamed to Laser on 2026-09-06 (D-36, MX-T7).** Everything
+> below predates that and says `piorbit`, which is left exactly as written: a
+> ledger that gets edited to match the present is no longer evidence of what was
+> decided at the time. Read `piorbit` here as the working name for this product.
+> The one place the old name is still live rather than historical is
+> `wireNamespace`, which is frozen on purpose — see D-36 and `product.json`.
+
+
 ### D-1 · 2026-09-05 · Build from scratch, not a fork
 Decision: piorbit is a new codebase. Borrow patterns and small pieces from
 pi-web (Proxy-over-default UI context, pending dialog store), pi-web-ui
@@ -833,3 +841,4 @@ One hole is left open knowingly: `<name>-<word>-v<n>` is exactly the shape of th
 - 2026-09-05 · claude-2026-09-05-review4 · three reviews of the distribution work applied: install entry point, provenance default, bundled-npm discovery and install-script policy, integrity actually checked, upgrade rollback, `--purge`, CLI/desktop agent-directory agreement, first-run frame. D-42..D-47. `pnpm -r build`/`typecheck`/`test` clean, 760 tests.
 - 2026-09-05 · claude-2026-09-05-identity · MX-T7 done. `product.json` is the one place the product is named; 14 files are generated from it, `pnpm identity:check` fails the build and the tests on drift, and renaming to `wavelet` and back proved it end to end. D-48 recorded: the wire namespace is frozen and does not follow a rename. 781 tests green.
 - 2026-09-06 · claude-2026-09-06-review5 · three reviews applied (rename lane, runtime lane, product lane). Identity check widened to former names, JSX text and JSON values and 24 real strays fixed, including one that would have broken the first commit (D-50); the rename migration no longer treats a `doctor`-created empty directory as an install, and the CLI migrates too. D-49 records the rejection of `ELECTRON_RUN_AS_NODE` for the host. Product fixes: the Add-project dialog can no longer be pushed open, a failed turn survives a reload, provider errors are sentences with the right next step, sessions are named by their first line, a reload comes back to the session, projects can be removed from the UI and say honestly why one stays, `--yes` no longer escalates a home install into a sudo one. M4-T8 added for "All settings". 790 tests green, `verify-install.sh` 74/0.
+- 2026-09-06 · claude-2026-09-06-a · renamed to Laser: `laser` for the repo, binary, directories, scheme and env prefix; `@lasercode/*` for the npm scope (npm `laser` is taken); appId `com.hubtrix.laser` under a domain we own; `wireNamespace` frozen at `piorbit` and `formerNames` carrying it so existing installs migrate. One edit to product.json regenerated 16 files. Forward-facing docs renamed; this ledger deliberately not. New repo `youssefsiam38/laser`, full history pushed, remote repointed. 790 tests green.

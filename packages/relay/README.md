@@ -21,7 +21,7 @@ so it cannot drift.
 GET  /healthz                aggregate counters, no per-channel data
 GET  /                       one line of prose
 WS   /ws                     the channel; optional ?cookie=<value> under load
-     Sec-WebSocket-Protocol: piorbit.channel.<channel-id>
+     Sec-WebSocket-Protocol: laser.channel.<channel-id>
 ```
 
 The channel id is a **header, never a path segment**. A request line is written

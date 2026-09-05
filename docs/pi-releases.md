@@ -1,4 +1,4 @@
-# Pi release notes that affect piorbit
+# Pi release notes that affect laser
 
 One entry per Pi release we evaluate (MX-T1). Pin is in `packages/worker/package.json`.
 

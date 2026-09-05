@@ -13,7 +13,7 @@ in `../../STATUS_DETAILED.md`.
 ```
 src/
   main.tsx            entry; imports globals.css
-  App.tsx             <PiorbitProvider><Shell/></PiorbitProvider>
+  App.tsx             <LaserProvider><Shell/></LaserProvider>
   globals.css         Tailwind v4 entry: DESIGN.md tokens, @theme inline, base layer, utilities
   client.ts           HostClient — JSON-RPC over WebSocket, reconnect
   store.ts            AppState + reducer: sessions, open views, blocks, dialogs, toasts
@@ -39,10 +39,10 @@ Everything assistant-ui touches lives here; import it from the barrel
 
 | Module | Role |
 | --- | --- |
-| `projection.ts` | `SessionView` → `ThreadMessageLike[]`. Splits extension dialogs into tool-attached (`approval` / `interrupt`) and free-standing; notices become a `data` part named `piorbit-notice`. |
-| `threadList.ts` | Session catalog → `RemoteThreadListAdapter`. Attention-first ordering, local-only archive, rename; `delete` throws by design (piorbit never deletes Pi sessions). |
+| `projection.ts` | `SessionView` → `ThreadMessageLike[]`. Splits extension dialogs into tool-attached (`approval` / `interrupt`) and free-standing; notices become a `data` part named `laser-notice`. |
+| `threadList.ts` | Session catalog → `RemoteThreadListAdapter`. Attention-first ordering, local-only archive, rename; `delete` throws by design (laser never deletes Pi sessions). |
 | `adapter.ts` | Per-session `ExternalStoreAdapter`: send routing, queue lanes, composer key plan, approval/interrupt answers, image attachments. |
-| `PiorbitProvider.tsx` | The one stateful shell: `HostClient` + reducer + `useRemoteThreadListRuntime`. Exposes `usePiorbit`, `useSessionMeta`, `useHostUiRequests`, `useExtensionUi`, `useToasts`. |
+| `LaserProvider.tsx` | The one stateful shell: `HostClient` + reducer + `useRemoteThreadListRuntime`. Exposes `useLaser`, `useSessionMeta`, `useHostUiRequests`, `useExtensionUi`, `useToasts`. |
 
 Send routing (`resolveSendBehavior`) — assistant-ui routes every composer send
 through the queue adapter, so both lanes funnel into one place:
@@ -53,7 +53,7 @@ through the queue adapter, so both lanes funnel into one place:
 | steer (Enter while running) | `session/prompt` | `pi/session/steer` |
 
 Thread selection is two-way and loop-guarded: sidebar → assistant-ui through the
-controlled `threadId` prop, assistant-ui → piorbit through `onThreadIdChange`
+controlled `threadId` prop, assistant-ui → laser through `onThreadIdChange`
 plus a `threads.selectionChanged` listener, both no-ops when the id already
 matches `state.current`.
 
@@ -96,5 +96,5 @@ pnpm -F @lasercode/ui build
   mapped in `globals.css` (`bg-surface`, `text-ink-2`, `border-line`, `live`,
   `attention`, `danger`, `ok`), never raw hex.
 - Both themes are defined on the tokens; `.dark` on `<html>` is set pre-paint by
-  a script in `index.html` from `localStorage["piorbit-theme"]`.
+  a script in `index.html` from `localStorage["laser-theme"]`.
 - Nothing here imports Pi. The UI speaks only `@lasercode/protocol`.
