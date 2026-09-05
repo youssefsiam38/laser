@@ -170,11 +170,21 @@ a `stream` panel with monospace text, its `setStatus` as an ambient line, its
 dialogs as `decision` panels. Adopting the contract is an upgrade, never a
 requirement.
 
-## The conformance test
+## The multi-implementation lens
 
 A standard with one implementation is a description of that implementation.
-So the test is four independent implementations of "background agent work",
-built by people who never coordinated, rendering identically:
+So every panel kind is designed against **imagined competing
+implementations** — three or four independent ways someone might build the
+same thing — and the payload keeps only what survives all of them.
+
+This is a design lens, not a support commitment. piorbit does not promise to
+ship an adapter for every package below. Their value is that they are real,
+they disagree, and designing against that disagreement is what keeps an
+adapter interface flexible enough to absorb the fifth implementation nobody
+has written yet.
+
+The lens was calibrated on `run`, where four real implementations exist and
+could be read:
 
 | | `pi-subagents` (nicobailon) | `@tintinweb/pi-subagents` | `pi-background-tasks` | `feynman` |
 | --- | --- | --- | --- | --- |
@@ -188,7 +198,9 @@ built by people who never coordinated, rendering identically:
 | Progress percentage | none | none | none | none |
 | Cost accounting | full | **two totals that do not derive from each other** | full, agent tasks only | **declared and never populated** |
 
-They agree on more than they disagree, and the agreements are what to build on.
+They agree on more than they disagree, and the agreements are what to build
+on. Every other kind below gets the same treatment, from imagined
+implementations rather than read ones.
 
 ### What all four already do
 
@@ -320,6 +332,180 @@ Honesty about the limits of the test:
    rendering the poorer of the two, or writing two adapters and accepting they
    differ in depth.
 
+
+## The other five kinds, under the same lens
+
+Each payload below is designed against three or four ways someone might
+implement that kind. The recurring answer is the same every time: **adapters
+carry references and generic shapes, never domain values.** The moment a
+payload names something from one producer's world, the second producer does
+not fit.
+
+### `document` — something you read
+
+Imagined implementations: a markdown preview, a research report with
+versions and provenance, a unified diff from an edit tool, a rendered image,
+a PDF, a chart.
+
+What varies, and therefore what the payload must not assume:
+
+- **Where the content is.** Inline for a small markdown string, a file path
+  for a preview, a generated blob for a chart. So content is a `ref` the host
+  reads, with inline as an optimisation for small text — never the only form.
+- **Who renders it.** We render markdown, diffs and images. We cannot render
+  a protein structure or a genome track, and pretending otherwise produces
+  garbage. So `renderable` is explicit and unknown types degrade to "open
+  externally" rather than to a broken viewer.
+- **Whether it changes.** Static, updated in place, or versioned with
+  lineage. `version` is optional, and its absence means "not versioned",
+  not "version 1".
+
+```ts
+type DocumentPanel = {
+  kind: "document";
+  id: string; source: string; title: string;
+  mediaType: string;                       // "text/markdown", "text/x-diff", "image/png"
+  content?: { ref: string } | { inline: string };
+  renderable: boolean;                     // false → offer to open, do not guess
+  version?: { label: string; previousRef?: string };
+  path?: string;                           // where it lives, if it lives somewhere
+  actions?: Action[];
+};
+```
+
+### `stream` — append-only output
+
+Imagined implementations: shell stdout, a build log, the provider request
+log, a tail of a detached agent's transcript.
+
+- **Framing differs**: raw text, ANSI-coloured text, or JSONL records. A host
+  that assumes one mangles the others, so `encoding` is required. ANSI is the
+  sharp one — `pi-background-tasks` pre-renders colour into its status string,
+  so a host must either interpret the escapes or strip them, and silently
+  passing them through is the wrong third option.
+- **Reads are bounded, always.** A stream can be gigabytes. The host reads
+  ranges, and the panel says how big it is so far.
+- **Truncation is stated, not implied.** Rotated, capped, or head-only, the
+  panel says which.
+
+```ts
+type StreamPanel = {
+  kind: "stream";
+  id: string; source: string; title: string;
+  encoding: "text" | "ansi" | "jsonl";
+  ref: string;                             // host reads ranges from this
+  bytes?: number;                          // also the liveness signal
+  truncated?: "head" | "tail" | "rotated";
+  follow?: boolean;                        // is it still being written
+  actions?: Action[];
+};
+```
+
+### `collection` — a set of found things
+
+Imagined implementations: web search results, grep hits, a file list, model
+or package lists, citations.
+
+Their item shapes have nothing in common — `{title, url, snippet}` versus
+`{path, line, text}` versus `{name, version, downloads}`. So the payload
+carries a **generic row**, and the producer decides what goes in each slot:
+
+```ts
+type CollectionPanel = {
+  kind: "collection";
+  id: string; source: string; title: string;
+  layout?: "list" | "table";
+  items: Array<{
+    id: string;
+    primary: string;                       // the line you read first
+    secondary?: string;                    // context under it
+    meta?: Array<{ label: string; value: string }>;   // columns, when tabular
+    ref?: string;                          // opens a document panel
+    actions?: Action[];
+  }>;
+  total?: number; cursor?: string;         // paginated, if it is
+};
+```
+
+A per-domain schema here would have been the easiest mistake to make and the
+hardest to undo.
+
+### `decision` — something blocking on you
+
+Imagined implementations: Pi's four dialogs, a tool approval with scope
+options, a plan awaiting approval, a permission grant, a multi-field
+elicitation form.
+
+- **Cardinality varies.** One question or a whole form. So `fields[]`, and a
+  single question is a form with one field rather than a special case.
+- **Blocking scope varies**, and it decides placement: a tool approval blocks
+  one tool row, a plan approval blocks a turn, a credential prompt blocks
+  everything. Only the last earns a sheet.
+- **Rejection needs somewhere to go.** Our rule is that "No" is never a dead
+  end, so the payload carries the field that opens when you decline.
+
+```ts
+type DecisionPanel = {
+  kind: "decision";
+  id: string; source: string; title: string; message?: string;
+  blocking: "tool" | "turn" | "session";
+  toolCallId?: string;                     // renders inside that tool row
+  fields: Array<{
+    id: string; label: string;
+    type: "choice" | "text" | "longtext" | "confirm";
+    options?: string[]; default?: string; required?: boolean;
+  }>;
+  rejection?: { label: string; field: string };   // "No" opens this
+  timeoutMs?: number;
+};
+```
+
+### `plan` — intended structure over several steps
+
+Imagined implementations: workflow phases, a mission with an objective, a
+todo list, an agent plan with approval, a scripted run whose shape we
+inferred.
+
+- **Structure varies from flat to phased to a graph.** The payload is
+  phase-ordered steps, because that is the shape all of them can express;
+  declared dependencies are optional edges on top.
+- **Steps may or may not be runs.** When a step is a real run, it links to
+  that panel rather than duplicating its state.
+- **The plan itself may need approval**, which is a `decision`, not a new
+  concept.
+
+```ts
+type PlanPanel = {
+  kind: "plan";
+  id: string; source: string; title: string; objective?: string;
+  inferred?: boolean;                      // rebuilt from traces, drawn dashed
+  steps: Array<{
+    id: string; label: string; phase?: string;
+    state: "pending" | "running" | "done" | "failed" | "skipped" | "blocked";
+    runId?: string;                        // link, never a copy
+    dependsOn?: string[];                  // only when declared
+  }>;
+  approval?: { decisionId: string };
+  usage?: Usage | null;
+};
+```
+
+### The shared vocabulary
+
+Three types appear in every kind, and defining them once is most of what
+makes the adapters flexible:
+
+```ts
+type Action = { id: string; label: string; confirm?: string; destructive?: boolean };
+type Usage  = { input?: number; output?: number; cacheRead?: number; cacheWrite?: number;
+                costUsd?: number | null; unavailableReason?: string };
+type Ref    = string;   // opaque; the host reads it, ranges and all
+```
+
+`Action` is why a fifth implementation with a verb we have never seen still
+renders. `Usage` is why "not measured" and "zero" stay different. `Ref` is why
+no payload ever carries a megabyte.
+
 ## The rules
 
 **R1 · One status vocabulary.** The five states in `DESIGN.md` — working,
@@ -369,6 +555,12 @@ exactly this.
 docs call its protocol version nearly meaningless because four behaviours
 shipped without a bump. And a session that filtered an extension out looks
 exactly like that extension being absent, so discovery always has a timeout.
+
+**R12a · Adapters carry references and generic shapes, never domain values.**
+The moment a payload names something from one producer's world — a URL field
+on a search result, a line number on a hit — the second producer does not fit.
+Rows have `primary` and `secondary`; content has a `ref`; verbs have an `id`
+and a `label`. This is the rule the other eleven exist to serve.
 
 **R12 · Consume results promptly.** An extension may hold a completion open
 waiting for someone to take the result. tintinweb's window is 200 ms, after
