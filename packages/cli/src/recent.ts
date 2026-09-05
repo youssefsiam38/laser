@@ -4,7 +4,7 @@
  * Pi creates a session file lazily — `session/new` returns a path that does not
  * exist on disk until the first message is persisted — so the host's catalog,
  * which is a scan of session *files*, cannot see a brand new session. Without
- * this note, `piorbit new && piorbit send "…"` would fail to find the session it
+ * this note, `laser new && laser send "…"` would fail to find the session it
  * had just created.
  *
  * It is a cache, never a source of truth: every read is verified by loading the

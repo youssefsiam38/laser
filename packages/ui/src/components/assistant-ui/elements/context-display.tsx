@@ -27,7 +27,7 @@ import { toneForPercent, type RingTone } from "@/components/status";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { percent as formatPercent, tokens as formatTokens } from "@/format";
 import { cn } from "@/lib/utils";
-import { usePiorbitStable, useSessionMeta } from "@/runtime";
+import { useLaserStable, useSessionMeta } from "@/runtime";
 
 type ContextDisplayContextValue = {
   /** Tokens in the window, or null right after compaction (unknown until the next response). */
@@ -215,7 +215,7 @@ function ContextRingButton({
   size?: number | undefined;
   stroke?: number | undefined;
 }) {
-  const { actions } = usePiorbitStable();
+  const { actions } = useLaserStable();
   const { contextUsage, running, compacting } = useSessionMeta();
   if (!contextUsage) return null;
   const idle = !running && !compacting && contextUsage.percent !== null;

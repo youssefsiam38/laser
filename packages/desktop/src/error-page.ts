@@ -6,7 +6,7 @@ import { PRODUCT_NAME } from "@lasercode/protocol";
  * They exist because the alternative is a blank window, and a blank window is a
  * placeholder. Each says what is happening, what to do, and where the log is —
  * in that order, in words, with no stack trace — and both are drawn in the app's
- * own palette so they read as piorbit rather than as a browser error.
+ * own palette so they read as laser rather than as a browser error.
  *
  * The starting screen only appears if the host takes longer than a moment. A
  * fast start goes straight to the app, so the common case never sees a splash

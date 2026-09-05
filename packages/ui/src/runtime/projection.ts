@@ -1,5 +1,5 @@
 /**
- * Pure projection: piorbit `SessionView` blocks → assistant-ui `ThreadMessageLike[]`.
+ * Pure projection: laser `SessionView` blocks → assistant-ui `ThreadMessageLike[]`.
  *
  * Rules (see PLAN M1-T10 / DESIGN.md "Transcript"):
  * - A `user` block becomes one user message (text part, plus a short note part
@@ -24,7 +24,7 @@
  *   is what `stopped-run` draws. Pi's vocabulary is mapped onto assistant-ui's
  *   once, here, so no component has to know both.
  * - The turn's own token counts and the speaker of a child run ride on
- *   `metadata.custom.piorbit`, where `message-timing` and `speaker-identity`
+ *   `metadata.custom.<product>`, where `message-timing` and `speaker-identity`
  *   already look for them.
  * - Dialogs raised while exactly one tool ran carry that `toolCallId`: a
  *   `confirm` projects onto the tool call as a native `approval`, and
@@ -33,7 +33,7 @@
  *
  * Pure: no React, no DOM, no network. Tested in test/runtime/projection.test.ts.
  */
-import { namespaced } from "@lasercode/protocol";
+import { namespaced, MESSAGE_METADATA_NS } from "@lasercode/protocol";
 import type { ThreadMessageLike } from "@assistant-ui/react";
 import type { MessageSpeaker, StopReason, UiDialogRequest, Usage } from "@lasercode/protocol";
 import type { Block, SessionView } from "../store.js";
@@ -254,7 +254,7 @@ const userMessage = (block: Extract<Block, { kind: "user" }>): ThreadMessageLike
     content,
     ...(createdAt ? { createdAt } : {}),
     metadata: {
-      custom: { piorbit: { kind: "user", images: block.images, optimistic: block.optimistic === true } },
+      custom: { [MESSAGE_METADATA_NS]: { kind: "user", images: block.images, optimistic: block.optimistic === true } },
     },
   };
 };
@@ -267,7 +267,7 @@ const noticeMessage = (block: Extract<Block, { kind: "notice" }>): ThreadMessage
     content: [{ type: "data", name: NOTICE_DATA_PART, data: { level: block.level, text: block.text } }],
     status: { type: "complete", reason: "stop" },
     ...(createdAt ? { createdAt } : {}),
-    metadata: { custom: { piorbit: { kind: "notice", level: block.level, text: block.text } } },
+    metadata: { custom: { [MESSAGE_METADATA_NS]: { kind: "notice", level: block.level, text: block.text } } },
   };
 };
 
@@ -358,7 +358,7 @@ const turnMessage = (
     ...(createdAt ? { createdAt } : {}),
     metadata: {
       custom: {
-        piorbit: {
+        [MESSAGE_METADATA_NS]: {
           kind: "turn",
           blockIds: group.map((b) => b.id),
           ...(usageCustom ? { usage: usageCustom } : {}),

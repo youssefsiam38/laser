@@ -40,7 +40,7 @@
     "",
     "Declaring the bindings here makes them the desktop package's own direct",
     "dependencies, so the walker sees them, they carry exact pins like",
-    "everything else piorbit ships, and `build/before-pack.cjs` can check them.",
+    "everything else laser ships, and `build/before-pack.cjs` can check them.",
     "They are optional and carry `os`/`cpu` fields, so each build machine",
     "installs only its own — which is why a release builds each architecture on",
     "a runner of that architecture rather than cross-compiling."

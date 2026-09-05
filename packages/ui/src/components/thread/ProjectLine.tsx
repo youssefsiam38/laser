@@ -14,7 +14,7 @@ import {
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
-import { usePiorbitStable, usePiorbitState } from "@/runtime";
+import { useLaserStable, useLaserState } from "@/runtime";
 import { FILE_CHANGING_TOOLS, deltaParts, githubCompareUrl, pullRequestCommands } from "./project-git.js";
 import { useSessionUpdates } from "./session-updates.js";
 
@@ -27,8 +27,8 @@ const POLL_MS = 30_000;
  * turn). The worker caches, so asking often is cheap.
  */
 function useProjectGit(cwd: string | undefined, path: string | undefined): ProjectGitStatus | undefined {
-  const { client } = usePiorbitStable();
-  const connection = usePiorbitState((s) => s.connection);
+  const { client } = useLaserStable();
+  const connection = useLaserState((s) => s.connection);
   const [status, setStatus] = useState<ProjectGitStatus | undefined>(undefined);
   const generation = useRef(0);
 
@@ -92,8 +92,8 @@ function useProjectGit(cwd: string | undefined, path: string | undefined): Proje
  * entirely when the directory is not a repository.
  */
 export function ProjectLine({ className }: { className?: string | undefined }) {
-  const cwd = usePiorbitState((s) => (s.current ? s.open[s.current]?.state.cwd : undefined));
-  const path = usePiorbitState((s) => s.current);
+  const cwd = useLaserState((s) => (s.current ? s.open[s.current]?.state.cwd : undefined));
+  const path = useLaserState((s) => s.current);
   const git = useProjectGit(cwd, path);
   const [prOpen, setPrOpen] = useState(false);
 

@@ -71,7 +71,7 @@ export class AttentionTracker {
   private readonly now: () => Date;
   private writeTimer: ReturnType<typeof setTimeout> | undefined;
   /**
-   * When piorbit first ran on this machine. Sessions untouched since then are
+   * When laser first ran on this machine. Sessions untouched since then are
    * history and stay idle; anything that changes afterwards is unread even if
    * it has never been opened here. Without it a session a terminal Pi just
    * finished could never reach the inbox until someone opened it — which is
@@ -215,7 +215,7 @@ export class AttentionTracker {
       if (live.error !== undefined) return "error";
       if (live.running) return "working";
     }
-    // Never opened here: compare against when piorbit first ran instead, so
+    // Never opened here: compare against when laser first ran instead, so
     // history stays idle (marking every old session unread on first launch
     // would make the inbox useless) while anything that has changed since
     // still asks for a look.

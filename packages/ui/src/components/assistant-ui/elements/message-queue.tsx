@@ -20,7 +20,7 @@ import type { ComponentProps, ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { isSteerQueueItemId, usePiorbitStable } from "@/runtime";
+import { isSteerQueueItemId, useLaserStable } from "@/runtime";
 
 export type QueueLane = "steer" | "follow-up";
 
@@ -87,7 +87,7 @@ export function QueuedChip({ text, lane }: { text: string; lane: QueueLane }) {
  */
 export function ComposerQueue() {
   const aui = useAui();
-  const { actions } = usePiorbitStable();
+  const { actions } = useLaserStable();
   const count = useAuiState((s) => s.composer.queue.length);
 
   const clear = () => {

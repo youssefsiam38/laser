@@ -22,7 +22,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { cn } from "@/lib/utils";
-import { usePiorbitStable } from "@/runtime";
+import { useLaserStable } from "@/runtime";
 import type { SettingsCatalog, SettingsScope, SettingsSnapshot } from "@lasercode/protocol";
 
 import { NotificationsSetting } from "@/components/mobile";
@@ -50,7 +50,7 @@ const PROJECTLESS: readonly Tab[] = ["appearance", "keyboard", "trust", "device"
  * before a project exists they go through the directory the host keeps for
  * exactly that purpose (`pi/setup/state`, the same one the first-run flow
  * uses). Without this, the person most likely to want them — someone who has
- * just installed piorbit and has no project yet — is the one person who
+ * just installed laser and has no project yet — is the one person who
  * cannot reach them.
  */
 const GLOBAL_THROUGH_SETUP: readonly Tab[] = ["packages", "models"];
@@ -66,7 +66,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
 ];
 
 export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | undefined; initialTab?: Tab | undefined }) {
-  const { client, actions } = usePiorbitStable();
+  const { client, actions } = useLaserStable();
   // `initialTab` is only ever set by something that already knows the fix — a
   // rejected credential sending the person straight to Providers and models.
   const [tab, setTab] = useState<Tab>(initialTab ?? "settings");
@@ -226,7 +226,7 @@ function DeviceTab() {
  * again. This clears it; the shell picks the change up on its next read.
  */
 function RunSetupAgain() {
-  const { client, actions } = usePiorbitStable();
+  const { client, actions } = useLaserStable();
   const [running, setRunning] = useState(false);
 
   const run = async () => {

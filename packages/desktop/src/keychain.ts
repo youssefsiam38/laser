@@ -18,7 +18,7 @@
  *
  * The fallback matters as much as the happy path. A Linux box with no Secret
  * Service (a headless session, a minimal WM) has no keychain, and refusing to
- * start there would be wrong. So piorbit falls back to a 0600 file — and says
+ * start there would be wrong. So laser falls back to a 0600 file — and says
  * so, in the UI, every time. A degraded security story that nobody is told
  * about is the actual failure.
  */

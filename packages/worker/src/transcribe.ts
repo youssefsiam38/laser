@@ -4,7 +4,7 @@
  * pi-gpt-transcribe refuses to start unless `ctx.mode === "tui"`: it captures
  * the microphone from the terminal process, draws a TUI waveform component, and
  * writes into Pi's own editor with `pasteToEditor`. None of that exists in a
- * browser, so piorbit does not drive the package — it reimplements the same
+ * browser, so laser does not drive the package — it reimplements the same
  * contract on this side of the wire and keeps the package as the *configuration*
  * and the *reason the affordance is offered at all* (see modules/transcribe.ts).
  *
@@ -45,7 +45,7 @@ import {
 
 // ---------------------------------------------------------------------------
 // Configuration — read from pi-gpt-transcribe's own file, so one edit serves
-// the terminal and piorbit.
+// the terminal and laser.
 //
 // The parsing is the package's, not ours. It is the package's file format, and
 // a second parser for it is a copy that drifts silently: a key added on that
@@ -798,7 +798,7 @@ export function transcribeBridge(): TranscribeBridge | undefined {
 
 /**
  * pi-gpt-transcribe's `WidgetState` (0.2.1, `src/widget.ts`), kept verbatim as
- * the contract between the terminal widget and piorbit's native one so the two
+ * the contract between the terminal widget and laser's native one so the two
  * show the same thing. The split across the wire:
  *
  *   level      the browser's, always — the microphone is there and nothing

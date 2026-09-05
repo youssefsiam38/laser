@@ -7,10 +7,10 @@
 import type { SessionUpdateParams } from "@lasercode/protocol";
 import { useEffect, useRef } from "react";
 
-import { usePiorbitStable } from "@/runtime";
+import { useLaserStable } from "@/runtime";
 
 export function useSessionUpdates(path: string | undefined, onUpdate: (params: SessionUpdateParams) => void): void {
-  const { client } = usePiorbitStable();
+  const { client } = useLaserStable();
   const handler = useRef(onUpdate);
   handler.current = onUpdate;
   useEffect(() => {

@@ -14,7 +14,7 @@
  * is equal — both leave a running part plain — and settling is a colour
  * change in the same box, not a layout shift.
  *
- * The theme is piorbit's own, not `github-*`: every colour is a `--syntax-*`
+ * The theme is laser's own, not `github-*`: every colour is a `--syntax-*`
  * token (docs/ux-theme.md T1), so one theme serves both bases and a person
  * who edits the tokens in Settings changes the code too. Shiki accepts
  * `var()` strings as theme colours and writes them into inline styles.
@@ -29,7 +29,7 @@ import { cn } from "@/lib/utils";
 import { fenceClassName } from "./fence.js";
 
 /** A TextMate theme whose colours are the theme system's tokens. */
-export const PIORBIT_SHIKI_THEME = {
+export const LASER_SHIKI_THEME = {
   name: PRODUCT_NAME,
   type: "dark" as const,
   fg: "var(--ink)",
@@ -96,7 +96,7 @@ const HighlightedCode: FC<{
   language: string;
   options: Omit<ShikiHighlighterProps, "children" | "language" | "theme">;
 }> = ({ code, language, options }) => {
-  const highlighted = useShikiHighlighter(code, language, PIORBIT_SHIKI_THEME, {
+  const highlighted = useShikiHighlighter(code, language, LASER_SHIKI_THEME, {
     ...options,
     engine: "javascript",
   });

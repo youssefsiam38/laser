@@ -5,7 +5,7 @@ import { StatusDot } from "@/components/status";
 import type { Status } from "@/components/status/status";
 import { duration, tokens } from "@/format";
 import { cn } from "@/lib/utils";
-import { usePiorbitState } from "@/runtime";
+import { useLaserState } from "@/runtime";
 import type { AppState } from "@/store";
 import { useSessionUpdates } from "./session-updates.js";
 import { useThreadSlots } from "./thread-slots.js";
@@ -56,7 +56,7 @@ const lastPromptAt = (s: AppState): string | undefined => {
  */
 function useTurnStats(path: string | undefined, running: boolean): TurnStats {
   const [stats, setStats] = useState<TurnStats>(EMPTY_TURN);
-  const promptAt = usePiorbitState(lastPromptAt);
+  const promptAt = useLaserState(lastPromptAt);
   useEffect(() => {
     setStats(EMPTY_TURN);
   }, [path]);
@@ -78,8 +78,8 @@ function useTurnStats(path: string | undefined, running: boolean): TurnStats {
  * that truncates and never wraps.
  */
 export function StatusLine() {
-  const words = usePiorbitState(wordsFor, sameWords);
-  const path = usePiorbitState((s) => s.current);
+  const words = useLaserState(wordsFor, sameWords);
+  const path = useLaserState((s) => s.current);
   const slots = useThreadSlots();
   const stats = useTurnStats(path, words?.live === true && words.status === "working");
   const ticking = stats.startedAt !== undefined && stats.endedAt === undefined && words?.live === true;

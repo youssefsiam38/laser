@@ -26,7 +26,7 @@
  * fails loudly with an actionable message instead of silently not saving
  * (see `piSettingsStorage`). Bumping the Pi pin is MX-T2 and must re-check it.
  *
- * Concurrency: piorbit is the only writer in this process, Pi's lock covers
+ * Concurrency: laser is the only writer in this process, Pi's lock covers
  * other processes, and every write is a merge over current file content, so an
  * interleaved write by a terminal Pi loses nothing but the racing field.
  */
@@ -1138,7 +1138,7 @@ export interface SettingsAdapterOptions {
   agentDir?: string;
   /**
    * The host's own trust decision for this project, when it made one (M2-T4).
-   * piorbit records decisions in `~/.piorbit/projects.json` rather than Pi's
+   * laser records decisions in `~/.laser/projects.json` rather than Pi's
    * `trust.json` (two writers on Pi's lock is a bug), so without this the
    * adapter would read Pi's store, see nothing, and disagree with the driver
    * about the very same project. Omit when nobody decided.
@@ -1148,7 +1148,7 @@ export interface SettingsAdapterOptions {
 
 /**
  * One adapter per worker (one project directory). It owns the only
- * `SettingsManager` piorbit writes through.
+ * `SettingsManager` laser writes through.
  */
 export class SettingsAdapter {
   readonly cwd: string;
@@ -1292,7 +1292,7 @@ export class SettingsAdapter {
 
   /**
    * `trusted` is Pi's answer to "do I load this project's settings"; `writable`
-   * is piorbit's answer to "may I edit the file". They are deliberately
+   * is laser's answer to "may I edit the file". They are deliberately
    * different. A directory with no `.pi` yet is trusted (nothing to gate) but
    * writing project settings *creates* a trust-gated resource, so from the next
    * read Pi will ignore the file until somebody trusts the project. The
@@ -1300,7 +1300,7 @@ export class SettingsAdapter {
    * writing a file that quietly does nothing.
    *
    * The only case that blocks writing is an explicit decline: overwriting a
-   * project the user has said no to would be piorbit deciding for them.
+   * project the user has said no to would be laser deciding for them.
    */
   private computeTrust(): SettingsProjectTrust {
     let decision: boolean | null = null;
@@ -1311,7 +1311,7 @@ export class SettingsAdapter {
     } catch {
       // A missing or unreadable trust store means "no decision".
     }
-    // piorbit's own decision wins over Pi's store: it is the one the running
+    // laser's own decision wins over Pi's store: it is the one the running
     // session was started with, so the settings screen must not claim otherwise.
     if (this.hostTrusted !== undefined) decision = this.hostTrusted;
     if (decision === true) {

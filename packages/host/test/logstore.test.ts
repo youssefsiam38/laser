@@ -242,7 +242,7 @@ describe("retention", () => {
       expect(detail).not.toContain("sk-also-secret");
       expect(detail).toContain("[redacted]");
       expect(detail).toContain("hello"); // everything else survives intact
-      expect((entry.detail as { piorbitRedactedFields?: number }).piorbitRedactedFields).toBe(2);
+      expect((entry.detail as { laserRedactedFields?: number }).laserRedactedFields).toBe(2);
 
       // A gateway names its key with a vendor prefix; Pi's own payloads are full
       // of token *budgets*, which must survive or every row lies the other way.

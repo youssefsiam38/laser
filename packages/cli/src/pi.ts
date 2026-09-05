@@ -1,8 +1,8 @@
 /**
- * Reaching Pi without leaving piorbit's world.
+ * Reaching Pi without leaving laser's world.
  *
- * `piorbit pi ...` runs the Pi that `@lasercode/worker` pins (AGENTS.md invariant
- * 4), not whatever `pi` happens to be on `$PATH`, and runs it with piorbit's
+ * `laser pi ...` runs the Pi that `@lasercode/worker` pins (AGENTS.md invariant
+ * 4), not whatever `pi` happens to be on `$PATH`, and runs it with laser's
  * agent dir and pi-subagents temp root. That is the whole point: a session you
  * start from the terminal this way shows up in the app, and a background
  * subagent run lands in the root the host watches.
@@ -17,7 +17,7 @@ import { createRequire } from "node:module";
 import { constants as osConstants } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { CliError, ExitCode } from "./errors.js";
-import { piEnv, type PiorbitPaths } from "./config.js";
+import { piEnv, type LaserPaths } from "./config.js";
 
 export interface PiResolution {
   /** Absolute path to Pi's CLI entry (`dist/bundle/cli.js` in 0.85). */
@@ -149,7 +149,7 @@ export function which(command: string, env: NodeJS.ProcessEnv = process.env): st
 }
 
 export interface RunPiOptions {
-  paths: PiorbitPaths;
+  paths: LaserPaths;
   global: boolean;
   cwd?: string;
   /** Streams to inherit. `"inherit"` in normal use; overridden by doctor. */

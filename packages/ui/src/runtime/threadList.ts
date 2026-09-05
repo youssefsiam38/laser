@@ -1,12 +1,12 @@
 /**
- * The `RemoteThreadListAdapter` over piorbit's session catalog, plus the pure
+ * The `RemoteThreadListAdapter` over laser's session catalog, plus the pure
  * builders it is made of.
  *
  * Identity: a thread's `remoteId` (and `externalId`) is the Pi **session file
  * path**. Ids are only unique per cwd, so the path is the one stable handle
  * (`@lasercode/protocol` SessionSummary.path).
  *
- * Archiving is client-local for now: piorbit's protocol has no archive verb, so
+ * Archiving is client-local for now: laser's protocol has no archive verb, so
  * an archived path is remembered in `localStorage` under
  * {@link ARCHIVE_STORAGE_KEY}. Deleting is not supported at all — Pi session
  * files are the user's transcript history.

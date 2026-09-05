@@ -30,7 +30,7 @@ import { STATUS_LABEL } from "@/components/status/status";
 import { Badge } from "@/components/ui/badge";
 import { relativeTime } from "@/format";
 import { cn } from "@/lib/utils";
-import { usePiorbitState } from "@/runtime";
+import { useLaserState } from "@/runtime";
 import type { AppState } from "@/store";
 
 import { mono } from "./surfaces.js";
@@ -128,7 +128,7 @@ const sameRows = (a: readonly InboxRow[], b: readonly InboxRow[]): boolean => a.
 
 /** The inbox, fed from the app store: every summary plus the live views, derived client-side. */
 export const InboxPanel = memo(function InboxPanel({ onOpen }: { onOpen(row: InboxRow): void }) {
-  const rows = usePiorbitState(useCallback((s: AppState) => inboxRows(s.sessions, s.open), []), sameRows);
+  const rows = useLaserState(useCallback((s: AppState) => inboxRows(s.sessions, s.open), []), sameRows);
   const [collapsed, setCollapsed] = useState(false);
   return <BackgroundInbox rows={rows} onOpen={onOpen} collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />;
 });

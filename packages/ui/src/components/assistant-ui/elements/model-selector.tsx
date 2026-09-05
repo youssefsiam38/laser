@@ -51,7 +51,7 @@ import {
   CommandSeparator,
 } from "@/components/ui/command";
 import { tokens } from "@/format";
-import { usePiorbitStable, usePiorbitState, useSessionMeta } from "@/runtime";
+import { useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
 
 import { ErrorState } from "./error-state.js";
 import { GenerationLoader } from "./loading-state.js";
@@ -584,12 +584,12 @@ export function modelOption(model: ModelRef): ModelOption {
 const defaultModelCache = new Map<string, Promise<ModelRef | null>>();
 
 function useProjectDefaultModel(cwd: string | undefined, enabled: boolean): { model: ModelRef | null; loading: boolean } {
-  const { client } = usePiorbitStable();
+  const { client } = useLaserStable();
   // The catalogue answers "no default" while the project's worker is still
   // starting, and that answer must not be the one this screen keeps. Re-asking
   // when the worker's status changes is what turns "No model" back into the
   // model, without a reload.
-  const workerStatus = usePiorbitState((s) => (cwd ? s.workers[cwd]?.status : undefined));
+  const workerStatus = useLaserState((s) => (cwd ? s.workers[cwd]?.status : undefined));
   const [fallback, setFallback] = useState<ModelRef | null>(null);
   // The catalogue is a thousand rows and the project's worker may still be
   // starting, so the first answer can take seconds. Saying "No model" during
@@ -658,7 +658,7 @@ function useProjectDefaultModel(cwd: string | undefined, enabled: boolean): { mo
  * labelled as what a new session will start with.
  */
 export function SessionModelSelector({ className }: { className?: string | undefined }) {
-  const { actions, currentProject } = usePiorbitStable();
+  const { actions, currentProject } = useLaserStable();
   const { model: sessionModel, session } = useSessionMeta();
   const { model: projectDefault, loading: defaultLoading } = useProjectDefaultModel(session?.cwd ?? currentProject, !session);
   const model = sessionModel ?? (session ? null : projectDefault);

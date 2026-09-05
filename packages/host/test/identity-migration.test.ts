@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { DATA_DIR_NAME, PRODUCT_NAME } from "@lasercode/protocol";
-import { migrateFormerIdentities, ownedDirectories, piorbitDataDir } from "../src/index.js";
+import { migrateFormerIdentities, ownedDirectories, laserDataDir } from "../src/index.js";
 
 const root = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-migration-`));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -31,7 +31,7 @@ function homeWithOldInstall(label: string): string {
 describe("the directories the product owns", () => {
   it("starts with the data directory paths.ts resolves", () => {
     const env = { HOME: root };
-    expect(ownedDirectories(DATA_DIR_NAME, env)[0]).toBe(piorbitDataDir(env));
+    expect(ownedDirectories(DATA_DIR_NAME, env)[0]).toBe(laserDataDir(env));
   });
 
   it("covers the config directory and the legacy dotfile, which is what --purge removes", () => {
@@ -71,7 +71,7 @@ describe("migrating from a former name", () => {
   });
 
   it("treats an empty destination as no destination, because `doctor` makes one", () => {
-    // `piorbit doctor` checks that the state directory is writable by creating
+    // `laser doctor` checks that the state directory is writable by creating
     // it. Someone running it once before the app's first start would otherwise
     // be signed out, session-less and orphaned from every paired phone forever,
     // with a log line about two installs they do not have.

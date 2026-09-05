@@ -43,7 +43,7 @@ Three rules, and they are not style:
   lines it actually needs. Coupling two modules means one package's absence can
   break another's.
 - **A module fails alone.** `createLaserExtension` wraps every `detect` and
-  `activate` in a try/catch and reports failures in `piorbit/capabilities`
+  `activate` in a try/catch and reports failures in `laser/capabilities`
   under `failed`. Never let a module throw out of a Pi event handler.
 - **Nothing here reads files.** File watchers live in `@lasercode/host` so that
   sessions started from a terminal — which have no worker and no extension —
@@ -131,9 +131,9 @@ What activation is allowed to do:
 | Read `ctx.sessionManager` (read-only) | Write to the session file |
 | Emit on `pi.events` | Import another module |
 | `send(...)` messages to the worker | Assume a client is attached |
-| Report a problem as `piorbit/module/log` | Throw |
+| Report a problem as `laser/module/log` | Throw |
 
-`piorbit/module/log` at `error` level surfaces as a toast; `info` and `warn` go
+`laser/module/log` at `error` level surfaces as a toast; `info` and `warn` go
 to the host's log store. Use `error` only for something a person can act on.
 
 ### Awaiting a Pi event on purpose
@@ -296,9 +296,9 @@ Rules for a bridge:
    to the `modules` array. Order is for log readability only.
 4. Write `detect` against Pi's registries, returning `false` on any throw.
 5. Write `activate`. Emit panels on the bus; report problems with
-   `piorbit/module/log`; return a disposer if you subscribed to anything.
+   `laser/module/log`; return a disposer if you subscribed to anything.
 6. If the UI must change behaviour, gate it on the module name appearing in
-   `piorbit/capabilities`, never on a version or a setting.
+   `laser/capabilities`, never on a version or a setting.
 7. Test only what is subtle — a payload mapping, a parser, a state machine.
    Detection against a live Pi is not a unit test; the mapping from the
    package's shape to a panel is.
@@ -309,9 +309,9 @@ Rules for a bridge:
 
 | Module | Bridges | Detection | What it produces |
 | --- | --- | --- | --- |
-| `provider-log` | Pi's own provider hooks | always | `piorbit/provider/*` for the logs page |
-| `panels` | the declared panel protocol | always | validates `laser:panel` → `piorbit/panel/upsert` |
-| `subagents` | pi-subagents registries and its rpc bus | `globalThis` symbols | `piorbit/subagents/event` |
+| `provider-log` | Pi's own provider hooks | always | `laser/provider/*` for the logs page |
+| `panels` | the declared panel protocol | always | validates `laser:panel` → `laser/panel/upsert` |
+| `subagents` | pi-subagents registries and its rpc bus | `globalThis` symbols | `laser/subagents/event` |
 | `transcribe` | pi-gpt-transcribe | the `/transcribe` command | detection + the pre-send transform |
 | `web-access` | pi-web-access | its registered tools | `collection` panels for searches, fetches and source checks |
 

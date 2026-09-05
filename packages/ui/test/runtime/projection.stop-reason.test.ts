@@ -6,7 +6,7 @@
  * the test proves the whole path — the reducer folding `message_end` and the
  * projection turning it into the status and metadata the components read.
  */
-import { WIRE_NAMESPACE } from "@lasercode/protocol";
+import { MESSAGE_METADATA_NS } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
 import type { SessionState, SessionUpdate } from "@lasercode/protocol";
 import { applyUpdate, type SessionView } from "../../src/store.js";
@@ -55,7 +55,7 @@ const turn = (
 ];
 
 const meta = (message: { metadata?: unknown }): Record<string, unknown> =>
-  ((message.metadata as { custom?: Record<string, unknown> }).custom?.[WIRE_NAMESPACE] as Record<string, unknown>) ?? {};
+  ((message.metadata as { custom?: Record<string, unknown> }).custom?.[MESSAGE_METADATA_NS] as Record<string, unknown>) ?? {};
 
 describe("stop reason", () => {
   it("maps the agent's vocabulary onto the transcript's, and only for a turn that ended short", () => {

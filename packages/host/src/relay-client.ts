@@ -2,7 +2,7 @@
  * Host relay client (M6-T5). One instance per paired device.
  *
  * The connection is **outbound only**: the host never listens on a public port,
- * so nothing about piorbit is reachable from the internet except through a relay
+ * so nothing about laser is reachable from the internet except through a relay
  * channel whose id only the two peers can compute. The relay forwards bytes it
  * cannot read; this file is where those bytes become the same JSON-RPC the local
  * WebSocket server speaks.
@@ -34,7 +34,7 @@ import {
   type CryptoBackend,
   type KeyPair,
 } from "@lasercode/crypto";
-import { ErrorCodes, type JsonRpcNotification, type JsonRpcResponse, type SessionUpdateParams } from "@lasercode/protocol";
+import { ErrorCodes, type JsonRpcNotification, type JsonRpcResponse, type SessionUpdateParams, WIRE_NAMESPACE } from "@lasercode/protocol";
 import WebSocket from "ws";
 
 export type RelayClientState =
@@ -114,7 +114,7 @@ const DEFAULT_RELAY_MAX_FRAME_BYTES = 65_536;
  * string on purpose: the host does not depend on the relay package, exactly as
  * the relay does not depend on the crypto package.
  */
-const CHANNEL_PROTOCOL_PREFIX = "piorbit.channel.";
+const CHANNEL_PROTOCOL_PREFIX = `${WIRE_NAMESPACE}.channel.`;
 
 function channelSubprotocol(channelIdText: string): string {
   return `${CHANNEL_PROTOCOL_PREFIX}${channelIdText}`;
@@ -601,7 +601,7 @@ function reduce(notification: JsonRpcNotification): JsonRpcNotification | null {
         ...params,
         update: {
           ...update,
-          result: { piorbit: "this result was too large to send over the relay; open the row to load it" },
+          result: { laser: "this result was too large to send over the relay; open the row to load it" },
           oversized: true,
         },
       },

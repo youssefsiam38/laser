@@ -31,30 +31,7 @@ import type {
 
 const { contextBridge, ipcRenderer } = electron;
 
-/** Channel names, repeated here because a `.cts` cannot import the ESM table. */
-const IPC = {
-  hostInfo: "piorbit:host/info",
-  hostChanged: "piorbit:host/changed",
-  hostRetry: "piorbit:host/retry",
-  panelPopOut: "piorbit:panel/pop-out",
-  panelClose: "piorbit:panel/close",
-  deepLink: "piorbit:deep-link",
-  deepLinkPending: "piorbit:deep-link/pending",
-  windowMinimize: "piorbit:window/minimize",
-  windowToggleMaximize: "piorbit:window/toggle-maximize",
-  windowClose: "piorbit:window/close",
-  windowState: "piorbit:window/state",
-  windowStateChanged: "piorbit:window/state-changed",
-  themeSet: "piorbit:theme/set",
-  microphoneStatus: "piorbit:microphone/status",
-  microphoneRequest: "piorbit:microphone/request",
-  microphoneSettings: "piorbit:microphone/settings",
-  identity: "piorbit:identity",
-  updateStatus: "piorbit:update/status",
-  updateCheck: "piorbit:update/check",
-  updateInstall: "piorbit:update/install",
-  updateChanged: "piorbit:update/changed",
-} as const;
+const { IPC } = require("./ipc.generated.cjs") as typeof import("./ipc.generated.cjs");
 
 interface Bootstrap {
   version: string;
@@ -66,7 +43,7 @@ interface Bootstrap {
  * The two strings this file may not import.
  *
  * A sandboxed preload's `require` resolves only `electron` and a few Node
- * builtins, so `@piorbit/protocol` is out of reach here. They are name-free for
+ * builtins, so `@laser/protocol` is out of reach here. They are name-free for
  * exactly that reason — an internal contract inside one build rather than the
  * product's identity — and `src/api.ts` declares the same two values for
  * everything that *can* import. `test/preload.test.ts` keeps them equal.

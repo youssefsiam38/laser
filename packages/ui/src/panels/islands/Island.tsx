@@ -443,7 +443,7 @@ function IslandMenu({
  * The kind's body, and the "ended" notice above it. Exported because the
  * inline surface draws the same six bodies inside a transcript card: a
  * `collection` looks the same wherever the placement table sends it, which is
- * the whole point of piorbit owning presentation.
+ * the whole point of laser owning presentation.
  */
 export function PanelBody({ entry, size, now, decisions }: { entry: PanelEntry; size: IslandSize; now: number; decisions: ReadonlySet<string> }) {
   const actions = usePanelActions();

@@ -1,7 +1,7 @@
 /**
  * Where the root identity lives.
  *
- * The seed never touches a piorbit file on disk. On the desktop it goes into the
+ * The seed never touches a laser file on disk. On the desktop it goes into the
  * OS keychain through `@napi-rs/keyring` (keytar is archived and unmaintained,
  * so it is not an option). This module deliberately does NOT depend on that
  * package: `@lasercode/crypto` also runs in a browser, where a native addon cannot
@@ -39,7 +39,7 @@ export class IdentityStoreError extends Error {
 }
 
 export interface RootIdentityStore {
-  /** Human-readable, for error messages: "the macOS keychain", "~/.piorbit/identity.key". */
+  /** Human-readable, for error messages: "the macOS keychain", "~/.laser/identity.key". */
   readonly description: string;
   load(): Promise<Uint8Array | null>;
   save(seed: Uint8Array): Promise<void>;

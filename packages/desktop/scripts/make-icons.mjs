@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 /**
- * The piorbit mark, drawn once and emitted as PNGs.
+ * The Laser mark, drawn once and emitted as PNGs.
  *
- * The mark is an orbit: a ring with one body on it and a filled core. It is the
- * same shape as the rail's project ring in `packages/ui/DESIGN.md`, so the app
- * icon, the tray and the UI all say the same thing.
+ * The mark is a laser cavity: two mirrors facing each other with the beam
+ * running through the gap and out the far side. Same drawing as the logo.
  *
  * Two outputs, because they have different lives:
  *   build/icon.png          the app icon electron-builder turns into .icns/.ico
@@ -39,29 +38,69 @@ function rgb(hex) {
 }
 
 /**
- * Coverage of the mark at one supersampled pixel, as three layers:
- * ring, body, core. Coordinates are normalised to a unit square.
+ * Coverage of the Laser mark at one supersampled pixel, in two layers: the two
+ * mirrors (ink) and the beam between them.
+ *
+ * The rectangles are the mark's own proportions, measured off the artwork and
+ * normalised into a unit square, so the icon and the logo on the site are the
+ * same drawing rather than two drawings that resemble each other.
+ *
+ * Still no canvas dependency: a rounded rectangle is one signed distance
+ * function, and there are five of them.
  */
+
+/** Signed distance to a rounded rectangle, negative inside. */
+function roundedRect(px, py, x, y, w, h, r) {
+  const cx = x + w / 2;
+  const cy = y + h / 2;
+  const radius = Math.min(r, w / 2, h / 2);
+  const dx = Math.abs(px - cx) - (w / 2 - radius);
+  const dy = Math.abs(py - cy) - (h / 2 - radius);
+  const outside = Math.hypot(Math.max(dx, 0), Math.max(dy, 0));
+  return outside + Math.min(Math.max(dx, dy), 0) - radius;
+}
+
+/**
+ * The mark, measured from the artwork. Each entry is [x, y, w, h] in a unit
+ * square. The two mirrors face each other with flat parallel inner edges —
+ * that straightness is what makes it read as a laser and not as two hooks — and
+ * only the outer ends are rounded.
+ */
+const MIRRORS = [
+  [0.6021, 0.0045, 0.1054, 0.9907], // the far mirror, full height
+  [0.2812, 0.0048, 0.1054, 0.4094], // the near mirror, above the beam
+  [0.2809, 0.586, 0.1064, 0.4089], // and below it
+];
+const BEAM = [
+  [0.0, 0.4458, 0.5717, 0.112], // entering, through the gap
+  [0.7333, 0.4453, 0.2666, 0.1095], // and leaving the far side
+];
+
 function markCoverage(rawU, rawV, geometry) {
-  const { ringRadius, ringWidth, bodyRadius, bodyAngle, coreRadius, gap } = geometry;
-  // The mark can be scaled and nudged inside the canvas so a badge has room.
   const scale = geometry.scale ?? 1;
   const u = (rawU - (geometry.cx ?? 0.5)) / scale + 0.5;
   const v = (rawV - (geometry.cy ?? 0.5)) / scale + 0.5;
-  const dx = u - 0.5;
-  const dy = v - 0.5;
-  const distance = Math.hypot(dx, dy);
 
-  const bodyX = 0.5 + Math.cos(bodyAngle) * ringRadius;
-  const bodyY = 0.5 + Math.sin(bodyAngle) * ringRadius;
-  const bodyDistance = Math.hypot(u - bodyX, v - bodyY);
+  // `inset` shrinks the mark inside its square; `radius` is the terminal
+  // rounding, in units of a bar's width so it scales with the mark.
+  const inset = geometry.inset ?? 0;
+  const span = 1 - inset * 2;
+  const map = ([x, y, w, h]) => [inset + x * span, inset + y * span, w * span, h * span];
+  const r = (geometry.radius ?? 0.5) * 0.1054 * span;
 
-  // The ring opens up around the body so the two never merge into a blob.
-  const ring =
-    Math.abs(distance - ringRadius) <= ringWidth / 2 && bodyDistance > bodyRadius + gap ? 1 : 0;
-  const body = bodyDistance <= bodyRadius ? 1 : 0;
-  const core = distance <= coreRadius ? 1 : 0;
-  return { ring, body, core };
+  let ink = 0;
+  for (const rect of MIRRORS) {
+    const [x, y, w, h] = map(rect);
+    if (roundedRect(u, v, x, y, w, h, r) <= 0) ink = 1;
+  }
+  let beam = 0;
+  for (const rect of BEAM) {
+    const [x, y, w, h] = map(rect);
+    if (roundedRect(u, v, x, y, w, h, r) <= 0) beam = 1;
+  }
+  // The beam is drawn over the mirrors, never blended with them.
+  if (beam) ink = 0;
+  return { ink, beam };
 }
 
 /**
@@ -72,9 +111,8 @@ function render(size, palette, geometry) {
   const pixels = Buffer.alloc(size * size * 4);
   const ground = palette.ground ? rgb(palette.ground) : null;
   const layers = [
-    { color: rgb(palette.ring), key: "ring", alpha: palette.ringAlpha ?? 1 },
-    { color: rgb(palette.core), key: "core", alpha: palette.coreAlpha ?? 1 },
-    { color: rgb(palette.body), key: "body", alpha: palette.bodyAlpha ?? 1 },
+    { color: rgb(palette.ink), key: "ink", alpha: palette.inkAlpha ?? 1 },
+    { color: rgb(palette.beam), key: "beam", alpha: palette.beamAlpha ?? 1 },
   ];
 
   for (let y = 0; y < size; y++) {
@@ -186,29 +224,22 @@ function encodePng(size, pixels) {
 // ------------------------------------------------------------ recipes ----
 
 const APP_GEOMETRY = {
-  ringRadius: 0.3,
-  ringWidth: 0.052,
-  bodyRadius: 0.082,
-  bodyAngle: -Math.PI / 3.2,
-  coreRadius: 0.086,
-  gap: 0.026,
+  // The mark sits inside a comfortable margin; the squircle is the ground.
+  inset: 0.17,
+  radius: 0.5,
   squircle: { radius: 0.5, exponent: 5 },
 };
 
-// The tray mark is heavier: at 16 px a hairline ring disappears.
+// The tray runs at 16px, where a margin is wasted space: the mark fills it.
 const TRAY_GEOMETRY = {
-  ringRadius: 0.29,
-  ringWidth: 0.11,
-  bodyRadius: 0.13,
-  bodyAngle: -Math.PI / 3.2,
-  coreRadius: 0.1,
-  gap: 0.04,
+  inset: 0.04,
+  radius: 0.5,
   squircle: null,
 };
 
-const APP_PALETTE = { ground: "#0B0F14", ring: "#4DA3FF", core: "#4DA3FF", body: "#4DA3FF", ringAlpha: 0.55 };
+const APP_PALETTE = { ground: identity.branding.dark, ink: "#E9E8E6", beam: "#03CC7B" };
 /** macOS template: black + alpha only; the system tints it. */
-const TEMPLATE_PALETTE = { ground: null, ring: "#000000", core: "#000000", body: "#000000", ringAlpha: 0.62 };
+const TEMPLATE_PALETTE = { ground: null, ink: "#000000", beam: "#000000", beamAlpha: 0.55 };
 
 const outputs = [];
 
@@ -244,7 +275,7 @@ function trayImage(size, palette, badge) {
   const cy = size * 0.78;
   const cut = size * 0.29;
   const dot = size * 0.2;
-  const [r, g, b] = rgb(palette.badge ?? palette.body);
+  const [r, g, b] = rgb(palette.badge ?? palette.beam);
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const distance = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
@@ -269,11 +300,9 @@ function trayImage(size, palette, badge) {
  */
 const COLOUR_PALETTE = {
   ground: null,
-  ring: "#4DA3FF",
-  core: "#4DA3FF",
-  body: "#4DA3FF",
+  ink: "#E9E8E6",
+  beam: "#03CC7B",
   badge: "#F5B849",
-  ringAlpha: 0.72,
 };
 
 const trayVariants = {

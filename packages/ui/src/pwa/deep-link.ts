@@ -70,7 +70,7 @@ export function rememberDecisionLink(url: { search: string; hash: string }): Dec
   return link;
 }
 
-/** A `piorbit:navigate` message from the service worker (the app was already open). */
+/** A `laser:navigate` message from the service worker (the app was already open). */
 export function acceptNavigateMessage(data: unknown): DecisionLink | undefined {
   if (!data || typeof data !== "object") return undefined;
   const d = data as { type?: unknown; url?: unknown };

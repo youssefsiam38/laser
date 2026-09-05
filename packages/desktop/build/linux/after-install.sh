@@ -7,10 +7,10 @@
 # It does four things and nothing else, so that after-remove.sh can undo
 # exactly this list:
 #
-#   1. put `piorbit` on PATH
+#   1. put `laser` on PATH
 #   2. give Chromium a usable sandbox on kernels that need the setuid helper
 #   3. refresh the three caches that make the menu entry, its icon and the
-#      piorbit:// handler appear without a logout
+#      laser:// handler appear without a logout
 #   4. install the AppArmor profile that lets the app open a user namespace on
 #      Ubuntu 24.04 and later
 #
@@ -72,9 +72,9 @@ fi
 
 # ---------------------------------------------------------- 3. caches ----
 
-# update-desktop-database is what registers piorbit:// : it reads the
+# update-desktop-database is what registers laser:// : it reads the
 # MimeType= line out of the .desktop entry and writes the mimeinfo cache the
-# desktop environment consults when something opens a piorbit:// link.
+# desktop environment consults when something opens a laser:// link.
 if hash update-desktop-database 2>/dev/null; then
     update-desktop-database /usr/share/applications || true
 fi

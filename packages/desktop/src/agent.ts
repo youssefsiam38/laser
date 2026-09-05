@@ -1,5 +1,5 @@
 /**
- * Proving, at every launch, that the agent piorbit runs is the agent piorbit
+ * Proving, at every launch, that the agent laser runs is the agent laser
  * ships (M10-T3).
  *
  * The app is self-contained or it is not, and "not" has to be a refusal rather

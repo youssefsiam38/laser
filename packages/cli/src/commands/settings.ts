@@ -1,13 +1,13 @@
 /**
- * `piorbit settings` — read and write Pi settings from a terminal (M9-T5).
+ * `laser settings` — read and write Pi settings from a terminal (M9-T5).
  *
  * The adapter lives in the worker (only it may import Pi), so every verb here
  * is one `pi/settings/*` call against the host, which starts or reuses the
- * worker for the project. That means `piorbit settings` and the Settings screen
+ * worker for the project. That means `laser settings` and the Settings screen
  * cannot disagree: same lock, same merge rule, same trust answer.
  *
  * Values are JSON. `--raw` accepts a bare string for the common case
- * (`piorbit settings set theme --raw dark`) so nobody has to quote `'"dark"'`.
+ * (`laser settings set theme --raw dark`) so nobody has to quote `'"dark"'`.
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";
 import { resolve } from "node:path";
@@ -27,13 +27,13 @@ function verbOf(positionals: readonly string[]): { verb: Verb; rest: string[] } 
   const [first, ...rest] = positionals;
   if (first === undefined) return { verb: "get", rest: [] };
   if ((VERBS as readonly string[]).includes(first)) return { verb: first as Verb, rest };
-  // `piorbit settings theme` reads one key: the common case should not need a verb.
+  // `laser settings theme` reads one key: the common case should not need a verb.
   return { verb: "get", rest: [first, ...rest] };
 }
 
 function scopeOf(args: CommandContext["args"]): SettingsScope {
   const value = str(args, "scope") ?? "global";
-  // `piorbit packages` calls the same file "user". Accepting both spellings
+  // `laser packages` calls the same file "user". Accepting both spellings
   // costs nothing and saves the guess; the docs name "global".
   if (value === "user") return "global";
   if (value !== "global" && value !== "project") {

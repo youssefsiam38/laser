@@ -1,7 +1,7 @@
 /**
  * What happens to a person's data when the product is renamed (MX-T7, D-36).
  *
- * "piorbit" is a working name. Everything the product owns on disk is named
+ * "laser" is a working name. Everything the product owns on disk is named
  * after it — `~/.local/share/<name>` and the platform equivalents,
  * `~/.config/<name>`, the legacy `~/.<name>` — so a rename would leave an
  * installed copy looking at an empty directory beside a full one, with the

@@ -6,10 +6,10 @@
  *   pnpm sandbox            # http://127.0.0.1:41441
  *   PORT=5000 pnpm sandbox
  *
- * It records itself in its own state dir the way `piorbit up` does, so the CLI
+ * It records itself in its own state dir the way `laser up` does, so the CLI
  * can be pointed at it:
  *
- *   PIORBIT_STATE_DIR=<the state dir it prints> piorbit status
+ *   LASER_STATE_DIR=<the state dir it prints> laser status
  *
  * The fake provider ("stub/stub-1") echoes a short markdown reply with a code
  * fence so streaming, markdown, and tool-free turns can be exercised.
@@ -193,7 +193,7 @@ writeFileSync(
 
 // ---- host ----
 // `stateDir` keeps the sandbox's projects, attention and log store inside the
-// temp dir; without it a demo run would write to the real ~/.piorbit.
+// temp dir; without it a demo run would write to the real ~/.laser.
 const sessionDir = join(base, "sessions");
 const stateDir = join(base, "state");
 const subagentsTempRoot = join(stateDir, "subagents");
@@ -207,7 +207,7 @@ const host = new HostServer({
 });
 const { url, port } = await host.listen();
 
-// The same record `piorbit up` writes. Without it the CLI has no way to find
+// The same record `laser up` writes. Without it the CLI has no way to find
 // this host, and half of what the CLI does could not be tried against a
 // sandbox at all.
 const hostFile = join(stateDir, "host.json");

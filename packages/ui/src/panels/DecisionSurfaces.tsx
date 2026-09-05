@@ -13,7 +13,7 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/
 import { useIsTouch } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
 import { consumeDecisionLink, usePendingDecisionLink } from "@/pwa";
-import { usePiorbitStable, usePiorbitView } from "@/runtime";
+import { useLaserStable, useLaserView } from "@/runtime";
 
 import { DecisionBody } from "./islands/bodies/DecisionBody.js";
 import { placementOf } from "./placement.js";
@@ -30,7 +30,7 @@ import { useToolRowIds } from "./tool-rows.js";
  * keeps "inline, in its tool row" from meaning "nowhere".
  */
 function useDecisions(): { cards: PanelEntry[]; sheet: PanelEntry | undefined; inToolRows: PanelEntry[] } {
-  const view = usePiorbitView();
+  const view = useLaserView();
   const entries = usePanelEntries(view?.path);
   const toolRows = useToolRowIds();
   return useMemo(() => {
@@ -124,7 +124,7 @@ export function PanelDecisionCards({ className }: { className?: string | undefin
  */
 function useDecisionLink(entry: PanelEntry | undefined): boolean {
   const link = usePendingDecisionLink();
-  const { actions } = usePiorbitStable();
+  const { actions } = useLaserStable();
   const panelActions = usePanelActions();
   const [declineFirst, setDeclineFirst] = useState(false);
 

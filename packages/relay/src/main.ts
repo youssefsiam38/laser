@@ -88,7 +88,7 @@ async function run(): Promise<void> {
 
 /**
  * Run when executed, stay quiet when imported by a test. Compare real paths:
- * `piorbit-relay` is a bin symlink, so `argv[1]` and `import.meta.url` are
+ * `laser-relay` is a bin symlink, so `argv[1]` and `import.meta.url` are
  * different strings pointing at the same file.
  */
 function isEntryPoint(): boolean {

@@ -1,11 +1,11 @@
 /**
- * PrefsStore (M11-T6) — piorbit's own preferences, kept by the host.
+ * PrefsStore (M11-T6) — laser's own preferences, kept by the host.
  *
  * Why this is not `pi/settings/set`: the agent's settings file belongs to the
  * agent. `SettingsAdapter` refuses any key the pinned agent does not define,
  * and it is right to — writing `theme` into `~/.pi/agent/settings.json` would
  * put a key there that the agent ignores today and could collide with
- * tomorrow. So piorbit's preferences live here instead, in
+ * tomorrow. So laser's preferences live here instead, in
  * `<stateDir>/prefs.json`, next to `projects.json` and `attention.json`.
  *
  * Why the host and not the browser: a theme in `localStorage` is a theme on one

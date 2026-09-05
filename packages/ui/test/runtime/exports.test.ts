@@ -10,11 +10,11 @@ import * as runtime from "../../src/runtime/index.js";
 describe("runtime barrel", () => {
   it("exports the provider, its hooks and the pure builders", () => {
     for (const name of [
-      "PiorbitProvider",
-      "usePiorbit",
-      "usePiorbitStable",
-      "usePiorbitState",
-      "usePiorbitView",
+      "LaserProvider",
+      "useLaser",
+      "useLaserStable",
+      "useLaserState",
+      "useLaserView",
       "useHostUiRequests",
       "useSessionMeta",
       "useExtensionUi",

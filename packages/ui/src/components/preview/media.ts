@@ -4,7 +4,7 @@
  *
  * The panel contract says content is a media type plus a ref, and that
  * `renderable: false` must degrade to "open this elsewhere" rather than to a
- * broken viewer. This file is the piorbit end of that promise: we render
+ * broken viewer. This file is the laser end of that promise: we render
  * markdown, unified diffs, images and plain text, and we say so out loud for
  * everything else instead of guessing. A PDF, a protein structure or a
  * spreadsheet is not a viewer we have; pretending otherwise produces garbage.

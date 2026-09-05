@@ -1,6 +1,6 @@
 "use client";
 /**
- * The workbench: piorbit's full-window screens that are not a transcript —
+ * The workbench: laser's full-window screens that are not a transcript —
  * Settings (M4-T2/T3/T4) and Logs (M4-T6).
  *
  * They are one overlay rather than a route because the app has no router and

@@ -2,12 +2,12 @@
  * panels — the declared panel protocol on Pi's event bus (docs/ux-panels.md,
  * "The contract", way 2).
  *
- * Always active. An extension that opts in emits `piorbit:panel` with a kind,
+ * Always active. An extension that opts in emits `laser:panel` with a kind,
  * an intent and strict JSON data; this module validates it (refusing anything
  * that smells of presentation), flattens it into a `Panel` and hands it to the
- * worker as `piorbit/panel/upsert`. `piorbit:panel:close` retires a panel.
+ * worker as `laser/panel/upsert`. `laser:panel:close` retires a panel.
  * When a person presses an action, the worker sends the command back here and
- * it is replayed on `piorbit:panel:action` for the extension to answer.
+ * it is replayed on `laser:panel:action` for the extension to answer.
  *
  * A terminal Pi has nobody listening on these channels, so emitting costs an
  * unaware host nothing. Delivery is at-least-once (R9): an identical re-emit
@@ -27,12 +27,12 @@ import {
   validatePanelEvent,
   type PanelActionEvent,
 } from "@lasercode/protocol";
-import type { PiorbitModule } from "./index.js";
+import type { LaserModule } from "./index.js";
 
 /** Ids remembered for dedupe and for answering "is anyone still holding this panel?". */
 const MAX_KNOWN = 1000;
 
-export const panelsModule: PiorbitModule = {
+export const panelsModule: LaserModule = {
   name: "panels",
   detect: () => true,
   activate({ pi, send, commands, panels }) {

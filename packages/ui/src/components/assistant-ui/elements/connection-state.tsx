@@ -19,7 +19,7 @@ import { useEffect, useRef, useState, type ComponentProps } from "react";
 import { Button } from "@/components/ui/button";
 import { StatusDot } from "@/components/status";
 import { cn } from "@/lib/utils";
-import { usePiorbitStable, usePiorbitState } from "@/runtime";
+import { useLaserStable, useLaserState } from "@/runtime";
 
 import { mono } from "./surfaces.js";
 
@@ -99,7 +99,7 @@ const RESUMED_MS = 2500;
  * `open` after either is "resumed" for {@link RESUMED_MS}.
  */
 export function useConnectionPhase(): { phase: ConnectionPhase; first: boolean } {
-  const connection = usePiorbitState((s) => s.connection);
+  const connection = useLaserState((s) => s.connection);
   const everOpen = useRef(false);
   const wasDown = useRef(false);
   const [resumed, setResumed] = useState(false);
@@ -126,7 +126,7 @@ export function useConnectionPhase(): { phase: ConnectionPhase; first: boolean }
 
 /** One quiet line under the top bar while the host is unreachable; absent when connected. */
 export function HostConnectionState({ className }: { className?: string | undefined }) {
-  const { client } = usePiorbitStable();
+  const { client } = useLaserStable();
   const { phase, first } = useConnectionPhase();
   return (
     <ConnectionState

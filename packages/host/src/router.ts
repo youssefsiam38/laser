@@ -69,7 +69,7 @@ export interface RouterDeps {
   packages?: PackageService | undefined;
   /** First-run state (M10-T6). */
   setup?: SetupService | undefined;
-  /** piorbit's own preferences (M11-T6). Host-owned; never Pi's settings file. */
+  /** laser's own preferences (M11-T6). Host-owned; never Pi's settings file. */
   prefs?: PrefsStore | undefined;
   /** The origin a phone opens, for the URLs inside a notification. */
   publicOrigin?: (() => string) | undefined;
@@ -116,7 +116,7 @@ export class Router {
    * Sessions a worker holds open that Pi has not written to disk yet. Pi
    * persists lazily, so a session created by `session/new` is invisible to the
    * catalog until its first message lands — without this a brand-new session is
-   * missing from the sidebar (and from `piorbit sessions`) until the first turn.
+   * missing from the sidebar (and from `laser sessions`) until the first turn.
    * An entry is dropped as soon as the catalog sees the file or the worker
    * closes it, so nothing here can outlive the real session.
    */

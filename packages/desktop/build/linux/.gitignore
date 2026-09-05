@@ -1,4 +1,4 @@
-# Written by `pnpm -F @piorbit/desktop linux:assets` (scripts/make-linux-assets.mjs)
+# Written by `pnpm -F @laser/desktop linux:assets` (scripts/make-linux-assets.mjs)
 # from product.json, the two .tpl files beside this one, and package.json's
 # version. The inputs are committed; the output is not, the same way
 # build/icons/ is not.

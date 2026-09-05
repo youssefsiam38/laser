@@ -3,8 +3,8 @@
  * The JSON escape hatch.
  *
  * The file as Pi loaded it, editable. Saving diffs the document against the
- * catalogue and sends only the paths that changed, so keys piorbit does not
- * know about survive untouched. An edit piorbit cannot express as a change to
+ * catalogue and sends only the paths that changed, so keys laser does not
+ * know about survive untouched. An edit laser cannot express as a change to
  * a known setting is refused by name rather than dropped — the one failure mode
  * a raw editor must not have.
  */

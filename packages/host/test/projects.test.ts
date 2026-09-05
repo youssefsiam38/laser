@@ -1,6 +1,6 @@
 /**
  * M2-T4: the project list survives a restart, and the trust gate resolves in
- * the documented order (piorbit's own decision → Pi's `trust.json` → Pi's
+ * the documented order (laser's own decision → Pi's `trust.json` → Pi's
  * `defaultProjectTrust` → ask a client).
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";

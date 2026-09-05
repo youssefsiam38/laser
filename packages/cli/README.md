@@ -138,7 +138,7 @@ $ laser doctor
   PASS  providers       anthropic (oauth), openai; env: OPENAI_API_KEY
   FAIL  port            127.0.0.1:41441 is in use by another program
                         → See what holds it (`lsof -nP -iTCP:41441 -sTCP:LISTEN`), or run laser on another port (`--port`).
-  PASS  subagents root  /home/you/.piorbit/subagents (469 GiB free)
+  PASS  subagents root  /home/you/.laser/subagents (469 GiB free)
   WARN  subagents uids  roots for another uid exist: /tmp/pi-subagents-uid-0
                         → Background subagent runs started under that uid are invisible to a laser running as uid 1000.
   PASS  worker          spawned, opened a session and closed it (4.9s)

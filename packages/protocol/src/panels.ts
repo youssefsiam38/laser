@@ -3,13 +3,13 @@
  * for everything an extension can show.
  *
  * Six kinds, one payload each, three shared types. An extension declares a
- * `kind` and an `intent`; piorbit decides the surface. Payloads are data,
+ * `kind` and an `intent`; laser decides the surface. Payloads are data,
  * never presentation: no HTML, no class names, no colours, no widths (the
  * schemas in schemas.ts refuse them).
  *
  * Also here:
- *   - the Pi event-bus protocol (`piorbit:panel`, `piorbit:panel:close`,
- *     `piorbit:panel:action`) the companion extension listens on;
+ *   - the Pi event-bus protocol (`laser:panel`, `laser:panel:close`,
+ *     `laser:panel:action`) the companion extension listens on;
  *   - the `pi/panel/*` methods, added to `ClientRequests` / `HostNotifications`
  *     by module augmentation so messages.ts stays the ACP-shaped core;
  *   - the attention derivation (R1): lifecycle is the data, the five-word
@@ -22,7 +22,7 @@ import type { SessionAttention } from "./messages.js";
 // Shared vocabulary
 // ---------------------------------------------------------------------------
 
-/** A verb the extension will answer to. piorbit renders the control. */
+/** A verb the extension will answer to. laser renders the control. */
 export interface Action {
   id: string;
   label: string;
@@ -348,7 +348,7 @@ export const PANEL_CLOSE_EVENT = "piorbit:panel:close";
 export const PANEL_ACTION_EVENT = "piorbit:panel:action";
 
 /**
- * What an extension emits on `piorbit:panel`. Kind-specific fields travel in
+ * What an extension emits on `laser:panel`. Kind-specific fields travel in
  * `data`; the companion module validates and flattens it into a `Panel`.
  */
 export interface PanelEvent {
@@ -371,7 +371,7 @@ export interface PanelCloseEvent {
   reason?: string | undefined;
 }
 
-/** piorbit → extension, on `piorbit:panel:action`. */
+/** laser → extension, on `laser:panel:action`. */
 export interface PanelActionEvent {
   id: string;
   actionId: string;

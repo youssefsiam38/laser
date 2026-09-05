@@ -29,14 +29,14 @@ import { StreamingCaret, StreamingText } from "@/components/assistant-ui/element
 import { ToolGroup } from "@/components/assistant-ui/elements/tool-group.aui";
 import { useCopy } from "@/hooks/use-copy";
 import { cn } from "@/lib/utils";
-import { NOTICE_DATA_PART, usePiorbitStable, usePiorbitState } from "@/runtime";
+import { NOTICE_DATA_PART, useLaserStable, useLaserState } from "@/runtime";
 import { continuationsOf, laterUserMessages, leafOf, userEntryAt } from "./entries.js";
 import { THINKING_LEVELS, useSupportedThinkingLevels } from "@/components/assistant-ui/elements/reasoning-effort";
 import { toolGroupKey } from "./tool-groups.js";
 import { ToolRow } from "./ToolRow.js";
 
-/** `metadata.custom.piorbit` the projection stamps on every message. */
-interface PiorbitMeta {
+/** `metadata.custom.laser` the projection stamps on every message. */
+interface LaserMeta {
   kind?: "user" | "turn" | "notice";
   images?: number;
   optimistic?: boolean;
@@ -45,15 +45,15 @@ interface PiorbitMeta {
   speaker?: Speaker;
 }
 
-const piorbitMeta = (message: MessageState): PiorbitMeta =>
-  ((message.metadata as { custom?: Record<string, unknown> } | undefined)?.custom?.[WIRE_NAMESPACE] as PiorbitMeta | undefined) ?? {};
+const laserMeta = (message: MessageState): LaserMeta =>
+  ((message.metadata as { custom?: Record<string, unknown> } | undefined)?.custom?.[WIRE_NAMESPACE] as LaserMeta | undefined) ?? {};
 
 const MESSAGE_ROOT = "[content-visibility:auto] [contain-intrinsic-size:auto_320px]";
 
 const EMPTY_ENTRIES: readonly unknown[] = [];
 
 /** The whole session tree, as Pi persisted it; stable between hydrations. */
-const useEntries = (): readonly unknown[] => usePiorbitState((s) => (s.current ? s.open[s.current]?.entries : undefined)) ?? EMPTY_ENTRIES;
+const useEntries = (): readonly unknown[] => useLaserState((s) => (s.current ? s.open[s.current]?.entries : undefined)) ?? EMPTY_ENTRIES;
 
 /** Text of every text part of the message in scope, for copying. */
 const useMessageText = (): string =>
@@ -76,7 +76,7 @@ function useNewDay(): Date | undefined {
 }
 
 function useSessionPath(): string | undefined {
-  return usePiorbitState((s) => s.current);
+  return useLaserState((s) => s.current);
 }
 
 /** Chooser: assistant-ui's `ThreadPrimitive.Messages` render function target. */
@@ -92,10 +92,10 @@ export function ThreadMessage() {
 
 export function UserMessage() {
   const aui = useAui();
-  const { actions } = usePiorbitStable();
+  const { actions } = useLaserStable();
   const text = useMessageText();
-  const images = useAuiState((s) => piorbitMeta(s.message).images ?? 0);
-  const optimistic = useAuiState((s) => piorbitMeta(s.message).optimistic === true);
+  const images = useAuiState((s) => laserMeta(s.message).images ?? 0);
+  const optimistic = useAuiState((s) => laserMeta(s.message).optimistic === true);
   const busy = useAuiState((s) => s.thread.isRunning);
   const newDay = useNewDay();
   const path = useSessionPath();
@@ -224,8 +224,8 @@ function stopReason(reason: string, detail: string | undefined): { reason: strin
 
 export function AssistantMessage() {
   const streaming = useAuiState((s) => s.message.role === "assistant" && s.message.status?.type === "running");
-  const isNotice = useAuiState((s) => piorbitMeta(s.message).kind === "notice");
-  const speaker = useAuiState((s) => piorbitMeta(s.message).speaker);
+  const isNotice = useAuiState((s) => laserMeta(s.message).kind === "notice");
+  const speaker = useAuiState((s) => laserMeta(s.message).speaker);
   const messageId = useAuiState((s) => s.message.id);
   // Two primitive selectors rather than one object, so the row does not re-render on every state change.
   const stoppedReason = useAuiState((s) => {
@@ -313,7 +313,7 @@ export function AssistantMessage() {
 }
 
 function AssistantStopped({ reason, detail, tone }: ReturnType<typeof stopReason>) {
-  const { actions } = usePiorbitStable();
+  const { actions } = useLaserStable();
   const workbench = useWorkbench();
   const running = useAuiState((s) => s.thread.isRunning);
   const disabled = useAuiState((s) => s.thread.isDisabled);
@@ -348,14 +348,14 @@ function AssistantStopped({ reason, detail, tone }: ReturnType<typeof stopReason
  * forks before the prompt that produced this reply and sends it again.
  */
 function AssistantFooter() {
-  const { actions } = usePiorbitStable();
+  const { actions } = useLaserStable();
   const text = useMessageText();
   const { copied, copy } = useCopy();
   const path = useSessionPath();
   const entries = useEntries();
   const busy = useAuiState((s) => s.thread.isRunning);
-  const model = usePiorbitState((s) => (s.current ? s.open[s.current]?.state.model ?? null : null));
-  const thinking = usePiorbitState((s) => (s.current ? s.open[s.current]?.state.thinkingLevel : undefined));
+  const model = useLaserState((s) => (s.current ? s.open[s.current]?.state.model ?? null : null));
+  const thinking = useLaserState((s) => (s.current ? s.open[s.current]?.state.thinkingLevel : undefined));
   // Only what this model accepts (R2). Unknown yet → offer them all.
   const supported = useSupportedThinkingLevels();
   const thinkingLevels = supported ?? THINKING_LEVELS;

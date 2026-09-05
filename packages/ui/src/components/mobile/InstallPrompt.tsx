@@ -5,7 +5,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { promptInstall, useCanPromptInstall, type PwaEnvironment } from "@/pwa";
-import { usePiorbitState } from "@/runtime";
+import { useLaserState } from "@/runtime";
 import { FORTNIGHT_MS, INSTALL_KEY, useDismissed } from "./remembered.js";
 
 /** After connecting, wait this long before suggesting the home screen. */
@@ -21,11 +21,11 @@ const APPEAR_AFTER_MS = 4_000;
 export function InstallPrompt({ env }: { env: PwaEnvironment }) {
   const [dismissed, dismiss] = useDismissed(INSTALL_KEY);
   const canPrompt = useCanPromptInstall();
-  const connection = usePiorbitState((s) => s.connection);
+  const connection = useLaserState((s) => s.connection);
   // Nothing has been done in the app yet: a sheet that says it "works best
   // installed" before the person has seen it work is the first thing they meet,
   // and it is an advert. It waits until there is a session to come back to.
-  const used = usePiorbitState((s) => s.sessions.length > 0 || Object.keys(s.open).length > 0);
+  const used = useLaserState((s) => s.sessions.length > 0 || Object.keys(s.open).length > 0);
   const [open, setOpen] = useState(false);
   const eligible = env.secure && !env.standalone && env.touch && !dismissed && used;
 

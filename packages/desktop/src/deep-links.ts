@@ -1,17 +1,17 @@
 /**
- * `piorbit://` links (M5-T1).
+ * `laser://` links (M5-T1).
  *
  * Three shapes, and deliberately only three:
  *
- *   piorbit://session/<absolute session file path>
- *   piorbit://project/<absolute project directory>
- *   piorbit://open
+ *   laser://session/<absolute session file path>
+ *   laser://project/<absolute project directory>
+ *   laser://open
  *
  * The payload is a filesystem path, which is the one thing a URL is bad at: it
  * can contain `/`, `?`, `#`, spaces and, on Windows, a backslash and a colon.
  * So the canonical form percent-encodes the whole path into a single segment
  * (`build()` does that), and the parser also accepts the unencoded form that
- * people type by hand — `piorbit://session//home/me/p/s.jsonl` — because a link
+ * people type by hand — `laser://session//home/me/p/s.jsonl` — because a link
  * that only works when it was machine-generated is a link that fails in an
  * issue report.
  *
@@ -40,7 +40,7 @@ function decodeSegment(raw: string): string | undefined {
 }
 
 /**
- * Parse one link. Returns `undefined` for anything that is not a piorbit link
+ * Parse one link. Returns `undefined` for anything that is not a laser link
  * we understand, so a caller can ignore junk without a try/catch.
  */
 export function parseDeepLink(input: string): DeepLink | undefined {
@@ -53,7 +53,7 @@ export function parseDeepLink(input: string): DeepLink | undefined {
   if (url.protocol !== `${DEEP_LINK_SCHEME}:`) return undefined;
 
   // A non-special scheme has an *opaque* host, which `new URL` leaves exactly
-  // as written (verified: `piorbit://Open` keeps its capital). So the verb is
+  // as written (verified: `laser://Open` keeps its capital). So the verb is
   // lowercased here, while the path — which is case-sensitive on every
   // filesystem we care about — is not.
   const verb = url.hostname.toLowerCase();

@@ -1,10 +1,10 @@
 "use client";
 /**
  * Settings → Extensions (M10-T5). Browse, install, update and remove without a
- * terminal, on a machine that has nothing but piorbit on it.
+ * terminal, on a machine that has nothing but laser on it.
  *
  * Every verb is an RPC to the host, which pins the exact version, hands the
- * install to the agent's own package manager running on the runtime piorbit
+ * install to the agent's own package manager running on the runtime laser
  * ships, verifies what landed, and records it. This screen shows the work
  * while it runs (`pi/packages/progress` → the `job-progress` element) and a
  * failure as one sentence with a Retry (`error-state`). It never prints a
@@ -34,7 +34,7 @@ import {
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
-import { usePiorbitStable } from "@/runtime";
+import { useLaserStable } from "@/runtime";
 import type {
   PackageCatalogEntry,
   PackageEntry,
@@ -74,7 +74,7 @@ interface Failure {
 }
 
 export function PackagesScreen({ cwd, snapshot, onSettingsChanged }: PackagesScreenProps) {
-  const { client, actions } = usePiorbitStable();
+  const { client, actions } = useLaserStable();
   const [view, setView] = useState<View>("installed");
   const [installed, setInstalled] = useState<PackageEntry[]>([]);
   const [loading, setLoading] = useState(true);

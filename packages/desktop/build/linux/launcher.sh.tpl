@@ -63,13 +63,13 @@ user_chose_features=0
 # is evidence of anything. install.sh now points the launcher symlink and the
 # .desktop entry at this script rather than at AppRun, so that path should not
 # happen at all — but "should not" is not a safety property, and the failure it
-# used to produce was silent: piorbit running with no sandbox and no message.
+# used to produce was silent: laser running with no sandbox and no message.
 #
 # So the third test is the shape AppRun's injection actually has. AppRun builds
 # `exec "$BIN" --no-sandbox "$@"`, always prepending, so an AppDir that has an
 # AppRun beside us and hands us --no-sandbox as the *first* argument is that
-# case and nothing else. A person typing `piorbit --no-sandbox` past this ends
-# up in the same place by a different door: PIORBIT_DISABLE_SANDBOX=1, which is
+# case and nothing else. A person typing `laser --no-sandbox` past this ends
+# up in the same place by a different door: LASER_DISABLE_SANDBOX=1, which is
 # checked immediately below and survives.
 from_apprun=0
 if [ -n "${APPDIR-}" ] || [ -n "${APPIMAGE-}" ]; then
@@ -169,7 +169,7 @@ esac
 # with a non-setuid helper: the renderer runs with Seccomp: 2 in a user
 # namespace of its own.
 #
-# --no-sandbox is never added here on piorbit's own initiative. If neither
+# --no-sandbox is never added here on laser's own initiative. If neither
 # mechanism is available the app says so and stops, because a coding agent with
 # an unsandboxed renderer is a different product from the one that was
 # installed.

@@ -5,7 +5,7 @@
  *
  *   - A comment that still says the old name after a rename is a documentation
  *     chore. Nothing on a person's machine is wrong because of it.
- *   - An identifier — `PiorbitPaths`, `piorbitDataDir` — is a symbol inside a
+ *   - An identifier — `LaserPaths`, `laserDataDir` — is a symbol inside a
  *     private workspace. Renaming it is a mechanical sweep with no user
  *     visible effect, the same as the npm scope.
  *   - A **string literal** is different. It is the app id, the scheme, the

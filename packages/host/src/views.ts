@@ -6,7 +6,7 @@
  * Validity is the session file's own (size, mtime): Pi appends, so any change
  * moves both. That makes the cache correct without a watcher and without
  * trusting our own bookkeeping — a session driven from a terminal invalidates
- * it exactly the same way one driven from piorbit does.
+ * it exactly the same way one driven from laser does.
  */
 import { statSync } from "node:fs";
 

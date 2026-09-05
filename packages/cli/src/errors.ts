@@ -11,7 +11,7 @@ export const ExitCode = {
   Failure: 1,
   /** The command line itself was wrong (unknown flag, missing argument). */
   Usage: 2,
-  /** No piorbit host is running (or it is not reachable). */
+  /** No laser host is running (or it is not reachable). */
   NoHost: 3,
   /** The host answered, but with an error. */
   HostError: 4,

@@ -245,7 +245,7 @@ export function noiseProtocolName(pattern: NoisePattern): string {
 export interface NoiseHandshakeOptions {
   pattern: NoisePattern;
   initiator: boolean;
-  /** Bound into `h` before anything else. piorbit always uses the channel id. */
+  /** Bound into `h` before anything else. laser always uses the channel id. */
   prologue?: Uint8Array;
   /** Local static. Required by both IK and KK for both roles. */
   staticKeyPair: KeyPair;

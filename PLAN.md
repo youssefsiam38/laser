@@ -281,7 +281,7 @@ Depends on: M1 (M3 for subagents).
 
 | ID | Task | Done when |
 | --- | --- | --- |
-| M8-T1 | Capability detection: the companion extension reports active modules per session (`piorbit/capabilities`); UI feature flags follow it | absent package hides its UI |
+| M8-T1 | Capability detection: the companion extension reports active modules per session (`laser/capabilities`); UI feature flags follow it | absent package hides its UI |
 | M8-T2 | `transcribe` module + desktop path for pi-gpt-transcribe: `WidgetState` as contract, native waveform, hotkey routing, awaitable pre-send transform, non-tui entry point (upstream PR) | dictation works in desktop composer |
 | M8-T3 | Native markdown preview and image display replacing TUI-only packages | preview pane for any markdown file |
 | M8-T4 | `web-access` module: detection and native rendering of pi-web-access widgets | search results widget renders |

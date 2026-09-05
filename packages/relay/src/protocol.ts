@@ -1,3 +1,4 @@
+import { WIRE_NAMESPACE } from "@lasercode/protocol/identity";
 /**
  * The relay's own control vocabulary, and the one rule that keeps this package
  * honest:
@@ -83,7 +84,7 @@ export function isChannelId(value: string): boolean {
  * `Sec-WebSocket-Protocol` is a header, so it stays out of request lines, and
  * the relay still treats the value as an opaque route (AGENTS.md invariant 7).
  */
-export const CHANNEL_PROTOCOL_PREFIX = "piorbit.channel.";
+export const CHANNEL_PROTOCOL_PREFIX = `${WIRE_NAMESPACE}.channel.`;
 
 /** The `Sec-WebSocket-Protocol` value a client offers for one channel. */
 export function channelSubprotocol(channelId: string): string {

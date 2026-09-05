@@ -1,6 +1,6 @@
 /**
  * Mobile surfaces (M7). Mount `<MobileSurfaces />` once inside
- * `<PiorbitProvider>`; everything else here is a piece of it that other
+ * `<LaserProvider>`; everything else here is a piece of it that other
  * surfaces may also want (the notifications row in settings, the dictate
  * button in the composer).
  */

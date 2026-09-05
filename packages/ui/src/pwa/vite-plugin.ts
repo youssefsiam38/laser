@@ -16,7 +16,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { transformWithEsbuild, type Plugin } from "vite";
-import { DECLARATIVE_WEB_PUSH_VERSION, FORMER_NAMES, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, STORAGE_PREFIX, dottedStorageKey, storageKey } from "@lasercode/protocol";
+import { DECLARATIVE_WEB_PUSH_VERSION, FORMER_NAMES, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, STORAGE_PREFIX, dottedStorageKey, storageKey, SW_SKIP_WAITING, SW_PUSH_CHANGED } from "@lasercode/protocol";
 
 import { compileVars } from "../theme/compile.js";
 import { DEFAULT_LIGHT_PRESET_ID, DEFAULT_PRESET, getPreset } from "../theme/presets.js";
@@ -84,7 +84,7 @@ self.addEventListener("activate", (event) => {
 });
 `;
 
-export interface PiorbitPwaOptions {
+export interface LaserPwaOptions {
   /** Module the plugin injects into the HTML head. Default `/src/pwa/boot.ts`. */
   bootModule?: string;
 }
@@ -128,7 +128,7 @@ export function productIdentityHtml(): Plugin {
   };
 }
 
-export function piorbitPwa(options: PiorbitPwaOptions = {}): Plugin {
+export function laserPwa(options: LaserPwaOptions = {}): Plugin {
   const bootModule = options.bootModule ?? "/src/pwa/boot.ts";
   return {
     name: PLUGIN,
@@ -186,6 +186,8 @@ export function piorbitPwa(options: PiorbitPwaOptions = {}): Plugin {
         .replace("__SW_BUILD__", build)
         .replace("__SW_CACHE_PREFIX__", CACHE_PREFIX)
         .replace("__SW_PRODUCT_NAME__", PRODUCT_DISPLAY_NAME)
+        .replace("__SW_SKIP_WAITING__", SW_SKIP_WAITING)
+        .replace("__SW_PUSH_CHANGED__", SW_PUSH_CHANGED)
         .replace("__SW_OFFLINE_STYLE__", () => style);
       if (!out.includes(JSON.stringify(precache))) throw new Error(`${PLUGIN} — the precache placeholder was not found in sw.ts`);
       if (out.includes("__SW_OFFLINE_STYLE__")) throw new Error(`${PLUGIN} — the offline-style placeholder was not found in sw.ts`);

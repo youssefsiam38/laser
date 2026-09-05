@@ -25,7 +25,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { modKey } from "@/format";
 import { useIsMobile, useIsTouch } from "@/hooks/use-mobile";
 import { usePanelEntries } from "@/panels";
-import { composerSendPlan, usePiorbitStable, usePiorbitView, useSessionMeta } from "@/runtime";
+import { composerSendPlan, useLaserStable, useLaserView, useSessionMeta } from "@/runtime";
 import { ProjectLine } from "./ProjectLine.js";
 import { StatusLine } from "./StatusLine.js";
 
@@ -107,7 +107,7 @@ export function Composer() {
             </ComposerBar>
           </ComposerPrimitive.AttachmentDropzone>
         )}
-        {/* `/` runs a piorbit command; `@` addresses a running subagent by handle. */}
+        {/* `/` runs a laser command; `@` addresses a running subagent by handle. */}
         <ComposerTriggerPopover char="/" adapter={slash.adapter} action={slash.action} {...(slash.iconMap ? { iconMap: slash.iconMap } : {})} fallbackIcon={SlashSquare} className="bottom-[calc(100%-2rem)]" />
         <ComposerTriggerPopover char="@" adapter={mention.adapter} directive={mention.directive} fallbackIcon={AtSign} emptyItemsLabel="Nothing to mention here yet" className="bottom-[calc(100%-2rem)]" />
         {!mobile && <ComposerFooterLine />}
@@ -130,8 +130,8 @@ export function Composer() {
  * disabled and says why, rather than accepting input it will drop.
  */
 function useNothingToSendTo(): string | undefined {
-  const { currentProject } = usePiorbitStable();
-  const view = usePiorbitView();
+  const { currentProject } = useLaserStable();
+  const view = useLaserView();
   if (view || currentProject) return undefined;
   return "Open a project first — the agent works inside a folder on this computer.";
 }
@@ -240,12 +240,12 @@ function SendOrStop({ mobile = false }: { mobile?: boolean }) {
 }
 
 // ---------------------------------------------------------------------------
-// `/` — piorbit's own commands, then everything the agent itself can run in
+// `/` — laser's own commands, then everything the agent itself can run in
 // this session: the packages' registered commands, the prompt library and the
 // skills, from `pi/commands/list`.
 //
 // Pi's builtin terminal commands (`/model`, `/settings`, `/tree`, `/thinking`)
-// are deliberately absent: they open its terminal pickers, and piorbit has its
+// are deliberately absent: they open its terminal pickers, and laser has its
 // own control for every one of them. A row that opened nothing would be worse
 // than no row (R2).
 // ---------------------------------------------------------------------------
@@ -265,8 +265,8 @@ const SLASH_ICONS = {
 
 /** What the agent can run here. Empty until a session is open, and on any failure. */
 function useAgentCommands(): CommandInfo[] {
-  const { client } = usePiorbitStable();
-  const path = usePiorbitView()?.path;
+  const { client } = useLaserStable();
+  const path = useLaserView()?.path;
   const [commands, setCommands] = useState<CommandInfo[]>([]);
   useEffect(() => {
     if (!path) {
@@ -279,7 +279,7 @@ function useAgentCommands(): CommandInfo[] {
       .then((result) => {
         if (!cancelled) setCommands(result.commands);
       })
-      // A popover that opens with piorbit's own commands is a working popover;
+      // A popover that opens with laser's own commands is a working popover;
       // it must never be a toast about a list nobody asked for.
       .catch(() => {
         if (!cancelled) setCommands([]);
@@ -293,8 +293,8 @@ function useAgentCommands(): CommandInfo[] {
 
 function useSlashCommands() {
   const aui = useAui();
-  const { actions } = usePiorbitStable();
-  const view = usePiorbitView();
+  const { actions } = useLaserStable();
+  const view = useLaserView();
   const shell = useShell();
   const { running, compacting } = useSessionMeta();
   const busy = running || compacting;
@@ -367,7 +367,7 @@ const MENTION_ICONS = { agent: Bot, file: FileText } as const;
 
 /** The project's files. Empty until a project is open, and on any failure. */
 function useProjectFiles(cwd: string | undefined): ProjectFile[] {
-  const { client } = usePiorbitStable();
+  const { client } = useLaserStable();
   const [files, setFiles] = useState<ProjectFile[]>([]);
   useEffect(() => {
     if (!cwd) {
@@ -391,7 +391,7 @@ function useProjectFiles(cwd: string | undefined): ProjectFile[] {
 }
 
 function useHandleMentions() {
-  const view = usePiorbitView();
+  const view = useLaserView();
   const entries = usePanelEntries(view?.path);
   const files = useProjectFiles(view?.state.cwd);
   const items = useMemo(

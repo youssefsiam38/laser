@@ -1,5 +1,5 @@
 /**
- * `piorbit relay` — link a phone to this desktop (M9-T7, M6).
+ * `laser relay` — link a phone to this desktop (M9-T7, M6).
  *
  * Four verbs and one file. `login` records which relay to meet at, `pair`
  * runs the Noise_IK handshake with a phone that scanned the QR, `devices`
@@ -52,10 +52,10 @@ import {
   type RelayConfig,
 } from "../relay-config.js";
 import { readHostFile } from "../hostfile.js";
-import type { PiorbitPaths } from "../config.js";
+import type { LaserPaths } from "../config.js";
 
 /** Mirrors `CHANNEL_PROTOCOL_PREFIX` in `@lasercode/relay`, as the host does. */
-const CHANNEL_PROTOCOL_PREFIX = "piorbit.channel.";
+const CHANNEL_PROTOCOL_PREFIX = "${WIRE_NAMESPACE}.channel.";
 
 const VERBS = ["status", "login", "pair", "devices", "revoke"] as const;
 type Verb = (typeof VERBS)[number];
@@ -136,7 +136,7 @@ unlinks every device. It lives in the state directory, mode 0600.
 
 async function status({ term, paths }: CommandContext): Promise<void> {
   // Reading status writes nothing, including no key: a machine that has never
-  // paired anything must look the same after `piorbit relay` as before it.
+  // paired anything must look the same after `laser relay` as before it.
   const config = readRelayConfig(paths);
   const identity = await readIdentity(paths);
   const list = identity ? deviceListOf(config, identity) : undefined;
@@ -168,7 +168,7 @@ async function status({ term, paths }: CommandContext): Promise<void> {
   }
 
   term.print(`relay      ${config.relayUrl}`);
-  term.print(`app        ${config.publicOrigin ?? term.out.dim("not set — `piorbit relay login --origin <url>`")}`);
+  term.print(`app        ${config.publicOrigin ?? term.out.dim("not set — `laser relay login --origin <url>`")}`);
   term.print(`identity   ${term.out.dim(identity ? fingerprint(identity.publicKey) : "not created yet")}`);
   const linked = list?.devices ?? [];
   term.print(`devices    ${linked.length === 0 ? term.out.dim("none linked") : String(linked.length)}`);

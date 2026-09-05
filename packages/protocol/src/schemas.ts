@@ -422,7 +422,7 @@ export const panelActionEventSchema = z
 export type PanelValidation = { ok: true; panel: Panel } | { ok: false; error: string };
 
 /**
- * Validate a `piorbit:panel` bus event and flatten it into a `Panel`.
+ * Validate a `laser:panel` bus event and flatten it into a `Panel`.
  * Strict at both layers; the error is one sentence naming the field, so the
  * extension author can act on it when it shows up in the logs.
  */

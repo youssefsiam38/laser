@@ -1,7 +1,7 @@
 "use client";
 /**
  * Number ticker (`elements-number-ticker`): a value whose digits roll into
- * place. In piorbit it is the ONE live value a minimal island shows and the
+ * place. In laser it is the ONE live value a minimal island shows and the
  * live counters — elapsed time, tokens — on the status line and expanded
  * islands. Tabular, `typed`, and inline: it fits a row, it does not stand as
  * a 3xl figure with a caption beneath it.

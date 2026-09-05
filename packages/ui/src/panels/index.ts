@@ -1,7 +1,7 @@
 /**
  * The panel system (docs/ux-panels.md). Components import from here.
  *
- *   PanelsProvider          mount inside <PiorbitProvider>
+ *   PanelsProvider          mount inside <LaserProvider>
  *   PanelAmbient            the panel half of the status line above the composer (its trailing slot)
  *   PanelInlineCards        the inline surface: cards in the transcript
  *   PanelInspectSheet       `inspect`: a sheet that opens on arrival

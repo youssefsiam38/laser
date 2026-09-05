@@ -22,7 +22,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useCopy } from "@/hooks";
 import { dateTime, duration } from "@/format";
 import { cn } from "@/lib/utils";
-import { usePiorbitStable } from "@/runtime";
+import { useLaserStable } from "@/runtime";
 import type { LogEntry } from "@lasercode/protocol";
 
 import { SECTION_TONE } from "./model.js";
@@ -42,7 +42,7 @@ export function LogDetail({ entry }: { entry: LogEntry | undefined }) {
 }
 
 function Detail({ entry }: { entry: LogEntry }) {
-  const { client } = usePiorbitStable();
+  const { client } = useLaserStable();
   const [body, setBody] = useState<string>();
   const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(false);

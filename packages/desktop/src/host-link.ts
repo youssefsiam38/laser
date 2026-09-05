@@ -12,7 +12,7 @@
  * changes state goes through the UI, where a person can see what they did.
  *
  * Unlike the CLI's `HostRpc`, this one reconnects: the host restarts (a crash,
- * an update, `piorbit restart`) and the tray has to come back on its own.
+ * an update, `laser restart`) and the tray has to come back on its own.
  */
 import { WebSocket } from "ws";
 import type { HostNotificationMethod, HostNotifications, JsonRpcMessage, ProjectInfo, SessionSummary } from "@lasercode/protocol";

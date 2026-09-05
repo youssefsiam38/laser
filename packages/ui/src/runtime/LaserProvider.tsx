@@ -7,9 +7,9 @@
  * `useRemoteThreadListRuntime` over the session catalog whose per-thread
  * `runtimeHook` builds a `useExternalStoreRuntime` for the open session.
  *
- * Everything piorbit needs that assistant-ui does not model — free-standing
+ * Everything laser needs that assistant-ui does not model — free-standing
  * extension dialogs, status pills, widgets, worker status, projects, the
- * session tree — hangs off {@link usePiorbit} instead of being forced into a
+ * session tree — hangs off {@link useLaser} instead of being forced into a
  * runtime seam.
  *
  * Why the snapshot store: `useRemoteThreadListRuntime` stores `runtimeHook` in
@@ -90,7 +90,7 @@ export type TrustRequest = HostNotifications["pi/project/trust_request"];
 // Context
 // ---------------------------------------------------------------------------
 
-export interface PiorbitActions {
+export interface LaserActions {
   /** `session/load` (+ `pi/session/entries` on first open) and select it. */
   openSession(path: string): Promise<void>;
   /** `session/new` in `cwd`; resolves with the new session path. */
@@ -130,7 +130,7 @@ export interface PiorbitActions {
   toast(level: "info" | "warning" | "error", text: string): void;
 }
 
-export interface PiorbitContextValue {
+export interface LaserContextValue {
   state: AppState;
   dispatch: (action: Action) => void;
   client: HostClient;
@@ -145,18 +145,18 @@ export interface PiorbitContextValue {
   /** Project-trust questions waiting for an answer. */
   trustRequests: TrustRequest[];
   archive: ArchiveStore;
-  actions: PiorbitActions;
+  actions: LaserActions;
 }
 
 /** Everything that does not change when the transcript does. */
-export type PiorbitStable = Omit<PiorbitContextValue, "state" | "view">;
+export type LaserStable = Omit<LaserContextValue, "state" | "view">;
 
-const PiorbitStableContext = createContext<PiorbitStable | null>(null);
-const PiorbitStateContext = createContext<StateStore | null>(null);
+const LaserStableContext = createContext<LaserStable | null>(null);
+const LaserStateContext = createContext<StateStore | null>(null);
 
-export function usePiorbitStable(): PiorbitStable {
-  const value = useContext(PiorbitStableContext);
-  if (!value) throw new Error("usePiorbit must be used inside <PiorbitProvider>.");
+export function useLaserStable(): LaserStable {
+  const value = useContext(LaserStableContext);
+  if (!value) throw new Error("useLaser must be used inside <LaserProvider>.");
   return value;
 }
 
@@ -169,9 +169,9 @@ const identity = <T,>(value: T): T => value;
  *
  * `isEqual` lets a selector that allocates (a derived list) stay stable.
  */
-export function usePiorbitState<T>(selector: (state: AppState) => T, isEqual: (a: T, b: T) => boolean = Object.is): T {
-  const store = useContext(PiorbitStateContext);
-  if (!store) throw new Error("usePiorbitState must be used inside <PiorbitProvider>.");
+export function useLaserState<T>(selector: (state: AppState) => T, isEqual: (a: T, b: T) => boolean = Object.is): T {
+  const store = useContext(LaserStateContext);
+  if (!store) throw new Error("useLaserState must be used inside <LaserProvider>.");
   const selectorRef = useRef(selector);
   selectorRef.current = selector;
   const isEqualRef = useRef(isEqual);
@@ -195,18 +195,18 @@ export function usePiorbitState<T>(selector: (state: AppState) => T, isEqual: (a
 }
 
 /** The currently open session view. Identity is stable while it does not change. */
-export function usePiorbitView(): SessionView | undefined {
-  return usePiorbitState((s) => (s.current ? s.open[s.current] : undefined));
+export function useLaserView(): SessionView | undefined {
+  return useLaserState((s) => (s.current ? s.open[s.current] : undefined));
 }
 
 /**
  * The whole context. Kept for consumers that genuinely need all of it; anything
- * on a hot path should use {@link usePiorbitState} instead.
+ * on a hot path should use {@link useLaserState} instead.
  */
-export function usePiorbit(): PiorbitContextValue {
-  const stable = usePiorbitStable();
-  const state = usePiorbitState(identity);
-  const view = usePiorbitView();
+export function useLaser(): LaserContextValue {
+  const stable = useLaserStable();
+  const state = useLaserState(identity);
+  const view = useLaserView();
   return useMemo(() => ({ ...stable, state, view }), [stable, state, view]);
 }
 
@@ -335,13 +335,13 @@ const readStringList = (key: string): string[] => {
 // Provider
 // ---------------------------------------------------------------------------
 
-export interface PiorbitProviderProps {
+export interface LaserProviderProps {
   children: ReactNode;
   /** Override the host WebSocket URL (defaults to the page origin). */
   url?: string | undefined;
 }
 
-export function PiorbitProvider({ children, url }: PiorbitProviderProps): ReactNode {
+export function LaserProvider({ children, url }: LaserProviderProps): ReactNode {
   const store = useMemo(() => createStateStore(), []);
   const dispatch = store.dispatch;
   // Always the committed state, even inside a socket callback that runs before
@@ -749,7 +749,7 @@ export function PiorbitProvider({ children, url }: PiorbitProviderProps): ReactN
     [client, refreshSessions, requireCurrent],
   );
 
-  const actions = useMemo<PiorbitActions>(
+  const actions = useMemo<LaserActions>(
     () => ({
       openSession: (path) => guard(() => openSession(path)).then(() => undefined),
       newSession: (cwd) => newSession(cwd),
@@ -879,7 +879,7 @@ export function PiorbitProvider({ children, url }: PiorbitProviderProps): ReactN
     ],
   );
 
-  const actionsRef = useRef<PiorbitActions>(actions);
+  const actionsRef = useRef<LaserActions>(actions);
   actionsRef.current = actions;
 
   const setCurrentProject = useCallback((cwd: string | undefined) => {
@@ -951,7 +951,7 @@ export function PiorbitProvider({ children, url }: PiorbitProviderProps): ReactN
   }, [state.connection, openSession, readState]);
 
   /**
-   * Deep link: `piorbit open` / `piorbit new --open` send the browser to
+   * Deep link: `laser open` / `laser new --open` send the browser to
    * `#/session/<encodeURIComponent(path)>`. Honour it once per hash, and clear
    * the fragment afterwards so a reload does not drag the user back to a
    * session they have since navigated away from. Failure is surfaced through
@@ -1064,7 +1064,7 @@ export function PiorbitProvider({ children, url }: PiorbitProviderProps): ReactN
 
   // Identity survives every transcript delta, so a consumer that only reads
   // actions/projects never re-renders while the agent streams.
-  const stable = useMemo<PiorbitStable>(
+  const stable = useMemo<LaserStable>(
     () => ({
       dispatch,
       client,
@@ -1080,25 +1080,25 @@ export function PiorbitProvider({ children, url }: PiorbitProviderProps): ReactN
   );
 
   return (
-    <PiorbitStateContext.Provider value={store}>
-      <PiorbitStableContext.Provider value={stable}>
+    <LaserStateContext.Provider value={store}>
+      <LaserStableContext.Provider value={stable}>
         <AssistantRuntimeProvider runtime={runtime}>
           <ThreadSelectionSync />
           {children}
         </AssistantRuntimeProvider>
-      </PiorbitStableContext.Provider>
-    </PiorbitStateContext.Provider>
+      </LaserStableContext.Provider>
+    </LaserStateContext.Provider>
   );
 }
 
 /**
- * assistant-ui → piorbit: a thread picked in an assistant-ui `ThreadList`
+ * assistant-ui → laser: a thread picked in an assistant-ui `ThreadList`
  * becomes the open session here. The reverse direction is the controlled
  * `threadId` prop above.
  */
 function ThreadSelectionSync(): null {
-  const { actions } = usePiorbitStable();
-  const current = usePiorbitState((s) => s.current);
+  const { actions } = useLaserStable();
+  const current = useLaserState((s) => s.current);
   const aui = useAui();
   useAuiEvent("threads.selectionChanged", ({ threadId }) => {
     let remoteId: string | undefined;
@@ -1188,8 +1188,8 @@ export interface HostUiRequests {
 
 /** Free-standing extension dialogs for the current session. */
 export function useHostUiRequests(): HostUiRequests {
-  const { actions } = usePiorbitStable();
-  const view = usePiorbitView();
+  const { actions } = useLaserStable();
+  const view = useLaserView();
   const requests = useMemo(() => {
     if (!view) return [];
     const toolCallIds = new Set(view.blocks.filter((b) => b.kind === "tool").map((b) => b.id));
@@ -1212,9 +1212,9 @@ export interface SessionMeta {
 }
 
 export function useSessionMeta(): SessionMeta {
-  const view = usePiorbitView();
-  const connection = usePiorbitState((s) => s.connection);
-  const workers = usePiorbitState((s) => s.workers);
+  const view = useLaserView();
+  const connection = useLaserState((s) => s.connection);
+  const workers = useLaserState((s) => s.workers);
   return useMemo(
     () => ({
       path: view?.path,
@@ -1240,7 +1240,7 @@ export interface ExtensionUi {
 }
 
 export function useExtensionUi(): ExtensionUi {
-  const view = usePiorbitView();
+  const view = useLaserView();
   return useMemo(
     () => ({
       statuses: view?.statuses ?? {},
@@ -1260,7 +1260,7 @@ export interface TrustPrompts {
 
 /** Project-trust questions raised by the host (M2-T4). */
 export function useTrustPrompts(): TrustPrompts {
-  const { trustRequests, actions } = usePiorbitStable();
+  const { trustRequests, actions } = useLaserStable();
   return useMemo(
     () => ({ requests: trustRequests, answer: actions.answerTrust }),
     [actions.answerTrust, trustRequests],
@@ -1273,7 +1273,7 @@ export interface Toasts {
 }
 
 export function useToasts(): Toasts {
-  const { actions } = usePiorbitStable();
-  const toasts = usePiorbitState((s) => s.toasts);
+  const { actions } = useLaserStable();
+  const toasts = useLaserState((s) => s.toasts);
   return useMemo(() => ({ toasts, dismiss: actions.dismissToast }), [actions.dismissToast, toasts]);
 }

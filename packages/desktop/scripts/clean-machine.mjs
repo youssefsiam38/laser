@@ -2,7 +2,7 @@
 /**
  * The clean-machine test (M10-T3).
  *
- * piorbit claims to be self-contained: a person installs it and nothing else,
+ * laser claims to be self-contained: a person installs it and nothing else,
  * and nothing it runs — not the runtime, not the agent, not the agent's
  * dependencies — comes from their machine. This script is that claim, made
  * checkable.

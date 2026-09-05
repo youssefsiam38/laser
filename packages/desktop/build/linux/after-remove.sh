@@ -38,7 +38,7 @@ if type update-alternatives >/dev/null 2>&1; then
     update-alternatives --remove "$EXE" "$APP_DIR/$EXE" || true
 elif [ -L "/usr/bin/$EXE" ] && [ "$(readlink -f "/usr/bin/$EXE" 2>/dev/null)" = "$APP_DIR/$EXE" ]; then
     # Only our own symlink. On a machine that also has a home-directory install,
-    # or a second copy registered some other way, /usr/bin/piorbit may not be
+    # or a second copy registered some other way, /usr/bin/laser may not be
     # ours — and removing this package must not break that one.
     rm -f "/usr/bin/$EXE"
 fi
@@ -46,7 +46,7 @@ fi
 # ------------------------------------------------------ 3. caches ----
 
 # Same three caches as the install, so the menu entry, its icon and the
-# piorbit:// handler disappear now rather than at the next login.
+# laser:// handler disappear now rather than at the next login.
 if hash update-desktop-database 2>/dev/null; then
     update-desktop-database /usr/share/applications || true
 fi

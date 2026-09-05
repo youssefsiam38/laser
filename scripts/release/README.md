@@ -24,7 +24,7 @@ working arm64 app.
 # 1. Set the version, commit it, tag it. The tag and EVERY package.json in the
 #    workspace must agree or publish.sh refuses — a release whose tag and
 #    version disagree cannot be reproduced from the tag, and a workspace whose
-#    packages disagree gives `piorbit --version` and the AppStream release entry
+#    packages disagree gives `laser --version` and the AppStream release entry
 #    two different answers.
 scripts/release/set-version.sh 0.1.0
 git commit -am "chore: v0.1.0"
@@ -71,7 +71,7 @@ scripts/release/sign.sh --show-key      # paste the line into install.sh
 
 Then commit that `RELEASE_PUBKEY=` line. From that moment `install.sh` treats a
 release **without** a signature as tampering rather than as a missing feature,
-so publish every release with the key available — or with `PIORBIT_RELEASE_KEY`
+so publish every release with the key available — or with `LASER_RELEASE_KEY`
 set as a repository secret so the workflow can do it.
 
 Back the key up somewhere you will still have it in five years. Rotating it
@@ -81,12 +81,12 @@ the old public half.
 ## What a release contains
 
 ```
-piorbit-0.1.0-x86_64.AppImage        one file, no root, no package manager
-piorbit-0.1.0-arm64.AppImage
-piorbit-0.1.0-linux-x64.tar.gz       the same AppDir, for machines that will not run an AppImage
-piorbit-0.1.0-linux-arm64.tar.gz
-piorbit_0.1.0_amd64.deb              when electron-builder.yml builds them
-piorbit-0.1.0.x86_64.rpm
+laser-0.1.0-x86_64.AppImage        one file, no root, no package manager
+laser-0.1.0-arm64.AppImage
+laser-0.1.0-linux-x64.tar.gz       the same AppDir, for machines that will not run an AppImage
+laser-0.1.0-linux-arm64.tar.gz
+laser_0.1.0_amd64.deb              when electron-builder.yml builds them
+laser-0.1.0.x86_64.rpm
 SHA256SUMS                           every file above, plus install.sh
 SHA256SUMS.sig                       when a release key is configured
 install.sh                           the installer this release was tested against

@@ -1,8 +1,8 @@
 /**
  * One name, two programs (M10-T1).
  *
- * `~/.local/bin/piorbit` is what the installer puts on a person's PATH, and it
- * is the launcher script — so it is also what answers `piorbit doctor` typed in
+ * `~/.local/bin/laser` is what the installer puts on a person's PATH, and it
+ * is the launcher script — so it is also what answers `laser doctor` typed in
  * a terminal. Getting the split wrong is invisible in a build and obvious to a
  * person: either a window opens when they asked for a command, or a Chromium
  * flag that Electron passes to itself on relaunch is handed to the CLI, which
@@ -97,7 +97,7 @@ describe("the launcher decides between the window and the command", () => {
  * electron-builder's AppRun probes with `unshare -Ur true` and, when that
  * fails — as it does on stock Ubuntu 24.04 — *prepends* `--no-sandbox` to
  * whatever the person typed. Letting it through is a silent sandbox downgrade;
- * deciding window-or-command before dropping it sends `piorbit doctor` to a
+ * deciding window-or-command before dropping it sends `laser doctor` to a
  * window.
  *
  * The trap is how you know AppRun ran. A *mounted* AppImage is easy: the

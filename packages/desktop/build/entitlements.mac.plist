@@ -9,7 +9,7 @@
     allow-dyld-environment-variables
         Electron sets DYLD_* for its own frameworks.
     disable-library-validation
-        piorbit spawns the stock Node it ships, which loads its own dynamic
+        laser spawns the stock Node it ships, which loads its own dynamic
         libraries and any native addon a Pi package pulls in. Library
         validation would refuse anything not signed by our team id.
     device.audio-input
@@ -17,7 +17,7 @@
         the key without the entitlement, or the entitlement without the key,
         both end in a process that is killed rather than prompted.
 
-  There is deliberately no App Sandbox: piorbit runs a coding agent over the
+  There is deliberately no App Sandbox: laser runs a coding agent over the
   user's own source tree, which the sandbox exists to prevent.
 -->
 <plist version="1.0">

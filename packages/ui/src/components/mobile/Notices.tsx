@@ -7,7 +7,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { cn } from "@/lib/utils";
 import { applyUpdate, asRawClient, insecureOriginAdvice, useEnvironment, usePush, useServiceWorker, type PwaEnvironment } from "@/pwa";
-import { usePiorbitStable, usePiorbitState, usePiorbitView } from "@/runtime";
+import { useLaserStable, useLaserState, useLaserView } from "@/runtime";
 import { StackRow } from "./MobileStack.js";
 import { INSECURE_KEY, NOTIFY_HINT_KEY, useDismissed } from "./remembered.js";
 
@@ -96,12 +96,12 @@ export function UpdateReady() {
  * actually work — the offer is dismissed for good either way.
  */
 export function NotifyHint() {
-  const { client } = usePiorbitStable();
+  const { client } = useLaserStable();
   const env = useEnvironment();
   const push = usePush(asRawClient(client), env);
   const [dismissed, dismiss] = useDismissed(NOTIFY_HINT_KEY);
-  const connection = usePiorbitState((s) => s.connection);
-  const waiting = usePiorbitView()?.dialogs.length ?? 0;
+  const connection = useLaserState((s) => s.connection);
+  const waiting = useLaserView()?.dialogs.length ?? 0;
   if (dismissed || waiting === 0 || connection !== "open") return null;
   if (push.availability.state !== "ready" || push.subscribed) return null;
   return (

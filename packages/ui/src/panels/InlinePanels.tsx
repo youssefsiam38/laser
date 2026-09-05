@@ -31,7 +31,7 @@ import { Badge } from "@/components/ui/badge";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
-import { usePiorbitView } from "@/runtime";
+import { useLaserView } from "@/runtime";
 
 import { Island, PanelBody, PRESSED } from "./islands/Island.js";
 import { placementOf, wantsInspectSheet, type InlineMode, type Viewport } from "./placement.js";
@@ -51,7 +51,7 @@ interface InlineEntry {
 }
 
 function useInlineEntries(): InlineEntry[] {
-  const view = usePiorbitView();
+  const view = useLaserView();
   const viewport = useViewport();
   const entries = usePanelEntries(view?.path);
   return useMemo(() => {
@@ -177,14 +177,14 @@ function InlineCard({ item }: { item: InlineEntry }) {
 /**
  * `inspect` opens, once, when the panel first arrives.
  *
- * Auto-opening is otherwise something piorbit does not do (the dock never
+ * Auto-opening is otherwise something laser does not do (the dock never
  * promotes a panel by itself), and this is the one intent whose whole meaning
  * is "now". It opens once per panel id: a re-emit that updates a panel already
  * seen does not re-interrupt.
  */
 export function PanelInspectSheet() {
   const viewport = useViewport();
-  const view = usePiorbitView();
+  const view = useLaserView();
   const entries = usePanelEntries(view?.path);
   const [openKey, setOpenKey] = useState<string | undefined>(undefined);
   const opened = useRef(new Set<string>());

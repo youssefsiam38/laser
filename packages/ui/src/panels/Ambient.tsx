@@ -18,7 +18,7 @@ import { cn } from "@/lib/utils";
 // from inside `@/panels` closes the loop. `fleet.ts` imports nothing.
 import { openFleet } from "@/components/subagents/fleet.js";
 import { useTick } from "@/components/thread/timing";
-import { usePiorbitView } from "@/runtime";
+import { useLaserView } from "@/runtime";
 
 import { ambientStatuses } from "./fallback.js";
 import { placementOf } from "./placement.js";
@@ -31,7 +31,7 @@ export interface PanelAmbientProps {
 }
 
 export function PanelAmbient({ className }: PanelAmbientProps) {
-  const view = usePiorbitView();
+  const view = useLaserView();
   const fleet = usePanelsState((r) => fleetSummary(r.panels), (a, b) => a.running === b.running && a.needsYou === b.needsYou);
   const entries = usePanelEntries(view?.path);
   const glance = useMemo(() => entries.filter((e) => !e.closed && placementOf(e.panel, "desktop").surface === "ambient"), [entries]);

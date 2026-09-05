@@ -35,7 +35,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { usePiorbitStable, usePiorbitState } from "../runtime/index.js";
+import { useLaserStable, useLaserState } from "../runtime/index.js";
 import type { AppState, SessionView } from "../store.js";
 import {
   DOCK_MIN_WIDTH,
@@ -362,7 +362,7 @@ export function mediaTypeOfRef(ref: string): { mediaType: string; renderable: bo
 }
 
 export function PanelsProvider({ children }: { children: ReactNode }): ReactNode {
-  const { client, actions: app } = usePiorbitStable();
+  const { client, actions: app } = useLaserStable();
   const store = useMemo(() => {
     const stored = readStored();
     return createRootStore({
@@ -428,9 +428,9 @@ export function PanelsProvider({ children }: { children: ReactNode }): ReactNode
   };
 
   // --- reconcile on (re)attach --------------------------------------------
-  const current = usePiorbitState((s: AppState) => s.current);
+  const current = useLaserState((s: AppState) => s.current);
   currentPath.current = current;
-  const connection = usePiorbitState((s: AppState) => s.connection);
+  const connection = useLaserState((s: AppState) => s.connection);
   useEffect(() => {
     if (!current || connection !== "open") return;
     let cancelled = false;
@@ -450,7 +450,7 @@ export function PanelsProvider({ children }: { children: ReactNode }): ReactNode
   }, [client, current, connection]);
 
   // --- fallback: widgets and dialogs from the app store -------------------
-  const open = usePiorbitState((s: AppState) => s.open);
+  const open = useLaserState((s: AppState) => s.open);
   const knownFallback = useRef(new Map<string, Set<string>>()); // path → panel ids
   useEffect(() => {
     const now = Date.now();

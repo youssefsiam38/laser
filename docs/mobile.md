@@ -107,7 +107,7 @@ tool's row, and one that blocks the whole session takes a sheet.
 
 Turn them on from the hint under an approval, or from Settings →
 Notifications (the same row). The host generates VAPID keys on first run into
-`~/.pi/agent/piorbit/push.json` and stores each device's subscription next to
+`~/.pi/agent/laser/push.json` and stores each device's subscription next to
 them. One notification document is sent per waiting decision; it is the
 Declarative Web Push shape (`web_push: 8030`), so Safari renders it without
 waking a worker and Chromium's worker renders the same JSON. Tapping opens the

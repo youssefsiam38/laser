@@ -2,11 +2,11 @@ import { ENV } from "@lasercode/protocol";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { agentHome, desktopEnv, piorbitDataDir } from "../src/agent-home.js";
+import { agentHome, desktopEnv, laserDataDir } from "../src/agent-home.js";
 
 /**
- * This is the whole "piorbit never touches your own agent" guarantee, and it is
- * one function. The failure it prevents is silent in both directions: piorbit
+ * This is the whole "laser never touches your own agent" guarantee, and it is
+ * one function. The failure it prevents is silent in both directions: laser
  * quietly writing another program's settings file, or a person's shell variable
  * quietly deciding where the app keeps its credentials.
  */
@@ -23,8 +23,8 @@ describe("desktopEnv", () => {
     expect(env["PI_CODING_AGENT_DIR"]).toBeUndefined();
     expect(env["PI_CODING_AGENT_SESSION_DIR"]).toBeUndefined();
     expect(env["PI_SUBAGENTS_TEMP_ROOT"]).toBeUndefined();
-    expect(env[ENV.agentDir]).toBe(join(piorbitDataDir({ HOME: home }), "agent"));
-    expect(env[ENV.stateDir]).toBe(join(piorbitDataDir({ HOME: home }), "state"));
+    expect(env[ENV.agentDir]).toBe(join(laserDataDir({ HOME: home }), "agent"));
+    expect(env[ENV.stateDir]).toBe(join(laserDataDir({ HOME: home }), "state"));
   });
 
   it(`honours ${ENV.agentDir}, which is the deliberate lever`, () => {

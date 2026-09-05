@@ -2,7 +2,7 @@
 
 Self-hosted so the offline shell renders in the real typeface, so a captive or
 flaky network cannot stall the first paint on a render-blocking cross-origin
-stylesheet, and so opening piorbit on a phone does not announce itself to a
+stylesheet, and so opening laser on a phone does not announce itself to a
 font CDN before it has drawn anything. The service worker precaches these
 files (`src/pwa/vite-plugin.ts`, `PUBLIC_SHELL`).
 

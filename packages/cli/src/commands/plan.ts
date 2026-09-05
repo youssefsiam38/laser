@@ -1,5 +1,5 @@
 /**
- * `piorbit plan <run>` — the intended shape of a multi-step run.
+ * `laser plan <run>` — the intended shape of a multi-step run.
  *
  * A plan is either **declared** (pi-subagents persisted a `workflowGraph` for a
  * chain or parallel launch) or **inferred** (a scripted workflow persists no
@@ -48,7 +48,7 @@ export function groupPhases(steps: readonly PlanStep[]): Phase[] {
 
 /**
  * A plan is named by the run it belongs to. People have the run id (from
- * `piorbit runs`, or from pi-subagents itself), not the panel id, so any
+ * `laser runs`, or from pi-subagents itself), not the panel id, so any
  * suffix of either works — and an ambiguous reference lists the candidates
  * rather than picking one.
  */

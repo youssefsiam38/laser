@@ -1,5 +1,5 @@
 /**
- * `piorbit packages` — Pi's package manager, from a terminal (M9-T5).
+ * `laser packages` — Pi's package manager, from a terminal (M9-T5).
  *
  * Everything goes through `pi/packages/*` on the host, which reaches the
  * project's worker and Pi's own `DefaultPackageManager`. Install and update do
@@ -33,7 +33,7 @@ function verbOf(positionals: readonly string[]): { verb: Verb; rest: string[] } 
 
 function scopeOf(args: CommandContext["args"]): PackageScope {
   const value = str(args, "scope") ?? "user";
-  // `piorbit settings` calls the same file "global"; both spellings work here.
+  // `laser settings` calls the same file "global"; both spellings work here.
   if (value === "global") return "user";
   if (value !== "user" && value !== "project") {
     throw new CliError(`unknown package scope ${JSON.stringify(value)}`, {

@@ -31,6 +31,17 @@ export const EXECUTABLE = identity.binary;
  */
 export const REAL_BINARY = identity.realBinary;
 
+/**
+ * Where the .deb and .rpm put the application tree.
+ *
+ * electron-builder derives this from `productName`, which is the *display*
+ * name — so it is `/opt/Laser`, not `/opt/laser`. Deriving it here rather than
+ * assuming it matches the binary name is the whole point: while the two
+ * spellings happened to be identical the packaging checks passed by luck, and
+ * the first rename that gave the product a capital letter broke them.
+ */
+export const INSTALL_DIR = `/opt/${identity.displayName}`;
+
 /** One line. Debian's `Description` first line, AppStream's `<summary>`. */
 export const SUMMARY = identity.copy.summary;
 

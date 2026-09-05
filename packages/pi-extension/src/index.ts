@@ -1,7 +1,7 @@
 /**
  * @lasercode/pi-extension — the single companion extension (D-13).
  *
- * The worker passes `createPiorbitExtension({ send })` as an inline extension
+ * The worker passes `createLaserExtension({ send })` as an inline extension
  * factory when it builds the session's ResourceLoader. Inside the Pi process
  * it owns everything that must run in-process:
  *   - capability detection (which supported packages are present)
@@ -36,10 +36,10 @@ export type {
   ModuleName,
   OutboundMessage,
   ModuleContext,
-  PiorbitModule,
+  LaserModule,
 } from "./modules/index.js";
 
-export interface PiorbitExtensionOptions {
+export interface LaserExtensionOptions {
   /** Delivers messages to the worker (in-process callback). */
   send: (message: OutboundMessage) => void;
   /**
@@ -60,11 +60,11 @@ export interface PiorbitExtensionOptions {
  * transcripts and a person's settings can filter on it, so renaming the product
  * must not make an existing session's extension records unreadable.
  */
-export const PIORBIT_EXTENSION_NAME: string = WIRE_NAMESPACE;
+export const LASER_EXTENSION_NAME: string = WIRE_NAMESPACE;
 
-export function createPiorbitExtension(options: PiorbitExtensionOptions): InlineExtension {
+export function createLaserExtension(options: LaserExtensionOptions): InlineExtension {
   return {
-    name: PIORBIT_EXTENSION_NAME,
+    name: LASER_EXTENSION_NAME,
     factory: (pi: ExtensionAPI) => {
       if (process.env["PI_SUBAGENT_CHILD"] === "1") return;
       const disposers: Array<() => void> = [];

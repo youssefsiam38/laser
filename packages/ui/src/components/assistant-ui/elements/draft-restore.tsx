@@ -20,7 +20,7 @@ import { Button } from "@/components/ui/button";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { relativeTime } from "@/format";
 import { cn } from "@/lib/utils";
-import { usePiorbitView } from "@/runtime";
+import { useLaserView } from "@/runtime";
 
 import { mono, paper } from "./surfaces.js";
 
@@ -147,7 +147,7 @@ export function useComposerDraft(path: string | undefined): {
 
 /** The offer above the composer, when the open session has an unsent draft. */
 export function ComposerDraftRestore({ className }: { className?: string | undefined }) {
-  const view = usePiorbitView();
+  const view = useLaserView();
   const { saved, restore, discard } = useComposerDraft(view?.path);
   if (!saved) return null;
   return <DraftRestore draft={saved.text} savedAt={saved.at} onRestore={restore} onDiscard={discard} className={className} />;

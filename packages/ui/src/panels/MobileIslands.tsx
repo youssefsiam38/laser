@@ -25,7 +25,7 @@ import { StatusDot } from "@/components/status";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { usePiorbitView } from "@/runtime";
+import { useLaserView } from "@/runtime";
 
 import { Island } from "./islands/Island.js";
 import { stripBudget } from "./layout.js";
@@ -38,7 +38,7 @@ const UNMEASURED_WIDTH = 320;
 
 export function MobileIslands({ className }: { className?: string | undefined }) {
   const mobile = useIsMobile();
-  const view = usePiorbitView();
+  const view = useLaserView();
   const entries = useIslandEntries(view?.path, "mobile");
   const actions = usePanelActions();
   const [openKey, setOpenKey] = useState<string | undefined>(undefined);

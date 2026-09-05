@@ -106,7 +106,7 @@ export function effectiveDiff(catalog: SettingsCatalog, snapshot: SettingsSnapsh
 export interface JsonApplyResult {
   changes: SettingChange[];
   /**
-   * Paths the editor changed that piorbit cannot write — keys Pi 0.85 does not
+   * Paths the editor changed that laser cannot write — keys Pi 0.85 does not
    * define. The caller refuses the whole edit and names them.
    */
   unrepresentable: string[];

@@ -56,7 +56,7 @@ export interface HostServerOptions {
   nodeBinary?: string;
   /** Directory of the built UI; defaults to the workspace `@lasercode/ui/dist` if present. */
   uiDir?: string;
-  /** Where piorbit keeps its own state (projects, attention). Default `~/.piorbit`. */
+  /** Where laser keeps its own state (projects, attention). Default `~/.laser`. */
   stateDir?: string;
   /** Idle time before an unused worker is retired; 0 disables retirement. */
   workerIdleMs?: number;
@@ -169,7 +169,7 @@ export class HostServer {
   readonly subagents: SubagentsLayer;
   /** Web Push to paired phones (M7-T5). Inert until a device subscribes. */
   readonly push: PushService;
-  /** piorbit's own preferences (M11-T6) — the theme among them. */
+  /** laser's own preferences (M11-T6) — the theme among them. */
   readonly prefs: PrefsStore;
   readonly router: Router;
   private readonly http: Server;
@@ -378,7 +378,7 @@ export class HostServer {
 
   /**
    * Bring up one outbound relay client per paired device (M6-T5). No-op unless
-   * `options.relay` was supplied, which is the default: piorbit is a local app
+   * `options.relay` was supplied, which is the default: laser is a local app
    * until somebody links a device.
    *
    * A device whose channel id cannot be derived is reported and skipped rather

@@ -3,7 +3,7 @@
  *
  * `@lasercode/ui` is the same bundle in a browser tab, a phone, and this window.
  * So everything here is **additive and optional**: the shell exposes
- * `window.piorbit`, and the web build simply does not have it. A feature that
+ * `window.laser`, and the web build simply does not have it. A feature that
  * only works on the desktop must degrade to something that works everywhere —
  * popping a panel out becomes opening a tab, the custom titlebar becomes no
  * titlebar at all.
@@ -17,7 +17,7 @@ import type { PanelKind } from "@lasercode/protocol";
 
 export type DesktopPlatform = "darwin" | "win32" | "linux";
 
-/** How much of the window frame piorbit draws itself, and where it must not draw. */
+/** How much of the window frame laser draws itself, and where it must not draw. */
 export interface DesktopChrome {
   /**
    * `system`: macOS still draws the traffic lights, inset into our own bar.
@@ -42,7 +42,7 @@ export interface DesktopHostInfo {
   port: number;
   /** Written for a person: what happened and what to do about it. */
   message?: string;
-  /** False when we attached to a host somebody else (`piorbit up`) started. */
+  /** False when we attached to a host somebody else (`laser up`) started. */
   startedByUs: boolean;
   /** The stock Node the host runs on, and its own `process.execPath` (M5-T2). */
   runtime?: {
@@ -50,7 +50,7 @@ export interface DesktopHostInfo {
     version: string;
     execPath: string;
     /**
-     * The agent piorbit ships, as the *bundled* Node resolved it — never
+     * The agent laser ships, as the *bundled* Node resolved it — never
      * anything installed on this machine (M10-T3).
      */
     agent?: { package: string; version: string; packageDir: string };
@@ -71,7 +71,7 @@ export interface PanelDescriptor {
   cwd?: string;
 }
 
-/** Set on `window.piorbit.panel` inside a popped-out window; null in the main one. */
+/** Set on `window.laser.panel` inside a popped-out window; null in the main one. */
 export type PanelWindowDescriptor = PanelDescriptor;
 
 export type DeepLink =
@@ -90,7 +90,7 @@ export interface IdentitySummary {
   /** True when this run generated the key, which invalidates every pairing. */
   created: boolean;
   /**
-   * Set when the keychain refused and piorbit fell back to a 0600 file. The UI
+   * Set when the keychain refused and laser fell back to a 0600 file. The UI
    * must say so: the security story changed, and silence would be a lie.
    */
   degraded?: string;
@@ -121,7 +121,7 @@ export interface WindowChromeState {
   focused: boolean;
 }
 
-export interface PiorbitDesktop {
+export interface LaserDesktop {
   /** The app version, so the UI can show it without asking the host. */
   readonly version: string;
   readonly platform: DesktopPlatform;
@@ -177,33 +177,9 @@ export interface PiorbitDesktop {
   };
 }
 
-/**
- * IPC channel names. One table, imported by both sides, so a rename is a
- * compile error rather than a silent dead channel.
- */
-export const IPC = {
-  hostInfo: "piorbit:host/info",
-  hostChanged: "piorbit:host/changed",
-  hostRetry: "piorbit:host/retry",
-  panelPopOut: "piorbit:panel/pop-out",
-  panelClose: "piorbit:panel/close",
-  deepLink: "piorbit:deep-link",
-  deepLinkPending: "piorbit:deep-link/pending",
-  windowMinimize: "piorbit:window/minimize",
-  windowToggleMaximize: "piorbit:window/toggle-maximize",
-  windowClose: "piorbit:window/close",
-  windowState: "piorbit:window/state",
-  windowStateChanged: "piorbit:window/state-changed",
-  themeSet: "piorbit:theme/set",
-  microphoneStatus: "piorbit:microphone/status",
-  microphoneRequest: "piorbit:microphone/request",
-  microphoneSettings: "piorbit:microphone/settings",
-  identity: "piorbit:identity",
-  updateStatus: "piorbit:update/status",
-  updateCheck: "piorbit:update/check",
-  updateInstall: "piorbit:update/install",
-  updateChanged: "piorbit:update/changed",
-} as const;
+/** IPC channel names, generated from product.json so both sides agree. */
+export { IPC } from "./ipc.generated.js";
+export type { IpcChannel } from "./ipc.generated.js";
 
 /** The protocol scheme the OS hands back to us. product.json owns the value. */
 export const DEEP_LINK_SCHEME = URL_SCHEME;

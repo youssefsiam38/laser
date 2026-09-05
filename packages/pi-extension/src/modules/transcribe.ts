@@ -4,7 +4,7 @@
  * The package is a terminal program. `start()` refuses unless
  * `ctx.mode === "tui"`, because it opens the microphone from the Pi process,
  * draws a TUI component as its widget, and writes into Pi's own editor with
- * `pasteToEditor`. A browser has none of those. So piorbit does not drive the
+ * `pasteToEditor`. A browser has none of those. So laser does not drive the
  * package: it reimplements the same contract natively — microphone and level
  * meter in the browser, key and network call in the worker
  * (`packages/worker/src/transcribe.ts`) — and this module does the two things
@@ -32,7 +32,7 @@
 
 import { PRODUCT_NAME, symbolKey } from "@lasercode/protocol";
 import type { ExtensionContext, SlashCommandInfo } from "@earendil-works/pi-coding-agent";
-import type { PiorbitModule } from "./index.js";
+import type { LaserModule } from "./index.js";
 
 /** The npm/git package id, as it appears in `sourceInfo.source` and `sourceInfo.path`. */
 const PACKAGE_ID = "pi-gpt-transcribe";
@@ -74,7 +74,7 @@ function joinWithSpace(existing: string, addition: string): string {
   return `${existing} ${addition}`;
 }
 
-export const transcribeModule: PiorbitModule = {
+export const transcribeModule: LaserModule = {
   name: "transcribe",
 
   detect({ pi }) {

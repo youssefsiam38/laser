@@ -7,11 +7,11 @@
  * it does. Knobs (fonts, text size, density, corners, contrast, motion) belong
  * to the person, not the preset: switching presets keeps them.
  *
- * Persistence is in two places, on purpose. `localStorage` (`piorbit.theme`)
+ * Persistence is in two places, on purpose. `localStorage` (`laser.theme`)
  * holds the shape the boot script in `index.html` replays before first paint,
  * so a reload never flashes. The host holds the same state in its own
  * `theme` preference namespace (`pi/prefs/*`, M11-T6), which is what makes the
- * theme a property of your piorbit rather than of one browser: a paired phone
+ * theme a property of your laser rather than of one browser: a paired phone
  * opens wearing what the desktop wears. `hydrate` and `subscribe` are the seam
  * the sync uses; see `runtime/prefs.ts`.
  */
@@ -30,7 +30,7 @@ export type ThemeState = {
 
 /**
  * `followSystem: true` is the default because a person who has set their
- * desktop to light has already answered this question. Opening piorbit for the
+ * desktop to light has already answered this question. Opening laser for the
  * first time on a light desktop and getting a dark window is the app telling
  * them their preference does not count. Picking a preset in Settings turns it
  * off (`setPreset`), which is the moment they *did* answer it here.

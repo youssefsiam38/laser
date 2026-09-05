@@ -4,7 +4,7 @@
  * stderr.
  *
  * The contract for every command: **data to stdout, everything else to
- * stderr**. `piorbit sessions --json | jq` must never see a progress line.
+ * stderr**. `laser sessions --json | jq` must never see a progress line.
  */
 
 /** Colour codes only, for measuring the visible width of a rendered cell. */
@@ -104,7 +104,7 @@ export function sanitize(text: string): string {
  * point of printing is a rule that holds only until the next column is added.
  * One pass at the boundary is the version that stays true: `\u001b]0;…\u0007`
  * in a subagent's task string retitles the terminal, `\u001b]52;c;…\u0007`
- * writes the clipboard, and `piorbit runs` is the command people put in a
+ * writes the clipboard, and `laser runs` is the command people put in a
  * loop.
  */
 export function sanitizeDeep<T>(value: T): T {

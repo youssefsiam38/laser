@@ -3,7 +3,7 @@
  *
  * Pi writes a session file lazily, so a session created by `session/new` is
  * invisible to the catalog until its first persisted message. The Router keeps
- * a stub so the sidebar and `piorbit sessions` show it immediately. The stub is
+ * a stub so the sidebar and `laser sessions` show it immediately. The stub is
  * a small state machine with three exits — catalog catches up, worker lets go,
  * or the filter excludes it — and getting any of them wrong leaves a ghost
  * session in the list forever, which is exactly the kind of bug a test is the

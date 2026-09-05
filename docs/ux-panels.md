@@ -238,8 +238,8 @@ pi.events.emit("laser:panel", {
 });
 ```
 
-laser answers on `piorbit:panel:action` with `{ id, actionId, value }`.
-`piorbit:panel:close` retires a panel. That is the whole API.
+laser answers on `laser:panel:action` with `{ id, actionId, value }`.
+`laser:panel:close` retires a panel. That is the whole API.
 
 The rule that makes it work: **the payload is data, never presentation.** No
 HTML, no class names, no colours, no widths. An extension that wants a
@@ -710,9 +710,9 @@ Where the contract lives in code (lane P, wave 2). Paths are relative to the rep
 | Piece | File | Notes |
 | --- | --- | --- |
 | Payload types (`RunPanel`, `PlanPanel`, `DocumentPanel`, `StreamPanel`, `CollectionPanel`, `DecisionPanel`, `Action`, `PanelUsage`, `Ref`, `PanelIntent`, `Attention`) | `packages/protocol/src/panels.ts` | `Usage` is exported as `PanelUsage` (messages.ts already owns a `Usage`). `attentionOf` / `highestAttention` are R1; `refsOf` is what the host grants reads for. |
-| Bus protocol constants and event shapes (`laser:panel`, `piorbit:panel:close`, `piorbit:panel:action`) | `packages/protocol/src/panels.ts` | `DEFAULT_INTENT` fills a missing `intent` per kind. |
+| Bus protocol constants and event shapes (`laser:panel`, `laser:panel:close`, `laser:panel:action`) | `packages/protocol/src/panels.ts` | `DEFAULT_INTENT` fills a missing `intent` per kind. |
 | Wire: `pi/panel/upsert`, `pi/panel/close` (host → client), `pi/panel/action`, `pi/panel/read`, `pi/panel/list` (client → host) | `packages/protocol/src/panels.ts` (module augmentation of `ClientRequests` / `HostNotifications`), schemas in `packages/protocol/src/schemas.ts` | `panelSchema` is strict at every level; `validatePanelEvent` refuses presentation keys (`PRESENTATION_KEYS`) anywhere in `data` and names the field. |
-| Companion module (declared protocol on Pi's bus) | `packages/pi-extension/src/modules/panels.ts` | Validates, dedupes identical re-emits (R9), forwards as `piorbit/panel/upsert` / `piorbit/panel/close`; replays `pi/panel/action` on `piorbit:panel:action` through the module `CommandBus` (`modules/index.ts`). |
+| Companion module (declared protocol on Pi's bus) | `packages/pi-extension/src/modules/panels.ts` | Validates, dedupes identical re-emits (R9), forwards as `laser/panel/upsert` / `laser/panel/close`; replays `pi/panel/action` on `laser:panel:action` through the module `CommandBus` (`modules/index.ts`). |
 | Host: panel memory, ref grants, ranged reads, attention | `packages/host/src/panels/{store,refs,hub}.ts` | `PanelHub.observeExtensionMessage` turns extension messages into broadcasts; `list` and `read` answer the router; a blocking `decision` raises attention like a dialog (R5). Only refs a panel carried are readable. |
 | Fallback (`setWidget` → `stream`, `setStatus` → ambient, dialogs → `decision`) | `packages/ui/src/panels/fallback.ts` | Derived client-side from the `pi/ui/*` stream; ids are `ui:*` and answer through `pi/ui/response`. |
 | Panel store (entries, liveness ring, velocity, seen, closed notices, reconcile) | `packages/ui/src/panels/store.ts` | Pure. Tested in `packages/ui/test/panels/store.test.ts`. |

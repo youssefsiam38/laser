@@ -9,7 +9,7 @@ import { SelectionToolbar } from "@/components/assistant-ui/elements/quote.aui";
 import { ScrollAnchor } from "@/components/assistant-ui/elements/scroll-anchor";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { MobileIslands, PanelDecisionCards, PanelInlineCards, PanelInspectSheet } from "@/panels";
-import { usePiorbitStable, usePiorbitState } from "@/runtime";
+import { useLaserStable, useLaserState } from "@/runtime";
 import { Composer } from "./Composer.js";
 import { EmptyState } from "./EmptyState.js";
 import { ThreadMessage } from "./messages.js";
@@ -22,7 +22,7 @@ import { ThreadSlotsProvider, type ThreadSlots } from "./thread-slots.js";
  * The footer's bottom inset is `max(safe-area, --kb)` so the composer rides
  * above the on-screen keyboard.
  *
- * Renders inside `<PiorbitProvider>`; needs nothing else from the shell.
+ * Renders inside `<LaserProvider>`; needs nothing else from the shell.
  * `statusSlot` is the trailing slot of the status line above the composer —
  * the shell mounts the fleet pill there (D-20 §5).
  */
@@ -112,8 +112,8 @@ function ThreadLoading() {
  * rather than letting a missing tool look like a bug.
  */
 function TrustGuardrail() {
-  const { projectInfo } = usePiorbitStable();
-  const cwd = usePiorbitState((s) => (s.current ? s.open[s.current]?.state.cwd : undefined));
+  const { projectInfo } = useLaserStable();
+  const cwd = useLaserState((s) => (s.current ? s.open[s.current]?.state.cwd : undefined));
   const trust = cwd ? projectInfo[cwd]?.trust : undefined;
   if (trust !== "declined") return null;
   return (
@@ -131,9 +131,9 @@ function TrustGuardrail() {
  * landed gets its entry id without a manual refresh.
  */
 function EntriesRefresh() {
-  const { actions } = usePiorbitStable();
-  const path = usePiorbitState((s) => s.current);
-  const running = usePiorbitState((s) => (s.current ? s.open[s.current]?.running ?? false : false));
+  const { actions } = useLaserStable();
+  const path = useLaserState((s) => s.current);
+  const running = useLaserState((s) => (s.current ? s.open[s.current]?.running ?? false : false));
   useEffect(() => {
     if (path && !running) void actions.refreshEntries();
   }, [actions, path, running]);

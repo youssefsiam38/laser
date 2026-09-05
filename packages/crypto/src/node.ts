@@ -16,7 +16,7 @@ export function defaultIdentityPath(): string {
 /**
  * Fallback for headless hosts with no keychain (a Linux box with no Secret
  * Service, CI). Mode 0600, written atomically. The desktop should prefer
- * `createKeyringRootIdentityStore`; this exists so `piorbit` still runs where a
+ * `createKeyringRootIdentityStore`; this exists so `laser` still runs where a
  * keychain does not.
  */
 export class FileRootIdentityStore implements RootIdentityStore {

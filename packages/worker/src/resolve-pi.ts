@@ -2,7 +2,7 @@
  * Where the agent comes from — and the proof that it does not come from this
  * machine (M10-T3).
  *
- * piorbit ships the agent. It is pinned to an exact version in
+ * laser ships the agent. It is pinned to an exact version in
  * `packages/worker/package.json`, it is copied into the application package as
  * real files, and it is found by walking **this file's own `node_modules`
  * chain** — never `PATH`, never a global install, never a user directory. That
@@ -23,7 +23,7 @@
  *      before; it is not hypothetical.
  *
  * Run as a script it prints one JSON object and exits non-zero on failure, so
- * the Electron shell and `piorbit doctor` can ask the *bundled* Node — the
+ * the Electron shell and `laser doctor` can ask the *bundled* Node — the
  * binary the workers really use — instead of guessing from their own process.
  *
  * This module imports Pi only inside `--check`, and nothing else in it touches
@@ -34,7 +34,7 @@ import { accessSync, constants, existsSync, readFileSync, realpathSync, statSync
 import { delimiter, dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** The agent package piorbit ships. Pinned in `packages/worker/package.json`. */
+/** The agent package laser ships. Pinned in `packages/worker/package.json`. */
 export const AGENT_PACKAGE = "@earendil-works/pi-coding-agent";
 
 /** An exact version, and nothing else: `^`, `~` and `*` are not pins. */
@@ -42,7 +42,7 @@ const EXACT_VERSION = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z-.]+)?$/;
 
 export interface BundledAgent {
   packageName: string;
-  /** Absolute path to the agent package inside piorbit's own tree. */
+  /** Absolute path to the agent package inside laser's own tree. */
   packageDir: string;
   /** Absolute path to the agent's CLI entry, inside `packageDir`. */
   bin: string;
@@ -133,7 +133,7 @@ export function findInNodeModules(from: string, name: string): { dir?: string; s
 }
 
 /**
- * Find the agent piorbit ships. Throws an `AgentResolutionError` when it is
+ * Find the agent laser ships. Throws an `AgentResolutionError` when it is
  * missing or unusable; does **not** check the version — `assertBundledAgent`
  * does that, so a caller can report "found, but wrong" as its own failure.
  */
@@ -203,8 +203,8 @@ export function assertBundledAgent(workerDir = workerPackageDir()): BundledAgent
 // --------------------------------------------------------------- reporting
 
 /**
- * What the machine happens to have. Read for one reason only: so `piorbit
- * doctor` can say "you have one, and piorbit is not using it" out loud. Nothing
+ * What the machine happens to have. Read for one reason only: so `laser
+ * doctor` can say "you have one, and laser is not using it" out loud. Nothing
  * in this module ever resolves through these values.
  */
 export interface MachineAgent {
@@ -350,7 +350,7 @@ function missingPackageOf(error: unknown): string | undefined {
 /**
  * `node dist/resolve-pi.js [--check]` prints the report as one JSON line.
  *
- * Spawning this is how the Electron shell and `piorbit doctor` get an answer
+ * Spawning this is how the Electron shell and `laser doctor` get an answer
  * from the *bundled* Node in the *worker's* own location, which is the only
  * place the answer means anything.
  */

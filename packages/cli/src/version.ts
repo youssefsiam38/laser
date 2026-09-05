@@ -1,7 +1,7 @@
 /**
  * The CLI's version, read from its own package.json at runtime so a build never
  * ships a stale string. Falls back rather than throwing: a missing manifest is
- * not worth failing `piorbit --version` over.
+ * not worth failing `laser --version` over.
  */
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";

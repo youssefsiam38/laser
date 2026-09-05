@@ -25,7 +25,7 @@ import { cn } from "@/lib/utils";
 
 /*
  * The registry's `CanvasSplit` row and `CanvasSplitThread` column are not
- * exported, and deliberately. In piorbit the split's row is the shell's own
+ * exported, and deliberately. In laser the split's row is the shell's own
  * layout row, and it holds four things, not two: the sessions panel, the
  * thread's `<main>`, this pane and the telemetry panel, with the workbench
  * covering all of them. A two-child wrapper would have to be given

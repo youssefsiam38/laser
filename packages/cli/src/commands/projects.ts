@@ -1,5 +1,5 @@
 /**
- * `piorbit projects` — the project list the app shows, edited from a terminal.
+ * `laser projects` — the project list the app shows, edited from a terminal.
  *
  * The list lives in the host (`pi/project/*`), not in this process, so adding a
  * project here makes it appear in an open browser tab without a reload. When a

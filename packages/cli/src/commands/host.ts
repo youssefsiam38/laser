@@ -9,7 +9,7 @@ import { resolve } from "node:path";
 import type { HostNotifications } from "@lasercode/protocol";
 import { bool } from "../args.js";
 import type { Command } from "../command.js";
-import { hostUrl, type PiorbitPaths } from "../config.js";
+import { hostUrl, type LaserPaths } from "../config.js";
 import { runDaemon } from "../daemon.js";
 import { CliError, ExitCode } from "../errors.js";
 import { shortCwd } from "../format.js";
@@ -179,7 +179,7 @@ session commands will use it — but \`${PRODUCT_NAME} down\` still refuses to s
     if (status.state === "stopped") {
       // No record of our own. Something may still be serving there — a host
       // started by hand, or by `pnpm sandbox`. Saying "not running" while a
-      // piorbit UI answers on the port would be a lie worth avoiding.
+      // laser UI answers on the port would be a lie worth avoiding.
       const foreign = await probeHealth(hostUrl(paths), 1000);
       if (term.json) {
         term.data({
@@ -285,7 +285,7 @@ goes wrong when you do it by hand.
   },
 };
 
-/** Hidden: the process `piorbit up` re-executes as the host. */
+/** Hidden: the process `laser up` re-executes as the host. */
 export const daemonCommand: Command = {
   name: "__daemon",
   group: "Host",
@@ -299,7 +299,7 @@ export const daemonCommand: Command = {
 };
 
 /** Shared by every command that needs a live host. */
-export async function requireHost(paths: PiorbitPaths): Promise<HostRecord> {
+export async function requireHost(paths: LaserPaths): Promise<HostRecord> {
   const status = await inspectHost(paths);
   if (status.state === "running") return status.record;
   if (status.state === "unreachable") {
@@ -309,7 +309,7 @@ export async function requireHost(paths: PiorbitPaths): Promise<HostRecord> {
       fix: `Run \`${PRODUCT_NAME} restart\`.`,
     });
   }
-  // No record of our own, but a piorbit host may still be serving this port —
+  // No record of our own, but a laser host may still be serving this port —
   // started by hand, by `pnpm sandbox`, or by the desktop app. Refusing to talk
   // to a host that is right there and answering would be pedantry, not safety:
   // the port is the address, and `/healthz` is the proof. `down` still refuses
@@ -322,8 +322,8 @@ export async function requireHost(paths: PiorbitPaths): Promise<HostRecord> {
   });
 }
 
-/** A healthy piorbit host on the configured port that piorbit did not start. */
-async function adoptForeignHost(paths: PiorbitPaths): Promise<HostRecord | undefined> {
+/** A healthy laser host on the configured port that laser did not start. */
+async function adoptForeignHost(paths: LaserPaths): Promise<HostRecord | undefined> {
   const url = hostUrl(paths);
   if (!(await probeHealth(url))) return undefined;
   return {
@@ -341,7 +341,7 @@ async function adoptForeignHost(paths: PiorbitPaths): Promise<HostRecord | undef
 }
 
 /** Connect to the running host, or explain why we cannot. */
-export async function connect(paths: PiorbitPaths, onNotification?: NotificationHandler): Promise<HostRpc> {
+export async function connect(paths: LaserPaths, onNotification?: NotificationHandler): Promise<HostRpc> {
   const record = await requireHost(paths);
   return HostRpc.connect({
     url: `ws://${record.host}:${record.port}/ws`,
@@ -365,7 +365,7 @@ export async function connect(paths: PiorbitPaths, onNotification?: Notification
  * answer it, and the command exits.
  */
 export async function connectForProject(
-  paths: PiorbitPaths,
+  paths: LaserPaths,
   cwd: string,
   onNotification?: NotificationHandler,
 ): Promise<HostRpc> {

@@ -10,7 +10,7 @@
  *
  * The list is signed over a canonical JSON encoding — sorted keys, no
  * whitespace, no floats — with a domain-separating prefix, so a signature can
- * never be mistaken for a signature over anything else piorbit signs.
+ * never be mistaken for a signature over anything else laser signs.
  */
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -50,7 +50,7 @@ export interface DeviceListBody {
 
 export interface SignedDeviceList {
   body: DeviceListBody;
-  /** base64url Ed25519 signature over `piorbit-device-list-v1\n` ‖ canonicalJson(body). */
+  /** base64url Ed25519 signature over `laser-device-list-v1\n` ‖ canonicalJson(body). */
   signature: string;
 }
 

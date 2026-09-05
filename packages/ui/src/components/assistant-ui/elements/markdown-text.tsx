@@ -6,7 +6,7 @@
  *
  * What is the registry's: the primitive, the memoized component map, the
  * code header with a copy control, `defer` for large streaming messages.
- * What is piorbit's, each on purpose:
+ * What is laser's, each on purpose:
  *   - Every class reads a token; prose is `text-md` at max 72ch, typed things
  *     are mono at the 12px floor, headings are the type scale.
  *   - **Never raw HTML** (AGENTS.md invariant 9): remark-gfm and no

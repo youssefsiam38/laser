@@ -1,19 +1,19 @@
 /**
- * Where piorbit keeps things, and the environment it hands to a Pi child.
+ * Where laser keeps things, and the environment it hands to a Pi child.
  *
- * One resolution order, used by every command so `piorbit doctor`, `piorbit up`
- * and `piorbit pi` can never disagree about which agent directory is in play:
+ * One resolution order, used by every command so `laser doctor`, `laser up`
+ * and `laser pi` can never disagree about which agent directory is in play:
  *
- *   agent dir          --agent-dir  ▸ PIORBIT_AGENT_DIR ▸ <data>/agent
- *   session dir        --session-dir ▸ PIORBIT_SESSION_DIR ▸ <agent>/sessions
- *   state dir          --state-dir ▸ PIORBIT_STATE_DIR ▸ <data>/state, or <agent>/piorbit
- *                      when --agent-dir/PIORBIT_AGENT_DIR names a non-default agent
+ *   agent dir          --agent-dir  ▸ LASER_AGENT_DIR ▸ <data>/agent
+ *   session dir        --session-dir ▸ LASER_SESSION_DIR ▸ <agent>/sessions
+ *   state dir          --state-dir ▸ LASER_STATE_DIR ▸ <data>/state, or <agent>/laser
+ *                      when --agent-dir/LASER_AGENT_DIR names a non-default agent
  *                      directory, so two agent directories never share one host
- *   subagents root     --subagents-temp-root ▸ PIORBIT_SUBAGENTS_TEMP_ROOT ▸ <state>/subagents
- *   port               --port ▸ PIORBIT_PORT ▸ 41441
+ *   subagents root     --subagents-temp-root ▸ LASER_SUBAGENTS_TEMP_ROOT ▸ <state>/subagents
+ *   port               --port ▸ LASER_PORT ▸ 41441
  *
- * `<data>` is `piorbitDataDir()`: `$XDG_DATA_HOME/piorbit` on Linux and the
- * platform equivalents elsewhere. It is piorbit's own directory, not the
+ * `<data>` is `laserDataDir()`: `$XDG_DATA_HOME/laser` on Linux and the
+ * platform equivalents elsewhere. It is laser's own directory, not the
  * agent's — a person who already runs the underlying agent from a terminal
  * keeps their `~/.pi/agent` untouched, and the desktop app and this command
  * resolve to the same place so they can never show different sessions.
@@ -23,7 +23,7 @@
  * *written* by `piEnv()` below, so a Pi we spawn lands in exactly the
  * directories the host is watching — and they are deliberately **not read**
  * here. In a desktop session those variables mean "the agent I use in my
- * shell", which is the one installation piorbit must never adopt: the app
+ * shell", which is the one installation laser must never adopt: the app
  * strips them (`packages/desktop/src/agent-home.ts`), so a CLI that honoured
  * them would show a different agent directory, different settings and
  * different sessions from the window on the same machine — for exactly the
@@ -32,7 +32,7 @@
 import { DATA_DIR_NAME, ENV, ENV_PREFIX, PRODUCT_NAME } from "@lasercode/protocol";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { HOST_BIND_ADDRESS, HOST_DEFAULT_PORT, defaultAgentDir, defaultStateDir, piorbitDataDir } from "@lasercode/host";
+import { HOST_BIND_ADDRESS, HOST_DEFAULT_PORT, defaultAgentDir, defaultStateDir, laserDataDir } from "@lasercode/host";
 import type { FlagSpecs, ParsedArgs } from "./args.js";
 import { num, str } from "./args.js";
 
@@ -40,13 +40,13 @@ export const PI_AGENT_DIR_ENV = "PI_CODING_AGENT_DIR";
 export const PI_SESSION_DIR_ENV = "PI_CODING_AGENT_SESSION_DIR";
 export const PI_SUBAGENTS_TEMP_ROOT_ENV = "PI_SUBAGENTS_TEMP_ROOT";
 
-export interface PiorbitPaths {
+export interface LaserPaths {
   /** Pi's agent directory: settings.json, auth.json, sessions, missions. */
   agentDir: string;
   sessionDir: string;
   subagentsTempRoot: string;
   /**
-   * piorbit's own state (host record, log, project list, attention). Shared
+   * laser's own state (host record, log, project list, attention). Shared
    * with a host started any other way, unless the agent dir was overridden —
    * then it moves under the agent dir so sandboxes stay isolated.
    */
@@ -57,7 +57,7 @@ export interface PiorbitPaths {
   logFile: string;
   host: string;
   port: number;
-  /** True when the port came from a flag or PIORBIT_PORT, not the default. */
+  /** True when the port came from a flag or LASER_PORT, not the default. */
   portIsExplicit: boolean;
 }
 
@@ -90,14 +90,14 @@ function pick(...candidates: Array<string | undefined>): string | undefined {
   return undefined;
 }
 
-export function resolvePaths(parsed: ParsedArgs, env: NodeJS.ProcessEnv = process.env): PiorbitPaths {
+export function resolvePaths(parsed: ParsedArgs, env: NodeJS.ProcessEnv = process.env): LaserPaths {
   const agentDirOverride = pick(str(parsed, "agent-dir"), env[ENV.agentDir]);
   const agentDir = expandPath(agentDirOverride ?? defaultAgentDir(env));
   const sessionDir = expandPath(
     pick(str(parsed, "session-dir"), env[ENV.sessionDir]) ?? join(agentDir, "sessions"),
   );
   // An overridden agent dir means a sandbox: give it its own host record and
-  // project list, so `piorbit up --agent-dir /tmp/x` cannot adopt or stop the
+  // project list, so `laser up --agent-dir /tmp/x` cannot adopt or stop the
   // host serving the real one.
   const stateDir = expandPath(
     pick(str(parsed, "state-dir"), env[ENV.stateDir]) ??
@@ -125,10 +125,10 @@ export function resolvePaths(parsed: ParsedArgs, env: NodeJS.ProcessEnv = proces
 
 /**
  * The environment for anything we spawn that will load Pi: the pinned Pi
- * binary (`piorbit pi`) and, through the host, every worker. Pinning both
+ * binary (`laser pi`) and, through the host, every worker. Pinning both
  * directories is what keeps a terminal-started subagent run visible in the app.
  */
-export function piEnv(paths: PiorbitPaths, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export function piEnv(paths: LaserPaths, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return {
     ...base,
     [PI_AGENT_DIR_ENV]: paths.agentDir,
@@ -138,10 +138,10 @@ export function piEnv(paths: PiorbitPaths, base: NodeJS.ProcessEnv = process.env
   };
 }
 
-export function hostUrl(paths: Pick<PiorbitPaths, "host" | "port">): string {
+export function hostUrl(paths: Pick<LaserPaths, "host" | "port">): string {
   return `http://${paths.host}:${paths.port}`;
 }
 
-export function wsUrl(paths: Pick<PiorbitPaths, "host" | "port">): string {
+export function wsUrl(paths: Pick<LaserPaths, "host" | "port">): string {
   return `ws://${paths.host}:${paths.port}/ws`;
 }

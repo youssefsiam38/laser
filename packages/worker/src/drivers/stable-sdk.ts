@@ -1,7 +1,7 @@
 /**
  * StableSdkDriver (M0-T4) — the real driver, on the pinned stable Pi SDK.
  *
- * Owns one `AgentSessionRuntime` for one project directory. Loads the piorbit
+ * Owns one `AgentSessionRuntime` for one project directory. Loads the laser
  * companion extension inline, binds the UI bridge in "rpc" mode, and maps Pi's
  * `AgentSessionEvent` stream onto protocol `SessionUpdate`s.
  *
@@ -32,7 +32,7 @@ import {
   type ExtensionError,
   type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
-import { createCommandBus, createPiorbitExtension } from "@lasercode/pi-extension";
+import { createCommandBus, createLaserExtension } from "@lasercode/pi-extension";
 import type {
   CommandInfo,
   ContentBlock,
@@ -93,7 +93,7 @@ export class StableSdkDriver implements SessionDriver {
     if (options.subagentsTempRoot) process.env["PI_SUBAGENTS_TEMP_ROOT"] = options.subagentsTempRoot;
 
     const agentDir = options.agentDir ?? getAgentDir();
-    const piorbit = createPiorbitExtension({
+    const laser = createLaserExtension({
       send: (message) => this.emit({ type: "extension", message }),
       commands: this.extensionBus,
     });
@@ -116,7 +116,7 @@ export class StableSdkDriver implements SessionDriver {
                 projectTrusted: cwd === options.cwd ? options.projectTrusted : false,
               }),
             }),
-        resourceLoaderOptions: { extensionFactories: [piorbit] },
+        resourceLoaderOptions: { extensionFactories: [laser] },
       });
       return {
         ...(await createAgentSessionFromServices({
@@ -322,7 +322,7 @@ export class StableSdkDriver implements SessionDriver {
    *
    * Pi's own `BUILTIN_SLASH_COMMANDS` (`/model`, `/settings`, `/tree`,
    * `/thinking`) are deliberately not here: they open Pi's terminal pickers,
-   * which this app never runs. piorbit has its own controls for every one of
+   * which this app never runs. laser has its own controls for every one of
    * them and offers those instead, rather than a row that would do nothing.
    */
   async commands(): Promise<CommandInfo[]> {

@@ -1,11 +1,11 @@
 import { Shell } from "@/components/shell/Shell";
-import { PiorbitProvider } from "@/runtime";
+import { LaserProvider } from "@/runtime";
 
 /** Root: the host connection + assistant-ui runtime, then the frame. */
 export function App() {
   return (
-    <PiorbitProvider>
+    <LaserProvider>
       <Shell />
-    </PiorbitProvider>
+    </LaserProvider>
   );
 }

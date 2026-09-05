@@ -1,11 +1,11 @@
 /**
  * The per-thread `ExternalStoreAdapter`: assistant-ui's thread surface mapped
- * onto one piorbit session over `HostClient`.
+ * onto one laser session over `HostClient`.
  *
  * Send routing. When an adapter exposes a `queue`, assistant-ui routes EVERY
  * composer send through it (`queue.steer` when `opts.steer ?? isRunning`,
  * `queue.enqueue` otherwise) and never calls `onNew` for a thread-composer
- * send. So both lanes and `onNew` funnel into one place, and the piorbit verb
+ * send. So both lanes and `onNew` funnel into one place, and the laser verb
  * is decided by {@link resolveSendBehavior}:
  *
  * | lane   | idle   | running   |

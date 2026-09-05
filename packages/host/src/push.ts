@@ -148,7 +148,7 @@ export async function encryptPushPayload(subscription: PushSubscriptionJson, pla
 // ---------------------------------------------------------------------------
 
 export interface PushServiceOptions {
-  /** Pi agent dir; keys and subscriptions live in `<agentDir>/piorbit/push.json`. */
+  /** Pi agent dir; keys and subscriptions live in `<agentDir>/laser/push.json`. */
   agentDir: string;
   /** VAPID `sub` claim. A mailto: or https: URL the push service can contact. */
   subject?: string;
@@ -180,7 +180,7 @@ export class PushService {
    * Which is why "the file is not there" and "the file is there and I cannot
    * read it" are different answers. Absent is first run: generate. Present but
    * unreadable — a truncated write, a permissions change, a `version: 2` from
-   * a newer piorbit — is a refusal, reported by `config()` in words, with the
+   * a newer laser — is a refusal, reported by `config()` in words, with the
    * file left exactly as it is for a person to look at.
    */
   async ready(): Promise<PushStoreFile> {

@@ -6,7 +6,7 @@
  * is typed; the input itself is the panel's, so the two share one box.
  *
  * Divergences from the registry copy:
- *   - No `pinned` section: piorbit has no pin. Sessions that need you sort
+ *   - No `pinned` section: laser has no pin. Sessions that need you sort
  *     first inside each project instead, the same order as the list.
  *   - Rows carry a status dot and a relative time, the same anatomy as a
  *     list row, so a search result and a list row are recognisably the same

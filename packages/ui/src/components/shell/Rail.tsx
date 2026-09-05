@@ -10,7 +10,7 @@ import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { initials } from "@/format";
 import { useTheme } from "@/hooks";
 import { cn } from "@/lib/utils";
-import { usePiorbitStable, usePiorbitState } from "@/runtime";
+import { useLaserStable, useLaserState } from "@/runtime";
 
 import { projectSummaries, trustLabel, type ProjectSummary } from "./model.js";
 import { sessionsList, useSessionsList } from "./session-groups.js";
@@ -42,7 +42,7 @@ const sameSummaries = (a: readonly ProjectSummary[], b: readonly ProjectSummary[
  * and the header's `+` start sessions there.
  */
 export function Rail() {
-  const { projects } = usePiorbitStable();
+  const { projects } = useLaserStable();
   const shell = useShell();
   const { theme, toggle } = useTheme();
   const workbench = useWorkbench();
@@ -53,7 +53,7 @@ export function Rail() {
       className="flex h-full w-14 shrink-0 flex-col items-center bg-surface-2 pt-[calc(env(safe-area-inset-top)+8px)] pb-[calc(env(safe-area-inset-bottom)+8px)] hairline-r"
     >
       <Brand />
-      {/* Keyed on the project list: `usePiorbitState` caches by store state,
+      {/* Keyed on the project list: `useLaserState` caches by store state,
           and the project list is React state, so a new project would otherwise
           wait for the next store change to appear. */}
       <ProjectList key={projects.join("\n")} />
@@ -93,12 +93,12 @@ export function Rail() {
 }
 
 function ProjectList() {
-  const { projects, projectInfo, currentProject, setCurrentProject, actions } = usePiorbitStable();
+  const { projects, projectInfo, currentProject, setCurrentProject, actions } = useLaserStable();
   const shell = useShell();
   const { filter } = useSessionsList();
   // Derived inside the selector so a streamed token that changes nothing the
   // rail shows does not re-render it (or its Radix tooltips).
-  const summaries = usePiorbitState(
+  const summaries = useLaserState(
     useCallback((s) => projectSummaries(projects, s.sessions, s.open, s.workers, projectInfo), [projectInfo, projects]),
     sameSummaries,
   );

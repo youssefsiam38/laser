@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { shortCwd } from "@/format";
 import { cn } from "@/lib/utils";
-import { usePiorbitStable, usePiorbitState } from "@/runtime";
+import { useLaserStable, useLaserState } from "@/runtime";
 
 import { isAbsolutePath, recentCwds } from "./model.js";
 import { useShell } from "./shell-context.js";
@@ -24,8 +24,8 @@ import { useShell } from "./shell-context.js";
  */
 export function AddProjectDialog() {
   const shell = useShell();
-  const { actions, setCurrentProject } = usePiorbitStable();
-  const sessions = usePiorbitState((s) => s.sessions);
+  const { actions, setCurrentProject } = useLaserStable();
+  const sessions = useLaserState((s) => s.sessions);
   const [value, setValue] = useState("");
   const recent = useMemo(() => recentCwds(sessions), [sessions]);
 

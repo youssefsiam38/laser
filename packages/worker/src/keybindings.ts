@@ -21,7 +21,7 @@
  * 2. **Nothing must ever be a second writer on one file.** Pi never writes
  *    `keybindings.json` (it loads it at startup and on reload), and
  *    `SettingsManager`'s lock covers `settings.json`, a different file. What is
- *    left is piorbit racing itself: keybindings are global while workers are
+ *    left is laser racing itself: keybindings are global while workers are
  *    per project, so two workers share this file. Hence the same discipline
  *    `SettingsManager` uses — an exclusive lock around read-modify-write, and
  *    an atomic rename so a reader sees the old file or the new one and never a
@@ -211,7 +211,7 @@ export class KeybindingsAdapter {
   }
 
   /**
-   * An exclusive lock beside the file, so two piorbit workers (keybindings are
+   * An exclusive lock beside the file, so two laser workers (keybindings are
    * global; workers are per project) cannot interleave a read-modify-write.
    * A lock left behind by a crash goes stale and is taken over rather than
    * blocking rebinding forever.

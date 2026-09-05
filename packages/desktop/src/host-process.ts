@@ -8,13 +8,13 @@
  *    MCP servers over stdio, `npx`, a worker per project — inherits a
  *    `process.execPath` that is a real node.
  * 2. **Starting twice is not an error.** Someone may already have run
- *    `piorbit up`, or left a host running from a previous session. If one
+ *    `laser up`, or left a host running from a previous session. If one
  *    answers `/healthz`, the app attaches to it and does not stop it on quit.
  *    Nothing is more annoying than a GUI that kills your terminal's daemon.
  *
  * We spawn the CLI's `__daemon` entry rather than the host's own `main.js`,
  * because the daemon writes `<state-dir>/host.json`. That one file is what lets
- * `piorbit status`, `piorbit down` and the next launch of the app all agree
+ * `laser status`, `laser down` and the next launch of the app all agree
  * about which host is running.
  *
  * Rule 1 has a second half that is easy to miss: the *script* has to be outside
@@ -26,7 +26,7 @@ import { ENV, PRODUCT_NAME } from "@lasercode/protocol";
 import { type ChildProcess, spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync } from "node:fs";
 import { existsSync } from "node:fs";
-import { cliEntry, daemonArgs, inspectHost, logTail, piEnv, portInUse, probeHealth, type PiorbitPaths } from "@lasercode/cli";
+import { cliEntry, daemonArgs, inspectHost, logTail, piEnv, portInUse, probeHealth, type LaserPaths } from "@lasercode/cli";
 import { checkBundledAgent, type AgentCheck } from "./agent.js";
 import type { DesktopHostInfo } from "./api.js";
 import type { DesktopLog } from "./log.js";
@@ -40,18 +40,18 @@ const MAX_RESTARTS = 2;
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 export interface HostProcessOptions {
-  paths: PiorbitPaths;
+  paths: LaserPaths;
   packaged: boolean;
   resourcesPath: string;
   log: DesktopLog;
   /**
-   * The environment children inherit, before piorbit's own pins are applied.
+   * The environment children inherit, before laser's own pins are applied.
    * The shell hands in a scrubbed copy (see `agent-home.ts`) so a variable that
    * points at the person's *own* agent installation cannot reach a worker.
    */
   baseEnv?: NodeJS.ProcessEnv;
   /**
-   * Extra environment for the host. Used for `PIORBIT_ALLOWED_ORIGINS` when the
+   * Extra environment for the host. Used for `LASER_ALLOWED_ORIGINS` when the
    * UI is served by a dev server: the host refuses WebSocket upgrades from an
    * origin it does not know, and Vite forwards the browser's own.
    */
@@ -205,7 +205,7 @@ export class HostProcess {
 
     mkdirSync(paths.stateDir, { recursive: true });
     // The daemon's own stdout and stderr go straight to the host log, the same
-    // file `piorbit up` uses, so both ways of starting leave one trail.
+    // file `laser up` uses, so both ways of starting leave one trail.
     const logFd = openSync(paths.logFile, "a");
     const env = this.hostEnv();
     let child: ChildProcess;
@@ -369,7 +369,7 @@ export class HostProcess {
   /**
    * Electron sets variables that would confuse a plain Node child (and
    * `ELECTRON_RUN_AS_NODE` would change what our own binary means). The host
-   * gets a clean environment plus the piorbit path pins.
+   * gets a clean environment plus the laser path pins.
    */
   private electronFreeEnv(): NodeJS.ProcessEnv {
     const env = { ...(this.options.baseEnv ?? process.env) };

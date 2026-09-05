@@ -4,9 +4,9 @@
  * payload; `after_provider_response` carries status and headers only (Pi exposes
  * no raw response body; the assembled assistant message comes from session events).
  */
-import type { PiorbitModule } from "./index.js";
+import type { LaserModule } from "./index.js";
 
-export const providerLogModule: PiorbitModule = {
+export const providerLogModule: LaserModule = {
   name: "provider-log",
   detect: () => true,
   activate({ pi, send }) {

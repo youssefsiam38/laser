@@ -1,7 +1,7 @@
 /**
  * The runtime applier. One style write, no reload, no remount, no flash.
  *
- * The compiled declarations go into a single `<style id="piorbit-theme">`
+ * The compiled declarations go into a single `<style id="laser-theme">`
  * whose selector is `:root[data-theme]`. That beats the `:root` defaults in
  * `globals.css` on specificity, so it wins regardless of where Vite inserts
  * the stylesheet (dev injects late), and it leaves the root's inline `style`

@@ -29,7 +29,7 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { usePiorbitStable, useSessionMeta } from "@/runtime";
+import { useLaserStable, useSessionMeta } from "@/runtime";
 
 import { field } from "./surfaces.js";
 
@@ -145,7 +145,7 @@ const catalogCache = new Map<string, Promise<readonly ModelCatalogEntry[]>>();
  * reasoning because a fetch is in flight would hide a working control.
  */
 export function useSupportedThinkingLevels(): readonly ThinkingLevel[] | undefined {
-  const { client } = usePiorbitStable();
+  const { client } = useLaserStable();
   const { session, model } = useSessionMeta();
   const cwd = session?.cwd;
   const [catalog, setCatalog] = useState<readonly ModelCatalogEntry[]>();
@@ -196,7 +196,7 @@ const THINKING_EFFORTS: readonly EffortLevel[] = [
  * never unreachable.
  */
 export function ThinkingEffort({ className }: { className?: string | undefined }) {
-  const { actions } = usePiorbitStable();
+  const { actions } = useLaserStable();
   const { thinkingLevel, session, model } = useSessionMeta();
   const supported = useSupportedThinkingLevels();
   const disabled = !session;

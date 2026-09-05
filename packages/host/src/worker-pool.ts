@@ -38,7 +38,7 @@ export interface WorkerPoolOptions {
   onStatus?: (info: WorkerInfo) => void;
   /**
    * Trust gate (M2-T4). Resolves to the `projectTrusted` flag the worker runs
-   * with, prompting a client when nobody has decided. `undefined` means piorbit
+   * with, prompting a client when nobody has decided. `undefined` means laser
    * has no opinion (nothing in the directory is trust-gated) and the worker
    * keeps Pi's own default. Rejecting refuses the spawn with the reason.
    */

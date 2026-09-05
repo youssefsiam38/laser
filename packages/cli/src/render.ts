@@ -1,5 +1,5 @@
 /**
- * `piorbit tail` — session updates as readable terminal lines.
+ * `laser tail` — session updates as readable terminal lines.
  *
  * Two rules shape this file:
  *

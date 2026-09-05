@@ -1,5 +1,5 @@
 /**
- * @lasercode/cli — the `piorbit` command.
+ * @lasercode/cli — the `laser` command.
  *
  * Exported so other packages (the Electron shell, tests) can reuse the pieces
  * without shelling out. This package speaks @lasercode/protocol and never imports
@@ -8,7 +8,7 @@
 export { COMMANDS, run } from "./cli.js";
 export { parseArgs, bool, str, num, list, distance, type FlagSpec, type FlagSpecs, type ParsedArgs } from "./args.js";
 export { findCommand, type Command, type CommandContext, type CommandGroup } from "./command.js";
-export { piorbitDataDir, defaultAgentDir, defaultStateDir, migrateFormerIdentities } from "@lasercode/host";
+export { laserDataDir, defaultAgentDir, defaultStateDir, migrateFormerIdentities } from "@lasercode/host";
 export {
   expandPath,
   hostUrl,
@@ -20,7 +20,7 @@ export {
   PI_AGENT_DIR_ENV,
   PI_SESSION_DIR_ENV,
   PI_SUBAGENTS_TEMP_ROOT_ENV,
-  type PiorbitPaths,
+  type LaserPaths,
 } from "./config.js";
 export { runDaemon, type DaemonOptions } from "./daemon.js";
 export { CliError, ExitCode, messageOf, usageError, type ExitCodeValue } from "./errors.js";

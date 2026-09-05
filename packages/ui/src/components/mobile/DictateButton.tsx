@@ -15,7 +15,7 @@ import {
   useDictationPhase,
   useEnvironment,
 } from "@/pwa";
-import { usePiorbitStable, usePiorbitView } from "@/runtime";
+import { useLaserStable, useLaserView } from "@/runtime";
 
 /**
  * The composer's microphone, drawn by the `composer` element's voice pieces
@@ -38,7 +38,7 @@ import { usePiorbitStable, usePiorbitView } from "@/runtime";
  */
 export function DictateButton({ className, size }: { className?: string | undefined; size?: "icon-sm" | "icon-lg" | undefined }) {
   const env = useEnvironment();
-  const view = usePiorbitView();
+  const view = useLaserView();
   const available = view?.capabilities.includes("transcribe") ?? false;
 
   // The adapter outlives every session; tell it which one is being recorded.
@@ -58,7 +58,7 @@ export function DictateButton({ className, size }: { className?: string | undefi
 
 function DictateControls({ className, size }: { className?: string | undefined; size?: "icon-sm" | "icon-lg" | undefined }) {
   const aui = useAui();
-  const { actions } = usePiorbitStable();
+  const { actions } = useLaserStable();
   const phase = useDictationPhase();
   const level = useDictationLevel();
   const error = useDictationError();

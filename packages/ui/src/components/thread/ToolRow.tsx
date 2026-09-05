@@ -18,7 +18,7 @@ import {
 import { TOOL_ICONS } from "@/components/assistant-ui/elements/tool-group.aui";
 import { useIsTouch } from "@/hooks/use-mobile";
 import { DecisionBody, dialogPanel, PanelToolDecision, uiResponseFor, useRegisterToolRow } from "@/panels";
-import { usePiorbitStable } from "@/runtime";
+import { useLaserStable } from "@/runtime";
 import { diffViewForTool } from "./diff.js";
 import { useElapsed } from "./timing.js";
 import { parseBashOutput, pretty, resultDetails, resultText, summarizeTool, toolBody } from "./tool-summary.js";
@@ -42,7 +42,7 @@ const isInterruptPayload = (payload: unknown): payload is InterruptPayload => {
 };
 
 /**
- * One tool call in the transcript. This is the piorbit glue between Pi's
+ * One tool call in the transcript. This is the laser glue between Pi's
  * built-in tools and the catalog elements that draw them: `tool-call` is the
  * row, `terminal-block` the `bash` body, `code-diff` the `edit`/`write` body,
  * `tool-error` the failure, the `tool-fallback` parts the args, result and
@@ -189,7 +189,7 @@ function TextBody({ args, text, failed }: { args: unknown; text: string; failed:
  * so the model reads why right after the refused tool result.
  */
 function RowApproval(props: ToolCallMessagePartProps) {
-  const { actions } = usePiorbitStable();
+  const { actions } = useLaserStable();
   const running = useAuiState((s) => s.thread.isRunning);
   const denyFeedback = useCallback(
     async (reason: string) => {

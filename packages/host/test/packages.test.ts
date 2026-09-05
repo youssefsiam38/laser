@@ -131,7 +131,7 @@ describe("detectInstallRuntime", () => {
 
   /**
    * The case the shell's own installer variable does not reach: a person runs
-   * `piorbit up` (or `piorbit doctor`) in a terminal first, and the window then
+   * `laser up` (or `laser doctor`) in a terminal first, and the window then
    * *adopts* that host. Both run on the same bundled Node, so the sibling
    * lookup is what makes Settings able to install for either of them.
    */

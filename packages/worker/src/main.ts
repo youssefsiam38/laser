@@ -38,7 +38,7 @@ function openTransport(): { input: NodeJS.ReadableStream; write: (line: string) 
 }
 
 async function main(): Promise<void> {
-  // Belt and braces. The desktop shell and `piorbit doctor` both check the pin
+  // Belt and braces. The desktop shell and `laser doctor` both check the pin
   // before a worker is ever spawned, so in a shipped app this cannot fail —
   // but this is the process that actually imports the agent, and a worker that
   // loads a version nobody pinned is worse than one that refuses to start.

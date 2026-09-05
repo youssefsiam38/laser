@@ -1,6 +1,6 @@
 /**
  * The fallback (docs/ux-panels.md, "The contract", way 4): an extension that
- * knows nothing about piorbit still lands in the panel system.
+ * knows nothing about laser still lands in the panel system.
  *
  *   setWidget(key, lines)  → a `stream` panel keyed by the widget key, text
  *                            encoding, content served client-side (`inline:`)

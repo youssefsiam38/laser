@@ -1,7 +1,7 @@
 /**
  * A QR encoder, written here rather than installed (M9-T7).
  *
- * `piorbit relay pair` has to put a link on a phone's camera, and the link is
+ * `laser relay pair` has to put a link on a phone's camera, and the link is
  * the only thing that matters in this whole flow: it carries the ephemeral key
  * the pairing handshake is built on. Pulling a package tree in to draw it —
  * for a CLI whose only dependency today is a WebSocket — is a poor trade when

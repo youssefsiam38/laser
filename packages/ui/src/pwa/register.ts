@@ -1,3 +1,4 @@
+import { SW_SKIP_WAITING, SW_PUSH_CHANGED } from "@lasercode/protocol";
 /**
  * Service worker registration and the "a new version is ready" moment.
  *
@@ -35,7 +36,7 @@ export function getServiceWorkerRegistration(): ServiceWorkerRegistration | unde
   return registration;
 }
 
-/** Messages the worker posts to pages (`piorbit:navigate`, `piorbit:push-changed`). */
+/** Messages the worker posts to pages (`laser:navigate`, `laser:push-changed`). */
 export function onServiceWorkerMessage(listener: (data: unknown) => void): () => void {
   messageListeners.add(listener);
   return () => messageListeners.delete(listener);
@@ -104,7 +105,7 @@ export function applyUpdate(): void {
     reloaded = true;
     window.location.reload();
   });
-  waiting.postMessage({ type: "piorbit:skip-waiting" });
+  waiting.postMessage({ type: SW_SKIP_WAITING });
 }
 
 function subscribe(cb: () => void): () => void {

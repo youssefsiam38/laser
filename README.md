@@ -61,8 +61,8 @@ without taking any of them.
 
 ```bash
 sh laser-install.sh --help                     # --version, --format, --prefix, --dry-run
-sh ~/.local/lib/piorbit/install.sh --uninstall   # removes exactly what it installed
-sh ~/.local/lib/piorbit/install.sh --uninstall --purge   # …and deletes your settings too
+sh ~/.local/lib/laser/install.sh --uninstall   # removes exactly what it installed
+sh ~/.local/lib/laser/install.sh --uninstall --purge   # …and deletes your settings too
 ```
 
 `laser` on your PATH is both things: on its own it opens the window, and with

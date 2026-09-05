@@ -9,7 +9,7 @@ export {
   type HostRelayDevice,
   defaultUiDir,
 } from "./server.js";
-export { piorbitDataDir, defaultAgentDir, defaultStateDir } from "./paths.js";
+export { laserDataDir, defaultAgentDir, defaultStateDir } from "./paths.js";
 export {
   migrateFormerIdentities,
   ownedDirectories,

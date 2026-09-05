@@ -13,7 +13,7 @@ import {
 import { useShellOptional } from "@/components/shell/shell-context";
 import { Button } from "@/components/ui/button";
 import { shortCwd } from "@/format";
-import { usePiorbitStable, useSessionMeta } from "@/runtime";
+import { useLaserStable, useSessionMeta } from "@/runtime";
 
 const SUGGESTIONS: ReadonlyArray<{ title: string; prompt: string }> = [
   {
@@ -42,7 +42,7 @@ const SUGGESTIONS: ReadonlyArray<{ title: string; prompt: string }> = [
  * the composer beside it is disabled with the same sentence as its placeholder.
  */
 export function EmptyState() {
-  const { currentProject } = usePiorbitStable();
+  const { currentProject } = useLaserStable();
   const { session } = useSessionMeta();
   const shell = useShellOptional();
   const disabled = useAuiState((s) => s.thread.isDisabled);

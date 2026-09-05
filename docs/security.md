@@ -204,7 +204,7 @@ list:
 ```
 
 - Signed over a **canonical JSON** encoding with a domain-separating prefix
-  (`piorbit-device-list-v1\n`), so a signature can never be reinterpreted as a
+  (`laser-device-list-v1\n`), so a signature can never be reinterpreted as a
   signature over something else.
 - Each device's `id` is derived from its public key, so an entry cannot be
   rewritten to point at a different key without invalidating the signature.

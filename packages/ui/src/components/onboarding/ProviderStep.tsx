@@ -17,7 +17,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { usePiorbitStable } from "@/runtime";
+import { useLaserStable } from "@/runtime";
 import type { ProviderAuthInfo, ProviderLoginMethod } from "@lasercode/protocol";
 
 import { ProviderSignIn } from "./ProviderSignIn.js";
@@ -52,7 +52,7 @@ const credentialBadge = (provider: { oauth: boolean; source?: string | undefined
   provider.oauth || provider.source === "environment" || provider.source === "fallback" ? "signed in" : "key saved";
 
 export function ProviderStep({ cwd, onConfigured, onBusyChange }: ProviderStepProps) {
-  const { client } = usePiorbitStable();
+  const { client } = useLaserStable();
   const [providers, setProviders] = useState<ProviderAuthInfo[]>();
   const [error, setError] = useState<string>();
   const [selected, setSelected] = useState<string>();

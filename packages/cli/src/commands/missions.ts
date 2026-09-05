@@ -1,11 +1,11 @@
 /**
- * `piorbit missions` — the durable record.
+ * `laser missions` — the durable record.
  *
  * A mission outlives the runs it joins, the session that started it, and
  * several compactions; it is the third noun (D-19) and the only one that is
  * still there tomorrow. The host reads `~/.pi/agent/missions` and publishes
  * each session's missions as one `collection` panel, so this command lists
- * rows and `piorbit missions show <id>` asks the host to render one ledger —
+ * rows and `laser missions show <id>` asks the host to render one ledger —
  * the same action the app fires when you open a row.
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";

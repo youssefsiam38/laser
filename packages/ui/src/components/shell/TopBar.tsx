@@ -43,7 +43,7 @@ import { shortCwd } from "@/format";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
 import { useDock, useIslandEntries, usePanelActions } from "@/panels";
-import { sessionTitle, usePiorbitStable, usePiorbitState, usePiorbitView, useSessionMeta } from "@/runtime";
+import { sessionTitle, useLaserStable, useLaserState, useLaserView, useSessionMeta } from "@/runtime";
 
 import { InlineRename } from "./InlineRename.js";
 import { lastPromptEntryId, sessionStateLabel, sessionStatus, workerChip } from "./model.js";
@@ -61,9 +61,9 @@ const firstUserLine = (view: { blocks: readonly { kind: string; text?: string }[
 };
 
 export function TopBar() {
-  const { actions, client, currentProject } = usePiorbitStable();
-  const view = usePiorbitView();
-  const sessions = usePiorbitState((s) => s.sessions);
+  const { actions, client, currentProject } = useLaserStable();
+  const view = useLaserView();
+  const sessions = useLaserState((s) => s.sessions);
   const meta = useSessionMeta();
   const shell = useShell();
   const { copy } = useCopy();
@@ -274,7 +274,7 @@ export function TopBar() {
 }
 
 function CompactDialog({ open, onOpenChange }: { open: boolean; onOpenChange(open: boolean): void }) {
-  const { actions } = usePiorbitStable();
+  const { actions } = useLaserStable();
   const [instructions, setInstructions] = useState("");
   const submit = () => {
     const text = instructions.trim();

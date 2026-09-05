@@ -315,7 +315,7 @@ export interface SettingDescriptor {
   default?: unknown;
   /** Scopes this key may be written at. Some keys are global-only in Pi. */
   scopes: SettingsScope[];
-  /** Pi honours this only in its terminal UI; piorbit says so instead of hiding it. */
+  /** Pi honours this only in its terminal UI; laser says so instead of hiding it. */
   terminalOnly?: boolean;
   /** Pi writes this itself (identifiers, changelog markers). Shown read-only. */
   managed?: boolean;
@@ -350,7 +350,7 @@ export interface SettingsFileState {
 /** Why project settings are (or are not) in play, in words a person can act on. */
 export interface SettingsProjectTrust {
   trusted: boolean;
-  /** True when piorbit may write `.pi/settings.json` for this directory. */
+  /** True when laser may write `.pi/settings.json` for this directory. */
   writable: boolean;
   reason: string;
 }
@@ -404,7 +404,7 @@ export interface PackageUpdateInfo {
 
 /**
  * A package the person can install from Settings (M10-T5): a row of
- * piorbit's curated list, or a hit from a live registry search. Metadata
+ * laser's curated list, or a hit from a live registry search. Metadata
  * only; installing pins `version` and verifies the download.
  */
 export interface PackageCatalogEntry {
@@ -416,7 +416,7 @@ export interface PackageCatalogEntry {
   homepage?: string;
   publishedAt?: string;
   keywords?: string[];
-  /** From piorbit's own list rather than a live search. */
+  /** From laser's own list rather than a live search. */
   curated: boolean;
   /** Set when a configured package already provides this name. */
   installed?: { source: string; scope: PackageScope; version?: string };
@@ -432,7 +432,7 @@ export interface PackageRuntimeInfo {
 }
 
 /**
- * One line of piorbit's package lock: what was installed, at which exact
+ * One line of laser's package lock: what was installed, at which exact
  * version, with which tarball integrity. Enough to reproduce the same set
  * and to notice when the registry hands back different bytes for the same
  * version.
@@ -642,7 +642,7 @@ export interface LogStats {
 // M11 · Host-owned preferences (`pi/prefs/*`).
 //
 // Pi's settings file belongs to Pi: `pi/settings/set` refuses any key the
-// pinned agent does not define, and it is right to. piorbit's own preferences
+// pinned agent does not define, and it is right to. laser's own preferences
 // — the theme first among them — therefore need a store of their own, keyed by
 // namespace, persisted beside the host's other state and never inside the
 // agent's settings. Because it lives in the host and not in a browser, a theme
@@ -704,7 +704,7 @@ export interface KeybindingsSnapshot {
   piVersion: string;
   bindings: KeybindingDescriptor[];
   conflicts: KeybindingConflict[];
-  /** False when piorbit will not write the file; `reason` says why, for a person. */
+  /** False when laser will not write the file; `reason` says why, for a person. */
   writable: boolean;
   reason?: string;
   /** Set when the file exists but could not be read; the defaults are shown instead. */
@@ -720,7 +720,7 @@ export type KeybindingChange = { id: string; op: "set"; keys: string[] } | { id:
 
 /**
  * Something `/` can run. `source` says where it came from so the popover can
- * group it: `piorbit` is the app's own, `extension` a package's registered
+ * group it: `laser` is the app's own, `extension` a package's registered
  * command, `prompt` a prompt template, `skill` a skill file.
  */
 export interface CommandInfo {
@@ -929,7 +929,7 @@ export interface ClientRequests {
   // installing through the agent's own package manager.
 
   /**
-   * Packages a person can install: piorbit's curated list when `query` is
+   * Packages a person can install: laser's curated list when `query` is
    * empty, a live registry search otherwise. With `cwd`, entries that are
    * already configured for that project say so.
    */
@@ -972,7 +972,7 @@ export interface ClientRequests {
   "pi/logs/clear": { params: { sections?: LogSection[] }; result: { deleted: number } };
 
   // ---------------------------------------------------- M11 · preferences --
-  // Answered by the host, not a worker: these are piorbit's own, they are not
+  // Answered by the host, not a worker: these are laser's own, they are not
   // per project, and they must survive a worker that is asleep.
 
   /** Every namespace, or one when `namespace` names it. */

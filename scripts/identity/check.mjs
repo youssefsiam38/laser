@@ -6,7 +6,7 @@
  *
  * It runs inside `pnpm -r build` (as @lasercode/protocol's prebuild) and inside
  * `pnpm -r test`, so a hand-edited `appId` in electron-builder.yml, a stale
- * generated manifest, or a fresh `"piorbit"` typed into a component, all stop
+ * generated manifest, or a fresh `"laser"` typed into a component, all stop
  * the build with the file and line rather than shipping a product that answers
  * to two names.
  *
@@ -87,8 +87,8 @@ const EXEMPT_DIRS = ["docs/", ".agents/", ".github/ISSUE_TEMPLATE/"];
  * Every name this product has answered to, current first.
  *
  * A check that only looked for today's name would be **green on a
- * half-finished rename**: rename `piorbit` to `wavelet`, regenerate, and every
- * `piorbit` still sitting in a component, a script or a packaging field would
+ * half-finished rename**: rename `laser` to `wavelet`, regenerate, and every
+ * `laser` still sitting in a component, a script or a packaging field would
  * pass unseen. The former names are exactly the ones a rename has to sweep, so
  * they are scanned too, and stay scanned until they are dropped from
  * product.json's `formerNames`.
@@ -97,7 +97,7 @@ const NAMES = [identity.name, ...identity.formerNames.map((former) => former.nam
 const escape = (word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const ANY_NAME = NAMES.map(escape).join("|");
 
-/** Every environment prefix, likewise: `PIORBIT_UI_URL` must not survive a rename either. */
+/** Every environment prefix, likewise: `LASER_UI_URL` must not survive a rename either. */
 const ANY_ENV_PREFIX = [identity.envPrefix, ...identity.formerNames.map((former) => former.envPrefix)]
   .map(escape)
   .join("|");
@@ -118,18 +118,18 @@ const SCOPE = new RegExp(`@(${ANY_NAME})(/[a-z0-9-]+)?`, "g");
  * reported as places that failed to derive.
  */
 const WIRE = new RegExp(
-  // Not preceded by `.`, `/` or a word character. Without this, `~/.piorbit/state`
+  // Not preceded by `.`, `/` or a word character. Without this, `~/.laser/state`
   // — a hardcoded data directory, the single worst thing a rename can leave
-  // behind — reads as the wire path `piorbit/state` and is stripped before the
+  // behind — reads as the wire path `laser/state` and is stripped before the
   // scan ever sees it.
   `(?<![./\\w-])${escape(identity.wireNamespace)}(` +
-    // `piorbit:panel`, `piorbit:panel:action`, `piorbit:window/state-changed`
+    // `laser:panel`, `laser:panel:action`, `laser:window/state-changed`
     `:[a-z][a-z0-9-]*([:/][a-z][a-z0-9-]*)*` +
-    // `piorbit/panel/upsert`, `piorbit/module/log` — segments, never a filename
+    // `laser/panel/upsert`, `laser/module/log` — segments, never a filename
     `|/[a-z][a-z0-9-]*(/[a-z][a-z0-9-]*)*` +
-    // `piorbit.channel.<id>`, `piorbit.transcribe.v1`
+    // `laser.channel.<id>`, `laser.transcribe.v1`
     `|\\.channel\\.|\\.[a-z-]+\\.v[0-9]+` +
-    // the HKDF labels: `piorbit-channel-v1`, `piorbit-pairing-channel-v1`
+    // the HKDF labels: `laser-channel-v1`, `laser-pairing-channel-v1`
     `|(-[a-z]+)*-v[0-9]+` +
     `)(?![a-z0-9])`,
   "g",
@@ -137,7 +137,7 @@ const WIRE = new RegExp(
 
 /**
  * Identifiers: the name glued to other identifier characters, as in
- * `PiorbitProvider`, `usePiorbitState`, `piorbitDataDir`, or a relative import
+ * `LaserProvider`, `useLaserState`, `laserDataDir`, or a relative import
  * of a file named after one. They are symbols inside a private workspace with
  * no user-visible effect, so renaming them is a mechanical sweep rather than a
  * broken install — the same call as the npm scope.
@@ -147,7 +147,7 @@ const IDENTIFIER = new RegExp(
   "gi",
 );
 
-/** `"./PiorbitProvider.js"` — a module specifier is the file's name, not the product's. */
+/** `"./LaserProvider.js"` — a module specifier is the file's name, not the product's. */
 const IMPORT_PATH = new RegExp(`["'\`]\\.{1,2}/[^"'\`]*(${ANY_NAME})[^"'\`]*["'\`]`, "gi");
 
 /** An environment variable is always a finding, even though `_` looks like an identifier. */

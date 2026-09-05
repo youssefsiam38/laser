@@ -56,7 +56,7 @@ function copyFor(change: AttentionChange): Copy | undefined {
 
 export interface NotifierOptions {
   log: DesktopLog;
-  /** True when a piorbit window has focus, in which case we stay quiet. */
+  /** True when a laser window has focus, in which case we stay quiet. */
   isForeground: () => boolean;
   onActivate: (link: DeepLink) => void;
 }

@@ -36,7 +36,7 @@ export interface StorageMigrationResult {
 
 const EMPTY: StorageMigrationResult = { moved: [], kept: [], caches: [] };
 
-/** `piorbit-` and `piorbit.` — both separators this app has ever used. */
+/** `laser-` and `laser.` — both separators this app has ever used. */
 function prefixesFor(name: string): string[] {
   return [`${name}-`, `${name}.`];
 }

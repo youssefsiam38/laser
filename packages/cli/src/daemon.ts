@@ -1,10 +1,10 @@
 /**
  * The host process the CLI supervises.
  *
- * `piorbit up` re-executes this file's entry (`piorbit __daemon`) detached, so
+ * `laser up` re-executes this file's entry (`laser __daemon`) detached, so
  * the long-lived process is a plain Node process the CLI can find by pid and
  * kill by pid — no shell wrapper, no orphaned npm script in between. Running it
- * in the foreground (`piorbit up --foreground`) is the same code path without
+ * in the foreground (`laser up --foreground`) is the same code path without
  * the detach, which is what you want when you are debugging the host.
  *
  * It writes `<state-dir>/host.json` after the port is bound and removes it on
@@ -15,31 +15,31 @@
 import { ENV, PRODUCT_NAME } from "@lasercode/protocol";
 import { fromBase64Url, isAuthorized } from "@lasercode/crypto";
 import { HostServer, migrateFormerIdentities, type HostRelayOptions } from "@lasercode/host";
-import type { PiorbitPaths } from "./config.js";
+import type { LaserPaths } from "./config.js";
 import { clearHostFile, processIdentity, writeHostFile } from "./hostfile.js";
 import { deviceListOf, loadIdentity, loadStaticKey, readRelayConfig } from "./relay-config.js";
 import { CLI_VERSION } from "./version.js";
 
 export interface DaemonOptions {
-  paths: PiorbitPaths;
+  paths: LaserPaths;
   /** Where the host writes its own log lines. `process.stderr` when foreground. */
   log?: (line: string) => void;
 }
 
 /**
- * Outbound relay channels for the phones `piorbit relay pair` has linked
+ * Outbound relay channels for the phones `laser relay pair` has linked
  * (M9-T7). Absent unless `relay.json` exists **and** names at least one
  * device: with no relay configured the host makes no outbound connection at
- * all, which is what makes piorbit a local app by default.
+ * all, which is what makes laser a local app by default.
  *
  * `isAuthorized` re-reads nothing — it closes over the list this process
- * started with, and `piorbit relay revoke` tells the person to restart. That
+ * started with, and `laser relay revoke` tells the person to restart. That
  * is deliberate: a host that re-read a file on every reconnect would be a
  * second reader of state the CLI owns, and the failure mode (a revoked phone
  * reconnecting until the next restart) is stated where it happens instead of
  * being hidden behind a watcher.
  */
-async function relayOptions(paths: PiorbitPaths, log: (line: string) => void): Promise<HostRelayOptions | undefined> {
+async function relayOptions(paths: LaserPaths, log: (line: string) => void): Promise<HostRelayOptions | undefined> {
   let config;
   try {
     config = readRelayConfig(paths);
@@ -107,7 +107,7 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
   });
 
   const { url, port } = await server.listen();
-  // Recorded so `piorbit down` can prove this pid is still us before signalling.
+  // Recorded so `laser down` can prove this pid is still us before signalling.
   const identity = processIdentity(process.pid);
   writeHostFile(paths.hostFile, {
     pid: process.pid,

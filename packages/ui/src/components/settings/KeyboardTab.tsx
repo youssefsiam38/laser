@@ -4,7 +4,7 @@
  *
  * Every key the app itself answers to, in one place, drawn from the same
  * `modKey()` the command palette uses so a Mac shows ⌘ and everything else
- * shows Ctrl. This is a reference, not an editor, and it says so: piorbit's
+ * shows Ctrl. This is a reference, not an editor, and it says so: laser's
  * shortcuts are fixed in this version, and a control that pretends otherwise
  * would be a lie (docs/ux-panels.md R2).
  *
@@ -31,7 +31,7 @@ import { Button } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { modKey } from "@/format";
-import { usePiorbitStable } from "@/runtime";
+import { useLaserStable } from "@/runtime";
 import { cn } from "@/lib/utils";
 
 interface Binding {
@@ -209,7 +209,7 @@ function baseKeyOf(key: string): string | undefined {
 }
 
 function AgentKeys({ cwd }: { cwd?: string | undefined }) {
-  const { client } = usePiorbitStable();
+  const { client } = useLaserStable();
   const [snapshot, setSnapshot] = useState<KeybindingsSnapshot>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);

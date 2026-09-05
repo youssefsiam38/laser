@@ -8,7 +8,7 @@
  * Three sources, in order of trust:
  *   1. `useMessageTiming()` — the runtime's own stream timing, when the
  *      adapter provides it.
- *   2. `metadata.custom.piorbit.timing` / `.usage` — what the projection
+ *   2. `metadata.custom.laser.timing` / `.usage` — what the projection
  *      stamps from Pi's `message_end` usage (`{ output, input, cacheRead,
  *      cacheWrite }`) and the turn's wall clock, when it does.
  *   3. Our local wall clock (`useElapsed`) for a turn this window watched.
@@ -26,13 +26,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { duration, tokens as formatTokens } from "@/format";
 import { cn } from "@/lib/utils";
 
-interface PiorbitTimingMeta {
+interface LaserTimingMeta {
   timing?: { elapsedMs?: number };
   usage?: { output?: number; input?: number; cacheRead?: number; cacheWrite?: number };
 }
 
-const metaOf = (message: MessageState): PiorbitTimingMeta =>
-  ((message.metadata as { custom?: Record<string, unknown> } | undefined)?.custom?.[WIRE_NAMESPACE] as PiorbitTimingMeta | undefined) ?? {};
+const metaOf = (message: MessageState): LaserTimingMeta =>
+  ((message.metadata as { custom?: Record<string, unknown> } | undefined)?.custom?.[WIRE_NAMESPACE] as LaserTimingMeta | undefined) ?? {};
 
 const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 

@@ -29,7 +29,7 @@ export interface NodeRuntime {
   /**
    * The package manager staged beside it, when there is one.
    *
-   * piorbit installs extensions from Settings, and the person who installed a
+   * laser installs extensions from Settings, and the person who installed a
    * desktop app has no npm on PATH. `build/before-pack.cjs` stages the one that
    * ships inside the pinned Node archive next to the binary, so this is a
    * sibling lookup rather than a search: found here, or the app says installs
@@ -66,7 +66,7 @@ function candidates(options: { packaged: boolean; resourcesPath: string }): Arra
     // fell back to whatever `node` is on PATH would run the agent on an
     // unpinned version, and the person would never be told. If the bundled one
     // is missing the install is broken, and `resolveNodeRuntime` says exactly
-    // that. `PIORBIT_NODE` above stays the deliberate override.
+    // that. `LASER_NODE` above stays the deliberate override.
     return found;
   }
 

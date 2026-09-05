@@ -4,7 +4,7 @@
  *
  * pi-subagents 0.65 has no sockets and no IPC. The detached runner watches
  * `<asyncDir>/control/` and acts on files it finds there, which is why a run
- * started from a terminal is still controllable from piorbit — and why this
+ * started from a terminal is still controllable from laser — and why this
  * lives in the host rather than in the companion extension.
  *
  * Every byte below matches `pi-subagents/src/runs/background/control-channel.ts`
@@ -30,7 +30,7 @@ import { basename, dirname, join } from "node:path";
 /** pi-subagents' own limit; a longer message is refused by the runner's validator. */
 export const MAX_STEER_MESSAGE_BYTES = 128 * 1024;
 
-/** How piorbit names itself in a control request, so `subagent status` shows where it came from. */
+/** How laser names itself in a control request, so `subagent status` shows where it came from. */
 /**
  * The `source` stamped on a control message pi-subagents reads back.
  *

@@ -3,7 +3,7 @@
  * Speaker identity (`elements-speaker-identity`): which agent produced a
  * message inside a child run — `orchestrator`, `worker#2`, a tool. Rendered
  * as a header above the message when the projection stamps a speaker
- * (`metadata.custom.piorbit.speaker`); the parent session's own replies carry
+ * (`metadata.custom.laser.speaker`); the parent session's own replies carry
  * none and show none.
  *
  * Divergences from the registry copy: the registry renders a demo list of

@@ -1,6 +1,6 @@
 "use client";
 /**
- * The body for a document piorbit will not draw (M8-T3).
+ * The body for a document laser will not draw (M8-T3).
  *
  * The panel contract is explicit that `renderable: false` degrades to "open
  * this elsewhere" and never to a broken viewer, so this card is a designed

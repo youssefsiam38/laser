@@ -18,7 +18,7 @@ export function ago(iso: string, now = Date.now()): string {
   return new Date(at).toLocaleDateString(undefined, { day: "numeric", month: "short" });
 }
 
-/** `~/projects/piorbit` — home collapsed, and only the last two segments. */
+/** `~/projects/laser` — home collapsed, and only the last two segments. */
 export function shortCwd(cwd: string): string {
   const home = homedir();
   const collapsed = cwd === home ? "~" : cwd.startsWith(`${home}${sep}`) ? `~${cwd.slice(home.length)}` : cwd;

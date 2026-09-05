@@ -589,7 +589,7 @@ export class SubagentsLayer {
     return this.claimed;
   }
 
-  /** Everything currently on show for one session, for `piorbit runs`. */
+  /** Everything currently on show for one session, for `laser runs`. */
   panelIdsFor(path: string): string[] {
     const ids: string[] = [];
     for (const record of this.runs.values()) if (record.path === path) ids.push(...record.panelIds);

@@ -1,5 +1,5 @@
 /**
- * `piorbit logs` — the host's low-level log store from a terminal (M9-T7).
+ * `laser logs` — the host's low-level log store from a terminal (M9-T7).
  *
  * The store lives in the host (`pi/logs/*`), so this sees exactly what the
  * Logs page sees: provider round-trips, tool executions, session events,
@@ -230,7 +230,7 @@ row per line. --clear deletes rows and needs --yes; it can only narrow by
   },
 };
 
-/** One row. `--json` streams NDJSON so `piorbit logs -f --json | jq` works. */
+/** One row. `--json` streams NDJSON so `laser logs -f --json | jq` works. */
 async function emit(
   rpc: HostRpc,
   term: Terminal,

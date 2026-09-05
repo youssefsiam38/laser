@@ -151,7 +151,7 @@ export function readIdentity(path = productJsonPath) {
     name: raw.name,
     displayName: raw.displayName,
     appId: raw.appId,
-    /** `dev.piorbit` — AppStream's developer id, the app id without its last segment. */
+    /** `dev.laser` — AppStream's developer id, the app id without its last segment. */
     developerId: raw.appId.split(".").slice(0, -1).join("."),
     urlScheme: raw.urlScheme,
     schemePrefix: `${raw.urlScheme}://`,

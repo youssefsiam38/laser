@@ -38,7 +38,7 @@ page about something that spans commands.
     // A name that is both (pi, doctor) gets the topic, which is the longer read,
     // plus a pointer to the command's own flags.
     if (topic) {
-      // Help is the answer to `piorbit help`, so it goes to stdout and can
+      // Help is the answer to `laser help`, so it goes to stdout and can
       // be piped, the same as the generated command help.
       term.write(`${term.out.bold(topic.title)}\n`);
       for (const body of topic.body.trim().split("\n")) term.write(`${body}\n`);
@@ -46,7 +46,7 @@ page about something that spans commands.
       // pointing at it here would send the reader to the wrong help.
       if (command && !command.passthrough) {
         term.write("\n");
-        term.write(`${term.out.dim(`Options: piorbit ${command.name} --help`)}\n`);
+        term.write(`${term.out.dim(`Options: laser ${command.name} --help`)}\n`);
       }
       return;
     }

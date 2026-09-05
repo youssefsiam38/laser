@@ -23,7 +23,7 @@
  *  - **Run without npm on PATH.** The packaged app ships a stock Node and the
  *    package manager out of the same verified archive. `runtime()` finds it
  *    beside that Node — for the host the shell spawned and for one a terminal
- *    `piorbit up` left running, which the shell adopts — and `npmCommand()` is
+ *    `laser up` left running, which the shell adopts — and `npmCommand()` is
  *    what the worker is told to use, with `--strict-allow-scripts` so an
  *    unreviewed install script stops the install instead of running. A packaged
  *    build never reaches for the machine's own npm. When there is none, an
@@ -424,14 +424,14 @@ const NOT_READY =
  * `--strict-allow-scripts` turns that warning into a hard failure that names
  * the package. The install stops, the person is told which extension wanted to
  * run something, and nothing has run. It is the bundled npm's own flag, and it
- * is why the bundled npm is the one piorbit ships with.
+ * is why the bundled npm is the one laser ships with.
  */
 const NPM_SAFETY_FLAGS = ["--strict-allow-scripts"] as const;
 
 /**
  * Where the installer is. Best first:
  *
- *   1. `PIORBIT_NPM_CLI`, which the desktop shell sets;
+ *   1. `LASER_NPM_CLI`, which the desktop shell sets;
  *   2. `<node>/../npm/bin/npm-cli.js` — the packaged layout, which is what
  *      `build/before-pack.cjs` stages beside the pinned Node;
  *   3. `<node>/../../lib/node_modules/npm/bin/npm-cli.js` — a stock Node
@@ -439,15 +439,15 @@ const NPM_SAFETY_FLAGS = ["--strict-allow-scripts"] as const;
  *   4. `npm` on PATH, **only when this is not a packaged install**.
  *
  * (2) exists because (1) reaches only the host the Electron shell spawns. A
- * person who runs `piorbit up` in a terminal first, then opens the window, gets
- * a host the window *adopts* — and that host had no PIORBIT_NPM_CLI, so
+ * person who runs `laser up` in a terminal first, then opens the window, gets
+ * a host the window *adopts* — and that host had no LASER_NPM_CLI, so
  * Settings used to say "the installer it ships with is missing. Reinstall
- * piorbit", which is false and which reinstalling cannot fix. Both hosts run on
+ * laser", which is false and which reinstalling cannot fix. Both hosts run on
  * the same bundled Node, so a sibling lookup answers for both.
  *
- * (4) is excluded from a packaged install on purpose: piorbit pins every
+ * (4) is excluded from a packaged install on purpose: laser pins every
  * version it ships, and an unpinned npm off the person's PATH writing into
- * piorbit's own agent directory is exactly the thing the bundling is for.
+ * laser's own agent directory is exactly the thing the bundling is for.
  */
 export function detectInstallRuntime(
   options: { execPath?: string; env?: NodeJS.ProcessEnv; exists?: (path: string) => boolean; packaged?: boolean } = {},
@@ -487,7 +487,7 @@ export function detectInstallRuntime(
  * Is this host running out of a packaged app? The host's own module lives under
  * `resources/app.asar.unpacked/` in every packaging format, and nowhere else —
  * so this answers the same way whether the shell spawned the host or a terminal
- * `piorbit up` did.
+ * `laser up` did.
  */
 function isPackagedInstall(): boolean {
   return import.meta.url.includes("app.asar");
@@ -628,7 +628,7 @@ export type Forward = <M extends ClientMethod>(
 export interface PackageServiceOptions {
   /** The agent's directory; user-scope packages live under `<agentDir>/npm`. */
   agentDir: string;
-  /** piorbit's own state; the lock lives here. Absent = memory only (tests). */
+  /** laser's own state; the lock lives here. Absent = memory only (tests). */
   stateDir?: string;
   forward: Forward;
   log?: (line: string) => void;
@@ -776,7 +776,7 @@ export class PackageService {
   async install(params: ClientRequests["pi/packages/install"]["params"]): Promise<ClientRequests["pi/packages/install"]["result"]> {
     const npmName = parseNpmSource(params.source)?.name ?? params.source;
     // One directory, more than one client: the desktop, a phone over the relay
-    // and `piorbit packages` all reach this service. The worker serialises what
+    // and `laser packages` all reach this service. The worker serialises what
     // it runs, but two requests for the same package overlap *here* — and the
     // loser's post-install check then reads the winner's version, calls it a
     // mismatch, and `discard()`s a package that was installed successfully.
@@ -1147,7 +1147,7 @@ function describeRegistryFailure(error: unknown): string {
 // first run (M10-T6)
 
 export interface SetupServiceOptions {
-  /** piorbit's own state directory. */
+  /** laser's own state directory. */
   stateDir: string;
   now?: () => Date;
 }

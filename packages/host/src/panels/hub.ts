@@ -2,7 +2,7 @@
  * PanelHub — where panels enter the host and leave for clients.
  *
  * Inputs: `pi/extension/message` notifications from a worker carrying
- * `piorbit/panel/upsert` / `piorbit/panel/close` (the companion `panels`
+ * `laser/panel/upsert` / `laser/panel/close` (the companion `panels`
  * module), plus session lifecycle. Outputs: `pi/panel/upsert` /
  * `pi/panel/close` broadcasts, attention (a blocking decision lights the
  * session row, R5), and the answers to `pi/panel/list` and `pi/panel/read`.

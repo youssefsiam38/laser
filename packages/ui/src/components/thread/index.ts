@@ -1,5 +1,5 @@
 /**
- * The thread column. The shell renders `<Thread/>` inside `<PiorbitProvider>`.
+ * The thread column. The shell renders `<Thread/>` inside `<LaserProvider>`.
  */
 export { Thread, type ThreadProps } from "./Thread.js";
 export { ThreadSlotsProvider, useThreadSlots, type ThreadSlots } from "./thread-slots.js";

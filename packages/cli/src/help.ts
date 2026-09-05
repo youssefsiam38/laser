@@ -11,7 +11,7 @@ import { CLI_VERSION } from "./version.js";
 
 /**
  * Help is the *result* of asking for help, not progress: it goes to stdout so
- * `piorbit --help | less` and `piorbit help > cmds.txt` produce something.
+ * `laser --help | less` and `laser help > cmds.txt` produce something.
  * `write` rather than `print` so `--help` still answers under `--json`.
  */
 function say(term: Terminal, text = ""): void {
@@ -77,7 +77,7 @@ export function renderRootHelp(commands: readonly Command[], term: Terminal): vo
 
 export function renderCommandHelp(command: Command, term: Terminal): void {
   const p = term.out;
-  say(term, `${p.bold(`piorbit ${command.name}`)} — ${command.summary}`);
+  say(term, `${p.bold(`laser ${command.name}`)} — ${command.summary}`);
   say(term);
   say(term, p.bold("USAGE"));
   say(term, `  ${command.usage}`);
@@ -126,7 +126,7 @@ export interface Topic {
   body: string;
 }
 
-/** `piorbit help <topic>` — the things that do not belong to one command. */
+/** `laser help <topic>` — the things that do not belong to one command. */
 /**
  * One row of the environment table, padded so the descriptions line up.
  *

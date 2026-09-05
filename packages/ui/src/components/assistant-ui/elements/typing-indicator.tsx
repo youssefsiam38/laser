@@ -1,7 +1,7 @@
 "use client";
 /**
  * Typing indicator (`elements-typing-indicator`): three dots that read as
- * presence. In piorbit this is the honest substitute for a typewriter on a
+ * presence. In laser this is the honest substitute for a typewriter on a
  * DETACHED run — one that is working but sends no text deltas (R4). It never
  * stands in for a live stream, which has a caret.
  *

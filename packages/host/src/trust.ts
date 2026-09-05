@@ -12,7 +12,7 @@
  * The host therefore decides before it starts a worker, and passes the answer
  * down. This module only reads: Pi's `trust.json` (nearest-ancestor entry wins,
  * exactly as `findNearestTrustEntry` does) and `defaultProjectTrust` from the
- * global settings file. piorbit's own decisions live in the project registry;
+ * global settings file. laser's own decisions live in the project registry;
  * Pi's trust store has a lock protocol we are not going to reimplement from the
  * outside, and never writing it keeps `docs/architecture.md`'s "data we read"
  * list true.

@@ -33,7 +33,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
 import { formatElapsed, openDecisionIds, usePanelActions, usePanelEntries, usePanelsState } from "@/panels";
 import { useTick } from "@/components/thread/timing";
-import { usePiorbitView } from "@/runtime";
+import { useLaserView } from "@/runtime";
 
 import { openFleet } from "./fleet.js";
 import {
@@ -94,7 +94,7 @@ function useReveal(mobile: boolean): (node: RunNode) => void {
 }
 
 export function RunTabs() {
-  const view = usePiorbitView();
+  const view = useLaserView();
   const mobile = useIsMobile();
   const entries = usePanelEntries(view?.path);
   const decisions = usePanelsState((r) => openDecisionIds(r.panels), (a, b) => a.size === b.size && [...a].every((x) => b.has(x)));

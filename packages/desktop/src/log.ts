@@ -4,7 +4,7 @@
  * Separate from the host log on purpose: when the app will not start, the
  * question is almost always "did the shell fail, or did the host?", and two
  * files answer it in one glance. Kept small by truncating rather than rotating
- * — nobody has ever wanted the second-to-last piorbit desktop log.
+ * — nobody has ever wanted the second-to-last laser desktop log.
  */
 import { appendFileSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { dirname } from "node:path";

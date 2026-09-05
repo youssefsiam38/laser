@@ -205,7 +205,7 @@ export interface Capabilities {
   /** `control/steer-inbox-closed.json` exists: the runner has stopped reading steers. */
   steerClosed: boolean;
   /**
-   * A live piorbit worker holds this session with the subagents module active,
+   * A live laser worker holds this session with the subagents module active,
    * so `subagents:rpc:v1` is reachable. Resume exists only through the owning
    * session (findings.md), so it appears only here.
    */

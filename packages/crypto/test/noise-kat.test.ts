@@ -1,6 +1,6 @@
 /**
  * Known-answer tests against the Noise project's own vectors (cacophony),
- * trimmed to the two suites piorbit speaks. This is the one place in the repo
+ * trimmed to the two suites laser speaks. This is the one place in the repo
  * where tests are unambiguously worth the time: a Noise bug is silent.
  *
  * Every vector runs twice — once on the @noble backend, once on WebCrypto —

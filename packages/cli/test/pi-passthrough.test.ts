@@ -1,6 +1,6 @@
 /**
- * The `piorbit pi` split rule decides whether a flag reaches Pi or is eaten by
- * piorbit. Getting it wrong is invisible until someone's `--help` goes to the
+ * The `laser pi` split rule decides whether a flag reaches Pi or is eaten by
+ * laser. Getting it wrong is invisible until someone's `--help` goes to the
  * wrong program, so it is pinned here.
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";

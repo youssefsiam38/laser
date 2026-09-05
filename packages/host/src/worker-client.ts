@@ -1,5 +1,5 @@
 /**
- * WorkerClient — spawns one `piorbit-worker` for one cwd and speaks JSON-RPC
+ * WorkerClient — spawns one `laser-worker` for one cwd and speaks JSON-RPC
  * to it over the fd-3 pipe. Correlates requests by id, forwards notifications,
  * and reports exit. The host never imports Pi; it only resolves the worker's
  * entry file path.

@@ -1,5 +1,5 @@
 /*
- * piorbit — "Ground Station" design tokens and base styles.
+ * laser — "Ground Station" design tokens and base styles.
  * Contract: packages/ui/DESIGN.md. Tailwind v4 entry.
  */
 @import "tailwindcss";
@@ -324,7 +324,7 @@
   --color-sidebar-border: var(--line);
   --color-sidebar-ring: var(--live);
 
-  /* piorbit names */
+  /* laser names */
   --color-bg: var(--bg);
   --color-surface: var(--surface);
   --color-surface-2: var(--surface-2);

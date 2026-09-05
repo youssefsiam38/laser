@@ -1,15 +1,15 @@
 /**
- * piorbit's own home on disk, and the reason it is not the agent's (M10-T3).
+ * laser's own home on disk, and the reason it is not the agent's (M10-T3).
  *
- * A person installs piorbit. They may never learn which agent runs underneath,
- * and they certainly did not agree to piorbit reading, rewriting or locking a
+ * A person installs laser. They may never learn which agent runs underneath,
+ * and they certainly did not agree to laser reading, rewriting or locking a
  * configuration directory some other program owns. So the desktop app keeps
  * **everything** — settings, credentials, sessions, installed extensions, its
- * own state — inside one directory that belongs to piorbit:
+ * own state — inside one directory that belongs to laser:
  *
- *   Linux    $XDG_DATA_HOME/piorbit, or ~/.local/share/piorbit
- *   macOS    ~/Library/Application Support/piorbit
- *   Windows  %LOCALAPPDATA%\piorbit
+ *   Linux    $XDG_DATA_HOME/laser, or ~/.local/share/laser
+ *   macOS    ~/Library/Application Support/laser
+ *   Windows  %LOCALAPPDATA%\laser
  *
  * Two consequences, both deliberate:
  *
@@ -18,27 +18,27 @@
  *   written. `PI_CODING_AGENT_DIR` and its siblings are *removed* from the
  *   environment the app inherits rather than honoured, because in a desktop
  *   session those variables mean "the agent I use in my shell" — the one thing
- *   piorbit must not adopt. Uninstalling piorbit cannot damage it, and piorbit
+ *   laser must not adopt. Uninstalling laser cannot damage it, and laser
  *   cannot be broken by it.
- * - **`PIORBIT_AGENT_DIR` still wins.** That is the deliberate lever: advanced
+ * - **`LASER_AGENT_DIR` still wins.** That is the deliberate lever: advanced
  *   settings write it, and a person who genuinely wants both to share one
  *   directory sets it and gets exactly that.
  */
 import { ENV } from "@lasercode/protocol";
 import { join } from "node:path";
-import { piorbitDataDir } from "@lasercode/cli";
+import { laserDataDir } from "@lasercode/cli";
 
 /** Pi's own variable names. In a GUI they describe the *other* installation. */
 const AGENT_ENV_VARS = ["PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR", "PI_SUBAGENTS_TEMP_ROOT"] as const;
 
 export interface AgentHome {
-  /** The one directory piorbit owns. Everything below it is piorbit's. */
+  /** The one directory laser owns. Everything below it is laser's. */
   dataDir: string;
-  /** The agent directory piorbit gives the host and every worker. */
+  /** The agent directory laser gives the host and every worker. */
   agentDir: string;
-  /** piorbit's own state: host record, logs, project list, attention. */
+  /** laser's own state: host record, logs, project list, attention. */
   stateDir: string;
-  /** True when the person pointed piorbit somewhere else on purpose. */
+  /** True when the person pointed laser somewhere else on purpose. */
   chosenByPerson: boolean;
   /**
    * Variables that were present and are being ignored, so the log can say so.
@@ -48,16 +48,16 @@ export interface AgentHome {
 }
 
 /**
- * `$XDG_DATA_HOME/piorbit` and the platform equivalents.
+ * `$XDG_DATA_HOME/laser` and the platform equivalents.
  *
  * Re-exported rather than defined here: `@lasercode/host` owns the answer, and
  * the CLI resolves its own paths from the same function, so the window, a
- * terminal `piorbit sessions` and the host they both talk to cannot disagree.
+ * terminal `laser sessions` and the host they both talk to cannot disagree.
  */
-export { piorbitDataDir };
+export { laserDataDir };
 
 export function agentHome(env: NodeJS.ProcessEnv = process.env): AgentHome {
-  const dataDir = piorbitDataDir(env);
+  const dataDir = laserDataDir(env);
   const chosen = (env[ENV.agentDir] ?? "").trim();
   return {
     dataDir,

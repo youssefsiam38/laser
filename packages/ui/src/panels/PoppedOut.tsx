@@ -9,15 +9,15 @@ import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
 import { useEffect, useMemo } from "react";
 
 import { StatusRing } from "@/components/status";
-import { usePiorbitStable, usePiorbitState } from "@/runtime";
+import { useLaserStable, useLaserState } from "@/runtime";
 
 import { Island } from "./islands/Island.js";
 import { POPOUT_CHANNEL, parsePopoutHash, usePanelEntries } from "./PanelsProvider.js";
 
 export function PoppedOutPanel({ hash }: { hash: string }) {
   const target = useMemo(() => parsePopoutHash(hash), [hash]);
-  const { actions } = usePiorbitStable();
-  const connection = usePiorbitState((s) => s.connection);
+  const { actions } = useLaserStable();
+  const connection = useLaserState((s) => s.connection);
   const entries = usePanelEntries(target?.path);
   const entry = entries.find((e) => e.panel.id === target?.id);
 

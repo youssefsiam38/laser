@@ -5,7 +5,7 @@
  *
  * Adopted from the assistant-ui registry and mapped onto the semantic tokens
  * in docs/ux-theme.md, so every element that imports `paper` or `field` gets
- * piorbit's ground rather than the catalog's `bg-foreground/[0.04]` guesses.
+ * laser's ground rather than the catalog's `bg-foreground/[0.04]` guesses.
  * Divergences from the registry copy, each on purpose:
  *
  *   - `mono` is `typed` — 12px, the legibility floor — not the catalog's 11px.

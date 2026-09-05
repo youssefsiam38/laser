@@ -1,7 +1,7 @@
 /**
  * web-access — pi-web-access as `collection` panels (M8-T4).
  *
- * The package already works in piorbit without help: it uses only the portable
+ * The package already works in laser without help: it uses only the portable
  * UI surface (`notify`, `select`, string widgets), so its dialogs and status
  * lines come through the ui-bridge unchanged. What it does *not* have is a way
  * to show a set of found things as anything but a wall of text in a tool row.
@@ -10,7 +10,7 @@
  * sense of docs/ux-panels.md: it reads the package's private world and emits
  * the declared payload. Two deliberate choices:
  *
- * - **It emits on the public bus** (`piorbit:panel`), exactly as a third-party
+ * - **It emits on the public bus** (`laser:panel`), exactly as a third-party
  *   extension that opted into the contract would, rather than through a
  *   private channel to the worker. The contract is dogfooded by our own code
  *   before it is asked of anyone else's (docs/ux-panels.md, decision 4). A
@@ -32,7 +32,7 @@
 
 import type { ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { PANEL_EVENT, type CollectionItem, type PanelEvent } from "@lasercode/protocol";
-import type { PiorbitModule } from "./index.js";
+import type { LaserModule } from "./index.js";
 
 /** As it appears in `sourceInfo.source` (`npm:pi-web-access`) and in the resolved path. */
 const PACKAGE_ID = "pi-web-access";
@@ -236,7 +236,7 @@ function entriesOf(ctx: ExtensionContext): readonly CustomEntryLike[] {
   }
 }
 
-export const webAccessModule: PiorbitModule = {
+export const webAccessModule: LaserModule = {
   name: "web-access",
 
   detect({ pi }) {

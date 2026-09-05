@@ -2,7 +2,7 @@
 /**
  * Thread list — THE SESSIONS PANEL (docs/ux-elements.md "AUI-connected",
  * DESIGN.md "Layout" → Sessions, D-20 §6). Installed from `thread-list` and
- * rebuilt around what the runtime already knows: piorbit runs a
+ * rebuilt around what the runtime already knows: laser runs a
  * `RemoteThreadListRuntime` whose adapter lists every Pi session as a thread
  * with `custom.cwd` and `custom.attention`, so the list reads
  * `s.threads.threadIds` / `threadItems` and the row reads `s.threadListItem`.
@@ -15,7 +15,7 @@
  *     adapter's order.
  *   - A row is a status dot, the title (typed id prefix when untitled), the
  *     relative time and a subtitle — the last tool or "Waiting for you" — read
- *     from the piorbit store for that path, because the runtime's item state
+ *     from the laser store for that path, because the runtime's item state
  *     has no such fields.
  *   - The more-menu offers Rename, Archive (client-local; Pi has no verb) and
  *     Copy path. Delete is absent: the transcript file is the user's history
@@ -49,7 +49,7 @@ import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { dateTime, relativeTime, shortCwd } from "@/format";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
-import { attentionRank, mergeSessions, usePiorbitStable, usePiorbitState } from "@/runtime";
+import { attentionRank, mergeSessions, useLaserStable, useLaserState } from "@/runtime";
 import type { AppState } from "@/store";
 
 // ---------------------------------------------------------------------------
@@ -82,7 +82,7 @@ const modified = (item: { custom?: Record<string, unknown> | undefined; lastMess
 export function useThreadListGroups(projects: readonly string[], filter: string | undefined, query = ""): ThreadListGroup[] {
   const threadIds = useAuiState((s) => s.threads.threadIds);
   const threadItems = useAuiState((s) => s.threads.threadItems);
-  const workers = usePiorbitState((s) => s.workers);
+  const workers = useLaserState((s) => s.workers);
   const needle = query.trim().toLowerCase();
 
   return useMemo(() => {
@@ -127,7 +127,7 @@ export function useThreadListGroups(projects: readonly string[], filter: string 
 // ---------------------------------------------------------------------------
 
 export interface ThreadListProps {
-  /** Known projects, in rail order (`usePiorbitStable().projects`). */
+  /** Known projects, in rail order (`useLaserStable().projects`). */
   projects: readonly string[];
   /** Filters rows by title. */
   query?: string | undefined;
@@ -142,7 +142,7 @@ export const ThreadList: FC<ThreadListProps> = ({ projects, query = "", onOpen, 
   const list = useSessionsList();
   const groups = useThreadListGroups(projects, list.filter, query);
   const archivedCount = useAuiState((s) => s.threads.archivedThreadIds.length);
-  const { currentProject } = usePiorbitStable();
+  const { currentProject } = useLaserStable();
   const [editing, setEditing] = useState<string | undefined>(undefined);
 
   // The rail asked for a group: bring its header to the top of the list.
@@ -343,9 +343,9 @@ const sameRow = (a: RowModel, b: RowModel): boolean =>
   a.modifiedAt === b.modifiedAt &&
   a.messageCount === b.messageCount;
 
-/** What the runtime's item state lacks, from the piorbit store, for one path. */
+/** What the runtime's item state lacks, from the laser store, for one path. */
 function useRowModel(path: string | undefined): RowModel {
-  return usePiorbitState(
+  return useLaserState(
     useCallback(
       (s: AppState): RowModel => {
         const summary = path ? mergeSessions(s.sessions, s.open).find((x) => x.path === path) : undefined;
@@ -472,7 +472,7 @@ const menuItemClass = cn(
 );
 
 function ThreadListItemMore({ path, title, archived, onRename }: { path: string | undefined; title: string; archived: boolean; onRename(): void }) {
-  const { actions } = usePiorbitStable();
+  const { actions } = useLaserStable();
   const { copy } = useCopy();
   const copyPath = () => {
     if (!path) return;

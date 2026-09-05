@@ -191,7 +191,7 @@ export class PairingResponder {
     return new PairingResponder(options, handshake, ephemeral, options.now ?? Date.now);
   }
 
-  /** The string to render as a QR. `baseUrl` is the PWA origin, e.g. `https://app.piorbit.dev/link`. */
+  /** The string to render as a QR. `baseUrl` is the PWA origin, e.g. `https://app.laser.dev/link`. */
   link(baseUrl: string): string {
     return `${baseUrl}#${encodeFragment(this.relayUrl, this.ephemeralPublicKey)}`;
   }

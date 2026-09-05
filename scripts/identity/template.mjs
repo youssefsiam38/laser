@@ -16,7 +16,7 @@ const filters = {
   json: (value) => JSON.stringify(value),
   yaml: (value) => (Array.isArray(value) ? `[${value.join(", ")}]` : String(value)),
   upper: (value) => String(value).toUpperCase(),
-  /** `$PIORBIT_ARCH` — a shell variable reference, for files where `${{` means something else. */
+  /** `$LASER_ARCH` — a shell variable reference, for files where `${{` means something else. */
   shellvar: (value) => `$${value}`,
   /** A JSON array's contents: `"a", "b"` — for use inside literal brackets. */
   jsonList: (value) => (Array.isArray(value) ? value.map((item) => JSON.stringify(item)).join(", ") : JSON.stringify(value)),

@@ -2,7 +2,7 @@
  * The pi-subagents 0.65 on-disk vocabulary, parsed defensively (M3-T2).
  *
  * This file is the *only* place that knows what `status.json` looks like. It
- * declares the subset piorbit reads, parses it without trusting a single field,
+ * declares the subset laser reads, parses it without trusting a single field,
  * and exposes nothing that is not verified against the real files on disk. Its
  * shapes are a strict subset of `pi-subagents/src/shared/types.ts` `AsyncStatus`
  * (0.65.0, read 2026-09-05); every field below was seen in a real run under
@@ -178,7 +178,7 @@ export interface AsyncStatus {
   runId: string;
   /** Absolute directory the run lives in. Not in the file; filled by the reader. */
   dir: string;
-  /** Parent Pi session *file path*, which is piorbit's session `path`. */
+  /** Parent Pi session *file path*, which is laser's session `path`. */
   sessionId?: string;
   cwd?: string;
   mode: "single" | "parallel" | "chain" | "workflow";

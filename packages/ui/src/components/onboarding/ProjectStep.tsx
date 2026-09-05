@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { shortCwd } from "@/format";
 import { cn } from "@/lib/utils";
-import { usePiorbitState, usePiorbitStable } from "@/runtime";
+import { useLaserState, useLaserStable } from "@/runtime";
 import type { DirectoryListing } from "@lasercode/protocol";
 
 import { recentCwds } from "@/components/shell/model";
@@ -27,8 +27,8 @@ export interface ProjectStepProps {
 }
 
 export function ProjectStep({ onAdded }: ProjectStepProps) {
-  const { client, actions, setCurrentProject, projects } = usePiorbitStable();
-  const sessions = usePiorbitState((s) => s.sessions);
+  const { client, actions, setCurrentProject, projects } = useLaserStable();
+  const sessions = useLaserState((s) => s.sessions);
   const [listing, setListing] = useState<DirectoryListing>();
   const [loading, setLoading] = useState(true);
   const [typed, setTyped] = useState("");

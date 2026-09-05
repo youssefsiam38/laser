@@ -1,5 +1,5 @@
 /**
- * HostClient — JSON-RPC over WebSocket to the piorbit host.
+ * HostClient — JSON-RPC over WebSocket to the laser host.
  *
  * Reconnects with backoff and, on reconnect, re-issues `session/load` with
  * the last seen `seq` for every session the app is attached to, so a dropped

@@ -74,7 +74,7 @@ export interface SessionView {
   entries: unknown[];
   /**
    * Companion-extension modules active in this session, from
-   * `piorbit/capabilities`. Features that only exist where their package does
+   * `laser/capabilities`. Features that only exist where their package does
    * gate on this and are hidden, never disabled, when it is absent (R2).
    */
   capabilities: PiExtensionModuleName[];

@@ -1,5 +1,5 @@
 /**
- * Placement is piorbit's decision, not the extension's (docs/ux-panels.md).
+ * Placement is laser's decision, not the extension's (docs/ux-panels.md).
  * kind × intent × viewport → surface. This is the table in the contract,
  * verbatim, with its one branch: on a phone the dock does not exist.
  *

@@ -35,7 +35,7 @@
  * credentials through a separate `before_provider_headers` hook, so the request
  * payload does not normally carry one — but that is Pi's implementation detail,
  * response headers arrive raw, and a user-configured gateway can put a key in
- * the body. The store is still the most sensitive artefact piorbit produces —
+ * the body. The store is still the most sensitive artefact laser produces —
  * a provider request contains the whole conversation and every tool result —
  * so the file is created 0600, and `providerPayloads: "summary"` drops the
  * bodies entirely for anyone who wants that trade.
@@ -176,7 +176,7 @@ export class LogStoreUnavailableError extends Error {
 function openDatabase(file: string): Database {
   let DatabaseSync: new (path: string) => Database;
   try {
-    // Node 22.5+ ships this; Node 24 is piorbit's floor (AGENTS.md §5).
+    // Node 22.5+ ships this; Node 24 is laser's floor (AGENTS.md §5).
     // `createRequire` rather than a static import so a Node without it fails
     // here, with an explanation, instead of failing the whole host at load.
     ({ DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as {
@@ -359,14 +359,14 @@ export class LogStore {
     // Say so rather than lying by omission: a row that dropped fields shows it.
     const safe =
       count > 0 && value !== null && typeof value === "object" && !Array.isArray(value)
-        ? { ...(value as Record<string, unknown>), piorbitRedactedFields: count }
+        ? { ...(value as Record<string, unknown>), laserRedactedFields: count }
         : value;
     let body: string;
     try {
       body = JSON.stringify(safe) ?? "null";
     } catch {
       // A payload with a cycle or a BigInt is still worth a row.
-      body = JSON.stringify({ piorbit: "payload was not JSON-serializable", type: typeof detail });
+      body = JSON.stringify({ laser: "payload was not JSON-serializable", type: typeof detail });
     }
     const bytes = Buffer.byteLength(body, "utf8");
     const preview = body.slice(0, PREVIEW_CHARS);
@@ -581,7 +581,7 @@ export class LogStore {
   // --------------------------------------------------------------- ingestion
 
   /**
-   * Messages from the piorbit companion extension running inside a session.
+   * Messages from the laser companion extension running inside a session.
    * `provider-log` forwards Pi's request and response hooks; the request row
    * carries the whole payload, the response row closes it with status,
    * headers and latency.

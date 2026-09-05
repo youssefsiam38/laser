@@ -8,11 +8,11 @@
  * ask, so the host decides before it starts a worker and this screen is where
  * the decision is made and changed.
  *
- * What is *not* here matters as much. piorbit reads the agent's own
+ * What is *not* here matters as much. laser reads the agent's own
  * `trust.json` and never writes it (`packages/host/src/trust.ts`): that file
  * has a lock protocol owned by a program that may be running, and taking a
  * second writer to it is the bug in AGENTS.md invariant 8. So a decision made
- * here is piorbit's, kept in piorbit's project registry, and the row says so
+ * here is laser's, kept in laser's project registry, and the row says so
  * rather than implying it changed the agent's terminal behaviour too.
  */
 import { useCallback, useMemo, useState } from "react";
@@ -23,7 +23,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { shortCwd } from "@/format";
 import { cn } from "@/lib/utils";
-import { usePiorbitStable } from "@/runtime";
+import { useLaserStable } from "@/runtime";
 import type { ProjectInfo, ProjectTrust } from "@lasercode/protocol";
 
 import { Empty, SearchInput } from "./SettingsScreen.js";
@@ -58,7 +58,7 @@ function headline(trust: ProjectTrust): string {
 }
 
 export function TrustTab() {
-  const { projectInfo, actions } = usePiorbitStable();
+  const { projectInfo, actions } = useLaserStable();
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState<string>();
 

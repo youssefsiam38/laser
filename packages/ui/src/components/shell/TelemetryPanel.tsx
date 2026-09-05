@@ -14,7 +14,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { money, tokens } from "@/format";
 import { cn } from "@/lib/utils";
-import { usePiorbitStable, usePiorbitView, useSessionMeta } from "@/runtime";
+import { useLaserStable, useLaserView, useSessionMeta } from "@/runtime";
 
 import { CheckpointHistory } from "@/components/assistant-ui/elements/checkpoint-history";
 import { historyRows, spendSeries, usageByModel, usageFromEntries, type UsageTotals } from "./model.js";
@@ -29,7 +29,7 @@ export interface TelemetryPanelProps {
  * state, and the session tree. Read-only except compact / fork / jump.
  */
 export function TelemetryPanel({ variant }: TelemetryPanelProps) {
-  const view = usePiorbitView();
+  const view = useLaserView();
   const shell = useShell();
 
   return (
@@ -124,8 +124,8 @@ function NoSession() {
 // ---------------------------------------------------------------------------
 
 function ContextSection() {
-  const { actions } = usePiorbitStable();
-  const view = usePiorbitView();
+  const { actions } = useLaserStable();
+  const view = useLaserView();
   const meta = useSessionMeta();
   const usage = meta.contextUsage;
   const busy = meta.running || meta.compacting;
@@ -167,7 +167,7 @@ function ContextSection() {
 }
 
 function UsageSection() {
-  const view = usePiorbitView();
+  const view = useLaserView();
   const entries = view?.entries;
   const usage = useMemo<UsageTotals | undefined>(() => (entries ? usageFromEntries(entries) : undefined), [entries]);
   const lines = useMemo(() => (entries ? usageByModel(entries) : []), [entries]);
@@ -273,7 +273,7 @@ function ToolsSection() {
 
 function WorkerSection() {
   const meta = useSessionMeta();
-  const view = usePiorbitView();
+  const view = useLaserView();
   const worker = meta.worker;
   const tone = worker ? (WORKER_TONE[worker.status] ?? { color: "bg-ink-3", label: worker.status }) : undefined;
   return (
@@ -299,8 +299,8 @@ function WorkerSection() {
 // fallback (docs/ux-panels.md, src/panels/fallback.ts).
 
 function HistorySection() {
-  const { actions } = usePiorbitStable();
-  const view = usePiorbitView();
+  const { actions } = useLaserStable();
+  const view = useLaserView();
   const meta = useSessionMeta();
   const shell = useShell();
   const entries = view?.entries;

@@ -10,7 +10,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { dirname, join } from "node:path";
-import type { PiorbitPaths } from "./config.js";
+import type { LaserPaths } from "./config.js";
 
 export interface HostRecord {
   pid: number;
@@ -27,7 +27,7 @@ export interface HostRecord {
   /**
    * An identity for the *process*, not just its number: the machine's boot id
    * plus the process's own start time. A pid is reused, and this file outlives
-   * a crash or a power cut, so without this `piorbit down` could SIGTERM and
+   * a crash or a power cut, so without this `laser down` could SIGTERM and
    * then SIGKILL whatever program happened to inherit pid 4242 after a reboot.
    * Absent when the platform cannot supply one (see `processIdentity`).
    */
@@ -173,7 +173,7 @@ export async function portInUse(host: string, port: number, timeoutMs = 750): Pr
  * What is running, if anything. Removes a record whose process is gone so the
  * next command does not have to reason about it.
  */
-export async function inspectHost(paths: Pick<PiorbitPaths, "hostFile">, timeoutMs = 1500): Promise<HostStatus> {
+export async function inspectHost(paths: Pick<LaserPaths, "hostFile">, timeoutMs = 1500): Promise<HostStatus> {
   const record = readHostFile(paths.hostFile);
   if (!record) return { state: "stopped", removedStaleRecord: false };
 

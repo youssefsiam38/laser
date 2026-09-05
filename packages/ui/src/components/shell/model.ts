@@ -249,7 +249,7 @@ export function inboxRows(sessions: readonly SessionSummary[], open: Views, limi
     .slice(0, limit);
 }
 
-/** Browser tab title: `(2) Session name · piorbit`. */
+/** Browser tab title: `(2) Session name · laser`. */
 export function documentTitle(sessionTitle: string | undefined, needYou: number): string {
   const prefix = needYou > 0 ? `(${needYou}) ` : "";
   return sessionTitle ? `${prefix}${sessionTitle} · ${PRODUCT_DISPLAY_NAME}` : `${prefix}${PRODUCT_DISPLAY_NAME}`;

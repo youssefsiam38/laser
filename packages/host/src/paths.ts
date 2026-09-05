@@ -1,25 +1,25 @@
 /**
- * The one directory piorbit owns, and everything under it (M10-T3).
+ * The one directory laser owns, and everything under it (M10-T3).
  *
- * A person installs piorbit. They may never learn which agent runs underneath,
- * and they certainly did not agree to piorbit reading, rewriting or locking a
- * configuration directory some other program owns. So piorbit keeps
+ * A person installs laser. They may never learn which agent runs underneath,
+ * and they certainly did not agree to laser reading, rewriting or locking a
+ * configuration directory some other program owns. So laser keeps
  * **everything** — settings, credentials, sessions, installed extensions, its
- * own state — inside one directory that belongs to piorbit:
+ * own state — inside one directory that belongs to laser:
  *
- *   Linux    $XDG_DATA_HOME/piorbit, or ~/.local/share/piorbit
- *   macOS    ~/Library/Application Support/piorbit
- *   Windows  %LOCALAPPDATA%\piorbit
+ *   Linux    $XDG_DATA_HOME/laser, or ~/.local/share/laser
+ *   macOS    ~/Library/Application Support/laser
+ *   Windows  %LOCALAPPDATA%\laser
  *
  * This lives in the host rather than in the desktop shell or the CLI because
- * all three have to agree: the app, a terminal `piorbit sessions`, and the host
+ * all three have to agree: the app, a terminal `laser sessions`, and the host
  * they both talk to. When they disagree the person sees an empty session list
  * in one place and a full one in the other, with nothing on screen explaining
  * why. One function, one answer.
  *
- * A global agent installation is therefore invisible to piorbit: its directory
- * is never opened and never written, uninstalling piorbit cannot damage it, and
- * it cannot break piorbit. `PIORBIT_AGENT_DIR` (or `--agent-dir`) is the
+ * A global agent installation is therefore invisible to laser: its directory
+ * is never opened and never written, uninstalling laser cannot damage it, and
+ * it cannot break laser. `LASER_AGENT_DIR` (or `--agent-dir`) is the
  * deliberate lever for a person who genuinely wants both to share one
  * directory.
  */
@@ -27,8 +27,8 @@ import { DATA_DIR_NAME } from "@lasercode/protocol";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-/** `$XDG_DATA_HOME/piorbit` and the platform equivalents. */
-export function piorbitDataDir(env: NodeJS.ProcessEnv = process.env): string {
+/** `$XDG_DATA_HOME/laser` and the platform equivalents. */
+export function laserDataDir(env: NodeJS.ProcessEnv = process.env): string {
   const home = env["HOME"] ?? homedir();
   if (process.platform === "darwin") return join(home, "Library", "Application Support", DATA_DIR_NAME);
   if (process.platform === "win32") {
@@ -39,12 +39,12 @@ export function piorbitDataDir(env: NodeJS.ProcessEnv = process.env): string {
   return xdg && xdg.trim() !== "" ? join(xdg, DATA_DIR_NAME) : join(home, ".local", "share", DATA_DIR_NAME);
 }
 
-/** The agent directory piorbit gives the host and every worker. */
+/** The agent directory laser gives the host and every worker. */
 export function defaultAgentDir(env: NodeJS.ProcessEnv = process.env): string {
-  return join(piorbitDataDir(env), "agent");
+  return join(laserDataDir(env), "agent");
 }
 
-/** piorbit's own state: host record, log, project list, attention, prefs. */
+/** laser's own state: host record, log, project list, attention, prefs. */
 export function defaultStateDir(env: NodeJS.ProcessEnv = process.env): string {
-  return join(piorbitDataDir(env), "state");
+  return join(laserDataDir(env), "state");
 }

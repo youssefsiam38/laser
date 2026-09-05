@@ -62,7 +62,7 @@ export interface Mission {
   updatedAt?: string;
   cwd?: string;
   projectRoot?: string;
-  /** Session file path of the session that created it — piorbit's session `path`. */
+  /** Session file path of the session that created it — laser's session `path`. */
   ownerSessionId?: string;
   summary?: string;
   runs: MissionRun[];

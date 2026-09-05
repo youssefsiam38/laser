@@ -1,5 +1,5 @@
 /**
- * Messages produced inside a Pi session by the piorbit companion extension
+ * Messages produced inside a Pi session by the laser companion extension
  * (`@lasercode/pi-extension`). They live here, not in that package, so the worker
  * and host can reference them without importing anything Pi-flavoured
  * (AGENTS.md invariant 2: protocol first, then implementation).
@@ -30,7 +30,7 @@ export type PiExtensionMessage =
   | ({ type: "piorbit/provider/request" } & ProviderRequestRecord)
   | ({ type: "piorbit/provider/response" } & ProviderResponseRecord)
   | { type: "piorbit/subagents/event"; event: unknown }
-  /** The `panels` module: a validated `piorbit:panel` event, or a close (docs/ux-panels.md). */
+  /** The `panels` module: a validated `laser:panel` event, or a close (docs/ux-panels.md). */
   | { type: "piorbit/panel/upsert"; panel: Panel }
   | { type: "piorbit/panel/close"; id: string; reason?: string }
   | {

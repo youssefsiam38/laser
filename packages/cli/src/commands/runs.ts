@@ -1,10 +1,10 @@
 /**
- * `piorbit runs` — the fleet, in a terminal.
+ * `laser runs` — the fleet, in a terminal.
  *
  * The nouns are the app's nouns on purpose (D-19 §5): a **run** is a unit of
  * agent work with a lifecycle, a **plan** is the intended shape of several of
  * them, a **ledger** is the durable record. Different vocabulary in the
- * terminal and in the window would make piorbit feel like two products.
+ * terminal and in the window would make laser feel like two products.
  *
  * The data is the host's panel data — the same `pi/panel/list` the app reads,
  * so a run shown here is the same object, with the same id, as the island in

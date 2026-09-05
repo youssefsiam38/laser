@@ -17,7 +17,7 @@ import { Badge } from "@/components/ui/badge";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { tokens } from "@/format";
 import { cn } from "@/lib/utils";
-import { usePiorbitStable } from "@/runtime";
+import { useLaserStable } from "@/runtime";
 import type { ModelCatalogEntry, ProviderAuthInfo } from "@lasercode/protocol";
 
 export interface ModelStepProps {
@@ -30,7 +30,7 @@ export interface ModelStepProps {
 const ROW_LIMIT = 120;
 
 export function ModelStep({ cwd, onChosen }: ModelStepProps) {
-  const { client, actions } = usePiorbitStable();
+  const { client, actions } = useLaserStable();
   const [models, setModels] = useState<ModelCatalogEntry[]>();
   const [providers, setProviders] = useState<ProviderAuthInfo[]>([]);
   const [current, setCurrent] = useState<string>();

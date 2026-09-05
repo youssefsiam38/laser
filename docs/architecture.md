@@ -63,7 +63,7 @@ detach), `pi.models`. Dialogs would move to keyed dialog services.
 `packages/pi-extension` is one Pi extension, passed by the worker as an inline
 extension factory (`createLaserExtension({ send })`). At `session_start` it
 runs each module's `detect()` and activates the ones whose package is present,
-then reports `piorbit/capabilities` to the worker. Modules:
+then reports `laser/capabilities` to the worker. Modules:
 
 | Module | Bridges | Detection |
 | --- | --- | --- |

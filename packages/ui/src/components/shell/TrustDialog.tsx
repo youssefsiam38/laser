@@ -54,7 +54,7 @@ export function TrustDialog() {
   /**
    * Escape and a backdrop click mean "not now", never "declined, forever". Esc
    * closes every other overlay in the app, and recording a permanent decline
-   * from a reflex would leave the project read-only with `piorbit projects
+   * from a reflex would leave the project read-only with `laser projects
    * trust` as the only way back.
    */
   const dismiss = () => decide(false, false);

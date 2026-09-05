@@ -20,7 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
-import { usePiorbitStable } from "@/runtime";
+import { useLaserStable } from "@/runtime";
 import type { ProviderAuthInfo, ProviderLoginEvent, ProviderLoginMethod, ProviderLoginPrompt } from "@lasercode/protocol";
 
 export interface ProviderSignInProps {
@@ -59,7 +59,7 @@ const fresh = (): Flow => ({
 });
 
 export function ProviderSignIn({ cwd, provider, method, onDone, onCancel, className }: ProviderSignInProps) {
-  const { client } = usePiorbitStable();
+  const { client } = useLaserStable();
   const [flow, setFlow] = useState<Flow>(fresh);
   const [answer, setAnswer] = useState("");
   const [sending, setSending] = useState(false);

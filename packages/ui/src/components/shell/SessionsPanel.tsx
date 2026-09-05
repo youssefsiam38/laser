@@ -14,7 +14,7 @@ import { useWorkbench } from "@/components/workbench";
 import { shortCwd, shortcutLabel } from "@/format";
 import { useTheme } from "@/hooks";
 import { cn } from "@/lib/utils";
-import { usePiorbitStable, usePiorbitState } from "@/runtime";
+import { useLaserStable, useLaserState } from "@/runtime";
 import type { AppState } from "@/store";
 
 import { InboxPanel } from "@/components/assistant-ui/elements/background-inbox";
@@ -46,8 +46,8 @@ function useClock(ms = 30_000): void {
  * header, inbox, filter strip, empty and sheet footer.
  */
 export function SessionsPanel({ variant }: SessionsPanelProps) {
-  const { projects } = usePiorbitStable();
-  // `usePiorbitState` caches by store state, so a selector that also closes
+  const { projects } = useLaserStable();
+  // `useLaserState` caches by store state, so a selector that also closes
   // over `projects` (React state, not store state) would keep answering from a
   // stale project list until the next store change. Remounting on the list
   // key gives the hook a fresh cache the moment a project is added or removed.
@@ -55,16 +55,16 @@ export function SessionsPanel({ variant }: SessionsPanelProps) {
 }
 
 function SessionsPanelBody({ variant }: SessionsPanelProps) {
-  const { projects, currentProject, setCurrentProject, actions } = usePiorbitStable();
+  const { projects, currentProject, setCurrentProject, actions } = useLaserStable();
   const shell = useShell();
   const list = useSessionsList();
   useClock();
 
-  const groups = usePiorbitState(
+  const groups = useLaserState(
     useCallback((s: AppState) => groupsFor(projects, s), [projects]),
     sameGroups,
   );
-  const connection = usePiorbitState((s) => s.connection);
+  const connection = useLaserState((s) => s.connection);
   const [query, setQuery] = useState("");
   const [activeId, setActiveId] = useState<string | undefined>(undefined);
 

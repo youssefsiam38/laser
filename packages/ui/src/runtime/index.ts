@@ -1,5 +1,5 @@
 /**
- * Public surface of the piorbit assistant-ui runtime layer.
+ * Public surface of the laser assistant-ui runtime layer.
  *
  * Components import from here; nothing below it talks to `HostClient` or the
  * reducer directly.
@@ -69,13 +69,13 @@ export { THEME_PREFS_NAMESPACE, useThemeSync } from "./prefs.js";
 export {
   PROJECTS_STORAGE_KEY,
   PROJECT_STORAGE_KEY,
-  PiorbitProvider,
+  LaserProvider,
   useExtensionUi,
   useHostUiRequests,
-  usePiorbit,
-  usePiorbitStable,
-  usePiorbitState,
-  usePiorbitView,
+  useLaser,
+  useLaserStable,
+  useLaserState,
+  useLaserView,
   useSessionMeta,
   useToasts,
   useTrustPrompts,
@@ -83,10 +83,10 @@ export {
   type HostUiRequests,
   type TrustPrompts,
   type TrustRequest,
-  type PiorbitActions,
-  type PiorbitContextValue,
-  type PiorbitStable,
-  type PiorbitProviderProps,
+  type LaserActions,
+  type LaserContextValue,
+  type LaserStable,
+  type LaserProviderProps,
   type SessionMeta,
   type Toasts,
-} from "./PiorbitProvider.js";
+} from "./LaserProvider.js";

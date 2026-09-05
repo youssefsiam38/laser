@@ -36,7 +36,7 @@ export const ErrorCodes = {
   MethodNotFound: -32601,
   InvalidParams: -32602,
   Internal: -32603,
-  // piorbit-specific range
+  // laser-specific range
   SessionNotFound: -32000,
   SessionBusy: -32001,
   DriverUnavailable: -32002,

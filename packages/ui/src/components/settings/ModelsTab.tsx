@@ -20,7 +20,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { money, tokens } from "@/format";
 import { cn } from "@/lib/utils";
-import { usePiorbitStable } from "@/runtime";
+import { useLaserStable } from "@/runtime";
 import type {
   ModelCatalogEntry,
   ProviderAuthInfo,
@@ -55,7 +55,7 @@ export interface ModelsTabProps {
 }
 
 export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
-  const { client, actions } = usePiorbitStable();
+  const { client, actions } = useLaserStable();
   const [providers, setProviders] = useState<ProviderAuthInfo[]>([]);
   const [models, setModels] = useState<ModelCatalogEntry[]>([]);
   const [patterns, setPatterns] = useState<string[] | null>(null);

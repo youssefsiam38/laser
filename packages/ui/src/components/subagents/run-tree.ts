@@ -185,7 +185,7 @@ export function reconcileFocus(tree: RunTree, focusedId: string | undefined, pre
   return undefined;
 }
 
-/** Every node, flattened depth-first — the fleet sheet's list and `piorbit runs`. */
+/** Every node, flattened depth-first — the fleet sheet's list and `laser runs`. */
 export function flatten(tree: RunTree): RunNode[] {
   const out: RunNode[] = [];
   const walk = (nodes: readonly RunNode[]): void => {

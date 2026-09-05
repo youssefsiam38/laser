@@ -13,7 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { shortCwd } from "@/format";
 import { cn } from "@/lib/utils";
-import { usePiorbitStable, usePiorbitView } from "@/runtime";
+import { useLaserStable, useLaserView } from "@/runtime";
 
 import { useWorkbench, type WorkbenchPage } from "./workbench-context.js";
 
@@ -31,8 +31,8 @@ const TABS: Array<{ id: WorkbenchPage; label: string; icon: typeof SlidersHorizo
 
 export function Workbench() {
   const { page, tab: settingsTab, open, close } = useWorkbench();
-  const { currentProject } = usePiorbitStable();
-  const view = usePiorbitView();
+  const { currentProject } = useLaserStable();
+  const view = useLaserView();
   const cwd = currentProject ?? view?.state.cwd;
 
   if (!page) return null;

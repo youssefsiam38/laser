@@ -33,7 +33,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { METAINFO_FILE_NAME, EXECUTABLE, identity } from "../build/linux/product.mjs";
+import { METAINFO_FILE_NAME, EXECUTABLE, INSTALL_DIR, identity } from "../build/linux/product.mjs";
 
 const packageRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const outDir = join(packageRoot, "out");
@@ -273,11 +273,11 @@ function validateShippedDeb() {
     // The profile that lets the app open a user namespace on Ubuntu 24.04. A
     // syntax error in it is silent at build time and fatal at install time.
     if (has("apparmor_parser")) {
-      execFileSync("tar", ["--extract", "--directory", temp, `./opt/${EXECUTABLE}/resources/apparmor-profile`], {
+      execFileSync("tar", ["--extract", "--directory", temp, `.${INSTALL_DIR}/resources/apparmor-profile`], {
         input: payload,
         maxBuffer: 1024 * 1024 * 1024,
       });
-      const profile = join(temp, "opt", EXECUTABLE, "resources", "apparmor-profile");
+      const profile = join(temp, INSTALL_DIR.replace(/^\//, ""), "resources", "apparmor-profile");
       const parsed = spawnSync("apparmor_parser", ["--skip-kernel-load", "--debug", profile], { encoding: "utf8" });
       if (parsed.status !== 0) {
         problems.push(`${deb}: apparmor_parser rejected the bundled profile\n${parsed.stderr}`.trimEnd());

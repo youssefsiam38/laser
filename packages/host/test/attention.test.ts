@@ -72,7 +72,7 @@ describe("AttentionTracker", () => {
     const after = iso(clock + 60_000);
     expect(a.attentionOf(PATH, before)).toBe<SessionAttention>("idle");
     expect(a.attentionOf(PATH, after)).toBe<SessionAttention>("finished_unread");
-    // A session nobody here ever opened falls back to when piorbit first ran:
+    // A session nobody here ever opened falls back to when laser first ran:
     // history stays idle, but something a terminal Pi has just written since
     // reaches the inbox without anyone having to open it here first.
     expect(a.attentionOf("/sessions/never-opened.jsonl", before)).toBe<SessionAttention>("idle");

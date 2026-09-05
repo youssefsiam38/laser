@@ -39,7 +39,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { clockTime } from "@/format";
 import { cn } from "@/lib/utils";
 import { usePanelActions } from "@/panels";
-import { usePiorbitStable, usePiorbitView } from "@/runtime";
+import { useLaserStable, useLaserView } from "@/runtime";
 import type { LogEntry, LogLevel, LogSection, LogStats } from "@lasercode/protocol";
 
 import { LogDetail } from "./LogDetail.js";
@@ -57,7 +57,7 @@ const STATS_REFRESH_MS = 1500;
 const SEARCH_DEBOUNCE_MS = 200;
 
 export function LogsScreen({ cwd }: { cwd: string | undefined }) {
-  const { client, actions } = usePiorbitStable();
+  const { client, actions } = useLaserStable();
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [stats, setStats] = useState<LogStats>();
   const [selected, setSelected] = useState<LogEntry>();
@@ -403,7 +403,7 @@ function Toolbar({
  * put it in) and for "All", which is a query, not a stream.
  */
 function WatchInDock({ section }: { section: LogSection | "all" }) {
-  const view = usePiorbitView();
+  const view = useLaserView();
   const actions = usePanelActions();
   if (!view || section === "all") return null;
   const label = LOG_SECTIONS.find((entry) => entry.id === section)?.label ?? section;

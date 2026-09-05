@@ -4,7 +4,7 @@ import { Bell, BellOff, BellRing, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { asRawClient, useEnvironment, usePush } from "@/pwa";
-import { usePiorbitStable } from "@/runtime";
+import { useLaserStable } from "@/runtime";
 
 /**
  * The push control. Every state is a sentence, not a disabled switch:
@@ -12,7 +12,7 @@ import { usePiorbitStable } from "@/runtime";
  * can mount this row in the settings screen as is.
  */
 export function NotificationsSetting({ className }: { className?: string }) {
-  const { client } = usePiorbitStable();
+  const { client } = useLaserStable();
   const env = useEnvironment();
   const push = usePush(asRawClient(client), env);
   const a = push.availability;

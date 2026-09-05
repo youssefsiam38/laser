@@ -2,7 +2,7 @@
  * Host lifecycle: start it, wait for it to actually answer, stop it politely,
  * and open a browser at it.
  *
- * Starting twice is not an error. `piorbit up` on a machine that already has a
+ * Starting twice is not an error. `laser up` on a machine that already has a
  * host attaches to it and prints the URL, which is what a person means when
  * they type it a second time.
  */
@@ -11,7 +11,7 @@ import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { PiorbitPaths } from "./config.js";
+import type { LaserPaths } from "./config.js";
 import { hostUrl } from "./config.js";
 import { CliError, ExitCode } from "./errors.js";
 import {
@@ -64,7 +64,7 @@ export interface StartResult {
  * a host that dies on startup (port taken, bad agent dir, broken build) must
  * produce the log tail, not a hang.
  */
-export async function startHost(paths: PiorbitPaths, timeoutMs = 30_000): Promise<StartResult> {
+export async function startHost(paths: LaserPaths, timeoutMs = 30_000): Promise<StartResult> {
   const existing = await inspectHost(paths);
   if (existing.state === "running") return { record: existing.record, started: false };
   if (existing.state === "unreachable") {
@@ -122,7 +122,7 @@ export async function startHost(paths: PiorbitPaths, timeoutMs = 30_000): Promis
 }
 
 /** The arguments a daemon needs to reproduce this CLI's path resolution. */
-export function daemonArgs(paths: PiorbitPaths): string[] {
+export function daemonArgs(paths: LaserPaths): string[] {
   return [
     "--port",
     String(paths.port),
@@ -141,11 +141,11 @@ export function daemonArgs(paths: PiorbitPaths): string[] {
  * Refuse to start on a port somebody else owns. Without this the daemon dies
  * with EADDRINUSE inside a detached process and the user sees only a timeout.
  */
-async function assertPortIsOurs(paths: PiorbitPaths): Promise<void> {
+async function assertPortIsOurs(paths: LaserPaths): Promise<void> {
   if (!(await portInUse(paths.host, paths.port))) return;
   const url = hostUrl(paths);
   if (await probeHealth(url)) {
-    // A piorbit host without a record: started by hand, or by another agent dir.
+    // A laser host without a record: started by hand, or by another agent dir.
     throw new CliError(`something is already serving a ${PRODUCT_NAME} host on ${url}, but ${PRODUCT_NAME} did not start it`, {
       fix: `Use it as it is (open ${url}), or start yours elsewhere with \`${PRODUCT_NAME} up --port <port>\`.`,
     });
@@ -164,7 +164,7 @@ export interface StopResult {
   forced: boolean;
 }
 
-export async function stopHost(paths: PiorbitPaths, graceMs = 10_000): Promise<StopResult> {
+export async function stopHost(paths: LaserPaths, graceMs = 10_000): Promise<StopResult> {
   const status = await inspectHost(paths);
   if (status.state === "stopped") return { stopped: false, forced: false };
 
@@ -234,7 +234,7 @@ export function logTail(path: string, lines = 12): string[] {
 
 /**
  * Open the system browser. Never throws: failing to open a browser must not
- * fail `piorbit up`, whose real job is to have started the host.
+ * fail `laser up`, whose real job is to have started the host.
  */
 export function openBrowser(url: string): boolean {
   const [command, args] =

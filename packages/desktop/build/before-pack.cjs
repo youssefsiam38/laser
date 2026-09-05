@@ -332,7 +332,7 @@ exports.default = async function beforePack(context) {
   mkdirSync(staging, { recursive: true });
   copyFileSync(source, join(staging, binary));
   // The package manager, beside the runtime. `host-process.ts` points
-  // PIORBIT_NPM_CLI at it, which is how Settings installs an extension on a
+  // LASER_NPM_CLI at it, which is how Settings installs an extension on a
   // machine that has never had Node on it.
   cpSync(join(packageRoot, "runtime", target, "npm"), join(staging, "npm"), { recursive: true });
   console.log(`${identity.name}: staged ${target} node and its package manager for packaging`);

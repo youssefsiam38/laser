@@ -4,7 +4,7 @@
  * that would have to be repeated across those four is a bug in this shape.
  */
 import type { FlagSpecs, ParsedArgs } from "./args.js";
-import type { PiorbitPaths } from "./config.js";
+import type { LaserPaths } from "./config.js";
 import type { Terminal } from "./output.js";
 
 export type CommandGroup = "Host" | "Sessions" | "Projects" | "Relay" | "Advanced" | "Diagnostics" | "Shell";
@@ -13,7 +13,7 @@ export interface PositionalSpec {
   name: string;
   description: string;
   optional?: boolean;
-  /** Consumes the rest of the line (`piorbit send <text...>`). */
+  /** Consumes the rest of the line (`laser send <text...>`). */
   variadic?: boolean;
 }
 
@@ -24,7 +24,7 @@ export interface Example {
 
 export interface CommandContext {
   term: Terminal;
-  paths: PiorbitPaths;
+  paths: LaserPaths;
   args: ParsedArgs;
   /** Argv after the command name, before parsing. Passthrough commands use it. */
   raw: readonly string[];
@@ -36,10 +36,10 @@ export interface Command {
   name: string;
   aliases?: readonly string[];
   group: CommandGroup;
-  /** One line, lower case, no trailing period. Shown in `piorbit --help`. */
+  /** One line, lower case, no trailing period. Shown in `laser --help`. */
   summary: string;
   usage: string;
-  /** A paragraph or two for `piorbit <command> --help`. */
+  /** A paragraph or two for `laser <command> --help`. */
   description?: string;
   positionals?: readonly PositionalSpec[];
   flags?: FlagSpecs;
@@ -49,7 +49,7 @@ export interface Command {
    * `raw`. Used by `pi`, whose flags belong to Pi.
    */
   passthrough?: boolean;
-  /** Kept out of `piorbit --help` and completions (`__daemon`). */
+  /** Kept out of `laser --help` and completions (`__daemon`). */
   hidden?: boolean;
   /** Return an exit code, or nothing for success. Throw `CliError` to fail. */
   run(context: CommandContext): Promise<number | void>;

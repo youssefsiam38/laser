@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { useWorkbench } from "@/components/workbench";
 import { relativeTime, shortCwd, shortcutLabel } from "@/format";
 import { useTheme } from "@/hooks";
-import { usePiorbitStable, usePiorbitState, usePiorbitView, useSessionMeta } from "@/runtime";
+import { useLaserStable, useLaserState, useLaserView, useSessionMeta } from "@/runtime";
 
 import { errorText, useShell } from "./shell-context.js";
 import { sessionGroups, sessionsList } from "./session-groups.js";
@@ -60,17 +60,17 @@ export function CommandPaletteDialog({ open, onOpenChange }: { open: boolean; on
 type RunnableCommand = PaletteCommand & { run(): void };
 
 function usePaletteCommands(): RunnableCommand[] {
-  const { actions, currentProject, projects, setCurrentProject } = usePiorbitStable();
-  const view = usePiorbitView();
+  const { actions, currentProject, projects, setCurrentProject } = useLaserStable();
+  const view = useLaserView();
   const meta = useSessionMeta();
   const shell = useShell();
   const workbench = useWorkbench();
   const { theme, toggle } = useTheme();
-  // Not a selector closing over `projects`: `usePiorbitState` caches by store
+  // Not a selector closing over `projects`: `useLaserState` caches by store
   // state, and `projects` is React state (see SessionsPanel).
-  const sessions = usePiorbitState((s) => s.sessions);
-  const open = usePiorbitState((s) => s.open);
-  const workers = usePiorbitState((s) => s.workers);
+  const sessions = useLaserState((s) => s.sessions);
+  const open = useLaserState((s) => s.open);
+  const workers = useLaserState((s) => s.workers);
   const groups = useMemo(() => sessionGroups(projects, sessions, open, workers), [projects, sessions, open, workers]);
   const busy = meta.running || meta.compacting;
 
@@ -119,7 +119,7 @@ function usePaletteCommands(): RunnableCommand[] {
   }, [actions, busy, currentProject, groups, meta.running, setCurrentProject, shell, theme, toggle, view, workbench]);
 }
 
-async function forkFromLastPrompt(entries: readonly unknown[], actions: ReturnType<typeof usePiorbitStable>["actions"]): Promise<void> {
+async function forkFromLastPrompt(entries: readonly unknown[], actions: ReturnType<typeof useLaserStable>["actions"]): Promise<void> {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i] as { type?: string; id?: string; message?: { role?: string } };
     if (e.type === "message" && e.message?.role === "user" && e.id) {

@@ -68,7 +68,7 @@ export interface ModuleContext {
   panels?: PanelClaims;
 }
 
-export interface PiorbitModule {
+export interface LaserModule {
   name: ModuleName;
   /** True if the package this module bridges is present in this session. */
   detect(ctx: ModuleContext): boolean | Promise<boolean>;
@@ -78,7 +78,7 @@ export interface PiorbitModule {
 
 /**
  * The extension's end of the command channel: the worker calls `deliver`, the
- * modules subscribe through `on`. Exported so `createPiorbitExtension` can hand
+ * modules subscribe through `on`. Exported so `createLaserExtension` can hand
  * `deliver` to the driver and `on` to the modules.
  */
 export function createCommandBus(): CommandBus & { deliver(command: PiExtensionCommand): boolean } {
@@ -105,7 +105,7 @@ export function createCommandBus(): CommandBus & { deliver(command: PiExtensionC
 }
 
 /** Order matters only for log readability. Modules must not depend on each other. */
-export const modules: readonly PiorbitModule[] = [
+export const modules: readonly LaserModule[] = [
   providerLogModule,
   panelsModule,
   subagentsModule,

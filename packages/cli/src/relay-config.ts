@@ -16,7 +16,7 @@
  * the list against it), so it is created once and never rotated here.
  *
  * The state directory follows `--state-dir` like everything else, so
- * `piorbit --state-dir /tmp/x relay …` is a sandbox and cannot reach the real
+ * `laser --state-dir /tmp/x relay …` is a sandbox and cannot reach the real
  * pairings. The desktop shell keeps the same root seed in the OS keychain
  * (`packages/desktop/src/keychain.ts`); this is the headless path, and
  * `FileRootIdentityStore` is the store the crypto package ships for exactly
@@ -42,7 +42,7 @@ import {
 import { FileRootIdentityStore } from "@lasercode/crypto/node";
 
 import { CliError, ExitCode } from "./errors.js";
-import type { PiorbitPaths } from "./config.js";
+import type { LaserPaths } from "./config.js";
 
 export interface RelayConfig {
   v: 1;
@@ -59,20 +59,20 @@ export interface RelayConfig {
   deviceList?: SignedDeviceList;
 }
 
-export function relayConfigPath(paths: PiorbitPaths): string {
+export function relayConfigPath(paths: LaserPaths): string {
   return join(paths.stateDir, "relay.json");
 }
 
-export function identityPath(paths: PiorbitPaths): string {
+export function identityPath(paths: LaserPaths): string {
   return join(paths.stateDir, "identity.key");
 }
 
-export function staticKeyPath(paths: PiorbitPaths): string {
+export function staticKeyPath(paths: LaserPaths): string {
   return join(paths.stateDir, "relay-static.key");
 }
 
 /** The stored config, or undefined when `relay login` has never run. */
-export function readRelayConfig(paths: PiorbitPaths): RelayConfig | undefined {
+export function readRelayConfig(paths: LaserPaths): RelayConfig | undefined {
   const path = relayConfigPath(paths);
   let text: string;
   try {
@@ -102,7 +102,7 @@ export function readRelayConfig(paths: PiorbitPaths): RelayConfig | undefined {
   return parsed as RelayConfig;
 }
 
-export function writeRelayConfig(paths: PiorbitPaths, config: RelayConfig): void {
+export function writeRelayConfig(paths: LaserPaths, config: RelayConfig): void {
   const path = relayConfigPath(paths);
   const temporary = `${path}.tmp`;
   try {
@@ -120,17 +120,17 @@ export function writeRelayConfig(paths: PiorbitPaths, config: RelayConfig): void
 }
 
 /** The root identity, created on first use. `created` invalidates every pairing. */
-export async function loadIdentity(paths: PiorbitPaths): Promise<{ identity: RootIdentity; created: boolean }> {
+export async function loadIdentity(paths: LaserPaths): Promise<{ identity: RootIdentity; created: boolean }> {
   mkdirSync(paths.stateDir, { recursive: true, mode: 0o700 });
   return loadOrCreateRootIdentity(new FileRootIdentityStore(identityPath(paths)));
 }
 
 /**
  * The root identity if it exists, and nothing if it does not. Reading status
- * must not generate a key: `piorbit relay` on a machine that has never paired
+ * must not generate a key: `laser relay` on a machine that has never paired
  * anything should leave the disk exactly as it found it.
  */
-export async function readIdentity(paths: PiorbitPaths): Promise<RootIdentity | undefined> {
+export async function readIdentity(paths: LaserPaths): Promise<RootIdentity | undefined> {
   const seed = await new FileRootIdentityStore(identityPath(paths)).load();
   if (!seed) return undefined;
   const identity = rootIdentityFromSeed(seed);
@@ -144,7 +144,7 @@ export async function readIdentity(paths: PiorbitPaths): Promise<RootIdentity | 
  * 24 the private key ends up as a non-extractable WebCrypto key even though it
  * came off disk.
  */
-export async function loadStaticKey(paths: PiorbitPaths): Promise<{ keyPair: KeyPair; created: boolean }> {
+export async function loadStaticKey(paths: LaserPaths): Promise<{ keyPair: KeyPair; created: boolean }> {
   const path = staticKeyPath(paths);
   const backend = await selectBackend();
   let raw: Uint8Array | undefined;

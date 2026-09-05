@@ -5,7 +5,7 @@
  * restyled to DESIGN.md tokens.
  *
  * The registry file is a chat app's settings card: a model segmented control,
- * a system prompt, a temperature slider and a few toggles. piorbit's settings
+ * a system prompt, a temperature slider and a few toggles. laser's settings
  * are Pi's, generated from the pinned Pi's catalogue as dozens of typed
  * fields at two scopes (`components/settings/SettingsForm.tsx`), so the card
  * as a whole does not fit. What fits — and what the form lacked — is its

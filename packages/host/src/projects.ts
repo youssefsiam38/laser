@@ -1,5 +1,5 @@
 /**
- * ProjectRegistry (M2-T4) — the projects piorbit knows about, server-side.
+ * ProjectRegistry (M2-T4) — the projects laser knows about, server-side.
  *
  * Before this, "projects" lived in the browser's localStorage, so the CLI could
  * not see them, a second device started empty, and removing one on the phone
@@ -24,7 +24,7 @@ interface StoredProject {
   addedAt: string;
   lastUsedAt?: string;
   pinned: boolean;
-  /** Only set once a person decided in piorbit and asked us to remember. */
+  /** Only set once a person decided in laser and asked us to remember. */
   trust?: "trusted" | "declined";
 }
 
@@ -184,7 +184,7 @@ export class ProjectRegistry {
   /**
    * Resolve trust for a directory we are about to start a worker in, asking a
    * client when nobody has decided. Returns the flag the worker should run
-   * with, or `undefined` for "piorbit has no opinion — keep Pi's own default".
+   * with, or `undefined` for "laser has no opinion — keep Pi's own default".
    *
    * `not_required` must map to `undefined`, not `false`. A directory with no
    * trust-gated `.pi` resources was never a question, and answering `false`

@@ -10,7 +10,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useBreakpoint, useIsWide, useKeyboardInset } from "@/hooks";
 import { PanelAmbient, PanelDecisionSheet, PanelsProvider, POPOUT_HASH_PREFIX, PoppedOutPanel } from "@/panels";
 import { FleetSheet, RunTabs } from "@/components/subagents";
-import { mergeSessions, sessionTitle, usePiorbitStable, usePiorbitState, usePiorbitView } from "@/runtime";
+import { mergeSessions, sessionTitle, useLaserStable, useLaserState, useLaserView } from "@/runtime";
 
 import { AddProjectDialog } from "./AddProjectDialog.js";
 import { HostConnectionState } from "@/components/assistant-ui/elements/connection-state";
@@ -92,10 +92,10 @@ function ShellFrame() {
   const layout = useBreakpoint();
   const isWide = useIsWide();
   const desktop = layout === "desktop";
-  const { currentProject, actions } = usePiorbitStable();
-  const view = usePiorbitView();
-  const connection = usePiorbitState((s) => s.connection);
-  const sessions = usePiorbitState((s) => s.sessions);
+  const { currentProject, actions } = useLaserStable();
+  const view = useLaserView();
+  const connection = useLaserState((s) => s.connection);
+  const sessions = useLaserState((s) => s.sessions);
 
   const [prefs, setPrefs] = useState<PanelPrefs>(readPrefs);
   const [sheets, setSheets] = useState({ sessions: false, telemetry: false });
@@ -103,7 +103,7 @@ function ShellFrame() {
   const [toolsOpen, setToolsOpen] = useState(false);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const sessionsLoaded = usePiorbitState((s) => s.sessionsLoaded);
+  const sessionsLoaded = useLaserState((s) => s.sessionsLoaded);
   // First run (M10-T6): the host says whether setup is still pending; the
   // flow takes the conversation's place until it is finished or skipped.
   const setup = useSetupPending();
@@ -195,10 +195,10 @@ function ShellFrame() {
     return () => window.removeEventListener("keydown", onKey);
   }, [newSession, toggleSessions, toggleTelemetry]);
 
-  // Tab title carries the same vocabulary as the dots: "(2) name · piorbit".
+  // Tab title carries the same vocabulary as the dots: "(2) name · laser".
   // Derived in the selector: a streamed token that changes no session's
   // attention must not re-render the whole shell.
-  const needYou = usePiorbitState((s) => needYouCount(mergeSessions(s.sessions, s.open), s.open));
+  const needYou = useLaserState((s) => needYouCount(mergeSessions(s.sessions, s.open), s.open));
   useEffect(() => {
     const summary = view ? sessions.find((s) => s.path === view.path) : undefined;
     const title = view ? (summary ? sessionTitle(summary, view) : (view.state.name ?? view.title ?? "New session")) : undefined;

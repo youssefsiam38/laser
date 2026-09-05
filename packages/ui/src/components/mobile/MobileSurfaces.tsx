@@ -1,3 +1,4 @@
+import { SW_SKIP_WAITING, SW_PUSH_CHANGED } from "@lasercode/protocol";
 import { useEffect } from "react";
 
 import { useIsMobile } from "@/hooks";
@@ -10,14 +11,14 @@ import {
   useEnvironment,
   type PushSubscriptionJson,
 } from "@/pwa";
-import { usePiorbitStable } from "@/runtime";
+import { useLaserStable } from "@/runtime";
 import { InstallPrompt } from "./InstallPrompt.js";
 import { MobileStack } from "./MobileStack.js";
 import { InsecureOriginNotice, NotifyHint, OfflineNotice, UpdateReady } from "./Notices.js";
 
 /**
  * Everything the phone adds to the shell, mounted once inside
- * `<PiorbitProvider>`: the reconnect guard and service-worker plumbing (every
+ * `<LaserProvider>`: the reconnect guard and service-worker plumbing (every
  * width — a laptop lid does the same to a socket), and on a phone the notice
  * strip plus the install sheet.
  *
@@ -54,7 +55,7 @@ export function MobileSurfaces() {
  * notification tap while the app was open, and a rotated push subscription.
  */
 function usePwaGuards(): void {
-  const { client, actions } = usePiorbitStable();
+  const { client, actions } = useLaserStable();
 
   useEffect(() => {
     const raw = asRawClient(client);
@@ -71,7 +72,7 @@ function usePwaGuards(): void {
       const link = acceptNavigateMessage(data);
       if (link?.sessionPath) void actions.openSession(link.sessionPath);
       const changed = data as { type?: unknown; subscription?: unknown } | null;
-      if (changed?.type === "piorbit:push-changed" && changed.subscription) {
+      if (changed?.type === SW_PUSH_CHANGED && changed.subscription) {
         void syncPushSubscription(raw, changed.subscription as PushSubscriptionJson).catch(() => {});
       }
     });

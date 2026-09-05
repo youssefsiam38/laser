@@ -1,14 +1,14 @@
 /**
  * The router. Rules, in order:
  *
- *   piorbit                  → `up`
- *   piorbit --help|-h        → the command list
- *   piorbit --version|-V     → the version
- *   piorbit --<flag> …       → `up` with those flags (so `piorbit --no-open` works)
- *   piorbit <command> …      → that command
+ *   laser                  → `up`
+ *   laser --help|-h        → the command list
+ *   laser --version|-V     → the version
+ *   laser --<flag> …       → `up` with those flags (so `laser --no-open` works)
+ *   laser <command> …      → that command
  *
- * The command name comes first. That is what makes `piorbit pi --help` reach
- * Pi rather than piorbit: once the name is read, a passthrough command owns
+ * The command name comes first. That is what makes `laser pi --help` reach
+ * Pi rather than laser: once the name is read, a passthrough command owns
  * every remaining token.
  */
 import { ENV, PRODUCT_NAME } from "@lasercode/protocol";
@@ -61,7 +61,7 @@ export async function run(argv: readonly string[]): Promise<number> {
   const early = (tokens: readonly string[]): Terminal =>
     new Terminal({ json: earlyJson(tokens), color: earlyColor(tokens) });
 
-  // `--help` with no command is the only help path handled here; `piorbit help`
+  // `--help` with no command is the only help path handled here; `laser help`
   // is a real command, so it can honour --color and the rest.
   if (first === "--help" || first === "-h") {
     renderRootHelp(COMMANDS, new Terminal({ json: false, color: earlyColor(argv) }));
@@ -72,8 +72,8 @@ export async function run(argv: readonly string[]): Promise<number> {
     return ExitCode.Ok;
   }
 
-  // Global flags may lead (`piorbit --agent-dir /tmp/x status`). Anything that
-  // is not a global flag ends the scan, so `piorbit --no-open` still means
+  // Global flags may lead (`laser --agent-dir /tmp/x status`). Anything that
+  // is not a global flag ends the scan, so `laser --no-open` still means
   // `up --no-open` rather than an error about an unknown global.
   const { leading, index } = scanLeadingGlobals(argv);
   const name = argv[index];
@@ -180,7 +180,7 @@ export function scanLeadingGlobals(argv: readonly string[]): { leading: string[]
   return { leading, index: i };
 }
 
-/** Flags `piorbit pi` will consume before handing the rest to Pi. */
+/** Flags `laser pi` will consume before handing the rest to Pi. */
 const PI_PREFIX_FLAGS = new Set(["--global-pi", "--agent-dir", "--session-dir", "--subagents-temp-root"]);
 
 function isPiPrefixFlag(token: string): boolean {

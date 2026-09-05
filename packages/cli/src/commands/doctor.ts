@@ -1,5 +1,5 @@
 /**
- * `piorbit doctor` — the command that has to earn trust.
+ * `laser doctor` — the command that has to earn trust.
  *
  * Every check answers a question a broken setup actually raises, in the order a
  * failure would cascade: the runtime, the bundled agent, the directories, the
@@ -7,7 +7,7 @@
  * real session, which is the only check that proves the whole chain.
  *
  * The first two rows exist to make one claim checkable rather than marketing:
- * **nothing piorbit runs comes from this machine.** The runtime is the Node
+ * **nothing laser runs comes from this machine.** The runtime is the Node
  * binary shipped inside the application; the agent is the exact version pinned
  * in git, resolved from inside the package. If a person has their own agent
  * installed, doctor finds it, names it, and says it is not being used.
@@ -31,7 +31,7 @@ import { WorkerClient } from "@lasercode/host";
 import type { ModelRef, SessionState } from "@lasercode/protocol";
 import { bool } from "../args.js";
 import type { Command } from "../command.js";
-import { hostUrl, type PiorbitPaths } from "../config.js";
+import { hostUrl, type LaserPaths } from "../config.js";
 import { ExitCode, messageOf } from "../errors.js";
 import { inspectHost, portInUse, probeHealth } from "../hostfile.js";
 import type { Painter, Terminal } from "../output.js";
@@ -190,7 +190,7 @@ function badge(status: Status, p: Painter): string {
 
 /**
  * The Node this command is running on — which, launched from the installed
- * application, *is* the Node piorbit ships. Reported with its path so the claim
+ * application, *is* the Node laser ships. Reported with its path so the claim
  * is checkable rather than asserted.
  */
 function checkRuntime(): Check {
@@ -357,11 +357,11 @@ function agentChecks(inspection: AgentInspection): Check[] {
 }
 
 /**
- * The row that makes "piorbit ignores your own agent" visible. It is a PASS
+ * The row that makes "laser ignores your own agent" visible. It is a PASS
  * whether or not one is installed: finding one is not a problem, it is the
- * proof that piorbit left it alone.
+ * proof that laser left it alone.
  */
-function checkMachineAgent(inspection: AgentInspection, paths: PiorbitPaths): Check {
+function checkMachineAgent(inspection: AgentInspection, paths: LaserPaths): Check {
   const machine = inspection.ok ? inspection.report.machine : inspection.machine;
   const found = [
     machine.commandOnPath ? `a command at ${machine.commandOnPath}` : "",
@@ -395,11 +395,11 @@ function checkMachineAgent(inspection: AgentInspection, paths: PiorbitPaths): Ch
 
 /**
  * The agent directory, plus one thing `checkWritableDir` cannot know: whether
- * it belongs to piorbit at all. A directory shared with another installation is
+ * it belongs to laser at all. A directory shared with another installation is
  * usable, and it is also how two programs end up fighting over one settings
  * file, so it is said out loud.
  */
-function agentDirChecks(paths: PiorbitPaths): Check[] {
+function agentDirChecks(paths: LaserPaths): Check[] {
   const check = checkWritableDir("agent dir", paths.agentDir, false, "--agent-dir");
   const stock = join(homedir(), ".pi", "agent");
   if (paths.agentDir !== stock || check.status === "fail") return [check];
@@ -418,10 +418,10 @@ function agentDirChecks(paths: PiorbitPaths): Check[] {
 
 /**
  * Running the agent's own command, which is a different code path from loading
- * it as a library: `piorbit pi` and the `piorbit packages` verbs go through the
+ * it as a library: `laser pi` and the `laser packages` verbs go through the
  * command, workers go through the library, and either can be broken alone.
  */
-async function checkAgentCommand(paths: PiorbitPaths, timeoutMs: number): Promise<Check> {
+async function checkAgentCommand(paths: LaserPaths, timeoutMs: number): Promise<Check> {
   const started = Date.now();
   try {
     const result = await withTimeout(
@@ -505,7 +505,7 @@ function checkWritableDir(name: string, dir: string, create: boolean, flag: stri
  * Provider credentials, read from Pi's own store as JSON. Only names, types and
  * expiry are reported — a key or token is never read into a printable string.
  */
-function checkProviders(paths: PiorbitPaths): Check {
+function checkProviders(paths: LaserPaths): Check {
   const authPath = join(paths.agentDir, "auth.json");
   const envProviders = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "XAI_API_KEY"].filter(
     (name) => (process.env[name] ?? "") !== "",
@@ -568,29 +568,29 @@ function checkProviders(paths: PiorbitPaths): Check {
   return { name: "providers", status: "pass", detail, data: { authPath, providers } };
 }
 
-async function checkPort(paths: PiorbitPaths): Promise<Check> {
+async function checkPort(paths: LaserPaths): Promise<Check> {
   const status = await inspectHost(paths);
   if (status.state === "running") {
     return {
       name: "port",
       status: "pass",
       detail: `${paths.port} — held by the ${PRODUCT_NAME} host (pid ${status.record.pid})`,
-      data: { port: paths.port, heldByPiorbit: true, pid: status.record.pid },
+      data: { port: paths.port, heldByLaser: true, pid: status.record.pid },
     };
   }
   if (!(await portInUse(paths.host, paths.port))) {
     return { name: "port", status: "pass", detail: `${paths.port} is free`, data: { port: paths.port, free: true } };
   }
-  // Something is listening. A piorbit host with no record of its own is the
+  // Something is listening. A laser host with no record of its own is the
   // common case in development (`pnpm sandbox`, or a host started by hand):
-  // usable, but `piorbit down` will not know how to stop it.
+  // usable, but `laser down` will not know how to stop it.
   if (await probeHealth(hostUrl(paths))) {
     return {
       name: "port",
       status: "warn",
       detail: `${paths.port} — a ${PRODUCT_NAME} host is serving here, but ${PRODUCT_NAME} did not start it`,
       fix: `Use it as it is (${hostUrl(paths)}), or stop it yourself; \`${PRODUCT_NAME} down\` only stops hosts it started.`,
-      data: { port: paths.port, free: false, foreignPiorbit: true },
+      data: { port: paths.port, free: false, foreignLaser: true },
     };
   }
   return {
@@ -605,9 +605,9 @@ async function checkPort(paths: PiorbitPaths): Promise<Check> {
 /**
  * pi-subagents has no IPC: everything crosses processes through files under a
  * temp root, and the default root is uid-scoped. A root owned by another uid is
- * a real trap — runs started as root are invisible to a piorbit running as you.
+ * a real trap — runs started as root are invisible to a laser running as you.
  */
-async function checkSubagentRoots(paths: PiorbitPaths): Promise<Check[]> {
+async function checkSubagentRoots(paths: LaserPaths): Promise<Check[]> {
   const checks: Check[] = [
     checkWritableDir("subagents root", paths.subagentsTempRoot, true, "--subagents-temp-root"),
   ];
@@ -654,7 +654,7 @@ async function checkSubagentRoots(paths: PiorbitPaths): Promise<Check[]> {
  * it writes nothing into the user's own sessions.
  */
 async function checkWorker(
-  paths: PiorbitPaths,
+  paths: LaserPaths,
   timeoutMs: number,
 ): Promise<{ check: Check; model: Check; auth: Check }> {
   const root = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-doctor-`));
@@ -748,7 +748,7 @@ async function checkWorker(
  * --json` without `--credentials` answers with a status and a reason and never
  * emits the credential, which is exactly what a doctor should print.
  */
-async function checkModelAuth(paths: PiorbitPaths, model: ModelRef, timeoutMs: number): Promise<Check> {
+async function checkModelAuth(paths: LaserPaths, model: ModelRef, timeoutMs: number): Promise<Check> {
   try {
     const result = await withTimeout(
       runPi(["auth", "check", "--provider", model.provider, "--model", model.id, "--json", "--no-refresh"], {

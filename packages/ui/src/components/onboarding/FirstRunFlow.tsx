@@ -30,7 +30,7 @@ import { GenerationLoader } from "@/components/assistant-ui/elements/loading-sta
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { modKey, shortCwd } from "@/format";
-import { usePiorbitStable, usePiorbitState } from "@/runtime";
+import { useLaserStable, useLaserState } from "@/runtime";
 import type { SetupState } from "@lasercode/protocol";
 
 import { ModelStep } from "./ModelStep.js";
@@ -65,8 +65,8 @@ export interface SetupPending {
  * app never blocks on a screen it cannot finish.
  */
 export function useSetupPending(): SetupPending {
-  const { client } = usePiorbitStable();
-  const connection = usePiorbitState((s) => s.connection);
+  const { client } = useLaserStable();
+  const connection = useLaserState((s) => s.connection);
   const [state, setState] = useState<SetupState>();
   const [unsupported, setUnsupported] = useState(false);
 
@@ -120,7 +120,7 @@ const TITLES = COUNTED_STEPS.map((step) => STEP_TITLES[step]);
 const countedIndex = (step: SetupStep): number => COUNTED_STEPS.indexOf(step);
 
 export function FirstRunFlow({ setup, onFinished }: FirstRunFlowProps) {
-  const { actions, client, projects, currentProject } = usePiorbitStable();
+  const { actions, client, projects, currentProject } = useLaserStable();
   const [step, setStep] = useState<SetupStep>();
   const [providersConfigured, setProvidersConfigured] = useState<number>();
   const [defaultModel, setDefaultModel] = useState<string>();

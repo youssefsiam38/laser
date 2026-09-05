@@ -57,7 +57,7 @@ export type DriverEvent =
   | { type: "update"; update: SessionUpdate }
   | { type: "ui_request"; request: UiDialogRequest }
   | { type: "ui_event"; event: UiFireAndForget }
-  /** Emitted by the piorbit companion extension running inside the session. */
+  /** Emitted by the laser companion extension running inside the session. */
   | { type: "extension"; message: PiExtensionMessage }
   | { type: "closed"; reason: string };
 

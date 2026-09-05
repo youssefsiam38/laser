@@ -199,7 +199,7 @@ export class PackagesAdapter {
 
 /**
  * Pi asks its `SettingsManager` which package manager to run and falls back to
- * a bare `npm` on PATH. On a machine that has only piorbit there is none, so
+ * a bare `npm` on PATH. On a machine that has only laser there is none, so
  * the host's bundled command stands in — but only when settings name nothing,
  * so a person's own `npmCommand` (bun, pnpm, a wrapper) is never overridden.
  * A proxy rather than a subclass: the manager is Pi's, constructed by Pi.

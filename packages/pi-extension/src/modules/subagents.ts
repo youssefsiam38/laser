@@ -1,5 +1,5 @@
 /**
- * subagents — the in-process half of piorbit's pi-subagents support (M3-T1).
+ * subagents — the in-process half of laser's pi-subagents support (M3-T1).
  *
  * ## The division of labour
  *
@@ -29,7 +29,7 @@
  *
  * ## It dogfoods the declared protocol
  *
- * Every panel this module produces is emitted on `piorbit:panel` — the same
+ * Every panel this module produces is emitted on `laser:panel` — the same
  * public bus event any third-party extension would use (docs/ux-panels.md,
  * "The contract", way 2). It gets no private path into the host, so if the
  * declared protocol is not good enough for pi-subagents it is not good enough
@@ -58,7 +58,7 @@ import {
   type PanelEvent,
   type RunLifecycle,
 } from "@lasercode/protocol";
-import type { ModuleContext, PiorbitModule } from "./index.js";
+import type { ModuleContext, LaserModule } from "./index.js";
 
 // ---------------------------------------------------------------------------
 // pi-subagents' public in-process surface, as constants (never an import)
@@ -378,7 +378,7 @@ async function probe(events: EventBusLike): Promise<Probe | undefined> {
   return result;
 }
 
-export const subagentsModule: PiorbitModule = {
+export const subagentsModule: LaserModule = {
   name: "subagents",
 
   /**

@@ -18,7 +18,7 @@ import { APP_ID, ENV, PRODUCT_NAME } from "@lasercode/protocol";
 import { BrowserWindow, Menu, app, dialog, ipcMain, nativeTheme, session, shell } from "electron";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { migrateFormerIdentities, resolvePaths, type ParsedArgs, type PiorbitPaths } from "@lasercode/cli";
+import { migrateFormerIdentities, resolvePaths, type ParsedArgs, type LaserPaths } from "@lasercode/cli";
 import {
   DEEP_LINK_SCHEME,
   IPC,
@@ -54,9 +54,9 @@ import { chromeFor, WindowManager } from "./windows.js";
 const NO_ARGS: ParsedArgs = { flags: {}, positionals: [], rest: [], hasRest: false };
 
 /**
- * piorbit's own home, not the agent's (M10-T3). `desktopEnv` removes the
+ * laser's own home, not the agent's (M10-T3). `desktopEnv` removes the
  * variables that describe the person's *own* agent installation and pins
- * piorbit's directories in their place, and everything downstream — the paths
+ * laser's directories in their place, and everything downstream — the paths
  * this process uses, the host it spawns, every worker under that host — is
  * resolved from this one environment. See `agent-home.ts` for why.
  */
@@ -66,7 +66,7 @@ const migration = migrateFormerIdentities(process.env);
 
 const environment = desktopEnv(process.env);
 const home = agentHome(process.env);
-const paths: PiorbitPaths = resolvePaths(NO_ARGS, environment);
+const paths: LaserPaths = resolvePaths(NO_ARGS, environment);
 const log = new DesktopLog(join(paths.stateDir, "desktop.log"));
 for (const line of migration.lines) log.line(line);
 log.line(
@@ -75,7 +75,7 @@ log.line(
 );
 
 /**
- * A development run points at Vite when `PIORBIT_UI_URL` is set, so the UI can
+ * A development run points at Vite when `LASER_UI_URL` is set, so the UI can
  * hot-reload while still driving a real host. Without it, the host serves the
  * built bundle, which is what a packaged app always does.
  */

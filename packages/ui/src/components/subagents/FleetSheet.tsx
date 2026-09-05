@@ -25,7 +25,7 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/
 import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
 import { openDecisionIds, usePanelsState, entriesForPath, type PanelEntry } from "@/panels";
-import { usePiorbitState, usePiorbitView } from "@/runtime";
+import { useLaserState, useLaserView } from "@/runtime";
 import type { AppState } from "@/store";
 
 import { closeFleet, useFleetFocus, useFleetOpen } from "./fleet.js";
@@ -35,9 +35,9 @@ export function FleetSheet() {
   const open = useFleetOpen();
   const focus = useFleetFocus();
   const mobile = useIsMobile();
-  const view = usePiorbitView();
-  const sessions = usePiorbitState((s: AppState) => s.sessions);
-  const openViews = usePiorbitState((s: AppState) => s.open);
+  const view = useLaserView();
+  const sessions = useLaserState((s: AppState) => s.sessions);
+  const openViews = useLaserState((s: AppState) => s.open);
   const panels = usePanelsState((r) => r.panels);
   const decisions = usePanelsState((r) => openDecisionIds(r.panels), (a, b) => a.size === b.size && [...a].every((x) => b.has(x)));
   const [expanded, setExpanded] = useState<string | undefined>(undefined);

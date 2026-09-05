@@ -219,7 +219,7 @@ function SectionHeading({ section }: { section: SettingsCatalog["sections"][numb
 /**
  * Pi ignores a project settings file it has not been told to trust. When that
  * is the case the form still works — the file is real and editable — but says
- * plainly that nothing in it is taking effect, and offers the one fix piorbit
+ * plainly that nothing in it is taking effect, and offers the one fix laser
  * can make from here.
  */
 function ProjectTrustNotice({ snapshot }: { snapshot: SettingsSnapshot }) {

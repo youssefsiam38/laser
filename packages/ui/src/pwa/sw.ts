@@ -1,5 +1,5 @@
 /**
- * piorbit service worker — the app shell, and nothing else.
+ * laser service worker — the app shell, and nothing else.
  *
  * Caches: `index.html`, the hashed `assets/*` bundle, the manifest, the icons
  * and the two self-hosted typefaces. That is the whole list. `/ws`, `/healthz`
@@ -13,7 +13,7 @@
  *
  * Push: one Declarative Web Push document per event (`@lasercode/protocol`,
  * `src/push.ts`). Safari renders it itself; here, for Chromium, we render it.
- * A tap focuses an open piorbit window and hands it the URL, or opens one.
+ * A tap focuses an open laser window and hands it the URL, or opens one.
  *
  * Built by `vite-plugin.ts`: the two placeholders below are replaced with the
  * emitted file list and a content hash, and the result is emitted as `/sw.js`.
@@ -75,6 +75,10 @@ const BUILD = "__SW_BUILD__";
 const CACHE_PREFIX = "__SW_CACHE_PREFIX__";
 /** Replaced at build time with the product's display name. */
 const PRODUCT = "__SW_PRODUCT_NAME__";
+
+/** Substituted like the rest; the worker imports nothing at runtime. */
+const SW_SKIP_WAITING = "__SW_SKIP_WAITING__";
+const SW_PUSH_CHANGED = "__SW_PUSH_CHANGED__";
 const CACHE = `${CACHE_PREFIX}${BUILD}`;
 const SHELL = "/index.html";
 
@@ -104,7 +108,7 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("message", (event) => {
   const data = event.data as { type?: unknown } | null;
-  if (data?.type === "piorbit:skip-waiting") void self.skipWaiting();
+  if (data?.type === SW_SKIP_WAITING) void self.skipWaiting();
 });
 
 // ---------------------------------------------------------------------------
@@ -227,7 +231,7 @@ self.addEventListener("notificationclick", (event) => {
 });
 
 /**
- * Prefer the piorbit window that is already open: it holds the live socket,
+ * Prefer the laser window that is already open: it holds the live socket,
  * so handing it the URL is instant and keeps its state. Only open a new
  * window when there is none.
  */
@@ -259,7 +263,7 @@ self.addEventListener("pushsubscriptionchange", (event) => {
       if (!key) return;
       const fresh = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
       const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-      for (const c of clients) c.postMessage({ type: "piorbit:push-changed", subscription: fresh.toJSON() });
+      for (const c of clients) c.postMessage({ type: SW_PUSH_CHANGED, subscription: fresh.toJSON() });
     })(),
   );
 });

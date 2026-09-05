@@ -1,7 +1,7 @@
 /**
  * The product's identity, for TypeScript (MX-T7, D-36).
  *
- * "piorbit" is a working name. The product may be renamed and moved to another
+ * "laser" is a working name. The product may be renamed and moved to another
  * repository, and nothing may treat the current name as fixed — so no package
  * writes it. Everything derives from `product.json` at the repository root,
  * through the generated `product.generated.ts` next door and this module's
@@ -58,7 +58,7 @@ export const APP_DEVELOPER_ID: string = PRODUCT.developerId;
 /** The one URL scheme the app answers to, without punctuation. */
 export const URL_SCHEME: string = PRODUCT.urlScheme;
 
-/** `piorbit://` — the prefix a deep link starts with. */
+/** `laser://` — the prefix a deep link starts with. */
 export const URL_SCHEME_PREFIX = `${PRODUCT.urlScheme}://`;
 
 /**
@@ -130,7 +130,7 @@ export const FORMER_NAMES: readonly FormerIdentity[] = PRODUCT.formerNames;
 // ---------------------------------------------------------------------------
 // Helpers. Everything below composes a name; nothing below writes one.
 
-/** `PIORBIT_FOO` from `FOO`, for a variable not in `ENV` (a test, a probe). */
+/** `LASER_FOO` from `FOO`, for a variable not in `ENV` (a test, a probe). */
 export function envVar(suffix: string): string {
   return `${PRODUCT.envPrefix}_${suffix}`;
 }
@@ -156,7 +156,7 @@ export function readEnv(
 }
 
 /**
- * `piorbit-panels` — the product's hyphenated namespace.
+ * `laser-panels` — the product's hyphenated namespace.
  *
  * Everything a browser keys by name goes through this: `localStorage` keys,
  * Cache Storage names, the id of a `<style>` element the app owns, the name it
@@ -167,10 +167,10 @@ export function namespaced(suffix: string): string {
   return `${PRODUCT.storagePrefix}-${suffix}`;
 }
 
-/** `piorbit-panels` — a hyphenated browser storage key. */
+/** `laser-panels` — a hyphenated browser storage key. */
 export const storageKey = namespaced;
 
-/** `piorbit.theme` — a dotted browser storage key, for the ones already dotted. */
+/** `laser.theme` — a dotted browser storage key, for the ones already dotted. */
 export function dottedStorageKey(suffix: string): string {
   return `${PRODUCT.storagePrefix}.${suffix}`;
 }
@@ -187,12 +187,12 @@ export function storageKeyHistory(suffix: string, separator: "-" | "." = "-"): s
   );
 }
 
-/** `piorbit.transcribe.v1` — a cross-realm `Symbol.for` key. */
+/** `laser.transcribe.v1` — a cross-realm `Symbol.for` key. */
 export function symbolKey(suffix: string): string {
   return `${PRODUCT.symbolPrefix}.${suffix}`;
 }
 
-/** `piorbit://open` — build a deep link. `rest` is already encoded. */
+/** `laser://open` — build a deep link. `rest` is already encoded. */
 export function schemeUrl(rest: string): string {
   return `${URL_SCHEME_PREFIX}${rest}`;
 }
@@ -204,3 +204,24 @@ export function isProductUrl(url: string): boolean {
     lower.startsWith(`${scheme}://`),
   );
 }
+
+/**
+ * The two messages the service worker and the page exchange.
+ *
+ * They follow the product rather than the wire namespace: the worker and the
+ * page are one build, served together and replaced together, so nothing older
+ * is ever on the other end of them.
+ */
+export const SW_SKIP_WAITING = `${PRODUCT_NAME}:skip-waiting`;
+export const SW_PUSH_CHANGED = `${PRODUCT_NAME}:push-changed`;
+
+/**
+ * The key the transcript projection stamps its own annotations under, inside
+ * an assistant-ui message's `metadata.custom`.
+ *
+ * In memory only — never persisted, never sent to a peer — so it follows the
+ * product rather than the wire namespace. It is a constant because the writer
+ * and its readers sat in different files and silently disagreed the first time
+ * the product was renamed.
+ */
+export const MESSAGE_METADATA_NS = PRODUCT_NAME;

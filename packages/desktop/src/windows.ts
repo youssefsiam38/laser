@@ -1,7 +1,7 @@
 /**
  * Windows: the app window, and one window per popped-out panel (M5-T1).
  *
- * The titlebar treatment is the reason this file is not four lines. piorbit
+ * The titlebar treatment is the reason this file is not four lines. laser
  * draws its own top bar, so the native one is hidden — but "hidden" means three
  * different things:
  *
@@ -11,7 +11,7 @@
  *            the right, in our colours, which we restate whenever the theme
  *            changes. The UI leaves room on the right.
  *   Linux    no overlay exists, so the window is frameless and the UI draws the
- *            three controls itself through `window.piorbit.window`.
+ *            three controls itself through `window.laser.window`.
  *
  * Two things the UI cannot do for itself and which are therefore here: the
  * background colour is set before the first paint (a white flash on a dark
@@ -20,9 +20,9 @@
  *
  * Navigation is locked to the host origin. The renderer is our own bundle, but
  * it renders agent output, and a link the agent wrote must open in the person's
- * browser — never inside a window holding `window.piorbit`.
+ * browser — never inside a window holding `window.laser`.
  */
-import { DESKTOP_ARGUMENT_PREFIX } from "./api.js";
+import { DESKTOP_ARGUMENT_PREFIX, IPC } from "./api.js";
 import { PRODUCT_NAME } from "@lasercode/protocol";
 import { BrowserWindow, clipboard, dialog, nativeTheme, screen, shell, type BrowserWindowConstructorOptions } from "electron";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
@@ -148,7 +148,7 @@ export interface WindowManagerOptions {
   onMainNavigating: () => void;
 }
 
-/** `--piorbit-<name>=<url-encoded json>`, read back by the preload from argv. */
+/** `--laser-<name>=<url-encoded json>`, read back by the preload from argv. */
 function launchArgument(name: string, value: unknown): string {
   return `${DESKTOP_ARGUMENT_PREFIX}${name}=${encodeURIComponent(JSON.stringify(value))}`;
 }
@@ -243,7 +243,7 @@ export class WindowManager {
     window.on("close", (event) => {
       this.state.write(window);
       if (this.quitting) return;
-      // The tray keeps piorbit running: closing the window puts it away, it
+      // The tray keeps laser running: closing the window puts it away, it
       // does not stop the agent. Quit is explicit, from the tray or Cmd/Ctrl+Q.
       event.preventDefault();
       window.hide();
@@ -347,7 +347,7 @@ export class WindowManager {
   private publishState(window: BrowserWindow): void {
     if (window.isDestroyed()) return;
     const state = this.stateOf(window);
-    window.webContents.send("piorbit:window/state-changed", state);
+    window.webContents.send(IPC.windowStateChanged, state);
     if (window === this.main) this.options.onMainWindowState(state);
   }
 
@@ -433,7 +433,7 @@ export class WindowManager {
   /**
    * Everything a window is not allowed to do. `setWindowOpenHandler` and
    * `will-navigate` together mean a link in agent output opens in the person's
-   * browser and can never take over a window that has `window.piorbit`.
+   * browser and can never take over a window that has `window.laser`.
    */
   private harden(window: BrowserWindow): void {
     const { log } = this.options;
@@ -448,7 +448,7 @@ export class WindowManager {
       // `http://127.0.0.1:41441`, and both `http://127.0.0.1:41441.example/`
       // and `http://127.0.0.1:414419/` are prefixed by it. The URLs that reach
       // here come from agent output, and the window they would load in carries
-      // the whole `window.piorbit` bridge.
+      // the whole `window.laser` bridge.
       if (origin && sameOrigin(url, origin)) return;
       event.preventDefault();
       if (/^https?:/i.test(url)) this.openInBrowser(window, url);

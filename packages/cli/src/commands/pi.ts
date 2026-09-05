@@ -1,9 +1,9 @@
 /**
- * `piorbit pi ...` — the pinned Pi, with piorbit's environment.
+ * `laser pi ...` — the pinned Pi, with laser's environment.
  *
  * This command is deliberately transparent. Everything after `pi` belongs to
  * Pi: `--help`, `--version`, `update --extensions`, `models`, any future verb.
- * piorbit consumes only the flags that appear *before* Pi's first argument, so
+ * laser consumes only the flags that appear *before* Pi's first argument, so
  * there is one simple rule to remember and no flag can ever be shadowed.
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";
@@ -13,7 +13,7 @@ import { resolvePaths } from "../config.js";
 import { usageError } from "../errors.js";
 import { exitLikeChild, runPi } from "../pi.js";
 
-/** Flags piorbit will eat if they lead; everything after the first miss is Pi's. */
+/** Flags laser will eat if they lead; everything after the first miss is Pi's. */
 const BOOLEAN_PREFIX = new Set(["--global-pi"]);
 const VALUE_PREFIX = new Set(["--agent-dir", "--session-dir", "--subagents-temp-root"]);
 
@@ -25,7 +25,7 @@ export interface PiPrefix {
 }
 
 /**
- * Split `piorbit pi` arguments into piorbit's leading flags and Pi's arguments.
+ * Split `laser pi` arguments into laser's leading flags and Pi's arguments.
  * Exported because the rule is subtle enough to deserve a test.
  */
 export function splitPiArgs(raw: readonly string[]): PiPrefix {
