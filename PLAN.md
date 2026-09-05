@@ -17,6 +17,12 @@ A visualization and control layer on top of the Pi coding agent:
 - A lightweight relay for Railway giving phones and other devices the same UI
   through an end-to-end encrypted channel, with QR pairing and device revocation.
 - Mobile-first responsive UI shipped as a PWA (no native shell).
+- **Self-contained**: one command installs a native Linux desktop app that
+  bundles its own runtime and agent. No Node, no npm, no separate agent
+  install, and no terminal after the first line. The person need not know
+  which agent runs underneath.
+- **Fully themeable**: every visual value is a token the person can change
+  from Settings, defaulting to a plain dark preset.
 - Built-in support for community packages when present: pi-subagents,
   pi-gpt-transcribe, pi-web-access.
 
@@ -55,6 +61,8 @@ docs/                     architecture, research findings, upstream log
 ```
 M0 Foundation
  └─ M1 Local loop (one project, one session, dialogs, transcript)
+     ├─ MP Panel system (docs/ux-panels.md: how anything renders)
+     │    └─ M3 Subagent tabs
      ├─ M2 Many sessions, many projects
      │    └─ M3 Subagent tabs
      ├─ M4 Settings and logs
@@ -62,7 +70,9 @@ M0 Foundation
      ├─ M6 Relay and pairing
      │    └─ M7 Mobile PWA
      ├─ M8 Package support (transcribe, web-access, native replacements)
-     └─ M9 CLI (host lifecycle, session verbs, Pi passthrough, doctor)
+     ├─ M9 CLI (host lifecycle, session verbs, Pi passthrough, doctor)
+     ├─ M10 Self-contained distribution (one-command install, bundled runtime + agent)
+     └─ M11 Theme system (every token a variable, chosen in Settings)
 MX Cross-cutting (migration readiness, upstream, security) — runs alongside
 ```
 
@@ -303,6 +313,76 @@ Depends on: M1 (host), M2 (projects), M4 (settings) for the richer subcommands.
 
 ---
 
+## MP · Panel system
+
+The rendering system every other milestone draws through
+([`docs/ux-panels.md`](docs/ux-panels.md), D-18). Added after M0–M9 were
+written, because the contract that replaced per-package views is a milestone
+of its own and M3, M4's logs page and M8's previews all land on it (D-27).
+
+| ID | Task | Done when |
+| --- | --- | --- |
+| MP-T1 | Payload types, the bus protocol and the `pi/panel/*` wire in `@piorbit/protocol`, with schemas that refuse presentation keys anywhere in `data` | a panel with a `className` is rejected by name |
+| MP-T2 | Companion `panels` module: validate, dedupe identical re-emits, forward, replay actions | an extension that emits `piorbit:panel` reaches the dock unchanged |
+| MP-T3 | Host panel hub: memory per session, ref grants, ranged reads, attention from a blocking decision | a ref no panel carried is refused |
+| MP-T4 | The island: one element, four sizes, the morph between them, a body per kind | third expansion shrinks the least recently watched to minimal |
+| MP-T5 | The dock: columns, dividers, maximize, pop out, dismiss, the `+N` overflow | a wide monitor gets four expanded panels, none of them narrow |
+| MP-T6 | Placement table, ambient line, phone islands, decision surfaces | the table is the test |
+| MP-T7 | Fallback so nothing regresses: `setWidget` → stream, `setStatus` → ambient, dialogs → decision | an unaware extension looks first-class |
+
+---
+
+## M10 · Self-contained distribution
+
+Goal: a person installs piorbit with one command and never touches a terminal
+again. They do not install Node, or Pi, or anything else, and they need not
+know Pi exists.
+
+Done when: on a clean Linux machine with only `gh` present, one command
+installs a native desktop app that appears in the application menu, launches,
+runs an agent, and installs extensions from Settings — with no Node, no npm,
+no Pi and no manual step anywhere.
+
+Depends on: M5 (desktop shell), M9 (CLI).
+
+| ID | Task | Done when |
+| --- | --- | --- |
+| M10-T1 | `install.sh` at the repo root, fetched and run through `gh` from the private repo. Detects arch, verifies a checksum, downloads the release asset, installs per-user under `~/.local`, registers a `.desktop` entry and icons, and prints one line saying what to do next. Idempotent; re-running upgrades | `gh api ... \| sh` on a clean box ends with a launchable app |
+| M10-T2 | One command in the README, copy-pasteable, using `gh` so the private repo needs no token juggling. An `--uninstall` flag that removes everything it created | the command works for a collaborator with repo access and nothing else |
+| M10-T3 | The app bundles its own runtime and agent: stock Node unpacked outside asar, the pinned Pi and its dependency tree vendored into the package. Nothing resolves from the user's machine, and the user's own global Pi (if any) is never touched | `doctor` inside the packaged app reports the bundled Node and the bundled pinned Pi, on a machine with neither installed |
+| M10-T4 | Package for every Linux distribution: AppImage (universal), `.deb`, `.rpm`, and a plain tarball. Desktop entry, MIME handler for `piorbit://`, icons at every size, and a post-install that does not require root for the AppImage path | each artifact installs and launches on its target |
+| M10-T5 | Extension and package management entirely from Settings: browse, install, update, remove, with progress and a readable failure. Installs go into piorbit's own agent directory, never the user's global one | a package is installed from the UI on a machine with no npm on `PATH` |
+| M10-T6 | First-run experience inside the app: pick a provider, sign in, pick a model, add a project — all in the UI. No config file, no environment variable, no terminal | a new user reaches a working session without leaving the window |
+| M10-T7 | Release pipeline: a tagged build produces every artifact plus a checksum manifest, and the app's updater points at it. Versions pinned end to end — Node, Pi, every workspace package | a release is reproducible from a tag |
+| M10-T8 | Product language: the UI never requires knowing Pi exists. "Agent", "model", "extension", "session" — Pi is named only in advanced settings and diagnostics, where it is the truth | a reader of every visible string could not tell which agent runs underneath |
+
+---
+
+## M11 · Theme system
+
+Goal: nothing visual is a constant. Every colour, font, size, radius, shadow
+and duration is a token, and the person using the app chooses them.
+
+Done when: `docs/ux-theme.md` is satisfied — no component holds a literal
+visual value, Settings → Appearance changes theme, accent, fonts, text size,
+density, corners, contrast and motion with a live preview, and the default is
+a dark preset good enough that most people never open the panel.
+
+Depends on: M4 (settings surface).
+
+| ID | Task | Done when |
+| --- | --- | --- |
+| M11-T1 | Three-layer token architecture: primitive scales, semantic tokens, component tokens with fallbacks. Every semantic token defined for both bases | a grep for hex, `oklch(`, `rgb(` and raw `px` font sizes in `packages/ui/src` returns only the primitive scales |
+| M11-T2 | `Theme` as data and a runtime applier that writes custom properties on the root. Switching is one style write, no reload, no flash | switching presets is instant and nothing remounts |
+| M11-T3 | Preset gallery: several dark and several light, each a live swatch card. Default is a plain dark preset with Inter and JetBrains Mono | presets render as themselves in the picker |
+| M11-T4 | Settings → Appearance: theme, accent hue, attention hue, interface font, code font, text size, density, corners, contrast, motion, follow-the-system, and a custom token editor with a contrast readout | every control previews live on the app behind it |
+| M11-T5 | Font loading on demand by family, with real fallback stacks and no reflow on swap; the curated interface and code lists from `docs/ux-theme.md`, plus a no-webfont system option | choosing a font loads only that family |
+| M11-T6 | Themes persist in settings so they follow the person to the phone through the relay; a fresh install starts on the default | the phone shows the same theme after pairing |
+| M11-T7 | Guard rails: the legibility floor holds at every text size, high contrast raises text until it clears its ground, a failing custom token is flagged, and the attention hue can never equal the accent hue | the checks fire in the editor rather than shipping a broken theme |
+| M11-T8 | Every adopted assistant-ui element restyled through our tokens, starting with `surfaces` | no element renders on its own defaults |
+
+---
+
 ## MX · Cross-cutting (runs alongside every milestone)
 
 | ID | Task | Done when |
@@ -312,3 +392,4 @@ Depends on: M1 (host), M2 (projects), M4 (settings) for the richer subcommands.
 | MX-T3 | Upstream log: every PR/issue with URL and status | `docs/upstream.md` current |
 | MX-T4 | Security review before M6 ships: relay, pairing, output escaping | findings closed |
 | MX-T5 | Accessibility pass: keyboard, focus, reduced motion, contrast in both themes | checklist in `docs/a11y.md` |
+| MX-T6 | Element inventory reconciliation: walk `docs/ux-elements.md` row by row against what wave 2 built, install the catalog element where one exists and hand-rolled code is standing in its place, and record every deliberate divergence in the row | every claimed row names a file, or says why it was written instead |

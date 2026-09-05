@@ -22,6 +22,15 @@ That sets the bar for every screen, every command and every transition:
   The same element grows and shrinks; identity, position and scroll survive
   every transition. Sixty frames, no layout shift, and every motion has a
   `prefers-reduced-motion` fallback that loses nothing but the movement.
+- **No static visual values, ever.** Every colour, font, size, radius, shadow,
+  spacing step and duration comes from a token that the person can change in
+  Settings. A hex literal, an `oklch()`, or a raw `px` font size in a
+  component is a bug; the only literals live in the primitive scales and the
+  preset definitions. See [`docs/ux-theme.md`](docs/ux-theme.md).
+- **The person never needs a terminal.** Extensions, models, providers,
+  projects and themes are all installed and configured from the UI. The app
+  bundles its own runtime and agent, and the visible copy never requires
+  knowing which agent runs underneath.
 - **Legibility is a floor, not a goal.** No data below 12px, no overflow, no
   clipped text, no horizontal page scroll, ever. A component that cannot fit
   its content shows less content, never smaller text.
@@ -39,7 +48,9 @@ Three documents are the constitution for this, and they are binding on
 every UI change: [`packages/ui/DESIGN.md`](packages/ui/DESIGN.md) for the
 visual system, [`docs/ux-panels.md`](docs/ux-panels.md) for how anything
 renders, and [`docs/ux-agent-work.md`](docs/ux-agent-work.md) for the model
-behind agent work. A UI change that does not fit them is either a bug or a
+behind agent work, [`docs/ux-elements.md`](docs/ux-elements.md) for which
+assistant-ui element owns each surface, and [`docs/ux-theme.md`](docs/ux-theme.md)
+for the token system. A UI change that does not fit them is either a bug or a
 decision recorded in `STATUS_DETAILED.md` — never a quiet exception.
 
 Before any UI task is marked done, run it in the browser at a desktop width
