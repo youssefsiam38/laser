@@ -97,10 +97,10 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
-| M2-T1 | Worker pool | done | claude-2026-09-05-laneA | `pnpm -F @piorbit/host test` (test/worker-pool.test.ts, 6 tests) | see notes |
-| M2-T2 | Attention model + inbox | done | claude-2026-09-05-laneA | `pnpm -F @piorbit/host test` (test/attention.test.ts) + `pnpm -F @piorbit/ui test` (inbox rows) | see notes |
-| M2-T3 | Fast switching | done | claude-2026-09-05-laneA | `packages/host/src/views.ts`; `packages/ui/test/runtime/isolation.test.ts` | see notes |
-| M2-T4 | Project management + trust | done | claude-2026-09-05-laneA | `pnpm -F @piorbit/host test` (test/projects.test.ts, 7 tests) | see notes; needs the worker patch in the handoff |
+| M2-T1 | Worker pool | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | pool lifecycle: starting/ready/crashed/retired, backoff, idle retire gated on attachments + live pi-subagents runs; boot-id+start-time pid identity |
+| M2-T2 | Attention model + inbox | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | host attention model, persisted seen watermark, inbox |
+| M2-T3 | Fast switching | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | hydrated-view cache in host; per-path selectors verified |
+| M2-T4 | Project management + trust | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | server-side projects with Pi trust gate passed through as a dialog |
 | M2-T5 | Desktop notifications | todo | — | — | needs M5 (Electron) for real notifications |
 
 #### M2-T1 notes
@@ -142,13 +142,13 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
-| M4-T1 | Settings adapter | todo | — | — | — |
-| M4-T2 | Settings UI | todo | — | — | — |
-| M4-T3 | Package manager UI | todo | — | — | — |
-| M4-T4 | Providers and models | todo | — | — | — |
-| M4-T5 | Log store | todo | — | — | — |
-| M4-T6 | Logs page | todo | — | — | — |
-| M4-T7 | Keybindings + trust views | todo | — | — | — |
+| M4-T1 | Settings adapter | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | worker SettingsAdapter over SettingsManager; all 51 top-level keys; writes under Pi lock then reload |
+| M4-T2 | Settings UI | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | schema-driven settings screen: global/project/effective, search, JSON escape hatch |
+| M4-T3 | Package manager UI | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | PackagesAdapter over DefaultPackageManager with progress notifications |
+| M4-T4 | Providers and models | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | ModelsAdapter: provider auth, catalog, thinking levels |
+| M4-T5 | Log store | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | SQLite log store (node:sqlite): content-addressed payloads, byte-budgeted paging, retention; Authorization/API-key headers redacted incl. vendor prefixes |
+| M4-T6 | Logs page | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | logs screen: section tabs, search, follow, virtualized list, detail with copy; provider-response ceiling stated |
+| M4-T7 | Keybindings + trust views | todo | — | — | keybindings/trust views not built in wave 1 |
 
 ---
 
@@ -168,13 +168,13 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
-| M6-T1 | Noise IK/KK crypto | todo | — | — | — |
-| M6-T2 | Pairing flow | todo | — | — | — |
-| M6-T3 | Device list + revocation | todo | — | — | — |
-| M6-T4 | Relay server | todo | — | — | — |
-| M6-T5 | Host relay client | todo | — | — | — |
-| M6-T6 | Keystroke timing defense | todo | — | — | — |
-| M6-T7 | Threat model doc | todo | — | — | — |
+| M6-T1 | Noise IK/KK crypto | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | Noise IK/KK 25519_AESGCM_SHA256, prologue + AAD binding, rekey; 42 crypto tests incl. KATs |
+| M6-T2 | Pairing flow | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | QR with ephemeral key in fragment; HKDF channel id; SAS gate before grant |
+| M6-T3 | Device list + revocation | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | root Ed25519 signs versioned device list; downgrade refused |
+| M6-T4 | Relay server | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | relay byte forwarder, no crypto lib (purity test), channel id via Sec-WebSocket-Protocol not the path, 2 sockets/channel, cookies, padded buckets, no deflate |
+| M6-T5 | Host relay client | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | host RelayClient: outbound, reconnect, resume from seq |
+| M6-T6 | Keystroke timing defense | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | 20 ms send grid + chaff tail in crypto/timing |
+| M6-T7 | Threat model doc | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | docs/security.md with threat model and residual metadata |
 
 ---
 
@@ -200,6 +200,21 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 | M8-T3 | Native markdown preview + image display | todo | — | — | — |
 | M8-T4 | `web-access` module | todo | — | — | module stub; detect returns false |
 | M8-T5 | Module authoring guide | todo | — | — | — |
+
+---
+
+## M9 · CLI
+
+| ID | Task | State | Owner | Evidence | Notes |
+| --- | --- | --- | --- | --- | --- |
+| M9-T1 | `packages/cli`, `piorbit` bin, router, `--json`, help, colors | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | hand-rolled parser on util.parseArgs; color degrades off-TTY and under NO_COLOR |
+| M9-T2 | `up`/`down`/`status`/`restart` host lifecycle | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | pidfile + port file under the state dir; attaches if already running; boot-id + start-time identity |
+| M9-T3 | `piorbit pi …` passthrough to the pinned Pi | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | inherits stdio, forwards exit codes and signals, sets PI_CODING_AGENT_DIR / PI_SUBAGENTS_TEMP_ROOT; `--global-pi` opts into the user's install |
+| M9-T4 | session verbs over the host protocol | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | sessions/new/open/send/tail/stop/entries/fork/rename/compact; `tail` streams updates and exits on agent_settled unless --follow |
+| M9-T5 | `projects` / `packages` / `settings` verbs | in-progress | claude-2026-09-05-c | protocol methods exist (`pi/settings/*`, `pi/packages/*`); `projects` built | settings and packages CLI verbs not yet wired |
+| M9-T6 | `doctor` | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1`; run on this machine: 12 PASS, 1 WARN (uid-0 subagents root) | spawns a throwaway worker to prove the stack boots |
+| M9-T7 | `relay login\|pair\|devices\|revoke`, `logs --follow` | todo | — | — | protocol ready (`pi/logs/query` with afterId; crypto pairing API) |
+| M9-T8 | completions + `help <topic>` | todo | — | — | — |
 
 ---
 
@@ -435,6 +450,16 @@ our decisions, it does seven things better and each is adopted.
 Not adopted: an embedded browser pane (embeds are out of scope, D-18) and a
 four-pane dock on a laptop-width window (theirs was 1860px wide).
 
+### D-21 · 2026-09-05 · Relay channel id travels in the WebSocket subprotocol
+Decision: the channel id is sent as `Sec-WebSocket-Protocol: piorbit.channel.<id>` and the path is a constant `/ws`, instead of the id in the request line.
+Why: request lines land in proxy and edge access logs; subprotocols do not, and a subprotocol is also the only channel a browser client can set. The relay still treats the value as an opaque route (invariant 7).
+Consequences: epoch rotation and squatter eviction for a disclosed id are design work, deferred and stated as such in docs/security.md.
+
+### D-22 · 2026-09-05 · Wave-1 deferrals recorded honestly
+- Notifications over ~61 kB are dropped with a counter rather than chunked; a relayed phone misses large tool outputs but never the session. Chunking is a follow-up task.
+- The host WebSocket has an Origin allowlist but no token; any local process can drive the agent. Token in host.json is a follow-up task.
+- No wave-1 UI was seen rendered by its authors; the orchestrator's browser pass is the only visual check so far.
+
 ---
 
 ## Open questions
@@ -473,3 +498,4 @@ four-pane dock on a laptop-width window (theirs was 1860px wide).
 - 2026-09-05 · claude-2026-09-05-b · M0-T8: `workflow` scope granted and `.github/workflows/ci.yml` installed, but the first run was refused by GitHub billing (private repos bill Actions minutes). Added `pnpm verify` as the local equivalent. Blocked on the user's GitHub billing, not on code.
 - 2026-09-05 · claude-2026-09-05-b · D-18 and D-19: panel contract and agent-work model decided (all leans). M3 unblocked; the panel system becomes a prerequisite lane in wave 2.
 - 2026-09-05 · claude-2026-09-05-b · D-20: seven amendments adopted from Claude Code's desktop UI; M2-T6 added; docs updated.
+- 2026-09-05 · claude-2026-09-05-c · wave 1 landed (`7841860`, `958bfb1`): M2-T1..T4, M4-T1..T6, M6-T1..T7, M9-T1..T4, M9-T6 done; 39 review findings applied (37 already in HEAD, 2 real fixes + protocol sample); D-21, D-22. 385 tests green.
