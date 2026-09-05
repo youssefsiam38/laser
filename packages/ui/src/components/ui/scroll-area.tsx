@@ -24,6 +24,13 @@ function ScrollArea({
         ref={viewportRef}
         className={cn(
           "size-full rounded-[inherit] outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
+          // Radix wraps viewport content in a `display: table` div, which
+          // shrink-wraps to its own max-width instead of filling the viewport
+          // — anything wider than the content then scrolls horizontally for no
+          // reason (it showed up first on the settings page at phone widths).
+          // Forcing it back to a block is the fix, and it belongs here rather
+          // than at each callsite.
+          "[&>div]:!block",
           viewportClassName,
         )}
       >

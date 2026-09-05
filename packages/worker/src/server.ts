@@ -22,7 +22,10 @@ import {
   type SessionUpdateParams,
   type TypedClientRequest,
 } from "@piorbit/protocol";
+import { resolve } from "node:path";
 import type { DriverEvent, SessionDriver } from "./driver.js";
+import { ModelsAdapter, PackagesAdapter } from "./packages.js";
+import { SettingsAdapter } from "./settings.js";
 
 export interface WorkerServerOptions {
   cwd: string;
@@ -31,6 +34,8 @@ export interface WorkerServerOptions {
   agentDir?: string;
   sessionDir?: string;
   subagentsTempRoot?: string;
+  /** Host-resolved Pi project trust for `cwd`; see `DriverOpenOptions.projectTrusted`. */
+  projectTrusted?: boolean;
   /** Updates kept per session for `fromSeq` replay. */
   replayBuffer?: number;
 }
@@ -47,7 +52,24 @@ type Result<M extends keyof ClientRequests> = ClientRequests[M]["result"];
 
 export class WorkerServer {
   private readonly sessions = new Map<string, Live>();
+  /**
+   * Opens in flight, keyed by session path. `handle()` dispatches concurrently,
+   * so two `session/load`s for one path used to miss the `sessions` map, build
+   * two drivers on one Pi session file (AGENTS.md invariant 8) and orphan the
+   * first — its subscription still emitting, its runtime leaked. Nothing above
+   * can dedupe this: a desktop and a phone are two clients, and the pool's
+   * crash recovery can race a client's own reconnect.
+   */
+  private readonly opening = new Map<string, Promise<SessionState>>();
   private readonly replayBuffer: number;
+  /**
+   * M4 adapters. Built on first use: constructing a `SettingsManager` reads two
+   * files and `ModelRuntime.create` touches the network-free catalogue, and a
+   * worker that never opens the settings screen should pay for neither.
+   */
+  private settingsAdapter: SettingsAdapter | undefined;
+  private packagesAdapter: PackagesAdapter | undefined;
+  private modelsAdapter: ModelsAdapter | undefined;
 
   constructor(private readonly options: WorkerServerOptions) {
     this.replayBuffer = options.replayBuffer ?? 5000;
@@ -111,6 +133,11 @@ export class WorkerServer {
 
       case "pi/session/list":
         throw new ProtocolError(ErrorCodes.Unsupported, "pi/session/list is answered by the host catalog, not a worker");
+      case "pi/session/detach":
+        throw new ProtocolError(
+          ErrorCodes.Unsupported,
+          "pi/session/detach is host bookkeeping; a worker has nothing to detach from",
+        );
       case "pi/session/steer":
         await this.live(req.params.path).driver.steer(req.params.content);
         return {};
@@ -162,10 +189,98 @@ export class WorkerServer {
         // UI bridge, so broadcasting could settle another session's dialog with
         // an answer the user never gave it.
         const owner = this.ownerOfDialog(req.params.id);
-        owner?.driver.respondToUi(req.params);
-        return {};
+        if (!owner) return { delivered: false } satisfies Result<"pi/ui/response">;
+        owner.driver.respondToUi(req.params);
+        return { delivered: true } satisfies Result<"pi/ui/response">;
       }
+
+      // ----------------------------------------------------------- M4 ---
+      case "pi/settings/list":
+        this.assertCwd(req.params.cwd);
+        return { catalog: this.settings().catalog() } satisfies Result<"pi/settings/list">;
+      case "pi/settings/get": {
+        this.assertCwd(req.params.cwd);
+        const settings = this.settings();
+        await settings.refresh();
+        return { snapshot: settings.snapshot() } satisfies Result<"pi/settings/get">;
+      }
+      case "pi/settings/set": {
+        this.assertCwd(req.params.cwd);
+        return {
+          snapshot: await this.settings().apply(req.params.scope, req.params.changes),
+        } satisfies Result<"pi/settings/set">;
+      }
+
+      case "pi/packages/list":
+        this.assertCwd(req.params.cwd);
+        return { packages: this.packages().list() } satisfies Result<"pi/packages/list">;
+      case "pi/packages/install":
+        this.assertCwd(req.params.cwd);
+        return {
+          packages: await this.packages().install(req.params.source, req.params.scope),
+        } satisfies Result<"pi/packages/install">;
+      case "pi/packages/remove":
+        this.assertCwd(req.params.cwd);
+        return (await this.packages().remove(req.params.source, req.params.scope)) satisfies Result<"pi/packages/remove">;
+      case "pi/packages/update":
+        this.assertCwd(req.params.cwd);
+        return { packages: await this.packages().update(req.params.source) } satisfies Result<"pi/packages/update">;
+      case "pi/packages/check_updates":
+        this.assertCwd(req.params.cwd);
+        return { updates: await this.packages().checkUpdates() } satisfies Result<"pi/packages/check_updates">;
+
+      case "pi/providers/list":
+        this.assertCwd(req.params.cwd);
+        return (await this.modelCatalog().providers()) satisfies Result<"pi/providers/list">;
+      case "pi/models/catalog":
+        this.assertCwd(req.params.cwd);
+        return (await this.modelCatalog().catalog(req.params.refresh ?? false)) satisfies Result<"pi/models/catalog">;
+
+      case "pi/logs/query":
+      case "pi/logs/content":
+      case "pi/logs/stats":
+      case "pi/logs/clear":
+        throw new ProtocolError(
+          ErrorCodes.Unsupported,
+          `${req.method} is answered by the host's log store, not a worker`,
+        );
     }
+  }
+
+  // ------------------------------------------------------------- M4 adapters
+
+  private assertCwd(cwd: string): void {
+    if (resolve(cwd) !== resolve(this.options.cwd)) {
+      throw new ProtocolError(ErrorCodes.InvalidParams, `this worker serves ${this.options.cwd}, not ${cwd}`);
+    }
+  }
+
+  private settings(): SettingsAdapter {
+    this.settingsAdapter ??= new SettingsAdapter({
+      cwd: this.options.cwd,
+      ...(this.options.agentDir ? { agentDir: this.options.agentDir } : {}),
+      ...(this.options.projectTrusted !== undefined ? { hostTrusted: this.options.projectTrusted } : {}),
+    });
+    return this.settingsAdapter;
+  }
+
+  private packages(): PackagesAdapter {
+    this.packagesAdapter ??= new PackagesAdapter({
+      cwd: this.options.cwd,
+      ...(this.options.agentDir ? { agentDir: this.options.agentDir } : {}),
+      settings: this.settings(),
+      onProgress: (event) => this.notify("pi/packages/progress", { cwd: this.options.cwd, ...event }),
+    });
+    return this.packagesAdapter;
+  }
+
+  private modelCatalog(): ModelsAdapter {
+    this.modelsAdapter ??= new ModelsAdapter({
+      cwd: this.options.cwd,
+      ...(this.options.agentDir ? { agentDir: this.options.agentDir } : {}),
+      settings: this.settings(),
+    });
+    return this.modelsAdapter;
   }
 
   private async sessionNew(params: ClientRequests["session/new"]["params"]): Promise<Result<"session/new">> {
@@ -185,10 +300,42 @@ export class WorkerServer {
     if (existing) {
       const state = existing.driver.state();
       this.replay(existing, params.fromSeq);
-      return { state, replayFrom: params.fromSeq ?? 0 };
+      return { state, replayFrom: this.replayFloor(existing, params.fromSeq) };
     }
-    const state = await this.openAndAttach({ cwd: this.options.cwd, sessionPath: params.path, ...this.commonOpen() });
-    return { state, replayFrom: 0 };
+    const inFlight = this.opening.get(params.path);
+    if (inFlight) {
+      const state = await inFlight;
+      const live = this.sessions.get(state.path);
+      if (!live) return { state, replayFrom: 0 };
+      this.replay(live, params.fromSeq);
+      return { state, replayFrom: this.replayFloor(live, params.fromSeq) };
+    }
+    // Registered synchronously, before `open()` gets a chance to yield.
+    const promise = this.openAndAttach({ cwd: this.options.cwd, sessionPath: params.path, ...this.commonOpen() });
+    this.opening.set(params.path, promise);
+    try {
+      const state = await promise;
+      return { state, replayFrom: 0 };
+    } finally {
+      this.opening.delete(params.path);
+    }
+  }
+
+  /**
+   * The earliest seq this reply actually covers.
+   *
+   * Answering with the `fromSeq` the client asked for is a lie once the replay
+   * buffer no longer reaches that far — every token delta consumes a seq, so a
+   * few thousand tokens is one buffer. The client would believe it missed
+   * nothing and render a transcript with a hole in it. Reporting the real floor
+   * lets it notice the mismatch and re-hydrate.
+   */
+  private replayFloor(live: Live, fromSeq: number | undefined): number {
+    const asked = fromSeq ?? 0;
+    const oldest = live.buffer[0]?.seq;
+    // Nothing buffered: nothing after `live.seq` can be replayed either.
+    if (oldest === undefined) return live.seq;
+    return asked >= oldest - 1 ? asked : oldest - 1;
   }
 
   /**
@@ -204,6 +351,14 @@ export class WorkerServer {
     live.unsubscribe = driver.subscribe((event) => (ready ? this.onDriverEvent(live, event) : queued.push(event)));
     try {
       const state = await driver.open(openOptions);
+      const already = this.sessions.get(state.path);
+      if (already && already !== live) {
+        // Someone else got there first (a `session/new` that landed on an
+        // existing path, say). One writer per session file, always.
+        live.unsubscribe();
+        await driver.dispose().catch(() => {});
+        return already.driver.state();
+      }
       live.path = state.path;
       this.sessions.set(state.path, live);
       ready = true;
@@ -221,6 +376,7 @@ export class WorkerServer {
       ...(this.options.agentDir ? { agentDir: this.options.agentDir } : {}),
       ...(this.options.sessionDir ? { sessionDir: this.options.sessionDir } : {}),
       ...(this.options.subagentsTempRoot ? { subagentsTempRoot: this.options.subagentsTempRoot } : {}),
+      ...(this.options.projectTrusted !== undefined ? { projectTrusted: this.options.projectTrusted } : {}),
     };
   }
 
@@ -238,15 +394,22 @@ export class WorkerServer {
    * single-session worker keeps working.
    */
   private ownerOfDialog(id: string): Live | undefined {
+    let blind: Live | undefined;
+    let blindCount = 0;
     for (const live of this.sessions.values()) {
       const pendingUi = (live.driver as { pendingUi?: () => Array<{ id: string }> }).pendingUi;
-      if (typeof pendingUi === "function" && pendingUi.call(live.driver).some((request) => request.id === id)) {
-        return live;
+      if (typeof pendingUi === "function") {
+        if (pendingUi.call(live.driver).some((request) => request.id === id)) return live;
+        continue;
       }
+      // A driver that cannot report its pending dialogs (the stub).
+      blind = live;
+      blindCount += 1;
     }
-    // No driver claims it. With one session there is no ambiguity, so deliver
-    // anyway (a driver may not expose `pendingUi`); with several, drop it.
-    return this.sessions.size === 1 ? this.sessions.values().next().value : undefined;
+    // Guessing is only safe when exactly one session could not be asked. A
+    // driver that *can* be asked and does not claim the id genuinely does not
+    // have it, and the caller is told so rather than answering into the void.
+    return blindCount === 1 ? blind : undefined;
   }
 
   private onDriverEvent(live: Live, event: DriverEvent): void {

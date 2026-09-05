@@ -18,7 +18,7 @@ Next: M2 (many projects, attention model).
 | --- | --- | --- |
 | M0 Foundation | in-progress | T1–T7 done; T8 CI blocked (gh token scope) |
 | M1 Local loop | done | T1–T10 done, including the assistant-ui rebuild |
-| M2 Many sessions, many projects | todo | depends on M1; can start now |
+| M2 Many sessions, many projects | in-progress | T1–T4 done (worker lifecycle, attention + inbox, fast switching, projects + trust); T5 needs M5 |
 | M3 Subagent tabs | todo | depends on M2; `subagents` module stub + host file-layer paths exist |
 | M4 Settings and logs | todo | depends on M1; `provider-log` module already forwards request/response hooks |
 | M5 Desktop shell | todo | depends on M1 |
@@ -33,12 +33,13 @@ Next: M2 (many projects, attention model).
 
 ## Next up (dependencies satisfied)
 
-1. M2-T1 — worker pool lifecycle: idle retire (no attachments, no background subagent runs), crash restart with backoff, duplicate-cwd refusal test.
-2. M2-T2 — attention model: per-session state and an attention-sorted inbox. The UI already renders `SessionAttention`; the host never sets it.
-3. M2-T4 — project management: add/remove projects, Pi's trust prompt passed through.
+1. Worker patch for M2-T4 (handoff H-1): four edits so the worker honours the host's `--project-trusted`. Until it lands, Pi runs every project trusted.
+2. M3-T1/T2 — subagent tabs: the host already reads `status.json` and the runner pid for the retirement guard, so the file layer has a foothold.
+3. M2-T5 — desktop notifications for waiting/finished sessions; needs M5's Electron shell to be real.
 
 ## Recently done
 
+- M2-T1..T4 — worker lifecycle (starting/ready/crashed/retired, backoff restart, idle retire gated on attachments and live pi-subagents runs), host attention model with persisted "seen" and an inbox, hydrated-view cache, server-side projects with Pi's trust gate. Evidence: `pnpm -F @piorbit/host test` (55 tests) and `pnpm -F @piorbit/ui test` (135 tests).
 - M1-T10 — UI rebuilt on assistant-ui 0.15.18 + Tailwind v4 per `packages/ui/DESIGN.md`. Evidence: 172 tests; browser run (streaming, tokenized code, both themes, both layouts). Three defects found in browser verification and fixed: a blank screen on the first send, code blocks that never tokenized, and a touch media query that disagreed with the composer primitive.
 - M1-T7, M1-T9 — rename, compact, fork + history panel.
 - M1-T3..T6, T8 — the local loop end to end, with resume after reload.

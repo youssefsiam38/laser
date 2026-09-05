@@ -52,7 +52,7 @@ is rich and current, and it covers far more than the thread: elements,
 primitives, the runtime and `aui` client, tools and approvals, generative
 UI, streaming, thread lists, markdown, observability, mobile. Invoke it with
 the `Skill` tool (`assistant-ui`) before touching any component, and read the
-relevant sub-skill under `~/.claude/skills/assistant-ui/` — `elements` before
+relevant sub-skill under `.agents/skills/` in this repo (project-local install via `npx skills add assistant-ui/skills`, tracked by `skills-lock.json`) — `elements` before
 building a surface, `primitives` before composing one, `runtime` before
 touching the adapter, `tools` before any approval or tool UI, `markdown`
 before any renderer, `thread-list` before the sessions panel. Prefer an

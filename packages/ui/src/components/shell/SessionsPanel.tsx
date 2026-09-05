@@ -1,6 +1,6 @@
 import type * as React from "react";
 import { memo, useCallback, useEffect, useReducer, useState } from "react";
-import { ChevronDown, Copy, EllipsisVertical, FolderPlus, Moon, Pencil, Plus, Sun } from "lucide-react";
+import { ChevronDown, Copy, EllipsisVertical, FileClock, FolderPlus, Moon, Pencil, Plus, Settings, Sun } from "lucide-react";
 import { ContextMenu } from "radix-ui";
 import type { SessionSummary } from "@piorbit/protocol";
 
@@ -21,14 +21,16 @@ import {
 import { Kbd } from "@/components/ui/kbd";
 import { Skeleton, SkeletonText } from "@/components/ui/skeleton";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
+import { useWorkbench } from "@/components/workbench";
 import { dateTime, relativeTime, shortCwd, shortcutLabel } from "@/format";
 import { useCopy, useTheme } from "@/hooks";
 import { cn } from "@/lib/utils";
 import { sessionTitle, usePiorbitStable, usePiorbitState } from "@/runtime";
 import type { AppState } from "@/store";
 
+import { InboxPanel } from "./InboxPanel.js";
 import { InlineRename } from "./InlineRename.js";
-import { isUntitled, sessionStatus, sessionSubtitle, sessionsForProject, type SessionSubtitle } from "./model.js";
+import { isUntitled, sessionStatus, sessionSubtitle, sessionsForProject, type InboxRow, type SessionSubtitle } from "./model.js";
 import { errorText, useShell } from "./shell-context.js";
 
 export interface SessionsPanelProps {
@@ -87,7 +89,7 @@ const sameRows = (a: readonly Row[], b: readonly Row[]): boolean =>
   a.length === b.length && a.every((row, i) => sameRow(row, b[i]!));
 
 export function SessionsPanel({ variant }: SessionsPanelProps) {
-  const { currentProject, actions, client } = usePiorbitStable();
+  const { currentProject, setCurrentProject, actions, client } = usePiorbitStable();
   const shell = useShell();
   const { copy } = useCopy();
   useClock();
@@ -108,6 +110,15 @@ export function SessionsPanel({ variant }: SessionsPanelProps) {
       if (variant === "sheet") shell.setSessionsOpen(false);
     },
     [actions, shell, variant],
+  );
+
+  /** An inbox row can live in another project; follow it there. */
+  const openFromInbox = useCallback(
+    (row: InboxRow) => {
+      if (row.cwd !== currentProject) setCurrentProject(row.cwd);
+      open(row.path);
+    },
+    [currentProject, open, setCurrentProject],
   );
 
   const rename = useCallback(
@@ -199,6 +210,7 @@ export function SessionsPanel({ variant }: SessionsPanelProps) {
       )}
 
       <div className="min-h-0 flex-1 overflow-y-auto">
+        <InboxPanel onOpen={openFromInbox} />
         {!currentProject ? (
           <EmptyState
             title="No project yet"
@@ -319,7 +331,11 @@ const SessionRow = memo(function SessionRow({
                 onRename(summary.path);
               }}
               aria-current={active ? "page" : undefined}
-              title={summary.path}
+              title={
+                summary.messageCount > 0
+                  ? `${summary.path}\n${summary.messageCount} message${summary.messageCount === 1 ? "" : "s"}`
+                  : summary.path
+              }
               className={cn(
                 "grid w-full grid-cols-[8px_minmax(0,1fr)_auto] items-center gap-x-2.5 px-3 py-2 text-start",
                 "transition-colors duration-75 outline-none",
@@ -447,6 +463,11 @@ function ProjectSwitcher() {
 function SheetFooter() {
   const { theme, toggle } = useTheme();
   const shell = useShell();
+  const workbench = useWorkbench();
+  const openWorkbench = (page: "settings" | "logs") => {
+    workbench.open(page);
+    shell.setSessionsOpen(false);
+  };
   return (
     <footer className="flex shrink-0 items-center gap-1 px-2 py-2 hairline-t">
       <TooltipIconButton tooltip={theme === "dark" ? "Light theme" : "Dark theme"} side="top" onClick={toggle}>
@@ -454,6 +475,13 @@ function SheetFooter() {
       </TooltipIconButton>
       <TooltipIconButton tooltip="Add project" side="top" onClick={() => shell.setAddProjectOpen(true)}>
         <FolderPlus />
+      </TooltipIconButton>
+      {/* There is no rail on mobile, so settings and logs are reachable here. */}
+      <TooltipIconButton tooltip="Logs" side="top" onClick={() => openWorkbench("logs")}>
+        <FileClock />
+      </TooltipIconButton>
+      <TooltipIconButton tooltip="Settings" side="top" onClick={() => openWorkbench("settings")}>
+        <Settings />
       </TooltipIconButton>
       <span className="ms-auto pe-1 font-mono text-[11px] text-ink-3">piorbit</span>
     </footer>

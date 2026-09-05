@@ -10,6 +10,7 @@ import {
   PanelRight,
   PanelRightClose,
   Pencil,
+  RotateCw,
   Shrink,
   SquarePen,
 } from "lucide-react";
@@ -160,10 +161,33 @@ export function TopBar() {
           </span>
         )}
 
-        {chip && (
-          <Badge variant={chip.tone === "muted" ? "outline" : chip.tone} className="shrink-0">
-            {chip.label}
-          </Badge>
+        {chip && meta.session && (
+          <span className="flex shrink-0 items-center gap-1">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Badge variant={chip.tone === "muted" ? "outline" : chip.tone} tabIndex={0}>
+                  {chip.label}
+                </Badge>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-80 items-start">
+                {chip.detail ?? chip.label}
+                <span className="text-[11px] opacity-70">
+                  One Pi worker runs each project directory. Its sessions are safe on disk either way.
+                </span>
+              </TooltipContent>
+            </Tooltip>
+            {chip.canRetry && (
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => void actions.restartWorker(meta.session!.cwd)}
+                title={`Start the worker for ${meta.session.cwd} again`}
+              >
+                <RotateCw />
+                Retry
+              </Button>
+            )}
+          </span>
         )}
 
         {pills.map(([key, text]) => (

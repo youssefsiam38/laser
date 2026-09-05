@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Thread } from "@/components/thread/Thread";
+import { Workbench, WorkbenchProvider } from "@/components/workbench";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useBreakpoint, useIsWide, useKeyboardInset } from "@/hooks";
@@ -14,6 +15,7 @@ import { SessionsPanel } from "./SessionsPanel.js";
 import { errorText, isEditableTarget, ShellContext, type ShellContextValue } from "./shell-context.js";
 import { TelemetryPanel } from "./TelemetryPanel.js";
 import { Toasts } from "./Toasts.js";
+import { TrustDialog } from "./TrustDialog.js";
 import { TopBar } from "./TopBar.js";
 
 export const PANELS_STORAGE_KEY = "piorbit-panels";
@@ -194,20 +196,26 @@ export function Shell() {
 
   return (
     <TooltipProvider>
+      <WorkbenchProvider>
       <ShellContext.Provider value={shell}>
         <div className="flex h-full w-full overflow-hidden bg-bg text-ink">
           {layout !== "mobile" && <Rail />}
-          {desktop && sessionsOpen && <SessionsPanel variant="panel" />}
-          <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <TopBar />
-            <ConnectionBanner />
-            {/* The thread's sticky footer owns the keyboard/safe-area inset
-                (Thread.tsx); adding it here too lifted the composer twice. */}
-            <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-              <Thread />
-            </div>
-          </main>
-          {desktop && telemetryOpen && <TelemetryPanel variant="panel" />}
+          {/* Everything right of the rail. The workbench (M4 settings and logs)
+              covers this area and leaves the project rail reachable. */}
+          <div className="relative flex min-h-0 min-w-0 flex-1">
+            {desktop && sessionsOpen && <SessionsPanel variant="panel" />}
+            <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <TopBar />
+              <ConnectionBanner />
+              {/* The thread's sticky footer owns the keyboard/safe-area inset
+                  (Thread.tsx); adding it here too lifted the composer twice. */}
+              <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+                <Thread />
+              </div>
+            </main>
+            {desktop && telemetryOpen && <TelemetryPanel variant="panel" />}
+            <Workbench />
+          </div>
         </div>
 
         {!desktop && (
@@ -230,8 +238,10 @@ export function Shell() {
         )}
 
         <AddProjectDialog />
+        <TrustDialog />
         <Toasts />
       </ShellContext.Provider>
+      </WorkbenchProvider>
     </TooltipProvider>
   );
 }

@@ -8,7 +8,8 @@
  * stream on stdout. When fd 3 is absent (run by hand), stdio is used and
  * console output is redirected to stderr.
  *
- * Args: --cwd <dir> [--agent-dir <dir>] [--session-dir <dir>] [--subagents-temp-root <dir>]
+ * Args: --cwd <dir> [--agent-dir <dir>] [--session-dir <dir>]
+ *       [--subagents-temp-root <dir>] [--project-trusted yes|no]
  */
 import { Socket } from "node:net";
 import { LineDecoder, parseJsonLine, type JsonRpcMessage } from "@piorbit/protocol";
@@ -40,6 +41,11 @@ async function main(): Promise<void> {
   const agentDir = arg("agent-dir");
   const sessionDir = arg("session-dir");
   const subagentsTempRoot = arg("subagents-temp-root");
+  const projectTrusted = arg("project-trusted");
+  if (projectTrusted !== undefined && projectTrusted !== "yes" && projectTrusted !== "no") {
+    console.error(`piorbit worker: --project-trusted must be "yes" or "no", got ${JSON.stringify(projectTrusted)}`);
+    process.exit(2);
+  }
 
   const transport = openTransport();
   const send = (message: JsonRpcMessage) => transport.write(`${JSON.stringify(message)}\n`);
@@ -51,6 +57,7 @@ async function main(): Promise<void> {
     ...(agentDir ? { agentDir } : {}),
     ...(sessionDir ? { sessionDir } : {}),
     ...(subagentsTempRoot ? { subagentsTempRoot } : {}),
+    ...(projectTrusted !== undefined ? { projectTrusted: projectTrusted === "yes" } : {}),
   });
 
   const decoder = new LineDecoder();

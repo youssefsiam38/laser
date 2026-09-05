@@ -42,6 +42,8 @@ export const ErrorCodes = {
   DriverUnavailable: -32002,
   Cancelled: -32003,
   Unsupported: -32004,
+  /** The project has trust-gated resources and nobody has approved it yet (M2-T4). */
+  ProjectUntrusted: -32005,
 } as const;
 
 export function isRequest(m: JsonRpcMessage): m is JsonRpcRequest {

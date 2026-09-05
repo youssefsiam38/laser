@@ -85,7 +85,12 @@ beforeEach(async () => {
     JSON.stringify({ providers: { stub: { baseUrl: stub.url, api: "openai-completions", apiKey: "k", models: [{ id: "stub-1", contextWindow: 8000, maxTokens: 500 }] } } }),
   );
   logs = [];
-  host = new HostServer({ agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), log: (l) => logs.push(l) });
+  host = new HostServer({
+    agentDir: join(base, "agent"),
+    sessionDir: join(base, "sessions"),
+    stateDir: join(base, "state"),
+    log: (l) => logs.push(l),
+  });
 });
 
 afterEach(async () => {

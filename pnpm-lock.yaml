@@ -10,6 +10,9 @@ importers:
 
   .:
     dependencies:
+      '@piorbit/cli':
+        specifier: workspace:*
+        version: link:packages/cli
       '@piorbit/host':
         specifier: workspace:*
         version: link:packages/host
@@ -23,6 +26,25 @@ importers:
       vitest:
         specifier: ^3.2.4
         version: 3.2.7(@types/debug@4.1.13)(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(yaml@2.9.0)
+
+  packages/cli:
+    dependencies:
+      '@piorbit/host':
+        specifier: workspace:*
+        version: link:../host
+      '@piorbit/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@piorbit/worker':
+        specifier: workspace:*
+        version: link:../worker
+      ws:
+        specifier: 8.18.3
+        version: 8.18.3
+    devDependencies:
+      '@types/ws':
+        specifier: 8.18.1
+        version: 8.18.1
 
   packages/crypto:
     dependencies:
@@ -48,6 +70,9 @@ importers:
 
   packages/host:
     dependencies:
+      '@piorbit/crypto':
+        specifier: workspace:*
+        version: link:../crypto
       '@piorbit/protocol':
         specifier: workspace:*
         version: link:../protocol

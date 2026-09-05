@@ -18,6 +18,8 @@ const samples: Record<ClientMethod, unknown> = {
   "session/cancel": { path: "/s.jsonl" },
   "session/set_mode": { path: "/s.jsonl", mode: "plan" },
   "pi/session/list": {},
+  "pi/session/inbox": { cwd: "/p", limit: 20 },
+  "pi/session/seen": { path: "/s.jsonl", seq: 12 },
   "pi/session/steer": { path: "/s.jsonl", content: [{ type: "image", mimeType: "image/png", data: "AAAA" }] },
   "pi/session/follow_up": { path: "/s.jsonl", content: [{ type: "text", text: "later" }] },
   "pi/session/clear_queue": { path: "/s.jsonl" },
@@ -30,6 +32,29 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/model/set": { path: "/s.jsonl", model: { provider: "stub", id: "stub-1" } },
   "pi/thinking/set": { path: "/s.jsonl", level: "high" },
   "pi/ui/response": { id: "ui-1", value: "Allow" },
+  "pi/project/list": {},
+  "pi/project/add": { cwd: "/p" },
+  "pi/project/remove": { cwd: "/p" },
+  "pi/project/trust": { cwd: "/p", trusted: true, remember: true },
+  "pi/worker/list": {},
+  "pi/worker/restart": { cwd: "/p" },
+  "pi/worker/stop": { cwd: "/p" },
+
+  // --- M4 ---
+  "pi/settings/list": { cwd: "/p" },
+  "pi/settings/get": { cwd: "/p" },
+  "pi/settings/set": { cwd: "/p", scope: "global", changes: [{ path: "compaction.reserveTokens", op: "set", value: 8192 }] },
+  "pi/packages/list": { cwd: "/p" },
+  "pi/packages/install": { cwd: "/p", source: "pi-web-access", scope: "user" },
+  "pi/packages/remove": { cwd: "/p", source: "pi-web-access", scope: "project" },
+  "pi/packages/update": { cwd: "/p", source: "pi-web-access" },
+  "pi/packages/check_updates": { cwd: "/p" },
+  "pi/providers/list": { cwd: "/p" },
+  "pi/models/catalog": { cwd: "/p", refresh: true },
+  "pi/logs/query": { sections: ["provider"], search: "claude", limit: 100, beforeId: 900 },
+  "pi/logs/content": { ref: "a".repeat(64), maxBytes: 4096 },
+  "pi/logs/stats": {},
+  "pi/logs/clear": { sections: ["tools", "provider"] },
 };
 
 describe("client request schemas", () => {
@@ -48,6 +73,22 @@ describe("client request schemas", () => {
     expect(() => clientParamsSchemas["pi/thinking/set"].parse({ path: "/s", level: "ultra" })).toThrow();
     expect(() => clientParamsSchemas["session/new"].parse({ cwd: "/p", extra: 1 })).toThrow();
     expect(() => clientParamsSchemas["pi/ui/response"].parse({ id: "x", cancelled: false })).toThrow();
+  });
+
+  it("refuses a settings path that could reach an object's prototype", () => {
+    for (const path of ["__proto__", "compaction.__proto__.x", "constructor", "a.prototype.b", "a..b", "a b"]) {
+      expect(() =>
+        clientParamsSchemas["pi/settings/set"].parse({ cwd: "/p", scope: "global", changes: [{ path, op: "unset" }] }),
+      ).toThrow();
+    }
+    expect(() =>
+      clientParamsSchemas["pi/settings/set"].parse({ cwd: "/p", scope: "user", changes: [{ path: "theme", op: "unset" }] }),
+    ).toThrow();
+  });
+
+  it("refuses a log content ref that is not a sha256", () => {
+    expect(() => clientParamsSchemas["pi/logs/content"].parse({ ref: "../../etc/passwd" })).toThrow();
+    expect(() => clientParamsSchemas["pi/logs/content"].parse({ ref: "A".repeat(64) })).toThrow();
   });
 
   it("maps failures to JSON-RPC error codes", () => {

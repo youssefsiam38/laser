@@ -1,6 +1,8 @@
 export { Shell, PANELS_STORAGE_KEY } from "./Shell.js";
 export { Rail } from "./Rail.js";
 export { SessionsPanel, type SessionsPanelProps } from "./SessionsPanel.js";
+export { InboxPanel } from "./InboxPanel.js";
+export { TrustDialog } from "./TrustDialog.js";
 export { TopBar } from "./TopBar.js";
 export { TelemetryPanel, type TelemetryPanelProps } from "./TelemetryPanel.js";
 export { HistoryTree, type HistoryTreeProps } from "./HistoryTree.js";

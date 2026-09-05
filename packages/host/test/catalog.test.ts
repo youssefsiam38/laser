@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionCatalog } from "../src/catalog.js";
@@ -38,6 +38,38 @@ describe("SessionCatalog", () => {
     session("--nested--", "n.jsonl", { id: "nested", cwd: "/n" }, new Date("2026-01-01"));
     const ids = new SessionCatalog(dir).list().map((s) => s.id).sort();
     expect(ids).toEqual(["flat", "nested"]);
+  });
+
+  it("fills name, first message and message count, and continues the scan as the file grows", () => {
+    const path = join(dir, "--home-c--", "1_c.jsonl");
+    mkdirSync(join(dir, "--home-c--"), { recursive: true });
+    const message = (role: string, text: string) =>
+      `${JSON.stringify({ type: "message", id: role + text.length, message: { role, content: [{ type: "text", text }] } })}\n`;
+    writeFileSync(
+      path,
+      `${JSON.stringify({ type: "session", version: 3, id: "c", cwd: "/home/c" })}\n` +
+        message("user", "  Fix the flaky   test\nplease ") +
+        message("assistant", "On it") +
+        // A tool result is not a message a person counts.
+        `${JSON.stringify({ type: "message", message: { role: "toolResult", toolCallId: "t1", content: "ok" } })}\n`,
+    );
+    utimesSync(path, new Date("2026-04-01"), new Date("2026-04-01"));
+
+    const catalog = new SessionCatalog(dir);
+    const first = catalog.list("/home/c")[0]!;
+    expect(first).toMatchObject({ messageCount: 2, firstMessage: "Fix the flaky test please" });
+    expect(first.name).toBeUndefined();
+
+    // Append a rename and another exchange; the scan resumes from where it stopped.
+    appendFileSync(
+      path,
+      `${JSON.stringify({ type: "session_info", name: "Flaky test" })}\n` +
+        message("user", "…and the ünicode päth") +
+        message("assistant", "done"),
+    );
+    utimesSync(path, new Date("2026-04-02"), new Date("2026-04-02"));
+    const second = catalog.list("/home/c")[0]!;
+    expect(second).toMatchObject({ name: "Flaky test", messageCount: 4, firstMessage: "Fix the flaky test please" });
   });
 
   it("returns nothing for a missing directory and re-reads when a file changes", () => {

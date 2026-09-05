@@ -2,15 +2,16 @@
  * Pure view-model helpers for the app shell. No React, no DOM.
  * Tested in test/shell/model.test.ts.
  */
-import type { SessionSummary } from "@piorbit/protocol";
+import type { ProjectInfo, ProjectTrust, SessionSummary } from "@piorbit/protocol";
 import { mergeSessions, sessionAttention, sortSessions } from "../../runtime/threadList.js";
 import { textOf, type Block, type SessionView } from "../../store.js";
 import { shortCwd, summariseArgs } from "../../format.js";
-import { aggregateStatus, type Status } from "../status/status.js";
+import { aggregateStatus, statusRank, type Status } from "../status/status.js";
 
 export type WorkerInfo = { status: string; message?: string };
 export type Views = Readonly<Record<string, SessionView | undefined>>;
 export type Workers = Readonly<Record<string, WorkerInfo | undefined>>;
+export type Projects = Readonly<Record<string, ProjectInfo | undefined>>;
 
 // ---------------------------------------------------------------------------
 // Projects
@@ -26,6 +27,10 @@ export interface ProjectSummary {
   /** Sessions in `waiting_for_input`. */
   needYou: number;
   worker: WorkerInfo | undefined;
+  /** Pi project trust, from the host. `undefined` until the project list lands. */
+  trust: ProjectTrust | undefined;
+  /** True when a person added this directory rather than it being discovered. */
+  pinned: boolean;
 }
 
 /** Catalog ∪ open views, restricted to one project, attention-sorted. */
@@ -46,11 +51,13 @@ export function projectSummaries(
   sessions: readonly SessionSummary[],
   open: Views,
   workers: Workers,
+  info: Projects = {},
 ): ProjectSummary[] {
   const all = mergeSessions(sessions, open);
   return projects.map((cwd) => {
     const mine = all.filter((s) => s.cwd === cwd);
     const worker = workers[cwd];
+    const project = info[cwd];
     const statuses = mine.map((s) => sessionAttention(s, open[s.path]));
     if (worker?.status === "crashed") statuses.push("error");
     return {
@@ -60,8 +67,23 @@ export function projectSummaries(
       sessionCount: mine.length,
       needYou: needYouCount(mine, open),
       worker,
+      trust: project?.trust,
+      pinned: project?.pinned ?? false,
     };
   });
+}
+
+/** The words next to a project's trust state; `undefined` when there is nothing to say. */
+export function trustLabel(trust: ProjectTrust | undefined): { label: string; tone: "attention" | "muted" } | undefined {
+  switch (trust) {
+    case "declined":
+      return { label: "Project files not loaded", tone: "muted" };
+    case "unknown":
+      return { label: "Needs approval", tone: "attention" };
+    default:
+      // `trusted` and `not_required` are the normal case: say nothing.
+      return undefined;
+  }
 }
 
 /**
@@ -150,21 +172,72 @@ export function sessionStateLabel(view: SessionView | undefined, worker?: Worker
 export interface WorkerChip {
   label: string;
   tone: "attention" | "danger" | "muted";
+  /** What went wrong, in full, for the tooltip. */
+  detail?: string;
+  /** True when `pi/worker/restart` would do something: offer a retry. */
+  canRetry: boolean;
 }
 
 /** Chip for the top bar; `undefined` when the worker is ready (nothing to say). */
 export function workerChip(worker: WorkerInfo | undefined): WorkerChip | undefined {
   if (!worker || worker.status === "ready") return undefined;
+  const detail = worker.message ? { detail: worker.message } : {};
   switch (worker.status) {
     case "starting":
-      return { label: "Worker starting", tone: "attention" };
+      return { label: "Starting Pi", tone: "attention", canRetry: false, ...detail };
     case "crashed":
-      return { label: "Worker crashed", tone: "danger" };
+      return { label: "Worker crashed", tone: "danger", canRetry: true, ...detail };
     case "retired":
-      return { label: "Worker retired", tone: "muted" };
+      return { label: "Worker asleep", tone: "muted", canRetry: true, ...detail };
     default:
-      return { label: `Worker ${worker.status}`, tone: "muted" };
+      return { label: `Worker ${worker.status}`, tone: "muted", canRetry: false, ...detail };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Inbox (M2-T2)
+// ---------------------------------------------------------------------------
+
+export interface InboxRow {
+  path: string;
+  cwd: string;
+  /** Directory name, so a row read out of project context still makes sense. */
+  project: string;
+  title: string;
+  status: Status;
+  sub: SessionSubtitle;
+  modifiedAt: string;
+}
+
+/**
+ * Sessions that want a person, across every project, most urgent first.
+ *
+ * Derived here rather than through `pi/session/inbox`: the client already holds
+ * every summary plus the live views, and a round trip per attention change
+ * would be a catalog scan per turn. The host query exists for clients that hold
+ * no catalog (the CLI, and anything on the far side of the relay).
+ */
+export function inboxRows(sessions: readonly SessionSummary[], open: Views, limit = 20): InboxRow[] {
+  return mergeSessions(sessions, open)
+    .map((summary) => {
+      const view = open[summary.path];
+      return {
+        path: summary.path,
+        cwd: summary.cwd,
+        project: shortCwd(summary.cwd),
+        title: summary.name ?? view?.title ?? summary.id.slice(0, 8),
+        status: sessionStatus(view, summary),
+        sub: sessionSubtitle(summary, view),
+        modifiedAt: summary.modifiedAt,
+      };
+    })
+    .filter((row) => row.status !== "idle")
+    .sort((a, b) => {
+      const rank = statusRank(a.status) - statusRank(b.status);
+      if (rank !== 0) return rank;
+      return a.modifiedAt < b.modifiedAt ? 1 : a.modifiedAt > b.modifiedAt ? -1 : 0;
+    })
+    .slice(0, limit);
 }
 
 /** Browser tab title: `(2) Session name · piorbit`. */

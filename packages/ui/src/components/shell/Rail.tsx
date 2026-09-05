@@ -1,7 +1,8 @@
 import { useCallback } from "react";
-import { FolderPlus, Moon, Settings, Sun } from "lucide-react";
+import { FileClock, FolderPlus, Moon, Settings, Sun } from "lucide-react";
 
 import { StatusRing, STATUS_LABEL } from "@/components/status";
+import { useWorkbench } from "@/components/workbench";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { initials } from "@/format";
@@ -9,7 +10,7 @@ import { useTheme } from "@/hooks";
 import { cn } from "@/lib/utils";
 import { usePiorbitStable, usePiorbitState } from "@/runtime";
 
-import { projectSummaries, type ProjectSummary } from "./model.js";
+import { projectSummaries, trustLabel, type ProjectSummary } from "./model.js";
 import { useShell } from "./shell-context.js";
 
 /** Two summary lists are the same when every rendered field is. */
@@ -22,6 +23,7 @@ const sameSummaries = (a: readonly ProjectSummary[], b: readonly ProjectSummary[
       p.status === q.status &&
       p.sessionCount === q.sessionCount &&
       p.needYou === q.needYou &&
+      p.trust === q.trust &&
       p.worker?.status === q.worker?.status
     );
   });
@@ -32,13 +34,14 @@ const sameSummaries = (a: readonly ProjectSummary[], b: readonly ProjectSummary[
  * danger when a worker crashed), the count is how many sessions need you.
  */
 export function Rail() {
-  const { projects, currentProject, setCurrentProject } = usePiorbitStable();
+  const { projects, projectInfo, currentProject, setCurrentProject } = usePiorbitStable();
   const shell = useShell();
   const { theme, toggle } = useTheme();
+  const workbench = useWorkbench();
   // Derived inside the selector so a streamed token that changes nothing the
   // rail shows does not re-render it (or its Radix tooltips).
   const summaries = usePiorbitState(
-    useCallback((s) => projectSummaries(projects, s.sessions, s.open, s.workers), [projects]),
+    useCallback((s) => projectSummaries(projects, s.sessions, s.open, s.workers, projectInfo), [projectInfo, projects]),
     sameSummaries,
   );
 
@@ -81,11 +84,22 @@ export function Rail() {
           {theme === "dark" ? <Sun /> : <Moon />}
         </TooltipIconButton>
         <TooltipIconButton
-          tooltip="Settings · arrives in M4"
+          tooltip="Logs"
           side="right"
           size="icon"
-          aria-disabled="true"
-          className="cursor-not-allowed text-ink-3 opacity-45 hover:bg-transparent hover:text-ink-3 active:translate-y-0"
+          aria-current={workbench.page === "logs" ? "page" : undefined}
+          className={cn("text-ink-3 hover:text-ink", workbench.page === "logs" && "bg-surface text-ink")}
+          onClick={() => workbench.open("logs")}
+        >
+          <FileClock />
+        </TooltipIconButton>
+        <TooltipIconButton
+          tooltip="Settings"
+          side="right"
+          size="icon"
+          aria-current={workbench.page === "settings" ? "page" : undefined}
+          className={cn("text-ink-3 hover:text-ink", workbench.page === "settings" && "bg-surface text-ink")}
+          onClick={() => workbench.open("settings")}
         >
           <Settings />
         </TooltipIconButton>
@@ -115,6 +129,7 @@ interface ProjectButtonProps {
 
 function ProjectButton({ project, active, onSelect }: ProjectButtonProps) {
   const count = `${project.sessionCount} session${project.sessionCount === 1 ? "" : "s"}`;
+  const trust = trustLabel(project.trust);
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -158,6 +173,7 @@ function ProjectButton({ project, active, onSelect }: ProjectButtonProps) {
             {project.status !== "idle" ? ` · ${STATUS_LABEL[project.status]}` : ""}
             {project.worker && project.worker.status !== "ready" ? ` · worker ${project.worker.status}` : ""}
           </span>
+          {trust && <span className="text-[11px] leading-4 opacity-70">{trust.label}</span>}
         </span>
       </TooltipContent>
     </Tooltip>

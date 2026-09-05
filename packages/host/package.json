@@ -13,7 +13,9 @@
   "bin": {
     "piorbit-host": "./dist/main.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -22,6 +24,7 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
+    "@piorbit/crypto": "workspace:*",
     "@piorbit/protocol": "workspace:*",
     "@piorbit/ui": "workspace:*",
     "@piorbit/worker": "workspace:*",

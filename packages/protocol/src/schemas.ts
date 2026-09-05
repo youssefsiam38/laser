@@ -39,6 +39,51 @@ export const uiDialogResponseSchema = z.union([
 const sessionPath = z.string().min(1);
 const content = z.array(contentBlockSchema).min(1);
 
+// ---------- M4 values (settings, packages, providers, logs) ----------
+
+const cwd = z.string().min(1);
+export const settingsScopeSchema = z.enum(["global", "project"]);
+export const packageScopeSchema = z.enum(["user", "project"]);
+export const logSectionSchema = z.enum(["provider", "tools", "session", "subagents", "host"]);
+export const logLevelSchema = z.enum(["debug", "info", "warn", "error"]);
+
+/**
+ * A settings path is a dotted chain of JSON identifiers. Refusing `__proto__`
+ * and friends here means the writer never has to defend against prototype
+ * pollution while walking the document.
+ */
+const FORBIDDEN_SEGMENTS = new Set(["__proto__", "constructor", "prototype"]);
+export const settingsPathSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .refine(
+    (value) =>
+      value
+        .split(".")
+        .every((segment) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(segment) && !FORBIDDEN_SEGMENTS.has(segment)),
+    { message: "must be a dotted chain of JSON identifiers (no __proto__, constructor or prototype)" },
+  );
+
+export const settingChangeSchema = z.union([
+  z.object({ path: settingsPathSchema, op: z.literal("set"), value: z.unknown() }).strict(),
+  z.object({ path: settingsPathSchema, op: z.literal("unset") }).strict(),
+]);
+
+export const logQuerySchema = z
+  .object({
+    sections: z.array(logSectionSchema).min(1).max(5).optional(),
+    cwd: cwd.optional(),
+    sessionPath: sessionPath.optional(),
+    search: z.string().max(500).optional(),
+    levels: z.array(logLevelSchema).min(1).max(4).optional(),
+    afterId: z.number().int().nonnegative().optional(),
+    beforeId: z.number().int().nonnegative().optional(),
+    limit: z.number().int().positive().max(1000).optional(),
+    byteBudget: z.number().int().positive().max(8 * 1024 * 1024).optional(),
+  })
+  .strict();
+
 // ---------- client → host request params, one per method ----------
 
 export const clientParamsSchemas = {
@@ -51,6 +96,11 @@ export const clientParamsSchemas = {
   "session/set_mode": z.object({ path: sessionPath, mode: z.string().min(1) }).strict(),
 
   "pi/session/list": z.object({ cwd: z.string().min(1).optional() }).strict(),
+  "pi/session/inbox": z
+    .object({ cwd: z.string().min(1).optional(), limit: z.number().int().positive().max(500).optional() })
+    .strict(),
+  "pi/session/seen": z.object({ path: sessionPath, seq: z.number().int().nonnegative().optional() }).strict(),
+  "pi/session/detach": z.object({ path: sessionPath }).strict(),
   "pi/session/steer": z.object({ path: sessionPath, content }).strict(),
   "pi/session/follow_up": z.object({ path: sessionPath, content }).strict(),
   "pi/session/clear_queue": z.object({ path: sessionPath }).strict(),
@@ -65,6 +115,40 @@ export const clientParamsSchemas = {
   "pi/model/set": z.object({ path: sessionPath, model: modelRefSchema }).strict(),
   "pi/thinking/set": z.object({ path: sessionPath, level: thinkingLevelSchema }).strict(),
   "pi/ui/response": uiDialogResponseSchema,
+
+  "pi/project/list": z.object({}).strict(),
+  "pi/project/add": z.object({ cwd: z.string().min(1) }).strict(),
+  "pi/project/remove": z.object({ cwd: z.string().min(1) }).strict(),
+  "pi/project/trust": z
+    .object({ cwd: z.string().min(1), trusted: z.boolean(), remember: z.boolean().optional() })
+    .strict(),
+
+  "pi/worker/list": z.object({}).strict(),
+  "pi/worker/restart": z.object({ cwd: z.string().min(1) }).strict(),
+  "pi/worker/stop": z.object({ cwd: z.string().min(1) }).strict(),
+
+  // --- M4: settings, packages, providers, logs ---
+  "pi/settings/list": z.object({ cwd }).strict(),
+  "pi/settings/get": z.object({ cwd }).strict(),
+  "pi/settings/set": z
+    .object({ cwd, scope: settingsScopeSchema, changes: z.array(settingChangeSchema).min(1).max(200) })
+    .strict(),
+
+  "pi/packages/list": z.object({ cwd }).strict(),
+  "pi/packages/install": z.object({ cwd, source: z.string().min(1).max(500), scope: packageScopeSchema }).strict(),
+  "pi/packages/remove": z.object({ cwd, source: z.string().min(1).max(500), scope: packageScopeSchema }).strict(),
+  "pi/packages/update": z.object({ cwd, source: z.string().min(1).max(500).optional() }).strict(),
+  "pi/packages/check_updates": z.object({ cwd }).strict(),
+
+  "pi/providers/list": z.object({ cwd }).strict(),
+  "pi/models/catalog": z.object({ cwd, refresh: z.boolean().optional() }).strict(),
+
+  "pi/logs/query": logQuerySchema,
+  "pi/logs/content": z
+    .object({ ref: z.string().regex(/^[0-9a-f]{64}$/), maxBytes: z.number().int().positive().max(8 * 1024 * 1024).optional() })
+    .strict(),
+  "pi/logs/stats": z.object({}).strict(),
+  "pi/logs/clear": z.object({ sections: z.array(logSectionSchema).min(1).max(5).optional() }).strict(),
 } satisfies Record<ClientMethod, z.ZodTypeAny>;
 
 export const clientMethods = Object.keys(clientParamsSchemas) as ClientMethod[];

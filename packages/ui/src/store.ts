@@ -203,7 +203,10 @@ export function reduce(state: AppState, action: Action): AppState {
 function updateView(state: AppState, path: string, fn: (v: SessionView) => SessionView): AppState {
   const view = state.open[path];
   if (!view) return state;
-  return { ...state, open: { ...state.open, [path]: fn(view) } };
+  const next = fn(view);
+  // A reducer that returns the same view must not produce a new state object,
+  // or every no-op notification re-renders every subscriber.
+  return next === view ? state : { ...state, open: { ...state.open, [path]: next } };
 }
 
 function applyNotification(state: AppState, method: HostNotificationMethod, params: unknown): AppState {

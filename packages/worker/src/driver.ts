@@ -41,6 +41,13 @@ export interface DriverOpenOptions {
   sessionDir?: string;
   /** Where pi-subagents should keep its file layer for this worker. */
   subagentsTempRoot?: string;
+  /**
+   * Host-resolved Pi project trust (M2-T4). The SDK never runs Pi's own trust
+   * flow and `SettingsManager` defaults to trusted, so without this a project
+   * the user declined would still load its `.pi/` resources. Omit to keep Pi's
+   * default (used by tests and by hand-run workers).
+   */
+  projectTrusted?: boolean;
 }
 
 export type DriverEvent =

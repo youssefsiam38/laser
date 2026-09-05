@@ -29,11 +29,16 @@ import {
 import type { AssistantRuntime, ThreadMessageLike } from "@assistant-ui/react";
 import type {
   ContentBlock,
+  HostNotificationMethod,
+  HostNotifications,
   ModelRef,
+  ProjectInfo,
   SessionState,
+  SessionSummary,
   ThinkingLevel,
   UiDialogRequest,
   UiDialogResponse,
+  WorkerInfo,
 } from "@piorbit/protocol";
 import {
   createContext,
@@ -58,7 +63,15 @@ import {
 } from "./threadList.js";
 
 export const PROJECT_STORAGE_KEY = "piorbit-project";
+/**
+ * Pre-M2 project list. Projects now live in the host (`pi/project/*`) so the
+ * CLI, a second browser and a phone all see one list; this key is only read
+ * once, to hand old local entries to the host, and then removed.
+ */
 export const PROJECTS_STORAGE_KEY = "piorbit-projects";
+
+/** A project-trust question the host is holding a worker start on (M2-T4). */
+export type TrustRequest = HostNotifications["pi/project/trust_request"];
 
 // ---------------------------------------------------------------------------
 // Context
@@ -86,8 +99,20 @@ export interface PiorbitActions {
   refreshEntries(): Promise<void>;
   /** `pi/session/clear_queue`; resolves with the text to restore into the composer. */
   clearQueue(): Promise<string>;
-  addProject(cwd: string): void;
-  removeProject(cwd: string): void;
+  /**
+   * `pi/project/add` — server-side, so every client and the CLI see it.
+   * Resolves with the host's record, or `undefined` when the add failed (the
+   * failure is already on screen as a toast).
+   */
+  addProject(cwd: string): Promise<ProjectInfo | undefined>;
+  removeProject(cwd: string): Promise<void>;
+  refreshProjects(): Promise<void>;
+  /** Answer a `pi/project/trust_request`. The held-back worker starts (or does not). */
+  answerTrust(cwd: string, trusted: boolean, remember: boolean): Promise<void>;
+  /** Start a crashed or retired worker again (`pi/worker/restart`). */
+  restartWorker(cwd: string): Promise<void>;
+  /** Tell the host this session has been read up to its latest update. */
+  markSeen(path: string, seq: number): void;
   dismissToast(id: number): void;
   toast(level: "info" | "warning" | "error", text: string): void;
 }
@@ -100,8 +125,12 @@ export interface PiorbitContextValue {
   view: SessionView | undefined;
   currentProject: string | undefined;
   setCurrentProject: (cwd: string | undefined) => void;
-  /** Every cwd we know about: from the catalog, from open sessions, and user-added. */
+  /** Every cwd we know about: the host's project list, plus any open session's. */
   projects: string[];
+  /** The host's project records, keyed by cwd (trust, pin, session count). */
+  projectInfo: Readonly<Record<string, ProjectInfo>>;
+  /** Project-trust questions waiting for an answer. */
+  trustRequests: TrustRequest[];
   archive: ArchiveStore;
   actions: PiorbitActions;
 }
@@ -294,16 +323,27 @@ export function PiorbitProvider({ children, url }: PiorbitProviderProps): ReactN
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
 
   const [currentProject, setCurrentProjectState] = useState<string | undefined>(() => readString(PROJECT_STORAGE_KEY));
-  const [extraProjects, setExtraProjects] = useState<string[]>(() => readStringList(PROJECTS_STORAGE_KEY));
+  const [projectList, setProjectList] = useState<ProjectInfo[]>([]);
+  const [trustRequests, setTrustRequests] = useState<TrustRequest[]>([]);
   const projectRef = useRef<string | undefined>(currentProject);
   projectRef.current = currentProject;
 
   const archive = useMemo(() => createArchiveStore(storage()), []);
 
+  /**
+   * Host notifications the reducer does not model: the project list, trust
+   * questions, per-session attention, and a worker that came back. Kept in a
+   * ref so the `HostClient` identity does not depend on it.
+   */
+  const onHostNotification = useRef<(method: HostNotificationMethod, params: unknown) => void>(() => {});
+
   const client = useMemo(() => {
     const created: HostClient = new HostClient({
       ...(url !== undefined ? { url } : {}),
-      onNotification: (method, params) => dispatch({ type: "notification", method, params }),
+      onNotification: (method, params) => {
+        dispatch({ type: "notification", method, params });
+        onHostNotification.current(method, params);
+      },
       onConnection: (s) => dispatch({ type: "connection", state: s }),
       // A worker that restarted numbers its updates from 1 again; without this
       // the reducer would dedupe every one of them as a replay and the session
@@ -350,6 +390,48 @@ export function PiorbitProvider({ children, url }: PiorbitProviderProps): ReactN
     }
   }, [client]);
 
+  /**
+   * Coalesced re-list, for attention on a session we do not hold yet (a
+   * terminal-started one, or a session another client just made). A burst of
+   * these arrives when several projects wake at once, and each list is a
+   * catalog scan, so they collapse into one.
+   */
+  const sessionRefreshTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const scheduleSessionRefresh = useCallback(() => {
+    if (sessionRefreshTimer.current) return;
+    sessionRefreshTimer.current = setTimeout(() => {
+      sessionRefreshTimer.current = undefined;
+      void refreshSessions();
+    }, 250);
+  }, [refreshSessions]);
+  useEffect(() => () => clearTimeout(sessionRefreshTimer.current), []);
+
+  const refreshProjects = useCallback(async () => {
+    try {
+      const { projects } = await client.request("pi/project/list", {});
+      setProjectList(projects);
+    } catch {
+      /* not connected yet */
+    }
+  }, [client]);
+
+  /**
+   * One-time migration: projects used to live in this browser. Hand them to
+   * the host so every client gets them, then drop the key.
+   */
+  const migratedProjects = useRef(false);
+  const migrateLocalProjects = useCallback(async () => {
+    if (migratedProjects.current) return;
+    migratedProjects.current = true;
+    const local = readStringList(PROJECTS_STORAGE_KEY);
+    if (local.length === 0) return;
+    for (const cwd of local) {
+      await client.request("pi/project/add", { cwd }).catch(() => {});
+    }
+    writeString(PROJECTS_STORAGE_KEY, undefined);
+    await refreshProjects();
+  }, [client, refreshProjects]);
+
   // Pi creates the session file on the first message and renames happen
   // mid-session, so refresh on connect, whenever a session settles, and on a
   // slow poll while connected.
@@ -357,6 +439,10 @@ export function PiorbitProvider({ children, url }: PiorbitProviderProps): ReactN
   useEffect(() => {
     if (state.connection === "open") void refreshSessions();
   }, [state.connection, runningCount, refreshSessions]);
+  useEffect(() => {
+    if (state.connection !== "open") return;
+    void migrateLocalProjects().then(() => refreshProjects());
+  }, [state.connection, migrateLocalProjects, refreshProjects]);
   useEffect(() => {
     if (state.connection !== "open") return;
     const timer = setInterval(() => void refreshSessions(), 20_000);
@@ -385,9 +471,16 @@ export function PiorbitProvider({ children, url }: PiorbitProviderProps): ReactN
           ...(hydrated ? { fromSeq: view.lastSeq } : {}),
         });
         dispatch({ type: "opened", state: session });
-        // `replayFrom` below the seq we hold = a fresh worker epoch.
-        const needsResync = hydrated && replayFrom < (view?.lastSeq ?? 0);
+        // `replayFrom` is the earliest seq the worker can actually replay. Below
+        // what we hold means a fresh worker epoch; *above* it means its replay
+        // buffer no longer reaches back to us and there is a hole. Either way
+        // the transcript has to be re-read rather than patched.
+        const needsResync = hydrated && replayFrom !== (view?.lastSeq ?? 0);
         if (needsResync) {
+          // `seq` restarts at 1 in a new worker, so a mark from the old epoch
+          // would suppress every future one and the row would stay unread
+          // while the user is looking straight at it.
+          seenSeq.current.delete(path);
           client.resync(path, replayFrom);
           dispatch({ type: "resync", path, lastSeq: replayFrom });
         } else {
@@ -426,6 +519,79 @@ export function PiorbitProvider({ children, url }: PiorbitProviderProps): ReactN
     return path;
   }, []);
 
+  // --- attention ("seen") -------------------------------------------------
+
+  /** Highest seq we have told the host about, per session, in the current worker epoch. */
+  const seenSeq = useRef(new Map<string, number>());
+
+  // A reconnect can land on a restarted host or restarted workers, so every
+  // remembered seq belongs to an epoch that may no longer exist.
+  useEffect(() => {
+    if (state.connection !== "open") seenSeq.current.clear();
+  }, [state.connection]);
+
+  /**
+   * Only the session on screen counts as "attached" for the host's idle
+   * retirement guard. The host used to add a path on every `session/load` and
+   * never remove one, so every project touched today kept its worker — and its
+   * whole Pi runtime — resident for the life of the window.
+   */
+  const detached = useRef(new Set<string>());
+  useEffect(() => {
+    if (state.connection !== "open") {
+      detached.current.clear();
+      return;
+    }
+    for (const path of Object.keys(state.open)) {
+      if (path === state.current) {
+        detached.current.delete(path);
+        continue;
+      }
+      if (detached.current.has(path)) continue;
+      detached.current.add(path);
+      // Bookkeeping only: nothing is closed, and switching back re-attaches
+      // through the `session/load` that `openSession` always sends.
+      client.request("pi/session/detach", { path }).catch(() => detached.current.delete(path));
+    }
+  }, [client, state.connection, state.current, state.open]);
+
+  const markSeen = useCallback(
+    (path: string, seq: number) => {
+      if ((seenSeq.current.get(path) ?? -1) >= seq) return;
+      seenSeq.current.set(path, seq);
+      // Fire and forget: attention is a convenience, and a failed mark is
+      // corrected by the next one.
+      client.request("pi/session/seen", { path, seq }).catch(() => {});
+    },
+    [client],
+  );
+
+  const currentPath = state.current;
+  const currentView = currentPath ? state.open[currentPath] : undefined;
+  const currentSeq = currentView?.lastSeq ?? 0;
+  const currentRunning = currentView?.running ?? false;
+
+  // Read = on screen and settled. While the agent is still working the row
+  // should stay "working"; it becomes read when it finishes under your eyes.
+  useEffect(() => {
+    if (!currentPath || state.connection !== "open" || currentRunning) return;
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+    markSeen(currentPath, currentSeq);
+  }, [currentPath, currentRunning, currentSeq, markSeen, state.connection]);
+
+  // Coming back to the tab counts as reading it.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const onVisible = () => {
+      const s = readState();
+      if (document.visibilityState !== "visible" || !s.current) return;
+      const view = s.open[s.current];
+      if (view && !view.running) markSeen(s.current, view.lastSeq);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [markSeen]);
+
   // --- actions ------------------------------------------------------------
 
   const send = useCallback(
@@ -460,6 +626,66 @@ export function PiorbitProvider({ children, url }: PiorbitProviderProps): ReactN
   const applyState = useCallback((session: SessionState) => {
     dispatch({ type: "opened", state: session });
   }, []);
+
+  /**
+   * Fold the host-only notifications into local state. Attention is patched
+   * onto the catalog rows we already hold rather than triggering a re-list: a
+   * running agent changes attention often, and re-listing on each change would
+   * mean a full catalog scan per turn.
+   */
+  onHostNotification.current = (method, params) => {
+    switch (method) {
+      case "pi/project/updated":
+        setProjectList((params as HostNotifications["pi/project/updated"]).projects);
+        return;
+      case "pi/project/trust_request": {
+        const request = params as TrustRequest;
+        setTrustRequests((current) => (current.some((r) => r.id === request.id) ? current : [...current, request]));
+        return;
+      }
+      case "pi/project/trust_resolved": {
+        const { id } = params as HostNotifications["pi/project/trust_resolved"];
+        setTrustRequests((current) => current.filter((r) => r.id !== id));
+        return;
+      }
+      case "pi/session/attention": {
+        const { path, attention } = params as HostNotifications["pi/session/attention"];
+        const sessions = readState().sessions;
+        let changed = false;
+        let known = false;
+        const next: SessionSummary[] = sessions.map((summary) => {
+          if (summary.path !== path) return summary;
+          known = true;
+          if (summary.attention === attention) return summary;
+          changed = true;
+          return { ...summary, attention };
+        });
+        // A session we have never listed: started from a terminal, or created
+        // in another client. Dropping this would keep it out of the inbox until
+        // the next poll, which is exactly when it is asking for a person.
+        if (!known) {
+          if (attention !== "idle") scheduleSessionRefresh();
+          return;
+        }
+        if (changed) dispatch({ type: "sessions", sessions: next });
+        return;
+      }
+      case "pi/worker/status": {
+        const info = params as WorkerInfo;
+        // The host restarted a worker and re-opened its sessions. Their update
+        // stream numbers from 1 again, so re-load ours to adopt the new epoch
+        // (`openSession` resyncs and re-hydrates when it sees the lower seq).
+        if (info.status !== "ready" || !info.reopened?.length) return;
+        const open = readState().open;
+        for (const path of info.reopened) {
+          if (open[path]) void actionsRef.current.openSession(path);
+        }
+        return;
+      }
+      default:
+        return;
+    }
+  };
 
   const fork = useCallback(
     async (entryId: string) => {
@@ -540,27 +766,51 @@ export function PiorbitProvider({ children, url }: PiorbitProviderProps): ReactN
           const { steering, followUp } = await client.request("pi/session/clear_queue", { path: requireCurrent() });
           return [...steering, ...followUp].join("\n\n");
         }).then((text) => text ?? ""),
-      addProject: (cwd) => {
-        const trimmed = cwd.trim();
-        if (!trimmed) return;
-        setExtraProjects((current) => {
-          if (current.includes(trimmed)) return current;
-          const next = [...current, trimmed];
-          writeString(PROJECTS_STORAGE_KEY, JSON.stringify(next));
-          return next;
-        });
-      },
-      removeProject: (cwd) => {
-        setExtraProjects((current) => {
-          const next = current.filter((p) => p !== cwd);
-          writeString(PROJECTS_STORAGE_KEY, JSON.stringify(next));
-          return next;
-        });
-      },
+      addProject: (cwd) =>
+        guard(async () => {
+          const trimmed = cwd.trim();
+          if (!trimmed) throw new Error("Type a directory path first.");
+          const { project } = await client.request("pi/project/add", { cwd: trimmed });
+          setProjectList((current) =>
+            current.some((p) => p.cwd === project.cwd) ? current : [...current, project],
+          );
+          return project;
+        }),
+      removeProject: (cwd) =>
+        guard(async () => {
+          await client.request("pi/project/remove", { cwd });
+          setProjectList((current) => current.filter((p) => p.cwd !== cwd || p.sessionCount > 0));
+          await refreshProjects();
+        }).then(() => undefined),
+      refreshProjects,
+      answerTrust: (cwd, trusted, remember) =>
+        guard(async () => {
+          const { project } = await client.request("pi/project/trust", { cwd, trusted, remember });
+          setProjectList((current) => current.map((p) => (p.cwd === project.cwd ? project : p)));
+          setTrustRequests((current) => current.filter((r) => r.cwd !== project.cwd));
+        }).then(() => undefined),
+      restartWorker: (cwd) =>
+        guard(async () => {
+          await client.request("pi/worker/restart", { cwd });
+        }).then(() => undefined),
+      markSeen,
       dismissToast: (id) => dispatch({ type: "dismissToast", id }),
       toast: (level, text) => dispatch({ type: "toast", level, text }),
     }),
-    [answerDialog, applyState, client, fork, guard, newSession, openSession, refreshSessions, requireCurrent, send],
+    [
+      answerDialog,
+      applyState,
+      client,
+      fork,
+      guard,
+      markSeen,
+      newSession,
+      openSession,
+      refreshProjects,
+      refreshSessions,
+      requireCurrent,
+      send,
+    ],
   );
 
   const actionsRef = useRef<PiorbitActions>(actions);
@@ -571,20 +821,68 @@ export function PiorbitProvider({ children, url }: PiorbitProviderProps): ReactN
     writeString(PROJECT_STORAGE_KEY, cwd);
   }, []);
 
-  // Via a string key so the array identity survives a delta (it feeds the
-  // stable half of the context).
+  // The host owns the list; a session opened before the list arrives (or in a
+  // directory the host has not indexed yet) still gets a rail icon. Via a
+  // string key so the array identity survives a delta — it feeds the stable
+  // half of the context.
   const projectsKey = useMemo(() => {
-    const set = new Set<string>(extraProjects);
-    for (const summary of state.sessions) set.add(summary.cwd);
+    const set = new Set<string>(projectList.map((p) => p.cwd));
     for (const open of Object.values(state.open)) set.add(open.state.cwd);
     return [...set].sort((a, b) => a.localeCompare(b)).join("\n");
-  }, [extraProjects, state.sessions, state.open]);
+  }, [projectList, state.open]);
   const projects = useMemo(() => (projectsKey ? projectsKey.split("\n") : []), [projectsKey]);
+  const projectInfo = useMemo(() => {
+    const map: Record<string, ProjectInfo> = {};
+    for (const project of projectList) map[project.cwd] = project;
+    return map;
+  }, [projectList]);
 
   // Default the project to the first one we learn about.
   useEffect(() => {
     if (currentProject === undefined && projects[0]) setCurrentProject(projects[0]);
   }, [currentProject, projects, setCurrentProject]);
+
+  /**
+   * Deep link: `piorbit open` / `piorbit new --open` send the browser to
+   * `#/session/<encodeURIComponent(path)>`. Honour it once per hash, and clear
+   * the fragment afterwards so a reload does not drag the user back to a
+   * session they have since navigated away from. Failure is surfaced through
+   * `onError` like any other open, not swallowed — a stale link in a shell
+   * history is exactly the case where silence would be confusing.
+   */
+  const consumedHash = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (state.connection !== "open") return;
+    const hash = globalThis.location?.hash ?? "";
+    if (hash === consumedHash.current) return;
+    const match = /^#\/session\/(.+)$/.exec(hash);
+    if (!match?.[1]) return;
+    consumedHash.current = hash;
+    let path: string;
+    try {
+      path = decodeURIComponent(match[1]);
+    } catch {
+      onError(new Error(`That link is not a valid session path: ${hash}`));
+      return;
+    }
+    void openSession(path)
+      .then(() => {
+        const cwd = readState().open[path]?.state.cwd;
+        if (cwd) setCurrentProject(cwd);
+      })
+      .catch((error: unknown) => {
+        onError(
+          new Error(
+            `Could not open ${path} from the link: ${error instanceof Error ? error.message : String(error)}. ` +
+              `Run \`piorbit sessions\` to see what exists.`,
+          ),
+        );
+      })
+      .finally(() => {
+        const { pathname, search } = globalThis.location;
+        globalThis.history?.replaceState(null, "", `${pathname}${search}`);
+      });
+  }, [state.connection, openSession, onError, readState, setCurrentProject]);
 
   // --- runtime ------------------------------------------------------------
 
@@ -659,8 +957,18 @@ export function PiorbitProvider({ children, url }: PiorbitProviderProps): ReactN
   // Identity survives every transcript delta, so a consumer that only reads
   // actions/projects never re-renders while the agent streams.
   const stable = useMemo<PiorbitStable>(
-    () => ({ dispatch, client, currentProject, setCurrentProject, projects, archive, actions }),
-    [actions, archive, client, currentProject, dispatch, projects, setCurrentProject],
+    () => ({
+      dispatch,
+      client,
+      currentProject,
+      setCurrentProject,
+      projects,
+      projectInfo,
+      trustRequests,
+      archive,
+      actions,
+    }),
+    [actions, archive, client, currentProject, dispatch, projectInfo, projects, setCurrentProject, trustRequests],
   );
 
   return (
@@ -833,6 +1141,21 @@ export function useExtensionUi(): ExtensionUi {
       editorText: view?.editorText,
     }),
     [view],
+  );
+}
+
+export interface TrustPrompts {
+  /** Oldest first; the host holds a worker start open for each. */
+  requests: TrustRequest[];
+  answer(cwd: string, trusted: boolean, remember: boolean): Promise<void>;
+}
+
+/** Project-trust questions raised by the host (M2-T4). */
+export function useTrustPrompts(): TrustPrompts {
+  const { trustRequests, actions } = usePiorbitStable();
+  return useMemo(
+    () => ({ requests: trustRequests, answer: actions.answerTrust }),
+    [actions.answerTrust, trustRequests],
   );
 }
 

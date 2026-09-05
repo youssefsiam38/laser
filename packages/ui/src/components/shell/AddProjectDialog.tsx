@@ -36,9 +36,13 @@ export function AddProjectDialog() {
     shell.setAddProjectOpen(open);
     if (!open) setValue("");
   };
+  /**
+   * Adding is server-side now, so it survives a reload and every other client
+   * sees it. Select it only once the host has taken it: a rejected path (a
+   * typo, an unreadable directory) must not leave the rail pointing at nothing.
+   */
   const choose = (cwd: string) => {
-    actions.addProject(cwd);
-    setCurrentProject(cwd);
+    void actions.addProject(cwd).then((project) => project && setCurrentProject(project.cwd));
     close(false);
   };
 

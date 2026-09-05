@@ -108,7 +108,15 @@ writeFileSync(
 );
 
 // ---- host ----
-const host = new HostServer({ port: PORT, agentDir, sessionDir: join(base, "sessions"), log: (l) => console.error(l) });
+// `stateDir` keeps the sandbox's projects, attention and log store inside the
+// temp dir; without it a demo run would write to the real ~/.piorbit.
+const host = new HostServer({
+  port: PORT,
+  agentDir,
+  sessionDir: join(base, "sessions"),
+  stateDir: join(base, "state"),
+  log: (l) => console.error(l),
+});
 const { url } = await host.listen();
 console.log(`piorbit sandbox\n  ui:       ${url}\n  project:  ${project}\n  agentDir: ${agentDir}\n  provider: ${providerUrl}`);
 

@@ -16,6 +16,7 @@
     "verify": "pnpm -r build && pnpm -r typecheck && pnpm -r test"
   },
   "dependencies": {
+    "@piorbit/cli": "workspace:*",
     "@piorbit/host": "workspace:*"
   },
   "devDependencies": {

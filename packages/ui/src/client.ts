@@ -62,6 +62,8 @@ export class HostClient {
   private timerHandle: ReturnType<typeof setTimeout> | undefined;
   /** Transcript deltas waiting for the next frame, in arrival (seq) order. */
   private readonly pendingUpdates: SessionUpdateParams[] = [];
+  /** Extra notification listeners registered with `subscribe()`. */
+  private readonly listeners = new Set<NotificationHandler>();
 
   constructor(private readonly options: HostClientOptions) {}
 
@@ -199,7 +201,33 @@ export class HostClient {
     }
     if (this.pendingUpdates.length === 0) return;
     const batch = this.pendingUpdates.splice(0, this.pendingUpdates.length);
-    for (const params of batch) this.options.onNotification("session/update", params);
+    for (const params of batch) this.deliver("session/update", params);
+  }
+
+  /**
+   * Extra notification listeners, alongside `options.onNotification`.
+   *
+   * The provider owns the one handler that feeds the reducer; screens that
+   * live outside app state — the logs page tailing `pi/logs/append`, the
+   * packages screen following `pi/packages/progress` — subscribe here instead
+   * of widening the reducer with rows nothing else reads. Returns an
+   * unsubscribe function.
+   */
+  subscribe(handler: NotificationHandler): () => void {
+    this.listeners.add(handler);
+    return () => this.listeners.delete(handler);
+  }
+
+  private deliver<M extends HostNotificationMethod>(method: M, params: HostNotifications[M]): void {
+    this.options.onNotification(method, params);
+    // A throwing listener must not stop the others, or the app's own handler.
+    for (const listener of this.listeners) {
+      try {
+        listener(method, params);
+      } catch {
+        /* a screen's listener is never allowed to break the socket */
+      }
+    }
   }
 
   private onMessage(message: JsonRpcMessage): void {
@@ -221,7 +249,7 @@ export class HostClient {
         return;
       }
       this.flushUpdates();
-      this.options.onNotification(method, message.params as never);
+      this.deliver(method, message.params as never);
     }
   }
 }

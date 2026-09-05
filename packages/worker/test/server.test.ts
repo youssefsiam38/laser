@@ -28,7 +28,10 @@ class FakeDriver implements SessionDriver {
     messageCount: 0,
     pendingMessageCount: 0,
   };
+  /** Set to make `open()` yield, so a second request can arrive mid-open. */
+  static gate: Promise<void> | undefined;
   async open(o: unknown) {
+    if (FakeDriver.gate) await FakeDriver.gate;
     this.opened = o;
     const path = (o as { sessionPath?: string }).sessionPath;
     if (path) this.st = { ...this.st, path };
@@ -115,10 +118,49 @@ describe("WorkerServer", () => {
     expect(h.drivers).toHaveLength(1); // attached, not reopened
   });
 
+  it("opens one driver for concurrent loads of the same session file", async () => {
+    // Two writers on one Pi session file is AGENTS.md invariant 8. A desktop
+    // and a phone, or the pool's crash recovery racing a client's reconnect,
+    // both produce exactly this.
+    const h = harness();
+    let release!: () => void;
+    FakeDriver.gate = new Promise<void>((resolve) => (release = resolve));
+    try {
+      const first = h.call(1, "session/load", { path: "/tmp/fake/s2.jsonl" });
+      const second = h.call(2, "session/load", { path: "/tmp/fake/s2.jsonl" });
+      release();
+      const [a, b] = await Promise.all([first, second]);
+      expect(a.result).toMatchObject({ state: { path: "/tmp/fake/s2.jsonl" } });
+      expect(b.result).toMatchObject({ state: { path: "/tmp/fake/s2.jsonl" } });
+      expect(h.drivers).toHaveLength(1);
+      expect(h.server.openSessions()).toEqual(["/tmp/fake/s2.jsonl"]);
+    } finally {
+      FakeDriver.gate = undefined;
+    }
+  });
+
+  it("reports the replay floor it can actually honour, not the seq that was asked for", async () => {
+    const h = harness(); // replayBuffer: 3
+    await h.call(1, "session/new", { cwd: "/tmp/fake" });
+    const d = h.drivers[0]!;
+    for (let i = 0; i < 10; i++) d.emit({ type: "update", update: { kind: "turn_start" } });
+
+    // The buffer now starts at seq 8, so a client at seq 2 has a hole. Saying
+    // "replayFrom: 2" would tell it that it missed nothing.
+    const loaded = await h.call(2, "session/load", { path: "/tmp/fake/s1.jsonl", fromSeq: 2 });
+    expect(loaded.result).toMatchObject({ replayFrom: 7 });
+
+    const reachable = await h.call(3, "session/load", { path: "/tmp/fake/s1.jsonl", fromSeq: 9 });
+    expect(reachable.result).toMatchObject({ replayFrom: 9 });
+  });
+
   it("forwards ui and extension events, routes ui responses to drivers", async () => {
     const h = harness();
     await h.call(1, "session/new", { cwd: "/tmp/fake" });
     const d = h.drivers[0]!;
+    // A real bridge reports the dialog as pending for as long as it is open;
+    // the worker only delivers an answer to a driver that claims the id.
+    d.pending = [{ method: "confirm", id: "ui-1", title: "Sure?" }];
     d.emit({ type: "ui_request", request: { method: "confirm", id: "ui-1", title: "Sure?" } });
     d.emit({ type: "ui_event", event: { method: "notify", message: "m", level: "info" } });
     d.emit({ type: "extension", message: { type: "piorbit/capabilities", active: ["provider-log"], failed: [] } });
@@ -126,8 +168,14 @@ describe("WorkerServer", () => {
     expect(h.notifications("pi/ui/event")[0]!.params).toMatchObject({ method: "notify" });
     expect(h.notifications("pi/extension/message")[0]!.params).toMatchObject({ message: { type: "piorbit/capabilities" } });
 
-    await h.call(2, "pi/ui/response", { id: "ui-1", confirmed: true });
+    const answer = await h.call(2, "pi/ui/response", { id: "ui-1", confirmed: true });
+    expect(answer.result).toEqual({ delivered: true });
     expect(d.answered).toEqual([{ id: "ui-1", confirmed: true }]);
+
+    // An id nobody is holding is reported, not silently swallowed.
+    d.pending = [];
+    const stale = await h.call(3, "pi/ui/response", { id: "ui-1", confirmed: true });
+    expect(stale.result).toEqual({ delivered: false });
   });
 
   it("routes a ui response only to the session that raised the dialog", async () => {

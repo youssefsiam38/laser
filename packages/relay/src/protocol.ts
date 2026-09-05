@@ -1,0 +1,73 @@
+/**
+ * The relay's own control vocabulary, and the one rule that keeps this package
+ * honest:
+ *
+ *   **text frames are the relay's; binary frames are the peers'.**
+ *
+ * The relay reads and writes only text frames. It never looks inside a binary
+ * frame, never forwards a text frame, and never buffers a binary frame — it
+ * copies bytes from one socket to the other or drops them. That is the whole
+ * contract (AGENTS.md invariant 7).
+ */
+
+/** Relay → client. */
+export type RelayControl =
+  | { t: "hello"; channel: string; slot: 0 | 1; peer: boolean; pingIntervalMs: number; maxFrameBytes: number }
+  /** The other side arrived or left. Hold your handshake until `present` is true. */
+  | { t: "peer"; present: boolean }
+  | { t: "ping"; n: number }
+  | { t: "error"; code: RelayErrorCode; message: string };
+
+/** Client → relay. The only thing the relay accepts. */
+export type RelayClientControl = { t: "pong"; n: number };
+
+export type RelayErrorCode =
+  | "no_peer"
+  | "frame_too_large"
+  | "bad_frame_size"
+  | "bad_control"
+  | "channel_full"
+  | "rate_limited";
+
+/** WebSocket close codes in the private-use range (4000-4999). */
+export const RelayClose = {
+  /** The channel already has its two sockets. */
+  ChannelFull: 4409,
+  /** Per-IP limit hit. */
+  RateLimited: 4429,
+  /** Ping went unanswered. */
+  Timeout: 4408,
+  /** The client sent something the relay does not accept. */
+  BadRequest: 4400,
+  /** The relay is shutting down. */
+  GoingAway: 4001,
+} as const;
+
+/**
+ * Legal on-the-wire frame sizes: 12-byte header + padded bucket + 16-byte tag,
+ * mirroring `@piorbit/crypto`'s `framing.ts`. Duplicated as plain numbers on
+ * purpose — the relay must not depend on the crypto package.
+ */
+export const FRAME_HEADER_BYTES = 12;
+export const FRAME_TAG_BYTES = 16;
+export const FRAME_BUCKETS = [64, 256, 1024, 4096] as const;
+export const MAX_BUCKET_BYTES = 262_144;
+
+export function legalFrameSizes(maxFrameBytes: number): Set<number> {
+  const sizes = new Set<number>();
+  const add = (bucket: number): void => {
+    const size = FRAME_HEADER_BYTES + bucket + FRAME_TAG_BYTES;
+    if (size <= maxFrameBytes) sizes.add(size);
+  };
+  for (const bucket of FRAME_BUCKETS) add(bucket);
+  const largest = FRAME_BUCKETS[FRAME_BUCKETS.length - 1]!;
+  for (let bucket = largest * 2; bucket <= MAX_BUCKET_BYTES; bucket += largest) add(bucket);
+  return sizes;
+}
+
+/** 32 bytes, base64url, unpadded. The relay treats it as an opaque route. */
+const CHANNEL_ID = /^[A-Za-z0-9_-]{43}$/;
+
+export function isChannelId(value: string): boolean {
+  return CHANNEL_ID.test(value);
+}

@@ -4,6 +4,7 @@ import type { SessionState, SessionSummary } from "@piorbit/protocol";
 import {
   documentTitle,
   historyRows,
+  inboxRows,
   isAbsolutePath,
   lastPromptEntryId,
   needYouCount,
@@ -13,6 +14,7 @@ import {
   sessionStatus,
   sessionSubtitle,
   sessionsForProject,
+  trustLabel,
   usageFromEntries,
   workerChip,
 } from "../../src/components/shell/model.js";
@@ -141,8 +143,43 @@ describe("session rows", () => {
   it("worker chip only speaks when something is off", () => {
     expect(workerChip(undefined)).toBeUndefined();
     expect(workerChip({ status: "ready" })).toBeUndefined();
-    expect(workerChip({ status: "starting" })).toEqual({ label: "Worker starting", tone: "attention" });
-    expect(workerChip({ status: "crashed", message: "x" })).toEqual({ label: "Worker crashed", tone: "danger" });
+    expect(workerChip({ status: "starting" })).toEqual({ label: "Starting Pi", tone: "attention", canRetry: false });
+    expect(workerChip({ status: "crashed", message: "exit 1" })).toEqual({
+      label: "Worker crashed",
+      tone: "danger",
+      canRetry: true,
+      detail: "exit 1",
+    });
+    // A retired worker is asleep, not broken; it can still be woken by hand.
+    expect(workerChip({ status: "retired" })).toMatchObject({ tone: "muted", canRetry: true });
+  });
+
+  it("inbox lists what needs you across projects, most urgent first", () => {
+    const sessions = [
+      summary({ path: "/s/idle.jsonl", id: "idle" }),
+      summary({ path: "/s/unread.jsonl", id: "unread", attention: "finished_unread", modifiedAt: "2026-09-05T11:00:00.000Z" }),
+      summary({ path: "/s/err.jsonl", id: "err", cwd: "/p/two", attention: "error" }),
+      summary({ path: "/s/ask.jsonl", id: "ask", cwd: "/p/two" }),
+    ];
+    const open = {
+      "/s/ask.jsonl": view({ path: "/s/ask.jsonl", dialogs: [{ method: "confirm", id: "d1", title: "?" }] }),
+    };
+    const rows = inboxRows(sessions, open);
+    expect(rows.map((r) => [r.path, r.status])).toEqual([
+      ["/s/ask.jsonl", "waiting_for_input"],
+      ["/s/err.jsonl", "error"],
+      ["/s/unread.jsonl", "finished_unread"],
+    ]);
+    expect(rows[0]).toMatchObject({ project: "two", sub: { text: "Waiting for you" } });
+    expect(inboxRows(sessions, open, 1)).toHaveLength(1);
+  });
+
+  it("names the trust states that are worth saying out loud", () => {
+    expect(trustLabel("trusted")).toBeUndefined();
+    expect(trustLabel("not_required")).toBeUndefined();
+    expect(trustLabel(undefined)).toBeUndefined();
+    expect(trustLabel("unknown")).toMatchObject({ tone: "attention" });
+    expect(trustLabel("declined")).toMatchObject({ tone: "muted" });
   });
 
   it("builds the tab title", () => {

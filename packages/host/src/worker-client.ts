@@ -22,6 +22,13 @@ export interface WorkerClientOptions {
   agentDir?: string;
   sessionDir?: string;
   subagentsTempRoot?: string;
+  /**
+   * Whether Pi may load this project's own `.pi` resources (M2-T4). The host
+   * decides (see projects.ts / trust.ts) and passes the answer down as
+   * `--project-trusted yes|no`; omitting it leaves the worker on Pi's own
+   * default, which is "trusted".
+   */
+  projectTrusted?: boolean;
   /** Path to the worker entry; defaults to the workspace `@piorbit/worker` build. */
   workerMain?: string;
   /** Node binary to run the worker with; defaults to the current one. */
@@ -48,6 +55,14 @@ export class WorkerClient {
   private readonly pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private nextId = 1;
   private exited = false;
+  /** Set once, so a spawn `error` followed by an `exit` reports one incident. */
+  private reported = false;
+  /**
+   * The spawn itself failed (bad node binary, missing worker entry, EACCES).
+   * Node emits `error` and never `exit` for these, so the pool needs to be able
+   * to tell "never started" from "exited", and to say which in the UI.
+   */
+  private startError: Error | undefined;
   readonly ready: Promise<void>;
 
   constructor(private readonly options: WorkerClientOptions) {
@@ -55,6 +70,7 @@ export class WorkerClient {
     if (options.agentDir) args.push("--agent-dir", options.agentDir);
     if (options.sessionDir) args.push("--session-dir", options.sessionDir);
     if (options.subagentsTempRoot) args.push("--subagents-temp-root", options.subagentsTempRoot);
+    if (options.projectTrusted !== undefined) args.push("--project-trusted", options.projectTrusted ? "yes" : "no");
 
     this.child = spawn(options.nodeBinary ?? process.execPath, args, {
       stdio: ["ignore", "pipe", "pipe", "pipe"],
@@ -97,16 +113,35 @@ export class WorkerClient {
     this.child.stdout?.on("data", () => {}); // drain; Pi/extension logs are not ours
     this.child.on("exit", (code, signal) => {
       this.exited = true;
-      const error = new Error(`worker for ${options.cwd} exited (${code ?? signal})`);
-      rejectReady(error);
-      for (const entry of this.pending.values()) entry.reject(error);
-      this.pending.clear();
-      options.onExit(code, signal);
+      this.settle(new Error(`worker for ${options.cwd} exited (${code ?? signal})`), rejectReady, code, signal);
     });
     this.child.on("error", (error) => {
+      // No `exit` follows a failed spawn, so this is the only chance to unblock
+      // `ready`, fail the pending calls, and tell the pool the worker is gone.
       this.exited = true;
-      rejectReady(error);
+      this.startError ??= error;
+      this.settle(error, rejectReady, null, null);
     });
+  }
+
+  /** Fail everything in flight and report the exit, exactly once. */
+  private settle(
+    error: Error,
+    rejectReady: (e: Error) => void,
+    code: number | null,
+    signal: NodeJS.Signals | null,
+  ): void {
+    if (this.reported) return;
+    this.reported = true;
+    rejectReady(error);
+    for (const entry of this.pending.values()) entry.reject(error);
+    this.pending.clear();
+    this.options.onExit(code, signal);
+  }
+
+  /** Non-undefined when the child process could not be started at all. */
+  get spawnError(): Error | undefined {
+    return this.startError;
   }
 
   get pid(): number | undefined {

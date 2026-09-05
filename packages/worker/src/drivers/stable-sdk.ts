@@ -24,6 +24,7 @@ import {
   createAgentSessionServices,
   getAgentDir,
   SessionManager,
+  SettingsManager,
   type AgentSession,
   type AgentSessionEvent,
   type AgentSessionRuntime,
@@ -94,6 +95,18 @@ export class StableSdkDriver implements SessionDriver {
       const services = await createAgentSessionServices({
         cwd,
         agentDir,
+        // The host owns the trust decision (packages/host/src/trust.ts): the SDK
+        // never runs Pi's interactive trust flow and SettingsManager defaults to
+        // trusted, so an undecided or declined project would otherwise load its
+        // `.pi/` extensions anyway. Any cwd other than the one the host asked
+        // about is untrusted — the runtime re-runs this factory on a cwd switch.
+        ...(options.projectTrusted === undefined
+          ? {}
+          : {
+              settingsManager: SettingsManager.create(cwd, agentDir, {
+                projectTrusted: cwd === options.cwd ? options.projectTrusted : false,
+              }),
+            }),
         resourceLoaderOptions: { extensionFactories: [piorbit] },
       });
       return {
