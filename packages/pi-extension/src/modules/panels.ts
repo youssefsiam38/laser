@@ -48,7 +48,7 @@ export const panelsModule: LaserModule = {
     };
 
     const warn = (message: string): void =>
-      send({ type: "piorbit/module/log", module: "panels", level: "warn", message });
+      send({ type: "lasercode/module/log", module: "panels", level: "warn", message });
 
     const offPanel = pi.events.on(PANEL_EVENT, (raw) => {
       const result = validatePanelEvent(raw);
@@ -59,7 +59,7 @@ export const panelsModule: LaserModule = {
       const serialized = JSON.stringify(result.panel);
       if (known.get(result.panel.id) === serialized) return;
       remember(result.panel.id, serialized);
-      send({ type: "piorbit/panel/upsert", panel: result.panel });
+      send({ type: "lasercode/panel/upsert", panel: result.panel });
     });
 
     const offClose = pi.events.on(PANEL_CLOSE_EVENT, (raw) => {
@@ -72,14 +72,14 @@ export const panelsModule: LaserModule = {
       // previous activation, and a close nobody needed is harmless.
       known.delete(result.event.id);
       send({
-        type: "piorbit/panel/close",
+        type: "lasercode/panel/close",
         id: result.event.id,
         ...(result.event.reason !== undefined ? { reason: result.event.reason } : {}),
       });
     });
 
     const offCommand = commands?.on((command) => {
-      if (command.type !== "piorbit/panel/action") return false;
+      if (command.type !== "lasercode/panel/action") return false;
       // A panel may have been declared by the host — the pi-subagents file
       // layer watches disk and emits runs for sessions with no extension — and
       // another module in this process can still answer for it. Replaying is

@@ -123,7 +123,7 @@ against:
 ### 4.2 The window that remains
 
 Anyone holding the QR **while it is live** can compute the pairing channel id —
-it is `HKDF(salt = "piorbit-pairing-channel-v1", ikm = ephemeral pub,
+it is `HKDF(salt = "laser-pairing-channel-v1", ikm = ephemeral pub,
 info = "relay_token")` — and race the real phone to the relay. This is inherent:
 two strangers must rendezvous somewhere before they share a secret.
 

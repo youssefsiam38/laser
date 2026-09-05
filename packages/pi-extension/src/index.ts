@@ -91,7 +91,7 @@ export function createLaserExtension(options: LaserExtensionOptions): InlineExte
             failed.push({ module: mod.name, error: error instanceof Error ? error.message : String(error) });
           }
         }
-        options.send({ type: "piorbit/capabilities", active, failed });
+        options.send({ type: "lasercode/capabilities", active, failed });
       });
 
       pi.on("session_shutdown", async () => {

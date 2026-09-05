@@ -44,10 +44,10 @@ export class PanelHub {
    */
   observeExtensionMessage(cwd: string, path: string, message: PiExtensionMessage): boolean {
     switch (message.type) {
-      case "piorbit/panel/upsert":
+      case "lasercode/panel/upsert":
         this.upsert(cwd, path, message.panel);
         return true;
-      case "piorbit/panel/close":
+      case "lasercode/panel/close":
         this.close(path, message.id, message.reason);
         return true;
       default:

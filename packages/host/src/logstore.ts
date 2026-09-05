@@ -588,7 +588,7 @@ export class LogStore {
    */
   observeExtensionMessage(cwd: string, sessionPath: string, message: PiExtensionMessage): void {
     switch (message.type) {
-      case "piorbit/provider/request": {
+      case "lasercode/provider/request": {
         const entry = this.record({
           section: "provider",
           kind: "provider_request",
@@ -603,7 +603,7 @@ export class LogStore {
         }
         return;
       }
-      case "piorbit/provider/response": {
+      case "lasercode/provider/response": {
         const open = this.openProviderRequests.get(sessionPath);
         this.openProviderRequests.delete(sessionPath);
         const finishedAt = Date.parse(message.at) || Date.now();
@@ -622,7 +622,7 @@ export class LogStore {
         });
         return;
       }
-      case "piorbit/capabilities": {
+      case "lasercode/capabilities": {
         this.record({
           section: "session",
           kind: "capabilities",
@@ -636,7 +636,7 @@ export class LogStore {
         });
         return;
       }
-      case "piorbit/module/log": {
+      case "lasercode/module/log": {
         this.record({
           section: "session",
           kind: `module:${message.module}`,
@@ -647,7 +647,7 @@ export class LogStore {
         });
         return;
       }
-      case "piorbit/subagents/event": {
+      case "lasercode/subagents/event": {
         this.record({
           section: "subagents",
           kind: "subagent_event",

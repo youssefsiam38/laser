@@ -536,11 +536,11 @@ export class SubagentsLayer {
    * owns (R9 — one id, one panel).
    */
   observeExtensionMessage(path: string, message: PiExtensionMessage): void {
-    if (message.type === "piorbit/panel/upsert") {
+    if (message.type === "lasercode/panel/upsert") {
       this.observeDeclaredPanel(path, message.panel.id);
       return;
     }
-    if (message.type !== "piorbit/subagents/event") return;
+    if (message.type !== "lasercode/subagents/event") return;
     const event = message.event as { type?: unknown; reachable?: unknown; methods?: unknown } | null;
     if (!event || event.type !== "bus") return;
     if (event.reachable !== true) {

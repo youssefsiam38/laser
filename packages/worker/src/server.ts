@@ -211,7 +211,7 @@ export class WorkerServer {
         const { driver } = this.live(req.params.path);
         const delivered =
           driver.deliverExtensionCommand?.({
-            type: "piorbit/panel/action",
+            type: "lasercode/panel/action",
             id: req.params.id,
             actionId: req.params.actionId,
             ...(req.params.value !== undefined ? { value: req.params.value } : {}),
@@ -613,7 +613,7 @@ export class WorkerServer {
       case "extension":
         // The capability report is what gates the microphone and everything
         // else that is only offered where its package is (M8-T1).
-        if (event.message.type === "piorbit/capabilities") this.activeModules = new Set(event.message.active);
+        if (event.message.type === "lasercode/capabilities") this.activeModules = new Set(event.message.active);
         this.notify("pi/extension/message", { path: live.path, message: event.message });
         return;
       case "closed":

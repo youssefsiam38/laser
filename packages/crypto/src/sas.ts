@@ -1,3 +1,4 @@
+import { WIRE_NAMESPACE } from "@lasercode/protocol/identity";
 /**
  * Short Authentication String from the Noise handshake hash.
  *
@@ -14,7 +15,7 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { concatBytes, utf8 } from "./bytes.js";
 
-const SAS_CONTEXT = /* @__PURE__ */ utf8("piorbit-sas-v1");
+const SAS_CONTEXT = /* @__PURE__ */ utf8(`${WIRE_NAMESPACE}-sas-v1`);
 
 /** 64 emoji chosen to be visually distinct, single-codepoint, and present on every platform. */
 export const SAS_EMOJI: readonly string[] = [

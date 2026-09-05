@@ -1,3 +1,4 @@
+import { WIRE_NAMESPACE } from "@lasercode/protocol/identity";
 /**
  * Signed device list (M6-T3).
  *
@@ -16,8 +17,8 @@ import { ed25519 } from "@noble/curves/ed25519.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { concatBytes, equalBytes, fromBase64Url, toBase64Url, utf8 } from "./bytes.js";
 
-export const DEVICE_LIST_CONTEXT = "piorbit-device-list-v1";
-const DEVICE_ID_CONTEXT = /* @__PURE__ */ utf8("piorbit-device-id-v1");
+export const DEVICE_LIST_CONTEXT = `${WIRE_NAMESPACE}-device-list-v1`;
+const DEVICE_ID_CONTEXT = /* @__PURE__ */ utf8(`${WIRE_NAMESPACE}-device-id-v1`);
 const DEVICE_ID_BYTES = 16;
 
 export class DeviceListError extends Error {

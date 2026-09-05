@@ -23,18 +23,18 @@ export interface ProviderResponseRecord {
 
 export type PiExtensionMessage =
   | {
-      type: "piorbit/capabilities";
+      type: "lasercode/capabilities";
       active: PiExtensionModuleName[];
       failed: Array<{ module: PiExtensionModuleName; error: string }>;
     }
-  | ({ type: "piorbit/provider/request" } & ProviderRequestRecord)
-  | ({ type: "piorbit/provider/response" } & ProviderResponseRecord)
-  | { type: "piorbit/subagents/event"; event: unknown }
+  | ({ type: "lasercode/provider/request" } & ProviderRequestRecord)
+  | ({ type: "lasercode/provider/response" } & ProviderResponseRecord)
+  | { type: "lasercode/subagents/event"; event: unknown }
   /** The `panels` module: a validated `laser:panel` event, or a close (docs/ux-panels.md). */
-  | { type: "piorbit/panel/upsert"; panel: Panel }
-  | { type: "piorbit/panel/close"; id: string; reason?: string }
+  | { type: "lasercode/panel/upsert"; panel: Panel }
+  | { type: "lasercode/panel/close"; id: string; reason?: string }
   | {
-      type: "piorbit/module/log";
+      type: "lasercode/module/log";
       module: PiExtensionModuleName;
       level: "info" | "warn" | "error";
       message: string;

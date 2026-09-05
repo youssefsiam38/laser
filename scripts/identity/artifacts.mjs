@@ -163,7 +163,7 @@ function manifestFields(relativePath, edits) {
  * The Electron IPC channel table.
  *
  * Emitted as CommonJS because the preload is a `.cts` and cannot import the
- * ESM one, and duplicating the table by hand is how `piorbit:identity` survived
+ * ESM one, and duplicating the table by hand is how `laser:identity` survived
  * a rename that changed the other twenty channels. One generated file, imported
  * by both sides.
  *

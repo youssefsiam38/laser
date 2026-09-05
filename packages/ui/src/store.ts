@@ -263,7 +263,7 @@ function applyNotification(state: AppState, method: HostNotificationMethod, para
     }
     case "pi/extension/message": {
       const p = params as HostNotifications["pi/extension/message"];
-      if (p.message.type === "piorbit/capabilities") {
+      if (p.message.type === "lasercode/capabilities") {
         const active = p.message.active;
         return updateView(state, p.path, (v) =>
           v.capabilities.length === active.length && active.every((m, i) => v.capabilities[i] === m)
@@ -271,7 +271,7 @@ function applyNotification(state: AppState, method: HostNotificationMethod, para
             : { ...v, capabilities: [...active] },
         );
       }
-      if (p.message.type === "piorbit/module/log" && p.message.level === "error") {
+      if (p.message.type === "lasercode/module/log" && p.message.level === "error") {
         return pushToast(state, "error", `${p.message.module}: ${p.message.message}`);
       }
       return state;

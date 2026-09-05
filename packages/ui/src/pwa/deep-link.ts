@@ -74,7 +74,7 @@ export function rememberDecisionLink(url: { search: string; hash: string }): Dec
 export function acceptNavigateMessage(data: unknown): DecisionLink | undefined {
   if (!data || typeof data !== "object") return undefined;
   const d = data as { type?: unknown; url?: unknown };
-  if (d.type !== "piorbit:navigate" || typeof d.url !== "string") return undefined;
+  if (d.type !== "lasercode:navigate" || typeof d.url !== "string") return undefined;
   try {
     const url = new URL(d.url, globalThis.location?.origin ?? "http://localhost");
     return rememberDecisionLink(url);

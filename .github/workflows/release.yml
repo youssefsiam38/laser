@@ -78,8 +78,8 @@ jobs:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       # The one value a person can type. It reaches `run:` through the
       # environment and never through string substitution.
-      LASER_TAG: ${{ inputs.tag || github.ref_name }}
-      LASER_ARCH: ${{ matrix.arch }}
+      LASERCODE_TAG: ${{ inputs.tag || github.ref_name }}
+      LASERCODE_ARCH: ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -100,7 +100,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --no-install-recommends -y rpm binutils
 
       - name: build
-        run: scripts/release/build-linux.sh --arch "$LASER_ARCH" --out release
+        run: scripts/release/build-linux.sh --arch "$LASERCODE_ARCH" --out release
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -121,8 +121,8 @@ jobs:
       # `secrets` is not one of the contexts a step-level `if:` can read, so the
       # secret is lifted into the environment here and the step below tests that
       # instead. An unset secret expands to the empty string.
-      LASER_RELEASE_KEY_PEM: ${{ secrets.LASER_RELEASE_KEY }}
-      LASER_TAG: ${{ inputs.tag || github.ref_name }}
+      LASERCODE_RELEASE_KEY_PEM: ${{ secrets.LASERCODE_RELEASE_KEY }}
+      LASERCODE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -144,11 +144,11 @@ jobs:
       # with it, the manifest carries a signature made by a key that never
       # existed on a build machine before this step and does not survive it.
       - name: release signing key
-        if: ${{ env.LASER_RELEASE_KEY_PEM != '' }}
+        if: ${{ env.LASERCODE_RELEASE_KEY_PEM != '' }}
         run: |
-          mkdir -p ~/.config/laser
+          mkdir -p ~/.config/lasercode
           umask 077
-          printf '%s' "$LASER_RELEASE_KEY_PEM" > ~/.config/laser/release-key.pem
+          printf '%s' "$LASERCODE_RELEASE_KEY_PEM" > ~/.config/lasercode/release-key.pem
 
       # Assemble the exact bytes that will be uploaded: SHA256SUMS over every
       # artifact plus install.sh, signed if a key is configured. Nothing is
@@ -161,12 +161,12 @@ jobs:
         run: |
           git fetch --tags --force --depth=1 origin || true
           if [ -z "$(git tag --points-at HEAD)" ]; then
-            echo "::error::$LASER_TAG does not name a tag: refusing to attest and publish a non-tag commit."
+            echo "::error::$LASERCODE_TAG does not name a tag: refusing to attest and publish a non-tag commit."
             exit 1
           fi
 
       - name: stage the release
-        run: scripts/release/publish.sh --stage-only --tag "$LASER_TAG" --dir release
+        run: scripts/release/publish.sh --stage-only --tag "$LASERCODE_TAG" --dir release
 
       # Install the real artifact, from the real manifest, the way a person
       # will — into a throwaway HOME on this runner. A release that cannot be
@@ -189,4 +189,4 @@ jobs:
       - name: publish the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: scripts/release/publish.sh --tag "$LASER_TAG" --dir release
+        run: scripts/release/publish.sh --tag "$LASERCODE_TAG" --dir release

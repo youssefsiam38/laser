@@ -102,7 +102,7 @@ not there anyway, a wrong "yes" costs a button that fails when it is pressed.
 `createLaserExtension` sends one message at `session_start`:
 
 ```ts
-{ type: "piorbit/capabilities", active: ModuleName[], failed: [{ module, error }] }
+{ type: "laser/capabilities", active: ModuleName[], failed: [{ module, error }] }
 ```
 
 It travels to the client as `pi/extension/message` and is the flag the UI gates
@@ -271,7 +271,7 @@ worker publishes a small handle on a well-known symbol and the module looks it
 up — the same shape pi-subagents uses for its own in-process registries:
 
 ```ts
-const BRIDGE = Symbol.for("piorbit.transcribe.v1");   // declared on both sides, imported by neither
+const BRIDGE = Symbol.for("laser.transcribe.v1");   // declared on both sides, imported by neither
 ```
 
 Rules for a bridge:

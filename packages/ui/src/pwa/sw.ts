@@ -245,7 +245,7 @@ async function openOrFocus(url: string): Promise<void> {
     } catch {
       /* focus is best effort; the message still lands */
     }
-    target.postMessage({ type: "piorbit:navigate", url });
+    target.postMessage({ type: "lasercode:navigate", url });
     return;
   }
   await self.clients.openWindow(url);

@@ -24,7 +24,7 @@ import type { JsonRpcNotification, JsonRpcResponse } from "@lasercode/protocol";
 import { RelayClient } from "../src/relay-client.js";
 
 /** Mirrors `CHANNEL_PROTOCOL_PREFIX` in @lasercode/relay; see the note above. */
-const CHANNEL_PROTOCOL_PREFIX = "piorbit.channel.";
+const CHANNEL_PROTOCOL_PREFIX = "lasercode.channel.";
 
 /** Just enough relay: two sockets per channel, `hello`/`peer`, binary passthrough. */
 class StubRelay {

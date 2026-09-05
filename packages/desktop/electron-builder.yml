@@ -74,7 +74,7 @@ buildDependenciesFromSource: false
 
 protocols:
   - name: Laser
-    schemes: [laser]
+    schemes: [lasercode]
 
 # ---------------------------------------------------------------- macOS ----
 mac:
@@ -130,10 +130,10 @@ win:
   # unsigned installer.
   #
   # To sign, export all four before `pnpm -F @lasercode/desktop dist -- --win`:
-  #   LASER_AZURE_PUBLISHER_NAME    the CN in the certificate profile
-  #   LASER_AZURE_ENDPOINT          https://<region>.codesigning.azure.net
-  #   LASER_AZURE_ACCOUNT           the code-signing account name
-  #   LASER_AZURE_PROFILE           the certificate profile name
+  #   LASERCODE_AZURE_PUBLISHER_NAME    the CN in the certificate profile
+  #   LASERCODE_AZURE_ENDPOINT          https://<region>.codesigning.azure.net
+  #   LASERCODE_AZURE_ACCOUNT           the code-signing account name
+  #   LASERCODE_AZURE_PROFILE           the certificate profile name
   # plus the credentials electron-builder reads itself: AZURE_TENANT_ID,
   # AZURE_CLIENT_ID, AZURE_CLIENT_SECRET.
 
@@ -152,7 +152,7 @@ nsis:
 # between the formats are differences in what the host machine has to provide.
 #
 #   AppImage   one file, no install, no root. Runs on any distribution.
-#   deb / rpm  a real system package: menu entry, laser:// handler, icon
+#   deb / rpm  a real system package: menu entry, lasercode:// handler, icon
 #              cache, AppArmor profile, and a sandbox helper set up as root.
 #   tar.gz     everything, unpacked wherever you like, with a laser-setup.sh
 #              that wires up the menu entry per-user — the offline path, for a
@@ -242,7 +242,7 @@ linux:
     entry:
       # Exec, Icon, Name, Comment, Categories, StartupWMClass and MimeType are
       # all computed by electron-builder — MimeType from the `protocols` block
-      # above, which is what registers laser:// with the desktop. Setting
+      # above, which is what registers lasercode:// with the desktop. Setting
       # them here would be silently overwritten. What is left is what nothing
       # else supplies:
       StartupNotify: "true"
@@ -306,7 +306,7 @@ deb:
   artifactName: laser_${version}_${arch}.${ext}
 
   # Written by us rather than left to electron-builder's defaults, so that the
-  # install registers the laser:// handler and refreshes the icon and desktop
+  # install registers the lasercode:// handler and refreshes the icon and desktop
   # caches, and the removal undoes exactly that and nothing more. fpm maps them
   # onto postinst/%post and postrm/%postun, and both of those also run in the
   # middle of an *upgrade* — the scripts handle that.
@@ -346,7 +346,7 @@ deb:
     - xdg-utils
   recommends:
     # The tools the post-install script uses to register the menu entry and the
-    # laser:// handler. Present on every desktop install; the scripts check
+    # lasercode:// handler. Present on every desktop install; the scripts check
     # for each one before calling it, so a server install still succeeds.
     - desktop-file-utils
     - shared-mime-info
@@ -383,7 +383,7 @@ rpm:
   artifactName: laser-${version}.${arch}.${ext}
 
   # Written by us rather than left to electron-builder's defaults, so that the
-  # install registers the laser:// handler and refreshes the icon and desktop
+  # install registers the lasercode:// handler and refreshes the icon and desktop
   # caches, and the removal undoes exactly that and nothing more. fpm maps them
   # onto postinst/%post and postrm/%postun, and both of those also run in the
   # middle of an *upgrade* — the scripts handle that.

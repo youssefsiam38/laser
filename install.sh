@@ -46,7 +46,7 @@ REPO_DEFAULT="youssefsiam38/laser"
 PRODUCT="laser"
 BINARY="laser"
 APP_ID="com.hubtrix.laser"
-URL_SCHEME="laser"
+URL_SCHEME="lasercode"
 DESKTOP_NAME="laser.desktop"
 
 # Ed25519 public key, PEM, base64 of the DER SubjectPublicKeyInfo body, as
@@ -61,7 +61,7 @@ PROGRAM="laser installer"
 DRY_RUN=0
 ASSUME_YES=0
 MODE="install"
-REPO="${LASER_REPO:-$REPO_DEFAULT}"
+REPO="${LASERCODE_REPO:-$REPO_DEFAULT}"
 TAG=""
 FORMAT="appimage"
 # 1 once `--format` was given. An explicit choice is an instruction, and nothing
@@ -650,7 +650,7 @@ receipt_write() {
 # ------------------------------------------------------- desktop wiring ----
 
 # Reuse the .desktop file the app was packaged with rather than inventing one:
-# it already carries the MimeType line that makes laser:// links work, the
+# it already carries the MimeType line that makes lasercode:// links work, the
 # StartupWMClass that stops the window from getting its own taskbar group, and
 # the translated names. Only the paths are rewritten, because they were relative
 # to a mount point that no longer exists.
@@ -715,7 +715,7 @@ refresh_desktop_caches() {
   fi
 }
 
-# Claim laser:// links. Install only — on uninstall the entry is gone and the
+# Claim lasercode:// links. Install only — on uninstall the entry is gone and the
 # association goes with it, and rewriting the mimeapps list on the way out would
 # touch a file this script did not create.
 claim_url_scheme() {
@@ -1207,7 +1207,7 @@ so you can run this again once the package is gone. To remove it by hand:
   # the answer is no, a re-run still finds an installation to remove.
   removed_data=0
   kept_data=0
-  for data_dir in "$HOME/.config/laser" "$HOME/.local/share/laser" "$HOME/.laser" "$HOME/.config/piorbit" "$HOME/.local/share/piorbit" "$HOME/.piorbit"; do
+  for data_dir in "$HOME/.config/lasercode" "$HOME/.local/share/lasercode" "$HOME/.lasercode"; do
     [ -d "$data_dir" ] || continue
     # `--yes` means "do not stop to ask me", not "delete my data". Settings,
     # the device identity and every pairing are not recoverable, so deleting

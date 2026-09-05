@@ -44,9 +44,9 @@ describe("StableSdkDriver.open", () => {
     expect(state.path).toContain(join(base, "sessions"));
 
     // The companion extension ran its detection pass and reported.
-    const caps = events.find((e) => e.type === "extension" && e.message.type === "piorbit/capabilities");
+    const caps = events.find((e) => e.type === "extension" && e.message.type === "lasercode/capabilities");
     expect(caps).toBeDefined();
-    if (caps?.type === "extension" && caps.message.type === "piorbit/capabilities") {
+    if (caps?.type === "extension" && caps.message.type === "lasercode/capabilities") {
       expect(caps.message.active).toContain("provider-log");
       expect(caps.message.failed).toEqual([]);
     }

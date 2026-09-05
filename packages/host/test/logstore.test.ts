@@ -137,12 +137,12 @@ describe("large payloads", () => {
 describe("ingestion", () => {
   it("correlates a provider response with its request and times it", () => {
     store.observeExtensionMessage("/p", "/s/a.jsonl", {
-      type: "piorbit/provider/request",
+      type: "lasercode/provider/request",
       at: "2026-09-05T10:00:00.000Z",
       payload: { model: "claude-sonnet-4-5", messages: [{}, {}], tools: [{}, {}, {}], stream: true },
     });
     store.observeExtensionMessage("/p", "/s/a.jsonl", {
-      type: "piorbit/provider/response",
+      type: "lasercode/provider/response",
       at: "2026-09-05T10:00:01.500Z",
       status: 200,
       headers: { "content-type": "text/event-stream" },
@@ -159,7 +159,7 @@ describe("ingestion", () => {
 
   it("logs an HTTP error response at error level", () => {
     store.observeExtensionMessage("/p", "/s/a.jsonl", {
-      type: "piorbit/provider/response",
+      type: "lasercode/provider/response",
       at: new Date().toISOString(),
       status: 429,
       headers: {},

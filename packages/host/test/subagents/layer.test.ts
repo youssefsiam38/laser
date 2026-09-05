@@ -257,7 +257,7 @@ describe("actions", () => {
     });
     // Resume appears only once a live module has said the bus is reachable.
     layer.observeExtensionMessage(SESSION.path, {
-      type: "piorbit/subagents/event",
+      type: "lasercode/subagents/event",
       event: { type: "bus", reachable: true, methods: ["ping", "status", "steer", "stop", "resume"] },
     });
     layer.refresh();

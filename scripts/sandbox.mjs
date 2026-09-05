@@ -126,7 +126,7 @@ writeFileSync(
   // draw without pi-subagents being installed.
   const emitPanels = () => {
       const now = Date.now();
-      pi.events.emit("piorbit:panel", {
+      pi.events.emit("lasercode:panel", {
         v: 1, id: "sandbox:run", kind: "run", intent: "follow",
         title: "worker#2", source: "sandbox", handle: "@sandbox",
         lifecycle: "running", activity: "reading the repository",
@@ -135,7 +135,7 @@ writeFileSync(
         usage: { input: 84_800, output: 7_000, cacheRead: 328_000, cacheWrite: 0, costUsd: 0.032 },
         actions: [{ id: "stop", label: "Stop", destructive: true, confirm: "Stop worker#2?" }],
       });
-      pi.events.emit("piorbit:panel", {
+      pi.events.emit("lasercode:panel", {
         v: 1, id: "sandbox:plan", kind: "plan", intent: "follow",
         title: "Workflow · 2 lanes", source: "sandbox", objective: "Ship the sandbox demo",
         inferred: true,
@@ -146,12 +146,12 @@ writeFileSync(
         ],
         usage: null,
       });
-      pi.events.emit("piorbit:panel", {
+      pi.events.emit("lasercode:panel", {
         v: 1, id: "sandbox:doc", kind: "document", intent: "follow",
         title: "README.md", source: "sandbox", mediaType: "text/markdown", renderable: true,
         content: { inline: "# Sandbox project\n\nA scratch project for demos.\n\n- one\n- two\n" },
       });
-      pi.events.emit("piorbit:panel", {
+      pi.events.emit("lasercode:panel", {
         v: 1, id: "sandbox:hits", kind: "collection", intent: "inline",
         title: '3 results for "noise protocol"', source: "sandbox", layout: "list",
         items: [
@@ -161,7 +161,7 @@ writeFileSync(
         ],
         total: 3,
       });
-      pi.events.emit("piorbit:panel", {
+      pi.events.emit("lasercode:panel", {
         v: 1, id: "sandbox:ask", kind: "decision", intent: "inspect",
         title: "Publish the sandbox build?", source: "sandbox", blocking: "turn",
         message: "Nothing is published; this only shows a toast.",
@@ -184,8 +184,8 @@ writeFileSync(
   // Answering closes the question, which is what makes "delivered" true rather
   // than a claim. The stream kind is covered by /widget, whose lines the host
   // turns into a stream panel through the fallback.
-  pi.events.on("piorbit:panel:action", (event) => {
-    if (event.id === "sandbox:ask") pi.events.emit("piorbit:panel:close", { id: "sandbox:ask", reason: "answered" });
+  pi.events.on("lasercode:panel:action", (event) => {
+    if (event.id === "sandbox:ask") pi.events.emit("lasercode:panel:close", { id: "sandbox:ask", reason: "answered" });
   });
 }
 `,

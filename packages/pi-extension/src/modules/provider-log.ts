@@ -11,11 +11,11 @@ export const providerLogModule: LaserModule = {
   detect: () => true,
   activate({ pi, send }) {
     pi.on("before_provider_request", async (event: { payload: unknown }) => {
-      send({ type: "piorbit/provider/request", at: new Date().toISOString(), payload: event.payload });
+      send({ type: "lasercode/provider/request", at: new Date().toISOString(), payload: event.payload });
       return undefined;
     });
     pi.on("after_provider_response", async (event: { status: number; headers: Record<string, string> }) => {
-      send({ type: "piorbit/provider/response", at: new Date().toISOString(), status: event.status, headers: event.headers });
+      send({ type: "lasercode/provider/response", at: new Date().toISOString(), status: event.status, headers: event.headers });
       return undefined;
     });
   },

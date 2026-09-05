@@ -1,4 +1,4 @@
-import { PRODUCT_NAME } from "@lasercode/protocol";
+import { namespaced } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
 import * as runtime from "../../src/runtime/index.js";
 
@@ -56,10 +56,10 @@ describe("runtime barrel", () => {
   });
 
   it("exports the documented constants", () => {
-    expect(runtime.NOTICE_DATA_PART).toBe(`${PRODUCT_NAME}-notice`);
-    expect(runtime.ARCHIVE_STORAGE_KEY).toBe(`${PRODUCT_NAME}-archived`);
-    expect(runtime.PROJECT_STORAGE_KEY).toBe(`${PRODUCT_NAME}-project`);
-    expect(runtime.PROJECTS_STORAGE_KEY).toBe(`${PRODUCT_NAME}-projects`);
+    expect(runtime.NOTICE_DATA_PART).toBe(namespaced("notice"));
+    expect(runtime.ARCHIVE_STORAGE_KEY).toBe(namespaced("archived"));
+    expect(runtime.PROJECT_STORAGE_KEY).toBe(namespaced("project"));
+    expect(runtime.PROJECTS_STORAGE_KEY).toBe(namespaced("projects"));
     expect(runtime.STEER_QUEUE_PREFIX).toBe("steer:");
     expect(runtime.FOLLOW_UP_QUEUE_PREFIX).toBe("followUp:");
     expect(runtime.ATTENTION_ORDER).toEqual(["waiting_for_input", "error", "finished_unread", "working", "idle"]);

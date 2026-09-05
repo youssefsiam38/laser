@@ -178,10 +178,10 @@ describe("WorkerServer", () => {
     d.pending = [{ method: "confirm", id: "ui-1", title: "Sure?" }];
     d.emit({ type: "ui_request", request: { method: "confirm", id: "ui-1", title: "Sure?" } });
     d.emit({ type: "ui_event", event: { method: "notify", message: "m", level: "info" } });
-    d.emit({ type: "extension", message: { type: "piorbit/capabilities", active: ["provider-log"], failed: [] } });
+    d.emit({ type: "extension", message: { type: "lasercode/capabilities", active: ["provider-log"], failed: [] } });
     expect(h.notifications("pi/ui/request")[0]!.params).toMatchObject({ id: "ui-1", method: "confirm" });
     expect(h.notifications("pi/ui/event")[0]!.params).toMatchObject({ method: "notify" });
-    expect(h.notifications("pi/extension/message")[0]!.params).toMatchObject({ message: { type: "piorbit/capabilities" } });
+    expect(h.notifications("pi/extension/message")[0]!.params).toMatchObject({ message: { type: "lasercode/capabilities" } });
 
     const answer = await h.call(2, "pi/ui/response", { id: "ui-1", confirmed: true });
     expect(answer.result).toEqual({ delivered: true });

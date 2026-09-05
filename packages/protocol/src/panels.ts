@@ -343,9 +343,9 @@ export function liveBytesOf(panel: Panel): number | undefined {
 // The declared protocol on Pi's event bus
 // ---------------------------------------------------------------------------
 
-export const PANEL_EVENT = "piorbit:panel";
-export const PANEL_CLOSE_EVENT = "piorbit:panel:close";
-export const PANEL_ACTION_EVENT = "piorbit:panel:action";
+export const PANEL_EVENT = "lasercode:panel";
+export const PANEL_CLOSE_EVENT = "lasercode:panel:close";
+export const PANEL_ACTION_EVENT = "lasercode:panel:action";
 
 /**
  * What an extension emits on `laser:panel`. Kind-specific fields travel in
@@ -392,7 +392,7 @@ export const DEFAULT_INTENT: Readonly<Record<PanelKind, PanelIntent>> = {
 // ---------------------------------------------------------------------------
 
 /** Worker → companion extension (the only inbound message today). */
-export type PiExtensionCommand = { type: "piorbit/panel/action"; id: string; actionId: string; value?: string };
+export type PiExtensionCommand = { type: "lasercode/panel/action"; id: string; actionId: string; value?: string };
 
 // ---------------------------------------------------------------------------
 // The wire: pi/panel/* (module augmentation of the method catalogue)

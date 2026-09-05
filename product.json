@@ -17,17 +17,36 @@
     "",
     "When the name changes, move the old identity into formerNames so an",
     "existing install's directories and storage keys are migrated rather than",
-    "orphaned. See packages/host/src/identity-migration.ts."
+    "orphaned. See packages/host/src/identity-migration.ts.",
+    "",
+    "It is empty because the one rename so far happened before anything was",
+    "distributed: no release existed, nobody had installed a build, and the only",
+    "machine with data was the maintainer's, which was migrated and verified",
+    "empty of the old paths before this was cleared. Carrying a former name that",
+    "can never match anything is dead code that reads like a live guarantee."
+  ],
+
+  "$namespaces": [
+    "`name` and `binary` are what a person types; the rest are namespaces they",
+    "share with every other tool on the machine, and those carry the longer",
+    "name on purpose.",
+    "",
+    "`laser` is taken on npm and on PyPI and Debian already ships `laserboy`,",
+    "so the word is claimed. A directory under ~/.config, a URL scheme, an",
+    "environment prefix and a Symbol.for key are all global registries with no",
+    "registrar: a collision there is silent, and the failure is two programs",
+    "quietly sharing state. The binary keeps the short name because it is typed",
+    "daily and lives in the user's own ~/.local/bin, where a clash is loud."
   ],
 
   "name": "laser",
   "displayName": "Laser",
   "appId": "com.hubtrix.laser",
-  "urlScheme": "laser",
-  "envPrefix": "LASER",
-  "dirName": "laser",
-  "storagePrefix": "laser",
-  "symbolPrefix": "laser",
+  "urlScheme": "lasercode",
+  "envPrefix": "LASERCODE",
+  "dirName": "lasercode",
+  "storagePrefix": "lasercode",
+  "symbolPrefix": "lasercode",
   "binary": "laser",
   "repository": "youssefsiam38/laser",
 
@@ -42,16 +61,19 @@
     "derive different keys and simply fail to connect), every third-party",
     "extension that emits a panel, and every stored session already on disk.",
     "",
-    "So it is frozen on purpose. When the product is renamed, `name` changes",
-    "and this does not; the day a protocol break is wanted, it gets a version",
-    "suffix rather than a new spelling."
+    "So it is frozen from the first release onwards. It was changed once, at",
+    "the rename, because there was nothing yet to break: no release existed, no",
+    "device was paired and no session had been stored. After the first person",
+    "installs a build that is no longer true, and from then on `name` may change",
+    "while this must not. The day a protocol break is actually wanted, it gets a",
+    "version suffix rather than a new spelling."
   ],
-  "wireNamespace": "piorbit",
+  "wireNamespace": "lasercode",
 
   "vendor": "{displayName} contributors",
   "maintainerEmail": "ysiam@kwentra.com",
 
-  "formerNames": ["piorbit"],
+  "formerNames": [],
 
   "copy": {
     "summary": "A control room for coding agents",

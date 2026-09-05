@@ -15,19 +15,19 @@
  *
  * Two channel ids exist and they are different on purpose:
  *
- *   pairing    HKDF(salt = "piorbit-pairing-channel-v1", ikm = ephemeral pub,
+ *   pairing    HKDF(salt = "laser-pairing-channel-v1", ikm = ephemeral pub,
  *                   info = "relay_token")
  *              — derivable by anyone who sees the QR, which is inherent: the two
  *                peers have to rendezvous before they share a secret. Bounded by
  *                a TTL, single use, exactly two sockets, and the SAS.
  *
- *   steady      HKDF(salt = "piorbit-channel-v1",
+ *   steady      HKDF(salt = "laser-channel-v1",
  *                    ikm = DH(device static, desktop static),
  *                    info = "relay_token" ‖ epoch)
  *              — only the two peers can compute it. This is the routing key for
  *                every reconnection, one per paired device.
  */
-import { PRODUCT_NAME } from "@lasercode/protocol/identity";
+import { PRODUCT_NAME, WIRE_NAMESPACE } from "@lasercode/protocol/identity";
 import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { selectBackend, type CryptoBackend, type KeyPair } from "./backend.js";
@@ -41,8 +41,8 @@ export const RELAY_TOKEN_INFO = "relay_token";
 export const PAIRING_LINK_VERSION = "v1";
 export const DEFAULT_PAIRING_TTL_MS = 180_000;
 
-const CHANNEL_SALT = /* @__PURE__ */ utf8("piorbit-channel-v1");
-const PAIRING_CHANNEL_SALT = /* @__PURE__ */ utf8("piorbit-pairing-channel-v1");
+const CHANNEL_SALT = /* @__PURE__ */ utf8(`${WIRE_NAMESPACE}-channel-v1`);
+const PAIRING_CHANNEL_SALT = /* @__PURE__ */ utf8(`${WIRE_NAMESPACE}-pairing-channel-v1`);
 
 export class PairingError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {

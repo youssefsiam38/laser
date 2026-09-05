@@ -412,7 +412,7 @@ export const subagentsModule: LaserModule = {
     };
 
     const log = (level: "info" | "warn" | "error", message: string): void =>
-      send({ type: "piorbit/module/log", module: "subagents", level, message });
+      send({ type: "lasercode/module/log", module: "subagents", level, message });
 
     /**
      * Tell the host what this bus can do, so the UI shows exactly those
@@ -422,7 +422,7 @@ export const subagentsModule: LaserModule = {
       methods = found?.methods ?? [];
       session = found?.sessionId;
       send({
-        type: "piorbit/subagents/event",
+        type: "lasercode/subagents/event",
         event: { type: "bus", reachable: found !== undefined, methods, ...(session !== undefined ? { sessionId: session } : {}) },
       });
     };
