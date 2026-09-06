@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  activityDetailLevel,
   activityGroupDefaultOpen,
   toolDetailsDefaultOpen,
 } from "../../src/runtime/sessionPreferences.js";
 
 describe("session activity detail", () => {
+  it("starts new sessions with every activity disclosure collapsed", () => {
+    expect(activityDetailLevel(undefined)).toBe("answers");
+    expect(activityDetailLevel("/session/without-a-saved-preference.jsonl")).toBe("answers");
+  });
+
   it("keeps the aggregate quiet for answers and opens only reasoning at the middle level", () => {
     expect(activityGroupDefaultOpen("answers", true, false)).toBe(false);
     expect(activityGroupDefaultOpen("reasoning", false, false)).toBe(false);

@@ -2,11 +2,10 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-06T15:00:20+03:00 · codex-2026-09-06-account-usage · commit: `3d34b58`
+**Last updated:** 2026-09-06T15:06:53+03:00 · codex-2026-09-06-release-024 · commit: `1a83b3e`
 
-**Current focus:** M12 is complete. Main now carries adaptive account/API usage,
-three-level activity disclosure and a context-preserving model picker after the
-published stable 0.2.3 release.
+**Current focus:** The verified adaptive-session controls are being published as
+stable 0.2.4; Answers only is explicitly regression-tested as the default.
 
 ## Milestones
 
@@ -25,7 +24,7 @@ published stable 0.2.3 release.
 | M9 CLI | done | all planned CLI tasks complete |
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
-| M12 Product experience | done | stable 0.2.3 published; follow-up UX verified on main |
+| M12 Product experience | in-progress | stable 0.2.4 source verified; release pipeline next |
 | MX Cross-cutting | in-progress | seam and identity gates green; Pi pin 0.85.0 |
 
 ## Blockers
@@ -34,9 +33,9 @@ None.
 
 ## Next up
 
-1. M3-T9: file the prepared upstream subagent patches.
-2. M10-T10: design and prove the in-app updater installation seam.
-3. MX-T2: audit the next Pi pin before updating the embedded engine.
+1. M12-T43: publish and verify stable 0.2.4.
+2. M3-T9: file the prepared upstream subagent patches.
+3. M10-T10: design and prove the in-app updater installation seam.
 
 ## Recently done
 

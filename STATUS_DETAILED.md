@@ -326,6 +326,7 @@ lane T's own if both were written.
 | M12-T40 | Adaptive API and account usage telemetry | done | codex-2026-09-06-account-usage | `pnpm verify` — 888 tests; 3 account-parser tests | see notes |
 | M12-T41 | Three-level session activity disclosure | done | codex-2026-09-06-account-usage | `pnpm verify` — 888 tests; 2 session-preference tests | see notes |
 | M12-T42 | Restore the active model picker choice on open | done | codex-2026-09-06-account-usage | `pnpm verify` — 888 tests; 3 model-selector tests | see notes |
+| M12-T43 | Publish stable 0.2.4 | in-progress | codex-2026-09-06-release-024 | — | see notes |
 
 #### M12-T1 notes
 - 2026-09-06 claimed: audit the shipped logo assets, theme presets, assistant-ui
@@ -809,6 +810,14 @@ lane T's own if both were written.
 - 2026-09-06 done: provider scope derives from the selected model before the
   menu opens, the active row remains checked, and temporary filters clear on
   close without changing the session selection.
+
+#### M12-T43 notes
+- 2026-09-06 claimed: advance the single workspace version to 0.2.4, rerun the
+  release gate, push the version commit and stable tag, then verify GitHub
+  artifacts, signatures, provenance and APT/DNF publication.
+- 2026-09-06 checkpoint: confirmed and regression-tested that a session with no
+  saved preference starts in Answers only, with every activity aggregate,
+  reasoning block and tool body collapsed.
 
 ---
 
@@ -1961,6 +1970,30 @@ and forces repeated navigation.
 Consequences: add M12-T42. The shared assistant-ui selector context exposes its
 open state, while the settings pickers inherit the same sensible initial state
 without persisting transient filters.
+
+### D-93 · 2026-09-06 · Adaptive session controls ship as stable 0.2.4
+
+Decision: publish the verified post-0.2.3 account/API telemetry, activity-detail
+levels and context-preserving model picker together as the stable 0.2.4 patch.
+
+Why: these changes are compatible refinements to the installed 0.2 line and
+the user explicitly requested a new release after the final picker adjustment.
+
+Consequences: add M12-T43. The version-only commit and v0.2.4 tag must point to
+the same source, and the release is complete only after both architectures and
+native update feeds pass.
+
+### D-94 · 2026-09-06 · New sessions start with activity collapsed
+
+Decision: Answers only is the default activity-detail level for any session
+without a saved preference. Reasoning, aggregate actions and inner tool details
+all start collapsed; attention states may still force visibility.
+
+Why: the transcript should begin as a readable answer-first surface, and people
+who want a more verbose default can opt into it per session.
+
+Consequences: the 0.2.4 release gate includes a regression test for the absent-
+preference path as well as the three expansion helpers.
 
 ## Status edits log
 
