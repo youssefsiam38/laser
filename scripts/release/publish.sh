@@ -146,6 +146,20 @@ assets=()
 while IFS= read -r f; do assets+=("$f"); done < <(find "$DIR" -maxdepth 1 -type f | LC_ALL=C sort)
 
 create_args=(release create "$TAG" --repo "$REPO" --title "$product_display $VERSION")
+edit_args=(release edit "$TAG" --repo "$REPO")
+# GitHub's /releases/latest route excludes prereleases. Keep that contract
+# mechanical: SemVer pre-release versions never become Latest, while a plain
+# release such as 0.1.0 is explicitly both stable and Latest.
+case "$VERSION" in
+  *-*)
+    create_args+=(--prerelease --latest=false)
+    edit_args+=(--prerelease --latest=false)
+    ;;
+  *)
+    create_args+=(--latest)
+    edit_args+=(--prerelease=false --latest)
+    ;;
+esac
 [ "$DRAFT" = 1 ] && create_args+=(--draft)
 if [ -n "$NOTES" ]; then
   create_args+=(--notes "$NOTES")
@@ -156,6 +170,7 @@ fi
 if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
   printf '    release %s exists; replacing its assets\n' "$TAG"
   gh release upload "$TAG" --repo "$REPO" --clobber "${assets[@]}"
+  gh "${edit_args[@]}"
 else
   gh "${create_args[@]}" "${assets[@]}"
 fi

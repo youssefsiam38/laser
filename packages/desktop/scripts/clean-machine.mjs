@@ -69,7 +69,9 @@ function defaultPackageDir() {
   const candidates =
     process.platform === "darwin"
       ? [`mac-${process.arch}`, "mac", "mac-universal"].map((name) => join(out, name, `${identity.displayName}.app`, "Contents"))
-      : [join(out, `${process.platform === "win32" ? "win" : "linux"}-unpacked`)];
+      : process.platform === "win32"
+        ? [join(out, "win-unpacked")]
+        : [join(out, `linux-${process.arch}-unpacked`), join(out, "linux-unpacked")];
   return candidates.find((candidate) => existsSync(join(candidate, "resources"))) ?? candidates[0];
 }
 
