@@ -33,7 +33,9 @@ jobs:
 
       - run: pnpm -r typecheck
 
-      - run: pnpm -r test
+      # Desktop tests open one hidden real Electron window and exercise the
+      # Linux launcher. A hosted runner has no graphical session of its own.
+      - run: xvfb-run -a pnpm -r test
 
       # The installer's own test: fixture-based, no network, ~2 seconds. It is
       # the only thing that checks the path a person on a clean machine takes,
