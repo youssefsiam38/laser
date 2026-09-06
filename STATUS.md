@@ -2,10 +2,10 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-06T12:47:28+03:00 · codex-2026-09-06-release-hotfix · commit: `62d0448`
+**Last updated:** 2026-09-06T12:50:43+03:00 · codex-2026-09-06-release-hotfix · commit: `5ad7689`
 
-**Current focus:** The packaged Subagents and new-chat model-picker fixes are
-proved and ready on main; the corrective release itself remains unpublished.
+**Current focus:** Version 0.2.1 is prepared from the CI-proven packaged
+Subagents and new-chat model-picker fixes; publication verification remains.
 
 ## Milestones
 
@@ -33,7 +33,7 @@ None.
 
 ## Next up
 
-1. M12-T5: publish the corrective release after explicit approval.
+1. M12-T5: publish and verify the approved corrective 0.2.1 release.
 2. M3-T9: file the prepared upstream subagent patches.
 3. M10-T10: design and prove the in-app updater installation seam.
 

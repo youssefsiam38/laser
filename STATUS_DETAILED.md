@@ -407,6 +407,9 @@ lane T's own if both were written.
   `AGENTS.md` rules: stage new files before identity/verify, wait for clean CI
   before tagging, preserve runtime-loaded dependency source, and require a real
   packaged session/capability probe rather than a top-level import check.
+- 2026-09-06 release approved: main CI passed build, typecheck, all tests and
+  install verification at `5ad7689`; prepare 0.2.1 and tag only after the exact
+  version commit passes the same clean pipeline.
 
 #### M12-T6 notes
 - 2026-09-06 claimed: reproduce the packaged extension failure from the live
