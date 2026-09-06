@@ -2,10 +2,10 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-06T16:57:39+03:00 · codex-2026-09-06-request-inspector · HEAD: `484a598`
+**Last updated:** 2026-09-06T17:11:31+03:00 · codex-2026-09-06-request-inspector · release source: `05539dc`
 
-**Current focus:** Publish verified stable 0.2.5: live activity rows, captured
-API-request inspection and quota recovery; 918 tests and 76 installer checks pass.
+**Current focus:** Stable 0.2.5 is published: captured API requests, reversible
+live activity rows, and stale-service quota recovery. Both native update feeds ship.
 
 ## Milestones
 
@@ -24,7 +24,7 @@ API-request inspection and quota recovery; 918 tests and 76 installer checks pas
 | M9 CLI | done | planned tasks complete |
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
-| M12 Product experience | in-progress | 0.2.5 verification and release |
+| M12 Product experience | in-progress | 0.2.5 published; remaining experience work |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
@@ -39,8 +39,8 @@ API-request inspection and quota recovery; 918 tests and 76 installer checks pas
 
 ## Recently done
 
-- M12-T48: stale-service quota recovery; host route and auth-retry tests pass.
+- M12-T47: stable 0.2.5; workflow 34037802194, 12 assets, both native feeds.
+- M12-T48: quota version recovery; host route, packaged session and auth-retry proof.
 - M12-T46: captured request inspector; host E2E and four browser layouts pass.
-- M12-T45: uniform reversible/live activity rows; pointer, Enter and motion proof.
-- M12-T43: stable 0.2.4 publishes both architectures and native feeds.
+- M12-T45: reversible live rows; pointer, Enter and reduced-motion checks pass.
 - M12-T44: compact 14px conversation and tighter rhythm.

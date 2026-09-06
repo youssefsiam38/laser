@@ -330,7 +330,7 @@ lane T's own if both were written.
 | M12-T44 | Compact the conversation surface | done | codex-2026-09-06-compact-transcript | `pnpm verify` — 891 tests; dark/light desktop/phone visual pass | see notes |
 | M12-T45 | Reliable, uniform activity disclosures | done | codex-2026-09-06-activity-rows | 424 UI tests; typecheck; desktop/phone dark/light and pointer/Enter toggles | see notes |
 | M12-T46 | Captured API request inspector | done | codex-2026-09-06-request-inspector | `pnpm verify` 918 tests; host E2E prompt attribution; desktop/phone both themes | see notes |
-| M12-T47 | Publish stable patch 0.2.5 | in-progress | codex-2026-09-06-request-inspector | — | release gate after M12-T46 and M12-T48 |
+| M12-T47 | Publish stable patch 0.2.5 | done | codex-2026-09-06-request-inspector | `05539dc`; stable v0.2.5; release workflow 34037802194 passed | see notes |
 | M12-T48 | Recover subscription quota refresh across updates | done | codex-2026-09-06-request-inspector | `pnpm verify`; quota lifecycle and host route tests; packaged-session probe | see notes |
 
 #### M12-T1 notes
@@ -878,6 +878,17 @@ lane T's own if both were written.
   fixture gate passes 76 checks. Real session probe opens all bundled features,
   lists 1,336 models and accepts quota refresh. Release pipeline will repeat the
   packaged clean-machine and real-install gates independently for x64 and ARM64.
+- 2026-09-06 checkpoint: release source `05539dc` is on main. Clean CI
+  `34037703812` passed before tag `v0.2.5` was pushed. Release workflow
+  `34037802194` is building both architectures; no publication claimed yet.
+- 2026-09-06 done: workflow `34037802194` passed both native builds, packaged
+  session checks, staged installation, signing, provenance, publication and feed
+  deployment. GitHub lists v0.2.5 as Latest, not draft/prerelease, with 12 assets.
+  Public APT amd64/arm64 and RPM x86_64/aarch64 metadata all advertise 0.2.5.
+  Release page: https://github.com/youssefsiam38/laser/releases/tag/v0.2.5 .
+  Published notes explain full quit after updating, quota version mismatch and
+  capture limitations. Review servers are stopped; host PID 333618 and the user's
+  running sessions remain untouched. Only the user's untracked `fixes.md` remains.
 
 #### M12-T48 notes
 - 2026-09-06 claimed: inspect the reported unknown quota method before publishing.
