@@ -65,7 +65,10 @@ describe.runIf(runnable)("the bridge, in a real window", () => {
        });`,
     );
     try {
-      const output = execFileSync(electronBin, [script, `--user-data-dir=${userData}`], {
+      // This probes the preload, not Chromium's process sandbox. A clean GitHub
+      // runner cannot make Electron's downloaded chrome-sandbox root-owned
+      // mode 4755, so run this one throwaway hidden process without it.
+      const output = execFileSync(electronBin, [script, "--no-sandbox", `--user-data-dir=${userData}`], {
         encoding: "utf8",
         timeout: 60_000,
         stdio: ["ignore", "pipe", "pipe"],

@@ -17,6 +17,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pretest": "pnpm run linux:assets",
     "test": "vitest run",
     "clean": "rm -rf dist *.tsbuildinfo out build/icon.png build/icons build/linux/generated",
     "dev": "tsc -p tsconfig.json && electron dist/main.js --dev",
