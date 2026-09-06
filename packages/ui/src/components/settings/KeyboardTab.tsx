@@ -1,6 +1,6 @@
 "use client";
 /**
- * Settings → Keyboard (M4-T7, the keybindings half).
+ * Settings → Help and shortcuts (M4-T7, the keybindings half).
  *
  * Every key the app itself answers to, in one place, drawn from the same
  * `modKey()` the command palette uses so a Mac shows ⌘ and everything else
@@ -93,8 +93,8 @@ export function KeyboardTab({ cwd }: { cwd?: string | undefined }) {
     <ScrollArea className="h-full">
       <div className="mx-auto flex max-w-200 flex-col gap-8 px-6 py-6">
         <p className="text-xs leading-5 text-ink-3">
-          Everything the mouse can do has a key. The window&rsquo;s own keys are fixed in this version; the agent&rsquo;s,
-          further down, you can change.
+          The compact chat composer keeps these reminders here instead of reserving a permanent row beneath every message box.
+          The window&rsquo;s own keys are fixed in this version; the agent&rsquo;s, further down, you can change.
         </p>
 
         {list.map((group) => (

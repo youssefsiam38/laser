@@ -1,8 +1,8 @@
 "use client";
 /**
  * `tool-group` (assistant-ui registry), restyled: consecutive tool calls
- * collapsed into one summary row — "Ran 2 commands", "Edited 3 files" — with
- * a chevron that opens the individual rows in place (D-20 §4,
+ * collapsed into one summary row — including mixed counted actions — with
+ * a live thinking indicator and a chevron that opens every individual row in place (D-20 §4,
  * docs/ux-elements.md "Tool group"). This element IS that feature.
  *
  * The registry parts (Root / Trigger / Content) keep their contract: Root is
@@ -33,7 +33,14 @@ import {
 } from "react";
 
 import { StatusDot } from "@/components/status";
-import { summarizeToolGroup, toolGroupDefaultOpen, type ToolGroupMember, type ToolGroupSummary } from "@/components/thread/tool-groups";
+import { ThinkingIndicator } from "@/components/assistant-ui/elements/thinking-indicator";
+import {
+  summarizeToolGroup,
+  toolGroupDefaultOpen,
+  type ToolGroupBreakdownItem,
+  type ToolGroupMember,
+  type ToolGroupSummary,
+} from "@/components/thread/tool-groups";
 import { elapsedOf, markDone, markRunning, useTick } from "@/components/thread/timing";
 import type { ToolKind } from "@/components/thread/tool-summary";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -136,6 +143,10 @@ export type ToolGroupTriggerProps = Omit<React.ComponentProps<typeof Collapsible
   elapsedMs?: number | undefined;
   /** One line per call, for the tooltip and the accessible name. */
   lines?: readonly string[] | undefined;
+  /** Mixed activity: counted categories shown together on one line. */
+  breakdown?: readonly ToolGroupBreakdownItem[] | undefined;
+  /** Exact currently running child action, rendered by the assistant-ui thinking indicator. */
+  activeLabel?: string | undefined;
   open?: boolean | undefined;
 };
 
@@ -149,16 +160,24 @@ function ToolGroupTrigger({
   trailing,
   elapsedMs,
   lines,
+  breakdown,
+  activeLabel,
   open = false,
   className,
   ...props
 }: ToolGroupTriggerProps) {
   const LeadIcon = icon ?? Wrench;
+  const accessibleSummary =
+    active && activeLabel
+      ? activeLabel
+      : breakdown?.length
+        ? `${label}: ${breakdown.map((item) => item.label).join(", ")}`
+        : `${label}${detail ? ` · ${detail}` : ""}`;
   return (
     <CollapsibleTrigger
       data-slot="tool-group-trigger"
       title={lines?.join("\n")}
-      aria-label={`${label}${detail ? ` · ${detail}` : ""}. ${open ? "Collapse to hide" : "Expand to show"} each call.`}
+      aria-label={`${accessibleSummary}. ${open ? "Collapse to hide" : "Expand to show"} each call.`}
       className={cn(
         "group/trigger flex h-7 w-full min-w-0 items-center gap-2 rounded-md text-start outline-none",
         "transition-colors duration-(--motion-instant) hover:bg-surface-2 active:bg-[color-mix(in_oklab,var(--surface-2)_80%,var(--ink))]",
@@ -176,12 +195,40 @@ function ToolGroupTrigger({
           <LeadIcon className={cn("size-3.5", attention ? "text-attention" : "text-ink-3")} />
         )}
       </span>
-      <span data-slot="tool-group-trigger-label" className={cn("shrink-0 text-sm font-medium text-ink", active && "shimmer-text")}>
-        {label}
+      <span className="flex min-w-0 items-center gap-2 overflow-hidden">
+        {active && activeLabel ? (
+          <ThinkingIndicator
+            label={activeLabel}
+            dot={false}
+            className="min-w-0 overflow-hidden [&_[data-slot=thinking-indicator-label]]:max-w-full [&_[data-slot=thinking-indicator-label]]:truncate"
+          />
+        ) : (
+          <span data-slot="tool-group-trigger-label" className="shrink-0 text-sm font-medium text-ink">
+            {label}
+          </span>
+        )}
+        {!active && breakdown?.map((item, index) => {
+          const BreakdownIcon = TOOL_ICONS[item.iconKind];
+          return (
+            <span
+              key={item.family}
+              data-slot="tool-group-breakdown-item"
+              className={cn(
+                "flex min-w-0 shrink items-center gap-1.5 text-xs text-ink-2",
+                index > 0 && "border-s border-line ps-2",
+              )}
+              aria-hidden="true"
+            >
+              <BreakdownIcon className="size-3 shrink-0 text-ink-3" />
+              <span className="truncate">{item.label}</span>
+              {item.detail ? <span className={cn(mono, "shrink-0 text-ink-3")}>· {item.detail}</span> : null}
+            </span>
+          );
+        })}
+        {!active && !breakdown?.length && detail ? (
+          <span className={cn(mono, "min-w-0 truncate", active || attention ? "text-ink-2" : "text-ink-3")}>{detail}</span>
+        ) : null}
       </span>
-      {detail ? (
-        <span className={cn(mono, "min-w-0 truncate", active || attention ? "text-ink-2" : "text-ink-3")}>{detail}</span>
-      ) : null}
       {trailing && !open ? <span className={cn(mono, "shrink-0 text-danger")}>{trailing}</span> : null}
       <span
         aria-hidden="true"
@@ -323,6 +370,8 @@ function ToolGroupSummaryRow({
         trailing={failures > 0 ? (failures === summary.count ? "failed" : `${failures} failed`) : undefined}
         elapsedMs={elapsed}
         lines={summary.lines}
+        breakdown={summary.breakdown}
+        activeLabel={summary.activeLabel}
         open={open}
       />
       <ToolGroupContent>{children}</ToolGroupContent>

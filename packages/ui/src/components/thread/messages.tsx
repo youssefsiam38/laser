@@ -183,7 +183,7 @@ export function UserMessage() {
             onCopyPath={copyPath}
             busy={busy}
           />
-          <MessageTimestamp />
+          <MessageTimestamp className={hoverReveal} />
         </MessageFooter>
       </div>
     </MessagePrimitive.Root>
@@ -195,11 +195,9 @@ export function UserMessage() {
 // ---------------------------------------------------------------------------
 
 /**
- * Consecutive reasoning parts coalesce; consecutive tool calls coalesce **per
- * family** (reads, edits, commands, searches…), so a summary row is always
- * specific — "Edited 2 files" then "Ran 2 commands", never "Used 5 tools" for
- * a run that a person would describe as two things. A tool with a registered
- * standalone UI is left alone so it can draw itself.
+ * Consecutive reasoning parts coalesce; every uninterrupted run of tool calls
+ * shares one chronological activity parent. The parent names and counts each
+ * family; registered standalone tool UIs remain the detailed children.
  */
 type GroupKey = `group-${string}`;
 const groupBy = (part: { type: string; toolName?: string }): GroupKey[] => {
@@ -293,8 +291,8 @@ export function AssistantMessage() {
                 // thinking indicator names the state and proves time is moving.
                 return <EmptyReplyThinking timingKey={`${messageId}:indicator`} />;
               default:
-                // Consecutive calls of one family collapse into one summary row
-                // (D-20 §4); a group of one is just that call's row.
+                // Consecutive calls collapse into one counted activity row
+                // (D-20 §4, D-83); a group of one remains its own row.
                 if (part.type.startsWith("group-tool")) {
                   return (
                     <div className="my-2 flex flex-col first:mt-0 last:mb-0">
@@ -312,7 +310,7 @@ export function AssistantMessage() {
       {isNotice && !streaming ? (
         <MessageFooter>
           <span />
-          <MessageTimestamp />
+          <MessageTimestamp className={hoverReveal} />
         </MessageFooter>
       ) : null}
     </MessagePrimitive.Root>
@@ -432,7 +430,7 @@ function AssistantFooter() {
       />
       <span className="flex min-w-0 items-center gap-2">
         <MessageTiming />
-        <MessageTimestamp />
+        <MessageTimestamp className={hoverReveal} />
       </span>
     </MessageFooter>
   );

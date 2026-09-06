@@ -7,12 +7,11 @@
  *
  * Why Shiki won the evaluation against the hljs highlighter this replaced
  * (docs/ux-elements.md "Shiki highlighter"): TextMate grammars tokenize
- * real-world TypeScript, JSX, YAML and shell far more accurately than hljs's
- * heuristics; every language is a lazy chunk, so the transcript bundle carries
- * no grammar until a fence asks for one; and the JavaScript regex engine
- * needs no WebAssembly fetch, which matters on the relay. Streaming behaviour
- * is equal — both leave a running part plain — and settling is a colour
- * change in the same box, not a layout shift.
+ * real-world TypeScript, JSX, YAML, shell and the rest of Shiki's full catalog.
+ * Every grammar is a lazy chunk, so the transcript bundle carries no language
+ * until a fence asks for one. The Oniguruma engine is required for full
+ * TextMate regex compatibility and is lazy with the highlighter. Streaming
+ * remains plain, and settling is a colour change in the same box.
  *
  * The theme is laser's own, not `github-*`: every colour is a `--syntax-*`
  * token (docs/ux-theme.md T1), so one theme serves both bases and a person
@@ -37,20 +36,50 @@ export const LASER_SHIKI_THEME = {
   colors: { "editor.foreground": "var(--ink)", "editor.background": "transparent" },
   settings: [
     { settings: { foreground: "var(--ink)", background: "transparent" } },
-    { scope: ["comment", "punctuation.definition.comment"], settings: { foreground: "var(--syntax-comment)", fontStyle: "italic" } },
-    { scope: ["keyword", "storage.type", "storage.modifier", "keyword.operator.new", "keyword.control"], settings: { foreground: "var(--syntax-keyword)" } },
-    { scope: ["string", "string.quoted", "string.template", "punctuation.definition.string"], settings: { foreground: "var(--syntax-string)" } },
-    { scope: ["constant.numeric", "constant.language", "constant.character", "constant.other"], settings: { foreground: "var(--syntax-number)" } },
-    { scope: ["entity.name.function", "support.function", "meta.function-call entity.name", "entity.name.tag"], settings: { foreground: "var(--syntax-function)" } },
-    { scope: ["entity.name.type", "entity.name.class", "support.type", "support.class", "entity.other.inherited-class", "entity.other.attribute-name"], settings: { foreground: "var(--syntax-type)" } },
-    { scope: ["variable", "variable.parameter", "variable.other", "meta.definition.variable"], settings: { foreground: "var(--syntax-variable)" } },
-    { scope: ["punctuation", "meta.brace", "keyword.operator"], settings: { foreground: "var(--syntax-punctuation)" } },
+    {
+      scope: ["comment", "punctuation.definition.comment", "string.comment"],
+      settings: { foreground: "var(--syntax-comment)", fontStyle: "italic" },
+    },
+    {
+      scope: ["keyword", "keyword.control", "keyword.operator.word", "storage", "storage.type", "storage.modifier", "meta.preprocessor", "entity.name.directive"],
+      settings: { foreground: "var(--syntax-keyword)" },
+    },
+    {
+      scope: ["string", "string.quoted", "string.template", "string.regexp", "constant.other.symbol", "constant.other.color", "markup.inline.raw"],
+      settings: { foreground: "var(--syntax-string)" },
+    },
+    {
+      scope: ["constant", "constant.numeric", "constant.language", "constant.character", "constant.character.escape", "variable.language", "entity.name.label"],
+      settings: { foreground: "var(--syntax-number)" },
+    },
+    {
+      scope: ["entity.name.function", "entity.name.method", "support.function", "support.method", "meta.function-call", "entity.name.tag", "markup.heading", "markup.heading entity.name"],
+      settings: { foreground: "var(--syntax-function)" },
+    },
+    {
+      scope: ["entity.name.type", "entity.name.class", "entity.name.interface", "entity.name.namespace", "entity.name.module", "support.type", "support.class", "support.constant", "entity.other.inherited-class"],
+      settings: { foreground: "var(--syntax-type)" },
+    },
+    {
+      scope: ["variable", "variable.parameter", "variable.other", "meta.definition.variable", "meta.object-literal.key", "variable.other.property", "support.type.property-name", "entity.other.attribute-name", "entity.name.selector"],
+      settings: { foreground: "var(--syntax-variable)" },
+    },
+    { scope: ["markup.bold"], settings: { foreground: "var(--syntax-variable)", fontStyle: "bold" } },
+    { scope: ["markup.italic"], settings: { foreground: "var(--syntax-variable)", fontStyle: "italic" } },
+    { scope: ["markup.underline.link", "string.other.link", "markup.list"], settings: { foreground: "var(--syntax-type)" } },
+    { scope: ["markup.inserted", "meta.diff.header.to-file"], settings: { foreground: "var(--ok)" } },
+    { scope: ["markup.deleted", "meta.diff.header.from-file", "invalid"], settings: { foreground: "var(--danger)" } },
+    { scope: ["punctuation", "meta.brace", "keyword.operator", "meta.separator"], settings: { foreground: "var(--syntax-punctuation)" } },
   ],
 };
 
-/** Fences are usually tagged with an alias; anything Shiki does not bundle renders as plain text. */
+/** Full TextMate-compatible regex support, lazy-loaded with the first settled fence. */
+export const SHIKI_ENGINE = "oniguruma" as const;
+
+/** Fences are often tagged with an alias or model-written wrapper; unknowns stay plain. */
 export function shikiLanguage(language: string | undefined): string {
-  const key = (language ?? "").trim().toLowerCase();
+  const raw = (language ?? "").trim().toLowerCase().split(/\s+/, 1)[0] ?? "";
+  const key = raw.replace(/^\{?\.?lang(?:uage)?-/, "").replace(/^\{\./, "").replace(/^\./, "").replace(/\}$/, "").replace(/:.+$/, "");
   if (!key) return "text";
   if (key in bundledLanguages) return key;
   const alias = ALIASES[key];
@@ -63,14 +92,18 @@ const ALIASES: Record<string, string> = {
   mjs: "js",
   cjs: "js",
   node: "js",
+  javascriptreact: "jsx",
+  typescriptreact: "tsx",
   py3: "python",
   zsh: "bash",
+  shellscript: "bash",
   golang: "go",
   "c++": "cpp",
   cc: "cpp",
   h: "c",
   hpp: "cpp",
   docker: "dockerfile",
+  html5: "html",
   conf: "ini",
   patch: "diff",
   make: "makefile",
@@ -98,7 +131,7 @@ const HighlightedCode: FC<{
 }> = ({ code, language, options }) => {
   const highlighted = useShikiHighlighter(code, language, LASER_SHIKI_THEME, {
     ...options,
-    engine: "javascript",
+    engine: SHIKI_ENGINE,
   });
   return <>{highlighted ?? <PlainCode code={code} />}</>;
 };

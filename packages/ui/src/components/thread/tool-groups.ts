@@ -21,6 +21,15 @@ export interface ToolGroupMember {
 /** The family a group is named after. `mixed` = more than one family. */
 export type ToolGroupFamily = "command" | "edit" | "write" | "read" | "search" | "list" | "other" | "mixed";
 
+export interface ToolGroupBreakdownItem {
+  readonly family: Exclude<ToolGroupFamily, "mixed">;
+  readonly iconKind: ToolKind;
+  /** A counted, past/present-tense action: "Read 3 files". */
+  readonly label: string;
+  /** Extra precision where the action count differs from its subject count. */
+  readonly detail: string | undefined;
+}
+
 export interface ToolGroupSummary {
   readonly family: ToolGroupFamily;
   /** Icon to draw when nothing is running; the family's own, `Wrench` for mixed. */
@@ -33,6 +42,10 @@ export interface ToolGroupSummary {
   readonly hasError: boolean;
   readonly hasDecision: boolean;
   readonly running: boolean;
+  /** Exact current action for the live indicator: "Editing src/index.html". */
+  readonly activeLabel: string | undefined;
+  /** Mixed activity only: one counted item per family, in first-seen order. */
+  readonly breakdown: readonly ToolGroupBreakdownItem[];
   /** Full list for the accessible name and the tooltip: one line per call. */
   readonly lines: readonly string[];
 }
@@ -40,11 +53,8 @@ export interface ToolGroupSummary {
 /** The family a tool name belongs to. */
 export const toolFamily = (toolName: string): Exclude<ToolGroupFamily, "mixed"> => familyOf(toolKind(toolName));
 
-/** Grouping key for the transcript: edits and writes share one ("files changed"). */
-export const toolGroupKey = (toolName: string): string => {
-  const family = toolFamily(toolName);
-  return family === "write" ? "edit" : family;
-};
+/** Every uninterrupted tool run shares one chronological activity parent. */
+export const toolGroupKey = (_toolName: string): string => "activity";
 
 const familyOf = (kind: ToolKind): Exclude<ToolGroupFamily, "mixed"> => {
   switch (kind) {
@@ -74,26 +84,39 @@ const pathOf = (args: unknown): string | undefined => {
   return typeof path === "string" && path ? path : undefined;
 };
 
-/**
- * Name a run of tool calls. Edits and writes to the same file count once
- * ("Edited 1 file · 3 edits"): saying "3 files" for three edits to one file
- * would be a lie, and the file count is what a person wants to know.
- */
-export function summarizeToolGroup(members: readonly ToolGroupMember[]): ToolGroupSummary {
-  const count = members.length;
-  const kinds = members.map((m) => toolKind(m.toolName));
-  const families = new Set(kinds.map(familyOf));
-  // Edit + write is one story: files changed.
-  if (families.has("edit") && families.has("write")) {
-    families.delete("write");
-  }
-  const family: ToolGroupFamily = families.size === 1 ? [...families][0]! : "mixed";
-  const running = members.some((m) => m.running);
-  const hasError = members.some((m) => m.isError);
-  const hasDecision = members.some((m) => m.awaiting);
-  const live = members.find((m) => m.running || m.awaiting);
+function activeToolLabel(member: ToolGroupMember): string {
+  const summary = summarizeTool(member.toolName, member.args);
+  const path = pathOf(member.args);
+  const target = path && ["read", "write", "edit", "ls"].includes(summary.kind) ? shortPath(path, 2) : summary.summary;
+  const action = (() => {
+    switch (summary.kind) {
+      case "read":
+        return "Reading";
+      case "write":
+        return "Writing";
+      case "edit":
+        return "Editing";
+      case "bash":
+        return "Running";
+      case "grep":
+      case "find":
+        return "Searching";
+      case "ls":
+        return "Listing";
+      default:
+        return summary.verb;
+    }
+  })();
+  return `${action}${target ? ` ${target}` : ""}`;
+}
 
-  const distinctFiles = new Set(members.map((m) => pathOf(m.args)).filter((p): p is string => p !== undefined)).size;
+function summarizeFamily(
+  family: Exclude<ToolGroupFamily, "mixed">,
+  members: readonly ToolGroupMember[],
+  running: boolean,
+): ToolGroupBreakdownItem {
+  const count = members.length;
+  const distinctFiles = new Set(members.map((member) => pathOf(member.args)).filter((path): path is string => path !== undefined)).size;
   let label: string;
   let detail: string | undefined;
   switch (family) {
@@ -127,6 +150,43 @@ export function summarizeToolGroup(members: readonly ToolGroupMember[]): ToolGro
     default:
       label = `${running ? "Using" : "Used"} ${plural(count, "tool", "tools")}`;
   }
+  const firstKind = toolKind(members[0]?.toolName ?? "");
+  return { family, iconKind: family === "edit" ? "edit" : firstKind, label, detail };
+}
+
+/**
+ * Name a run of tool calls. Edits and writes to the same file count once
+ * ("Edited 1 file · 3 edits"): saying "3 files" for three edits to one file
+ * would be a lie, and the file count is what a person wants to know.
+ */
+export function summarizeToolGroup(members: readonly ToolGroupMember[]): ToolGroupSummary {
+  const count = members.length;
+  const kinds = members.map((m) => toolKind(m.toolName));
+  const families = new Set(kinds.map(familyOf));
+  const combineFileChanges = families.has("edit") && families.has("write");
+  if (combineFileChanges) families.delete("write");
+  const family: ToolGroupFamily = families.size === 1 ? [...families][0]! : "mixed";
+  const running = members.some((m) => m.running);
+  const hasError = members.some((m) => m.isError);
+  const hasDecision = members.some((m) => m.awaiting);
+  const live = members.find((m) => m.running || m.awaiting);
+  const active = members.find((m) => m.running);
+
+  const byFamily = new Map<Exclude<ToolGroupFamily, "mixed">, ToolGroupMember[]>();
+  for (const member of members) {
+    const rawFamily = familyOf(toolKind(member.toolName));
+    const memberFamily = combineFileChanges && rawFamily === "write" ? "edit" : rawFamily;
+    const familyMembers = byFamily.get(memberFamily) ?? [];
+    familyMembers.push(member);
+    byFamily.set(memberFamily, familyMembers);
+  }
+  const breakdown = [...byFamily.entries()].map(([memberFamily, familyMembers]) =>
+    summarizeFamily(memberFamily, familyMembers, familyMembers.some((member) => member.running)),
+  );
+
+  const ownSummary = family === "mixed" ? undefined : breakdown[0];
+  let label = ownSummary?.label ?? `${running ? "Working through" : "Completed"} ${plural(count, "action", "actions")}`;
+  let detail = ownSummary?.detail;
 
   // While live, the typed fragment is the call in flight: that is what you
   // would be reading in the expanded row.
@@ -136,7 +196,7 @@ export function summarizeToolGroup(members: readonly ToolGroupMember[]): ToolGro
     if (text) detail = text;
   }
 
-  const iconKind: ToolKind = family === "mixed" ? "other" : (kinds[0] ?? "other");
+  const iconKind: ToolKind = family === "mixed" ? "other" : (ownSummary?.iconKind ?? kinds[0] ?? "other");
 
   const lines = members.map((m) => {
     const s = summarizeTool(m.toolName, m.args);
@@ -144,7 +204,19 @@ export function summarizeToolGroup(members: readonly ToolGroupMember[]): ToolGro
     return `${s.verb} ${s.summary || (pathOf(m.args) ? shortPath(pathOf(m.args)!) : "")}`.trim() + status;
   });
 
-  return { family, iconKind, label, detail, count, hasError, hasDecision, running, lines };
+  return {
+    family,
+    iconKind,
+    label,
+    detail,
+    count,
+    hasError,
+    hasDecision,
+    running,
+    activeLabel: active ? activeToolLabel(active) : undefined,
+    breakdown: family === "mixed" ? breakdown : [],
+    lines,
+  };
 }
 
 /**

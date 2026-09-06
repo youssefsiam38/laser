@@ -28,7 +28,7 @@ export function ThinkingIndicator({ label, elapsed, dot = true, className, ...pr
   return (
     <span data-slot="thinking-indicator" className={cn("inline-flex items-center gap-2 text-sm", className)} {...props}>
       {dot ? <StatusDot status="working" size="sm" aria-hidden="true" /> : null}
-      <ShimmerLabel key={label} className="relative inline-block font-medium leading-none">
+      <ShimmerLabel data-slot="thinking-indicator-label" key={label} className="relative inline-block font-medium leading-none">
         {label}
       </ShimmerLabel>
       {elapsed !== undefined ? <span className={cn(mono, "text-ink-3 tnum")}>{elapsed}</span> : null}

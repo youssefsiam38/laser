@@ -7,7 +7,7 @@
  * What is the registry's: the primitive, the memoized component map, the
  * code header with a copy control, `defer` for large streaming messages.
  * What is laser's, each on purpose:
- *   - Every class reads a token; prose is `text-md` at max 72ch, typed things
+ *   - Every class reads a token; prose is `text-md` at the shared prose measure, typed things
  *     are mono at the 12px floor, headings are the type scale.
  *   - **Never raw HTML** (AGENTS.md invariant 9): remark-gfm and no
  *     rehype-raw, so an agent cannot inject markup. KaTeX output is built by
@@ -203,7 +203,7 @@ const componentsByLanguage = {
 };
 
 /**
- * Transcript prose at max 72ch, never raw HTML. The streaming caret rides on
+ * Transcript prose at the shared reading measure, never raw HTML. The streaming caret rides on
  * the last block while the part reports `running`.
  */
 const MarkdownTextImpl: FC<MarkdownTextProps> = ({ className, components }) => {
@@ -222,7 +222,7 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ className, components }) => {
       componentsByLanguage={componentsByLanguage}
       smooth={false}
       defer
-      className={cn("md-body max-w-[72ch] text-md break-words text-ink", "[&[data-status=running]>*:last-child]:caret", className)}
+      className={cn("md-body max-w-(--measure-prose) text-md break-words text-ink", "[&[data-status=running]>*:last-child]:caret", className)}
     />
   );
 };

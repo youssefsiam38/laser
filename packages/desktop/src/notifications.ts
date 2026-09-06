@@ -39,16 +39,16 @@ interface Copy {
  * names, and the project first because that is how people hold several agents
  * in their head.
  */
-function copyFor(change: AttentionChange): Copy | undefined {
+export function notificationCopy(change: AttentionChange): Copy | undefined {
   const project = plainText(baseName(change.session.cwd), 40);
-  const session = plainText(change.session.name ?? "Untitled session", 60);
+  const session = change.session.name ? plainText(change.session.name, 60) : undefined;
   switch (change.to) {
     case "waiting_for_input":
-      return { title: `${project} needs you`, body: `${session} is waiting for an answer.` };
+      return { title: `${project} needs you`, body: session ? `${session} is waiting for an answer.` : "The session is waiting for an answer." };
     case "finished_unread":
-      return { title: `${project} finished`, body: `${session} is done. Nothing is running there now.` };
+      return { title: `${project} finished`, body: session ? `${session} is done. Nothing is running there now.` : "The session is done. Nothing is running there now." };
     case "error":
-      return { title: `${project} hit an error`, body: `${session} stopped. Open it to see what happened.` };
+      return { title: `${project} hit an error`, body: session ? `${session} stopped. Open it to see what happened.` : "The session stopped. Open it to see what happened." };
     default:
       return undefined;
   }
@@ -82,7 +82,7 @@ export class Notifier {
       return false;
     }
 
-    const copy = copyFor(change);
+    const copy = notificationCopy(change);
     if (!copy) return false;
 
     this.lastAt.set(change.session.path, now);

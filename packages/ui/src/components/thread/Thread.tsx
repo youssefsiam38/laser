@@ -17,7 +17,7 @@ import { ThreadSlotsProvider, type ThreadSlots } from "./thread-slots.js";
 
 /**
  * The assistant-ui thread column (DESIGN.md "Layout" 3): transcript at max
- * 76ch, the viewport scrolls (never the body), and a sticky footer that holds
+ * the shared thread measure, the viewport scrolls (never the body), and a sticky footer that holds
  * turn-blocking decisions, queue chips, and the floating composer.
  * The footer's bottom inset is `max(safe-area, --kb)` so the composer rides
  * above the on-screen keyboard.
@@ -54,7 +54,7 @@ export function Thread({ statusSlot }: ThreadProps = {}) {
             <ThreadPrimitive.Viewport data-slot="thread-viewport" className="flex flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain">
               {/* A long transcript gets a rail of ticks at the viewport's edge, on a wide screen only. */}
               <ConversationMapAui side="right" className="hidden lg:block" />
-              <div className="mx-auto flex w-full max-w-[76ch] flex-1 flex-col px-4 md:px-6">
+              <div className="mx-auto flex w-full max-w-(--measure-thread) flex-1 flex-col px-4 md:px-6">
                 <AuiIf condition={(s) => s.thread.isLoading}>
                   <ThreadLoading />
                 </AuiIf>

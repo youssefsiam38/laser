@@ -147,6 +147,12 @@ export const TEXT_SCALE: Record<"small" | "default" | "large" | "larger", number
 /** iOS zooms a focused field under 16px; a platform constant, not a design choice. */
 export const TOUCH_INPUT_MIN_PX = 16;
 
+/** Readable line measures. Shared so transcript-adjacent surfaces align. */
+export const CONTENT_MEASURE = {
+  thread: "84ch",
+  prose: "80ch",
+} as const;
+
 /* ----------------------------------------------------------------------------
  * Spacing, radius, motion.
  * -------------------------------------------------------------------------- */

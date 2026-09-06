@@ -78,11 +78,11 @@ describe("every preset (T5: the default must be good, and so must the rest)", ()
           expect(contrastRatio(t[`ansi-${i as 0}`], t["terminal-bg"]), `ansi-${i}`).toBeGreaterThanOrEqual(4.5);
         }
       });
-      it("writes only measurable colours and pixel sizes", () => {
+      it("writes only measurable colours, pixel sizes and reading measures", () => {
         const vars = compileVars(preset);
         for (const [k, v] of Object.entries(vars)) {
           if (k.startsWith("--shadow") || k.startsWith("--font") || k === "--motion-ease" || k === "color-scheme" || k === "--text-scale") continue;
-          expect(v, k).toMatch(/^(#[0-9a-f]{6}|[\d.]+px|[\d.]+ms)$/);
+          expect(v, k).toMatch(/^(#[0-9a-f]{6}|[\d.]+px|[\d.]+ms|[\d.]+ch)$/);
         }
       });
     });
@@ -104,6 +104,14 @@ describe(`${PRODUCT_DISPLAY_NAME} brand defaults`, () => {
     expect(light.tokens.bg).toBe(LASER_BRAND.warmWhite);
     expect(light.tokens.ink).toBe(LASER_BRAND.black);
     expect(hueDistance(hueOf(light.tokens.live)!, hueOf(LASER_BRAND.green)!)).toBeLessThan(12);
+  });
+});
+
+describe("shared reading measures", () => {
+  it("compiles one wider measure for the thread and its prose", () => {
+    const vars = compileVars(DEFAULT_PRESET);
+    expect(vars["--measure-thread"]).toBe("84ch");
+    expect(vars["--measure-prose"]).toBe("80ch");
   });
 });
 

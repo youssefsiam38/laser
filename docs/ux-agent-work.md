@@ -162,3 +162,9 @@ scripted workflows we do not. Inferred connectors are dashed and labelled
    R2 and R4 they are read-only cards that appear late. *Lean: ship them
    read-only and file the upstream index patch — unless late-appearing cards
    feel broken to you, in which case that patch is a prerequisite for M3.*
+
+The sheet separates lifecycle without flattening lineage: a root tree belongs
+to **In progress** while any descendant is queued, running, paused, pending or
+blocked, then moves whole to the collapsible **Finished** section. Completed,
+failed and cancelled rows keep their own terminal labels. Background terminal
+processes can join this model later, but are not represented as fleet work yet.

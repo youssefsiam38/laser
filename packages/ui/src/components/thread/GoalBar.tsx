@@ -36,7 +36,7 @@ export function GoalBar() {
   return (
     <>
       <section aria-label="Session goal" className="shrink-0 px-3 py-2 hairline-b">
-        <div className="mx-auto flex max-w-[76ch] items-start gap-3 rounded-xl border border-[color-mix(in_oklab,var(--live)_32%,var(--line))] bg-[color-mix(in_oklab,var(--live)_5%,var(--surface))] px-3 py-2.5">
+        <div className="mx-auto flex max-w-(--measure-thread) items-start gap-3 rounded-xl border border-[color-mix(in_oklab,var(--live)_32%,var(--line))] bg-[color-mix(in_oklab,var(--live)_5%,var(--surface))] px-3 py-2.5">
           <div className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-[color-mix(in_oklab,var(--live)_14%,var(--surface))] text-live">
             <Target className="size-4" aria-hidden="true" />
           </div>

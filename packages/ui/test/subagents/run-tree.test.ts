@@ -11,8 +11,11 @@ import {
   buildRunTree,
   flatten,
   overflowAttention,
+  partitionRunRoots,
   pathTo,
   reconcileFocus,
+  runBranchIsActive,
+  runNodeIsTerminal,
   tabsFor,
 } from "../../src/components/subagents/run-tree.js";
 
@@ -219,5 +222,54 @@ describe("the fleet's chronological hierarchy", () => {
     );
 
     expect(tree.roots[0]?.children.map((node) => node.id)).toEqual(["company", "consumer", "market"]);
+  });
+});
+
+describe("fleet lifecycle sections", () => {
+  it("puts terminal roots in Finished and active roots in In progress", () => {
+    const tree = buildRunTree(
+      [entry(run("running")), entry(run("done", { lifecycle: "done" })), entry(run("failed", { lifecycle: "failed" }))],
+      new Set(),
+      NOW,
+    );
+    const sections = partitionRunRoots(tree.roots);
+    expect(sections.active.map((node) => node.id)).toEqual(["running"]);
+    expect(sections.finished.map((node) => node.id)).toEqual(["done", "failed"]);
+    expect(runNodeIsTerminal(tree.byId.get("done")!)).toBe(true);
+  });
+
+  it("keeps a terminal parent with its active child until the whole workflow finishes", () => {
+    const tree = buildRunTree(
+      [entry(run("workflow", { lifecycle: "done" })), entry(child("lane", "workflow", { lifecycle: "running" }))],
+      new Set(),
+      NOW,
+    );
+    const root = tree.roots[0]!;
+    expect(runBranchIsActive(root)).toBe(true);
+    expect(partitionRunRoots(tree.roots)).toMatchObject({ active: [root], finished: [] });
+  });
+
+  it("treats an all-terminal plan as finished but leaves blocked work active", () => {
+    const donePlan: Panel = {
+      kind: "plan",
+      id: "done-plan",
+      source: "pi-subagents",
+      intent: "follow",
+      title: "Finished workflow",
+      steps: [
+        { id: "a", label: "a", state: "done" },
+        { id: "b", label: "b", state: "failed" },
+      ],
+    };
+    const blockedPlan: Panel = {
+      ...donePlan,
+      id: "blocked-plan",
+      title: "Blocked workflow",
+      steps: [{ id: "a", label: "a", state: "blocked" }],
+    };
+    const tree = buildRunTree([entry(donePlan), entry(blockedPlan)], new Set(), NOW);
+    const sections = partitionRunRoots(tree.roots);
+    expect(sections.active.map((node) => node.id)).toEqual(["blocked-plan"]);
+    expect(sections.finished.map((node) => node.id)).toEqual(["done-plan"]);
   });
 });

@@ -313,6 +313,14 @@ lane T's own if both were written.
 | M12-T27 | Remove projects whose remaining chats are archived | done | codex-2026-09-06-archive-remove | 392 UI tests; UI typecheck and production build | see notes |
 | M12-T28 | Persist project priority across both left sidebars | done | codex-2026-09-06-project-order | `pnpm verify` — 862 tests; host persistence test | see notes |
 | M12-T29 | Make dock panels directly reorderable | done | codex-2026-09-06-project-order | `pnpm verify` — 862 tests; 13 dock-state tests | see notes |
+| M12-T30 | Widen the shared conversation reading measure | done | codex-2026-09-06-activity-summary | `pnpm verify` — 869 tests | see notes |
+| M12-T31 | Aggregate adjacent tool activity under one rich disclosure | done | codex-2026-09-06-activity-summary | `pnpm verify` — 869 tests; 7 group-summary tests | see notes |
+| M12-T32 | Reveal timestamps from the message row | done | codex-2026-09-06-activity-summary | `pnpm verify` — 869 tests; timestamp interaction test | see notes |
+| M12-T33 | Reclaim the space below the composer | done | codex-2026-09-06-activity-summary | `pnpm verify` — 869 tests | see notes |
+| M12-T34 | Expand Markdown syntax-highlighting coverage | done | codex-2026-09-06-activity-summary | `pnpm verify` — 869 tests; 3 highlighter catalog tests | see notes |
+| M12-T35 | Align native notification session titles | done | codex-2026-09-06-activity-summary | `pnpm verify` — 875 tests; 66 desktop tests | see notes |
+| M12-T36 | Separate active and terminal fleet work | done | codex-2026-09-06-activity-summary | `pnpm verify` — 875 tests; 20 run-tree tests | see notes |
+| M12-T37 | Publish stable 0.2.2 | in-progress | codex-2026-09-06-activity-summary | — | see notes |
 
 #### M12-T1 notes
 - 2026-09-06 claimed: audit the shipped logo assets, theme presets, assistant-ui
@@ -679,6 +687,67 @@ lane T's own if both were written.
   grip or keyboard without changing panel identity, size or body state. Order
   restores per browser session. Full 862-test build, typecheck and test gate
   passes; the development server remains stopped as requested.
+
+#### M12-T30 notes
+- 2026-09-06 claimed: replace the narrow component literals with wider
+  semantic thread and prose measure tokens shared by chat, goals and previews.
+- 2026-09-06 done: the centered thread and goal row use an 84ch semantic
+  measure; transcript and prose previews use 80ch. The values compile through
+  every theme and collapse naturally to the available phone width.
+
+#### M12-T31 notes
+- 2026-09-06 claimed: make all adjacent tool calls one chronological activity
+  group, enrich its collapsed row with counted action categories, and preserve
+  the existing full tool rows when expanded.
+- 2026-09-06 checkpoint: a running group replaces the settled breakdown with
+  the assistant-ui thinking indicator and the exact live action target; the
+  counted category summary returns as soon as the run settles.
+- 2026-09-06 done: all adjacent calls now share one chronological parent.
+  Settled mixed work shows counted, icon-led families in first-seen order;
+  active work names the current file, command, pattern or directory; expansion
+  preserves every prior detail row. Full workspace gate passes.
+
+#### M12-T32 notes
+- 2026-09-06 claimed: apply the transcript's shared hover/focus reveal behavior
+  to message timestamps while retaining coarse-pointer and screen-reader access.
+- 2026-09-06 done: user, assistant and notice times are quiet at rest, reveal
+  from the whole row on mouse hover or keyboard focus, and remain visible on
+  coarse pointers. Day separators and turn timing remain unchanged.
+
+#### M12-T33 notes
+- 2026-09-06 claimed: remove the desktop-only footer beneath the composer and
+  make the existing settings reference explicit as Help and shortcuts.
+- 2026-09-06 done: chat no longer reserves a footer for repeated git and key
+  hints; Help and shortcuts is the durable home for composer guidance.
+
+#### M12-T34 notes
+- 2026-09-06 claimed: preserve the installed assistant-ui Shiki element while
+  replacing its restricted regex engine, normalizing model-written fence
+  labels, broadening theme scopes and proving the full bundled catalog.
+- 2026-09-06 done: settled Markdown fences use Oniguruma and every Shiki
+  bundled language or alias, tolerate common model fence-label variants, and
+  map a broader set of TextMate scopes into Laser's semantic syntax tokens.
+  All 402 UI tests, typecheck, production build and the full 869-test workspace
+  gate pass; grammar and engine assets remain lazy chunks.
+
+#### M12-T35 notes
+- 2026-09-06 claimed: make the desktop fleet carry the catalog's first-message
+  title fallback and remove “Untitled session” from native notification copy.
+- 2026-09-06 done: desktop notifications now share the explicit name or first
+  user-message title visible in Laser, with neutral session copy when neither
+  exists. Fleet and notification regressions pass in the full workspace gate.
+
+#### M12-T36 notes
+- 2026-09-06 claimed: partition fleet root subtrees into In progress and
+  Finished sections while preserving every parent/child relationship.
+- 2026-09-06 done: active work is prominent, terminal work is collapsible, and
+  a workflow remains intact until its whole descendant tree has settled. Existing
+  status rows preserve the distinctions between done, failed and cancelled.
+
+#### M12-T37 notes
+- 2026-09-06 claimed: set the single workspace version to 0.2.2, commit and tag
+  the verified experience batch, then observe the complete release and package-
+  feed workflow before calling the patch published.
 
 ---
 
@@ -1674,8 +1743,103 @@ data; manual ordering would make those signals ambiguous.
 Consequences: add M12-T29. Panel order is remembered per session and exposed
 through pointer, touch and keyboard controls with a visible drag handle.
 
+### D-83 · 2026-09-06 · Tool aggregation is chronological, detail remains canonical
+
+Decision: one uninterrupted run of tool calls is represented by one collapsed
+activity row, even when it mixes reads, edits, commands and searches. The row
+counts and names each action family in first-seen order; opening it renders the
+existing individual rows unchanged. While active, the same row uses the
+assistant-ui thinking indicator to name the precise call in flight. Conversation
+and prose widths are shared semantic theme measures rather than component-local
+literals.
+
+Why: grouping by tool family split ordinary work into one-item groups that
+could not collapse, while a generic total hid what happened. A counted parent
+reduces transcript noise without weakening audit detail. A modestly wider
+measure uses the available canvas without letting related surfaces drift.
+
+Consequences: add M12-T30 and M12-T31. Reasoning, prose and other message parts
+remain chronological boundaries; errors and pending decisions still open the
+group automatically.
+
+### D-84 · 2026-09-06 · Exact timestamps are interaction detail
+
+Decision: message timestamps are visually hidden at rest on fine-pointer
+devices and reveal with the message row's existing hover/focus behavior. They
+remain visible on coarse pointers and announced to assistive technology. Day
+separators and elapsed/token metrics keep their current visibility.
+
+Why: a clock on every block adds repeated visual noise without helping the
+normal reading path, while hover/focus preserves exact timing when requested.
+
+Consequences: add M12-T32 and apply one shared reveal rule to user, assistant
+and notice timestamps.
+
+### D-85 · 2026-09-06 · Composer guidance is reference material; code grammar is complete
+
+Decision: chat does not reserve a permanent row beneath the composer for git
+status or keyboard hints. Composer guidance lives in Settings under Help and
+shortcuts. Markdown keeps the assistant-ui Shiki renderer, but uses its full
+TextMate-compatible engine and bundled language catalog rather than the
+restricted JavaScript-regex engine; Laser's semantic syntax tokens still own
+all colours.
+
+Why: repeated instructions consume scarce vertical space after they are
+learned. Shiki is already the stronger renderer and includes the required
+catalog; the observed gaps come from its constrained engine, incomplete scope
+theme and literal fence variants, not from needing a second highlighting stack.
+
+Consequences: add M12-T33 and M12-T34. Streaming fences remain plain until
+settled to avoid re-tokenizing partial code, and unknown languages remain safe
+plain text.
+
+### D-86 · 2026-09-06 · Native notifications share the visible session title
+
+Decision: the desktop fleet resolves a session label from its explicit name,
+then its catalogued first user message, matching the normal chat-list fallback.
+If neither exists, notification prose refers generically to “the session” and
+never invents an “Untitled session” name.
+
+Why: the fleet discarded `firstMessage`, so Ubuntu banners called a session
+untitled while Laser visibly named that same session from its first prompt.
+
+Consequences: add M12-T35. The desktop remains independent of the UI package;
+the small fleet model carries only the resolved plain-text label it needs.
+
+### D-87 · 2026-09-06 · Fleet lifecycle sections preserve whole run trees
+
+Decision: the fleet has a prominent In progress section and a collapsible
+Finished section. Classification happens at the root subtree: if any node in a
+workflow is still queued, running, paused, pending or blocked, the whole tree
+stays active; it moves as one unit only when every node is terminal.
+
+Why: terminal and active work need separate scanning zones, but extracting a
+finished child from a live workflow would recreate the false-parentage bug the
+tree model was designed to prevent.
+
+Consequences: add M12-T36. Done, failed, skipped and cancelled remain visibly
+distinct on their own rows inside Finished. Background terminals are outside
+this task.
+
+### D-88 · 2026-09-06 · Ship the accumulated experience batch as stable 0.2.2
+
+Decision: 0.2.2 is the next stable patch and contains the wider transcript,
+aggregate live tool activity, interaction-only timestamps, compact composer,
+full Shiki highlighting, truthful notification titles and lifecycle-separated
+fleet. The cache-write diagnosis changes no accounting in this release.
+
+Why: the user explicitly approved a new stable patch after the full 875-test
+workspace gate passed.
+
+Consequences: add M12-T37. The version is changed through the repository's
+single workspace-version script, and the release is complete only after both
+architectures, staged installation, provenance and native package feeds pass.
+
 ## Status edits log
 
+- 2026-09-06 · codex-2026-09-06-activity-summary · M12-T35/M12-T36 done: native notifications use Laser's visible session title, and fleet work is divided into active and terminal lifecycle sections without breaking trees; full 875-test gate passes.
+- 2026-09-06 · codex-2026-09-06-activity-summary · M12-T33/M12-T34 done: the composer footer moved to Help and shortcuts, and Markdown code uses Shiki's full Oniguruma grammar coverage with Laser-theme scopes; full 869-test gate passes.
+- 2026-09-06 · codex-2026-09-06-activity-summary · M12-T30/M12-T31/M12-T32 done: the transcript is wider, mixed tool activity has one counted/live assistant-ui disclosure, and exact timestamps reveal on row interaction; full 866-test gate passes.
 - 2026-09-06 · codex-2026-09-06-project-order · M12-T28/M12-T29 done: project priority persists across both left sidebars and dock panels gain accessible, session-persistent slot ordering; full 862-test gate passes.
 - 2026-09-06 · codex-2026-09-06-archive-remove · M12-T27 done: archived transcript totals no longer keep an unpinned project in navigation or produce the false saved-sessions warning; 392 UI tests, typecheck and build pass.
 - 2026-09-06 · codex-2026-09-06-release-hotfix · M12-T5/M12 done: stable 0.2.1 is Latest; both architectures, staged install, provenance, 12 assets, signed APT/DNF feeds and the public latest-stable path are verified.

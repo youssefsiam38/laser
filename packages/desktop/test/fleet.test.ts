@@ -87,6 +87,22 @@ describe("FleetModel", () => {
     expect(change?.session.name).toBe("Refactor");
   });
 
+  it("uses the first prompt as the display name when a session was not explicitly renamed", () => {
+    const model = new FleetModel();
+    model.setConnected(true);
+    model.setSessions([
+      summary({ path: "/s/a", cwd: "/w/a", firstMessage: "Fix the native notification title", attention: "working" }),
+    ]);
+    const change = model.applyAttention({
+      path: "/s/a",
+      cwd: "/w/a",
+      attention: "finished_unread",
+      at: "2026-09-05T10:05:00.000Z",
+    });
+    expect(change?.session.name).toBe("Fix the native notification title");
+    expect(shouldNotify(change as AttentionChange)).toBe(true);
+  });
+
   it("says nothing when attention is re-announced unchanged", () => {
     const model = new FleetModel();
     model.setConnected(true);

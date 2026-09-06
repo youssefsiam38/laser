@@ -48,6 +48,32 @@ const RUNNISH = new Set<Panel["kind"]>(["run", "plan"]);
 const isRunning = (panel: Panel): boolean =>
   panel.kind === "run" ? panel.lifecycle === "running" || panel.lifecycle === "queued" : false;
 
+const TERMINAL_RUN = new Set(["done", "failed", "cancelled"]);
+const TERMINAL_STEP = new Set(["done", "failed", "skipped"]);
+
+/** Whether this one row has reached an end state, without considering children. */
+export function runNodeIsTerminal(node: RunNode): boolean {
+  const panel = node.entry.panel;
+  if (panel.kind === "run") return TERMINAL_RUN.has(panel.lifecycle);
+  return panel.kind === "plan" && panel.steps.length > 0 && panel.steps.every((step) => TERMINAL_STEP.has(step.state));
+}
+
+/**
+ * A workflow remains active while anything inside it is active. Moving a
+ * finished child away from a live parent would make the fleet easier to scan
+ * but structurally false, so lifecycle partitioning always moves whole roots.
+ */
+export function runBranchIsActive(node: RunNode): boolean {
+  return !runNodeIsTerminal(node) || node.children.some(runBranchIsActive);
+}
+
+export function partitionRunRoots(roots: readonly RunNode[]): { active: RunNode[]; finished: RunNode[] } {
+  const active: RunNode[] = [];
+  const finished: RunNode[] = [];
+  for (const root of roots) (runBranchIsActive(root) ? active : finished).push(root);
+  return { active, finished };
+}
+
 /**
  * Build the tree from one session's panels. A child names its parent by panel
  * id; a parent that never arrived (its plan was pruned, or the child outlived

@@ -182,7 +182,7 @@ export class TrayController {
     for (const project of projects.slice(0, PROJECT_LIMIT)) {
       const summary = fleetSummary(project.running, project.waiting);
       const submenu: MenuItemConstructorOptions[] = project.sessions.slice(0, SESSION_LIMIT).map((session) => ({
-        label: `${plainText(session.name ?? "Untitled session", 48)} · ${describe(session.attention)} · ${shortAge(session.modifiedAt)}`,
+        label: `${plainText(session.name ?? "New session", 48)} · ${describe(session.attention)} · ${shortAge(session.modifiedAt)}`,
         click: () => this.options.onNavigate({ kind: "session", path: session.path }),
       }));
       if (project.sessions.length > SESSION_LIMIT) {

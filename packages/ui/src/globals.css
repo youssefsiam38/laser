@@ -192,6 +192,8 @@
   --leading-code: 18px;
   --text-floor: 12px;
   --text-touch-min: 16px;
+  --measure-thread: 84ch;
+  --measure-prose: 80ch;
   --space-unit: 4px;
   --radius: 8px;
   --motion-instant: 75ms;

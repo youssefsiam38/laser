@@ -2,7 +2,7 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-06T13:24:11+03:00 · codex-2026-09-06-project-order · commit: `2974bdd`
+**Last updated:** 2026-09-06T13:59:14+03:00 · codex-2026-09-06-activity-summary · commit: `6df542a`
 
 **Current focus:** Stable 0.2.1 is published and verified; the next product work
 is upstream subagent patches and the remaining in-app updater seam.
@@ -39,8 +39,8 @@ None.
 
 ## Recently done
 
-- M12-T29: dock panels can be reordered by grip or keyboard and restore per session.
-- M12-T28: project priority persists across the rail and grouped sessions sidebar.
-- M12-T27: archived-only unpinned projects now leave navigation with accurate removal copy.
-- M12-T5: stable 0.2.1 is Latest with verified packages, provenance and signed update feeds.
-- M12-T26: AGPL/commercial dual licensing and Apache integration boundaries ship with the app.
+- M12-T36: the fleet separates active and terminal work without breaking run trees.
+- M12-T35: native notifications share the session title visible in Laser.
+- M12-T34: Markdown code uses full Shiki grammar coverage and Laser-theme scopes.
+- M12-T33: the composer footer moved into the Help and shortcuts reference.
+- M12-T32: exact timestamps reveal on message-row hover/focus instead of repeating at rest.

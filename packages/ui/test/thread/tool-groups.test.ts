@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { summarizeToolGroup, toolGroupDefaultOpen, type ToolGroupMember } from "../../src/components/thread/tool-groups.js";
+import { summarizeToolGroup, toolGroupDefaultOpen, toolGroupKey, type ToolGroupMember } from "../../src/components/thread/tool-groups.js";
 
 const call = (toolName: string, args: unknown, over: Partial<ToolGroupMember> = {}): ToolGroupMember => ({
   toolCallId: `${toolName}-${JSON.stringify(args)}`,
@@ -29,17 +29,43 @@ describe("summarizeToolGroup", () => {
     expect(s.family).toBe("edit");
   });
 
-  it("falls back to 'Used N tools' for mixed families", () => {
-    const s = summarizeToolGroup([call("bash", { command: "ls" }), call("read", { path: "/a" })]);
-    expect(s.label).toBe("Used 2 tools");
+  it("summarizes mixed activity with counted families in first-seen order", () => {
+    const s = summarizeToolGroup([
+      call("read", { path: "/a" }),
+      call("bash", { command: "ls" }),
+      call("edit", { path: "/a" }),
+      call("read", { path: "/b" }),
+      call("write", { path: "/c" }),
+    ]);
+    expect(s.label).toBe("Completed 5 actions");
     expect(s.iconKind).toBe("other");
+    expect(s.breakdown).toEqual([
+      expect.objectContaining({ family: "read", label: "Read 2 files", iconKind: "read" }),
+      expect.objectContaining({ family: "command", label: "Ran 1 command", iconKind: "bash" }),
+      expect.objectContaining({ family: "edit", label: "Edited 2 files", iconKind: "edit" }),
+    ]);
+  });
+
+  it("puts every tool family in the same chronological activity group", () => {
+    expect(toolGroupKey("read")).toBe("activity");
+    expect(toolGroupKey("bash")).toBe("activity");
+    expect(toolGroupKey("unknown-extension-tool")).toBe("activity");
   });
 
   it("speaks in the present tense while live and shows the call in flight", () => {
     const s = summarizeToolGroup([call("bash", { command: "pnpm build" }), call("bash", { command: "pnpm test" }, { running: true })]);
     expect(s.label).toBe("Running 2 commands");
     expect(s.detail).toBe("pnpm test");
+    expect(s.activeLabel).toBe("Running pnpm test");
     expect(s.running).toBe(true);
+  });
+
+  it("names the exact target of a live file action", () => {
+    const s = summarizeToolGroup([
+      call("read", { path: "/workspace/src/old.ts" }),
+      call("edit", { path: "/workspace/src/index.html" }, { running: true }),
+    ]);
+    expect(s.activeLabel).toBe("Editing src/index.html");
   });
 
   it("opens by default only for an error or a pending decision", () => {

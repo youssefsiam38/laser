@@ -18,7 +18,7 @@ import { ATTENTION_RANK, type ProjectInfo, type SessionAttention, type SessionSu
 export interface FleetSession {
   path: string;
   cwd: string;
-  /** Untrusted: a session name comes from the agent. Never rendered as markup. */
+  /** Untrusted display label: explicit name, then the first user message. */
   name: string | undefined;
   attention: SessionAttention;
   modifiedAt: string;
@@ -90,7 +90,9 @@ export class FleetModel {
       const change = this.upsert({
         path: summary.path,
         cwd: summary.cwd,
-        name: summary.name,
+        // Match the visible session-list title. Most sessions are not renamed;
+        // their first prompt is still their useful, human-recognisable name.
+        name: summary.name ?? summary.firstMessage,
         attention: summary.attention ?? "idle",
         modifiedAt: summary.modifiedAt,
       });

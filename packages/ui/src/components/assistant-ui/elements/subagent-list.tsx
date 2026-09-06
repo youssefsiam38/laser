@@ -19,12 +19,14 @@
  *     the parent status but never pulls a child away from that subtree.
  *   - A session that is closed here but whose runs kept going says so.
  */
-import { useEffect, useRef, useState, type ComponentProps } from "react";
+import { CheckCheck, ChevronDown, RadioTower } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 
 import { shortCwd } from "@/format";
 import { cn } from "@/lib/utils";
 import { Island } from "@/panels/islands/Island";
-import type { RunNode } from "@/components/subagents/run-tree";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { partitionRunRoots, runNodeIsTerminal, type RunNode } from "@/components/subagents/run-tree";
 
 export interface FleetGroup {
   path: string;
@@ -80,36 +82,109 @@ export function SubagentList({
   onToggle(id: string): void;
 }) {
   const expandedHeight = useExpandedHeight();
+  const [finishedOpen, setFinishedOpen] = useState(true);
+  const partition = useMemo(() => partitionGroups(groups), [groups]);
+  useEffect(() => {
+    if (expandedId && partition.finished.some((group) => group.roots.some((root) => branchHas(root, expandedId)))) {
+      setFinishedOpen(true);
+    }
+  }, [expandedId, partition.finished]);
+
   return (
     <div data-slot="subagent-list" className={cn("flex flex-col", className)} {...props}>
-      {groups.map((group) => (
-        <section key={group.path} aria-label={group.title}>
-          {/* Opaque: DESIGN.md keeps glass out of the system, and a blurred
-              header over a scrolling list is exactly the decoration it names. */}
-          <header className="sticky top-0 z-10 flex items-baseline gap-2 bg-bg px-4 py-1.5 hairline-b">
-            <h3 className="min-w-0 truncate text-xs font-medium text-ink">{group.title}</h3>
-            {group.cwd && <span className="eyebrow shrink-0">{shortCwd(group.cwd)}</span>}
-            {group.orphaned && (
-              <span className="shrink-0 text-xs text-ink-3" title="This session is closed here; its runs kept going.">
-                session closed
-              </span>
-            )}
-          </header>
-          <ul role="list" className="flex flex-col gap-2 px-2 py-2">
-            {group.roots.map((node) => (
-              <SubagentBranch
-                key={node.key}
-                node={node}
-                expandedId={expandedId}
-                expandedHeight={expandedHeight}
-                onToggle={onToggle}
-              />
-            ))}
-          </ul>
-        </section>
-      ))}
+      <FleetSectionHeader icon={RadioTower} label="In progress" count={partition.activeCount} />
+      {partition.active.length > 0 ? (
+        <FleetGroups groups={partition.active} expandedId={expandedId} expandedHeight={expandedHeight} onToggle={onToggle} />
+      ) : (
+        <p className="px-4 py-5 text-sm text-ink-3">Nothing is in progress.</p>
+      )}
+
+      {partition.finishedCount > 0 && (
+        <Collapsible open={finishedOpen} onOpenChange={setFinishedOpen} className="hairline-t">
+          <CollapsibleTrigger className="group/finished flex w-full items-center gap-2 px-4 py-3 text-start outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-inset">
+            <CheckCheck aria-hidden="true" className="size-4 shrink-0 text-ok" />
+            <span className="text-xs font-medium text-ink">Finished</span>
+            <span className="tnum text-xs text-ink-3">{partition.finishedCount}</span>
+            <ChevronDown aria-hidden="true" className="ms-auto size-4 text-ink-3 transition-transform duration-(--motion-fast) group-data-[state=open]/finished:rotate-180 motion-reduce:transition-none" />
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <FleetGroups groups={partition.finished} expandedId={expandedId} expandedHeight={expandedHeight} onToggle={onToggle} />
+          </CollapsibleContent>
+        </Collapsible>
+      )}
     </div>
   );
+}
+
+function FleetSectionHeader({ icon: Icon, label, count }: { icon: typeof RadioTower; label: string; count: number }) {
+  return (
+    <header className="flex items-center gap-2 px-4 py-3">
+      <Icon aria-hidden="true" className="size-4 shrink-0 text-accent" />
+      <h3 className="text-xs font-medium text-ink">{label}</h3>
+      <span className="tnum text-xs text-ink-3">{count}</span>
+    </header>
+  );
+}
+
+function FleetGroups({
+  groups,
+  expandedId,
+  expandedHeight,
+  onToggle,
+}: {
+  groups: readonly FleetGroup[];
+  expandedId: string | undefined;
+  expandedHeight: number;
+  onToggle(id: string): void;
+}) {
+  return groups.map((group) => (
+    <section key={group.path} aria-label={group.title}>
+      {/* Opaque: DESIGN.md keeps glass out of the system, and a blurred
+          header over a scrolling list is exactly the decoration it names. */}
+      <header className="sticky top-0 z-10 flex items-baseline gap-2 bg-bg px-4 py-1.5 hairline-b">
+        <h4 className="min-w-0 truncate text-xs font-medium text-ink">{group.title}</h4>
+        {group.cwd && <span className="eyebrow shrink-0">{shortCwd(group.cwd)}</span>}
+        {group.orphaned && (
+          <span className="shrink-0 text-xs text-ink-3" title="This session is closed here; its runs kept going.">
+            session closed
+          </span>
+        )}
+      </header>
+      <ul role="list" className="flex flex-col gap-2 px-2 py-2">
+        {group.roots.map((node) => (
+          <SubagentBranch key={node.key} node={node} expandedId={expandedId} expandedHeight={expandedHeight} onToggle={onToggle} />
+        ))}
+      </ul>
+    </section>
+  ));
+}
+
+function partitionGroups(groups: readonly FleetGroup[]): {
+  active: FleetGroup[];
+  finished: FleetGroup[];
+  activeCount: number;
+  finishedCount: number;
+} {
+  const active: FleetGroup[] = [];
+  const finished: FleetGroup[] = [];
+  let activeCount = 0;
+  let finishedCount = 0;
+  for (const group of groups) {
+    const roots = partitionRunRoots(group.roots);
+    if (roots.active.length > 0) active.push({ ...group, roots: roots.active });
+    if (roots.finished.length > 0) finished.push({ ...group, roots: roots.finished, running: 0 });
+    for (const root of roots.active) activeCount += countWhere(root, (node) => !runNodeIsTerminal(node));
+    for (const root of roots.finished) finishedCount += countWhere(root, runNodeIsTerminal);
+  }
+  return { active, finished, activeCount, finishedCount };
+}
+
+function countWhere(node: RunNode, predicate: (node: RunNode) => boolean): number {
+  return (predicate(node) ? 1 : 0) + node.children.reduce((total, child) => total + countWhere(child, predicate), 0);
+}
+
+function branchHas(node: RunNode, id: string): boolean {
+  return node.id === id || node.children.some((child) => branchHas(child, id));
 }
 
 /** One actual subtree. Nested lists keep lineage intact in both DOM and paint. */

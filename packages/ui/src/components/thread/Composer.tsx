@@ -21,13 +21,10 @@ import { SessionModelSelector } from "@/components/assistant-ui/elements/model-s
 import { ThinkingEffort } from "@/components/assistant-ui/elements/reasoning-effort";
 import { DictateButton } from "@/components/mobile";
 import { useShell } from "@/components/shell/shell-context";
-import { Kbd } from "@/components/ui/kbd";
-import { modKey } from "@/format";
 import { useIsMobile, useIsTouch } from "@/hooks/use-mobile";
 import { usePanelEntries } from "@/panels";
 import { finishActiveDictation } from "@/pwa";
 import { composerSendPlan, useLaserStable, useLaserView, useSessionMeta } from "@/runtime";
-import { ProjectLine } from "./ProjectLine.js";
 import { completeLeadingSlash, matchLeadingSlash, slashCommandMatchesQuery } from "./slash-completion.js";
 import { StatusLine } from "./StatusLine.js";
 
@@ -44,8 +41,8 @@ import { StatusLine } from "./StatusLine.js";
  * between two 44px controls, the microphone inside the pill.
  *
  * Above the card: the draft offer, the queue chips, then the status line
- * (D-20 §5). Below it: the project's git line on the left and the key legend
- * on the right.
+ * (D-20 §5). Nothing reserves space below it; controls explain themselves
+ * through tooltips and Settings → Help and shortcuts owns the reference.
  */
 export function Composer() {
   const mobile = useIsMobile();
@@ -112,7 +109,6 @@ export function Composer() {
         {/* `/` runs a laser command; `@` addresses a running subagent by handle. */}
         <ComposerTriggerPopover char="/" matcher={matchLeadingSlash} adapter={slash.adapter} action={slash.action} {...(slash.iconMap ? { iconMap: slash.iconMap } : {})} fallbackIcon={SlashSquare} className="bottom-[calc(100%-2rem)]" />
         <ComposerTriggerPopover char="@" adapter={mention.adapter} directive={mention.directive} fallbackIcon={AtSign} emptyItemsLabel="Nothing to mention here yet" className="bottom-[calc(100%-2rem)]" />
-        {!mobile && <ComposerFooterLine />}
       </ComposerPrimitive.Root>
     </ComposerPrimitive.Unstable_TriggerPopoverRoot>
   );
@@ -444,10 +440,6 @@ function useHandleMentions() {
   return unstable_useMentionAdapter({ items, includeModelContextTools: false, iconMap: MENTION_ICONS });
 }
 
-// ---------------------------------------------------------------------------
-// Under the card: project line on the left, key legend on the right (md+).
-// ---------------------------------------------------------------------------
-
 /** One line under a command row: what it does, and where it came from. */
 function describeCommand(command: CommandInfo): string {
   const kind =
@@ -455,32 +447,4 @@ function describeCommand(command: CommandInfo): string {
   const where = command.origin ? ` · ${command.origin}` : "";
   const hint = command.argumentHint ? ` ${command.argumentHint}` : "";
   return command.description ? `${command.description}${where}` : `${kind}${hint}${where}`;
-}
-
-function ComposerFooterLine() {
-  const { running } = useSessionMeta();
-  const mod = modKey();
-  return (
-    <div className="flex h-5 min-w-0 items-center justify-between gap-3 px-1 text-xs text-ink-3">
-      <ProjectLine className="min-w-0 flex-1" />
-      <span className="hidden shrink-0 items-center gap-2 leading-4 md:flex" aria-hidden="true">
-        <span className="flex items-center gap-1">
-          <Kbd>⏎</Kbd> {running ? "steer" : "send"}
-        </span>
-        {running ? (
-          <span className="flex items-center gap-1">
-            <Kbd>{mod}</Kbd>
-            <Kbd>⏎</Kbd> queue
-          </span>
-        ) : null}
-        <span className="flex items-center gap-1">
-          <Kbd>⇧</Kbd>
-          <Kbd>⏎</Kbd> newline
-        </span>
-        <span className="flex items-center gap-1">
-          <Kbd>/</Kbd> commands
-        </span>
-      </span>
-    </div>
-  );
 }

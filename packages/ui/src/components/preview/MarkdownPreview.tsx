@@ -11,7 +11,7 @@
  * and nothing has to be forked. That is why a document and an assistant message
  * cannot drift apart visually.
  *
- * The width differs on purpose. Prose in the transcript is capped at 72ch
+ * The width differs on purpose. Prose in the transcript uses the shared reading measure
  * because it is being read as conversation; a document in the dock is the whole
  * pane, and a table or a code block inside it needs the room. `max-w-none`
  * overrides the primitive's cap through tailwind-merge rather than by copying
@@ -40,7 +40,7 @@ export function MarkdownPreview({ text, prose = false, className }: MarkdownPrev
   return (
     <div data-slot="markdown-preview" className={cn("min-w-0 px-4 py-3", className)}>
       <TextMessagePartProvider text={text} isRunning={false}>
-        <MarkdownText className={prose ? "max-w-[72ch]" : "max-w-none"} />
+        <MarkdownText className={prose ? "max-w-(--measure-prose)" : "max-w-none"} />
       </TextMessagePartProvider>
     </div>
   );

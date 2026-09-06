@@ -452,6 +452,14 @@ Depends on: M1, M2-T4, M4, M5-T1, M11.
 | M12-T27 | Remove projects whose remaining chats are archived | after every chat in an unpinned project is archived, Remove project hides it immediately and reports the visible state rather than the on-disk transcript count |
 | M12-T28 | Persist one drag-reorderable project priority across navigation | project circles support pointer, touch and keyboard reordering; the chosen order survives restart and is identical in the project rail and grouped sessions sidebar |
 | M12-T29 | Make dock panel placement directly reorderable | open panel islands can be dragged by a dedicated handle or reordered by keyboard; their slots morph to the chosen order and that order survives a reload of the browser session |
+| M12-T30 | Give the conversation a wider, shared reading measure | chat prose, its thread frame, the goal row and prose previews use wider semantic measure tokens without losing the centered responsive layout |
+| M12-T31 | Collapse mixed tool activity into one useful parent summary | every adjacent run of tool actions has one compact expandable row with counted action categories, status and duration; while live it uses the thinking indicator to name the exact current action; expansion preserves every existing detailed tool row |
+| M12-T32 | Reveal message timestamps on interaction instead of by default | exact message times stay visually quiet until their message row is hovered or keyboard-focused, while coarse-pointer users and assistive technology retain access |
+| M12-T33 | Reclaim the space below the composer | the persistent git/key-hint footer is absent from chat and its interaction guidance remains discoverable under a clearly named Help and shortcuts settings tab |
+| M12-T34 | Highlight every Shiki-bundled Markdown fence accurately | settled chat code uses Shiki's full TextMate-compatible grammar engine, recognizes official and common model fence labels, and maps broad language scopes to Laser theme tokens |
+| M12-T35 | Give native notifications the same session title as the app | desktop banners use an explicit session name or its first user message, never the misleading “Untitled session” placeholder |
+| M12-T36 | Separate active and terminal work in the fleet | queued, running, paused or blocked run trees stay in a prominent In progress section; fully settled trees move to a collapsible Finished section without breaking parent-child lineage |
+| M12-T37 | Publish the accumulated experience fixes as stable 0.2.2 | every workspace manifest and tag agrees on 0.2.2; CI builds, installs, signs, attests and publishes both Linux architectures; the native package feeds deploy successfully |
 
 ---
 

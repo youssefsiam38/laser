@@ -87,7 +87,7 @@ timestamps, hints, durations, the "waiting for you" subtitle — and measured
 
 - UI and body: the theme's `--font-sans` (**Host Grotesk** by default), 14px
   base, 1.5 line height, transcript prose
-  15px at max 72ch.
+  15px at max 80ch (`--measure-prose`).
 - Typed things (paths, ids, commands, eyebrows, numbers): the theme's
   `--font-mono` (**Martian Mono** by default), 11–12px,
   `font-variant-numeric: tabular-nums`, eyebrows uppercase with `0.08em`
@@ -129,7 +129,7 @@ Desktop (≥1024px), four columns left to right:
    dot, title (`--font-mono` id prefix when untitled), relative time, last tool
    or "waiting for you" subtitle. The rail's project icons jump to and filter
    that group rather than replacing the list. Collapsible to 0 with `[`.
-3. **Thread** (flex): the assistant-ui thread. Max width 76ch centered, sticky
+3. **Thread** (flex): the assistant-ui thread. Max width 84ch (`--measure-thread`) centered, sticky
    top bar (session title, model, thinking, context ring, more menu), floating
    composer at the bottom with queue chips above it.
 4. **Telemetry** (320px, collapsible with `]`): context ring with tokens,
@@ -181,8 +181,8 @@ by color and an `aria-label`.
   telemetry rail and top bar; widgets in the telemetry rail.
 - Markdown via `@assistant-ui/react-markdown` with `remark-gfm`; never raw
   HTML (invariant 9). Code blocks: header with language + copy, highlighted by
-  `@assistant-ui/react-syntax-highlighter` (hljs light, async) only after the
-  fence closes.
+  the assistant-ui Shiki element with the full bundled language catalog and
+  Oniguruma TextMate engine, lazy and only after the fence closes.
 
 ## Composer
 
@@ -193,9 +193,9 @@ you", "working", "idle"). This is the ambient surface; it lives here rather
 than in the top bar so the eye finds it in the same place on a phone and a
 desktop, next to where you type.
 
-Below the composer, a **project line**: git branch, `+added −removed` since
-the session started, and a "Create PR" action when there is something to
-push. Tabular numerals; hidden entirely when the project is not a repo.
+Nothing sits below the composer: controls carry tooltips and the complete key
+reference lives in Settings → Help and shortcuts. The reclaimed row belongs to
+the transcript on every desktop session.
 
 Floating card, `--radius-xl`, `--surface` on `--bg`, one soft shadow. Textarea
 autosizes to 8 lines. Left: attach image (paste also works). Right: model

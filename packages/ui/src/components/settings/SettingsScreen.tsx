@@ -62,7 +62,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "appearance", label: "Appearance" },
   { id: "features", label: "Features" },
   { id: "models", label: "Providers and models" },
-  { id: "keyboard", label: "Keyboard" },
+  { id: "keyboard", label: "Help and shortcuts" },
   { id: "trust", label: "Trust" },
   { id: "device", label: "This device" },
 ];
@@ -154,7 +154,7 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
   );
 
   // "No project" is a state of one tab, not of the screen: the tab strip has
-  // to stay on screen or Appearance, Keyboard, Trust and This device become
+  // to stay on screen or Appearance, Help and shortcuts, Trust and This device become
   // unreachable on a machine with no project yet — which is every first run.
   const needsProject = !cwd && !PROJECTLESS.includes(tab);
   const switchingProject = Boolean(cwd && snapshot && snapshotCwd !== cwd);
@@ -201,7 +201,7 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
         {needsProject ? (
           <Empty
             title="Open a project first"
-            body={`These settings can be overridden per project, so ${PRODUCT_NAME} needs to know which project you mean. Pick one in the rail, or add one. Features, Providers and models, Appearance, Keyboard, Trust and This device all work without one.`}
+            body={`These settings can be overridden per project, so ${PRODUCT_NAME} needs to know which project you mean. Pick one in the rail, or add one. Features, Providers and models, Appearance, Help and shortcuts, Trust and This device all work without one.`}
           />
         ) : (
           <>

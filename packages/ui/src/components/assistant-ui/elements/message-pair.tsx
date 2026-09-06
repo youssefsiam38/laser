@@ -59,4 +59,4 @@ export function MessageFooter({ className, ...props }: ComponentProps<"div">) {
 }
 
 export const hoverReveal =
-  "opacity-0 transition-opacity duration-(--motion-instant) group-hover/message:opacity-100 focus-within:opacity-100 data-[floating]:opacity-100 [@media(pointer:coarse)]:opacity-100 motion-reduce:transition-none";
+  "opacity-0 transition-opacity duration-(--motion-instant) group-hover/message:opacity-100 group-focus-within/message:opacity-100 focus-within:opacity-100 data-[floating]:opacity-100 [@media(pointer:coarse)]:opacity-100 motion-reduce:transition-none";

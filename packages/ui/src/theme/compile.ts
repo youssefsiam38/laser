@@ -12,6 +12,7 @@ import { pickOnColor, raiseContrast, toHex } from "./color.js";
 import { fontStack } from "./fonts.js";
 import {
   ANSI,
+  CONTENT_MEASURE,
   DURATIONS,
   EASE_MORPH,
   EYEBROW_FLOOR_PX,
@@ -131,6 +132,8 @@ export function compileVars(theme: Theme): Record<string, string> {
   }
   vars["--text-floor"] = `${TEXT_FLOOR_PX}px`;
   vars["--text-touch-min"] = `${TOUCH_INPUT_MIN_PX}px`;
+  vars["--measure-thread"] = CONTENT_MEASURE.thread;
+  vars["--measure-prose"] = CONTENT_MEASURE.prose;
 
   vars["--space-unit"] = `${SPACE_UNIT[theme.density]}px`;
   vars["--radius"] = `${RADIUS_BASE[theme.radius]}px`;
