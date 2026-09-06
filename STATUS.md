@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-07T01:52:00+03:00 · codex-2026-09-07-search · HEAD: `b8ff358`
+**Last updated:** 2026-09-07T01:54:00+03:00 · codex-2026-09-07-search · release HEAD: `d75085e`
 
-**Current focus:** M12-T51 — dispatch verified 0.2.6 source, tag and release; do not monitor Actions.
+**Current focus:** 0.2.6 source, tag and release page pushed. Actions deliberately unmonitored; artifact/feed completion is not claimed.
 
 ## Milestones
 
@@ -23,7 +23,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M9 CLI | done | planned tasks complete |
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
-| M12 Product experience | in-progress | 0.2.6 release dispatch |
+| M12 Product experience | done | 0.2.6 dispatched; 954 tests pass |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
@@ -38,8 +38,8 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Recently done
 
+- M12-T51: [0.2.6 release](https://github.com/youssefsiam38/laser/releases/tag/v0.2.6), commit/tag pushed; no Actions monitoring.
 - M12-T54: prioritized history search and session find; 954 tests and four-layout review.
 - M12-T53: compact project tree, persisted pins and project labels; responsive theme review.
 - M12-T52: execution-owned edge-to-edge activity beams; zero-gap browser measurements.
 - M12-T50: native update daemon refresh and remembered exact-chat request Markdown.
-- M12-T49: Pi-backed skills and lossless fuzzy slash completion.

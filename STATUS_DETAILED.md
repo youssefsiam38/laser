@@ -334,7 +334,7 @@ lane T's own if both were written.
 | M12-T48 | Recover subscription quota refresh across updates | done | codex-2026-09-06-request-inspector | `pnpm verify`; quota lifecycle and host route tests; packaged-session probe | see notes |
 | M12-T49 | Restore engine commands and skills in slash completion | done | codex-2026-09-06-slash-skills | `pnpm verify` — 925 tests; desktop/phone dark/light browser review | see notes |
 | M12-T50 | Refresh daemon on updates and remember the request transcript view | done | codex-2026-09-06-slash-skills | `pnpm verify` — 925 tests; shellcheck; desktop lifecycle tests; four-layout Markdown review | see notes |
-| M12-T51 | Publish stable patch 0.2.6 | in-progress | codex-2026-09-06-slash-skills | — | see notes |
+| M12-T51 | Publish stable patch 0.2.6 | done | codex-2026-09-07-search | `d75085e`, pushed `v0.2.6`; https://github.com/youssefsiam38/laser/releases/tag/v0.2.6 | dispatch complete; Actions intentionally unmonitored |
 | M12-T52 | Make live activity follow the executing action | done | codex-2026-09-06-slash-skills | UI build; workspace typecheck; 448 UI tests; browser measured zero gaps on both edges | see notes |
 | M12-T53 | Compact project tree and single-location session attention | done | codex-2026-09-06-slash-skills | 448 UI tests; desktop/phone dark/light review; live spinner, pin persistence and 44px touch targets | see notes |
 | M12-T54 | Search full conversations and navigate exact matches | done | codex-2026-09-07-search | workspace build/typecheck; 954 tests; desktop/phone light/dark browser review | see notes |
@@ -943,6 +943,7 @@ lane T's own if both were written.
   1348958 were inspected but never signalled or restarted.
 
 #### M12-T51 notes
+- 2026-09-07 done: commit `d75085e` and immutable `v0.2.6` pushed atomically to origin. Public stable release page created at https://github.com/youssefsiam38/laser/releases/tag/v0.2.6 with curated notes and `--latest=false`; the artifact workflow promotes it only after installers are uploaded. Per direct user instruction, no Actions status was fetched, no monitoring was started, and artifact/feed success is not claimed. This completes the dispatch handoff H-3. Production was not restarted; only user-owned `fixes.md` remains untracked.
 - 2026-09-07 final checkpoint: `pnpm verify` exits 0 with 954 tests on the complete 0.2.6 batch (`/tmp/laser-026-final-verify.log`). Identity and whitespace checks pass; final search browser review covers both themes and widths. Isolated sandbox and browser stopped, production untouched. Dispatch the exact source and tag, create the release page without premature Latest promotion, and do not monitor Actions.
 - 2026-09-07 claimed follow-up: preserve the visible transcript anchor when the
   session activity preference expands or collapses content before release.
