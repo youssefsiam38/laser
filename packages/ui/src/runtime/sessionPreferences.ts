@@ -2,7 +2,7 @@ import { storageKey } from "@lasercode/protocol";
 import { useEffect, useState } from "react";
 
 const PREFIX = storageKey("reasoning-expanded:");
-const EVENT = "laser:session-preference";
+const EVENT = storageKey("session-preference");
 
 export function reasoningExpanded(path: string | undefined): boolean {
   if (!path) return true;

@@ -363,6 +363,12 @@ lane T's own if both were written.
   release instruction, add derived/measured `tok/s` to the existing reply
   timing footer, run focused verification only, then let the tagged CI pipeline
   build the release artifacts.
+- 2026-09-06 checkpoint: the first tagged pipeline stopped before compilation
+  because the identity scanner only scans tracked files, so eight newly added
+  paths/strings were invisible before the release commit and visible in CI.
+  Renamed the mark asset and derived or neutralized all eight values. The
+  post-stage identity check, UI typecheck and 11 focused UI/host/worker tests
+  pass; move the unpublished failed tag to this corrective commit.
 
 #### M12-T6 notes
 - 2026-09-06 claimed: reproduce the packaged extension failure from the live

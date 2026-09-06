@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 export function LaserLogo({ className, ...props }: Omit<ComponentProps<"img">, "src" | "alt">) {
   return (
     <img
-      src="/icons/laser-mark-192.png"
+      src="/icons/mark-192.png"
       alt={PRODUCT_DISPLAY_NAME}
       draggable={false}
       className={cn("block select-none", className)}

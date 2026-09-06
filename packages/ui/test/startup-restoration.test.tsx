@@ -8,14 +8,14 @@ import {
 } from "../src/components/assistant-ui/elements/loading-state.js";
 
 describe("startup restoration", () => {
-  it("renders the approved Laser mark and converging branded paths", () => {
+  it("renders the approved product mark and converging branded paths", () => {
     const markup = renderToStaticMarkup(
       createElement(StartupRestorationScreen, { label: "Returning to your last session" }),
     );
 
     expect(markup).toContain('role="status"');
     expect(markup).toContain('aria-label="Returning to your last session"');
-    expect(markup).not.toContain('/icons/laser-mark-192.png');
+    expect(markup).not.toContain('/icons/mark-192.png');
     expect(markup).toContain("startup-mark relative");
     expect(markup).toContain('class="startup-beam-live"');
     expect(markup.match(/pathLength="1"/g)).toHaveLength(6);

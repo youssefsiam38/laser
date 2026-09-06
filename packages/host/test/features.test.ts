@@ -8,7 +8,7 @@ describe("FeatureService", () => {
     expect(JSON.stringify(FEATURE_MANIFESTS)).not.toMatch(/\b(?:pi|package|extension)s?\b/i);
   });
 
-  it("starts with Laser's curated features enabled", () => {
+  it("starts with the curated features enabled", () => {
     const service = new FeatureService(new PrefsStore());
     expect(service.list("/project").map(({ manifest, enabled, source }) => ({ id: manifest.id, enabled, source }))).toEqual([
       { id: "subagents", enabled: true, source: "default" },

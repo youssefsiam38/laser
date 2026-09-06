@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "private": false,
   "type": "module",
-  "description": "Reusable Pi-native durable goal capability used by Laser.",
+  "description": "Reusable Pi-native durable session goal capability.",
   "license": "MIT",
   "exports": {
     ".": {

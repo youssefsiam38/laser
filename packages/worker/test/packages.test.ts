@@ -8,7 +8,7 @@ import { applyReviewedInstallScripts } from "../src/packages.js";
 const roots: string[] = [];
 
 function temporaryRoot(): string {
-  const root = mkdtempSync(join(tmpdir(), "laser-package-policy-"));
+  const root = mkdtempSync(join(tmpdir(), "package-policy-"));
   roots.push(root);
   return root;
 }
