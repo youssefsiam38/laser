@@ -1,6 +1,6 @@
 {
   "name": "@lasercode/relay",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "Railway byte forwarder. Two sockets per channel id, nothing else. Links NO crypto library (AGENTS.md invariant 7).",

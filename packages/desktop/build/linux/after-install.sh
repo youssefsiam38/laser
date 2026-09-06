@@ -60,6 +60,17 @@ needs_setuid_helper() {
         [ "$(cat /proc/sys/user/max_user_namespaces)" = "0" ]; then
         return 0
     fi
+    # Ubuntu 23.10+ may leave both generic namespace knobs enabled while
+    # AppArmor denies user namespaces to unconfined programs. The launcher
+    # probes through /usr/bin/unshare, which is deliberately unconfined and is
+    # therefore denied even when Laser's own profile grants `userns` to the
+    # Electron binary. Native packages have a root-owned helper available, so
+    # enable that deterministic fallback instead of making launch depend on a
+    # probe performed under a different AppArmor profile.
+    if [ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ] &&
+        [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = "1" ]; then
+        return 0
+    fi
     return 1
 }
 

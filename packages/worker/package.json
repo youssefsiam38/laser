@@ -1,6 +1,6 @@
 {
   "name": "@lasercode/worker",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "Per-project Pi host. The only package (with pi-extension) allowed to import Pi. Pi version is PINNED here (see AGENTS.md invariant 4).",

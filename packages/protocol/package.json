@@ -1,6 +1,6 @@
 {
   "name": "@lasercode/protocol",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "ACP-shaped JSON-RPC messages for the desktop app and its relay, plus pi/* extras. Imports nothing from Pi.",

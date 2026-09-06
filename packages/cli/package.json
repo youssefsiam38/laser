@@ -1,6 +1,6 @@
 {
   "name": "@lasercode/cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "The command-line entry point: host lifecycle, session verbs, pinned-Pi passthrough, doctor. Speaks @lasercode/protocol; never imports Pi.",
