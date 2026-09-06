@@ -2,7 +2,7 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-06T13:03:56+03:00 · codex-2026-09-06-release-hotfix · commit: `faa3f9c`
+**Last updated:** 2026-09-06T13:24:11+03:00 · codex-2026-09-06-project-order · commit: `2974bdd`
 
 **Current focus:** Stable 0.2.1 is published and verified; the next product work
 is upstream subagent patches and the remaining in-app updater seam.
@@ -39,8 +39,8 @@ None.
 
 ## Recently done
 
+- M12-T29: dock panels can be reordered by grip or keyboard and restore per session.
+- M12-T28: project priority persists across the rail and grouped sessions sidebar.
+- M12-T27: archived-only unpinned projects now leave navigation with accurate removal copy.
 - M12-T5: stable 0.2.1 is Latest with verified packages, provenance and signed update feeds.
 - M12-T26: AGPL/commercial dual licensing and Apache integration boundaries ship with the app.
-- M12-T2: new chats can choose their project default; packaged sessions expose every model.
-- M12-T25: startup restoration uses transparent branding and smoothly absorbed beam arcs.
-- M12-T24: provider icons and tags identify the configured billing/API provider.

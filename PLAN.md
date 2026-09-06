@@ -449,6 +449,9 @@ Depends on: M1, M2-T4, M4, M5-T1, M11.
 | M12-T24 | Give every built-in provider a researched, theme-safe brand mark | all 40 built-in provider ids resolve through one maintained icon catalog; regional and plan variants retain their parent brand; known providers never fall back to generated initials |
 | M12-T25 | Replace the false empty startup with a branded restoration transition | the shell remains hidden while the remembered project/session, transcript and goal restore; a token-driven Laser beam screen communicates that work in both themes and all widths without delaying a fast launch |
 | M12-T26 | Establish the open-core licensing boundary | Laser is AGPL-3.0-only with a commercial license available by agreement; the reusable protocol and Pi-native goal packages are Apache-2.0; trademark scope is explicit |
+| M12-T27 | Remove projects whose remaining chats are archived | after every chat in an unpinned project is archived, Remove project hides it immediately and reports the visible state rather than the on-disk transcript count |
+| M12-T28 | Persist one drag-reorderable project priority across navigation | project circles support pointer, touch and keyboard reordering; the chosen order survives restart and is identical in the project rail and grouped sessions sidebar |
+| M12-T29 | Make dock panel placement directly reorderable | open panel islands can be dragged by a dedicated handle or reordered by keyboard; their slots morph to the chosen order and that order survives a reload of the browser session |
 
 ---
 

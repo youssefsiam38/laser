@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { SessionState, SessionSummary } from "@lasercode/protocol";
+import type { ProjectInfo, SessionState, SessionSummary } from "@lasercode/protocol";
 import type { SessionView } from "../../src/store.js";
 import {
   ARCHIVE_STORAGE_KEY,
@@ -7,11 +7,13 @@ import {
   createArchiveStore,
   createThreadListAdapter,
   mergeSessions,
+  orderProjectInfos,
   sessionAttention,
   sessionTitle,
   sortSessions,
   threadListSignature,
   toThreadMetadata,
+  visibleProjectCwds,
 } from "../../src/runtime/threadList.js";
 
 const summary = (over: Partial<SessionSummary> & Pick<SessionSummary, "path" | "id">): SessionSummary => ({
@@ -179,6 +181,105 @@ describe("createArchiveStore", () => {
     const guarded = createArchiveStore(throwing);
     guarded.add("/y");
     expect(guarded.has("/y")).toBe(true);
+  });
+
+  it("publishes only real archive changes", () => {
+    const store = createArchiveStore(null);
+    const revisions: number[] = [];
+    const unsubscribe = store.subscribe(() => revisions.push(store.getSnapshot()));
+    store.add("/a");
+    store.add("/a");
+    store.remove("/missing");
+    store.remove("/a");
+    unsubscribe();
+    store.add("/b");
+    expect(revisions).toEqual([1, 2]);
+  });
+});
+
+describe("visibleProjectCwds", () => {
+  const project = (cwd: string, pinned: boolean): ProjectInfo => ({
+    cwd,
+    name: cwd.slice(1),
+    addedAt: "2026-09-06T00:00:00.000Z",
+    trust: "not_required",
+    pinned,
+    sessionCount: 1,
+  });
+
+  it("hides an unpinned project whose on-disk chats are all archived", () => {
+    const archive = createArchiveStore(null);
+    archive.add("/old.jsonl");
+    expect(
+      visibleProjectCwds(
+        [project("/archived", false), project("/pinned", true)],
+        [summary({ path: "/old.jsonl", id: "old", cwd: "/archived" })],
+        {},
+        archive,
+      ),
+    ).toEqual(["/pinned"]);
+  });
+
+  it("keeps unarchived and open projects reachable", () => {
+    const archive = createArchiveStore(null);
+    archive.add("/open.jsonl");
+    const open = view({ path: "/open.jsonl", state: sessionState({ path: "/open.jsonl", cwd: "/open" }) });
+    expect(
+      visibleProjectCwds(
+        [project("/active", false), project("/open", false)],
+        [
+          summary({ path: "/active.jsonl", id: "active", cwd: "/active" }),
+          summary({ path: "/open.jsonl", id: "open", cwd: "/open" }),
+        ],
+        { "/open.jsonl": open },
+        archive,
+      ),
+    ).toEqual(["/active", "/open"]);
+  });
+
+  it("keeps a discovered project visible until its complete catalog is archived", () => {
+    const archive = createArchiveStore(null);
+    archive.add("/known.jsonl");
+    expect(
+      visibleProjectCwds(
+        [{ ...project("/partial", false), sessionCount: 2 }],
+        [summary({ path: "/known.jsonl", id: "known", cwd: "/partial" })],
+        {},
+        archive,
+      ),
+    ).toEqual(["/partial"]);
+  });
+
+  it("preserves host priority and only appends not-yet-indexed projects", () => {
+    const archive = createArchiveStore(null);
+    expect(
+      visibleProjectCwds(
+        [project("/z-priority", true), project("/a-later", true)],
+        [summary({ path: "/new.jsonl", id: "new", cwd: "/new" })],
+        {},
+        archive,
+      ),
+    ).toEqual(["/z-priority", "/a-later", "/new"]);
+  });
+});
+
+describe("orderProjectInfos", () => {
+  const project = (cwd: string): ProjectInfo => ({
+    cwd,
+    name: cwd.slice(1),
+    addedAt: "2026-09-06T00:00:00.000Z",
+    trust: "not_required",
+    pinned: true,
+    sessionCount: 0,
+  });
+
+  it("applies a partial order without losing unknown or omitted records", () => {
+    const projects = [project("/a"), project("/b"), project("/c")];
+    expect(orderProjectInfos(projects, ["/c", "/missing", "/a", "/c"]).map((entry) => entry.cwd)).toEqual([
+      "/c",
+      "/a",
+      "/b",
+    ]);
   });
 });
 

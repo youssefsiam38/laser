@@ -15,7 +15,7 @@
  */
 import { storageKey } from "@lasercode/protocol";
 import type { RemoteThreadListAdapter } from "@assistant-ui/react";
-import type { SessionAttention, SessionSummary } from "@lasercode/protocol";
+import type { ProjectInfo, SessionAttention, SessionSummary } from "@lasercode/protocol";
 import type { SessionView } from "../store.js";
 
 /**
@@ -167,6 +167,9 @@ export interface ArchiveStore {
   add(path: string): void;
   remove(path: string): void;
   list(): string[];
+  /** React-compatible change subscription for project and thread visibility. */
+  subscribe(listener: () => void): () => void;
+  getSnapshot(): number;
 }
 
 /** Storage-backed archive set; degrades to in-memory when storage is unavailable. */
@@ -181,6 +184,8 @@ export function createArchiveStore(storage?: Pick<Storage, "getItem" | "setItem"
     }
   };
   const set = load();
+  const listeners = new Set<() => void>();
+  let revision = 0;
   const persist = (): void => {
     try {
       storage?.setItem(ARCHIVE_STORAGE_KEY, JSON.stringify([...set]));
@@ -188,18 +193,86 @@ export function createArchiveStore(storage?: Pick<Storage, "getItem" | "setItem"
       /* private mode / quota — the archive stays in memory */
     }
   };
+  const publish = (): void => {
+    revision += 1;
+    for (const listener of listeners) listener();
+  };
   return {
     has: (path) => set.has(path),
     add: (path) => {
+      if (set.has(path)) return;
       set.add(path);
       persist();
+      publish();
     },
     remove: (path) => {
-      set.delete(path);
+      if (!set.delete(path)) return;
       persist();
+      publish();
     },
     list: () => [...set],
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    getSnapshot: () => revision,
   };
+}
+
+/**
+ * Projects that belong in navigation for this client.
+ *
+ * The host counts every transcript on disk, including client-local archived
+ * ones. That is correct for storage, but not for navigation: after a person
+ * unpins a project and archives its last chat, the archived files must not
+ * make the project look active. Open work remains reachable even when its
+ * transcript was archived.
+ */
+export function visibleProjectCwds(
+  projects: readonly ProjectInfo[],
+  sessions: readonly SessionSummary[],
+  open: Readonly<Record<string, SessionView | undefined>>,
+  archive: ArchiveStore,
+): string[] {
+  const archivedByCwd = new Map<string, number>();
+  for (const session of sessions) {
+    if (!archive.has(session.path)) continue;
+    archivedByCwd.set(session.cwd, (archivedByCwd.get(session.cwd) ?? 0) + 1);
+  }
+  const visible: string[] = [];
+  const seen = new Set<string>();
+  const append = (cwd: string) => {
+    if (seen.has(cwd)) return;
+    seen.add(cwd);
+    visible.push(cwd);
+  };
+  // Preserve the host's priority order. Sessions and open views only append
+  // directories the host has not indexed yet, so a transient catalog update
+  // cannot reshuffle a person's rail.
+  for (const project of projects) {
+    if (project.pinned || project.sessionCount > (archivedByCwd.get(project.cwd) ?? 0)) append(project.cwd);
+  }
+  for (const session of sessions) if (!archive.has(session.path)) append(session.cwd);
+  for (const view of Object.values(open)) if (view) append(view.state.cwd);
+  return visible;
+}
+
+/** Apply a partial project priority while retaining omitted host records. */
+export function orderProjectInfos(projects: readonly ProjectInfo[], cwds: readonly string[]): ProjectInfo[] {
+  const byCwd = new Map(projects.map((project) => [project.cwd, project]));
+  const ordered: ProjectInfo[] = [];
+  const seen = new Set<string>();
+  for (const cwd of cwds) {
+    const project = byCwd.get(cwd);
+    if (!project || seen.has(cwd)) continue;
+    seen.add(cwd);
+    ordered.push(project);
+  }
+  for (const project of projects) {
+    if (seen.has(project.cwd)) continue;
+    ordered.push(project);
+  }
+  return ordered;
 }
 
 // ---------------------------------------------------------------------------

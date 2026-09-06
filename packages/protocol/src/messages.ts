@@ -858,6 +858,8 @@ export interface ClientRequests {
   // --- projects (M2-T4). Server-side, so the CLI and the UI see one list. ---
   "pi/project/list": { params: {}; result: { projects: ProjectInfo[] } };
   "pi/project/add": { params: { cwd: string }; result: { project: ProjectInfo } };
+  /** Saves project priority. Omitted known projects retain their relative order after these entries. */
+  "pi/project/reorder": { params: { cwds: string[] }; result: { projects: ProjectInfo[] } };
   /** Forgets the project (and its trust decision). Session files are never touched. */
   "pi/project/remove": { params: { cwd: string }; result: {} };
   /** Answer to `pi/project/trust_request`; also usable to change a decision later. */

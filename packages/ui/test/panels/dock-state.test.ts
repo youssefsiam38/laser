@@ -25,6 +25,17 @@ describe("dock state", () => {
     expect(renderedSize(s, "c")).toBe("expanded");
   });
 
+  it("reorders an island without losing its identity or geometry state", () => {
+    const before = run(
+      registered("a", "b", "c"),
+      { type: "setSize", key: "c", size: "expanded", now: 10 },
+      { type: "reorder", key: "c", over: "a" },
+    );
+    expect(before.order).toEqual(["c", "a", "b"]);
+    expect(before.islands["c"]!.size).toBe("expanded");
+    expect(run(before, { type: "reorder", key: "missing", over: "a" })).toBe(before);
+  });
+
   it("a third expanding in a column shrinks the least recently watched to minimal, never evicts", () => {
     let s = registered("a", "b", "c");
     s = run(s, { type: "setSize", key: "a", size: "expanded", now: 10 }, { type: "setSize", key: "b", size: "expanded", now: 20 });

@@ -79,6 +79,23 @@ describe("ProjectRegistry", () => {
     expect(reloaded.list().map((p) => [p.name, p.pinned])).toEqual([["seen", false]]);
   });
 
+  it("persists project priority and keeps entries omitted by a stale client", () => {
+    const store = join(base, "projects.json");
+    const alpha = project("alpha");
+    const beta = project("beta");
+    const gamma = project("gamma");
+    const { reg, changes } = registry({ storePath: store });
+    reg.add(alpha);
+    reg.add(beta);
+    reg.add(gamma);
+
+    expect(reg.reorder([gamma, alpha]).map((entry) => entry.cwd)).toEqual([gamma, alpha, beta]);
+    expect(changes.at(-1)?.map((entry) => entry.cwd)).toEqual([gamma, alpha, beta]);
+
+    const { reg: reloaded } = registry({ storePath: store });
+    expect(reloaded.list().map((entry) => entry.cwd)).toEqual([gamma, alpha, beta]);
+  });
+
   it("does not ask about a directory with nothing trust-gated in it, and states no opinion", async () => {
     const plain = project("plain");
     const { reg, requests } = registry();

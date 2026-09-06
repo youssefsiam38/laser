@@ -62,6 +62,7 @@ export const initialDock: DockState = {
 export type DockAction =
   | { type: "register"; key: string; now: number }
   | { type: "unregister"; key: string }
+  | { type: "reorder"; key: string; over: string }
   | { type: "setSize"; key: string; size: Exclude<IslandSize, "maximized">; now: number }
   | { type: "toggleExpanded"; key: string; now: number }
   | { type: "maximize"; key: string; now: number }
@@ -125,6 +126,15 @@ export function reduceDock(state: DockState, action: DockAction): DockState {
         dismissed: state.dismissed.filter((k) => k !== action.key),
         ...(state.maximized === action.key ? { maximized: undefined } : {}),
       };
+    }
+    case "reorder": {
+      const from = state.order.indexOf(action.key);
+      const to = state.order.indexOf(action.over);
+      if (from < 0 || to < 0 || from === to) return state;
+      const order = [...state.order];
+      const [moved] = order.splice(from, 1);
+      order.splice(to, 0, moved!);
+      return { ...state, order };
     }
     case "setSize":
       return setSize(state, action.key, action.size, action.now);

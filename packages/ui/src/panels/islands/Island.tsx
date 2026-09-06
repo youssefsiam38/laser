@@ -17,8 +17,19 @@
  * reach 44px through the hit-area pseudo-element, not by growing the pill.
  */
 import type { Action } from "@lasercode/protocol";
-import { ChevronsDownUp, Ellipsis, ExternalLink, Maximize2, Minimize2, MoveDiagonal, X } from "lucide-react";
-import { memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { ChevronsDownUp, Ellipsis, ExternalLink, GripVertical, Maximize2, Minimize2, MoveDiagonal, X } from "lucide-react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ButtonHTMLAttributes,
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 
 import { AgentPlan } from "@/components/assistant-ui/elements/agent-plan";
 import { AgentStatus } from "@/components/assistant-ui/elements/agent-status";
@@ -59,6 +70,11 @@ export interface IslandProps {
   frame: "dock" | "sheet" | "popout";
   /** Newly registered: plays the arrival. */
   fresh?: boolean;
+  /** Dock-only sortable plumbing; the visible handle owns activation. */
+  dragNodeRef?: ((node: HTMLElement | null) => void) | undefined;
+  dragHandleProps?: ButtonHTMLAttributes<HTMLButtonElement> | undefined;
+  dragStyle?: CSSProperties | undefined;
+  dragging?: boolean;
   /**
    * A close control in the header, for a frame that has no chrome of its own.
    * The phone's sheet passes it; the dock and the fleet list do not.
@@ -71,7 +87,21 @@ export interface IslandProps {
   onExpand?: (() => void) | undefined;
 }
 
-function IslandImpl({ entry, size, rect, hidden = false, poppedOut = false, frame, fresh = false, onClose, onExpand }: IslandProps) {
+function IslandImpl({
+  entry,
+  size,
+  rect,
+  hidden = false,
+  poppedOut = false,
+  frame,
+  fresh = false,
+  dragNodeRef,
+  dragHandleProps,
+  dragStyle,
+  dragging = false,
+  onClose,
+  onExpand,
+}: IslandProps) {
   const actions = usePanelActions();
   const { path, panel } = entry;
   const key = panelKey(path, panel.id);
@@ -82,6 +112,13 @@ function IslandImpl({ entry, size, rect, hidden = false, poppedOut = false, fram
   const now = Date.now();
   const values = liveValues(entry, now);
   const root = useRef<HTMLElement>(null);
+  const setRoot = useCallback(
+    (node: HTMLElement | null) => {
+      root.current = node;
+      dragNodeRef?.(node);
+    },
+    [dragNodeRef],
+  );
   const [everExpanded, setEverExpanded] = useState(size === "expanded" || size === "maximized");
   useEffect(() => {
     if (size === "expanded" || size === "maximized") setEverExpanded(true);
@@ -101,16 +138,17 @@ function IslandImpl({ entry, size, rect, hidden = false, poppedOut = false, fram
   };
 
   const expanded = size === "expanded" || size === "maximized";
-  const style: CSSProperties | undefined =
+  const positionStyle: CSSProperties | undefined =
     size === "maximized" || frame !== "dock"
       ? undefined
       : rect
         ? { top: rect.top, left: rect.left, width: rect.width, height: rect.height }
         : undefined;
+  const style = positionStyle || dragStyle ? { ...positionStyle, ...dragStyle } : undefined;
 
   return (
     <section
-      ref={root}
+      ref={setRoot}
       data-island
       data-size={size}
       data-kind={panel.kind}
@@ -142,7 +180,8 @@ function IslandImpl({ entry, size, rect, hidden = false, poppedOut = false, fram
         attention === "error" && size !== "maximized" && frame === "dock" && "border-danger/50",
         hidden && "opacity-0",
         // The morph: the rectangle, the radius and the border move together.
-        "transition-[top,left,width,height,border-radius,opacity,border-color] duration-(--motion-morph) ease-morph motion-reduce:transition-none data-[morphing]:transition-none",
+        "transition-[top,left,width,height,transform,border-radius,opacity,border-color] duration-(--motion-morph) ease-morph motion-reduce:transition-none data-[morphing]:transition-none",
+        dragging && "z-20 shadow-float-sm",
       )}
     >
       <IslandHeader
@@ -152,6 +191,7 @@ function IslandImpl({ entry, size, rect, hidden = false, poppedOut = false, fram
         values={values}
         poppedOut={poppedOut}
         frame={frame}
+        dragHandleProps={dragHandleProps}
         onClose={onClose}
         onExpand={onExpand}
       />
@@ -205,6 +245,7 @@ function IslandHeader({
   values,
   poppedOut,
   frame,
+  dragHandleProps,
   onClose,
   onExpand,
 }: {
@@ -214,6 +255,7 @@ function IslandHeader({
   values: LiveValue[];
   poppedOut: boolean;
   frame: IslandProps["frame"];
+  dragHandleProps?: ButtonHTMLAttributes<HTMLButtonElement> | undefined;
   onClose?: (() => void) | undefined;
   onExpand?: (() => void) | undefined;
 }) {
@@ -250,6 +292,16 @@ function IslandHeader({
         maximized && "h-12 border-b border-line px-4",
       )}
     >
+      {frame === "dock" && !maximized && dragHandleProps && (
+        <TooltipIconButton
+          {...dragHandleProps}
+          tooltip="Drag to reorder panel"
+          size="icon-xs"
+          className={cn("shrink-0 cursor-grab text-ink-3 active:cursor-grabbing", COARSE_HIT)}
+        >
+          <GripVertical />
+        </TooltipIconButton>
+      )}
       <AgentStatus
         data-island-toggle
         // Expanded, the title is not a control: it is taken out of the tab

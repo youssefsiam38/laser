@@ -24,6 +24,8 @@ interface StoredProject {
   addedAt: string;
   lastUsedAt?: string;
   pinned: boolean;
+  /** Zero-based person-defined priority. Missing on stores written before M12-T28. */
+  order?: number;
   /** Only set once a person decided in laser and asked us to remember. */
   trust?: "trusted" | "declined";
 }
@@ -75,7 +77,7 @@ export class ProjectRegistry {
 
   // ------------------------------------------------------------- the list
 
-  /** Pinned projects ∪ directories the catalog has seen, by name. */
+  /** Pinned projects ∪ directories the catalog has seen, by saved priority then name. */
   list(): ProjectInfo[] {
     const counts = this.options.catalog.cwdCounts();
     const cwds = new Set<string>([...this.stored.keys(), ...counts.keys()]);
@@ -94,7 +96,16 @@ export class ProjectRegistry {
         sessionCount: counts.get(cwd) ?? 0,
       });
     }
-    return out.sort((a, b) => a.name.localeCompare(b.name) || a.cwd.localeCompare(b.cwd));
+    return out.sort((a, b) => {
+      const aOrder = this.stored.get(a.cwd)?.order;
+      const bOrder = this.stored.get(b.cwd)?.order;
+      if (aOrder !== undefined || bOrder !== undefined) {
+        if (aOrder === undefined) return 1;
+        if (bOrder === undefined) return -1;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+      }
+      return a.name.localeCompare(b.name) || a.cwd.localeCompare(b.cwd);
+    });
   }
 
   get(cwd: string): ProjectInfo {
@@ -120,6 +131,36 @@ export class ProjectRegistry {
     this.persist();
     this.emit();
     return this.get(key);
+  }
+
+  /**
+   * Save one project order for every client surface. Unknown and duplicate
+   * paths are ignored; known paths omitted by a stale client keep their
+   * relative order after the submitted entries.
+   */
+  reorder(cwds: readonly string[]): ProjectInfo[] {
+    const current = this.list();
+    const known = new Set(current.map((project) => project.cwd));
+    const ordered: string[] = [];
+    const seen = new Set<string>();
+    for (const cwd of cwds) {
+      const key = canonical(cwd);
+      if (!known.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      ordered.push(key);
+    }
+    for (const project of current) {
+      if (seen.has(project.cwd)) continue;
+      seen.add(project.cwd);
+      ordered.push(project.cwd);
+    }
+    for (const [order, cwd] of ordered.entries()) {
+      const existing = this.stored.get(cwd) ?? { addedAt: this.now().toISOString(), pinned: false };
+      this.stored.set(cwd, { ...existing, order });
+    }
+    this.persist();
+    this.emit();
+    return this.list();
   }
 
   /**
@@ -253,6 +294,7 @@ export class ProjectRegistry {
           addedAt: v.addedAt,
           pinned: v.pinned === true,
           ...(typeof v.lastUsedAt === "string" ? { lastUsedAt: v.lastUsedAt } : {}),
+          ...(typeof v.order === "number" && Number.isSafeInteger(v.order) && v.order >= 0 ? { order: v.order } : {}),
           ...(v.trust === "trusted" || v.trust === "declined" ? { trust: v.trust } : {}),
         });
       }

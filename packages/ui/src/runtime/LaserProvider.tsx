@@ -61,7 +61,9 @@ import { projectSessionView, shareProjectedMessages, splitDialogs } from "./proj
 import {
   createArchiveStore,
   createThreadListAdapter,
+  orderProjectInfos,
   threadListSignature,
+  visibleProjectCwds,
   type ArchiveStore,
 } from "./threadList.js";
 
@@ -120,6 +122,8 @@ export interface LaserActions {
    * failure is already on screen as a toast).
    */
   addProject(cwd: string): Promise<ProjectInfo | undefined>;
+  /** Persist project priority shared by the rail and grouped sessions list. */
+  reorderProjects(cwds: string[]): Promise<void>;
   removeProject(cwd: string): Promise<void>;
   refreshProjects(): Promise<void>;
   /** Answer a `pi/project/trust_request`. The held-back worker starts (or does not). */
@@ -361,6 +365,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   projectRef.current = currentProject;
 
   const archive = useMemo(() => createArchiveStore(storage()), []);
+  const archiveRevision = useSyncExternalStore(archive.subscribe, archive.getSnapshot, archive.getSnapshot);
 
   /**
    * Host notifications the reducer does not model: the project list, trust
@@ -831,10 +836,17 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           );
           return project;
         }),
+      reorderProjects: async (cwds) => {
+        // Reorder immediately; the local host normally answers within a frame,
+        // but the interaction should not snap back while it waits.
+        setProjectList((current) => orderProjectInfos(current, cwds));
+        const result = await guard(() => client.request("pi/project/reorder", { cwds }));
+        if (result) setProjectList(result.projects);
+        else await refreshProjects();
+      },
       removeProject: (cwd) =>
         guard(async () => {
           await client.request("pi/project/remove", { cwd });
-          setProjectList((current) => current.filter((p) => p.cwd !== cwd || p.sessionCount > 0));
           const { projects: after } = await client.request("pi/project/list", {});
           setProjectList(after);
           // Removing unpins; it never deletes, and two things can keep the
@@ -846,11 +858,15 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           // so say which it is.
           const still = after.find((project) => project.cwd === cwd);
           const openHere = Object.values(readState().open).some((view) => view.state.cwd === cwd);
-          if (still) {
+          const archivedCount = readState().sessions.filter(
+            (session) => session.cwd === cwd && archive.has(session.path),
+          ).length;
+          const unarchivedCount = Math.max(0, (still?.sessionCount ?? 0) - archivedCount);
+          if (still && unarchivedCount > 0) {
             dispatch({
               type: "toast",
               level: "info",
-              text: `${basenameOf(cwd)} is still listed: ${still.sessionCount} session${still.sessionCount === 1 ? "" : "s"} saved there. Archive them to take it off the list; nothing was deleted.`,
+              text: `${basenameOf(cwd)} is still listed: ${unarchivedCount} unarchived chat${unarchivedCount === 1 ? "" : "s"} remain. Archive them to take it off the list; nothing was deleted.`,
             });
           } else if (openHere) {
             dispatch({
@@ -859,6 +875,10 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
               text: `${basenameOf(cwd)} is off the list. It stays in the rail while one of its sessions is open, so that session cannot go missing.`,
             });
           } else {
+            if (projectRef.current === cwd) {
+              setCurrentProjectState(undefined);
+              writeString(PROJECT_STORAGE_KEY, undefined);
+            }
             dispatch({ type: "toast", level: "info", text: `${basenameOf(cwd)} is off the list. Nothing on disk was deleted.` });
           }
         }).then(() => undefined),
@@ -906,10 +926,8 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   // string key so the array identity survives a delta — it feeds the stable
   // half of the context.
   const projectsKey = useMemo(() => {
-    const set = new Set<string>(projectList.map((p) => p.cwd));
-    for (const open of Object.values(state.open)) set.add(open.state.cwd);
-    return [...set].sort((a, b) => a.localeCompare(b)).join("\n");
-  }, [projectList, state.open]);
+    return visibleProjectCwds(projectList, state.sessions, state.open, archive).join("\n");
+  }, [archive, archiveRevision, projectList, state.open, state.sessions]);
   const projects = useMemo(() => (projectsKey ? projectsKey.split("\n") : []), [projectsKey]);
   const projectInfo = useMemo(() => {
     const map: Record<string, ProjectInfo> = {};

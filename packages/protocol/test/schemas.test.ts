@@ -38,6 +38,7 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/ui/response": { id: "ui-1", value: "Allow" },
   "pi/project/list": {},
   "pi/project/add": { cwd: "/p" },
+  "pi/project/reorder": { cwds: ["/p/important", "/p/later"] },
   "pi/project/remove": { cwd: "/p" },
   "pi/project/trust": { cwd: "/p", trusted: true, remember: true },
   "pi/project/git": { cwd: "/p", path: "/s.jsonl" },

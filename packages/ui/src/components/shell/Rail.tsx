@@ -1,4 +1,22 @@
-import { useCallback } from "react";
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  TouchSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { useCallback, type ButtonHTMLAttributes, type CSSProperties } from "react";
 import { FileClock, FolderPlus, Moon, Settings, Sun } from "lucide-react";
 
 import { StatusRing, STATUS_LABEL } from "@/components/status";
@@ -92,7 +110,7 @@ export function Rail() {
 }
 
 function ProjectList() {
-  const { projects, projectInfo, currentProject, setCurrentProject } = useLaserStable();
+  const { projects, projectInfo, currentProject, setCurrentProject, actions } = useLaserStable();
   const shell = useShell();
   const { filter } = useSessionsList();
   // Derived inside the selector so a streamed token that changes nothing the
@@ -116,30 +134,66 @@ function ProjectList() {
     [currentProject, filter, setCurrentProject, shell],
   );
 
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 180, tolerance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+  const reorder = useCallback(
+    ({ active, over }: DragEndEvent) => {
+      if (!over || active.id === over.id) return;
+      const from = projects.indexOf(String(active.id));
+      const to = projects.indexOf(String(over.id));
+      if (from < 0 || to < 0) return;
+      void actions.reorderProjects(arrayMove(projects, from, to));
+    },
+    [actions, projects],
+  );
+
   return (
-    <ul role="list" className="mt-2 flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto py-1 scrollbar-none">
-      {summaries.map((project) => (
-        <li key={project.cwd}>
-          <ProjectButton
-            project={project}
-            active={project.cwd === currentProject}
-            filtered={filter === project.cwd}
-            onSelect={() => select(project.cwd)}
-          />
-        </li>
-      ))}
-      <li>
-        <TooltipIconButton
-          tooltip="Add project"
-          side="right"
-          size="icon"
-          className="text-ink-3 hover:text-ink"
-          onClick={() => shell.setAddProjectOpen(true)}
-        >
-          <FolderPlus />
-        </TooltipIconButton>
-      </li>
-    </ul>
+    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={reorder}>
+      <SortableContext items={projects} strategy={verticalListSortingStrategy}>
+        <ul role="list" className="mt-2 flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto py-1 scrollbar-none">
+          {summaries.map((project) => (
+            <SortableProjectButton
+              key={project.cwd}
+              project={project}
+              active={project.cwd === currentProject}
+              filtered={filter === project.cwd}
+              onSelect={() => select(project.cwd)}
+            />
+          ))}
+          <li>
+            <TooltipIconButton
+              tooltip="Add project"
+              side="right"
+              size="icon"
+              className="text-ink-3 hover:text-ink"
+              onClick={() => shell.setAddProjectOpen(true)}
+            >
+              <FolderPlus />
+            </TooltipIconButton>
+          </li>
+        </ul>
+      </SortableContext>
+    </DndContext>
+  );
+}
+
+function SortableProjectButton(props: ProjectButtonProps) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: props.project.cwd });
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+  return (
+    <li ref={setNodeRef} style={style} className={cn(isDragging && "z-10 opacity-80")}>
+      <ProjectButton
+        {...props}
+        dragging={isDragging}
+        dragHandleProps={{ ...attributes, ...listeners }}
+      />
+    </li>
   );
 }
 
@@ -164,22 +218,25 @@ interface ProjectButtonProps {
   /** The sessions list is showing only this project. */
   filtered: boolean;
   onSelect(): void;
+  dragging?: boolean;
+  dragHandleProps?: ButtonHTMLAttributes<HTMLButtonElement>;
 }
 
-function ProjectButton({ project, active, filtered, onSelect }: ProjectButtonProps) {
+function ProjectButton({ project, active, filtered, onSelect, dragging = false, dragHandleProps }: ProjectButtonProps) {
   const count = `${project.sessionCount} session${project.sessionCount === 1 ? "" : "s"}`;
   const trust = trustLabel(project.trust);
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <button
+          {...dragHandleProps}
           type="button"
           onClick={onSelect}
           aria-current={active ? "true" : undefined}
           aria-pressed={filtered}
           aria-label={`${project.name} — ${project.cwd}`}
           className={cn(
-            "relative flex size-10 cursor-pointer items-center justify-center rounded-lg",
+            "relative flex size-10 cursor-grab items-center justify-center rounded-lg active:cursor-grabbing",
             "transition-[background-color,color] duration-(--motion-instant) outline-none",
             "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live",
             filtered
@@ -189,6 +246,7 @@ function ProjectButton({ project, active, filtered, onSelect }: ProjectButtonPro
             "before:absolute before:-start-2 before:top-2.5 before:bottom-2.5 before:w-0.5 before:rounded-e-full before:bg-ink",
             "before:opacity-0 before:transition-opacity before:duration-(--motion-instant)",
             filtered && "before:opacity-100",
+            dragging && "bg-surface text-ink shadow-float-sm",
           )}
         >
           <StatusRing status={project.status} size={32} thickness={2} aria-hidden="true">
@@ -221,6 +279,7 @@ function ProjectButton({ project, active, filtered, onSelect }: ProjectButtonPro
                 ? "Current for new chats and project settings · click to filter"
                 : "Click to make current and show only this project's sessions"}
           </span>
+          <span className="text-xs leading-4 opacity-70">Drag to change project priority</span>
         </span>
       </TooltipContent>
     </Tooltip>

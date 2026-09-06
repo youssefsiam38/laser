@@ -289,6 +289,9 @@ export class Router {
       case "pi/project/add":
         return { project: this.deps.projects.add(req.params.cwd) };
 
+      case "pi/project/reorder":
+        return { projects: this.deps.projects.reorder(req.params.cwds) };
+
       case "pi/project/remove": {
         this.deps.projects.remove(req.params.cwd);
         return {};

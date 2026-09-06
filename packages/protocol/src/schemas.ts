@@ -598,6 +598,7 @@ export const clientParamsSchemas = {
 
   "pi/project/list": z.object({}).strict(),
   "pi/project/add": z.object({ cwd: z.string().min(1) }).strict(),
+  "pi/project/reorder": z.object({ cwds: z.array(z.string().min(1)).max(1_000) }).strict(),
   "pi/project/remove": z.object({ cwd: z.string().min(1) }).strict(),
   "pi/project/trust": z
     .object({ cwd: z.string().min(1), trusted: z.boolean(), remember: z.boolean().optional() })

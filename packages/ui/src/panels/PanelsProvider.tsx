@@ -155,6 +155,8 @@ interface StoredDock {
   /** panel key → size, so a reload keeps what you were watching. */
   sizes?: Record<string, DockIsland["size"]>;
   dividers?: Record<string, [number, number]>;
+  /** Session path → panel keys in the person's chosen slot order. */
+  orders?: Record<string, string[]>;
 }
 
 const readStored = (): StoredDock => {
@@ -163,6 +165,7 @@ const readStored = (): StoredDock => {
     if (!raw || typeof raw !== "object") return {};
     const prefs = parseDockPrefs(raw);
     const dividers: Record<string, [number, number]> = {};
+    const orders: Record<string, string[]> = {};
     const rawDividers = (raw as { dividers?: unknown }).dividers;
     if (rawDividers && typeof rawDividers === "object") {
       for (const [path, value] of Object.entries(rawDividers as Record<string, unknown>)) {
@@ -171,11 +174,18 @@ const readStored = (): StoredDock => {
         }
       }
     }
+    const rawOrders = (raw as { orders?: unknown }).orders;
+    if (rawOrders && typeof rawOrders === "object") {
+      for (const [path, value] of Object.entries(rawOrders as Record<string, unknown>)) {
+        if (Array.isArray(value) && value.every((key) => typeof key === "string")) orders[path] = value;
+      }
+    }
     return {
       ...(prefs.width !== undefined ? { width: prefs.width } : {}),
       ...(prefs.hidden !== undefined ? { hidden: prefs.hidden } : {}),
       ...(prefs.sizes ? { sizes: prefs.sizes } : {}),
       dividers,
+      orders,
     };
   } catch {
     return {};
@@ -186,11 +196,13 @@ const writeStored = (root: PanelsRoot): void => {
   try {
     const sizes: Record<string, DockIsland["size"]> = {};
     const dividers: Record<string, [number, number]> = {};
+    const orders: Record<string, string[]> = {};
     for (const [path, dock] of Object.entries(root.docks)) {
       for (const [key, island] of Object.entries(dock.islands)) if (island.size !== "minimal") sizes[key] = island.size;
       if (dock.dividers[0] !== 0.5 || dock.dividers[1] !== 0.5) dividers[path] = [dock.dividers[0], dock.dividers[1]];
+      if (dock.order.length > 0) orders[path] = [...dock.order];
     }
-    const stored: StoredDock = { width: root.dockPrefs.width, hidden: root.dockPrefs.hidden, sizes, dividers };
+    const stored: StoredDock = { width: root.dockPrefs.width, hidden: root.dockPrefs.hidden, sizes, dividers, orders };
     globalThis.sessionStorage?.setItem(DOCK_STORAGE_KEY, JSON.stringify(stored));
   } catch {
     /* private mode, quota: the dock still works, it just forgets */
@@ -212,6 +224,7 @@ export interface PanelActions {
   focusPoppedOut(key: string): boolean;
   dismiss(path: string, key: string): void;
   watched(path: string, key: string): void;
+  reorder(path: string, key: string, over: string): void;
   setColumns(path: string, columns: 1 | 2): void;
   setWidth(width: number, maxWidth: number): void;
   setDivider(path: string, column: 0 | 1, ratio: number): void;
@@ -608,6 +621,7 @@ export function PanelsProvider({ children }: { children: ReactNode }): ReactNode
       },
       dismiss: (path, key) => dock(path, { type: "dismiss", key }),
       watched: (path, key) => dock(path, { type: "watched", key, now: Date.now() }),
+      reorder: (path, key, over) => dock(path, { type: "reorder", key, over }),
       setColumns: (path, columns) => dock(path, { type: "setColumns", columns }),
       setWidth: (width, maxWidth) =>
         dispatch({
@@ -713,6 +727,15 @@ export function PanelsProvider({ children }: { children: ReactNode }): ReactNode
         if (dividers && !dockState) {
           dispatch({ type: "dock", path: entry.path, action: { type: "setDivider", column: 0, ratio: dividers[0] } });
           dispatch({ type: "dock", path: entry.path, action: { type: "setDivider", column: 1, ratio: dividers[1] } });
+        }
+        const rememberedOrder = stored.current.orders?.[entry.path] ?? [];
+        for (let index = 0; index < rememberedOrder.length; index++) {
+          const order = read().docks[entry.path]?.order ?? [];
+          const desired = rememberedOrder[index];
+          const over = order[index];
+          if (desired && over && desired !== over && order.includes(desired)) {
+            dispatch({ type: "dock", path: entry.path, action: { type: "reorder", key: desired, over } });
+          }
         }
       }
       for (const [path, dockState] of Object.entries(root.docks)) {

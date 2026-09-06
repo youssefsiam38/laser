@@ -310,6 +310,9 @@ lane T's own if both were written.
 | M12-T24 | Complete provider icon catalog | done | codex-2026-09-06-model-icons | UI typecheck; 379 UI tests; UI build; live provider-route review | see notes |
 | M12-T25 | Branded startup restoration transition | done | codex-2026-09-06-startup-beam | UI typecheck; 381 UI tests; UI build; live dark/light desktop and phone review | see notes |
 | M12-T26 | Establish the open-core licensing boundary | done | codex-2026-09-06-release-hotfix | canonical hashes match upstream; packaged legal-file proof | see notes |
+| M12-T27 | Remove projects whose remaining chats are archived | done | codex-2026-09-06-archive-remove | 392 UI tests; UI typecheck and production build | see notes |
+| M12-T28 | Persist project priority across both left sidebars | done | codex-2026-09-06-project-order | `pnpm verify` — 862 tests; host persistence test | see notes |
+| M12-T29 | Make dock panels directly reorderable | done | codex-2026-09-06-project-order | `pnpm verify` — 862 tests; 13 dock-state tests | see notes |
 
 #### M12-T1 notes
 - 2026-09-06 claimed: audit the shipped logo assets, theme presets, assistant-ui
@@ -641,6 +644,41 @@ lane T's own if both were written.
 - 2026-09-06 done: GNU and Apache license hashes match their authoritative
   texts; every package declares its scope, and the clean-machine build contains
   all four application legal/brand documents plus both Apache package licenses.
+
+#### M12-T27 notes
+- 2026-09-06 claimed: reproduce why Remove project uses the host catalog total
+  after every visible chat was archived, then make archived-only unpinned
+  projects disappear without deleting their transcripts.
+- 2026-09-06 done: the archive store now publishes changes to project
+  navigation. Pinned, unarchived and open projects remain reachable; an
+  unpinned project backed only by archived transcripts disappears. Remove
+  project reports the unarchived count, clears a removed inactive selection,
+  and retains the open-session explanation where applicable. All 392 UI tests,
+  typecheck and the production build pass.
+
+#### M12-T28 notes
+- 2026-09-06 claimed: add accessible drag ordering to the project circles and
+  persist the same host-owned order consumed by the grouped sessions sidebar.
+- 2026-09-06 checkpoint: `pi/project/reorder` now saves canonical priority in
+  the host. The rail updates optimistically; project visibility preserves the
+  returned order, which `sessionGroups` already consumes directly.
+- 2026-09-06 done: pointer, touch and keyboard sorting share one host-owned
+  order across the rail and grouped sessions list. Partial/stale client orders
+  cannot lose projects; persistence survives registry reload. Full 862-test
+  build, typecheck and test gate passes.
+
+#### M12-T29 notes
+- 2026-09-06 claimed: add a dedicated accessible drag handle to dock panels,
+  use the existing morphing layout for slot changes, and remember each
+  session's order. Attention-ranked chats and chronological views stay sorted
+  by their semantics rather than gaining conflicting manual order.
+- 2026-09-06 checkpoint: dock islands now have a dedicated grip backed by
+  pointer, delayed-touch and keyboard sensors. Slot order uses the existing
+  morph layout and is stored per session alongside sizes and dividers.
+- 2026-09-06 done: every visible dock island can move between canvas slots by
+  grip or keyboard without changing panel identity, size or body state. Order
+  restores per browser session. Full 862-test build, typecheck and test gate
+  passes; the development server remains stopped as requested.
 
 ---
 
@@ -1596,8 +1634,50 @@ Consequences: add M12-T26, canonical license texts and path-level metadata;
 ship the legal files inside binary distributions. Commercial terms remain a
 separate written agreement, not a blanket public grant.
 
+### D-80 · 2026-09-06 · Archived transcripts do not pin project navigation
+
+Decision: an unpinned project discovered only from archived transcripts is
+absent from the project rail. A pinned project or a project with an open or
+unarchived session remains visible. The transcripts stay on disk and remain in
+Archived.
+
+Why: the host catalog intentionally counts every transcript on disk, while
+archiving is a client-visible organization choice. Treating that disk count as
+the rail count makes Remove project falsely claim that archived chats are still
+active work.
+
+Consequences: add M12-T27. Project visibility observes archive changes; removal
+copy reports unarchived sessions and preserves the existing open-session guard.
+
+### D-81 · 2026-09-06 · Project priority is one host-owned order
+
+Decision: project priority is the order returned and persisted by the host.
+The project rail edits it through accessible drag-and-drop, and every project-
+grouped navigation surface consumes the same ordered list.
+
+Why: two client-local orders could drift between the rail, session groups,
+devices and restarts. The host already owns project identity and persistence.
+
+Consequences: add M12-T28 and a protocol reorder operation. New or previously
+unordered projects follow the ordered projects with a deterministic name sort.
+
+### D-82 · 2026-09-06 · Manual ordering only where position communicates intent
+
+Decision: drag ordering belongs on the project rail and dock panel canvas.
+It does not apply to attention-ranked chats, chronological fleet/timeline
+views, settings rows or provider/model search results.
+
+Why: project and panel placement express a person's priority and workspace
+arrangement. The other surfaces encode urgency, time, hierarchy or filtered
+data; manual ordering would make those signals ambiguous.
+
+Consequences: add M12-T29. Panel order is remembered per session and exposed
+through pointer, touch and keyboard controls with a visible drag handle.
+
 ## Status edits log
 
+- 2026-09-06 · codex-2026-09-06-project-order · M12-T28/M12-T29 done: project priority persists across both left sidebars and dock panels gain accessible, session-persistent slot ordering; full 862-test gate passes.
+- 2026-09-06 · codex-2026-09-06-archive-remove · M12-T27 done: archived transcript totals no longer keep an unpinned project in navigation or produce the false saved-sessions warning; 392 UI tests, typecheck and build pass.
 - 2026-09-06 · codex-2026-09-06-release-hotfix · M12-T5/M12 done: stable 0.2.1 is Latest; both architectures, staged install, provenance, 12 assets, signed APT/DNF feeds and the public latest-stable path are verified.
 - 2026-09-06 · codex-2026-09-06-release-hotfix · M12-T2/M12-T26 done and M12-T5 hotfix-ready: new-chat model selection, packaged TypeScript feature loading, AGPL/commercial dual licensing and Apache reusable-package scope pass the full 854-test gate and clean-machine package proof.
 - 2026-09-06 · codex-2026-09-06-startup-beam · M12-T25 final art pass: transparent website mark, six eased inbound arcs and gradient beam absorption replace the rigid geometric rails; 381 UI tests, typecheck and build pass.

@@ -12,8 +12,31 @@
  * element (`components/assistant-ui/elements/canvas-split.tsx`); this file is
  * the layout engine inside it.
  */
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  TouchSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import { SortableContext, rectSortingStrategy, sortableKeyboardCoordinates, useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { Layers } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+  type CSSProperties,
+  type KeyboardEvent,
+  type PointerEvent,
+} from "react";
 
 import { CanvasSplitDivider, CanvasSplitPane } from "@/components/assistant-ui/elements/canvas-split";
 import { StatusDot } from "@/components/status";
@@ -58,6 +81,11 @@ function DockFrame({ path, dock, visible, className }: { path: string; dock: Doc
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [fresh, setFresh] = useState<ReadonlySet<string>>(() => new Set());
   const known = useRef(new Set<string>());
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 180, tolerance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
 
   // Islands that just appeared play the arrival once.
   useEffect(() => {
@@ -95,6 +123,17 @@ function DockFrame({ path, dock, visible, className }: { path: string; dock: Doc
   }, [actions, path]);
 
   const layout: DockLayout = useMemo(() => layoutDock(dock, size.width, size.height), [dock, size.width, size.height]);
+  const sortableKeys = useMemo(
+    () => visible.map((entry) => entry.key).filter((key) => layout.rects[key] && !layout.rects[key]!.hidden),
+    [layout.rects, visible],
+  );
+  const reorder = useCallback(
+    ({ active, over }: DragEndEvent) => {
+      if (!over || active.id === over.id) return;
+      actions.reorder(path, String(active.id), String(over.id));
+    },
+    [actions, path],
+  );
 
   // Esc restores a maximized island wherever focus is.
   useEffect(() => {
@@ -120,42 +159,60 @@ function DockFrame({ path, dock, visible, className }: { path: string; dock: Doc
         onChange={(width) => actions.setWidth(width, maxWidth())}
       />
       <div ref={body} className="relative min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
-        <div className="relative" style={{ height: Math.max(size.height, layout.contentHeight) }}>
-          {size.width > 0 &&
-            visible.map((entry) => {
-              const rect = layout.rects[entry.key];
-              const island = dock.islands[entry.key];
-              if (!rect || !island) return null;
-              return (
-                <Island
-                  key={entry.key}
-                  entry={entry}
-                  size={renderedSize(dock, entry.key)}
-                  rect={rect}
-                  hidden={rect.hidden}
-                  poppedOut={island.poppedOut}
-                  frame="dock"
-                  fresh={fresh.has(entry.key)}
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={reorder}>
+          <SortableContext items={sortableKeys} strategy={rectSortingStrategy}>
+            <div className="relative" style={{ height: Math.max(size.height, layout.contentHeight) }}>
+              {size.width > 0 &&
+                visible.map((entry) => {
+                  const rect = layout.rects[entry.key];
+                  const island = dock.islands[entry.key];
+                  if (!rect || !island) return null;
+                  const props = {
+                    entry,
+                    size: renderedSize(dock, entry.key),
+                    rect,
+                    hidden: rect.hidden,
+                    poppedOut: island.poppedOut,
+                    frame: "dock" as const,
+                    fresh: fresh.has(entry.key),
+                  };
+                  return rect.hidden ? <Island key={entry.key} {...props} /> : <SortableDockIsland key={entry.key} {...props} />;
+                })}
+              {size.width > 0 && layout.overflowRect && layout.overflow.length > 0 && (
+                <OverflowIsland rect={layout.overflowRect} keys={layout.overflow} entries={visible} path={path} />
+              )}
+              {layout.dividers.map((d) => (
+                <Divider
+                  key={`${d.column}-${d.keys.join("|")}`}
+                  column={d.column}
+                  rect={d.rect}
+                  path={path}
+                  ratio={dock.dividers[d.column] ?? 0.5}
+                  regionTop={layout.rects[d.keys[0]]?.top ?? d.rect.top}
+                  regionHeight={(layout.rects[d.keys[1]]?.top ?? 0) + (layout.rects[d.keys[1]]?.height ?? 0) - (layout.rects[d.keys[0]]?.top ?? 0)}
                 />
-              );
-            })}
-          {size.width > 0 && layout.overflowRect && layout.overflow.length > 0 && (
-            <OverflowIsland rect={layout.overflowRect} keys={layout.overflow} entries={visible} path={path} />
-          )}
-          {layout.dividers.map((d) => (
-            <Divider
-              key={`${d.column}-${d.keys.join("|")}`}
-              column={d.column}
-              rect={d.rect}
-              path={path}
-              ratio={dock.dividers[d.column] ?? 0.5}
-              regionTop={layout.rects[d.keys[0]]?.top ?? d.rect.top}
-              regionHeight={(layout.rects[d.keys[1]]?.top ?? 0) + (layout.rects[d.keys[1]]?.height ?? 0) - (layout.rects[d.keys[0]]?.top ?? 0)}
-            />
-          ))}
-        </div>
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
       </div>
     </CanvasSplitPane>
+  );
+}
+
+function SortableDockIsland(props: ComponentProps<typeof Island>) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useSortable({ id: props.entry.key });
+  const dragStyle: CSSProperties | undefined = transform
+    ? { transform: CSS.Transform.toString(transform) }
+    : undefined;
+  return (
+    <Island
+      {...props}
+      dragNodeRef={setNodeRef}
+      dragHandleProps={{ ...attributes, ...listeners }}
+      dragStyle={dragStyle}
+      dragging={isDragging}
+    />
   );
 }
 
