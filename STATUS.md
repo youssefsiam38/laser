@@ -3,25 +3,32 @@
 Regenerated at the end of every work session from `STATUS_DETAILED.md`.
 Rules in `AGENTS.md` §3.5. No dates or estimates here except "Last updated".
 
-**Last updated:** 2026-09-06 · claude-2026-09-06-display · commit: `35a1b10` (working tree ahead: D-53)
+**Last updated:** 2026-09-06 · claude-2026-09-06-display · commit: `f3639b2`
 
-**Current focus:** the desktop on real Linux hardware. The "Set up button is
-only clickable on its left part" report was not CSS: the page hit-tests
-correctly at every point in a plain browser. It was a **stale frame** — on an
-NVIDIA GPU with no explicit sync the window shows the layout from a moment ago
-while input goes to the current one. This machine cannot sync on either
-backend: Ubuntu 24.04 ships Mutter 46.2 with the explicit-sync protocol
-deliberately off, and Xwayland 23.2 has none. So the desktop now decides its
-display backend on Linux (D-53, `packages/desktop/src/linux-display.ts`):
-native Wayland, Chromium's `WaylandLinuxDrmSyncobj` on, and software
-compositing only when the session's GPU is NVIDIA and the compositor does not
-advertise `wp_linux_drm_syncobj_manager_v1` — asked directly, before Chromium
-starts. The log now says what was decided (`display:` and `gpu:` lines).
-The user has not yet confirmed the fix on screen.
+**Current focus:** the desktop window is unusable on the maintainer's machine
+and the cause is **not established**. Buttons are not clickable, or clickable
+only across part of their area, and the cursor does not become a pointer. The
+same page in an ordinary browser tab behaves correctly. Two fixes were shipped
+this session on two different theories; the symptom survived both. Read
+`HANDOFF.md` (untracked, in the repository root) before touching this: it holds
+every measurement taken, what they rule out, the seven questions left open, the
+web sources already read, and the scripts left in the scratchpad.
 
-Earlier this session: a dark desktop opens a dark window (the renderer's
-`prefers-color-scheme` answers late; the theme re-resolves), and Chromium's
-state is pinned to `~/.config/lasercode` in development runs too.
+One of the two fixes was a **real, separately verified bug**: the preload script
+failed to load with `module not found: ./ipc.generated.cjs`, because a sandboxed
+preload's `require` resolves only `electron` and a few Node builtins. Electron
+loaded the page anyway, so the window had no bridge on it and every
+desktop-backed control did nothing (D-54). The channel table is now written into
+the preload by `pnpm identity:generate`, and two tests hold it — one forbidding
+any runtime specifier but `electron`, one launching the real binary and
+asserting the bridge is on `window`. That fix is sound. It did not resolve the
+reported symptom.
+
+The other fix (D-53) rested on a stale-frame theory that the evidence does not
+support; its software-compositing fallback was **removed** in D-55 rather than
+left in to cost hardware acceleration. What remains from it is
+`ozone-platform-hint=auto`, Chromium's `WaylandLinuxDrmSyncobj` feature, and a
+log line naming the GPU and whether the compositor offers explicit sync.
 
 ## Milestones
 
@@ -32,51 +39,67 @@ state is pinned to `~/.config/lasercode` in development runs too.
 | MP Panel system | done | the contract in `docs/ux-panels.md` is implemented and everything draws through it |
 | M2 Many sessions, many projects | in-progress | T1–T4, T6 done; T5 needs a real desktop session to fire a notification |
 | M3 Subagent tabs | in-progress | T1–T3, T5–T8 done; T4 resume needs a live bus; T9 upstream PRs unfiled |
-| M4 Settings and logs | in-progress | T1–T7 done; T8: "All settings" still reads as Pi's `settings.json` with labels |
-| M5 Desktop shell | in-progress | T1–T3 done and proven here; Linux display policy added (D-53); T4/T5 need macOS, Windows and credentials |
+| M4 Settings and logs | in-progress | T1–T7 done; **T8 todo**: "All settings" still reads as the agent's `settings.json` with labels |
+| M5 Desktop shell | **blocked in practice** | T1–T3 built and the bridge is proven by test, but the window is unusable on the one machine it has been tried on; T4/T5 need macOS, Windows and credentials |
 | M6 Relay and pairing | done | channel id via subprotocol (D-21); rotation deferred (D-22) |
 | M7 Mobile PWA | in-progress | T1–T4 done; T5 push and T6 mic complete in code, unproven without a phone |
 | M8 Package support | in-progress | T1, T3–T5 done; T2 dictation wired but this machine has only OAuth providers |
 | M9 CLI | in-progress | T1–T8 done, `relay` proven end to end against a real relay |
-| M10 Self-contained distribution | in-progress | T1–T8 done and reviewed (D-42..D-47, D-50). T9/T10 are updating, staged (D-31, D-35). Packaged artifacts predate the rename and D-53 |
+| M10 Self-contained distribution | in-progress | T1–T8 done and reviewed (D-42..D-47, D-50); x64 artifacts rebuilt with the preload fix but **never installed or launched**. T9/T10 staged (D-31, D-35) |
 | M11 Theme system | in-progress | T1–T4, T6–T8 done; T5 needs a network trace to close |
-| MX Cross-cutting | in-progress | T6, T7 done; the identity check is a real gate (D-50); seam green; pin 0.85.0 |
+| MX Cross-cutting | in-progress | T6, T7 done; the identity check is a real gate (D-50, and now D-54's inlined block); seam green; pin 0.85.0 |
 
 ## Blockers
 
+- **The desktop window is unusable and the cause is unknown.** This gates any
+  claim that the product works. `HANDOFF.md` is the entry point. Nobody has yet
+  tried `--ozone-platform=x11` by hand, checked whether the frameless window's
+  input region and geometry origin agree with the renderer's coordinate space,
+  or run the packaged build.
+- **The packaged artifacts have never been installed.** x64 AppImage, deb, rpm
+  and tar.gz were rebuilt with the preload fix at `packages/desktop/out/`, and
+  none has been installed or launched. Two things are unverified in a packaged
+  build: that the preload loads from inside `app.asar`, and that the Wayland
+  registry probe (`ELECTRON_RUN_AS_NODE` on `dist/wayland-globals.js`) works
+  from inside the archive.
 - **No release signing key exists yet.** `RELEASE_PUBKEY` is empty on purpose;
   provenance (layer 1) is required meanwhile.
-- **No arm64 hardware here.** Every arm64 artifact is built by config only.
+- **No arm64 hardware here.** `dist:linux` refuses to cross-build arm64 by
+  design, because only the x64 keychain binding is installed.
 - `.rpm` builds here but has not been installed on a Fedora/RHEL box.
 - M0-T8 CI: GitHub Actions refused to start (account billing). `pnpm verify`
   and `pnpm verify:install` locally.
 - M7-T5 push: needs `HostRelayOptions.publicOrigin`; nothing sets it.
-- M8-T2 dictation: needs a platform OpenAI API key; only OAuth providers here.
+- M8-T2 dictation: needs a platform OpenAI API key; only OAuth providers here,
+  and the one key-based provider has no credit left.
 - AppStream screenshots deliberately absent: no public HTTPS host yet.
 
 ## Next up (dependencies satisfied)
 
-1. **Confirm D-53 on screen**, then **rebuild the Linux artifacts** under the
-   `laser`/`lasercode` identity (`dist:linux`) and prove in the installed app's
-   log that the Wayland probe runs from inside `app.asar` (`display:` line
-   present). Then a real `install.sh` on a stripped PATH.
-2. **Generate a release key, pin it, tag `v0.1.0`** and run the release
-   workflow — the only step never executed is `gh release create`.
-3. **App icons from the final mark** and window title aligned with the website.
-4. **M4-T8**: rewrite "All settings" for a person.
+1. **Establish why the window is unusable.** Everything else is downstream of
+   this. Start at `HANDOFF.md` §"Open, unexplained".
+2. **Install a packaged artifact and launch it**, proving the preload and the
+   Wayland probe work from inside `app.asar`, then a real `install.sh` run on a
+   stripped PATH.
+3. **M4-T8**: rewrite "All settings" for a person. It is the one screen that
+   still requires knowing which agent runs underneath: raw key names under every
+   label, sections named for the file rather than the job, free-text provider and
+   model boxes beside pickers that already exist.
+4. **Generate a release key, pin it, tag `v0.1.0`.** The only step never
+   executed is `gh release create`.
 5. **M10-T10** once the repository is public: set `publish`, prove an AppImage
    self-updates in place. **M10-T9** after it.
 
 ## Recently done
 
-- **Stale frames on NVIDIA diagnosed and mitigated** (D-53) — the compositor
-  is asked for explicit sync before Chromium starts; software compositing only
-  where the bug would show; 59 desktop tests including the wire parser and the
-  policy table.
-- **A dark desktop opens a dark window; Chromium state pinned** (35a1b10).
-- **The wire namespace renamed before anything shipped** (D-52) — `lasercode`,
-  `formerNames` emptied, migration code kept and tested.
-- **Three reviews applied** (D-49, D-50) — identity check widened; rename
-  migration hardened; thirteen product defects fixed; 790 tests.
-- **One module defines the product's identity** (MX-T7, D-48) — `product.json`
-  is the only place the product is named.
+- **The bridge reaches the window** (D-54) — a sandboxed preload cannot require
+  a sibling file; the channel table is generated into the preload, and a smoke
+  test launches the real binary to prove the bridge arrives. Verified by
+  reintroducing the bad require and watching the test fail.
+- **The stale-frame fallback removed, the GPU log made honest** (D-55) — no
+  software compositing anywhere; `getGPUFeatureStatus()` is read on
+  `gpu-info-update`, not at ready, where every feature reads `disabled_software`
+  before Chromium has decided.
+- **A dark desktop opens a dark window; Chromium state pinned** (`35a1b10`).
+- **The wire namespace renamed before anything shipped** (D-52).
+- **One module defines the product's identity** (MX-T7, D-48).
