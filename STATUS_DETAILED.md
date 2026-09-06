@@ -403,6 +403,10 @@ lane T's own if both were written.
   CI: the new acceptance probe used a literal temporary-directory prefix while
   it was untracked locally. It now derives `PRODUCT_NAME`, preserving the
   single-source identity rule; no product code or package behavior failed.
+- 2026-09-06 checkpoint: the two escaped-release patterns are now permanent
+  `AGENTS.md` rules: stage new files before identity/verify, wait for clean CI
+  before tagging, preserve runtime-loaded dependency source, and require a real
+  packaged session/capability probe rather than a top-level import check.
 
 #### M12-T6 notes
 - 2026-09-06 claimed: reproduce the packaged extension failure from the live

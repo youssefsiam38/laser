@@ -316,6 +316,50 @@ pnpm -F @lasercode/worker dev       # run one package in watch mode
 Conventions: TypeScript strict, ESM everywhere, relative imports use `.js`
 specifiers (Pi loads extensions this way and we match it), Node 24, pnpm.
 
+## 5a. Release and packaging failure rules
+
+These rules exist because both failures below escaped a local green check and
+reached a pushed release candidate. Treat them as release blockers, not advice.
+
+### New files and the identity check
+
+**Problem:** `scripts/identity/check.mjs` intentionally scans tracked files. A
+new untracked source file can spell `laser`, an app id, a directory name or a
+wire namespace literally and still pass locally; the same check fails in CI
+after the commit makes that file tracked. This has happened more than once.
+
+**Fix:** import `PRODUCT_*` from `@lasercode/protocol` in TypeScript, import
+`scripts/identity/identity.mjs` in Node scripts, or add a generated template for
+shell/YAML. Never silence the scanner for a product-bearing source file.
+
+**Prevention:** before the final identity/build/test gate, stage every intended
+new file, confirm no intended file remains under `git status` as `??`, then run
+`pnpm identity:check` and `pnpm verify`. A green check run before staging new
+files is not release evidence. After pushing, wait for the clean CI run to pass
+before creating or moving a release tag.
+
+### Executable dependency source in packaged builds
+
+**Problem:** a dependency's `.ts` files are not necessarily development files.
+Pi extensions may export TypeScript directly and Pi's resource loader transpiles
+it at runtime. A broad electron-builder exclusion removed
+`pi-subagents/index.ts` and its `src/**/*.ts`; Electron launched and Pi's
+compiled core imported, but every new/opened session failed, leaving the new
+chat model picker unavailable. `asarUnpack` cannot restore a file excluded by
+`files`.
+
+**Fix:** preserve executable dependency source in `node_modules`. Read the
+package's `exports`, `files` and Pi manifest before excluding an extension or
+file type. Never classify code as disposable solely from its extension.
+
+**Prevention:** every new or bumped curated feature must be tested from
+`packages/desktop/out/*-unpacked` with the bundled Node and an empty `PATH`.
+The clean-machine gate must open a real session with all default features and
+exercise a capability reached only after session creation (currently the model
+list). Checking that files exist, that `require.resolve` succeeds, or that Pi's
+compiled top-level module imports is insufficient. The distribution must also
+carry the project's legal files; the same packaged gate verifies them.
+
 ---
 
 ## 6. Upstream contributions
