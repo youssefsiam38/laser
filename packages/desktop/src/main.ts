@@ -16,7 +16,7 @@
  */
 import { APP_ID, DATA_DIR_NAME, ENV, PRODUCT_NAME } from "@lasercode/protocol";
 import { BrowserWindow, Menu, app, dialog, ipcMain, nativeTheme, session, shell } from "electron";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { migrateFormerIdentities, resolvePaths, type ParsedArgs, type LaserPaths } from "@lasercode/cli";
 import {
@@ -34,6 +34,7 @@ import { statusPageUrl } from "./error-page.js";
 import type { AttentionChange, FleetSnapshot } from "./fleet.js";
 import { HostLink } from "./host-link.js";
 import { HostProcess } from "./host-process.js";
+import { connectedGpuVendors, linuxDisplayDecision, probeWaylandGlobals } from "./linux-display.js";
 import { loadSecrets } from "./keychain.js";
 import { DesktopLog } from "./log.js";
 import { Notifier } from "./notifications.js";
@@ -94,35 +95,27 @@ let quitting = false;
 // ------------------------------------------------------------ singleton ----
 
 /**
- * The display backend, before anything opens a window.
- *
- * `ozone-platform-hint=auto` is Chromium's own setting for "native Wayland on a
- * Wayland session, X11 otherwise", and it is the supported way to say it.
- *
- * Chromium refuses to run Vulkan on its Wayland backend — the log says
- * "'--ozone-platform=wayland' is not compatible with Vulkan" — and then carries
- * on anyway. What the person gets is a window whose cursor draws in one place
- * and hit-tests in another: a button is live down one edge and dead across the
- * rest, and never shows a pointer. It looks like broken CSS and it is not.
- *
- * So Vulkan comes off *only* when the Wayland backend is the one that will run.
- * An X11 session, or someone who chose their own `--ozone-platform`, is left
- * exactly as Chromium would have left them — this is avoiding one specific
- * incompatibility at the moment it would occur, not switching a feature off for
- * every Linux user, most of whom would never have hit it.
+ * The display backend, before anything opens a window. The policy and its
+ * reasons live in `linux-display.ts`; the short version is that an NVIDIA GPU
+ * under a compositor without explicit sync shows stale frames, and the app is
+ * the one party that can still make it right.
  */
 if (process.platform === "linux") {
-  const argv = process.argv.slice(1);
-  const asked = (flag: string) => argv.some((a) => a === `--${flag}` || a.startsWith(`--${flag}=`));
-  const chosePlatform = asked("ozone-platform") || asked("ozone-platform-hint");
-  if (!chosePlatform) app.commandLine.appendSwitch("ozone-platform-hint", "auto");
-
-  const willRunWayland = chosePlatform
-    ? argv.some((a) => a === "--ozone-platform=wayland")
-    : Boolean(process.env["WAYLAND_DISPLAY"]);
-  if (willRunWayland && !asked("disable-features") && !asked("enable-features")) {
-    app.commandLine.appendSwitch("disable-features", "Vulkan");
+  const decision = linuxDisplayDecision({
+    argv: process.argv.slice(1),
+    env: process.env,
+    gpuVendors: connectedGpuVendors(),
+    waylandGlobals: probeWaylandGlobals(
+      process.env,
+      process.execPath,
+      join(dirname(fileURLToPath(import.meta.url)), "wayland-globals.js"),
+    ),
+  });
+  for (const [name, value] of decision.switches) {
+    if (value === undefined) app.commandLine.appendSwitch(name);
+    else app.commandLine.appendSwitch(name, value);
   }
+  for (const note of decision.notes) log.line(note);
 }
 
 // A second launch (a deep link, a double-click) must reach the instance that
@@ -535,6 +528,11 @@ function installMenu(): void {
 async function start(): Promise<void> {
   registerProtocolHandler();
   await app.whenReady();
+  if (process.platform === "linux") {
+    // What Chromium actually did with the display decision, for support logs.
+    const gpu = app.getGPUFeatureStatus() as unknown as Record<string, string>;
+    log.line(`gpu: compositing ${gpu["gpu_compositing"]}, rasterization ${gpu["rasterization"]}, webgl ${gpu["webgl"]}`);
+  }
 
   installPermissionGates(session.defaultSession, {
     isOurOrigin: (url) => {
