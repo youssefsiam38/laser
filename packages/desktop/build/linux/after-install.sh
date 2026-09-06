@@ -129,7 +129,7 @@ fi
 # -------------------------------------------------------- 5. updates ----
 
 REPO_OWNER='youssefsiam38'
-REPO_NAME='${sanitizedProductName}'
+REPO_NAME='laser'
 PAGES_BASE="https://$REPO_OWNER.github.io/$REPO_NAME"
 
 # The key itself is owned by the package (the fpm mapping in

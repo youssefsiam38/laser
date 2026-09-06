@@ -341,6 +341,15 @@ export function artifacts() {
       source: "product.json",
     },
     {
+      path: "packages/desktop/build/linux/after-install.sh",
+      contents: manifestFields("packages/desktop/build/linux/after-install.sh", [
+        [/REPO_OWNER='[^']*'/, `REPO_OWNER='${identity.repository.split("/")[0]}'`],
+        [/REPO_NAME='[^']*'/, `REPO_NAME='${identity.repository.split("/")[1]}'`],
+      ]),
+      kind: "committed",
+      source: "product.json",
+    },
+    {
       path: "install.sh",
       contents: renderTemplate(read("install.sh.tpl"), identity, "install.sh.tpl"),
       kind: "committed",

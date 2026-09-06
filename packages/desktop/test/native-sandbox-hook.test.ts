@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 const hookPath = fileURLToPath(
   new URL("../build/linux/after-install.sh", import.meta.url),
 );
+const productPath = fileURLToPath(new URL("../../../product.json", import.meta.url));
 
 describe("native Linux sandbox install hook", () => {
   it("enables the setuid helper when Ubuntu restricts user namespaces through AppArmor", async () => {
@@ -18,5 +19,17 @@ describe("native Linux sandbox install hook", () => {
     );
     expect(source).toMatch(/chown root:root "\$APP_DIR\/chrome-sandbox"/);
     expect(source).toMatch(/chmod 4755 "\$APP_DIR\/chrome-sandbox"/);
+  });
+
+  it("registers the case-sensitive GitHub Pages repository path", async () => {
+    const [source, product] = await Promise.all([
+      readFile(hookPath, "utf8"),
+      readFile(productPath, "utf8").then((text) => JSON.parse(text) as { repository: string }),
+    ]);
+    const [owner, repository] = product.repository.split("/");
+
+    expect(source).toContain(`REPO_OWNER='${owner}'`);
+    expect(source).toContain(`REPO_NAME='${repository}'`);
+    expect(source).not.toContain("REPO_NAME='${sanitizedProductName}'");
   });
 });
