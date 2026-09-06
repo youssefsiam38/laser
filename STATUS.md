@@ -56,12 +56,13 @@ log line naming the GPU and whether the compositor offers explicit sync.
   tried `--ozone-platform=x11` by hand, checked whether the frameless window's
   input region and geometry origin agree with the renderer's coordinate space,
   or run the packaged build.
-- **The packaged artifacts have never been installed.** x64 AppImage, deb, rpm
-  and tar.gz were rebuilt with the preload fix at `packages/desktop/out/`, and
-  none has been installed or launched. Two things are unverified in a packaged
-  build: that the preload loads from inside `app.asar`, and that the Wayland
-  registry probe (`ELECTRON_RUN_AS_NODE` on `dist/wayland-globals.js`) works
-  from inside the archive.
+- **The packaged app has never been launched as an app.** The install path
+  itself is now proven against today's x64 artifacts: `verify-install.sh
+  --release` passes 44 checks with none failing, the packaged `preload.cjs`
+  inside `app.asar` requires only `electron` and carries the inlined channel
+  table, and the Wayland probe runs from inside the archive under the packaged
+  binary. What has not happened is starting the installed app: it binds port
+  41441 and would collide with the running development host.
 - **No release signing key exists yet.** `RELEASE_PUBKEY` is empty on purpose;
   provenance (layer 1) is required meanwhile.
 - **No arm64 hardware here.** `dist:linux` refuses to cross-build arm64 by
@@ -78,9 +79,9 @@ log line naming the GPU and whether the compositor offers explicit sync.
 
 1. **Establish why the window is unusable.** Everything else is downstream of
    this. Start at `HANDOFF.md` §"Open, unexplained".
-2. **Install a packaged artifact and launch it**, proving the preload and the
-   Wayland probe work from inside `app.asar`, then a real `install.sh` run on a
-   stripped PATH.
+2. **Launch the installed app** (the only distribution step left; the install
+   path, the packaged preload and the packaged Wayland probe are all verified).
+   It needs the development host stopped first, or a free port.
 3. **M4-T8**: rewrite "All settings" for a person. It is the one screen that
    still requires knowing which agent runs underneath: raw key names under every
    label, sections named for the file rather than the job, free-text provider and
