@@ -1,7 +1,7 @@
 "use client";
 /**
- * `tool-group` (assistant-ui registry), restyled: consecutive tool calls
- * collapsed into one summary row — including mixed counted actions — with
+ * `tool-group` (assistant-ui registry), restyled: consecutive reasoning and
+ * tool activity collapsed into one summary row — including mixed actions — with
  * a live thinking indicator and a chevron that opens every individual row in place (D-20 §4,
  * docs/ux-elements.md "Tool group"). This element IS that feature.
  *
@@ -18,7 +18,7 @@
  *     `MessagePrimitive.GroupedParts`, not the deprecated start/end indices.
  */
 import { useAuiState, useScrollLock, type MessagePrimitive } from "@assistant-ui/react";
-import { ChevronRight, CircleAlert, FilePen, FilePlus, FileText, FolderOpen, FolderSearch, Search, SquareTerminal, Wrench } from "lucide-react";
+import { ChevronRight, CircleAlert, FilePen, FilePlus, FileText, FolderOpen, FolderSearch, ScanText, Search, SquareTerminal, Wrench } from "lucide-react";
 import {
   memo,
   useCallback,
@@ -35,23 +35,26 @@ import {
 import { StatusDot } from "@/components/status";
 import { ThinkingIndicator } from "@/components/assistant-ui/elements/thinking-indicator";
 import {
-  summarizeToolGroup,
+  summarizeActivityGroup,
   toolGroupDefaultOpen,
+  type ActivityIconKind,
+  type ReasoningActivity,
   type ToolGroupBreakdownItem,
   type ToolGroupMember,
   type ToolGroupSummary,
 } from "@/components/thread/tool-groups";
-import { elapsedOf, markDone, markRunning, useTick } from "@/components/thread/timing";
-import type { ToolKind } from "@/components/thread/tool-summary";
+import { elapsedOf, markDone, markRunning, useElapsed, useTick } from "@/components/thread/timing";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { duration } from "@/format";
 import { cn } from "@/lib/utils";
+import { useLaserState, useReasoningExpanded } from "@/runtime";
 
+import { ReasoningText } from "./reasoning.js";
 import { collapsePanel, mono } from "./surfaces.js";
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
 
-export const TOOL_ICONS: Record<ToolKind, Icon> = {
+export const TOOL_ICONS: Record<ActivityIconKind, Icon> = {
   read: FileText,
   write: FilePlus,
   edit: FilePen,
@@ -60,6 +63,7 @@ export const TOOL_ICONS: Record<ToolKind, Icon> = {
   find: FolderSearch,
   ls: FolderOpen,
   other: Wrench,
+  reasoning: ScanText,
 };
 
 function motionFastMs(): number {
@@ -112,7 +116,7 @@ function ToolGroupRoot({
       open={isOpen}
       onOpenChange={handleOpenChange}
       className={cn(
-        "group/toolgroup relative -mx-2 rounded-md px-2",
+        "group/toolgroup relative -mx-2 rounded-md bg-surface-1 px-2",
         tone === "danger" && "before:absolute before:inset-y-1 before:start-0 before:w-0.5 before:rounded-full before:bg-danger",
         tone === "attention" &&
           "before:absolute before:inset-y-1 before:start-0 before:w-0.5 before:rounded-full before:bg-attention",
@@ -203,7 +207,7 @@ function ToolGroupTrigger({
             className="min-w-0 overflow-hidden [&_[data-slot=thinking-indicator-label]]:max-w-full [&_[data-slot=thinking-indicator-label]]:truncate"
           />
         ) : (
-          <span data-slot="tool-group-trigger-label" className="shrink-0 text-sm font-medium text-ink">
+          <span data-slot="tool-group-trigger-label" className="shrink-0 text-sm font-medium text-ink-2">
             {label}
           </span>
         )}
@@ -279,22 +283,37 @@ function ToolGroupContent({ className, children, ...props }: React.ComponentProp
 type GroupPart = MessagePrimitive.GroupedParts.GroupPart;
 
 export interface ToolGroupProps {
-  /** The `group-tool*` node from `MessagePrimitive.GroupedParts`. */
+  /** The shared reasoning/tool activity node from `MessagePrimitive.GroupedParts`. */
   part: GroupPart;
+  /** Stable wall-clock key for a live aggregate. */
+  timingKey: string;
   /** The individual tool rows, rendered by the grouped-parts pipeline. */
   children: ReactNode;
 }
 
 const isSettled = (status: { type: string }): boolean => status.type === "complete" || status.type === "incomplete";
 
-/** Projects the message's tool parts into what the summary needs. */
-function useGroupMembers(part: GroupPart): ToolGroupMember[] {
+interface GroupActivity {
+  members: ToolGroupMember[];
+  reasoning: ReasoningActivity;
+}
+
+/** Projects the message's reasoning and tool parts into what the summary needs. */
+function useGroupActivity(part: GroupPart): GroupActivity {
   const parts = useAuiState((s) => s.message.parts);
   return useMemo(() => {
     const out: ToolGroupMember[] = [];
+    let reasoningCount = 0;
+    let reasoningRunning = false;
     for (const index of part.indices) {
       const p = parts[index];
-      if (!p || p.type !== "tool-call") continue;
+      if (!p) continue;
+      if (p.type === "reasoning") {
+        reasoningCount += 1;
+        reasoningRunning ||= p.status.type === "running";
+        continue;
+      }
+      if (p.type !== "tool-call") continue;
       const status = p.status;
       const running = status.type === "running";
       const awaiting = status.type === "requires-action";
@@ -308,15 +327,23 @@ function useGroupMembers(part: GroupPart): ToolGroupMember[] {
         cancelled: status.type === "incomplete" && status.reason === "cancelled",
       });
     }
-    return out;
+    return { members: out, reasoning: { count: reasoningCount, running: reasoningRunning } };
   }, [part.indices, parts]);
 }
 
-function ToolGroupImpl({ part, children }: ToolGroupProps) {
-  const members = useGroupMembers(part);
-  if (members.length <= 1) return <>{children}</>;
+function ToolGroupImpl({ part, timingKey, children }: ToolGroupProps) {
+  const { members, reasoning } = useGroupActivity(part);
+  const path = useLaserState((state) => state.current);
+  const reasoningExpanded = useReasoningExpanded(path);
+  if (reasoning.count === 0 && members.length <= 1) return <>{children}</>;
   return (
-    <ToolGroupSummaryRow members={members} groupStatus={part.status}>
+    <ToolGroupSummaryRow
+      members={members}
+      reasoning={reasoning}
+      reasoningExpanded={reasoningExpanded}
+      timingKey={timingKey}
+      groupStatus={part.status}
+    >
       {children}
     </ToolGroupSummaryRow>
   );
@@ -324,16 +351,22 @@ function ToolGroupImpl({ part, children }: ToolGroupProps) {
 
 function ToolGroupSummaryRow({
   members,
+  reasoning,
+  reasoningExpanded,
+  timingKey,
   groupStatus,
   children,
 }: {
   members: readonly ToolGroupMember[];
+  reasoning: ReasoningActivity;
+  reasoningExpanded: boolean;
+  timingKey: string;
   groupStatus: GroupPart["status"];
   children: ReactNode;
 }) {
-  const summary: ToolGroupSummary = useMemo(() => summarizeToolGroup(members), [members]);
+  const summary: ToolGroupSummary = useMemo(() => summarizeActivityGroup(members, reasoning), [members, reasoning]);
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
-  const open = userOpen ?? toolGroupDefaultOpen(summary);
+  const open = userOpen ?? ((reasoning.count > 0 && reasoningExpanded) || toolGroupDefaultOpen(summary));
 
   // The rows inside are unmounted while collapsed, so the group keeps the
   // wall-clock marks their durations are read from (same keys as the rows).
@@ -343,11 +376,13 @@ function ToolGroupSummaryRow({
       else markDone(m.toolCallId);
     }
   }, [members]);
-  useTick(summary.running);
-  const elapsed = members.reduce<number | undefined>((total, m) => {
+  useTick(summary.running && reasoning.count === 0);
+  const activityElapsed = useElapsed(timingKey, summary.running ? "running" : "done");
+  const toolElapsed = members.reduce<number | undefined>((total, m) => {
     const ms = elapsedOf(m.toolCallId);
     return ms === undefined ? total : (total ?? 0) + ms;
   }, undefined);
+  const elapsed = reasoning.count > 0 ? activityElapsed : toolElapsed;
 
   const failed = summary.hasError && isSettled(groupStatus);
   const failures = members.filter((m) => m.isError).length;
@@ -367,7 +402,7 @@ function ToolGroupSummaryRow({
         active={summary.running}
         failed={failed}
         attention={summary.hasDecision}
-        trailing={failures > 0 ? (failures === summary.count ? "failed" : `${failures} failed`) : undefined}
+        trailing={failures > 0 ? (failures === members.length ? "failed" : `${failures} failed`) : undefined}
         elapsedMs={elapsed}
         lines={summary.lines}
         breakdown={summary.breakdown}
@@ -376,6 +411,19 @@ function ToolGroupSummaryRow({
       />
       <ToolGroupContent>{children}</ToolGroupContent>
     </ToolGroupRoot>
+  );
+}
+
+/** Complete reasoning text inside an expanded aggregate, without a second disclosure. */
+function ActivityReasoning({ children }: { children: ReactNode }) {
+  return (
+    <section data-slot="activity-reasoning" className="py-2 text-ink-2">
+      <div className="mb-1 flex items-center gap-2 text-xs font-medium text-ink-3">
+        <ScanText className="size-3.5" aria-hidden="true" />
+        <span>Reasoning</span>
+      </div>
+      <ReasoningText className="ms-0 max-h-none border-s-0 py-0 ps-0">{children}</ReasoningText>
+    </section>
   );
 }
 
@@ -390,4 +438,4 @@ ToolGroup.Root = ToolGroupRoot;
 ToolGroup.Trigger = ToolGroupTrigger;
 ToolGroup.Content = ToolGroupContent;
 
-export { ToolGroup, ToolGroupRoot, ToolGroupTrigger, ToolGroupContent };
+export { ActivityReasoning, ToolGroup, ToolGroupRoot, ToolGroupTrigger, ToolGroupContent };

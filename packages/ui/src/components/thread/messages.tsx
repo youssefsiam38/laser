@@ -18,7 +18,6 @@ import { MessageBranches } from "@/components/assistant-ui/elements/message-bran
 import { AssistantBody, MessageFooter, UserBubble, hoverReveal } from "@/components/assistant-ui/elements/message-pair";
 import { MessageTiming } from "@/components/assistant-ui/elements/message-timing.aui";
 import { QuoteReply, splitLeadingQuote } from "@/components/assistant-ui/elements/quote-reply";
-import { ReasoningGroup } from "@/components/assistant-ui/elements/reasoning.aui";
 import { RegenerateMenu, type RegeneratePick } from "@/components/assistant-ui/elements/regenerate-menu";
 import { Sources } from "@/components/assistant-ui/elements/sources.aui";
 import { SpeakerIdentity, type Speaker } from "@/components/assistant-ui/elements/speaker-identity";
@@ -27,7 +26,7 @@ import { ThinkingIndicator } from "@/components/assistant-ui/elements/thinking-i
 import { useWorkbench } from "@/components/workbench";
 import { readProviderFailure } from "./provider-error.js";
 import { StreamingText } from "@/components/assistant-ui/elements/streaming-text";
-import { ToolGroup } from "@/components/assistant-ui/elements/tool-group.aui";
+import { ActivityReasoning, ToolGroup } from "@/components/assistant-ui/elements/tool-group.aui";
 import { useCopy } from "@/hooks/use-copy";
 import { duration as formatDuration } from "@/format";
 import { cn } from "@/lib/utils";
@@ -195,14 +194,13 @@ export function UserMessage() {
 // ---------------------------------------------------------------------------
 
 /**
- * Consecutive reasoning parts coalesce; every uninterrupted run of tool calls
- * shares one chronological activity parent. The parent names and counts each
- * family; registered standalone tool UIs remain the detailed children.
+ * One uninterrupted run of reasoning and tool work shares a chronological
+ * activity parent. The parent names and counts thought plus each action family;
+ * expansion preserves the complete reasoning and registered tool UIs.
  */
 type GroupKey = `group-${string}`;
 const groupBy = (part: { type: string; toolName?: string }): GroupKey[] => {
-  if (part.type === "reasoning") return ["group-reasoning"];
-  if (part.type === "tool-call") return [`group-tool-${toolGroupKey(part.toolName ?? "")}`];
+  if (part.type === "reasoning" || part.type === "tool-call") return [`group-${toolGroupKey(part.toolName ?? "")}`];
   return [];
 };
 
@@ -252,12 +250,6 @@ export function AssistantMessage() {
         <MessagePrimitive.GroupedParts groupBy={groupBy}>
           {({ part, children }) => {
             switch (part.type) {
-              case "group-reasoning":
-                return (
-                  <ReasoningGroup timingKey={`${messageId}:r${part.indices[0] ?? 0}`} running={part.status.type === "running"}>
-                    {children}
-                  </ReasoningGroup>
-                );
               case "text":
                 return (
                   <StreamingText streaming={part.status.type === "running"} className="my-3 first:mt-0 last:mb-0">
@@ -265,7 +257,11 @@ export function AssistantMessage() {
                   </StreamingText>
                 );
               case "reasoning":
-                return <MarkdownText className="text-sm text-ink-2" />;
+                return (
+                  <ActivityReasoning>
+                    <MarkdownText className="text-sm text-ink-2" />
+                  </ActivityReasoning>
+                );
               case "tool-call":
                 return part.toolUI ?? <ToolRow {...part} />;
               case "source":
@@ -291,12 +287,14 @@ export function AssistantMessage() {
                 // thinking indicator names the state and proves time is moving.
                 return <EmptyReplyThinking timingKey={`${messageId}:indicator`} />;
               default:
-                // Consecutive calls collapse into one counted activity row
-                // (D-20 §4, D-83); a group of one remains its own row.
-                if (part.type.startsWith("group-tool")) {
+                // Consecutive reasoning and calls collapse into one activity
+                // row (D-20 §4, D-83, D-89); a single tool stays standalone.
+                if (part.type === "group-activity") {
                   return (
                     <div className="my-2 flex flex-col first:mt-0 last:mb-0">
-                      <ToolGroup part={part as MessagePrimitive.GroupedParts.GroupPart}>{children}</ToolGroup>
+                      <ToolGroup part={part as MessagePrimitive.GroupedParts.GroupPart} timingKey={`${messageId}:activity:${part.indices[0] ?? 0}`}>
+                        {children}
+                      </ToolGroup>
                     </div>
                   );
                 }

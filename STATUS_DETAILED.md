@@ -320,7 +320,9 @@ lane T's own if both were written.
 | M12-T34 | Expand Markdown syntax-highlighting coverage | done | codex-2026-09-06-activity-summary | `pnpm verify` — 869 tests; 3 highlighter catalog tests | see notes |
 | M12-T35 | Align native notification session titles | done | codex-2026-09-06-activity-summary | `pnpm verify` — 875 tests; 66 desktop tests | see notes |
 | M12-T36 | Separate active and terminal fleet work | done | codex-2026-09-06-activity-summary | `pnpm verify` — 875 tests; 20 run-tree tests | see notes |
-| M12-T37 | Publish stable 0.2.2 | in-progress | codex-2026-09-06-activity-summary | — | see notes |
+| M12-T37 | Publish stable 0.2.2 | done | codex-2026-09-06-activity-summary | [release workflow](https://github.com/youssefsiam38/laser/actions/runs/34029183501) | see notes |
+| M12-T38 | Aggregate reasoning with tool activity | done | codex-2026-09-06-activity-summary | `pnpm verify` — 877 tests; 9 activity-summary tests | see notes |
+| M12-T39 | Publish stable 0.2.3 | in-progress | codex-2026-09-06-activity-summary | — | see notes |
 
 #### M12-T1 notes
 - 2026-09-06 claimed: audit the shipped logo assets, theme presets, assistant-ui
@@ -753,6 +755,23 @@ lane T's own if both were written.
   while that file was untracked, and the identity scanner considered tracked
   files only. The test now derives identity, the scanner includes untracked
   non-ignored source, and AGENTS.md records the prevention rule.
+- 2026-09-06 done: corrected workflow 34029183501 built both architectures,
+  passed the staged real-install gate, signed and attested the artifacts,
+  published the stable GitHub release, and deployed the APT and DNF feeds.
+
+#### M12-T38 notes
+- 2026-09-06 claimed: give reasoning and tools one assistant-ui activity group,
+  preserve the full expanded timeline, and distinguish its compact summary with
+  the transcript's muted surface vocabulary.
+- 2026-09-06 done: reasoning and tool calls now share the muted assistant-ui
+  disclosure, count thought once, announce live thinking or the exact active
+  tool, and restore every reasoning/tool detail in chronological order on open.
+
+#### M12-T39 notes
+- 2026-09-06 queued: publish the focused activity refinement as 0.2.3 without
+  waiting for the independent 0.2.2 tag workflow.
+- 2026-09-06 claimed: set the single workspace version to 0.2.3, run the release
+  gate, push main and the stable tag, then verify artifacts and update feeds.
 
 ---
 
@@ -1839,6 +1858,22 @@ workspace gate passed.
 Consequences: add M12-T37. The version is changed through the repository's
 single workspace-version script, and the release is complete only after both
 architectures, staged installation, provenance and native package feeds pass.
+
+### D-89 · 2026-09-06 · Reasoning is part of one transcript activity disclosure
+
+Decision: adjacent reasoning and tool parts share one aggregate disclosure.
+Its settled row uses a deliberately muted surface and lists “Reasoned” beside
+counted tool families; its live row uses the assistant-ui thinking indicator
+for either active thought or the exact tool action. Expansion preserves full
+reasoning Markdown and every existing tool row in their original order.
+
+Why: thought and action are one stretch of agent work. Rendering reasoning as a
+separate full block defeats the scan-friendly parent level and makes the muted
+action summary look unrelated to the work that produced it.
+
+Consequences: add M12-T38 and M12-T39. The per-session expanded-thinking
+preference opens a group containing reasoning; failures and decisions still
+force it open. Stable 0.2.3 may build concurrently with the tagged 0.2.2 run.
 
 ## Status edits log
 

@@ -460,6 +460,8 @@ Depends on: M1, M2-T4, M4, M5-T1, M11.
 | M12-T35 | Give native notifications the same session title as the app | desktop banners use an explicit session name or its first user message, never the misleading “Untitled session” placeholder |
 | M12-T36 | Separate active and terminal work in the fleet | queued, running, paused or blocked run trees stay in a prominent In progress section; fully settled trees move to a collapsible Finished section without breaking parent-child lineage |
 | M12-T37 | Publish the accumulated experience fixes as stable 0.2.2 | every workspace manifest and tag agrees on 0.2.2; CI builds, installs, signs, attests and publishes both Linux architectures; the native package feeds deploy successfully |
+| M12-T38 | Fold reasoning into the aggregate activity disclosure | adjacent reasoning and tool work share one muted, live summary row; its collapsed state counts thought and action families, and its expanded state preserves the complete reasoning and tool detail |
+| M12-T39 | Publish the activity-disclosure refinement as stable 0.2.3 | every workspace manifest and tag agrees on 0.2.3 and the independent release pipeline publishes both Linux architectures, provenance and updater feeds |
 
 ---
 

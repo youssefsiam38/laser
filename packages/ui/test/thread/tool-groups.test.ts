@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { summarizeToolGroup, toolGroupDefaultOpen, toolGroupKey, type ToolGroupMember } from "../../src/components/thread/tool-groups.js";
+import {
+  summarizeActivityGroup,
+  summarizeToolGroup,
+  toolGroupDefaultOpen,
+  toolGroupKey,
+  type ToolGroupMember,
+} from "../../src/components/thread/tool-groups.js";
 
 const call = (toolName: string, args: unknown, over: Partial<ToolGroupMember> = {}): ToolGroupMember => ({
   toolCallId: `${toolName}-${JSON.stringify(args)}`,
@@ -58,6 +64,31 @@ describe("summarizeToolGroup", () => {
     expect(s.detail).toBe("pnpm test");
     expect(s.activeLabel).toBe("Running pnpm test");
     expect(s.running).toBe(true);
+  });
+
+  it("summarizes reasoning beside every settled tool family", () => {
+    const s = summarizeActivityGroup(
+      [call("read", { path: "/a" }), call("edit", { path: "/b" }), call("bash", { command: "pnpm test" })],
+      { count: 2, running: false },
+    );
+    expect(s.label).toBe("Completed 4 steps");
+    expect(s.breakdown).toEqual([
+      expect.objectContaining({ family: "reasoning", label: "Reasoned", iconKind: "reasoning" }),
+      expect.objectContaining({ family: "read", label: "Read 1 file" }),
+      expect.objectContaining({ family: "edit", label: "Edited 1 file" }),
+      expect.objectContaining({ family: "command", label: "Ran 1 command" }),
+    ]);
+    expect(s.lines[0]).toBe("Reasoned");
+  });
+
+  it("uses the thinking indicator label until a concrete tool action takes over", () => {
+    expect(summarizeActivityGroup([], { count: 1, running: true }).activeLabel).toBe("Thinking");
+    expect(
+      summarizeActivityGroup([call("edit", { path: "/workspace/src/index.html" }, { running: true })], {
+        count: 1,
+        running: false,
+      }).activeLabel,
+    ).toBe("Editing src/index.html");
   });
 
   it("names the exact target of a live file action", () => {

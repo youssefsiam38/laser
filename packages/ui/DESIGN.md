@@ -165,11 +165,13 @@ by color and an `aria-label`.
 - User messages: right-aligned, `--surface-2` block, 10px radius, no avatar.
 - Assistant messages: left, no bubble, prose on the ground; a 2px `--live`
   left hairline appears only while streaming.
-- Reasoning: collapsible row "Reasoning · 3.2s" with a shimmering label while
-  streaming; collapsed by default once complete.
-- Tool calls: **consecutive calls collapse into one summary row** by default
-  — "Ran 2 commands", "Edited 3 files", "Read 5 files" — with a chevron that
-  expands to the individual rows (D-20). Each individual row: `[icon] verb
+- Reasoning and tool calls: **one uninterrupted stretch collapses into one
+  muted activity row** — "Reasoned · Read 5 files · Ran 2 commands" — with a
+  chevron that restores the full reasoning and every individual tool row in
+  chronological order (D-89). While live, the same row uses the thinking
+  indicator to name either Thinking or the exact active tool. The per-session
+  expanded-thinking preference opens any group containing reasoning; errors
+  and decisions always open it. Each individual tool row: `[icon] verb
   path/or/summary ····· 120ms`. Verb in `--font-sans` 500, path in `--font-mono`. Rows expand to show args and result. `bash` expands into a terminal block (dark ground in
   both themes, `--font-mono`, stdout/stderr). `edit`/`write` show a diff. Errors
   get a `--danger` left hairline and the error text.

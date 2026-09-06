@@ -6,6 +6,8 @@
  */
 import { shortPath, summarizeTool, toolKind, type ToolKind } from "./tool-summary.js";
 
+export type ActivityIconKind = ToolKind | "reasoning";
+
 /** What the group needs to know about one call; a projection of the tool part. */
 export interface ToolGroupMember {
   readonly toolCallId: string;
@@ -19,11 +21,11 @@ export interface ToolGroupMember {
 }
 
 /** The family a group is named after. `mixed` = more than one family. */
-export type ToolGroupFamily = "command" | "edit" | "write" | "read" | "search" | "list" | "other" | "mixed";
+export type ToolGroupFamily = "command" | "edit" | "write" | "read" | "search" | "list" | "other" | "reasoning" | "mixed";
 
 export interface ToolGroupBreakdownItem {
   readonly family: Exclude<ToolGroupFamily, "mixed">;
-  readonly iconKind: ToolKind;
+  readonly iconKind: ActivityIconKind;
   /** A counted, past/present-tense action: "Read 3 files". */
   readonly label: string;
   /** Extra precision where the action count differs from its subject count. */
@@ -33,7 +35,7 @@ export interface ToolGroupBreakdownItem {
 export interface ToolGroupSummary {
   readonly family: ToolGroupFamily;
   /** Icon to draw when nothing is running; the family's own, `Wrench` for mixed. */
-  readonly iconKind: ToolKind;
+  readonly iconKind: ActivityIconKind;
   /** Host Grotesk 500 label, e.g. "Ran 2 commands" or "Running 2 commands" while live. */
   readonly label: string;
   /** Typed fragment after the label: the live call while running, or "· 3 edits" when calls outnumber files. */
@@ -56,7 +58,7 @@ export const toolFamily = (toolName: string): Exclude<ToolGroupFamily, "mixed"> 
 /** Every uninterrupted tool run shares one chronological activity parent. */
 export const toolGroupKey = (_toolName: string): string => "activity";
 
-const familyOf = (kind: ToolKind): Exclude<ToolGroupFamily, "mixed"> => {
+const familyOf = (kind: ToolKind): Exclude<ToolGroupFamily, "mixed" | "reasoning"> => {
   switch (kind) {
     case "bash":
       return "command";
@@ -111,7 +113,7 @@ function activeToolLabel(member: ToolGroupMember): string {
 }
 
 function summarizeFamily(
-  family: Exclude<ToolGroupFamily, "mixed">,
+  family: Exclude<ToolGroupFamily, "mixed" | "reasoning">,
   members: readonly ToolGroupMember[],
   running: boolean,
 ): ToolGroupBreakdownItem {
@@ -172,7 +174,7 @@ export function summarizeToolGroup(members: readonly ToolGroupMember[]): ToolGro
   const live = members.find((m) => m.running || m.awaiting);
   const active = members.find((m) => m.running);
 
-  const byFamily = new Map<Exclude<ToolGroupFamily, "mixed">, ToolGroupMember[]>();
+  const byFamily = new Map<Exclude<ToolGroupFamily, "mixed" | "reasoning">, ToolGroupMember[]>();
   for (const member of members) {
     const rawFamily = familyOf(toolKind(member.toolName));
     const memberFamily = combineFileChanges && rawFamily === "write" ? "edit" : rawFamily;
@@ -196,7 +198,7 @@ export function summarizeToolGroup(members: readonly ToolGroupMember[]): ToolGro
     if (text) detail = text;
   }
 
-  const iconKind: ToolKind = family === "mixed" ? "other" : (ownSummary?.iconKind ?? kinds[0] ?? "other");
+  const iconKind: ActivityIconKind = family === "mixed" ? "other" : (ownSummary?.iconKind ?? kinds[0] ?? "other");
 
   const lines = members.map((m) => {
     const s = summarizeTool(m.toolName, m.args);
@@ -216,6 +218,75 @@ export function summarizeToolGroup(members: readonly ToolGroupMember[]): ToolGro
     activeLabel: active ? activeToolLabel(active) : undefined,
     breakdown: family === "mixed" ? breakdown : [],
     lines,
+  };
+}
+
+export interface ReasoningActivity {
+  /** Consecutive reasoning chunks are one human-readable thought stream. */
+  readonly count: number;
+  readonly running: boolean;
+}
+
+/**
+ * Fold reasoning into the same compact activity summary as its tool work.
+ * Multiple streamed reasoning chunks count as one thought, not invented steps.
+ */
+export function summarizeActivityGroup(
+  members: readonly ToolGroupMember[],
+  reasoning: ReasoningActivity,
+): ToolGroupSummary {
+  if (reasoning.count === 0) return summarizeToolGroup(members);
+
+  const toolSummary = members.length > 0 ? summarizeToolGroup(members) : undefined;
+  const reasoningItem: ToolGroupBreakdownItem = {
+    family: "reasoning",
+    iconKind: "reasoning",
+    label: reasoning.running ? "Thinking" : "Reasoned",
+    detail: undefined,
+  };
+  const running = reasoning.running || toolSummary?.running === true;
+  const toolBreakdown: readonly ToolGroupBreakdownItem[] = !toolSummary
+    ? []
+    : toolSummary.family === "mixed"
+      ? toolSummary.breakdown
+      : [
+          {
+            family: toolSummary.family,
+            iconKind: toolSummary.iconKind,
+            label: toolSummary.label,
+            detail: toolSummary.detail,
+          },
+        ];
+  const count = members.length + 1;
+
+  if (!toolSummary) {
+    return {
+      family: "reasoning",
+      iconKind: "reasoning",
+      label: reasoning.running ? "Thinking" : "Reasoned",
+      detail: undefined,
+      count,
+      hasError: false,
+      hasDecision: false,
+      running,
+      activeLabel: reasoning.running ? "Thinking" : undefined,
+      breakdown: [],
+      lines: [reasoning.running ? "Reasoning — running" : "Reasoned"],
+    };
+  }
+
+  return {
+    family: "mixed",
+    iconKind: "reasoning",
+    label: `${running ? "Working through" : "Completed"} ${plural(count, "step", "steps")}`,
+    detail: undefined,
+    count,
+    hasError: toolSummary.hasError,
+    hasDecision: toolSummary.hasDecision,
+    running,
+    activeLabel: toolSummary.activeLabel ?? (reasoning.running ? "Thinking" : undefined),
+    breakdown: [reasoningItem, ...toolBreakdown],
+    lines: [reasoning.running ? "Reasoning — running" : "Reasoned", ...toolSummary.lines],
   };
 }
 
