@@ -748,6 +748,11 @@ lane T's own if both were written.
 - 2026-09-06 claimed: set the single workspace version to 0.2.2, commit and tag
   the verified experience batch, then observe the complete release and package-
   feed workflow before calling the patch published.
+- 2026-09-06 checkpoint: the first tag run stopped before packaging because the
+  new notification test hard-coded the product name. The earlier local gate ran
+  while that file was untracked, and the identity scanner considered tracked
+  files only. The test now derives identity, the scanner includes untracked
+  non-ignored source, and AGENTS.md records the prevention rule.
 
 ---
 

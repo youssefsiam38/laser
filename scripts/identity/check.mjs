@@ -50,8 +50,9 @@ for (const artifact of artifacts()) {
 // ---------------------------------------------------------------------------
 // 2. Nothing else spells the name.
 //
-// Tracked files only, so a build directory or somebody's scratch file cannot
-// fail the build. Three things are deliberately not failures:
+// Tracked and untracked, non-ignored source files. This catches a new file before
+// its first commit; ignored build output remains invisible. Three things are
+// deliberately not failures:
 //
 //   - Markdown, comments and identifiers. Prose for people and symbols inside a
 //     private workspace; a stale sentence or an old type name after a rename is
@@ -157,16 +158,20 @@ const ENV_VAR = new RegExp(`\\b(${ANY_ENV_PREFIX})_[A-Z0-9_]+\\b`, "g");
 const needle = new RegExp(ANY_NAME, "i");
 
 /**
- * Tracked files, or nothing.
+ * Repository source files, including untracked non-ignored files, or nothing.
  *
  * The scan needs git to know what is source and what is somebody's scratch
  * file. A source tarball has no git, and there the generated-file comparison
  * above is still the check that matters, so this degrades to "skip" with a line
  * saying so rather than failing a build for a missing tool.
  */
-function trackedFiles() {
+function repositoryFiles() {
   try {
-    const out = execFileSync("git", ["ls-files", "-z"], { cwd: repoRoot, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
+    const out = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      maxBuffer: 32 * 1024 * 1024,
+    });
     return out.split("\0").filter(Boolean);
   } catch {
     process.stdout.write("product identity: no git here, so only the generated files were checked.\n");
@@ -175,7 +180,7 @@ function trackedFiles() {
 }
 
 const strays = [];
-for (const file of trackedFiles()) {
+for (const file of repositoryFiles()) {
   if (EXEMPT_PATHS.has(file)) continue;
   if (EXEMPT_DIRS.some((dir) => file.startsWith(dir))) continue;
   if (file.endsWith(".md")) continue;

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { PRODUCT_NAME } from "@lasercode/protocol";
 
 vi.mock("electron", () => ({
   Notification: class {
@@ -15,7 +16,7 @@ function change(name: string | undefined, to: AttentionChange["to"]): AttentionC
   return {
     session: {
       path: "/sessions/a.jsonl",
-      cwd: "/workspace/laser",
+      cwd: `/workspace/${PRODUCT_NAME}`,
       name,
       attention: to,
       modifiedAt: "2026-09-06T10:00:00.000Z",
@@ -29,7 +30,7 @@ function change(name: string | undefined, to: AttentionChange["to"]): AttentionC
 describe("native notification copy", () => {
   it("uses the fleet's resolved session title", () => {
     expect(notificationCopy(change("Fix the native notification title", "finished_unread"))).toEqual({
-      title: "laser finished",
+      title: `${PRODUCT_NAME} finished`,
       body: "Fix the native notification title is done. Nothing is running there now.",
     });
   });

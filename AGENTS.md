@@ -389,6 +389,9 @@ each other, detect their package at `session_start`, and fail individually
 - Conventional prefix (`feat:`, `fix:`, `docs:`, `chore:`), scope = package name.
 - No AI attribution trailers of any kind in commit messages or PR bodies.
 - Never commit secrets, `auth.json`, session transcripts, or `.env` files.
+- Run `pnpm identity:check` after adding new source files, not only before they
+  are staged. The identity guard scans tracked and untracked non-ignored source;
+  this prevents CI-only failures from a new file that hard-codes product identity.
 
 ---
 
