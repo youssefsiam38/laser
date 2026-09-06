@@ -530,8 +530,14 @@ async function start(): Promise<void> {
   await app.whenReady();
   if (process.platform === "linux") {
     // What Chromium actually did with the display decision, for support logs.
-    const gpu = app.getGPUFeatureStatus() as unknown as Record<string, string>;
-    log.line(`gpu: compositing ${gpu["gpu_compositing"]}, rasterization ${gpu["rasterization"]}, webgl ${gpu["webgl"]}`);
+    // Only once `gpu-info-update` has fired: before that every feature reads
+    // `disabled_software`, which is Chromium not knowing yet, not Chromium
+    // having decided — and a log that says the GPU is off when it is on sends
+    // the next person chasing the wrong thing.
+    app.once("gpu-info-update", () => {
+      const gpu = app.getGPUFeatureStatus() as unknown as Record<string, string>;
+      log.line(`gpu: compositing ${gpu["gpu_compositing"]}, rasterization ${gpu["rasterization"]}, webgl ${gpu["webgl"]}`);
+    });
   }
 
   installPermissionGates(session.defaultSession, {

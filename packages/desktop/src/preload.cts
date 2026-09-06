@@ -31,7 +31,43 @@ import type {
 
 const { contextBridge, ipcRenderer } = electron;
 
-const { IPC } = require("./ipc.generated.cjs") as typeof import("./ipc.generated.cjs");
+/**
+ * The channel table, written here by `pnpm identity:generate` from
+ * `product.json` — not imported.
+ *
+ * A sandboxed preload's `require` resolves `electron` and a few Node builtins
+ * and nothing else. A relative specifier such as `./ipc.generated.cjs` fails at
+ * load time with "module not found", and Electron's response is to skip the
+ * preload entirely: the page then loads with no bridge on `window`, so every
+ * button that asks the desktop for something does nothing at all and there is
+ * nothing on screen to say why. Hence a generated block instead of an import;
+ * `pnpm identity:check` fails the build if it drifts from `ipc.generated.ts`.
+ */
+// <generated: IPC CHANNELS>
+const IPC = {
+  hostInfo: "laser:host/info",
+  hostChanged: "laser:host/changed",
+  hostRetry: "laser:host/retry",
+  panelPopOut: "laser:panel/pop-out",
+  panelClose: "laser:panel/close",
+  deepLink: "laser:deep-link",
+  deepLinkPending: "laser:deep-link/pending",
+  windowMinimize: "laser:window/minimize",
+  windowToggleMaximize: "laser:window/toggle-maximize",
+  windowClose: "laser:window/close",
+  windowState: "laser:window/state",
+  windowStateChanged: "laser:window/state-changed",
+  themeSet: "laser:theme/set",
+  microphoneStatus: "laser:microphone/status",
+  microphoneRequest: "laser:microphone/request",
+  microphoneSettings: "laser:microphone/settings",
+  identity: "laser:identity",
+  updateStatus: "laser:update/status",
+  updateCheck: "laser:update/check",
+  updateInstall: "laser:update/install",
+  updateChanged: "laser:update/changed",
+} as const;
+// </generated: IPC CHANNELS>
 
 interface Bootstrap {
   version: string;

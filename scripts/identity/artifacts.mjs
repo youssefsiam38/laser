@@ -157,6 +157,28 @@ function manifestFields(relativePath, edits) {
   return text;
 }
 
+/**
+ * Replace a marked block inside a hand-written file.
+ *
+ * `manifestFields` edits a value; this edits a region, for the one file that
+ * needs generated *code* and cannot import it (the sandboxed preload). The
+ * markers stay in the file so the next person can see the region is written
+ * from `product.json`, not by hand.
+ */
+function inlineBlock(relativePath, label, block) {
+  const text = read(...relativePath.split("/"));
+  const begin = `// <generated: ${label}>`;
+  const end = `// </generated: ${label}>`;
+  const pattern = new RegExp(`${begin}[\\s\\S]*?${end}`);
+  if (!pattern.test(text)) {
+    throw new Error(
+      `${relativePath}: expected the ${begin} … ${end} markers and did not find them. ` +
+        `Restore them, or drop this artifact from scripts/identity/artifacts.mjs.`,
+    );
+  }
+  return text.replace(pattern, `${begin}\n${block}\n${end}`);
+}
+
 /** Everything generated from product.json, in the order a person would read it. */
 
 /**
@@ -199,10 +221,12 @@ function ipcModule() {
   // is how one channel survived a rename — both are generated from this array.
   const esm = [...head, "export const IPC = {", body, "} as const;", "",
     "export type IpcChannel = (typeof IPC)[keyof typeof IPC];", ""].join("\n");
+  // The same table as statements, for inlining into a file that cannot import it.
+  const block = ["const IPC = {", body, "} as const;"].join("\n");
   const cjs = [...head, "const IPC = {", body, "} as const;", "",
     "type IpcChannel = (typeof IPC)[keyof typeof IPC];", "",
     "export = { IPC } as { IPC: typeof IPC & Record<string, IpcChannel> };", ""].join("\n");
-  return { esm, cjs };
+  return { esm, cjs, block };
 }
 
 export function artifacts() {
@@ -216,6 +240,21 @@ export function artifacts() {
       path: join("packages", "desktop", "src", "ipc.generated.cts"),
       contents: ipcModule().cjs,
       kind: "committed",
+    },
+    {
+      // The preload cannot `require` a sibling file: a sandboxed preload's
+      // `require` resolves `electron` and a few Node builtins and nothing else,
+      // so a relative specifier fails at load time and the whole bridge is
+      // silently absent from the window. The channel table is therefore written
+      // *into* the preload, between the markers below, and stays generated.
+      path: join("packages", "desktop", "src", "preload.cts"),
+      contents: inlineBlock(
+        join("packages", "desktop", "src", "preload.cts"),
+        "IPC CHANNELS",
+        ipcModule().block,
+      ),
+      kind: "committed",
+      source: "product.json",
     },
     {
       path: "package.json",

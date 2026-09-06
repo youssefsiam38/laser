@@ -35,26 +35,22 @@ describe("linuxDisplayDecision", () => {
     expect(names(d)).toEqual(["ozone-platform-hint=auto", "enable-features=WaylandLinuxDrmSyncobj"]);
   });
 
-  it("composites in software on NVIDIA when the compositor has no explicit sync", () => {
+  it("never switches the GPU off, whatever the compositor lacks", () => {
+    // The software-compositing fallback was removed with its theory: the
+    // "dead button" it was meant to fix was a preload that failed to load.
     const d = linuxDisplayDecision(facts({ gpuVendors: [NVIDIA_VENDOR], waylandGlobals: ["wl_compositor"] }));
-    expect(names(d)).toContain("disable-gpu-compositing");
-    expect(d.notes.join("\n")).toMatch(/NVIDIA.*no explicit sync.*software/);
+    expect(names(d)).toEqual(["ozone-platform-hint=auto", "enable-features=WaylandLinuxDrmSyncobj"]);
+    expect(d.notes.join("\n")).toContain("NVIDIA, compositor no explicit sync");
   });
 
-  it("keeps the GPU on NVIDIA when the compositor does offer explicit sync", () => {
+  it("names the GPU and the compositor, so a rendering report starts with facts", () => {
     const d = linuxDisplayDecision(facts({ gpuVendors: [NVIDIA_VENDOR] }));
-    expect(names(d)).not.toContain("disable-gpu-compositing");
+    expect(d.notes.join("\n")).toContain("NVIDIA, compositor explicit sync");
     expect(names(d)).toContain("enable-features=WaylandLinuxDrmSyncobj");
   });
 
-  it("keeps the GPU on other vendors even without explicit sync", () => {
-    const d = linuxDisplayDecision(facts({ gpuVendors: ["0x8086"], waylandGlobals: ["wl_compositor"] }));
-    expect(names(d)).not.toContain("disable-gpu-compositing");
-  });
-
-  it("does nothing drastic when the compositor could not be asked", () => {
+  it("says so when the compositor could not be asked", () => {
     const d = linuxDisplayDecision(facts({ gpuVendors: [NVIDIA_VENDOR], waylandGlobals: undefined }));
-    expect(names(d)).not.toContain("disable-gpu-compositing");
     expect(d.notes.join("\n")).toContain("compositor unknown");
   });
 
@@ -72,15 +68,14 @@ describe("linuxDisplayDecision", () => {
       facts({ argv: ["--ozone-platform=wayland"], env: { DISPLAY: ":0" }, gpuVendors: [NVIDIA_VENDOR], waylandGlobals: [] }),
     );
     expect(forced.wayland).toBe(true);
-    expect(names(forced)).toEqual(["enable-features=WaylandLinuxDrmSyncobj", "disable-gpu-compositing"]);
+    expect(names(forced)).toEqual(["enable-features=WaylandLinuxDrmSyncobj"]);
   });
 
-  it("respects feature lists and GPU switches the person passed", () => {
+  it("respects a feature list the person passed", () => {
     const d = linuxDisplayDecision(
-      facts({ argv: ["--enable-features=Foo", "--use-gl=egl"], gpuVendors: [NVIDIA_VENDOR], waylandGlobals: [] }),
+      facts({ argv: ["--enable-features=Foo"], gpuVendors: [NVIDIA_VENDOR], waylandGlobals: [] }),
     );
     expect(names(d)).toEqual(["ozone-platform-hint=auto"]);
-    expect(d.notes.join("\n")).toContain("yours");
   });
 });
 
