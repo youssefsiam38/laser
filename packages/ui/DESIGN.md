@@ -175,10 +175,14 @@ by color and an `aria-label`.
   chronological order (D-89). While live, the same row uses the thinking
   indicator to name either Thinking or the exact active tool. The per-session
   Activity detail choice has three levels: Answers only keeps the aggregate
-  closed, Show reasoning opens aggregates that contain reasoning while their
-  action bodies stay folded, and Show everything opens both levels. Errors and
-  decisions always open their aggregate. Each individual tool row: `[icon] verb
-  path/or/summary ····· 120ms`. Verb in `--font-sans` 500, path in `--font-mono`. Rows expand to show args and result. `bash` expands into a terminal block (dark ground in
+  closed, Show reasoning keeps the aggregate closed but expands reasoning inside
+  when the reader opens it, and Show everything opens both levels. Errors and
+  decisions start their aggregate open; a manual toggle takes precedence.
+  Each child, including reasoning, uses the same `[icon] label · detail · duration ›`
+  row on `--surface` in `--ink-2`; chevrons align at the end. A single action has
+  no redundant aggregate parent. Each row expands independently; waiting tools
+  can fold their details without hiding their approval footer. Verb in
+  `--font-sans` 500, path in `--font-mono`. Rows expand to show args and result. `bash` expands into a terminal block (dark ground in
   both themes, `--font-mono`, stdout/stderr). `edit`/`write` show a diff. Errors
   get a `--danger` left hairline and the error text.
 - Tool-associated dialogs (approval/select/input/editor raised while exactly

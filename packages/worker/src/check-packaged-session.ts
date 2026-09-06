@@ -35,6 +35,9 @@ export async function checkPackagedSession(): Promise<PackagedSessionReport> {
       features: ["subagents", "goals"],
     });
     const models = await driver.listModels();
+    if (!driver.deliverExtensionCommand({ type: "lasercode/account-usage/refresh" })) {
+      throw new Error("The bundled subscription allowance module did not accept refresh.");
+    }
     return { ok: true, sessionId: state.id, modelCount: models.length };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };

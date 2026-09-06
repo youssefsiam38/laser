@@ -467,6 +467,10 @@ Depends on: M1, M2-T4, M4, M5-T1, M11.
 | M12-T42 | Open the chat model picker at the session's active choice | opening the picker immediately scopes its provider field to the current routing provider and marks the current model, while closing clears temporary search and filter overrides for the next session |
 | M12-T43 | Publish the adaptive-session controls as stable 0.2.4 | every workspace manifest and tag agrees on 0.2.4; CI builds, stages, installs, signs and attests both Linux architectures; GitHub and native package update channels publish successfully |
 | M12-T44 | Make the transcript compact without shrinking the app | assistant and user prose use the 14px body scale; message, block and bubble spacing becomes denser; controls, metadata, reading measure, touch targets and the 12px data floor remain unchanged across desktop/phone and dark/light themes |
+| M12-T45 | Make activity disclosures reliable and visually uniform | aggregate, reasoning and tool rows toggle independently with consistent muted styling; interaction tests cover manual collapse and live updates; desktop/phone and both themes are inspected |
+| M12-T46 | Inspect captured provider requests from messages and logs | a shared large inspector exposes instructions, messages, tools, parameters and full redacted JSON; prompt links are exact for new captures and legacy/unavailable cases are explicit; retries and tool-loop requests are selectable |
+| M12-T47 | Publish stable patch 0.2.5 | the verified source is committed and tagged; both architecture installers and signed native update feeds publish with a release page |
+| M12-T48 | Prevent stale services from breaking subscription quota refresh | desktop refuses a mismatched background-service version without killing work; quota errors explain recovery; refresh and auth-failure paths are tested through the engine bridge |
 
 ---
 

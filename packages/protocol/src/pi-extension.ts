@@ -45,8 +45,17 @@ export interface AccountUsageState {
 
 export interface ProviderRequestRecord {
   at: string;
+  context?: ProviderRequestContext;
   /** The complete serialized provider payload, as Pi built it. */
   payload: unknown;
+}
+
+/** Engine-neutral identity captured alongside the serialized request body. */
+export interface ProviderRequestContext {
+  promptEntryId?: string;
+  provider?: string;
+  model?: string;
+  api?: string;
 }
 
 export interface ProviderResponseRecord {

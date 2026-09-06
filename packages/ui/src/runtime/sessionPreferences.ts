@@ -44,10 +44,10 @@ export function useActivityDetailLevel(path: string | undefined): ActivityDetail
 /** Errors and decisions remain visible regardless of a quiet preference. */
 export function activityGroupDefaultOpen(
   level: ActivityDetailLevel,
-  hasReasoning: boolean,
+  _hasReasoning: boolean,
   needsAttention: boolean,
 ): boolean {
-  return needsAttention || level === "everything" || (level === "reasoning" && hasReasoning);
+  return needsAttention || level === "everything";
 }
 
 export function toolDetailsDefaultOpen(level: ActivityDetailLevel): boolean {

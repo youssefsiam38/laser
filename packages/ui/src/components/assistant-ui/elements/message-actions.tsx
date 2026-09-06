@@ -10,7 +10,7 @@
  * the regenerate menu can sit in the same row, and "more" is a real menu with
  * the session-tree actions rather than a bare callback.
  */
-import { Check, Copy, Ellipsis, GitFork, Link, Milestone, PencilLine } from "lucide-react";
+import { Braces, Check, Copy, Ellipsis, GitFork, Link, Milestone, PencilLine } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
 
 import {
@@ -37,14 +37,15 @@ export interface MessageActionsProps extends Omit<ComponentProps<"div">, "childr
   onJump?: (() => void) | undefined;
   /** Copy the session file's path. */
   onCopyPath?: (() => void) | undefined;
+  onViewRequest?: (() => void) | undefined;
   /** A `RegenerateMenu`, when the message can be re-run. */
   regenerate?: ReactNode;
   /** Disables the session-tree actions while a turn runs. */
   busy?: boolean;
 }
 
-export function MessageActions({ copied, onCopy, onEdit, onFork, onJump, onCopyPath, regenerate, busy = false, className, ...props }: MessageActionsProps) {
-  const hasMenu = onFork !== undefined || onJump !== undefined || onCopyPath !== undefined;
+export function MessageActions({ copied, onCopy, onEdit, onFork, onJump, onCopyPath, onViewRequest, regenerate, busy = false, className, ...props }: MessageActionsProps) {
+  const hasMenu = onFork !== undefined || onJump !== undefined || onCopyPath !== undefined || onViewRequest !== undefined;
   return (
     <div data-slot="message-actions" className={cn("flex items-center", className)} {...props}>
       <TooltipIconButton tooltip={copied ? "Copied" : "Copy"} size="icon-xs" onClick={onCopy} className={cn("grid place-items-center text-ink-3", copied && "text-ok hover:text-ok")}>
@@ -65,6 +66,7 @@ export function MessageActions({ copied, onCopy, onEdit, onFork, onJump, onCopyP
             </TooltipIconButton>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start">
+            {onViewRequest && <DropdownMenuItem onSelect={onViewRequest}><Braces />View API request</DropdownMenuItem>}
             {onFork || onJump ? <DropdownMenuLabel>Session tree</DropdownMenuLabel> : null}
             {onFork ? (
               <DropdownMenuItem disabled={busy} onSelect={onFork}>

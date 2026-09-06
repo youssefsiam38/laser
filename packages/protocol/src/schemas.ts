@@ -148,6 +148,10 @@ export const settingChangeSchema = z.union([
 
 export const logQuerySchema = z
   .object({
+    kind: z.string().min(1).max(100).optional(),
+    promptEntryId: z.string().min(1).max(200).optional(),
+    afterAt: z.string().datetime({ offset: true }).optional(),
+    beforeAt: z.string().datetime({ offset: true }).optional(),
     sections: z.array(logSectionSchema).min(1).max(5).optional(),
     cwd: cwd.optional(),
     sessionPath: sessionPath.optional(),

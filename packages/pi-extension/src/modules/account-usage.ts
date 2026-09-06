@@ -81,7 +81,9 @@ export const accountUsageModule: LaserModule = {
       }
     };
     const queue = () => {
-      if (!pending) pending = refresh().finally(() => { pending = undefined; });
+      if (!pending) pending = refresh()
+        .catch(() => emit("unavailable", "Could not refresh your account credentials. Reconnect your OpenAI account in Providers and try again."))
+        .finally(() => { pending = undefined; });
       return pending;
     };
     const updateContext = (session: ModuleContext["session"]) => {

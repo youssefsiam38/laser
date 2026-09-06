@@ -66,10 +66,10 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
   const path = useLaserState((laser) => laser.current);
   const activityLevel = useActivityDetailLevel(path);
 
-  // A waiting decision always opens. Otherwise the session's disclosure level
-  // supplies the default and a click overrides it until that level changes.
+  // A decision starts open, but its always-visible footer does not prevent
+  // the reader from folding the args/result above it.
   const [userOpen, setUserOpen] = useState<{ level: ActivityDetailLevel; open: boolean } | null>(null);
-  const open = isRequiresAction || (userOpen?.level === activityLevel ? userOpen.open : toolDetailsDefaultOpen(activityLevel));
+  const open = userOpen?.level === activityLevel ? userOpen.open : isRequiresAction || toolDetailsDefaultOpen(activityLevel);
 
   const localElapsed = useElapsed(toolCallId, running || awaiting ? "running" : "done");
   const elapsed = timing ? (timing.completedAt ?? Date.now()) - timing.startedAt : localElapsed;

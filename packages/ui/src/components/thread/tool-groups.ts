@@ -222,14 +222,14 @@ export function summarizeToolGroup(members: readonly ToolGroupMember[]): ToolGro
 }
 
 export interface ReasoningActivity {
-  /** Consecutive reasoning chunks are one human-readable thought stream. */
+  /** Number of reasoning rows rendered inside the aggregate. */
   readonly count: number;
   readonly running: boolean;
 }
 
 /**
  * Fold reasoning into the same compact activity summary as its tool work.
- * Multiple streamed reasoning chunks count as one thought, not invented steps.
+ * Count the actual child rows so expanding a summary never reveals a different total.
  */
 export function summarizeActivityGroup(
   members: readonly ToolGroupMember[],
@@ -257,7 +257,7 @@ export function summarizeActivityGroup(
             detail: toolSummary.detail,
           },
         ];
-  const count = members.length + 1;
+  const count = members.length + reasoning.count;
 
   if (!toolSummary) {
     return {

@@ -12,10 +12,10 @@ describe("session activity detail", () => {
     expect(activityDetailLevel("/session/without-a-saved-preference.jsonl")).toBe("answers");
   });
 
-  it("keeps the aggregate quiet for answers and opens only reasoning at the middle level", () => {
+  it("keeps aggregates closed at the middle level too; reasoning opens inside on request", () => {
     expect(activityGroupDefaultOpen("answers", true, false)).toBe(false);
     expect(activityGroupDefaultOpen("reasoning", false, false)).toBe(false);
-    expect(activityGroupDefaultOpen("reasoning", true, false)).toBe(true);
+    expect(activityGroupDefaultOpen("reasoning", true, false)).toBe(false);
   });
 
   it("opens action bodies only for everything while attention always wins", () => {

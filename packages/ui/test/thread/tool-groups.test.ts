@@ -71,7 +71,7 @@ describe("summarizeToolGroup", () => {
       [call("read", { path: "/a" }), call("edit", { path: "/b" }), call("bash", { command: "pnpm test" })],
       { count: 2, running: false },
     );
-    expect(s.label).toBe("Completed 4 steps");
+    expect(s.label).toBe("Completed 5 steps");
     expect(s.breakdown).toEqual([
       expect.objectContaining({ family: "reasoning", label: "Reasoned", iconKind: "reasoning" }),
       expect.objectContaining({ family: "read", label: "Read 1 file" }),

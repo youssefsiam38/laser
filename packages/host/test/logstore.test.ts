@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type { SessionUpdateParams } from "@lasercode/protocol";
 import { LogStore, describeProviderRequest } from "../src/logstore.js";
 
@@ -83,6 +84,37 @@ describe("paging", () => {
 });
 
 describe("filters", () => {
+  it("links every request loop to its exact prompt, scoped to the session", () => {
+    const context = { promptEntryId:"prompt-1",provider:"openai",model:"test",api:"openai-responses" };
+    for (const session of ["/a", "/a", "/b"]) store.observeExtensionMessage("/p",session,{
+      type:"lasercode/provider/request",at:new Date().toISOString(),context,payload:{model:"test",authorization:"secret",input:"x".repeat(3000)},
+    });
+    store.record({section:"provider",kind:"provider_response",summary:"response",sessionPath:"/a",requestContext:context});
+    const page=store.query({sessionPath:"/a",kind:"provider_request",promptEntryId:"prompt-1"});
+    expect(page.entries).toHaveLength(2);
+    expect(page.entries[0]?.requestContext).toEqual(context);
+    const payload=JSON.parse(store.content(page.entries[0]!.detailRef!.ref).text);
+    expect(payload.authorization).not.toBe("secret");
+    expect(payload.input).toHaveLength(3000);
+    expect(store.query({promptEntryId:"other"}).entries).toHaveLength(0);
+  });
+  it("bounds legacy timestamps inclusively at the start and exclusively at the next prompt", () => {
+    for(const at of ["2026-09-06T10:00:00.000Z","2026-09-06T10:01:00.000Z","2026-09-06T10:02:00.000Z"])
+      store.record({section:"provider",kind:"provider_request",summary:at,at});
+    expect(store.query({afterAt:"2026-09-06T10:01:00.000Z",beforeAt:"2026-09-06T10:02:00.000Z"}).entries.map(row=>row.at)).toEqual(["2026-09-06T10:01:00.000Z"]);
+  });
+  it("adds request linkage to an existing database without deleting earlier logs", () => {
+    store.record({section:"host",kind:"note",summary:"existing"});
+    store.close();
+    const db=new DatabaseSync(join(base,"logs.db"));
+    db.exec("DROP INDEX entries_prompt; ALTER TABLE entries DROP COLUMN request_context;");
+    db.close();
+    store=new LogStore({file:join(base,"logs.db")});
+    expect(store.query({}).entries[0]?.summary).toBe("existing");
+    expect(store.query({}).entries[0]?.requestContext).toBeUndefined();
+    store.record({section:"provider",kind:"provider_request",summary:"new",requestContext:{promptEntryId:"new"}});
+    expect(store.query({promptEntryId:"new"}).entries).toHaveLength(1);
+  });
   it("narrows by section, level, session and search", () => {
     store.record({ section: "provider", kind: "provider_request", summary: "anthropic · 3 messages" });
     store.record({ section: "tools", kind: "tool_start", summary: "bash started", sessionPath: "/s/a.jsonl" });

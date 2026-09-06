@@ -36,6 +36,7 @@ import { THINKING_LEVELS, useSupportedThinkingLevels } from "@/components/assist
 import { useElapsed } from "./timing.js";
 import { toolGroupKey } from "./tool-groups.js";
 import { ToolRow } from "./ToolRow.js";
+import { ApiRequestDialog } from "@/components/logs/ApiRequestDialog";
 
 /** `metadata.custom.laser` the projection stamps on every message. */
 interface LaserMeta {
@@ -105,6 +106,9 @@ export function UserMessage() {
   const { copied, copy } = useCopy();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(text);
+  const [requestOpen, setRequestOpen] = useState(false);
+  const requestAt = useAuiState(s => s.message.createdAt?.toISOString());
+  const nextRequestAt = useAuiState(s => s.thread.messages.slice(s.message.index + 1).find(m => m.role === "user")?.createdAt?.toISOString());
 
   // The n-th prompt on screen is the n-th user entry on disk (entries.ts).
   const ordinal = useAuiState((s) => {
@@ -180,11 +184,13 @@ export function UserMessage() {
             onFork={fork}
             onJump={jump}
             onCopyPath={copyPath}
+            onViewRequest={path ? () => setRequestOpen(true) : undefined}
             busy={busy}
           />
           <MessageTimestamp className={hoverReveal} />
         </MessageFooter>
       </div>
+      {requestOpen && path && <ApiRequestDialog target={{ kind: "message", path, ...(entryId ? { entryId } : {}), ...(requestAt ? { at: requestAt } : {}), ...(nextRequestAt ? { beforeAt: nextRequestAt } : {}) }} onClose={() => setRequestOpen(false)} />}
     </MessagePrimitive.Root>
   );
 }
@@ -258,7 +264,7 @@ export function AssistantMessage() {
                 );
               case "reasoning":
                 return (
-                  <ActivityReasoning>
+                  <ActivityReasoning running={part.status.type === "running"}>
                     <MarkdownText className="text-sm text-ink-2" />
                   </ActivityReasoning>
                 );
@@ -290,6 +296,9 @@ export function AssistantMessage() {
                 // Consecutive reasoning and calls collapse into one activity
                 // row (D-20 §4, D-83, D-89); a single tool stays standalone.
                 if (part.type === "group-activity") {
+                  // One action already has its own disclosure; do not make
+                  // the reader open a second identical header to reach it.
+                  if (part.indices.length === 1) return children;
                   return (
                     <div className="my-2 flex flex-col first:mt-0 last:mb-0">
                       <ToolGroup part={part as MessagePrimitive.GroupedParts.GroupPart} timingKey={`${messageId}:activity:${part.indices[0] ?? 0}`}>

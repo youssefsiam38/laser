@@ -328,6 +328,10 @@ lane T's own if both were written.
 | M12-T42 | Restore the active model picker choice on open | done | codex-2026-09-06-account-usage | `pnpm verify` — 888 tests; 3 model-selector tests | see notes |
 | M12-T43 | Publish stable 0.2.4 | done | codex-2026-09-06-release-024 | [release workflow](https://github.com/youssefsiam38/laser/actions/runs/34034100668) | see notes |
 | M12-T44 | Compact the conversation surface | done | codex-2026-09-06-compact-transcript | `pnpm verify` — 891 tests; dark/light desktop/phone visual pass | see notes |
+| M12-T45 | Reliable, uniform activity disclosures | done | codex-2026-09-06-activity-rows | 424 UI tests; typecheck; desktop/phone dark/light and pointer/Enter toggles | see notes |
+| M12-T46 | Captured API request inspector | done | codex-2026-09-06-request-inspector | `pnpm verify` 918 tests; host E2E prompt attribution; desktop/phone both themes | see notes |
+| M12-T47 | Publish stable patch 0.2.5 | in-progress | codex-2026-09-06-request-inspector | — | release gate after M12-T46 and M12-T48 |
+| M12-T48 | Recover subscription quota refresh across updates | done | codex-2026-09-06-request-inspector | `pnpm verify`; quota lifecycle and host route tests; packaged-session probe | see notes |
 
 #### M12-T1 notes
 - 2026-09-06 claimed: audit the shipped logo assets, theme presets, assistant-ui
@@ -841,6 +845,52 @@ lane T's own if both were written.
   inspected at 1600×1000 and 390×844 in dark and light themes.
 
 ---
+
+#### M12-T45 notes
+- 2026-09-06 claimed: reproduce broken activity toggles, restore independent
+  reasoning/action disclosures and share one muted row treatment throughout.
+- 2026-09-06 checkpoint: reasoning was a static section; the middle preference
+  opened its aggregate contrary to the requested rule; waiting tools OR-ed their
+  status over manual collapse; `bg-surface-1` had no token mapping. All are fixed.
+  Single actions no longer have redundant parents, and totals count rendered
+  reasoning rows. Eight DOM interaction tests pass, including live rerenders and
+  approval visibility; real pointer and Enter toggles are being checked.
+- 2026-09-06 done: real pointer and Enter open and close parent/child rows;
+  desktop and phone in both themes reviewed. Added a shared token-led live beam
+  beneath thinking/tool labels, pointer-transparent with a static reduced-motion
+  fallback; browser computed animations stop under reduced motion.
+
+#### M12-T46 notes
+- 2026-09-06 claimed: reuse host request captures, add exact prompt attribution
+  at the Pi hook and a shared large inspector reached from message and log menus.
+  Requests remain redacted; historical gaps are shown honestly, never reconstructed.
+- 2026-09-06 checkpoint: shared message-menu/log-detail inspector is implemented.
+  Real retained 165 kB requests inspected on desktop/phone in both themes. Tests
+  cover provider-neutral sections, JSON preservation, exact and legacy linkage,
+  database upgrade, large redacted payloads, modal navigation and missing bodies.
+  A real host → built worker → stub provider request proves prompt attribution.
+
+#### M12-T47 notes
+- 2026-09-06 claimed: version 0.2.5 is synchronized across workspace manifests;
+  intended new files are staged, identity check passes, and the full gate runs
+  before committing. Wait for clean branch CI before creating the immutable tag.
+- 2026-09-06 checkpoint: full build, typecheck and all 918 tests pass; installer
+  fixture gate passes 76 checks. Real session probe opens all bundled features,
+  lists 1,336 models and accepts quota refresh. Release pipeline will repeat the
+  packaged clean-machine and real-install gates independently for x64 and ARM64.
+
+#### M12-T48 notes
+- 2026-09-06 claimed: inspect the reported unknown quota method before publishing.
+  Confirmed local host PID 333618 records CLI 0.2.0 while installed protocol and
+  worker files are 0.2.4 and contain the method. Loaded processes survive package
+  replacement; desktop currently attaches to any healthy host without a version
+  check. Preserve running work; add a mismatch guard and clear recovery guidance,
+  quota refresh/auth-error tests, and a real host-to-worker routing regression.
+- 2026-09-06 checkpoint: mismatch adoption guard and actionable refresh error
+  implemented; module auth exceptions now leave loading and support retry. Tests
+  prove initial quota, manual refresh, no credential leakage, failure recovery,
+  public host routing and packaged-session refresh acceptance. No existing app,
+  daemon or session was restarted. Review Vite and headless browser are stopped.
 
 ## MX · Cross-cutting
 
@@ -2045,6 +2095,36 @@ the 28px message rhythm that makes the thread feel especially loose.
 Consequences: add M12-T44 and make it a prerequisite for the recreated stable
 v0.2.4 tag. The compactness remains token-led and isolated to assistant-ui's
 message, Markdown and thread elements.
+
+### D-96 · 2026-09-06 · One activity-row grammar
+
+Decision: add M12-T45; every action, including reasoning, has the same quiet
+summary-row anatomy and its own reversible disclosure inside the aggregate.
+Why: the user needs one recognizable activity treatment while scanning answers.
+Consequences: reuse the adopted assistant-ui disclosure parts; retain full bodies
+and prove interaction rather than relying only on summary or style-source tests.
+
+### D-97 · 2026-09-06 · Inspect recorded requests, not a reconstructed prompt
+
+Decision: add M12-T46 and release task M12-T47. A shared inspector groups common
+provider payload fields while retaining full JSON and unknown fields. New
+captures carry the nearest user entry on the engine's active branch; older
+captures, missing logs, retries and continuation calls are explicitly labelled.
+Why: a developer needs the captured request behind a particular prompt, including
+system instructions and tool schemas, without leaking credentials or confusing
+a reconstructed prompt with recorded data.
+Consequences: extend the existing neutral log protocol/store and companion hook;
+no provider SDK import in the UI or host. Publish stable 0.2.5 and its release page
+after verification, as requested.
+
+### D-98 · 2026-09-06 · Do not attach a new desktop to an old service
+
+Decision: add M12-T48 as a release prerequisite. Compare the running service's
+recorded version to the bundled CLI before desktop adoption. On mismatch, explain
+how to finish work and fully restart; never silently kill a shared daemon.
+Why: installing new files does not update JavaScript already loaded in memory.
+Consequences: unknown quota-method errors become actionable restart guidance;
+fresh-host quota routing and credential failures are release regression tests.
 
 ## Status edits log
 

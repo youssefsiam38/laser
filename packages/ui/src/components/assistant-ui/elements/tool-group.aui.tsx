@@ -33,7 +33,7 @@ import {
 } from "react";
 
 import { StatusDot } from "@/components/status";
-import { ThinkingIndicator } from "@/components/assistant-ui/elements/thinking-indicator";
+import { ActivityBeam, ThinkingIndicator } from "@/components/assistant-ui/elements/thinking-indicator";
 import {
   summarizeActivityGroup,
   type ActivityIconKind,
@@ -49,7 +49,7 @@ import { cn } from "@/lib/utils";
 import { activityGroupDefaultOpen, useActivityDetailLevel, useLaserState, type ActivityDetailLevel } from "@/runtime";
 
 import { ReasoningText } from "./reasoning.js";
-import { collapsePanel, mono } from "./surfaces.js";
+import { activityRow, activityTrigger, collapsePanel, mono } from "./surfaces.js";
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -115,7 +115,7 @@ function ToolGroupRoot({
       open={isOpen}
       onOpenChange={handleOpenChange}
       className={cn(
-        "group/toolgroup relative -mx-2 rounded-md bg-surface-1 px-2",
+        activityRow, "group/toolgroup",
         tone === "danger" && "before:absolute before:inset-y-1 before:start-0 before:w-0.5 before:rounded-full before:bg-danger",
         tone === "attention" &&
           "before:absolute before:inset-y-1 before:start-0 before:w-0.5 before:rounded-full before:bg-attention",
@@ -180,15 +180,14 @@ function ToolGroupTrigger({
     <CollapsibleTrigger
       data-slot="tool-group-trigger"
       title={lines?.join("\n")}
-      aria-label={`${accessibleSummary}. ${open ? "Collapse to hide" : "Expand to show"} each call.`}
+      aria-label={`${accessibleSummary}. ${open ? "Collapse" : "Expand"} details.`}
       className={cn(
-        "group/trigger flex h-7 w-full min-w-0 items-center gap-2 rounded-md text-start outline-none",
-        "transition-colors duration-(--motion-instant) hover:bg-surface-2 active:bg-[color-mix(in_oklab,var(--surface-2)_80%,var(--ink))]",
-        "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-live",
+        activityTrigger,
         className,
       )}
       {...props}
     >
+      {active && <ActivityBeam />}
       <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
         {active ? (
           <StatusDot status="working" size="sm" aria-hidden="true" />
@@ -198,7 +197,7 @@ function ToolGroupTrigger({
           <LeadIcon className={cn("size-3.5", attention ? "text-attention" : "text-ink-3")} />
         )}
       </span>
-      <span className="flex min-w-0 items-center gap-2 overflow-hidden">
+      <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
         {active && activeLabel ? (
           <ThinkingIndicator
             label={activeLabel}
@@ -206,7 +205,7 @@ function ToolGroupTrigger({
             className="min-w-0 overflow-hidden [&_[data-slot=thinking-indicator-label]]:max-w-full [&_[data-slot=thinking-indicator-label]]:truncate"
           />
         ) : (
-          <span data-slot="tool-group-trigger-label" className="shrink-0 text-sm font-medium text-ink-2">
+          <span data-slot="tool-group-trigger-label" className="min-w-0 truncate text-sm font-medium text-ink-2">
             {label}
           </span>
         )}
@@ -217,7 +216,7 @@ function ToolGroupTrigger({
               key={item.family}
               data-slot="tool-group-breakdown-item"
               className={cn(
-                "flex min-w-0 shrink items-center gap-1.5 text-xs text-ink-2",
+                "hidden min-w-0 shrink items-center gap-1.5 text-xs text-ink-2 sm:flex",
                 index > 0 && "border-s border-line ps-2",
               )}
               aria-hidden="true"
@@ -233,10 +232,6 @@ function ToolGroupTrigger({
         ) : null}
       </span>
       {trailing && !open ? <span className={cn(mono, "shrink-0 text-danger")}>{trailing}</span> : null}
-      <span
-        aria-hidden="true"
-        className="mt-px min-w-3 flex-1 self-center border-b border-dotted border-line transition-colors duration-(--motion-instant) group-hover/trigger:border-ink-3"
-      />
       {elapsedMs !== undefined ? (
         <span className={cn(mono, "shrink-0 tnum", active ? "text-live" : "text-ink-3")}>{duration(elapsedMs)}</span>
       ) : null}
@@ -261,7 +256,7 @@ function ToolGroupContent({ className, children, ...props }: React.ComponentProp
     <CollapsibleContent data-slot="tool-group-content" className={cn(collapsePanel, "outline-none", className)} {...props}>
       <div
         className={cn(
-          "ms-[7px] flex flex-col border-s border-line ps-[9px] pt-0.5 pb-1",
+          "flex min-w-0 flex-col gap-1 border-t border-line py-1",
           "[&>*]:animate-in [&>*]:fade-in-0 [&>*]:fill-mode-both [&>*]:[animation-duration:var(--motion-fast)] [&>*]:ease-(--motion-ease)",
           "[&>*]:motion-reduce:animate-none",
           "[&>*:nth-child(2)]:[animation-delay:calc(var(--motion-instant)*0.5)]",
@@ -347,7 +342,7 @@ function ToolGroupImpl({ part, timingKey, children }: ToolGroupProps) {
   );
 }
 
-function ToolGroupSummaryRow({
+export function ToolGroupSummaryRow({
   members,
   reasoning,
   activityLevel,
@@ -414,16 +409,19 @@ function ToolGroupSummaryRow({
   );
 }
 
-/** Complete reasoning text inside an expanded aggregate, without a second disclosure. */
-function ActivityReasoning({ children }: { children: ReactNode }) {
+/** Reasoning uses exactly the same reversible row as every other action. */
+function ActivityReasoning({ running = false, children }: { running?: boolean; children: ReactNode }) {
+  const path = useLaserState((state) => state.current);
+  const level = useActivityDetailLevel(path);
+  const [userOpen, setUserOpen] = useState<{ level: ActivityDetailLevel; open: boolean } | null>(null);
+  const open = userOpen?.level === level ? userOpen.open : level !== "answers";
   return (
-    <section data-slot="activity-reasoning" className="py-2 text-ink-2">
-      <div className="mb-1 flex items-center gap-2 text-xs font-medium text-ink-3">
-        <ScanText className="size-3.5" aria-hidden="true" />
-        <span>Reasoning</span>
-      </div>
-      <ReasoningText className="ms-0 max-h-none border-s-0 py-0 ps-0">{children}</ReasoningText>
-    </section>
+    <ToolGroupRoot data-slot="activity-reasoning" open={open} onOpenChange={(next) => setUserOpen({ level, open: next })}>
+      <ToolGroupTrigger label="Reasoning" icon={ScanText} active={running} activeLabel="Thinking" open={open} />
+      <ToolGroupContent>
+        <ReasoningText className="ms-0 max-h-none border-s-0 px-2 py-1">{children}</ReasoningText>
+      </ToolGroupContent>
+    </ToolGroupRoot>
   );
 }
 

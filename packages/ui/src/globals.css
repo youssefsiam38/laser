@@ -747,6 +747,34 @@
   }
 }
 
+/* Live activity: a diffuse travelling light beneath legible, stationary text. */
+.activity-beam {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+  background: color-mix(in oklab, var(--live) 3%, transparent);
+}
+.activity-beam > span {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  width: 60%;
+  background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--live) 12%, transparent), transparent);
+  animation: activity-beam-travel calc(var(--motion-slow) * 14) var(--motion-ease) infinite;
+}
+@keyframes activity-beam-travel {
+  0% { transform: translateX(-110%); opacity: 0; }
+  20% { opacity: 1; }
+  80% { opacity: 1; }
+  100% { transform: translateX(180%); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .activity-beam > span { animation: none; width: 100%; opacity: .5; }
+}
+
 /* Streaming caret on the last text part. */
 @utility caret {
   &::after {

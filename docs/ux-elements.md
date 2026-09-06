@@ -191,6 +191,29 @@ it, not to start from an empty file. Record the divergence in the row.
 | Composer trigger popover | The slash-command and mention popovers — **adopted**: `packages/ui/src/components/assistant-ui/elements/composer-trigger-popover.aui.tsx`, restyled only; mounted twice in `thread/Composer.tsx` under one `Unstable_TriggerPopoverRoot` (`/` action, `@` directive) |
 | Directive text | System and directive messages, and extension notices — **adopted**: `elements/directive-text.aui.tsx` + `elements/directive-text.tsx`; `@file` / `@handle` directives render as `Badge` chips, never HTML. Wired for prompt text and notice text (`thread/messages.tsx`, `DirectiveString`) |
 
+### Activity-row interaction contract (D-96)
+
+Tool group, Tool fallback and individual reasoning share `activityRow` and
+`activityTrigger` from `surfaces.tsx`: muted surface, secondary ink, leading icon
+and trailing chevron. `ActivityReasoning` uses the Tool group disclosure parts
+around the complete `ReasoningText`, instead of the old static reasoning section.
+An aggregate is added only for multiple actions; its count matches the visible
+child rows. Show reasoning keeps this parent closed and opens only reasoning
+inside after the reader expands it (superseding the earlier parent-open wording
+in the inventory). Every row is manually reversible, including waiting tool
+details; approval controls stay outside their fold. `activity-disclosure.test.tsx`
+tests the actual buttons, mounted bodies, live updates and independent children.
+
+### Captured request inspector (D-97)
+
+The user-message actions element and log detail open one large dialog. Adopted
+SpecSheet and JsonViewer elements render capture metadata and complete JSON;
+the shared disclosure rows render instructions, conversation, tools and provider
+parameters. Unknown fields remain inspectable. Exact prompt links are captured
+at the engine hook; timestamp-only legacy attribution is visibly qualified.
+No request is recreated or sent by the inspector. Credential redaction remains
+in the host before persistence; retention and summary-only gaps are explicit.
+
 ## Renderers
 
 | Element | laser surface |

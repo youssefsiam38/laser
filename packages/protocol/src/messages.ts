@@ -605,12 +605,18 @@ export interface LogEntry {
   status?: number;
   /** Joins a request to its response, or a tool start to its end. */
   correlationId?: string;
+  requestContext?: import("./pi-extension.js").ProviderRequestContext;
   /** Inline when small; large payloads travel as `detailRef` instead. */
   detail?: unknown;
   detailRef?: LogContentRef;
 }
 
 export interface LogQuery {
+  kind?: string;
+  promptEntryId?: string;
+  /** Inclusive lower / exclusive upper timestamp bound for legacy captures. */
+  afterAt?: string;
+  beforeAt?: string;
   sections?: LogSection[];
   cwd?: string;
   sessionPath?: string;

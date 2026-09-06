@@ -1,4 +1,5 @@
 "use client";
+import { accountUsageRefreshError } from "./account-usage-error.js";
 /**
  * The one stateful shell of the UI: owns the `HostClient`, the reducer, the
  * selected project, and the assistant-ui runtime.
@@ -819,7 +820,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         }).then(() => undefined),
       refreshAccountUsage: () =>
         guard(async () => {
-          const { delivered } = await client.request("pi/account-usage/refresh", { path: requireCurrent() });
+          const { delivered } = await client.request("pi/account-usage/refresh", { path: requireCurrent() }).catch(error => { throw accountUsageRefreshError(error); });
           if (!delivered) throw new Error("Account allowance is not available in this session.");
         }).then(() => undefined),
       goal: (action) =>

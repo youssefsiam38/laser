@@ -16,6 +16,11 @@ import { cn } from "@/lib/utils";
 
 import { mono, ShimmerLabel } from "./surfaces.js";
 
+/** Decorative companion to the text indicator; never captures a row's clicks. */
+export function ActivityBeam() {
+  return <span data-slot="activity-beam" aria-hidden="true" className="activity-beam"><span /></span>;
+}
+
 export interface ThinkingIndicatorProps extends Omit<ComponentProps<"span">, "children"> {
   label: string;
   /** Already formatted: "3.2s". */

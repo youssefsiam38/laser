@@ -58,6 +58,14 @@ and a phone width, in both themes, and look at it the way a demanding
 designer would. "It builds" is not the bar. "I would show this to someone I
 respect" is.
 
+Activity disclosures require interaction tests, not just summary/string tests.
+Reasoning is an independently collapsible action, not a static heading inside
+the aggregate. Share the activity row tokens across reasoning and tools; never
+invent a token name without a theme mapping (`surface-1` is not a token).
+Manual toggles override default-open preferences, including waiting tools;
+approval footers remain outside the fold. Verify pointer and keyboard toggles
+after viewport restoration settles, and check that collapsed bodies really hide.
+
 **Use the `/assistant-ui` skill for every piece of UI work, everywhere.** It
 is rich and current, and it covers far more than the thread: elements,
 primitives, the runtime and `aui` client, tools and approvals, generative
@@ -337,6 +345,19 @@ new file, confirm no intended file remains under `git status` as `??`, then run
 `pnpm identity:check` and `pnpm verify`. A green check run before staging new
 files is not release evidence. After pushing, wait for the clean CI run to pass
 before creating or moving a release tag.
+
+### A running service is not the installed version
+
+**Problem:** replacing package files left a 0.2.0 host running beneath 0.2.4
+files. New UI quota refresh reached its old in-memory protocol and returned
+`unknown method pi/account-usage/refresh`. Reading package.json on disk cannot
+prove the running process has the new code.
+
+**Prevention:** check `host.json`'s recorded `cliVersion` before desktop adoption.
+Never silently attach different versions or kill a shared service to upgrade it.
+Explain full quit (including tray) after finishing work. Test new public methods
+through a real host and built worker, not only worker dispatch. Quota credential
+failures must leave loading and remain retryable without leaking auth details.
 
 ### Executable dependency source in packaged builds
 

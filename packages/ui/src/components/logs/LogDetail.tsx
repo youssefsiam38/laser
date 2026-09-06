@@ -27,6 +27,7 @@ import { useLaserStable } from "@/runtime";
 import { PRODUCT_NAME, type LogEntry } from "@lasercode/protocol";
 
 import { SECTION_TONE } from "./model.js";
+import { ApiRequestDialog } from "./ApiRequestDialog.js";
 
 export function LogDetail({ entry }: { entry: LogEntry | undefined }) {
   if (!entry) {
@@ -49,6 +50,7 @@ function Detail({ entry }: { entry: LogEntry }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
   const { copied, copy } = useCopy();
+  const [requestOpen, setRequestOpen] = useState(false);
 
   const ref = entry.detailRef;
 
@@ -144,6 +146,8 @@ function Detail({ entry }: { entry: LogEntry }) {
         </header>
 
         {entry.kind === "provider_response" && <ProviderCeilingNote />}
+        {entry.kind === "provider_request" && <Button variant="outline" onClick={() => setRequestOpen(true)}>View API request</Button>}
+        {requestOpen && <ApiRequestDialog target={{ kind: "log", entry }} onClose={() => setRequestOpen(false)} />}
 
         {ref && (
           <p className="flex items-center gap-1.5 font-mono text-xs text-ink-3">

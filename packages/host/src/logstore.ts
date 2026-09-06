@@ -136,6 +136,7 @@ export interface LogInput {
   durationMs?: number;
   status?: number;
   correlationId?: string;
+  requestContext?: LogEntry["requestContext"];
   detail?: unknown;
   at?: string;
 }
@@ -152,6 +153,7 @@ interface Row {
   duration_ms: number | null;
   status: number | null;
   correlation_id: string | null;
+  request_context: string | null;
   detail: string | null;
   detail_ref: string | null;
   detail_bytes: number | null;
@@ -236,6 +238,11 @@ function openDatabase(file: string): Database {
       body         TEXT    NOT NULL
     );
   `);
+  // Additive migration: existing requests remain readable, without invented
+  // prompt attribution. New captures carry branch-local entry identity.
+  const columns = db.prepare("PRAGMA table_info(entries)").all() as { name: string }[];
+  if (!columns.some((column) => column.name === "request_context")) db.exec("ALTER TABLE entries ADD COLUMN request_context TEXT");
+  db.exec("CREATE INDEX IF NOT EXISTS entries_prompt ON entries(session_path, json_extract(request_context, '$.promptEntryId'), id)");
   return db;
 }
 
@@ -294,8 +301,8 @@ export class LogStore {
       .prepare(
         `INSERT INTO entries
            (at, section, kind, level, cwd, session_path, summary, duration_ms, status, correlation_id,
-            detail, detail_ref, detail_bytes, detail_type, detail_preview, search)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            detail, detail_ref, detail_bytes, detail_type, detail_preview, search, request_context)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       )
       .run(
         at,
@@ -314,6 +321,7 @@ export class LogStore {
         detail.contentType,
         detail.preview,
         `${input.summary}\n${input.kind}\n${detail.preview ?? ""}`.toLowerCase(),
+        input.requestContext ? JSON.stringify(input.requestContext) : null,
       );
 
     const id = Number(info.lastInsertRowid);
@@ -329,6 +337,7 @@ export class LogStore {
       ...(input.durationMs !== undefined ? { durationMs: input.durationMs } : {}),
       ...(input.status !== undefined ? { status: input.status } : {}),
       ...(input.correlationId !== undefined ? { correlationId: input.correlationId } : {}),
+      ...(input.requestContext ? { requestContext: input.requestContext } : {}),
       ...(detail.inline !== null ? { detail: JSON.parse(detail.inline) as unknown } : {}),
       ...(detail.ref !== null
         ? {
@@ -385,6 +394,10 @@ export class LogStore {
   query(query: LogQuery = {}): LogPage {
     const where: string[] = [];
     const params: unknown[] = [];
+    if (query.kind) { where.push("kind = ?"); params.push(query.kind); }
+    if (query.promptEntryId) { where.push("json_extract(request_context, '$.promptEntryId') = ?"); params.push(query.promptEntryId); }
+    if (query.afterAt) { where.push("at >= ?"); params.push(new Date(query.afterAt).toISOString()); }
+    if (query.beforeAt) { where.push("at < ?"); params.push(new Date(query.beforeAt).toISOString()); }
     if (query.sections?.length) {
       where.push(`section IN (${query.sections.map(() => "?").join(",")})`);
       params.push(...query.sections);
@@ -596,6 +609,7 @@ export class LogStore {
           sessionPath,
           at: message.at,
           summary: describeProviderRequest(message.payload),
+          ...(message.context ? { requestContext: message.context } : {}),
           ...(this.providerPayloads === "full" ? { detail: message.payload } : {}),
         });
         if (entry) {
@@ -794,6 +808,7 @@ function toEntry(row: Row): LogEntry {
     ...(row.duration_ms !== null ? { durationMs: row.duration_ms } : {}),
     ...(row.status !== null ? { status: row.status } : {}),
     ...(row.correlation_id !== null ? { correlationId: row.correlation_id } : {}),
+    ...(row.request_context !== null ? { requestContext: JSON.parse(row.request_context) as NonNullable<LogEntry["requestContext"]> } : {}),
     ...(row.detail !== null ? { detail: safeParse(row.detail) } : {}),
     ...(row.detail_ref !== null
       ? {

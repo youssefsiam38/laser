@@ -26,7 +26,8 @@ import { ENV, PRODUCT_NAME } from "@lasercode/protocol";
 import { type ChildProcess, spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync } from "node:fs";
 import { existsSync } from "node:fs";
-import { cliEntry, daemonArgs, inspectHost, logTail, piEnv, portInUse, probeHealth, type LaserPaths } from "@lasercode/cli";
+import { CLI_VERSION, cliEntry, daemonArgs, inspectHost, logTail, piEnv, portInUse, probeHealth, type LaserPaths } from "@lasercode/cli";
+import { hostVersionProblem } from "./host-compatibility.js";
 import { checkBundledAgent, type AgentCheck } from "./agent.js";
 import type { DesktopHostInfo } from "./api.js";
 import type { DesktopLog } from "./log.js";
@@ -109,6 +110,11 @@ export class HostProcess {
 
     const existing = await inspectHost(paths);
     if (existing.state === "running") {
+      const mismatch = hostVersionProblem(existing.record.cliVersion, CLI_VERSION);
+      if (mismatch) {
+        log.line(mismatch);
+        return this.publish({ state: "failed", startedByUs: false, message: mismatch });
+      }
       log.line(`attached to the host already running at ${existing.record.url} (pid ${existing.record.pid})`);
       return this.publish({
         state: "ready",

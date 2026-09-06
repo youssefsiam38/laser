@@ -10,8 +10,14 @@ export const providerLogModule: LaserModule = {
   name: "provider-log",
   detect: () => true,
   activate({ pi, send }) {
-    pi.on("before_provider_request", async (event: { payload: unknown }) => {
-      send({ type: "lasercode/provider/request", at: new Date().toISOString(), payload: event.payload });
+    pi.on("before_provider_request", async (event, ctx) => {
+      const prompt = ctx.sessionManager.getBranch().findLast((entry) => entry.type === "message" && entry.message.role === "user");
+      send({ type: "lasercode/provider/request", at: new Date().toISOString(), payload: event.payload,
+        context: {
+          ...(prompt ? { promptEntryId: prompt.id } : {}),
+          ...(ctx.model ? { provider: ctx.model.provider, model: ctx.model.id, api: ctx.model.api } : {}),
+        },
+      });
       return undefined;
     });
     pi.on("after_provider_response", async (event: { status: number; headers: Record<string, string> }) => {

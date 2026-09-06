@@ -31,6 +31,7 @@ import { ChevronRight, CircleAlert, Wrench } from "lucide-react";
 import { memo, useCallback, useRef, useState, type ComponentType, type ReactNode, type SVGProps } from "react";
 
 import { StatusDot } from "@/components/status";
+import { ActivityBeam } from "./thinking-indicator.js";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Textarea } from "@/components/ui/textarea";
@@ -39,7 +40,7 @@ import { cn } from "@/lib/utils";
 import { toolDetailsDefaultOpen, useActivityDetailLevel, useLaserState, type ActivityDetailLevel } from "@/runtime";
 import { JsonViewer, parseJsonText } from "./json-viewer.js";
 
-import { collapsePanel, mono, pressable } from "./surfaces.js";
+import { activityRow, activityTrigger, collapsePanel, mono, pressable } from "./surfaces.js";
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -97,7 +98,7 @@ function ToolFallbackRoot({
       open={isOpen}
       onOpenChange={handleOpenChange}
       className={cn(
-        "group/tool relative -mx-2 w-[calc(100%+var(--spacing)*4)] rounded-md px-2",
+        activityRow, "group/tool",
         tone === "danger" && "before:absolute before:inset-y-1 before:start-0 before:w-0.5 before:rounded-full before:bg-danger",
         tone === "attention" &&
           "before:absolute before:inset-y-1 before:start-0 before:w-0.5 before:rounded-full before:bg-attention",
@@ -190,14 +191,13 @@ function ToolFallbackTrigger({
       disabled={!expandable}
       aria-label={`${verb} ${summary ?? ""}`.trim()}
       className={cn(
-        "group/trigger flex h-7 w-full min-w-0 items-center gap-2 rounded-md text-start outline-none",
-        "transition-colors duration-(--motion-instant) hover:bg-surface-2 active:bg-[color-mix(in_oklab,var(--surface-2)_80%,var(--ink))]",
-        "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-live",
+        activityTrigger,
         "disabled:cursor-default disabled:hover:bg-transparent disabled:active:bg-transparent",
         className,
       )}
       {...props}
     >
+      {running && <ActivityBeam />}
       <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
         {running ? (
           <StatusDot status="working" size="sm" aria-hidden="true" />
@@ -209,7 +209,7 @@ function ToolFallbackTrigger({
       </span>
       <span
         data-slot="tool-fallback-trigger-label"
-        className={cn("shrink-0 text-sm font-medium", cancelled ? "text-ink-3 line-through" : "text-ink", running && "shimmer-text")}
+        className={cn("min-w-0 truncate text-sm font-medium", cancelled ? "text-ink-3 line-through" : "text-ink-2", running && "shimmer-text")}
       >
         {verb}
       </span>
@@ -221,7 +221,7 @@ function ToolFallbackTrigger({
       {detail ? <span className={cn(mono, "shrink-0 text-ink-3")}>{detail}</span> : null}
       <span
         aria-hidden="true"
-        className="mt-px min-w-3 flex-1 self-center border-b border-dotted border-line transition-colors duration-(--motion-instant) group-hover/trigger:border-ink-3"
+        className="flex-1"
       />
       {trailing}
       {cancelled ? (
@@ -252,7 +252,7 @@ function ToolFallbackTrigger({
 function ToolFallbackContent({ className, children, ...props }: React.ComponentProps<typeof CollapsibleContent>) {
   return (
     <CollapsibleContent data-slot="tool-fallback-content" className={cn(collapsePanel, "outline-none", className)} {...props}>
-      <div className="mb-2 ms-6 flex flex-col gap-2 pt-1">{children}</div>
+      <div className="flex min-w-0 flex-col gap-2 border-t border-line px-2 py-2">{children}</div>
     </CollapsibleContent>
   );
 }
@@ -643,7 +643,7 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
   const path = useLaserState((laser) => laser.current);
   const activityLevel = useActivityDetailLevel(path);
   const [userOpen, setUserOpen] = useState<{ level: ActivityDetailLevel; open: boolean } | null>(null);
-  const open = isRequiresAction || (userOpen?.level === activityLevel ? userOpen.open : toolDetailsDefaultOpen(activityLevel));
+  const open = userOpen?.level === activityLevel ? userOpen.open : isRequiresAction || toolDetailsDefaultOpen(activityLevel);
 
   const hasBody = Boolean(argsText) || result !== undefined || status?.type === "incomplete";
   const tone = state === "failed" ? "danger" : state === "awaiting" ? "attention" : undefined;

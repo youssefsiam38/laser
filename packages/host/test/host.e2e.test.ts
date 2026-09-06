@@ -120,6 +120,11 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
     await client.waitFor((m) => "method" in m && m.method === "pi/extension/message");
     expect(host.pool.cwds()).toEqual([join(base, "project")]);
 
+    // Exercise the public route through the actual built worker, not just its
+    // dispatcher in isolation. No real account or quota request is needed.
+    const quota = await client.request<{ delivered: boolean }>("pi/account-usage/refresh", { path: state.path });
+    expect(typeof quota.delivered).toBe("boolean");
+
     // Prompt through host → worker → Pi → stub provider.
     await client.request("pi/model/set", { path: state.path, model: { provider: "stub", id: "stub-1" } });
     const prompted = await client.request("session/prompt", { path: state.path, content: [{ type: "text", text: "hello" }] });
@@ -130,6 +135,12 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
     expect(updates.map((u) => u.seq)).toEqual(updates.map((_, i) => i + 1)); // contiguous from 1
     const text = updates.filter((u) => u.update.kind === "text_delta").map((u) => (u.update as { delta: string }).delta).join("");
     expect(text).toBe(REPLY.join(""));
+
+    const { entries: transcript } = await client.request<{entries:Array<{type:string;id:string;message?:{role:string}}> }>("pi/session/entries",{path:state.path});
+    const promptEntryId=transcript.find(entry=>entry.type==="message"&&entry.message?.role==="user")!.id;
+    const requests=await client.request<{entries:Array<{requestContext?:{promptEntryId:string};kind:string}>}>("pi/logs/query",{sessionPath:state.path,kind:"provider_request",promptEntryId});
+    expect(requests.entries.length).toBeGreaterThan(0);
+    expect(requests.entries.every(entry=>entry.kind==="provider_request"&&entry.requestContext?.promptEntryId===promptEntryId)).toBe(true);
 
     // Catalog now sees the persisted session, keyed to the project.
     const { sessions } = await client.request<{ sessions: Array<{ path: string; cwd: string }> }>("pi/session/list", {});
