@@ -2,11 +2,11 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-06T05:28:15+03:00 · codex-2026-09-06-release · commit: `a1a1674`
+**Last updated:** 2026-09-06T06:09:33+03:00 · codex-2026-09-06-sandbox · commit: `8d1c3e4`
 
-**Current focus:** Laser 0.1.0 is public, stable and Latest. The website follows
-the latest stable release; clean CI, the public installer and signed native
-update feeds are green. Phone remote control remains visibly marked Soon.
+**Current focus:** Laser 0.1.2 is public, stable, Latest and installed on the
+maintainer's Ubuntu 24.04 machine. Its renderer is sandboxed, its native update
+source works, and clean CI/release gates are green. Phone control remains Soon.
 
 ## Milestones
 
@@ -23,7 +23,7 @@ update feeds are green. Phone remote control remains visibly marked Soon.
 | M7 Mobile PWA | in-progress | phone `/link` entry and paired browser transport are Soon |
 | M8 Package support | in-progress | dictation lacks a usable API key |
 | M9 CLI | in-progress | T1–T8 done; relay CLI proven end to end |
-| M10 Distribution | in-progress | 0.1.0 and native OS updates shipped; in-app updater remains T10 |
+| M10 Distribution | in-progress | 0.1.2 and native OS updates shipped; in-app updater remains T10 |
 | M11 Theme system | in-progress | T5 needs a cold-start network trace |
 | MX Cross-cutting | in-progress | seam and identity gates green; Pi pin 0.85.0 |
 
@@ -42,8 +42,8 @@ update feeds are green. Phone remote control remains visibly marked Soon.
 
 ## Recently done
 
-- CI run 34006391926: build, typecheck, all tests and installer verification passed.
-- Release run 34005922135: x64, ARM64, publication, provenance and Pages passed.
-- v0.1.0 is a stable GitHub Release and the repository's Latest release.
-- Public APT and RPM repository signatures verify; APT advertises Laser 0.1.0.
-- laser.hubtrix.com installs through the latest-stable release route.
+- Release run 34007810725: 0.1.2 passed both architectures, staged install, provenance and Pages.
+- Live Ubuntu install: 0.1.2, sandbox helper 4755, renderer `--enable-sandbox`.
+- The installed lowercase APT source verifies and selects Laser 0.1.2.
+- CI run 34007758082 passed build, typecheck, all tests and installer verification.
+- laser.hubtrix.com follows GitHub's latest stable release route.
