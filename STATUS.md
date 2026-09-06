@@ -2,10 +2,10 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-06T15:45:20+03:00 · codex-2026-09-06-compact-transcript · commit: `de1cf61`
+**Last updated:** 2026-09-06T15:57:06+03:00 · codex-2026-09-06-release-024 · commit: `3e5b89a`
 
-**Current focus:** The approved compact transcript is verified; publish and
-verify stable 0.2.4 from the completed source.
+**Current focus:** Stable 0.2.4 is published with compact conversation density,
+adaptive usage, session disclosure controls and active model restoration.
 
 ## Milestones
 
@@ -24,7 +24,7 @@ verify stable 0.2.4 from the completed source.
 | M9 CLI | done | all planned CLI tasks complete |
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
-| M12 Product experience | in-progress | compact density verified; 0.2.4 ready to tag |
+| M12 Product experience | in-progress | stable 0.2.4 published; later experience work remains |
 | MX Cross-cutting | in-progress | seam and identity gates green; Pi pin 0.85.0 |
 
 ## Blockers
@@ -33,14 +33,14 @@ verify stable 0.2.4 from the completed source.
 
 ## Next up
 
-1. M12-T43: publish and verify stable 0.2.4.
-2. M3-T9: file the prepared upstream subagent patches.
-3. M10-T10: design and prove the in-app updater installation seam.
+1. M3-T9: file the prepared upstream subagent patches.
+2. M10-T10: design and prove the in-app updater installation seam.
+3. MX-T5: complete the accessibility pass.
 
 ## Recently done
 
+- M12-T43: stable 0.2.4 ships both architectures and native update feeds.
 - M12-T44: the conversation uses compact 14px prose and tighter rhythm.
 - M12-T42: model pickers reopen at the session's active provider and model.
 - M12-T41: each session has three consistent activity-detail levels.
 - M12-T40: usage adapts across API, account and mixed billing, including subagents.
-- M12-T39: stable 0.2.3 published with both architectures and native update feeds.

@@ -326,7 +326,7 @@ lane T's own if both were written.
 | M12-T40 | Adaptive API and account usage telemetry | done | codex-2026-09-06-account-usage | `pnpm verify` — 888 tests; 3 account-parser tests | see notes |
 | M12-T41 | Three-level session activity disclosure | done | codex-2026-09-06-account-usage | `pnpm verify` — 888 tests; 2 session-preference tests | see notes |
 | M12-T42 | Restore the active model picker choice on open | done | codex-2026-09-06-account-usage | `pnpm verify` — 888 tests; 3 model-selector tests | see notes |
-| M12-T43 | Publish stable 0.2.4 | in-progress | codex-2026-09-06-release-024 | — | see notes |
+| M12-T43 | Publish stable 0.2.4 | done | codex-2026-09-06-release-024 | [release workflow](https://github.com/youssefsiam38/laser/actions/runs/34034100668) | see notes |
 | M12-T44 | Compact the conversation surface | done | codex-2026-09-06-compact-transcript | `pnpm verify` — 891 tests; dark/light desktop/phone visual pass | see notes |
 
 #### M12-T1 notes
@@ -825,6 +825,10 @@ lane T's own if both were written.
   local/remote tag was deleted. Q-7 unblocks the final source and tag.
 - 2026-09-06 resumed: the user approved the proposed compact transcript and
   asked to implement and push it; M12-T44 now gates the recreated v0.2.4 tag.
+- 2026-09-06 done: stable v0.2.4 published from `3e5b89a`; x64 and ARM64
+  builds, staged installation, repository signing, provenance, GitHub assets,
+  and APT/DNF deployment all passed in release run 34034100668. GitHub marks
+  it as the non-draft, non-prerelease latest release with all 12 assets.
 
 #### M12-T44 notes
 - 2026-09-06 claimed: move only transcript prose to the shared 14px body scale,
@@ -2092,3 +2096,4 @@ message, Markdown and thread elements.
 - 2026-09-06 · claude-2026-09-06-review5 · three reviews applied (rename lane, runtime lane, product lane). Identity check widened to former names, JSX text and JSON values and 24 real strays fixed, including one that would have broken the first commit (D-50); the rename migration no longer treats a `doctor`-created empty directory as an install, and the CLI migrates too. D-49 records the rejection of `ELECTRON_RUN_AS_NODE` for the host. Product fixes: the Add-project dialog can no longer be pushed open, a failed turn survives a reload, provider errors are sentences with the right next step, sessions are named by their first line, a reload comes back to the session, projects can be removed from the UI and say honestly why one stays, `--yes` no longer escalates a home install into a sudo one. M4-T8 added for "All settings". 790 tests green, `verify-install.sh` 74/0.
 - 2026-09-06 · claude-2026-09-06-a · renamed to Laser: `laser` for the repo, binary, directories, scheme and env prefix; `@lasercode/*` for the npm scope (npm `laser` is taken); appId `com.hubtrix.laser` under a domain we own; `wireNamespace` frozen at `piorbit` and `formerNames` carrying it so existing installs migrate. One edit to product.json regenerated 16 files. Forward-facing docs renamed; this ledger deliberately not. New repo `youssefsiam38/laser`, full history pushed, remote repointed. 790 tests green.
 - 2026-09-06 · claude-2026-09-06-a · rename finished: zero occurrences of the old name outside this ledger. Wire namespace moved to `lasercode` and `formerNames` emptied (D-52); machine-wide namespaces separated from what a person types (D-51). Crypto salts, the relay subprotocol and the Electron IPC table now derive rather than spell. 790 tests green.
+- 2026-09-06 · codex-2026-09-06-release-024 · M12-T43..T44 done: compact transcript density passed 891 tests and dark/light desktop/phone inspection; stable v0.2.4 published from `3e5b89a` with both architectures, staged installation, provenance, 12 GitHub assets and APT/DNF feeds green in release run 34034100668.
