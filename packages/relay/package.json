@@ -3,6 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
+  "license": "AGPL-3.0-only",
   "description": "Railway byte forwarder. Two sockets per channel id, nothing else. Links NO crypto library (AGENTS.md invariant 7).",
   "bin": {
     "laser-relay": "./dist/main.js"

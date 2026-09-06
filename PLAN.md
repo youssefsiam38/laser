@@ -448,6 +448,7 @@ Depends on: M1, M2-T4, M4, M5-T1, M11.
 | M12-T23 | Make Add Project a native folder-selection action | desktop entry points open the operating system folder chooser directly; no product surface accepts or pastes a directory path |
 | M12-T24 | Give every built-in provider a researched, theme-safe brand mark | all 40 built-in provider ids resolve through one maintained icon catalog; regional and plan variants retain their parent brand; known providers never fall back to generated initials |
 | M12-T25 | Replace the false empty startup with a branded restoration transition | the shell remains hidden while the remembered project/session, transcript and goal restore; a token-driven Laser beam screen communicates that work in both themes and all widths without delaying a fast launch |
+| M12-T26 | Establish the open-core licensing boundary | Laser is AGPL-3.0-only with a commercial license available by agreement; the reusable protocol and Pi-native goal packages are Apache-2.0; trademark scope is explicit |
 
 ---
 

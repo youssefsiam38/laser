@@ -3,6 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
+  "license": "AGPL-3.0-only",
   "description": "The one web app: Electron renderer, browser tab, and PWA. Speaks @lasercode/protocol over WebSocket. React 19 + Vite + assistant-ui + Tailwind v4 (D-15, D-16). Every browser dependency is a devDependency on purpose: the built bundle in dist/ is the artifact, and nothing imports this package's source at runtime (`exports` offers only package.json, which the host resolves to find dist/). As dependencies they were copied into every installer twice, once inside app.asar and again in app.asar.unpacked, for nothing.",
   "exports": {
     "./package.json": "./package.json"

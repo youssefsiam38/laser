@@ -3,6 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
+  "license": "AGPL-3.0-only",
   "description": "Per-project Pi host. The only package (with pi-extension) allowed to import Pi. Pi version is PINNED here (see AGENTS.md invariant 4).",
   "exports": {
     ".": {

@@ -3,6 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
+  "license": "AGPL-3.0-only",
   "description": "Electron shell: main process, tray, notifications, keychain, updater. Spawns the host from a bundled stock Node placed outside asar (M5-T2). Must not import Pi.",
   "homepage": "https://github.com/youssefsiam38/laser",
   "desktopName": "laser.desktop",

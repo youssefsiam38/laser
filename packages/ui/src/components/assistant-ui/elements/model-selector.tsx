@@ -33,7 +33,7 @@ import {
   type ReactNode,
 } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
-import type { ModelRef } from "@lasercode/protocol";
+import type { ModelRef, SettingChange } from "@lasercode/protocol";
 import { CheckIcon, ChevronDownIcon, ChevronsUpDown, Cpu } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -1026,26 +1026,41 @@ function useProjectDefaultModel(cwd: string | undefined, enabled: boolean): { mo
  * a thousand rows, so it is not fetched on every render), grouped by
  * provider; a pick calls `pi/model/set`.
  *
- * With no session open it shows the project's default instead, disabled and
- * labelled as what a new session will start with.
+ * With no session open it edits the default that the new session will inherit.
+ * That is the point at which choosing a model is most useful; disabling the
+ * control until after the first prompt falsely looks like a provider failure.
  */
 export function SessionModelSelector({ className }: { className?: string | undefined }) {
-  const { actions, currentProject } = useLaserStable();
+  const { actions, client, currentProject } = useLaserStable();
   const { model: sessionModel, session } = useSessionMeta();
-  const { model: projectDefault, loading: defaultLoading } = useProjectDefaultModel(session?.cwd ?? currentProject, !session);
-  const model = sessionModel ?? (session ? null : projectDefault);
+  const sessionPath = session?.path;
+  const cwd = session?.cwd ?? currentProject;
+  const { model: projectDefault, loading: defaultLoading } = useProjectDefaultModel(cwd, !sessionPath);
+  const [newSessionModel, setNewSessionModel] = useState<ModelRef | null>(null);
+  const model = sessionModel ?? (sessionPath ? null : (newSessionModel ?? projectDefault));
   /** No session, and we do not know its default yet: claim nothing. */
-  const unknown = !session && !model && defaultLoading;
+  const unknown = !sessionPath && !model && defaultLoading;
   const [open, setOpen] = useState(false);
   const [models, setModels] = useState<ModelRef[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!open || models !== null) return;
+    setModels(null);
+    setError(null);
+    setNewSessionModel(null);
+  }, [cwd, sessionPath]);
+
+  useEffect(() => {
+    if (!open || models !== null || !cwd) return;
     let live = true;
     setError(null);
-    actions
-      .listModels()
+    const request = sessionPath
+      ? actions.listModels()
+      : client.request("pi/models/catalog", { cwd }).then(({ models: catalog }) =>
+          catalog.filter((entry) => entry.enabled),
+        );
+    request
       .then((list) => {
         if (live) setModels(list);
       })
@@ -1055,7 +1070,7 @@ export function SessionModelSelector({ className }: { className?: string | undef
     return () => {
       live = false;
     };
-  }, [open, models, actions]);
+  }, [open, models, actions, client, cwd, sessionPath]);
 
   // A model the session already has but the list has not delivered yet still
   // needs to be shown as the value, so it is an option of its own until then.
@@ -1068,7 +1083,24 @@ export function SessionModelSelector({ className }: { className?: string | undef
   const value = model ? modelOptionId(model) : undefined;
   const pick = (id: string) => {
     const next = (models ?? []).find((m) => modelOptionId(m) === id);
-    if (next) void actions.setModel(next);
+    if (!next) return;
+    if (sessionPath) {
+      void actions.setModel(next);
+      return;
+    }
+    if (!cwd) return;
+    setSaving(true);
+    void client.request("pi/settings/set", {
+      cwd,
+      scope: "project",
+      changes: defaultModelChanges(next),
+    }).then(
+      () => {
+        defaultModelCache.set(cwd, Promise.resolve(next));
+        setNewSessionModel(next);
+      },
+      (saveError: unknown) => actions.toast("error", saveError instanceof Error ? saveError.message : String(saveError)),
+    ).finally(() => setSaving(false));
   };
 
   return (
@@ -1076,9 +1108,9 @@ export function SessionModelSelector({ className }: { className?: string | undef
       <ModelSelectorTrigger
         variant="ghost"
         size="sm"
-        disabled={!session}
+        disabled={!cwd || saving}
         aria-label={
-          session
+          sessionPath
             ? `Model: ${model ? (model.name ?? model.id) : "none"}`
             : unknown
               ? "Checking which model a new session starts with"
@@ -1086,7 +1118,7 @@ export function SessionModelSelector({ className }: { className?: string | undef
                 ? `New sessions start with ${model.name ?? model.id}`
                 : "No model chosen"
         }
-        title={session ? undefined : model ? "What a new session starts with. Change it in Settings → Providers and models." : undefined}
+        title={sessionPath ? undefined : "Choose what new sessions in this project start with"}
         className={cn("min-w-0 max-w-56 shrink gap-1.5 text-ink-2", className)}
       >
         {model ? (
@@ -1115,4 +1147,12 @@ export function SessionModelSelector({ className }: { className?: string | undef
       />
     </ModelSelectorRoot>
   );
+}
+
+/** The atomic settings write behind a model choice made before a session exists. */
+export function defaultModelChanges(model: Pick<ModelRef, "provider" | "id">): SettingChange[] {
+  return [
+    { path: "defaultProvider", op: "set", value: model.provider },
+    { path: "defaultModel", op: "set", value: model.id },
+  ];
 }

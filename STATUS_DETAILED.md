@@ -285,10 +285,10 @@ lane T's own if both were written.
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
 | M12-T1 | Product identity and conversation controls | done | codex-2026-09-06-v020 | `pnpm -r typecheck && pnpm -r test && pnpm -r build`; live browser review | see notes |
-| M12-T2 | Provider/model experience | done | codex-2026-09-06-v020 | `pnpm -r typecheck && pnpm -r test && pnpm -r build`; live browser review | see notes |
+| M12-T2 | Provider/model experience | done | codex-2026-09-06-release-hotfix | 388 UI tests; packaged session exposes 1,336 models | see notes |
 | M12-T3 | Rich diagnostics and focused settings | done | codex-2026-09-06-v020 | `pnpm -r typecheck && pnpm -r test && pnpm -r build` | see notes |
 | M12-T4 | Project and archive management | done | codex-2026-09-06-v020 | `pnpm -r typecheck && pnpm -r test && pnpm -r build` | see notes |
-| M12-T5 | Integrate, visually verify, package and publish stable 0.2.0 | done | codex-2026-09-06-release-v020 | [stable release](https://github.com/youssefsiam38/laser/releases/tag/v0.2.0); [green pipeline](https://github.com/youssefsiam38/laser/actions/runs/34024139514) | see notes |
+| M12-T5 | Integrate, visually verify, package and publish stable 0.2.0 | in-progress | codex-2026-09-06-release-hotfix | [0.2.0 release](https://github.com/youssefsiam38/laser/releases/tag/v0.2.0); packaged Subagents regression under repair | see notes |
 | M12-T6 | Make curated extension installation self-contained and safe | done | codex-2026-09-06-v020 | worker package tests; host package tests; live `pi-subagents@0.65.1` install | see notes |
 | M12-T7 | Brand-aligned fresh-install theme | done | codex-2026-09-06-v020 | `pnpm verify`; theme tests; live dark/light review | see notes |
 | M12-T8 | Session-safe web search and extension UI compatibility | done | codex-2026-09-06-v020 | 104 worker tests; user-confirmed live pi-subagents retry | see notes |
@@ -309,6 +309,7 @@ lane T's own if both were written.
 | M12-T23 | Native-only Add Project flow | done | codex-2026-09-06-native-project-picker | 376 UI tests; 63 desktop tests; live browser fallback review | see notes |
 | M12-T24 | Complete provider icon catalog | done | codex-2026-09-06-model-icons | UI typecheck; 379 UI tests; UI build; live provider-route review | see notes |
 | M12-T25 | Branded startup restoration transition | done | codex-2026-09-06-startup-beam | UI typecheck; 381 UI tests; UI build; live dark/light desktop and phone review | see notes |
+| M12-T26 | Establish the open-core licensing boundary | done | codex-2026-09-06-release-hotfix | canonical hashes match upstream; packaged legal-file proof | see notes |
 
 #### M12-T1 notes
 - 2026-09-06 claimed: audit the shipped logo assets, theme presets, assistant-ui
@@ -331,6 +332,17 @@ lane T's own if both were written.
   searchable Provider and Model fields. Removed the duplicate hidden command
   input that stole focus after the first typed model character; live typing
   remains focused after selecting a provider.
+- 2026-09-06 reopened: an installed 0.2.0 user with connected providers can
+  browse the chat model picker but cannot select a model. Trace the shared
+  picker action and cover configured-provider selection in the release hotfix.
+- 2026-09-06 checkpoint: this was two paths. Loading an old session failed at
+  the stripped Subagents entry point; before any session existed, the composer
+  deliberately disabled its picker. The idle picker now loads the project
+  catalogue and atomically writes the provider/model default for the new
+  session; 388 UI tests and typecheck pass.
+- 2026-09-06 done: a new chat can choose its project-scoped default before its
+  first prompt; an open chat still changes only that session. The full 854-test
+  workspace gate and packaged-session model-list probe pass.
 
 #### M12-T3 notes
 - 2026-09-06 claimed: inventory every JSON payload renderer and the Tools route,
@@ -378,6 +390,15 @@ lane T's own if both were written.
   published 12 signed/checksummed assets, and deployed the signed APT/DNF feeds.
   The public website resolves the installer through `releases/latest`; release
   notes cover the complete product experience, friendly timestamps and `tok/s`.
+- 2026-09-06 reopened: the published package strips all dependency `*.ts` files,
+  but pi-subagents 0.65.1 intentionally exports `index.ts`; opening a session
+  therefore throws `Cannot find module .../pi-subagents/index.ts`. Preserve
+  executable TypeScript and extend the packaged clean-machine gate to load the
+  bundled Subagents feature before publishing a corrective release.
+- 2026-09-06 checkpoint: dependency TypeScript is preserved. The strengthened
+  packaged acceptance probe opened a real session with Subagents and Goals
+  under the bundled Node with an empty PATH and exposed 1,336 models; the x64
+  clean-machine package passes every packaging claim.
 
 #### M12-T6 notes
 - 2026-09-06 claimed: reproduce the packaged extension failure from the live
@@ -593,6 +614,17 @@ lane T's own if both were written.
   toward the mark, peak before contact and fade through the final curve so the
   centre absorbs rather than clips each beam. UI typecheck, 381 tests and build
   pass; dark/light desktop and phone-width composition were reviewed live.
+
+#### M12-T26 notes
+- 2026-09-06 claimed: apply the recommended open-core licensing split without
+  weakening third-party terms or silently granting product trademarks.
+- 2026-09-06 checkpoint: Laser application code is AGPL-3.0-only and offered
+  separately under a negotiated commercial license; `packages/protocol` and
+  `packages/pi-goal` are Apache-2.0. Full canonical texts, path-level scope and
+  a trademark policy are present; verify they ship in the binary distribution.
+- 2026-09-06 done: GNU and Apache license hashes match their authoritative
+  texts; every package declares its scope, and the clean-machine build contains
+  all four application legal/brand documents plus both Apache package licenses.
 
 ---
 
@@ -1530,8 +1562,27 @@ Consequences: add M12-T25. Deep links and ordinary remembered-session startup
 share the gate; first-run remains its own full-window flow after restoration;
 reduced motion keeps the same status without traveling beams.
 
+### D-79 · 2026-09-06 · Open core with a commercial path
+
+Decision: license the Laser application under AGPL-3.0-only and offer the same
+AGPL-covered code under a separate commercial agreement. License the reusable,
+engine-neutral protocol and Pi-native goal package under Apache-2.0. Software
+licenses do not grant the Laser name or logo.
+
+Why: the AGPL preserves source availability when modified Laser deployments are
+offered over a network, while a separately negotiated commercial license makes
+proprietary embedding and hosted products possible. Apache-2.0 keeps adoption
+friction low at the public integration seams and includes an express patent
+grant. Trademark separation lets compatible forks exist without appearing to
+be official Laser builds.
+
+Consequences: add M12-T26, canonical license texts and path-level metadata;
+ship the legal files inside binary distributions. Commercial terms remain a
+separate written agreement, not a blanket public grant.
+
 ## Status edits log
 
+- 2026-09-06 · codex-2026-09-06-release-hotfix · M12-T2/M12-T26 done and M12-T5 hotfix-ready: new-chat model selection, packaged TypeScript feature loading, AGPL/commercial dual licensing and Apache reusable-package scope pass the full 854-test gate and clean-machine package proof.
 - 2026-09-06 · codex-2026-09-06-startup-beam · M12-T25 final art pass: transparent website mark, six eased inbound arcs and gradient beam absorption replace the rigid geometric rails; 381 UI tests, typecheck and build pass.
 - 2026-09-06 · codex-2026-09-06-startup-beam · M12-T25 done: startup restoration is atomic behind a branded Laser beam transition; 381 UI tests and build pass, responsive dark/light review is complete, and the app remains running.
 - 2026-09-06 · codex-2026-09-06-provider-icons · M12-T24 done: all 40 built-in providers use pinned Lobe Icons mono marks; exhaustive tests and live dark/light review pass, and the rebuilt app is running.

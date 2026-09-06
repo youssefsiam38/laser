@@ -46,7 +46,12 @@ files:
   # `scripts/clean-machine.mjs` catches this class; do not widen it again.
   - "!**/node_modules/*/{test,tests,__tests__,example,examples,docs,doc}/**"
   - "!**/node_modules/@*/*/{test,tests,__tests__,example,examples,docs,doc}/**"
-  - "!**/node_modules/**/*.{md,markdown,ts,map,flow}"
+  # Do not strip TypeScript from dependencies. Pi extensions are executable
+  # source packages: pi-subagents, for example, exports index.ts and imports
+  # its implementation from src/**/*.ts. Pi's resource loader transpiles that
+  # source at runtime. Removing it produces an installer that launches but
+  # cannot open any session with the bundled Subagents feature enabled.
+  - "!**/node_modules/**/*.{md,markdown,map,flow}"
   # Prebuilt native audio bindings for every platform, ~28 MB, reachable from
   # exactly one function: pi-gpt-transcribe's openMic. Nothing here opens a
   # microphone — the browser does the capture and the worker only makes the
@@ -58,6 +63,16 @@ extraResources:
   # The stock Node the host is spawned from (M5-T2).
   - from: build/runtime
     to: runtime
+  # The binary distribution must carry the complete AGPL terms and the exact
+  # scope/dual-license/trademark notices beside the executable resources.
+  - from: ../../LICENSE
+    to: legal/LICENSE
+  - from: ../../LICENSING.md
+    to: legal/LICENSING.md
+  - from: ../../COMMERCIAL.md
+    to: legal/COMMERCIAL.md
+  - from: ../../TRADEMARKS.md
+    to: legal/TRADEMARKS.md
 
 asar: true
 asarUnpack:

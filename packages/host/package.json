@@ -3,6 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
+  "license": "AGPL-3.0-only",
   "description": "Supervisor: one worker per project, session catalog, local WebSocket for the UI, relay client, log store. Must not import Pi (it only resolves the worker's entry path).",
   "exports": {
     ".": {

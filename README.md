@@ -3,8 +3,7 @@
 A visualization and control layer on top of the [Pi coding agent](https://github.com/earendil-works/pi):
 a web-tech desktop app with multi-project, multi-session navigation, subagent tab
 groups (pi-subagents), a full settings surface, and realtime low-level logs.
-Phone remote control through the encrypted relay is coming soon; 0.1.0 is the
-local desktop release.
+Phone remote control through the encrypted relay is coming soon.
 
 Builds on the community's packages; does not replace them.
 
@@ -37,8 +36,8 @@ but no GitHub account or sign-in — and no Node, npm, package manager, or agent
 The app carries its own runtime.
 
 ```bash
-curl -fsSLo laser-install.sh https://raw.githubusercontent.com/youssefsiam38/laser/v0.1.0/install.sh \
-  && sh laser-install.sh --version v0.1.0
+curl -fsSLo laser-install.sh https://github.com/youssefsiam38/laser/releases/latest/download/install.sh \
+  && sh laser-install.sh
 ```
 
 That downloads the release for your architecture, checks it against the
@@ -73,6 +72,14 @@ sh laser-install.sh --version v0.1.0 --format appimage  # no-root, per-user inst
 sh ~/.local/lib/laser/install.sh --uninstall   # removes exactly what it installed
 sh ~/.local/lib/laser/install.sh --uninstall --purge   # …and deletes your settings too
 ```
+
+## License
+
+Laser is open source under `AGPL-3.0-only`, with a commercial license available
+for proprietary products and hosted modifications. The reusable protocol and
+Pi-native goal packages are `Apache-2.0`. See [`LICENSING.md`](LICENSING.md) for
+the exact path-level scope and [`TRADEMARKS.md`](TRADEMARKS.md) for the name and
+logo policy.
 
 `laser` on your PATH is both things: on its own it opens the window, and with
 a word after it — `laser doctor`, `laser sessions` — it is the command

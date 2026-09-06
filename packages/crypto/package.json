@@ -3,6 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
+  "license": "AGPL-3.0-only",
   "description": "Noise IK/KK over 25519_AESGCM_SHA256 (WebCrypto first, @noble fallback), pairing, signed device list. Runs in Node and the browser.",
   "exports": {
     ".": {

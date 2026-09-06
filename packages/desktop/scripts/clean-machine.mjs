@@ -218,6 +218,7 @@ const required = [
   "@lasercode/worker",
   "@lasercode/protocol",
   "@lasercode/pi-extension",
+  "pi-subagents",
 ];
 const missing = required.filter((name) => !packageNames.includes(name));
 record(
@@ -225,6 +226,15 @@ record(
   missing.length === 0,
   missing.length === 0 ? required.join(", ") : `missing: ${missing.join(", ")}`,
   "Declare the missing package as a dependency of a workspace package so the packager copies it, then rebuild.",
+);
+
+const legalFiles = ["LICENSE", "LICENSING.md", "COMMERCIAL.md", "TRADEMARKS.md"];
+const missingLegal = legalFiles.filter((name) => !existsSync(join(resources, "legal", name)));
+record(
+  "the distribution carries its license and brand terms",
+  missingLegal.length === 0,
+  missingLegal.length === 0 ? legalFiles.join(", ") : `missing: ${missingLegal.join(", ")}`,
+  "Stage the repository's legal files under resources/legal and rebuild.",
 );
 
 // 4 ── a bare environment: no node, npm, pnpm or agent anywhere on PATH ------
@@ -288,7 +298,20 @@ record(
   "Reinstall the dependencies and rebuild the package.",
 );
 
-// 7 ── the machine's own agent is found and not used ------------------------
+// 7 ── a real session loads every bundled feature --------------------------
+const sessionProbe = join(modules, "@lasercode", "worker", "dist", "check-packaged-session.js");
+const sessionRun = runBare(nodeBinary, [sessionProbe], bareEnv);
+const sessionReport = lastJsonLine(sessionRun.stdout);
+record(
+  "a real session opens with every bundled feature",
+  Boolean(sessionReport?.ok) && sessionReport.modelCount > 0,
+  sessionReport?.ok
+    ? `session ${sessionReport.sessionId}; ${sessionReport.modelCount} models available to the picker`
+    : sessionReport?.error ?? sessionRun.stderr.trim() ?? "no answer",
+  "The packaged worker could not load a curated feature. Preserve executable dependency source and rebuild.",
+);
+
+// 8 ── the machine's own agent is found and not used ------------------------
 record(
   "an agent directory on the machine is seen and not used",
   Boolean(agentReport?.ok) &&
@@ -300,7 +323,7 @@ record(
   "The resolver should notice another installation and still resolve inside the package.",
 );
 
-// 8 ── doctor, from inside the package, with nothing on PATH ----------------
+// 9 ── doctor, from inside the package, with nothing on PATH ----------------
 const cli = join(modules, "@lasercode", "cli", "dist", "main.js");
 const doctorRun = runBare(nodeBinary, [cli, "doctor", "--skip-worker", "--json", "--no-color"], bareEnv);
 const doctorReport = lastJsonLine(doctorRun.stdout);
@@ -316,7 +339,7 @@ record(
   packagingFailures.map((row) => `${row.name}: ${row.detail}`).join("; ") || "Run doctor by hand inside the package.",
 );
 
-// 9 ── nothing wrote to the machine's own agent directory -------------------
+// 10 ── nothing wrote to the machine's own agent directory ------------------
 const decoyAfter = existsSync(decoyPath) ? statSync(decoyPath) : undefined;
 record(
   "the machine's own agent directory was not written to",
