@@ -2,10 +2,10 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-06T15:06:53+03:00 · codex-2026-09-06-release-024 · commit: `1a83b3e`
+**Last updated:** 2026-09-06T15:14:48+03:00 · codex-2026-09-06-release-024 · commit: `972ce10`
 
-**Current focus:** The verified adaptive-session controls are being published as
-stable 0.2.4; Answers only is explicitly regression-tested as the default.
+**Current focus:** Stable 0.2.4 is paused before publication while the user
+decides whether its transcript should adopt the proposed compact density.
 
 ## Milestones
 
@@ -24,12 +24,12 @@ stable 0.2.4; Answers only is explicitly regression-tested as the default.
 | M9 CLI | done | all planned CLI tasks complete |
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
-| M12 Product experience | in-progress | stable 0.2.4 source verified; release pipeline next |
+| M12 Product experience | in-progress | 0.2.4 is untagged and awaiting density direction |
 | MX Cross-cutting | in-progress | seam and identity gates green; Pi pin 0.85.0 |
 
 ## Blockers
 
-None.
+- M12-T43: Q-7, the user's decision on compact transcript density.
 
 ## Next up
 

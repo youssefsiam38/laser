@@ -326,7 +326,7 @@ lane T's own if both were written.
 | M12-T40 | Adaptive API and account usage telemetry | done | codex-2026-09-06-account-usage | `pnpm verify` — 888 tests; 3 account-parser tests | see notes |
 | M12-T41 | Three-level session activity disclosure | done | codex-2026-09-06-account-usage | `pnpm verify` — 888 tests; 2 session-preference tests | see notes |
 | M12-T42 | Restore the active model picker choice on open | done | codex-2026-09-06-account-usage | `pnpm verify` — 888 tests; 3 model-selector tests | see notes |
-| M12-T43 | Publish stable 0.2.4 | in-progress | codex-2026-09-06-release-024 | — | see notes |
+| M12-T43 | Publish stable 0.2.4 | blocked | codex-2026-09-06-release-024 | — | see notes |
 
 #### M12-T1 notes
 - 2026-09-06 claimed: audit the shipped logo assets, theme presets, assistant-ui
@@ -818,6 +818,10 @@ lane T's own if both were written.
 - 2026-09-06 checkpoint: confirmed and regression-tested that a session with no
   saved preference starts in Answers only, with every activity aggregate,
   reasoning block and tool body collapsed.
+- 2026-09-06 blocked: the user requested an opinion on a denser transcript
+  before implementation and asked that 0.2.4 publish only after that decision.
+  Release run 34032180101 was cancelled before publication and the unpublished
+  local/remote tag was deleted. Q-7 unblocks the final source and tag.
 
 ---
 
@@ -1008,6 +1012,18 @@ Do not: write `~/.pi/agent/trust.json` from the host. It has Pi's own lock
 protocol (`withTrustFileLock`) and the host must not become a second writer.
 Mirroring a remembered decision into it belongs in the worker (which may import
 Pi) as a follow-up task.
+
+### H-2 · M12-T43 · 2026-09-06 · codex-2026-09-06-release-024
+State of the work: version 0.2.4 is committed on main at 972ce10, but it is not
+published and no v0.2.4 tag exists locally or remotely.
+Uncommitted: no product changes; user-owned `fixes.md` remains untracked.
+What is blocked: the user asked for an opinion before deciding whether the
+transcript density adjustment belongs in this release.
+Next concrete step: if approved, add and claim the compact-density task, make
+the token-led transcript-only changes, visually verify both widths/themes,
+then recreate v0.2.4 at the final commit and restart the release workflow.
+Do not: publish or recreate v0.2.4 from 972ce10; release run 34032180101 was
+cancelled before publication specifically so the tag can name the final UI.
 
 ---
 
@@ -1541,6 +1557,7 @@ Consequences: the buffer is bounded (2000 lines per section) and client-local; i
 | Q-4 | Panel contract (7 questions in docs/ux-panels.md) | M3, M4-T6, M8 | answered by D-18: all leans |
 | Q-5 | Agent-work model (6 questions in docs/ux-agent-work.md) | M3 | answered by D-19: all leans |
 | Q-6 | Must 0.1.0 wait for the missing mobile `/link` pairing flow, or ship as an explicitly local-desktop preview? | — | answered by D-59: ship local desktop; visible Soon flag on phone remote control |
+| Q-7 | Adopt the proposed transcript-only compact density for 0.2.4: 14px/21px prose, tighter block rhythm and 20px message gaps while preserving control sizes and the 12px data floor? | M12-T43 | user |
 
 ---
 
