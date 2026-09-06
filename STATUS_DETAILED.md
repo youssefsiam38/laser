@@ -386,6 +386,7 @@ lane T's own if both were written.
 - 2026-09-05 integrator: `laserDataDir()` moved into `@lasercode/host` and the CLI's default agent directory now points at it, so `laser sessions` in a terminal and the app's window resolve the same directory. Before this they disagreed and each showed sessions the other could not see.
 
 #### M10-T7 notes
+- 2026-09-06 release checkpoint: the first public tag run stopped before any build or publication because pnpm/action-setup now rejects a workflow version alongside package.json's exact `packageManager` pin. Removed the duplicate workflow input; the repository pin is the single source of truth.
 - 2026-09-06 release checkpoint: both the application and website repositories passed a redacted full-history Gitleaks scan with zero findings (44 and 6 commits respectively).
 - 2026-09-06 release checkpoint: `pnpm verify` passes across the workspace. The release workflow now publishes its signed Sigstore bundle as `provenance.jsonl` after the attested release assets, enabling offline verification without authentication.
 
