@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { StableSdkDriver } from "./drivers/stable-sdk.js";
 
 export type PackagedSessionReport =
@@ -19,7 +20,7 @@ export type PackagedSessionReport =
   | { ok: false; error: string };
 
 export async function checkPackagedSession(): Promise<PackagedSessionReport> {
-  const root = mkdtempSync(join(tmpdir(), "laser-packaged-session-"));
+  const root = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-packaged-session-`));
   const driver = new StableSdkDriver();
   try {
     for (const name of ["project", "agent", "sessions", "subagents"]) {

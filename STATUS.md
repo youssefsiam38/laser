@@ -2,7 +2,7 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-06T12:43:57+03:00 · codex-2026-09-06-release-hotfix · commit: `6447b09`
+**Last updated:** 2026-09-06T12:46:31+03:00 · codex-2026-09-06-release-hotfix · commit: `e5e8dc1`
 
 **Current focus:** The packaged Subagents and new-chat model-picker fixes are
 proved and ready on main; the corrective release itself remains unpublished.

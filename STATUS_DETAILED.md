@@ -399,6 +399,10 @@ lane T's own if both were written.
   packaged acceptance probe opened a real session with Subagents and Goals
   under the bundled Node with an empty PATH and exposed 1,336 models; the x64
   clean-machine package passes every packaging claim.
+- 2026-09-06 checkpoint: the first hotfix push exposed one identity guard in
+  CI: the new acceptance probe used a literal temporary-directory prefix while
+  it was untracked locally. It now derives `PRODUCT_NAME`, preserving the
+  single-source identity rule; no product code or package behavior failed.
 
 #### M12-T6 notes
 - 2026-09-06 claimed: reproduce the packaged extension failure from the live
