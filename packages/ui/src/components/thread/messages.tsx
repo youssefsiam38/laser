@@ -6,7 +6,7 @@ import { memo, useContext, useMemo, useState } from "react";
 import { FindSelectionContext, SearchMessageContext, useSearchReveal } from "./search-state.js";
 
 import { UserMessageAttachments } from "@/components/assistant-ui/elements/attachment.aui";
-import { DaySeparator, MessageTimestamp, dayChanged } from "@/components/assistant-ui/elements/day-separator";
+import { MessageTimestamp } from "@/components/assistant-ui/elements/message-timestamp";
 import { DirectiveString } from "@/components/assistant-ui/elements/directive-text.aui";
 import { EditMessage } from "@/components/assistant-ui/elements/edit-message";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
@@ -68,17 +68,6 @@ const useMessageText = (): string =>
       .join("\n\n"),
   );
 
-/** The day this message starts, when it is the first message of that day. */
-function useNewDay(): Date | undefined {
-  return useAuiState((s) => {
-    const at = s.message.createdAt;
-    if (!at) return undefined;
-    if (s.message.index === 0) return at;
-    const previous = s.thread.messages[s.message.index - 1];
-    return dayChanged(previous?.createdAt, at) ? at : undefined;
-  });
-}
-
 function useSessionPath(): string | undefined {
   return useLaserState((s) => s.current);
 }
@@ -103,7 +92,6 @@ export function UserMessage() {
   const images = useAuiState((s) => laserMeta(s.message).images ?? 0);
   const optimistic = useAuiState((s) => laserMeta(s.message).optimistic === true);
   const busy = useAuiState((s) => s.thread.isRunning);
-  const newDay = useNewDay();
   const path = useSessionPath();
   const entries = useEntries();
   const { copied, copy } = useCopy();
@@ -147,7 +135,6 @@ export function UserMessage() {
 
   return (
     <MessagePrimitive.Root data-role="user" data-search-selected={searchReveal || undefined} className={cn("group/message flex flex-col items-end gap-1", MESSAGE_ROOT)}>
-      {newDay ? <DaySeparator date={newDay} className="self-stretch" /> : null}
       <div className={cn("flex min-w-0 flex-col items-end gap-1", editing ? "w-full" : "max-w-[85%]")}>
         {editing ? (
           <EditMessage
@@ -250,11 +237,9 @@ export function AssistantMessage() {
     return error && typeof error === "object" && "message" in error ? String((error as { message: unknown }).message) : undefined;
   });
   const stopped = stoppedReason !== undefined ? stopReason(stoppedReason, stoppedError) : undefined;
-  const newDay = useNewDay();
 
   return (
     <MessagePrimitive.Root data-role="assistant" data-search-selected={searchReveal || undefined} data-streaming={streaming || undefined} className={cn("group/message flex flex-col", MESSAGE_ROOT)}>
-      {newDay ? <DaySeparator date={newDay} /> : null}
       {speaker ? <SpeakerIdentity {...speaker} /> : null}
       <AssistantBody streaming={streaming}>
         <MessagePrimitive.GroupedParts groupBy={groupBy} indicator="empty">

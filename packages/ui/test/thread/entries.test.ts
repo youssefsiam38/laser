@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import { dayChanged, dayLabel } from "../../src/components/assistant-ui/elements/day-separator.js";
 import { splitLeadingQuote } from "../../src/components/assistant-ui/elements/quote-reply.js";
 import { continuationsOf, laterUserMessages, leafOf, userEntryAt, userEntryIds } from "../../src/components/thread/entries.js";
 
@@ -64,20 +63,5 @@ describe("quote-reply: splitLeadingQuote", () => {
   it("leaves a prompt without one alone", () => {
     expect(splitLeadingQuote("plain")).toEqual({ quote: undefined, rest: "plain" });
     expect(splitLeadingQuote("x\n> not leading")).toEqual({ quote: undefined, rest: "x\n> not leading" });
-  });
-});
-
-describe("day-separator", () => {
-  const d = (s: string) => new Date(s);
-  it("changes at local midnight only", () => {
-    expect(dayChanged(d("2026-09-05T23:59:00"), d("2026-09-06T00:01:00"))).toBe(true);
-    expect(dayChanged(d("2026-09-05T01:00:00"), d("2026-09-05T23:00:00"))).toBe(false);
-    expect(dayChanged(undefined, d("2026-09-05T01:00:00"))).toBe(false);
-  });
-  it("names today and yesterday before it names a date", () => {
-    const now = d("2026-09-05T12:00:00");
-    expect(dayLabel(d("2026-09-05T08:00:00"), now)).toBe("Today");
-    expect(dayLabel(d("2026-09-04T23:30:00"), now)).toBe("Yesterday");
-    expect(dayLabel(d("2026-09-01T09:00:00"), now)).not.toMatch(/Today|Yesterday/);
   });
 });

@@ -338,6 +338,7 @@ lane T's own if both were written.
 | M12-T52 | Make live activity follow the executing action | done | codex-2026-09-06-slash-skills | UI build; workspace typecheck; 448 UI tests; browser measured zero gaps on both edges | see notes |
 | M12-T53 | Compact project tree and single-location session attention | done | codex-2026-09-06-slash-skills | 448 UI tests; desktop/phone dark/light review; live spinner, pin persistence and 44px touch targets | see notes |
 | M12-T54 | Search full conversations and navigate exact matches | done | codex-2026-09-07-search | workspace build/typecheck; 954 tests; desktop/phone light/dark browser review | see notes |
+| M12-T55 | Remove transcript day separators | done | codex-2026-09-07-day-separators | 458 UI tests; UI typecheck/build; desktop/phone light/dark browser review | see notes |
 
 #### M12-T1 notes
 - 2026-09-06 claimed: audit the shipped logo assets, theme presets, assistant-ui
@@ -1001,6 +1002,10 @@ lane T's own if both were written.
 - 2026-09-07 checkpoint: host streaming search paginates saved content without opening workers. Global and sidebar search begin at 30 days and expand through explicit older date ranges. Best-match excerpts and ordering prioritize user messages, assistant replies, then reasoning/tools, with recency only breaking ties. Selection carries the excerpt source into session find.
 - 2026-09-07 verification checkpoint: 460 UI tests and typecheck pass; browser testing caught off-screen `content-visibility` preventing precise highlight geometry. Selected messages now opt into layout, search highlights use DOM ranges without editing React-owned markup, and closing find restores disclosure state. Final responsive/theme review and the workspace release gate follow.
 - 2026-09-07 done: workspace build and typecheck plus all 954 tests pass (460 UI, 168 host, 29 protocol). Added the missing protocol inventory sample caught by the complete gate. Isolated browser proof covers source ranking despite reversed recency, explicit older expansion, arrow/Enter selection, Enter/Shift+Enter match navigation, Escape/focus restoration, folded tool matches, reduced motion and zero horizontal overflow at 1280×900 and 390×844 in both themes. Evidence: `/tmp/laser-global-desktop-light.png`, `/tmp/laser-global-phone-dark.png`, `/tmp/laser-find-phone-dark-final.png`, `/tmp/laser-026-search-tests.log`. No transcript escape conversion or future summarization was added.
+
+#### M12-T55 notes
+- 2026-09-07 claimed: remove the visual and semantic day-divider component from every message path while retaining per-message local timestamps and their full accessible date descriptions.
+- 2026-09-07 done: deleted the day-divider component and boundary selector instead of merely hiding them. The remaining `message-timestamp` element is mounted for user, assistant and notice messages and retains its full natural date label. All 458 UI tests, typecheck, build, identity and whitespace checks pass. Browser review at 1280×900 and 390×844 in light/dark found zero separator nodes, two timestamp nodes, and no horizontal overflow; evidence: `/tmp/laser-no-day-desktop-dark.png`, `/tmp/laser-no-day-desktop-light.png`, `/tmp/laser-no-day-phone-dark.png`, `/tmp/laser-no-day-phone-light.png`. Isolated preview processes stopped; production was untouched. No commit, push, version change or release was requested.
 
 ## MX · Cross-cutting
 
@@ -2333,6 +2338,16 @@ searched range, user content outranks assistant replies, which outrank reasoning
 and tools; newest sessions break ties. Excerpts identify their source. Stale
 replies cannot replace a newer query. Command escape characters remain untouched,
 as requested.
+
+### D-105 · 2026-09-07 · Per-message timestamps replace day dividers
+
+Decision: remove transcript day separator rendering and the separator component.
+Keep the timestamp on every user, assistant and notice message, including its
+natural full date description for hover and assistive technology.
+Why: repeated horizontal date dividers consume space and duplicate information
+already available on each message.
+Consequences: calendar transitions no longer add layout or a semantic separator;
+the timestamp remains the single source for when a message was created.
 
 ## Status edits log
 

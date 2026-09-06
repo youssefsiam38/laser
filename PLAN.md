@@ -477,6 +477,7 @@ Depends on: M1, M2-T4, M4, M5-T1, M11.
 | M12-T52 | Make live activity follow the executing action | only actively streaming reasoning glows; executing tools illuminate their own row and aggregate with an exact live label; settled and waiting rows stop animating; dark/light, phone/desktop and reduced-motion paths verified |
 | M12-T53 | Compact project tree and single-location session attention | rounded single-line session rows nested under quiet folders; persistent chat pins have one canonical row; working sessions have a visible spinner; no duplicated inbox or project attention highlights; responsive themes and keyboard paths verified |
 | M12-T54 | Search full conversations and navigate exact matches | Ctrl/Cmd+F opens session find with live count and previous/next; Ctrl/Cmd+Shift+F and the sidebar magnifier search saved history with highlighted in-flow excerpts; older date ranges expand on demand; user messages rank above replies, then reasoning/tools; keyboard, stale responses and responsive themes are verified |
+| M12-T55 | Remove transcript day separators | no Today/Yesterday/date divider is rendered between messages; every message keeps its exact timestamp and the transcript spacing remains compact |
 
 ---
 
