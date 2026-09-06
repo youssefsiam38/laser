@@ -369,6 +369,10 @@ lane T's own if both were written.
   Renamed the mark asset and derived or neutralized all eight values. The
   post-stage identity check, UI typecheck and 11 focused UI/host/worker tests
   pass; move the unpublished failed tag to this corrective commit.
+- 2026-09-06 checkpoint: before the corrected pipeline published, the user
+  added visible timestamps to the release scope. Every user, assistant and
+  notice message now shows a compact local clock with a natural full-date label;
+  day separators keep the longer transcript chronology.
 
 #### M12-T6 notes
 - 2026-09-06 claimed: reproduce the packaged extension failure from the live

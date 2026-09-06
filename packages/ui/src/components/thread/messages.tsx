@@ -5,7 +5,7 @@ import { Info, TriangleAlert } from "lucide-react";
 import { memo, useMemo, useState } from "react";
 
 import { UserMessageAttachments } from "@/components/assistant-ui/elements/attachment.aui";
-import { DaySeparator, dayChanged } from "@/components/assistant-ui/elements/day-separator";
+import { DaySeparator, MessageTimestamp, dayChanged } from "@/components/assistant-ui/elements/day-separator";
 import { DirectiveString } from "@/components/assistant-ui/elements/directive-text.aui";
 import { EditMessage } from "@/components/assistant-ui/elements/edit-message";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
@@ -183,6 +183,7 @@ export function UserMessage() {
             onCopyPath={copyPath}
             busy={busy}
           />
+          <MessageTimestamp />
         </MessageFooter>
       </div>
     </MessagePrimitive.Root>
@@ -308,6 +309,12 @@ export function AssistantMessage() {
       </AssistantBody>
       {stopped ? <AssistantStopped {...stopped} /> : null}
       {!isNotice && !streaming ? <AssistantFooter /> : null}
+      {isNotice && !streaming ? (
+        <MessageFooter>
+          <span />
+          <MessageTimestamp />
+        </MessageFooter>
+      ) : null}
     </MessagePrimitive.Root>
   );
 }
@@ -423,7 +430,10 @@ function AssistantFooter() {
           ) : undefined
         }
       />
-      <MessageTiming />
+      <span className="flex min-w-0 items-center gap-2">
+        <MessageTiming />
+        <MessageTimestamp />
+      </span>
     </MessageFooter>
   );
 }

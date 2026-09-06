@@ -9,6 +9,7 @@
  * the transcript decides where it goes (`dayChanged`). The label is `typed`,
  * 12px, and reads "Today" / "Yesterday" before it reads a date.
  */
+import { useAuiState } from "@assistant-ui/react";
 import type { ComponentProps } from "react";
 
 import { cn } from "@/lib/utils";
@@ -32,6 +33,16 @@ export function dayLabel(date: Date, now: Date = new Date()): string {
   return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
+/** The compact local clock shown beside every message. */
+export function messageTimeLabel(date: Date, locales?: Intl.LocalesArgument): string {
+  return date.toLocaleTimeString(locales, { hour: "numeric", minute: "2-digit" });
+}
+
+/** A natural, exact local timestamp for hover and assistive technology. */
+export function messageTimeDescription(date: Date, now: Date = new Date(), locales?: Intl.LocalesArgument): string {
+  return `${dayLabel(date, now)} at ${messageTimeLabel(date, locales)}`;
+}
+
 export interface DaySeparatorProps extends Omit<ComponentProps<"div">, "children"> {
   date: Date;
 }
@@ -45,5 +56,24 @@ export function DaySeparator({ date, className, ...props }: DaySeparatorProps) {
       </time>
       <span aria-hidden="true" className="h-px flex-1 bg-line" />
     </div>
+  );
+}
+
+/** Visible local time for the message currently in assistant-ui scope. */
+export function MessageTimestamp({ className, ...props }: Omit<ComponentProps<"time">, "children" | "dateTime">) {
+  const createdAt = useAuiState((state) => state.message.createdAt);
+  if (!createdAt) return null;
+  const description = messageTimeDescription(createdAt);
+  return (
+    <time
+      data-slot="message-timestamp"
+      dateTime={createdAt.toISOString()}
+      title={description}
+      aria-label={description}
+      className={cn(mono, "shrink-0 text-ink-3 tnum", className)}
+      {...props}
+    >
+      {messageTimeLabel(createdAt)}
+    </time>
   );
 }
