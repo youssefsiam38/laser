@@ -326,7 +326,8 @@ lane T's own if both were written.
 | M12-T40 | Adaptive API and account usage telemetry | done | codex-2026-09-06-account-usage | `pnpm verify` — 888 tests; 3 account-parser tests | see notes |
 | M12-T41 | Three-level session activity disclosure | done | codex-2026-09-06-account-usage | `pnpm verify` — 888 tests; 2 session-preference tests | see notes |
 | M12-T42 | Restore the active model picker choice on open | done | codex-2026-09-06-account-usage | `pnpm verify` — 888 tests; 3 model-selector tests | see notes |
-| M12-T43 | Publish stable 0.2.4 | blocked | codex-2026-09-06-release-024 | — | see notes |
+| M12-T43 | Publish stable 0.2.4 | in-progress | codex-2026-09-06-release-024 | — | see notes |
+| M12-T44 | Compact the conversation surface | done | codex-2026-09-06-compact-transcript | `pnpm verify` — 891 tests; dark/light desktop/phone visual pass | see notes |
 
 #### M12-T1 notes
 - 2026-09-06 claimed: audit the shipped logo assets, theme presets, assistant-ui
@@ -822,6 +823,18 @@ lane T's own if both were written.
   before implementation and asked that 0.2.4 publish only after that decision.
   Release run 34032180101 was cancelled before publication and the unpublished
   local/remote tag was deleted. Q-7 unblocks the final source and tag.
+- 2026-09-06 resumed: the user approved the proposed compact transcript and
+  asked to implement and push it; M12-T44 now gates the recreated v0.2.4 tag.
+
+#### M12-T44 notes
+- 2026-09-06 claimed: move only transcript prose to the shared 14px body scale,
+  tighten message/block/bubble rhythm through existing spacing tokens, and
+  preserve every control size, touch target and accessibility floor.
+- 2026-09-06 done: assistant and user prose now share the 14px body scale;
+  messages use a 20px rhythm and Markdown blocks and prompt bubbles are one
+  spacing step tighter. Controls, metadata, composer, 80ch measure and 12px
+  floor are unchanged. `pnpm verify` passed 891 tests; the live session was
+  inspected at 1600×1000 and 390×844 in dark and light themes.
 
 ---
 
@@ -1557,7 +1570,7 @@ Consequences: the buffer is bounded (2000 lines per section) and client-local; i
 | Q-4 | Panel contract (7 questions in docs/ux-panels.md) | M3, M4-T6, M8 | answered by D-18: all leans |
 | Q-5 | Agent-work model (6 questions in docs/ux-agent-work.md) | M3 | answered by D-19: all leans |
 | Q-6 | Must 0.1.0 wait for the missing mobile `/link` pairing flow, or ship as an explicitly local-desktop preview? | — | answered by D-59: ship local desktop; visible Soon flag on phone remote control |
-| Q-7 | Adopt the proposed transcript-only compact density for 0.2.4: 14px/21px prose, tighter block rhythm and 20px message gaps while preserving control sizes and the 12px data floor? | M12-T43 | user |
+| Q-7 | Adopt the proposed transcript-only compact density for 0.2.4: 14px/21px prose, tighter block rhythm and 20px message gaps while preserving control sizes and the 12px data floor? | — | answered by D-95: yes |
 
 ---
 
@@ -2011,6 +2024,23 @@ who want a more verbose default can opt into it per session.
 
 Consequences: the 0.2.4 release gate includes a regression test for the absent-
 preference path as well as the three expansion helpers.
+
+### D-95 · 2026-09-06 · Compact density belongs to the transcript, not the shell
+
+Decision: reduce assistant and user transcript prose from the 15px reading
+scale to the existing 14px body scale, reduce message-stack gaps from seven to
+five spacing steps, and tighten prose blocks and user-bubble padding by one
+spacing step. Keep controls, the composer, metadata, touch targets, the 80ch
+prose measure and the 12px data floor unchanged.
+
+Why: the screenshot shows excess density in the conversation itself, while the
+surrounding navigation and controls already use the compact 12–14px hierarchy.
+A global scale reduction would damage targets and metadata without addressing
+the 28px message rhythm that makes the thread feel especially loose.
+
+Consequences: add M12-T44 and make it a prerequisite for the recreated stable
+v0.2.4 tag. The compactness remains token-led and isolated to assistant-ui's
+message, Markdown and thread elements.
 
 ## Status edits log
 

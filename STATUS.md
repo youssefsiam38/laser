@@ -2,10 +2,10 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-06T15:14:48+03:00 · codex-2026-09-06-release-024 · commit: `972ce10`
+**Last updated:** 2026-09-06T15:45:20+03:00 · codex-2026-09-06-compact-transcript · commit: `de1cf61`
 
-**Current focus:** Stable 0.2.4 is paused before publication while the user
-decides whether its transcript should adopt the proposed compact density.
+**Current focus:** The approved compact transcript is verified; publish and
+verify stable 0.2.4 from the completed source.
 
 ## Milestones
 
@@ -24,12 +24,12 @@ decides whether its transcript should adopt the proposed compact density.
 | M9 CLI | done | all planned CLI tasks complete |
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
-| M12 Product experience | in-progress | 0.2.4 is untagged and awaiting density direction |
+| M12 Product experience | in-progress | compact density verified; 0.2.4 ready to tag |
 | MX Cross-cutting | in-progress | seam and identity gates green; Pi pin 0.85.0 |
 
 ## Blockers
 
-- M12-T43: Q-7, the user's decision on compact transcript density.
+- None.
 
 ## Next up
 
@@ -39,8 +39,8 @@ decides whether its transcript should adopt the proposed compact density.
 
 ## Recently done
 
+- M12-T44: the conversation uses compact 14px prose and tighter rhythm.
 - M12-T42: model pickers reopen at the session's active provider and model.
 - M12-T41: each session has three consistent activity-detail levels.
 - M12-T40: usage adapts across API, account and mixed billing, including subagents.
 - M12-T39: stable 0.2.3 published with both architectures and native update feeds.
-- M12-T38: reasoning and tools share one live, muted activity disclosure.

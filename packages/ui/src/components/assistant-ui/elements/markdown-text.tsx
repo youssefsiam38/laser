@@ -7,7 +7,7 @@
  * What is the registry's: the primitive, the memoized component map, the
  * code header with a copy control, `defer` for large streaming messages.
  * What is laser's, each on purpose:
- *   - Every class reads a token; prose is `text-md` at the shared prose measure, typed things
+ *   - Every class reads a token; prose is `text-base` at the shared prose measure, typed things
  *     are mono at the 12px floor, headings are the type scale.
  *   - **Never raw HTML** (AGENTS.md invariant 9): remark-gfm and no
  *     rehype-raw, so an agent cannot inject markup. KaTeX output is built by
@@ -78,7 +78,7 @@ function CodeHeader({ language, code }: CodeHeaderProps) {
   return (
     <div
       data-slot="code-header"
-      className="mt-4 flex h-8 items-center justify-between rounded-t-lg border border-b-0 border-line bg-surface-2 pe-1 ps-3"
+      className="mt-3 flex h-8 items-center justify-between rounded-t-lg border border-b-0 border-line bg-surface-2 pe-1 ps-3"
     >
       <span className="eyebrow">{language || "code"}</span>
       <TooltipIconButton
@@ -95,22 +95,22 @@ function CodeHeader({ language, code }: CodeHeaderProps) {
 
 const defaultComponents = memoizeMarkdownComponents({
   h1: ({ className, ...props }) => (
-    <h1 className={cn("mt-6 mb-2 text-xl font-semibold text-ink first:mt-0 last:mb-0", className)} {...props} />
+    <h1 className={cn("mt-5 mb-2 text-xl font-semibold text-ink first:mt-0 last:mb-0", className)} {...props} />
   ),
   h2: ({ className, ...props }) => (
-    <h2 className={cn("mt-6 mb-2 text-lg font-semibold text-ink first:mt-0 last:mb-0", className)} {...props} />
+    <h2 className={cn("mt-5 mb-2 text-lg font-semibold text-ink first:mt-0 last:mb-0", className)} {...props} />
   ),
   h3: ({ className, ...props }) => (
-    <h3 className={cn("mt-5 mb-1.5 text-md font-semibold text-ink first:mt-0 last:mb-0", className)} {...props} />
+    <h3 className={cn("mt-4 mb-1.5 text-md font-semibold text-ink first:mt-0 last:mb-0", className)} {...props} />
   ),
   h4: ({ className, ...props }) => (
-    <h4 className={cn("mt-4 mb-1 text-base font-semibold text-ink first:mt-0 last:mb-0", className)} {...props} />
+    <h4 className={cn("mt-3 mb-1 text-base font-semibold text-ink first:mt-0 last:mb-0", className)} {...props} />
   ),
   h5: ({ className, ...props }) => (
-    <h5 className={cn("mt-4 mb-1 text-sm font-semibold text-ink first:mt-0 last:mb-0", className)} {...props} />
+    <h5 className={cn("mt-3 mb-1 text-sm font-semibold text-ink first:mt-0 last:mb-0", className)} {...props} />
   ),
-  h6: ({ className, ...props }) => <h6 className={cn("mt-4 mb-1 eyebrow first:mt-0 last:mb-0", className)} {...props} />,
-  p: ({ className, ...props }) => <p className={cn("my-3 first:mt-0 last:mb-0", className)} {...props} />,
+  h6: ({ className, ...props }) => <h6 className={cn("mt-3 mb-1 eyebrow first:mt-0 last:mb-0", className)} {...props} />,
+  p: ({ className, ...props }) => <p className={cn("my-2 first:mt-0 last:mb-0", className)} {...props} />,
   a: ({ className, ...props }) => {
     // GFM footnote references (`[^1]`) are the citations a transcript actually
     // carries: draw them as the citation chip, in-page, not as external links.
@@ -127,18 +127,18 @@ const defaultComponents = memoizeMarkdownComponents({
     );
   },
   blockquote: ({ className, ...props }) => (
-    <blockquote className={cn("my-3 border-s-2 border-line ps-4 text-ink-2", className)} {...props} />
+    <blockquote className={cn("my-2 border-s-2 border-line ps-3 text-ink-2", className)} {...props} />
   ),
   ul: ({ className, ...props }) => (
-    <ul className={cn("my-3 list-disc ps-6 marker:text-ink-3 [&>li]:mt-1", className)} {...props} />
+    <ul className={cn("my-2 list-disc ps-5 marker:text-ink-3 [&>li]:mt-1", className)} {...props} />
   ),
   ol: ({ className, ...props }) => (
-    <ol className={cn("my-3 list-decimal ps-6 marker:text-ink-3 marker:tnum [&>li]:mt-1", className)} {...props} />
+    <ol className={cn("my-2 list-decimal ps-5 marker:text-ink-3 marker:tnum [&>li]:mt-1", className)} {...props} />
   ),
   li: ({ className, ...props }) => <li className={cn("ps-1 [&>input]:me-1.5", className)} {...props} />,
-  hr: ({ className, ...props }) => <hr className={cn("my-6 border-line", className)} {...props} />,
+  hr: ({ className, ...props }) => <hr className={cn("my-5 border-line", className)} {...props} />,
   table: ({ className, ...props }) => (
-    <div className="my-3 overflow-x-auto">
+    <div className="my-2 overflow-x-auto">
       <table className={cn("w-full border-collapse text-sm", className)} {...props} />
     </div>
   ),
@@ -167,7 +167,7 @@ const defaultComponents = memoizeMarkdownComponents({
     <section
       className={cn(
         // The footnotes block: a hairline above, then the list in secondary ink at 13px.
-        "[&[data-footnotes]]:mt-6 [&[data-footnotes]]:border-t [&[data-footnotes]]:border-line [&[data-footnotes]]:pt-3 [&[data-footnotes]]:text-sm [&[data-footnotes]]:text-ink-2 [&[data-footnotes]>h2]:sr-only",
+        "[&[data-footnotes]]:mt-5 [&[data-footnotes]]:border-t [&[data-footnotes]]:border-line [&[data-footnotes]]:pt-2 [&[data-footnotes]]:text-sm [&[data-footnotes]]:text-ink-2 [&[data-footnotes]>h2]:sr-only",
         className,
       )}
       {...props}
@@ -176,7 +176,7 @@ const defaultComponents = memoizeMarkdownComponents({
   pre: ({ className, ...props }) => (
     <pre
       className={cn(
-        "mb-4 overflow-x-auto rounded-b-lg border border-line bg-surface-2 font-mono text-xs leading-sm text-ink last:mb-0 [&>code]:block [&>code]:p-3.5",
+        "mb-3 overflow-x-auto rounded-b-lg border border-line bg-surface-2 font-mono text-xs leading-sm text-ink last:mb-0 [&>code]:block [&>code]:p-3",
         className,
       )}
       {...props}
@@ -222,7 +222,7 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ className, components }) => {
       componentsByLanguage={componentsByLanguage}
       smooth={false}
       defer
-      className={cn("md-body max-w-(--measure-prose) text-md break-words text-ink", "[&[data-status=running]>*:last-child]:caret", className)}
+      className={cn("md-body max-w-(--measure-prose) text-base break-words text-ink", "[&[data-status=running]>*:last-child]:caret", className)}
     />
   );
 };

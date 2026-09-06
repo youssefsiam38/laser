@@ -466,6 +466,7 @@ Depends on: M1, M2-T4, M4, M5-T1, M11.
 | M12-T41 | Give each session one three-level activity disclosure preference | the chat menu offers text-only, reasoning, and full-detail modes; every reasoning/tool sequence keeps one aggregate parent while the selected level controls which established inner renderers start open |
 | M12-T42 | Open the chat model picker at the session's active choice | opening the picker immediately scopes its provider field to the current routing provider and marks the current model, while closing clears temporary search and filter overrides for the next session |
 | M12-T43 | Publish the adaptive-session controls as stable 0.2.4 | every workspace manifest and tag agrees on 0.2.4; CI builds, stages, installs, signs and attests both Linux architectures; GitHub and native package update channels publish successfully |
+| M12-T44 | Make the transcript compact without shrinking the app | assistant and user prose use the 14px body scale; message, block and bubble spacing becomes denser; controls, metadata, reading measure, touch targets and the 12px data floor remain unchanged across desktop/phone and dark/light themes |
 
 ---
 

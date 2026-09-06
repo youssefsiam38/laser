@@ -252,7 +252,7 @@ export function AssistantMessage() {
             switch (part.type) {
               case "text":
                 return (
-                  <StreamingText streaming={part.status.type === "running"} className="my-3 first:mt-0 last:mb-0">
+                  <StreamingText streaming={part.status.type === "running"} className="my-2 first:mt-0 last:mb-0">
                     <MarkdownText />
                   </StreamingText>
                 );
@@ -269,13 +269,13 @@ export function AssistantMessage() {
                 return <Sources {...part} />;
               case "image":
                 return (
-                  <div className="my-3 first:mt-0 last:mb-0">
+                  <div className="my-2 first:mt-0 last:mb-0">
                     <Image {...part} />
                   </div>
                 );
               case "file":
                 return (
-                  <div className="my-3 first:mt-0 last:mb-0">
+                  <div className="my-2 first:mt-0 last:mb-0">
                     <File {...part} />
                   </div>
                 );
@@ -321,7 +321,7 @@ function EmptyReplyThinking({ timingKey }: { timingKey: string }) {
     <ThinkingIndicator
       label="Thinking"
       elapsed={elapsed === undefined ? undefined : formatDuration(elapsed)}
-      className="my-3 h-6 first:mt-0 last:mb-0"
+      className="my-2 h-6 first:mt-0 last:mb-0"
     />
   );
 }

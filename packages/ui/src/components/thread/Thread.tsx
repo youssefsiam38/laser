@@ -61,7 +61,7 @@ export function Thread({ statusSlot }: ThreadProps = {}) {
                 <AuiIf condition={(s) => s.thread.isEmpty && !s.thread.isLoading}>
                   <EmptyState />
                 </AuiIf>
-                <div data-slot="thread-messages" className="flex flex-col gap-7 pt-6 pb-6 empty:hidden">
+                <div data-slot="thread-messages" className="flex flex-col gap-5 pt-5 pb-5 empty:hidden">
                   <ThreadPrimitive.Messages>{() => <ThreadMessage />}</ThreadPrimitive.Messages>
                 </div>
                 {/* The inline surface (docs/ux-panels.md): panels arrive during a

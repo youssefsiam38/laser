@@ -85,9 +85,9 @@ timestamps, hints, durations, the "waiting for you" subtitle — and measured
 
 ## Type
 
-- UI and body: the theme's `--font-sans` (**Host Grotesk** by default), 14px
-  base, 1.5 line height, transcript prose
-  15px at max 80ch (`--measure-prose`).
+- UI, body and transcript prose: the theme's `--font-sans` (**Host Grotesk**
+  by default), 14px base, 1.5 line height. Transcript prose keeps the max 80ch
+  reading measure (`--measure-prose`) and uses the compact 20px message rhythm.
 - Typed things (paths, ids, commands, eyebrows, numbers): the theme's
   `--font-mono` (**Martian Mono** by default), 11–12px,
   `font-variant-numeric: tabular-nums`, eyebrows uppercase with `0.08em`
