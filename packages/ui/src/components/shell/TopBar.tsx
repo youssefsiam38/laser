@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/dialog";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
@@ -43,7 +44,7 @@ import { shortCwd } from "@/format";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
 import { useDock, useIslandEntries, usePanelActions } from "@/panels";
-import { sessionTitle, useLaserStable, useLaserState, useLaserView, useSessionMeta } from "@/runtime";
+import { sessionTitle, setReasoningExpanded, useLaserStable, useLaserState, useLaserView, useReasoningExpanded, useSessionMeta } from "@/runtime";
 
 import { InlineRename } from "./InlineRename.js";
 import { lastPromptEntryId, sessionStateLabel, sessionStatus, workerChip } from "./model.js";
@@ -69,6 +70,7 @@ export function TopBar() {
   const { copy } = useCopy();
   const [renaming, setRenaming] = useState(false);
   const [compactOpen, setCompactOpen] = useState(false);
+  const reasoningOpen = useReasoningExpanded(view?.path);
 
   const summary = useMemo(() => (view ? sessions.find((s) => s.path === view.path) : undefined), [sessions, view]);
   const status = sessionStatus(view, summary);
@@ -250,6 +252,14 @@ export function TopBar() {
               <SquarePen />
               Compact with instructions…
             </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuCheckboxItem
+              disabled={!view}
+              checked={reasoningOpen}
+              onCheckedChange={(checked) => view && setReasoningExpanded(view.path, checked === true)}
+            >
+              Expand reasoning by default
+            </DropdownMenuCheckboxItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem disabled={!view || meta.running} onSelect={() => void forkFromLastPrompt()}>
               <GitFork />

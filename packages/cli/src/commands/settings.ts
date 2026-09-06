@@ -1,5 +1,5 @@
 /**
- * `laser settings` — read and write Pi settings from a terminal (M9-T5).
+ * `laser settings` — read and write Laser settings from a terminal (M9-T5).
  *
  * The adapter lives in the worker (only it may import Pi), so every verb here
  * is one `pi/settings/*` call against the host, which starts or reuses the
@@ -9,7 +9,7 @@
  * Values are JSON. `--raw` accepts a bare string for the common case
  * (`laser settings set theme --raw dark`) so nobody has to quote `'"dark"'`.
  */
-import { PRODUCT_NAME } from "@lasercode/protocol";
+import { PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PROJECT_DIR_NAME } from "@lasercode/protocol";
 import { resolve } from "node:path";
 import type { SettingChange, SettingDescriptor, SettingsScope, SettingsSnapshot } from "@lasercode/protocol";
 import { bool, str } from "../args.js";
@@ -33,8 +33,7 @@ function verbOf(positionals: readonly string[]): { verb: Verb; rest: string[] } 
 
 function scopeOf(args: CommandContext["args"]): SettingsScope {
   const value = str(args, "scope") ?? "global";
-  // `laser packages` calls the same file "user". Accepting both spellings
-  // costs nothing and saves the guess; the docs name "global".
+  // The wire calls the global scope "user" internally.
   if (value === "user") return "global";
   if (value !== "global" && value !== "project") {
     throw new CliError(`unknown settings scope ${JSON.stringify(value)}`, {
@@ -93,18 +92,18 @@ function origin(snapshot: SettingsSnapshot, path: string): string {
 export const settingsCommand: Command = {
   name: "settings",
   group: "Projects",
-  summary: "read and write agent settings for a project",
+  summary: `read and write ${PRODUCT_DISPLAY_NAME} settings for a project`,
   usage: `${PRODUCT_NAME} settings [get [key]|list|set <key> <json>|unset <key>] [--project <dir>] [--scope <global|project>]`,
   description: `
-Reads the effective settings for a project — your global file deep-merged with
-that project's own \`.pi/settings.json\` — and writes either scope under the
-agent's own lock, so a running session picks the change up.
+Reads the effective ${PRODUCT_DISPLAY_NAME} settings for a project — your global choices
+deep-merged with that project's own \`${PROJECT_DIR_NAME}/settings.json\` — and writes either
+scope safely, so a running session picks the change up.
 
 Values are JSON: \`${PRODUCT_NAME} settings set compaction.reserveTokens 8192\`,
 \`${PRODUCT_NAME} settings set hideThinkingBlock true\`. Use --raw for a plain string.
 
 Writing project settings *creates* a trust-gated file. If the project is not
-trusted, the agent will ignore what you just wrote — this command says so rather
+trusted, ${PRODUCT_DISPLAY_NAME} will ignore what you just wrote — this command says so rather
 than letting the write quietly do nothing.
 `,
   positionals: [
@@ -173,7 +172,7 @@ than letting the write quietly do nothing.
           }))
           .filter((row) => showAll || row.origin !== "default")
           .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-        // Anything a file sets that this Pi has no field for: worth showing, and
+        // Anything a file sets that Laser has no field for: worth showing, and
         // worth marking, rather than silently dropping.
         const extra = unknownKeys(snapshot, known).map((path) => ({
           path,
@@ -258,7 +257,7 @@ than letting the write quietly do nothing.
           ? `${term.err.green("unset")} ${key} in ${scope} settings${now === undefined ? "" : term.err.dim(` (now ${render(now)} from ${origin(snapshot, key)})`)}`
           : `${term.err.green("set")} ${key} = ${sanitize(render(now))} ${term.err.dim(`in ${scope} settings`)}`,
       );
-      // The write landed but Pi will ignore it: say so where it cannot be missed.
+      // The write landed but Laser will ignore it: say so where it cannot be missed.
       if (scope === "project" && !snapshot.projectTrust.trusted) {
         term.warn(sanitize(snapshot.projectTrust.reason));
       }

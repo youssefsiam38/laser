@@ -110,6 +110,12 @@ describe("describeInstallFailure", () => {
     expect(describeInstallFailure("x", "npm error code ENOTFOUND\nnpm error network request failed")).toMatch(/could not be reached/);
     expect(describeInstallFailure("x", "npm error code ETARGET\nNo matching version found for x@1.9.0")).toBe("Could not install x: version 1.9.0 does not exist.");
     expect(describeInstallFailure("x", "Project is not trusted; refusing to access project package storage")).toMatch(/not trusted yet/);
+    expect(
+      describeInstallFailure(
+        "pi-subagents",
+        "npm error code ESTRICTALLOWSCRIPTS\nnpm error 3 package(s) have install scripts not covered by allowScripts",
+      ),
+    ).toBe(`Could not install pi-subagents: one of its components needs to run setup code that ${PRODUCT_NAME} has not reviewed yet. Nothing was installed.`);
     const long = describeInstallFailure("x", `npm ERR! ${"y".repeat(400)}`);
     expect(long.length).toBeLessThan(240);
     expect(long.endsWith("…")).toBe(true);

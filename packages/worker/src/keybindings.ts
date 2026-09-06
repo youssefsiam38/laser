@@ -136,7 +136,7 @@ export class KeybindingsAdapter {
     const unreadable = this.unreadable();
     return {
       path: this.file,
-      piVersion: VERSION,
+      engineVersion: VERSION,
       bindings,
       conflicts: manager.getConflicts().map((conflict) => ({ key: conflict.key, ids: [...conflict.keybindings] })),
       writable: unreadable === undefined,

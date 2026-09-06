@@ -3,7 +3,7 @@
  * Form controls generated from a `SettingDescriptor`.
  *
  * Every control edits a *draft* string/value locally and commits on blur (or
- * immediately for toggles and selects), because a settings write takes Pi's
+ * immediately for toggles and selects), because a settings write takes the
  * file lock and reloads the session's settings manager — far too heavy to run
  * per keystroke. A control that cannot represent the stored value (someone
  * hand-edited the file) says so and offers the raw JSON instead of silently
@@ -24,7 +24,7 @@ export interface FieldProps {
   /** Value at the edited scope, or undefined when the scope does not set it. */
   value: unknown;
   disabled?: boolean | undefined;
-  /** `undefined` unsets the key so Pi's default applies again. */
+  /** `undefined` unsets the key so Laser's default applies again. */
   onCommit: (value: unknown) => void;
   /**
    * The id the row's `<label>` points at. Every control here takes one, so a
@@ -132,10 +132,10 @@ function NumberField({
 
   const commit = () => {
     const text = draft.trim();
-    // A blur that changed nothing must not write. Every commit takes Pi's file
+    // A blur that changed nothing must not write. Every commit takes the settings
     // lock, rewrites the file and reloads the settings manager — tabbing
     // through the form would be one of those per field, and on a project with
-    // no `.pi` yet it would create a trust-gated file Pi then ignores.
+    // no `.laser` yet it would create a trust-gated file Laser then ignores.
     if (text === stored.trim()) {
       setError(undefined);
       return;
@@ -235,7 +235,7 @@ function StringListField({
 }: ControlProps & { spec: Extract<SettingDescriptor["type"], { control: "string-list" }> }) {
   const items = Array.isArray(value) && value.every((item) => typeof item === "string") ? (value as string[]) : undefined;
   const [draft, setDraft] = useState("");
-  // Editing an existing entry is local until blur: every commit takes Pi's
+  // Editing an existing entry is local until blur: every commit takes the
   // settings lock and reloads the session's settings manager, which is far too
   // heavy to run per keystroke. Adding and removing commit immediately.
   const [editing, setEditing] = useState<string[] | undefined>();

@@ -12,7 +12,7 @@
  *       [--subagents-temp-root <dir>] [--project-trusted yes|no]
  */
 import { Socket } from "node:net";
-import { ENV, LineDecoder, PRODUCT_NAME, parseJsonLine, type JsonRpcMessage } from "@lasercode/protocol";
+import { ENV, FEATURE_MANIFESTS, LineDecoder, PRODUCT_NAME, parseJsonLine, type FeatureId, type JsonRpcMessage } from "@lasercode/protocol";
 import { StableSdkDriver } from "./drivers/stable-sdk.js";
 import { AgentResolutionError, assertBundledAgent } from "./resolve-pi.js";
 import { WorkerServer } from "./server.js";
@@ -73,6 +73,17 @@ async function main(): Promise<void> {
     npmCommand = undefined;
   }
 
+  let features: FeatureId[] = FEATURE_MANIFESTS.filter((feature) => feature.defaultEnabled).map((feature) => feature.id);
+  try {
+    const parsed: unknown = JSON.parse(process.env[ENV.features] ?? "null");
+    if (Array.isArray(parsed)) {
+      const known = new Set(FEATURE_MANIFESTS.map((feature) => feature.id));
+      features = parsed.filter((id): id is FeatureId => typeof id === "string" && known.has(id as FeatureId));
+    }
+  } catch {
+    // Malformed environment falls back to the product defaults.
+  }
+
   const transport = openTransport();
   const send = (message: JsonRpcMessage) => transport.write(`${JSON.stringify(message)}\n`);
 
@@ -85,6 +96,7 @@ async function main(): Promise<void> {
     ...(subagentsTempRoot ? { subagentsTempRoot } : {}),
     ...(projectTrusted !== undefined ? { projectTrusted: projectTrusted === "yes" } : {}),
     ...(npmCommand ? { npmCommand } : {}),
+    features,
   });
 
   const decoder = new LineDecoder();

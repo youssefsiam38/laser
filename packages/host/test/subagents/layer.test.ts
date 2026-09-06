@@ -94,6 +94,46 @@ describe("discovering background runs", () => {
     expect(seen.upserts).toHaveLength(1);
   });
 
+  it("removes its panels without deleting run files when the feature is disabled", () => {
+    const runDir = writeRun("r1", { mode: "single", state: "running", startedAt: Date.now(), pid: process.pid, steps: [{ agent: "worker", status: "running" }] });
+    let enabled = true;
+    const { layer, seen } = makeLayer(() => Date.now(), { enabled: () => enabled });
+    layer.refresh();
+    enabled = false;
+    layer.refresh();
+
+    expect(seen.closes).toContainEqual({ path: SESSION.path, id: "subagents:run:r1", reason: "Subagents is disabled for this project" });
+    expect(readFileSync(join(runDir, "status.json"), "utf8")).toContain('"runId":"r1"');
+  });
+
+  it("converges a workflow lane and its detailed child status on one panel id", () => {
+    writeRun("workflow-1", {
+      mode: "workflow",
+      state: "running",
+      startedAt: Date.now(),
+      steps: [{ agent: "researcher", status: "running", workflowKey: "company", runId: "child-1" }],
+      preflight: { lanes: [{ key: "company" }] },
+    });
+    writeRun("child-1", {
+      mode: "single",
+      state: "running",
+      startedAt: Date.now(),
+      parentWorkflowRunId: "workflow-1",
+      workflowKey: "company",
+      steps: [{ agent: "researcher", status: "running", tokens: { input: 120, output: 30 } }],
+    });
+    const { layer, seen } = makeLayer();
+    layer.refresh();
+    const children = seen.upserts.filter(({ panel }) => panel.kind === "run");
+
+    expect(new Set(children.map(({ panel }) => panel.id))).toEqual(new Set(["subagents:run:child-1"]));
+    expect(children.length).toBeGreaterThanOrEqual(1);
+    expect(children.length).toBeLessThanOrEqual(2);
+    expect(children.every(({ panel }) => panel.kind === "run" && panel.title === "company")).toBe(true);
+    expect(children.every(({ panel }) => panel.kind === "run" && panel.parent?.id === "subagents:plan:workflow-1")).toBe(true);
+    expect(children.at(-1)?.panel.kind === "run" && children.at(-1)?.panel.usage).toMatchObject({ input: 120, output: 30 });
+  });
+
   it("treats an unreadable status file as unknown, never as finished", () => {
     const dir = join(root, "temp", "async-subagent-runs", "r3");
     mkdirSync(dir, { recursive: true });

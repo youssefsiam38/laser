@@ -20,16 +20,21 @@
 │  SessionDriver ──┬── StableSdkDriver (pinned Pi SDK)        │
 │                  └── ChordDriver (stub, seam test)          │
 │  ui-bridge (ExtensionUIContext → pi/ui/*)                   │
-│  settings + package adapters                                │
+│  engine adapter + Laser-owned feature loader                 │
 │  loads packages/pi-extension into the session:              │
 │    one extension, modules/{provider-log,subagents,          │
-│    transcribe,web-access,...} activated by detection        │
+│    transcribe,panels,...} activated by detection            │
 └─────────────────────────────────────────────────────────────┘
 
 packages/relay  ← dumb byte forwarder on Railway, 2 sockets per channel
 packages/crypto ← Noise IK/KK, pairing, device list (Node + browser)
 packages/desktop ← Electron main: tray, keychain, updater, bundled Node
 ```
+
+The binding product/engine boundary and exhaustive settings classification are
+in [`product-boundary.md`](product-boundary.md). Laser is the product; Pi and
+Pi-native packages are exact-pinned implementation details confined to the
+worker and companion extension.
 
 ## The driver seam
 
@@ -69,21 +74,28 @@ then reports `laser/capabilities` to the worker. Modules:
 | --- | --- | --- |
 | `provider-log` | Pi's `before_provider_request` / `after_provider_response` hooks | always |
 | `subagents` | pi-subagents in-process registries and `subagents:rpc:v1` bus | `globalThis[Symbol.for("pi-subagents.*")]` |
-| `transcribe` | pi-gpt-transcribe desktop dictation | todo |
-| `web-access` | pi-web-access widgets | todo |
+| `goal` | canonical durable goal state | Goals feature enabled |
+| `transcribe` | pi-gpt-transcribe desktop dictation | matching command registered |
+| `web-access` | retired (D-61): pi-web-access stays in its transcript tool disclosure | — |
 
-Adding support for a package = adding a module. Modules never import each other
-and fail individually. File-based observation is not here; it is in the host.
+Adding support for engine behavior means a reusable Pi-native package plus one
+module that translates it to the product protocol. Modules never import each
+other and fail individually. File-based observation is not here; it is in the
+host.
 
 ## Protocol shape
 
 ACP-inspired JSON-RPC:
 
-- Requests (client → host): `session/new`, `session/load`, `session/prompt`,
+- Product requests (client → host): `session/new`, `session/load`, `session/prompt`,
   `session/cancel`, `session/set_mode`, plus `pi/*` extras such as
   `pi/session/steer`, `pi/session/follow_up`, `pi/session/fork`,
   `pi/model/set`, `pi/thinking/set`, `pi/compact`, `pi/settings/*`,
-  `pi/packages/*`, `pi/subagents/*`, `pi/logs/*`.
+  `pi/subagents/*`, `pi/logs/*`. Legacy `pi/packages/*` requests are rejected;
+  package installation is not a Laser capability.
+- New product capabilities use engine-neutral methods: `feature/list`,
+  `feature/set`, `session/goal/get`, `session/goal/action`. Remaining `pi/*`
+  methods are internal wire compatibility and are not product vocabulary.
 - Notifications (host → client): `session/update` with a monotonically
   increasing `seq` per session; clients resume with `session/load { fromSeq }`.
 - Requests (host → client): `session/request_permission` and `pi/ui/request`
@@ -99,16 +111,22 @@ ACP-inspired JSON-RPC:
   no background subagent run references the session.
 - Never two workers for one cwd. Never two writers on one Pi session file.
 
-## Data on disk we read (never write directly)
+## Internal engine data on disk
 
-- `~/.pi/agent/sessions/**/*.jsonl` — Pi session files (append-only, no lock).
-- `~/.pi/agent/settings.json`, `<project>/.pi/settings.json` — via `SettingsManager` only.
-- `~/.pi/agent/missions/**` — pi-subagents missions ledger.
+- `<Laser data>/agent/sessions/**/*.jsonl` — session files (append-only, no lock).
+- `<Laser data>/agent/settings.json` — private engine state, written only through
+  `SettingsManager`.
+- `<Laser data>/agent/missions/**` — Subagents mission ledgers.
 - `$PI_SUBAGENTS_TEMP_ROOT/async-subagent-runs/<runId>/{status.json,events.jsonl,control/}` — pi-subagents background runs. We pin `PI_SUBAGENTS_TEMP_ROOT` for workers we start and also scan the default uid-scoped roots.
-- `~/.pi/agent/sessions/<slug>/subagent-artifacts/*_transcript.jsonl` — foreground children.
+- `<Laser data>/agent/sessions/<slug>/subagent-artifacts/*_transcript.jsonl` — foreground children.
+
+Laser does not discover `<project>/.pi`. Project configuration is owned at
+`<project>/.laser/settings.json`, validated by the worker and applied as
+in-memory engine overrides.
 
 ## Data we own
 
 - Host SQLite: provider round-trips, tool events, session index cache, attention
   state, device list, relay channel state.
 - Keychain: root identity key, relay credentials.
+- `<project>/.laser/settings.json`: project-scoped product settings.

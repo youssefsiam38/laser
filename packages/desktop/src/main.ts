@@ -76,7 +76,7 @@ log.line(
 );
 
 /**
- * A development run points at Vite when `LASER_UI_URL` is set, so the UI can
+ * A development run points at Vite when `${ENV.uiUrl}` is set, so the UI can
  * hot-reload while still driving a real host. Without it, the host serves the
  * built bundle, which is what a packaged app always does.
  */
@@ -437,6 +437,17 @@ function installIpc(): void {
   ipcMain.on(IPC.themeSet, (_event, theme: unknown) => {
     if (theme !== "light" && theme !== "dark") return;
     windows.applyTheme(theme);
+  });
+
+  ipcMain.handle(IPC.directorySelect, async (event) => {
+    const owner = windowOf(event);
+    const options: Electron.OpenDialogOptions = {
+      title: "Choose a project folder",
+      buttonLabel: "Use this folder",
+      properties: ["openDirectory", "createDirectory"],
+    };
+    const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options);
+    return result.canceled ? null : (result.filePaths[0] ?? null);
   });
 
   ipcMain.handle(IPC.microphoneStatus, () => microphoneStatus());

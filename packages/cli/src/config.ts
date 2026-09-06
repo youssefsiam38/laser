@@ -1,8 +1,8 @@
 /**
  * Where laser keeps things, and the environment it hands to a Pi child.
  *
- * One resolution order, used by every command so `laser doctor`, `laser up`
- * and `laser pi` can never disagree about which agent directory is in play:
+ * One resolution order, used by every Laser command so the app, doctor and
+ * the background host cannot disagree about which private runtime is in play:
  *
  *   agent dir          --agent-dir  ▸ LASER_AGENT_DIR ▸ <data>/agent
  *   session dir        --session-dir ▸ LASER_SESSION_DIR ▸ <agent>/sessions
@@ -124,9 +124,8 @@ export function resolvePaths(parsed: ParsedArgs, env: NodeJS.ProcessEnv = proces
 }
 
 /**
- * The environment for anything we spawn that will load Pi: the pinned Pi
- * binary (`laser pi`) and, through the host, every worker. Pinning both
- * directories is what keeps a terminal-started subagent run visible in the app.
+ * The environment for internal processes that load the pinned engine. Pinning
+ * both directories keeps background agent runs visible in the app.
  */
 export function piEnv(paths: LaserPaths, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return {

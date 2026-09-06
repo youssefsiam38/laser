@@ -48,7 +48,8 @@ import type {
 } from "@lasercode/protocol";
 import type { AcceptanceLedger, AsyncStatus, ForegroundChild, RunState, StatusStep, StepState } from "./status.js";
 
-export const PANEL_SOURCE = "pi-subagents";
+/** Product-facing source. The implementation package is intentionally private. */
+export const PANEL_SOURCE = "Subagents";
 export const PANEL_ID_PREFIX = "subagents:";
 
 /** True for every panel id this layer owns, so the router can claim its actions. */
@@ -283,7 +284,9 @@ export interface MapOptions {
 export const runPanelId = (runId: string): string => `${PANEL_ID_PREFIX}run:${runId}`;
 export const planPanelId = (runId: string): string => `${PANEL_ID_PREFIX}plan:${runId}`;
 export const childPanelId = (runId: string, step: StatusStep, index: number): string =>
-  `${PANEL_ID_PREFIX}child:${runId}:${step.childId ?? step.workflowKey ?? String(index)}`;
+  step.runId !== undefined
+    ? runPanelId(step.runId)
+    : `${PANEL_ID_PREFIX}child:${runId}:${step.childId ?? step.workflowKey ?? String(index)}`;
 export const foregroundPanelId = (runId: string, index: number | undefined): string =>
   `${PANEL_ID_PREFIX}fg:${runId}${index === undefined ? "" : `:${index}`}`;
 export const checkPanelId = (parentPanelId: string): string => parentPanelId.replace(/^subagents:(run|child|fg):/, `${PANEL_ID_PREFIX}check:`);
@@ -363,7 +366,9 @@ export function childRunPanel(
         ? { phase: { label: step.agent ?? "step", index: index + 1, total } }
         : {}),
     origin: originOf(status),
-    ...(total > 1 ? { parent: { id: planPanelId(status.runId), relation: "step-of" as const } } : {}),
+    ...(total > 1 || status.preflight !== undefined || status.workflowGraph !== undefined
+      ? { parent: { id: planPanelId(status.runId), relation: "step-of" as const } }
+      : {}),
     ...opt(requested, "requested"),
     ...opt(step.model, "model"),
     ...opt(iso(step.startedAt ?? status.startedAt), "startedAt"),
@@ -388,6 +393,10 @@ export function singleRunPanel(status: AsyncStatus, options: MapOptions): RunPan
   return {
     ...child,
     id: runPanelId(status.runId),
+    ...opt(status.workflowKey, "title"),
+    ...(status.parentWorkflowRunId
+      ? { parent: { id: planPanelId(status.parentWorkflowRunId), relation: "step-of" as const } }
+      : {}),
     lifecycle: LIFECYCLE_OF[status.state] ?? child.lifecycle,
     ...opt(
       terminalReason(status.state, {

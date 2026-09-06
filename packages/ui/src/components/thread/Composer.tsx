@@ -1,6 +1,6 @@
 import { ComposerPrimitive, useAui, useAuiState, unstable_useMentionAdapter, unstable_useSlashCommandAdapter } from "@assistant-ui/react";
 import type { CommandInfo, ProjectFile } from "@lasercode/protocol";
-import { AtSign, Bot, FileText, FolderOpen, GitFork, History, ListX, Pencil, Plus, Puzzle, Shrink, SlashSquare, Sparkles } from "lucide-react";
+import { AtSign, Bot, FileText, FolderOpen, GitFork, History, ListX, Pencil, Plus, Shrink, SlashSquare, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 
 import {
@@ -25,8 +25,10 @@ import { Kbd } from "@/components/ui/kbd";
 import { modKey } from "@/format";
 import { useIsMobile, useIsTouch } from "@/hooks/use-mobile";
 import { usePanelEntries } from "@/panels";
+import { finishActiveDictation } from "@/pwa";
 import { composerSendPlan, useLaserStable, useLaserView, useSessionMeta } from "@/runtime";
 import { ProjectLine } from "./ProjectLine.js";
+import { completeLeadingSlash, matchLeadingSlash, slashCommandMatchesQuery } from "./slash-completion.js";
 import { StatusLine } from "./StatusLine.js";
 
 /**
@@ -108,7 +110,7 @@ export function Composer() {
           </ComposerPrimitive.AttachmentDropzone>
         )}
         {/* `/` runs a laser command; `@` addresses a running subagent by handle. */}
-        <ComposerTriggerPopover char="/" adapter={slash.adapter} action={slash.action} {...(slash.iconMap ? { iconMap: slash.iconMap } : {})} fallbackIcon={SlashSquare} className="bottom-[calc(100%-2rem)]" />
+        <ComposerTriggerPopover char="/" matcher={matchLeadingSlash} adapter={slash.adapter} action={slash.action} {...(slash.iconMap ? { iconMap: slash.iconMap } : {})} fallbackIcon={SlashSquare} className="bottom-[calc(100%-2rem)]" />
         <ComposerTriggerPopover char="@" adapter={mention.adapter} directive={mention.directive} fallbackIcon={AtSign} emptyItemsLabel="Nothing to mention here yet" className="bottom-[calc(100%-2rem)]" />
         {!mobile && <ComposerFooterLine />}
       </ComposerPrimitive.Root>
@@ -148,6 +150,7 @@ function useComposerKeys(): (e: KeyboardEvent<HTMLTextAreaElement>) => void {
   const aui = useAui();
   const running = useAuiState((s) => s.thread.isRunning);
   const disabled = useAuiState((s) => s.thread.isDisabled);
+  const dictating = useAuiState((s) => s.composer.dictation != null);
   const touch = useIsTouch();
   return (e) => {
     if (e.nativeEvent.isComposing) return;
@@ -163,9 +166,13 @@ function useComposerKeys(): (e: KeyboardEvent<HTMLTextAreaElement>) => void {
     if (touch && !e.metaKey && !e.ctrlKey) return;
     e.preventDefault();
     if (disabled || !aui.composer.getState().canSend) return;
-    foldQuote(aui);
-    aui.composer.setRunConfig(plan.runConfig);
-    aui.composer.send(plan.sendOptions);
+    const send = () => {
+      foldQuote(aui);
+      aui.composer.setRunConfig(plan.runConfig);
+      aui.composer.send(plan.sendOptions);
+    };
+    if (dictating) void finishActiveDictation().then(send);
+    else send();
   };
 }
 
@@ -212,6 +219,7 @@ function SendOrStop({ mobile = false }: { mobile?: boolean }) {
   const aui = useAui();
   const running = useAuiState((s) => s.thread.isRunning);
   const empty = useAuiState((s) => s.composer.isEmpty);
+  const dictating = useAuiState((s) => s.composer.dictation != null);
   const stop = running && empty;
   const size = mobile ? "icon-lg" : "icon-sm";
   const className = mobile ? MobileComposerButtonClass(true) : undefined;
@@ -230,9 +238,20 @@ function SendOrStop({ mobile = false }: { mobile?: boolean }) {
         shortcut="⏎"
         size={size}
         className={className}
-        onClick={() => {
-          foldQuote(aui);
-          aui.composer.setRunConfig({ custom: { streamingBehavior: running ? "steer" : "prompt" } });
+        onClick={(event) => {
+          const prepare = () => {
+            foldQuote(aui);
+            aui.composer.setRunConfig({ custom: { streamingBehavior: running ? "steer" : "prompt" } });
+          };
+          if (!dictating) {
+            prepare();
+            return;
+          }
+          event.preventDefault();
+          void finishActiveDictation().then(() => {
+            prepare();
+            aui.composer.send();
+          });
         }}
       />
     </ComposerPrimitive.Send>
@@ -258,7 +277,7 @@ const SLASH_ICONS = {
   "new": Plus,
   queue: ListX,
   project: FolderOpen,
-  extension: Puzzle,
+  feature: Sparkles,
   prompt: FileText,
   skill: Sparkles,
 } as const;
@@ -315,12 +334,12 @@ function useSlashCommands() {
         // These are the agent's own commands: they run when the message is
         // sent, not when the row is clicked. So the row writes the command into
         // the composer and leaves the cursor after it, ready for arguments.
-        // Deferred by a tick because `removeOnExecute` strips the trigger text
-        // right after this returns, and it must not strip what we just wrote.
+        // The primitive removes only the leading `/query`. Restore the chosen
+        // command in place and keep every argument or line after it intact.
         execute: () => {
-          const text = `/${command.name} `;
           setTimeout(() => {
-            aui.composer.setText(text);
+            const remainder = aui.composer.getState().text;
+            aui.composer.setText(completeLeadingSlash(command.name, remainder));
           }, 0);
         },
       })),
@@ -347,7 +366,16 @@ function useSlashCommands() {
     aui.composer.setText(current ? `${current}\n${text}` : text);
   }
 
-  return unstable_useSlashCommandAdapter({ commands, removeOnExecute: true, iconMap: SLASH_ICONS });
+  const slash = unstable_useSlashCommandAdapter({ commands, removeOnExecute: true, iconMap: SLASH_ICONS });
+  const adapter = useMemo(
+    () => ({
+      ...slash.adapter,
+      search: (query: string) =>
+        (slash.adapter.search?.("") ?? []).filter((item) => slashCommandMatchesQuery(item, query)),
+    }),
+    [slash.adapter],
+  );
+  return useMemo(() => ({ ...slash, adapter }), [slash, adapter]);
 }
 
 // ---------------------------------------------------------------------------

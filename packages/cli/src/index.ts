@@ -63,6 +63,5 @@ export {
 export { TailRenderer, firstLine, formatDuration, summarizeArgs, summarizeResult } from "./render.js";
 export { HostRpc, HostRpcError, describeRpcError, type NotificationHandler } from "./rpc.js";
 export { listSessions, matchSessions, resolveSession, resolveProject } from "./session-ref.js";
-export { splitPiArgs, type PiPrefix } from "./commands/pi.js";
 export { sessionFragment } from "./commands/session.js";
 export { CLI_VERSION } from "./version.js";

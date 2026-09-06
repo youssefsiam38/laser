@@ -52,7 +52,7 @@ export function PoppedOutPanel({ hash }: { hash: string }) {
     return (
       <Empty
         title={connection === "open" ? "This panel is gone" : "Connecting to the host…"}
-        body={connection === "open" ? "The extension that showed it has closed it, or the session ended. You can close this tab." : "The panel appears as soon as the session is open."}
+        body={connection === "open" ? "The feature that showed it has closed it, or the session ended. You can close this tab." : "The panel appears as soon as the session is open."}
         busy={connection !== "open"}
       />
     );

@@ -138,34 +138,6 @@ const envRow = (name: string, description: string): string => `  ${name.padEnd(3
 
 export const TOPICS: readonly Topic[] = [
   {
-    name: "pi",
-    title: `Reaching Pi through ${PRODUCT_NAME}`,
-    body: `
-${PRODUCT_NAME} pins its own copy of Pi inside @lasercode/worker. That pinned copy is the
-one the app runs, and \`${PRODUCT_NAME} pi\` runs the same one, so what you see in a
-terminal and what you see in the app are the same agent at the same version.
-
-  ${PRODUCT_NAME} pi                     start Pi's TUI in the current directory
-  ${PRODUCT_NAME} pi --help              Pi's own help, verbatim
-  ${PRODUCT_NAME} pi update --extensions Pi's own update verb, verbatim
-  ${PRODUCT_NAME} pi models              Pi's own model list
-
-Everything after \`${PRODUCT_NAME} pi\` belongs to Pi, including --help and --version.
-${PRODUCT_NAME} only consumes flags that appear *before* the first Pi argument:
-
-  --global-pi              run the \`pi\` on your PATH instead of the pinned one
-  --agent-dir <dir>        override the agent directory for this run
-  --subagents-temp-root <dir>
-
-Children inherit PI_CODING_AGENT_DIR, PI_CODING_AGENT_SESSION_DIR and
-PI_SUBAGENTS_TEMP_ROOT from ${PRODUCT_NAME}'s resolution, which is why a background
-subagent run started this way shows up in the app.
-
-Exit codes and signals pass straight through: \`${PRODUCT_NAME} pi\` exits with Pi's
-code, and a Pi killed by a signal kills the wrapper with the same signal.
-`,
-  },
-  {
     name: "host",
     title: "The host process",
     body: `
@@ -277,7 +249,7 @@ ${envRow("PI_CODING_AGENT_DIR", `used when ${ENV.agentDir} is unset`)}
 ${envRow("PI_CODING_AGENT_SESSION_DIR", `used when ${ENV.sessionDir} is unset`)}
 ${envRow("PI_SUBAGENTS_TEMP_ROOT", `used when ${ENV.subagentsTempRoot} is unset`)}
 
-Set by ${PRODUCT_NAME} for every Pi it starts (directly or through a worker):
+Set internally by ${PRODUCT_NAME} for its bundled engine:
 
   PI_CODING_AGENT_DIR, PI_CODING_AGENT_SESSION_DIR, PI_SUBAGENTS_TEMP_ROOT, ${ENV_PREFIX}=1
 `,
@@ -302,7 +274,6 @@ Exit codes:
   3  no host is running
   4  the host answered with an error
 
-\`${PRODUCT_NAME} pi\` is the exception: it exits with Pi's own code.
 `,
   },
 ];

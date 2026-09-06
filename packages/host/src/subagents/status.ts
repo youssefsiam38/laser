@@ -181,6 +181,10 @@ export interface AsyncStatus {
   /** Parent Pi session *file path*, which is laser's session `path`. */
   sessionId?: string;
   cwd?: string;
+  /** Workflow run that launched this run, when this is a scripted lane. */
+  parentWorkflowRunId?: string;
+  /** Caller-facing lane key inside `parentWorkflowRunId`. */
+  workflowKey?: string;
   mode: "single" | "parallel" | "chain" | "workflow";
   state: RunState;
   error?: string;
@@ -519,6 +523,8 @@ export function parseStatus(raw: unknown, dir: string, fallbackRunId: string): A
     steps,
     ...put(str(o.sessionId), "sessionId"),
     ...put(str(o.cwd), "cwd"),
+    ...put(str(o.parentWorkflowRunId), "parentWorkflowRunId"),
+    ...put(str(o.workflowKey), "workflowKey"),
     ...put(str(o.error), "error"),
     ...put(num(o.pid), "pid"),
     ...put(num(o.startedAt), "startedAt"),

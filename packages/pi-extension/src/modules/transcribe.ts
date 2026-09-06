@@ -10,11 +10,9 @@
  * (`packages/worker/src/transcribe.ts`) — and this module does the two things
  * that can only be done from inside the Pi process.
  *
- * 1. **Detection.** The affordance exists only where the package does. A
- *    session without pi-gpt-transcribe installed shows no microphone at all
- *    (M8-T1), rather than a button that explains itself after you press it.
- *    Detection reads Pi's own command registry, so a package the user filtered
- *    out of this project reads as absent — which is exactly what it is (R11).
+ * 1. **Availability.** Dictation is an always-present Laser capability. Its
+ *    reusable backend is pinned in the worker; there is no package detection
+ *    or installation state in the product.
  *
  * 2. **The pre-send transform.** A phrase still being transcribed when you
  *    press Enter belongs to the prompt you just sent. Pi awaits its `input`
@@ -31,13 +29,8 @@
  */
 
 import { PRODUCT_NAME, symbolKey } from "@lasercode/protocol";
-import type { ExtensionContext, SlashCommandInfo } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { LaserModule } from "./index.js";
-
-/** The npm/git package id, as it appears in `sourceInfo.source` and `sourceInfo.path`. */
-const PACKAGE_ID = "pi-gpt-transcribe";
-/** The slash command the package registers (`src/command.ts`, `COMMAND_NAME`). */
-const COMMAND_NAME = "transcribe";
 
 /** Mirrors `packages/worker/src/transcribe.ts`. Both sides declare it; neither imports the other. */
 const BRIDGE_SYMBOL = Symbol.for(symbolKey("transcribe.v1"));
@@ -56,18 +49,6 @@ function bridge(): TranscribeBridge | undefined {
     : undefined;
 }
 
-/**
- * True when `info` came from the named package. Matches the settings entry
- * (`npm:pi-gpt-transcribe`, `git:github.com/youssefsiam38/pi-gpt-transcribe`)
- * and the resolved path, because a package installed from git, from npm, or
- * from a local checkout writes a different `source` each time and only the path
- * is common to all three.
- */
-function fromPackage(info: SlashCommandInfo["sourceInfo"] | undefined, id: string): boolean {
-  if (!info) return false;
-  return info.source.includes(id) || info.path.includes(id);
-}
-
 /** "already typed" + "new phrase", exactly one space between. */
 function joinWithSpace(existing: string, addition: string): string {
   if (existing === "" || /\s$/.test(existing)) return `${existing}${addition}`;
@@ -77,18 +58,7 @@ function joinWithSpace(existing: string, addition: string): string {
 export const transcribeModule: LaserModule = {
   name: "transcribe",
 
-  detect({ pi }) {
-    try {
-      return pi
-        .getCommands()
-        .some((command) => command.name === COMMAND_NAME && fromPackage(command.sourceInfo, PACKAGE_ID));
-    } catch {
-      // `getCommands` needs a bound runner. If it is not ready, the honest
-      // answer is "not detected" — the capability report is re-sent on the next
-      // session_start, and a wrong "yes" would offer a microphone that fails.
-      return false;
-    }
-  },
+  detect: () => true,
 
   activate({ pi, send }) {
     send({
@@ -96,7 +66,7 @@ export const transcribeModule: LaserModule = {
       module: "transcribe",
       level: "info",
       message:
-        `pi-gpt-transcribe detected. ${PRODUCT_NAME} dictates natively (browser microphone, worker transcription) and reads the package's config.json; its terminal path stays unused.`,
+        `${PRODUCT_NAME} dictation is ready. The browser owns capture and the worker uses the pinned transcription core; terminal presentation stays unused.`,
     });
 
     // Pi has no `off`: handlers live as long as the extension runner, which is

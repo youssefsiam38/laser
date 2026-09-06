@@ -13,7 +13,7 @@
  * actually see. Ordering is creation order, never attention order — a strip
  * that reshuffles is a strip you cannot learn.
  */
-import { ATTENTION_RANK, highestAttention, type Attention, type Panel } from "@lasercode/protocol";
+import { highestAttention, type Attention, type Panel } from "@lasercode/protocol";
 import { attentionOfEntry, elapsedOf, type PanelEntry } from "@/panels";
 
 export interface RunNode {
@@ -61,7 +61,10 @@ export function buildRunTree(
 ): RunTree {
   const nodes = new Map<string, RunNode>();
   const order: string[] = [];
-  for (const entry of entries) {
+  const chronological = entries
+    .map((entry, index) => ({ entry, index }))
+    .sort((a, b) => a.entry.firstSeenAt - b.entry.firstSeenAt || a.index - b.index);
+  for (const { entry } of chronological) {
     if (!RUNNISH.has(entry.panel.kind) || entry.closed) continue;
     const node: RunNode = {
       key: entry.key,
@@ -88,6 +91,28 @@ export function buildRunTree(
     if (parent && parent !== node) parent.children.push(node);
     else roots.push(node);
   }
+
+  // A structured run already carries its authoritative lane/step order. Child
+  // status files can land a few milliseconds apart (or be replayed in a
+  // filesystem-dependent order), so their PanelHub arrival time must not
+  // scramble that sequence.
+  const orderBranches = (node: RunNode): void => {
+    if (node.entry.panel.kind === "plan") {
+      const positions = new Map(
+        node.entry.panel.steps.flatMap((step, index) => (step.runId ? [[step.runId, index] as const] : [])),
+      );
+      node.children.sort((a, b) => {
+        const aAt = positions.get(a.id);
+        const bAt = positions.get(b.id);
+        if (aAt === undefined && bAt === undefined) return 0;
+        if (aAt === undefined) return 1;
+        if (bAt === undefined) return -1;
+        return aAt - bAt;
+      });
+    }
+    for (const child of node.children) orderBranches(child);
+  };
+  for (const root of roots) orderBranches(root);
 
   // Depth and the attention roll-up, in one post-order walk. Cycles cannot
   // happen with well-formed ids, but a `seen` set keeps a malformed feed from
@@ -185,7 +210,7 @@ export function reconcileFocus(tree: RunTree, focusedId: string | undefined, pre
   return undefined;
 }
 
-/** Every node, flattened depth-first — the fleet sheet's list and `laser runs`. */
+/** Every node, flattened depth-first — summaries, tests and `laser runs`. */
 export function flatten(tree: RunTree): RunNode[] {
   const out: RunNode[] = [];
   const walk = (nodes: readonly RunNode[]): void => {
@@ -196,9 +221,4 @@ export function flatten(tree: RunTree): RunNode[] {
   };
   walk(tree.roots);
   return out;
-}
-
-/** Attention-first ordering, for the fleet sheet only — never for the strip. */
-export function byAttention(nodes: readonly RunNode[]): RunNode[] {
-  return [...nodes].sort((a, b) => ATTENTION_RANK[a.attention] - ATTENTION_RANK[b.attention] || a.entry.firstSeenAt - b.entry.firstSeenAt);
 }

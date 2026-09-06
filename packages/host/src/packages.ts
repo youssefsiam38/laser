@@ -521,6 +521,9 @@ export function describeInstallFailure(name: string, raw: string): string {
   if (/\benospc\b|no space left/.test(lower)) {
     return say("the disk is full.");
   }
+  if (/estrictallowscripts|install scripts (?:not covered by allowscripts|blocked)/.test(lower)) {
+    return say(`one of its components needs to run setup code that ${PRODUCT_NAME} has not reviewed yet. Nothing was installed.`);
+  }
   if (/not trusted/.test(lower)) {
     return say("this project is not trusted yet. Trust it first, or install for your user instead.");
   }

@@ -1,11 +1,9 @@
 /**
- * Reaching Pi without leaving laser's world.
+ * Internal access to Laser's pinned engine for diagnostics and tests.
  *
- * `laser pi ...` runs the Pi that `@lasercode/worker` pins (AGENTS.md invariant
- * 4), not whatever `pi` happens to be on `$PATH`, and runs it with laser's
- * agent dir and pi-subagents temp root. That is the whole point: a session you
- * start from the terminal this way shows up in the app, and a background
- * subagent run lands in the root the host watches.
+ * This resolves the copy that `@lasercode/worker` pins (AGENTS.md invariant 4),
+ * never whatever engine binary happens to be on `$PATH`. It is not exposed as
+ * a public passthrough command.
  *
  * Resolving a path is not importing Pi. Nothing in this package imports
  * `@earendil-works/*`; it only asks Node where the worker's copy lives.

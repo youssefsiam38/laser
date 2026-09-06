@@ -21,7 +21,7 @@ const field = (path: string, over: Partial<SettingDescriptor> = {}): SettingDesc
 });
 
 const catalog: SettingsCatalog = {
-  piVersion: "0.85.0",
+  engineVersion: "0.85.0",
   sections: [
     { id: "model", title: "Model", description: "m" },
     { id: "privacy", title: "Privacy", description: "p" },

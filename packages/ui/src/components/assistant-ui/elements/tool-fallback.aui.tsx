@@ -36,6 +36,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Textarea } from "@/components/ui/textarea";
 import { duration as formatDuration } from "@/format";
 import { cn } from "@/lib/utils";
+import { JsonViewer, parseJsonText } from "./json-viewer.js";
 
 import { collapsePanel, mono, pressable } from "./surfaces.js";
 
@@ -275,12 +276,11 @@ function ToolFallbackArgs({
   ...props
 }: React.ComponentProps<"div"> & { argsText?: string | undefined }) {
   if (!argsText) return null;
+  const json = parseJsonText(argsText);
   return (
     <div data-slot="tool-fallback-args" className={cn(className)} {...props}>
       <ToolFallbackSection label="args">
-        <pre className="max-h-80 overflow-auto rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs leading-sm wrap-break-word whitespace-pre-wrap text-ink-2">
-          {argsText}
-        </pre>
+        {json === undefined ? <pre className="max-h-80 overflow-auto rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs leading-sm wrap-break-word whitespace-pre-wrap text-ink-2">{argsText}</pre> : <JsonViewer value={json} expandedDepth={1} className="max-h-80" />}
       </ToolFallbackSection>
     </div>
   );
@@ -297,9 +297,7 @@ function ToolFallbackResult({
   return (
     <div data-slot="tool-fallback-result" className={cn(className)} {...props}>
       <ToolFallbackSection label="result">
-        <pre className="max-h-80 overflow-auto rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs leading-sm wrap-break-word whitespace-pre-wrap text-ink-2">
-          {text}
-        </pre>
+        {typeof result === "string" && parseJsonText(result) === undefined ? <pre className="max-h-80 overflow-auto rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs leading-sm wrap-break-word whitespace-pre-wrap text-ink-2">{text}</pre> : <JsonViewer value={typeof result === "string" ? parseJsonText(result) : result} expandedDepth={1} className="max-h-80" />}
       </ToolFallbackSection>
     </div>
   );

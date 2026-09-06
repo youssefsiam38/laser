@@ -18,7 +18,7 @@
  *   - Every colour, radius and size reads a token.
  *   - `SessionModelSelector` binds the picker to the open session: models
  *     load from `pi/model/list` when the popover opens, group by provider,
- *     carry the provider's mark, and a pick calls `pi/model/set`.
+ *     carry the configured provider's mark, and a pick calls `pi/model/set`.
  */
 
 import {
@@ -34,13 +34,14 @@ import {
 } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import type { ModelRef } from "@lasercode/protocol";
-import { CheckIcon, ChevronDownIcon, Cpu } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, ChevronsUpDown, Cpu } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { Button } from "@/components/ui/button";
 import {
   Command,
   CommandEmpty,
@@ -55,11 +56,14 @@ import { useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
 
 import { ErrorState } from "./error-state.js";
 import { GenerationLoader } from "./loading-state.js";
-import { ProviderLogo } from "./logos.js";
+import { ProviderLogo, providerDisplayName } from "./logos.js";
 
 export type ModelOption = {
   id: string;
   name: string;
+  provider?: string;
+  /** Routing provider shown at the end of a model row. */
+  providerTag?: string;
   description?: string;
   icon?: ReactNode;
   disabled?: boolean;
@@ -357,6 +361,11 @@ function ModelSelectorContent({
   const { side: renderedSide, popupRef } = useLazyFlipSide();
   const unfiltered =
     searchable === false || (!searchable && children === undefined);
+  // Custom unfiltered menus can supply their own visible CommandInput. Adding
+  // the hidden keyboard anchor as well gives cmdk two inputs; after the first
+  // character it moves focus to the hidden one. The anchor is only needed by
+  // the stock, input-less list.
+  const needsFocusAnchor = unfiltered && children === undefined;
 
   return (
     <PopoverContent
@@ -376,7 +385,7 @@ function ModelSelectorContent({
         shouldFilter={!unfiltered}
         {...(value !== undefined ? { defaultValue: value } : {})}
       >
-        {unfiltered && <ModelSelectorFocusAnchor />}
+        {needsFocusAnchor && <ModelSelectorFocusAnchor />}
         {children ?? (
           <>
             {searchable && <ModelSelectorSearch />}
@@ -496,7 +505,7 @@ function ModelSelectorItem({
         onSelect?.(selectedValue);
       }}
       className={cn(
-        "relative items-start gap-2.5 rounded-md py-1.5 ps-3 pe-9 [&_svg:not([class*='size-'])]:size-3.5",
+        "relative items-start gap-2.5 rounded-md py-1.5 px-3 [&_svg:not([class*='size-'])]:size-3.5",
         className,
       )}
       {...props}
@@ -506,7 +515,7 @@ function ModelSelectorItem({
           {model.icon && (
             <ModelIcon className="mt-0.75">{model.icon}</ModelIcon>
           )}
-          <span className="flex min-w-0 flex-col">
+          <span className="flex min-w-0 flex-1 flex-col">
             <span className="truncate font-medium" title={model.name}>
               {model.name}
             </span>
@@ -516,10 +525,15 @@ function ModelSelectorItem({
               </span>
             )}
           </span>
+          {model.providerTag && (
+            <span className="mt-0.25 max-w-36 shrink-0 truncate rounded-md border border-line bg-surface-2 px-1.5 py-0.5 font-mono text-xs leading-4 text-ink-3" title={`Provider: ${model.providerTag}`}>
+              {model.providerTag}
+            </span>
+          )}
         </>
       )}
       {isSelected && (
-        <span className="absolute end-3 top-2 flex size-4 items-center justify-center">
+        <span className="mt-0.25 flex size-4 shrink-0 items-center justify-center">
           <CheckIcon className="size-3.5 text-live" />
         </span>
       )}
@@ -559,15 +573,373 @@ export {
 
 export const modelOptionId = (model: Pick<ModelRef, "provider" | "id">): string => `${model.provider}/${model.id}`;
 
-/** A Pi model as a picker option: provider mark, name, typed id, context size in the search terms. */
+/** Split proxy catalogues into the provider used and the upstream model name. */
+export function modelProvenance(model: Pick<ModelRef, "provider" | "id">): {
+  provider: string;
+  sourceProvider?: string;
+  modelId: string;
+} {
+  const modelId = model.id.replace(/^~/, "");
+  const slash = modelId.indexOf("/");
+  if (model.provider === "openrouter" && slash > 0) {
+    return { provider: model.provider, sourceProvider: modelId.slice(0, slash), modelId };
+  }
+  return { provider: model.provider, modelId };
+}
+
+/** A model as a picker option: model-family mark, name, provenance and search terms. */
 export function modelOption(model: ModelRef): ModelOption {
+  const provenance = modelProvenance(model);
   return {
     id: modelOptionId(model),
     name: model.name ?? model.id,
-    description: model.name && model.name !== model.id ? model.id : model.provider,
+    provider: model.provider,
+    providerTag: providerDisplayName(model.provider),
+    description: provenance.sourceProvider
+      ? `${provenance.modelId} via ${provenance.provider}`
+      : model.id,
     icon: <ProviderLogo provider={model.provider} className="size-3.5" />,
-    keywords: [model.provider, model.id, ...(model.contextWindow ? [tokens(model.contextWindow)] : [])],
+    keywords: [model.provider, model.id, provenance.modelId, provenance.sourceProvider ?? "", ...(model.contextWindow ? [tokens(model.contextWindow)] : [])],
   };
+}
+
+export interface ProviderModelMenuProps {
+  loading?: boolean | undefined;
+  error?: string | null | undefined;
+  onRetry?: () => void;
+  side?: ModelSelectorContentProps["side"];
+  align?: ModelSelectorContentProps["align"];
+  beforeFilters?: ReactNode;
+}
+
+/** Shared provider/model menu with one explicit field for each filter. */
+export function ProviderModelMenu({ loading = false, error, onRetry, side = "bottom", align = "start", beforeFilters }: ProviderModelMenuProps) {
+  const { models } = useModelSelectorContext();
+  const [providerFilter, setProviderFilter] = useState("all");
+  const [modelFilter, setModelFilter] = useState("");
+  const groups = useMemo(() => {
+    const byProvider = new Map<string, ModelOption[]>();
+    for (const option of models) {
+      const provider = option.provider ?? option.id.slice(0, option.id.indexOf("/"));
+      const list = byProvider.get(provider) ?? [];
+      list.push(option);
+      byProvider.set(provider, list);
+    }
+    return [...byProvider.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [models]);
+  const providers = useMemo(() => groups.map(([provider]) => provider), [groups]);
+  const visibleGroups = useMemo(() => {
+    const needle = modelFilter.trim().toLowerCase();
+    const providerGroups = providerFilter === "all" ? groups : groups.filter(([provider]) => provider === providerFilter);
+    if (!needle) return providerGroups;
+    return providerGroups
+      .map(([provider, list]) => [
+        provider,
+        list.filter((option) =>
+          [option.name, option.id.slice(option.id.indexOf("/") + 1), ...(option.keywords ?? []).filter((term) => term !== option.provider)]
+            .filter(Boolean)
+            .some((term) => term!.toLowerCase().includes(needle)),
+        ),
+      ] as const)
+      .filter(([, list]) => list.length > 0);
+  }, [groups, modelFilter, providerFilter]);
+  const visibleCount = visibleGroups.reduce((count, [, list]) => count + list.length, 0);
+
+  return (
+    <ModelSelectorContent side={side} align={align} searchable={false} className="w-88">
+      {beforeFilters}
+      <div className="grid gap-2 border-b border-line p-2">
+        <LabeledFilter label="Provider">
+          <ProviderFilterField providers={providers} value={providerFilter} onValueChange={setProviderFilter} />
+        </LabeledFilter>
+        <LabeledFilter label="Model">
+          <ModelSelectorSearch
+            aria-label="Filter by model"
+            placeholder={providerFilter === "all" ? "Search model names or IDs" : `Search ${providerFilter} models`}
+            value={modelFilter}
+            onValueChange={setModelFilter}
+          />
+        </LabeledFilter>
+      </div>
+      <ModelSelectorList>
+        {error ? (
+          <ErrorState className="m-2" title="Couldn’t load the model list" detail={error} {...(onRetry ? { onRetry } : {})} />
+        ) : loading ? (
+          <div className="px-3 py-3"><GenerationLoader label="Loading models" layout="inline" /></div>
+        ) : visibleCount === 0 ? (
+          <p className="px-3 py-4 text-center text-sm text-ink-3">No model matches.</p>
+        ) : (
+          visibleGroups.map(([provider, list]) => (
+            <ModelSelectorGroup key={provider} heading={provider}>
+              {list.map((option) => <ModelSelectorItem key={option.id} model={option} />)}
+            </ModelSelectorGroup>
+          ))
+        )}
+      </ModelSelectorList>
+    </ModelSelectorContent>
+  );
+}
+
+function LabeledFilter({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[4.25rem_minmax(0,1fr)] items-center gap-2">
+      <span className="eyebrow text-ink-3">{label}</span>
+      <div className="min-w-0 overflow-hidden rounded-lg border border-line bg-surface">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+export interface ProviderFilterFieldProps {
+  providers: readonly string[];
+  value: string;
+  onValueChange(value: string): void;
+  className?: string;
+}
+
+/** Searchable single-field provider filter shared by menus and catalogue tables. */
+export function ProviderFilterField({ providers, value, onValueChange, className }: ProviderFilterFieldProps) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          role="combobox"
+          aria-label="Filter by provider"
+          aria-expanded={open}
+          className={cn("h-9 w-full justify-between rounded-none px-2.5 font-normal", className)}
+        >
+          <span className="flex min-w-0 items-center gap-2 truncate">
+            {value === "all" ? null : <ProviderLogo provider={value} className="size-3.5 shrink-0" />}
+            <span className="truncate">{value === "all" ? "All providers" : value}</span>
+          </span>
+          <ChevronsUpDown aria-hidden="true" className="size-3.5 shrink-0 text-ink-3" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-72 max-w-[calc(100vw-2rem)] overflow-hidden p-0">
+        <Command className="bg-transparent">
+          <CommandInput aria-label="Search providers" placeholder="Search providers" />
+          <CommandList>
+            <CommandEmpty>No provider matches.</CommandEmpty>
+            <CommandGroup heading="Providers">
+              <CommandItem
+                value="all-providers"
+                onSelect={() => {
+                  onValueChange("all");
+                  setOpen(false);
+                }}
+              >
+                <span className="flex-1">All providers</span>
+                {value === "all" ? <CheckIcon className="size-3.5 text-live" /> : null}
+              </CommandItem>
+              {providers.map((provider) => (
+                <CommandItem
+                  key={provider}
+                  value={provider}
+                  onSelect={() => {
+                    onValueChange(provider);
+                    setOpen(false);
+                  }}
+                >
+                  <ProviderLogo provider={provider} className="size-3.5" />
+                  <span className="min-w-0 flex-1 truncate">{provider}</span>
+                  {value === provider ? <CheckIcon className="size-3.5 text-live" /> : null}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+export interface ProviderModelPickerProps {
+  models: readonly ModelRef[];
+  value?: string;
+  onValueChange(value: string): void;
+  disabled?: boolean;
+  loading?: boolean;
+  error?: string;
+  placeholder?: string;
+  className?: string;
+  side?: ProviderModelMenuProps["side"];
+  align?: ProviderModelMenuProps["align"];
+}
+
+export interface ProviderPickerProps {
+  models: readonly ModelRef[];
+  value?: string;
+  onValueChange(value: string): void;
+  disabled?: boolean;
+  loading?: boolean;
+  error?: string;
+  placeholder?: string;
+  className?: string;
+}
+
+/** Searchable provider-only companion to the provider/model picker. */
+export function ProviderPicker({ models, value, onValueChange, disabled, loading = false, error, placeholder = "Choose a provider", className }: ProviderPickerProps) {
+  const options = useMemo<ModelOption[]>(
+    () => [...new Set(models.map((model) => model.provider))].sort().map((provider) => ({ id: provider, name: provider, provider, icon: <ProviderLogo provider={provider} className="size-3.5" /> })),
+    [models],
+  );
+  return (
+    <ModelSelectorRoot models={options} {...(value ? { value } : {})} onValueChange={onValueChange}>
+      <ModelSelectorTrigger disabled={disabled} className={cn("w-full max-w-96", className)}>
+        <ModelSelectorValue placeholder={placeholder} />
+      </ModelSelectorTrigger>
+      <ModelSelectorContent searchable>
+        <ModelSelectorSearch placeholder="Search providers" />
+        <ModelSelectorList>
+          {error ? (
+            <ErrorState className="m-2" title="Couldn’t load providers" detail={error} />
+          ) : loading ? (
+            <div className="px-3 py-3"><GenerationLoader label="Loading providers" layout="inline" /></div>
+          ) : (
+            <>
+              <ModelSelectorEmpty>No provider matches.</ModelSelectorEmpty>
+              <ModelSelectorGroup heading="Providers">
+                {options.map((option) => <ModelSelectorItem key={option.id} model={option} />)}
+              </ModelSelectorGroup>
+            </>
+          )}
+        </ModelSelectorList>
+      </ModelSelectorContent>
+    </ModelSelectorRoot>
+  );
+}
+
+/** A complete single-value model control for settings and onboarding. */
+export function ProviderModelPicker({ models, value, onValueChange, disabled, loading, error, placeholder, className, side, align }: ProviderModelPickerProps) {
+  const options = useMemo(() => models.map(modelOption), [models]);
+  return (
+    <ModelSelectorRoot models={options} {...(value ? { value } : {})} onValueChange={onValueChange}>
+      <ModelSelectorTrigger disabled={disabled} className={cn("w-full max-w-96", className)}>
+        <ModelSelectorValue placeholder={placeholder ?? "Choose a model"} className="min-w-0" />
+      </ModelSelectorTrigger>
+      <ProviderModelMenu loading={loading} error={error} {...(side ? { side } : {})} {...(align ? { align } : {})} />
+    </ModelSelectorRoot>
+  );
+}
+
+export interface ProviderModelMultiPickerProps {
+  models: readonly ModelRef[];
+  values: readonly string[];
+  onValuesChange(values: string[]): void;
+  disabled?: boolean;
+  loading?: boolean;
+  error?: string;
+  label?: string;
+  className?: string;
+}
+
+/** A searchable, provider-filtered multi-select for model allowlists. */
+export function ProviderModelMultiPicker({ models, values, onValuesChange, disabled, loading = false, error, label = "models", className }: ProviderModelMultiPickerProps) {
+  const [open, setOpen] = useState(false);
+  const [providerFilter, setProviderFilter] = useState("all");
+  const [modelFilter, setModelFilter] = useState("");
+  const options = useMemo(() => models.map(modelOption), [models]);
+  const groups = useMemo(() => {
+    const grouped = new Map<string, ModelOption[]>();
+    for (const option of options) {
+      const provider = option.provider ?? "other";
+      const list = grouped.get(provider) ?? [];
+      list.push(option);
+      grouped.set(provider, list);
+    }
+    return [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [options]);
+  const chosen = useMemo(() => new Set(values), [values]);
+  const providers = useMemo(() => groups.map(([provider]) => provider), [groups]);
+  const visibleGroups = useMemo(() => {
+    const needle = modelFilter.trim().toLowerCase();
+    const providerGroups = providerFilter === "all" ? groups : groups.filter(([provider]) => provider === providerFilter);
+    if (!needle) return providerGroups;
+    return providerGroups
+      .map(([provider, list]) => [provider, list.filter((option) =>
+        [option.name, option.id.slice(option.id.indexOf("/") + 1)]
+          .filter(Boolean)
+          .some((term) => term!.toLowerCase().includes(needle)),
+      )] as const)
+      .filter(([, list]) => list.length > 0);
+  }, [groups, modelFilter, providerFilter]);
+  const toggle = (id: string) => onValuesChange(chosen.has(id) ? values.filter((value) => value !== id) : [...values, id]);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={disabled}
+          role="combobox"
+          aria-expanded={open}
+          className={cn("h-8 w-full max-w-120 justify-between px-2.5 font-normal", className)}
+        >
+          <span className="truncate">{values.length === 0 ? `All ${label}` : `${values.length} ${label} selected`}</span>
+          <ChevronDownIcon aria-hidden="true" className="size-3.5 text-ink-3" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-88 max-w-[calc(100vw-2rem)] overflow-hidden p-0">
+        <Command className="bg-transparent" shouldFilter={false}>
+          <div className="grid gap-2 border-b border-line p-2">
+            <LabeledFilter label="Provider">
+              <ProviderFilterField providers={providers} value={providerFilter} onValueChange={setProviderFilter} />
+            </LabeledFilter>
+            <LabeledFilter label="Model">
+              <CommandInput
+                aria-label="Filter by model"
+                placeholder={providerFilter === "all" ? "Search model names or IDs" : `Search ${providerFilter} models`}
+                value={modelFilter}
+                onValueChange={setModelFilter}
+              />
+            </LabeledFilter>
+          </div>
+          <CommandList>
+            {error ? (
+              <ErrorState className="m-2" title="Couldn’t load models" detail={error} />
+            ) : loading ? (
+              <div className="px-3 py-3"><GenerationLoader label="Loading models" layout="inline" /></div>
+            ) : visibleGroups.length === 0 ? (
+              <p className="px-3 py-4 text-center text-sm text-ink-3">No model matches.</p>
+            ) : (
+              <>
+                {visibleGroups.map(([provider, list]) => (
+              <CommandGroup key={provider} heading={provider}>
+                {list.map((option) => (
+                  <CommandItem
+                    key={option.id}
+                    value={option.id}
+                    keywords={[option.name, ...(option.keywords ?? [])]}
+                    onSelect={() => toggle(option.id)}
+                    className="relative items-start gap-2.5 rounded-md px-3 py-1.5"
+                  >
+                    {option.icon && <ModelIcon className="mt-0.75">{option.icon}</ModelIcon>}
+                    <span className="flex min-w-0 flex-1 flex-col">
+                      <span className="truncate font-medium">{option.name}</span>
+                      {option.description && <span className="typed truncate text-ink-3">{option.description}</span>}
+                    </span>
+                    {option.providerTag && (
+                      <span className="mt-0.25 max-w-36 shrink-0 truncate rounded-md border border-line bg-surface-2 px-1.5 py-0.5 font-mono text-xs leading-4 text-ink-3" title={`Provider: ${option.providerTag}`}>
+                        {option.providerTag}
+                      </span>
+                    )}
+                    {chosen.has(option.id) && <CheckIcon className="mt-0.25 size-3.5 shrink-0 text-live" />}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+                ))}
+              </>
+            )}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 /**
@@ -692,16 +1064,6 @@ export function SessionModelSelector({ className }: { className?: string | undef
     if (model && !list.some((m) => modelOptionId(m) === modelOptionId(model))) list.unshift(model);
     return list.map(modelOption);
   }, [models, model]);
-  const groups = useMemo(() => {
-    const byProvider = new Map<string, ModelOption[]>();
-    for (const option of options) {
-      const provider = option.id.slice(0, option.id.indexOf("/"));
-      const list = byProvider.get(provider) ?? [];
-      list.push(option);
-      byProvider.set(provider, list);
-    }
-    return [...byProvider.entries()];
-  }, [options]);
 
   const value = model ? modelOptionId(model) : undefined;
   const pick = (id: string) => {
@@ -724,7 +1086,7 @@ export function SessionModelSelector({ className }: { className?: string | undef
                 ? `New sessions start with ${model.name ?? model.id}`
                 : "No model chosen"
         }
-        title={session ? undefined : model ? "What a new session starts with. Change it in Settings → Models." : undefined}
+        title={session ? undefined : model ? "What a new session starts with. Change it in Settings → Providers and models." : undefined}
         className={cn("min-w-0 max-w-56 shrink gap-1.5 text-ink-2", className)}
       >
         {model ? (
@@ -741,39 +1103,16 @@ export function SessionModelSelector({ className }: { className?: string | undef
           </span>
         )}
       </ModelSelectorTrigger>
-      <ModelSelectorContent side="top" align="start" searchable>
-        <ModelSelectorSearch placeholder="Search models" />
-        <ModelSelectorList>
-          {error ? (
-            // Written for a person, with the way out: the raw RPC string is
-            // the detail, never the headline, and Retry re-asks.
-            <ErrorState
-              className="m-2"
-              title="Couldn’t load the model list"
-              detail={error}
-              onRetry={() => {
-                setError(null);
-                setModels(null);
-              }}
-            />
-          ) : models === null ? (
-            <div className="px-3 py-3">
-              <GenerationLoader label="Loading models" layout="inline" />
-            </div>
-          ) : (
-            <>
-              <ModelSelectorEmpty>No model matches.</ModelSelectorEmpty>
-              {groups.map(([provider, list]) => (
-                <ModelSelectorGroup key={provider} heading={provider}>
-                  {list.map((option) => (
-                    <ModelSelectorItem key={option.id} model={option} />
-                  ))}
-                </ModelSelectorGroup>
-              ))}
-            </>
-          )}
-        </ModelSelectorList>
-      </ModelSelectorContent>
+      <ProviderModelMenu
+        side="top"
+        align="start"
+        loading={models === null}
+        error={error}
+        onRetry={() => {
+          setError(null);
+          setModels(null);
+        }}
+      />
     </ModelSelectorRoot>
   );
 }

@@ -67,6 +67,7 @@ function ReasoningRoot({
 }: ReasoningRootProps) {
   const initialOpenRef = useRef(defaultOpen);
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
+  if (userOpen === null) initialOpenRef.current = defaultOpen;
 
   const isControlled = controlledOpen !== undefined;
   const isOpen = isControlled ? controlledOpen : (userOpen ?? (streaming || initialOpenRef.current));

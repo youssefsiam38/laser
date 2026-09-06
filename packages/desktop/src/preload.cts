@@ -58,6 +58,7 @@ const IPC = {
   windowState: "laser:window/state",
   windowStateChanged: "laser:window/state-changed",
   themeSet: "laser:theme/set",
+  directorySelect: "laser:directory/select",
   microphoneStatus: "laser:microphone/status",
   microphoneRequest: "laser:microphone/request",
   microphoneSettings: "laser:microphone/settings",
@@ -154,6 +155,8 @@ const api = {
   setTheme: (theme: "light" | "dark"): void => {
     ipcRenderer.send(IPC.themeSet, theme);
   },
+
+  chooseDirectory: (): Promise<string | null> => ipcRenderer.invoke(IPC.directorySelect) as Promise<string | null>,
 
   microphone: {
     status: (): Promise<MicrophoneStatus> => ipcRenderer.invoke(IPC.microphoneStatus) as Promise<MicrophoneStatus>,

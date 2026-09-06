@@ -9,11 +9,10 @@ import { cn } from "@/lib/utils";
 import { useTrustPrompts } from "@/runtime";
 
 /**
- * Pi's project-trust question, asked by the host before it starts a worker
- * (M2-T4). Pi's own SDK never asks — it defaults to trusting — so this dialog
- * is the only thing standing between a cloned repository and its `.pi`
- * extensions running on this machine. It is modal on purpose: a worker start is
- * blocked behind the answer, and there is no safe default to pick silently.
+ * Laser's project-settings trust question, asked by the host before it starts a
+ * worker (M2-T4). It gates `.laser/settings.json`; `<project>/.pi` is ignored.
+ * The dialog is modal because worker start is blocked behind the answer, and
+ * there is no safe default to pick silently.
  *
  * Why this is not the `permission-grant` element (docs/ux-elements.md claims
  * that element for this surface, and it is used for the in-thread case in
@@ -104,8 +103,8 @@ export function TrustDialog() {
           </label>
 
           <p className="text-xs leading-4 text-ink-3">
-            Not now keeps the session working: the agent simply ignores this directory&rsquo;s settings, extensions,
-            skills and prompts.
+            Not now keeps the session working: the agent simply ignores this directory&rsquo;s settings, tools,
+            instructions and automations.
           </p>
         </div>
 

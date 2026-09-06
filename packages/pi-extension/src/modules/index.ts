@@ -1,10 +1,11 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { PiExtensionCommand, PiExtensionMessage, PiExtensionModuleName } from "@lasercode/protocol";
 import { panelsModule } from "./panels.js";
 import { providerLogModule } from "./provider-log.js";
 import { subagentsModule } from "./subagents.js";
 import { transcribeModule } from "./transcribe.js";
-import { webAccessModule } from "./web-access.js";
+import { goalModule } from "./goal.js";
+export { toSessionGoal } from "./goal.js";
 
 export type ModuleName = PiExtensionModuleName;
 export type OutboundMessage = PiExtensionMessage;
@@ -54,6 +55,8 @@ export function createPanelClaims(): PanelClaims {
 
 export interface ModuleContext {
   pi: ExtensionAPI;
+  /** Fresh context for the session_start currently activating modules. */
+  session?: ExtensionContext;
   send: (message: OutboundMessage) => void;
   /**
    * Commands from the worker (a panel action a person pressed). Absent when
@@ -108,7 +111,7 @@ export function createCommandBus(): CommandBus & { deliver(command: PiExtensionC
 export const modules: readonly LaserModule[] = [
   providerLogModule,
   panelsModule,
+  goalModule,
   subagentsModule,
   transcribeModule,
-  webAccessModule,
 ];

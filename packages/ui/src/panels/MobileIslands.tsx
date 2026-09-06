@@ -89,7 +89,7 @@ export function MobileIslands({ className }: { className?: string | undefined })
       <Sheet open={open !== undefined} onOpenChange={(o) => !o && setOpenKey(undefined)}>
         <SheetContent side="bottom" className="h-[85dvh] max-h-[85dvh] p-0" showCloseButton={false}>
           <SheetTitle className="sr-only">{open?.panel.title ?? "Panel"}</SheetTitle>
-          <SheetDescription className="sr-only">A panel from {open?.panel.source ?? "an extension"}.</SheetDescription>
+          <SheetDescription className="sr-only">A panel from {open?.panel.source ?? "a feature"}.</SheetDescription>
           {open && (
             <div className="flex min-h-0 flex-1 flex-col pt-1">
               {/* The same component, one size up (a second instance — D-34),

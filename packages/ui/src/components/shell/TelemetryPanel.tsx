@@ -1,11 +1,32 @@
 import type * as React from "react";
 import { useEffect, useMemo, useRef } from "react";
-import { Brain, ChevronRight, Cpu, PanelRightClose, RefreshCw, Shrink } from "lucide-react";
+import {
+  Activity,
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Brain,
+  ChevronRight,
+  CircleDollarSign,
+  Clock3,
+  Cpu,
+  Database,
+  FileCode2,
+  Gauge,
+  History,
+  Layers3,
+  PanelRightClose,
+  RefreshCw,
+  Shrink,
+  Wrench,
+  type LucideIcon,
+} from "lucide-react";
 
 import { Chart } from "@/components/assistant-ui/elements/chart";
 import { ContextRingButton } from "@/components/assistant-ui/elements/context-display";
 import { CostMeter } from "@/components/assistant-ui/elements/cost-meter";
 import { FileTree, useSessionFileChanges } from "@/components/assistant-ui/elements/file-tree";
+import { ProviderLogo } from "@/components/assistant-ui/elements/logos";
+import { NumberTicker } from "@/components/assistant-ui/elements/number-ticker";
 import { ToolTimeline, useThreadToolTimeline } from "@/components/assistant-ui/elements/tool-timeline";
 import { StatusRing } from "@/components/status";
 import { Badge } from "@/components/ui/badge";
@@ -25,11 +46,12 @@ export interface TelemetryPanelProps {
 }
 
 /**
- * The numbers a supervisor watches: context, spend, model, worker, extension
- * state, and the session tree. Read-only except compact / fork / jump.
+ * The session signals a supervisor watches: context, spend, model, file and
+ * tool activity, and history. Read-only except compact / fork / jump.
  */
 export function TelemetryPanel({ variant }: TelemetryPanelProps) {
   const view = useLaserView();
+  const meta = useSessionMeta();
   const shell = useShell();
 
   return (
@@ -38,6 +60,15 @@ export function TelemetryPanel({ variant }: TelemetryPanelProps) {
       className={cn("flex h-full min-h-0 flex-col bg-surface", variant === "panel" && "w-80 shrink-0 hairline-l")}
     >
       <header className={cn("flex h-12 shrink-0 items-center gap-2 px-4 hairline-b", variant === "sheet" && "pe-12")}>
+        <span className="relative flex size-7 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-live">
+          <Activity className="size-4" aria-hidden="true" />
+          {meta.running ? (
+            <span
+              aria-label="Agent is working"
+              className="absolute -end-0.5 -top-0.5 size-2 rounded-full border border-surface bg-live motion-safe:animate-attention"
+            />
+          ) : null}
+        </span>
         <h2 className="eyebrow">Telemetry</h2>
         {view && (
           <span className="truncate font-mono text-xs text-ink-3" title={view.path}>
@@ -63,7 +94,6 @@ export function TelemetryPanel({ variant }: TelemetryPanelProps) {
             <ModelSection />
             <FilesSection />
             <ToolsSection />
-            <WorkerSection />
             <HistorySection />
           </>
         ) : (
@@ -78,11 +108,27 @@ export function TelemetryPanel({ variant }: TelemetryPanelProps) {
 // Building blocks
 // ---------------------------------------------------------------------------
 
-function Section({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
+function Section({
+  title,
+  icon: Icon,
+  signal,
+  action,
+  children,
+}: {
+  title: string;
+  icon: LucideIcon;
+  signal?: React.ReactNode;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
     <section className="px-4 py-3 hairline-b">
-      <div className="mb-2 flex h-5 items-center justify-between gap-2">
+      <div className="mb-2.5 flex min-h-6 items-center gap-2">
+        <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-surface-2 text-ink-2">
+          <Icon className="size-3.5" aria-hidden="true" />
+        </span>
         <h3 className="eyebrow">{title}</h3>
+        {signal ? <span className="ms-auto">{signal}</span> : null}
         {action}
       </div>
       {children}
@@ -90,19 +136,10 @@ function Section({ title, action, children }: { title: string; action?: React.Re
   );
 }
 
-function Stat({ label, value, strong }: { label: string; value: React.ReactNode; strong?: boolean }) {
+function InstrumentCard({ className, children }: { className?: string; children: React.ReactNode }) {
   return (
-    <>
-      <dt className="text-xs leading-5 text-ink-2">{label}</dt>
-      <dd className={cn("text-end font-mono text-xs leading-5 tnum", strong ? "font-medium text-ink" : "text-ink")}>
-        {value}
-      </dd>
-    </>
+    <div className={cn("rounded-xl border border-line bg-surface-2/70 p-3", className)}>{children}</div>
   );
-}
-
-function Stats({ children }: { children: React.ReactNode }) {
-  return <dl className="grid grid-cols-[auto_1fr] gap-x-3">{children}</dl>;
 }
 
 function NoSession() {
@@ -132,6 +169,7 @@ function ContextSection() {
   return (
     <Section
       title="Context"
+      icon={Gauge}
       action={
         <Button size="xs" variant="outline" disabled={busy || !usage} onClick={() => void actions.compact()}>
           <Shrink />
@@ -139,7 +177,7 @@ function ContextSection() {
         </Button>
       }
     >
-      <div className="flex items-center gap-4">
+      <InstrumentCard className="flex items-center gap-4">
         {/* The one context ring in the app, drawn large. Same component the
             composer and the top bar mount (docs/ux-elements.md "Context
             display"); the rail was the third hand-drawn copy. */}
@@ -152,17 +190,83 @@ function ContextSection() {
         )}
         <div className="min-w-0 flex-1">
           {usage ? (
-            <Stats>
-              <Stat label="Tokens" value={usage.tokens === null ? "—" : tokens(usage.tokens)} strong />
-              <Stat label="Window" value={tokens(usage.contextWindow)} />
-              <Stat label="Auto-compact" value={view?.state.autoCompactionEnabled ? "on" : "off"} />
-            </Stats>
+            <>
+              <p className="text-xs leading-4 text-ink-3">Window load</p>
+              <p className="mt-0.5 font-mono text-sm font-semibold text-ink tnum">
+                {usage.tokens === null ? "—" : tokens(usage.tokens)} <span className="font-normal text-ink-3">/ {tokens(usage.contextWindow)}</span>
+              </p>
+              <div className="mt-2 flex items-center gap-1.5 text-xs text-ink-2">
+                <span
+                  aria-hidden="true"
+                  className={cn("size-1.5 rounded-full", view?.state.autoCompactionEnabled ? "bg-ok" : "bg-ink-3")}
+                />
+                Auto-compact {view?.state.autoCompactionEnabled ? "on" : "off"}
+              </div>
+            </>
           ) : (
             <p className="text-xs leading-4 text-ink-3">No usage reported yet. The first response fills this in.</p>
           )}
         </div>
-      </div>
+      </InstrumentCard>
     </Section>
+  );
+}
+
+const TOKEN_TONES = ["bg-live", "bg-ok", "bg-attention", "bg-ink-3"] as const;
+
+function TokenComposition({ usage }: { usage: UsageTotals }) {
+  const parts = [
+    { label: "Input", value: usage.input, icon: ArrowUpFromLine },
+    { label: "Output", value: usage.output, icon: ArrowDownToLine },
+    { label: "Cache read", value: usage.cacheRead, icon: Database },
+    { label: "Cache write", value: usage.cacheWrite, icon: Layers3 },
+  ] as const;
+  const measured = parts.reduce((sum, part) => sum + part.value, 0);
+
+  return (
+    <InstrumentCard>
+      <div className="flex items-end justify-between gap-3">
+        <div>
+          <p className="text-xs leading-4 text-ink-3">Token flow</p>
+          <NumberTicker value={tokens(usage.total)} label="Total tokens" className="mt-0.5 font-mono text-lg font-semibold text-ink" />
+        </div>
+        <span className="font-mono text-xs text-ink-3 tnum">{usage.turns} {usage.turns === 1 ? "turn" : "turns"}</span>
+      </div>
+      <div className="mt-3 flex h-2 w-full gap-px overflow-hidden rounded-full bg-surface">
+        {parts.map((part, index) => {
+          const percent = measured > 0 ? (part.value / measured) * 100 : 0;
+          if (percent === 0) return null;
+          return (
+            <span
+              key={part.label}
+              role="meter"
+              aria-label={`${part.label} token share`}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(percent)}
+              className={cn("h-full transition-[width] duration-(--motion-slow) ease-morph motion-reduce:transition-none", TOKEN_TONES[index])}
+              style={{ width: `${percent}%` }}
+            />
+          );
+        })}
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-1.5">
+        {parts.map((part, index) => {
+          const Icon = part.icon;
+          return (
+            <div key={part.label} className="flex min-w-0 items-center gap-2 rounded-lg bg-surface px-2 py-1.5">
+              <span className={cn("flex size-5 shrink-0 items-center justify-center rounded-md text-surface", TOKEN_TONES[index])}>
+                <Icon className="size-3" aria-hidden="true" />
+              </span>
+              <div className="min-w-0">
+                <p className="truncate text-xs leading-4 text-ink-3">{part.label}</p>
+                <p className="font-mono text-xs leading-4 text-ink tnum">{tokens(part.value)}</p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </InstrumentCard>
   );
 }
 
@@ -174,34 +278,32 @@ function UsageSection() {
   const series = useMemo(() => (entries ? spendSeries(entries) : []), [entries]);
   const lastTurn = series.length > 1 ? series[series.length - 1]! - series[series.length - 2]! : series[0];
   return (
-    <Section title="Spend">
+    <Section title="Spend" icon={CircleDollarSign} signal={usage ? <Badge variant="mono">{usage.turns} turns</Badge> : undefined}>
       {usage ? (
         <div className="flex flex-col gap-4">
           {/* The cost meter and the spend chart (docs/ux-elements.md
               "Observability" and "Structured output"), from the usage blocks
               Pi persists on the session file. */}
-          <CostMeter
-            sessionCostUsd={usage.cost}
-            runCostUsd={lastTurn}
-            turns={usage.turns}
-            lines={lines.map((line) => ({ model: line.model, inputTokens: line.input, outputTokens: line.output, costUsd: line.cost }))}
-          />
-          {series.length > 1 && (
-            <Chart
-              label="Spend over turns"
-              value={money(series[series.length - 1] ?? 0)}
-              delta={lastTurn !== undefined ? `+${money(lastTurn)} last` : undefined}
-              points={series}
-              pointLabel={(v, i) => `turn ${i + 1}: ${money(v)}`}
+          <InstrumentCard>
+            <CostMeter
+              sessionCostUsd={usage.cost}
+              runCostUsd={lastTurn}
+              turns={usage.turns}
+              lines={lines.map((line) => ({ model: line.model, inputTokens: line.input, outputTokens: line.output, costUsd: line.cost }))}
             />
+          </InstrumentCard>
+          {series.length > 1 && (
+            <InstrumentCard>
+              <Chart
+                label="Spend over turns"
+                value={money(series[series.length - 1] ?? 0)}
+                delta={lastTurn !== undefined ? `+${money(lastTurn)} last` : undefined}
+                points={series}
+                pointLabel={(v, i) => `turn ${i + 1}: ${money(v)}`}
+              />
+            </InstrumentCard>
           )}
-          <Stats>
-            <Stat label="Input" value={tokens(usage.input)} />
-            <Stat label="Output" value={tokens(usage.output)} />
-            <Stat label="Cache read" value={tokens(usage.cacheRead)} />
-            <Stat label="Cache write" value={tokens(usage.cacheWrite)} />
-            <Stat label="Total tokens" value={tokens(usage.total)} strong />
-          </Stats>
+          <TokenComposition usage={usage} />
         </div>
       ) : (
         <p className="text-xs leading-4 text-ink-3">No spend recorded. Totals appear after the agent's first response.</p>
@@ -213,36 +315,35 @@ function UsageSection() {
 function ModelSection() {
   const meta = useSessionMeta();
   return (
-    <Section title="Model">
-      <ul className="flex flex-col gap-1.5">
-        <li className="flex items-center gap-2 text-xs leading-5">
-          <Cpu className="size-3.5 shrink-0 text-ink-3" aria-hidden="true" />
-          {meta.model ? (
-            <span className="truncate font-mono text-xs text-ink" title={`${meta.model.provider}/${meta.model.id}`}>
-              <span className="text-ink-3">{meta.model.provider}/</span>
-              {meta.model.id}
+    <Section title="Model" icon={Cpu}>
+      <InstrumentCard>
+        {meta.model ? (
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="flex size-12 shrink-0 items-center justify-center rounded-xl bg-surface text-live shadow-float-sm">
+              <ProviderLogo provider={meta.model.provider} className="size-6" />
             </span>
-          ) : (
-            <span className="text-ink-3">No model selected</span>
-          )}
-        </li>
-        <li className="flex items-center gap-2 text-xs leading-5">
-          <Brain className="size-3.5 shrink-0 text-ink-3" aria-hidden="true" />
-          <span className="text-ink-2">Thinking</span>
-          <Badge variant="mono">{meta.thinkingLevel ?? "—"}</Badge>
-        </li>
-      </ul>
-      <p className="mt-2 text-xs leading-4 text-ink-3">Change both from the composer.</p>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-xs leading-4 text-ink-3">{meta.model.provider}</p>
+              <p className="truncate font-mono text-sm font-medium text-ink" title={`${meta.model.provider}/${meta.model.id}`}>
+                {meta.model.id}
+              </p>
+              <div className="mt-1.5 flex items-center gap-1.5">
+                <Brain className="size-3.5 text-ink-3" aria-hidden="true" />
+                <span className="text-xs text-ink-2">Thinking</span>
+                <Badge variant="mono">{meta.thinkingLevel ?? "—"}</Badge>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-3 text-sm text-ink-3">
+            <span className="flex size-10 items-center justify-center rounded-xl bg-surface"><Cpu className="size-5" aria-hidden="true" /></span>
+            No model selected
+          </div>
+        )}
+      </InstrumentCard>
     </Section>
   );
 }
-
-const WORKER_TONE: Record<string, { color: string; label: string }> = {
-  ready: { color: "bg-ok", label: "Ready" },
-  starting: { color: "bg-attention motion-safe:animate-attention", label: "Starting" },
-  crashed: { color: "bg-danger", label: "Crashed" },
-  retired: { color: "bg-ink-3", label: "Retired" },
-};
 
 /**
  * What this session touched on disk, as a tree. Both this and the tool
@@ -253,8 +354,38 @@ const WORKER_TONE: Record<string, { color: string; label: string }> = {
  */
 function FilesSection() {
   const changes = useSessionFileChanges();
+  const added = changes.reduce((sum, change) => sum + change.additions, 0);
+  const removed = changes.reduce((sum, change) => sum + change.deletions, 0);
+  const churn = added + removed;
   return (
-    <Section title="Files changed">
+    <Section title="Files changed" icon={FileCode2} signal={changes.length > 0 ? <Badge variant="mono">{changes.length}</Badge> : undefined}>
+      {changes.length > 0 ? (
+        <InstrumentCard className="mb-3">
+          <div className="flex items-center gap-3">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-surface text-live">
+              <FileCode2 className="size-5" aria-hidden="true" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs leading-4 text-ink-3">Session footprint</p>
+              <NumberTicker
+                value={`${changes.length} ${changes.length === 1 ? "file" : "files"}`}
+                label="Files changed"
+                className="font-mono text-sm font-semibold text-ink"
+              />
+            </div>
+            <div className="text-end font-mono text-xs leading-4 tnum">
+              <p className="text-ok">+{added}</p>
+              <p className="text-danger">−{removed}</p>
+            </div>
+          </div>
+          {churn > 0 ? (
+            <div className="mt-3 flex h-1.5 overflow-hidden rounded-full bg-surface" role="img" aria-label={`${added} additions and ${removed} deletions`}>
+              {added > 0 ? <span className="h-full bg-ok" style={{ width: `${(added / churn) * 100}%` }} /> : null}
+              {removed > 0 ? <span className="h-full bg-danger" style={{ width: `${(removed / churn) * 100}%` }} /> : null}
+            </div>
+          ) : null}
+        </InstrumentCard>
+      ) : null}
       <FileTree changes={changes} />
     </Section>
   );
@@ -264,31 +395,43 @@ function FilesSection() {
 function ToolsSection() {
   const timeline = useThreadToolTimeline();
   const shell = useShell();
+  const visibleSteps = timeline.steps.slice(-14);
   return (
-    <Section title="Tools">
+    <Section
+      title="Tools"
+      icon={Wrench}
+      signal={timeline.steps.length > 0 ? <Badge variant={timeline.streaming ? "live" : "mono"}>{timeline.steps.length} calls</Badge> : undefined}
+    >
+      {timeline.steps.length > 0 ? (
+        <InstrumentCard className="mb-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Activity className={cn("size-4", timeline.streaming ? "text-live" : "text-ink-3")} aria-hidden="true" />
+              <span className="text-xs font-medium text-ink">Run activity</span>
+            </div>
+            <span className="font-mono text-xs text-ink-3 tnum">
+              {timeline.streaming ? "live" : "settled"}
+            </span>
+          </div>
+          <div
+            className="mt-3 flex h-2 items-center gap-1"
+            role="img"
+            aria-label={`${timeline.steps.length} tool calls; ${timeline.streaming ? "one running" : "all settled"}`}
+          >
+            {visibleSteps.map((step) => (
+              <span
+                key={step.id}
+                title={`${step.verb}: ${step.chip}`}
+                className={cn(
+                  "h-full min-w-1 flex-1 rounded-full transition-colors duration-(--motion-slow) ease-morph motion-reduce:transition-none",
+                  step.running ? "bg-live motion-safe:animate-attention" : "bg-ink-3",
+                )}
+              />
+            ))}
+          </div>
+        </InstrumentCard>
+      ) : null}
       <ToolTimeline timeline={timeline} open={shell.toolsOpen} onOpenChange={shell.setToolsOpen} />
-    </Section>
-  );
-}
-
-function WorkerSection() {
-  const meta = useSessionMeta();
-  const view = useLaserView();
-  const worker = meta.worker;
-  const tone = worker ? (WORKER_TONE[worker.status] ?? { color: "bg-ink-3", label: worker.status }) : undefined;
-  return (
-    <Section title="Agent process">
-      <div className="flex items-start gap-2">
-        <span aria-hidden="true" className={cn("mt-[7px] size-2 shrink-0 rounded-full", tone?.color ?? "bg-line")} />
-        <div className="min-w-0 flex-1">
-          <p className="text-xs leading-5 text-ink">
-            {tone ? tone.label : "No status yet"}
-            {view && <span className="ms-1.5 font-mono text-xs text-ink-3">{view.state.cwd.split("/").filter(Boolean).at(-1)}</span>}
-          </p>
-          {worker?.message && <p className="text-xs leading-4 break-words text-ink-2">{worker.message}</p>}
-          {!worker && <p className="text-xs leading-4 text-ink-3">One agent runs per project directory.</p>}
-        </div>
-      </div>
     </Section>
   );
 }
@@ -328,8 +471,16 @@ function HistorySection() {
                 className="size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-instant) group-aria-expanded:rotate-90"
                 aria-hidden="true"
               />
+              <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-surface-2 text-ink-2">
+                <History className="size-3.5" aria-hidden="true" />
+              </span>
               <span className="eyebrow">History</span>
-              {rows.length > 0 && <span className="font-mono text-xs text-ink-3 tnum">{rows.length}</span>}
+              {rows.length > 0 && (
+                <span className="ms-auto flex items-center gap-1 font-mono text-xs text-ink-3 tnum">
+                  <Clock3 className="size-3" aria-hidden="true" />
+                  {rows.length}
+                </span>
+              )}
             </button>
           </CollapsibleTrigger>
           {shell.historyOpen && (

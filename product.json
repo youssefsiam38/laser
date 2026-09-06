@@ -78,7 +78,7 @@
   "copy": {
     "summary": "A control room for coding agents",
     "description": "Runs coding agent sessions across every project on this machine through one desktop interface.",
-    "descriptionMore": "Everything is configured inside the window: providers, models, extensions and projects. {displayName} brings its own runtime and its own agent, so there is nothing to install first and nothing on your machine for it to disagree with.",
+    "descriptionMore": "Everything is configured inside the window: providers, models, features and projects. {displayName} brings its own runtime and coding engine, so there is nothing to install first and nothing on your machine for it to disagree with.",
     "descriptionRelay": "Coming soon: the same interface on your phone through an end-to-end encrypted relay.",
     "webDescription": "Your coding agents in one desktop interface. Phone remote control is coming soon."
   },
@@ -93,8 +93,10 @@
   "keywords": ["agent", "ai", "assistant", "coding", "developer", "automation", "llm", "chat"],
 
   "branding": {
-    "light": "#4DA3FF",
+    "light": "#03CC7B",
     "dark": "#0B0F14",
+    "black": "#000000",
+    "warmWhite": "#E9E8E6",
     "webBackground": "#F5F7FA",
     "webTheme": "#F5F7FA"
   },

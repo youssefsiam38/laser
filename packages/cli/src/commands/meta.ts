@@ -22,7 +22,6 @@ page about something that spans commands.
   positionals: [{ name: "command|topic", description: "What to explain", optional: true }],
   examples: [
     { note: `everything ${PRODUCT_NAME} can do`, command: `${PRODUCT_NAME} help` },
-    { note: `how the \`${PRODUCT_NAME} pi\` passthrough works`, command: `${PRODUCT_NAME} help pi` },
     { note: "what doctor checks", command: `${PRODUCT_NAME} help doctor` },
   ],
   async run({ term, args, commands }) {

@@ -8,11 +8,11 @@
  */
 import { useSyncExternalStore } from "react";
 import {
-  MediaRecorderDictationAdapter,
   transcribeTransport,
   type DictationPhase,
   type TranscribeScope,
 } from "./dictation.js";
+import { PhraseDictationAdapter } from "./phrase-dictation.js";
 import type { RawRequestClient } from "./host-rpc.js";
 
 function store<T>(initial: T) {
@@ -34,10 +34,11 @@ function store<T>(initial: T) {
 
 const level = store(0);
 const phase = store<DictationPhase>("idle");
+const pending = store(0);
 const error = store<unknown>(undefined);
 let phraseSink: ((phrase: string) => void) | undefined;
 
-let instance: { client: RawRequestClient; adapter: MediaRecorderDictationAdapter } | undefined;
+let instance: { client: RawRequestClient; adapter: PhraseDictationAdapter } | undefined;
 
 /**
  * Which project and session a recording belongs to. Read at `begin` time, not
@@ -51,12 +52,13 @@ export function setDictationScope(next: TranscribeScope | undefined): void {
 }
 
 /** One adapter per host client. Safe to call on every render. */
-export function getMobileDictationAdapter(client: RawRequestClient): MediaRecorderDictationAdapter {
+export function getMobileDictationAdapter(client: RawRequestClient): PhraseDictationAdapter {
   if (instance?.client === client) return instance.adapter;
-  const adapter = new MediaRecorderDictationAdapter({
+  const adapter = new PhraseDictationAdapter({
     transport: transcribeTransport(client, () => scope),
     onLevel: (v) => level.set(v),
     onPhase: (p) => phase.set(p),
+    onPending: (value) => pending.set(value),
     onPhrase: (p) => phraseSink?.(p),
     onError: (e) => error.set(e),
   });
@@ -64,7 +66,12 @@ export function getMobileDictationAdapter(client: RawRequestClient): MediaRecord
   return adapter;
 }
 
-/** The composer button registers where the final phrase should go (caret placement). */
+/** Finish every captured phrase before the composer submits its text. */
+export async function finishActiveDictation(): Promise<void> {
+  await instance?.adapter.finishActive();
+}
+
+/** The composer button registers where every finished phrase should go. */
 export function setDictationPhraseSink(sink: ((phrase: string) => void) | undefined): void {
   phraseSink = sink;
 }
@@ -75,4 +82,5 @@ export function clearDictationError(): void {
 
 export const useDictationLevel = (): number => useSyncExternalStore(level.subscribe, level.get, () => 0);
 export const useDictationPhase = (): DictationPhase => useSyncExternalStore(phase.subscribe, phase.get, () => "idle" as const);
+export const useDictationPending = (): number => useSyncExternalStore(pending.subscribe, pending.get, () => 0);
 export const useDictationError = (): unknown => useSyncExternalStore(error.subscribe, error.get, () => undefined);

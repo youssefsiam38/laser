@@ -21,14 +21,12 @@ export { WorkerClient, WorkerRpcError, defaultWorkerMain, type WorkerClientOptio
 export { SessionCatalog, defaultSessionDir, type CatalogEntry } from "./catalog.js";
 export { AttentionTracker, type AttentionSnapshot, type AttentionTrackerOptions } from "./attention.js";
 export { PrefsStore, type PrefsStoreOptions } from "./prefs.js";
+export { FeatureService } from "./features.js";
 export { ProjectRegistry, type ProjectRegistryOptions, type TrustRequest } from "./projects.js";
 export { ViewCache } from "./views.js";
 export {
   canonical,
-  defaultProjectTrust,
-  savedPiTrust,
   trustReasons,
-  type DefaultProjectTrust,
   type TrustReasons,
 } from "./trust.js";
 export {

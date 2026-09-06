@@ -21,6 +21,7 @@ import { useState, type ComponentProps, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
+import { JsonViewer, parseJsonText } from "./json-viewer.js";
 
 import { field, mono } from "./surfaces.js";
 
@@ -81,7 +82,11 @@ export function StoppedRun({ reason, detail, advice, raw, action, onContinue, to
                 </Button>
               </CollapsibleTrigger>
               <CollapsibleContent>
-                <pre className={cn(field, mono, "mt-1 max-h-40 overflow-auto rounded-lg p-2.5 text-xs leading-4 whitespace-pre-wrap text-ink-2")}>{raw}</pre>
+                {parseJsonText(raw) === undefined ? (
+                  <pre className={cn(field, mono, "mt-1 max-h-40 overflow-auto rounded-lg p-2.5 text-xs leading-4 whitespace-pre-wrap text-ink-2")}>{raw}</pre>
+                ) : (
+                  <JsonViewer value={parseJsonText(raw)} expandedDepth={1} className="mt-1 max-h-40" />
+                )}
               </CollapsibleContent>
             </Collapsible>
           ) : null}

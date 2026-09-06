@@ -10,7 +10,7 @@
  * Pending extension dialogs are re-emitted on load for the same reason.
  */
 
-import { ErrorCodes, PRODUCT_NAME, ProtocolError, parseClientRequest, type ClientRequests, type ContentBlock, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionState, type SessionUpdateParams, type TypedClientRequest } from "@lasercode/protocol";
+import { ErrorCodes, PRODUCT_NAME, ProtocolError, parseClientRequest, type ClientRequests, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionState, type SessionUpdateParams, type TypedClientRequest } from "@lasercode/protocol";
 import { resolve } from "node:path";
 import type { DriverEvent, SessionDriver } from "./driver.js";
 import { ProjectFilesService } from "./files.js";
@@ -29,6 +29,7 @@ export interface WorkerServerOptions {
   subagentsTempRoot?: string;
   /** Host-resolved Pi project trust for `cwd`; see `DriverOpenOptions.projectTrusted`. */
   projectTrusted?: boolean;
+  features?: FeatureId[];
   /** Updates kept per session for `fromSeq` replay. */
   replayBuffer?: number;
   /** The package manager to run when settings name none (M10-T5): the one the host bundles. */
@@ -193,6 +194,15 @@ export class WorkerServer {
         return {
           state: await this.live(req.params.path).driver.setThinkingLevel(req.params.level),
         } satisfies Result<"pi/thinking/set">;
+      case "session/goal/get": {
+        const goal = await this.live(req.params.path).driver.goalState?.();
+        return { goal: goal ?? null } satisfies Result<"session/goal/get">;
+      }
+      case "session/goal/action": {
+        const driver = this.live(req.params.path).driver;
+        if (!driver.goalAction) throw new ProtocolError(ErrorCodes.Unsupported, "Goals are not available in this session.");
+        return { goal: await driver.goalAction(req.params.action) } satisfies Result<"session/goal/action">;
+      }
       case "pi/ui/response": {
         // Answer only the session that raised the dialog: ids are minted per
         // UI bridge, so broadcasting could settle another session's dialog with
@@ -417,7 +427,6 @@ export class WorkerServer {
           providerKey: (provider) => this.modelCatalog().apiKeyForProvider(provider),
           providers: async () => (await this.modelCatalog().providers()).providers,
         },
-        packagePresent: () => this.activeModules.has("transcribe"),
       });
       // Publishes drain() to the companion extension in this process, so Pi's
       // own `input` hook can pick up a phrase still in flight.
@@ -459,7 +468,7 @@ export class WorkerServer {
       ...(params.parentPath ? { parentSessionPath: params.parentPath } : {}),
       ...this.commonOpen(),
     });
-    return { state };
+    return { state: this.withCapabilities(state) };
   }
 
   private async sessionLoad(params: ClientRequests["session/load"]["params"]): Promise<Result<"session/load">> {
@@ -467,25 +476,29 @@ export class WorkerServer {
     if (existing) {
       const state = existing.driver.state();
       this.replay(existing, params.fromSeq);
-      return { state, replayFrom: this.replayFloor(existing, params.fromSeq) };
+      return { state: this.withCapabilities(state), replayFrom: this.replayFloor(existing, params.fromSeq) };
     }
     const inFlight = this.opening.get(params.path);
     if (inFlight) {
       const state = await inFlight;
       const live = this.sessions.get(state.path);
-      if (!live) return { state, replayFrom: 0 };
+      if (!live) return { state: this.withCapabilities(state), replayFrom: 0 };
       this.replay(live, params.fromSeq);
-      return { state, replayFrom: this.replayFloor(live, params.fromSeq) };
+      return { state: this.withCapabilities(state), replayFrom: this.replayFloor(live, params.fromSeq) };
     }
     // Registered synchronously, before `open()` gets a chance to yield.
     const promise = this.openAndAttach({ cwd: this.options.cwd, sessionPath: params.path, ...this.commonOpen() });
     this.opening.set(params.path, promise);
     try {
       const state = await promise;
-      return { state, replayFrom: 0 };
+      return { state: this.withCapabilities(state), replayFrom: 0 };
     } finally {
       this.opening.delete(params.path);
     }
+  }
+
+  private withCapabilities(state: SessionState): SessionState {
+    return { ...state, capabilities: [...this.activeModules] };
   }
 
   /**
@@ -555,6 +568,7 @@ export class WorkerServer {
       ...(this.options.sessionDir ? { sessionDir: this.options.sessionDir } : {}),
       ...(this.options.subagentsTempRoot ? { subagentsTempRoot: this.options.subagentsTempRoot } : {}),
       ...(this.options.projectTrusted !== undefined ? { projectTrusted: this.options.projectTrusted } : {}),
+      ...(this.options.features ? { features: this.options.features } : {}),
     };
   }
 

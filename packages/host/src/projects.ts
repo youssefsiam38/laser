@@ -10,15 +10,15 @@
  * It also owns the project-trust decision (see trust.ts for why the host has to
  * make one). `ensureTrusted()` is called before a worker starts: it answers
  * from a saved decision when there is one, and otherwise asks the connected
- * clients through `pi/project/trust_request` and blocks the worker start until
- * somebody answers. Declining is not an error — the worker starts with project
- * resources switched off, exactly like Pi's own "no".
+ * clients through the project-trust protocol and blocks the worker start until
+ * somebody answers. Declining is not an error — the worker starts without the
+ * project's `.laser` configuration.
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { ErrorCodes, PRODUCT_NAME, ProtocolError, type ProjectInfo, type ProjectTrust } from "@lasercode/protocol";
 import type { SessionCatalog } from "./catalog.js";
-import { canonical, defaultProjectTrust, savedPiTrust, trustReasons } from "./trust.js";
+import { canonical, trustReasons } from "./trust.js";
 
 interface StoredProject {
   addedAt: string;
@@ -37,8 +37,8 @@ export interface TrustRequest {
 
 export interface ProjectRegistryOptions {
   catalog: SessionCatalog;
-  /** Pi's agent dir; where `trust.json` and the global settings live. */
-  agentDir: string;
+  /** Internal engine directory. Project trust is Laser-owned. */
+  agentDir?: string;
   /** Where the project list is persisted. Absent = memory only (tests). */
   storePath?: string;
   onChange?: (projects: ProjectInfo[]) => void;
@@ -156,12 +156,6 @@ export class ProjectRegistry {
     const remembered = this.stored.get(key)?.trust;
     if (remembered) return { trust: remembered, reasons };
 
-    const pi = savedPiTrust(key, this.options.agentDir);
-    if (pi !== undefined) return { trust: pi ? "trusted" : "declined", reasons };
-
-    const fallback = defaultProjectTrust(this.options.agentDir);
-    if (fallback === "always") return { trust: "trusted", reasons };
-    if (fallback === "never") return { trust: "declined", reasons };
     return { trust: "unknown", reasons };
   }
 
@@ -184,14 +178,9 @@ export class ProjectRegistry {
   /**
    * Resolve trust for a directory we are about to start a worker in, asking a
    * client when nobody has decided. Returns the flag the worker should run
-   * with, or `undefined` for "laser has no opinion — keep Pi's own default".
+   * with, or `undefined` when there are no Laser-owned local resources.
    *
-   * `not_required` must map to `undefined`, not `false`. A directory with no
-   * trust-gated `.pi` resources was never a question, and answering `false`
-   * would pin it as *declined*: the settings screen would tell the user they
-   * had refused a project they were never asked about, and a `.pi/settings.json`
-   * created later in that session would be silently ignored. Throws only when
-   * nobody could possibly answer.
+   * `not_required` maps to `undefined`: no decision was requested.
    */
   async ensureTrusted(cwd: string): Promise<boolean | undefined> {
     const key = canonical(cwd);
@@ -206,8 +195,8 @@ export class ProjectRegistry {
     if (this.options.hasClients && !this.options.hasClients()) {
       throw new ProtocolError(
         ErrorCodes.ProjectUntrusted,
-        `${key} has project-local agent resources (${reasons.join(", ")}) and no trust decision. ` +
-          `Open ${PRODUCT_NAME} and approve the project, or run \`pi\` there once and answer its trust prompt.`,
+        `${key} has project-local ${PRODUCT_NAME} configuration (${reasons.join(", ")}) and no trust decision. ` +
+          `Open ${PRODUCT_NAME} and approve the project.`,
         { cwd: key, reasons },
       );
     }

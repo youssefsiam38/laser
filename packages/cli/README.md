@@ -1,13 +1,11 @@
 # `laser` — the command line
 
-The terminal half of laser: it starts and stops the host, drives sessions over
-the same protocol the app uses, reaches the **pinned** Pi without going through
-your global install, and tells you why a broken setup is broken.
+The optional terminal companion for Laser: it starts and stops the host, drives
+sessions over the same protocol the app uses, and diagnoses a broken setup.
 
 ```bash
 laser                       # start the host and open the app
 laser doctor                # is everything actually working?
-laser pi --help             # Pi's own help, from the copy laser pins
 ```
 
 Two rules hold everywhere:
@@ -60,13 +58,11 @@ window is the wrong shape for.
 | `laser rename [session] <name>` | Name a session |
 | `laser compact [session]` | Compact the context. `--instructions`, `--no-wait` |
 | `laser projects [list\|add\|remove\|trust] [dir]` | The project list the app shows, plus each project's worker status |
-| `laser settings [get\|list\|set\|unset] […]` | Read and write Pi settings for a project. `--project`, `--scope <global\|project>`, `--raw`, `--all` |
-| `laser packages [list\|install\|remove\|update\|check] […]` | Pi's package manager. `--project`, `--scope <user\|project>`, `--no-progress` |
+| `laser settings [get\|list\|set\|unset] […]` | Read and write Laser settings for a project. `--project`, `--scope <global\|project>`, `--raw`, `--all` |
 | `laser relay [status\|login\|pair\|devices\|revoke]` | Link a phone to this desktop through a relay. `--origin`, `--name`, `--timeout`, `--invert`, `--yes` |
 | `laser logs […]` | The host's provider, tool and session log store. `--follow`, `--section`, `--level`, `--search`, `--session`, `--project`, `--limit`, `--detail`, `--stats`, `--clear --yes` |
-| `laser pi […]` | Run the pinned Pi with laser's environment. `--global-pi` |
 | `laser doctor` | Check everything and print a fix for what fails. `--skip-worker`, `--timeout` |
-| `laser help [command\|topic]` | Topics: `pi`, `host`, `sessions`, `relay`, `doctor`, `env`, `json` |
+| `laser help [command\|topic]` | Topics: `host`, `sessions`, `relay`, `doctor`, `env`, `json` |
 | `laser completions <bash\|zsh\|fish>` | A completion script, generated from the command table |
 
 Global options — accepted before or after the command name: `--json`,
@@ -75,7 +71,7 @@ Global options — accepted before or after the command name: `--json`,
 
 Exit codes: `0` success · `1` it did not work (or `doctor` found a FAIL) ·
 `2` bad command line · `3` no host running · `4` the host answered with an
-error. `laser pi` exits with Pi's own code instead.
+error.
 
 ---
 
@@ -153,31 +149,6 @@ Exit code 1, because a row FAILed. `--json` gives the same rows with their
 
 ---
 
-## `laser pi`
-
-`laser pi` runs the Pi that `@lasercode/worker` pins — the same copy the app
-runs — not whatever `pi` is on your `PATH`. It sets:
-
-| Variable | To |
-| --- | --- |
-| `PI_CODING_AGENT_DIR` | laser's agent directory |
-| `PI_CODING_AGENT_SESSION_DIR` | laser's session directory |
-| `PI_SUBAGENTS_TEMP_ROOT` | laser's pi-subagents temp root |
-| `LASER` | `1` |
-
-so a session or a background subagent run you start from a terminal shows up in
-the app.
-
-Everything after `pi` is Pi's, including `--help` and `--version`. laser eats
-only the flags that *lead*: `--global-pi`, `--agent-dir`, `--session-dir`,
-`--subagents-temp-root`. Use `--` to force even those through to Pi.
-
-stdio is inherited, so the TUI works. The exit code is Pi's, and a Pi killed by
-a signal kills the wrapper with the same signal — `$?` is what it would be if
-you had run `pi` yourself.
-
----
-
 ## Where things live
 
 Resolution order, used identically by every command:
@@ -235,8 +206,7 @@ laser completions fish > ~/.config/fish/completions/laser.fish
 ```
 
 They are generated from the same table that generates `--help`, so a new command
-completes the day it exists. Completion stops at `pi`: the arguments there are
-Pi's, and guessing at them would be wrong.
+completes the day it exists.
 
 ---
 
@@ -255,8 +225,8 @@ Pi's, and guessing at them would be wrong.
 - **Agent output is data.** Everything printed from a transcript, a tool result
   or an extension goes through `sanitize()` first: no escape sequence from an
   agent reaches your terminal. It is AGENTS.md invariant 9, applied to stdout.
-- **This package never imports Pi.** It resolves the pinned Pi's *path* through
-  `@lasercode/worker` and spawns it. A test asserts both halves of that.
+- **This package never imports the engine.** Diagnostics resolve its bundled
+  executable through `@lasercode/worker`; it is not a product command.
 
 ## Development
 

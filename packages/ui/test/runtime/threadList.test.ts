@@ -196,6 +196,7 @@ describe("createThreadListAdapter", () => {
         return "/created.jsonl";
       },
       renameSession: async (path, name) => void calls.push(`rename:${path}:${name}`),
+      deleteSession: async (path) => void calls.push(`delete:${path}`),
       loadSession: async (path) => void calls.push(`load:${path}`),
       refreshSessions: async () => void calls.push("refresh"),
       beginInitialize: () => void calls.push("begin"),
@@ -256,9 +257,12 @@ describe("createThreadListAdapter", () => {
     expect(archive.has("/a.jsonl")).toBe(false);
   });
 
-  it("delete is not supported", async () => {
-    const { adapter } = deps();
-    await expect(adapter.delete("/a.jsonl")).rejects.toThrow(/does not delete/i);
+  it("deletes an archived transcript through the host and removes the local archive flag", async () => {
+    const { adapter, archive, calls } = deps();
+    archive.add("/a.jsonl");
+    await adapter.delete("/a.jsonl");
+    expect(calls).toEqual(["delete:/a.jsonl", "refresh"]);
+    expect(archive.has("/a.jsonl")).toBe(false);
   });
 
   it("fetch loads and hydrates the session, then reports its metadata", async () => {

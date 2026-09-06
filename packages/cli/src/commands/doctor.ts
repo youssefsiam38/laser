@@ -19,7 +19,7 @@
  *     "check your configuration";
  *   - a check that cannot run says so (SKIP) instead of passing quietly.
  */
-import { ENV, PRODUCT_NAME } from "@lasercode/protocol";
+import { ENV, PRODUCT_DISPLAY_NAME, PRODUCT_NAME } from "@lasercode/protocol";
 import { execFile } from "node:child_process";
 import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statfsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
@@ -417,9 +417,8 @@ function agentDirChecks(paths: LaserPaths): Check[] {
 }
 
 /**
- * Running the agent's own command, which is a different code path from loading
- * it as a library: `laser pi` and the `laser packages` verbs go through the
- * command, workers go through the library, and either can be broken alone.
+ * Running the bundled engine's own command is a different code path from
+ * loading it as a library, and either can be broken alone.
  */
 async function checkAgentCommand(paths: LaserPaths, timeoutMs: number): Promise<Check> {
   const started = Date.now();
@@ -502,7 +501,7 @@ function checkWritableDir(name: string, dir: string, create: boolean, flag: stri
 }
 
 /**
- * Provider credentials, read from Pi's own store as JSON. Only names, types and
+ * Provider credentials, read from Laser's private engine store as JSON. Only names, types and
  * expiry are reported — a key or token is never read into a printable string.
  */
 function checkProviders(paths: LaserPaths): Check {
@@ -522,7 +521,7 @@ function checkProviders(paths: LaserPaths): Check {
         name: "providers",
         status: "fail",
         detail: `${authPath} is not readable as JSON: ${messageOf(error)}`,
-        fix: `Pi refuses to start with a broken auth.json. Re-authenticate with \`${PRODUCT_NAME} pi\` and its /login command.`,
+        fix: `${PRODUCT_DISPLAY_NAME} cannot use a broken provider store. Open Settings → Providers and models, then sign in again.`,
       };
     }
   }
@@ -547,7 +546,7 @@ function checkProviders(paths: LaserPaths): Check {
       detail: `no credentials in ${authPath} and no provider key in the environment`,
       fix:
         `Open ${PRODUCT_NAME} and sign in to a provider — the first-run flow asks for one, and ` +
-        `Settings → Models can add one at any time. From a terminal: \`${PRODUCT_NAME} pi\`, then /login.`,
+        `Settings → Providers and models can add one at any time.`,
       data: { authPath, providers: [] },
     };
   }
@@ -561,7 +560,7 @@ function checkProviders(paths: LaserPaths): Check {
       name: "providers",
       status: "warn",
       detail: `${detail} — expired: ${expired.map((provider) => provider.id).join(", ")}`,
-      fix: `Re-authenticate the expired provider with \`${PRODUCT_NAME} pi\` and /login. Pi refreshes oauth tokens itself, so this may clear on its own.`,
+      fix: `Open Settings → Providers and models and sign in to the expired provider again.`,
       data: { authPath, providers },
     };
   }
@@ -709,7 +708,7 @@ async function checkWorker(
           status: "fail",
           detail: "a session opened but no model resolved",
           fix:
-            "Choose a default model in Settings → Models. If one is already chosen, the provider it " +
+            "Choose a default model in Settings → Providers and models. If one is already chosen, the provider it " +
             "names has no credentials — sign in to that provider on the same screen.",
           data: { available: models.length },
         },
@@ -758,7 +757,7 @@ async function checkModelAuth(paths: LaserPaths, model: ModelRef, timeoutMs: num
         cwd: tmpdir(),
       }),
       timeoutMs,
-      "`pi auth check` did not answer in time",
+      "the provider readiness check did not answer in time",
     );
     const line = result.stdout
       .split("\n")
@@ -778,15 +777,15 @@ async function checkModelAuth(paths: LaserPaths, model: ModelRef, timeoutMs: num
       name: "model auth",
       status: "fail",
       detail: `${model.provider} is ${parsed?.status ?? "not usable"}${parsed?.reason ? ` (${parsed.reason})` : ""}`,
-      fix: `Authenticate it: \`${PRODUCT_NAME} pi\` then /login, or export the provider's API key. Pi's own view: \`${PRODUCT_NAME} pi auth check --provider ${model.provider}\`.`,
+      fix: `Open Settings → Providers and models and authenticate ${model.provider}, or provide its API key.`,
       data: { provider: model.provider, ...(parsed ?? {}) },
     };
   } catch (error) {
     return {
       name: "model auth",
       status: "warn",
-      detail: `could not ask Pi about ${model.provider}: ${messageOf(error)}`,
-      fix: `Try it directly: \`${PRODUCT_NAME} pi auth check --provider ${model.provider}\`.`,
+      detail: `could not check ${model.provider}: ${messageOf(error)}`,
+      fix: `Open Settings → Providers and models and check ${model.provider}.`,
     };
   }
 }

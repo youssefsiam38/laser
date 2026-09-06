@@ -5,11 +5,14 @@
  *
  *   ┌────────────────────────────┐
  *   │ [pill] [pill] [pill] [+N]  │  minimal islands: a strip that wraps to two rows
+ *   ├────────────────────────────┤
+ *   │ one expanded island        │  one fills the canvas
+ *   ├────────────────────────────┤
+ *   │ two expanded islands       │  two are full-width stacked rows
  *   ├──────────────┬─────────────┤
- *   │ compact row  │ expanded    │  columns (1 or 2), each holding compact rows
- *   │ expanded     │             │  and up to two expanded islands split by a divider
- *   │ ──divider──  │             │
- *   │ expanded     │             │
+ *   │ first        │ third       │  three or four activate a 2×2 grid
+ *   ├──────────────┼─────────────┤
+ *   │ second       │ fourth      │  without remounting any island
  *   └──────────────┴─────────────┘
  *
  * The pure parts are tested in test/panels/dock-state.test.ts.
@@ -95,8 +98,18 @@ export function layoutDock(state: DockState, width: number, height: number): Doc
   const overflowRect = needsOverflow ? slot(visible.length) : undefined;
   for (const key of overflow) rects[key] = { ...slot(visible.length), size: "minimal", hidden: true };
 
-  // --- columns ---------------------------------------------------------------
-  const columns = state.columns;
+  // --- watched panels -------------------------------------------------------
+  // Width says whether two readable columns are possible; occupancy says
+  // whether there is any reason to use them. Projecting creation order into
+  // visual slots here also upgrades persisted docks whose first two panels
+  // were previously assigned to separate columns.
+  const expandedKeys = state.order
+    .filter((key) => {
+      const island = state.islands[key];
+      return island !== undefined && island.size === "expanded" && !island.poppedOut;
+    })
+    .slice(0, state.columns * MAX_EXPANDED_PER_COLUMN);
+  const columns = state.columns === 2 && expandedKeys.length >= 3 ? 2 : 1;
   const colWidth = Math.max(0, (inner - (columns - 1) * GAP) / columns);
   const bodyTop = stripHeight + PAD;
   const bodyHeight = Math.max(0, height - bodyTop - PAD);
@@ -108,14 +121,15 @@ export function layoutDock(state: DockState, width: number, height: number): Doc
     const left = PAD + c * (colWidth + GAP);
     const compact = state.order.filter((k) => {
       const island = state.islands[k];
-      return island !== undefined && island.size === "compact" && !island.poppedOut && island.column === column && state.maximized !== k;
+      return island !== undefined
+        && island.size === "compact"
+        && !island.poppedOut
+        && (columns === 1 || island.column === column)
+        && state.maximized !== k;
     });
-    const expanded = state.order
-      .filter((k) => {
-        const island = state.islands[k];
-        return island !== undefined && island.size === "expanded" && !island.poppedOut && island.column === column;
-      })
-      .slice(0, MAX_EXPANDED_PER_COLUMN);
+    const expanded = columns === 1
+      ? expandedKeys.slice(0, MAX_EXPANDED_PER_COLUMN)
+      : expandedKeys.slice(column * MAX_EXPANDED_PER_COLUMN, (column + 1) * MAX_EXPANDED_PER_COLUMN);
 
     let y = bodyTop;
     for (const key of compact) {
@@ -125,7 +139,9 @@ export function layoutDock(state: DockState, width: number, height: number): Doc
     const remaining = Math.max(0, bodyHeight - (y - bodyTop));
     if (expanded.length === 1) {
       const key = expanded[0]!;
-      const h = Math.max(EXPANDED_MIN, remaining);
+      // In the 2×2 layout a lone third panel owns the top-right quadrant;
+      // the empty fourth cell is real empty space until a fourth panel opens.
+      const h = columns === 2 ? Math.max(EXPANDED_MIN, Math.round((remaining - GAP) / 2)) : Math.max(EXPANDED_MIN, remaining);
       rects[key] = { top: y, left, width: colWidth, height: h, size: state.maximized === key ? "maximized" : "expanded", hidden: false };
       y += h;
     } else if (expanded.length === 2) {

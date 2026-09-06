@@ -19,12 +19,14 @@
  *                        answers; the others ignore it)
  */
 import { ErrorCodes, PRODUCT_NAME, ProtocolError, decisionPushPayload, parseClientRequest, type JsonRpcError, type JsonRpcResponse, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
+import { unlinkSync } from "node:fs";
 import type { AttentionTracker } from "./attention.js";
 import type { SessionCatalog } from "./catalog.js";
 import type { LogStore } from "./logstore.js";
 import { browseDirectories, type PackageService, type SetupService } from "./packages.js";
 import type { PanelHub } from "./panels/hub.js";
 import type { PrefsStore } from "./prefs.js";
+import type { FeatureService } from "./features.js";
 import type { ProjectRegistry } from "./projects.js";
 import type { PushService } from "./push.js";
 import type { SubagentsLayer } from "./subagents/layer.js";
@@ -71,6 +73,8 @@ export interface RouterDeps {
   setup?: SetupService | undefined;
   /** laser's own preferences (M11-T6). Host-owned; never Pi's settings file. */
   prefs?: PrefsStore | undefined;
+  /** Laser-owned feature manifests and enablement. */
+  features?: FeatureService | undefined;
   /** The origin a phone opens, for the URLs inside a notification. */
   publicOrigin?: (() => string) | undefined;
 }
@@ -80,11 +84,6 @@ const CWD_ROUTED = new Set([
   "pi/settings/list",
   "pi/settings/get",
   "pi/settings/set",
-  "pi/packages/list",
-  "pi/packages/install",
-  "pi/packages/remove",
-  "pi/packages/update",
-  "pi/packages/check_updates",
   "pi/providers/list",
   "pi/models/catalog",
   // Signing in (M10-T6): every message names the cwd so the worker that holds
@@ -225,6 +224,20 @@ export class Router {
         return {};
       }
 
+      case "pi/session/delete": {
+        const { path } = req.params;
+        const entry = this.catalog.list().find((session) => session.path === path);
+        if (!entry) throw new ProtocolError(ErrorCodes.SessionNotFound, "That session is no longer on disk.");
+        if (this.pool.openSessions(entry.cwd).includes(path)) {
+          throw new ProtocolError(ErrorCodes.SessionBusy, "Close this session before deleting its transcript.");
+        }
+        unlinkSync(path);
+        this.catalog.invalidate(path);
+        this.deps.views.invalidate(path);
+        this.unwritten.delete(path);
+        return {};
+      }
+
       case "pi/session/entries": {
         const { path } = req.params;
         const cached = this.deps.views.get(path);
@@ -289,30 +302,21 @@ export class Router {
       case "pi/project/browse":
         return browseDirectories(req.params.path);
 
-      // ------------------------------------------------------------ M10-T5
-      // Packages: the host decides, the worker does. Without a PackageService
-      // the five original methods fall through to the worker unchanged.
+      // Package management is deliberately not part of Laser's product API.
+      // These old wire methods remain parseable for a clear breaking-change
+      // response instead of falling through and accidentally reaching Pi.
       case "pi/packages/catalog":
-        return this.packages().catalog(req.params);
       case "pi/packages/runtime":
-        return this.packages().runtime();
       case "pi/packages/records":
-        return { records: this.packages().records(req.params.cwd) };
       case "pi/packages/install":
-        if (this.deps.packages) return this.deps.packages.install(req.params);
-        break;
       case "pi/packages/remove":
-        if (this.deps.packages) return this.deps.packages.remove(req.params);
-        break;
       case "pi/packages/update":
-        if (this.deps.packages) return this.deps.packages.update(req.params);
-        break;
       case "pi/packages/check_updates":
-        if (this.deps.packages) return this.deps.packages.checkUpdates(req.params);
-        break;
       case "pi/packages/list":
-        if (this.deps.packages) return this.deps.packages.list(req.params.cwd);
-        break;
+        throw new ProtocolError(
+          ErrorCodes.Unsupported,
+          `${PRODUCT_NAME} provides tested Features; it does not install agent packages. Open Settings → Features.`,
+        );
 
       // ------------------------------------------------------------ M10-T6
       case "pi/setup/state":
@@ -352,6 +356,23 @@ export class Router {
       }
       case "pi/prefs/set":
         return { entry: this.prefs().set(req.params.namespace, req.params.value) };
+
+      // ----------------------------------------------------------- features
+      case "feature/list":
+        return { features: this.features().list(req.params.cwd) };
+      case "feature/set": {
+        const features = this.features().set(req.params.id, req.params.enabled, req.params.scope, req.params.cwd);
+        const targets = req.params.scope === "project" && req.params.cwd ? [req.params.cwd] : this.pool.cwds();
+        let restartPending = false;
+        for (const cwd of targets) {
+          try {
+            await this.pool.restart(cwd);
+          } catch {
+            restartPending = true;
+          }
+        }
+        return { features, restartPending };
+      }
 
       // ------------------------------------------------------------ push
       case "pi/push/config":
@@ -475,6 +496,13 @@ export class Router {
       );
     }
     return this.deps.prefs;
+  }
+
+  private features(): FeatureService {
+    if (!this.deps.features) {
+      throw new ProtocolError(ErrorCodes.Unsupported, "This host has no feature registry.");
+    }
+    return this.deps.features;
   }
 
   /** The push service, or an error a person can act on. */

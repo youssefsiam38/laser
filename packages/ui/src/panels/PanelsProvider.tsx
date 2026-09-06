@@ -279,15 +279,23 @@ export function usePanelActions(): PanelActions {
 const sameKeys = (a: readonly PanelEntry[], b: readonly PanelEntry[]): boolean =>
   a.length === b.length && a.every((e, i) => e === b[i]);
 
+/** Web-search results already have a complete transcript disclosure. Older
+ * workers may still replay their retired duplicate panel, so hide it here as
+ * well as stopping emission in the companion extension. */
+export const isTranscriptOnlyPanel = (panel: Panel): boolean => panel.source === "pi-web-access";
+
+const visibleEntriesForPath = (state: PanelsState, path: string | undefined): PanelEntry[] =>
+  entriesForPath(state, path).filter((entry) => !isTranscriptOnlyPanel(entry.panel));
+
 /** Every panel entry of a session, in creation order. Stable while nothing changed. */
 export function usePanelEntries(path: string | undefined): PanelEntry[] {
-  return usePanelsState((root) => entriesForPath(root.panels, path), sameKeys);
+  return usePanelsState((root) => visibleEntriesForPath(root.panels, path), sameKeys);
 }
 
 /** The entries that live as islands on this viewport (dock, or chip-and-sheet on a phone). */
 export function useIslandEntries(path: string | undefined, viewport: Viewport): PanelEntry[] {
   return usePanelsState(
-    (root) => entriesForPath(root.panels, path).filter((e) => isIsland(e.panel, viewport)),
+    (root) => visibleEntriesForPath(root.panels, path).filter((e) => isIsland(e.panel, viewport)),
     sameKeys,
   );
 }
@@ -387,6 +395,7 @@ export function PanelsProvider({ children }: { children: ReactNode }): ReactNode
     const unsubscribe = client.subscribe((method: HostNotificationMethod, params) => {
       if (method === "pi/panel/upsert") {
         const { path, panel } = params as HostNotifications["pi/panel/upsert"];
+        if (isTranscriptOnlyPanel(panel)) return;
         const before = read();
         dispatch({ type: "panels", fn: (s) => upsertPanel(s, path, panel, Date.now()) });
         resurfaceIfNeeded(before, path, panel);
@@ -438,7 +447,7 @@ export function PanelsProvider({ children }: { children: ReactNode }): ReactNode
       .request("pi/panel/list", { path: current })
       .then(({ panels }) => {
         if (cancelled) return;
-        dispatch({ type: "panels", fn: (s) => reconcilePath(s, current, panels, Date.now()) });
+        dispatch({ type: "panels", fn: (s) => reconcilePath(s, current, panels.filter((panel) => !isTranscriptOnlyPanel(panel)), Date.now()) });
       })
       .catch(() => {
         // A host without the panel hub yet: declared panels simply do not
@@ -550,7 +559,7 @@ export function PanelsProvider({ children }: { children: ReactNode }): ReactNode
         // A worker that predates panel actions answers with nothing at all.
         const delivered = result?.delivered === true;
         if (!delivered) {
-          app.toast("warning", `"${entry.panel.title}" is no longer listening. The extension that showed it may have moved on.`);
+          app.toast("warning", `"${entry.panel.title}" is no longer listening. The feature that showed it may have moved on.`);
         }
         return delivered;
       } catch (error) {

@@ -40,7 +40,7 @@ Everything assistant-ui touches lives here; import it from the barrel
 | Module | Role |
 | --- | --- |
 | `projection.ts` | `SessionView` → `ThreadMessageLike[]`. Splits extension dialogs into tool-attached (`approval` / `interrupt`) and free-standing; notices become a `data` part named `laser-notice`. |
-| `threadList.ts` | Session catalog → `RemoteThreadListAdapter`. Attention-first ordering, local-only archive, rename; `delete` throws by design (laser never deletes Pi sessions). |
+| `threadList.ts` | Session catalog → `RemoteThreadListAdapter`. Attention-first ordering, local-only archive, rename, and host-validated permanent deletion for an archived transcript. |
 | `adapter.ts` | Per-session `ExternalStoreAdapter`: send routing, queue lanes, composer key plan, approval/interrupt answers, image attachments. |
 | `LaserProvider.tsx` | The one stateful shell: `HostClient` + reducer + `useRemoteThreadListRuntime`. Exposes `useLaser`, `useSessionMeta`, `useHostUiRequests`, `useExtensionUi`, `useToasts`. |
 

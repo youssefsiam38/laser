@@ -84,6 +84,9 @@ export const ENV_PREFIX: string = PRODUCT.envPrefix;
 /** The one directory the product owns, under each platform's data root. */
 export const DATA_DIR_NAME: string = PRODUCT.dirName;
 
+/** The product-owned settings directory inside a project checkout. */
+export const PROJECT_DIR_NAME: string = `.${PRODUCT_NAME}`;
+
 /** The prefix on every `localStorage`, `sessionStorage` and Cache Storage key. */
 export const STORAGE_PREFIX: string = PRODUCT.storagePrefix;
 

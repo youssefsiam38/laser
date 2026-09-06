@@ -4,19 +4,27 @@
  * primitive ramps so every preset inherits the contrast the ramps were tuned
  * for; the guard test in `test/theme.test.ts` re-measures every one anyway.
  *
- * The default is `graphite` (T5). Most people never open Appearance, so it
- * gets the scrutiny of a single-theme product: neutral greys with almost no
- * cast, a blue that reads as "running" without shouting, amber for
- * "needs you", and the two default faces.
+ * The default is the Laser brand pair (T5). Most people never open Appearance,
+ * so it gets the scrutiny of a single-theme product: the approved mark's
+ * black, warm-white and beam green, amber for "needs you", and the two default
+ * faces. Graphite and Paper remain available as quieter alternatives.
  */
+import { PRODUCT, PRODUCT_DISPLAY_NAME, PRODUCT_NAME } from "@lasercode/protocol";
 import { ACCENT_HUES, accentRamp, attentionRamp, neutralRamp, type NeutralFamily } from "./primitives.js";
 import { oklch, pickOnColor } from "./color.js";
 import { DEFAULT_FONTS } from "./fonts.js";
 import type { ThemeBase, ThemePreset, ThemeTokens } from "./types.js";
 
-export const DEFAULT_PRESET_ID = "graphite";
+export const DEFAULT_PRESET_ID = PRODUCT_NAME;
 /** The light preset a fresh install flips to when following the system. */
-export const DEFAULT_LIGHT_PRESET_ID = "paper";
+export const DEFAULT_LIGHT_PRESET_ID = `${PRODUCT_NAME}-light`;
+
+/** Approved website mark colours. The SVG is the identity source of truth. */
+export const LASER_BRAND = {
+  black: PRODUCT.branding.black.toLowerCase(),
+  warmWhite: PRODUCT.branding.warmWhite.toLowerCase(),
+  green: PRODUCT.branding.light.toLowerCase(),
+} as const;
 
 type Palette = {
   family: NeutralFamily;
@@ -62,11 +70,26 @@ const knobs = { textSize: "default", density: "comfortable", radius: "soft", con
 
 export const PRESETS: readonly ThemePreset[] = [
   {
+    id: PRODUCT_NAME,
+    name: PRODUCT_DISPLAY_NAME,
+    tagline: "Brand black, warm-white ink and beam green. The default.",
+    base: "dark",
+    tokens: {
+      ...paletteTokens({ family: "graphite", base: "dark", accentHue: ACCENT_HUES.green, attentionHue: ACCENT_HUES.amber, steps: DARK_STEPS }),
+      bg: LASER_BRAND.black,
+      ink: LASER_BRAND.warmWhite,
+      live: LASER_BRAND.green,
+      "on-live": LASER_BRAND.black,
+    },
+    fonts: { ...DEFAULT_FONTS },
+    ...knobs,
+  },
+  {
     id: "graphite",
     name: "Graphite",
-    tagline: "Plain dark. The default.",
+    tagline: "Plain dark with a softer green accent.",
     base: "dark",
-    tokens: paletteTokens({ family: "graphite", base: "dark", accentHue: ACCENT_HUES.blue, attentionHue: ACCENT_HUES.amber, steps: DARK_STEPS }),
+    tokens: paletteTokens({ family: "graphite", base: "dark", accentHue: ACCENT_HUES.green, attentionHue: ACCENT_HUES.amber, steps: DARK_STEPS }),
     fonts: { ...DEFAULT_FONTS },
     ...knobs,
   },
@@ -108,11 +131,24 @@ export const PRESETS: readonly ThemePreset[] = [
     motion: "full",
   },
   {
+    id: `${PRODUCT_NAME}-light`,
+    name: `${PRODUCT_DISPLAY_NAME} light`,
+    tagline: "Brand warm white, black ink and an accessible beam-green tone.",
+    base: "light",
+    tokens: {
+      ...paletteTokens({ family: "stone", base: "light", accentHue: ACCENT_HUES.green, attentionHue: 65, steps: LIGHT_STEPS }),
+      bg: LASER_BRAND.warmWhite,
+      ink: LASER_BRAND.black,
+    },
+    fonts: { ...DEFAULT_FONTS },
+    ...knobs,
+  },
+  {
     id: "paper",
     name: "Paper",
-    tagline: "Warm white, indigo accent. Light, easy on the eyes.",
+    tagline: "Warm white, beam-green accent. Light, easy on the eyes.",
     base: "light",
-    tokens: paletteTokens({ family: "stone", base: "light", accentHue: ACCENT_HUES.indigo, attentionHue: 65, steps: LIGHT_STEPS }),
+    tokens: paletteTokens({ family: "stone", base: "light", accentHue: ACCENT_HUES.green, attentionHue: 65, steps: LIGHT_STEPS }),
     fonts: { ...DEFAULT_FONTS },
     ...knobs,
   },

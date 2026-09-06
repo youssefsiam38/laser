@@ -48,6 +48,7 @@ function productModule() {
     issuesUrl: identity.issuesUrl,
     vendor: identity.vendor,
     copy: identity.copy,
+    branding: identity.branding,
     desktopFileName: identity.desktopFileName,
     metainfoFileName: identity.metainfoFileName,
     /**
@@ -202,6 +203,7 @@ function ipcModule() {
     ["windowClose", "window/close"], ["windowState", "window/state"],
     ["windowStateChanged", "window/state-changed"],
     ["themeSet", "theme/set"],
+    ["directorySelect", "directory/select"],
     ["microphoneStatus", "microphone/status"], ["microphoneRequest", "microphone/request"],
     ["microphoneSettings", "microphone/settings"],
     ["identity", "identity"],

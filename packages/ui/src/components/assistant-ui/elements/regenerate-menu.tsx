@@ -11,21 +11,18 @@
  */
 import type { ModelRef, ThinkingLevel } from "@lasercode/protocol";
 import { RefreshCw } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
+import { PopoverTrigger } from "@/components/ui/popover";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-import { GenerationLoader } from "./loading-state.js";
+import {
+  ModelSelectorRoot,
+  ProviderModelMenu,
+  modelOption,
+  modelOptionId,
+} from "./model-selector.js";
 import { mono } from "./surfaces.js";
 
 export type RegeneratePick = { model: ModelRef } | { thinking: ThinkingLevel };
@@ -41,61 +38,86 @@ export interface RegenerateMenuProps {
   className?: string | undefined;
 }
 
-const modelKey = (m: ModelRef): string => `${m.provider}/${m.id}`;
-
 export function RegenerateMenu({ loadModels, thinkingLevels, currentModel, currentThinking, onPick, disabled = false, className }: RegenerateMenuProps) {
   const [models, setModels] = useState<ModelRef[] | undefined>(undefined);
+  const [error, setError] = useState<string>();
   const [open, setOpen] = useState(false);
 
   const onOpenChange = (next: boolean) => {
     setOpen(next);
     if (next && models === undefined) {
-      void loadModels().then((list) => setModels(list));
+      setError(undefined);
+      void loadModels().then(
+        (list) => setModels(list),
+        (reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)),
+      );
     }
   };
+  const availableModels = useMemo(() => {
+    const list = models ? [...models] : currentModel ? [currentModel] : [];
+    if (currentModel && !list.some((model) => modelOptionId(model) === modelOptionId(currentModel))) list.unshift(currentModel);
+    return list;
+  }, [currentModel, models]);
+  const options = useMemo(() => availableModels.map(modelOption), [availableModels]);
+  const currentKey = currentModel ? modelOptionId(currentModel) : undefined;
 
   return (
-    <DropdownMenu open={open} onOpenChange={onOpenChange}>
-      <DropdownMenuTrigger asChild>
-        <TooltipIconButton tooltip="Fork and re-run with…" size="icon-xs" className={cn("text-ink-3", className)} disabled={disabled}>
+    <ModelSelectorRoot
+      models={options}
+      {...(currentKey ? { value: currentKey } : {})}
+      open={open}
+      onOpenChange={onOpenChange}
+      onValueChange={(key) => {
+        const model = availableModels.find((entry) => modelOptionId(entry) === key);
+        if (model) onPick({ model });
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Fork and re-run with another model or thinking level"
+          title="Fork and re-run with…"
+          className={cn("text-ink-3", className)}
+          disabled={disabled}
+        >
           <RefreshCw />
-        </TooltipIconButton>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-72">
-        <p className="px-2 pt-1.5 pb-1 text-xs text-ink-2">Re-runs this prompt in a fork. This reply stays here.</p>
-        <DropdownMenuSeparator />
-        <DropdownMenuLabel>Thinking</DropdownMenuLabel>
-        <DropdownMenuRadioGroup {...(currentThinking ? { value: currentThinking } : {})} onValueChange={(v) => onPick({ thinking: v as ThinkingLevel })}>
-          {thinkingLevels.map((level) => (
-            <DropdownMenuRadioItem key={level} value={level}>
-              <span className="capitalize">{level}</span>
-              {level === currentThinking ? <span className={cn(mono, "ms-auto text-ink-3")}>current</span> : null}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-        <DropdownMenuSeparator />
-        <DropdownMenuLabel>Model</DropdownMenuLabel>
-        {models === undefined ? (
-          <GenerationLoader label="Loading models" layout="inline" className="px-2 py-1.5 text-ink-3" />
-        ) : models.length === 0 ? (
-          <p className="px-2 py-1.5 text-xs text-ink-3">No other models are signed in.</p>
-        ) : (
-          <DropdownMenuRadioGroup
-            value={currentModel ? modelKey(currentModel) : ""}
-            onValueChange={(key) => {
-              const model = models.find((m) => modelKey(m) === key);
-              if (model) onPick({ model });
-            }}
-          >
-            {models.map((m) => (
-              <DropdownMenuRadioItem key={modelKey(m)} value={modelKey(m)}>
-                <span className="min-w-0 flex-1 truncate">{m.name ?? m.id}</span>
-                <span className={cn(mono, "ms-auto shrink-0 text-ink-3")}>{currentModel && modelKey(currentModel) === modelKey(m) ? "current" : m.provider}</span>
-              </DropdownMenuRadioItem>
-            ))}
-          </DropdownMenuRadioGroup>
+        </Button>
+      </PopoverTrigger>
+      <ProviderModelMenu
+        align="start"
+        loading={models === undefined && error === undefined}
+        error={error}
+        onRetry={() => {
+          setModels(undefined);
+          setError(undefined);
+          void loadModels().then(
+            (list) => setModels(list),
+            (reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)),
+          );
+        }}
+        beforeFilters={(
+          <div className="grid gap-2 border-b border-line p-2">
+            <p className="text-xs leading-4 text-ink-2">Re-runs this prompt in a fork. This reply stays here.</p>
+            <label className="grid grid-cols-[4.25rem_minmax(0,1fr)] items-center gap-2">
+              <span className="eyebrow text-ink-3">Thinking</span>
+              <select
+                aria-label="Thinking level for re-run"
+                value={currentThinking ?? ""}
+                onChange={(event) => {
+                  onPick({ thinking: event.target.value as ThinkingLevel });
+                  setOpen(false);
+                }}
+                className={cn(mono, "h-9 rounded-lg border border-line bg-surface px-2.5 text-xs text-ink outline-none focus-visible:border-live")}
+              >
+                {!currentThinking ? <option value="" disabled>Choose a level</option> : null}
+                {thinkingLevels.map((level) => <option key={level} value={level}>{level}</option>)}
+              </select>
+            </label>
+          </div>
         )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+      />
+    </ModelSelectorRoot>
   );
 }

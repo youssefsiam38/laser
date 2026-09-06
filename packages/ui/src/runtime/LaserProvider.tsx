@@ -30,6 +30,7 @@ import {
 import type { AssistantRuntime, ThreadMessageLike } from "@assistant-ui/react";
 import type {
   ContentBlock,
+  GoalAction,
   HostNotificationMethod,
   HostNotifications,
   ModelRef,
@@ -110,6 +111,7 @@ export interface LaserActions {
   jump(entryId: string): Promise<void>;
   refreshSessions(): Promise<void>;
   refreshEntries(): Promise<void>;
+  goal(action: GoalAction): Promise<void>;
   /** `pi/session/clear_queue`; resolves with the text to restore into the composer. */
   clearQueue(): Promise<string>;
   /**
@@ -137,6 +139,8 @@ export interface LaserContextValue {
   /** The currently open session view, if any. */
   view: SessionView | undefined;
   currentProject: string | undefined;
+  /** The remembered startup destination is still connecting or hydrating. */
+  startupRestoring: boolean;
   setCurrentProject: (cwd: string | undefined) => void;
   /** Every cwd we know about: the host's project list, plus any open session's. */
   projects: string[];
@@ -350,6 +354,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
 
   const [currentProject, setCurrentProjectState] = useState<string | undefined>(() => readString(PROJECT_STORAGE_KEY));
+  const [startupRestoring, setStartupRestoring] = useState(true);
   const [projectList, setProjectList] = useState<ProjectInfo[]>([]);
   const [trustRequests, setTrustRequests] = useState<TrustRequest[]>([]);
   const projectRef = useRef<string | undefined>(currentProject);
@@ -532,6 +537,8 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           const { entries } = await client.request("pi/session/entries", { path });
           dispatch({ type: "hydrate", path, entries, expectSeq: seqBefore });
         }
+        const { goal } = await client.request("session/goal/get", { path });
+        dispatch({ type: "goal", path, goal });
       })();
       const tracked = work.finally(() => {
         if (openInFlight.current.get(path) === tracked) openInFlight.current.delete(path);
@@ -548,6 +555,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       client.track(session.path, 0);
       dispatch({ type: "opened", state: session });
       dispatch({ type: "hydrate", path: session.path, entries: [] });
+      dispatch({ type: "goal", path: session.path, goal: null });
       void refreshSessions();
       return session.path;
     },
@@ -802,6 +810,12 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           const { entries } = await client.request("pi/session/entries", { path });
           dispatch({ type: "entries", path, entries });
         }).then(() => undefined),
+      goal: (action) =>
+        guard(async () => {
+          const path = requireCurrent();
+          const { goal } = await client.request("session/goal/action", { path, action });
+          dispatch({ type: "goal", path, goal });
+        }).then(() => undefined),
       clearQueue: () =>
         guard(async () => {
           const { steering, followUp } = await client.request("pi/session/clear_queue", { path: requireCurrent() });
@@ -940,14 +954,22 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     if (/^#\/session\//.test(globalThis.location?.hash ?? "")) return;
     restoredSession.current = true;
     const cwd = projectRef.current;
-    if (!cwd) return;
+    if (!cwd) {
+      setStartupRestoring(false);
+      return;
+    }
     const remembered = readStringMap(SESSION_STORAGE_KEY);
     const path = remembered[cwd];
-    if (!path || readState().open[path]) return;
-    void openSession(path).catch(() => {
-      const { [cwd]: _gone, ...rest } = readStringMap(SESSION_STORAGE_KEY);
-      writeString(SESSION_STORAGE_KEY, JSON.stringify(rest));
-    });
+    if (!path) {
+      setStartupRestoring(false);
+      return;
+    }
+    void openSession(path)
+      .catch(() => {
+        const { [cwd]: _gone, ...rest } = readStringMap(SESSION_STORAGE_KEY);
+        writeString(SESSION_STORAGE_KEY, JSON.stringify(rest));
+      })
+      .finally(() => setStartupRestoring(false));
   }, [state.connection, openSession, readState]);
 
   /**
@@ -971,6 +993,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       path = decodeURIComponent(match[1]);
     } catch {
       onError(new Error(`That link is not a valid session path: ${hash}`));
+      setStartupRestoring(false);
       return;
     }
     void openSession(path)
@@ -989,6 +1012,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       .finally(() => {
         const { pathname, search } = globalThis.location;
         globalThis.history?.replaceState(null, "", `${pathname}${search}`);
+        setStartupRestoring(false);
       });
   }, [state.connection, openSession, onError, readState, setCurrentProject]);
 
@@ -1017,6 +1041,9 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         createSession: (cwd) => actionsRef.current.newSession(cwd),
         renameSession: async (path, name) => {
           await client.request("pi/session/rename", { path, name });
+        },
+        deleteSession: async (path) => {
+          await client.request("pi/session/delete", { path });
         },
         loadSession: (path) => openSession(path),
         refreshSessions,
@@ -1069,6 +1096,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       dispatch,
       client,
       currentProject,
+      startupRestoring,
       setCurrentProject,
       projects,
       projectInfo,
@@ -1076,7 +1104,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       archive,
       actions,
     }),
-    [actions, archive, client, currentProject, dispatch, projectInfo, projects, setCurrentProject, trustRequests],
+    [actions, archive, client, currentProject, dispatch, projectInfo, projects, setCurrentProject, startupRestoring, trustRequests],
   );
 
   return (

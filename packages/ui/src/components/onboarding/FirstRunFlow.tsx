@@ -336,7 +336,7 @@ export function FirstRunFlow({ setup, onFinished }: FirstRunFlowProps) {
           total={COUNTED_STEPS.length}
           titles={TITLES}
           title={STEP_TITLES.ready}
-          description={`A provider is connected, a model is chosen, and the folder ${shortCwd(projectCwd ?? currentProject ?? projects[0] ?? "")} is open. Everything else is in the app: extensions, more providers, keyboard shortcuts and how it looks.`}
+          description={`A provider is connected, a model is chosen, and the folder ${shortCwd(projectCwd ?? currentProject ?? projects[0] ?? "")} is open. Everything else is in the app: features, more providers, keyboard shortcuts and how it looks.`}
           actions={
             <>
               {back}
@@ -358,7 +358,7 @@ export function FirstRunFlow({ setup, onFinished }: FirstRunFlowProps) {
               <span className="font-medium text-ink">Every project in one list.</span> The sessions that need you sort to the top, across all of them.
             </li>
             <li>
-              <span className="font-medium text-ink">Nothing needs a terminal.</span> The gear in the rail opens settings, extensions and providers.
+              <span className="font-medium text-ink">Nothing needs a terminal.</span> The gear in the rail opens settings, features and providers.
             </li>
           </ul>
           {startError && <ErrorState title="Could not start a session" detail={startError} onRetry={() => void startSession()} retryLabel="Try again" />}
@@ -367,4 +367,3 @@ export function FirstRunFlow({ setup, onFinished }: FirstRunFlowProps) {
     </div>
   );
 }
-

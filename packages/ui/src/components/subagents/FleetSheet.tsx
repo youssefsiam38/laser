@@ -29,7 +29,11 @@ import { useLaserState, useLaserView } from "@/runtime";
 import type { AppState } from "@/store";
 
 import { closeFleet, useFleetFocus, useFleetOpen } from "./fleet.js";
-import { buildRunTree, byAttention, flatten } from "./run-tree.js";
+import { buildRunTree, type RunNode } from "./run-tree.js";
+
+function countRunNodes(nodes: readonly RunNode[]): number {
+  return nodes.reduce((total, node) => total + 1 + countRunNodes(node.children), 0);
+}
 
 export function FleetSheet() {
   const open = useFleetOpen();
@@ -49,15 +53,14 @@ export function FleetSheet() {
     for (const path of paths) {
       const entries: PanelEntry[] = entriesForPath(panels, path);
       const tree = buildRunTree(entries, decisions, now);
-      const nodes = byAttention(flatten(tree));
-      if (nodes.length === 0) continue;
+      if (tree.roots.length === 0) continue;
       const summary = sessions.find((s) => s.path === path);
       out.push({
         path,
         cwd: summary?.cwd ?? "",
         title: summary?.name ?? summary?.firstMessage ?? path.split("/").at(-1) ?? path,
         orphaned: openViews[path] === undefined && path !== view?.path,
-        nodes,
+        roots: tree.roots,
         running: tree.running,
       });
     }
@@ -69,7 +72,7 @@ export function FleetSheet() {
     if (open && focus) setExpanded(focus);
   }, [open, focus]);
 
-  const total = groups.reduce((n, group) => n + group.nodes.length, 0);
+  const total = groups.reduce((n, group) => n + countRunNodes(group.roots), 0);
   const running = groups.reduce((n, group) => n + group.running, 0);
 
   return (

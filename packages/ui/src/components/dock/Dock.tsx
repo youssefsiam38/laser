@@ -2,10 +2,11 @@
 /**
  * The dock (docs/ux-panels.md "Four surfaces", D-20): the right side of the
  * thread, holding this session's islands. Minimal islands in a strip at the
- * top that wraps to a second row then folds into `+N`; at most two expanded
- * per column with a draggable divider; resizable by its left edge; two
- * columns past ~640px of dock or a 1600px window. The islands are absolutely
- * positioned children of one container so each is one element for life.
+ * top that wraps to a second row then folds into `+N`; one expanded panel
+ * fills it, two form full-width rows, and three or four form a 2×2 grid when
+ * the dock is wide enough. The dock is resizable by its left edge. Islands
+ * are absolutely positioned children of one container so each remains one
+ * element for life while its rectangle morphs.
  *
  * The frame — the pane and its resize divider — is the catalog's canvas-split
  * element (`components/assistant-ui/elements/canvas-split.tsx`); this file is
@@ -73,7 +74,8 @@ function DockFrame({ path, dock, visible, className }: { path: string; dock: Doc
     return;
   }, [visible]);
 
-  // Measure the body; columns follow the dock and the window (D-20).
+  // Measure the body; readable column capacity follows the dock width. The
+  // layout engine activates the second column only when occupancy needs it.
   useLayoutEffect(() => {
     const el = body.current;
     if (!el) return;

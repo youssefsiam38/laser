@@ -26,6 +26,7 @@ export const ENV_NAMES = /** @type {const} */ ([
   "DEBUG",
   "DISABLE_SANDBOX",
   "EXTENSION_NAME",
+  "FEATURES",
   "HOME",
   "NODE",
   "NODE_MIRROR",

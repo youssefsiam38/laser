@@ -111,6 +111,7 @@ const content = z.array(contentBlockSchema).min(1);
 
 const cwd = z.string().min(1);
 export const settingsScopeSchema = z.enum(["global", "project"]);
+export const featureScopeSchema = z.enum(["global", "project"]);
 export const packageScopeSchema = z.enum(["user", "project"]);
 export const logSectionSchema = z.enum(["provider", "tools", "session", "subagents", "host"]);
 export const providerLoginMethodSchema = z.enum(["oauth", "api_key"]);
@@ -587,6 +588,7 @@ export const clientParamsSchemas = {
     .object({ path: sessionPath, entryId: z.string().min(1), summarize: z.boolean().optional(), label: z.string().optional() })
     .strict(),
   "pi/session/rename": z.object({ path: sessionPath, name: z.string() }).strict(),
+  "pi/session/delete": z.object({ path: sessionPath }).strict(),
   "pi/session/entries": z.object({ path: sessionPath }).strict(),
   "pi/session/compact": z.object({ path: sessionPath, instructions: z.string().optional() }).strict(),
   "pi/model/list": z.object({ path: sessionPath }).strict(),
@@ -612,6 +614,24 @@ export const clientParamsSchemas = {
   "pi/settings/get": z.object({ cwd }).strict(),
   "pi/settings/set": z
     .object({ cwd, scope: settingsScopeSchema, changes: z.array(settingChangeSchema).min(1).max(200) })
+    .strict(),
+
+  "feature/list": z.object({ cwd: cwd.optional() }).strict(),
+  "feature/set": z
+    .object({ id: z.string().min(1).max(80), enabled: z.boolean().nullable(), scope: featureScopeSchema, cwd: cwd.optional() })
+    .strict(),
+  "session/goal/get": z.object({ path: sessionPath }).strict(),
+  "session/goal/action": z
+    .object({
+      path: sessionPath,
+      action: z.discriminatedUnion("action", [
+        z.object({ action: z.literal("pause") }).strict(),
+        z.object({ action: z.literal("resume") }).strict(),
+        z.object({ action: z.literal("clear") }).strict(),
+        z.object({ action: z.literal("edit"), objective: z.string().trim().min(1).max(4000) }).strict(),
+        z.object({ action: z.literal("start"), objective: z.string().trim().min(1).max(4000), tokenBudget: z.number().int().positive().optional() }).strict(),
+      ]),
+    })
     .strict(),
 
   "pi/packages/list": z.object({ cwd }).strict(),

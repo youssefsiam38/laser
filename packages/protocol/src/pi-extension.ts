@@ -6,8 +6,9 @@
  */
 
 import type { Panel } from "./panels.js";
+import type { SessionGoal } from "./features.js";
 
-export type PiExtensionModuleName = "provider-log" | "subagents" | "transcribe" | "web-access" | "panels";
+export type PiExtensionModuleName = "provider-log" | "subagents" | "transcribe" | "web-access" | "panels" | "goal";
 
 export interface ProviderRequestRecord {
   at: string;
@@ -30,6 +31,7 @@ export type PiExtensionMessage =
   | ({ type: "lasercode/provider/request" } & ProviderRequestRecord)
   | ({ type: "lasercode/provider/response" } & ProviderResponseRecord)
   | { type: "lasercode/subagents/event"; event: unknown }
+  | { type: "lasercode/goal/state"; goal: SessionGoal | null }
   /** The `panels` module: a validated `laser:panel` event, or a close (docs/ux-panels.md). */
   | { type: "lasercode/panel/upsert"; panel: Panel }
   | { type: "lasercode/panel/close"; id: string; reason?: string }

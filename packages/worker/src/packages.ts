@@ -34,6 +34,7 @@ import type {
   ThinkingLevel,
 } from "@lasercode/protocol";
 import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { SettingsAdapter } from "./settings.js";
 
@@ -42,6 +43,23 @@ export class PackagesError extends Error {
 }
 
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/**
+ * Lifecycle scripts reviewed as part of a specific curated release.
+ *
+ * npm 11's `--strict-allow-scripts` is intentionally kept on: an extension
+ * may otherwise add a new transitive setup script without Laser noticing.
+ * Keys here are therefore pinned twice — by the extension release and by the
+ * dependency release whose script was inspected. A future extension version
+ * gets no inherited approval and fails closed until it is reviewed.
+ */
+const REVIEWED_INSTALL_SCRIPTS: Readonly<Record<string, Readonly<Record<string, true>>>> = {
+  "npm:pi-subagents@0.65.1": {
+    "esbuild@0.28.1": true,
+    "@google/genai@1.52.0": true,
+    "protobufjs@7.6.6": true,
+  },
+};
 
 /** Best-effort classification of a package source string, matching Pi's own parsing. */
 function sourceType(source: string): "npm" | "git" {
@@ -119,6 +137,7 @@ export class PackagesAdapter {
 
   async install(source: string, scope: PackageScope): Promise<PackageEntry[]> {
     this.assertProjectWritable(scope, `install ${source} into this project`);
+    applyReviewedInstallScripts(this.cwd, this.agentDir, scope, source);
     await this.run(`install ${source}`, () => this.manager.installAndPersist(source, { local: scope === "project" }), source);
     this.updates.delete(source);
     await this.settings.refresh();
@@ -195,6 +214,52 @@ export class PackagesAdapter {
   get running(): string | undefined {
     return this.busy;
   }
+}
+
+/**
+ * Merge Laser's exact reviewed approvals into Pi's npm project without
+ * overwriting a person's explicit policy. Pi still owns package installation;
+ * this only supplies the npm policy its package manager reads.
+ */
+export function applyReviewedInstallScripts(
+  cwd: string,
+  agentDir: string,
+  scope: PackageScope,
+  source: string,
+): boolean {
+  const reviewed = REVIEWED_INSTALL_SCRIPTS[source];
+  if (!reviewed) return false;
+
+  const installRoot = scope === "project" ? join(resolve(cwd), ".pi", "npm") : join(resolve(agentDir), "npm");
+  mkdirSync(installRoot, { recursive: true });
+  const packageJsonPath = join(installRoot, "package.json");
+  let manifest: Record<string, unknown> = { name: "pi-extensions", private: true };
+  if (existsSync(packageJsonPath)) {
+    const parsed = JSON.parse(readFileSync(packageJsonPath, "utf8")) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new PackagesError("The extension store has an invalid package manifest. Repair it before installing extensions.");
+    }
+    manifest = parsed as Record<string, unknown>;
+  }
+
+  const current =
+    typeof manifest["allowScripts"] === "object" && manifest["allowScripts"] !== null && !Array.isArray(manifest["allowScripts"])
+      ? { ...(manifest["allowScripts"] as Record<string, unknown>) }
+      : {};
+  let changed = false;
+  for (const [dependency, allowed] of Object.entries(reviewed)) {
+    const name = dependency.startsWith("@") ? dependency.slice(0, dependency.lastIndexOf("@")) : dependency.split("@")[0]!;
+    if (current[name] === false || current[dependency] !== undefined) continue;
+    current[dependency] = allowed;
+    changed = true;
+  }
+  if (!changed) return false;
+
+  manifest["allowScripts"] = current;
+  const temporary = `${packageJsonPath}.${process.pid}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  renameSync(temporary, packageJsonPath);
+  return true;
 }
 
 /**

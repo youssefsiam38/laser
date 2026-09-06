@@ -1,9 +1,7 @@
 /**
- * M2-T4: the project list survives a restart, and the trust gate resolves in
- * the documented order (laser's own decision → Pi's `trust.json` → Pi's
- * `defaultProjectTrust` → ask a client).
+ * Project list persistence and Laser-owned `.laser` trust decisions.
  */
-import { PRODUCT_NAME } from "@lasercode/protocol";
+import { PRODUCT_NAME, PROJECT_DIR_NAME } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,14 +15,17 @@ let agentDir: string;
 let sessionDir: string;
 let catalog: SessionCatalog;
 
-const project = (name: string, options: { pi?: boolean; skills?: boolean } = {}) => {
+const project = (name: string, options: { laser?: boolean; pi?: boolean } = {}) => {
   const dir = join(base, name);
   mkdirSync(dir, { recursive: true });
   if (options.pi) {
     mkdirSync(join(dir, ".pi"), { recursive: true });
     writeFileSync(join(dir, ".pi", "settings.json"), "{}");
   }
-  if (options.skills) mkdirSync(join(dir, ".agents", "skills"), { recursive: true });
+  if (options.laser) {
+    mkdirSync(join(dir, PROJECT_DIR_NAME), { recursive: true });
+    writeFileSync(join(dir, PROJECT_DIR_NAME, "settings.json"), "{}");
+  }
   return dir;
 };
 
@@ -90,41 +91,29 @@ describe("ProjectRegistry", () => {
   });
 
   it("distinguishes an explicit decline from nothing to decline", async () => {
-    const declined = project("declined-explicitly", { pi: true });
+    const declined = project("declined-explicitly", { laser: true });
     const { reg } = registry();
     reg.add(declined);
     reg.setTrust(declined, false, true);
     await expect(reg.ensureTrusted(declined)).resolves.toBe(false);
   });
 
-  it("honours Pi's saved decision, including one inherited from a parent", async () => {
-    const trusted = project("trusted", { pi: true });
-    const child = project("trusted/child", { pi: true });
-    const declined = project("declined", { pi: true });
-    writeFileSync(join(agentDir, "trust.json"), JSON.stringify({ [trusted]: true, [declined]: false }));
-
+  it("ignores the engine's project directory and trust files", async () => {
+    const dir = project("engine-config", { pi: true });
+    writeFileSync(join(agentDir, "trust.json"), JSON.stringify({ [dir]: false }));
+    writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ defaultProjectTrust: "never" }));
     const { reg, requests } = registry();
-    await expect(reg.ensureTrusted(trusted)).resolves.toBe(true);
-    await expect(reg.ensureTrusted(child)).resolves.toBe(true);
-    await expect(reg.ensureTrusted(declined)).resolves.toBe(false);
-    expect(reg.get(declined).trust).toBe("declined");
-    expect(requests).toEqual([]);
-  });
-
-  it("follows defaultProjectTrust when Pi has no saved decision", async () => {
-    const dir = project("always", { pi: true });
-    writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ defaultProjectTrust: "always" }));
-    const { reg, requests } = registry();
-    await expect(reg.ensureTrusted(dir)).resolves.toBe(true);
+    await expect(reg.ensureTrusted(dir)).resolves.toBeUndefined();
+    expect(reg.trustOf(dir).trust).toBe("not_required");
     expect(requests).toEqual([]);
   });
 
   it("asks a client once per directory and remembers a remembered answer", async () => {
-    const dir = project("ask", { skills: true });
+    const dir = project("ask", { laser: true });
     const store = join(base, "projects.json");
     const { reg, requests } = registry({ storePath: store });
     expect(reg.trustOf(dir).trust).toBe("unknown");
-    expect(reg.trustOf(dir).reasons).toEqual([".agents/skills"]);
+    expect(reg.trustOf(dir).reasons).toEqual([`${PROJECT_DIR_NAME}/settings.json`]);
 
     const first = reg.ensureTrusted(dir);
     const second = reg.ensureTrusted(dir); // concurrent open of a second session
@@ -141,14 +130,14 @@ describe("ProjectRegistry", () => {
   });
 
   it("declines for this run when nobody answers, and asks again next time", async () => {
-    const dir = project("timeout", { pi: true });
+    const dir = project("timeout", { laser: true });
     const { reg } = registry({ trustTimeoutMs: 10 });
     await expect(reg.ensureTrusted(dir)).resolves.toBe(false);
     expect(reg.trustOf(dir).trust).toBe("unknown"); // no decision was recorded
   });
 
   it("fails loudly instead of hanging when no client could answer", async () => {
-    const dir = project("headless", { pi: true });
+    const dir = project("headless", { laser: true });
     const { reg } = registry({ hasClients: () => false });
     await expect(reg.ensureTrusted(dir)).rejects.toThrow(/trust decision/);
   });

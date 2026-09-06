@@ -7,7 +7,7 @@
  *   - capability detection (which supported packages are present)
  *   - pi-subagents in-process registries and the `subagents:rpc:v1` bus
  *   - provider request/response hooks for the logs page
- *   - per-package glue (transcribe, web-access, ...)
+ *   - per-package glue (transcribe, subagents, ...)
  *
  * Rules:
  *   - One module per community package under ./modules. Modules never import
@@ -28,7 +28,7 @@ import {
   type OutboundMessage,
 } from "./modules/index.js";
 
-export { createCommandBus, createPanelClaims } from "./modules/index.js";
+export { createCommandBus, createPanelClaims, toSessionGoal } from "./modules/index.js";
 export type {
   CommandBus,
   CommandHandler,
@@ -77,7 +77,8 @@ export function createLaserExtension(options: LaserExtensionOptions): InlineExte
       const wanted = new Set<ModuleName>(options.only ?? modules.map((m) => m.name));
 
       // Detection runs at session_start so extensions loaded after us are visible.
-      pi.on("session_start", async () => {
+      pi.on("session_start", async (_event, session) => {
+        ctx.session = session;
         const active: ModuleName[] = [];
         const failed: Array<{ module: ModuleName; error: string }> = [];
         for (const mod of modules) {

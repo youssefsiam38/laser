@@ -26,7 +26,7 @@
  */
 
 /** Where the fix lives, when the fix is inside this app. */
-export type ProviderErrorDestination = "models" | "packages";
+export type ProviderErrorDestination = "models";
 
 export interface ProviderFailure {
   /** What happened, in one sentence. */

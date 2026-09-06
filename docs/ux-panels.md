@@ -65,7 +65,7 @@ Where a panel can appear. Also closed.
 | --- | --- | --- |
 | **Ambient** | one line directly above the composer, on every width | state you glance at |
 | **Inline** | a card in the transcript, at the point it happened | the result of a tool call you just watched |
-| **Dock** | the right side, at most **two** stacked panes | something you want to keep watching while you keep working |
+| **Dock** | the right side: one canvas, two stacked rows, or a readable 2×2 grid | something you want to keep watching while you keep working |
 | **Sheet** | overlay, focused, dismissible | something you are doing *instead of* the conversation |
 
 The dock holds at most two **expanded** islands per column, never three. A
@@ -73,11 +73,11 @@ third does not evict anything — it shrinks the least recently watched one to
 minimal, where it keeps ticking. Nothing is ever parked in a drawer, because
 there is no drawer: minimal is a size, not a storage location.
 
-**The dock grows with the window (D-20).** It is resizable by dragging its
-edge, and past a width of about 640px — or a window of 1600px and up — it
-becomes two columns, each holding two expanded islands. A wide monitor gets
-four expanded panels without any of them getting narrow; a laptop gets two.
-The rule is per column, so it never changes.
+**The dock grows with the window (D-20, D-65).** It is resizable by dragging
+its edge. Occupancy chooses the active grid: one expanded island fills the
+whole dock; two split it into full-width top and bottom rows; three or four use
+a stable 2×2 grid once the dock is wide enough for two readable columns. A
+narrow dock keeps one column rather than violating the legibility floor.
 
 **Every expanded island can pop out (D-20).** Its header carries three
 controls in a fixed order: pop out, maximize, close. Pop out opens the panel
@@ -130,6 +130,9 @@ Rules for the geometry:
 - **Expanded-alone is the default, not a degraded split.** One island gets the
   whole dock. The split exists only when two things are genuinely being
   watched.
+- **Empty cells reserve no space.** Two watched islands are stacked across the
+  full width. The third activates the 2×2 grid and leaves one honest empty
+  quadrant until the fourth fills it.
 - **Minimal still carries information.** Never a bare label. A run shows
   elapsed time, a stream shows bytes, a plan shows steps done. If a kind has
   no live number, it does not belong in the dock at all.
@@ -220,8 +223,9 @@ Four ways a panel reaches laser.
 **1. Adapters we write.** Our companion extension already has a module per
 supported package. A module translates that package's private world into
 panels: pi-subagents children become `run` panels, its workflows become
-`plan` panels, pi-web-access results become a `collection`. The community
-package stays untouched and unaware.
+`plan` panels. A former pi-web-access collection adapter was retired by D-61
+because it duplicated the complete tool disclosure in the transcript. The
+community package stays untouched and unaware.
 
 **2. A declared protocol, for extensions that want to opt in.** Namespaced on
 Pi's event bus, so a terminal Pi ignores it and nothing breaks:
@@ -229,11 +233,11 @@ Pi's event bus, so a terminal Pi ignores it and nothing breaks:
 ```ts
 pi.events.emit("laser:panel", {
   v: 1,
-  id: "web-access:search:42",        // stable; re-emit to update in place
+  id: "package:index:42",            // stable; re-emit to update in place
   kind: "collection",
   intent: "inline",
-  title: "8 results for \"noise protocol\"",
-  data: { items: [{ title, url, snippet }] },   // strict JSON, kind-specific
+  title: "8 matching items",
+  data: { items: [{ primary, secondary, meta }] }, // strict JSON, kind-specific
   actions: [{ id: "open", label: "Open" }],     // laser renders the controls
 });
 ```
@@ -719,7 +723,7 @@ Where the contract lives in code (lane P, wave 2). Paths are relative to the rep
 | Placement table (kind × intent × viewport → surface) | `packages/ui/src/panels/placement.ts` | Pure; the table is the test in `test/panels/placement.test.ts`. A placement carries `via`, so `inspect` and a phone's `follow` — which both read `sheet` — are told apart. |
 | The inline surface, and the sheet `inspect` opens | `packages/ui/src/panels/InlinePanels.tsx` | `PanelInlineCards` sits at the tail of the transcript; `PanelInspectSheet` opens once per panel. Both draw the island's own bodies (`PanelBody`). |
 | A `decision` in its tool row | `packages/ui/src/panels/DecisionSurfaces.tsx` (`PanelToolDecision`), rows register in `packages/ui/src/panels/tool-rows.ts` | The tool-row column is only chosen while that row is on screen; otherwise the question falls back to the card. |
-| Dock geometry (four sizes, two expanded per column, LRU shrink, columns, dividers, maximize, pop out, dismiss) | `packages/ui/src/panels/dock-state.ts`, layout in `packages/ui/src/panels/layout.ts` | Pure; tested in `test/panels/dock-state.test.ts`. `stripBudget` is shared with the phone's strip so both fold into `+N` at the same place. |
+| Dock geometry (four sizes, occupancy-aware 1/2/3/4 grid, LRU shrink, dividers, maximize, pop out, dismiss) | `packages/ui/src/panels/dock-state.ts`, layout in `packages/ui/src/panels/layout.ts` | Pure; tested in `test/panels/dock-state.test.ts`. Width sets readable column capacity; occupancy activates it. `stripBudget` is shared with the phone's strip so both fold into `+N` at the same place. |
 | ANSI interpreter | `packages/ui/src/panels/ansi.ts` | SGR → spans, everything else stripped; tested. |
 | The island (one element, four sizes, morph, bodies per kind) | `packages/ui/src/panels/islands/Island.tsx`, `islands/bodies/*.tsx`, `islands/ActionButtons.tsx` | One header for all four sizes, so the dot, the title and the controls keep their identity through a morph. Document and diff rendering lives in `components/preview/*`. Live values per size budget in `panels/values.ts`; ranged reads in `panels/read.ts`. |
 | The dock | `packages/ui/src/components/dock/Dock.tsx` | Mounted by `Shell.tsx` right of the thread on tablet and desktop. |

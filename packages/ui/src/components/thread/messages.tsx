@@ -23,15 +23,18 @@ import { RegenerateMenu, type RegeneratePick } from "@/components/assistant-ui/e
 import { Sources } from "@/components/assistant-ui/elements/sources.aui";
 import { SpeakerIdentity, type Speaker } from "@/components/assistant-ui/elements/speaker-identity";
 import { StoppedRun } from "@/components/assistant-ui/elements/stopped-run";
+import { ThinkingIndicator } from "@/components/assistant-ui/elements/thinking-indicator";
 import { useWorkbench } from "@/components/workbench";
 import { readProviderFailure } from "./provider-error.js";
-import { StreamingCaret, StreamingText } from "@/components/assistant-ui/elements/streaming-text";
+import { StreamingText } from "@/components/assistant-ui/elements/streaming-text";
 import { ToolGroup } from "@/components/assistant-ui/elements/tool-group.aui";
 import { useCopy } from "@/hooks/use-copy";
+import { duration as formatDuration } from "@/format";
 import { cn } from "@/lib/utils";
 import { NOTICE_DATA_PART, useLaserStable, useLaserState } from "@/runtime";
 import { continuationsOf, laterUserMessages, leafOf, userEntryAt } from "./entries.js";
 import { THINKING_LEVELS, useSupportedThinkingLevels } from "@/components/assistant-ui/elements/reasoning-effort";
+import { useElapsed } from "./timing.js";
 import { toolGroupKey } from "./tool-groups.js";
 import { ToolRow } from "./ToolRow.js";
 
@@ -285,12 +288,9 @@ export function AssistantMessage() {
                 if (part.name === NOTICE_DATA_PART) return <Notice data={part.data} />;
                 return part.dataRendererUI;
               case "indicator":
-                // A turn that has started and sent nothing yet: the caret alone.
-                return (
-                  <span className="my-3 block h-6 text-md first:mt-0 last:mb-0">
-                    <StreamingCaret />
-                  </span>
-                );
+                // A turn that has started and sent nothing yet. The catalog
+                // thinking indicator names the state and proves time is moving.
+                return <EmptyReplyThinking timingKey={`${messageId}:indicator`} />;
               default:
                 // Consecutive calls of one family collapse into one summary row
                 // (D-20 §4); a group of one is just that call's row.
@@ -312,6 +312,17 @@ export function AssistantMessage() {
   );
 }
 
+function EmptyReplyThinking({ timingKey }: { timingKey: string }) {
+  const elapsed = useElapsed(timingKey, "running");
+  return (
+    <ThinkingIndicator
+      label="Thinking"
+      elapsed={elapsed === undefined ? undefined : formatDuration(elapsed)}
+      className="my-3 h-6 first:mt-0 last:mb-0"
+    />
+  );
+}
+
 function AssistantStopped({ reason, detail, tone }: ReturnType<typeof stopReason>) {
   const { actions } = useLaserStable();
   const workbench = useWorkbench();
@@ -327,7 +338,7 @@ function AssistantStopped({ reason, detail, tone }: ReturnType<typeof stopReason
   const onContinue = canContinue ? () => void actions.send([{ type: "text", text: "Continue" }], "prompt") : undefined;
   const action =
     failure?.destination !== undefined
-      ? { label: failure.destination === "models" ? "Open Providers and models" : "Open Extensions", onClick: () => workbench.open("settings", failure.destination) }
+      ? { label: "Open Providers and models", onClick: () => workbench.open("settings", failure.destination) }
       : undefined;
   return (
     <StoppedRun
@@ -426,7 +437,7 @@ const NoticeImpl = ({ data }: { data: unknown }) => {
   if (level === "error") {
     // `extension_error` arrives as "extension: message" (store.ts).
     const at = text.indexOf(": ");
-    const title = at > 0 ? `${text.slice(0, at)} failed` : "An extension reported an error";
+    const title = at > 0 ? `${text.slice(0, at)} failed` : "A feature reported an error";
     const detail = at > 0 ? text.slice(at + 2) : text;
     return <ErrorState title={title} detail={detail} className="my-1" />;
   }

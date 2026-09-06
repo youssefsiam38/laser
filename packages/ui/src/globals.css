@@ -14,8 +14,8 @@
  * so the browser never falls back for a weight the file can actually draw.
  * All are SIL OFL 1.1; see public/fonts/README.md.
  *
- * Inter and JetBrains Mono are the defaults (docs/ux-theme.md "Fonts"), so
- * their faces must be declared here or the default preset renders in the
+ * Host Grotesk and Martian Mono are the defaults (docs/ux-theme.md "Fonts"),
+ * so their faces must be declared here or the default preset renders in the
  * fallback stack — `src/theme/fonts.ts` marks them `self-hosted` precisely
  * because these rules exist.
  * ------------------------------------------------------------------------- */
@@ -114,18 +114,18 @@
  * ------------------------------------------------------------------------- */
 :root {
   /* @theme-default-start */
-  --bg: #0e0f11;
+  --bg: #000000;
   --surface: #17181a;
   --surface-2: #202224;
   --line: #323335;
-  --ink: #dee0e2;
+  --ink: #e9e8e6;
   --ink-2: #afb1b4;
   --ink-3: #97989b;
-  --live: #85baff;
+  --live: #03cc7b;
   --attention: #fabb41;
   --danger: #ff8382;
   --ok: #6ed889;
-  --on-live: #070709;
+  --on-live: #000000;
   --on-attention: #070709;
   --on-danger: #070709;
   --on-ok: #070709;
@@ -159,9 +159,9 @@
   --syntax-punctuation: #9ea6ae;
   --shadow-float: 0 1px 2px rgb(0 0 0 / 0.4), 0 12px 32px -8px rgb(0 0 0 / 0.6);
   --shadow-float-sm: 0 1px 2px rgb(0 0 0 / 0.4), 0 4px 14px -4px rgb(0 0 0 / 0.5);
-  --on-accent: #070709;
-  --font-sans: "Inter", "Inter Fallback", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: "JetBrains Mono", "JetBrains Mono Fallback", ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --on-accent: #000000;
+  --font-sans: "Host Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Martian Mono", ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   --text-scale: 1;
   --text-2xs: 11px;
   --text-2xs--line-height: 16px;
@@ -209,6 +209,119 @@
   --kb: 0px;
 }
 
+/* Full-window startup restoration. The path composition follows Magic UI's
+ * Animated Beam, while every material and duration comes from Laser tokens. */
+.startup-restoration {
+  --startup-beam-duration: calc(var(--motion-morph) * 7);
+  --startup-signal-duration: calc(var(--motion-morph) * 5);
+  --startup-aperture-size: calc(var(--space-unit) * 48);
+  --startup-beam-width: 1.25;
+  --startup-beam-track-opacity: 0.16;
+  isolation: isolate;
+  animation: startup-arrive var(--motion-morph) var(--motion-ease) both;
+}
+
+.startup-restoration::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at center, color-mix(in oklab, var(--live) 7%, transparent), transparent 48%);
+}
+
+.startup-restoration-exit {
+  animation: startup-depart var(--motion-morph) var(--motion-ease) both;
+}
+
+.startup-restoration-beams {
+  overflow: visible;
+  mask-image: radial-gradient(ellipse at center, black 18%, transparent 78%);
+}
+
+.startup-beam-tracks,
+.startup-beam-live {
+  fill: none;
+  stroke-linecap: round;
+  stroke-width: var(--startup-beam-width);
+}
+
+.startup-beam-tracks {
+  opacity: var(--startup-beam-track-opacity);
+}
+
+.startup-beam-live path {
+  stroke-dasharray: 0.13 0.87;
+  filter: drop-shadow(0 0 var(--space-unit) var(--live));
+  animation: startup-beam var(--startup-beam-duration) var(--motion-ease) infinite;
+}
+
+.startup-beam-live path:nth-child(2) {
+  animation-delay: calc(var(--motion-morph) * -2);
+}
+
+.startup-beam-live path:nth-child(3) {
+  animation-delay: calc(var(--motion-morph) * -4);
+}
+
+.startup-beam-live path:nth-child(4) {
+  animation-delay: calc(var(--motion-morph) * -1);
+}
+
+.startup-beam-live path:nth-child(5) {
+  animation-delay: calc(var(--motion-morph) * -5);
+}
+
+.startup-beam-live path:nth-child(6) {
+  animation-delay: calc(var(--motion-morph) * -3);
+}
+
+.startup-aperture-halo {
+  width: var(--startup-aperture-size);
+  aspect-ratio: 1;
+  transform: translate(-50%, -38%);
+  background: radial-gradient(circle, color-mix(in oklab, var(--live) 20%, transparent), transparent 68%);
+  filter: blur(calc(var(--space-unit) * 3));
+  animation: startup-halo var(--startup-signal-duration) var(--motion-ease) infinite;
+}
+
+.startup-mark {
+  filter: drop-shadow(0 0 calc(var(--space-unit) * 3) color-mix(in oklab, var(--live) 28%, transparent));
+  animation: startup-mark var(--startup-signal-duration) var(--motion-ease) infinite;
+}
+
+.startup-signal span {
+  animation: startup-signal var(--startup-signal-duration) var(--motion-ease) infinite;
+}
+
+@keyframes startup-arrive {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes startup-depart {
+  from { opacity: 1; filter: blur(0); }
+  to { opacity: 0; filter: blur(calc(var(--space-unit) * 2)); }
+}
+
+@keyframes startup-beam {
+  from { stroke-dashoffset: 1; }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes startup-halo {
+  0%, 100% { opacity: 0.42; transform: translate(-50%, -38%) scale(0.92); }
+  50% { opacity: 0.78; transform: translate(-50%, -38%) scale(1.06); }
+}
+
+@keyframes startup-mark {
+  0%, 100% { opacity: 0.86; transform: scale(0.98); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes startup-signal {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(220%); }
+}
+
 /* ---------------------------------------------------------------------------
  * Tokens the theme *rewrites at runtime*, so their utilities must indirect
  * through `var()`.
@@ -227,11 +340,11 @@
  * ------------------------------------------------------------------------- */
 @theme {
   --font-sans:
-    "Inter", "Inter Fallback", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Host Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
     "Helvetica Neue", Arial, sans-serif;
   --font-mono:
-    "JetBrains Mono", "JetBrains Mono Fallback", ui-monospace, "SFMono-Regular", "SF Mono", Menlo,
-    Consolas, "Liberation Mono", monospace;
+    "Martian Mono", ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
 
   /* Type scale: 11 / 12 / 13 / 14 / 15 / 18 / 22 / 28, plus the code size.
    *

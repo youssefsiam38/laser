@@ -224,7 +224,7 @@ const ComposerTriggerPopoverImpl: FC<ComposerTriggerPopoverProps> = ({
     <ComposerPrimitive.Unstable_TriggerPopover
       data-slot="composer-trigger-popover"
       className={cn(
-        "absolute start-0 bottom-full z-50 mb-2 w-72 max-w-full overflow-hidden rounded-xl border border-line bg-surface text-ink shadow-float",
+        "absolute start-0 bottom-full z-50 mb-2 w-72 max-h-72 max-w-full overflow-x-hidden overflow-y-auto overscroll-contain rounded-xl border border-line bg-surface text-ink shadow-float",
         className,
       )}
       {...props}

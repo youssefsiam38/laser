@@ -4,7 +4,7 @@
  *   - four island sizes, one element each (the size is the only thing that changes)
  *   - at most two expanded per column; a third shrinks the least recently
  *     watched to minimal, never evicts
- *   - two columns past ~640px of dock width or a 1600px window
+ *   - capacity for two columns past ~640px; occupancy activates the second
  *   - a draggable divider per column, remembered per session
  *   - maximize is a flag over an expanded island, so Esc returns it exactly
  *

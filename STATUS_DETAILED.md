@@ -150,7 +150,7 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 | M4-T5 | Log store | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | SQLite log store (node:sqlite): content-addressed payloads, byte-budgeted paging, retention; Authorization/API-key headers redacted incl. vendor prefixes |
 | M4-T6 | Logs page | done | claude-2026-09-05-c, integrator | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1`; `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration); 6 tests in `packages/ui/test/panels/logs.test.ts` | logs screen: section tabs, search, follow, virtualized list, detail with copy; provider-response ceiling stated. Wave 2: "Watch" sends a section to the dock as a `stream` island (`src/panels/logs.ts`), so live host output is the same island an extension gets |
 | M4-T7 | Keybindings + trust views | done | lane-E, lane-G | `packages/worker/src/keybindings.ts`, `packages/ui/src/components/settings/KeyboardTab.tsx`, `packages/ui/src/components/settings/TrustTab.tsx`; `pnpm -F @lasercode/worker test -- keybindings` (runs against the pinned agent for real); live: `app.clear` rebound to `ctrl+shift+k`, file became `{"app.clear":"ctrl+shift+k"}`, Reset emptied it | Trust view writes only through the host's registry, never the agent's own trust list. Keyboard now has two halves: the window's own keys, which are fixed in this version and say so, and the agent's actions and editor keys, which are read and written through `pi/keybindings/get\|set`. The "edit it from a terminal" footnote is gone. The adapter loads `KeybindingsManager` by file URL because the pinned agent exports it as a type only — the same class of exception as `piSettingsStorage`, and it must be re-checked on a pin bump (D-38) |
-| M4-T8 | "All settings" written for a person, not for settings.json | todo | — | — | see notes |
+| M4-T8 | "All settings" written for a person, not for settings.json | done | codex-2026-09-06-v020 | `pnpm -r typecheck && pnpm -r test && pnpm -r build`; live browser review | see notes |
 
 ---
 
@@ -280,6 +280,307 @@ lane T's own if both were written.
 
 ---
 
+## M12 · 0.2.0 product experience
+
+| ID | Task | State | Owner | Evidence | Notes |
+| --- | --- | --- | --- | --- | --- |
+| M12-T1 | Product identity and conversation controls | done | codex-2026-09-06-v020 | `pnpm -r typecheck && pnpm -r test && pnpm -r build`; live browser review | see notes |
+| M12-T2 | Provider/model experience | done | codex-2026-09-06-v020 | `pnpm -r typecheck && pnpm -r test && pnpm -r build`; live browser review | see notes |
+| M12-T3 | Rich diagnostics and focused settings | done | codex-2026-09-06-v020 | `pnpm -r typecheck && pnpm -r test && pnpm -r build` | see notes |
+| M12-T4 | Project and archive management | done | codex-2026-09-06-v020 | `pnpm -r typecheck && pnpm -r test && pnpm -r build` | see notes |
+| M12-T5 | Integrate, visually verify, package and publish stable 0.2.0 | in-progress | codex-2026-09-06-release-v020 | local `pnpm verify`; local x64 package/clean-machine check | see notes |
+| M12-T6 | Make curated extension installation self-contained and safe | done | codex-2026-09-06-v020 | worker package tests; host package tests; live `pi-subagents@0.65.1` install | see notes |
+| M12-T7 | Brand-aligned fresh-install theme | done | codex-2026-09-06-v020 | `pnpm verify`; theme tests; live dark/light review | see notes |
+| M12-T8 | Session-safe web search and extension UI compatibility | done | codex-2026-09-06-v020 | 104 worker tests; user-confirmed live pi-subagents retry | see notes |
+| M12-T9 | Predictable project rail and composer trigger menus | done | codex-2026-09-06-v020 | `pnpm verify`; live project/filter/settings/slash review | see notes |
+| M12-T10 | Occupancy-aware dock geometry | done | codex-2026-09-06-v020 | `pnpm verify`; 1→4 exact live geometry; dark/light desktop + phone regression | see notes |
+| M12-T11 | Rich context inspector and visible thinking indicator | done | codex-2026-09-06-v020 | `pnpm verify`; live context review in four visual combinations | see notes |
+| M12-T12 | Visual telemetry instrument panel | done | codex-2026-09-06-v020 | `pnpm verify`; 320px desktop rail and phone sheet reviewed in both themes | see notes |
+| M12-T13 | Chronological hierarchical Fleet | done | codex-2026-09-06-v020 | `pnpm verify`; live session `01a0750d` hierarchy; desktop/phone dark/light review | see notes |
+| M12-T14 | Deduplicate workflow child identities | done | codex-2026-09-06-v020 | 152 host tests; live session `01a0750d` shows 4 unique runs | see notes |
+| M12-T15 | Laser/Pi product boundary and settings taxonomy | done | codex-2026-09-06-product-boundary | `docs/product-boundary.md`; `pnpm identity:check` | see notes |
+| M12-T16 | Curated feature registry | done | codex-2026-09-06-product-boundary | 4 feature tests; live Features review | see notes |
+| M12-T17 | Bundled Subagents feature | done | codex-2026-09-06-product-boundary | reviewed built-in path tests; 105 worker tests | see notes |
+| M12-T18 | Reusable goal engine and protocol | done | codex-2026-09-06-product-boundary | 2 goal-state tests; 27 protocol tests | see notes |
+| M12-T19 | Persistent goal row and product language | done | codex-2026-09-06-product-boundary | 375 UI tests; live desktop review | see notes |
+| M12-T20 | Clean-break acceptance verification | done | codex-2026-09-06-product-boundary | `pnpm -r build && pnpm -r test` — 842 tests; dark/light desktop and phone review | see notes |
+| M12-T21 | Provider-gated core dictation | done | codex-2026-09-06-product-boundary | 35 dictation/capability tests; live microphone-control and readiness review | see notes |
+| M12-T22 | Lossless leading slash completion | done | codex-2026-09-06-product-boundary | 3 UI tests; live Tab completion review | see notes |
+| M12-T23 | Native-only Add Project flow | done | codex-2026-09-06-native-project-picker | 376 UI tests; 63 desktop tests; live browser fallback review | see notes |
+| M12-T24 | Complete provider icon catalog | done | codex-2026-09-06-model-icons | UI typecheck; 379 UI tests; UI build; live provider-route review | see notes |
+| M12-T25 | Branded startup restoration transition | done | codex-2026-09-06-startup-beam | UI typecheck; 381 UI tests; UI build; live dark/light desktop and phone review | see notes |
+
+#### M12-T1 notes
+- 2026-09-06 claimed: audit the shipped logo assets, theme presets, assistant-ui
+  thinking indicator, reasoning panel and reasoning-effort control before edits.
+- 2026-09-06 checkpoint: the generated app mark is now the rail home control;
+  graphite and paper use the mark's green; thinking moved into the compact
+  reasoning-effort popover; context opens one detailed dialog from both entry
+  points; reasoning expansion is a persisted per-session menu preference.
+- 2026-09-06 done: the rail and package now use the exact approved website
+  artwork, and the grouped reasoning disclosure renders every reasoning part.
+
+#### M12-T2 notes
+- 2026-09-06 claimed: isolate the provider-loading loop and build one
+  provider-first model vocabulary for the composer and settings.
+- 2026-09-06 checkpoint: confirmed the endless provider flicker was the inline
+  `onConfigured` callback retriggering `ProviderStep`'s effect; stabilized it.
+  The assistant-ui model selector now has provider-first filtering, reusable
+  single/multi selectors, and explicit OpenRouter source provenance.
+- 2026-09-06 done: composer, message re-run and settings expose separate
+  searchable Provider and Model fields. Removed the duplicate hidden command
+  input that stole focus after the first typed model character; live typing
+  remains focused after selecting a provider.
+
+#### M12-T3 notes
+- 2026-09-06 claimed: inventory every JSON payload renderer and the Tools route,
+  then replace them through shared components rather than one-off screens.
+- 2026-09-06 checkpoint: added one collapsible syntax-coloured JSON viewer for
+  logs, tool payloads, stream records, provider errors and settings exploration;
+  the contradictory Tools section is excluded from both form and effective views.
+- 2026-09-06 done: full workspace typecheck, tests and build pass.
+
+#### M12-T4 notes
+- 2026-09-06 claimed: trace Electron IPC and thread-list/project actions end to
+  end before exposing native picking or destructive menus.
+- 2026-09-06 checkpoint: added the sandboxed Electron folder-picker bridge,
+  visible project menus with Archive chats and Remove project, and confirmed
+  deletion for archived transcripts through a host-validated protocol method.
+- 2026-09-06 done: full workspace typecheck, tests and build pass.
+
+#### M12-T5 notes
+- 2026-09-06 claimed: bump the integrated tree to 0.2.0, verify all four visual
+  combinations, build and install the native package, publish a stable Latest
+  release, and confirm the website follows it.
+- 2026-09-06 blocked: local verification and a preliminary x64 package check
+  pass, but the user explicitly requires a separate direct approval before any
+  0.2.0 publish, tag, push, website deployment or package installation.
+- 2026-09-06 resumed: the user explicitly approved publishing 0.2.0. Re-run
+  every release gate, commit the integrated tree, push and tag only after the
+  local release build and clean-machine installation proof pass.
+- 2026-09-06 checkpoint: the pre-change full workspace gate passed with 847
+  tests, and the x64 package build plus clean-machine proof held. Per the final
+  release instruction, add derived/measured `tok/s` to the existing reply
+  timing footer, run focused verification only, then let the tagged CI pipeline
+  build the release artifacts.
+
+#### M12-T6 notes
+- 2026-09-06 claimed: reproduce the packaged extension failure from the live
+  host log, preserve npm's lifecycle-script boundary, and approve only reviewed
+  version-pinned setup scripts required by the curated pi-subagents release.
+- 2026-09-06 checkpoint: the bundled npm and command path are correct; npm 11.19
+  refuses pi-subagents because esbuild 0.28.1, @google/genai 1.52.0 and
+  protobufjs 7.6.6 have unreviewed lifecycle scripts. The current wrapper hides
+  that reason behind its spawned command, which then leaks into the UI.
+- 2026-09-06 done: `pi-subagents@0.65.1` installed from the live Extensions
+  screen. The isolated extension manifest contains only exact approvals for
+  `esbuild@0.28.1`, `@google/genai@1.52.0` and `protobufjs@7.6.6`; worker and
+  host package tests pass.
+
+#### M12-T7 notes
+- 2026-09-06 claimed: read the approved website SVG palette, introduce a named
+  Laser dark/light preset pair, and prove the exact brand colours remain
+  accessible in their intended roles.
+- 2026-09-06 done: fresh installs follow the Laser dark/light pair derived from
+  the approved mark; exact palette and contrast guards pass, and both themes
+  were reviewed live.
+
+#### M12-T8 notes
+- 2026-09-06 claimed: remove pi-web-access panel emission and legacy UI
+  resurfacing while preserving the transcript tool disclosure; reproduce the
+  `setToolsExpanded` failure from the supplied session and close that RPC gap.
+- 2026-09-06 checkpoint: the second supplied transcript contains two failures
+  with the same missing `ctx.ui.setToolsExpanded` method. It was served by the
+  Hubtrix worker started at 06:57, before the corrected bundle was built at
+  07:24. After its active turn settled, Laser's worker restart route replaced
+  it with pid 2625188 at 07:46; all 104 worker tests pass and the live process
+  now runs the bundle whose UI bridge owns the no-op compatibility method.
+- 2026-09-06 done: the user retried the live pi-subagents flow and confirmed it
+  works.
+
+#### M12-T9 notes
+- 2026-09-06 claimed: separate project selection from destructive menus and
+  bound the slash/mention result surface so long command lists scroll in place.
+- 2026-09-06 checkpoint: live browser verification confirms clicking the Laser
+  project switches the current worker/filter without opening a menu; the full
+  slash catalogue is capped at 18rem with its own visible scrollbar.
+- 2026-09-06 checkpoint: “Show all” now clears the rail selection treatment but
+  retains the current project for new chats. Project and Effective settings show
+  a labelled project-target dropdown with the exact directory before any edit.
+- 2026-09-06 done: the full workspace verification passes and live review
+  confirms selection-only rail actions, explicit settings targeting, and a
+  bounded scrolling slash catalogue.
+
+#### M12-T10 notes
+- 2026-09-06 claimed: make expanded-island occupancy, rather than the dock's
+  available column count alone, choose the active grid: one full canvas, two
+  stacked rows, then a stable 2×2 grid for three or four panels.
+- 2026-09-06 done: 364 UI tests cover the occupancy and persisted compact-island
+  regression. Live 1920×1080 measurements match the exact full/halves/quadrants
+  geometry; dark/light desktop and phone-width regression review pass.
+
+#### M12-T11 notes
+- 2026-09-06 claimed: redesign the context-window dialog around icon-led usage
+  cards and replace the empty running-reply caret with the installed
+  assistant-ui thinking indicator plus elapsed time.
+- 2026-09-06 done: the detailed context inspector is legible without overflow
+  in dark/light desktop and 390×844 phone layouts. Empty running replies now use
+  the installed thinking indicator before text or reasoning begins.
+
+#### M12-T12 notes
+- 2026-09-06 claimed: reshape the far-right telemetry rail around icon-led
+  instruments and proportional visuals derived only from actual session data.
+- 2026-09-06 checkpoint: tool failures remain solely in the detailed timeline;
+  the sequence strip shows activity only. Removed Agent process because worker
+  lifecycle is project-level implementation state already covered elsewhere.
+- 2026-09-06 done: context, cost, token flow, model identity, file churn, tool
+  activity and history now share one icon-led instrument vocabulary. Input
+  points up to the provider and output down to the device; no emoji, fake metric
+  or horizontal overflow. The 320px rail and phone sheet pass both themes.
+
+#### M12-T13 notes
+- 2026-09-06 claimed: stop globally attention-sorting a depth-first flattening,
+  retain each run's persisted parent id, and render real nested chronological
+  subtrees with lineage connectors rather than indentation alone.
+- 2026-09-06 done: the stored parentage was correct, but Fleet flattened the
+  tree and then globally sorted it by attention, separating the successful
+  company lane from its failed siblings. Fleet now renders semantic nested
+  subtrees and keeps workflow children in the authoritative plan-step order;
+  the live session shows company, consumer and market directly under the plan.
+
+#### M12-T14 notes
+- 2026-09-06 claimed: use pi-subagents' persisted child run id and
+  `parentWorkflowRunId` to converge the workflow summary and the child's own
+  richer status file on one panel identity.
+- 2026-09-06 done: pi-subagents persists each lane in the workflow aggregate
+  and in the child's detailed status file. Laser previously assigned those two
+  records different ids. Both now converge on the launched child run id while
+  the detailed record retains metrics and controls; the live count fell from
+  seven apparent runs to the correct four (one workflow plus three lanes).
+
+#### M12-T15 notes
+- 2026-09-06 claimed: codify Laser as the product and Pi as its pinned internal
+  engine, then replace the mirrored settings catalogue with an explicit
+  product/Advanced/internal/unsupported taxonomy before changing the UI.
+- 2026-09-06 done: the product boundary is binding in `AGENTS.md`, architecture
+  and product docs. Project settings live only in `.laser`; normal UI and CLI
+  expose Laser concepts while the exact-pinned engine stays internal.
+
+#### M12-T16 notes
+- 2026-09-06 claimed: introduce a Laser-owned feature manifest and remove public
+  package installation and Pi passthrough without a legacy migration path.
+- 2026-09-06 done: manifests own scope, dependencies, capabilities, restart and
+  health. Public package operations and Pi passthrough are absent; the live
+  branded Features screen cleanly exposes only curated capabilities.
+
+#### M12-T17 notes
+- 2026-09-06 claimed: bundle the reviewed Subagents implementation and expose
+  only a scoped Laser feature toggle, health and capabilities.
+- 2026-09-06 done: Subagents loads only from the reviewed bundled path and is
+  controlled through the scoped feature manifest; users never install or see
+  its underlying package.
+
+#### M12-T18 notes
+- 2026-09-06 claimed: evaluate and pin `@narumitw/pi-goal`, keeping its durable
+  logic Pi-native while the companion extension translates it to Laser's
+  engine-neutral protocol.
+- 2026-09-06 done: the reusable goal state package is repository-local and
+  Pi-native; the companion bridge maps it to engine-neutral protocol with
+  session-isolated start/edit/pause/resume/clear/complete/block/wait state.
+
+#### M12-T19 notes
+- 2026-09-06 claimed: map goal state to the session surface below the panel row
+  with Laser-owned presentation and controls.
+- 2026-09-06 done: the persistent goal row sits below the panel row, owns its
+  progress and controls, survives reloads and session switches without leaking,
+  and uses product language throughout.
+
+#### M12-T20 notes
+- 2026-09-06 claimed: prove `.laser` isolation, settings/features, session isolation,
+  safety limits, product language and all four visual combinations.
+- 2026-09-06 done: identity guard, full workspace build and 842 tests pass.
+  Desktop and 390px phone layouts were reviewed in both brand themes; the
+  rebuilt dark desktop Features page was rechecked after final copy changes.
+
+#### M12-T21 notes
+- 2026-09-06 claimed: bundle the exact reviewed `pi-gpt-transcribe` core without
+  a feature toggle, explain its API-key dependency beside provider setup and
+  preflight readiness before microphone access.
+- 2026-09-06 checkpoint: matched the terminal package's real interaction model:
+  Web Audio cuts natural phrases, requests run concurrently, results insert in
+  spoken order at the current caret, typing stays enabled, and send drains the
+  final phrase before submitting.
+- 2026-09-06 done: dictation ships as core rather than a feature. Providers and
+  models reports the configured OpenAI API key as Ready before microphone
+  access; worker and phrase-controller regressions cover ordered pause-based
+  transcription, live-caret insertion, failure recovery and final drain.
+- 2026-09-06 fix: the startup capability notification could arrive before the
+  UI created its session view, so the Ready provider still produced no mic.
+  Capabilities now ride in the session snapshot and later notifications update
+  them; a fresh live session exposes “Dictate a message” beside Attach.
+
+#### M12-T22 notes
+- 2026-09-06 claimed: constrain slash matching to character zero and replace
+  only the leading trigger span, preserving all arguments and later lines.
+- 2026-09-06 done: command matching uses command identity rather than
+  descriptions. Live `/go` + Tab resolves only to `/goal`, including with the
+  caret after the trigger and untouched text following it.
+- 2026-09-06 QA note: before the matcher fix, the live `/go` probe surfaced and
+  invoked `/compact` once in session `01a0750d`; it appended a failed compaction
+  attempt. No transcript data was rewritten or deleted.
+
+#### M12-T23 notes
+- 2026-09-06 claimed: remove directory text entry and recent-path selection;
+  make every desktop Add Project entry point invoke the operating system folder
+  chooser, with a non-editable explanation outside the desktop app.
+- 2026-09-06 done: Electron now launches its native folder chooser immediately
+  from every shared Add Project trigger; cancelling changes nothing. The path
+  input, paste path, recent folders and redundant desktop modal are gone. A live
+  browser check found zero text inputs and the host-computer explanation.
+
+#### M12-T24 notes
+- 2026-09-06 claimed: reconcile Pi's exact 40-provider manifest against maintained
+  brand-icon catalogs, then replace every known-provider monogram with a compact
+  theme-safe mark and prove the mapping exhaustively.
+- 2026-09-06 checkpoint: followed LobeHub's published icon skill and pinned
+  `@lobehub/icons@5.18.0`; direct mono-component imports keep every mark at the
+  catalog's 24-unit geometry, inherit Laser ink, and exclude the catalog's
+  unrelated UI helpers from the renderer bundle.
+- 2026-09-06 done: all 40 built-in ids resolve to real SVG marks in an exhaustive
+  test. Regional and plan variants share the correct parent brand; Radius uses
+  Lobe's Pi mark because it is Pi's own gateway. UI typecheck, 378 tests and the
+  production build pass; provider rows were reviewed live in dark and light.
+- 2026-09-06 reopened: the mixed all-model list incorrectly repeats each
+  routing provider's mark on model rows. Separate routing-provider identity in
+  filters/headings from model-family identity on model choices, then visually
+  audit the unfiltered catalogue.
+- 2026-09-06 correction: the user clarified that provider means the configured
+  API and billing route, never the model developer. Every model row now uses
+  that provider's mark and a friendly provider tag; DeepSeek through Workers AI
+  shows Cloudflare plus Workers AI. Provider model subtables collapse
+  independently. UI typecheck, 379 tests and the production build pass.
+
+#### M12-T25 notes
+- 2026-09-06 claimed: bind one full-window Laser beam transition to the real
+  remembered-session hydration promise, preventing the default project/session
+  shell from appearing before restoration completes.
+- 2026-09-06 done: the operational shell stays unmounted until the remembered
+  session, transcript and goal finish loading, then appears beneath a token-timed
+  exit. The adapted Animated Beam composition uses the approved Laser mark,
+  live theme colour and real connection/restoration copy. Reduced motion keeps
+  the same status without travel. UI typecheck, 381 tests and build pass; dark
+  and light desktop plus phone-width geometry were reviewed live.
+- 2026-09-06 reopened from visual review: remove the square grid, diamond
+  aperture and logo tile; rebuild the motion from the transparent mark's own
+  rounded rails, asymmetric terminals and green beam.
+- 2026-09-06 done after art review: the startup uses the exact transparent
+  website mark with no tile, grid or geometric frame. Six rounded paths arc
+  toward the mark, peak before contact and fade through the final curve so the
+  centre absorbs rather than clips each beam. UI typecheck, 381 tests and build
+  pass; dark/light desktop and phone-width composition were reviewed live.
+
+---
+
 ## MX · Cross-cutting
 
 | ID | Task | State | Owner | Evidence | Notes |
@@ -293,6 +594,17 @@ lane T's own if both were written.
 | MX-T7 | One module defines the product's identity | done | claude-2026-09-05-identity | `product.json` at the repository root; `pnpm identity:generate` rewrites 14 files; `pnpm identity:check` runs inside `pnpm -r build` and `pnpm -r test`; renaming to `wavelet` and back proved end to end — see notes | The rename is one edit plus one command. A frozen `wireNamespace` is the deliberate exception (D-48) |
 
 #### M4-T8 notes
+- 2026-09-06 done: regular and advanced settings now use product-language
+  controls; provider/model values are rich selectors with independent Provider
+  and Model search. The live catalogue preserves provider sub-tables and shows
+  proxy provenance as source provider plus delivering provider.
+- 2026-09-06 claimed: replace free-text provider/model values with the shared
+  provider-first searchable selector, render effective defaults as selected
+  values, and keep both standard and advanced views written for a person.
+- 2026-09-06 checkpoint: provider/model fields use shared searchable controls,
+  model overrides no longer take free-text keys, effective/default values render
+  inside the controls, raw paths are no longer repeated under regular labels,
+  and the Tools section is gone.
 - 2026-09-06 raised by a product review of a real install. Appearance,
   Extensions, This device and Trust read as product screens; "All settings"
   reads as Pi's `settings.json` with labels: raw key names under every label,
@@ -825,6 +1137,153 @@ the website and 0.1.0 metadata do not present phone remote control as available.
 The feature may be promoted only after a real-phone QR scan completes the six-
 symbol comparison and reconnects to the desktop through the relay.
 
+### D-60 · 2026-09-06 · 0.2.0 is the product-experience release
+Decision: group the identity, provider/model, reasoning, JSON diagnostics and
+project-management work in M12 and release it together as stable 0.2.0.
+Why: these requests cross M1, M2, M4, M5 and M11, but they form one visible
+promise: the installed app should feel coherent rather than like separately
+finished subsystems. A dedicated milestone preserves ownership and makes the
+package/release gate explicit without reopening completed implementation rows.
+Consequences: M4-T8 remains the settings foundation; M12 owns the shared UI and
+desktop integration; M12-T5 cannot start until T1–T4 and M4-T8 are done.
+
+### D-61 · 2026-09-06 · Web search belongs only in the transcript
+Decision: stop adapting pi-web-access results into collection panels and hide
+any legacy pi-web-access panel a running or older host replays. The existing
+tool disclosure in the message remains the only web-search presentation.
+Why: the panel repeats the same result data, and panels are currently scoped to
+the project worker rather than a conversation branch, so the duplicate can
+follow a person from an old session into a new one.
+Consequences: `pi-web-access` remains installable and fully usable; only the
+redundant pinned/inline island is removed. M8-T4 remains historical evidence of
+the adapter that shipped, while M12-T8 records its deliberate retirement.
+
+### D-62 · 2026-09-06 · The fresh-install theme is the Laser brand pair
+Decision: add named Laser dark and light presets, derived from the approved
+website mark's black, `#E9E8E6` and `#03CC7B`, and make them the fresh-install
+system-following pair. Keep Graphite and Paper as optional presets.
+Why: choosing a generic green hue is not the same as giving the product a
+recognisable default identity. The logo is the source of truth.
+Consequences: the dark preset may use the exact beam green as its interactive
+accent; the light preset uses an accessible darker tone of the same hue where
+green carries text, while retaining the exact logo colours in the palette.
+
+### D-63 · 2026-09-06 · The project rail is selection-only
+Decision: project initials in the permanent rail only select and filter their
+project. Project removal and chat archival remain in the explicit overflow menu
+in the sessions list. The strong rail highlight represents the optional session
+filter, not the retained current-project scope. Composer trigger results use a
+bounded scrolling surface.
+Why: making the project button itself a dropdown trigger caused an ordinary
+selection click to open a destructive menu, while an unbounded command list
+could grow beyond the viewport.
+Consequences: switching projects is a single predictable click, destructive
+actions stay visibly separate, “Show all” clears the strong highlight without
+discarding the project used by new chats/settings, and slash/mention suggestions
+never consume the full application height.
+
+### D-64 · 2026-09-06 · Project-scoped settings name their target
+Decision: when Project or Effective scope is open, show a dedicated project
+target control beside the scope tabs. Changing it changes the retained current
+project without turning on a sessions filter.
+Why: “Show all” intentionally clears the rail filter while a current project
+still exists for new chats and settings. A hidden retained value is not enough
+context for a settings write.
+Consequences: every project override names both the project and exact directory
+on the same surface, and stale settings from the previous target disappear
+while the new snapshot loads.
+
+### D-65 · 2026-09-06 · Dock occupancy chooses the active grid
+Decision: one expanded panel fills the dock; two expanded panels use full-width
+top and bottom rows; three or four expanded panels use stable quadrants in a
+2×2 grid whenever the dock is wide enough to preserve the legibility floor.
+The island elements keep their identity while their rectangles morph.
+Why: choosing two columns from dock width before considering occupancy stranded
+the first panel in the left half and made the canvas look pre-divided even when
+nothing occupied the other regions.
+Consequences: dock width still determines whether two readable columns are
+available (D-25), but empty columns no longer reserve space. The third panel is
+the first reason to activate the 2×2 grid; the fourth fills its remaining cell.
+Supersedes: the occupancy implications of D-20; D-25's readability threshold
+still stands.
+
+### D-66 · 2026-09-06 · Thinking is a state, not a caret
+Decision: an assistant turn that is running but has not produced a visible part
+uses the installed assistant-ui thinking indicator with a live elapsed value.
+The context inspector remains the installed context-display composition, but
+its detailed dialog uses icon-led cards and an explicit window-health summary.
+Why: a blinking caret does not name the state or show that time is passing, and
+four undifferentiated number boxes make context data harder to scan than the
+information deserves.
+Consequences: the reasoning disclosure continues using the same indicator once
+reasoning arrives, so the status has one visual vocabulary before and during a
+reasoning stream. This adds M12-T11 without changing the 0.2.0 release gate.
+
+### D-67 · 2026-09-06 · Telemetry is an instrument panel
+Decision: the far-right rail presents context health, token composition, model
+identity, file churn, tool activity and worker state through icon-led cards,
+meters and compact visual summaries derived from the current session.
+Why: a column of labels and numbers makes the person read every row before they
+can understand the session, even though the same facts have strong visual forms.
+Consequences: the rail remains truthful and read-only, uses no decorative fake
+metrics or emoji, and retains exact text values alongside every visual. This
+adds M12-T12 without changing the 0.2.0 release gate.
+
+### D-68 · 2026-09-06 · Session telemetry does not expose worker plumbing
+Decision: remove the Agent process section from the telemetry rail, and let the
+project/session status and error surfaces own worker startup or crash failures.
+Tool failure counts likewise have one owner: the detailed tool timeline; the
+activity strip reports only call sequence and whether work is live or settled.
+Why: the process card exposed an implementation detail without giving the
+person an action, while repeated failure summaries made the rail noisier rather
+than clearer.
+Consequences: telemetry is shorter, session-focused and non-duplicative.
+Supersedes: D-67 only where it included worker state in the rail.
+
+### D-69 · 2026-09-06 · Fleet order never breaks lineage
+Decision: the Fleet renders the run tree recursively. Roots and each parent's
+children follow creation time; attention rolls into the ancestor's status but
+never reorders a child outside its subtree.
+Why: globally sorting a flattened tree by attention preserved each row's depth
+number but destroyed adjacency, allowing a child to sit below an unrelated run
+and visually inherit the wrong parent.
+Consequences: parentage is represented structurally in the DOM and by a
+continuous lineage rail, not inferred from indentation. This adds M12-T13
+without changing the 0.2.0 release gate.
+
+### D-70 · 2026-09-06 · A workflow child has one panel identity
+Decision: when pi-subagents persists a workflow step's launched `runId`, Laser
+uses that run id for both the aggregate workflow child and the child's own
+status file. The child status retains its workflow key and parent workflow id.
+Why: session `01a0750d` proves that pi-subagents writes both records for each
+lane. Giving them different panel ids rendered three real workers as six rows
+and duplicated their failure states.
+Consequences: either record can refresh the same child in place; the Fleet
+shows one workflow plus its three real children and keeps the detailed child
+record's metrics and controls when it arrives. This adds M12-T14 without
+changing the 0.2.0 release gate.
+
+### D-71 · 2026-09-06 · Laser is the product; Pi is the internal engine
+Decision: Laser owns the public concepts, settings schema, feature catalogue,
+protocol and presentation. Pi remains an exact-pinned execution engine. Logic
+that must understand Pi lives in a reusable Pi-native package in this
+repository or an exact-pinned upstream package; the companion extension adapts
+that logic to engine-neutral protocol, and Laser chooses every visible surface.
+People enable curated Features, never install or configure packages through the
+normal product UI. Low-level engine settings are internally managed or omitted;
+specialist settings live in a permanent Advanced tab, while the existing
+catalogue-density switch is renamed Full configuration.
+Why: mirroring an engine's configuration and package manager makes Laser feel
+like a wrapper and commits its public experience to implementation details that
+should be replaceable. The reusable logic boundary respects Pi's APIs and lets
+native Pi users adopt the capability without importing Laser's UI.
+Consequences: add M12-T15 through M12-T20; migrate supported installed packages
+to feature state without deleting unknown configuration; keep temporary package
+plumbing internal; add Goals as a bundled feature backed by the exact-pinned
+`@narumitw/pi-goal` implementation unless verification proves it unsuitable.
+M12-T5 remains blocked until these tasks finish and the user separately
+authorizes any release, tag, push, deployment or installation.
+
 ### D-26 · 2026-09-05 · The host's log sections are `stream` panels too
 Decision: the logs page keeps search and paging; "Watch" sends one section to the dock as a client-local `stream` island fed from `pi/logs/append` (`packages/ui/src/panels/logs.ts`).
 Why: the contract's reach is the point — the provider log and a package's `setWidget` output should be the same island. Rebuilding the logs page out of panels would have thrown away virtualization, search and paging for nothing.
@@ -942,8 +1401,127 @@ Consequences: 24 real strays were found and fixed, including a session-specific 
 
 One hole is left open knowingly: `<name>-<word>-v<n>` is exactly the shape of the frozen HKDF labels (`piorbit-pairing-channel-v1`, `piorbit-device-list-v1`, `piorbit-sas-v1`), so a hand-typed value of that shape — a service-worker cache prefix, say — is still stripped. Narrowing it further would mean either listing the three crypto files by path or reporting real wire labels as failures on every run. The proof was a real rename: with `name: wavelet` and `formerNames: ["piorbit"]`, three of four planted probes were caught (`".piorbit/state"`, `"Welcome to piorbit"`, `probe_dir="$HOME/.piorbit/state"`) and `"piorbit-shell-v1"` was not.
 
+### D-72 · 2026-09-06 · The product boundary is a clean break
+
+Decision: Laser has no legacy-user migration. Project settings live only in
+`<project>/.laser/settings.json`; `<project>/.pi`, Pi trust, automatic engine
+resource discovery, public package installation and public Pi passthrough are
+unsupported. The worker applies validated Laser settings as in-memory overrides
+and loads reviewed built-ins by exact path.
+
+Why: the user confirmed there are no existing users and explicitly authorized
+the breaking change. Carrying compatibility would preserve exactly the public
+engine coupling this iteration removes.
+
+Consequences: supersedes D-71's migration and temporary-plumbing consequences,
+and changes M12-T16/M12-T20 from migration work to clean-break verification.
+Internal wire names may remain until separately versioned, but the host rejects
+package operations and no product UI or CLI exposes them.
+
+### D-73 · 2026-09-06 · Dictation is core, with provider readiness at setup
+
+Decision: dictation is built into Laser and never appears in Features. The exact
+reviewed `pi-gpt-transcribe` core is pinned inside the worker. Settings →
+Providers and models owns the persistent note because it is where the missing
+dependency is resolved; the microphone action repeats the actionable failure by
+checking readiness before it asks for microphone permission.
+
+Why: availability is not a user choice. The only conditional is whether an
+OpenAI platform API key can authorize the transcription endpoint; ChatGPT
+account sign-in alone cannot. Showing this on a feature card would teach the
+wrong model and make a provider problem look like an installation problem.
+
+Consequences: add M12-T21. The upstream OAuth success logo stays unchanged for
+now: the pinned dependency hardcodes the page and offers no branding seam, so a
+Laser override would require a fork or runtime patch and violate the user's
+"only if easy and pattern-safe" condition.
+
+### D-74 · 2026-09-06 · Voice and keyboard share the live composer
+
+Decision: Laser dictation follows the upstream terminal interaction: audio is
+cut at natural pauses, phrases transcribe concurrently, results are delivered
+in spoken order and each lands at the person's current caret while keyboard
+editing remains enabled. Sending first drains the open phrase and pending
+transcriptions. The UI owns Web Audio capture and its token-driven waveform;
+the worker keeps the exact-pinned transcription request and credentials.
+
+Why: the user identified this as the existing package's defining experience.
+The official OpenAI model docs also distinguish low-latency Realtime transcript
+deltas from completed/committed phrase transcription; switching APIs would add
+different cost and semantics without being needed to match upstream.
+
+Consequences: extend M12-T21. Phrase insertion briefly lights the composer edge,
+pending phrases stay visible beside the sound-reactive waveform, and reduced
+motion still presents the same state without decorative movement.
+
+### D-75 · 2026-09-06 · Slash completion owns only the first token
+
+Decision: slash command detection only runs when `/` is the first character.
+Selecting a command replaces only the typed leading token and preserves the
+remaining draft byte-for-byte.
+
+Why: completion previously replaced the whole composer after assistant-ui had
+already removed the trigger span, permanently deleting arguments and later
+text. Commands are only unambiguous at the beginning of a prompt.
+
+Consequences: add M12-T22 and regression tests for keyboard/pointer-equivalent
+selection, suffix preservation and rejection of mid-draft slashes.
+
+### D-76 · 2026-09-06 · Adding a project means choosing a folder
+
+Decision: Add Project is a native desktop folder-selection action. Laser does
+not expose a directory path field, paste target or recent-path shortcut as an
+alternative. A non-desktop client explains that projects are added from the
+computer running Laser rather than pretending it can browse that filesystem.
+
+Why: a path field makes people reason about host paths, allows typing errors and
+does not behave like a desktop project picker. The Electron bridge already owns
+the correct operating-system chooser.
+
+Consequences: add M12-T23. Every Add Project trigger uses the same shell action;
+opening it in Electron launches `chooseDirectory()` immediately and cancellation
+is a clean no-op.
+
+### D-77 · 2026-09-06 · Provider marks come from one AI-native catalog
+
+Decision: use the maintained Lobe Icons package as Laser's source of truth for
+built-in provider artwork. Normalize marks through one 24-unit frame and Laser
+theme ink. Region, billing-plan and gateway variants reuse their parent brand;
+only genuinely custom provider ids may use the generated fallback.
+
+Why: Simple Icons is the broad company-logo catalog, but Lobe Icons applies the
+same maintained approach specifically to AI models, providers and applications
+and covers the niche provider set Laser actually exposes. A package dependency
+keeps provenance and future updates reviewable instead of accumulating copied
+SVG paths from unrelated sources.
+
+Consequences: add M12-T24. The exact pinned Pi provider manifest is an exhaustive
+test fixture: all 40 ids must resolve to a catalog mark, while caller sizing and
+theme tokens remain authoritative.
+
+### D-78 · 2026-09-06 · Startup restoration is an atomic visual transition
+
+Decision: Laser does not mount the operational shell until the remembered
+project and session have either restored completely or definitively failed.
+During that boundary it renders one branded, token-driven beam transition tied
+to the actual restore state; it does not add an artificial minimum delay.
+
+Why: briefly showing the first project and an empty session is not harmless
+loading chrome. It communicates the wrong active process, then moves the person
+without input. A real restoration boundary prevents the false state and gives
+slow starts an intentional identity while fast starts remain fast.
+
+Consequences: add M12-T25. Deep links and ordinary remembered-session startup
+share the gate; first-run remains its own full-window flow after restoration;
+reduced motion keeps the same status without traveling beams.
+
 ## Status edits log
 
+- 2026-09-06 · codex-2026-09-06-startup-beam · M12-T25 final art pass: transparent website mark, six eased inbound arcs and gradient beam absorption replace the rigid geometric rails; 381 UI tests, typecheck and build pass.
+- 2026-09-06 · codex-2026-09-06-startup-beam · M12-T25 done: startup restoration is atomic behind a branded Laser beam transition; 381 UI tests and build pass, responsive dark/light review is complete, and the app remains running.
+- 2026-09-06 · codex-2026-09-06-provider-icons · M12-T24 done: all 40 built-in providers use pinned Lobe Icons mono marks; exhaustive tests and live dark/light review pass, and the rebuilt app is running.
+- 2026-09-06 · codex-2026-09-06-native-project-picker · M12-T23 done: Add Project is a native folder-selection action with no path-entry alternative; 376 UI and 63 desktop tests pass, and the rebuilt app is running.
+- 2026-09-06 · codex-2026-09-06-product-boundary · M12-T15..T22 complete locally; clean Laser/Pi boundary, curated Features, bundled Subagents, durable Goals, core dictation and lossless slash completion verified. Startup capability race fixed after live mic control was missing. Full build and 842 tests green; 0.2.0 remains unreleased pending direct approval.
 - 2026-09-05 · claude-2026-09-05-a · created ledger, M0-T1 done, M0-T3 in-progress, D-1..D-12 recorded.
 - 2026-09-05 · claude-2026-09-05-a · install/build/test verified; M0-T1 evidence, M0-T5 done, M0-T2 and M0-T7 in-progress with tests.
 - 2026-09-05 · claude-2026-09-05-a · D-13: subagents-bridge replaced by pi-extension with modules; file layer moved to host; M3/M8 rows updated; M8-T5 added.

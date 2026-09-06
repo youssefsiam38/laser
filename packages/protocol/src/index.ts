@@ -6,6 +6,7 @@
  * `@earendil-works/*` or `pi-subagents` (enforced by the seam test, M0-T5).
  */
 export * from "./identity.js";
+export * from "./features.js";
 export * from "./jsonrpc.js";
 export * from "./messages.js";
 export * from "./panels.js";

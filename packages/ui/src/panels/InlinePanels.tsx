@@ -208,7 +208,7 @@ export function PanelInspectSheet() {
     <Sheet open={entry !== undefined} onOpenChange={(o) => !o && setOpenKey(undefined)}>
       <SheetContent side="bottom" className="mx-auto h-[85dvh] max-h-[85dvh] w-full max-w-3xl p-0" showCloseButton={false}>
         <SheetTitle className="sr-only">{entry?.panel.title ?? "Panel"}</SheetTitle>
-        <SheetDescription className="sr-only">A panel from {entry?.panel.source ?? "an extension"} that asked for your attention.</SheetDescription>
+        <SheetDescription className="sr-only">A panel from {entry?.panel.source ?? "a feature"} that asked for your attention.</SheetDescription>
         {entry && (
           <div className="flex min-h-0 flex-1 flex-col pt-1">
             <Island entry={entry} size="expanded" frame="sheet" onClose={() => setOpenKey(undefined)} />

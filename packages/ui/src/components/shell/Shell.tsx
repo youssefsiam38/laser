@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Dock } from "@/components/dock";
 import { MobileSurfaces } from "@/components/mobile";
 import { Thread } from "@/components/thread/Thread";
+import { GoalBar } from "@/components/thread/GoalBar";
 import { Workbench, WorkbenchProvider } from "@/components/workbench";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -14,6 +15,7 @@ import { mergeSessions, sessionTitle, useLaserStable, useLaserState, useLaserVie
 
 import { AddProjectDialog } from "./AddProjectDialog.js";
 import { HostConnectionState } from "@/components/assistant-ui/elements/connection-state";
+import { StartupRestorationGate } from "@/components/assistant-ui/elements/loading-state";
 import { CommandPaletteDialog } from "./CommandPalette.js";
 import { FirstRunFlow, useSetupPending } from "@/components/onboarding";
 import { documentTitle, needYouCount } from "./model.js";
@@ -75,16 +77,27 @@ function useHash(): string {
 
 export function Shell() {
   const hash = useHash();
-  if (hash.startsWith(POPOUT_HASH_PREFIX)) {
-    return (
-      <TooltipProvider>
-        <PanelsProvider>
-          <PoppedOutPanel hash={hash} />
-        </PanelsProvider>
-      </TooltipProvider>
-    );
-  }
-  return <ShellFrame />;
+  const { startupRestoring } = useLaserStable();
+  const connection = useLaserState((state) => state.connection);
+  const content = hash.startsWith(POPOUT_HASH_PREFIX) ? (
+    <TooltipProvider>
+      <PanelsProvider>
+        <PoppedOutPanel hash={hash} />
+      </PanelsProvider>
+    </TooltipProvider>
+  ) : (
+    <ShellFrame />
+  );
+
+  return (
+    <StartupRestorationGate
+      active={startupRestoring}
+      label={connection === "open" ? "Returning to your last session" : "Connecting to your workspace"}
+      notice={<HostConnectionState className="absolute inset-x-0 top-0 z-20" />}
+    >
+      {content}
+    </StartupRestorationGate>
+  );
 }
 
 function ShellFrame() {
@@ -287,6 +300,7 @@ function ShellFrame() {
                   (docs/ux-agent-work.md). Renders nothing when the session has
                   no agent work. */}
               <RunTabs />
+              <GoalBar />
               <HostConnectionState />
               {/* The thread's sticky footer owns the keyboard/safe-area inset
                   (Thread.tsx); adding it here too lifted the composer twice. */}

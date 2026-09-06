@@ -2,20 +2,23 @@
 /**
  * Providers and models (M4-T4).
  *
- * Auth status comes from Pi's own `ModelRuntime`, so what is shown here is
+ * Auth status comes from the bundled engine's `ModelRuntime`, so what is shown here is
  * exactly what a session will be able to use. No credential value ever crosses
  * the protocol — only whether one resolved and where it came from. Signing in
  * happens here too (M10-T6): the same `ProviderStep` the first run uses, which
  * drives the agent's own login flow through `pi/providers/login/*`.
  */
-import { PRODUCT_NAME } from "@lasercode/protocol";
+import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Eye, Loader2, RefreshCw, Sparkles } from "lucide-react";
+import { ChevronRight, Eye, Loader2, Mic2, RefreshCw, Sparkles } from "lucide-react";
 
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
 import { DataTable, type DataTableColumn } from "@/components/assistant-ui/elements/data-table";
+import { modelProvenance, ProviderFilterField, ProviderModelMultiPicker } from "@/components/assistant-ui/elements/model-selector";
+import { ProviderLogo } from "@/components/assistant-ui/elements/logos";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { money, tokens } from "@/format";
@@ -28,22 +31,12 @@ import type {
   SettingsScope,
   SettingsSnapshot,
   ThinkingLevel,
+  TranscribeStatus,
 } from "@lasercode/protocol";
 
 import { ProviderStep } from "@/components/onboarding";
 
-import { SettingField } from "./fields.js";
 import { SearchInput } from "./SettingsScreen.js";
-
-const ENABLED_MODELS_FIELD = {
-  path: "enabledModels",
-  key: "enabledModels",
-  label: "Enabled models",
-  description: "",
-  section: "model",
-  type: { control: "string-list", placeholder: "claude-*" },
-  scopes: ["global", "project"],
-} as const;
 
 /** Rows rendered at once; the filter is how you reach the rest. */
 const MODEL_ROW_LIMIT = 200;
@@ -57,13 +50,16 @@ export interface ModelsTabProps {
 export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
   const { client, actions } = useLaserStable();
   const [providers, setProviders] = useState<ProviderAuthInfo[]>([]);
+  const [dictation, setDictation] = useState<TranscribeStatus>();
   const [models, setModels] = useState<ModelCatalogEntry[]>([]);
   const [patterns, setPatterns] = useState<string[] | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState("");
+  const [providerFilter, setProviderFilter] = useState("all");
   const [onlyEnabled, setOnlyEnabled] = useState(false);
+  const [collapsedProviders, setCollapsedProviders] = useState<Set<string>>(() => new Set());
   const [fatal, setFatal] = useState<string>();
 
   const load = useCallback(
@@ -71,13 +67,15 @@ export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
       if (refresh) setRefreshing(true);
       else setLoading(true);
       try {
-        const [providerResult, catalogResult] = await Promise.all([
+        const [providerResult, catalogResult, dictationResult] = await Promise.all([
           client.request("pi/providers/list", { cwd }),
           client.request("pi/models/catalog", { cwd, refresh }),
+          client.request("pi/transcribe/status", { cwd }),
         ]);
         setProviders(providerResult.providers);
         setModels(catalogResult.models);
         setPatterns(catalogResult.enabledPatterns);
+        setDictation(dictationResult);
         setErrors([...(providerResult.error ? [providerResult.error] : []), ...catalogResult.errors]);
         setFatal(undefined);
       } catch (loadError) {
@@ -90,6 +88,10 @@ export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
     [client, cwd],
   );
 
+  const handleProviderConfigured = useCallback(() => {
+    void load(false);
+  }, [load]);
+
   useEffect(() => {
     void load(false);
   }, [load]);
@@ -99,15 +101,26 @@ export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
     return models.filter(
       (model) =>
         (!onlyEnabled || model.enabled) &&
+        (providerFilter === "all" || model.provider === providerFilter) &&
         (needle === "" ||
-          `${model.provider}/${model.id}`.toLowerCase().includes(needle) ||
+          model.id.toLowerCase().includes(needle) ||
           (model.name ?? "").toLowerCase().includes(needle)),
     );
-  }, [models, filter, onlyEnabled]);
+  }, [models, filter, onlyEnabled, providerFilter]);
   // Pi knows well over a thousand models with every provider catalogue loaded.
   // Rendering them all is pointless DOM; the filter is the way through them.
   const shown = matching.slice(0, MODEL_ROW_LIMIT);
   const hidden = matching.length - shown.length;
+  const modelProviders = useMemo(() => [...new Set(models.map((model) => model.provider))].sort(), [models]);
+  const grouped = useMemo(() => {
+    const groups = new Map<string, ModelCatalogEntry[]>();
+    for (const model of shown) {
+      const list = groups.get(model.provider) ?? [];
+      list.push(model);
+      groups.set(model.provider, list);
+    }
+    return [...groups.entries()];
+  }, [shown]);
 
   const setThinking = (model: ModelCatalogEntry, level: ThinkingLevel | undefined) => {
     // A map key here holds a slash, which is not a settings path segment, so
@@ -168,9 +181,30 @@ export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
           </div>
           <p className="text-xs leading-5 text-ink-2">
             Which providers are signed in, and how. Pick one to sign in with an account or an API key, or to sign out.
-            {PRODUCT_NAME} never reads the credential itself.
+            {" "}{PRODUCT_DISPLAY_NAME} never reads the credential itself.
           </p>
-          <ProviderStep cwd={cwd} onConfigured={() => void load(false)} />
+          <ProviderStep cwd={cwd} onConfigured={handleProviderConfigured} />
+          <div className="flex items-start gap-3 rounded-xl border border-line bg-surface px-3 py-3">
+            <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-[color-mix(in_oklab,var(--live)_12%,var(--surface))] text-live">
+              <Mic2 className="size-4" aria-hidden="true" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-sm font-medium text-ink">Dictation comes with {PRODUCT_DISPLAY_NAME}</p>
+                {dictation && (
+                  <Badge variant="outline" className={dictation.available ? "text-live" : "text-attention"}>
+                    {dictation.available ? "Ready" : "Needs an API key"}
+                  </Badge>
+                )}
+              </div>
+              <p className="mt-1 text-xs leading-5 text-ink-2">
+                Speech-to-text uses OpenAI’s transcription service. Add an OpenAI platform API key here; a ChatGPT account sign-in alone cannot authorize audio transcription.
+              </p>
+              {dictation && !dictation.available && dictation.reason && (
+                <p className="mt-1 text-xs leading-5 text-attention">{dictation.reason}</p>
+              )}
+            </div>
+          </div>
           {providers.length > 0 && (
             <p className="text-xs leading-4 text-ink-3">
               {providers.filter((p) => p.configured).length} of {providers.length} signed in.
@@ -194,13 +228,13 @@ export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
             Patterns in <code className="font-mono">enabledModels</code> limit the models the agent cycles through and
             the model picker offers. Leave it empty to offer every model available. Written to your global settings.
           </p>
-          <SettingField
-            field={ENABLED_MODELS_FIELD as never}
-            value={patterns ?? undefined}
+          <ProviderModelMultiPicker
+            models={models}
+            values={patterns ?? []}
             disabled={snapshot === undefined}
-            onCommit={(value) =>
+            onValuesChange={(value) =>
               void onApply("global", [
-                value === undefined
+                value.length === 0
                   ? { path: "enabledModels", op: "unset" }
                   : { path: "enabledModels", op: "set", value },
               ]).then((ok) => {
@@ -208,6 +242,14 @@ export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
               })
             }
           />
+          {patterns && patterns.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {patterns.map((pattern) => <Badge key={pattern} variant="outline" className="font-mono">{pattern}</Badge>)}
+              <Button variant="ghost" size="xs" onClick={() => void onApply("global", [{ path: "enabledModels", op: "unset" }]).then((ok) => ok && void load(false))}>
+                Offer every model
+              </Button>
+            </div>
+          )}
         </section>
 
         <section className="flex min-w-0 flex-col gap-2">
@@ -217,7 +259,6 @@ export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
               {matching.length}
               {matching.length !== models.length ? ` of ${models.length}` : ""}
             </Badge>
-            <SearchInput value={filter} onChange={setFilter} placeholder="Filter models" className="ms-auto w-52" />
             <Button
               variant="ghost"
               size="sm"
@@ -229,6 +270,26 @@ export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
             </Button>
           </div>
 
+          <div className="grid gap-2 rounded-xl border border-line bg-surface p-2 sm:grid-cols-2" aria-label="Model catalogue filters">
+            <label className="grid gap-1">
+              <span className="eyebrow text-ink-3">Provider</span>
+              <ProviderFilterField
+                providers={modelProviders}
+                value={providerFilter}
+                onValueChange={setProviderFilter}
+              />
+            </label>
+            <label className="grid gap-1">
+              <span className="eyebrow text-ink-3">Model</span>
+              <SearchInput
+                value={filter}
+                onChange={setFilter}
+                placeholder="Search model names or IDs"
+                className="w-full"
+              />
+            </label>
+          </div>
+
           {models.length === 0 && !loading && (
             <p className="rounded-lg border border-line px-3 py-6 text-center text-sm text-ink-2">
               No models are available. Add a provider credential above, or point{" "}
@@ -236,17 +297,54 @@ export function ModelsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
             </p>
           )}
 
-          {/* The model catalogue as the `data-table` element (docs/ux-elements.md
-              "Structured output"); the filter is the way through a thousand rows. */}
-          <DataTable
-            caption="Every available model, with its context window, thinking levels and startup level"
-            columns={modelColumns(setThinking)}
-            rows={shown}
-            rowKey={(model) => `${model.provider}/${model.id}`}
-            rowClassName={(model) => (model.enabled ? undefined : "opacity-45")}
-            minWidth="44rem"
-            emptyMessage={loading ? "Reading the catalogue…" : "No model matches the filter."}
-          />
+          {grouped.map(([provider, providerModels]) => {
+            const open = !collapsedProviders.has(provider);
+            return (
+              <Collapsible
+                key={provider}
+                open={open}
+                onOpenChange={(nextOpen) => {
+                  setCollapsedProviders((current) => {
+                    const next = new Set(current);
+                    if (nextOpen) next.delete(provider);
+                    else next.add(provider);
+                    return next;
+                  });
+                }}
+                className="overflow-hidden rounded-xl border border-line bg-surface"
+              >
+                <CollapsibleTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 bg-surface-2 px-3 py-2 text-start outline-none transition-colors duration-(--motion-fast) hover:bg-surface-3 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-live motion-reduce:transition-none"
+                    aria-label={`${open ? "Collapse" : "Expand"} ${provider} models`}
+                  >
+                    <ChevronRight
+                      aria-hidden="true"
+                      className={cn("size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none", open && "rotate-90")}
+                    />
+                    <ProviderLogo provider={provider} className="size-4 shrink-0" />
+                    <h3 className="min-w-0 truncate text-sm font-semibold text-ink">{provider}</h3>
+                    <Badge variant="outline">{providerModels.length}</Badge>
+                    {provider === "openrouter" && <span className="ms-auto hidden text-xs text-ink-3 sm:inline">Proxy catalogue; each row names its source.</span>}
+                  </button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="hairline-t">
+                  <DataTable
+                    caption={`${provider} models, with context window, thinking levels and startup level`}
+                    columns={modelColumns(setThinking)}
+                    rows={providerModels}
+                    rowKey={(model) => `${model.provider}/${model.id}`}
+                    rowClassName={(model) => (model.enabled ? undefined : "opacity-45")}
+                    minWidth="44rem"
+                    emptyMessage={loading ? "Reading the catalogue…" : "No model matches the filter."}
+                    className="rounded-none border-0"
+                  />
+                </CollapsibleContent>
+              </Collapsible>
+            );
+          })}
+          {grouped.length === 0 && models.length > 0 && <p className="rounded-lg border border-line px-3 py-6 text-center text-sm text-ink-2">No model matches the filters.</p>}
           {hidden > 0 && (
             <p className="text-xs text-ink-3">
               Showing the first {MODEL_ROW_LIMIT} of {matching.length} matching models. Type in the filter to narrow
@@ -267,9 +365,7 @@ function modelColumns(setThinking: (model: ModelCatalogEntry, level: ThinkingLev
       render: (model) => (
         <div className="flex flex-col gap-0.5">
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="typed text-ink">
-              {model.provider}/{model.id}
-            </span>
+            <span className="typed text-ink">{modelProvenance(model).modelId}</span>
             {model.vision && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -293,6 +389,9 @@ function modelColumns(setThinking: (model: ModelCatalogEntry, level: ThinkingLev
             {!model.enabled && <Badge variant="default">excluded by enabledModels</Badge>}
           </div>
           {model.name && model.name !== model.id && <p className="text-xs text-ink-3">{model.name}</p>}
+          {modelProvenance(model).sourceProvider && (
+            <p className="text-xs text-ink-3">Source: {modelProvenance(model).sourceProvider} · delivered by {model.provider}</p>
+          )}
         </div>
       ),
     },

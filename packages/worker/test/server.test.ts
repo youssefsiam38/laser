@@ -30,11 +30,14 @@ class FakeDriver implements SessionDriver {
   };
   /** Set to make `open()` yield, so a second request can arrive mid-open. */
   static gate: Promise<void> | undefined;
+  /** Event emitted during open, before the JSON-RPC response exists. */
+  static openingEvent: DriverEvent | undefined;
   async open(o: unknown) {
     if (FakeDriver.gate) await FakeDriver.gate;
     this.opened = o;
     const path = (o as { sessionPath?: string }).sessionPath;
     if (path) this.st = { ...this.st, path };
+    if (FakeDriver.openingEvent) this.emit(FakeDriver.openingEvent);
     return this.st;
   }
   state() { return this.st; }
@@ -79,6 +82,22 @@ function harness() {
 }
 
 describe("WorkerServer", () => {
+  it("includes startup capabilities in the session snapshot", async () => {
+    FakeDriver.openingEvent = {
+      type: "extension",
+      message: { type: "lasercode/capabilities", active: ["provider-log", "transcribe"], failed: [] },
+    };
+    try {
+      const h = harness();
+      const created = await h.call(1, "session/new", { cwd: "/tmp/fake" });
+      expect(created.result).toMatchObject({
+        state: { capabilities: ["provider-log", "transcribe"] },
+      });
+    } finally {
+      FakeDriver.openingEvent = undefined;
+    }
+  });
+
   it("opens a session, numbers updates, and answers requests", async () => {
     const h = harness();
     const created = await h.call(1, "session/new", { cwd: "/tmp/fake" });

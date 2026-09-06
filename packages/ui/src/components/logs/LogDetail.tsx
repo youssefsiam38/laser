@@ -16,6 +16,7 @@ import { Check, Copy, Download, Info } from "lucide-react";
 
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
 import { AnsiText } from "@/components/assistant-ui/elements/ansi-text";
+import { JsonViewer, parseJsonText } from "@/components/assistant-ui/elements/json-viewer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -23,7 +24,7 @@ import { useCopy } from "@/hooks";
 import { dateTime, duration } from "@/format";
 import { cn } from "@/lib/utils";
 import { useLaserStable } from "@/runtime";
-import type { LogEntry } from "@lasercode/protocol";
+import { PRODUCT_NAME, type LogEntry } from "@lasercode/protocol";
 
 import { SECTION_TONE } from "./model.js";
 
@@ -60,6 +61,7 @@ function Detail({ entry }: { entry: LogEntry }) {
   const terminalOutput = !ref
     ? false
     : /(^|_)(stderr|stdout|output|console)$/.test(entry.kind);
+  const jsonBody = body === undefined ? undefined : parseJsonText(body);
 
   useEffect(() => {
     if (!ref) {
@@ -177,15 +179,10 @@ function Detail({ entry }: { entry: LogEntry }) {
               <pre className="terminal max-h-[60vh] w-full min-w-0 overflow-auto rounded-lg border border-terminal-line p-3 whitespace-pre">
                 <AnsiText text={body} />
               </pre>
+            ) : jsonBody !== undefined ? (
+              <JsonViewer value={jsonBody} />
             ) : (
-              <pre
-                className={cn(
-                  "max-h-[60vh] w-full min-w-0 overflow-auto rounded-lg bg-surface-2 p-3",
-                  "font-mono text-xs leading-sm whitespace-pre text-ink-2",
-                )}
-              >
-                {body}
-              </pre>
+              <pre className={cn("max-h-[60vh] w-full min-w-0 overflow-auto rounded-lg bg-surface-2 p-3", "font-mono text-xs leading-sm whitespace-pre text-ink-2")}>{body}</pre>
             )}
           </div>
         )}
@@ -208,8 +205,8 @@ function ProviderCeilingNote() {
     <div className="flex items-start gap-2 rounded-lg bg-surface-2 px-3 py-2 text-xs leading-5 text-ink-2">
       <Info className="mt-0.5 size-3.5 shrink-0 text-ink-3" />
       <p>
-        <span className="font-medium text-ink">There is no response body here, and there cannot be.</span> Pi 0.85 gives
-        an extension the complete provider <em>request</em>, but its{" "}
+        <span className="font-medium text-ink">There is no response body here, and there cannot be.</span> The current engine gives
+        {PRODUCT_NAME} the complete provider <em>request</em>, but its{" "}
         <code className="font-mono text-xs">after_provider_response</code> hook carries only the HTTP status and the
         response headers — it exposes no hook for the raw stream. The model's actual output is reconstructed from
         session events and shown in the transcript.

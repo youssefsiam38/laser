@@ -120,7 +120,7 @@ function TrustGuardrail() {
     <GuardrailNotice
       title="This project is not trusted"
       policy="trust"
-      explanation="Its extensions, skills and project settings are not loaded, so tools they would add are missing here. The built-in tools still work. To change that, remove and re-add the project and answer the trust question again."
+      explanation="Its tools, instructions and project settings are not loaded, so project-specific capabilities are missing here. The built-in tools still work. To change that, remove and re-add the project and answer the trust question again."
     />
   );
 }

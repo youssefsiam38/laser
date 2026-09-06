@@ -31,6 +31,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@lasercode/crypto";
 import { ENV, PRODUCT_NAME, decisionPushPayload, type HostNotifications, type JsonRpcNotification, type LogEntry, type SessionUpdateParams } from "@lasercode/protocol";
 import { AttentionTracker } from "./attention.js";
+import { FeatureService } from "./features.js";
 import { PrefsStore } from "./prefs.js";
 import { SessionCatalog, defaultSessionDir } from "./catalog.js";
 import { LogStore } from "./logstore.js";
@@ -171,6 +172,8 @@ export class HostServer {
   readonly push: PushService;
   /** laser's own preferences (M11-T6) — the theme among them. */
   readonly prefs: PrefsStore;
+  /** Laser-owned capability policy; implementation packages stay hidden. */
+  readonly features: FeatureService;
   readonly router: Router;
   private readonly http: Server;
   private readonly wss: WebSocketServer;
@@ -256,6 +259,7 @@ export class HostServer {
       storePath: join(stateDir, "prefs.json"),
       onChange: (entry) => this.notify("pi/prefs/updated", entry),
     });
+    this.features = new FeatureService(this.prefs);
 
     // The host resolves the package manager the workers should use — the one
     // the packaged app bundles, or the one on PATH on a developer machine —
@@ -273,6 +277,7 @@ export class HostServer {
     const poolOptions: WorkerPoolOptions = {
       ...(options.agentDir ? { agentDir: options.agentDir } : {}),
       ...(npmCommand ? { env: { [ENV.npmCommand]: JSON.stringify(npmCommand) } } : {}),
+      envForCwd: (cwd) => ({ [ENV.features]: JSON.stringify(this.features.enabled(cwd)) }),
       ...(options.sessionDir ? { sessionDir: options.sessionDir } : {}),
       ...(options.subagentsTempRoot ? { subagentsTempRoot: options.subagentsTempRoot } : {}),
       ...(options.workerMain ? { workerMain: options.workerMain } : {}),
@@ -312,6 +317,7 @@ export class HostServer {
       // lets a run started from a terminal find the session that owns it.
       sessions: () =>
         this.catalog.list().map((entry) => ({ path: entry.path, cwd: entry.cwd, modifiedAt: entry.modifiedAt })),
+      enabled: (cwd) => this.features.enabled(cwd).includes("subagents"),
       ...(options.agentDir ? { agentDir: options.agentDir } : {}),
       ...(options.subagentsTempRoot ? { roots: [options.subagentsTempRoot, ...subagentsTempRoots()] } : {}),
       // Resume is the one control that is not a file: it goes back through the
@@ -335,6 +341,7 @@ export class HostServer {
       subagents: this.subagents,
       push: this.push,
       prefs: this.prefs,
+      features: this.features,
       publicOrigin: () => this.publicOrigin(),
       packages: this.packages,
       setup: this.setup,

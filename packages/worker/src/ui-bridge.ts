@@ -198,6 +198,10 @@ export function createUiBridge(handlers: UiBridgeHandlers, options: UiBridgeOpti
     custom: () => Promise.resolve(undefined),
     getEditorText: () => "",
     getToolsExpanded: () => false,
+    // Tool expansion is transcript presentation owned by Laser. Extensions
+    // may request a state (pi-subagents does before every run); accepting that
+    // request as a no-op keeps the extension portable in RPC mode.
+    setToolsExpanded: () => {},
     getAllThemes: () => [],
     getTheme: () => undefined,
     setTheme: () => ({ success: false, error: NOT_AVAILABLE }),

@@ -9,7 +9,8 @@
  */
 
 import { WIRE_NAMESPACE } from "./identity.js";
-import type { PiExtensionMessage } from "./pi-extension.js";
+import type { PiExtensionMessage, PiExtensionModuleName } from "./pi-extension.js";
+import type { FeatureScope, FeatureState, GoalAction, SessionGoal } from "./features.js";
 import type { PushConfig, PushDeviceInfo, PushSubscriptionJson } from "./push.js";
 
 // ---------- Shared value types (no Pi types allowed here) ----------
@@ -73,7 +74,7 @@ export interface MessageSpeaker {
 export type SessionAttention = "idle" | "working" | "waiting_for_input" | "error" | "finished_unread";
 
 /**
- * Whether Pi may load a project's own `.pi` resources (see Pi's security.md).
+ * Whether Laser may apply a project's own `.laser` settings.
  *
  * `not_required` means the directory has nothing trust-gated in it, so there is
  * nothing to ask about. `unknown` means it does and nobody has decided yet: the
@@ -174,6 +175,12 @@ export interface SessionState {
   autoCompactionEnabled: boolean;
   messageCount: number;
   pendingMessageCount: number;
+  /**
+   * Active reviewed engine modules at the moment this snapshot was produced.
+   * Included in the request result because startup notifications can arrive
+   * before a client has created its local session view.
+   */
+  capabilities?: PiExtensionModuleName[];
   /** `tokens`/`percent` are null right after compaction, before the next response. */
   contextUsage?: { tokens: number | null; contextWindow: number; percent: number | null };
 }
@@ -321,6 +328,14 @@ export interface SettingDescriptor {
   managed?: boolean;
   /** Documented by Pi as advanced or JSON-only; collapsed by default. */
   advanced?: boolean;
+  /** Laser-owned placement. Internal and unsupported settings never become fields. */
+  audience?: "general" | "advanced";
+}
+
+export interface SettingClassification {
+  key: string;
+  disposition: "general" | "advanced" | "internal" | "unsupported";
+  reason: string;
 }
 
 export interface SettingsSection {
@@ -330,12 +345,14 @@ export interface SettingsSection {
 }
 
 export interface SettingsCatalog {
-  /** Version of the Pi the worker is pinned to. */
-  piVersion: string;
+  /** Version of the internal engine adapter that defined this catalog. */
+  engineVersion: string;
   sections: SettingsSection[];
   fields: SettingDescriptor[];
   /** Every top-level key of the pinned Pi's `Settings` interface. */
   topLevelKeys: string[];
+  /** Exhaustive classification of the pinned engine schema. */
+  classifications: SettingClassification[];
 }
 
 export interface SettingsFileState {
@@ -350,7 +367,7 @@ export interface SettingsFileState {
 /** Why project settings are (or are not) in play, in words a person can act on. */
 export interface SettingsProjectTrust {
   trusted: boolean;
-  /** True when laser may write `.pi/settings.json` for this directory. */
+  /** True when Laser may write `.laser/settings.json` for this directory. */
   writable: boolean;
   reason: string;
 }
@@ -701,7 +718,7 @@ export interface KeybindingsSnapshot {
   /** The file the agent reads them from. Shown so a person can find it. */
   path: string;
   /** Version of the agent the ids and defaults came from. */
-  piVersion: string;
+  engineVersion: string;
   bindings: KeybindingDescriptor[];
   conflicts: KeybindingConflict[];
   /** False when laser will not write the file; `reason` says why, for a person. */
@@ -720,17 +737,17 @@ export type KeybindingChange = { id: string; op: "set"; keys: string[] } | { id:
 
 /**
  * Something `/` can run. `source` says where it came from so the popover can
- * group it: `laser` is the app's own, `extension` a package's registered
+ * group it: `laser` is the app's own, `feature` a built-in capability's
  * command, `prompt` a prompt template, `skill` a skill file.
  */
 export interface CommandInfo {
   /** What a person types after the slash, without the slash. */
   name: string;
   description?: string;
-  source: typeof WIRE_NAMESPACE | "extension" | "prompt" | "skill";
+  source: typeof WIRE_NAMESPACE | "feature" | "prompt" | "skill";
   /** e.g. `<provider/model>`; shown after the name, never sent. */
   argumentHint?: string;
-  /** Package or file the command came from, for the row's second line. */
+  /** Product feature or project source, for the row's second line. */
   origin?: string;
 }
 
@@ -823,6 +840,8 @@ export interface ClientRequests {
     result: { editorText?: string; cancelled: boolean };
   };
   "pi/session/rename": { params: { path: string; name: string }; result: {} };
+  /** Permanently remove a closed persisted transcript. */
+  "pi/session/delete": { params: { path: string }; result: {} };
   /** Persisted Pi session entries (opaque; see Pi's session-format.md) for transcript hydration. */
   "pi/session/entries": { params: { path: string }; result: { entries: unknown[] } };
   "pi/session/compact": { params: { path: string; instructions?: string }; result: {} };
@@ -884,6 +903,18 @@ export interface ClientRequests {
     params: { cwd: string; scope: SettingsScope; changes: SettingChange[] };
     result: { snapshot: SettingsSnapshot };
   };
+
+  /** Laser-owned capabilities. Implementations and package sources are deliberately absent. */
+  "feature/list": { params: { cwd?: string }; result: { features: FeatureState[] } };
+  "feature/set": {
+    /** `null` clears a project override and follows the global choice again. */
+    params: { id: string; enabled: boolean | null; scope: FeatureScope; cwd?: string };
+    result: { features: FeatureState[]; restartPending: boolean };
+  };
+
+  /** One durable objective belongs to one session. */
+  "session/goal/get": { params: { path: string }; result: { goal: SessionGoal | null } };
+  "session/goal/action": { params: { path: string; action: GoalAction }; result: { goal: SessionGoal | null } };
 
   "pi/packages/list": { params: { cwd: string }; result: { packages: PackageEntry[] } };
   /** Installs and adds the source to settings at `scope`. Progress arrives as `pi/packages/progress`. */

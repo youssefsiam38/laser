@@ -67,6 +67,7 @@ export function ComposerBar({ className, ...props }: ComponentProps<"div">) {
         "flex flex-col rounded-2xl border border-line bg-surface shadow-float transition-[border-color] duration-(--motion-instant)",
         "focus-within:border-[color-mix(in_oklab,var(--line)_40%,var(--ink-3))]",
         "data-[dragging=true]:border-dashed data-[dragging=true]:border-live",
+        "data-[dictation-insert=true]:border-live data-[dictation-insert=true]:ring-2 data-[dictation-insert=true]:ring-live/20",
         className,
       )}
       {...props}
@@ -273,6 +274,8 @@ export interface ComposerVoiceProps extends Omit<ComponentProps<"span">, "childr
   /** Microphone RMS level, 0…1. */
   level: number;
   phase: "starting" | "listening" | "transcribing";
+  /** Finished phrases currently crossing from audio to text. */
+  pending?: number | undefined;
   /** Epoch ms the recording started; drives the elapsed readout. */
   startedAt: number;
 }
@@ -283,7 +286,7 @@ export interface ComposerVoiceProps extends Omit<ComponentProps<"span">, "childr
  * word while the audio is being transcribed. Height, never scale: a bar is
  * 2px wide and 3–16px tall. Under reduced motion the bars hold their level.
  */
-export function ComposerVoice({ level, phase, startedAt, className, ...props }: ComposerVoiceProps) {
+export function ComposerVoice({ level, phase, pending = 0, startedAt, className, ...props }: ComposerVoiceProps) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -318,6 +321,12 @@ export function ComposerVoice({ level, phase, startedAt, className, ...props }: 
         <ShimmerLabel className="font-medium">{label}</ShimmerLabel>
       ) : (
         <span className="font-medium text-ink">{label}</span>
+      )}
+      {pending > 0 && phase === "listening" && (
+        <span className="flex items-center gap-1 text-live">
+          <span aria-hidden="true" className="size-1.5 rounded-full bg-live motion-safe:animate-attention" />
+          {pending} {pending === 1 ? "phrase" : "phrases"}
+        </span>
       )}
       {phase !== "transcribing" && <span className="typed text-ink-3">{duration(Math.max(0, now - startedAt)).replace(/\.\ds$/, "s")}</span>}
     </span>

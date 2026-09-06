@@ -32,6 +32,8 @@ export interface WorkerPoolOptions {
   nodeBinary?: string;
   /** Extra environment for every worker (the bundled package manager, M10-T5). */
   env?: Readonly<Record<string, string>>;
+  /** Environment resolved at spawn time, so project feature overrides apply. */
+  envForCwd?: (cwd: string) => Readonly<Record<string, string>>;
   onNotification: (cwd: string, notification: JsonRpcNotification) => void;
   onStderr?: (cwd: string, text: string) => void;
   /** Called for every lifecycle change, after the notification is sent. */
@@ -333,7 +335,9 @@ export class WorkerPool {
       ...(this.options.subagentsTempRoot ? { subagentsTempRoot: this.options.subagentsTempRoot } : {}),
       ...(this.options.workerMain ? { workerMain: this.options.workerMain } : {}),
       ...(this.options.nodeBinary ? { nodeBinary: this.options.nodeBinary } : {}),
-      ...(this.options.env ? { env: this.options.env } : {}),
+      ...((this.options.env || this.options.envForCwd)
+        ? { env: { ...(this.options.env ?? {}), ...(this.options.envForCwd?.(entry.cwd) ?? {}) } }
+        : {}),
       ...(projectTrusted !== undefined ? { projectTrusted } : {}),
       onNotification: (n) => this.onWorkerNotification(entry, n),
       onExit: (code, signal) => this.onExit(entry, client, code, signal),

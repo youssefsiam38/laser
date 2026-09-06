@@ -92,6 +92,7 @@ export {
   describeMicrophoneError,
   pickRecorderMimeType,
   placePhraseAtCaret,
+  removeRuntimeAppend,
   transcribeTransport,
   type CaretPlacement,
   type DictationPhase,
@@ -115,10 +116,13 @@ export {
 
 export {
   clearDictationError,
+  finishActiveDictation,
   getMobileDictationAdapter,
   setDictationPhraseSink,
   setDictationScope,
   useDictationError,
   useDictationLevel,
+  useDictationPending,
   useDictationPhase,
 } from "./mobile-dictation.js";
+export { PhraseDictationAdapter, PhraseSegmenter, encodePcmWav } from "./phrase-dictation.js";

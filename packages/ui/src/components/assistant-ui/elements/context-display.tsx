@@ -21,10 +21,13 @@
  *   - `ContextRingButton` binds the ring to the open session and makes it the
  *     compact control when the session is idle, as the composer had.
  */
-import { createContext, useContext, useMemo, type ComponentProps, type ReactNode } from "react";
+import { createContext, useContext, useMemo, useState, type ComponentProps, type ReactNode } from "react";
+import { BatteryMedium, BrainCircuit, Cpu, Database, Gauge, Sparkles, TriangleAlert, type LucideIcon } from "lucide-react";
 
 import { toneForPercent, type RingTone } from "@/components/status";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { percent as formatPercent, tokens as formatTokens } from "@/format";
 import { cn } from "@/lib/utils";
 import { useLaserStable, useSessionMeta } from "@/runtime";
@@ -198,9 +201,8 @@ const ContextDisplay = {
 };
 
 /**
- * The open session's context ring. Idle: click compacts (`pi/session/compact`);
- * while a turn runs or a compaction is in flight it only informs. Renders
- * nothing before the first response reports usage.
+ * The open session's context ring. Clicking opens the same detailed inspector
+ * from the top bar and composer; compaction is an explicit action inside it.
  */
 function ContextRingButton({
   className,
@@ -216,23 +218,128 @@ function ContextRingButton({
   stroke?: number | undefined;
 }) {
   const { actions } = useLaserStable();
-  const { contextUsage, running, compacting } = useSessionMeta();
+  const { contextUsage, running, compacting, model } = useSessionMeta();
+  const [open, setOpen] = useState(false);
   if (!contextUsage) return null;
   const idle = !running && !compacting && contextUsage.percent !== null;
+  const remaining = contextUsage.tokens === null ? null : Math.max(0, contextUsage.contextWindow - contextUsage.tokens);
   return (
-    <ContextDisplayRing
-      window={contextUsage.contextWindow}
-      tokens={contextUsage.tokens}
-      percent={contextUsage.percent}
-      showLabel={showLabel}
-      side={side}
-      {...(size !== undefined ? { size } : {})}
-      {...(stroke !== undefined ? { stroke } : {})}
-      hint={compacting ? "Compacting…" : idle ? "Click to compact the context now." : undefined}
-      disabled={!idle}
-      onClick={() => void actions.compact()}
-      className={cn("disabled:cursor-default", compacting && "motion-safe:animate-attention", className)}
-    />
+    <>
+      <ContextDisplayRing
+        window={contextUsage.contextWindow}
+        tokens={contextUsage.tokens}
+        percent={contextUsage.percent}
+        showLabel={showLabel}
+        side={side}
+        {...(size !== undefined ? { size } : {})}
+        {...(stroke !== undefined ? { stroke } : {})}
+        hint="Open context details"
+        onClick={() => setOpen(true)}
+        className={cn("cursor-pointer", compacting && "motion-safe:animate-attention", className)}
+      />
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader className="gap-3">
+            <div className="flex items-center gap-3">
+              <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-live/10 text-live">
+                <BrainCircuit aria-hidden="true" className="size-5" />
+              </span>
+              <div className="min-w-0">
+                <DialogTitle>Context window</DialogTitle>
+                <DialogDescription className="mt-1">The working memory available to this session’s current model.</DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+          <div className="overflow-hidden rounded-xl border border-line bg-surface">
+            <div className="flex items-center justify-between gap-4 p-4">
+              <div className="min-w-0">
+                <p className="eyebrow">Window health</p>
+                <p className="mt-1 text-lg font-semibold text-ink">
+                  {contextUsage.percent === null ? "Measuring usage" : `${formatPercent(contextUsage.percent)} filled`}
+                </p>
+                <p className="mt-1 text-sm text-ink-2">
+                  {contextUsage.tokens === null
+                    ? `Capacity ${formatTokens(contextUsage.contextWindow)}`
+                    : `${formatTokens(contextUsage.tokens)} of ${formatTokens(contextUsage.contextWindow)} tokens in use`}
+                </p>
+              </div>
+              <span className={cn("grid size-10 shrink-0 place-items-center rounded-xl bg-surface-2", TONE_TEXT[toneForPercent(contextUsage.percent ?? 0)])}>
+                <Gauge aria-hidden="true" className="size-5" />
+              </span>
+            </div>
+            <div className="h-2 overflow-hidden bg-line">
+              <div className={cn("h-full transition-[width] duration-(--motion-slow) motion-reduce:transition-none", TONE_BAR[toneForPercent(contextUsage.percent ?? 0)])} style={{ width: `${contextUsage.percent ?? 0}%` }} />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <ContextStat icon={BrainCircuit} label="Used" value={contextUsage.tokens === null ? "Unknown" : formatTokens(contextUsage.tokens)} detail="Conversation and tool output" />
+            <ContextStat icon={BatteryMedium} label="Remaining" value={remaining === null ? "Unknown" : formatTokens(remaining)} detail="Room before the limit" />
+            <ContextStat icon={Database} label="Capacity" value={formatTokens(contextUsage.contextWindow)} detail="Model context window" />
+            <ContextStat icon={Gauge} label="Filled" value={contextUsage.percent === null ? "Unknown" : formatPercent(contextUsage.percent)} detail="Current window pressure" />
+          </div>
+          <ContextGuidance percent={contextUsage.percent} />
+          {model && (
+            <div className="flex items-center gap-3 rounded-xl border border-line bg-surface px-3 py-2.5">
+              <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-surface-2 text-ink-2">
+                <Cpu aria-hidden="true" className="size-4" />
+              </span>
+              <div className="min-w-0">
+                <p className="eyebrow">Current model</p>
+                <p className="mt-0.5 truncate typed text-ink">{model.provider}/{model.id}</p>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setOpen(false)}>Close</Button>
+            <Button disabled={!idle} onClick={() => { void actions.compact(); setOpen(false); }}>
+              {compacting ? "Compacting…" : running ? "Available after this turn" : "Compact context"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function ContextStat({ icon: Icon, label, value, detail }: { icon: LucideIcon; label: string; value: string; detail: string }) {
+  return (
+    <div className="rounded-xl border border-line bg-surface p-3">
+      <div className="flex items-start gap-2.5">
+        <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-surface-2 text-live">
+          <Icon aria-hidden="true" className="size-4" />
+        </span>
+        <div className="min-w-0">
+          <p className="eyebrow">{label}</p>
+          <p className="mt-1 typed text-ink">{value}</p>
+        </div>
+      </div>
+      <p className="mt-2 text-xs leading-4 text-ink-3">{detail}</p>
+    </div>
+  );
+}
+
+function ContextGuidance({ percent }: { percent: number | null }) {
+  const critical = percent !== null && percent >= 90;
+  const warm = percent !== null && percent >= 70;
+  const Icon = critical || warm ? TriangleAlert : Sparkles;
+  const title = percent === null ? "Usage is being measured" : critical ? "Compaction recommended" : warm ? "Plan to compact soon" : "Plenty of working room";
+  const description = percent === null
+    ? "The next model response will report how much context is in use."
+    : critical
+      ? "Compact before useful earlier detail is pushed out of the model’s window."
+      : warm
+        ? "Compaction will summarize earlier work and recover room when you need it."
+        : "The session has comfortable room for more conversation and tool output.";
+  return (
+    <div className={cn("flex items-start gap-3 rounded-xl border p-3", critical ? "border-danger/40 bg-danger/5" : warm ? "border-attention/40 bg-attention/5" : "border-line bg-surface-2")}>
+      <span className={cn("grid size-8 shrink-0 place-items-center rounded-lg bg-surface", critical ? "text-danger" : warm ? "text-attention" : "text-live")}>
+        <Icon aria-hidden="true" className="size-4" />
+      </span>
+      <div className="min-w-0">
+        <p className="text-sm font-medium text-ink">{title}</p>
+        <p className="mt-1 text-sm leading-5 text-ink-2">{description}</p>
+      </div>
+    </div>
   );
 }
 

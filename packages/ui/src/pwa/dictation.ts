@@ -68,6 +68,16 @@ export function placePhraseAtCaret(text: string, caret: number | undefined, phra
   return { text: `${before}${inserted}${after}`, caret: at + inserted.length };
 }
 
+/** Undo assistant-ui's end append before placing a phrase at the live caret. */
+export function removeRuntimeAppend(text: string, phrase: string): string {
+  const trimmed = phrase.trim();
+  if (!trimmed) return text;
+  const spaced = ` ${trimmed}`;
+  if (text.endsWith(spaced)) return text.slice(0, -spaced.length);
+  if (text.endsWith(trimmed)) return text.slice(0, -trimmed.length);
+  return text;
+}
+
 /** Words for a `getUserMedia` failure, in the app's voice. */
 export function describeMicrophoneError(error: unknown): { title: string; body: string } {
   const name = error instanceof Error ? error.name : "";
@@ -91,6 +101,8 @@ export function describeMicrophoneError(error: unknown): { title: string; body: 
 }
 
 export interface TranscribeTransport {
+  /** Fail before opening the microphone when the required provider is unavailable. */
+  check?(): Promise<void>;
   begin(mimeType: string): Promise<string>;
   chunk(id: string, data: string): Promise<void>;
   end(id: string): Promise<string>;
@@ -114,6 +126,11 @@ export function transcribeTransport(client: RawRequestClient, scope: () => Trans
     return current;
   };
   return {
+    check: async () => {
+      const { cwd } = need();
+      const status = await extendedRequest(client, "pi/transcribe/status", { cwd });
+      if (!status.available) throw new Error(status.reason ?? "Dictation is not available for this project.");
+    },
     begin: (mimeType) => {
       const { cwd, path } = need();
       return extendedRequest(client, "pi/transcribe/begin", {
@@ -221,6 +238,7 @@ export class MediaRecorderDictationAdapter implements DictationAdapter {
     const start = async () => {
       phase("starting");
       try {
+        await o.transport.check?.();
         stream = await (o.getMedia ?? (() => navigator.mediaDevices.getUserMedia({ audio: true })))();
         if (cancelled) {
           teardown();

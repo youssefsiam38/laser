@@ -2,18 +2,10 @@
 /**
  * Settings → Trust (M4-T7, the trust-store half).
  *
- * A project's `.pi` directory can carry settings, extensions, skills, prompts
- * and system-prompt text that run as soon as the agent opens the directory.
- * The agent gates that behind a decision; the SDK the worker uses does not
- * ask, so the host decides before it starts a worker and this screen is where
- * the decision is made and changed.
- *
- * What is *not* here matters as much. laser reads the agent's own
- * `trust.json` and never writes it (`packages/host/src/trust.ts`): that file
- * has a lock protocol owned by a program that may be running, and taking a
- * second writer to it is the bug in AGENTS.md invariant 8. So a decision made
- * here is laser's, kept in laser's project registry, and the row says so
- * rather than implying it changed the agent's terminal behaviour too.
+ * A project's `.laser/settings.json` can affect the agent when the project is
+ * opened. The host decides whether Laser may apply it before starting a worker;
+ * this screen is where that product-owned decision is reviewed and changed.
+ * Pi trust state and `<project>/.pi` are deliberately ignored.
  */
 import { useCallback, useMemo, useState } from "react";
 import { RefreshCw, ShieldAlert, ShieldCheck, ShieldQuestion, ShieldX } from "lucide-react";
@@ -101,7 +93,7 @@ export function TrustTab() {
       <div className="mx-auto flex max-w-200 flex-col gap-5 px-6 py-6">
         <div className="flex flex-col gap-1">
           <p className="text-xs leading-5 text-ink-3">
-            A project can ship its own settings, extensions, skills and prompts. Trusting it lets the agent load them
+            A project can ship its own settings, tools, instructions and automations. Trusting it lets the agent load them
             when it opens that directory; declining runs the agent with your configuration only. You can change your
             mind here at any time — it takes effect the next time the project&rsquo;s worker starts.
           </p>

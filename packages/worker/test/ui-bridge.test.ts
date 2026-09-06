@@ -12,6 +12,8 @@ type Ctx = {
   editor: (title: string, prefill?: string) => Promise<string | undefined>;
   custom: () => Promise<unknown>;
   notify: (message: string, level?: "info" | "warning" | "error") => void;
+  getToolsExpanded: () => boolean;
+  setToolsExpanded: (expanded: boolean) => void;
 };
 
 /** Test harness: a bridge plus the requests and fire-and-forget events it produced. */
@@ -76,6 +78,13 @@ describe("ui bridge", () => {
     // A member added by a future Pi release must not throw inside an extension.
     expect(typeof extended.someFutureMethod).toBe("function");
     expect(extended.someFutureMethod?.()).toBeUndefined();
+
+    // Pi spreads the supplied UI context into a plain wrapper. Methods that a
+    // real extension calls must therefore be own properties, not Proxy-only
+    // fallbacks. pi-subagents calls this before executing every run.
+    expect(Object.hasOwn(ctx, "setToolsExpanded")).toBe(true);
+    expect(() => ctx.setToolsExpanded(false)).not.toThrow();
+    expect(ctx.getToolsExpanded()).toBe(false);
 
     // Pending dialogs are visible for reattach, and dispose settles them safely.
     const p = ctx.select("Pick", ["a"]);

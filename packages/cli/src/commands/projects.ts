@@ -6,7 +6,7 @@
  * host build predates those calls, the list is still shown — derived from the
  * session catalog — and only the mutating verbs refuse, with the reason.
  */
-import { PRODUCT_NAME } from "@lasercode/protocol";
+import { PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PROJECT_DIR_NAME } from "@lasercode/protocol";
 import { resolve } from "node:path";
 import type { ProjectInfo, WorkerInfo } from "@lasercode/protocol";
 import { bool } from "../args.js";
@@ -82,8 +82,8 @@ A project is a directory ${PRODUCT_NAME} runs an agent in — one agent per dire
 never two. Adding one pins it so it stays in the sidebar even before it has any
 sessions.
 
-\`trust\` answers the project-trust question for a directory: whether the agent
-may load that project's own configuration, extensions and skills. \`--no\`
+\`trust\` answers the project-trust question for a directory: whether ${PRODUCT_DISPLAY_NAME}
+may apply that project's own \`${PROJECT_DIR_NAME}/settings.json\`. \`--no\`
 declines.
 `,
   positionals: [
@@ -97,7 +97,7 @@ declines.
   examples: [
     { note: "what the app shows", command: `${PRODUCT_NAME} projects` },
     { note: "pin this directory", command: `${PRODUCT_NAME} projects add .` },
-    { note: "trust a project's own .pi resources", command: `${PRODUCT_NAME} projects trust ~/code/api` },
+    { note: `trust a project's ${PRODUCT_DISPLAY_NAME} settings`, command: `${PRODUCT_NAME} projects trust ~/code/api` },
   ],
   async run({ term, paths, args }) {
     const { verb, rest } = verbOf(args.positionals);

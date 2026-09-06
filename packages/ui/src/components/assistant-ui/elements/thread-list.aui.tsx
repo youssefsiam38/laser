@@ -18,10 +18,10 @@
  *     from the laser store for that path, because the runtime's item state
  *     has no such fields.
  *   - The more-menu offers Rename, Archive (client-local; Pi has no verb) and
- *     Copy path. Delete is absent: the transcript file is the user's history
- *     and `adapter.delete` refuses.
+ *     Copy path. Archived rows add an explicitly confirmed permanent delete;
+ *     the host validates the path against Pi's session catalogue first.
  *   - Archived sessions live under a collapsible "Archived" group at the end
- *     with Unarchive; the registry copy had none.
+ *     with Unarchive and Delete; the registry copy had none.
  *   - Colours, sizes and durations read tokens; the running spinner became
  *     the status dot's sweep.
  */
@@ -34,7 +34,7 @@ import {
   useAuiState,
 } from "@assistant-ui/react";
 import type { SessionAttention } from "@lasercode/protocol";
-import { Archive, ArchiveRestore, ChevronRight, Copy, EllipsisVertical, Pencil, Plus } from "lucide-react";
+import { Archive, ArchiveRestore, ChevronRight, Copy, EllipsisVertical, EyeOff, Pencil, Plus, Trash2 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type FC } from "react";
 
 import { InlineRename } from "@/components/shell/InlineRename";
@@ -46,6 +46,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton, SkeletonText } from "@/components/ui/skeleton";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { dateTime, relativeTime, shortCwd } from "@/format";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
@@ -200,6 +202,9 @@ interface ProjectGroupProps {
 }
 
 const ProjectGroup = memo(function ProjectGroup({ group, first, collapsed, isCurrent, canCreate, editing, onEdit, onOpen, onNewSession }: ProjectGroupProps) {
+  const aui = useAui();
+  const { actions, archive } = useLaserStable();
+  const sessions = useLaserState((state) => state.sessions);
   const threadIds = useAuiState((s) => s.threads.threadIds);
   const id = groupDomId(group.cwd);
   const listId = `${id}-list`;
@@ -240,6 +245,30 @@ const ProjectGroup = memo(function ProjectGroup({ group, first, collapsed, isCur
             <Plus />
           </TooltipIconButton>
         )}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <TooltipIconButton tooltip={`Actions for ${group.name}`} size="icon-xs" className="text-ink-3 opacity-0 group-hover/project:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100 [@media(pointer:coarse)]:opacity-100">
+              <EllipsisVertical />
+            </TooltipIconButton>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-56">
+            <DropdownMenuItem
+              disabled={count === 0}
+              onSelect={() => {
+                const paths = sessions.filter((session) => session.cwd === group.cwd).map((session) => session.path);
+                paths.forEach((path) => archive.add(path));
+                void aui.threads.reload();
+                actions.toast("info", `${paths.length} chat${paths.length === 1 ? "" : "s"} archived in ${group.name}.`);
+              }}
+            >
+              <Archive /> Archive chats
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => void actions.removeProject(group.cwd)}>
+              <EyeOff /> Remove project
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <TooltipIconButton
           tooltip={collapsed ? "Expand" : "Collapse"}
           size="icon-xs"
@@ -472,8 +501,10 @@ const menuItemClass = cn(
 );
 
 function ThreadListItemMore({ path, title, archived, onRename }: { path: string | undefined; title: string; archived: boolean; onRename(): void }) {
+  const aui = useAui();
   const { actions } = useLaserStable();
   const { copy } = useCopy();
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const copyPath = () => {
     if (!path) return;
     void copy(path).then((ok) => actions.toast(ok ? "info" : "error", ok ? "Session path copied" : "Could not copy the path"));
@@ -505,12 +536,17 @@ function ThreadListItemMore({ path, title, archived, onRename }: { path: string 
           </ThreadListItemMorePrimitive.Item>
           <ThreadListItemMorePrimitive.Separator className="-mx-1 my-1 h-px bg-line" />
           {archived ? (
-            <ThreadListItemPrimitive.Unarchive asChild>
-              <ThreadListItemMorePrimitive.Item className={menuItemClass}>
-                <ArchiveRestore />
-                Unarchive
+            <>
+              <ThreadListItemPrimitive.Unarchive asChild>
+                <ThreadListItemMorePrimitive.Item className={menuItemClass}>
+                  <ArchiveRestore />
+                  Unarchive
+                </ThreadListItemMorePrimitive.Item>
+              </ThreadListItemPrimitive.Unarchive>
+              <ThreadListItemMorePrimitive.Item className={cn(menuItemClass, "text-danger focus:text-danger")} onSelect={() => setDeleteOpen(true)}>
+                <Trash2 /> Delete permanently
               </ThreadListItemMorePrimitive.Item>
-            </ThreadListItemPrimitive.Unarchive>
+            </>
           ) : (
             <ThreadListItemPrimitive.Archive asChild>
               <ThreadListItemMorePrimitive.Item className={menuItemClass}>
@@ -521,6 +557,31 @@ function ThreadListItemMore({ path, title, archived, onRename }: { path: string 
           )}
         </ThreadListItemMorePrimitive.Content>
       </ThreadListItemMorePrimitive.Root>
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete “{title}”?</DialogTitle>
+            <DialogDescription>This permanently removes the saved transcript from disk. It cannot be recovered here.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setDeleteOpen(false)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              disabled={!path}
+              onClick={() => {
+                try {
+                  aui.threadListItem.delete();
+                  setDeleteOpen(false);
+                } catch (error) {
+                  actions.toast("error", error instanceof Error ? error.message : String(error));
+                }
+              }}
+            >
+              Delete transcript
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

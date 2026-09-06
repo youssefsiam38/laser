@@ -2,7 +2,6 @@ import type { CollectionItem, CollectionPanel } from "@lasercode/protocol";
 import { Ellipsis, FileText } from "lucide-react";
 import { useMemo } from "react";
 
-import { WebSearch } from "@/components/assistant-ui/elements/web-search";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { cn } from "@/lib/utils";
@@ -24,19 +23,10 @@ export interface CollectionBodyProps {
 export function CollectionBody({ panel, onAct, onOpenRef }: CollectionBodyProps) {
   const total = panel.total ?? panel.items.length;
   const act = (item: CollectionItem, actionId: string) => onAct(actionId, item.id);
-  // A web search is a collection whose rows are pages, and reading it as
-  // "primary / secondary / meta" throws away the one thing a person scans for
-  // — the domain. `pi-web-access` names itself in `source` (the module sets it
-  // in packages/pi-extension/src/modules/web-access.ts), so the specialised
-  // rows are chosen by what produced the panel, never guessed from its shape.
-  // The footer stays: declared actions belong to the panel, not to the layout.
-  const web = panel.source === "pi-web-access";
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
       <div data-island-scroll className="min-h-0 flex-1 overflow-auto">
-        {web ? (
-          <WebSearch panel={panel} onOpenRef={onOpenRef} />
-        ) : panel.items.length === 0 ? (
+        {panel.items.length === 0 ? (
           <p className="py-6 text-center text-sm text-ink-3">Nothing found.</p>
         ) : panel.layout === "table" ? (
           <Table items={panel.items} onOpenRef={onOpenRef} onAct={act} />
@@ -49,14 +39,10 @@ export function CollectionBody({ panel, onAct, onOpenRef }: CollectionBodyProps)
         )}
       </div>
       <div className="flex flex-wrap items-center gap-3">
-        {/* `WebSearch` counts its own sources; a second count beside it reads
-            as two different numbers about the same thing. */}
-        {web ? null : (
-          <span className="typed text-ink-3 tnum">
-            {total > panel.items.length ? `${panel.items.length} of ${total}` : `${panel.items.length} ${panel.items.length === 1 ? "item" : "items"}`}
-            {panel.cursor ? " · more available" : ""}
-          </span>
-        )}
+        <span className="typed text-ink-3 tnum">
+          {total > panel.items.length ? `${panel.items.length} of ${total}` : `${panel.items.length} ${panel.items.length === 1 ? "item" : "items"}`}
+          {panel.cursor ? " · more available" : ""}
+        </span>
         <ActionButtons actions={panel.actions} onAct={(id) => onAct(id)} className="ms-auto" />
       </div>
     </div>

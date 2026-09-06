@@ -2,7 +2,7 @@
 /**
  * Reasoning (`reasoning`, runtime-bound): the collapsible "Reasoning · 3.2s"
  * block in the transcript. Streams open with the thinking indicator in the
- * header, collapses by default once complete, and never loses the reader's
+ * header, stays expanded so the full reasoning remains visible, and never loses the reader's
  * place: the thread viewport is scroll-locked for the disclosure.
  *
  * Divergences from the registry copy:
@@ -18,6 +18,7 @@ import { memo, useCallback, useRef, type ReactNode } from "react";
 
 import { MarkdownText } from "@/components/assistant-ui/elements/markdown-text";
 import { useElapsed } from "@/components/thread/timing";
+import { useLaserState, useReasoningExpanded } from "@/runtime";
 
 import {
   ReasoningContent,
@@ -83,8 +84,10 @@ export interface ReasoningGroupProps {
  */
 function ReasoningGroupImpl({ timingKey, running, children }: ReasoningGroupProps) {
   const elapsed = useElapsed(timingKey, running ? "running" : "done");
+  const path = useLaserState((state) => state.current);
+  const defaultOpen = useReasoningExpanded(path);
   return (
-    <ReasoningRoot streaming={running}>
+    <ReasoningRoot streaming={running} defaultOpen={defaultOpen}>
       <ReasoningTrigger active={running} durationMs={elapsed} />
       <ReasoningPanel streaming={running}>{children}</ReasoningPanel>
     </ReasoningRoot>

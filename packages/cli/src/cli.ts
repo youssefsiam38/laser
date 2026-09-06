@@ -7,9 +7,8 @@
  *   laser --<flag> …       → `up` with those flags (so `laser --no-open` works)
  *   laser <command> …      → that command
  *
- * The command name comes first. That is what makes `laser pi --help` reach
- * Pi rather than laser: once the name is read, a passthrough command owns
- * every remaining token.
+ * The command name comes first; everything else is parsed from Laser's own
+ * command table.
  */
 import { ENV, PRODUCT_NAME } from "@lasercode/protocol";
 import { distance, parseArgs, type ParsedArgs } from "./args.js";
@@ -24,9 +23,7 @@ import { hostCommands } from "./commands/host.js";
 import { logsCommand } from "./commands/logs.js";
 import { metaCommands } from "./commands/meta.js";
 import { missionsCommand } from "./commands/missions.js";
-import { packagesCommand } from "./commands/packages.js";
 import { planCommand } from "./commands/plan.js";
-import { piCommand } from "./commands/pi.js";
 import { projectsCommand } from "./commands/projects.js";
 import { relayCommand } from "./commands/relay.js";
 import { runsCommand } from "./commands/runs.js";
@@ -42,15 +39,11 @@ export const COMMANDS: readonly Command[] = [
   missionsCommand,
   projectsCommand,
   settingsCommand,
-  packagesCommand,
   relayCommand,
-  piCommand,
   doctorCommand,
   logsCommand,
   ...metaCommands,
 ];
-
-const EMPTY_ARGS: ParsedArgs = { flags: {}, positionals: [], rest: [], hasRest: false };
 
 export async function run(argv: readonly string[]): Promise<number> {
   const first = argv[0];
@@ -90,30 +83,6 @@ export async function run(argv: readonly string[]): Promise<number> {
       }),
       early(argv),
     );
-  }
-
-  if (command.passthrough) {
-    // No parsing at all: the command owns its arguments, including --help.
-    const term = new Terminal({ json: false, color: "auto" });
-    try {
-      const stray = leading.find((token) => token.startsWith("-") && !isPiPrefixFlag(token));
-      if (stray) {
-        throw new CliError(`${stray} cannot be used before \`${PRODUCT_NAME} ${command.name}\``, {
-          exitCode: ExitCode.Usage,
-          fix: `Everything after \`${command.name}\` goes to Pi. Only ${[...PI_PREFIX_FLAGS].join(", ")} are ${PRODUCT_NAME}'s there.`,
-        });
-      }
-      const result = await command.run({
-        term,
-        paths: resolvePaths(EMPTY_ARGS),
-        args: EMPTY_ARGS,
-        raw: rest,
-        commands: COMMANDS,
-      });
-      return typeof result === "number" ? result : ExitCode.Ok;
-    } catch (error) {
-      return fail(error, term);
-    }
   }
 
   let args: ParsedArgs;
@@ -178,14 +147,6 @@ export function scanLeadingGlobals(argv: readonly string[]): { leading: string[]
     }
   }
   return { leading, index: i };
-}
-
-/** Flags `laser pi` will consume before handing the rest to Pi. */
-const PI_PREFIX_FLAGS = new Set(["--global-pi", "--agent-dir", "--session-dir", "--subagents-temp-root"]);
-
-function isPiPrefixFlag(token: string): boolean {
-  const eq = token.indexOf("=");
-  return PI_PREFIX_FLAGS.has(eq >= 0 ? token.slice(0, eq) : token);
 }
 
 /** Closest command or topic name, for "did you mean". */

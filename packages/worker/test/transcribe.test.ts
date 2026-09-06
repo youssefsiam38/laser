@@ -99,7 +99,8 @@ describe("resolveTranscriptionKey", () => {
     ).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(TranscribeError);
     expect((error as TranscribeError).reason).toBe("oauth_key");
-    expect((error as TranscribeError).message).toContain("OAuth token");
+    expect((error as TranscribeError).message).toContain("ChatGPT account sign-in");
+    expect((error as TranscribeError).message).toContain("Settings → Providers and models");
   });
 
   it("names the OAuth providers a person actually signed in with", async () => {
@@ -122,8 +123,8 @@ describe("resolveTranscriptionKey", () => {
   it("says what to do when there is no key at all", async () => {
     const error = await resolveTranscriptionKey(config, keys()).catch((e: unknown) => e);
     expect((error as TranscribeError).reason).toBe("no_key");
-    expect((error as TranscribeError).message).toContain("OPENAI_API_KEY");
-    expect((error as TranscribeError).message).toContain(config.configPath);
+    expect((error as TranscribeError).message).toContain("OpenAI platform API key");
+    expect((error as TranscribeError).message).toContain("Settings → Providers and models");
   });
 });
 
@@ -278,16 +279,13 @@ describe("TranscribeService", () => {
     await expect(ending).resolves.toEqual({ text: "mine" });
   });
 
-  it("reports why dictation is unavailable instead of offering a button that fails", async () => {
-    const absent = new TranscribeService({
+  it("ships dictation as built in and reports a missing provider in product language", async () => {
+    const builtIn = new TranscribeService({
       keys: keys({ env: { OPENAI_API_KEY: "k" } }),
       config: loadTranscribeConfig({ XDG_CONFIG_HOME: configDir() }),
-      packagePresent: () => false,
     });
-    services.push(absent);
-    const status = await absent.status();
-    expect(status.available).toBe(false);
-    expect(status.reason).toContain("pi-gpt-transcribe is not installed");
+    services.push(builtIn);
+    await expect(builtIn.status()).resolves.toEqual({ available: true, provider: "openai" });
 
     const noKey = new TranscribeService({
       keys: keys({ providers: async () => [provider("openai-codex", { oauth: true })] }),
@@ -297,6 +295,7 @@ describe("TranscribeService", () => {
     const denied = await noKey.status();
     expect(denied.available).toBe(false);
     expect(denied.reason).toContain("openai-codex");
+    expect(denied.reason).not.toContain("pi-gpt-transcribe");
   });
 
   it("publishes and withdraws the in-process bridge the companion extension looks up", async () => {

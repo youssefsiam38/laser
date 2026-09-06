@@ -7,8 +7,9 @@ this file is how you obey them in code.
 Support for a community package is **a module, never a package**. There is one
 Pi extension in this repo, `@lasercode/pi-extension`, and it carries one module
 per package it knows about. Adding pi-web-access support meant adding
-`src/modules/web-access.ts` and one line in `src/modules/index.ts`. That is the
-whole ceremony, and it is deliberate: a second extension would mean a second
+one module and one line in `src/modules/index.ts`; D-61 later retired that
+adapter because its panel duplicated the transcript. That was the whole
+ceremony, and it is deliberate: a second extension would mean a second
 `session_start`, a second failure domain, and a second thing to install.
 
 ---
@@ -68,6 +69,7 @@ The three probes, in order of preference:
 
 ```ts
 // 1. A registered tool — the strongest signal, and the one that survives a rename.
+// This is the historical pi-web-access adapter's probe; D-61 retired its panel.
 pi.getAllTools().some((tool) => fromPackage(tool.sourceInfo, "pi-web-access"));
 
 // 2. A registered command.
@@ -166,11 +168,11 @@ import { PANEL_EVENT, type PanelEvent } from "@lasercode/protocol";
 
 const panel: PanelEvent = {
   v: 1,
-  id: `web-access:${searchId}`,          // stable; re-emit to update in place (R6)
+  id: `package:${recordId}`,             // stable; re-emit to update in place (R6)
   kind: "collection",
   intent: "inline",
-  source: "pi-web-access",               // the badge on the panel
-  title: `8 results for “noise protocol”`,
+  source: "example-package",             // the badge on the panel
+  title: "8 matching items",
   data: { layout: "list", items },       // kind-specific, strict JSON
 };
 pi.events.emit(PANEL_EVENT, panel);
@@ -208,11 +210,9 @@ whole and logged — clamp a long URL rather than lose the panel.
 
 ### Where to get the data
 
-Prefer the package's own persisted record over the tool result. pi-web-access
-writes every search, fetch and source-check as a custom session entry with
-`pi.appendEntry("web-search-results", …)`; that entry exists on every code path,
-while `details.curatedQueries` exists only on the curated one. Bracket the tool
-call and read what it appended:
+Prefer the package's own persisted record over the tool result. If a package
+writes a custom session entry on every code path while the tool details exist
+only on one path, bracket the tool call and read what it appended:
 
 ```ts
 pi.on("tool_execution_start", (event, ctx) => marks.set(event.toolCallId, entriesOf(ctx).length));
@@ -226,26 +226,32 @@ No ids to guess, and it keeps working when the tool is renamed.
 
 ---
 
-## 5. When the package cannot be driven at all
+## 5. When a capability needs a native Laser surface
 
-Some packages are terminal programs. pi-gpt-transcribe opens the microphone
+Some engine capabilities began as terminal programs. pi-gpt-transcribe opens the microphone
 from the Pi process, draws a TUI component and writes into Pi's own editor;
 pi-markdown-preview and `@xynogen/pix-display` are `ctx.ui.custom()` from top to
 bottom. `custom()` is not emulated (D-2) and never will be.
 
-For those, the module does **not** bridge. It does two things:
+For those, the module does **not** bridge presentation. It does two things:
 
-1. **Detects**, so the native affordance appears exactly where the package is.
-2. **Keeps the package's contract**, so the native implementation and the
+1. **Declares availability**, so the native affordance is part of Laser itself.
+2. **Keeps the capability contract**, so the native implementation and the
    terminal one stay the same product.
 
-pi-gpt-transcribe is the worked example. laser reimplements dictation —
+pi-gpt-transcribe is the worked example. Laser bundles its exact reviewed core
+and implements dictation —
 microphone and meter in the browser, key and network call in
-`packages/worker/src/transcribe.ts` — and keeps three things from the package:
+`packages/worker/src/transcribe.ts` — while keeping three things from upstream:
 its `config.json` (one edit serves both), its `WidgetState`
 (`{ level, pending, inserted, error, startedAt }`) as the waveform's contract,
-and its pre-send behaviour. Copying a contract is cheap; forking a product is
-not.
+and its phrase-at-a-time pre-send behaviour. Natural pauses cut phrases; requests
+can transcribe concurrently, but finished text is delivered in spoken order at
+the live composer caret so voice and keyboard edits can coexist. Sending waits
+for the last in-flight phrase rather than dropping it. Copying a contract is cheap; forking a product is
+not. Dictation is always present and never appears in the Features page. Settings
+→ Providers and models explains that it needs an OpenAI platform API key, and
+the microphone preflight reports the same requirement before recording starts.
 
 The rendering rules travel with the contract. A level meter must map RMS to
 decibels between −60 and −8 dBFS with a fast attack and a slow release
@@ -313,7 +319,7 @@ Rules for a bridge:
 | `panels` | the declared panel protocol | always | validates `laser:panel` → `laser/panel/upsert` |
 | `subagents` | pi-subagents registries and its rpc bus | `globalThis` symbols | `laser/subagents/event` |
 | `transcribe` | pi-gpt-transcribe | the `/transcribe` command | detection + the pre-send transform |
-| `web-access` | pi-web-access | its registered tools | `collection` panels for searches, fetches and source checks |
+| `web-access` | pi-web-access | retired by D-61 | no module; the transcript tool disclosure is the single presentation |
 
 ---
 

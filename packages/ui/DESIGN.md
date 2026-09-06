@@ -8,9 +8,8 @@ decision in `STATUS_DETAILED.md`.
 > shadow and motion are no longer values written in this file: they are
 > **tokens the person can change in Settings**, compiled from a preset by
 > `src/theme/`, and their contract is [`docs/ux-theme.md`](../../docs/ux-theme.md).
-> The default preset is *graphite*, not the "Ground Station" palette below,
-> and the default faces are Inter and JetBrains Mono, not Host Grotesk and
-> Martian Mono. The tables in "Tokens" and the family names in "Type" are kept
+> The default preset is *Laser*, with Host Grotesk and Martian Mono as its
+> default faces. The tables in "Tokens" and the family names in "Type" are kept
 > as the **reference preset** — the proportions, roles and contrast floors
 > every preset must still satisfy — and are no longer the shipped values. What
 > is binding here and everywhere is the *shape*: which token carries which
@@ -86,11 +85,11 @@ timestamps, hints, durations, the "waiting for you" subtitle — and measured
 
 ## Type
 
-- UI and body: the theme's `--font-sans` (**Inter** by default; the reference
-  preset above is Host Grotesk), 14px base, 1.5 line height, transcript prose
+- UI and body: the theme's `--font-sans` (**Host Grotesk** by default), 14px
+  base, 1.5 line height, transcript prose
   15px at max 72ch.
 - Typed things (paths, ids, commands, eyebrows, numbers): the theme's
-  `--font-mono` (**JetBrains Mono** by default), 11–12px,
+  `--font-mono` (**Martian Mono** by default), 11–12px,
   `font-variant-numeric: tabular-nums`, eyebrows uppercase with `0.08em`
   tracking (`--tracking-eyebrow`).
 - Display (empty states, project names in the rail tooltip): `--font-sans` 600.

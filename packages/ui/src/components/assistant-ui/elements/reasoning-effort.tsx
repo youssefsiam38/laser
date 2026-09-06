@@ -12,9 +12,8 @@
  *   - The "budget spent" progress bar is gone. Pi reports no thinking budget
  *     and no thinking token count per level, and a bar that cannot be filled
  *     is a fake (docs/ux-panels.md R3).
- *   - `ThinkingEffort` is the runtime-bound wrapper: inline on a wide
- *     composer, behind a popover on a narrow one, so the level is reachable
- *     on every width (DESIGN.md "Composer").
+ *   - `ThinkingEffort` is the runtime-bound wrapper behind one compact
+ *     popover at every width, so the composer never becomes a settings bar.
  *   - Only the levels the *open session's model* accepts are offered
  *     (`ModelCatalogEntry.thinkingLevels`; Pi maps the rest to null). A
  *     control appears only if it actually works here — and when a model does
@@ -190,10 +189,7 @@ const THINKING_EFFORTS: readonly EffortLevel[] = [
 ];
 
 /**
- * The composer's thinking control: the segmented group inline where there is
- * room (the toolbar container at `@lg`, 32rem, and up), the same group inside
- * a popover behind a Brain trigger below that. One radiogroup, two homes,
- * never unreachable.
+ * The composer's thinking control: a compact icon opens the full radiogroup.
  */
 export function ThinkingEffort({ className }: { className?: string | undefined }) {
   const { actions } = useLaserStable();
@@ -233,29 +229,25 @@ export function ThinkingEffort({ className }: { className?: string | undefined }
 
   return (
     <span data-slot="thinking-effort" className={cn("flex items-center", className)}>
-      <ReasoningEffort
-        levels={efforts}
-        selectedKey={thinkingLevel}
-        onSelect={select}
-        disabled={disabled}
-        className="hidden @lg:flex"
-      />
       <Popover>
         <PopoverTrigger asChild>
           <Button
             variant="ghost"
-            size="sm"
+            size="icon-sm"
             disabled={disabled}
             aria-label={`Thinking: ${thinkingLevel ?? "unset"}`}
-            className="typed gap-1.5 text-ink-2 hover:text-ink @lg:hidden"
+            title={`Thinking: ${thinkingLevel ?? "unset"}`}
+            className="text-ink-2 hover:text-ink"
           >
             <Brain aria-hidden="true" className="size-3.5 text-ink-3" />
-            <span>{thinkingLevel ?? "—"}</span>
           </Button>
         </PopoverTrigger>
-        <PopoverContent align="end" side="top" className="w-auto">
-          <span className="eyebrow">Thinking</span>
-          <ReasoningEffort levels={efforts} selectedKey={thinkingLevel} onSelect={select} disabled={disabled} />
+        <PopoverContent align="end" side="top" className="w-auto max-w-[calc(100vw-2rem)]">
+          <div className="mb-2 flex items-baseline justify-between gap-4">
+            <span className="eyebrow">Thinking</span>
+            <span className="typed text-ink-3">{thinkingLevel ?? "unset"}</span>
+          </div>
+          <ReasoningEffort levels={efforts} selectedKey={thinkingLevel} onSelect={select} disabled={disabled} className="max-w-full" />
         </PopoverContent>
       </Popover>
     </span>

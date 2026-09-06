@@ -400,6 +400,57 @@ Depends on: M4 (settings surface).
 
 ---
 
+## M12 · 0.2.0 product experience
+
+Goal: Laser's installed desktop experience carries its identity everywhere,
+makes provider/model choices unmistakable, and presents a Laser-owned product
+surface over a pinned Pi engine: settings are product concepts, community
+packages become curated features, and durable session goals have a first-class
+Laser experience backed by reusable Pi-native logic.
+
+Done when: the logo and green default accent ship in the app; provider/model
+controls are one reusable provider-first searchable component; provider loading
+does not flicker; reasoning is readable and its effort control is compact;
+JSON is collapsible and highlighted; project and archive actions work; the
+desktop add-project flow opens the operating system folder picker; settings and
+feature copy do not expose Pi or package-management plumbing; Subagents and
+Goals are bundled feature capabilities; a goal survives reload and session
+switches without leaking between sessions; and a packaged 0.2.0 build passes
+the full verification suite and a manual desktop, phone-width, light and dark
+review.
+
+Depends on: M1, M2-T4, M4, M5-T1, M11.
+
+| ID | Task | Done when |
+| --- | --- | --- |
+| M12-T1 | Product identity and conversation controls: app logo, logo-green default accent, compact reasoning-effort popover, thinking indicator, complete reasoning body | the installed shell is visibly Laser and the composer has no wide effort selector |
+| M12-T2 | Provider/model experience: stop provider-loading flicker; provider-first searchable picker shared by the composer and settings; grouped model catalogue with explicit proxy provenance | OpenRouter models read as models sourced through OpenRouter, never as a direct-provider model |
+| M12-T3 | Rich diagnostics and focused settings: collapsible syntax-highlighted JSON wherever payloads render; remove the contradictory Tools settings page | large nested payloads can be navigated without leaving the JSON representation |
+| M12-T4 | Project and archive management: native desktop folder picker; project overflow actions for remove and archive chats; permanent delete in Archived | every destructive action names its scope and requires deliberate confirmation |
+| M12-T5 | Integrate, visually verify, package and publish stable 0.2.0 | full build, typecheck and tests pass; all four visual combinations pass; installed 0.2.0 launches with the correct icon; stable release is Latest |
+| M12-T6 | Make curated extension installation self-contained and safe | `pi-subagents@0.65.1` installs from the packaged app with only Laser-reviewed, version-pinned lifecycle scripts allowed; unreviewed scripts produce a useful error instead of an installer command |
+| M12-T7 | Add a new Laser brand preset and make its dark/light pair the fresh-install default | the default pair is visibly derived from the logo's `#03CC7B`, `#E9E8E6` and black palette and passes every contrast guard |
+| M12-T8 | Remove duplicate web-search panels and complete the RPC UI compatibility surface used by curated extensions | web results render only in their transcript tool disclosure, never migrate between sessions, and pi-subagents can call `setToolsExpanded` without failing |
+| M12-T9 | Keep project selection and composer trigger menus predictable | a project rail icon only selects its worker/project, while slash and mention results stay inside a bounded scrollable popover |
+| M12-T10 | Make dock geometry follow the number of watched panels | one panel fills the dock, two split into full-width rows, and three or four occupy a stable 2×2 grid without remounting islands |
+| M12-T11 | Give context and live thinking states a first-class visual treatment | the context inspector uses meaningful icon-led cards and a clear usage hierarchy, while an empty running reply renders the assistant-ui thinking indicator instead of a bare caret |
+| M12-T12 | Turn the telemetry rail into a visual instrument panel | context health, token composition, model identity, file activity and tool activity can be understood at a glance from real session data without duplicate, decorative or invented metrics |
+| M12-T13 | Make the Fleet a chronological hierarchy instead of an indented flat sort | every child is rendered inside its actual parent's subtree and siblings retain creation order, so a child can never appear to belong to an adjacent run |
+| M12-T14 | Give workflow children one identity across aggregate and child status files | a workflow with three launched children renders as one workflow plus three children, never seven apparent runs with duplicated failures |
+| M12-T15 | Define the Laser/Pi product boundary and classify the settings surface | `AGENTS.md` and architecture docs make Pi an internal engine; every engine setting is classified as product, Advanced, internally managed or unsupported |
+| M12-T16 | Replace package management with a curated, engine-neutral feature registry | people enable scoped Laser features from manifests with dependencies, capabilities, restart and health; package installation and Pi passthrough are absent from the product |
+| M12-T17 | Ship Subagents as a bundled Laser feature | Subagents can be enabled or disabled without installing or seeing a package, while the bridge preserves the upstream lifecycle and persisted run model |
+| M12-T18 | Integrate a pinned, reusable Pi-native goal engine behind an engine-neutral goal protocol | `/goal` and UI actions share one session-isolated persisted goal state with start, edit, pause, resume, clear, complete, block and wait semantics |
+| M12-T19 | Build the persistent goal row and product language | the current session's goal appears below the panel row with status, progress evidence and controls; no Pi, extension or package terminology reaches the normal product UI |
+| M12-T20 | Verify the clean break and all goal/feature states | protocol, `.laser` isolation, loop-safety, reload/switch isolation and product-language tests pass; desktop and phone widths pass in dark and light themes |
+| M12-T21 | Make dictation a provider-gated core capability | dictation is bundled and absent from Features; provider readiness is explained in Providers and models and checked before microphone access; natural pauses land as ordered phrases at the live caret while typing remains enabled |
+| M12-T22 | Preserve drafts when completing leading slash commands | Tab or pointer selection replaces only a slash token at character zero and keeps every argument or later line unchanged |
+| M12-T23 | Make Add Project a native folder-selection action | desktop entry points open the operating system folder chooser directly; no product surface accepts or pastes a directory path |
+| M12-T24 | Give every built-in provider a researched, theme-safe brand mark | all 40 built-in provider ids resolve through one maintained icon catalog; regional and plan variants retain their parent brand; known providers never fall back to generated initials |
+| M12-T25 | Replace the false empty startup with a branded restoration transition | the shell remains hidden while the remembered project/session, transcript and goal restore; a token-driven Laser beam screen communicates that work in both themes and all widths without delaying a fast launch |
+
+---
+
 ## MX · Cross-cutting (runs alongside every milestone)
 
 | ID | Task | Done when |

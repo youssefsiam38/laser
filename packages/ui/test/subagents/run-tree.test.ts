@@ -9,7 +9,6 @@ import type { PanelEntry } from "../../src/panels/store.js";
 import {
   MAX_TABS,
   buildRunTree,
-  byAttention,
   flatten,
   overflowAttention,
   pathTo,
@@ -70,6 +69,21 @@ describe("building the tree", () => {
       NOW,
     );
     expect(tree.roots.map((n) => n.id)).toEqual(["first", "second", "third"]);
+  });
+
+  it("derives chronology from firstSeenAt even when the feed is shuffled", () => {
+    const tree = buildRunTree(
+      [
+        entry(run("late"), { firstSeenAt: NOW - 1_000 }),
+        entry(child("child", "early"), { firstSeenAt: NOW - 4_000 }),
+        entry(run("early"), { firstSeenAt: NOW - 9_000 }),
+      ],
+      new Set(),
+      NOW,
+    );
+    expect(tree.roots.map((n) => n.id)).toEqual(["early", "late"]);
+    expect(tree.roots[0]?.children.map((n) => n.id)).toEqual(["child"]);
+    expect(flatten(tree).map((n) => n.id)).toEqual(["early", "child", "late"]);
   });
 
   it("leaves closed panels out of the tree", () => {
@@ -165,8 +179,8 @@ describe("focus survives the tree changing under it", () => {
   });
 });
 
-describe("the fleet's flat view", () => {
-  it("flattens depth-first, then sorts by what needs you first", () => {
+describe("the fleet's chronological hierarchy", () => {
+  it("keeps a child with its parent even when another root needs attention", () => {
     const tree = buildRunTree(
       [
         entry(run("a", { lifecycle: "done", startedAt: new Date(NOW - 9_000).toISOString() })),
@@ -177,7 +191,33 @@ describe("the fleet's flat view", () => {
       NOW,
     );
     expect(flatten(tree).map((n) => n.id)).toEqual(["a", "b", "c"]);
-    // `a` inherits "waiting" from nothing, but `c` asks for a person, so it leads.
-    expect(byAttention(flatten(tree))[0]?.id).toBe("c");
+    expect(tree.roots[1]?.attention).toBe("waiting_for_input");
+  });
+
+  it("uses the workflow's lane order when child status files arrive out of order", () => {
+    const plan: Panel = {
+      kind: "plan",
+      id: "workflow",
+      source: "pi-subagents",
+      intent: "follow",
+      title: "Workflow · 3 lanes",
+      steps: [
+        { id: "company", label: "company", state: "done", runId: "company" },
+        { id: "consumer", label: "consumer", state: "failed", runId: "consumer" },
+        { id: "market", label: "market", state: "failed", runId: "market" },
+      ],
+    };
+    const tree = buildRunTree(
+      [
+        entry(child("market", "workflow"), { firstSeenAt: NOW - 9_000 }),
+        entry(plan, { firstSeenAt: NOW - 8_000 }),
+        entry(child("consumer", "workflow"), { firstSeenAt: NOW - 7_000 }),
+        entry(child("company", "workflow"), { firstSeenAt: NOW - 6_000 }),
+      ],
+      new Set(),
+      NOW,
+    );
+
+    expect(tree.roots[0]?.children.map((node) => node.id)).toEqual(["company", "consumer", "market"]);
   });
 });

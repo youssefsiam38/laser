@@ -4,7 +4,7 @@
  *
  * The theme used to live in this tab's `localStorage`, which meant it lived on
  * one device: a phone that paired with a themed desktop opened in the default
- * graphite and stayed there. `pi/prefs/*` moves the same state to the host, so
+ * Laser's brand preset and stayed there. `pi/prefs/*` moves the same state to the host, so
  * the theme is a property of "your laser" rather than of "this browser".
  *
  * `localStorage` is still written, and deliberately: it is what the boot script

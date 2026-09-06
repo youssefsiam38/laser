@@ -17,6 +17,7 @@ things*. Its output feeds two of the six kinds:
 | a **run** | `run` |
 | a **plan** | `plan` |
 | a **ledger** | rendered as `document` (missions) and `collection` (history) |
+| a **session goal** | persistent row below the run tabs; never a panel |
 
 Read the panel contract first. This one exists because agent work is the
 richest domain laser has, and without a model for it the `run` and `plan`
@@ -63,6 +64,19 @@ history.
 
 Three nouns, and the CLI uses the same words.
 
+## Session goals
+
+A goal is the one durable objective governing the current session. It is not a
+run or a panel and does not compete for dock space. While present it stays in a
+single row directly below the run tabs with its status, objective, evaluations,
+active time, token use, optional budget and latest block/wait reason. Controls
+appear only when the current status permits them.
+
+Goal state is branch-local session data. Switching, starting or forking a
+session must never carry another session's goal across. Pi-native goal logic
+owns persistence and continuation safety; Laser owns the row and the neutral
+protocol. See [`product-boundary.md`](product-boundary.md).
+
 ## Navigating runs
 
 The run tree is the tab group. It renders as `run` panels, but the navigation
@@ -80,6 +94,13 @@ around them is specific enough to specify here:
 - **Never a tree widget with expand arrows.** Trees are for files, not live
   work: an expanding tree makes you hunt for the thing that needs you, which is
   what R5 exists to prevent.
+- The Fleet's all-runs view is different from that navigation strip: each
+  session renders chronological root-first subtrees with a continuous lineage
+  rail. A child is structurally inside its parent, never a globally sorted flat
+  row that merely looks indented. Attention rolls up to the ancestor's status
+  without moving the branch. When Pi persists both an aggregate workflow step
+  and that child's detailed status file, both records resolve to the child's
+  launched run id and update one row rather than duplicating the worker.
 
 ## What each run path actually permits
 

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { cn } from "@/lib/utils";
 import { AnsiText } from "@/components/assistant-ui/elements/ansi-text";
+import { JsonViewer } from "@/components/assistant-ui/elements/json-viewer";
 import { stripAnsi } from "../../ansi.js";
 import { useRefContent } from "../../read.js";
 import { panelKey, type PanelEntry, velocityOf } from "../../store.js";
@@ -242,7 +243,7 @@ function JsonlRows({ text, fromByte }: { text: string; fromByte: number }) {
                 <span className="shrink-0 text-terminal-ink-2 tnum">{summaryKey(row.value)}</span>
                 <span className="min-w-0 flex-1 truncate">{summaryOf(row.value)}</span>
               </summary>
-              <pre className="px-3 pb-2 wrap-break-word whitespace-pre-wrap text-terminal-ink-2">{JSON.stringify(row.value, null, 2)}</pre>
+              <JsonViewer value={row.value} tone="terminal" expandedDepth={1} className="max-h-80 rounded-none border-0 border-t border-terminal-line" />
             </details>
           )}
         </li>

@@ -196,12 +196,47 @@ describe("plans", () => {
 
 describe("panel identity (R6/R9: one panel, one id, arriving twice is normal)", () => {
   it("derives child ids from pi-subagents' own identity, not from our order", () => {
+    const withRunId = childPanelId("run-1", { status: "running", runId: "launched-run" }, 3);
     const withChildId = childPanelId("run-1", { status: "running", childId: "c7" }, 3);
     const withKey = childPanelId("run-1", { status: "running", workflowKey: "health" }, 3);
     const positional = childPanelId("run-1", { status: "running" }, 3);
+    expect(withRunId).toBe("subagents:run:launched-run");
     expect(withChildId).toBe("subagents:child:run-1:c7");
     expect(withKey).toBe("subagents:child:run-1:health");
     expect(positional).toBe("subagents:child:run-1:3");
+  });
+
+  it("gives a launched workflow child the same identity and parent from either status file", () => {
+    const fromWorkflow = panelsForStatus(
+      status({
+        runId: "workflow-1",
+        mode: "workflow",
+        steps: [{ status: "completed", agent: "researcher", workflowKey: "company", runId: "child-1" }],
+        preflight: { lanes: [{ key: "company" }] },
+      }),
+      { caps: CAPS },
+    ).find((panel) => panel.kind === "run");
+    const fromChild = singleRunPanel(
+      status({
+        runId: "child-1",
+        state: "complete",
+        parentWorkflowRunId: "workflow-1",
+        workflowKey: "company",
+        steps: [{ status: "complete", agent: "researcher" }],
+      }),
+      { caps: CAPS },
+    );
+
+    expect(fromWorkflow).toMatchObject({
+      id: "subagents:run:child-1",
+      title: "company",
+      parent: { id: "subagents:plan:workflow-1", relation: "step-of" },
+    });
+    expect(fromChild).toMatchObject({
+      id: "subagents:run:child-1",
+      title: "company",
+      parent: { id: "subagents:plan:workflow-1", relation: "step-of" },
+    });
   });
 
   it("produces byte-identical panels from the same status, so re-reads dedupe", () => {

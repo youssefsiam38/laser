@@ -36,6 +36,17 @@ const metaOf = (message: MessageState): LaserTimingMeta =>
 
 const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 
+/** Prefer transport timing; otherwise derive the rate from the values shown in this footer. */
+export function messageTokenRate(
+  output: number | undefined,
+  elapsedMs: number | undefined,
+  measured: number | undefined,
+): number | undefined {
+  if (measured !== undefined && Number.isFinite(measured) && measured >= 0) return measured;
+  if (output === undefined || elapsedMs === undefined || elapsedMs <= 0) return undefined;
+  return output / (elapsedMs / 1000);
+}
+
 export const MessageTiming: FC<{ className?: string | undefined; side?: "top" | "right" | "bottom" | "left" }> = ({ className, side = "top" }) => {
   const timing = useMessageTiming();
   const id = useAuiState((s) => s.message.id);
@@ -49,16 +60,21 @@ export const MessageTiming: FC<{ className?: string | undefined; side?: "top" | 
 
   if (running) return null;
   const total = timing?.totalStreamTime ?? stampedElapsed ?? local;
+  const rate = messageTokenRate(output, total, timing?.tokensPerSecond);
   if (total === undefined && output === undefined) return null;
 
-  const summary = [total !== undefined ? duration(total) : undefined, output !== undefined ? `${formatTokens(output)} tokens` : undefined]
+  const summary = [
+    total !== undefined ? duration(total) : undefined,
+    output !== undefined ? `${formatTokens(output)} tokens` : undefined,
+    rate !== undefined ? `${rate.toFixed(1)} tok/s` : undefined,
+  ]
     .filter(Boolean)
     .join(" · ");
 
   const rows: Array<[string, string]> = [];
   if (timing?.firstTokenTime !== undefined) rows.push(["First token", duration(timing.firstTokenTime)]);
   if (total !== undefined) rows.push(["Total", duration(total)]);
-  if (timing?.tokensPerSecond !== undefined) rows.push(["Speed", `${timing.tokensPerSecond.toFixed(1)} tok/s`]);
+  if (rate !== undefined) rows.push(["Speed", `${rate.toFixed(1)} tok/s`]);
   if (output !== undefined) rows.push(["Output", formatTokens(output)]);
   if (input !== undefined) rows.push(["Input", formatTokens(input)]);
   if (cacheRead !== undefined) rows.push(["Cache read", formatTokens(cacheRead)]);

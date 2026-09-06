@@ -127,15 +127,35 @@ say which claim failed. Nothing was copied to $OUT."
 
 mkdir -p "$OUT"
 
+# A reused staging directory must never smuggle an older release into the next
+# manifest. Keep artifacts for this version (including the other architecture
+# when CI has already merged it) and discard only generated package files from
+# older versions. install.sh and signatures are refreshed by publish.sh.
+shopt -s nullglob
+for staged in "$OUT"/*.AppImage "$OUT"/*.deb "$OUT"/*.rpm "$OUT"/*.tar.gz "$OUT"/*.pacman; do
+  case "$(basename "$staged")" in
+    *"$VERSION"*) ;;
+    *) rm -f -- "$staged" ;;
+  esac
+done
+
 # Copy out only the artifacts, and only the ones for this architecture.
 # electron-builder's names differ per format on purpose (a .deb says amd64, an
 # .rpm says x86_64), which is why install.sh matches names rather than
 # reconstructing them.
 copied=0
-shopt -s nullglob
 for artifact in "$DESKTOP"/out/*.AppImage "$DESKTOP"/out/*.deb "$DESKTOP"/out/*.rpm "$DESKTOP"/out/*.tar.gz "$DESKTOP"/out/*.pacman; do
+  name="$(basename "$artifact")"
+  case "$name" in
+    *"$VERSION"*) ;;
+    *) continue ;;
+  esac
+  case "$ARCH:$name" in
+    x64:*x86_64* | x64:*amd64* | arm64:*arm64* | arm64:*aarch64*) ;;
+    *) continue ;;
+  esac
   cp -f "$artifact" "$OUT/"
-  printf '    %s\n' "$(basename "$artifact")"
+  printf '    %s\n' "$name"
   copied=$((copied + 1))
 done
 shopt -u nullglob

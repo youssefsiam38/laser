@@ -1,13 +1,13 @@
-import { ENV } from "@lasercode/protocol";
+import { ENV, PRODUCT_DISPLAY_NAME, PRODUCT_NAME } from "@lasercode/protocol";
 import { readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { contrastRatio, hueDistance, hueOf, oklch, parseColor, raiseContrast } from "../src/theme/color.js";
 import { CONTRAST_TARGET, GROUND_TOKENS, TEXT_TOKENS, compileTheme, compileVars, resolveTokens, scaledType } from "../src/theme/compile.js";
 import { checkTheme, isApplicable, separateAttention, MIN_HUE_SEPARATION } from "../src/theme/guard.js";
-import { fontStack } from "../src/theme/fonts.js";
+import { DEFAULT_FONTS, fontEntry, fontStack } from "../src/theme/fonts.js";
 import { TEXT_FLOOR_PX, TEXT_SCALE, TYPE_SCALE, type TypeStep } from "../src/theme/primitives.js";
-import { DEFAULT_PRESET, PRESETS } from "../src/theme/presets.js";
+import { DEFAULT_LIGHT_PRESET_ID, DEFAULT_PRESET, LASER_BRAND, PRESETS, getPreset } from "../src/theme/presets.js";
 import type { Theme } from "../src/theme/types.js";
 
 /*
@@ -89,6 +89,24 @@ describe("every preset (T5: the default must be good, and so must the rest)", ()
   }
 });
 
+describe(`${PRODUCT_DISPLAY_NAME} brand defaults`, () => {
+  it("uses the approved SVG colours in the fresh-install dark theme", () => {
+    expect(DEFAULT_PRESET.id).toBe(PRODUCT_NAME);
+    expect(DEFAULT_PRESET.tokens.bg).toBe(LASER_BRAND.black);
+    expect(DEFAULT_PRESET.tokens.ink).toBe(LASER_BRAND.warmWhite);
+    expect(DEFAULT_PRESET.tokens.live).toBe(LASER_BRAND.green);
+    expect(DEFAULT_PRESET.tokens["on-live"]).toBe(LASER_BRAND.black);
+  });
+
+  it("pairs it with a branded accessible light theme", () => {
+    const light = getPreset(DEFAULT_LIGHT_PRESET_ID)!;
+    expect(light.id).toBe(`${PRODUCT_NAME}-light`);
+    expect(light.tokens.bg).toBe(LASER_BRAND.warmWhite);
+    expect(light.tokens.ink).toBe(LASER_BRAND.black);
+    expect(hueDistance(hueOf(light.tokens.live)!, hueOf(LASER_BRAND.green)!)).toBeLessThan(12);
+  });
+});
+
 describe("the legibility floor (T2)", () => {
   it("never scales data under 12px at any text size, and the eyebrow never under 11", () => {
     for (const scale of Object.values(TEXT_SCALE)) {
@@ -155,6 +173,35 @@ describe("fonts", () => {
   });
   it("treats an unknown id as a Google family", () => {
     expect(fontStack("Lexend", "sans")).toMatch(/^"Lexend", ui-sans-serif/);
+  });
+
+  /**
+   * Two properties of the *default* pair, both of which a well-meaning change
+   * could quietly undo.
+   *
+   * Self-hosted, because a first run must reach no font CDN: the app is meant
+   * to work on a machine that has only ever talked to this one origin, and a
+   * Google Fonts default would make the very first paint depend on a third
+   * party (M11-T5).
+   *
+   * Not Inter, because `DESIGN.md` rules it out by name and it is the font the
+   * maintainer asked to move away from. Every other face stays available in
+   * Settings; this is only what the app is set in before anyone chooses.
+   */
+  it("defaults to faces the app ships itself, so a first run fetches no CDN", () => {
+    for (const kind of ["sans", "mono"] as const) {
+      const entry = fontEntry(DEFAULT_FONTS[kind], kind);
+      expect(entry.source, `the default ${kind} face is ${entry.family}`).toBe("self-hosted");
+    }
+  });
+
+  it("does not default to Inter", () => {
+    expect(fontEntry(DEFAULT_FONTS.sans, "sans").family).not.toBe("Inter");
+  });
+
+  it("dresses the default preset in the default fonts", () => {
+    expect(DEFAULT_PRESET.fonts).toEqual({ ...DEFAULT_FONTS });
+    expect(compileVars(DEFAULT_PRESET)["--font-sans"]).toContain(fontEntry(DEFAULT_FONTS.sans, "sans").family);
   });
 });
 

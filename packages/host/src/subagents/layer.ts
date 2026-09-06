@@ -50,6 +50,7 @@ import {
 import {
   missionCollectionId,
   missionDocument,
+  missionDocumentId,
   missionsCollection,
   missionsDirOf,
   readMissions,
@@ -82,6 +83,8 @@ export interface SubagentsLayerOptions {
   /** Every Nth tick also re-reads the missions ledger, which changes far more slowly. */
   missionEvery?: number;
   now?: () => number;
+  /** Product feature policy. Disabled projects keep their files but expose no Subagents UI. */
+  enabled?(cwd: string): boolean;
   /**
    * Ask the worker that owns `path` to hand a command to the companion
    * extension. Resume is only reachable through the owning Pi session's bus,
@@ -172,6 +175,7 @@ export class SubagentsLayer {
   /** One pass. Never throws: it runs on a timer and a broken temp root is normal. */
   refresh(): void {
     this.tick += 1;
+    this.retireDisabled();
     try {
       this.scanBackgroundRuns();
     } catch {
@@ -192,7 +196,29 @@ export class SubagentsLayer {
   }
 
   private sessionsByPath(): Map<string, SessionRef> {
-    return new Map(this.options.sessions().map((session) => [session.path, session]));
+    return new Map(this.options.sessions().filter((session) => this.isEnabled(session.cwd)).map((session) => [session.path, session]));
+  }
+
+  private isEnabled(cwd: string): boolean {
+    return this.options.enabled?.(cwd) ?? true;
+  }
+
+  private retireDisabled(): void {
+    for (const [dir, record] of this.runs) {
+      if (!this.isEnabled(record.cwd)) this.retire(dir, "Subagents is disabled for this project");
+    }
+    for (const [transcript, record] of this.foreground) {
+      if (!this.isEnabled(record.cwd)) this.retireForeground(transcript, "Subagents is disabled for this project");
+    }
+    for (const session of this.options.sessions()) {
+      if (this.isEnabled(session.cwd)) continue;
+      this.sink.close(session.path, missionCollectionId, "Subagents is disabled for this project");
+      for (const mission of this.missionsById.values()) {
+        if (mission.ownerSessionId === session.path) {
+          this.sink.close(session.path, missionDocumentId(mission.id), "Subagents is disabled for this project");
+        }
+      }
+    }
   }
 
   private scanBackgroundRuns(): void {
@@ -208,8 +234,12 @@ export class SubagentsLayer {
         const dir = join(runsDir, runId);
         const stamp = stampOf(join(dir, "status.json"));
         if (!stamp) continue;
-        seen.add(dir);
         const previous = this.runs.get(dir);
+        if (previous && !this.isEnabled(previous.cwd)) {
+          this.retire(dir, "Subagents is disabled for this project");
+          continue;
+        }
+        seen.add(dir);
         if (previous && previous.stamp === stamp) {
           // Unchanged, so nothing is parsed. A finished run still ages out:
           // its file will never change again, so the clock is the only thing
@@ -263,6 +293,18 @@ export class SubagentsLayer {
     const panels = panelsForStatus(status, { caps, bytesOf: sizeOf });
     const previous = this.runs.get(status.dir);
     const ids = panels.map((panel) => panel.id);
+    // A launched workflow child has its own detailed status file as well as a
+    // summary row in the parent workflow. Both now share one panel id. Once
+    // the detailed record owns that id, the aggregate must not overwrite its
+    // richer usage, output and control data on every workflow refresh.
+    const emitted = panels.filter(
+      (panel) =>
+        !(
+          status.parentWorkflowRunId === undefined &&
+          panel.kind === "run" &&
+          this.ownedByAnotherRun(status.dir, panel.id)
+        ),
+    );
 
     // A run that changed hands (its status file now names a different session)
     // must not leave a copy behind: one run, one panel, one place (R6).
@@ -270,11 +312,13 @@ export class SubagentsLayer {
       for (const id of previous.panelIds) this.sink.close(previous.path, id, "it belongs to another session");
     }
 
-    for (const panel of panels) this.sink.upsert(session.cwd, session.path, panel);
+    for (const panel of emitted) this.sink.upsert(session.cwd, session.path, panel);
     // A panel this run used to have and no longer does (a step that vanished
     // from the status file) leaves rather than lingering.
     for (const id of previous?.panelIds ?? []) {
-      if (!ids.includes(id)) this.sink.close(session.path, id, "it is no longer in the run");
+      if (!ids.includes(id) && !this.ownedByAnotherRun(status.dir, id)) {
+        this.sink.close(session.path, id, "it is no longer in the run");
+      }
     }
 
     const live = status.state === "running" || status.state === "queued" || status.state === "paused";
@@ -285,14 +329,23 @@ export class SubagentsLayer {
       panelIds: ids,
       ...(live ? {} : { showUntil: (status.endedAt ?? status.lastUpdate ?? now) + RECENT_MS }),
     });
-    this.rememberTargets(status, session, panels);
+    this.rememberTargets(status, session, emitted);
+  }
+
+  private ownedByAnotherRun(dir: string, panelId: string): boolean {
+    for (const [candidateDir, record] of this.runs) {
+      if (candidateDir !== dir && record.panelIds.includes(panelId)) return true;
+    }
+    return false;
   }
 
   /** Which control file each panel's actions write to. */
   private rememberTargets(status: AsyncStatus, session: SessionRef, panels: readonly Panel[]): void {
     for (const panel of panels) {
       if (panel.kind !== "run") continue;
-      const index = status.steps.findIndex((step, i) => panel.id.endsWith(`:${step.childId ?? step.workflowKey ?? String(i)}`));
+      const index = status.steps.findIndex((step, i) =>
+        panel.id.endsWith(`:${step.runId ?? step.childId ?? step.workflowKey ?? String(i)}`),
+      );
       this.targets.set(panel.id, {
         path: session.path,
         cwd: session.cwd,
@@ -309,8 +362,10 @@ export class SubagentsLayer {
     const record = this.runs.get(dir);
     if (!record) return;
     for (const id of record.panelIds) {
-      this.sink.close(record.path, id, reason);
-      this.targets.delete(id);
+      if (!this.ownedByAnotherRun(dir, id)) {
+        this.sink.close(record.path, id, reason);
+        this.targets.delete(id);
+      }
     }
     this.runs.delete(dir);
   }
@@ -333,7 +388,7 @@ export class SubagentsLayer {
   private scanForeground(): void {
     const now = this.now();
     const byDir = new Map<string, SessionRef>();
-    for (const session of this.options.sessions()) {
+    for (const session of this.options.sessions().filter((candidate) => this.isEnabled(candidate.cwd))) {
       const dir = join(dirname(session.path), "subagent-artifacts");
       const current = byDir.get(dir);
       if (!current || (session.modifiedAt ?? "") > (current.modifiedAt ?? "")) byDir.set(dir, session);

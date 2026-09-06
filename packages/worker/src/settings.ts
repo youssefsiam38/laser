@@ -1,11 +1,9 @@
 /**
- * Settings adapter (M4-T1) — every Pi setting, at both scopes, from the UI.
+ * Settings adapter — Laser's curated settings, translated to the pinned engine.
  *
- * Pi 0.85 keeps settings in two files: `<agentDir>/settings.json` (global) and
- * `<cwd>/.pi/settings.json` (project). `SettingsManager` owns them: it merges
- * them (nested objects merge, arrays replace), takes a `proper-lockfile` lock
- * on every write, persists only the fields a session actually modified, and
- * has no file watcher — a caller that writes must `reload()`.
+ * Global engine state stays inside Laser's private agent directory. Project
+ * choices belong to Laser and live in `<cwd>/.laser/settings.json`; the engine's
+ * `<cwd>/.pi` directory is never read or written by this adapter.
  *
  * ## Why writes do not go through the typed setters
  *
@@ -31,14 +29,11 @@
  * interleaved write by a terminal Pi loses nothing but the racing field.
  */
 
-import { PRODUCT_NAME } from "@lasercode/protocol";
+import { PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PROJECT_DIR_NAME } from "@lasercode/protocol";
 import {
-  CONFIG_DIR_NAME,
-  ProjectTrustStore,
   SettingsManager,
   VERSION,
   getAgentDir,
-  hasTrustRequiringProjectResources,
 } from "@earendil-works/pi-coding-agent";
 import type {
   SettingChange,
@@ -50,8 +45,10 @@ import type {
   SettingsSection,
   SettingsSnapshot,
 } from "@lasercode/protocol";
-import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+
+export const LASER_PROJECT_DIR_NAME = PROJECT_DIR_NAME;
 
 // ---------------------------------------------------------------- catalogue
 
@@ -143,6 +140,38 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: "managed", title: "Managed by the agent", description: `Written by the agent itself. Shown for completeness; ${PRODUCT_NAME} will not change them.` },
 ];
 
+const PRODUCT_SECTIONS: readonly SettingsSection[] = [
+  { id: "model", title: "Model behavior", description: "Defaults for new sessions and how reasoning is shown." },
+  { id: "delivery", title: "Conversation flow", description: "How messages sent during a running turn are delivered." },
+  { id: "context", title: "Context", description: `How ${PRODUCT_NAME} keeps long conversations within the model's context window.` },
+  { id: "images", title: "Images", description: "How images are prepared before they reach the model." },
+  { id: "retry", title: "Reliability", description: "Recovery behavior for temporary provider failures." },
+  { id: "network", title: "Network", description: "Proxy and connection controls for unusual environments." },
+  { id: "shell", title: "Command environment", description: "How project commands are launched." },
+  { id: "warnings", title: "Safety notices", description: "Provider-specific notices that protect against unexpected usage." },
+];
+
+const GENERAL_KEYS = new Set([
+  "defaultProvider", "defaultModel", "defaultThinkingLevel", "modelThinkingLevels", "enabledModels",
+  "hideThinkingBlock", "steeringMode", "followUpMode", "compaction", "images",
+]);
+const ADVANCED_KEYS = new Set([
+  "transport", "retry", "showCacheMissNotices", "shellPath", "shellCommandPrefix", "thinkingBudgets",
+  "httpProxy", "httpIdleTimeoutMs", "websocketConnectTimeoutMs", "warnings",
+]);
+const INTERNAL_KEYS = new Set([
+  "lastChangelogVersion", "theme", "defaultProjectTrust", "npmCommand", "enableInstallTelemetry",
+  "enableAnalytics", "trackingId", "packages", "extensions", "skills", "prompts", "themes",
+  "enableSkillCommands", "defaultTools", "sessionDir",
+]);
+
+export const SETTINGS_CLASSIFICATIONS = PI_SETTINGS_TOP_LEVEL_KEYS.map((key) => {
+  if (GENERAL_KEYS.has(key)) return { key, disposition: "general" as const, reason: `A common ${PRODUCT_NAME} behavior people may choose.` };
+  if (ADVANCED_KEYS.has(key)) return { key, disposition: "advanced" as const, reason: "A specialist engine control exposed with product language." };
+  if (INTERNAL_KEYS.has(key)) return { key, disposition: "internal" as const, reason: `${PRODUCT_NAME} owns this value or exposes it through a dedicated product surface.` };
+  return { key, disposition: "unsupported" as const, reason: `This changes the engine's terminal interface, not the ${PRODUCT_NAME} experience.` };
+});
+
 const BOTH: SettingsScope[] = ["global", "project"];
 const GLOBAL_ONLY: SettingsScope[] = ["global"];
 
@@ -177,6 +206,7 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     description: "Thinking level a new session starts at.",
     section: "model",
     type: { control: "enum", options: THINKING_OPTIONS },
+    default: "medium",
     scopes: BOTH,
   },
   {
@@ -983,14 +1013,32 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
 ];
 
 const FIELD_BY_PATH = new Map(SETTINGS_FIELDS.map((field) => [field.path, field]));
+const PRODUCT_SETTING_KEYS = new Set(
+  SETTINGS_CLASSIFICATIONS
+    .filter((entry) => entry.disposition === "general" || entry.disposition === "advanced")
+    .map((entry) => entry.key),
+);
 
 export function settingsCatalog(): SettingsCatalog {
+  const disposition = new Map(SETTINGS_CLASSIFICATIONS.map((entry) => [entry.key, entry.disposition]));
+  const fields = SETTINGS_FIELDS.flatMap((field) => {
+    const audience = disposition.get(field.key);
+    if (audience !== "general" && audience !== "advanced") return [];
+    return [{ ...field, audience, advanced: field.advanced ?? fullConfigurationOnly(field.path) }];
+  });
   return {
-    piVersion: VERSION,
-    sections: [...SETTINGS_SECTIONS],
-    fields: [...SETTINGS_FIELDS],
+    engineVersion: VERSION,
+    sections: [...PRODUCT_SECTIONS],
+    fields,
     topLevelKeys: [...PI_SETTINGS_TOP_LEVEL_KEYS],
+    classifications: [...SETTINGS_CLASSIFICATIONS],
   };
+}
+
+function fullConfigurationOnly(path: string): boolean {
+  return path !== "defaultProvider" && path !== "defaultModel" && path !== "defaultThinkingLevel" &&
+    path !== "steeringMode" && path !== "followUpMode" && path !== "compaction.enabled" &&
+    path !== "images.autoResize" && path !== "images.blockImages" && path !== "retry.enabled";
 }
 
 // ------------------------------------------------------------------ errors
@@ -1005,6 +1053,35 @@ type Doc = Record<string, unknown>;
 
 const isPlainObject = (value: unknown): value is Doc =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+const ENGINE_PRIVATE_OVERRIDES: Doc = {
+  packages: [],
+  extensions: [],
+  skills: [],
+  prompts: [],
+  themes: [],
+};
+
+/** Only product-owned settings may cross from `.laser` into the engine. */
+export function laserEngineSettings(value: unknown): Doc {
+  if (!isPlainObject(value)) return {};
+  const allowed = new Set(
+    SETTINGS_CLASSIFICATIONS
+      .filter((entry) => entry.disposition === "general" || entry.disposition === "advanced")
+      .map((entry) => entry.key),
+  );
+  return Object.fromEntries(Object.entries(value).filter(([key]) => allowed.has(key)));
+}
+
+export function readLaserProjectSettings(cwd: string): Doc {
+  const file = join(resolve(cwd), LASER_PROJECT_DIR_NAME, "settings.json");
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, ""));
+    return laserEngineSettings(parsed);
+  } catch {
+    return {};
+  }
+}
 
 /** Read a dotted path. Returns undefined when any link is missing or not an object. */
 export function getAtPath(doc: unknown, path: string): unknown {
@@ -1138,7 +1215,7 @@ export interface SettingsAdapterOptions {
   agentDir?: string;
   /**
    * The host's own trust decision for this project, when it made one (M2-T4).
-   * laser records decisions in `~/.laser/projects.json` rather than Pi's
+   * Laser records decisions in its own project registry rather than the
    * `trust.json` (two writers on Pi's lock is a bug), so without this the
    * adapter would read Pi's store, see nothing, and disagree with the driver
    * about the very same project. Omit when nobody decided.
@@ -1163,10 +1240,13 @@ export class SettingsAdapter {
     this.cwd = resolve(options.cwd);
     this.agentDir = resolve(options.agentDir ?? getAgentDir());
     this.globalPath = join(this.agentDir, "settings.json");
-    this.projectPath = join(this.cwd, CONFIG_DIR_NAME, "settings.json");
+    this.projectPath = join(this.cwd, LASER_PROJECT_DIR_NAME, "settings.json");
     this.hostTrusted = options.hostTrusted;
     this.trust = this.computeTrust();
-    this.manager = SettingsManager.create(this.cwd, this.agentDir, { projectTrusted: this.trust.trusted });
+    // Never let the engine discover `<cwd>/.pi`. Laser feeds it only the
+    // curated values read from `<cwd>/.laser` as in-memory overrides.
+    this.manager = SettingsManager.create(this.cwd, this.agentDir, { projectTrusted: false });
+    this.applyProjectOverrides();
   }
 
   /** Pi's manager, for the package and model adapters that need one. */
@@ -1188,13 +1268,10 @@ export class SettingsAdapter {
    * call it before any read the UI will show.
    */
   async refresh(): Promise<void> {
-    const trust = this.computeTrust();
-    if (trust.trusted !== this.trust.trusted) {
-      // `setProjectTrusted` reloads the project file (or drops it) itself.
-      this.manager.setProjectTrusted(trust.trusted);
-    }
-    this.trust = trust;
+    this.trust = this.computeTrust();
+    this.manager.setProjectTrusted(false);
     await this.manager.reload();
+    this.applyProjectOverrides();
   }
 
   snapshot(): SettingsSnapshot {
@@ -1203,7 +1280,7 @@ export class SettingsAdapter {
       errors.set(error.scope, error.error.message);
     }
     const global = this.manager.getGlobalSettings() as Doc;
-    const project = this.trust.trusted ? (this.manager.getProjectSettings() as Doc) : {};
+    const project = this.trust.trusted ? readLaserProjectSettings(this.cwd) : {};
     return {
       cwd: this.cwd,
       agentDir: this.agentDir,
@@ -1229,9 +1306,9 @@ export class SettingsAdapter {
 
     for (const change of changes) {
       const field = FIELD_BY_PATH.get(change.path);
-      if (!field) {
+      if (!field || !PRODUCT_SETTING_KEYS.has(field.key)) {
         throw new SettingsError(
-          `Unknown setting "${change.path}". The agent (${VERSION}) has no such key; the Settings screen lists every one it does have.`,
+          `Unknown or unsupported setting "${change.path}". The Settings screen lists every choice ${PRODUCT_NAME} supports.`,
         );
       }
       if (field.managed) {
@@ -1248,13 +1325,36 @@ export class SettingsAdapter {
       }
     }
 
-    // Let Pi flush anything it queued before we take the same lock.
+    if (scope === "project") {
+      let doc: Doc = {};
+      if (existsSync(this.projectPath)) {
+        try {
+          const parsed: unknown = JSON.parse(readFileSync(this.projectPath, "utf8").replace(/^﻿/, ""));
+          if (!isPlainObject(parsed)) throw new Error("the file must contain a JSON object");
+          doc = laserEngineSettings(parsed);
+        } catch (error) {
+          throw new SettingsError(
+            `${this.projectPath} is not valid ${PRODUCT_DISPLAY_NAME} settings (${error instanceof Error ? error.message : String(error)}). ` +
+              `Nothing was written.`,
+          );
+        }
+      }
+      for (const change of changes) {
+        if (change.op === "set") setAtPath(doc, change.path, change.value);
+        else unsetAtPath(doc, change.path);
+      }
+      writeLaserProjectSettings(this.projectPath, doc);
+      await this.refresh();
+      return this.snapshot();
+    }
+
+    // Let the engine flush anything it queued before we take the same lock.
     await this.manager.flush();
 
     const storage = piSettingsStorage(this.manager);
-    const target = scope === "global" ? this.globalPath : this.projectPath;
+    const target = this.globalPath;
     let refused: string | undefined;
-    storage.withLock(scope, (current) => {
+    storage.withLock("global", (current) => {
       let doc: Doc = {};
       if (current !== undefined && current.trim() !== "") {
         let parsed: unknown;
@@ -1291,74 +1391,44 @@ export class SettingsAdapter {
   }
 
   /**
-   * `trusted` is Pi's answer to "do I load this project's settings"; `writable`
-   * is laser's answer to "may I edit the file". They are deliberately
-   * different. A directory with no `.pi` yet is trusted (nothing to gate) but
-   * writing project settings *creates* a trust-gated resource, so from the next
-   * read Pi will ignore the file until somebody trusts the project. The
-   * snapshot says so in `reason` and the settings screen shows it, rather than
-   * writing a file that quietly does nothing.
-   *
-   * The only case that blocks writing is an explicit decline: overwriting a
-   * project the user has said no to would be laser deciding for them.
+   * Laser owns project trust. The engine's trust store and `.pi` discovery do
+   * not participate in the product-facing decision.
    */
   private computeTrust(): SettingsProjectTrust {
-    let decision: boolean | null = null;
-    let requiresTrust = false;
-    try {
-      decision = new ProjectTrustStore(this.agentDir).get(this.cwd);
-      requiresTrust = hasTrustRequiringProjectResources(this.cwd);
-    } catch {
-      // A missing or unreadable trust store means "no decision".
-    }
-    // laser's own decision wins over Pi's store: it is the one the running
-    // session was started with, so the settings screen must not claim otherwise.
-    if (this.hostTrusted !== undefined) decision = this.hostTrusted;
-    if (decision === true) {
+    if (this.hostTrusted === true) {
       return {
         trusted: true,
         writable: true,
-        reason: `You trusted this project, so the agent loads ${this.projectPath}.`,
+        reason: `You trusted this project, so ${PRODUCT_NAME} loads ${this.projectPath}.`,
       };
     }
-    if (decision === false) {
+    if (this.hostTrusted === false) {
       return {
         trusted: false,
         writable: false,
-        reason: `You declined to trust this project, so the agent ignores ${this.projectPath} and ${PRODUCT_NAME} will not edit it.`,
-      };
-    }
-
-    let fallback = "ask";
-    try {
-      fallback = SettingsManager.create(this.cwd, this.agentDir, { projectTrusted: false }).getDefaultProjectTrust();
-    } catch {
-      // Fall back to Pi's own default.
-    }
-    if (fallback === "always") {
-      return {
-        trusted: true,
-        writable: true,
-        reason: 'No saved trust decision for this project, and defaultProjectTrust is "always", so the agent loads it.',
-      };
-    }
-    if (!requiresTrust) {
-      return {
-        trusted: true,
-        writable: true,
-        reason:
-          `This directory has no trust-gated .pi resources yet. Creating ${this.projectPath} makes it one, and ` +
-          `because defaultProjectTrust is "${fallback}" the agent will then ignore it until this project is trusted.`,
+        reason: `You declined to trust this project, so ${PRODUCT_NAME} ignores ${this.projectPath} and will not edit it.`,
       };
     }
     return {
-      trusted: false,
+      trusted: true,
       writable: true,
-      reason:
-        `This project has trust-gated .pi resources, nobody has decided about it, and defaultProjectTrust is ` +
-        `"${fallback}" — so the agent ignores ${this.projectPath}. Trust the project, or set defaultProjectTrust to "always".`,
+      reason: existsSync(this.projectPath)
+        ? `${PRODUCT_NAME} is using this project's own settings.`
+        : `This project has no ${PRODUCT_NAME} settings yet.`,
     };
   }
+
+  private applyProjectOverrides(): void {
+    const project = this.trust.trusted ? readLaserProjectSettings(this.cwd) : {};
+    this.manager.applyOverrides(mergeSettings(project, ENGINE_PRIVATE_OVERRIDES));
+  }
+}
+
+function writeLaserProjectSettings(path: string, doc: Doc): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const temporary = join(dirname(path), `.${process.pid}.${Date.now()}.settings.tmp`);
+  writeFileSync(temporary, `${JSON.stringify(laserEngineSettings(doc), null, 2)}\n`, { mode: 0o600 });
+  renameSync(temporary, path);
 }
 
 function fileState(path: string, values: Doc, error: string | undefined): SettingsFileState {

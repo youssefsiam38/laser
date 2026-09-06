@@ -3,7 +3,7 @@
  * Subagent list — THE fleet sheet's list (docs/ux-elements.md "Agents":
  * "every run across projects"). Installed from `elements-subagent-list` and
  * fed the run tree of every session that has panels: a section per session,
- * attention-first inside it, each row a run.
+ * chronological parent/child subtrees inside it, each row a run.
  *
  * Divergences from the registry copy, which was a stack of name / model /
  * fake-percentage cards:
@@ -14,8 +14,9 @@
  *   - No progress bars: none of the run producers has a percentage
  *     (docs/ux-panels.md "Nobody has a progress percentage"); a run that
  *     declares `progress` draws it inside its own body when expanded.
- *   - Indentation carries depth, because this list is flattened and the
- *     strip's one-level rule does not apply.
+ *   - Parentage is structural: a child's list lives inside its parent's list
+ *     item and a continuous lineage rail connects them. Attention rolls into
+ *     the parent status but never pulls a child away from that subtree.
  *   - A session that is closed here but whose runs kept going says so.
  */
 import { useEffect, useRef, useState, type ComponentProps } from "react";
@@ -31,7 +32,8 @@ export interface FleetGroup {
   title: string;
   /** The session is not open in this client: its runs kept going without it. */
   orphaned: boolean;
-  nodes: RunNode[];
+  /** Chronological top-level runs; every descendant remains on its node. */
+  roots: RunNode[];
   running: number;
 }
 
@@ -93,9 +95,15 @@ export function SubagentList({
               </span>
             )}
           </header>
-          <ul role="list" className="flex flex-col gap-1.5 px-2 py-2">
-            {group.nodes.map((node) => (
-              <SubagentRow key={node.key} node={node} expanded={expandedId === node.id} expandedHeight={expandedHeight} onToggle={() => onToggle(node.id)} />
+          <ul role="list" className="flex flex-col gap-2 px-2 py-2">
+            {group.roots.map((node) => (
+              <SubagentBranch
+                key={node.key}
+                node={node}
+                expandedId={expandedId}
+                expandedHeight={expandedHeight}
+                onToggle={onToggle}
+              />
             ))}
           </ul>
         </section>
@@ -104,20 +112,70 @@ export function SubagentList({
   );
 }
 
+/** One actual subtree. Nested lists keep lineage intact in both DOM and paint. */
+function SubagentBranch({
+  node,
+  nested = false,
+  expandedId,
+  expandedHeight,
+  onToggle,
+}: {
+  node: RunNode;
+  nested?: boolean;
+  expandedId: string | undefined;
+  expandedHeight: number;
+  onToggle(id: string): void;
+}) {
+  return (
+    <li
+      data-slot="subagent-branch"
+      className={cn(
+        "relative min-w-0",
+        nested && "before:absolute before:-start-3 before:top-5 before:h-px before:w-3 before:bg-line before:content-['']",
+      )}
+    >
+      <SubagentRow
+        node={node}
+        expanded={expandedId === node.id}
+        expandedHeight={expandedHeight}
+        onToggle={() => onToggle(node.id)}
+      />
+      {node.children.length > 0 ? (
+        <ul
+          role="list"
+          aria-label={`${node.title} child runs`}
+          className="relative ms-4 mt-1.5 flex flex-col gap-1.5 border-s border-line ps-3"
+        >
+          {node.children.map((child) => (
+            <SubagentBranch
+              key={child.key}
+              node={child}
+              nested
+              expandedId={expandedId}
+              expandedHeight={expandedHeight}
+              onToggle={onToggle}
+            />
+          ))}
+        </ul>
+      ) : null}
+    </li>
+  );
+}
+
 /**
  * One run. The island keeps its identity across the size change, so the dot
  * keeps ticking and the body keeps its scroll when you collapse it again.
  */
 function SubagentRow({ node, expanded, onToggle, expandedHeight }: { node: RunNode; expanded: boolean; onToggle(): void; expandedHeight: number }) {
-  const ref = useRef<HTMLLIElement>(null);
+  const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (expanded) ref.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [expanded]);
   return (
-    <li
+    <div
       ref={ref}
       data-slot="subagent-row"
-      style={{ marginInlineStart: Math.min(node.depth, 3) * 12, height: expanded ? expandedHeight : COLLAPSED_H }}
+      style={{ height: expanded ? expandedHeight : COLLAPSED_H }}
       className="rounded-xl border border-line transition-[height] duration-(--motion-morph) ease-morph motion-reduce:transition-none"
       onClickCapture={(event) => {
         // The island's own header button toggles size inside the dock; in a
@@ -138,6 +196,6 @@ function SubagentRow({ node, expanded, onToggle, expandedHeight }: { node: RunNo
       }}
     >
       <Island entry={node.entry} size={expanded ? "expanded" : "compact"} frame="sheet" />
-    </li>
+    </div>
   );
 }

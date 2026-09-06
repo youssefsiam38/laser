@@ -27,6 +27,9 @@ import type {
   SessionState,
   SessionUpdate,
   ThinkingLevel,
+  FeatureId,
+  GoalAction,
+  SessionGoal,
   UiDialogRequest,
   UiDialogResponse,
   UiFireAndForget,
@@ -51,6 +54,8 @@ export interface DriverOpenOptions {
    * default (used by tests and by hand-run workers).
    */
   projectTrusted?: boolean;
+  /** Laser-owned capabilities enabled for this project. */
+  features?: FeatureId[];
 }
 
 export type DriverEvent =
@@ -112,6 +117,10 @@ export interface SessionDriver {
 
   /** Replay persisted entries (for reattach). Returns entries and the seq they were last emitted at. */
   entries(): Promise<unknown[]>;
+
+  /** Durable goal control. Optional for engines that do not implement Goals. */
+  goalState?(): Promise<SessionGoal | null>;
+  goalAction?(action: GoalAction): Promise<SessionGoal | null>;
 
   dispose(): Promise<void>;
 }

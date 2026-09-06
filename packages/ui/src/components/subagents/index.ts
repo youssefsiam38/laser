@@ -9,7 +9,6 @@ export { closeFleet, openFleet, setFleetOpen, useFleetFocus, useFleetOpen } from
 export {
   MAX_TABS,
   buildRunTree,
-  byAttention,
   flatten,
   overflowAttention,
   pathTo,

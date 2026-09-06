@@ -12,6 +12,7 @@ import type {
   MessageSpeaker,
   PiExtensionModuleName,
   SessionState,
+  SessionGoal,
   SessionSummary,
   SessionUpdate,
   StopReason,
@@ -73,11 +74,12 @@ export interface SessionView {
   /** Raw persisted entries (for the history/tree panel). */
   entries: unknown[];
   /**
-   * Companion-extension modules active in this session, from
-   * `laser/capabilities`. Features that only exist where their package does
-   * gate on this and are hidden, never disabled, when it is absent (R2).
+   * Reviewed engine modules active in this session. The session snapshot is
+   * authoritative; later capability notifications keep it current.
    */
   capabilities: PiExtensionModuleName[];
+  /** Durable objective for this session, or null when Goal mode is inactive. */
+  goal: SessionGoal | null;
 }
 
 export interface AppState {
@@ -115,6 +117,7 @@ export type Action =
    */
   | { type: "hydrate"; path: string; entries: unknown[]; expectSeq?: number }
   | { type: "entries"; path: string; entries: unknown[] }
+  | { type: "goal"; path: string; goal: SessionGoal | null }
   /**
    * The worker that owns this session restarted its per-process `seq` counter
    * (worker crash, host restart). Adopt the new epoch and re-hydrate, or every
@@ -150,8 +153,9 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, sessions: action.sessions, sessionsLoaded: true };
     case "opened": {
       const existing = state.open[action.state.path];
+      const capabilities = action.state.capabilities ?? existing?.capabilities ?? [];
       const view: SessionView = existing
-        ? { ...existing, state: action.state }
+        ? { ...existing, state: action.state, capabilities }
         : {
             path: action.state.path,
             state: action.state,
@@ -165,7 +169,8 @@ export function reduce(state: AppState, action: Action): AppState {
             openedAt: new Date().toISOString(),
             hydrated: false,
             entries: [],
-            capabilities: [],
+            capabilities,
+            goal: null,
           };
       return { ...state, open: { ...state.open, [view.path]: view }, current: view.path };
     }
@@ -174,8 +179,8 @@ export function reduce(state: AppState, action: Action): AppState {
       const old = state.open[action.from];
       const { [action.from]: _gone, ...rest } = state.open;
       const view: SessionView = old
-        ? { ...old, path: action.state.path, state: action.state, lastSeq: 0, hydrated: false, entries: [] }
-        : { path: action.state.path, state: action.state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, dialogs: [], statuses: {}, widgets: {}, openedAt: new Date().toISOString(), hydrated: false, entries: [], capabilities: [] };
+        ? { ...old, path: action.state.path, state: action.state, lastSeq: 0, hydrated: false, entries: [], goal: null }
+        : { path: action.state.path, state: action.state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, dialogs: [], statuses: {}, widgets: {}, openedAt: new Date().toISOString(), hydrated: false, entries: [], capabilities: [], goal: null };
       return { ...state, open: { ...rest, [view.path]: view }, current: view.path };
     }
     case "select":
@@ -194,6 +199,8 @@ export function reduce(state: AppState, action: Action): AppState {
       );
     case "entries":
       return updateView(state, action.path, (v) => ({ ...v, entries: action.entries }));
+    case "goal":
+      return updateView(state, action.path, (v) => ({ ...v, goal: action.goal }));
     case "resync":
       return updateView(state, action.path, (v) =>
         v.lastSeq <= action.lastSeq ? v : { ...v, lastSeq: action.lastSeq, hydrated: false },
@@ -270,6 +277,10 @@ function applyNotification(state: AppState, method: HostNotificationMethod, para
             ? v
             : { ...v, capabilities: [...active] },
         );
+      }
+      if (p.message.type === "lasercode/goal/state") {
+        const goal = p.message.goal;
+        return updateView(state, p.path, (v) => ({ ...v, goal }));
       }
       if (p.message.type === "lasercode/module/log" && p.message.level === "error") {
         return pushToast(state, "error", `${p.message.module}: ${p.message.message}`);

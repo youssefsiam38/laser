@@ -16,6 +16,14 @@ function run(v: SessionView, updates: SessionUpdate[]): SessionView {
 }
 
 describe("applyUpdate", () => {
+  it("keeps startup capabilities when opening the session view", () => {
+    const next = reduce(initialState, {
+      type: "opened",
+      state: { ...state, capabilities: ["provider-log", "transcribe"] },
+    });
+    expect(next.open["/s.jsonl"]?.capabilities).toEqual(["provider-log", "transcribe"]);
+  });
+
   it("assembles a streamed assistant turn with a tool call", () => {
     const v = run(view(), [
       { kind: "agent_start" },

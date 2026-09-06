@@ -52,7 +52,7 @@ export const INTERFACE_FONTS: readonly FontEntry[] = [
     family: "Inter",
     kind: "sans",
     source: "self-hosted",
-    note: "Drawn for screens at 12–14px. The default.",
+    note: "Drawn for screens at 12–14px. Neutral and compact.",
     fallback: { local: "Arial", sizeAdjust: "107.12%", ascentOverride: "90.44%", descentOverride: "22.52%", lineGapOverride: "0%" },
   },
   {
@@ -105,7 +105,7 @@ export const INTERFACE_FONTS: readonly FontEntry[] = [
     family: "Host Grotesk",
     kind: "sans",
     source: "self-hosted",
-    note: "Characterful; the first design's face.",
+    note: "Characterful and confident. The default.",
     fallback: { local: "Arial" },
   },
   {
@@ -123,7 +123,7 @@ export const CODE_FONTS: readonly FontEntry[] = [
     family: "JetBrains Mono",
     kind: "mono",
     source: "self-hosted",
-    note: "Tall x-height, unambiguous glyphs. The default.",
+    note: "Tall x-height and unambiguous glyphs.",
     fallback: { local: "Courier New", sizeAdjust: "100%", ascentOverride: "102%", descentOverride: "30%", lineGapOverride: "0%" },
   },
   {
@@ -167,7 +167,7 @@ export const CODE_FONTS: readonly FontEntry[] = [
     family: "Martian Mono",
     kind: "mono",
     source: "self-hosted",
-    note: "Wide and technical; the first design's code face.",
+    note: "Wide, technical and distinctive. The default.",
     fallback: { local: "Courier New" },
   },
   {
@@ -179,7 +179,21 @@ export const CODE_FONTS: readonly FontEntry[] = [
   },
 ];
 
-export const DEFAULT_FONTS = { sans: "inter", mono: "jetbrains-mono" } as const;
+/**
+ * What the app is set in before anyone chooses.
+ *
+ * Both are self-hosted, so a first run fetches two files from the app's own
+ * origin and reaches no font CDN (M11-T5). Host Grotesk over Inter: Inter is
+ * the default of every other tool, its tall x-height and tight apertures make
+ * long transcripts dense to read, and `DESIGN.md` rules it out by name. Host
+ * Grotesk is quieter at text sizes, has more open counters, and is less than
+ * half the weight on the wire (20KB against 48KB for the Latin subset).
+ *
+ * Neither is a constant anywhere else: every font in the catalogue is a choice
+ * in Settings, and the theme's `fonts` field is what the compiled stylesheet
+ * reads. This is the starting point, not a hard-coded face.
+ */
+export const DEFAULT_FONTS = { sans: "host-grotesk", mono: "martian-mono" } as const;
 
 /**
  * Resolves a choice to a catalogue entry. An id that is not in the catalogue

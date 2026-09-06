@@ -154,6 +154,9 @@ export interface LaserDesktop {
   /** Keep the native frame (Windows overlay, macOS vibrancy) in step with the UI theme. */
   setTheme(theme: "light" | "dark"): void;
 
+  /** Open the operating system's folder picker. Null means it was cancelled. */
+  chooseDirectory(): Promise<string | null>;
+
   microphone: {
     status(): Promise<MicrophoneStatus>;
     /** Prompts once on macOS; resolves with whatever the system decided. */

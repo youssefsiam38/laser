@@ -27,9 +27,17 @@ export const PRODUCT = {
   "copy": {
     "summary": "A control room for coding agents",
     "description": "Runs coding agent sessions across every project on this machine through one desktop interface.",
-    "descriptionMore": "Everything is configured inside the window: providers, models, extensions and projects. Laser brings its own runtime and its own agent, so there is nothing to install first and nothing on your machine for it to disagree with.",
+    "descriptionMore": "Everything is configured inside the window: providers, models, features and projects. Laser brings its own runtime and coding engine, so there is nothing to install first and nothing on your machine for it to disagree with.",
     "descriptionRelay": "Coming soon: the same interface on your phone through an end-to-end encrypted relay.",
     "webDescription": "Your coding agents in one desktop interface. Phone remote control is coming soon."
+  },
+  "branding": {
+    "light": "#03CC7B",
+    "dark": "#0B0F14",
+    "black": "#000000",
+    "warmWhite": "#E9E8E6",
+    "webBackground": "#F5F7FA",
+    "webTheme": "#F5F7FA"
   },
   "desktopFileName": "laser.desktop",
   "metainfoFileName": "com.hubtrix.laser.metainfo.xml",
@@ -50,6 +58,7 @@ export const ENV = {
   "debug": "LASERCODE_DEBUG",
   "disableSandbox": "LASERCODE_DISABLE_SANDBOX",
   "extensionName": "LASERCODE_EXTENSION_NAME",
+  "features": "LASERCODE_FEATURES",
   "home": "LASERCODE_HOME",
   "node": "LASERCODE_NODE",
   "nodeMirror": "LASERCODE_NODE_MIRROR",

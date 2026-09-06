@@ -190,17 +190,17 @@ export async function resolveTranscriptionKey(config: TranscribeConfig, sources:
   }
 
   const oauthOnly = providers.filter((p) => p.configured && p.oauth).map((p) => p.id);
-  const fix = `Export ${config.apiKeyEnv}, or put "apiKey" in ${config.configPath}.`;
+  const fix = `Add an OpenAI platform API key in Settings → Providers and models.`;
   if (openai?.configured && openai.oauth) {
     throw new TranscribeError(
       "oauth_key",
-      `The ${TRANSCRIBE_PROVIDER} credential on this machine is an OAuth token, and ${config.baseUrl}/audio/transcriptions only accepts a platform API key. ${fix}`,
+      `Dictation cannot use a ChatGPT account sign-in because audio transcription requires a platform API key. ${fix}`,
     );
   }
   if (oauthOnly.length > 0) {
     throw new TranscribeError(
       "oauth_key",
-      `Dictation needs a platform OpenAI API key. Your signed-in providers (${oauthOnly.join(", ")}) are OAuth-backed, and the tokens they issue are rejected by ${config.baseUrl}/audio/transcriptions. ${fix}`,
+      `Dictation needs a platform OpenAI API key. Your signed-in providers (${oauthOnly.join(", ")}) use account access that cannot authorize audio transcription. ${fix}`,
     );
   }
   throw new TranscribeError("no_key", `Dictation needs an OpenAI API key. ${fix}`);
@@ -398,9 +398,8 @@ export async function transcribeAudio(request: TranscribeAudioRequest): Promise<
 // ---------------------------------------------------------------------------
 
 /**
- * `pi/transcribe/status`. `available` gates the microphone affordance itself:
- * a session without pi-gpt-transcribe, or without a usable key, shows no
- * button rather than a button that fails after you press it (M8-T1).
+ * `pi/transcribe/status`. The capability is bundled; `available` reports
+ * whether the required OpenAI platform API key is ready.
  */
 /** Re-exported so this file reads as one story; the wire type lives in the protocol. */
 export type { TranscribeStatus };
@@ -456,12 +455,6 @@ export interface TranscribeServiceOptions {
   config?: TranscribeConfig;
   fetchImpl?: typeof fetch;
   drainTimeoutMs?: number;
-  /**
-   * Whether pi-gpt-transcribe is present in this project, from the companion
-   * extension's capability report. Dictation is only offered where the package
-   * is (M8-T1); a project without it has no microphone at all.
-   */
-  packagePresent?: () => boolean;
 }
 
 /**
@@ -494,23 +487,17 @@ export class TranscribeService {
    * the microphone — rather than as a 401 mid-sentence.
    */
   async status(): Promise<TranscribeStatus> {
-    if (this.options.packagePresent && !this.options.packagePresent()) {
-      return {
-        available: false,
-        reason: "pi-gpt-transcribe is not installed for this project. Install it from Settings › Packages to dictate.",
-      };
-    }
     const config = this.currentConfig();
     try {
       await resolveTranscriptionKey(config, this.options.keys);
     } catch (error) {
       return {
         available: false,
-        provider: TRANSCRIBE_CONFIG_DIR_NAME,
+        provider: TRANSCRIBE_PROVIDER,
         reason: error instanceof Error ? error.message : String(error),
       };
     }
-    return { available: true, provider: TRANSCRIBE_CONFIG_DIR_NAME };
+    return { available: true, provider: TRANSCRIBE_PROVIDER };
   }
 
   /**

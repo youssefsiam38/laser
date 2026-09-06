@@ -1,82 +1,204 @@
 "use client";
 /**
- * Model logos — provider marks in the model picker and the telemetry rail
- * (docs/ux-elements.md "Primitives"). Installed from `logos`.
+ * Provider marks for model-facing surfaces.
  *
- * Divergences from the registry copy: every mark renders in `currentColor`.
- * The registry ships brand hexes (a terracotta Claude, a three-stop Gemini
- * gradient); here a colour is a token the person can change and a logo is a
- * shape, so the marks take the ink around them (docs/ux-theme.md T1).
- * `ProviderLogo` maps Pi's provider ids onto the marks and falls back to the
- * provider's initials, so an unfamiliar provider still gets a glyph.
+ * Artwork comes from the maintained `@lobehub/icons` AI-provider catalog. We
+ * deliberately use each component's mono variant: it renders with
+ * `currentColor`, so Laser's theme tokens retain contrast in every surface.
+ * Region and billing-plan provider ids share the parent company's mark.
  */
 
-import type { ComponentProps, ReactElement } from "react";
+import AntGroup from "@lobehub/icons/es/AntGroup/components/Mono.js";
+import Anthropic from "@lobehub/icons/es/Anthropic/components/Mono.js";
+import AzureAI from "@lobehub/icons/es/AzureAI/components/Mono.js";
+import Baseten from "@lobehub/icons/es/Baseten/components/Mono.js";
+import Bedrock from "@lobehub/icons/es/Bedrock/components/Mono.js";
+import Cerebras from "@lobehub/icons/es/Cerebras/components/Mono.js";
+import Claude from "@lobehub/icons/es/Claude/components/Mono.js";
+import Cloudflare from "@lobehub/icons/es/Cloudflare/components/Mono.js";
+import DeepSeek from "@lobehub/icons/es/DeepSeek/components/Mono.js";
+import Fireworks from "@lobehub/icons/es/Fireworks/components/Mono.js";
+import Gemini from "@lobehub/icons/es/Gemini/components/Mono.js";
+import GithubCopilot from "@lobehub/icons/es/GithubCopilot/components/Mono.js";
+import Google from "@lobehub/icons/es/Google/components/Mono.js";
+import Groq from "@lobehub/icons/es/Groq/components/Mono.js";
+import HuggingFace from "@lobehub/icons/es/HuggingFace/components/Mono.js";
+import Kimi from "@lobehub/icons/es/Kimi/components/Mono.js";
+import Minimax from "@lobehub/icons/es/Minimax/components/Mono.js";
+import Mistral from "@lobehub/icons/es/Mistral/components/Mono.js";
+import Moonshot from "@lobehub/icons/es/Moonshot/components/Mono.js";
+import Nvidia from "@lobehub/icons/es/Nvidia/components/Mono.js";
+import OpenAI from "@lobehub/icons/es/OpenAI/components/Mono.js";
+import OpenCode from "@lobehub/icons/es/OpenCode/components/Mono.js";
+import OpenRouter from "@lobehub/icons/es/OpenRouter/components/Mono.js";
+import Pi from "@lobehub/icons/es/Pi/components/Mono.js";
+import Qwen from "@lobehub/icons/es/Qwen/components/Mono.js";
+import Together from "@lobehub/icons/es/Together/components/Mono.js";
+import Vercel from "@lobehub/icons/es/Vercel/components/Mono.js";
+import VertexAI from "@lobehub/icons/es/VertexAI/components/Mono.js";
+import XAI from "@lobehub/icons/es/XAI/components/Mono.js";
+import XiaomiMiMo from "@lobehub/icons/es/XiaomiMiMo/components/Mono.js";
+import ZAI from "@lobehub/icons/es/ZAI/components/Mono.js";
+import type { IconType } from "@lobehub/icons/es/types/index.js";
 
-export type LogoProps = ComponentProps<"svg">;
+const PROVIDER_LOGOS = {
+  "amazon-bedrock": Bedrock,
+  "ant-ling": AntGroup,
+  anthropic: Anthropic,
+  "azure-openai-responses": AzureAI,
+  baseten: Baseten,
+  cerebras: Cerebras,
+  "cloudflare-ai-gateway": Cloudflare,
+  "cloudflare-workers-ai": Cloudflare,
+  deepseek: DeepSeek,
+  fireworks: Fireworks,
+  "github-copilot": GithubCopilot,
+  google: Google,
+  "google-vertex": VertexAI,
+  groq: Groq,
+  huggingface: HuggingFace,
+  "kimi-coding": Kimi,
+  minimax: Minimax,
+  "minimax-cn": Minimax,
+  mistral: Mistral,
+  moonshotai: Moonshot,
+  "moonshotai-cn": Moonshot,
+  nvidia: Nvidia,
+  openai: OpenAI,
+  "openai-codex": OpenAI,
+  opencode: OpenCode,
+  "opencode-go": OpenCode,
+  openrouter: OpenRouter,
+  "qwen-token-plan": Qwen,
+  "qwen-token-plan-cn": Qwen,
+  "qwen-token-plan-individual": Qwen,
+  radius: Pi,
+  together: Together,
+  "vercel-ai-gateway": Vercel,
+  xai: XAI,
+  xiaomi: XiaomiMiMo,
+  "xiaomi-token-plan-ams": XiaomiMiMo,
+  "xiaomi-token-plan-cn": XiaomiMiMo,
+  "xiaomi-token-plan-sgp": XiaomiMiMo,
+  zai: ZAI,
+  "zai-coding-cn": ZAI,
 
-function ClaudeLogo(props: LogoProps) {
-  return (
-    <svg
-      viewBox="0 0 256 257"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-hidden="true"
-      {...props}
-    >
-      <path
-        fill="currentColor"
-        d="m50.228 170.321 50.357-28.257.843-2.463-.843-1.361h-2.462l-8.426-.518-28.775-.778-24.952-1.037-24.175-1.296-6.092-1.297L0 125.796l.583-3.759 5.12-3.434 7.324.648 16.202 1.101 24.304 1.685 17.629 1.037 26.118 2.722h4.148l.583-1.685-1.426-1.037-1.101-1.037-25.147-17.045-27.22-18.017-14.258-10.37-7.713-5.25-3.888-4.925-1.685-10.758 7-7.713 9.397.649 2.398.648 9.527 7.323 20.35 15.75L94.817 91.9l3.889 3.24 1.555-1.102.195-.777-1.75-2.917-14.453-26.118-15.425-26.572-6.87-11.018-1.814-6.61c-.648-2.723-1.102-4.991-1.102-7.778l7.972-10.823L71.42 0 82.05 1.426l4.472 3.888 6.61 15.101 10.694 23.786 16.591 32.34 4.861 9.592 2.592 8.879.973 2.722h1.685v-1.556l1.36-18.211 2.528-22.36 2.463-28.776.843-8.1 4.018-9.722 7.971-5.25 6.222 2.981 5.12 7.324-.713 4.73-3.046 19.768-5.962 30.98-3.889 20.739h2.268l2.593-2.593 10.499-13.934 17.628-22.036 7.778-8.749 9.073-9.657 5.833-4.601h11.018l8.1 12.055-3.628 12.443-11.342 14.388-9.398 12.184-13.48 18.147-8.426 14.518.778 1.166 2.01-.194 30.46-6.481 16.462-2.982 19.637-3.37 8.88 4.148.971 4.213-3.5 8.62-20.998 5.184-24.628 4.926-36.682 8.685-.454.324.519.648 16.526 1.555 7.065.389h17.304l32.21 2.398 8.426 5.574 5.055 6.805-.843 5.184-12.962 6.611-17.498-4.148-40.83-9.721-14-3.5h-1.944v1.167l11.666 11.406 21.387 19.314 26.767 24.887 1.36 6.157-3.434 4.86-3.63-.518-23.526-17.693-9.073-7.972-20.545-17.304h-1.36v1.814l4.73 6.935 25.017 37.59 1.296 11.536-1.814 3.76-6.481 2.268-7.13-1.297-14.647-20.544-15.1-23.138-12.185-20.739-1.49.843-7.194 77.448-3.37 3.953-7.778 2.981-6.48-4.925-3.436-7.972 3.435-15.749 4.148-20.544 3.37-16.333 3.046-20.285 1.815-6.74-.13-.454-1.49.194-15.295 20.999-23.267 31.433-18.406 19.702-4.407 1.75-7.648-3.954.713-7.064 4.277-6.286 25.47-32.405 15.36-20.092 9.917-11.6-.065-1.686h-.583L44.07 198.125l-12.055 1.555-5.185-4.86.648-7.972 2.463-2.593 20.35-13.999-.064.065Z"
-      />
-    </svg>
-  );
-}
+  // Friendly aliases may appear in custom model catalogs.
+  claude: Claude,
+  gemini: Gemini,
+} satisfies Record<string, IconType>;
 
-function OpenAILogo(props: LogoProps) {
-  return (
-    <svg
-      viewBox="0 0 256 260"
-      xmlns="http://www.w3.org/2000/svg"
-      fill="currentColor"
-      aria-hidden="true"
-      {...props}
-    >
-      <path d="M239.184 106.203a64.716 64.716 0 0 0-5.576-53.103C219.452 28.459 191 15.784 163.213 21.74A65.586 65.586 0 0 0 52.096 45.22a64.716 64.716 0 0 0-43.23 31.36c-14.31 24.602-11.061 55.634 8.033 76.74a64.665 64.665 0 0 0 5.525 53.102c14.174 24.65 42.644 37.324 70.446 31.36a64.72 64.72 0 0 0 48.754 21.744c28.481.025 53.714-18.361 62.414-45.481a64.767 64.767 0 0 0 43.229-31.36c14.137-24.558 10.875-55.423-8.083-76.483Zm-97.56 136.338a48.397 48.397 0 0 1-31.105-11.255l1.535-.87 51.67-29.825a8.595 8.595 0 0 0 4.247-7.367v-72.85l21.845 12.636c.218.111.37.32.409.563v60.367c-.056 26.818-21.783 48.545-48.601 48.601Zm-104.466-44.61a48.345 48.345 0 0 1-5.781-32.589l1.534.921 51.722 29.826a8.339 8.339 0 0 0 8.441 0l63.181-36.425v25.221a.87.87 0 0 1-.358.665l-52.335 30.184c-23.257 13.398-52.97 5.431-66.404-17.803ZM23.549 85.38a48.499 48.499 0 0 1 25.58-21.333v61.39a8.288 8.288 0 0 0 4.195 7.316l62.874 36.272-21.845 12.636a.819.819 0 0 1-.767 0L41.353 151.53c-23.211-13.454-31.171-43.144-17.804-66.405v.256Zm179.466 41.695-63.08-36.63L161.73 77.86a.819.819 0 0 1 .768 0l52.233 30.184a48.6 48.6 0 0 1-7.316 87.635v-61.391a8.544 8.544 0 0 0-4.4-7.213Zm21.742-32.69-1.535-.922-51.619-30.081a8.39 8.39 0 0 0-8.492 0L99.98 99.808V74.587a.716.716 0 0 1 .307-.665l52.233-30.133a48.652 48.652 0 0 1 72.236 50.391v.205ZM88.061 139.097l-21.845-12.585a.87.87 0 0 1-.41-.614V65.685a48.652 48.652 0 0 1 79.757-37.346l-1.535.87-51.67 29.825a8.595 8.595 0 0 0-4.246 7.367l-.051 72.697Zm11.868-25.58 28.138-16.217 28.188 16.218v32.434l-28.086 16.218-28.188-16.218-.052-32.434Z" />
-    </svg>
-  );
-}
+const BUILTIN_PROVIDER_IDS = [
+  "amazon-bedrock",
+  "ant-ling",
+  "anthropic",
+  "azure-openai-responses",
+  "baseten",
+  "cerebras",
+  "cloudflare-ai-gateway",
+  "cloudflare-workers-ai",
+  "deepseek",
+  "fireworks",
+  "github-copilot",
+  "google",
+  "google-vertex",
+  "groq",
+  "huggingface",
+  "kimi-coding",
+  "minimax",
+  "minimax-cn",
+  "mistral",
+  "moonshotai",
+  "moonshotai-cn",
+  "nvidia",
+  "openai",
+  "openai-codex",
+  "opencode",
+  "opencode-go",
+  "openrouter",
+  "qwen-token-plan",
+  "qwen-token-plan-cn",
+  "qwen-token-plan-individual",
+  "radius",
+  "together",
+  "vercel-ai-gateway",
+  "xai",
+  "xiaomi",
+  "xiaomi-token-plan-ams",
+  "xiaomi-token-plan-cn",
+  "xiaomi-token-plan-sgp",
+  "zai",
+  "zai-coding-cn",
+] as const;
 
-function GeminiLogo(props: LogoProps) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      xmlns="http://www.w3.org/2000/svg"
-      fill="currentColor"
-      aria-hidden="true"
-      {...props}
-    >
-      <path d="M12 1c.53 5.94 4.06 9.47 10 10-5.94.53-9.47 4.06-10 10-.53-5.94-4.06-9.47-10-10C7.94 10.47 11.47 6.94 12 1Z" />
-    </svg>
-  );
-}
-
-
-const LOGOS: Record<string, (props: LogoProps) => ReactElement> = {
-  anthropic: ClaudeLogo,
-  claude: ClaudeLogo,
-  openai: OpenAILogo,
-  "openai-codex": OpenAILogo,
-  google: GeminiLogo,
-  gemini: GeminiLogo,
-  "google-vertex": GeminiLogo,
+const PROVIDER_DISPLAY_NAMES: Record<(typeof BUILTIN_PROVIDER_IDS)[number], string> = {
+  "amazon-bedrock": "Amazon Bedrock",
+  "ant-ling": "Ant Ling",
+  anthropic: "Anthropic",
+  "azure-openai-responses": "Azure OpenAI",
+  baseten: "Baseten",
+  cerebras: "Cerebras",
+  "cloudflare-ai-gateway": "Cloudflare Gateway",
+  "cloudflare-workers-ai": "Workers AI",
+  deepseek: "DeepSeek",
+  fireworks: "Fireworks AI",
+  "github-copilot": "GitHub Copilot",
+  google: "Google AI",
+  "google-vertex": "Vertex AI",
+  groq: "Groq",
+  huggingface: "Hugging Face",
+  "kimi-coding": "Kimi Code",
+  minimax: "MiniMax",
+  "minimax-cn": "MiniMax China",
+  mistral: "Mistral AI",
+  moonshotai: "Moonshot AI",
+  "moonshotai-cn": "Moonshot AI China",
+  nvidia: "NVIDIA",
+  openai: "OpenAI",
+  "openai-codex": "OpenAI Codex",
+  opencode: "OpenCode",
+  "opencode-go": "OpenCode Go",
+  openrouter: "OpenRouter",
+  "qwen-token-plan": "Qwen Token Plan",
+  "qwen-token-plan-cn": "Qwen Plan China",
+  "qwen-token-plan-individual": "Qwen Individual",
+  radius: "Radius",
+  together: "Together AI",
+  "vercel-ai-gateway": "Vercel Gateway",
+  xai: "xAI",
+  xiaomi: "Xiaomi",
+  "xiaomi-token-plan-ams": "Xiaomi AMS",
+  "xiaomi-token-plan-cn": "Xiaomi China",
+  "xiaomi-token-plan-sgp": "Xiaomi Singapore",
+  zai: "Z.ai",
+  "zai-coding-cn": "Z.ai Coding China",
 };
 
+function providerDisplayName(provider: string): string {
+  const normalized = provider.toLowerCase() as (typeof BUILTIN_PROVIDER_IDS)[number];
+  const catalogName = PROVIDER_DISPLAY_NAMES[normalized];
+  if (catalogName) return catalogName;
+  return provider
+    .split(/[-_.]+/)
+    .filter(Boolean)
+    .map((part) => part.length <= 3 ? part.toUpperCase() : `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
+    .join(" ");
+}
+
+function hasCatalogProviderLogo(provider: string): boolean {
+  return provider.toLowerCase() in PROVIDER_LOGOS;
+}
+
 /**
- * The mark for a Pi provider id, or a two-letter monogram when there is none.
- * Sized by the caller (`size-3.5` in a row, `size-4` in a trigger).
+ * A provider mark sized by its caller (`size-3.5` in rows, `size-4` in
+ * triggers). Unknown custom providers retain a deterministic monogram.
  */
 function ProviderLogo({ provider, className }: { provider: string; className?: string | undefined }) {
-  const Logo = LOGOS[provider.toLowerCase()];
-  if (Logo) return <Logo className={className} />;
+  const Logo: IconType | undefined = PROVIDER_LOGOS[provider.toLowerCase() as keyof typeof PROVIDER_LOGOS];
+  if (Logo) {
+    return <Logo aria-hidden="true" className={className} focusable="false" />;
+  }
+
   const letters = provider.replace(/[-_.]/g, " ").split(/\s+/).filter(Boolean);
   const monogram = ((letters[0]?.[0] ?? "?") + (letters[1]?.[0] ?? "")).toUpperCase();
   return (
@@ -89,4 +211,16 @@ function ProviderLogo({ provider, className }: { provider: string; className?: s
   );
 }
 
-export { ClaudeLogo, OpenAILogo, GeminiLogo, ProviderLogo };
+const ClaudeLogo = Claude;
+const OpenAILogo = OpenAI;
+const GeminiLogo = Gemini;
+
+export {
+  BUILTIN_PROVIDER_IDS,
+  ClaudeLogo,
+  GeminiLogo,
+  OpenAILogo,
+  ProviderLogo,
+  providerDisplayName,
+  hasCatalogProviderLogo,
+};

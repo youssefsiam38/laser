@@ -63,7 +63,7 @@ Simple choices first, depth behind a disclosure.
 
 | Control | Choices |
 | --- | --- |
-| Theme | A gallery of presets, each a live swatch card. Default is a plain dark preset |
+| Theme | A gallery of presets, each a live swatch card. Default is the Laser brand pair: black, warm white and beam green in dark mode; warm white, black and an accessible beam-green tone in light mode |
 | Accent | A hue row; picking one re-derives `--live` and its on-colour for both bases |
 | Attention hue | Separate from accent, because "needs you" must never be the same colour as "running" |
 | Interface font | A curated list, each rendered in itself so the choice is visible |
@@ -86,12 +86,10 @@ chosen, so an unused family costs nothing. Every choice declares a real
 fallback stack, and the app renders correctly before the webfont arrives —
 size and weight are chosen so the swap does not reflow.
 
-The **default interface font is Inter** and the **default code font is
-JetBrains Mono**. That is a deliberate change from the first design pass:
-Host Grotesk and Martian Mono are characterful but tiring at 12–13px, which
-is where this app lives. Inter was drawn for exactly this size on exactly
-these screens; JetBrains Mono has a tall x-height and unambiguous glyphs for
-code. Both remain available as choices, so nothing is lost.
+The **default interface font is Host Grotesk** and the **default code font is
+Martian Mono**. They give Laser a recognisable voice without baking a family
+into components; Inter and JetBrains Mono remain available for people who
+prefer a quieter, denser reading surface.
 
 Curated interface list: Inter, IBM Plex Sans, Source Sans 3, Public Sans,
 Figtree, Atkinson Hyperlegible (drawn for low vision), Host Grotesk, and the

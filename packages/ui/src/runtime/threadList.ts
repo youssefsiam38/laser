@@ -13,7 +13,7 @@
  *
  * The builders below are pure and tested in test/runtime/threadList.test.ts.
  */
-import { PRODUCT_NAME, storageKey } from "@lasercode/protocol";
+import { storageKey } from "@lasercode/protocol";
 import type { RemoteThreadListAdapter } from "@assistant-ui/react";
 import type { SessionAttention, SessionSummary } from "@lasercode/protocol";
 import type { SessionView } from "../store.js";
@@ -218,6 +218,8 @@ export interface ThreadListDeps {
   createSession(cwd: string): Promise<string>;
   /** `pi/session/rename`. */
   renameSession(path: string, name: string): Promise<void>;
+  /** Permanently delete a closed persisted transcript. */
+  deleteSession(path: string): Promise<void>;
   /** `session/load` + `pi/session/entries` hydration. */
   loadSession(path: string): Promise<void>;
   /** `pi/session/list` refresh. */
@@ -273,10 +275,10 @@ export function createThreadListAdapter(deps: ThreadListDeps): RemoteThreadListA
       deps.archive.remove(remoteId);
     },
 
-    delete: async () => {
-      throw new Error(
-        `${PRODUCT_NAME} does not delete sessions: the transcript file is your history. Archive the session instead.`,
-      );
+    delete: async (remoteId) => {
+      await deps.deleteSession(remoteId);
+      deps.archive.remove(remoteId);
+      await deps.refreshSessions();
     },
 
     initialize: async () => {

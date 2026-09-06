@@ -277,6 +277,22 @@ adding dates or estimates, deleting done-when criteria. Any structural change to
    `STATUS_DETAILED.md`. Agent work (subagents, workflows, missions) has a
    domain model of its own in [`docs/ux-agent-work.md`](docs/ux-agent-work.md):
    runs, plans and ledgers, which feed the `run` and `plan` kinds.
+6b. **Laser is the product; Pi is an internal engine.** No normal Laser surface
+   mirrors Pi's settings, package manager, extension vocabulary or branding.
+   Laser defines its own settings schema and curated feature manifests. Low-level
+   engine values are managed internally or omitted; specialist controls live in
+   a permanent Advanced tab. People enable Features, never install packages.
+   Logic that needs Pi semantics belongs in a reusable Pi-native workspace
+   package (or an exact-pinned upstream package) that uses documented Pi APIs and
+   remains useful to native Pi users. `packages/pi-extension` is the adapter: it
+   translates that logic into engine-neutral `@lasercode/protocol` data. The UI
+   owns placement, language and presentation. Nothing in UI, host or protocol
+   may import Pi, a Pi extension, or a community package. Dependencies stay exact
+   pinned. Project configuration belongs under `<project>/.laser`; the worker
+   disables Pi's automatic `<project>/.pi` discovery and passes only validated
+   `.laser` values as in-memory engine overrides. `.pi` is neither a migration
+   source nor supported Laser configuration. Package installation and Pi
+   passthrough are not product capabilities.
 7. **The relay is a byte forwarder.** `packages/relay` links no crypto library and
    never parses payloads beyond the channel id.
 8. **Never two writers on one Pi session file.**

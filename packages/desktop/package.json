@@ -1,6 +1,6 @@
 {
   "name": "@lasercode/desktop",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Electron shell: main process, tray, notifications, keychain, updater. Spawns the host from a bundled stock Node placed outside asar (M5-T2). Must not import Pi.",

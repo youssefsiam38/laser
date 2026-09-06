@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 /**
- * The Laser mark, drawn once and emitted as PNGs.
+ * Laser icon assets.
  *
- * The mark is a laser cavity: two mirrors facing each other with the beam
- * running through the gap and out the far side. Same drawing as the logo.
+ * App icons are copied from the approved website artwork kept under
+ * assets/app-icons. Tray icons use a compact procedural version of the same
+ * mark because they need platform-specific template and attention variants.
  *
- * Two outputs, because they have different lives:
+ * The outputs have different lives:
  *   build/icon.png          the app icon electron-builder turns into .icns/.ico
  *   src/assets/icons.generated.ts  the tray images, base64 in source
  *
@@ -23,7 +24,7 @@
  * box-filters down, which is a page of maths and zero supply chain.
  */
 import { deflateSync } from "node:zlib";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { identity } from "../../../scripts/identity/identity.mjs";
@@ -223,13 +224,6 @@ function encodePng(size, pixels) {
 
 // ------------------------------------------------------------ recipes ----
 
-const APP_GEOMETRY = {
-  // The mark sits inside a comfortable margin; the squircle is the ground.
-  inset: 0.17,
-  radius: 0.5,
-  squircle: { radius: 0.5, exponent: 5 },
-};
-
 // The tray runs at 16px, where a margin is wasted space: the mark fills it.
 const TRAY_GEOMETRY = {
   inset: 0.04,
@@ -237,27 +231,18 @@ const TRAY_GEOMETRY = {
   squircle: null,
 };
 
-const APP_PALETTE = { ground: identity.branding.dark, ink: "#E9E8E6", beam: "#03CC7B" };
 /** macOS template: black + alpha only; the system tints it. */
 const TEMPLATE_PALETTE = { ground: null, ink: "#000000", beam: "#000000", beamAlpha: 0.55 };
 
-const outputs = [];
-
-// App icon. 1024 so electron-builder can make every .icns/.ico size from it.
-outputs.push({ path: join(packageRoot, "build", "icon.png"), size: 1024, palette: APP_PALETTE, geometry: APP_GEOMETRY });
-// Linux wants a size set; electron-builder picks these up from build/icons.
-for (const size of [512, 256, 128, 64, 48, 32, 16]) {
-  outputs.push({
-    path: join(packageRoot, "build", "icons", `${size}x${size}.png`),
-    size,
-    palette: APP_PALETTE,
-    geometry: APP_GEOMETRY,
-  });
-}
-
-for (const output of outputs) {
-  mkdirSync(dirname(output.path), { recursive: true });
-  writeFileSync(output.path, encodePng(output.size, render(output.size, output.palette, output.geometry)));
+// App icons are the exact, approved artwork shared with laser.hubtrix.com.
+// Keep the pre-rendered size set in the repository: regenerating an
+// approximation here is how the website and desktop app drifted apart.
+for (const size of [1024, 512, 256, 128, 64, 48, 32, 16]) {
+  const output = size === 1024
+    ? join(packageRoot, "build", "icon.png")
+    : join(packageRoot, "build", "icons", `${size}x${size}.png`);
+  mkdirSync(dirname(output), { recursive: true });
+  copyFileSync(join(packageRoot, "assets", "app-icons", `${size}.png`), output);
 }
 
 /**

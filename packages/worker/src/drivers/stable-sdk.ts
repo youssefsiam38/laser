@@ -30,17 +30,22 @@ import {
   type AgentSessionRuntime,
   type CreateAgentSessionRuntimeFactory,
   type ExtensionError,
+  type InlineExtension,
   type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
-import { createCommandBus, createLaserExtension } from "@lasercode/pi-extension";
+import { goalExtensionPath, goalStateFromEntries } from "@lasercode/pi-goal";
+import { createCommandBus, createLaserExtension, toSessionGoal } from "@lasercode/pi-extension";
 import type {
   CommandInfo,
   ContentBlock,
+  FeatureId,
+  GoalAction,
   ImageContent,
   MessageSpeaker,
   ModelRef,
   PiExtensionCommand,
   PromptInfo,
+  SessionGoal,
   SessionState,
   SessionUpdate,
   StopReason,
@@ -49,6 +54,9 @@ import type {
   UiDialogResponse,
   Usage,
 } from "@lasercode/protocol";
+import { dirname, join } from "node:path";
+import { createRequire } from "node:module";
+import { readLaserProjectSettings } from "../settings.js";
 import {
   DriverUnavailableError,
   type DriverEvent,
@@ -60,6 +68,7 @@ import {
 import { createUiBridge, type UiBridge } from "../ui-bridge.js";
 
 type PiModel = ReturnType<ModelRuntime["getModels"]>[number];
+const require = createRequire(import.meta.url);
 
 export class StableSdkDriver implements SessionDriver {
   readonly kind = "stable-sdk" as const;
@@ -93,30 +102,69 @@ export class StableSdkDriver implements SessionDriver {
     if (options.subagentsTempRoot) process.env["PI_SUBAGENTS_TEMP_ROOT"] = options.subagentsTempRoot;
 
     const agentDir = options.agentDir ?? getAgentDir();
+    const enabled = new Set<FeatureId>(options.features ?? ["subagents", "goals"]);
     const laser = createLaserExtension({
       send: (message) => this.emit({ type: "extension", message }),
       commands: this.extensionBus,
+      only: [
+        "provider-log",
+        "panels",
+        "transcribe",
+        ...(enabled.has("subagents") ? ["subagents" as const] : []),
+        ...(enabled.has("goals") ? ["goal" as const] : []),
+      ],
     });
 
     const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
-      // The companion extension rides along with whatever the user already has
-      // installed; it is added to discovery, it does not replace it.
+      const settingsManager = SettingsManager.create(cwd, agentDir, {
+        // Laser never asks the engine to discover `<cwd>/.pi`. Project
+        // settings arrive from `.laser` as curated in-memory overrides below.
+        projectTrusted: false,
+      });
+      settingsManager.applyOverrides({
+        ...(options.projectTrusted === false ? {} : readLaserProjectSettings(cwd)),
+        // Packages and loose resources are an engine implementation detail.
+        // Features below are the only reviewed extensions in the runtime.
+        packages: [],
+        extensions: [],
+        skills: [],
+        prompts: [],
+        themes: [],
+      });
+
+      const extensionFactories: InlineExtension[] = [];
+      const additionalExtensionPaths: string[] = [];
+      const additionalSkillPaths: string[] = [];
+      const additionalPromptTemplatePaths: string[] = [];
+      if (enabled.has("subagents")) {
+        const entrypoint = require.resolve("pi-subagents");
+        const root = dirname(entrypoint);
+        additionalExtensionPaths.push(entrypoint);
+        additionalSkillPaths.push(join(root, "skills"));
+        additionalPromptTemplatePaths.push(join(root, "prompts"));
+      }
+      if (enabled.has("goals")) {
+        additionalExtensionPaths.push(goalExtensionPath());
+      }
+      extensionFactories.push(laser);
+
       const services = await createAgentSessionServices({
         cwd,
         agentDir,
-        // The host owns the trust decision (packages/host/src/trust.ts): the SDK
-        // never runs Pi's interactive trust flow and SettingsManager defaults to
-        // trusted, so an undecided or declined project would otherwise load its
-        // `.pi/` extensions anyway. Any cwd other than the one the host asked
-        // about is untrusted — the runtime re-runs this factory on a cwd switch.
-        ...(options.projectTrusted === undefined
-          ? {}
-          : {
-              settingsManager: SettingsManager.create(cwd, agentDir, {
-                projectTrusted: cwd === options.cwd ? options.projectTrusted : false,
-              }),
-            }),
-        resourceLoaderOptions: { extensionFactories: [laser] },
+        settingsManager,
+        resourceLoaderOptions: {
+          extensionFactories,
+          noExtensions: true,
+          noSkills: true,
+          noPromptTemplates: true,
+          noThemes: true,
+          agentsFilesOverride: ({ agentsFiles }) => ({
+            agentsFiles: agentsFiles.filter(({ path }) => !path.split(/[\\/]/).includes(".pi")),
+          }),
+          ...(additionalExtensionPaths.length > 0 ? { additionalExtensionPaths } : {}),
+          ...(additionalSkillPaths.length > 0 ? { additionalSkillPaths } : {}),
+          ...(additionalPromptTemplatePaths.length > 0 ? { additionalPromptTemplatePaths } : {}),
+        },
       });
       return {
         ...(await createAgentSessionFromServices({
@@ -213,6 +261,17 @@ export class StableSdkDriver implements SessionDriver {
 
   async entries(): Promise<unknown[]> {
     return this.session().sessionManager.getEntries();
+  }
+
+  async goalState(): Promise<SessionGoal | null> {
+    return toSessionGoal(goalStateFromEntries(this.session().sessionManager.getBranch()));
+  }
+
+  async goalAction(action: GoalAction): Promise<SessionGoal | null> {
+    await this.session().prompt(goalCommand(action));
+    const goal = await this.goalState();
+    this.emit({ type: "extension", message: { type: "lasercode/goal/state", goal } });
+    return goal;
   }
 
   // ----------------------------------------------------------------- prompting
@@ -329,11 +388,15 @@ export class StableSdkDriver implements SessionDriver {
     const session = this.session();
     const commands: CommandInfo[] = [];
     for (const command of session.extensionRunner.getRegisteredCommands()) {
+      const feature = command.invocationName === "goal" ? "Goals" : command.invocationName === "run" ? "Subagents" : undefined;
+      // Registered commands are implementation plumbing unless a curated
+      // feature claims a product command. Their package names never reach UI.
+      if (!feature) continue;
       commands.push({
         name: command.invocationName,
-        source: "extension",
+        source: "feature",
         ...(command.description ? { description: command.description } : {}),
-        ...(originOf(command.sourceInfo) ? { origin: originOf(command.sourceInfo)! } : {}),
+        origin: feature,
       });
     }
     for (const prompt of session.promptTemplates) {
@@ -543,7 +606,7 @@ function roleOf(message: unknown): "user" | "assistant" | "tool" | "custom" {
 function originOf(sourceInfo: unknown): string | undefined {
   const info = sourceInfo as { source?: unknown; scope?: unknown; origin?: unknown } | null;
   const source = typeof info?.source === "string" ? info.source.trim() : "";
-  if (info?.origin === "package" && source !== "") return source;
+  if (info?.origin === "package" && source !== "") return "Built in";
   if (info?.scope === "project") return "this project";
   if (info?.scope === "user") return "yours";
   return undefined;
@@ -552,6 +615,21 @@ function originOf(sourceInfo: unknown): string | undefined {
 /** The first few lines of a template, for the row's second line. Never the file. */
 function preview(content: string): string {
   return content.replace(/\s+/g, " ").trim().slice(0, 300);
+}
+
+function goalCommand(action: GoalAction): string {
+  switch (action.action) {
+    case "pause":
+      return "/goal pause";
+    case "resume":
+      return "/goal resume";
+    case "clear":
+      return "/goal clear";
+    case "edit":
+      return `/goal edit ${action.objective}`;
+    case "start":
+      return `/goal ${action.tokenBudget ? `--tokens ${action.tokenBudget} ` : ""}${action.objective}`;
+  }
 }
 
 /**

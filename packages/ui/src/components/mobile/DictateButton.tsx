@@ -4,14 +4,16 @@ import { useEffect, useRef, useState } from "react";
 import { ComposerVoice, ComposerVoiceButton } from "@/components/assistant-ui/elements/composer";
 import { cn } from "@/lib/utils";
 import {
-  MediaRecorderDictationAdapter,
+  PhraseDictationAdapter,
   clearDictationError,
   describeMicrophoneError,
   placePhraseAtCaret,
+  removeRuntimeAppend,
   setDictationPhraseSink,
   setDictationScope,
   useDictationError,
   useDictationLevel,
+  useDictationPending,
   useDictationPhase,
   useEnvironment,
 } from "@/pwa";
@@ -26,12 +28,11 @@ import { useLaserStable, useLaserView } from "@/runtime";
  * the control exists at all.
  *
  * Hidden entirely where dictation cannot work (R2 — hide the control, never
- * show a dead one): a browser with no microphone or no MediaRecorder, an
- * insecure origin (the insecure-origin notice says why), no open session, or
- * a project whose companion extension did not report a `transcribe` module.
- * The reason a *configured* project still cannot dictate — an OAuth-only
- * provider, say — comes back from `pi/transcribe/status` when someone presses
- * it, because it is a sentence, not a state to pre-render.
+ * show a dead one): a browser with no microphone or Web Audio capture, an
+ * insecure origin (the insecure-origin notice says why), or no open session.
+ * The reusable transcription backend ships with Laser. Before the microphone
+ * opens, the adapter checks its provider requirement and reports a missing or
+ * OAuth-only OpenAI credential in product language.
  *
  * Needs `adapters.dictation` on the runtime (`getMobileDictationAdapter`);
  * `ComposerPrimitive.Dictate` disables itself without one.
@@ -52,7 +53,7 @@ export function DictateButton({ className, size }: { className?: string | undefi
   }, [available, view]);
 
   if (!available) return null;
-  if (!env.microphone || !env.mediaRecorder || !MediaRecorderDictationAdapter.isSupported()) return null;
+  if (!env.microphone || !PhraseDictationAdapter.isSupported()) return null;
   return <DictateControls className={className} size={size} />;
 }
 
@@ -61,30 +62,38 @@ function DictateControls({ className, size }: { className?: string | undefined; 
   const { actions } = useLaserStable();
   const phase = useDictationPhase();
   const level = useDictationLevel();
+  const pending = useDictationPending();
   const error = useDictationError();
   const active = useAuiState((s) => s.composer.dictation != null);
   const [startedAt, setStartedAt] = useState(() => Date.now());
 
-  // Where the caret was when dictation began: the phrase goes there, not at the end.
-  const caret = useRef<{ text: string; at: number | undefined } | undefined>(undefined);
+  const insertTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => {
     if (!active) return;
     setStartedAt(Date.now());
-    const textarea = composerTextarea();
-    caret.current = { text: aui.composer.getState().text, at: textarea?.selectionStart ?? undefined };
     setDictationPhraseSink((phrase) => {
-      const snap = caret.current;
-      caret.current = undefined;
-      if (!snap || snap.at === undefined || snap.at >= snap.text.length) return; // runtime already appended
-      const placed = placePhraseAtCaret(snap.text, snap.at, phrase);
+      const textarea = composerTextarea();
+      const current = aui.composer.getState().text;
+      const base = removeRuntimeAppend(current, phrase);
+      const placed = placePhraseAtCaret(base, textarea?.selectionStart, phrase);
       aui.composer.setText(placed.text);
       requestAnimationFrame(() => {
         const el = composerTextarea();
         el?.setSelectionRange(placed.caret, placed.caret);
         el?.focus({ preventScroll: true });
+        const card = el?.closest<HTMLElement>('[data-slot="composer-card"]');
+        if (card) {
+          card.dataset.dictationInsert = "true";
+          if (insertTimer.current !== undefined) clearTimeout(insertTimer.current);
+          const duration = Number.parseFloat(getComputedStyle(card).getPropertyValue("--motion-morph")) || 0;
+          insertTimer.current = setTimeout(() => delete card.dataset.dictationInsert, duration);
+        }
       });
     });
-    return () => setDictationPhraseSink(undefined);
+    return () => {
+      setDictationPhraseSink(undefined);
+      if (insertTimer.current !== undefined) clearTimeout(insertTimer.current);
+    };
   }, [active, aui]);
 
   useEffect(() => {
@@ -104,7 +113,7 @@ function DictateControls({ className, size }: { className?: string | undefined; 
         </ComposerPrimitive.Dictate>
       </AuiIf>
       <AuiIf condition={(s) => s.composer.dictation != null}>
-        <ComposerVoice level={level} phase={voicePhase} startedAt={startedAt} />
+        <ComposerVoice level={level} phase={voicePhase} pending={pending} startedAt={startedAt} />
         <ComposerPrimitive.StopDictation asChild>
           <ComposerVoiceButton
             active

@@ -2,8 +2,9 @@
 /**
  * Settings (M4-T2, M4-T3, M4-T4).
  *
- * Four screens behind one header: every Pi setting as a form, the package
- * manager, providers/models, and this device.
+ * Laser-owned settings behind one header. Engine plumbing is intentionally
+ * absent; specialist product controls live in Advanced and bundled
+ * capabilities live in Features.
  *
  * The first three are per project, because Pi's settings are per project: the
  * scope switch is not decoration, it decides which of the two files a change
@@ -13,7 +14,7 @@
  * scope that has nothing to do with it.
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, RefreshCw, Search, Sparkles } from "lucide-react";
 
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
@@ -30,11 +31,11 @@ import { NotificationsSetting } from "@/components/mobile";
 import { AppearanceTab } from "./appearance/AppearanceTab.js";
 import { KeyboardTab } from "./KeyboardTab.js";
 import { ModelsTab } from "./ModelsTab.js";
-import { PackagesScreen } from "./packages/PackagesScreen.js";
+import { FeaturesScreen } from "./FeaturesScreen.js";
 import { SettingsForm } from "./SettingsForm.js";
 import { TrustTab } from "./TrustTab.js";
 
-type Tab = "settings" | "appearance" | "packages" | "models" | "keyboard" | "trust" | "device";
+type Tab = "general" | "advanced" | "appearance" | "features" | "models" | "keyboard" | "trust" | "device";
 
 /**
  * Four of these are per project and three are not. `PROJECTLESS` is the list
@@ -53,12 +54,13 @@ const PROJECTLESS: readonly Tab[] = ["appearance", "keyboard", "trust", "device"
  * just installed laser and has no project yet — is the one person who
  * cannot reach them.
  */
-const GLOBAL_THROUGH_SETUP: readonly Tab[] = ["packages", "models"];
+const GLOBAL_THROUGH_SETUP: readonly Tab[] = ["general", "advanced", "features", "models"];
 
 const TABS: Array<{ id: Tab; label: string }> = [
-  { id: "settings", label: "All settings" },
+  { id: "general", label: "General" },
+  { id: "advanced", label: "Advanced" },
   { id: "appearance", label: "Appearance" },
-  { id: "packages", label: "Extensions" },
+  { id: "features", label: "Features" },
   { id: "models", label: "Providers and models" },
   { id: "keyboard", label: "Keyboard" },
   { id: "trust", label: "Trust" },
@@ -69,10 +71,11 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
   const { client, actions } = useLaserStable();
   // `initialTab` is only ever set by something that already knows the fix — a
   // rejected credential sending the person straight to Providers and models.
-  const [tab, setTab] = useState<Tab>(initialTab ?? "settings");
+  const [tab, setTab] = useState<Tab>(initialTab ?? "general");
   const [setupCwd, setSetupCwd] = useState<string>();
   const [catalog, setCatalog] = useState<SettingsCatalog>();
   const [snapshot, setSnapshot] = useState<SettingsSnapshot>();
+  const [snapshotCwd, setSnapshotCwd] = useState<string>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -94,9 +97,14 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
   }, [client, project, setupCwd]);
 
   const cwd = project ?? (GLOBAL_THROUGH_SETUP.includes(tab) ? setupCwd : undefined);
+  const cwdRef = useRef(cwd);
+  cwdRef.current = cwd;
 
   const load = useCallback(async () => {
     if (!cwd) return;
+    if (snapshotCwd !== cwd) {
+      setSnapshotCwd(undefined);
+    }
     setLoading(true);
     setError(undefined);
     try {
@@ -106,14 +114,20 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
         catalog ? Promise.resolve({ catalog }) : client.request("pi/settings/list", { cwd }),
         client.request("pi/settings/get", { cwd }),
       ]);
+      if (cwdRef.current !== cwd) return;
       setCatalog(cat.catalog);
       setSnapshot(snap.snapshot);
+      setSnapshotCwd(cwd);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : String(loadError));
+      if (cwdRef.current === cwd) {
+        setSnapshot(undefined);
+        setSnapshotCwd(undefined);
+        setError(loadError instanceof Error ? loadError.message : String(loadError));
+      }
     } finally {
-      setLoading(false);
+      if (cwdRef.current === cwd) setLoading(false);
     }
-  }, [client, cwd, catalog]);
+  }, [client, cwd, catalog, snapshotCwd]);
 
   useEffect(() => {
     void load();
@@ -129,6 +143,7 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
       try {
         const { snapshot: next } = await client.request("pi/settings/set", { cwd, scope, changes });
         setSnapshot(next);
+        setSnapshotCwd(cwd);
         return true;
       } catch (writeError) {
         actions.toast("error", writeError instanceof Error ? writeError.message : String(writeError));
@@ -142,6 +157,7 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
   // to stay on screen or Appearance, Keyboard, Trust and This device become
   // unreachable on a machine with no project yet — which is every first run.
   const needsProject = !cwd && !PROJECTLESS.includes(tab);
+  const switchingProject = Boolean(cwd && snapshot && snapshotCwd !== cwd);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -180,24 +196,31 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
         </div>
       )}
 
-      <div className="min-h-0 flex-1">
+      <div className="relative min-h-0 flex-1">
+        <div className="h-full" inert={switchingProject ? true : undefined}>
         {needsProject ? (
           <Empty
             title="Open a project first"
-            body={`These settings are kept per project as well as globally, so ${PRODUCT_NAME} needs to know which project you mean. Pick one in the rail, or add one. Extensions, Providers and models, Appearance, Keyboard, Trust and This device all work without one.`}
+            body={`These settings can be overridden per project, so ${PRODUCT_NAME} needs to know which project you mean. Pick one in the rail, or add one. Features, Providers and models, Appearance, Keyboard, Trust and This device all work without one.`}
           />
         ) : (
           <>
-            {tab === "settings" && catalog && snapshot && (
-              <SettingsForm catalog={catalog} snapshot={snapshot} onApply={apply} />
+            {(tab === "general" || tab === "advanced") && cwd && catalog && snapshot && (
+              <SettingsForm audience={tab} cwd={cwd} catalog={catalog} snapshot={snapshot} onApply={apply} />
             )}
             {tab === "appearance" && <AppearanceTab />}
-            {tab === "packages" && cwd && <PackagesScreen cwd={cwd} snapshot={snapshot} onSettingsChanged={load} />}
+            {tab === "features" && <FeaturesScreen {...(cwd ? { cwd } : {})} />}
             {tab === "models" && cwd && <ModelsTab cwd={cwd} snapshot={snapshot} onApply={apply} />}
             {tab === "keyboard" && <KeyboardTab cwd={cwd} />}
             {tab === "trust" && <TrustTab />}
             {tab === "device" && <DeviceTab />}
           </>
+        )}
+        </div>
+        {switchingProject && (
+          <div className="absolute inset-0 z-20 flex items-start justify-center bg-bg pt-16" aria-live="polite">
+            <GenerationLoader label="Loading the selected project’s settings" layout="block" />
+          </div>
         )}
       </div>
     </div>

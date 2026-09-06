@@ -5,44 +5,84 @@
  * read-only diff of what Pi will actually use and where each value came from.
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";
-import { useId, useMemo, useState } from "react";
-import { ChevronRight, FileJson, Info, RotateCcw, ShieldAlert, Terminal } from "lucide-react";
+import { useEffect, useId, useMemo, useState } from "react";
+import { ChevronRight, ChevronsUpDown, FolderGit2, RotateCcw, ShieldAlert, Terminal, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { ProviderModelMultiPicker, ProviderModelPicker, ProviderPicker, modelProvenance, modelOptionId } from "@/components/assistant-ui/elements/model-selector";
+import { ProviderLogo } from "@/components/assistant-ui/elements/logos";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import type { SettingChange, SettingDescriptor, SettingsCatalog, SettingsScope, SettingsSnapshot } from "@lasercode/protocol";
+import { shortCwd } from "@/format";
+import { useLaserStable } from "@/runtime";
+import type { ModelCatalogEntry, SettingChange, SettingDescriptor, SettingsCatalog, SettingsScope, SettingsSnapshot, ThinkingLevel } from "@lasercode/protocol";
 
 import { SettingField } from "./fields.js";
-import { JsonView } from "./JsonView.js";
 import { effectiveDiff, getAtPath, rowFor, searchFields, sectionsWithFields, type FieldRow } from "./model.js";
 import { OriginBadge, SearchInput } from "./SettingsScreen.js";
 
 type View = SettingsScope | "effective";
 
 export interface SettingsFormProps {
+  audience: "general" | "advanced";
+  cwd: string;
   catalog: SettingsCatalog;
   snapshot: SettingsSnapshot;
   onApply: (scope: SettingsScope, changes: SettingChange[]) => Promise<boolean>;
 }
 
-export function SettingsForm({ catalog, snapshot, onApply }: SettingsFormProps) {
+export function SettingsForm({ audience, cwd, catalog, snapshot, onApply }: SettingsFormProps) {
+  const { client, projects, projectInfo, setCurrentProject } = useLaserStable();
   const [view, setView] = useState<View>("global");
   const [section, setSection] = useState<string>(catalog.sections[0]?.id ?? "model");
   const [query, setQuery] = useState("");
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [json, setJson] = useState(false);
+  const [showFull, setShowFull] = useState(false);
+  const [modelCatalog, setModelCatalog] = useState<{ models: ModelCatalogEntry[]; defaultProvider?: string; defaultModel?: string }>({ models: [] });
+  const [modelCatalogLoading, setModelCatalogLoading] = useState(true);
+  const [modelCatalogError, setModelCatalogError] = useState<string>();
+
+  useEffect(() => {
+    let live = true;
+    setModelCatalogLoading(true);
+    setModelCatalogError(undefined);
+    void client.request("pi/models/catalog", { cwd }).then((result) => {
+      if (!live) return;
+      setModelCatalog({
+        models: result.models,
+        ...(result.defaultProvider ? { defaultProvider: result.defaultProvider } : {}),
+        ...(result.defaultModel ? { defaultModel: result.defaultModel } : {}),
+      });
+    }).catch((error) => {
+      if (live) {
+        setModelCatalog({ models: [] });
+        setModelCatalogError(error instanceof Error ? error.message : String(error));
+      }
+    }).finally(() => {
+      if (live) setModelCatalogLoading(false);
+    });
+    return () => { live = false; };
+  }, [client, cwd]);
 
   const scope: SettingsScope = view === "project" ? "project" : "global";
   const searching = query.trim() !== "";
 
   const visible = useMemo(() => {
-    let fields = catalog.fields.filter((field) => field.scopes.includes(scope));
-    if (!showAdvanced) fields = fields.filter((field) => !field.advanced);
+    let fields = catalog.fields.filter((field) => field.audience === audience && field.scopes.includes(scope));
+    if (!showFull) fields = fields.filter((field) => !field.advanced);
     return searchFields(fields, query);
-  }, [catalog.fields, scope, showAdvanced, query]);
+  }, [audience, catalog.fields, scope, showFull, query]);
+
+  const audienceCatalog = useMemo(() => ({ ...catalog, fields: catalog.fields.filter((field) => field.audience === audience) }), [audience, catalog]);
 
   const sections = useMemo(() => sectionsWithFields(catalog, visible), [catalog, visible]);
   const activeSection = sections.some((s) => s.id === section) ? section : (sections[0]?.id ?? "");
@@ -52,26 +92,26 @@ export function SettingsForm({ catalog, snapshot, onApply }: SettingsFormProps) 
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 py-2 hairline-b">
         <ScopeSwitch view={view} onChange={setView} />
+        {view !== "global" && (
+          <ProjectTarget
+            cwd={cwd}
+            projects={projects}
+            names={projectInfo}
+            mode={view}
+            onChange={setCurrentProject}
+          />
+        )}
         {view !== "effective" && (
           <>
             <SearchInput value={query} onChange={setQuery} placeholder="Search settings" className="w-56" />
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setShowAdvanced((v) => !v)}
-              aria-pressed={showAdvanced}
-              className={cn(showAdvanced && "bg-surface-2 text-ink")}
+              onClick={() => setShowFull((v) => !v)}
+              aria-pressed={showFull}
+              className={cn(showFull && "bg-surface-2 text-ink")}
             >
-              Advanced
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setJson((v) => !v)}
-              aria-pressed={json}
-              className={cn("ms-auto gap-1.5", json && "bg-surface-2 text-ink")}
-            >
-              <FileJson /> JSON
+              Full configuration
             </Button>
           </>
         )}
@@ -80,9 +120,7 @@ export function SettingsForm({ catalog, snapshot, onApply }: SettingsFormProps) 
       {view === "project" && <ProjectTrustNotice snapshot={snapshot} />}
 
       {view === "effective" ? (
-        <EffectiveView catalog={catalog} snapshot={snapshot} />
-      ) : json ? (
-        <JsonView catalog={catalog} snapshot={snapshot} scope={scope} onApply={onApply} />
+        <EffectiveView catalog={audienceCatalog} snapshot={snapshot} />
       ) : (
         <div className="flex min-h-0 flex-1">
           {!searching && (
@@ -152,7 +190,7 @@ export function SettingsForm({ catalog, snapshot, onApply }: SettingsFormProps) 
               )}
               {shown.length === 0 && (
                 <p className="py-8 text-center text-sm text-ink-2">
-                  Nothing matches. {showAdvanced ? "" : "Advanced settings are hidden — turn them on to widen the search."}
+                  Nothing matches. {showFull ? "" : "Turn on Full configuration to include specialist controls in this tab."}
                 </p>
               )}
               {shown.map((field) => (
@@ -163,6 +201,9 @@ export function SettingsForm({ catalog, snapshot, onApply }: SettingsFormProps) 
                   scope={scope}
                   showSection={searching}
                   catalog={catalog}
+                  modelCatalog={modelCatalog}
+                  modelCatalogLoading={modelCatalogLoading}
+                  modelCatalogError={modelCatalogError}
                   onApply={onApply}
                 />
               ))}
@@ -170,6 +211,61 @@ export function SettingsForm({ catalog, snapshot, onApply }: SettingsFormProps) 
           </ScrollArea>
         </div>
       )}
+    </div>
+  );
+}
+
+function ProjectTarget({
+  cwd,
+  projects,
+  names,
+  mode,
+  onChange,
+}: {
+  cwd: string;
+  projects: string[];
+  names: Readonly<Record<string, { name: string }>>;
+  mode: "project" | "effective";
+  onChange: (cwd: string) => void;
+}) {
+  const name = names[cwd]?.name ?? shortCwd(cwd);
+  return (
+    <div className="flex min-w-0 items-center gap-1.5">
+      <span className="eyebrow hidden lg:inline">{mode === "project" ? "Override" : "Resolve"} for</span>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className="min-w-0 max-w-64 gap-1.5"
+            aria-label={`${mode === "project" ? "Project settings target" : "Effective settings project"}: ${name}`}
+            title={cwd}
+          >
+            <FolderGit2 className="shrink-0" />
+            <span className="min-w-0 truncate">{name}</span>
+            <ChevronsUpDown className="shrink-0 text-ink-3" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-80 max-w-[calc(100vw-var(--spacing-6))]">
+          <DropdownMenuLabel>
+            {mode === "project" ? "Project settings to override" : "Project whose effective settings to inspect"}
+          </DropdownMenuLabel>
+          <DropdownMenuRadioGroup value={cwd} onValueChange={onChange}>
+            {projects.map((project) => {
+              const projectName = names[project]?.name ?? shortCwd(project);
+              return (
+                <DropdownMenuRadioItem key={project} value={project} className="items-start">
+                  <span className="flex min-w-0 flex-col gap-0.5">
+                    <span className="font-medium text-ink">{projectName}</span>
+                    <span className="font-mono text-xs leading-4 break-all text-ink-3">{project}</span>
+                  </span>
+                </DropdownMenuRadioItem>
+              );
+            })}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }
@@ -258,6 +354,9 @@ function FieldRowView({
   scope,
   showSection,
   catalog,
+  modelCatalog,
+  modelCatalogLoading,
+  modelCatalogError,
   onApply,
 }: {
   field: SettingDescriptor;
@@ -265,13 +364,18 @@ function FieldRowView({
   scope: SettingsScope;
   showSection: boolean;
   catalog: SettingsCatalog;
+  modelCatalog: { models: ModelCatalogEntry[]; defaultProvider?: string; defaultModel?: string };
+  modelCatalogLoading: boolean;
+  modelCatalogError: string | undefined;
   onApply: (scope: SettingsScope, changes: SettingChange[]) => Promise<boolean>;
 }) {
   const controlId = useId();
   const row = rowFor(field, snapshot);
   const scoped = scope === "global" ? row.global : row.project;
+  const displayed = scoped ?? row.effective ?? field.default;
   const writable = !field.managed && (scope === "global" || snapshot.projectTrust.writable);
   const section = catalog.sections.find((s) => s.id === field.section);
+  const provider = String(getAtPath(snapshot.effective, "defaultProvider") ?? modelCatalog.defaultProvider ?? "");
 
   return (
     <div className="flex flex-col gap-2 border-t border-line py-3 first:border-t-0 sm:flex-row sm:gap-6">
@@ -295,44 +399,77 @@ function FieldRowView({
             </Tooltip>
           )}
         </div>
-        <p className="mt-0.5 font-mono text-xs text-ink-3">
-          {showSection && section ? `${section.title} · ` : ""}
-          {field.path}
-        </p>
+        {showSection && section && <p className="mt-0.5 text-xs text-ink-3">{section.title}</p>}
         <p className="mt-1 text-xs leading-5 text-ink-2">{field.description}</p>
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-        <SettingField
-          field={field}
-          id={controlId}
-          value={scoped}
-          disabled={!writable}
-          onCommit={(value) =>
-            void onApply(scope, [
-              value === undefined ? { path: field.path, op: "unset" } : { path: field.path, op: "set", value },
-            ])
-          }
-        />
+        {field.path === "defaultProvider" ? (
+          <ProviderPicker
+            models={modelCatalog.models}
+            {...((typeof displayed === "string" ? displayed : modelCatalog.defaultProvider) ? { value: typeof displayed === "string" ? displayed : modelCatalog.defaultProvider } : {})}
+            disabled={!writable || modelCatalogLoading}
+            loading={modelCatalogLoading}
+            {...(modelCatalogError ? { error: modelCatalogError } : {})}
+            onValueChange={(value) => void onApply(scope, [{ path: field.path, op: "set", value }])}
+          />
+        ) : field.path === "defaultModel" ? (
+          <ProviderModelPicker
+            models={modelCatalog.models}
+            {...((typeof displayed === "string" ? displayed : modelCatalog.defaultModel) && provider
+              ? { value: `${provider}/${typeof displayed === "string" ? displayed : modelCatalog.defaultModel}` }
+              : {})}
+            disabled={!writable || modelCatalogLoading}
+            loading={modelCatalogLoading}
+            {...(modelCatalogError ? { error: modelCatalogError } : {})}
+            onValueChange={(value) => {
+              const slash = value.indexOf("/");
+              const nextProvider = value.slice(0, slash);
+              const nextModel = value.slice(slash + 1);
+              void onApply(scope, [
+                { path: "defaultProvider", op: "set", value: nextProvider },
+                { path: "defaultModel", op: "set", value: nextModel },
+              ]);
+            }}
+          />
+        ) : field.path === "enabledModels" ? (
+          <ProviderModelMultiPicker
+            models={modelCatalog.models}
+            values={Array.isArray(displayed) ? displayed.filter((value): value is string => typeof value === "string") : []}
+            disabled={!writable || modelCatalogLoading}
+            loading={modelCatalogLoading}
+            {...(modelCatalogError ? { error: modelCatalogError } : {})}
+            onValuesChange={(value) => void onApply(scope, [value.length === 0 ? { path: field.path, op: "unset" } : { path: field.path, op: "set", value }])}
+          />
+        ) : field.path === "modelThinkingLevels" ? (
+          <ModelThinkingMapField
+            models={modelCatalog.models}
+            value={displayed}
+            disabled={!writable}
+            onCommit={(value) => void onApply(scope, [value === undefined ? { path: field.path, op: "unset" } : { path: field.path, op: "set", value }])}
+          />
+        ) : (
+          <SettingField
+            field={field}
+            id={controlId}
+            value={displayed}
+            disabled={!writable}
+            onCommit={(value) =>
+              void onApply(scope, [
+                value === undefined ? { path: field.path, op: "unset" } : { path: field.path, op: "set", value },
+              ])
+            }
+          />
+        )}
         <div className="flex flex-wrap items-center gap-2 text-xs text-ink-3">
-          {scoped === undefined ? (
-            <span className="inline-flex items-center gap-1">
-              <Info className="size-3" />
-              not set here · effective: <ValueChip value={row.effective ?? field.default} /> <OriginBadge origin={row.origin} />
-            </span>
-          ) : (
-            <>
+          <>
+              {scoped === undefined && row.origin !== "unset" && <OriginBadge origin={row.origin} />}
               {scope === "global" && row.project !== undefined && (
                 <span className="inline-flex items-center gap-1 text-attention">
                   the project file overrides this with <ValueChip value={row.project} />
                 </span>
               )}
-              {field.default !== undefined && (
-                <span>
-                  Default: <ValueChip value={field.default} />
-                </span>
-              )}
-              {writable && (
+              {writable && scoped !== undefined && (
                 <Button
                   variant="ghost"
                   size="xs"
@@ -342,10 +479,51 @@ function FieldRowView({
                   <RotateCcw /> Unset
                 </Button>
               )}
-            </>
-          )}
+          </>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ModelThinkingMapField({ models, value, disabled, onCommit }: { models: readonly ModelCatalogEntry[]; value: unknown; disabled: boolean; onCommit(value: unknown): void }) {
+  const map = typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const entries = Object.entries(map);
+  const replace = (next: Record<string, unknown>) => onCommit(Object.keys(next).length === 0 ? undefined : next);
+  return (
+    <div className="flex max-w-140 flex-col gap-1.5">
+      {entries.map(([key, level]) => {
+        const slash = key.indexOf("/");
+        const provider = slash > 0 ? key.slice(0, slash) : "";
+        const model = models.find((entry) => modelOptionId(entry) === key);
+        const provenance = model ? modelProvenance(model) : undefined;
+        const levels = model?.thinkingLevels.length ? model.thinkingLevels : (["off", "minimal", "low", "medium", "high", "xhigh", "max"] as ThinkingLevel[]);
+        return (
+          <div key={key} className="flex min-w-0 items-center gap-2 rounded-lg border border-line bg-surface px-2 py-1.5">
+            <ProviderLogo provider={provider} className="size-4 shrink-0" />
+            <span className="min-w-0 flex-1 truncate typed" title={key}>{provenance?.modelId ?? key}</span>
+            <select
+              aria-label={`Thinking level for ${key}`}
+              value={String(level)}
+              disabled={disabled}
+              onChange={(event) => replace({ ...map, [key]: event.target.value })}
+              className="h-7 rounded-md border border-line bg-surface px-2 text-xs text-ink outline-none focus-visible:border-live"
+            >
+              {levels.map((option) => <option key={option} value={option}>{option}</option>)}
+            </select>
+            <Button type="button" variant="ghost" size="icon-xs" aria-label={`Remove ${key}`} disabled={disabled} onClick={() => { const next = { ...map }; delete next[key]; replace(next); }}>
+              <X />
+            </Button>
+          </div>
+        );
+      })}
+      <ProviderModelPicker
+        key={entries.length}
+        models={models.filter((model) => !Object.prototype.hasOwnProperty.call(map, modelOptionId(model)))}
+        disabled={disabled}
+        placeholder="Add a model override"
+        onValueChange={(key) => replace({ ...map, [key]: "medium" })}
+      />
     </div>
   );
 }
@@ -360,9 +538,9 @@ function ValueChip({ value }: { value: unknown }) {
   );
 }
 
-/** Read-only table: what Pi will use, and which file decided it. */
+/** Read-only table: what Laser will use, and which scope decided it. */
 function EffectiveView({ catalog, snapshot }: { catalog: SettingsCatalog; snapshot: SettingsSnapshot }) {
-  const rows = useMemo(() => effectiveDiff(catalog, snapshot), [catalog, snapshot]);
+  const rows = useMemo(() => effectiveDiff(catalog, snapshot).filter((row) => row.field.section !== "tools"), [catalog, snapshot]);
   const unknownKeys = useMemo(() => {
     const known = new Set(catalog.topLevelKeys);
     const seen = new Set([...Object.keys(snapshot.global.values), ...Object.keys(snapshot.project.values)]);
@@ -373,15 +551,15 @@ function EffectiveView({ catalog, snapshot }: { catalog: SettingsCatalog; snapsh
     <ScrollArea className="min-h-0 flex-1">
       <div className="mx-auto flex max-w-240 flex-col gap-3 px-4 py-4">
         <p className="text-xs leading-5 text-ink-2">
-          Everything either file sets, and what the agent ends up using. Nested objects merge; arrays replace whole.
+          Every setting in this tab and the value {PRODUCT_NAME} will use. Nested objects merge; arrays replace whole.
           {snapshot.projectTrust.trusted
             ? ""
-            : " Project values are shown but greyed out — the agent is not loading that file (see the Project tab)."}
+            : " Project values are shown but greyed out because this project is not trusted."}
         </p>
 
         {rows.length === 0 && (
           <p className="py-8 text-center text-sm text-ink-2">
-            Neither settings file sets anything. The agent is running entirely on its defaults.
+            No value in this tab is overridden. {PRODUCT_NAME} is using its defaults.
           </p>
         )}
 
@@ -409,8 +587,7 @@ function EffectiveView({ catalog, snapshot }: { catalog: SettingsCatalog; snapsh
           <div className="rounded-lg bg-surface-2 px-3 py-2 text-xs leading-5 text-ink-2">
             <p className="font-medium text-ink">Keys {PRODUCT_NAME} does not recognise</p>
             <p className="mt-0.5">
-              These are in a settings file, but the agent ({catalog.piVersion}) does not define them. {PRODUCT_NAME} leaves
-              them exactly as they are and never rewrites them:{" "}
+              These values are not part of this {PRODUCT_NAME} version. {PRODUCT_NAME} leaves them exactly as they are and never rewrites them:{" "}
               <span className="font-mono text-ink-2">{unknownKeys.join(", ")}</span>
             </p>
           </div>

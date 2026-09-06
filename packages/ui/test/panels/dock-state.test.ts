@@ -141,19 +141,45 @@ describe("layoutDock", () => {
     expect(layout.rects["c"]!.top + layout.rects["c"]!.height).toBe(600 - 8);
   });
 
-  it("two columns lay out side by side with independent heights", () => {
-    let s = run(registered("a", "b", "c"), { type: "setColumns", columns: 2 });
+  it("uses occupancy-aware full, stacked, and quadrant layouts", () => {
+    let s = run(registered("a"), { type: "setColumns", columns: 2 });
+    s = run(
+      s,
+      { type: "setSize", key: "a", size: "expanded", now: 1 },
+    );
+    let layout = layoutDock(s, 800, 600);
+    expect(layout.rects["a"]).toMatchObject({ top: 8, left: 8, width: 784, height: 584 });
+
+    s = run(s, { type: "register", key: "b", now: 2 }, { type: "setSize", key: "b", size: "expanded", now: 2 });
+    layout = layoutDock(s, 800, 600);
+    expect(layout.rects["a"]).toMatchObject({ left: 8, width: 784, height: 288 });
+    expect(layout.rects["b"]).toMatchObject({ top: 304, left: 8, width: 784, height: 288 });
+    expect(layout.dividers).toHaveLength(1);
+
+    s = run(s, { type: "register", key: "c", now: 3 }, { type: "setSize", key: "c", size: "expanded", now: 3 });
+    layout = layoutDock(s, 800, 600);
+    expect(layout.rects["a"]).toMatchObject({ top: 8, left: 8, width: 388, height: 288 });
+    expect(layout.rects["b"]).toMatchObject({ top: 304, left: 8, width: 388, height: 288 });
+    expect(layout.rects["c"]).toMatchObject({ top: 8, left: 404, width: 388, height: 288 });
+
+    s = run(s, { type: "register", key: "d", now: 4 }, { type: "setSize", key: "d", size: "expanded", now: 4 });
+    layout = layoutDock(s, 800, 600);
+    expect(layout.rects["d"]).toMatchObject({ top: 304, left: 404, width: 388, height: 288 });
+    expect(layout.dividers.map((divider) => divider.keys)).toEqual([["a", "b"], ["c", "d"]]);
+  });
+
+  it("keeps compact islands from both stored columns in the one-column projection", () => {
+    let s = run(registered("a", "b"), { type: "setColumns", columns: 2 });
     s = run(
       s,
       { type: "setSize", key: "a", size: "expanded", now: 1 },
       { type: "setSize", key: "b", size: "expanded", now: 2 },
-      { type: "setSize", key: "c", size: "expanded", now: 3 },
-      { type: "setDivider", column: 0, ratio: 0.3 },
+      { type: "setSize", key: "b", size: "compact", now: 3 },
     );
+    expect(s.islands["b"]!.column).toBe(1);
+
     const layout = layoutDock(s, 800, 600);
-    expect(layout.rects["a"]!.left).toBe(8);
-    expect(layout.rects["b"]!.left).toBeGreaterThan(400);
-    expect(layout.rects["a"]!.height).toBeLessThan(layout.rects["c"]!.height);
-    expect(layout.rects["b"]!.height).toBe(600 - 16);
+    expect(layout.rects["b"]).toMatchObject({ top: 8, left: 8, width: 784, height: 36 });
+    expect(layout.rects["a"]).toMatchObject({ top: 52, left: 8, width: 784, height: 540 });
   });
 });
