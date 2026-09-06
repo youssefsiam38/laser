@@ -288,7 +288,7 @@ lane T's own if both were written.
 | M12-T2 | Provider/model experience | done | codex-2026-09-06-release-hotfix | 388 UI tests; packaged session exposes 1,336 models | see notes |
 | M12-T3 | Rich diagnostics and focused settings | done | codex-2026-09-06-v020 | `pnpm -r typecheck && pnpm -r test && pnpm -r build` | see notes |
 | M12-T4 | Project and archive management | done | codex-2026-09-06-v020 | `pnpm -r typecheck && pnpm -r test && pnpm -r build` | see notes |
-| M12-T5 | Integrate, visually verify, package and publish stable 0.2.0 | in-progress | codex-2026-09-06-release-hotfix | [0.2.0 release](https://github.com/youssefsiam38/laser/releases/tag/v0.2.0); packaged Subagents regression under repair | see notes |
+| M12-T5 | Integrate, visually verify, package and publish stable 0.2.0 | done | codex-2026-09-06-release-hotfix | [0.2.1 corrective release](https://github.com/youssefsiam38/laser/releases/tag/v0.2.1); [release pipeline](https://github.com/youssefsiam38/laser/actions/runs/34025881484) | see notes |
 | M12-T6 | Make curated extension installation self-contained and safe | done | codex-2026-09-06-v020 | worker package tests; host package tests; live `pi-subagents@0.65.1` install | see notes |
 | M12-T7 | Brand-aligned fresh-install theme | done | codex-2026-09-06-v020 | `pnpm verify`; theme tests; live dark/light review | see notes |
 | M12-T8 | Session-safe web search and extension UI compatibility | done | codex-2026-09-06-v020 | 104 worker tests; user-confirmed live pi-subagents retry | see notes |
@@ -410,6 +410,11 @@ lane T's own if both were written.
 - 2026-09-06 release approved: main CI passed build, typecheck, all tests and
   install verification at `5ad7689`; prepare 0.2.1 and tag only after the exact
   version commit passes the same clean pipeline.
+- 2026-09-06 done: stable 0.2.1 is GitHub's Latest release. The tagged pipeline
+  built and install-tested x86-64 and ARM64 artifacts, published 12 checksummed
+  and attested assets, and deployed signed APT/DNF repositories. Public checks
+  resolve `releases/latest` and the website installer to 0.2.1; APT advertises
+  0.2.1 and DNF metadata is live. The 0.2.0 notes now warn users to upgrade.
 
 #### M12-T6 notes
 - 2026-09-06 claimed: reproduce the packaged extension failure from the live
@@ -1593,6 +1598,7 @@ separate written agreement, not a blanket public grant.
 
 ## Status edits log
 
+- 2026-09-06 · codex-2026-09-06-release-hotfix · M12-T5/M12 done: stable 0.2.1 is Latest; both architectures, staged install, provenance, 12 assets, signed APT/DNF feeds and the public latest-stable path are verified.
 - 2026-09-06 · codex-2026-09-06-release-hotfix · M12-T2/M12-T26 done and M12-T5 hotfix-ready: new-chat model selection, packaged TypeScript feature loading, AGPL/commercial dual licensing and Apache reusable-package scope pass the full 854-test gate and clean-machine package proof.
 - 2026-09-06 · codex-2026-09-06-startup-beam · M12-T25 final art pass: transparent website mark, six eased inbound arcs and gradient beam absorption replace the rigid geometric rails; 381 UI tests, typecheck and build pass.
 - 2026-09-06 · codex-2026-09-06-startup-beam · M12-T25 done: startup restoration is atomic behind a branded Laser beam transition; 381 UI tests and build pass, responsive dark/light review is complete, and the app remains running.

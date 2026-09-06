@@ -2,10 +2,10 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-06T12:50:43+03:00 · codex-2026-09-06-release-hotfix · commit: `5ad7689`
+**Last updated:** 2026-09-06T13:03:56+03:00 · codex-2026-09-06-release-hotfix · commit: `faa3f9c`
 
-**Current focus:** Version 0.2.1 is prepared from the CI-proven packaged
-Subagents and new-chat model-picker fixes; publication verification remains.
+**Current focus:** Stable 0.2.1 is published and verified; the next product work
+is upstream subagent patches and the remaining in-app updater seam.
 
 ## Milestones
 
@@ -24,7 +24,7 @@ Subagents and new-chat model-picker fixes; publication verification remains.
 | M9 CLI | done | all planned CLI tasks complete |
 | M10 Distribution | in-progress | 0.1.2 native updates shipped; in-app updater remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
-| M12 0.2.0 product experience | in-progress | corrective release remains after the 0.2.0 packaging regression |
+| M12 0.2.0 product experience | done | 0.2.1 corrects and supersedes the broken 0.2.0 package |
 | MX Cross-cutting | in-progress | seam and identity gates green; Pi pin 0.85.0 |
 
 ## Blockers
@@ -33,14 +33,14 @@ None.
 
 ## Next up
 
-1. M12-T5: publish and verify the approved corrective 0.2.1 release.
-2. M3-T9: file the prepared upstream subagent patches.
-3. M10-T10: design and prove the in-app updater installation seam.
+1. M3-T9: file the prepared upstream subagent patches.
+2. M10-T10: design and prove the in-app updater installation seam.
+3. M8-T2: complete the remaining spoken-phrase acceptance proof.
 
 ## Recently done
 
+- M12-T5: stable 0.2.1 is Latest with verified packages, provenance and signed update feeds.
 - M12-T26: AGPL/commercial dual licensing and Apache integration boundaries ship with the app.
 - M12-T2: new chats can choose their project default; packaged sessions expose every model.
 - M12-T25: startup restoration uses transparent branding and smoothly absorbed beam arcs.
 - M12-T24: provider icons and tags identify the configured billing/API provider.
-- M12-T23: Add Project is a native folder-selection action with no path field.
