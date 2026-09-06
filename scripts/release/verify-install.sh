@@ -228,37 +228,44 @@ packaged_icon_count() {
 
 RELEASE_A="$ROOT/release-a"
 RELEASE_B="$ROOT/release-b"
+RELEASE_A_VERSION="0.1.0"
 if [ -n "$REAL_RELEASE" ]; then
   RELEASE_A="$(cd "$REAL_RELEASE" && pwd)"
+  RELEASE_A_VERSION="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$REPO_ROOT/package.json" | head -1)"
+  [ -n "$RELEASE_A_VERSION" ] || {
+    printf 'verify-install: could not read the workspace version from package.json\n' >&2
+    exit 1
+  }
   printf 'using the real release directory %s\n' "$RELEASE_A"
 else
   make_release "$RELEASE_A" "0.1.0"
   make_release "$RELEASE_B" "0.2.0"
 fi
+RELEASE_A_TAG="v$RELEASE_A_VERSION"
 
 # --------------------------------------------------------------- tests ----
 
 section "--dry-run changes nothing"
 before="$(snapshot "$FAKE_HOME")"
-installer --from "$RELEASE_A" --version v0.1.0 --dry-run
+installer --from "$RELEASE_A" --version "$RELEASE_A_TAG" --dry-run
 expect "dry run exits 0" equals "$rc" 0
 expect "dry run says what it would do" contains "$out" 'would:'
 expect "dry run left the filesystem untouched" equals "$before" "$(snapshot "$FAKE_HOME")"
 
 section "the default uses the operating system update channel"
-native_installer --from "$RELEASE_A" --version v0.1.0 --dry-run
+native_installer --from "$RELEASE_A" --version "$RELEASE_A_TAG" --dry-run
 expect "Debian-family machines select the deb package" contains "$out" '(x64, deb)'
 expect "the native default still changes nothing in a dry run" equals "$before" "$(snapshot "$FAKE_HOME")"
 
 section "a fresh install"
-installer --from "$RELEASE_A" --version v0.1.0
+installer --from "$RELEASE_A" --version "$RELEASE_A_TAG"
 expect "install exits 0" equals "$rc" 0
 expect "the bin symlink exists" test -L "$PREFIX/bin/$product_binary"
 expect "the app is unpacked and executable" test -x "$PREFIX/lib/$product_binary/app/$product_binary"
 if [ -n "$REAL_RELEASE" ]; then
-  expect "the launcher answers as the version that was installed" launcher_version_is "0.1.0"
+  expect "the launcher answers as the version that was installed" launcher_version_is "$RELEASE_A_VERSION"
 else
-  expect "the launcher runs the app" launcher_says "$product_display 0.1.0"
+  expect "the launcher runs the app" launcher_says "$product_display $RELEASE_A_VERSION"
 fi
 expect "a .desktop entry is installed" test -f "$desktop_file"
 DETAIL="$(cat "$desktop_file" 2>/dev/null || true)"
@@ -270,14 +277,14 @@ expect "nothing points at electron-builder's AppRun" \
 expect "the URL scheme stays registered" grep -qx "MimeType=x-scheme-handler/$product_scheme;" "$desktop_file"
 DETAIL=""
 expect "icons are installed at every packaged size" equals "$(icon_count)" "$(packaged_icon_count)"
-expect "the receipt records the version" grep -qx 'version=0.1.0' "$PREFIX/lib/$product_binary/install-receipt"
+expect "the receipt records the version" grep -qx "version=$RELEASE_A_VERSION" "$PREFIX/lib/$product_binary/install-receipt"
 expect "a copy of the installer is kept for --uninstall" test -f "$PREFIX/lib/$product_binary/install.sh"
 DETAIL="$out"
 expect "it closes with one line saying what to do next" contains "$out" 'Open it from your application menu'
 expect "it reports the checks it ran" contains "$out" 'checksum matched'
 
 section "re-running is idempotent"
-installer --from "$RELEASE_A" --version v0.1.0
+installer --from "$RELEASE_A" --version "$RELEASE_A_TAG"
 expect "reinstall exits 0" equals "$rc" 0
 expect "it says the version is already installed" contains "$out" 'already installed'
 DETAIL=""
@@ -442,7 +449,7 @@ expect "nothing else in bin was touched" test -f "$PREFIX/bin/unrelated"
 expect "settings survive --uninstall --yes" test -f "$FAKE_HOME/.config/$product_dir/settings.json"
 
 section "--purge is what deletes the data, and only that"
-plain_installer --from "$RELEASE_A" --version v0.1.0
+plain_installer --from "$RELEASE_A" --version "$RELEASE_A_TAG"
 expect "reinstall for the purge case exits 0" equals "$rc" 0
 DETAIL=""
 plain_installer --uninstall --purge
