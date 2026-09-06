@@ -45,6 +45,11 @@ function install(): { dir: string; log: string } {
     writeFileSync(name, `#!/bin/sh\nprintf '${label} %s\\n' "$*" > "${log}"\n`);
     chmodSync(name, 0o755);
   }
+  // The launcher must not depend on the CI host allowing user namespaces.
+  // Model the ordinary supported path explicitly; sandbox-failure behavior is
+  // outside this dispatch test and is exercised by packaged-app checks.
+  writeFileSync(join(dir, "unshare"), "#!/bin/sh\nexit 0\n");
+  chmodSync(join(dir, "unshare"), 0o755);
   writeFileSync(join(dir, BINARY_NAME), readFileSync(launcher, "utf8"));
   chmodSync(join(dir, BINARY_NAME), 0o755);
   return { dir, log };
@@ -57,7 +62,7 @@ function run(args: string[], env: Record<string, string> = {}, withAppRun = fals
     encoding: "utf8",
     // No display and no Wayland, so the launcher adds no feature flag and the
     // recorded arguments are only the ones under test.
-    env: { PATH: "/usr/bin:/bin", HOME: dir, ...env },
+    env: { PATH: `${dir}:/usr/bin:/bin`, HOME: dir, ...env },
     timeout: 20_000,
   });
   expect(result.error).toBeUndefined();
