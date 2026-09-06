@@ -2,10 +2,10 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-06T12:08:46+03:00 · codex-2026-09-06-release-v020 · commit: `ce14d97`
+**Last updated:** 2026-09-06T12:27:11+03:00 · codex-2026-09-06-release-v020 · commit: `a3cc474`
 
-**Current focus:** Stable 0.2.0 is approved and in release verification. The
-tagged GitHub pipeline will build, attest and publish both Linux architectures.
+**Current focus:** Stable 0.2.0 is published and verified. Remaining work returns
+to upstream subagent patches, the in-app updater seam and accessibility.
 
 ## Milestones
 
@@ -24,7 +24,7 @@ tagged GitHub pipeline will build, attest and publish both Linux architectures.
 | M9 CLI | done | all planned CLI tasks complete |
 | M10 Distribution | in-progress | 0.1.2 native updates shipped; in-app updater remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
-| M12 0.2.0 product experience | in-progress | product work done; release alone is blocked |
+| M12 0.2.0 product experience | done | stable Latest release published for x64 and ARM64 |
 | MX Cross-cutting | in-progress | seam and identity gates green; Pi pin 0.85.0 |
 
 ## Blockers
@@ -39,8 +39,8 @@ None.
 
 ## Recently done
 
+- M12-T5: stable 0.2.0 is Latest; both architectures, clean install, provenance and update feeds passed.
 - M12-T25: startup restoration uses transparent branding and smoothly absorbed beam arcs.
 - M12-T24: provider icons and tags identify the configured billing/API provider.
 - M12-T23: Add Project is a native folder-selection action with no path field.
 - M12-T22: leading slash completion preserves every later character.
-- M12-T21: provider-gated, cursor-aware dictation is a built-in capability.

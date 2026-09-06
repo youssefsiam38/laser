@@ -288,7 +288,7 @@ lane T's own if both were written.
 | M12-T2 | Provider/model experience | done | codex-2026-09-06-v020 | `pnpm -r typecheck && pnpm -r test && pnpm -r build`; live browser review | see notes |
 | M12-T3 | Rich diagnostics and focused settings | done | codex-2026-09-06-v020 | `pnpm -r typecheck && pnpm -r test && pnpm -r build` | see notes |
 | M12-T4 | Project and archive management | done | codex-2026-09-06-v020 | `pnpm -r typecheck && pnpm -r test && pnpm -r build` | see notes |
-| M12-T5 | Integrate, visually verify, package and publish stable 0.2.0 | in-progress | codex-2026-09-06-release-v020 | local `pnpm verify`; local x64 package/clean-machine check | see notes |
+| M12-T5 | Integrate, visually verify, package and publish stable 0.2.0 | done | codex-2026-09-06-release-v020 | [stable release](https://github.com/youssefsiam38/laser/releases/tag/v0.2.0); [green pipeline](https://github.com/youssefsiam38/laser/actions/runs/34024139514) | see notes |
 | M12-T6 | Make curated extension installation self-contained and safe | done | codex-2026-09-06-v020 | worker package tests; host package tests; live `pi-subagents@0.65.1` install | see notes |
 | M12-T7 | Brand-aligned fresh-install theme | done | codex-2026-09-06-v020 | `pnpm verify`; theme tests; live dark/light review | see notes |
 | M12-T8 | Session-safe web search and extension UI compatibility | done | codex-2026-09-06-v020 | 104 worker tests; user-confirmed live pi-subagents retry | see notes |
@@ -373,6 +373,11 @@ lane T's own if both were written.
   added visible timestamps to the release scope. Every user, assistant and
   notice message now shows a compact local clock with a natural full-date label;
   day separators keep the longer transcript chronology.
+- 2026-09-06 done: stable 0.2.0 is GitHub's Latest release. The tagged pipeline
+  built x64 and ARM64, installed the staged package, attested the artifacts,
+  published 12 signed/checksummed assets, and deployed the signed APT/DNF feeds.
+  The public website resolves the installer through `releases/latest`; release
+  notes cover the complete product experience, friendly timestamps and `tok/s`.
 
 #### M12-T6 notes
 - 2026-09-06 claimed: reproduce the packaged extension failure from the live
