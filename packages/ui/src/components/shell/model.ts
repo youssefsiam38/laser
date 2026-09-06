@@ -3,7 +3,7 @@
  * Tested in test/shell/model.test.ts.
  */
 import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
-import type { ProjectInfo, ProjectTrust, SessionSummary } from "@lasercode/protocol";
+import type { Panel, PanelUsage, ProjectInfo, ProjectTrust, SessionSummary } from "@lasercode/protocol";
 import { mergeSessions, sessionAttention, sessionTitle, sortSessions } from "../../runtime/threadList.js";
 import { textOf, type Block, type SessionView } from "../../store.js";
 import { shortCwd, summariseArgs } from "../../format.js";
@@ -308,14 +308,77 @@ export interface UsageTotals {
 
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 
+export type SessionBillingMode = "api" | "account" | "mixed" | "none";
+
+export function isAccountProvider(provider: string | undefined): boolean {
+  return provider === "openai-codex" || /^openai-codex-\d+$/.test(provider ?? "");
+}
+
+export interface BackgroundUsageSource {
+  /** Pi model reference (`provider/model`) when the producer knows it. */
+  model?: string;
+  usage?: PanelUsage;
+}
+
+const providerOfModel = (model: string | undefined): string | undefined => model?.split("/", 1)[0];
+const isAccountModel = (model: string | undefined): boolean => isAccountProvider(providerOfModel(model));
+
+/**
+ * Every run panel is one agent. Plan panels are deliberately ignored because
+ * their usage is a roll-up of those same children. Per-attempt slices retain
+ * failed fallback consumption under the provider that actually served it.
+ */
+export function backgroundUsageSources(panels: readonly Panel[]): BackgroundUsageSource[] {
+  const sources: BackgroundUsageSource[] = [];
+  for (const panel of panels) {
+    if (panel.kind !== "run") continue;
+    if (panel.usageByModel?.length) {
+      for (const slice of panel.usageByModel) sources.push({ ...(slice.model ? { model: slice.model } : {}), usage: slice.usage });
+    } else {
+      sources.push({ ...(panel.model ? { model: panel.model } : {}), ...(panel.usage ? { usage: panel.usage } : {}) });
+    }
+  }
+  return sources;
+}
+
+/** Billing views represented by the main agent and every child agent. */
+export function sessionBillingMode(
+  entries: readonly unknown[],
+  background: readonly BackgroundUsageSource[] = [],
+): SessionBillingMode {
+  let api = false;
+  let account = false;
+  for (const raw of entries) {
+    const entry = raw as RawEntry;
+    if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
+    if (isAccountProvider(entry.message.provider)) account = true;
+    else api = true;
+  }
+  for (const source of background) {
+    if (isAccountModel(source.model)) account = true;
+    else api = true;
+  }
+  return api && account ? "mixed" : account ? "account" : api ? "api" : "none";
+}
+
+function includeUsage(entry: RawEntry, billing: "all" | "api"): boolean {
+  if (billing === "all") return true;
+  const provider = entry.type === "message" ? entry.message?.provider : entry.provider;
+  return !isAccountProvider(provider);
+}
+
 /** Sum of every `usage` block on the file (assistant messages, compactions, branch summaries). */
-export function usageFromEntries(entries: readonly unknown[]): UsageTotals | undefined {
+export function usageFromEntries(
+  entries: readonly unknown[],
+  billing: "all" | "api" = "all",
+  background: readonly BackgroundUsageSource[] = [],
+): UsageTotals | undefined {
   const totals: UsageTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, cost: 0, turns: 0 };
   let seen = false;
   for (const raw of entries) {
     const e = raw as RawEntry;
     const usage = e.type === "message" ? (e.message?.role === "assistant" ? e.message.usage : undefined) : e.usage;
-    if (!usage) continue;
+    if (!usage || !includeUsage(e, billing)) continue;
     seen = true;
     totals.input += num(usage.input);
     totals.output += num(usage.output);
@@ -324,6 +387,18 @@ export function usageFromEntries(entries: readonly unknown[]): UsageTotals | und
     totals.total += num(usage.totalTokens) || num(usage.input) + num(usage.output) + num(usage.cacheRead) + num(usage.cacheWrite);
     totals.cost += num(usage.cost?.total);
     if (e.type === "message") totals.turns++;
+  }
+  for (const source of background) {
+    if (!source.usage || (billing === "api" && isAccountModel(source.model))) continue;
+    const usage = source.usage;
+    seen = true;
+    totals.input += num(usage.input);
+    totals.output += num(usage.output);
+    totals.cacheRead += num(usage.cacheRead);
+    totals.cacheWrite += num(usage.cacheWrite);
+    totals.total += num(usage.input) + num(usage.output) + num(usage.cacheRead) + num(usage.cacheWrite);
+    totals.cost += num(usage.costUsd);
+    totals.turns += num(usage.turns);
   }
   return seen ? totals : undefined;
 }
@@ -340,11 +415,15 @@ export interface ModelUsageLine {
  * carry a `model` (Pi stamps provider and model on each). Compactions and
  * branch summaries have no model and fold into the session total only.
  */
-export function usageByModel(entries: readonly unknown[]): ModelUsageLine[] {
+export function usageByModel(
+  entries: readonly unknown[],
+  billing: "all" | "api" = "all",
+  background: readonly BackgroundUsageSource[] = [],
+): ModelUsageLine[] {
   const byModel = new Map<string, ModelUsageLine>();
   for (const raw of entries) {
     const e = raw as RawEntry;
-    if (e.type !== "message" || e.message?.role !== "assistant" || !e.message.usage) continue;
+    if (e.type !== "message" || e.message?.role !== "assistant" || !e.message.usage || !includeUsage(e, billing)) continue;
     const model = e.message.model ? (e.message.provider ? `${e.message.provider}/${e.message.model}` : e.message.model) : "unknown model";
     const line = byModel.get(model) ?? { model, input: 0, output: 0, cost: 0 };
     line.input += num(e.message.usage.input);
@@ -352,17 +431,35 @@ export function usageByModel(entries: readonly unknown[]): ModelUsageLine[] {
     line.cost += num(e.message.usage.cost?.total);
     byModel.set(model, line);
   }
+  for (const source of background) {
+    if (!source.usage || (billing === "api" && isAccountModel(source.model))) continue;
+    const model = source.model ?? "unknown subagent model";
+    const line = byModel.get(model) ?? { model, input: 0, output: 0, cost: 0 };
+    line.input += num(source.usage.input);
+    line.output += num(source.usage.output);
+    line.cost += num(source.usage.costUsd);
+    byModel.set(model, line);
+  }
   return [...byModel.values()].sort((a, b) => b.cost - a.cost);
 }
 
 /** Cumulative cost after each assistant turn, in file order. */
-export function spendSeries(entries: readonly unknown[]): number[] {
+export function spendSeries(
+  entries: readonly unknown[],
+  billing: "all" | "api" = "all",
+  background: readonly BackgroundUsageSource[] = [],
+): number[] {
   const series: number[] = [];
   let total = 0;
   for (const raw of entries) {
     const e = raw as RawEntry;
-    if (e.type !== "message" || e.message?.role !== "assistant" || !e.message.usage) continue;
+    if (e.type !== "message" || e.message?.role !== "assistant" || !e.message.usage || !includeUsage(e, billing)) continue;
     total += num(e.message.usage.cost?.total);
+    series.push(total);
+  }
+  for (const source of background) {
+    if (!source.usage || (billing === "api" && isAccountModel(source.model))) continue;
+    total += num(source.usage.costUsd);
     series.push(total);
   }
   return series;

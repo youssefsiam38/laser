@@ -1,5 +1,6 @@
 import type * as React from "react";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { AccountCredits, AccountUsageState, AccountUsageWindow } from "@lasercode/protocol";
 import {
   Activity,
   ArrowDownToLine,
@@ -14,6 +15,7 @@ import {
   Gauge,
   History,
   Layers3,
+  Landmark,
   PanelRightClose,
   RefreshCw,
   Shrink,
@@ -27,6 +29,7 @@ import { CostMeter } from "@/components/assistant-ui/elements/cost-meter";
 import { FileTree, useSessionFileChanges } from "@/components/assistant-ui/elements/file-tree";
 import { ProviderLogo } from "@/components/assistant-ui/elements/logos";
 import { NumberTicker } from "@/components/assistant-ui/elements/number-ticker";
+import { QuotaBanner } from "@/components/assistant-ui/elements/quota-banner";
 import { ToolTimeline, useThreadToolTimeline } from "@/components/assistant-ui/elements/tool-timeline";
 import { StatusRing } from "@/components/status";
 import { Badge } from "@/components/ui/badge";
@@ -35,10 +38,21 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { money, tokens } from "@/format";
 import { cn } from "@/lib/utils";
+import { usePanelEntries } from "@/panels";
 import { useLaserStable, useLaserView, useSessionMeta } from "@/runtime";
 
 import { CheckpointHistory } from "@/components/assistant-ui/elements/checkpoint-history";
-import { historyRows, spendSeries, usageByModel, usageFromEntries, type UsageTotals } from "./model.js";
+import {
+  backgroundUsageSources,
+  historyRows,
+  isAccountProvider,
+  sessionBillingMode,
+  spendSeries,
+  usageByModel,
+  usageFromEntries,
+  type BackgroundUsageSource,
+  type UsageTotals,
+} from "./model.js";
 import { useShell } from "./shell-context.js";
 
 export interface TelemetryPanelProps {
@@ -270,47 +284,208 @@ function TokenComposition({ usage }: { usage: UsageTotals }) {
   );
 }
 
+type UsageView = "account" | "api";
+
 function UsageSection() {
   const view = useLaserView();
   const entries = view?.entries;
-  const usage = useMemo<UsageTotals | undefined>(() => (entries ? usageFromEntries(entries) : undefined), [entries]);
-  const lines = useMemo(() => (entries ? usageByModel(entries) : []), [entries]);
-  const series = useMemo(() => (entries ? spendSeries(entries) : []), [entries]);
-  const lastTurn = series.length > 1 ? series[series.length - 1]! - series[series.length - 2]! : series[0];
+  const panelEntries = usePanelEntries(view?.path);
+  const background = useMemo(
+    () => backgroundUsageSources(panelEntries.map((entry) => entry.panel)),
+    [panelEntries],
+  );
+  const transcriptMode = useMemo(
+    () => (entries ? sessionBillingMode(entries, background) : "none"),
+    [background, entries],
+  );
+  const mode = transcriptMode === "none" && isAccountProvider(view?.state.model?.provider) ? "account" : transcriptMode;
+  const [preferred, setPreferred] = useState<UsageView>("account");
+  const active: UsageView = mode === "mixed" ? preferred : mode === "account" ? "account" : "api";
+  const apiUsage = useMemo<UsageTotals | undefined>(
+    () => (entries ? usageFromEntries(entries, "api", background) : undefined),
+    [background, entries],
+  );
+  const accountUsage = view?.state.accountUsage;
+
   return (
-    <Section title="Spend" icon={CircleDollarSign} signal={usage ? <Badge variant="mono">{usage.turns} turns</Badge> : undefined}>
-      {usage ? (
-        <div className="flex flex-col gap-4">
-          {/* The cost meter and the spend chart (docs/ux-elements.md
-              "Observability" and "Structured output"), from the usage blocks
-              Pi persists on the session file. */}
-          <InstrumentCard>
-            <CostMeter
-              sessionCostUsd={usage.cost}
-              runCostUsd={lastTurn}
-              turns={usage.turns}
-              lines={lines.map((line) => ({ model: line.model, inputTokens: line.input, outputTokens: line.output, costUsd: line.cost }))}
-            />
-          </InstrumentCard>
-          {series.length > 1 && (
-            <InstrumentCard>
-              <Chart
-                label="Spend over turns"
-                value={money(series[series.length - 1] ?? 0)}
-                delta={lastTurn !== undefined ? `+${money(lastTurn)} last` : undefined}
-                points={series}
-                pointLabel={(v, i) => `turn ${i + 1}: ${money(v)}`}
-              />
-            </InstrumentCard>
-          )}
-          <TokenComposition usage={usage} />
-        </div>
+    <Section
+      title="Usage"
+      icon={active === "account" ? Landmark : CircleDollarSign}
+      signal={active === "api" && apiUsage ? <Badge variant="mono">{apiUsage.turns} turns</Badge> : undefined}
+    >
+      {mode === "mixed" ? <UsageTabs active={active} onChange={setPreferred} /> : null}
+      {active === "account" ? (
+        <AccountUsage state={accountUsage} />
       ) : (
-        <p className="text-xs leading-4 text-ink-3">No spend recorded. Totals appear after the agent's first response.</p>
+        <ApiUsage entries={entries} background={background} usage={apiUsage} />
       )}
     </Section>
   );
 }
+
+function UsageTabs({ active, onChange }: { active: UsageView; onChange: (view: UsageView) => void }) {
+  return (
+    <div role="tablist" aria-label="Usage billing view" className="mb-3 grid grid-cols-2 gap-0.5 rounded-lg bg-surface-2 p-0.5">
+      {(["account", "api"] as const).map((view) => (
+        <Button
+          key={view}
+          role="tab"
+          aria-selected={active === view}
+          variant="ghost"
+          size="sm"
+          className={cn("w-full", active === view && "bg-surface text-ink shadow-float-sm")}
+          onClick={() => onChange(view)}
+        >
+          {view === "account" ? <Landmark /> : <CircleDollarSign />}
+          {view === "account" ? "Account" : "API"}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+function ApiUsage({
+  entries,
+  background,
+  usage,
+}: {
+  entries: readonly unknown[] | undefined;
+  background: readonly BackgroundUsageSource[];
+  usage: UsageTotals | undefined;
+}) {
+  const lines = useMemo(() => (entries ? usageByModel(entries, "api", background) : []), [background, entries]);
+  const series = useMemo(() => (entries ? spendSeries(entries, "api", background) : []), [background, entries]);
+  const lastTurn = series.length > 1 ? series[series.length - 1]! - series[series.length - 2]! : series[0];
+  return (
+    usage ? (
+      <div className="flex flex-col gap-4">
+        {/* The cost meter and the spend chart (docs/ux-elements.md
+            "Observability" and "Structured output"), from API-billed usage
+            blocks Pi persists on the session file. */}
+        <InstrumentCard>
+          <CostMeter
+            sessionCostUsd={usage.cost}
+            runCostUsd={lastTurn}
+            turns={usage.turns}
+            lines={lines.map((line) => ({ model: line.model, inputTokens: line.input, outputTokens: line.output, costUsd: line.cost }))}
+          />
+        </InstrumentCard>
+        {series.length > 1 && (
+          <InstrumentCard>
+            <Chart
+              label="Spend over turns"
+              value={money(series[series.length - 1] ?? 0)}
+              delta={lastTurn !== undefined ? `+${money(lastTurn)} last` : undefined}
+              points={series}
+              pointLabel={(v, i) => `turn ${i + 1}: ${money(v)}`}
+            />
+          </InstrumentCard>
+        )}
+        <TokenComposition usage={usage} />
+      </div>
+    ) : (
+      <p className="text-xs leading-4 text-ink-3">No API spend recorded. Totals appear after an API-billed response.</p>
+    )
+  );
+}
+
+function AccountUsage({ state }: { state: AccountUsageState | undefined }) {
+  const { actions } = useLaserStable();
+  const snapshot = state?.snapshot;
+  const loading = state?.status === "loading";
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-ink">Subscription allowance</p>
+          <p className="truncate text-xs leading-4 text-ink-3">
+            {snapshot ? `Updated ${relativeTime(snapshot.fetchedAt)}` : "Current across every app using this account"}
+          </p>
+        </div>
+        <TooltipIconButton
+          tooltip="Refresh account allowance"
+          size="icon-sm"
+          variant="outline"
+          disabled={loading}
+          onClick={() => void actions.refreshAccountUsage()}
+        >
+          <RefreshCw className={cn(loading && "motion-safe:animate-sweep")} />
+        </TooltipIconButton>
+      </div>
+
+      {snapshot ? (
+        <>
+          <div className="grid gap-2">
+            {snapshot.windows.map((window) => <AllowanceWindow key={`${window.kind}:${window.windowDurationMins ?? "unknown"}`} window={window} />)}
+          </div>
+          {snapshot.credits ? <CreditsCard credits={snapshot.credits} /> : null}
+          {state?.status === "unavailable" && state.message ? (
+            <p role="status" className="text-xs leading-4 text-attention">{state.message} Showing the last update.</p>
+          ) : null}
+        </>
+      ) : (
+        <InstrumentCard className="flex items-start gap-3">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-surface text-ink-3">
+            <Landmark className="size-4" aria-hidden="true" />
+          </span>
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-ink">{loading ? "Reading allowance…" : "Allowance unavailable"}</p>
+            <p className="mt-0.5 text-xs leading-4 text-ink-3">
+              {state?.message ?? "Refresh to read the latest limits from your connected account."}
+            </p>
+          </div>
+        </InstrumentCard>
+      )}
+    </div>
+  );
+}
+
+function AllowanceWindow({ window }: { window: AccountUsageWindow }) {
+  const label = allowanceWindowLabel(window.windowDurationMins, window.kind);
+  return (
+    <QuotaBanner label={label} usedPercent={window.usedPercent} resetsLabel={resetLabel(window.resetsAt)} />
+  );
+}
+
+function CreditsCard({ credits }: { credits: AccountCredits }) {
+  const value = credits.unlimited ? "Unlimited" : credits.balance ?? (credits.hasCredits ? "Available" : "None");
+  return (
+    <InstrumentCard className="flex items-center gap-3">
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-surface text-live">
+        <CircleDollarSign className="size-5" aria-hidden="true" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-xs leading-4 text-ink-3">Purchased credits</p>
+        <p className="truncate font-mono text-sm font-semibold text-ink tnum">{value}</p>
+      </div>
+    </InstrumentCard>
+  );
+}
+
+function allowanceWindowLabel(minutes: number | undefined, kind: string): string {
+  if (minutes !== undefined && Math.abs(minutes - 300) <= 2) return "5-hour allowance";
+  if (minutes !== undefined && Math.abs(minutes - 10_080) <= 2) return "Weekly allowance";
+  if (minutes !== undefined && minutes < 1_440) return `${Math.round(minutes / 60)}-hour allowance`;
+  if (minutes !== undefined) return `${Math.round(minutes / 1_440)}-day allowance`;
+  return kind === "primary" ? "Primary allowance" : kind === "secondary" ? "Secondary allowance" : "Account allowance";
+}
+
+function resetLabel(timestamp: number | undefined): string {
+  if (timestamp === undefined) return "Reset unavailable";
+  const date = new Date(timestamp * 1_000);
+  if (Number.isNaN(date.getTime())) return "Reset unavailable";
+  return `Resets ${date.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}`;
+}
+
+function relativeTime(value: string): string {
+  const elapsed = Date.now() - Date.parse(value);
+  if (!Number.isFinite(elapsed) || elapsed < 0) return "just now";
+  const minutes = Math.floor(elapsed / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  return `${Math.floor(minutes / 60)}h ago`;
+}
+
 
 function ModelSection() {
   const meta = useSessionMeta();

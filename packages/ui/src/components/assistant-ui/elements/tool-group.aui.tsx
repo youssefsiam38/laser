@@ -36,7 +36,6 @@ import { StatusDot } from "@/components/status";
 import { ThinkingIndicator } from "@/components/assistant-ui/elements/thinking-indicator";
 import {
   summarizeActivityGroup,
-  toolGroupDefaultOpen,
   type ActivityIconKind,
   type ReasoningActivity,
   type ToolGroupBreakdownItem,
@@ -47,7 +46,7 @@ import { elapsedOf, markDone, markRunning, useElapsed, useTick } from "@/compone
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { duration } from "@/format";
 import { cn } from "@/lib/utils";
-import { useLaserState, useReasoningExpanded } from "@/runtime";
+import { activityGroupDefaultOpen, useActivityDetailLevel, useLaserState, type ActivityDetailLevel } from "@/runtime";
 
 import { ReasoningText } from "./reasoning.js";
 import { collapsePanel, mono } from "./surfaces.js";
@@ -334,13 +333,12 @@ function useGroupActivity(part: GroupPart): GroupActivity {
 function ToolGroupImpl({ part, timingKey, children }: ToolGroupProps) {
   const { members, reasoning } = useGroupActivity(part);
   const path = useLaserState((state) => state.current);
-  const reasoningExpanded = useReasoningExpanded(path);
-  if (reasoning.count === 0 && members.length <= 1) return <>{children}</>;
+  const activityLevel = useActivityDetailLevel(path);
   return (
     <ToolGroupSummaryRow
       members={members}
       reasoning={reasoning}
-      reasoningExpanded={reasoningExpanded}
+      activityLevel={activityLevel}
       timingKey={timingKey}
       groupStatus={part.status}
     >
@@ -352,21 +350,23 @@ function ToolGroupImpl({ part, timingKey, children }: ToolGroupProps) {
 function ToolGroupSummaryRow({
   members,
   reasoning,
-  reasoningExpanded,
+  activityLevel,
   timingKey,
   groupStatus,
   children,
 }: {
   members: readonly ToolGroupMember[];
   reasoning: ReasoningActivity;
-  reasoningExpanded: boolean;
+  activityLevel: ActivityDetailLevel;
   timingKey: string;
   groupStatus: GroupPart["status"];
   children: ReactNode;
 }) {
   const summary: ToolGroupSummary = useMemo(() => summarizeActivityGroup(members, reasoning), [members, reasoning]);
-  const [userOpen, setUserOpen] = useState<boolean | null>(null);
-  const open = userOpen ?? ((reasoning.count > 0 && reasoningExpanded) || toolGroupDefaultOpen(summary));
+  const [userOpen, setUserOpen] = useState<{ level: ActivityDetailLevel; open: boolean } | null>(null);
+  const open = userOpen?.level === activityLevel
+    ? userOpen.open
+    : activityGroupDefaultOpen(activityLevel, reasoning.count > 0, summary.hasError || summary.hasDecision);
 
   // The rows inside are unmounted while collapsed, so the group keeps the
   // wall-clock marks their durations are read from (same keys as the rows).
@@ -390,7 +390,7 @@ function ToolGroupSummaryRow({
   return (
     <ToolGroupRoot
       open={open}
-      onOpenChange={setUserOpen}
+      onOpenChange={(next) => setUserOpen({ level: activityLevel, open: next })}
       tone={failed ? "danger" : summary.hasDecision ? "attention" : undefined}
       data-family={summary.family}
       data-count={summary.count}

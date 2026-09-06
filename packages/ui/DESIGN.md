@@ -132,8 +132,12 @@ Desktop (≥1024px), four columns left to right:
 3. **Thread** (flex): the assistant-ui thread. Max width 84ch (`--measure-thread`) centered, sticky
    top bar (session title, model, thinking, context ring, more menu), floating
    composer at the bottom with queue chips above it.
-4. **Telemetry** (320px, collapsible with `]`): context ring with tokens,
-   cost/turn usage, model and thinking, worker status, extension status pills,
+4. **Telemetry** (320px, collapsible with `]`): context ring with tokens;
+   billing-aware usage (API cost/tokens or account allowance/resets/credits,
+   with Account/API tabs only when both occur). Every subagent run contributes
+   its own per-model attempts to the parent session, while plan roll-ups are
+   ignored to prevent double-counting; model and thinking, worker status,
+   extension status pills,
    extension widgets (string lines rendered in `--font-mono`), history/tree
    panel (fork, jump, labels). Hidden by default under 1280px.
 
@@ -170,8 +174,10 @@ by color and an `aria-label`.
   chevron that restores the full reasoning and every individual tool row in
   chronological order (D-89). While live, the same row uses the thinking
   indicator to name either Thinking or the exact active tool. The per-session
-  expanded-thinking preference opens any group containing reasoning; errors
-  and decisions always open it. Each individual tool row: `[icon] verb
+  Activity detail choice has three levels: Answers only keeps the aggregate
+  closed, Show reasoning opens aggregates that contain reasoning while their
+  action bodies stay folded, and Show everything opens both levels. Errors and
+  decisions always open their aggregate. Each individual tool row: `[icon] verb
   path/or/summary ····· 120ms`. Verb in `--font-sans` 500, path in `--font-mono`. Rows expand to show args and result. `bash` expands into a terminal block (dark ground in
   both themes, `--font-mono`, stdout/stderr). `edit`/`write` show a diff. Errors
   get a `--danger` left hairline and the error text.

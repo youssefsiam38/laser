@@ -282,6 +282,13 @@ function applyNotification(state: AppState, method: HostNotificationMethod, para
         const goal = p.message.goal;
         return updateView(state, p.path, (v) => ({ ...v, goal }));
       }
+      if (p.message.type === "lasercode/account-usage/state") {
+        const accountUsage = p.message.state;
+        return updateView(state, p.path, (v) => ({
+          ...v,
+          state: { ...v.state, accountUsage },
+        }));
+      }
       if (p.message.type === "lasercode/module/log" && p.message.level === "error") {
         return pushToast(state, "error", `${p.message.module}: ${p.message.message}`);
       }

@@ -8,7 +8,40 @@
 import type { Panel } from "./panels.js";
 import type { SessionGoal } from "./features.js";
 
-export type PiExtensionModuleName = "provider-log" | "subagents" | "transcribe" | "web-access" | "panels" | "goal";
+export type PiExtensionModuleName = "provider-log" | "account-usage" | "subagents" | "transcribe" | "web-access" | "panels" | "goal";
+
+/** One server-owned allowance window for an account-authenticated provider. */
+export interface AccountUsageWindow {
+  kind: "primary" | "secondary" | "other";
+  usedPercent: number;
+  windowDurationMins?: number;
+  /** Unix timestamp in seconds. */
+  resetsAt?: number;
+}
+
+/** Purchased credits are separate from the rolling subscription allowance. */
+export interface AccountCredits {
+  hasCredits: boolean;
+  unlimited: boolean;
+  /** Provider-formatted decimal value; never coerce financial precision. */
+  balance?: string;
+}
+
+export interface AccountUsageSnapshot {
+  provider: string;
+  planType?: string;
+  fetchedAt: string;
+  windows: AccountUsageWindow[];
+  credits?: AccountCredits;
+}
+
+export interface AccountUsageState {
+  provider: string;
+  status: "loading" | "ready" | "unavailable";
+  /** Kept during refresh/failure so the last good reading never disappears. */
+  snapshot?: AccountUsageSnapshot;
+  message?: string;
+}
 
 export interface ProviderRequestRecord {
   at: string;
@@ -30,6 +63,7 @@ export type PiExtensionMessage =
     }
   | ({ type: "lasercode/provider/request" } & ProviderRequestRecord)
   | ({ type: "lasercode/provider/response" } & ProviderResponseRecord)
+  | { type: "lasercode/account-usage/state"; state: AccountUsageState }
   | { type: "lasercode/subagents/event"; event: unknown }
   | { type: "lasercode/goal/state"; goal: SessionGoal | null }
   /** The `panels` module: a validated `laser:panel` event, or a close (docs/ux-panels.md). */

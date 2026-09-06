@@ -41,9 +41,17 @@ export interface PanelUsage {
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  /** Provider turns represented by this usage, when the producer records them. */
+  turns?: number;
   costUsd?: number | null;
   /** Why there are no numbers ("not measured for detached runs"). */
   unavailableReason?: string;
+}
+
+/** Model-attributed slices keep fallback attempts in the correct billing view. */
+export interface PanelUsageSlice {
+  model?: string;
+  usage: PanelUsage;
 }
 
 /**
@@ -108,6 +116,8 @@ export interface RunPanel extends PanelBase {
   endedAt?: string;
   /** `null` renders as "not measured", which is a different thing from zero. */
   usage?: PanelUsage | null;
+  /** Every attempt made by this agent, including failed model fallbacks. */
+  usageByModel?: PanelUsageSlice[];
   /** The live output, read through the host; `bytes` is the liveness signal. */
   output?: { ref: Ref; bytes?: number };
   artifacts?: Array<{ label: string; ref: Ref }>;
@@ -392,7 +402,9 @@ export const DEFAULT_INTENT: Readonly<Record<PanelKind, PanelIntent>> = {
 // ---------------------------------------------------------------------------
 
 /** Worker → companion extension (the only inbound message today). */
-export type PiExtensionCommand = { type: "lasercode/panel/action"; id: string; actionId: string; value?: string };
+export type PiExtensionCommand =
+  | { type: "lasercode/panel/action"; id: string; actionId: string; value?: string }
+  | { type: "lasercode/account-usage/refresh" };
 
 // ---------------------------------------------------------------------------
 // The wire: pi/panel/* (module augmentation of the method catalogue)

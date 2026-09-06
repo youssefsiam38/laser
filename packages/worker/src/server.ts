@@ -194,6 +194,12 @@ export class WorkerServer {
         return {
           state: await this.live(req.params.path).driver.setThinkingLevel(req.params.level),
         } satisfies Result<"pi/thinking/set">;
+      case "pi/account-usage/refresh": {
+        const delivered = this.live(req.params.path).driver.deliverExtensionCommand?.({
+          type: "lasercode/account-usage/refresh",
+        }) ?? false;
+        return { delivered } satisfies Result<"pi/account-usage/refresh">;
+      }
       case "session/goal/get": {
         const goal = await this.live(req.params.path).driver.goalState?.();
         return { goal: goal ?? null } satisfies Result<"session/goal/get">;

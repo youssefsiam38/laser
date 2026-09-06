@@ -2,10 +2,11 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-06T14:18:30+03:00 · codex-2026-09-06-activity-summary · commit: `54d7f18`
+**Last updated:** 2026-09-06T15:00:20+03:00 · codex-2026-09-06-account-usage · commit: `3d34b58`
 
-**Current focus:** The verified 0.2.3 activity refinement is ready for its stable
-tag; 0.2.2 is published across GitHub, APT and DNF.
+**Current focus:** M12 is complete. Main now carries adaptive account/API usage,
+three-level activity disclosure and a context-preserving model picker after the
+published stable 0.2.3 release.
 
 ## Milestones
 
@@ -24,7 +25,7 @@ tag; 0.2.2 is published across GitHub, APT and DNF.
 | M9 CLI | done | all planned CLI tasks complete |
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
-| M12 0.2.0 product experience | in-progress | 0.2.3 release is being published |
+| M12 Product experience | done | stable 0.2.3 published; follow-up UX verified on main |
 | MX Cross-cutting | in-progress | seam and identity gates green; Pi pin 0.85.0 |
 
 ## Blockers
@@ -33,14 +34,14 @@ None.
 
 ## Next up
 
-1. M12-T39: publish and verify stable 0.2.3.
-2. M3-T9: file the prepared upstream subagent patches.
-3. M10-T10: design and prove the in-app updater installation seam.
+1. M3-T9: file the prepared upstream subagent patches.
+2. M10-T10: design and prove the in-app updater installation seam.
+3. MX-T2: audit the next Pi pin before updating the embedded engine.
 
 ## Recently done
 
+- M12-T42: model pickers reopen at the session's active provider and model.
+- M12-T41: each session has three consistent activity-detail levels.
+- M12-T40: usage adapts across API, account and mixed billing, including subagents.
+- M12-T39: stable 0.2.3 published with both architectures and native update feeds.
 - M12-T38: reasoning and tools share one live, muted activity disclosure.
-- M12-T37: stable 0.2.2 published with signed x64/ARM64 artifacts and updater feeds.
-- M12-T36: the fleet separates active and terminal work without breaking run trees.
-- M12-T35: native notifications share the session title visible in Laser.
-- M12-T34: Markdown code uses full Shiki grammar coverage and Laser-theme scopes.

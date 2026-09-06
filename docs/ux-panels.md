@@ -393,9 +393,11 @@ type RunPanel = {
 
   usage?: {
     input?: number; output?: number; cacheRead?: number; cacheWrite?: number;
+    turns?: number;
     costUsd?: number | null;
     unavailableReason?: string;    // why there are no numbers
   } | null;
+  usageByModel?: Array<{ model?: string; usage: Usage }>; // every fallback attempt
 
   output?: { ref: string; bytes?: number };            // read through the host
   artifacts?: Array<{ label: string; ref: string }>;
@@ -588,7 +590,7 @@ makes the adapters flexible:
 
 ```ts
 type Action = { id: string; label: string; confirm?: string; destructive?: boolean };
-type Usage  = { input?: number; output?: number; cacheRead?: number; cacheWrite?: number;
+type Usage  = { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; turns?: number;
                 costUsd?: number | null; unavailableReason?: string };
 type Ref    = string;   // opaque; the host reads it, ranges and all
 ```

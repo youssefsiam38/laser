@@ -462,6 +462,9 @@ Depends on: M1, M2-T4, M4, M5-T1, M11.
 | M12-T37 | Publish the accumulated experience fixes as stable 0.2.2 | every workspace manifest and tag agrees on 0.2.2; CI builds, installs, signs, attests and publishes both Linux architectures; the native package feeds deploy successfully |
 | M12-T38 | Fold reasoning into the aggregate activity disclosure | adjacent reasoning and tool work share one muted, live summary row; its collapsed state counts thought and action families, and its expanded state preserves the complete reasoning and tool detail |
 | M12-T39 | Publish the activity-disclosure refinement as stable 0.2.3 | every workspace manifest and tag agrees on 0.2.3 and the independent release pipeline publishes both Linux architectures, provenance and updater feeds |
+| M12-T40 | Separate API spend from account allowance in session telemetry | API-only sessions retain token/cost charts; account-only sessions show authoritative allowance windows, resets and credit balance; mixed sessions expose both through a compact two-tab control without combining their units |
+| M12-T41 | Give each session one three-level activity disclosure preference | the chat menu offers text-only, reasoning, and full-detail modes; every reasoning/tool sequence keeps one aggregate parent while the selected level controls which established inner renderers start open |
+| M12-T42 | Open the chat model picker at the session's active choice | opening the picker immediately scopes its provider field to the current routing provider and marks the current model, while closing clears temporary search and filter overrides for the next session |
 
 ---
 

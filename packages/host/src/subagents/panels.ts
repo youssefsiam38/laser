@@ -46,7 +46,7 @@ import type {
   RunLifecycle,
   RunPanel,
 } from "@lasercode/protocol";
-import type { AcceptanceLedger, AsyncStatus, ForegroundChild, RunState, StatusStep, StepState } from "./status.js";
+import type { AcceptanceLedger, AsyncStatus, ForegroundChild, ModelAttempt, RunState, StatusStep, StepState } from "./status.js";
 
 /** Product-facing source. The implementation package is intentionally private. */
 export const PANEL_SOURCE = "Subagents";
@@ -148,6 +148,7 @@ export function usageOfStep(step: Pick<StatusStep, "modelAttempts" | "tokens" | 
       ...opt(sum((u) => u.output), "output"),
       ...opt(sum((u) => u.cacheRead), "cacheRead"),
       ...opt(sum((u) => u.cacheWrite), "cacheWrite"),
+      ...opt(sum((u) => u.turns), "turns"),
       costUsd: cost ?? step.totalCost?.costUsd ?? null,
     };
     return usage;
@@ -162,6 +163,30 @@ export function usageOfStep(step: Pick<StatusStep, "modelAttempts" | "tokens" | 
     costUsd: step.totalCost?.costUsd ?? null,
     unavailableReason: NO_CACHE_READS,
   };
+}
+
+/** Per-attempt usage preserves billing attribution across model fallbacks. */
+function usageByModelOfAttempts(
+  attempts: readonly ModelAttempt[] | undefined,
+  fallbackModel?: string,
+): Array<{ model?: string; usage: PanelUsage }> | undefined {
+  const slices = (attempts ?? []).flatMap((attempt) => {
+    const value = attempt.usage;
+    if (!value) return [];
+    const model = attempt.model ?? fallbackModel;
+    return [{
+      ...(model ? { model } : {}),
+      usage: {
+        ...opt(value.input, "input"),
+        ...opt(value.output, "output"),
+        ...opt(value.cacheRead, "cacheRead"),
+        ...opt(value.cacheWrite, "cacheWrite"),
+        ...opt(value.turns, "turns"),
+        ...opt(value.cost, "costUsd"),
+      },
+    }];
+  });
+  return slices.length > 0 ? slices : undefined;
 }
 
 /** The run-level roll-up. Same rules; `totalTokens` is a live counter with no cache reads. */
@@ -376,6 +401,7 @@ export function childRunPanel(
     // run did; "—" where a duration belongs reads as a bug, not as honesty.
     ...opt(iso(step.endedAt ?? (TERMINAL.has(lifecycle) ? status.endedAt : undefined)), "endedAt"),
     usage: usageOfStep(step),
+    ...opt(usageByModelOfAttempts(step.modelAttempts, step.model), "usageByModel"),
     ...(transcript ? { output: { ref: `file:${transcript}`, ...opt(bytes, "bytes") } } : {}),
     ...(artifactsOf(step).length > 0 ? { artifacts: artifactsOf(step) } : {}),
     ...(actionsForChild(step, status.state, options.caps).length > 0
@@ -477,6 +503,7 @@ export function foregroundRunPanel(child: ForegroundChild, options: Pick<MapOpti
         ...opt(meta.usage.output, "output"),
         ...opt(meta.usage.cacheRead, "cacheRead"),
         ...opt(meta.usage.cacheWrite, "cacheWrite"),
+        ...opt(meta.usage.turns, "turns"),
         costUsd: meta.usage.cost ?? null,
       }
     : child.live
@@ -500,6 +527,7 @@ export function foregroundRunPanel(child: ForegroundChild, options: Pick<MapOpti
     ...opt(iso(child.startedAt), "startedAt"),
     ...opt(iso(meta?.timestamp), "endedAt"),
     usage,
+    ...opt(usageByModelOfAttempts(meta?.modelAttempts, meta?.model), "usageByModel"),
     output: { ref: `file:${child.transcriptPath}`, ...opt(options.bytesOf?.(child.transcriptPath), "bytes") },
     ...opt(meta?.error, "error"),
   };

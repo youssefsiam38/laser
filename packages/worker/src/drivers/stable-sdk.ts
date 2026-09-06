@@ -79,6 +79,7 @@ export class StableSdkDriver implements SessionDriver {
   private readonly toolCalls = new PendingToolCallTracker();
   /** Worker → companion extension. `deliver` answers whether a module took it. */
   private readonly extensionBus = createCommandBus();
+  private accountUsage: SessionState["accountUsage"];
   private runtime: AgentSessionRuntime | undefined;
   private unsubscribe: (() => void) | undefined;
   private cwd = "";
@@ -104,10 +105,14 @@ export class StableSdkDriver implements SessionDriver {
     const agentDir = options.agentDir ?? getAgentDir();
     const enabled = new Set<FeatureId>(options.features ?? ["subagents", "goals"]);
     const laser = createLaserExtension({
-      send: (message) => this.emit({ type: "extension", message }),
+      send: (message) => {
+        if (message.type === "lasercode/account-usage/state") this.accountUsage = message.state;
+        this.emit({ type: "extension", message });
+      },
       commands: this.extensionBus,
       only: [
         "provider-log",
+        "account-usage",
         "panels",
         "transcribe",
         ...(enabled.has("subagents") ? ["subagents" as const] : []),
@@ -256,6 +261,7 @@ export class StableSdkDriver implements SessionDriver {
             },
           }
         : {}),
+      ...(this.accountUsage ? { accountUsage: this.accountUsage } : {}),
     };
   }
 

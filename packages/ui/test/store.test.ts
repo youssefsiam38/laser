@@ -24,6 +24,26 @@ describe("applyUpdate", () => {
     expect(next.open["/s.jsonl"]?.capabilities).toEqual(["provider-log", "transcribe"]);
   });
 
+  it("keeps the latest account allowance on the owning session", () => {
+    const opened = reduce(initialState, { type: "opened", state });
+    const next = reduce(opened, {
+      type: "notification",
+      method: "pi/extension/message",
+      params: {
+        path: "/s.jsonl",
+        message: {
+          type: "lasercode/account-usage/state",
+          state: {
+            provider: "openai-codex",
+            status: "ready",
+            snapshot: { provider: "openai-codex", fetchedAt: "2026-09-06T10:00:00.000Z", windows: [] },
+          },
+        },
+      },
+    });
+    expect(next.open["/s.jsonl"]?.state.accountUsage).toMatchObject({ status: "ready" });
+  });
+
   it("assembles a streamed assistant turn with a tool call", () => {
     const v = run(view(), [
       { kind: "agent_start" },

@@ -1,8 +1,9 @@
 import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
-import type { SessionState, SessionSummary } from "@lasercode/protocol";
+import type { Panel, SessionState, SessionSummary } from "@lasercode/protocol";
 
 import {
+  backgroundUsageSources,
   documentTitle,
   historyRows,
   inboxRows,
@@ -11,6 +12,7 @@ import {
   needYouCount,
   projectSummaries,
   recentCwds,
+  sessionBillingMode,
   sessionStateLabel,
   sessionStatus,
   sessionSubtitle,
@@ -215,6 +217,59 @@ describe("entries", () => {
   it("sums usage across assistant messages and summaries", () => {
     expect(usageFromEntries(entries)).toEqual({ input: 11, output: 6, cacheRead: 2, cacheWrite: 1, total: 20, cost: 0.011, turns: 1 });
     expect(usageFromEntries([])).toBeUndefined();
+  });
+
+  it("keeps account allowance and API spend in separate billing views", () => {
+    const mixed = [
+      { type: "message", message: { role: "assistant", provider: "openai-codex", usage: { input: 100, output: 20, totalTokens: 120, cost: { total: 4 } } } },
+      { type: "message", message: { role: "assistant", provider: "anthropic", usage: { input: 10, output: 5, totalTokens: 15, cost: { total: 0.1 } } } },
+    ];
+    expect(sessionBillingMode(mixed)).toBe("mixed");
+    expect(usageFromEntries(mixed, "api")).toMatchObject({ input: 10, output: 5, total: 15, cost: 0.1, turns: 1 });
+    expect(sessionBillingMode([mixed[0]])).toBe("account");
+    expect(sessionBillingMode([mixed[1]])).toBe("api");
+  });
+
+  it("counts every subagent under the model that served it without counting plan roll-ups", () => {
+    const panels: Panel[] = [
+      {
+        kind: "plan",
+        id: "plan",
+        source: "Subagents",
+        title: "Parallel",
+        intent: "follow",
+        steps: [],
+        usage: { input: 999, output: 999, costUsd: 99 },
+      },
+      {
+        kind: "run",
+        id: "child",
+        source: "Subagents",
+        title: "researcher",
+        intent: "follow",
+        lifecycle: "done",
+        usage: { input: 160, output: 30, costUsd: 0.4 },
+        usageByModel: [
+          { model: "openai-codex/gpt-5.6", usage: { input: 100, output: 20, turns: 2, costUsd: 0 } },
+          { model: "anthropic/claude-sonnet", usage: { input: 60, output: 10, turns: 1, costUsd: 0.4 } },
+        ],
+      },
+    ];
+    const background = backgroundUsageSources(panels);
+    const accountParent = [
+      { type: "message", message: { role: "assistant", provider: "openai-codex", usage: { input: 20, output: 5, cost: { total: 1 } } } },
+    ];
+    expect(background).toHaveLength(2);
+    expect(sessionBillingMode(accountParent, background)).toBe("mixed");
+    expect(usageFromEntries(accountParent, "api", background)).toEqual({
+      input: 60,
+      output: 10,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 70,
+      cost: 0.4,
+      turns: 1,
+    });
   });
 
   it("flattens the tree with branch depth, folded tool results, and labels on targets", () => {

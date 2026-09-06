@@ -65,7 +65,14 @@ export {
 } from "./adapter.js";
 
 export { THEME_PREFS_NAMESPACE, useThemeSync } from "./prefs.js";
-export { reasoningExpanded, setReasoningExpanded, useReasoningExpanded } from "./sessionPreferences.js";
+export {
+  activityDetailLevel,
+  activityGroupDefaultOpen,
+  setActivityDetailLevel,
+  toolDetailsDefaultOpen,
+  useActivityDetailLevel,
+  type ActivityDetailLevel,
+} from "./sessionPreferences.js";
 
 export {
   PROJECTS_STORAGE_KEY,

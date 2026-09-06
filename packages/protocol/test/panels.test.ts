@@ -60,6 +60,18 @@ describe("validatePanelEvent", () => {
     const parsed = panelSchema.parse(run({ usage: null }));
     expect(parsed.kind === "run" && parsed.usage).toBeNull();
   });
+
+  it("keeps model-attributed run attempts for billing without accepting secrets", () => {
+    const parsed = panelSchema.parse(run({
+      usageByModel: [
+        { model: "openai-codex/gpt-5.6", usage: { input: 10, output: 2, turns: 1, costUsd: 0 } },
+        { model: "anthropic/claude-sonnet", usage: { input: 4, output: 1, turns: 1, costUsd: 0.1 } },
+      ],
+    }));
+    expect(parsed.kind === "run" && parsed.usageByModel).toHaveLength(2);
+    expect(() => panelSchema.parse(run({ usageByModel: [{ model: "anthropic/claude", usage: { input: 1, token: "secret" } as never }] })))
+      .toThrow();
+  });
 });
 
 describe("attentionOf", () => {

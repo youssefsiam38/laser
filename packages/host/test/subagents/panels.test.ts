@@ -74,6 +74,25 @@ describe("usage is raw, and honest about what was never measured", () => {
     expect(usageOfStep(step)).toEqual({ input: 100, output: 20, cacheRead: 4000, cacheWrite: 0, costUsd: 0.5 });
   });
 
+  it("keeps every model attempt separately for downstream billing attribution", () => {
+    const panel = singleRunPanel(status({
+      state: "complete",
+      steps: [{
+        status: "complete",
+        agent: "worker",
+        model: "anthropic/claude-sonnet",
+        modelAttempts: [
+          { model: "openai-codex/gpt-5.6", success: false, usage: { input: 10, output: 1, cost: 0, turns: 1 } },
+          { model: "anthropic/claude-sonnet", success: true, usage: { input: 20, output: 2, cost: 0.2, turns: 2 } },
+        ],
+      }],
+    }), { caps: CAPS });
+    expect(panel.usageByModel).toEqual([
+      { model: "openai-codex/gpt-5.6", usage: { input: 10, output: 1, turns: 1, costUsd: 0 } },
+      { model: "anthropic/claude-sonnet", usage: { input: 20, output: 2, turns: 2, costUsd: 0.2 } },
+    ]);
+  });
+
   it("names what is missing rather than reporting zero cache reads", () => {
     const usage = usageOfStep({ status: "running", tokens: { input: 10, output: 3 } } as StatusStep);
     expect(usage).not.toBeNull();

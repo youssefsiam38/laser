@@ -1,37 +1,55 @@
 import { storageKey } from "@lasercode/protocol";
 import { useEffect, useState } from "react";
 
-const PREFIX = storageKey("reasoning-expanded:");
-const EVENT = storageKey("session-preference");
+export type ActivityDetailLevel = "answers" | "reasoning" | "everything";
 
-export function reasoningExpanded(path: string | undefined): boolean {
-  if (!path) return true;
+const PREFIX = storageKey("activity-detail:");
+const EVENT = storageKey("session-preference");
+const LEVELS = new Set<ActivityDetailLevel>(["answers", "reasoning", "everything"]);
+
+/** A new session starts quiet; its live summary still says what is happening. */
+export function activityDetailLevel(path: string | undefined): ActivityDetailLevel {
+  if (!path) return "answers";
   try {
-    return globalThis.localStorage?.getItem(`${PREFIX}${path}`) !== "false";
+    const value = globalThis.localStorage?.getItem(`${PREFIX}${path}`);
+    return LEVELS.has(value as ActivityDetailLevel) ? (value as ActivityDetailLevel) : "answers";
   } catch {
-    return true;
+    return "answers";
   }
 }
 
-export function setReasoningExpanded(path: string, expanded: boolean): void {
+export function setActivityDetailLevel(path: string, level: ActivityDetailLevel): void {
   try {
-    globalThis.localStorage?.setItem(`${PREFIX}${path}`, String(expanded));
+    globalThis.localStorage?.setItem(`${PREFIX}${path}`, level);
   } catch {
     // Private browsing can deny storage; this tab still receives the event.
   }
-  globalThis.dispatchEvent?.(new CustomEvent(EVENT, { detail: { path, expanded } }));
+  globalThis.dispatchEvent?.(new CustomEvent(EVENT, { detail: { path, level } }));
 }
 
-export function useReasoningExpanded(path: string | undefined): boolean {
-  const [expanded, setExpanded] = useState(() => reasoningExpanded(path));
+export function useActivityDetailLevel(path: string | undefined): ActivityDetailLevel {
+  const [level, setLevel] = useState(() => activityDetailLevel(path));
   useEffect(() => {
-    setExpanded(reasoningExpanded(path));
+    setLevel(activityDetailLevel(path));
     const listener = (event: Event) => {
-      const detail = (event as CustomEvent<{ path: string; expanded: boolean }>).detail;
-      if (detail?.path === path) setExpanded(detail.expanded);
+      const detail = (event as CustomEvent<{ path: string; level: ActivityDetailLevel }>).detail;
+      if (detail?.path === path) setLevel(detail.level);
     };
     globalThis.addEventListener?.(EVENT, listener);
     return () => globalThis.removeEventListener?.(EVENT, listener);
   }, [path]);
-  return expanded;
+  return level;
+}
+
+/** Errors and decisions remain visible regardless of a quiet preference. */
+export function activityGroupDefaultOpen(
+  level: ActivityDetailLevel,
+  hasReasoning: boolean,
+  needsAttention: boolean,
+): boolean {
+  return needsAttention || level === "everything" || (level === "reasoning" && hasReasoning);
+}
+
+export function toolDetailsDefaultOpen(level: ActivityDetailLevel): boolean {
+  return level === "everything";
 }

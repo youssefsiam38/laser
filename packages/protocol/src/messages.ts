@@ -9,7 +9,7 @@
  */
 
 import { WIRE_NAMESPACE } from "./identity.js";
-import type { PiExtensionMessage, PiExtensionModuleName } from "./pi-extension.js";
+import type { AccountUsageState, PiExtensionMessage, PiExtensionModuleName } from "./pi-extension.js";
 import type { FeatureScope, FeatureState, GoalAction, SessionGoal } from "./features.js";
 import type { PushConfig, PushDeviceInfo, PushSubscriptionJson } from "./push.js";
 
@@ -181,6 +181,8 @@ export interface SessionState {
    * before a client has created its local session view.
    */
   capabilities?: PiExtensionModuleName[];
+  /** Live, account-wide allowance for an account-authenticated provider. */
+  accountUsage?: AccountUsageState;
   /** `tokens`/`percent` are null right after compaction, before the next response. */
   contextUsage?: { tokens: number | null; contextWindow: number; percent: number | null };
 }
@@ -848,6 +850,8 @@ export interface ClientRequests {
   "pi/model/list": { params: { path: string }; result: { models: ModelRef[] } };
   "pi/model/set": { params: { path: string; model: ModelRef }; result: { state: SessionState } };
   "pi/thinking/set": { params: { path: string; level: ThinkingLevel }; result: { state: SessionState } };
+  /** Ask the active account-usage module for a fresh server snapshot. */
+  "pi/account-usage/refresh": { params: { path: string }; result: { delivered: boolean } };
   /**
    * Answer an extension dialog. `delivered` is false when no worker still holds
    * that dialog id — the session restarted, or the question timed out — so the

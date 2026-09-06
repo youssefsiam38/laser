@@ -30,9 +30,11 @@ import {
 } from "@/components/ui/dialog";
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuTrigger,
@@ -44,7 +46,16 @@ import { shortCwd } from "@/format";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
 import { useDock, useIslandEntries, usePanelActions } from "@/panels";
-import { sessionTitle, setReasoningExpanded, useLaserStable, useLaserState, useLaserView, useReasoningExpanded, useSessionMeta } from "@/runtime";
+import {
+  sessionTitle,
+  setActivityDetailLevel,
+  useActivityDetailLevel,
+  useLaserStable,
+  useLaserState,
+  useLaserView,
+  useSessionMeta,
+  type ActivityDetailLevel,
+} from "@/runtime";
 
 import { InlineRename } from "./InlineRename.js";
 import { lastPromptEntryId, sessionStateLabel, sessionStatus, workerChip } from "./model.js";
@@ -70,7 +81,7 @@ export function TopBar() {
   const { copy } = useCopy();
   const [renaming, setRenaming] = useState(false);
   const [compactOpen, setCompactOpen] = useState(false);
-  const reasoningOpen = useReasoningExpanded(view?.path);
+  const activityLevel = useActivityDetailLevel(view?.path);
 
   const summary = useMemo(() => (view ? sessions.find((s) => s.path === view.path) : undefined), [sessions, view]);
   const status = sessionStatus(view, summary);
@@ -253,13 +264,30 @@ export function TopBar() {
               Compact with instructions…
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuCheckboxItem
-              disabled={!view}
-              checked={reasoningOpen}
-              onCheckedChange={(checked) => view && setReasoningExpanded(view.path, checked === true)}
+            <DropdownMenuLabel>Activity detail</DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={activityLevel}
+              onValueChange={(level) => view && setActivityDetailLevel(view.path, level as ActivityDetailLevel)}
             >
-              Expand reasoning by default
-            </DropdownMenuCheckboxItem>
+              <DropdownMenuRadioItem value="answers" disabled={!view} className="items-start">
+                <span>
+                  <span className="block">Answers only</span>
+                  <span className="mt-0.5 block text-xs leading-4 text-ink-3">Reasoning and actions folded</span>
+                </span>
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="reasoning" disabled={!view} className="items-start">
+                <span>
+                  <span className="block">Show reasoning</span>
+                  <span className="mt-0.5 block text-xs leading-4 text-ink-3">Reasoning open, action bodies folded</span>
+                </span>
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="everything" disabled={!view} className="items-start">
+                <span>
+                  <span className="block">Show everything</span>
+                  <span className="mt-0.5 block text-xs leading-4 text-ink-3">Reasoning and action details open</span>
+                </span>
+              </DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
             <DropdownMenuSeparator />
             <DropdownMenuItem disabled={!view || meta.running} onSelect={() => void forkFromLastPrompt()}>
               <GitFork />

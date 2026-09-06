@@ -99,8 +99,8 @@ export interface SessionDriver {
   respondToUi(response: UiDialogResponse): void;
 
   /**
-   * Hand a command to the companion extension — a panel action a person
-   * pressed (docs/ux-panels.md). Returns true when a module took it; false
+   * Hand a command to the companion extension — a panel action or account
+   * refresh. Returns true when a module took it; false
    * means nobody still holds that panel id. Optional: the stub driver loads no
    * extension, so it has nothing to deliver to.
    */

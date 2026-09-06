@@ -105,6 +105,7 @@ type ModelSelectorContextValue = {
   setValue: (value: string) => void;
   /** The model matching `value`, derived once for all sub-components. */
   selectedModel: ModelOption | undefined;
+  open: boolean;
   setOpen: (open: boolean) => void;
 };
 
@@ -155,20 +156,22 @@ function ModelSelectorRoot({
   });
 
   const selectedModel = models.find((m) => m.id === value);
+  const isOpen = open ?? false;
   const contextValue = useMemo(
     () => ({
       models,
       value,
       setValue,
       selectedModel,
+      open: isOpen,
       setOpen,
     }),
-    [models, value, setValue, selectedModel, setOpen],
+    [models, value, setValue, selectedModel, isOpen, setOpen],
   );
 
   return (
     <ModelSelectorContext.Provider value={contextValue}>
-      <Popover open={open ?? false} onOpenChange={setOpen}>
+      <Popover open={isOpen} onOpenChange={setOpen}>
         {children}
       </Popover>
     </ModelSelectorContext.Provider>
@@ -612,11 +615,23 @@ export interface ProviderModelMenuProps {
   beforeFilters?: ReactNode;
 }
 
+export function providerFilterForModel(model: Pick<ModelOption, "provider"> | undefined): string {
+  return model?.provider ?? "all";
+}
+
 /** Shared provider/model menu with one explicit field for each filter. */
 export function ProviderModelMenu({ loading = false, error, onRetry, side = "bottom", align = "start", beforeFilters }: ProviderModelMenuProps) {
-  const { models } = useModelSelectorContext();
-  const [providerFilter, setProviderFilter] = useState("all");
+  const { models, selectedModel, open } = useModelSelectorContext();
+  const [providerOverride, setProviderOverride] = useState<string | null>(null);
   const [modelFilter, setModelFilter] = useState("");
+  const providerFilter = providerOverride ?? providerFilterForModel(selectedModel);
+
+  useEffect(() => {
+    if (open) return;
+    setProviderOverride(null);
+    setModelFilter("");
+  }, [open]);
+
   const groups = useMemo(() => {
     const byProvider = new Map<string, ModelOption[]>();
     for (const option of models) {
@@ -650,7 +665,7 @@ export function ProviderModelMenu({ loading = false, error, onRetry, side = "bot
       {beforeFilters}
       <div className="grid gap-2 border-b border-line p-2">
         <LabeledFilter label="Provider">
-          <ProviderFilterField providers={providers} value={providerFilter} onValueChange={setProviderFilter} />
+          <ProviderFilterField providers={providers} value={providerFilter} onValueChange={setProviderOverride} />
         </LabeledFilter>
         <LabeledFilter label="Model">
           <ModelSelectorSearch

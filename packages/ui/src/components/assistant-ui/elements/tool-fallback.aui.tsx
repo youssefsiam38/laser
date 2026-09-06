@@ -36,6 +36,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Textarea } from "@/components/ui/textarea";
 import { duration as formatDuration } from "@/format";
 import { cn } from "@/lib/utils";
+import { toolDetailsDefaultOpen, useActivityDetailLevel, useLaserState, type ActivityDetailLevel } from "@/runtime";
 import { JsonViewer, parseJsonText } from "./json-viewer.js";
 
 import { collapsePanel, mono, pressable } from "./surfaces.js";
@@ -639,19 +640,22 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
   const state = toolRowState(status, isError);
   const isRequiresAction = status?.type === "requires-action";
   const shouldRenderApproval = isRequiresAction && offersInterruptAction(status, approval, interrupt);
-
-  const [open, setOpen] = useState(isRequiresAction);
-  const [prevRequiresAction, setPrevRequiresAction] = useState(isRequiresAction);
-  if (isRequiresAction !== prevRequiresAction) {
-    setPrevRequiresAction(isRequiresAction);
-    if (isRequiresAction) setOpen(true);
-  }
+  const path = useLaserState((laser) => laser.current);
+  const activityLevel = useActivityDetailLevel(path);
+  const [userOpen, setUserOpen] = useState<{ level: ActivityDetailLevel; open: boolean } | null>(null);
+  const open = isRequiresAction || (userOpen?.level === activityLevel ? userOpen.open : toolDetailsDefaultOpen(activityLevel));
 
   const hasBody = Boolean(argsText) || result !== undefined || status?.type === "incomplete";
   const tone = state === "failed" ? "danger" : state === "awaiting" ? "attention" : undefined;
 
   return (
-    <ToolFallbackRoot open={open} onOpenChange={setOpen} tone={tone} data-tool={toolName} data-status={status?.type}>
+    <ToolFallbackRoot
+      open={open}
+      onOpenChange={(next) => setUserOpen({ level: activityLevel, open: next })}
+      tone={tone}
+      data-tool={toolName}
+      data-status={status?.type}
+    >
       <ToolFallbackTrigger verb={toolName} state={state} expandable={hasBody} />
       {hasBody ? (
         <ToolFallbackContent>

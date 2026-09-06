@@ -18,7 +18,7 @@ import { memo, useCallback, useRef, type ReactNode } from "react";
 
 import { MarkdownText } from "@/components/assistant-ui/elements/markdown-text";
 import { useElapsed } from "@/components/thread/timing";
-import { useLaserState, useReasoningExpanded } from "@/runtime";
+import { useActivityDetailLevel, useLaserState } from "@/runtime";
 
 import {
   ReasoningContent,
@@ -85,9 +85,9 @@ export interface ReasoningGroupProps {
 function ReasoningGroupImpl({ timingKey, running, children }: ReasoningGroupProps) {
   const elapsed = useElapsed(timingKey, running ? "running" : "done");
   const path = useLaserState((state) => state.current);
-  const defaultOpen = useReasoningExpanded(path);
+  const activityLevel = useActivityDetailLevel(path);
   return (
-    <ReasoningRoot streaming={running} defaultOpen={defaultOpen}>
+    <ReasoningRoot streaming={running} defaultOpen={activityLevel !== "answers"}>
       <ReasoningTrigger active={running} durationMs={elapsed} />
       <ReasoningPanel streaming={running}>{children}</ReasoningPanel>
     </ReasoningRoot>

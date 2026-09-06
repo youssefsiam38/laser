@@ -18,7 +18,7 @@ import {
 import { TOOL_ICONS } from "@/components/assistant-ui/elements/tool-group.aui";
 import { useIsTouch } from "@/hooks/use-mobile";
 import { DecisionBody, dialogPanel, PanelToolDecision, uiResponseFor, useRegisterToolRow } from "@/panels";
-import { useLaserStable } from "@/runtime";
+import { toolDetailsDefaultOpen, useActivityDetailLevel, useLaserStable, useLaserState, type ActivityDetailLevel } from "@/runtime";
 import { diffViewForTool } from "./diff.js";
 import { useElapsed } from "./timing.js";
 import { parseBashOutput, pretty, resultDetails, resultText, summarizeTool, toolBody } from "./tool-summary.js";
@@ -63,10 +63,13 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
   const awaiting = state === "awaiting";
   const failed = state === "failed";
   const isRequiresAction = status.type === "requires-action";
+  const path = useLaserState((laser) => laser.current);
+  const activityLevel = useActivityDetailLevel(path);
 
-  // Open by default while a question waits; otherwise closed until asked.
-  const [userOpen, setUserOpen] = useState<boolean | null>(null);
-  const open = userOpen ?? isRequiresAction;
+  // A waiting decision always opens. Otherwise the session's disclosure level
+  // supplies the default and a click overrides it until that level changes.
+  const [userOpen, setUserOpen] = useState<{ level: ActivityDetailLevel; open: boolean } | null>(null);
+  const open = isRequiresAction || (userOpen?.level === activityLevel ? userOpen.open : toolDetailsDefaultOpen(activityLevel));
 
   const localElapsed = useElapsed(toolCallId, running || awaiting ? "running" : "done");
   const elapsed = timing ? (timing.completedAt ?? Date.now()) - timing.startedAt : localElapsed;
@@ -106,7 +109,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
       state={state}
       elapsedMs={elapsed}
       open={open}
-      onOpenChange={setUserOpen}
+      onOpenChange={(next) => setUserOpen({ level: activityLevel, open: next })}
       toolName={toolName}
       peek={failed && text ? <ToolError message={text} compact /> : undefined}
       footer={footer}

@@ -43,7 +43,7 @@ export interface LaserExtensionOptions {
   /** Delivers messages to the worker (in-process callback). */
   send: (message: OutboundMessage) => void;
   /**
-   * Worker → extension commands (a panel action a person pressed). Create one
+   * Worker → extension commands (a panel action or account refresh). Create one
    * with `createCommandBus()`, pass it here, and call its `deliver()` from the
    * driver. Optional, so a worker that has no inbound path still loads the
    * extension unchanged.

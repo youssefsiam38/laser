@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { PiExtensionCommand, PiExtensionMessage, PiExtensionModuleName } from "@lasercode/protocol";
 import { panelsModule } from "./panels.js";
+import { accountUsageModule } from "./account-usage.js";
 import { providerLogModule } from "./provider-log.js";
 import { subagentsModule } from "./subagents.js";
 import { transcribeModule } from "./transcribe.js";
@@ -110,6 +111,7 @@ export function createCommandBus(): CommandBus & { deliver(command: PiExtensionC
 /** Order matters only for log readability. Modules must not depend on each other. */
 export const modules: readonly LaserModule[] = [
   providerLogModule,
+  accountUsageModule,
   panelsModule,
   goalModule,
   subagentsModule,

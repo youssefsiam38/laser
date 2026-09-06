@@ -322,7 +322,10 @@ lane T's own if both were written.
 | M12-T36 | Separate active and terminal fleet work | done | codex-2026-09-06-activity-summary | `pnpm verify` — 875 tests; 20 run-tree tests | see notes |
 | M12-T37 | Publish stable 0.2.2 | done | codex-2026-09-06-activity-summary | [release workflow](https://github.com/youssefsiam38/laser/actions/runs/34029183501) | see notes |
 | M12-T38 | Aggregate reasoning with tool activity | done | codex-2026-09-06-activity-summary | `pnpm verify` — 877 tests; 9 activity-summary tests | see notes |
-| M12-T39 | Publish stable 0.2.3 | in-progress | codex-2026-09-06-activity-summary | — | see notes |
+| M12-T39 | Publish stable 0.2.3 | done | codex-2026-09-06-activity-summary | [release workflow](https://github.com/youssefsiam38/laser/actions/runs/34029935117) | see notes |
+| M12-T40 | Adaptive API and account usage telemetry | done | codex-2026-09-06-account-usage | `pnpm verify` — 888 tests; 3 account-parser tests | see notes |
+| M12-T41 | Three-level session activity disclosure | done | codex-2026-09-06-account-usage | `pnpm verify` — 888 tests; 2 session-preference tests | see notes |
+| M12-T42 | Restore the active model picker choice on open | done | codex-2026-09-06-account-usage | `pnpm verify` — 888 tests; 3 model-selector tests | see notes |
 
 #### M12-T1 notes
 - 2026-09-06 claimed: audit the shipped logo assets, theme presets, assistant-ui
@@ -772,6 +775,40 @@ lane T's own if both were written.
   waiting for the independent 0.2.2 tag workflow.
 - 2026-09-06 claimed: set the single workspace version to 0.2.3, run the release
   gate, push main and the stable tag, then verify artifacts and update feeds.
+- 2026-09-06 done: workflow 34029935117 built and staged both architectures,
+  published the stable GitHub release with signatures and provenance, and
+  deployed the native APT and DNF update feeds.
+
+#### M12-T40 notes
+- 2026-09-06 claimed: expose OpenAI Codex allowance from the existing Pi OAuth
+  session, classify persisted turns by billing mode, and make the telemetry
+  section adapt between API, account and mixed views.
+- 2026-09-06 research: pinned Pi 0.85 marks OpenAI Codex as a subscription but
+  only totals tokens and API-equivalent cost; it does not expose account quota
+  windows or credits. OpenAI Codex app-server and two MIT Pi integrations prove
+  the read-only account endpoint and normalized data model.
+- 2026-09-06 checkpoint: include every subagent's own model-attributed usage in
+  its parent's billing view, including the mixed subscription-parent/API-child
+  case; plan aggregates must not double-count their run children.
+- 2026-09-06 done: the Pi-native module keeps OAuth secrets inside the worker,
+  the protocol carries only normalized allowance windows, and telemetry adapts
+  between account, API and mixed views with an explicit refresh action.
+
+#### M12-T41 notes
+- 2026-09-06 claimed: replace the binary reasoning preference with three
+  session-scoped disclosure levels and apply them through the existing unified
+  reasoning/tool activity parent and established detail renderers.
+- 2026-09-06 done: Answers only, Show reasoning and Show everything now control
+  the same aggregate parent and established inner rows per session; errors and
+  decisions still force visibility.
+
+#### M12-T42 notes
+- 2026-09-06 claimed: make the assistant-ui model menu derive its initial
+  provider scope and selected row from the active session, resetting only a
+  person's temporary filters when the menu closes.
+- 2026-09-06 done: provider scope derives from the selected model before the
+  menu opens, the active row remains checked, and temporary filters clear on
+  close without changing the session selection.
 
 ---
 
@@ -1875,8 +1912,59 @@ Consequences: add M12-T38 and M12-T39. The per-session expanded-thinking
 preference opens a group containing reasoning; failures and decisions still
 force it open. Stable 0.2.3 may build concurrently with the tagged 0.2.2 run.
 
+### D-90 · 2026-09-06 · Account allowance and API spend never share a measure
+
+Decision: classify every persisted assistant turn by billing mode. API-only
+sessions keep the existing spend and token instruments. OpenAI Codex account-
+only sessions replace them with authoritative allowance windows, reset times
+and purchased-credit balance. Mixed sessions get Account and API tabs; values
+from the two billing systems are never added, compared or plotted together.
+
+Why: subscription quota is server-owned account state, not a token price. A
+single total would be mathematically false and could imply a bill that does not
+exist. The transcript still determines which views belong to this session.
+
+Consequences: add M12-T40. The Pi companion reads the account endpoint with
+Pi's existing OAuth credential and sends only normalized, non-secret values.
+The protocol stays provider-neutral so another subscription provider can add a
+reader later without changing the UI contract.
+
+### D-91 · 2026-09-06 · One activity parent, three session-scoped detail levels
+
+Decision: every uninterrupted reasoning/tool sequence, including a single
+tool, keeps one aggregate activity parent. Its per-session default has three
+levels: Answers only keeps the parent closed; Show reasoning opens parents that
+contain reasoning while individual action bodies stay folded; Show everything
+opens the parent and every action body. A person's click overrides the default
+for that row, while errors and decisions still force visibility.
+
+Why: separate presentation rules for lone reasoning, one call and many calls
+make the transcript change grammar as work grows. The three levels adjust
+density without changing what an expansion contains or inventing a second
+renderer.
+
+Consequences: add M12-T41. The existing assistant-ui Tool group remains the
+only parent, and its children remain the same ReasoningText and tool rows used
+elsewhere. The old binary expanded-reasoning preference is removed.
+
+### D-92 · 2026-09-06 · Model menus open in session context
+
+Decision: the chat model menu derives its provider filter from the selected
+session model whenever it is closed, so opening it starts inside that routing
+provider with the existing model marked. Search and provider changes remain
+temporary exploration and reset on close.
+
+Why: the picker is an editor for the session's current choice. Opening at an
+unrelated all-provider catalogue makes a correct saved selection appear lost
+and forces repeated navigation.
+
+Consequences: add M12-T42. The shared assistant-ui selector context exposes its
+open state, while the settings pickers inherit the same sensible initial state
+without persisting transient filters.
+
 ## Status edits log
 
+- 2026-09-06 · codex-2026-09-06-account-usage · M12-T39..T42 done: stable 0.2.3 is published; adaptive account/API telemetry counts subagent attempts, activity disclosure has three session levels, and model menus reopen at the active provider/model; full 888-test gate passes.
 - 2026-09-06 · codex-2026-09-06-activity-summary · M12-T35/M12-T36 done: native notifications use Laser's visible session title, and fleet work is divided into active and terminal lifecycle sections without breaking trees; full 875-test gate passes.
 - 2026-09-06 · codex-2026-09-06-activity-summary · M12-T33/M12-T34 done: the composer footer moved to Help and shortcuts, and Markdown code uses Shiki's full Oniguruma grammar coverage with Laser-theme scopes; full 869-test gate passes.
 - 2026-09-06 · codex-2026-09-06-activity-summary · M12-T30/M12-T31/M12-T32 done: the transcript is wider, mixed tool activity has one counted/live assistant-ui disclosure, and exact timestamps reveal on row interaction; full 866-test gate passes.

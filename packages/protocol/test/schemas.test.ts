@@ -76,6 +76,7 @@ const samples: Record<ClientMethod, unknown> = {
 
   // --- panels ---
   "pi/panel/action": { path: "/s.jsonl", id: "web-access:search:42", actionId: "open", value: "https://example.com" },
+  "pi/account-usage/refresh": { path: "/s.jsonl" },
   "pi/panel/read": { path: "/tmp/session.jsonl", ref: "file:/tmp/run/events.jsonl", from: 0, to: 65536 },
   "pi/panel/list": { path: "/s.jsonl" },
 

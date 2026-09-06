@@ -186,6 +186,7 @@ export const usageSchema = z
     output: z.number().nonnegative().optional(),
     cacheRead: z.number().nonnegative().optional(),
     cacheWrite: z.number().nonnegative().optional(),
+    turns: z.number().int().nonnegative().optional(),
     costUsd: z.number().nonnegative().nullable().optional(),
     unavailableReason: z.string().max(200).optional(),
   })
@@ -223,6 +224,10 @@ const runPanelSchema = z
     startedAt: isoDate.optional(),
     endedAt: isoDate.optional(),
     usage: usageSchema.nullable().optional(),
+    usageByModel: z
+      .array(z.object({ model: z.string().max(200).optional(), usage: usageSchema }).strict())
+      .max(16)
+      .optional(),
     output: z.object({ ref, bytes: z.number().int().nonnegative().optional() }).strict().optional(),
     artifacts: z.array(z.object({ label: z.string().min(1).max(200), ref }).strict()).max(200).optional(),
     actions: z.array(actionSchema).max(20).optional(),
@@ -594,6 +599,7 @@ export const clientParamsSchemas = {
   "pi/model/list": z.object({ path: sessionPath }).strict(),
   "pi/model/set": z.object({ path: sessionPath, model: modelRefSchema }).strict(),
   "pi/thinking/set": z.object({ path: sessionPath, level: thinkingLevelSchema }).strict(),
+  "pi/account-usage/refresh": z.object({ path: sessionPath }).strict(),
   "pi/ui/response": uiDialogResponseSchema,
 
   "pi/project/list": z.object({}).strict(),

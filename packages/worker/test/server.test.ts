@@ -14,6 +14,7 @@ class FakeDriver implements SessionDriver {
   opened: unknown;
   pending: UiDialogRequest[] = [];
   answered: unknown[] = [];
+  extensionCommands: unknown[] = [];
   private st: SessionState = {
     path: "/tmp/fake/s1.jsonl",
     id: "s1",
@@ -59,6 +60,7 @@ class FakeDriver implements SessionDriver {
   async navigateTree() { return { cancelled: false }; }
   async fork(entryId: string) { this.st = { ...this.st, path: `/tmp/fake/fork-${entryId}.jsonl` }; return { state: this.st, editorText: "redo" }; }
   respondToUi(r: unknown) { this.answered.push(r); }
+  deliverExtensionCommand(command: unknown) { this.extensionCommands.push(command); return true; }
   pendingUi() { return this.pending; }
   async entries() { return []; }
   async dispose() { this.emit({ type: "closed", reason: "disposed" }); }
@@ -115,6 +117,9 @@ describe("WorkerServer", () => {
     expect(models.result).toEqual({ models: [{ provider: "p", id: "m" }] });
     const thinking = await h.call(4, "pi/thinking/set", { path: "/tmp/fake/s1.jsonl", level: "high" });
     expect(thinking.result).toMatchObject({ state: { thinkingLevel: "high" } });
+    const refreshed = await h.call(5, "pi/account-usage/refresh", { path: "/tmp/fake/s1.jsonl" });
+    expect(refreshed.result).toEqual({ delivered: true });
+    expect(h.drivers[0]?.extensionCommands).toContainEqual({ type: "lasercode/account-usage/refresh" });
   });
 
   it("replays buffered updates after fromSeq and re-emits pending dialogs on load", async () => {

@@ -113,6 +113,8 @@ export interface LaserActions {
   jump(entryId: string): Promise<void>;
   refreshSessions(): Promise<void>;
   refreshEntries(): Promise<void>;
+  /** Refresh cross-app allowance for the session's account provider. */
+  refreshAccountUsage(): Promise<void>;
   goal(action: GoalAction): Promise<void>;
   /** `pi/session/clear_queue`; resolves with the text to restore into the composer. */
   clearQueue(): Promise<string>;
@@ -814,6 +816,11 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           const path = requireCurrent();
           const { entries } = await client.request("pi/session/entries", { path });
           dispatch({ type: "entries", path, entries });
+        }).then(() => undefined),
+      refreshAccountUsage: () =>
+        guard(async () => {
+          const { delivered } = await client.request("pi/account-usage/refresh", { path: requireCurrent() });
+          if (!delivered) throw new Error("Account allowance is not available in this session.");
         }).then(() => undefined),
       goal: (action) =>
         guard(async () => {
