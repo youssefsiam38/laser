@@ -158,11 +158,23 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
-| M5-T1 | Electron main | done | lane-B | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration); headless Electron 44.2.0 boot on this machine | `packages/desktop/src/main.ts`; single-instance lock, deep links, tray, window state |
+| M5-T1 | Electron main | in-progress | codex-2026-09-06-input | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration); headless Electron 44.2.0 boot on this machine | reopened: Electron window input is unusable on the maintainer's Linux desktop; see notes |
 | M5-T2 | Bundled runtime outside asar | done | lane-B | `/proc/<host pid>/exe` = `runtime/linux-x64/node` (v24.20.0) | Node pinned in `packages/desktop/runtime.json` with official SHA-256s; `scripts/fetch-node.mjs --verify` refuses an Electron runtime |
 | M5-T3 | Keychain | done | lane-B | root identity read back from the system keyring across a restart | `@napi-rs/keyring`; reported 0600 fallback (`identity().degraded`) |
 | M5-T4 | Notifications + mic permission | in-progress | lane-B | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration); 30 desktop tests | gates and copy written; macOS TCC and real banners need the platform |
 | M5-T5 | Packaging, signing, updates | in-progress | lane-B | `packages/desktop/electron-builder.yml` + `README.md` | no signing possible here; Azure fields are `CHANGE-ME`; needs per-platform agents |
+
+#### M5-T1 notes
+- 2026-09-06 claimed: isolate the Electron-only click-coordinate failure by
+  comparing the existing frameless Linux window with a native-framed window.
+- 2026-09-06 X11 did not restore input. A native-framed X11 diagnostic build is
+  running with the bridge and host healthy; awaiting the maintainer's click test.
+- 2026-09-06 native-framed X11 was seamless in the maintainer's manual test;
+  frameless X11 with `hasShadow: false` was still broken. The fault follows
+  Electron's `frame: false` path, not Wayland or its client-side shadow.
+- 2026-09-06 permanent Linux native-frame policy implemented and guarded by
+  `test/window-frame.test.ts`; normal native-Wayland build is running for the
+  final manual check. Desktop build, typecheck and 61 tests pass.
 
 #### M5-T2 notes
 - 2026-09-06 investigated dropping the bundled Node and running the host on the
@@ -197,6 +209,7 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 | M7-T4 | Approval UI | done | lane-C, integrator | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration); answered in a browser against the sandbox | one decision surface on every width (`PanelDecisionCards`), touch-sized on a coarse pointer, mode-changing options marked |
 | M7-T5 | Push | in-progress | lane-C, integrator | `pnpm -F @lasercode/host test` → `test/push.test.ts` (RFC 8291 round trip, VAPID verify, 410 eviction); `pi/push/config` answered live with a generated key | `packages/host/src/push.ts`; `HostRelayOptions.publicOrigin` is what makes the links work off this machine, and nothing sets it yet |
 | M7-T6 | Mobile mic | in-progress | lane-C, lane-D, integrator | `pnpm -r build && pnpm -r typecheck && pnpm -r test` — 591 tests, exit 0 (2026-09-05, wave 2 integration); `pi/transcribe/status` answers with a reason live | end to end in code (browser → host router → worker `TranscribeService`); no device and no API key here, so no phrase has been transcribed |
+| M7-T7 | QR entry + paired browser transport | todo | — | — | Release audit found that the CLI emits `<publicOrigin>/link#…`, but the UI imports neither `PairingInitiator` nor the crypto package and has no `/link` controller. The QR opens a browser URL but cannot currently finish pairing. See D-59 and Q-6 |
 
 ---
 
@@ -347,18 +360,21 @@ lane T's own if both were written.
 
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
-| M10-T1 | One-command `install.sh` | done | lane-I, integrator | `install.sh` (POSIX sh, accepted by `sh -n`, `dash -n` and `busybox sh -n`); `bash scripts/release/verify-install.sh` → 63 assertions pass, ~2 s, no network; a real 0.1.0 AppImage installed into a throwaway `$HOME` and launched | Three verification layers, and it says which ran: `SHA256SUMS`, `gh attestation verify --signer-workflow` (a *failure* is fatal with no skip flag; a *missing* one is **also** fatal unless `--allow-unattested` is passed — D-42), and a maintainer Ed25519 signature when `RELEASE_PUBKEY` is pinned. Nothing is ever piped into a shell — the download lands in a file. The AppImage is extracted rather than kept whole, so FUSE never becomes a prerequisite. Per-user under `~/.local`, no root. See M10-T1 notes |
-| M10-T2 | The command in the README, and `--uninstall` | done | lane-I | `README.md` § Install; `verify-install.sh` covers uninstall, upgrade-in-place and "nothing installed" | Re-running upgrades from a receipt at `~/.local/lib/laser/install-receipt` and says `Upgrading laser A -> B`. `--uninstall` removes only what the receipt records, then asks separately about `~/.config/laser`, `~/.local/share/laser` and `~/.laser` — and `--yes` answers that one "keep", because deleting a device identity and every pairing is `--purge` and nothing else |
+| M10-T1 | One-command `install.sh` | in-progress | codex-2026-09-06-release | prior evidence retained; public-download verification pending | Reworking the completed private-repository transport into a public, unauthenticated download without weakening checksum, provenance, or maintainer-signature verification. See M10-T1 notes |
+| M10-T2 | The command in the README, and `--uninstall` | in-progress | codex-2026-09-06-release | prior evidence retained; public command verification pending | Updating the repository and product site to show one exact versioned public command. Existing upgrade/uninstall behavior is unchanged |
 | M10-T3 | Bundled runtime and agent, nothing from the machine | done | lane-R, integrator | `node packages/desktop/scripts/clean-machine.mjs` → all ten packaging claims hold with `PATH` emptied and a decoy `~/.pi/agent` left byte-identical; `packages/worker/src/resolve-pi.ts`, `packages/worker/test/resolve-pi.test.ts` | Two silent bugs found and fixed: `@earendil-works/pi-server` was resolved by `packageExtensions` and therefore never packaged (the packaged app could not open a single session), and `files:`'s unanchored `doc` exclusion deleted `yaml/dist/doc/`. A third, found at integration: `@napi-rs/keyring`'s native binding was missing too, so the app died at startup with `Cannot find native binding`. All three are now declared and `build/before-pack.cjs` fails the build for anything of the same shape. See M10-T3 notes |
 | M10-T4 | Every Linux package format | done | lane-P | `pnpm -F @lasercode/desktop dist:linux` builds AppImage, deb, rpm and tar.gz for both arches with `out/SHA256SUMS`; `desktop-file-validate` and `appstreamcli validate` both pass on the shipped copies | The AppImage bundles the static type-2 runtime (`toolsets.appimage: "1.0.3"`), so **libfuse2 is not required**. `deb`/`rpm` `depends:` are derived from every `DT_NEEDED` of the shipped binaries rather than copied from a template — `libxss1`/`libxtst6` dropped, `libsecret-1-0`/`libstdc++6` added. The launcher never disables the sandbox on the person's behalf and strips the `--no-sandbox` the AppImage runtime injects — and is now what the installer actually points at, in every format (D-43). `after-remove.sh` returns immediately during an upgrade, which upstream's template does not |
 | M10-T5 | Extensions from Settings | done | lane-S, integrator | `packages/host/src/packages.ts`, `packages/host/test/packages.test.ts` (22); live: `pi-simplify` installed from the UI in ~3 s → `settings.json: "packages": ["npm:pi-simplify@0.2.3"]`, lock with sha512 + resolved URL, manifest 0.2.3 on disk | The host resolves "newest"/a range/a tag to **one exact release** and writes `npm:<name>@<exact>` into settings, records the registry-declared integrity in `<stateDir>/packages.lock.json`, and verifies the installed manifest is that version (D-39). The package manager ships inside the app: `scripts/fetch-node.mjs` lifts the npm out of the *same* pinned Node archive, so it is covered by the hash already in git, and the host finds it beside the runtime binary whether the shell or a terminal `laser up` started it, never from `PATH` in a packaged build, always with `--strict-allow-scripts` (D-44). An integrity hash is stored only once it has been checked against what npm installed (D-45) |
 | M10-T6 | First run inside the window | done | lane-S | `packages/ui/src/components/onboarding/**`, `packages/ui/test/onboarding/setup-model.test.ts` (5); driven live at 1280 and 390, dark and light. The flow now owns the whole window and is re-runnable from Settings → This device (D-47) | Five steps: welcome, provider sign-in (OAuth and API key, only the methods the provider actually has), default model, project folder, done. Completion is host state (`pi/setup/state`), so it resumes on any device at the first thing that is actually missing. No config file, no environment variable, no terminal |
 | M10-T7 | Release pipeline, versions pinned end to end | done | lane-I, integrator | `.github/workflows/release.yml`; `scripts/release/{build-linux,manifest,sign,publish,set-version,verify-install}.sh`; `scripts/release/publish.sh` refuses a tag that disagrees with **any** manifest in the workspace | The workflow runs `scripts/release/*.sh` and nothing else, so a release is never blocked on CI. `build-linux.sh` gates on `clean-machine.mjs` before it copies one artifact out, and refuses a cross-architecture build. The whole workspace is one version (`scripts/release/set-version.sh`), now `0.1.0`. The updater feed is deliberately still `null` — that is M10-T10, per D-31 and D-35 |
 | M10-T8 | Product language | done | lane-L | 59 user-visible strings across 29 source files; `packages/ui/test/shell/model.test.ts` updated for the one it asserts | The agent is named in exactly two places, which is where it is the truth: the `laser pi` escape hatch (its command, help topic and passthrough errors) and diagnostics (`laser doctor`, `laser logs`, the Logs screen's provider-ceiling note). Nothing renamed — no identifiers, types, protocol fields, RPC methods or env vars. Two reverse failures fixed on the way: a `Something went wrong` with no content, and a parse error that blamed the agent for a file laser itself refuses to overwrite |
-| M10-T9 | OS-native update channel | todo | — | — | Needs a signing key and a host. Not started; D-35 makes it explicitly not a blocker for the first install |
-| M10-T10 | Turn the in-app updater on | todo | — | — | Blocked on the repository (or a releases repository) being public. `publish: null` and the app's honest `unsupported` stand until then (D-31, D-35) |
+| M10-T9 | OS-native update channel | in-progress | codex-2026-09-06-release | — | Claimed: publish signed APT and DNF repositories and have the `.deb`/`.rpm` register them so native software updaters discover and notify about later releases |
+| M10-T10 | Turn the in-app updater on | todo | — | — | The public repository removes the feed-access blocker, but the default installer extracts the AppImage (D-43), while electron-updater requires the original AppImage path. Keep `publish: null` until that install/update seam is designed and proved with a second version |
 
 #### M10-T1 notes
+- 2026-09-06 claimed: replace the authenticated private-repository transport with public HTTPS downloads, pin the maintainer signing key, retain mandatory provenance, and verify the 0.1.0 install end to end.
+- 2026-09-06 checkpoint: permanent Ed25519 public key pinned; private key stored mode 600 outside git and as the `LASERCODE_RELEASE_KEY` Actions secret. Public fetch uses curl/wget; `gh attestation verify --bundle` was proved with an empty GitHub CLI config against a current public attested artifact. Local installer suite: 74 passed, 0 failed.
+- 2026-09-06 checkpoint: native-package default added without weakening the explicit AppImage path; installer suite now 76 passed, 0 failed. A fresh x64 build produced AppImage, deb, rpm and tar.gz, and its clean-machine gate proved Node 24.20.0 and pinned Pi 0.85.0 came from inside the package with an empty PATH.
 - 2026-09-05 lane-I: the asset is chosen by **listing** the release and matching extension + architecture tokens, insisting on exactly one match, never by reconstructing a filename. electron-builder names each format the way that format's ecosystem does (`.deb`→amd64, `.rpm`→x86_64, AppImage→x86_64, arm64 vs aarch64), and a reconstructed name is a 404 on a stranger's machine.
 - 2026-09-05 lane-I: `RELEASE_PUBKEY` is deliberately empty rather than a placeholder. A fake key turns "not configured" into "passed"; `scripts/release/sign.sh --keygen` prints the exact line to paste.
 - 2026-09-05 integrator: the tarball's own installer was also called `install.sh`, which made two files with one name in one product. Renamed `laser-setup.sh` and told to say it is the offline path; the root installer handles `--format tar` and is tested both ways.
@@ -370,6 +386,12 @@ lane T's own if both were written.
 - 2026-09-05 integrator: `laserDataDir()` moved into `@lasercode/host` and the CLI's default agent directory now points at it, so `laser sessions` in a terminal and the app's window resolve the same directory. Before this they disagreed and each showed sessions the other could not see.
 
 #### M10-T7 notes
+- 2026-09-06 release checkpoint: both the application and website repositories passed a redacted full-history Gitleaks scan with zero findings (44 and 6 commits respectively).
+- 2026-09-06 release checkpoint: `pnpm verify` passes across the workspace. The release workflow now publishes its signed Sigstore bundle as `provenance.jsonl` after the attested release assets, enabling offline verification without authentication.
+
+#### M10-T9 notes
+- 2026-09-06 claimed: add signed public APT and DNF feeds to 0.1.0, including package hooks that register the feed and keys; verify package metadata locally before tagging.
+- 2026-09-06 checkpoint: RSA repository key `6E593349C0A1BE57F024CF97AFC91CDE867E302B` is stored as the Actions secret and its public half is packaged. The real `.deb` contains the APT key/source hook and all seven icon sizes; the real `.rpm` contains the DNF key/repo hook and verifies `digests signatures OK`. An isolated APT client accepted signed `InRelease` and selected Laser 0.1.0; `gpgv` accepted the signed DNF `repomd.xml`. `actionlint` and identity generation/check pass.
 - 2026-09-05 integrator: **the install path was walked end to end on this machine**, and it found four things no test had. (1) `@napi-rs/keyring`'s native binding was not packaged, so the app died at startup — the packaged tree had `keyring` and no binding. (2) `dist:linux` silently ignored `--x64` and built *both* architectures, which the new cross-arch guard then caught an hour in; unknown options are now refused by name. (3) `install.sh --from` reported the version as `local` in the last line a person reads, though every artifact carries it in its own filename. (4) On an installed copy the launcher was reached through the AppDir's `AppRun`, which *prepends* `--no-sandbox` when `unshare` fails — the strip keyed on `$APPIMAGE`, which the extracted case does not set, so the injected flag survived and laser ran unsandboxed without saying so. `packages/desktop/test/launcher.test.ts` covers the last one and the window-or-command split.
 - 2026-09-05 integrator: evidence of the walk, in order — `scripts/release/build-linux.sh --arch x64` built AppImage 185.9 MB, deb 151.9 MB, rpm 135.7 MB, tar.gz 192.9 MB plus `SHA256SUMS`, with the clean-machine gate passing; `install.sh --from release --dry-run` printed every action and took none, including this machine's AppArmor note; the real install wrote `~/.local/{lib,bin,share}` and the `.desktop` entry with `MimeType=x-scheme-handler/laser;`, `TryExec` and seven icon sizes; `laser --version` → `0.1.0` and `laser doctor` → 10 passed with the bundled runtime, the bundled agent and a real worker session, all with nothing else on `PATH`; the app launched, took its identity from the system keyring, logged `packages: installer <bundled node> <bundled npm-cli.js>`, and said out loud that the machine's own agent at `~/.nvm/.../bin/pi` is not used.
 
@@ -715,6 +737,75 @@ Decision: `linux-display.ts` keeps `ozone-platform-hint=auto` and Chromium's `Wa
 Why: the fallback in D-53 was reasoning, not evidence — a stale-frame theory for a symptom that turned out to be D-54, and it cost every NVIDIA user hardware compositing. Explicit sync stays worth enabling on its own merits (NVIDIA does no implicit sync; Chromium leaves the feature off; Electron does not turn it on — electron/electron#50455), and it costs nothing where the compositor lacks the protocol. Separately, `app.getGPUFeatureStatus()` at `whenReady` returns `disabled_software` for everything because Chromium has not finished asking; the log therefore claimed the GPU was off while it was on. Measured: `immediately-after-ready` reports `disabled_software`, `on-gpu-info-update` reports `enabled`.
 Consequences: this machine now logs `display: native Wayland, NVIDIA, compositor no explicit sync` and `gpu: compositing enabled, rasterization enabled, webgl enabled`. If a genuine stale-frame report appears later, the facts to act on are already in the log.
 
+### D-56 · 2026-09-06 · Linux keeps its native window frame
+Decision: Linux `BrowserWindow`s use `frame: true`. macOS keeps `hiddenInset`
+and Windows keeps its title-bar overlay. Linux reports system-owned chrome with
+no renderer inset.
+Why: the maintainer reproduced unusable pointer input in Electron 44.2.0 with
+`frame: false` under both native Wayland and X11; the same page worked in a
+browser. X11 plus `hasShadow: false` also failed, ruling out both Wayland and
+the client-side shadow alone. Changing only `frame` to `true` made the whole app
+seamless. Upstream replaced Linux's `OpaqueFrameView` with Chromium-based
+`ElectronFrameViewLinux` in electron/electron#51161; that code owns frame
+geometry, hit-testing and input regions and has already caused confirmed 43/44
+Linux regressions (electron/electron#52452, #52456, #52866). No upstream issue
+currently documents this exact full-window pointer-coordinate failure, so the
+specific upstream defect is an evidence-backed inference, not a claimed bisect.
+Consequences: Linux gets reliable native controls and titlebar instead of custom
+chrome. `test/window-frame.test.ts` prevents an aesthetic refactor from silently
+putting Linux back on the broken path. D-54's preload failure remains a real,
+separately tested bug; it was not the cause of the surviving input symptom.
+Supersedes: the symptom diagnoses in D-53, D-54 and D-55; their implementation
+decisions and tests otherwise stand.
+
+### D-57 · 2026-09-06 · Public releases need no GitHub account
+Decision: the repository and release assets are public. The versioned install
+command downloads `install.sh` from the matching git tag over HTTPS and runs the
+saved file. The installer downloads release assets with curl or wget and verifies
+the published Sigstore bundle offline with `gh`; `gh auth login` is never needed.
+The release manifest is also signed by the maintainer key pinned in `install.sh`.
+Why: the authenticated Contents API was correct for a private repository but the
+website displayed a different, non-working command. Making the source public
+removes the access boundary and lets the visible command, copied command, README,
+and release all use one reproducible versioned path without weakening D-42.
+Consequences: curl or wget and GitHub CLI 2.49+ are fetch-time prerequisites;
+Node, npm, the agent, root access, and a GitHub account are not. The provenance
+bundle is uploaded beside, but not included in, `SHA256SUMS` because a bundle
+cannot attest itself. Supersedes the private-repository transport in M10-T1/T2;
+D-42 remains in force.
+
+### D-58 · 2026-09-06 · Linux updates belong to the operating system
+Decision: on Debian/Ubuntu-family systems the one-line installer selects the
+`.deb`; on Fedora/RHEL/openSUSE-family systems it selects the `.rpm`. Those
+packages install Laser's public repository key and register signed APT or DNF
+feeds published by the release workflow on GitHub Pages. AppImage remains the
+explicit `--format appimage` no-root option.
+Why: the user wants future Laser releases to appear in Ubuntu Software Updater
+and the equivalent native operating-system surfaces. An extracted AppImage is
+invisible to those services; a native package plus a signed repository is their
+normal update contract.
+Consequences: the default native install asks for the normal administrator
+password once. Its package manager owns later discovery, notification, upgrade
+and removal. AppImage users re-run the installer and do not get native updater
+prompts. The separate in-app updater stays off until M10-T10 proves its path on
+platforms that need it. Supersedes D-57's statement that root access is not a
+prerequisite for the default path; its public-download and trust decisions stand.
+
+### D-59 · 2026-09-06 · 0.1.0 is local desktop; phone remote control is Soon
+Decision: release 0.1.0 as the local desktop product. Every public phone/relay
+claim carries a visible `Soon` flag, and package metadata describes the desktop
+experience only. M7-T7 owns the missing browser `/link` pairing controller and
+encrypted paired-device transport.
+Why: the release audit proved that `laser relay pair` generates a sound
+single-use URL, but the current UI imports neither `PairingInitiator` nor the
+crypto package and has no `/link` entry route. A scan opens the configured web
+origin but cannot complete pairing. The user chose to ship now and mark the
+feature Soon rather than hold 0.1.0.
+Consequences: the repository may contain and test relay/crypto foundations, but
+the website and 0.1.0 metadata do not present phone remote control as available.
+The feature may be promoted only after a real-phone QR scan completes the six-
+symbol comparison and reconnects to the desktop through the relay.
+
 ### D-26 · 2026-09-05 · The host's log sections are `stream` panels too
 Decision: the logs page keeps search and paging; "Watch" sends one section to the dock as a client-local `stream` island fed from `pi/logs/append` (`packages/ui/src/panels/logs.ts`).
 Why: the contract's reach is the point — the provider log and a package's `setWidget` output should be the same island. Rebuilding the logs page out of panels would have thrown away virtualization, search and paging for nothing.
@@ -731,6 +822,7 @@ Consequences: the buffer is bounded (2000 lines per section) and client-local; i
 | Q-3 | Which Pi release to pin next, and cadence of MX-T2 bumps. | MX-T2 | agent decides per release (D-16); default: bump when a release fixes something we hit or adds an SDK capability we need |
 | Q-4 | Panel contract (7 questions in docs/ux-panels.md) | M3, M4-T6, M8 | answered by D-18: all leans |
 | Q-5 | Agent-work model (6 questions in docs/ux-agent-work.md) | M3 | answered by D-19: all leans |
+| Q-6 | Must 0.1.0 wait for the missing mobile `/link` pairing flow, or ship as an explicitly local-desktop preview? | — | answered by D-59: ship local desktop; visible Soon flag on phone remote control |
 
 ---
 

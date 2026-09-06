@@ -2,7 +2,7 @@
   "id": "/",
   "name": "Laser",
   "short_name": "Laser",
-  "description": "Your coding agents, from anywhere. Answer approvals, steer runs, watch every project.",
+  "description": "Your coding agents in one desktop interface. Phone remote control is coming soon.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

@@ -34,6 +34,7 @@ export const ENV_NAMES = /** @type {const} */ ([
   "PORT",
   "RELEASE_KEY",
   "RELEASE_KEY_PEM",
+  "PACKAGE_SIGNING_KEY",
   "REPO",
   "SCRATCH",
   "SCREENSHOT_BASE_URL",

@@ -18,6 +18,11 @@ case "${1:-}" in
         ;;
 esac
 
+# ----------------------------------------------------- 5. updates ----
+
+rm -f "/etc/apt/sources.list.d/$EXE.list"
+rm -f "/etc/yum.repos.d/$EXE.repo"
+
 # ----------------------------------------------------- 4. AppArmor ----
 
 APPARMOR_TARGET="/etc/apparmor.d/$EXE"

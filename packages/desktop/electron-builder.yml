@@ -215,7 +215,7 @@ linux:
   # entry's `Comment` from this and ignores an override, and `Comment` is what
   # GNOME prints under the name in search results. The longer text lives in the
   # AppStream metainfo, which is the only surface with room for it.
-  description: "Runs coding agent sessions across every project on this machine, and mirrors them to your phone."
+  description: "Runs coding agent sessions across every project on this machine through one desktop interface."
 
   # Becomes `Categories=Development;IDE;`. `IDE` is a registered additional
   # category under `Development`, and it is where a desktop menu files the kind
@@ -297,6 +297,7 @@ deb:
     - --license
     - Proprietary
     - build/linux/generated/com.hubtrix.laser.metainfo.xml=/usr/share/metainfo/com.hubtrix.laser.metainfo.xml
+    - build/linux/package-repository-key.asc=/usr/share/keyrings/laser-archive-keyring.asc
   # electron-builder's default pattern is `${name}_${version}_${arch}`, and
   # `${name}` is this package's npm name — a scoped one — which fpm then
   # reads as a directory that does not exist. The file is named after the
@@ -380,6 +381,7 @@ rpm:
     - --license
     - Proprietary
     - build/linux/generated/com.hubtrix.laser.metainfo.xml=/usr/share/metainfo/com.hubtrix.laser.metainfo.xml
+    - build/linux/package-repository-key.asc=/etc/pki/rpm-gpg/RPM-GPG-KEY-laser
   artifactName: laser-${version}.${arch}.${ext}
 
   # Written by us rather than left to electron-builder's defaults, so that the

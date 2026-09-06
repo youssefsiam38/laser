@@ -4,7 +4,7 @@
 # correct under both: dpkg passes `configure <old-version>`, rpm passes `1` for
 # a first install and `2` for an upgrade. Nothing below depends on which.
 #
-# It does four things and nothing else, so that after-remove.sh can undo
+# It does five things and nothing else, so that after-remove.sh can undo
 # exactly this list:
 #
 #   1. put `laser` on PATH
@@ -13,6 +13,8 @@
 #      laser:// handler appear without a logout
 #   4. install the AppArmor profile that lets the app open a user namespace on
 #      Ubuntu 24.04 and later
+#   5. register the signed native package repository, so the operating
+#      system's normal updater discovers and announces later releases
 #
 # Every step is guarded: a machine without `gtk-update-icon-cache` or without
 # AppArmor installs cleanly, it just does not get that step.
@@ -111,6 +113,37 @@ if apparmor_status --enabled >/dev/null 2>&1; then
     else
         echo "$EXE: this version of AppArmor does not understand the bundled profile; skipping it."
     fi
+fi
+
+# -------------------------------------------------------- 5. updates ----
+
+REPO_OWNER='youssefsiam38'
+REPO_NAME='${sanitizedProductName}'
+PAGES_BASE="https://$REPO_OWNER.github.io/$REPO_NAME"
+
+# The key itself is owned by the package (the fpm mapping in
+# electron-builder.yml); these small source files are created here because the
+# URL needs shell variables that fpm does not expand. Do not run apt-get update
+# from a dpkg maintainer script: dpkg already holds the package-manager lock.
+# Ubuntu's apt-daily/GNOME Software refresh will pick it up normally.
+APT_KEY="/usr/share/keyrings/$EXE-archive-keyring.asc"
+if [ -f "$APT_KEY" ] && [ -d /etc/apt/sources.list.d ]; then
+    printf 'deb [arch=amd64,arm64 signed-by=%s] %s/apt stable main\n' "$APT_KEY" "$PAGES_BASE" \
+        >"/etc/apt/sources.list.d/$EXE.list"
+fi
+
+RPM_KEY="/etc/pki/rpm-gpg/RPM-GPG-KEY-$EXE"
+if [ -f "$RPM_KEY" ] && [ -d /etc/yum.repos.d ]; then
+    cat >"/etc/yum.repos.d/$EXE.repo" <<EOF
+[$EXE]
+name=$EXE
+baseurl=$PAGES_BASE/rpm/\$basearch
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=file://$RPM_KEY
+metadata_expire=6h
+EOF
 fi
 
 exit 0

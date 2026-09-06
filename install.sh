@@ -4,14 +4,15 @@
 # GENERATED from install.sh.tpl by `pnpm identity:generate`. Every name in this
 # file comes from product.json (MX-T7, D-36); edit the template, not this copy.
 #
-#   gh api repos/youssefsiam38/laser/contents/install.sh \
-#     -H 'Accept: application/vnd.github.raw' > laser-install.sh \
-#     && sh laser-install.sh
+#   curl -fsSLo laser-install.sh \
+#     https://raw.githubusercontent.com/youssefsiam38/laser/v0.1.0/install.sh \
+#     && sh laser-install.sh --version v0.1.0
 #
 # What this script is allowed to assume about the machine: a POSIX shell, the
-# GNU/BusyBox coreutils every distribution ships, and `gh`. Nothing else. In
-# particular NOT: node, npm, pnpm, python, curl, jq, fuse, or a package manager
-# it recognises.
+# GNU/BusyBox coreutils every distribution ships, curl or wget, and `gh` 2.49+
+# for offline provenance verification. GitHub sign-in is not required. In
+# particular NOT: node, npm, pnpm, python, jq, fuse, or a package manager it
+# recognises.
 #
 # ---------------------------------------------------------------- trust ----
 # Three layers, strongest first. The script says which ones actually ran.
@@ -32,10 +33,10 @@
 #      signature travels with the release. A pinned key that has no signature to
 #      check is treated as tampering, not as a missing feature.
 #
-# The bootstrap itself is anchored on `gh`: an authenticated TLS connection to
-# GitHub, as you, to a private repository. That is the same channel that handed
-# you this file, so it is the root of the chain rather than a weak link in it.
-# Nothing here is ever piped from a download straight into a shell.
+# The bootstrap and release files come from public GitHub HTTPS endpoints. The
+# provenance bundle is downloaded beside the artifact, then verified offline;
+# neither the installer nor `gh` needs a GitHub account or token. Nothing here
+# is ever piped from a download straight into a shell.
 #
 # POSIX sh only: no [[, no arrays, no $'…', no `local -r`, no <<<, no echo -e.
 set -eu
@@ -53,7 +54,7 @@ DESKTOP_NAME="laser.desktop"
 # printed by `scripts/release/sign.sh --show-key`. Empty until a release key
 # exists; see scripts/release/README.md. It is deliberately not a placeholder
 # value: a fake key would turn "not configured yet" into "verification passed".
-RELEASE_PUBKEY=""
+RELEASE_PUBKEY="MCowBQYDK2VwAyEAJHtCPAIkzx2D4xXdnkx8PCDgfav8/YAcZ7X6BM60dTA="
 
 # ------------------------------------------------------------- plumbing ----
 
@@ -63,6 +64,7 @@ ASSUME_YES=0
 MODE="install"
 REPO="${LASERCODE_REPO:-$REPO_DEFAULT}"
 TAG=""
+RELEASE_REF=""
 FORMAT="appimage"
 # 1 once `--format` was given. An explicit choice is an instruction, and nothing
 # below may quietly replace it with a different package and a sudo prompt.
@@ -75,6 +77,8 @@ FROM_DIR=""
 REQUIRE_ATTESTATION=1
 PURGE_DATA=0
 SCRATCH=""
+MANIFEST_PATH=""
+DOWNLOAD_TOOL=""
 
 # The workflow the attestation has to name. Without this, `gh attestation
 # verify --repo` accepts *any* workflow in the repository, so anyone who can
@@ -165,7 +169,8 @@ laser installer — installs the Laser desktop app for the current user.
 
 Options
   --version <tag>       a specific release tag (default: the latest release)
-  --format <fmt>        appimage | tar | deb | rpm   (default: appimage)
+  --format <fmt>        appimage | tar | deb | rpm   (default: native package
+                        on Debian/Fedora families, otherwise appimage)
   --prefix <dir>        where to install (default: ~/.local)
   --repo <owner/name>   the GitHub repository to install from
   --from <dir>          a local directory of release files, instead of GitHub
@@ -331,12 +336,22 @@ gh_install_hint() {
   printf ''
 }
 
-require_gh() {
+require_download_tools() {
   [ -n "$FROM_DIR" ] && return 0
-  if ! have gh; then
+  if have curl; then
+    DOWNLOAD_TOOL="curl"
+  elif have wget; then
+    DOWNLOAD_TOOL="wget"
+  else
+    die "there is no HTTPS download tool on this machine" \
+      "Install curl or wget, then run this script again. $PRODUCT itself does
+not need either after it is installed."
+  fi
+
+  if ! have gh && [ "$REQUIRE_ATTESTATION" = 1 ]; then
     hint=$(gh_install_hint)
     if [ -n "$hint" ]; then
-      die "$PRODUCT is published to a private repository, so this installer needs GitHub's \`gh\` command, and it is not installed" \
+      die "GitHub's \`gh\` command is not installed, so the release provenance cannot be verified" \
         "Install it with:
 
   $hint
@@ -345,19 +360,20 @@ then run this script again. If that package is not found on your release, the
 per-distribution instructions are at
   https://github.com/cli/cli/blob/trunk/docs/install_linux.md"
     fi
-    die "$PRODUCT is published to a private repository, so this installer needs GitHub's \`gh\` command, and it is not installed" \
+    die "GitHub's \`gh\` command is not installed, so the release provenance cannot be verified" \
       "Install it for your distribution — the instructions are at
   https://github.com/cli/cli/blob/trunk/docs/install_linux.md
 — then run this script again."
   fi
-  if ! gh auth status >/dev/null 2>&1; then
-    die "\`gh\` is installed but not signed in to GitHub" \
-      "Sign in with:
+}
 
-  gh auth login
-
-and choose the account that has access to $REPO, then run this script again."
-  fi
+download_url() {
+  # download_url <url> <destination>
+  case "$DOWNLOAD_TOOL" in
+    curl) curl -fL --retry 3 --connect-timeout 15 --output "$2" "$1" >/dev/null 2>&1 ;;
+    wget) wget -q -O "$2" "$1" ;;
+    *) return 1 ;;
+  esac
 }
 
 # --------------------------------------------------------------- hashes ----
@@ -417,8 +433,13 @@ if it fails a second time, do not install it, and report it."
 # it, anyone who can push a workflow file to the repo can mint provenance for
 # bytes of their own choosing and this check would pass.
 check_attestation() {
+  # check_attestation <artifact> <offline-bundle-or-empty>
   if [ -n "$FROM_DIR" ]; then
     TRUST_PROVENANCE="not applicable — installed from a local directory ($FROM_DIR)"
+    return 0
+  fi
+  if ! have gh; then
+    TRUST_PROVENANCE="NOT CHECKED — gh is not installed, and you passed --allow-unattested"
     return 0
   fi
   if ! gh attestation --help >/dev/null 2>&1; then
@@ -437,7 +458,16 @@ checksum manifest travels in the same release as the file it describes:
     TRUST_PROVENANCE="NOT CHECKED — this copy of gh is too old to check build provenance"
     return 0
   fi
-  att_out=$(gh attestation verify "$1" --repo "$REPO" --signer-workflow "$REPO/$SIGNER_WORKFLOW" 2>&1) && {
+  if [ -z "$2" ] || [ ! -f "$2" ]; then
+    if [ "$REQUIRE_ATTESTATION" = 1 ]; then
+      die "this release has no downloadable provenance bundle" \
+        "Every release built by $PRODUCT's release workflow publishes provenance.jsonl.
+Nothing was installed. The release is incomplete or was assembled by hand."
+    fi
+    TRUST_PROVENANCE="NONE — no provenance bundle, and you passed --allow-unattested"
+    return 0
+  fi
+  att_out=$(gh attestation verify "$1" --bundle "$2" --repo "$REPO" --signer-workflow "$REPO/$SIGNER_WORKFLOW" 2>&1) && {
     TRUST_PROVENANCE="attested to $REPO $SIGNER_WORKFLOW by GitHub Actions"
     return 0
   }
@@ -467,8 +497,8 @@ Otherwise ask for a release built by CI. Nothing was installed."
 $att_out
 
 Nothing was installed. A provenance check that fails is a stronger signal than
-one that is missing: do not install this file. If gh is simply not signed in,
-run \`gh auth status\` and sign in, then try again."
+one that is missing: do not install this file. No GitHub sign-in is needed; the
+release's bundle is verified offline."
       ;;
   esac
 }
@@ -514,38 +544,32 @@ list_assets() {
     ls -1 "$FROM_DIR"
     return 0
   fi
-  if [ -n "$TAG" ]; then
-    gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' 2>/dev/null ||
-      die "there is no release tagged \"$TAG\" in $REPO, or you cannot see it" \
-        "List what is there with:
-
-  gh release list --repo $REPO
-
-then run this script again with --version <tag>, or without --version for the
-latest release."
-  else
-    gh release view --repo "$REPO" --json assets --jq '.assets[].name' 2>/dev/null ||
-      die "$REPO has no published release yet, or your account cannot see it" \
-        "Check access with:
-
-  gh release list --repo $REPO
-
-If the list is empty, nothing has been released yet. If it says you are not
-authorised, ask for read access to the repository."
-  fi
+  [ -f "$MANIFEST_PATH" ] || die "the release manifest has not been downloaded"
+  awk '{ name = $2; sub(/^\*/, "", name); if (name != "") print name }' "$MANIFEST_PATH"
 }
 
 resolve_tag() {
   if [ -n "$FROM_DIR" ]; then
     TAG="${TAG:-local}"
+    RELEASE_REF="$TAG"
     return 0
   fi
-  [ -n "$TAG" ] && return 0
-  TAG=$(gh release view --repo "$REPO" --json tagName --jq '.tagName' 2>/dev/null) || TAG=""
-  [ -n "$TAG" ] || die "$REPO has no published release yet, or your account cannot see it" \
-    "Check with:
-
-  gh release list --repo $REPO"
+  case "$REPO" in
+    */*) ;;
+    *) die "--repo must be owner/name, and got: $REPO" ;;
+  esac
+  case "$REPO" in
+    *[!A-Za-z0-9._/-]* | */*/*) die "--repo contains characters that cannot be used in a GitHub release URL: $REPO" ;;
+  esac
+  if [ -n "$TAG" ]; then
+    case "$TAG" in
+      *[!A-Za-z0-9._-]*) die "--version contains characters that cannot be used in a GitHub release URL: $TAG" ;;
+    esac
+    RELEASE_REF="$TAG"
+  else
+    RELEASE_REF="latest"
+    TAG="latest"
+  fi
 }
 
 # The filename patterns each packaging format uses, per architecture. These are
@@ -605,11 +629,18 @@ fetch() {
     cp "$FROM_DIR/$1" "$2/$1"
     return 0
   fi
-  gh release download "$TAG" --repo "$REPO" --pattern "$1" --dir "$2" --clobber >/dev/null 2>&1 ||
+  case "$1" in
+    *[!A-Za-z0-9._+-]*) die "the release contains an unsafe asset name: $1" ;;
+  esac
+  if [ "$RELEASE_REF" = "latest" ]; then
+    f_url="https://github.com/$REPO/releases/latest/download/$1"
+  else
+    f_url="https://github.com/$REPO/releases/download/$RELEASE_REF/$1"
+  fi
+  download_url "$f_url" "$2/$1" ||
     die "could not download $1 from release $TAG" \
-      "Check the network and that you are still signed in:
-
-  gh auth status
+      "Check the network and the public release at:
+  https://github.com/$REPO/releases
 
 then run this script again. Nothing was installed."
 }
@@ -620,7 +651,13 @@ fetch_optional() {
     cp "$FROM_DIR/$1" "$2/$1"
     return 0
   fi
-  gh release download "$TAG" --repo "$REPO" --pattern "$1" --dir "$2" --clobber >/dev/null 2>&1
+  case "$1" in *[!A-Za-z0-9._+-]*) return 1 ;; esac
+  if [ "$RELEASE_REF" = "latest" ]; then
+    fo_url="https://github.com/$REPO/releases/latest/download/$1"
+  else
+    fo_url="https://github.com/$REPO/releases/download/$RELEASE_REF/$1"
+  fi
+  download_url "$fo_url" "$2/$1"
 }
 
 # -------------------------------------------------------------- receipt ----
@@ -963,10 +1000,20 @@ remove_system_package() {
 
 do_install() {
   detect_platform
-  require_gh
+  require_download_tools
+  choose_default_format
   say ""
   check_sandbox_support
   resolve_tag
+
+  work="$(scratch_dir)/download"
+  mkdir -p "$work"
+  step "downloading SHA256SUMS"
+  fetch "SHA256SUMS" "$work"
+  MANIFEST_PATH="$work/SHA256SUMS"
+  sig=""
+  if fetch_optional "SHA256SUMS.sig" "$work"; then sig="$work/SHA256SUMS.sig"; fi
+  check_signature "$MANIFEST_PATH" "$sig"
 
   previous_version=""
   previous_format=""
@@ -987,6 +1034,7 @@ do_install() {
       sed -n "s/^$BINARY[-_]\\([0-9][0-9A-Za-z.+-]*\\)[-_.]\\(x86_64\\|amd64\\|arm64\\|aarch64\\).*\$/\\1/p")
     [ -n "$from_name" ] && version="$from_name"
   fi
+  if [ "$TAG" = "latest" ]; then TAG="v$version"; fi
 
   say ""
   if [ -n "$previous_version" ] && [ "$previous_version" = "$version" ] && [ "$previous_format" = "$FORMAT" ]; then
@@ -996,28 +1044,21 @@ do_install() {
   else
     say "Installing $PRODUCT $version ($ARCH, $FORMAT)."
   fi
-  [ "$DRY_RUN" = 1 ] && say "Dry run: nothing will be downloaded or changed."
+  [ "$DRY_RUN" = 1 ] && say "Dry run: only release metadata was downloaded; nothing will be installed or changed."
   say ""
 
-  work="$(scratch_dir)/download"
-  mkdir -p "$work"
-
   if [ "$DRY_RUN" = 1 ]; then
-    step "would: download $asset and SHA256SUMS from $REPO release $TAG"
+    step "would: download $asset from $REPO release $TAG"
     step "would: verify $asset against SHA256SUMS and abort on a mismatch"
   else
-    step "downloading SHA256SUMS"
-    fetch "SHA256SUMS" "$work"
-    sig=""
-    if fetch_optional "SHA256SUMS.sig" "$work"; then sig="$work/SHA256SUMS.sig"; fi
-    check_signature "$work/SHA256SUMS" "$sig"
-
     step "downloading $asset"
     fetch "$asset" "$work"
 
     step "verifying $asset"
-    verify_file "$work/$asset" "$asset" "$work/SHA256SUMS"
-    check_attestation "$work/$asset"
+    verify_file "$work/$asset" "$asset" "$MANIFEST_PATH"
+    provenance=""
+    if fetch_optional "provenance.jsonl" "$work"; then provenance="$work/provenance.jsonl"; fi
+    check_attestation "$work/$asset" "$provenance"
     step "checksum matched"
     step "manifest: ${TRUST_SIGNATURE:-not checked}"
     step "provenance: ${TRUST_PROVENANCE:-not checked}"
@@ -1059,7 +1100,7 @@ do_install() {
           warn "this script was read from a pipe, so no copy of it was kept beside the app" \
             "$PRODUCT is installed. To uninstall it later you will need this script again:
 
-  gh api repos/$REPO/contents/install.sh -H 'Accept: application/vnd.github.raw' > $PRODUCT-install.sh
+  curl -fsSLo $PRODUCT-install.sh https://raw.githubusercontent.com/$REPO/$TAG/install.sh
   sh $PRODUCT-install.sh --uninstall"
         fi
         # Written before the desktop wiring, not after: if installing the menu
@@ -1087,13 +1128,37 @@ do_install() {
   say ""
   post_install_notes
   if [ "$DRY_RUN" = 1 ]; then
-    say "Dry run complete. Nothing was downloaded, and nothing on this machine changed."
+    say "Dry run complete. Only release metadata was downloaded; nothing was installed or changed."
     return 0
   fi
   case "$FORMAT" in
     deb | rpm) say "$PRODUCT $version is installed. Open it from your application menu." ;;
     *) say "$PRODUCT $version is installed. Open it from your application menu, or run: $BIN_DIR/$BINARY" ;;
   esac
+}
+
+# A native package is what lets Ubuntu Software, GNOME Software, Discover and
+# dnf's normal update services own later upgrades and their notifications. Use
+# it by default where the distribution has that package system; AppImage stays
+# the explicit no-root path and the fallback everywhere else.
+choose_default_format() {
+  [ "$FORMAT_CHOSEN" = 0 ] || return 0
+  distro_id=""
+  distro_like=""
+  if [ -r /etc/os-release ]; then
+    distro_id=$(. /etc/os-release 2>/dev/null && printf '%s' "${ID:-}")
+    distro_like=$(. /etc/os-release 2>/dev/null && printf '%s' "${ID_LIKE:-}")
+  fi
+  for candidate in $distro_id $distro_like; do
+    case "$candidate" in
+      ubuntu | debian | linuxmint | pop | elementary | raspbian)
+        if have apt || have dpkg; then FORMAT="deb"; return 0; fi
+        ;;
+      fedora | rhel | centos | rocky | almalinux | opensuse* | suse | sles)
+        if have dnf || have zypper || have rpm; then FORMAT="rpm"; return 0; fi
+        ;;
+    esac
+  done
 }
 
 # Ubuntu 24.04 and its derivatives restrict unprivileged user namespaces, which

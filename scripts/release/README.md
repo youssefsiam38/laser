@@ -1,6 +1,7 @@
 # Cutting a release
 
-Four scripts. `.github/workflows/release.yml` runs exactly these and nothing
+The release scripts below are the workflow's entire implementation.
+`.github/workflows/release.yml` runs exactly these and nothing
 else, so a release never depends on CI being available — it only depends on CI
 for the one thing a laptop cannot mint, the build attestation.
 
@@ -10,7 +11,8 @@ for the one thing a laptop cannot mint, the build attestation.
 | `build-linux.sh` | Builds every Linux artifact for **one** architecture into a staging directory, gates on the clean-machine check, and derives the tarball from the AppImage so both carry identical bytes |
 | `manifest.sh` | Writes `SHA256SUMS` over a staging directory, in `sha256sum` format, sorted |
 | `sign.sh` | Creates the release key, and signs `SHA256SUMS` with it |
-| `publish.sh` | Re-runs the manifest over the final set, adds `install.sh`, and uploads the lot to a GitHub release |
+| `package-repositories.sh` | Signs RPMs and builds the signed APT and DNF repositories used by native OS updaters |
+| `publish.sh` | Re-runs the manifest over the final set, adds `install.sh`, and uploads the lot to a GitHub release; CI adds the offline provenance bundle |
 | `verify-install.sh` | Runs `install.sh` end to end against a local directory: install, upgrade, tamper, uninstall |
 
 ## By hand
@@ -51,6 +53,12 @@ A failure there stops the release rather than staging artifacts nobody can run.
 `install.sh` in beside the artifacts, and uploads everything. Re-running it
 replaces the assets on an existing release rather than failing.
 
+In CI, `package-repositories.sh` runs before the manifest and attestation so the
+signed RPM bytes are the bytes both the release and DNF receive. It signs APT's
+`Release` metadata and DNF's `repomd.xml`, then GitHub Pages publishes the two
+feeds. A `.deb` or `.rpm` installation registers the matching feed; the normal
+operating-system updater handles all later notifications and upgrades.
+
 Check the result the way a person will:
 
 ```bash
@@ -88,8 +96,9 @@ laser-0.1.0-linux-arm64.tar.gz
 laser_0.1.0_amd64.deb              when electron-builder.yml builds them
 laser-0.1.0.x86_64.rpm
 SHA256SUMS                           every file above, plus install.sh
-SHA256SUMS.sig                       when a release key is configured
+SHA256SUMS.sig                       maintainer signature over SHA256SUMS
 install.sh                           the installer this release was tested against
+provenance.jsonl                     GitHub's signed offline build-provenance bundle
 ```
 
 `install.sh` ships **with** the release as well as living at the repository

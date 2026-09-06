@@ -72,7 +72,7 @@ done
 [ -n "$TAG" ] || die "--tag is required, for example --tag v0.1.0"
 [ -d "$DIR" ] || die "$DIR is not a directory" "Run scripts/release/build-linux.sh first."
 if [ "$STAGE_ONLY" = 0 ]; then
-  command -v gh >/dev/null 2>&1 || die "gh is not installed" "Publishing goes through gh, because the repository is private."
+  command -v gh >/dev/null 2>&1 || die "gh is not installed" "Publishing a GitHub release requires the GitHub CLI."
   gh auth status >/dev/null 2>&1 || die "gh is not signed in" "Run: gh auth login"
 fi
 
@@ -161,5 +161,5 @@ else
 fi
 
 printf '\nPublished. Install it with:\n\n'
-printf '  gh api repos/%s/contents/install.sh -H '\''Accept: application/vnd.github.raw'\'' > %s-install.sh \\\n' "$REPO" "$product_name"
-printf '    && sh %s-install.sh\n\n' "$product_name"
+printf '  curl -fsSLo %s-install.sh https://raw.githubusercontent.com/%s/%s/install.sh \\\n' "$product_name" "$REPO" "$TAG"
+printf '    && sh %s-install.sh --version %s\n\n' "$product_name" "$TAG"

@@ -5,8 +5,8 @@
  * So everything here is **additive and optional**: the shell exposes
  * `window.laser`, and the web build simply does not have it. A feature that
  * only works on the desktop must degrade to something that works everywhere —
- * popping a panel out becomes opening a tab, the custom titlebar becomes no
- * titlebar at all.
+ * popping a panel out becomes opening a tab, and desktop window controls become
+ * the browser's own frame.
  *
  * This module is types and channel names only. It is imported by the main
  * process, by the preload bridge, and (for types) by the renderer, so it must
@@ -20,7 +20,7 @@ export type DesktopPlatform = "darwin" | "win32" | "linux";
 /** How much of the window frame laser draws itself, and where it must not draw. */
 export interface DesktopChrome {
   /**
-   * `system`: macOS still draws the traffic lights, inset into our own bar.
+   * `system`: the OS owns the controls (and, on Linux, the whole titlebar).
    * `custom`: the window is frameless and the UI draws minimise/maximise/close.
    */
   controls: "system" | "custom";

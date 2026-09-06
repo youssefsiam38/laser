@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
+import { PRODUCT_NAME } from "@lasercode/protocol";
 import { DESKTOP_BRIDGE } from "../src/api.js";
 
 /**
@@ -32,7 +33,7 @@ const runnable = existsSync(electronBin) && existsSync(preload);
 
 describe.runIf(runnable)("the bridge, in a real window", () => {
   it(`exposes window.${DESKTOP_BRIDGE} with no preload error`, () => {
-    const userData = mkdtempSync(join(tmpdir(), "laser-bridge-"));
+    const userData = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-bridge-`));
     const script = join(userData, "probe.cjs");
     writeFileSync(
       script,

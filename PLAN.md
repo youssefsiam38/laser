@@ -265,6 +265,7 @@ Depends on: M6.
 | M7-T4 | Approval UI: non-modal footer on the tool card, "No" always opens feedback, broad-allow is mode-changing | one-hand test |
 | M7-T5 | Push: Declarative Web Push payload; Android action buttons; iOS single tap-to-open | both platforms verified |
 | M7-T6 | Mobile mic for transcription: `getUserMedia` + MediaRecorder to the host | phrase inserted at cursor |
+| M7-T7 | QR entry route and encrypted paired-device transport in the browser | scanning a fresh QR on a real phone opens `/link`, completes the six-symbol check, and reconnects to the desktop through the relay |
 
 ---
 
@@ -340,7 +341,7 @@ Goal: a person installs laser with one command and never touches a terminal
 again. They do not install Node, or Pi, or anything else, and they need not
 know Pi exists.
 
-Done when: on a clean Linux machine with only `gh` present, one command
+Done when: on a clean Linux machine with curl or wget and `gh` present, one command
 installs a native desktop app that appears in the application menu, launches,
 runs an agent, and installs extensions from Settings — with no Node, no npm,
 no Pi and no manual step anywhere.
@@ -361,8 +362,8 @@ Depends on: M5 (desktop shell), M9 (CLI). Blocks nothing; blocked for
 
 | ID | Task | Done when |
 | --- | --- | --- |
-| M10-T1 | `install.sh` at the repo root, fetched and run through `gh` from the private repo. Detects arch, verifies a checksum **and GitHub build provenance**, downloads the release asset, installs per-user under `~/.local`, registers a `.desktop` entry and icons, and prints one line saying what to do next. Idempotent; re-running upgrades, and an interrupted upgrade leaves the version that was working | `gh api ... \| sh` on a clean box ends with a launchable app |
-| M10-T2 | One command in the README, copy-pasteable, using `gh` so the private repo needs no token juggling. An `--uninstall` flag that removes everything it created, and a separate `--purge` for the data it did not | the command works for a collaborator with repo access and nothing else |
+| M10-T1 | `install.sh` at the repo root, fetched from the public repository and run from disk. Detects arch, verifies a checksum **and offline GitHub build provenance**, downloads the release asset, installs per-user under `~/.local`, registers a `.desktop` entry and icons, and prints one line saying what to do next. Idempotent; re-running upgrades, and an interrupted upgrade leaves the version that was working | the public versioned command on a clean box ends with a launchable app without GitHub sign-in |
+| M10-T2 | One public, versioned command in the README, copy-pasteable and identical to the website. An `--uninstall` flag that removes everything it created, and a separate `--purge` for the data it did not | the command works without repository access or a GitHub account |
 | M10-T3 | The app bundles its own runtime and agent: stock Node unpacked outside asar, the pinned Pi and its dependency tree vendored into the package. Nothing resolves from the user's machine, and the user's own global Pi (if any) is never touched | `doctor` inside the packaged app reports the bundled Node and the bundled pinned Pi, on a machine with neither installed |
 | M10-T4 | Package for every Linux distribution: AppImage (universal), `.deb`, `.rpm`, and a plain tarball. Desktop entry, MIME handler for `laser://`, icons at every size, and a post-install that does not require root for the AppImage path | each artifact installs and launches on its target |
 | M10-T5 | Extension and package management entirely from Settings: browse, install, update, remove, with progress and a readable failure. Installs go into laser's own agent directory, never the user's global one, run on the npm the app ships rather than the machine's, and refuse to run an unreviewed install script | a package is installed from the UI on a machine with no npm on `PATH` |

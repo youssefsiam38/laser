@@ -297,6 +297,7 @@ deb:
     - --license
     - Proprietary
     - build/linux/generated/{{metainfoFileName}}=/usr/share/metainfo/{{metainfoFileName}}
+    - build/linux/package-repository-key.asc=/usr/share/keyrings/{{binary}}-archive-keyring.asc
   # electron-builder's default pattern is `${name}_${version}_${arch}`, and
   # `${name}` is this package's npm name — a scoped one — which fpm then
   # reads as a directory that does not exist. The file is named after the
@@ -380,6 +381,7 @@ rpm:
     - --license
     - Proprietary
     - build/linux/generated/{{metainfoFileName}}=/usr/share/metainfo/{{metainfoFileName}}
+    - build/linux/package-repository-key.asc=/etc/pki/rpm-gpg/RPM-GPG-KEY-{{binary}}
   artifactName: {{binary}}-${version}.${arch}.${ext}
 
   # Written by us rather than left to electron-builder's defaults, so that the

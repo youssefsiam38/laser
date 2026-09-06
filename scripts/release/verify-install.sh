@@ -18,7 +18,8 @@ set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 . "$REPO_ROOT/scripts/identity/identity.sh"
-INSTALLER="$REPO_ROOT/install.sh"
+SOURCE_INSTALLER="$REPO_ROOT/install.sh"
+INSTALLER="$SOURCE_INSTALLER"
 REAL_RELEASE=""
 KEEP=0
 
@@ -42,8 +43,8 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-if [ ! -f "$INSTALLER" ]; then
-  printf 'verify-install: %s does not exist\n' "$INSTALLER" >&2
+if [ ! -f "$SOURCE_INSTALLER" ]; then
+  printf 'verify-install: %s does not exist\n' "$SOURCE_INSTALLER" >&2
   exit 1
 fi
 
@@ -55,6 +56,14 @@ trap cleanup EXIT
 FAKE_HOME="$ROOT/home"
 PREFIX="$FAKE_HOME/.local"
 mkdir -p "$FAKE_HOME" "$ROOT/tmp"
+
+# Synthetic releases use a throwaway signing key later in this test, so start
+# them with an unpinned copy. A real release always runs the production
+# installer and therefore enforces the permanent key committed in install.sh.
+if [ -z "$REAL_RELEASE" ]; then
+  INSTALLER="$ROOT/install-unpinned.sh"
+  sed 's|^RELEASE_PUBKEY="[^"]*"$|RELEASE_PUBKEY=""|' "$SOURCE_INSTALLER" >"$INSTALLER"
+fi
 
 # --------------------------------------------------------- assertions ----
 
@@ -106,7 +115,7 @@ plain_installer() {
       PATH="$PATH" \
       TMPDIR="$ROOT/tmp" \
       TERM="${TERM:-dumb}" \
-      sh "$INSTALLER" --prefix "$PREFIX" "$@" 2>&1
+      sh "$INSTALLER" --prefix "$PREFIX" --format appimage "$@" 2>&1
   )"
   rc=$?
   set -e
@@ -116,6 +125,17 @@ plain_installer() {
 # key pinned in it. `plain_installer` stays the unmodified script, for the
 # sections after it that are not about signatures.
 installer() { plain_installer "$@"; }
+
+native_installer() {
+  set +e
+  out="$(
+    env -i HOME="$FAKE_HOME" PATH="$PATH" TMPDIR="$ROOT/tmp" TERM="${TERM:-dumb}" \
+      sh "$INSTALLER" --prefix "$PREFIX" "$@" 2>&1
+  )"
+  rc=$?
+  set -e
+  DETAIL="$out"
+}
 
 snapshot() { find "$1" -mindepth 1 2>/dev/null | LC_ALL=C sort | cksum; }
 
@@ -174,7 +194,8 @@ make_release() {
   rm -f "${dir:?}"/*
   make_fake_appimage "$dir/$product_binary-$version-x86_64.AppImage" "$version"
   make_fake_appimage "$dir/$product_binary-$version-arm64.AppImage" "$version"
-  (cd "$dir" && sha256sum ./*.AppImage | sed 's|\./||' >SHA256SUMS)
+  printf 'deb-fixture\n' >"$dir/${product_binary}_${version}_amd64.deb"
+  (cd "$dir" && sha256sum ./*.AppImage ./*.deb | sed 's|\./||' >SHA256SUMS)
 }
 
 # Running what was just installed is the one place this script executes
@@ -223,6 +244,11 @@ installer --from "$RELEASE_A" --version v0.1.0 --dry-run
 expect "dry run exits 0" equals "$rc" 0
 expect "dry run says what it would do" contains "$out" 'would:'
 expect "dry run left the filesystem untouched" equals "$before" "$(snapshot "$FAKE_HOME")"
+
+section "the default uses the operating system update channel"
+native_installer --from "$RELEASE_A" --version v0.1.0 --dry-run
+expect "Debian-family machines select the deb package" contains "$out" '(x64, deb)'
+expect "the native default still changes nothing in a dry run" equals "$before" "$(snapshot "$FAKE_HOME")"
 
 section "a fresh install"
 installer --from "$RELEASE_A" --version v0.1.0
@@ -374,7 +400,7 @@ if [ -z "$REAL_RELEASE" ] && command -v openssl >/dev/null 2>&1; then
     set +e
     out="$(
       env -i HOME="$FAKE_HOME" PATH="$PATH" TMPDIR="$ROOT/tmp" TERM="${TERM:-dumb}" \
-        sh "$SIGNED_INSTALLER" --prefix "$PREFIX" "$@" 2>&1
+        sh "$SIGNED_INSTALLER" --prefix "$PREFIX" --format appimage "$@" 2>&1
     )"
     rc=$?
     set -e

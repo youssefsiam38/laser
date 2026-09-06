@@ -122,6 +122,7 @@ jobs:
       # secret is lifted into the environment here and the step below tests that
       # instead. An unset secret expands to the empty string.
       LASERCODE_RELEASE_KEY_PEM: ${{ secrets.LASERCODE_RELEASE_KEY }}
+      LASERCODE_PACKAGE_SIGNING_KEY: ${{ secrets.LASERCODE_PACKAGE_SIGNING_KEY }}
       LASERCODE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -131,6 +132,9 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
+
+      - name: package-repository tools
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y apt-utils createrepo-c dpkg-dev gnupg rpm
 
       # Every architecture's artifacts, flattened into one directory: one
       # release, one manifest, one set of hashes.
@@ -149,6 +153,24 @@ jobs:
           mkdir -p ~/.config/lasercode
           umask 077
           printf '%s' "$LASERCODE_RELEASE_KEY_PEM" > ~/.config/lasercode/release-key.pem
+
+      - name: package-repository signing key
+        run: |
+          test -n "$LASERCODE_PACKAGE_SIGNING_KEY" || { echo "::error::LASERCODE_PACKAGE_SIGNING_KEY is required"; exit 1; }
+          package_key_home="$RUNNER_TEMP/package-signing"
+          mkdir -p "$package_key_home"
+          chmod 700 "$package_key_home"
+          printf '%s' "$LASERCODE_PACKAGE_SIGNING_KEY" | gpg --homedir "$package_key_home" --batch --import
+          echo "GNUPGHOME=$package_key_home" >> "$GITHUB_ENV"
+
+      # Sign the RPM files before the release manifest and provenance are made,
+      # then build the APT/DNF indexes from those exact package bytes.
+      - name: signed native package repositories
+        run: scripts/release/package-repositories.sh --dir release --out package-repositories
+
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+        with:
+          path: package-repositories
 
       # Assemble the exact bytes that will be uploaded: SHA256SUMS over every
       # artifact plus install.sh, signed if a key is configured. Nothing is
@@ -180,13 +202,41 @@ jobs:
       # install.sh runs `gh attestation verify` against it and treats a failure
       # as fatal.
       - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        id: provenance
         with:
           # Everything in the directory, install.sh and the manifest included —
           # a glob that names formats would fail the build the day a format is
           # added or dropped from electron-builder.yml.
           subject-path: release/*
 
+      # Public installs do not need a GitHub account. Ship the signed Sigstore
+      # bundle as an ordinary release asset so `gh attestation verify --bundle`
+      # can verify it offline, without an API token. It stays outside `release/`:
+      # the bundle cannot attest itself and is therefore not part of SHA256SUMS.
+      - name: keep the offline provenance bundle
+        run: cp "${{ steps.provenance.outputs.bundle-path }}" "$RUNNER_TEMP/provenance.jsonl"
+
       - name: publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: scripts/release/publish.sh --tag "$LASERCODE_TAG" --dir release
+
+      - name: publish the offline provenance bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$LASERCODE_TAG" "$RUNNER_TEMP/provenance.jsonl" --repo "youssefsiam38/laser" --clobber
+
+  deploy-package-repositories:
+    name: deploy package repositories
+    needs: publish
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: publish APT and DNF repositories
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

@@ -10,8 +10,8 @@
  *   Windows  a `titleBarOverlay`: the system draws minimise/maximise/close on
  *            the right, in our colours, which we restate whenever the theme
  *            changes. The UI leaves room on the right.
- *   Linux    no overlay exists, so the window is frameless and the UI draws the
- *            three controls itself through `window.laser.window`.
+ *   Linux    a native frame avoids Electron's Linux frameless input-region
+ *            path, which can disagree with the renderer's geometry.
  *
  * Two things the UI cannot do for itself and which are therefore here: the
  * background colour is set before the first paint (a white flash on a dark
@@ -31,6 +31,7 @@ import { fileURLToPath } from "node:url";
 import type { DesktopChrome, PanelDescriptor, WindowChromeState } from "./api.js";
 import type { DesktopLog } from "./log.js";
 import { plainText } from "./text.js";
+import { LINUX_CHROME, LINUX_WINDOW_FRAME } from "./window-frame.js";
 
 /** DESIGN.md `--bg`, so the frame matches the page before the page exists. */
 const GROUND = { light: "#F5F7FA", dark: "#0B0F14" };
@@ -53,7 +54,7 @@ export function chromeFor(platform: NodeJS.Platform): DesktopChrome {
   if (platform === "win32") {
     return { controls: "system", height: TITLE_BAR_HEIGHT, insetLeft: 0, insetRight: WINDOWS_OVERLAY_INSET };
   }
-  return { controls: "custom", height: TITLE_BAR_HEIGHT, insetLeft: 0, insetRight: WINDOWS_OVERLAY_INSET };
+  return LINUX_CHROME;
 }
 
 export function preloadPath(): string {
@@ -377,8 +378,7 @@ export class WindowManager {
         },
       };
     }
-    // Linux: no overlay API. Frameless, and the UI draws the controls.
-    return { frame: false };
+    return LINUX_WINDOW_FRAME;
   }
 
   private webPreferences(): Electron.WebPreferences {

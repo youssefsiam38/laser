@@ -128,7 +128,7 @@ phone and this window on one code path.
 
 | | |
 | --- | --- |
-| `version`, `platform`, `chrome` | Version, OS, and the titlebar geometry the UI must respect: `chrome.height` of draggable strip, `chrome.insetLeft` clear of the macOS traffic lights, `chrome.insetRight` clear of the Windows controls, and `chrome.controls === "custom"` when the UI must draw minimise/maximise/close itself (Linux). |
+| `version`, `platform`, `chrome` | Version, OS, and the titlebar geometry the UI must respect: `chrome.height` of draggable strip, `chrome.insetLeft` clear of the macOS traffic lights, and `chrome.insetRight` clear of the Windows controls. Linux uses its native frame because Electron 44's frameless frame view can deliver input against the wrong geometry. |
 | `panel` | The `PanelDescriptor` when this window *is* a popped-out panel; `null` in the app window. Available before first paint. |
 | `host()`, `onHost()`, `retryHost()` | The host's state, url and ws url. |
 | `popOutPanel(descriptor)`, `closePanelWindow()` | docs/ux-panels.md D-20. Asking twice for one panel id focuses the window that exists rather than opening a second copy. On the web, the UI opens a tab instead. |
@@ -139,9 +139,9 @@ phone and this window on one code path.
 | `identity()` | Device id and where the key is stored. Carries a `degraded` message when there was no keychain — the UI must show it. |
 | `updates.*` | State, check, install. |
 
-The window's top bar is drawn by the UI; the shell only says where it may not
-draw. Give the strip `-webkit-app-region: drag` and every control inside it
-`-webkit-app-region: no-drag`.
+On macOS and Windows the window's top bar is drawn by the UI; the shell only
+says where it may not draw. Give the strip `-webkit-app-region: drag` and every
+control inside it `-webkit-app-region: no-drag`. Linux keeps the native titlebar.
 
 ## Packaging
 
@@ -339,24 +339,22 @@ wins, and that is the lever for someone who genuinely wants both to share.
 
 ### Updates
 
-`electron-updater` against a feed named by `publish:` in
-`electron-builder.yml`. Both `dmg` **and** `zip` are built for macOS: the updater needs the zip, people
-download the dmg. The app checks 20 s after launch and every six hours,
-downloads quietly, and **never restarts by itself** — an agent may be mid-turn.
-The tray offers "Restart to update", and `autoInstallOnAppQuit` picks it up on
-the next ordinary quit.
+Linux native packages update through the operating system. The `.deb` installs
+Laser's signed APT key and source; the `.rpm` installs the same key and a signed
+DNF repository. The release workflow publishes both repositories to GitHub
+Pages. The normal Ubuntu/Fedora update services refresh those feeds and own the
+notification and install, exactly like any other system package. Removing the
+package removes its source; upgrading preserves it.
 
-**Updates are off until a public feed exists (D-31, D-35, M10-T10).** `publish` is `null` in
-`electron-builder.yml`, so no `app-update.yml` ships and the app reports
-`unsupported` — "this build has no update feed" — rather than an error it
-cannot recover from. The feed it used to name is this private repository, and
-electron-updater fetches `latest.yml` unauthenticated: every installed copy
-would 404 forever. `electron-builder.yml` carries the two supported ways to
-turn it on (a public releases repository, or a generic feed URL).
+The per-user AppImage/tar path is deliberately outside APT and DNF and therefore
+does not receive native operating-system prompts. Re-run the installer for that
+path.
 
-Once one is set, verify an update end to end: publish version A as a release,
-install it, publish version B, then reopen the app and wait for the tray item
-to change.
+The separate in-app `electron-updater` remains off (D-31, D-35, M10-T10).
+`publish` is `null`, so no `app-update.yml` ships and the app reports
+`unsupported` rather than competing with the package manager or attempting an
+AppImage update from a path the installer extracted. macOS and Windows will need
+that path proved with a second version before it is enabled.
 
 ## What is not verified here
 

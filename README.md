@@ -2,8 +2,9 @@
 
 A visualization and control layer on top of the [Pi coding agent](https://github.com/earendil-works/pi):
 a web-tech desktop app with multi-project, multi-session navigation, subagent tab
-groups (pi-subagents), a full settings surface, realtime low-level logs, and an
-end-to-end encrypted relay so phones get the same UI.
+groups (pi-subagents), a full settings surface, and realtime low-level logs.
+Phone remote control through the encrypted relay is coming soon; 0.1.0 is the
+local desktop release.
 
 Builds on the community's packages; does not replace them.
 
@@ -30,24 +31,31 @@ the contract renders natively. That contract is
 
 ## Install
 
-One command. It needs [`gh`](https://cli.github.com) signed in to an account
-with access to this repository, and nothing else — no Node, no npm, no package
-manager, no agent. The app carries its own runtime.
+One public, versioned command. It needs `curl` and
+[`gh`](https://cli.github.com) 2.49 or newer for offline provenance verification,
+but no GitHub account or sign-in — and no Node, npm, package manager, or agent.
+The app carries its own runtime.
 
 ```bash
-gh api repos/youssefsiam38/laser/contents/install.sh \
-  -H 'Accept: application/vnd.github.raw' > laser-install.sh \
-  && sh laser-install.sh
+curl -fsSLo laser-install.sh https://raw.githubusercontent.com/youssefsiam38/laser/v0.1.0/install.sh \
+  && sh laser-install.sh --version v0.1.0
 ```
 
 That downloads the release for your architecture, checks it against the
 checksums published with it **and** against GitHub's build provenance — the
 Sigstore signature binding those bytes to laser's release workflow, this
-repository and the commit it was built from — then unpacks it under `~/.local`
-and puts laser in your application menu. No root, and nothing outside your
-home directory. Run it again any time to upgrade; it says which version it
-moved from and to, and an upgrade that is interrupted puts the version you had
-back.
+repository and the commit it was built from, verified from the release's
+offline bundle — then chooses the native package for the operating system.
+Ubuntu and Debian get the `.deb`; Fedora, RHEL and openSUSE get the `.rpm`.
+That asks for the normal administrator password once, puts laser in the
+application menu with its icon, and registers Laser's signed package feed so
+Ubuntu Software Updater, GNOME Software, Discover or dnf can announce and
+install later releases normally.
+
+For a no-root home-directory install, choose `--format appimage`. That path
+unpacks under `~/.local` and rolls an interrupted upgrade back, but it is not
+owned by the operating system's updater; re-run the install command to upgrade
+it.
 
 Provenance is required, not advisory. A build with none is refused, and a build
 whose provenance does not verify is refused with no flag to override it. Only a
@@ -61,6 +69,7 @@ without taking any of them.
 
 ```bash
 sh laser-install.sh --help                     # --version, --format, --prefix, --dry-run
+sh laser-install.sh --version v0.1.0 --format appimage  # no-root, per-user install
 sh ~/.local/lib/laser/install.sh --uninstall   # removes exactly what it installed
 sh ~/.local/lib/laser/install.sh --uninstall --purge   # …and deletes your settings too
 ```

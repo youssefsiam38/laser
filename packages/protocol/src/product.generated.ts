@@ -26,10 +26,10 @@ export const PRODUCT = {
   "vendor": "Laser contributors",
   "copy": {
     "summary": "A control room for coding agents",
-    "description": "Runs coding agent sessions across every project on this machine, and mirrors them to your phone.",
+    "description": "Runs coding agent sessions across every project on this machine through one desktop interface.",
     "descriptionMore": "Everything is configured inside the window: providers, models, extensions and projects. Laser brings its own runtime and its own agent, so there is nothing to install first and nothing on your machine for it to disagree with.",
-    "descriptionRelay": "The phone is not a second application. It is the same interface, reached over an end-to-end encrypted relay that Laser runs itself, so a session left on the desktop is the session picked up on the train.",
-    "webDescription": "Your coding agents, from anywhere. Answer approvals, steer runs, watch every project."
+    "descriptionRelay": "Coming soon: the same interface on your phone through an end-to-end encrypted relay.",
+    "webDescription": "Your coding agents in one desktop interface. Phone remote control is coming soon."
   },
   "desktopFileName": "laser.desktop",
   "metainfoFileName": "com.hubtrix.laser.metainfo.xml",
@@ -58,6 +58,7 @@ export const ENV = {
   "port": "LASERCODE_PORT",
   "releaseKey": "LASERCODE_RELEASE_KEY",
   "releaseKeyPem": "LASERCODE_RELEASE_KEY_PEM",
+  "packageSigningKey": "LASERCODE_PACKAGE_SIGNING_KEY",
   "repo": "LASERCODE_REPO",
   "scratch": "LASERCODE_SCRATCH",
   "screenshotBaseUrl": "LASERCODE_SCREENSHOT_BASE_URL",
