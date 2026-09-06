@@ -23,10 +23,54 @@ export function completeLeadingSlash(command: string, remainder: string): string
   return `${completed}${/^\s/u.test(remainder) ? "" : " "}${remainder}`;
 }
 
-/** Match command identity only; explanatory copy must never hijack Tab. */
-export function slashCommandMatchesQuery(command: { id: string; label?: string }, query: string): boolean {
+type SlashCommandItem = { id: string; label?: string };
+
+/**
+ * Pi-style fuzzy matching over command identity only. All query characters
+ * must occur in order, so `skbra` finds `skill:brave-search`; explanatory copy
+ * can never make an unrelated command win Tab completion.
+ */
+export function rankSlashCommandMatches<T extends SlashCommandItem>(commands: readonly T[], query: string): T[] {
   const needle = query.trim().toLocaleLowerCase();
-  if (needle === "") return true;
-  const name = (command.label ?? command.id).replace(/^\//u, "").toLocaleLowerCase();
-  return name.includes(needle);
+  if (needle === "") return [...commands];
+  return commands
+    .map((command, index) => ({ command, index, score: fuzzyCommandScore(commandName(command), needle) }))
+    .filter((match): match is { command: T; index: number; score: number } => match.score !== null)
+    .sort((a, b) => a.score - b.score || a.index - b.index)
+    .map(({ command }) => command);
+}
+
+export function slashCommandMatchesQuery(command: SlashCommandItem, query: string): boolean {
+  return rankSlashCommandMatches([command], query).length === 1;
+}
+
+function commandName(command: SlashCommandItem): string {
+  return (command.label ?? command.id).replace(/^\//u, "").toLocaleLowerCase();
+}
+
+/** Mirrors Pi's ordered-character scoring without importing its UI package. */
+function fuzzyCommandScore(text: string, query: string): number | null {
+  if (query.length > text.length) return null;
+  let queryIndex = 0;
+  let score = 0;
+  let lastMatch = -1;
+  let consecutive = 0;
+  for (let index = 0; index < text.length && queryIndex < query.length; index += 1) {
+    if (text[index] !== query[queryIndex]) continue;
+    const boundary = index === 0 || /[\s\-_./:]/u.test(text[index - 1] ?? "");
+    if (lastMatch === index - 1) {
+      consecutive += 1;
+      score -= consecutive * 5;
+    } else {
+      consecutive = 0;
+      if (lastMatch >= 0) score += (index - lastMatch - 1) * 2;
+    }
+    if (boundary) score -= 10;
+    score += index * 0.1;
+    lastMatch = index;
+    queryIndex += 1;
+  }
+  if (queryIndex < query.length) return null;
+  if (query === text) score -= 100;
+  return score;
 }

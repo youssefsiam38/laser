@@ -2,10 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-06T17:11:31+03:00 · codex-2026-09-06-request-inspector · release source: `05539dc`
+**Last updated:** 2026-09-07T01:52:00+03:00 · codex-2026-09-07-search · HEAD: `b8ff358`
 
-**Current focus:** Stable 0.2.5 is published: captured API requests, reversible
-live activity rows, and stale-service quota recovery. Both native update feeds ship.
+**Current focus:** M12-T51 — dispatch verified 0.2.6 source, tag and release; do not monitor Actions.
 
 ## Milestones
 
@@ -24,12 +23,12 @@ live activity rows, and stale-service quota recovery. Both native update feeds s
 | M9 CLI | done | planned tasks complete |
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
-| M12 Product experience | in-progress | 0.2.5 published; remaining experience work |
+| M12 Product experience | in-progress | 0.2.6 release dispatch |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
 
-- None. Existing running host remains untouched; review server is stopped.
+- None. Production untouched; isolated QA processes stopped; `fixes.md` is user-owned.
 
 ## Next up
 
@@ -39,8 +38,8 @@ live activity rows, and stale-service quota recovery. Both native update feeds s
 
 ## Recently done
 
-- M12-T47: stable 0.2.5; workflow 34037802194, 12 assets, both native feeds.
-- M12-T48: quota version recovery; host route, packaged session and auth-retry proof.
-- M12-T46: captured request inspector; host E2E and four browser layouts pass.
-- M12-T45: reversible live rows; pointer, Enter and reduced-motion checks pass.
-- M12-T44: compact 14px conversation and tighter rhythm.
+- M12-T54: prioritized history search and session find; 954 tests and four-layout review.
+- M12-T53: compact project tree, persisted pins and project labels; responsive theme review.
+- M12-T52: execution-owned edge-to-edge activity beams; zero-gap browser measurements.
+- M12-T50: native update daemon refresh and remembered exact-chat request Markdown.
+- M12-T49: Pi-backed skills and lossless fuzzy slash completion.

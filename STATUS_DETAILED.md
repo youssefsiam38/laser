@@ -332,6 +332,12 @@ lane T's own if both were written.
 | M12-T46 | Captured API request inspector | done | codex-2026-09-06-request-inspector | `pnpm verify` 918 tests; host E2E prompt attribution; desktop/phone both themes | see notes |
 | M12-T47 | Publish stable patch 0.2.5 | done | codex-2026-09-06-request-inspector | `05539dc`; stable v0.2.5; release workflow 34037802194 passed | see notes |
 | M12-T48 | Recover subscription quota refresh across updates | done | codex-2026-09-06-request-inspector | `pnpm verify`; quota lifecycle and host route tests; packaged-session probe | see notes |
+| M12-T49 | Restore engine commands and skills in slash completion | done | codex-2026-09-06-slash-skills | `pnpm verify` — 925 tests; desktop/phone dark/light browser review | see notes |
+| M12-T50 | Refresh daemon on updates and remember the request transcript view | done | codex-2026-09-06-slash-skills | `pnpm verify` — 925 tests; shellcheck; desktop lifecycle tests; four-layout Markdown review | see notes |
+| M12-T51 | Publish stable patch 0.2.6 | in-progress | codex-2026-09-06-slash-skills | — | see notes |
+| M12-T52 | Make live activity follow the executing action | done | codex-2026-09-06-slash-skills | UI build; workspace typecheck; 448 UI tests; browser measured zero gaps on both edges | see notes |
+| M12-T53 | Compact project tree and single-location session attention | done | codex-2026-09-06-slash-skills | 448 UI tests; desktop/phone dark/light review; live spinner, pin persistence and 44px touch targets | see notes |
+| M12-T54 | Search full conversations and navigate exact matches | done | codex-2026-09-07-search | workspace build/typecheck; 954 tests; desktop/phone light/dark browser review | see notes |
 
 #### M12-T1 notes
 - 2026-09-06 claimed: audit the shipped logo assets, theme presets, assistant-ui
@@ -903,6 +909,98 @@ lane T's own if both were written.
   public host routing and packaged-session refresh acceptance. No existing app,
   daemon or session was restarted. Review Vite and headless browser are stopped.
 
+#### M12-T49 notes
+- 2026-09-06 claimed: trace Pi's own ResourceLoader and slash-command catalogue,
+  then restore skills without reimplementing their semantics; keep completion
+  bounded, searchable and lossless for the rest of the draft.
+- 2026-09-07 checkpoint: the regression had three causes: Laser disabled Pi's
+  normal skill roots, hid manual-only skills, and replaced Pi's ordered-character
+  command matching. The worker now passes only explicit Laser/Agent Skills roots
+  to Pi, including curated bundled features and never `.pi`; a disposable
+  project worker supplies the catalogue before a first session exists.
+- 2026-09-07 done: new and existing sessions list the complete headless-runnable
+  catalogue; `/skbr` finds `/skill:brandkit`, and Tab produces
+  `/skill:brandkit keep every word` without touching the suffix. Mouse, keyboard,
+  bounded scrolling, desktop/phone and both themes were reviewed.
+
+#### M12-T50 notes
+- 2026-09-07 claimed: reproduce the message inspector failure on the user's
+  unchanged running host, then correct the update lifecycle and add the requested
+  plain/Markdown transcript preference without restarting production work.
+- 2026-09-07 checkpoint: `/opt` contains 0.2.5 files while Electron and the host
+  have 0.2.0 JavaScript loaded. The old host rejects the new log-query keys;
+  the cause is a package upgrade replacing files without reloading the process.
+- 2026-09-07 checkpoint: rejected the temporary old-schema UI fallback. Native
+  deb/rpm upgrades now send SIGHUP only to the exact packaged daemon after files
+  are installed; its existing graceful shutdown lets the desktop supervisor
+  restart it from the new bundle. A later app start also replaces any mismatched
+  recorded daemon before connecting. No migration or compatibility layer added.
+- 2026-09-07 done: the request inspector has no old-host protocol branch.
+  Instructions and Conversation default to Plain and switch to the exact chat
+  `MarkdownText` renderer; the choice persists in host-owned machine preferences.
+  Full build, typecheck and all 925 tests pass; shellcheck reports only the two
+  intentional electron-builder placeholders. Production PID 1348853 and daemon
+  1348958 were inspected but never signalled or restarted.
+
+#### M12-T51 notes
+- 2026-09-07 final checkpoint: `pnpm verify` exits 0 with 954 tests on the complete 0.2.6 batch (`/tmp/laser-026-final-verify.log`). Identity and whitespace checks pass; final search browser review covers both themes and widths. Isolated sandbox and browser stopped, production untouched. Dispatch the exact source and tag, create the release page without premature Latest promotion, and do not monitor Actions.
+- 2026-09-07 claimed follow-up: preserve the visible transcript anchor when the
+  session activity preference expands or collapses content before release.
+- 2026-09-07 claimed: synchronize the single workspace version at 0.2.6,
+  validate the exact release source, commit and push main, then create the stable
+  GitHub release and immutable tag without monitoring the workflow, as directed.
+- 2026-09-07 checkpoint: full 0.2.6 build/typecheck/925-test gate passed before
+  the late scroll fix. The final UI build/typecheck and 440 UI tests pass (927
+  workspace tests in total). Browser review measured zero final pixel drift
+  while switching activity detail at desktop and phone widths, dark and light.
+  The anchor follows a visible paragraph or row through the disclosure animation
+  and yields immediately to scrolling input. A real-browser failure caught a
+  slow React commit consuming the animation window; the window now starts at
+  the first post-commit frame, with a regression test for that exact delay.
+
+#### M12-T52 notes
+- 2026-09-07 claimed follow-up: remove the horizontal gap between an activity
+  row's background and live beam; measure aggregate, reasoning and tool edges.
+- 2026-09-07 claimed: trace per-part reasoning/tool lifecycle and the shared
+  activity beam; stop stale reasoning glow during tool execution, and illuminate
+  both the running child and its aggregate with the exact action label.
+- 2026-09-07 checkpoint: two concrete causes reproduced. The projection put
+  partial output in assistant-ui's terminal `result` field, stopping the beam
+  after the first progress chunk. `GroupedParts` defaulted to `no-text`, which
+  synthesized another Thinking indicator after tools. Progress now uses the
+  native UI-only artifact channel; initial waiting is neutral and reasoning
+  owns its actual streaming state. Known and unknown tools share the exact live
+  label, a stronger token-colored sweep and a reduced-motion static accent.
+- 2026-09-07 checkpoint: the opt-in sandbox activity prompt runs a real worker
+  reasoning-to-command-to-answer sequence. Both live rows stayed lit during
+  progress, reasoning stayed quiet, animation transforms changed over time,
+  and completion removed both beams. Desktop/phone, dark/light and reduced
+  motion were inspected without touching the production app.
+- 2026-09-07 done: 443 UI tests pass, including native runtime projection through
+  partial output, aggregate/child motion, completion and the no-extra-thinking
+  transcript contract. The prior full workspace gate plus the final UI suite
+  covers 930 tests. All isolated test processes were stopped after review.
+
+#### M12-T53 notes
+- 2026-09-07 claimed: restyle the existing assistant-ui thread list as a compact
+  folder tree; add persisted session pins without duplicate rows, remove the
+  sidebar inbox and aggregate project attention, and verify live row indicators.
+- 2026-09-07 done: native-runtime rows have persistent pin order, one canonical
+  location, 12px project labels and full-path tooltips. Browser review covered
+  both themes and widths, 44px touch rows, live/settled status, reduced motion,
+  and pins surviving reload. The duplicate inbox component is deleted; its prior
+  implementation remains in Git history.
+- 2026-09-07 final verification: 448 UI tests, UI build, workspace typecheck,
+  identity and whitespace checks pass. T52's padding moved from the outer row
+  to its trigger: reasoning, aggregate and tool beams measured zero left/right
+  gaps. Isolated sandbox/browser stopped; production app not restarted.
+
+#### M12-T54 notes
+- 2026-09-07 claimed: add read-only full-history search, browser-style current-session find and contained sidebar excerpts. Escape characters remain unchanged at the user's request; no summary feature is being added.
+- 2026-09-07 checkpoint: host streaming search paginates saved content without opening workers. Global and sidebar search begin at 30 days and expand through explicit older date ranges. Best-match excerpts and ordering prioritize user messages, assistant replies, then reasoning/tools, with recency only breaking ties. Selection carries the excerpt source into session find.
+- 2026-09-07 verification checkpoint: 460 UI tests and typecheck pass; browser testing caught off-screen `content-visibility` preventing precise highlight geometry. Selected messages now opt into layout, search highlights use DOM ranges without editing React-owned markup, and closing find restores disclosure state. Final responsive/theme review and the workspace release gate follow.
+- 2026-09-07 done: workspace build and typecheck plus all 954 tests pass (460 UI, 168 host, 29 protocol). Added the missing protocol inventory sample caught by the complete gate. Isolated browser proof covers source ranking despite reversed recency, explicit older expansion, arrow/Enter selection, Enter/Shift+Enter match navigation, Escape/focus restoration, folded tool matches, reduced motion and zero horizontal overflow at 1280×900 and 390×844 in both themes. Evidence: `/tmp/laser-global-desktop-light.png`, `/tmp/laser-global-phone-dark.png`, `/tmp/laser-find-phone-dark-final.png`, `/tmp/laser-026-search-tests.log`. No transcript escape conversion or future summarization was added.
+
 ## MX · Cross-cutting
 
 | ID | Task | State | Owner | Evidence | Notes |
@@ -1104,6 +1202,21 @@ Do not: publish or recreate v0.2.4 from 972ce10; release run 34032180101 was
 cancelled before publication specifically so the tag can name the final UI.
 
 ---
+
+### H-3 · M12-T51 · 2026-09-07 · codex-2026-09-06-slash-skills
+State: 0.2.6 verified but not committed, tagged, pushed or released. User interrupted
+dispatch to ask about literal escape characters in the activity summary.
+Finding: bash summaries use oneLine(command); whitespace is flattened, but valid
+shell escapes such as printf's backslash-n remain literal. Recommend a readable
+summary with untouched expanded/copyable source, not blind global unescaping.
+No escape-rendering change implemented yet.
+Next: resolve this added UX request, update notes, then commit/push/tag/create
+release without waiting for Actions, as authorized. All 0.2.6 changes remain
+uncommitted; user-owned fixes.md stays untouched. 448 UI tests and workspace
+typecheck pass; the earlier full gate had 925 tests before ten added UI tests.
+Notes: /tmp/laser-v0.2.6-notes.md. Create with --latest=false; the workflow promotes
+Latest after uploading installers. Do not create a draft: publish.sh does not
+undraft an existing release. No CI monitoring. QA processes were stopped.
 
 ## Decisions log (append-only)
 
@@ -2137,8 +2250,95 @@ Why: installing new files does not update JavaScript already loaded in memory.
 Consequences: unknown quota-method errors become actionable restart guidance;
 fresh-host quota routing and credential failures are release regression tests.
 
+### D-99 · 2026-09-07 · Explicit headless resources and version-tolerant inspection
+
+Decision: add M12-T49 and M12-T50. Laser asks Pi to load skills and prompts only
+from explicit product, Agent Skills and curated-feature roots; it never restores
+implicit `.pi` discovery. The composer advertises only commands that can run in
+the headless engine and follows Pi's command-identity matching. Captured-request
+inspection prefers exact links but retries the earlier read-only log-query schema
+when an operating-system update has replaced files beneath a still-running host.
+Its optional Markdown presentation is the chat renderer and a machine preference.
+Why: hiding Pi resources broke skills, while advertising terminal-only commands
+would create inert UI. Separately, package installation does not replace code
+already loaded by a daemon, so a new frontend can temporarily speak to an older
+schema even though both versions are correct in isolation.
+Consequences: skills work before and after a session exists without treating Pi
+configuration as product configuration; request inspection remains useful during
+safe update skew, labels timestamp attribution as legacy, defaults to plain text,
+and never reconstructs or mutates a provider request.
+
+### D-100 · 2026-09-07 · Updates refresh the daemon instead of widening the UI protocol
+
+Decision: supersede D-98 and the request-compatibility part of D-99. A native
+deb/rpm upgrade sends the existing packaged daemon a graceful SIGHUP after the
+new files are installed; its desktop supervisor starts the new generation. On
+any later launch, a version mismatch is also stopped safely and replaced before
+the UI connects. Remove the inspector's old-host query fallback.
+Why: the API-request failure was process lifecycle skew, not a request-inspector
+compatibility problem. With no legacy user base, maintaining parallel schemas
+would preserve the wrong boundary and add code to every future feature.
+Consequences: one daemon and UI generation run together. Active state closes
+through the existing graceful host shutdown, and a command-started daemon stays
+down until the next app launch or `laser up` rather than being relaunched as root.
+Supersedes: D-98 and the version-tolerant inspection clause of D-99.
+
+### D-101 · 2026-09-07 · Ship the command and lifecycle fixes as stable 0.2.6
+
+Decision: add M12-T51 and publish the verified change set as stable patch 0.2.6.
+Create the release and push its immutable tag after main; do not wait for or
+monitor the tag-triggered GitHub Actions workflow.
+Why: the user explicitly approved immediate publication and prefers reporting
+any CI failure later rather than holding this session open.
+Consequences: the release page may exist briefly before its architecture assets,
+attestation and native updater feeds arrive. Publication is complete only when
+the workflow later succeeds, but this session records dispatch rather than
+claiming unobserved artifacts.
+
+### D-102 · 2026-09-07 · Live activity belongs to the executing row
+
+Decision: add M12-T52 to the unreleased 0.2.6 patch. The aggregate and its active
+child share the activity beam; thinking is a reasoning phase, never a generic
+indicator for tool execution.
+Why: the user reported missing row motion and stale thinking during commands.
+Consequences: verify the reasoning-to-tool-to-answer transition before release.
+
+### D-103 · 2026-09-07 · One canonical session row in compact navigation
+
+Decision: add M12-T53 before 0.2.6. Reuse the assistant-ui thread-list primitives
+with quiet folder headers, rounded single-line rows and client-local pin order.
+Pins move their session out of its project group into Pinned, respect the project
+filter, and show a small project label. Activity appears only on the session row;
+remove the separate sidebar inbox, project badges and project activity rings.
+Why: the user requested filesystem-like scanning and identified triplicated
+attention for the same chat. Pins need project context without a second row.
+Consequences: newest-first project rows no longer reorder by attention priority;
+full title, project path, preview and time remain available in the row tooltip.
+The Superdesign approval-round workflow conflicts with the user's direct-delivery
+instruction; implement the supplied references directly and review the real app.
+Supersedes: the sidebar row anatomy and aggregate attention portions of D-20.
+
+### D-104 · 2026-09-07 · Full-history find without mutating conversations
+
+Decision: add M12-T54 before the pending release. A host-owned read-only search
+scans saved message content without opening workers. Current-session find uses
+the hydrated/live transcript, with reversible disclosure and exact match excerpts.
+Sidebar excerpts occupy normal document flow, never hover over other rows.
+Why: title/preview matching misses conversation history; browser find misses
+closed tool and reasoning bodies. Search must not edit drafts or engine state.
+Consequences: bounded result pages explicitly offer more results and older date
+ranges (30 days, then 90 days, then one year, then earlier history). Across the
+searched range, user content outranks assistant replies, which outrank reasoning
+and tools; newest sessions break ties. Excerpts identify their source. Stale
+replies cannot replace a newer query. Command escape characters remain untouched,
+as requested.
+
 ## Status edits log
 
+- 2026-09-07 · codex-2026-09-06-slash-skills · M12-T49/T50 done: Pi-backed
+  command, prompt and skill discovery is restored with lossless completion;
+  native updates refresh the daemon at the lifecycle boundary, and the request
+  inspector remembers the exact-chat Markdown view. Full gate: 925 tests.
 - 2026-09-06 · codex-2026-09-06-account-usage · M12-T39..T42 done: stable 0.2.3 is published; adaptive account/API telemetry counts subagent attempts, activity disclosure has three session levels, and model menus reopen at the active provider/model; full 888-test gate passes.
 - 2026-09-06 · codex-2026-09-06-activity-summary · M12-T35/M12-T36 done: native notifications use Laser's visible session title, and fleet work is divided into active and terminal lifecycle sections without breaking trees; full 875-test gate passes.
 - 2026-09-06 · codex-2026-09-06-activity-summary · M12-T33/M12-T34 done: the composer footer moved to Help and shortcuts, and Markdown code uses Shiki's full Oniguruma grammar coverage with Laser-theme scopes; full 869-test gate passes.

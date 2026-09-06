@@ -15,6 +15,7 @@ class FakeDriver implements SessionDriver {
   pending: UiDialogRequest[] = [];
   answered: unknown[] = [];
   extensionCommands: unknown[] = [];
+  disposed = false;
   private st: SessionState = {
     path: "/tmp/fake/s1.jsonl",
     id: "s1",
@@ -63,7 +64,9 @@ class FakeDriver implements SessionDriver {
   deliverExtensionCommand(command: unknown) { this.extensionCommands.push(command); return true; }
   pendingUi() { return this.pending; }
   async entries() { return []; }
-  async dispose() { this.emit({ type: "closed", reason: "disposed" }); }
+  async commands() { return [{ name: "skill:test", source: "skill" as const, description: "Test skill" }]; }
+  async prompts() { return []; }
+  async dispose() { this.disposed = true; this.emit({ type: "closed", reason: "disposed" }); }
 }
 
 function harness() {
@@ -84,6 +87,16 @@ function harness() {
 }
 
 describe("WorkerServer", () => {
+  it("lists project commands before a session exists without attaching the preview driver", async () => {
+    const h = harness();
+    const listed = await h.call(1, "pi/commands/list", { cwd: "/tmp/fake" });
+
+    expect(listed.result).toEqual({ commands: [{ name: "skill:test", source: "skill", description: "Test skill" }] });
+    expect(h.server.openSessions()).toEqual([]);
+    expect(h.drivers).toHaveLength(1);
+    expect(h.drivers[0]?.disposed).toBe(true);
+  });
+
   it("includes startup capabilities in the session snapshot", async () => {
     FakeDriver.openingEvent = {
       type: "extension",

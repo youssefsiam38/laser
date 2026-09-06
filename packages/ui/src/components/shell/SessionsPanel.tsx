@@ -1,12 +1,11 @@
 import { PRODUCT_NAME } from "@lasercode/protocol";
 import type * as React from "react";
 import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
-import { FileClock, FolderPlus, Moon, Plus, Settings, Sun, X } from "lucide-react";
+import { FileClock, FolderPlus, Moon, Plus, Search, Settings, Sun, X } from "lucide-react";
 
 import { ThreadList, ThreadListSearch } from "@/components/assistant-ui/elements/thread-list.aui";
-import { matchesThread, ThreadSearch, threadSearchKeys, type SearchableThread } from "@/components/assistant-ui/elements/thread-search";
+import { matchesThread, rankSearchThreads, ThreadSearch, threadSearchKeys, type SearchableThread } from "@/components/assistant-ui/elements/thread-search";
 import { StatusRing } from "@/components/status";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
@@ -17,10 +16,12 @@ import { cn } from "@/lib/utils";
 import { useLaserStable, useLaserState } from "@/runtime";
 import type { AppState } from "@/store";
 
-import { InboxPanel } from "@/components/assistant-ui/elements/background-inbox";
-import type { InboxRow } from "./model.js";
 import { groupsFor, sameGroups, sessionsList, useSessionsList } from "./session-groups.js";
 import { errorText, useShell } from "./shell-context.js";
+import { useSessionSearch } from "./use-session-search.js";
+import { SessionSearchProgress } from "./SessionSearchProgress.js";
+import { openGlobalSearch } from "./GlobalSearch.js";
+import { openConversationFind } from "@/components/thread/search-state";
 
 export interface SessionsPanelProps {
   /** `panel` = docked 288px column; `sheet` = inside a Sheet (tablet / mobile). */
@@ -38,12 +39,12 @@ function useClock(ms = 30_000): void {
 
 /**
  * The sessions panel (D-20 §6): every project as a collapsible group in one
- * scrolling list, attention-sorted inside each group. The list itself is the
+ * scrolling list, newest first inside each group. The list itself is the
  * `thread-list` element bound to the runtime's thread list; the search box
  * swaps it for the `thread-search` element while a query is typed
  * (docs/ux-elements.md "AUI-connected" and "Thread"). The rail filters and
  * jumps to a group rather than replacing the list. This file owns the frame:
- * header, inbox, filter strip, empty and sheet footer.
+ * header, filter strip, empty and sheet footer. Attention stays on the chat row.
  */
 export function SessionsPanel({ variant }: SessionsPanelProps) {
   const { projects } = useLaserStable();
@@ -67,23 +68,11 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
   const connection = useLaserState((s) => s.connection);
   const [query, setQuery] = useState("");
   const [activeId, setActiveId] = useState<string | undefined>(undefined);
+  const search = useSessionSearch(query, list.filter);
 
   const total = groups.reduce((n, g) => n + g.rows.length, 0);
-  const needYou = groups.reduce((n, g) => n + g.needYou, 0);
   const filteredName = list.filter ? shortCwd(list.filter) : undefined;
   const searching = query.trim() !== "";
-
-  const open = useCallback(
-    (path: string, cwd: string) => {
-      if (cwd !== currentProject) setCurrentProject(cwd);
-      // Never a silent failure: a click that cannot open a session says why.
-      void actions.openSession(path).catch((error: unknown) => actions.toast("error", errorText(error)));
-      if (variant === "sheet") shell.setSessionsOpen(false);
-    },
-    [actions, currentProject, setCurrentProject, shell, variant],
-  );
-
-  const openFromInbox = useCallback((row: InboxRow) => open(row.path, row.cwd), [open]);
 
   const newSessionIn = useCallback(
     async (cwd: string) => {
@@ -117,9 +106,12 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
             status: row.status,
             modifiedAt: row.summary.modifiedAt,
             untitled: row.untitled,
+            matchCount: search.hits.find(h => h.path === row.path)?.count,
+            excerpt: search.hits.find(h => h.path === row.path)?.excerpt,
+            matchSource: search.hits.find(h => h.path === row.path)?.source,
           })),
-        ),
-    [groups, list.filter],
+        ).filter(row => !search.after || !row.modifiedAt || row.modifiedAt >= search.after).sort(rankSearchThreads),
+    [groups, list.filter, search.hits, search.after],
   );
   const ordered = useMemo(() => searchable.filter((t) => matchesThread(t, query)), [searchable, query]);
   useEffect(() => {
@@ -131,10 +123,16 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
   const selectSearch = useCallback(
     (id: string) => {
       const cwd = cwdOf(id);
-      if (cwd) open(id, cwd);
+      if (cwd) {
+        setCurrentProject(cwd);
+        void actions.openSession(id).then(() => {
+          if (variant === "sheet") shell.setSessionsOpen(false);
+          requestAnimationFrame(() => requestAnimationFrame(() => openConversationFind(query, searchable.find(row => row.id === id)?.matchSource)));
+        }).catch(error => actions.toast("error", errorText(error)));
+      }
       setQuery("");
     },
-    [cwdOf, open],
+    [cwdOf, actions, setCurrentProject, variant, shell, query, searchable],
   );
 
   return (
@@ -149,11 +147,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
           <h2 className="truncate text-sm leading-5 font-semibold text-ink">Sessions</h2>
           {total > 0 && <span className="shrink-0 typed text-ink-3">{total}</span>}
         </div>
-        {needYou > 0 && (
-          <Badge variant="attention" className="tnum">
-            {needYou} need{needYou === 1 ? "s" : ""} you
-          </Badge>
-        )}
+        <TooltipIconButton tooltip="Search all sessions" shortcut="Ctrl+Shift+F" onClick={() => { if (variant === "sheet") shell.setSessionsOpen(false); openGlobalSearch(); }}><Search /></TooltipIconButton>
         {variant === "panel" && (
           <TooltipIconButton
             tooltip={currentProject ? `New session in ${shortCwd(currentProject)}` : "New session"}
@@ -177,15 +171,16 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
       )}
 
       {total > 0 && (
-        <div className="shrink-0 px-3 py-2 hairline-b">
+        <div className="shrink-0 px-3 py-2">
           <ThreadListSearch
             value={query}
+            maxLength={200}
             onValueChange={setQuery}
             onKeyDown={threadSearchKeys(ordered, activeId, setActiveId, selectSearch)}
             role="combobox"
             aria-expanded={searching}
             aria-controls="sessions-search-results"
-            aria-activedescendant={searching && activeId ? `thread-search-${activeId}` : undefined}
+            aria-activedescendant={searching && activeId ? `sessions-search-results-${activeId}` : undefined}
           />
         </div>
       )}
@@ -205,10 +200,9 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {searching ? (
-          <ThreadSearch id="sessions-search-results" threads={searchable} query={query} activeId={activeId} onActiveChange={setActiveId} onSelect={selectSearch} />
+          <ThreadSearch id="sessions-search-results" grouped={false} loading={search.busy} threads={searchable} query={query} activeId={activeId} onActiveChange={setActiveId} onSelect={selectSearch} />
         ) : (
           <>
-            <InboxPanel onOpen={openFromInbox} />
             {groups.length === 0 ? (
               <EmptyState
                 title="No project yet"
@@ -231,6 +225,8 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
           </>
         )}
       </div>
+
+      {searching && <SessionSearchProgress search={search} />}
 
       {variant === "sheet" && shell.layout === "mobile" && <SheetFooter />}
     </section>

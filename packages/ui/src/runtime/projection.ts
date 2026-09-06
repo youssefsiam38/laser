@@ -228,7 +228,9 @@ function toolPartOf(block: ToolBlock, dialog: UiDialogRequest | undefined): Proj
     const cached = toolPartCache.get(block);
     if (cached) return cached;
   }
-  const result = block.done ? block.result : block.partial;
+  // assistant-ui treats *any* result as terminal. Progress belongs in its
+  // UI-only artifact channel, otherwise the first output chunk stops the beam.
+  const result = block.done ? (block.result ?? null) : undefined;
   const part: ProjectedToolCallPart = {
     type: "tool-call",
     toolCallId: block.id,
@@ -236,11 +238,19 @@ function toolPartOf(block: ToolBlock, dialog: UiDialogRequest | undefined): Proj
     args: argsOf(block.args),
     argsText: argsTextOf(block.args),
     ...(result !== undefined ? { result } : {}),
+    ...(!block.done && block.partial !== undefined ? { artifact: { partialOutput: block.partial } } : {}),
     ...(block.isError ? { isError: true } : {}),
     ...(dialog ? dialogToToolFields(dialog) : {}),
   };
   if (!dialog) toolPartCache.set(block, part);
   return part;
+}
+
+/** Display live output without presenting it to the runtime as a final result. */
+export function toolDisplayResult(part: { result?: unknown; artifact?: unknown }): unknown {
+  if (part.result !== undefined) return part.result;
+  const artifact = part.artifact;
+  return artifact && typeof artifact === "object" && "partialOutput" in artifact ? artifact.partialOutput : undefined;
 }
 
 const userMessage = (block: Extract<Block, { kind: "user" }>): ThreadMessageLike => {

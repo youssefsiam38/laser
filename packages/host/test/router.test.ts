@@ -11,7 +11,7 @@
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionState, SessionSummary } from "@lasercode/protocol";
@@ -56,9 +56,16 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
     cwdOf: (path: string) => catalogRows.find((row) => row.path === path)?.cwd,
   } as unknown as SessionCatalog;
 
+  const workerRequests: Array<{ cwd: string; method: string; params: unknown }> = [];
   const pool = {
     openSessions: (cwd: string) => open[cwd] ?? [],
     cwdOfSession: () => undefined,
+    get: async (cwd: string) => ({
+      request: async (method: string, params: unknown) => {
+        workerRequests.push({ cwd, method, params });
+        return { commands: [{ name: "skill:test", source: "skill" }] };
+      },
+    }),
   } as unknown as WorkerPool;
 
   const attention = new AttentionTracker({});
@@ -74,6 +81,7 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
     note,
     catalogRows,
     open,
+    workerRequests,
     cleanup: () => {
       projects.close();
       attention.close();
@@ -83,6 +91,29 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
 }
 
 describe("Router · sessions not yet on disk", () => {
+  it("searches only the selected project and date range without opening workers", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "search-router-"));
+    const path = join(dir, "visible.jsonl");
+    writeFileSync(path, JSON.stringify({ type: "message", message: { role: "user", content: "Apple" } }));
+    const row: SessionSummary = { path, id: "visible", cwd: CWD_A, createdAt: "2026-01-01T00:00:00Z", modifiedAt: "2026-06-01T00:00:00Z", messageCount: 1 };
+    const h = harness({ catalogRows: [row, { ...row, path: "/missing-old.jsonl", modifiedAt: "2026-01-01T00:00:00Z" }, { ...row, path: "/missing-other.jsonl", cwd: CWD_B }] });
+    try {
+      const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "session/search", params: { query: "Apple", cwd: CWD_A, after: "2026-05-01T00:00:00Z", before: "2026-07-01T00:00:00Z" } });
+      expect(response).toMatchObject({ result: { hits: [{ path, source: "user", count: 1, excerpt: "Apple" }], unreadable: 0 } });
+      expect(h.workerRequests).toEqual([]);
+      const invalid = await h.router.handle({ jsonrpc: "2.0", id: 2, method: "session/search", params: { query: "Apple", after: "yesterday" } });
+      expect(invalid).toHaveProperty("error");
+    } finally { h.cleanup(); rmSync(dir, { recursive: true, force: true }); }
+  });
+  it("routes a new-chat command catalogue by project before a session path exists", async () => {
+    const h = harness();
+    const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/commands/list", params: { cwd: CWD_A } });
+
+    expect(response).toMatchObject({ result: { commands: [{ name: "skill:test", source: "skill" }] } });
+    expect(h.workerRequests).toEqual([{ cwd: CWD_A, method: "pi/commands/list", params: { cwd: CWD_A } }]);
+    h.cleanup();
+  });
+
   it("lists a session the worker holds but Pi has not written", () => {
     const h = harness();
     h.note(state(PATH_A, CWD_A));

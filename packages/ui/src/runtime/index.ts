@@ -13,6 +13,7 @@ export {
   shareProjectedMessages,
   splitDialogs,
   toolStatus,
+  toolDisplayResult,
   type ProjectedContentPart,
   type ProjectedMessageStatus,
   type ProjectedToolCallPart,

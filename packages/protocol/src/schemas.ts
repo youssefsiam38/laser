@@ -584,6 +584,7 @@ export const clientParamsSchemas = {
   "session/set_mode": z.object({ path: sessionPath, mode: z.string().min(1) }).strict(),
 
   "pi/session/list": z.object({ cwd: z.string().min(1).optional() }).strict(),
+  "session/search": z.object({ query: z.string().trim().min(1).max(200), cwd: z.string().min(1).optional(), after: z.string().datetime().optional(), before: z.string().datetime().optional(), cursor: z.number().int().nonnegative().optional() }).strict(),
   "pi/session/inbox": z
     .object({ cwd: z.string().min(1).optional(), limit: z.number().int().positive().max(500).optional() })
     .strict(),
@@ -694,7 +695,7 @@ export const clientParamsSchemas = {
   "pi/keybindings/set": z.object({ cwd, changes: z.array(keybindingChangeSchema).min(1).max(200) }).strict(),
 
   // --- composer sources ---
-  "pi/commands/list": z.object({ path: sessionPath }).strict(),
+  "pi/commands/list": z.union([z.object({ path: sessionPath }).strict(), z.object({ cwd }).strict()]),
   "pi/prompts/list": z.object({ path: sessionPath }).strict(),
   "pi/project/files": z
     .object({ cwd, query: z.string().max(200).optional(), limit: z.number().int().positive().max(2000).optional() })

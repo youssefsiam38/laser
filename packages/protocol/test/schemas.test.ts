@@ -14,6 +14,7 @@ import {
 const samples: Record<ClientMethod, unknown> = {
   "session/new": { cwd: "/p" },
   "session/load": { path: "/s.jsonl", fromSeq: 12 },
+  "session/search": { query: "Apple", cwd: "/p", after: "2026-01-01T00:00:00Z", before: "2026-07-01T00:00:00Z", cursor: 50 },
   "session/prompt": { path: "/s.jsonl", content: [{ type: "text", text: "hi" }], streamingBehavior: "steer" },
   "session/cancel": { path: "/s.jsonl" },
   "session/set_mode": { path: "/s.jsonl", mode: "plan" },
@@ -126,6 +127,12 @@ describe("client request schemas", () => {
     expect(() => clientParamsSchemas["pi/thinking/set"].parse({ path: "/s", level: "ultra" })).toThrow();
     expect(() => clientParamsSchemas["session/new"].parse({ cwd: "/p", extra: 1 })).toThrow();
     expect(() => clientParamsSchemas["pi/ui/response"].parse({ id: "x", cancelled: false })).toThrow();
+  });
+
+  it("bounds literal history searches and validates date ranges and cursors", () => {
+    const schema = clientParamsSchemas["session/search"];
+    expect(schema.parse({ query: "  Apple  " })).toEqual({ query: "Apple" });
+    for (const params of [{ query: " " }, { query: "x".repeat(201) }, { query: "x", after: "yesterday" }, { query: "x", cursor: -1 }, { query: "x", cursor: 0.5 }, { query: "x", path: "/arbitrary-file" }]) expect(() => schema.parse(params)).toThrow();
   });
 
   it("refuses a settings path that could reach an object's prototype", () => {

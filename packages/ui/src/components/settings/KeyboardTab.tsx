@@ -54,6 +54,8 @@ function groups(mod: string): BindingGroup[] {
       detail: "Answered by the window, wherever the focus is — except inside a text field.",
       bindings: [
         { keys: [[mod, "K"]], what: "Command palette", detail: "Sessions, projects, settings and every action, searchable." },
+        { keys: [[mod, "F"]], what: "Find in this conversation", detail: "Includes folded reasoning and tools. Enter / Shift+Enter moves between matches; Esc closes." },
+        { keys: [[mod, "Shift", "F"]], what: "Search all sessions", detail: "Recent history first. Search older periods on demand; your messages rank before assistant replies and tool activity." },
         { keys: [[mod, "N"]], what: "New session", detail: "In the project the rail has selected." },
         { keys: [["["]], what: "Show or hide the sessions list" },
         { keys: [["]"]], what: "Show or hide telemetry", detail: "On a narrow window this opens the history sheet instead." },

@@ -110,6 +110,12 @@ ACP-inspired JSON-RPC:
   binary, with a pinned Pi. Retired when idle and no presentation is attached and
   no background subagent run references the session.
 - Never two workers for one cwd. Never two writers on one Pi session file.
+- A deb/rpm upgrade sends the exact `/opt/Laser` daemon a graceful SIGHUP only
+  after the new files are installed. Its Electron supervisor restarts it from
+  the new bundle; a standalone command-started host stays down until the next
+  app launch or `laser up`. Desktop startup independently replaces any recorded
+  host whose CLI version does not equal the bundled version before UI connect.
+  The renderer does not carry old-protocol fallbacks for update skew.
 
 ## Internal engine data on disk
 

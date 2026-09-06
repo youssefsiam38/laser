@@ -86,7 +86,7 @@ const pathOf = (args: unknown): string | undefined => {
   return typeof path === "string" && path ? path : undefined;
 };
 
-function activeToolLabel(member: ToolGroupMember): string {
+export function activeToolLabel(member: Pick<ToolGroupMember, "toolName" | "args">): string {
   const summary = summarizeTool(member.toolName, member.args);
   const path = pathOf(member.args);
   const target = path && ["read", "write", "edit", "ls"].includes(summary.kind) ? shortPath(path, 2) : summary.summary;
@@ -106,7 +106,7 @@ function activeToolLabel(member: ToolGroupMember): string {
       case "ls":
         return "Listing";
       default:
-        return summary.verb;
+        return `Using ${summary.verb}`;
     }
   })();
   return `${action}${target ? ` ${target}` : ""}`;

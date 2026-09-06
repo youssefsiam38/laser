@@ -35,6 +35,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { goalExtensionPath, goalStateFromEntries } from "@lasercode/pi-goal";
 import { createCommandBus, createLaserExtension, toSessionGoal } from "@lasercode/pi-extension";
+import { PROJECT_DIR_NAME } from "@lasercode/protocol";
 import type {
   CommandInfo,
   ContentBlock,
@@ -54,8 +55,10 @@ import type {
   UiDialogResponse,
   Usage,
 } from "@lasercode/protocol";
-import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { readLaserProjectSettings } from "../settings.js";
 import {
   DriverUnavailableError,
@@ -139,8 +142,21 @@ export class StableSdkDriver implements SessionDriver {
 
       const extensionFactories: InlineExtension[] = [];
       const additionalExtensionPaths: string[] = [];
-      const additionalSkillPaths: string[] = [];
-      const additionalPromptTemplatePaths: string[] = [];
+      // Keep Pi's parser, validation, collision handling and invocation
+      // semantics, but give it Laser-owned and Agent Skills standard roots
+      // explicitly. `noSkills`/`noPromptTemplates` remain true below so the
+      // engine never falls back to `<cwd>/.pi` discovery.
+      const additionalSkillPaths = existingResourceRoots([
+        join(agentDir, "skills"),
+        join(homedir(), ".agents", "skills"),
+        ...(options.projectTrusted === false
+          ? []
+          : [join(cwd, PROJECT_DIR_NAME, "skills"), join(cwd, ".agents", "skills")]),
+      ]);
+      const additionalPromptTemplatePaths = existingResourceRoots([
+        join(agentDir, "prompts"),
+        ...(options.projectTrusted === false ? [] : [join(cwd, PROJECT_DIR_NAME, "prompts")]),
+      ]);
       if (enabled.has("subagents")) {
         const entrypoint = require.resolve("pi-subagents");
         const root = dirname(entrypoint);
@@ -381,9 +397,9 @@ export class StableSdkDriver implements SessionDriver {
   }
 
   /**
-   * Everything `/` can run here. Three sources, in the order the popover
-   * groups them: the commands packages registered (`pi.registerCommand`), the
-   * prompt templates loaded from disk, and the skills.
+   * Everything Pi's headless command catalogue can run here: registered
+   * commands, prompt templates and skills. Terminal-only commands are handled
+   * by Laser's own controls instead of being advertised as inert rows.
    *
    * Pi's own `BUILTIN_SLASH_COMMANDS` (`/model`, `/settings`, `/tree`,
    * `/thinking`) are deliberately not here: they open Pi's terminal pickers,
@@ -394,10 +410,10 @@ export class StableSdkDriver implements SessionDriver {
     const session = this.session();
     const commands: CommandInfo[] = [];
     for (const command of session.extensionRunner.getRegisteredCommands()) {
-      const feature = command.invocationName === "goal" ? "Goals" : command.invocationName === "run" ? "Subagents" : undefined;
-      // Registered commands are implementation plumbing unless a curated
-      // feature claims a product command. Their package names never reach UI.
-      if (!feature) continue;
+      // Only reviewed, bundled features are loaded into this runtime. Expose
+      // their complete registered command surface; filtering by two names made
+      // valid Subagents commands disappear from autocomplete.
+      const feature = command.invocationName === "goal" ? "Goals" : "Subagents";
       commands.push({
         name: command.invocationName,
         source: "feature",
@@ -417,7 +433,8 @@ export class StableSdkDriver implements SessionDriver {
     for (const skill of session.resourceLoader.getSkills().skills) {
       // Pi invokes a skill as `/skill:<name>`; the popover shows exactly what
       // gets typed, so what a person reads is what the agent receives.
-      if (skill.disableModelInvocation) continue;
+      // `disable-model-invocation` only hides a skill from the model's system
+      // prompt. Pi deliberately keeps explicit `/skill:name` invocation.
       commands.push({
         name: `skill:${skill.name}`,
         source: "skill",
@@ -501,6 +518,16 @@ export class StableSdkDriver implements SessionDriver {
       this.push({ kind: "state", state: this.state() });
     }
   }
+}
+
+/** De-duplicate existing resource roots while preserving precedence. */
+function existingResourceRoots(paths: string[]): string[] {
+  const seen = new Set<string>();
+  return paths.filter((path) => {
+    if (!existsSync(path) || seen.has(path)) return false;
+    seen.add(path);
+    return true;
+  });
 }
 
 // -------------------------------------------------------- pending tool calls

@@ -10,7 +10,7 @@
  * Pending extension dialogs are re-emitted on load for the same reason.
  */
 
-import { ErrorCodes, PRODUCT_NAME, ProtocolError, parseClientRequest, type ClientRequests, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionState, type SessionUpdateParams, type TypedClientRequest } from "@lasercode/protocol";
+import { ErrorCodes, PRODUCT_NAME, ProtocolError, parseClientRequest, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionState, type SessionUpdateParams, type TypedClientRequest } from "@lasercode/protocol";
 import { resolve } from "node:path";
 import type { DriverEvent, SessionDriver } from "./driver.js";
 import { ProjectFilesService } from "./files.js";
@@ -75,6 +75,8 @@ export class WorkerServer {
   private transcribeService: TranscribeService | undefined;
   /** The companion extension's last capability report; features gate on it (M8-T1). */
   private activeModules = new Set<PiExtensionModuleName>();
+  /** Coalesce simultaneous new-chat command requests into one read-only runtime. */
+  private commandCatalogInFlight: Promise<CommandInfo[]> | undefined;
 
   constructor(private readonly options: WorkerServerOptions) {
     this.replayBuffer = options.replayBuffer ?? 5000;
@@ -291,6 +293,11 @@ export class WorkerServer {
 
       // ------------------------------------------- composer sources ---
       case "pi/commands/list":
+        if ("cwd" in req.params) {
+          const { cwd } = req.params as { cwd: string };
+          this.assertCwd(cwd);
+          return { commands: await this.projectCommands() } satisfies Result<"pi/commands/list">;
+        }
         return { commands: await this.live(req.params.path).driver.commands() } satisfies Result<"pi/commands/list">;
       case "pi/prompts/list":
         return { prompts: await this.live(req.params.path).driver.prompts() } satisfies Result<"pi/prompts/list">;
@@ -576,6 +583,29 @@ export class WorkerServer {
       ...(this.options.projectTrusted !== undefined ? { projectTrusted: this.options.projectTrusted } : {}),
       ...(this.options.features ? { features: this.options.features } : {}),
     };
+  }
+
+  /**
+   * Load the same Pi resources a first session will use, without attaching the
+   * ephemeral session or writing a transcript. This makes skills available in
+   * the composer before the first message creates the real session.
+   */
+  private projectCommands(): Promise<CommandInfo[]> {
+    if (this.commandCatalogInFlight) return this.commandCatalogInFlight;
+    const pending = (async () => {
+      const driver = this.options.createDriver();
+      try {
+        await driver.open({ cwd: this.options.cwd, ...this.commonOpen() });
+        return await driver.commands();
+      } finally {
+        await driver.dispose().catch(() => {});
+      }
+    })();
+    this.commandCatalogInFlight = pending;
+    void pending.finally(() => {
+      if (this.commandCatalogInFlight === pending) this.commandCatalogInFlight = undefined;
+    }).catch(() => {});
+    return pending;
   }
 
   // ------------------------------------------------------------- sessions

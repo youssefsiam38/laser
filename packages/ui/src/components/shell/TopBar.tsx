@@ -13,11 +13,14 @@ import {
   Pencil,
   RotateCw,
   Shrink,
+  Search,
   SquarePen,
 } from "lucide-react";
 
 import { ContextRingButton } from "@/components/assistant-ui/elements/context-display";
 import { StatusDot } from "@/components/status";
+import { preserveReadingPosition } from "@/components/thread/preserve-reading-position";
+import { openConversationFind } from "@/components/thread/search-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -228,6 +231,7 @@ export function TopBar() {
         {/* The context ring (docs/ux-elements.md "Context display"); the
             composer carries the same element next to Send. */}
         <ContextRingButton side="bottom" className="me-1" />
+        <TooltipIconButton tooltip="Find in conversation" shortcut="Ctrl+F" onClick={() => openConversationFind()}><Search /></TooltipIconButton>
 
         {dockable && (
           <TooltipIconButton
@@ -267,7 +271,12 @@ export function TopBar() {
             <DropdownMenuLabel>Activity detail</DropdownMenuLabel>
             <DropdownMenuRadioGroup
               value={activityLevel}
-              onValueChange={(level) => view && setActivityDetailLevel(view.path, level as ActivityDetailLevel)}
+              onValueChange={(level) => {
+                if (!view || level === activityLevel) return;
+                const viewport = document.querySelector<HTMLElement>('[data-slot="thread-viewport"]');
+                if (viewport) preserveReadingPosition(viewport);
+                setActivityDetailLevel(view.path, level as ActivityDetailLevel);
+              }}
             >
               <DropdownMenuRadioItem value="answers" disabled={!view} className="items-start">
                 <span>

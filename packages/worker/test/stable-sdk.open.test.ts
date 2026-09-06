@@ -3,9 +3,9 @@
  * Everything is sandboxed in a temp dir (agentDir, sessionDir, cwd) so the
  * user's real ~/.pi/agent is never read or written.
  */
-import { PRODUCT_NAME } from "@lasercode/protocol";
+import { PRODUCT_NAME, PROJECT_DIR_NAME } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StableSdkDriver } from "../src/drivers/stable-sdk.js";
@@ -79,5 +79,43 @@ describe("StableSdkDriver.open", () => {
     const models = await driver.listModels();
     expect(models.length).toBeGreaterThan(10);
     expect(models[0]).toMatchObject({ provider: expect.any(String), id: expect.any(String) });
+  }, 60_000);
+
+  it("lists product, Agent Skills and every bundled feature command without reading .pi", async () => {
+    const writeSkill = (root: string, name: string, extra = "") => {
+      const dir = join(root, name);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, "SKILL.md"),
+        `---\nname: ${name}\ndescription: ${name} test skill\n${extra}---\n\nUse ${name}.\n`,
+      );
+    };
+    writeSkill(join(base, "agent", "skills"), "product-user-skill", "disable-model-invocation: true\n");
+    writeSkill(join(base, "project", ".agents", "skills"), "agent-standard-skill");
+    writeSkill(join(base, "project", PROJECT_DIR_NAME, "skills"), "product-project-skill");
+    writeSkill(join(base, "project", ".pi", "skills"), "legacy-pi-skill");
+
+    await driver.open({
+      cwd: join(base, "project"),
+      agentDir: join(base, "agent"),
+      sessionDir: join(base, "sessions"),
+      projectTrusted: true,
+    });
+    const commands = await driver.commands();
+    const names = commands.map((command) => command.name);
+
+    expect(names).toEqual(expect.arrayContaining([
+      "skill:product-user-skill",
+      "skill:agent-standard-skill",
+      "skill:product-project-skill",
+      "goal",
+      "subagents",
+      "subagents-guide",
+    ]));
+    expect(names).not.toContain("skill:legacy-pi-skill");
+    expect(commands.find((command) => command.name === "skill:product-user-skill")).toMatchObject({
+      source: "skill",
+      description: "product-user-skill test skill",
+    });
   }, 60_000);
 });

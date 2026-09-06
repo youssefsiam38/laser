@@ -88,6 +88,30 @@ afterEach(async () => {
 });
 
 describe("StableSdkDriver.prompt", () => {
+  it("expands an explicitly invoked skill through Pi before calling the provider", async () => {
+    const skillDir = join(base, "agent", "skills", "explicit-expansion-test");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(
+      join(skillDir, "SKILL.md"),
+      "---\nname: explicit-expansion-test\ndescription: Proves explicit skill expansion\ndisable-model-invocation: true\n---\n\nFollow the hidden skill body.\n",
+    );
+    const settled = new Promise<void>((resolve) => {
+      driver.subscribe((event) => {
+        if (event.type === "update" && event.update.kind === "agent_settled") resolve();
+      });
+    });
+    await driver.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir: join(base, "sessions") });
+    await driver.setModel({ provider: "stub", id: "stub-1" });
+
+    await driver.prompt([{ type: "text", text: "/skill:explicit-expansion-test preserve these arguments" }]);
+    await settled;
+
+    const request = JSON.stringify(stub.requests[0]);
+    expect(request).toContain("Follow the hidden skill body.");
+    expect(request).toContain("preserve these arguments");
+    expect(request).not.toContain("/skill:explicit-expansion-test");
+  }, 60_000);
+
   it("streams a reply from a stub provider as ordered session updates", async () => {
     const updates: SessionUpdate[] = [];
     const settled = new Promise<void>((resolve) => {

@@ -14,6 +14,8 @@ import { Composer } from "./Composer.js";
 import { EmptyState } from "./EmptyState.js";
 import { ThreadMessage } from "./messages.js";
 import { ThreadSlotsProvider, type ThreadSlots } from "./thread-slots.js";
+import { useConversationFind } from "./use-conversation-find.js";
+import { FindSelectionContext } from "./search-state.js";
 
 /**
  * The assistant-ui thread column (DESIGN.md "Layout" 3): transcript at max
@@ -46,12 +48,15 @@ const FOLLOW_UPS = AuiConfig({
 export function Thread({ statusSlot }: ThreadProps = {}) {
   const slots: ThreadSlots = statusSlot !== undefined ? { statusLine: statusSlot } : {};
   const aui = useAui();
+  const find = useConversationFind();
   return (
+    <FindSelectionContext value={find.selectedMessage}>
     <ThreadSlotsProvider slots={slots}>
       <TooltipProvider>
         <AuiProvider extends={aui} config={FOLLOW_UPS}>
-          <ThreadPrimitive.Root data-slot="thread" className="relative flex h-full min-h-0 flex-col bg-bg">
-            <ThreadPrimitive.Viewport data-slot="thread-viewport" className="flex flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain">
+          <ThreadPrimitive.Root ref={find.root} data-slot="thread" className="relative flex h-full min-h-0 flex-col bg-bg">
+            {find.bar}
+            <ThreadPrimitive.Viewport autoScroll={!find.open} scrollToBottomOnRunStart={!find.open} data-slot="thread-viewport" className="flex flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain">
               {/* A long transcript gets a rail of ticks at the viewport's edge, on a wide screen only. */}
               <ConversationMapAui side="right" className="hidden lg:block" />
               <div className="mx-auto flex w-full max-w-(--measure-thread) flex-1 flex-col px-4 md:px-6">
@@ -94,6 +99,7 @@ export function Thread({ statusSlot }: ThreadProps = {}) {
         </AuiProvider>
       </TooltipProvider>
     </ThreadSlotsProvider>
+    </FindSelectionContext>
   );
 }
 

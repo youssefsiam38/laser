@@ -306,8 +306,27 @@ adding dates or estimates, deleting done-when criteria. Any structural change to
 8. **Never two writers on one Pi session file.**
 9. **Phone output is untrusted data.** Everything rendered from agent output is
    escaped; no raw HTML from the transcript.
+10. **An update replaces the running generation, not the protocol.** A native
+    package upgrade gracefully reloads only the daemon launched from that exact
+    native install after the new files land. Desktop startup also replaces a
+    recorded daemon whose CLI version differs before opening the UI. Do not fix
+    UI/host version skew by teaching new features old request schemas: that
+    hides a broken process lifecycle and makes every future protocol permanent.
 
 Read `docs/architecture.md` for the layer diagram and the driver seam.
+
+### Live activity regression guards
+
+- assistant-ui treats a tool's `result` as terminal, even when the message is
+  still running. Keep partial output in its UI-only `artifact` channel and
+  reserve `result` for `tool_execution_end`; never trade live status for output.
+- The default `GroupedParts` indicator also appears after tool calls. Our
+  transcript uses `indicator="empty"`, with neutral waiting copy; actual
+  reasoning and running tools own their row beam. Test with partial output,
+  not only a resultless tool, and verify both aggregate and child status.
+- Batch disclosure changes anchor visible content through the animation.
+  Start the animation window after React commits, not at the menu click: a
+  large history can take longer to render than the animation itself.
 
 ---
 
@@ -401,6 +420,24 @@ one Pi extension with one module per package (`src/modules/*`). Adding support
 for a new package means adding a module, not a package. Modules never import
 each other, detect their package at `session_start`, and fail individually
 (reported to the UI, never fatal to the session).
+
+---
+
+## 6b. Search regression checks
+
+- Saved-history search belongs in the host and must not open workers. Search
+  message text, reasoning and tool bodies, not image blobs or session metadata.
+- New protocol methods need a schema round-trip sample and router coverage,
+  not just implementation tests; the complete method inventory is a release gate.
+- Rank by the best matching source (user, assistant, activity), then recency;
+  the excerpt and the destination must agree with that source. Keep older-range
+  expansion explicit and reject stale query replies.
+- Find must not wrap or replace React-owned text nodes. Use DOM ranges/native
+  highlights; force layout for the selected `content-visibility` message before
+  measuring it, and account for the sticky composer when scrolling. Verify a
+  distant match in a folded tool, not only visible paragraphs.
+- Search disclosure is transient. Closing find restores the user's detail
+  preference and focus; excerpts remain inside result rows, never overlays.
 
 ---
 

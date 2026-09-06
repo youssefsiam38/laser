@@ -129,6 +129,7 @@ export function groupDomId(cwd: string): string {
 // ---------------------------------------------------------------------------
 
 export const SESSION_GROUPS_STORAGE_KEY = storageKey("session-groups");
+export const SESSION_PINS_STORAGE_KEY = storageKey("session-pins");
 
 export interface SessionsListState {
   /** Only this project's group is shown; `undefined` = every project. */
@@ -137,11 +138,13 @@ export interface SessionsListState {
   readonly jump: { readonly cwd: string; readonly nonce: number } | undefined;
   /** Collapsed groups; persisted. */
   readonly collapsed: ReadonlySet<string>;
+  /** Session paths, in pin order. Archived/missing sessions are not rendered. */
+  readonly pinned: ReadonlySet<string>;
 }
 
-const readCollapsed = (): Set<string> => {
+const readPaths = (key: string): Set<string> => {
   try {
-    const parsed: unknown = JSON.parse(globalThis.localStorage?.getItem(SESSION_GROUPS_STORAGE_KEY) ?? "[]");
+    const parsed: unknown = JSON.parse(globalThis.localStorage?.getItem(key) ?? "[]");
     return new Set(Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : []);
   } catch {
     return new Set();
@@ -156,7 +159,7 @@ const writeCollapsed = (collapsed: ReadonlySet<string>): void => {
   }
 };
 
-let listState: SessionsListState = { filter: undefined, jump: undefined, collapsed: readCollapsed() };
+let listState: SessionsListState = { filter: undefined, jump: undefined, collapsed: readPaths(SESSION_GROUPS_STORAGE_KEY), pinned: readPaths(SESSION_PINS_STORAGE_KEY) };
 const listeners = new Set<() => void>();
 let jumpNonce = 0;
 
@@ -178,7 +181,7 @@ export const sessionsList = {
     const collapsed = new Set(listState.collapsed);
     collapsed.delete(cwd);
     if (collapsed.size !== listState.collapsed.size) writeCollapsed(collapsed);
-    publish({ filter: cwd, jump: { cwd, nonce: ++jumpNonce }, collapsed });
+    publish({ ...listState, filter: cwd, jump: { cwd, nonce: ++jumpNonce }, collapsed });
   },
   /** Back to every project, scrolled to `cwd` when given. */
   clearFilter(cwd?: string): void {
@@ -197,9 +200,20 @@ export const sessionsList = {
     writeCollapsed(collapsed);
     publish({ ...listState, collapsed });
   },
+  togglePinned(path: string): void {
+    const pinned = new Set(listState.pinned);
+    if (pinned.has(path)) pinned.delete(path);
+    else pinned.add(path);
+    try {
+      globalThis.localStorage?.setItem(SESSION_PINS_STORAGE_KEY, JSON.stringify([...pinned]));
+    } catch {
+      // As with collapsed groups, private mode retains this tab's choice.
+    }
+    publish({ ...listState, pinned });
+  },
   /** Test seam. */
   reset(): void {
-    publish({ filter: undefined, jump: undefined, collapsed: new Set() });
+    publish({ filter: undefined, jump: undefined, collapsed: new Set(), pinned: new Set() });
   },
 };
 

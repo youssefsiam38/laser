@@ -1,14 +1,22 @@
 // @vitest-environment happy-dom
 import { act } from "react";
+import { readFileSync } from "node:fs";
+import { URL as NodeURL } from "node:url";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ActivityReasoning, ToolGroupRoot, ToolGroupTrigger, ToolGroupContent, ToolGroupSummaryRow } from "../../src/components/assistant-ui/elements/tool-group.aui.js";
 import { ToolFallback, ToolFallbackRoot, ToolFallbackTrigger, ToolFallbackContent } from "../../src/components/assistant-ui/elements/tool-fallback.aui.js";
 import type { ActivityDetailLevel } from "../../src/runtime/sessionPreferences.js";
+import { AssistantRuntimeProvider, MessagePrimitive, ThreadPrimitive, useExternalStoreRuntime } from "@assistant-ui/react";
+import { ToolGroup } from "../../src/components/assistant-ui/elements/tool-group.aui.js";
+import { projectMessages } from "../../src/runtime/projection.js";
+import type { Block } from "../../src/store.js";
+import { activityRow, activityTrigger } from "../../src/components/assistant-ui/elements/surfaces.js";
 
 const preferences = vi.hoisted(() => ({ level: "answers" as ActivityDetailLevel }));
 vi.mock("@/runtime", async () => ({
   ...await import("../../src/runtime/sessionPreferences.js"),
+  ...await import("../../src/runtime/projection.js"),
   useActivityDetailLevel: () => preferences.level,
   useLaserState: () => "/test/session",
 }));
@@ -32,6 +40,45 @@ afterEach(async () => {
 });
 
 describe("activity disclosures", () => {
+  it("pads the trigger contents, not the outer row, so the beam reaches both edges", () => {
+    expect(activityRow).not.toMatch(/\bp[xslr]-/);
+    expect(activityTrigger).toContain("px-2");
+    expect(activityTrigger).toContain("w-full");
+  });
+  it("does not synthesize thinking after a tool call in the real transcript", () => {
+    const source = readFileSync(new NodeURL("../../src/components/thread/messages.tsx", import.meta.url), "utf8");
+    expect(source).toContain('<MessagePrimitive.GroupedParts groupBy={groupBy} indicator="empty">');
+    expect(source).toContain('label="Waiting for response"');
+  });
+  it("keeps the aggregate and child live through partial output, then stops both", async () => {
+    function LiveFixture({ done }: { done: boolean }) {
+      const blocks: Block[] = [
+        { kind: "assistant", id: "a", text: "", thinking: "Inspect the command", streaming: false },
+        { kind: "tool", id: "cmd", name: "bash", args: { command: "check-project" }, partial: "still working", done,
+          ...(done ? { result: "finished" } : {}) },
+      ];
+      const projected = projectMessages({ blocks, running: !done, dialogs: [] });
+      const runtime = useExternalStoreRuntime({ messages: projected.messages, isRunning: !done, onNew: async () => {} });
+      return <AssistantRuntimeProvider runtime={runtime}><ThreadPrimitive.Root><ThreadPrimitive.Messages>{() =>
+        <MessagePrimitive.Root><MessagePrimitive.GroupedParts groupBy={() => ["group-activity"]} indicator="empty">{({ part, children }) => {
+          if (part.type === "reasoning") return <ActivityReasoning running={part.status.type === "running"}>Inspect the command</ActivityReasoning>;
+          if (part.type === "tool-call") return <ToolFallback {...part} />;
+          if (part.type === "group-activity") return <ToolGroup part={part} timingKey="live-test">{children}</ToolGroup>;
+          return <span>Unexpected thinking</span>;
+        }}</MessagePrimitive.GroupedParts></MessagePrimitive.Root>
+      }</ThreadPrimitive.Messages></ThreadPrimitive.Root></AssistantRuntimeProvider>;
+    }
+    preferences.level = "everything";
+    await act(async () => root.render(<LiveFixture done={false} />));
+    expect(container.querySelectorAll('[data-slot="activity-beam"]')).toHaveLength(2);
+    expect(container.querySelector('[data-slot="activity-reasoning"] [data-slot="activity-beam"]')).toBeNull();
+    expect(container.textContent).toContain("still working");
+    expect(container.textContent).toContain("Running check-project");
+    expect(container.textContent).not.toContain("Unexpected thinking");
+    await act(async () => root.render(<LiveFixture done />));
+    expect(container.querySelectorAll('[data-slot="activity-beam"]')).toHaveLength(0);
+    expect(container.textContent).toContain("finished");
+  });
   it("allows a waiting tool's details to collapse without hiding its approval", async () => {
     await act(async () => root.render(<ToolFallback toolCallId="waiting" toolName="review" args={{}} argsText="{}"
       status={{type:"requires-action",reason:"tool-calls"}} approval={{id:"approval"}}

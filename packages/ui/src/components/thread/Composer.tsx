@@ -25,7 +25,7 @@ import { useIsMobile, useIsTouch } from "@/hooks/use-mobile";
 import { usePanelEntries } from "@/panels";
 import { finishActiveDictation } from "@/pwa";
 import { composerSendPlan, useLaserStable, useLaserView, useSessionMeta } from "@/runtime";
-import { completeLeadingSlash, matchLeadingSlash, slashCommandMatchesQuery } from "./slash-completion.js";
+import { completeLeadingSlash, matchLeadingSlash, rankSlashCommandMatches } from "./slash-completion.js";
 import { StatusLine } from "./StatusLine.js";
 
 /**
@@ -280,17 +280,18 @@ const SLASH_ICONS = {
 
 /** What the agent can run here. Empty until a session is open, and on any failure. */
 function useAgentCommands(): CommandInfo[] {
-  const { client } = useLaserStable();
+  const { client, currentProject } = useLaserStable();
   const path = useLaserView()?.path;
   const [commands, setCommands] = useState<CommandInfo[]>([]);
   useEffect(() => {
-    if (!path) {
+    const target = path ? { path } : currentProject ? { cwd: currentProject } : undefined;
+    if (!target) {
       setCommands([]);
       return;
     }
     let cancelled = false;
     client
-      .request("pi/commands/list", { path })
+      .request("pi/commands/list", target)
       .then((result) => {
         if (!cancelled) setCommands(result.commands);
       })
@@ -302,7 +303,7 @@ function useAgentCommands(): CommandInfo[] {
     return () => {
       cancelled = true;
     };
-  }, [client, path]);
+  }, [client, currentProject, path]);
   return commands;
 }
 
@@ -367,7 +368,7 @@ function useSlashCommands() {
     () => ({
       ...slash.adapter,
       search: (query: string) =>
-        (slash.adapter.search?.("") ?? []).filter((item) => slashCommandMatchesQuery(item, query)),
+        rankSlashCommandMatches(slash.adapter.search?.("") ?? [], query),
     }),
     [slash.adapter],
   );

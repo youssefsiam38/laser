@@ -1,4 +1,5 @@
 "use client";
+import { useSearchReveal } from "@/components/thread/search-state";
 /**
  * Reasoning (`reasoning`, the composable half): Root, Trigger, Content, Text
  * and Fade for the assistant's thinking block. `reasoning.aui.tsx` binds them
@@ -70,7 +71,8 @@ function ReasoningRoot({
   if (userOpen === null) initialOpenRef.current = defaultOpen;
 
   const isControlled = controlledOpen !== undefined;
-  const isOpen = isControlled ? controlledOpen : (userOpen ?? (streaming || initialOpenRef.current));
+  const reveal = useSearchReveal();
+  const isOpen = reveal || (isControlled ? controlledOpen : (userOpen ?? (streaming || initialOpenRef.current)));
   const isPreview = streaming === true && isOpen;
 
   const prevStreamingRef = useRef(streaming);

@@ -17,6 +17,7 @@ import { AddProjectDialog } from "./AddProjectDialog.js";
 import { HostConnectionState } from "@/components/assistant-ui/elements/connection-state";
 import { StartupRestorationGate } from "@/components/assistant-ui/elements/loading-state";
 import { CommandPaletteDialog } from "./CommandPalette.js";
+import { GlobalSearch } from "./GlobalSearch.js";
 import { FirstRunFlow, useSetupPending } from "@/components/onboarding";
 import { documentTitle, needYouCount } from "./model.js";
 import { Rail } from "./Rail.js";
@@ -335,6 +336,7 @@ function ShellFrame() {
 
         <AddProjectDialog />
         <CommandPaletteDialog open={paletteOpen} onOpenChange={setPaletteOpen} />
+        <GlobalSearch />
         <TrustDialog />
         <PanelDecisionSheet />
         <FleetSheet />

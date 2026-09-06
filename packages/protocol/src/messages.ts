@@ -809,6 +809,11 @@ export interface ClientRequests {
   "session/set_mode": { params: { path: string; mode: string }; result: {} };
 
   "pi/session/list": { params: { cwd?: string }; result: { sessions: SessionSummary[] } };
+  /** Read-only search of saved conversations; no worker is opened. */
+  "session/search": {
+    params: { query: string; cwd?: string; after?: string; before?: string; cursor?: number };
+    result: { hits: Array<{ path: string; count: number; excerpt: string; source: "user" | "assistant" | "reasoning" | "tool" }>; nextCursor?: number; unreadable: number };
+  };
   /**
    * Sessions that want a person, attention-sorted (waiting > error >
    * finished-unread > working > idle), then most recently modified. Across all
@@ -1039,8 +1044,11 @@ export interface ClientRequests {
   };
 
   // -------------------------------------------------- composer sources --
-  /** Everything `/` can run in this session: extension commands, prompts, skills. */
-  "pi/commands/list": { params: { path: string }; result: { commands: CommandInfo[] } };
+  /** Everything `/` can run in a session, or in a project before its first session exists. */
+  "pi/commands/list": {
+    params: { path: string } | { cwd: string };
+    result: { commands: CommandInfo[] };
+  };
   /** The prompt library the agent loaded for this session. */
   "pi/prompts/list": { params: { path: string }; result: { prompts: PromptInfo[] } };
   /**

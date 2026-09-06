@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   completeLeadingSlash,
   matchLeadingSlash,
+  rankSlashCommandMatches,
   slashCommandMatchesQuery,
 } from "../../src/components/thread/slash-completion.js";
 
@@ -23,5 +24,18 @@ describe("slash completion", () => {
     expect(slashCommandMatchesQuery({ id: "compact", label: "/compact" }, "go")).toBe(false);
     expect(slashCommandMatchesQuery({ id: "agent:goal", label: "/goal" }, "go")).toBe(true);
     expect(slashCommandMatchesQuery({ id: "queue", label: "/clear-queue" }, "queue")).toBe(true);
+  });
+
+  it("uses Pi-style fuzzy command search and ranks the strongest identity first", () => {
+    const commands = [
+      { id: "agent:skill:brave-search", label: "/skill:brave-search" },
+      { id: "agent:feature:subagents", label: "/subagents" },
+      { id: "agent:skill:browser", label: "/skill:browser" },
+    ];
+    expect(rankSlashCommandMatches(commands, "skbr").map((item) => item.label)).toEqual([
+      "/skill:brave-search",
+      "/skill:browser",
+    ]);
+    expect(rankSlashCommandMatches(commands, "sub").map((item) => item.label)).toEqual(["/subagents"]);
   });
 });

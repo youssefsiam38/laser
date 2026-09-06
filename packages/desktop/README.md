@@ -346,6 +346,15 @@ Pages. The normal Ubuntu/Fedora update services refresh those feeds and own the
 notification and install, exactly like any other system package. Removing the
 package removes its source; upgrading preserves it.
 
+After a native upgrade has unpacked the new files, its package hook sends a
+graceful reload signal only to the daemon whose command line identifies this
+exact `/opt/Laser` installation. The running desktop supervisor starts that
+daemon again from the new bundle, so the UI and host cannot remain on different
+versions. A later desktop launch also replaces any mismatched recorded daemon
+before connecting. A daemon started from the command line stays stopped until
+the next app launch or `laser up`; the root package hook never starts a process
+as a desktop user.
+
 The per-user AppImage/tar path is deliberately outside APT and DNF and therefore
 does not receive native operating-system prompts. Re-run the installer for that
 path.

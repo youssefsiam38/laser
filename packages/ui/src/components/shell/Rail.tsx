@@ -50,8 +50,8 @@ const sameSummaries = (a: readonly ProjectSummary[], b: readonly ProjectSummary[
 
 /**
  * The 56px project rail. One ring per directory: the ring is the project's
- * aggregate status (live while any session works, attention while any waits,
- * danger when a worker crashed), the count is how many sessions need you.
+ * directory marker. Session activity lives on its single canonical chat row,
+ * never as a second attention highlight on the project.
  *
  * A project icon jumps to and filters that project's group in the sessions
  * list rather than replacing the list (D-20 §6); clicking the active icon
@@ -249,17 +249,9 @@ function ProjectButton({ project, active, filtered, onSelect, dragging = false, 
             dragging && "bg-surface text-ink shadow-float-sm",
           )}
         >
-          <StatusRing status={project.status} size={32} thickness={2} aria-hidden="true">
+          <StatusRing status="idle" size={32} thickness={2} aria-hidden="true">
             <span className="font-mono text-xs font-medium tracking-typed">{initials(project.name)}</span>
           </StatusRing>
-          {project.needYou > 0 && (
-            <span
-              aria-hidden="true"
-              className="absolute -top-0.5 -end-0.5 flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-attention px-1 font-mono text-xs leading-none font-medium text-on-attention tnum ring-2 ring-surface-2"
-            >
-              {project.needYou}
-            </span>
-          )}
         </button>
       </TooltipTrigger>
       <TooltipContent side="right" className="max-w-80 items-start py-1.5">

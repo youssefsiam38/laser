@@ -119,15 +119,17 @@ timestamps, hints, durations, the "waiting for you" subtitle — and measured
 Desktop (≥1024px), four columns left to right:
 
 1. **Rail** (56px): project icons (initials in a ring), theme toggle, settings.
-   The ring around a project icon shows aggregate status: solid `--live` arc
-   while any session runs, `--attention` when any waits.
+   Rings are neutral directory markers; selection indicates the project
+   filter, never aggregate session attention (D-103).
 2. **Sessions** (288px): **every project**, as collapsible groups, each
-   attention-sorted inside (waiting > error > finished-unread > working >
-   idle, then by modified). One scrolling list, so quick navigation across
+   newest first inside. One scrolling list, so quick navigation across
    projects never requires switching first (D-20). Each group header: project
-   name, a `+` for a new session there, a collapse chevron. Each row: status
-   dot, title (`--font-mono` id prefix when untitled), relative time, last tool
-   or "waiting for you" subtitle. The rail's project icons jump to and filter
+   folder/name, a `+` for a new session there, a collapse chevron. Each row is
+   one compact line with a rounded neutral selection, title and trailing
+   activity: a working spinner, or a waiting/error/unread marker; idle is quiet.
+   Timestamps and previews live in the row tooltip. Pinned chats move into a
+   top section (never duplicated) with a muted 12px project label and full
+   path tooltip. Touch rows retain 44px targets. The rail's project icons jump to and filter
    that group rather than replacing the list. Collapsible to 0 with `[`.
 3. **Thread** (flex): the assistant-ui thread. Max width 84ch (`--measure-thread`) centered, sticky
    top bar (session title, model, thinking, context ring, more menu), floating
@@ -251,7 +253,10 @@ component.
 ## Accessibility
 
 Keyboard: `Cmd+K` command palette (later), `[`/`]` toggle rails, `Cmd+N` new
-session, `Esc` closes sheets and dialogs. Every icon button has a tooltip and
+session, `Ctrl/Cmd+F` finds in the current conversation, `Ctrl/Cmd+Shift+F`
+searches all saved sessions, and `Esc` closes search, sheets and dialogs.
+Find uses Enter/Shift+Enter to navigate matches. Global results use arrows and
+Enter; their highlighted excerpts stay in the row's normal flow. Every icon button has a tooltip and
 an `aria-label`. Focus ring is 2px `--live`. Contrast ≥ 4.5:1 for text in both
 themes.
 

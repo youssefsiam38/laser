@@ -32,4 +32,14 @@ describe("native Linux sandbox install hook", () => {
     expect(source).toContain(`REPO_NAME='${repository}'`);
     expect(source).not.toContain("REPO_NAME='${sanitizedProductName}'");
   });
+
+  it("gracefully refreshes only this native install's daemon on upgrade", async () => {
+    const source = await readFile(hookPath, "utf8");
+
+    expect(source).toMatch(/\[ -n "\$\{2:-\}" \] \|\| \[ "\$\{1:-\}" = "2" \]/);
+    expect(source).toContain('NODE="$APP_DIR/resources/runtime/node"');
+    expect(source).toContain('CLI="$APP_DIR/resources/app.asar.unpacked/node_modules/@lasercode/cli/dist/main.js"');
+    expect(source).toContain('"$NODE $CLI __daemon "*');
+    expect(source).toContain('kill -HUP "$pid"');
+  });
 });

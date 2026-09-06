@@ -9,8 +9,8 @@
  *    `process.execPath` that is a real node.
  * 2. **Starting twice is not an error.** Someone may already have run
  *    `laser up`, or left a host running from a previous session. If one
- *    answers `/healthz`, the app attaches to it and does not stop it on quit.
- *    Nothing is more annoying than a GUI that kills your terminal's daemon.
+ *    answers `/healthz` at this app's version, the app attaches to it. An old
+ *    generation is shut down cleanly and replaced before the UI connects.
  *
  * We spawn the CLI's `__daemon` entry rather than the host's own `main.js`,
  * because the daemon writes `<state-dir>/host.json`. That one file is what lets
@@ -24,10 +24,20 @@
  */
 import { ENV, PRODUCT_NAME } from "@lasercode/protocol";
 import { type ChildProcess, spawn } from "node:child_process";
-import { closeSync, mkdirSync, openSync } from "node:fs";
-import { existsSync } from "node:fs";
-import { CLI_VERSION, cliEntry, daemonArgs, inspectHost, logTail, piEnv, portInUse, probeHealth, type LaserPaths } from "@lasercode/cli";
-import { hostVersionProblem } from "./host-compatibility.js";
+import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
+import {
+  CLI_VERSION,
+  cliEntry,
+  daemonArgs,
+  inspectHost,
+  logTail,
+  piEnv,
+  portInUse,
+  probeHealth,
+  stopHost,
+  type LaserPaths,
+} from "@lasercode/cli";
+import { hostNeedsRefresh } from "./host-compatibility.js";
 import { checkBundledAgent, type AgentCheck } from "./agent.js";
 import type { DesktopHostInfo } from "./api.js";
 import type { DesktopLog } from "./log.js";
@@ -110,19 +120,30 @@ export class HostProcess {
 
     const existing = await inspectHost(paths);
     if (existing.state === "running") {
-      const mismatch = hostVersionProblem(existing.record.cliVersion, CLI_VERSION);
-      if (mismatch) {
-        log.line(mismatch);
-        return this.publish({ state: "failed", startedByUs: false, message: mismatch });
+      if (hostNeedsRefresh(existing.record.cliVersion, CLI_VERSION)) {
+        log.line(
+          `refreshing background service ${existing.record.cliVersion} to ${CLI_VERSION} (pid ${existing.record.pid})`,
+        );
+        try {
+          await stopHost(paths);
+        } catch (error) {
+          log.error("could not refresh the old background service", error);
+          return this.publish({
+            state: "failed",
+            startedByUs: false,
+            message: `${PRODUCT_NAME} could not refresh its background service. Quit ${PRODUCT_NAME} completely and open it again.`,
+          });
+        }
+      } else {
+        log.line(`attached to the host already running at ${existing.record.url} (pid ${existing.record.pid})`);
+        return this.publish({
+          state: "ready",
+          url: existing.record.url,
+          wsUrl: `ws://${existing.record.host}:${existing.record.port}/ws`,
+          port: existing.record.port,
+          startedByUs: false,
+        });
       }
-      log.line(`attached to the host already running at ${existing.record.url} (pid ${existing.record.pid})`);
-      return this.publish({
-        state: "ready",
-        url: existing.record.url,
-        wsUrl: `ws://${existing.record.host}:${existing.record.port}/ws`,
-        port: existing.record.port,
-        startedByUs: false,
-      });
     }
     if (existing.state === "unreachable") {
       return this.publish({

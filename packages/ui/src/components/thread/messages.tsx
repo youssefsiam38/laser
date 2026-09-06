@@ -2,7 +2,8 @@ import { WIRE_NAMESPACE } from "@lasercode/protocol";
 import { MessagePrimitive, useAui, useAuiState, type MessageState } from "@assistant-ui/react";
 import type { ModelRef, ThinkingLevel } from "@lasercode/protocol";
 import { Info, TriangleAlert } from "lucide-react";
-import { memo, useMemo, useState } from "react";
+import { memo, useContext, useMemo, useState } from "react";
+import { FindSelectionContext, SearchMessageContext, useSearchReveal } from "./search-state.js";
 
 import { UserMessageAttachments } from "@/components/assistant-ui/elements/attachment.aui";
 import { DaySeparator, MessageTimestamp, dayChanged } from "@/components/assistant-ui/elements/day-separator";
@@ -85,8 +86,9 @@ function useSessionPath(): string | undefined {
 /** Chooser: assistant-ui's `ThreadPrimitive.Messages` render function target. */
 export function ThreadMessage() {
   const role = useAuiState((s) => s.message.role);
-  if (role === "user") return <UserMessage />;
-  return <AssistantMessage />;
+  const id = useAuiState(s => s.message.id);
+  const selected = useContext(FindSelectionContext);
+  return <SearchMessageContext value={selected === id}>{role === "user" ? <UserMessage /> : <AssistantMessage />}</SearchMessageContext>;
 }
 
 // ---------------------------------------------------------------------------
@@ -94,6 +96,7 @@ export function ThreadMessage() {
 // ---------------------------------------------------------------------------
 
 export function UserMessage() {
+  const searchReveal = useSearchReveal();
   const aui = useAui();
   const { actions } = useLaserStable();
   const text = useMessageText();
@@ -143,7 +146,7 @@ export function UserMessage() {
   };
 
   return (
-    <MessagePrimitive.Root data-role="user" className={cn("group/message flex flex-col items-end gap-1", MESSAGE_ROOT)}>
+    <MessagePrimitive.Root data-role="user" data-search-selected={searchReveal || undefined} className={cn("group/message flex flex-col items-end gap-1", MESSAGE_ROOT)}>
       {newDay ? <DaySeparator date={newDay} className="self-stretch" /> : null}
       <div className={cn("flex min-w-0 flex-col items-end gap-1", editing ? "w-full" : "max-w-[85%]")}>
         {editing ? (
@@ -229,6 +232,7 @@ function stopReason(reason: string, detail: string | undefined): { reason: strin
 }
 
 export function AssistantMessage() {
+  const searchReveal = useSearchReveal();
   const streaming = useAuiState((s) => s.message.role === "assistant" && s.message.status?.type === "running");
   const isNotice = useAuiState((s) => laserMeta(s.message).kind === "notice");
   const speaker = useAuiState((s) => laserMeta(s.message).speaker);
@@ -249,11 +253,11 @@ export function AssistantMessage() {
   const newDay = useNewDay();
 
   return (
-    <MessagePrimitive.Root data-role="assistant" data-streaming={streaming || undefined} className={cn("group/message flex flex-col", MESSAGE_ROOT)}>
+    <MessagePrimitive.Root data-role="assistant" data-search-selected={searchReveal || undefined} data-streaming={streaming || undefined} className={cn("group/message flex flex-col", MESSAGE_ROOT)}>
       {newDay ? <DaySeparator date={newDay} /> : null}
       {speaker ? <SpeakerIdentity {...speaker} /> : null}
       <AssistantBody streaming={streaming}>
-        <MessagePrimitive.GroupedParts groupBy={groupBy}>
+        <MessagePrimitive.GroupedParts groupBy={groupBy} indicator="empty">
           {({ part, children }) => {
             switch (part.type) {
               case "text":
@@ -291,7 +295,7 @@ export function AssistantMessage() {
               case "indicator":
                 // A turn that has started and sent nothing yet. The catalog
                 // thinking indicator names the state and proves time is moving.
-                return <EmptyReplyThinking timingKey={`${messageId}:indicator`} />;
+                return <EmptyReplyPending timingKey={`${messageId}:indicator`} />;
               default:
                 // Consecutive reasoning and calls collapse into one activity
                 // row (D-20 §4, D-83, D-89); a single tool stays standalone.
@@ -324,11 +328,11 @@ export function AssistantMessage() {
   );
 }
 
-function EmptyReplyThinking({ timingKey }: { timingKey: string }) {
+function EmptyReplyPending({ timingKey }: { timingKey: string }) {
   const elapsed = useElapsed(timingKey, "running");
   return (
     <ThinkingIndicator
-      label="Thinking"
+      label="Waiting for response"
       elapsed={elapsed === undefined ? undefined : formatDuration(elapsed)}
       className="my-2 h-6 first:mt-0 last:mb-0"
     />

@@ -28,6 +28,7 @@ export type { ToolRowState } from "./tool-fallback.aui.js";
 export interface ToolCallProps {
   icon?: ComponentType<SVGProps<SVGSVGElement>> | undefined;
   verb: string;
+  activeLabel?: string | undefined;
   summary?: string | undefined;
   detail?: string | undefined;
   state: ToolRowState;
@@ -48,6 +49,7 @@ export interface ToolCallProps {
 export function ToolCall({
   icon,
   verb,
+  activeLabel,
   summary,
   detail,
   state,
@@ -74,6 +76,7 @@ export function ToolCall({
     >
       <ToolFallbackTrigger
         verb={verb}
+        activeLabel={activeLabel}
         summary={summary}
         detail={detail}
         icon={icon}

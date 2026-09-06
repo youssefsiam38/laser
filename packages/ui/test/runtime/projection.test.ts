@@ -8,6 +8,7 @@ import {
   shareProjectedMessages,
   splitDialogs,
   toolStatus,
+  toolDisplayResult,
   type ProjectedContentPart,
   type ProjectionResult,
 } from "../../src/runtime/projection.js";
@@ -145,9 +146,20 @@ describe("projectMessages — running status", () => {
   it("shows a live tool's partial output until the result lands", () => {
     const blocks: Block[] = [{ kind: "tool", id: "t1", name: "bash", args: { command: "ls" }, partial: "a\nb", done: false }];
     const { messages } = projectMessages({ blocks, running: true, dialogs: [] });
-    expect(parts(messages[0]!)[0]).toMatchObject({ result: "a\nb" });
+    const part = parts(messages[0]!)[0]!;
+    expect(part.result).toBeUndefined();
+    expect(part.artifact).toEqual({ partialOutput: "a\nb" });
+    expect(toolDisplayResult(part)).toBe("a\nb");
     expect(toolStatus(blocks[0] as Extract<Block, { kind: "tool" }>, true)).toBe("running");
     expect(toolStatus(blocks[0] as Extract<Block, { kind: "tool" }>, false)).toBe("incomplete");
+  });
+
+  it("only final output settles a tool, including an empty result", () => {
+    const blocks: Block[] = [{ kind: "tool", id: "t1", name: "bash", args: {}, partial: "progress", done: true }];
+    const part = parts(projectMessages({ blocks, running: true, dialogs: [] }).messages[0]!)[0]!;
+    expect(part.result).toBeNull();
+    expect(part.artifact).toBeUndefined();
+    expect(toolDisplayResult(part)).toBeNull();
   });
 });
 

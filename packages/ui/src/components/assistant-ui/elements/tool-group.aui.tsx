@@ -1,4 +1,5 @@
 "use client";
+import { useSearchReveal } from "@/components/thread/search-state";
 /**
  * `tool-group` (assistant-ui registry), restyled: consecutive reasoning and
  * tool activity collapsed into one summary row — including mixed actions — with
@@ -96,7 +97,8 @@ function ToolGroupRoot({
   const [lockMs] = useState(motionFastMs);
   const lockScroll = useScrollLock(collapsibleRef, lockMs);
   const isControlled = controlledOpen !== undefined;
-  const isOpen = isControlled ? controlledOpen : uncontrolledOpen;
+  const reveal = useSearchReveal();
+  const isOpen = reveal || (isControlled ? controlledOpen : uncontrolledOpen);
 
   const handleOpenChange = useCallback(
     (next: boolean) => {
@@ -179,6 +181,7 @@ function ToolGroupTrigger({
   return (
     <CollapsibleTrigger
       data-slot="tool-group-trigger"
+      data-active={active || undefined}
       title={lines?.join("\n")}
       aria-label={`${accessibleSummary}. ${open ? "Collapse" : "Expand"} details.`}
       className={cn(

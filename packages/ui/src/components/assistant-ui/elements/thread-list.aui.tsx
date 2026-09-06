@@ -8,22 +8,18 @@
  * `s.threads.threadIds` / `threadItems` and the row reads `s.threadListItem`.
  *
  * Divergences from the registry copy, so a reviewer can diff them:
- *   - Groups are **projects**, not Today / Yesterday / Earlier. Every project
- *     is a collapsible group in one scrolling list, attention-sorted inside
- *     (waiting > error > finished-unread > working > idle, then modified).
- *     `useThreadListGroups` does that grouping from `custom.cwd` and the
- *     adapter's order.
- *   - A row is a status dot, the title (typed id prefix when untitled), the
- *     relative time and a subtitle — the last tool or "Waiting for you" — read
- *     from the laser store for that path, because the runtime's item state
- *     has no such fields.
+ *   - Groups are quiet project folders, newest first inside. Client-local
+ *     pins move into a top section with project labels, never duplicate rows.
+ *   - Rounded single-line rows carry a title and trailing activity indicator.
+ *     Full path, preview and time remain in the tooltip. No idle dots and no
+ *     separate inbox/project activity highlights (D-103).
  *   - The more-menu offers Rename, Archive (client-local; Pi has no verb) and
  *     Copy path. Archived rows add an explicitly confirmed permanent delete;
  *     the host validates the path against Pi's session catalogue first.
  *   - Archived sessions live under a collapsible "Archived" group at the end
  *     with Unarchive and Delete; the registry copy had none.
- *   - Colours, sizes and durations read tokens; the running spinner became
- *     the status dot's sweep.
+ *   - Colours, sizes and durations read tokens; the running session uses a
+ *     small spinner with the shared sweep and a reduced-motion fallback.
  */
 import {
   AuiIf,
@@ -33,25 +29,24 @@ import {
   useAui,
   useAuiState,
 } from "@assistant-ui/react";
-import type { SessionAttention } from "@lasercode/protocol";
-import { Archive, ArchiveRestore, ChevronRight, Copy, EllipsisVertical, EyeOff, Pencil, Plus, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, ChevronRight, Copy, Ellipsis, EyeOff, Folder, FolderOpen, Pencil, Pin, PinOff, Plus, Trash2 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type FC } from "react";
 
 import { InlineRename } from "@/components/shell/InlineRename";
+import { SessionActivity } from "@/components/shell/SessionActivity";
 import { groupDomId, sessionsList, useSessionsList } from "@/components/shell/session-groups";
 import { isUntitled, sessionStatus, sessionSubtitle } from "@/components/shell/model";
-import { aggregateStatus, StatusDot, type Status } from "@/components/status";
-import { Badge } from "@/components/ui/badge";
+import { type Status } from "@/components/status";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton, SkeletonText } from "@/components/ui/skeleton";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { dateTime, relativeTime, shortCwd } from "@/format";
+import { dateTime, shortCwd } from "@/format";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
-import { attentionRank, mergeSessions, useLaserStable, useLaserState } from "@/runtime";
+import { mergeSessions, useLaserStable, useLaserState } from "@/runtime";
 import type { AppState } from "@/store";
 
 // ---------------------------------------------------------------------------
@@ -61,14 +56,11 @@ import type { AppState } from "@/store";
 export interface ThreadListGroup {
   cwd: string;
   name: string;
-  /** Indices into `s.threads.threadIds`, attention-sorted then newest first. */
+  /** Unpinned indices into `s.threads.threadIds`, newest first. */
   indices: number[];
-  status: Status;
-  needYou: number;
+  pinnedIndices: number[];
 }
 
-const rank = (item: { custom?: Record<string, unknown> | undefined }): number =>
-  attentionRank(item.custom?.["attention"] as SessionAttention | undefined);
 const modified = (item: { custom?: Record<string, unknown> | undefined; lastMessageAt?: Date | undefined }): number => {
   const raw = item.custom?.["modifiedAt"];
   const t = typeof raw === "string" ? Date.parse(raw) : (item.lastMessageAt?.getTime() ?? NaN);
@@ -76,7 +68,7 @@ const modified = (item: { custom?: Record<string, unknown> | undefined; lastMess
 };
 
 /**
- * Every project as a group, in rail order, each attention-sorted; a session
+ * Every project as a group, in rail order, newest first inside; a session
  * whose cwd is not a known project still gets a group at the end, so nothing
  * on disk is unreachable. `filter` narrows to one project (the rail's
  * choice), `query` to titles containing it.
@@ -84,7 +76,7 @@ const modified = (item: { custom?: Record<string, unknown> | undefined; lastMess
 export function useThreadListGroups(projects: readonly string[], filter: string | undefined, query = ""): ThreadListGroup[] {
   const threadIds = useAuiState((s) => s.threads.threadIds);
   const threadItems = useAuiState((s) => s.threads.threadItems);
-  const workers = useLaserState((s) => s.workers);
+  const { pinned } = useSessionsList();
   const needle = query.trim().toLowerCase();
 
   return useMemo(() => {
@@ -108,20 +100,20 @@ export function useThreadListGroups(projects: readonly string[], filter: string 
           const ia = byId.get(threadIds[a]!);
           const ib = byId.get(threadIds[b]!);
           if (!ia || !ib) return 0;
-          const r = rank(ia) - rank(ib);
-          return r !== 0 ? r : modified(ib) - modified(ia);
+          return modified(ib) - modified(ia);
         });
-        const statuses: Status[] = indices.map((i) => (byId.get(threadIds[i]!)?.custom?.["attention"] as Status | undefined) ?? "idle");
-        if (workers[cwd]?.status === "crashed") statuses.push("error");
+        const isPinned = (index: number) => {
+          const item = byId.get(threadIds[index]!);
+          return pinned.has(item?.externalId ?? item?.remoteId ?? "");
+        };
         return {
           cwd,
           name: shortCwd(cwd),
-          indices,
-          status: aggregateStatus(statuses),
-          needYou: statuses.filter((s) => s === "waiting_for_input").length,
+          indices: indices.filter((index) => !isPinned(index)),
+          pinnedIndices: indices.filter(isPinned),
         };
       });
-  }, [threadIds, threadItems, projects, filter, needle, workers]);
+  }, [threadIds, threadItems, projects, filter, needle, pinned]);
 }
 
 // ---------------------------------------------------------------------------
@@ -146,6 +138,17 @@ export const ThreadList: FC<ThreadListProps> = ({ projects, query = "", onOpen, 
   const archivedCount = useAuiState((s) => s.threads.archivedThreadIds.length);
   const { currentProject } = useLaserStable();
   const [editing, setEditing] = useState<string | undefined>(undefined);
+  const threadIds = useAuiState((s) => s.threads.threadIds);
+  const threadItems = useAuiState((s) => s.threads.threadItems);
+  const pinnedIndices = useMemo(() => {
+    const order = new Map([...list.pinned].map((path, index) => [path, index]));
+    const byId = new Map(threadItems.map((item) => [item.id, item]));
+    const position = (index: number) => {
+      const item = byId.get(threadIds[index]!);
+      return order.get(item?.externalId ?? item?.remoteId ?? "") ?? 0;
+    };
+    return groups.flatMap((group) => group.pinnedIndices).sort((a, b) => position(a) - position(b));
+  }, [groups, list.pinned, threadIds, threadItems]);
 
   // The rail asked for a group: bring its header to the top of the list.
   useEffect(() => {
@@ -155,7 +158,7 @@ export const ThreadList: FC<ThreadListProps> = ({ projects, query = "", onOpen, 
   }, [list.jump]);
 
   return (
-    <ThreadListPrimitive.Root data-slot="aui_thread-list-root" className="flex flex-col pb-2">
+    <ThreadListPrimitive.Root data-slot="aui_thread-list-root" className="flex flex-col gap-3 px-2 pt-1 pb-3">
       <AuiIf condition={(s) => s.threads.isLoading && s.threads.threadIds.length === 0}>
         <ThreadListSkeleton names={groups.map((g) => g.name)} />
       </AuiIf>
@@ -165,11 +168,18 @@ export const ThreadList: FC<ThreadListProps> = ({ projects, query = "", onOpen, 
             No session matches “{query.trim()}”.
           </p>
         ) : null}
-        {groups.map((group, index) => (
+        {pinnedIndices.length > 0 && (
+          <section aria-label="Pinned sessions" data-slot="pinned-sessions">
+            <div className="flex h-8 items-center gap-2 px-2 text-xs text-ink-3"><Pin className="size-3.5" /> Pinned</div>
+            <div role="list">
+              {pinnedIndices.map((index) => <ThreadListPrimitive.ItemByIndex key={threadIds[index]} index={index} components={{ ThreadListItem: itemComponent(editing, setEditing, onOpen) }} />)}
+            </div>
+          </section>
+        )}
+        {groups.map((group) => (
           <ProjectGroup
             key={group.cwd}
             group={group}
-            first={index === 0}
             collapsed={list.collapsed.has(group.cwd) && !query.trim()}
             isCurrent={group.cwd === currentProject}
             canCreate={canCreate}
@@ -191,7 +201,6 @@ export const ThreadList: FC<ThreadListProps> = ({ projects, query = "", onOpen, 
 
 interface ProjectGroupProps {
   group: ThreadListGroup;
-  first: boolean;
   collapsed: boolean;
   isCurrent: boolean;
   canCreate: boolean;
@@ -201,7 +210,7 @@ interface ProjectGroupProps {
   onNewSession?: ((cwd: string) => void) | undefined;
 }
 
-const ProjectGroup = memo(function ProjectGroup({ group, first, collapsed, isCurrent, canCreate, editing, onEdit, onOpen, onNewSession }: ProjectGroupProps) {
+const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, canCreate, editing, onEdit, onOpen, onNewSession }: ProjectGroupProps) {
   const aui = useAui();
   const { actions, archive } = useLaserStable();
   const sessions = useLaserState((state) => state.sessions);
@@ -209,9 +218,10 @@ const ProjectGroup = memo(function ProjectGroup({ group, first, collapsed, isCur
   const id = groupDomId(group.cwd);
   const listId = `${id}-list`;
   const count = group.indices.length;
+  const total = count + group.pinnedIndices.length;
   return (
-    <section aria-labelledby={`${id}-name`} data-cwd={group.cwd} data-current={isCurrent || undefined} className={cn("group/project", !first && "hairline-t")}>
-      <div id={id} className="sticky top-0 z-10 flex h-9 items-center gap-1 bg-surface ps-3 pe-1.5">
+    <section aria-labelledby={`${id}-name`} data-cwd={group.cwd} data-current={isCurrent || undefined} className="group/project">
+      <div id={id} className="sticky top-0 z-10 flex h-8 items-center gap-0.5 rounded-lg bg-surface px-1">
         <button
           type="button"
           onClick={() => sessionsList.toggleCollapsed(group.cwd)}
@@ -219,20 +229,16 @@ const ProjectGroup = memo(function ProjectGroup({ group, first, collapsed, isCur
           aria-controls={listId}
           title={`${group.cwd}${isCurrent ? "\nCurrent project: new sessions start here" : ""}`}
           className={cn(
-            "flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md text-start outline-none",
+            "flex h-7 min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md px-1 text-start text-ink-3 outline-none hover:bg-surface-2 hover:text-ink-2",
             "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
           )}
         >
-          <StatusDot status={group.status} size="sm" label={`${group.name}: ${group.status.replace(/_/g, " ")}`} />
-          <span id={`${id}-name`} title={group.name} className={cn("min-w-0 truncate text-sm leading-5", isCurrent ? "font-semibold text-ink" : "font-medium text-ink-2")}>
+          <ChevronRight aria-hidden="true" className={cn("size-3 shrink-0 transition-transform duration-(--motion-fast) motion-reduce:transition-none", !collapsed && "rotate-90")} />
+          {collapsed ? <Folder aria-hidden="true" className="size-3.5 shrink-0" /> : <FolderOpen aria-hidden="true" className="size-3.5 shrink-0" />}
+          <span id={`${id}-name`} title={group.name} className="min-w-0 truncate text-sm leading-5 text-ink-2">
             {group.name}
           </span>
-          <span className="shrink-0 typed text-ink-3">{count}</span>
-          {group.needYou > 0 && collapsed ? (
-            <Badge variant="attention" className="tnum">
-              {group.needYou}
-            </Badge>
-          ) : null}
+          <span className="shrink-0 text-xs text-ink-3 tnum">{total}</span>
         </button>
         {onNewSession && (
           <TooltipIconButton
@@ -248,12 +254,12 @@ const ProjectGroup = memo(function ProjectGroup({ group, first, collapsed, isCur
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <TooltipIconButton tooltip={`Actions for ${group.name}`} size="icon-xs" className="text-ink-3 opacity-0 group-hover/project:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100 [@media(pointer:coarse)]:opacity-100">
-              <EllipsisVertical />
+              <Ellipsis />
             </TooltipIconButton>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="min-w-56">
             <DropdownMenuItem
-              disabled={count === 0}
+              disabled={total === 0}
               onSelect={() => {
                 const paths = sessions.filter((session) => session.cwd === group.cwd).map((session) => session.path);
                 paths.forEach((path) => archive.add(path));
@@ -269,30 +275,20 @@ const ProjectGroup = memo(function ProjectGroup({ group, first, collapsed, isCur
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        <TooltipIconButton
-          tooltip={collapsed ? "Expand" : "Collapse"}
-          size="icon-xs"
-          className="text-ink-3"
-          aria-expanded={!collapsed}
-          aria-controls={listId}
-          onClick={() => sessionsList.toggleCollapsed(group.cwd)}
-        >
-          <ChevronRight className={cn("transition-transform duration-(--motion-fast) ease-out motion-reduce:transition-none", !collapsed && "rotate-90")} />
-        </TooltipIconButton>
       </div>
 
       {!collapsed &&
         (count === 0 ? (
-          <div className="flex items-center gap-2 px-3 pt-1 pb-3 text-xs leading-4 text-ink-3">
-            <span>No sessions yet.</span>
-            {onNewSession && (
+          <div id={listId} className="flex items-center gap-2 ps-9 pe-2 py-1 text-xs leading-4 text-ink-3">
+            <span>{total > 0 ? "All chats are pinned" : "No chats yet"}</span>
+            {total === 0 && onNewSession && (
               <Button variant="link" size="xs" className="text-xs" disabled={!canCreate} onClick={() => onNewSession(group.cwd)}>
                 Start one
               </Button>
             )}
           </div>
         ) : (
-          <div id={listId} role="list" className="pb-1">
+          <div id={listId} role="list">
             {group.indices.map((index) => (
               <ThreadListPrimitive.ItemByIndex key={threadIds[index]} index={index} components={{ ThreadListItem: itemComponent(editing, onEdit, onOpen) }} />
             ))}
@@ -307,22 +303,20 @@ function ArchivedGroup({ editing, onEdit, onOpen }: { editing: string | undefine
   const [open, setOpen] = useState(false);
   const listId = "session-group-archived";
   return (
-    <section aria-label="Archived sessions" className="hairline-t">
-      <div className="sticky top-0 z-10 flex h-9 items-center gap-1 bg-surface ps-3 pe-1.5">
+    <section aria-label="Archived sessions">
+      <div className="sticky top-0 z-10 flex h-8 items-center gap-1 rounded-lg bg-surface px-2">
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
           aria-expanded={open}
           aria-controls={listId}
-          className="flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md text-start outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live"
+          className="flex h-7 min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md text-start outline-none hover:bg-surface-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live"
         >
+          <ChevronRight aria-hidden="true" className={cn("size-3 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none", open && "rotate-90")} />
           <Archive aria-hidden="true" className="size-3.5 shrink-0 text-ink-3" />
           <span className="min-w-0 truncate text-sm leading-5 font-medium text-ink-2">Archived</span>
-          <span className="shrink-0 typed text-ink-3">{archivedIds.length}</span>
+          <span className="shrink-0 text-xs text-ink-3 tnum">{archivedIds.length}</span>
         </button>
-        <TooltipIconButton tooltip={open ? "Collapse" : "Expand"} size="icon-xs" className="text-ink-3" aria-expanded={open} aria-controls={listId} onClick={() => setOpen((o) => !o)}>
-          <ChevronRight className={cn("transition-transform duration-(--motion-fast) ease-out motion-reduce:transition-none", open && "rotate-90")} />
-        </TooltipIconButton>
       </div>
       {open && (
         <div id={listId} role="list" className="pb-1">
@@ -356,6 +350,7 @@ function itemComponent(editing: string | undefined, onEdit: (id: string | undefi
 // ---------------------------------------------------------------------------
 
 interface RowModel {
+  cwd: string;
   status: Status;
   untitled: boolean;
   sub: { text: string; mono: boolean; tone: "attention" | "default" | "muted" };
@@ -364,6 +359,7 @@ interface RowModel {
 }
 
 const sameRow = (a: RowModel, b: RowModel): boolean =>
+  a.cwd === b.cwd &&
   a.status === b.status &&
   a.untitled === b.untitled &&
   a.sub.text === b.sub.text &&
@@ -379,8 +375,9 @@ function useRowModel(path: string | undefined): RowModel {
       (s: AppState): RowModel => {
         const summary = path ? mergeSessions(s.sessions, s.open).find((x) => x.path === path) : undefined;
         const view = path ? s.open[path] : undefined;
-        if (!summary) return { status: "idle", untitled: true, sub: { text: "No messages yet", mono: false, tone: "muted" }, modifiedAt: undefined, messageCount: 0 };
+        if (!summary) return { cwd: "", status: "idle", untitled: true, sub: { text: "No messages yet", mono: false, tone: "muted" }, modifiedAt: undefined, messageCount: 0 };
         return {
+          cwd: summary.cwd,
           status: sessionStatus(view, summary),
           untitled: isUntitled(summary, view),
           sub: sessionSubtitle(summary, view),
@@ -405,6 +402,8 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
   const title = useAuiState((s) => s.threadListItem.title);
   const active = useAuiState((s) => s.threads.mainThreadId === s.threadListItem.id);
   const row = useRowModel(path);
+  const { pinned } = useSessionsList();
+  const isPinned = !archived && pinned.has(path ?? "");
   const isEditing = editing === id;
   const triggerRef = useRef<HTMLButtonElement>(null);
 
@@ -414,11 +413,12 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
     <ThreadListItemPrimitive.Root
       data-slot="aui_thread-list-item"
       data-active={active || undefined}
-      className={cn("group relative", active && "bg-surface-2")}
+      data-pinned={isPinned || undefined}
+      className={cn("group relative rounded-lg", active && "bg-surface-2")}
     >
       {isEditing ? (
         <div className="flex items-center gap-2.5 px-3 py-2">
-          <StatusDot status={row.status} size="sm" />
+          <SessionActivity status={row.status} />
           <RenameField onDone={() => onEdit(undefined)} />
         </div>
       ) : (
@@ -426,47 +426,31 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
           ref={triggerRef}
           data-slot="aui_thread-list-item-trigger"
           aria-current={active ? "page" : undefined}
-          title={path ? (row.messageCount > 0 ? `${path}\n${row.messageCount} message${row.messageCount === 1 ? "" : "s"}` : path) : undefined}
+          title={[shownTitle, row.cwd, row.sub.text, row.modifiedAt ? dateTime(row.modifiedAt) : ""].filter(Boolean).join("\n")}
           onClick={onOpen}
           onDoubleClick={(e) => {
             e.preventDefault();
             onEdit(id);
           }}
           className={cn(
-            "grid w-full grid-cols-[8px_minmax(0,1fr)_auto] items-center gap-x-2.5 px-3 py-2 text-start",
+            "flex min-h-8 w-full cursor-pointer items-center gap-2 rounded-lg ps-9 pe-9 py-1 text-start [@media(pointer:coarse)]:min-h-11",
             "transition-colors duration-(--motion-instant) outline-none",
             "hover:bg-[color-mix(in_oklab,var(--surface-2)_70%,transparent)] active:bg-surface-2",
             "focus-visible:-outline-offset-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live",
+            isPinned && "ps-3",
           )}
         >
-          <StatusDot status={row.status} size="sm" className="self-center" />
           <span
             data-slot="aui_thread-list-item-title"
             // The row's own title, so a name the column cuts is still readable
             // and still the accessible name (DESIGN.md, legibility floor).
             title={shownTitle}
-            className={cn("truncate leading-5", row.untitled ? "text-sm text-ink-2 italic" : "text-sm font-medium text-ink", active && !row.untitled && "font-semibold")}
+            className={cn("min-w-0 flex-1 truncate text-sm leading-5", row.untitled ? "text-ink-3" : active ? "text-ink" : "text-ink-2")}
           >
             <ThreadListItemPrimitive.Title fallback={shownTitle} />
           </span>
-          {row.modifiedAt ? (
-            <time dateTime={row.modifiedAt} title={dateTime(row.modifiedAt)} className="typed leading-5 text-ink-3">
-              {relativeTime(row.modifiedAt)}
-            </time>
-          ) : (
-            <span />
-          )}
-          <span aria-hidden="true" />
-          <span
-            title={row.sub.text}
-            className={cn(
-              "col-span-2 truncate pe-6 text-xs leading-4",
-              row.sub.mono && "font-mono",
-              row.sub.tone === "attention" ? "font-medium text-attention" : row.sub.tone === "muted" ? "text-ink-3" : "text-ink-2",
-            )}
-          >
-            {row.sub.text}
-          </span>
+          {isPinned && row.cwd && <span data-slot="pinned-session-project" title={row.cwd} aria-label={`Project: ${row.cwd}`} className="max-w-16 shrink-0 truncate rounded-sm bg-surface-2 px-1 text-xs leading-4 text-ink-3">{shortCwd(row.cwd)}</span>}
+          <SessionActivity status={archived ? "idle" : row.status} />
         </ThreadListItemPrimitive.Trigger>
       )}
       {!isEditing && <ThreadListItemMore path={path} title={shownTitle} archived={archived} onRename={() => onEdit(id)} />}
@@ -505,6 +489,8 @@ function ThreadListItemMore({ path, title, archived, onRename }: { path: string 
   const { actions } = useLaserStable();
   const { copy } = useCopy();
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const { pinned } = useSessionsList();
+  const isPinned = pinned.has(path ?? "");
   const copyPath = () => {
     if (!path) return;
     void copy(path).then((ok) => actions.toast(ok ? "info" : "error", ok ? "Session path copied" : "Could not copy the path"));
@@ -512,7 +498,7 @@ function ThreadListItemMore({ path, title, archived, onRename }: { path: string 
   return (
     <div
       className={cn(
-        "absolute end-2 bottom-1.5 opacity-0 transition-opacity duration-(--motion-instant)",
+        "absolute end-1 top-1/2 -translate-y-1/2 opacity-0 transition-opacity duration-(--motion-instant)",
         "group-hover:opacity-100 group-focus-within:opacity-100 has-[[data-state=open]]:opacity-100",
         "[@media(pointer:coarse)]:opacity-100",
       )}
@@ -520,10 +506,16 @@ function ThreadListItemMore({ path, title, archived, onRename }: { path: string 
       <ThreadListItemMorePrimitive.Root sharedFocusGroup>
         <ThreadListItemMorePrimitive.Trigger asChild>
           <TooltipIconButton tooltip={`Actions for ${title}`} size="icon-xs" className="text-ink-3">
-            <EllipsisVertical />
+            <Ellipsis />
           </TooltipIconButton>
         </ThreadListItemMorePrimitive.Trigger>
         <ThreadListItemMorePrimitive.Content align="end" sideOffset={4} data-slot="aui_thread-list-item-more-content" className={menuContentClass}>
+          {!archived && (
+            <ThreadListItemMorePrimitive.Item className={menuItemClass} disabled={!path} onSelect={() => path && sessionsList.togglePinned(path)}>
+              {isPinned ? <PinOff /> : <Pin />}
+              {isPinned ? "Unpin chat" : "Pin chat"}
+            </ThreadListItemMorePrimitive.Item>
+          )}
           {!archived && (
             <ThreadListItemMorePrimitive.Item className={menuItemClass} onSelect={onRename}>
               <Pencil />
@@ -596,19 +588,15 @@ function ThreadListSkeleton({ names }: { names: readonly string[] }) {
   return (
     <div aria-busy="true" aria-label="Loading sessions">
       {shown.map((name, g) => (
-        <section key={`${name}-${g}`} className={cn(g > 0 && "hairline-t")}>
-          <div className="flex h-9 items-center gap-2 px-3">
-            <Skeleton className="size-2 rounded-full" />
+        <section key={`${name}-${g}`} className="mb-3">
+          <div className="flex h-8 items-center gap-2 px-2">
+            <Skeleton className="size-3.5 rounded-sm" />
             {name ? <span className="text-sm leading-5 font-medium text-ink-2">{name}</span> : <SkeletonText width="40%" />}
           </div>
           <ul role="list" className="pb-1">
             {[72, 56].map((w, i) => (
-              <li key={i} className="grid grid-cols-[8px_minmax(0,1fr)_auto] items-center gap-x-2.5 px-3 py-2">
-                <Skeleton className="size-2 rounded-full" />
+              <li key={i} className="flex h-8 items-center ps-9 pe-3">
                 <SkeletonText width={`${w}%`} className="my-0.75" />
-                <SkeletonText width="2rem" className="my-0.75 h-3" />
-                <span />
-                <SkeletonText width={`${Math.min(92, w + 24)}%`} className="col-span-2 my-0.5 h-3" />
               </li>
             ))}
           </ul>

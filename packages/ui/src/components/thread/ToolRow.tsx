@@ -18,7 +18,8 @@ import {
 import { TOOL_ICONS } from "@/components/assistant-ui/elements/tool-group.aui";
 import { useIsTouch } from "@/hooks/use-mobile";
 import { DecisionBody, dialogPanel, PanelToolDecision, uiResponseFor, useRegisterToolRow } from "@/panels";
-import { toolDetailsDefaultOpen, useActivityDetailLevel, useLaserStable, useLaserState, type ActivityDetailLevel } from "@/runtime";
+import { toolDetailsDefaultOpen, toolDisplayResult, useActivityDetailLevel, useLaserStable, useLaserState, type ActivityDetailLevel } from "@/runtime";
+import { activeToolLabel } from "./tool-groups.js";
 import { diffViewForTool } from "./diff.js";
 import { useElapsed } from "./timing.js";
 import { parseBashOutput, pretty, resultDetails, resultText, summarizeTool, toolBody } from "./tool-summary.js";
@@ -53,7 +54,8 @@ const isInterruptPayload = (payload: unknown): payload is InterruptPayload => {
  * while it is on screen.
  */
 function ToolRowImpl(props: ToolCallMessagePartProps) {
-  const { toolCallId, toolName, args, result, isError, status, approval, interrupt, timing } = props;
+  const { toolCallId, toolName, args, isError, status, approval, interrupt, timing } = props;
+  const result = toolDisplayResult(props);
   useRegisterToolRow(toolCallId);
 
   const summary = useMemo(() => summarizeTool(toolName, args), [toolName, args]);
@@ -104,6 +106,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
     <ToolCall
       icon={TOOL_ICONS[kind]}
       verb={summary.verb}
+      activeLabel={activeToolLabel({ toolName, args })}
       summary={summary.summary}
       detail={summary.detail}
       state={state}

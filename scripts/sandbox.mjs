@@ -17,6 +17,7 @@
  */
 import { identity as product } from "./identity/identity.mjs";
 import { createServer } from "node:http";
+import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,6 +31,12 @@ const agentDir = join(base, "agent");
 mkdirSync(project, { recursive: true });
 mkdirSync(agentDir, { recursive: true });
 writeFileSync(join(project, "README.md"), `# Sandbox project\n\nA scratch project for ${product.name} demos.\n`);
+const skillDir = join(agentDir, "skills", "sandbox-review");
+mkdirSync(skillDir, { recursive: true });
+writeFileSync(
+  join(skillDir, "SKILL.md"),
+  "---\nname: sandbox-review\ndescription: Review the sandbox response for clarity and correctness\ndisable-model-invocation: true\n---\n\nReview the response carefully before answering.\n",
+);
 
 // ---- fake OpenAI-compatible streaming provider ----
 const reply = (prompt) =>
@@ -53,6 +60,20 @@ const provider = createServer((req, res) => {
     const base = { id: "c", object: "chat.completion.chunk", created: 1, model: "stub-1" };
     const send = (o) => res.write(`data: ${JSON.stringify(o)}\n\n`);
     send({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] });
+    // Opt-in lifecycle specimen: real worker events, including partial command
+    // output. Never runs unless the exact sandbox-only prompt is submitted.
+    if (process.env.SANDBOX_ACTIVITY === "1" && msgs.at(-1)?.role === "user" && prompt === "sandbox activity") {
+      for (const text of ["Checking the execution path. ", "I will run a short command and observe its progress."]) {
+        send({ ...base, choices: [{ index: 0, delta: { reasoning_content: text }, finish_reason: null }] });
+        await new Promise(r => setTimeout(r, 1200));
+      }
+      send({ ...base, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: randomUUID(), type: "function", function: {
+        name: "bash", arguments: JSON.stringify({ command: "printf 'progress\\n'; sleep 30; printf 'done\\n'" }),
+      } }] }, finish_reason: null }] });
+      send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
+      res.end("data: [DONE]\n\n");
+      return;
+    }
     for (const piece of reply(prompt)) {
       for (const ch of piece.match(/.{1,6}/gs) ?? []) {
         send({ ...base, choices: [{ index: 0, delta: { content: ch }, finish_reason: null }] });
@@ -173,10 +194,9 @@ writeFileSync(
       });
   };
 
-  // Emitted at session start rather than behind a slash command: Pi's command
-  // registry belongs to its terminal editor, and the app never types into it,
-  // so a command handler here would be unreachable from the app. A demo host
-  // should show the thing it exists to demonstrate.
+  // Emitted at session start so the panel gallery is immediately visible.
+  // The registered command remains available in the composer's live catalogue
+  // for testing explicit command invocation as well.
   pi.on("session_start", () => { console.error("[sandbox-ext] session_start"); setTimeout(() => { try { emitPanels(); console.error("[sandbox-ext] panels emitted"); } catch (e) { console.error("[sandbox-ext] emit failed: " + e); } }, 400); });
 
   pi.registerCommand("panels", { description: "sandbox: re-emit the demo panels", handler: async () => emitPanels() });

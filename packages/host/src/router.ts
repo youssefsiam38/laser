@@ -22,6 +22,7 @@ import { ErrorCodes, PRODUCT_NAME, ProtocolError, decisionPushPayload, parseClie
 import { unlinkSync } from "node:fs";
 import type { AttentionTracker } from "./attention.js";
 import type { SessionCatalog } from "./catalog.js";
+import { searchSessions } from "./session-search.js";
 import type { LogStore } from "./logstore.js";
 import { browseDirectories, type PackageService, type SetupService } from "./packages.js";
 import type { PanelHub } from "./panels/hub.js";
@@ -205,6 +206,12 @@ export class Router {
     switch (req.method) {
       case "pi/session/list":
         return { sessions: this.sessions(req.params.cwd) };
+
+      case "session/search": {
+        const { query, cwd, after, before, cursor } = req.params;
+        const sessions = this.catalog.list(cwd).filter(s => (!after || s.modifiedAt >= after) && (!before || s.modifiedAt < before));
+        return searchSessions(sessions, query, cursor);
+      }
 
       case "pi/session/inbox":
         return { sessions: this.inbox(req.params.cwd, req.params.limit) };
@@ -424,20 +431,27 @@ export class Router {
    * for everything else.
    */
   private async forwardToWorker(req: TypedClientRequest): Promise<unknown> {
-        // Settings, packages, providers and models are per project, not per
-        // session: they name a cwd and go to that project's worker.
-        if (CWD_ROUTED.has(req.method)) {
-          const { cwd } = req.params as { cwd: string };
-          const worker = await this.pool.get(cwd);
-          const result = await worker.request(req.method, req.params);
-          // Remember which worker opened this upload: the chunks that follow
-          // carry an id and nothing else.
-          if (req.method === "pi/transcribe/begin") {
-            const id = (result as { id?: string } | null)?.id;
-            if (id) this.uploads.set(id, cwd);
-          }
-          return result;
-        }
+    // A brand-new composer has a project but no session path yet. The worker
+    // answers from a disposable Pi runtime, so listing commands does not
+    // create an empty transcript.
+    if (req.method === "pi/commands/list" && "cwd" in req.params) {
+      const { cwd } = req.params as { cwd: string };
+      return (await this.pool.get(cwd)).request(req.method, req.params);
+    }
+    // Settings, packages, providers and models are per project, not per
+    // session: they name a cwd and go to that project's worker.
+    if (CWD_ROUTED.has(req.method)) {
+      const { cwd } = req.params as { cwd: string };
+      const worker = await this.pool.get(cwd);
+      const result = await worker.request(req.method, req.params);
+      // Remember which worker opened this upload: the chunks that follow carry
+      // an id and nothing else.
+      if (req.method === "pi/transcribe/begin") {
+        const id = (result as { id?: string } | null)?.id;
+        if (id) this.uploads.set(id, cwd);
+      }
+      return result;
+    }
 
         if (UPLOAD_ROUTED.has(req.method)) {
           const { id } = req.params as { id: string };

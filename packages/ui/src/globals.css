@@ -755,15 +755,23 @@
   overflow: hidden;
   border-radius: inherit;
   pointer-events: none;
-  background: color-mix(in oklab, var(--live) 3%, transparent);
+  background: color-mix(in oklab, var(--live) 7%, transparent);
 }
 .activity-beam > span {
   position: absolute;
   inset-block: 0;
   left: 0;
   width: 60%;
-  background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--live) 12%, transparent), transparent);
+  background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--live) 22%, transparent), transparent);
   animation: activity-beam-travel calc(var(--motion-slow) * 14) var(--motion-ease) infinite;
+}
+.activity-beam > span::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: calc(var(--spacing) / 4);
+  background: linear-gradient(90deg, transparent, var(--live), transparent);
 }
 @keyframes activity-beam-travel {
   0% { transform: translateX(-110%); opacity: 0; }
@@ -812,4 +820,16 @@
   &::-webkit-scrollbar {
     display: none;
   }
+}
+
+::highlight(conversation-matches) {
+  background-color: color-mix(in oklab, var(--attention) 25%, transparent);
+  color: var(--ink);
+}
+[data-message-id][data-search-selected] {
+  content-visibility: visible;
+}
+::highlight(conversation-current) {
+  background-color: var(--attention);
+  color: var(--bg);
 }

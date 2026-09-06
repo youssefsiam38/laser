@@ -1,4 +1,5 @@
 "use client";
+import { useSearchReveal } from "@/components/thread/search-state";
 /**
  * `tool-fallback` (assistant-ui registry), restyled to DESIGN.md.
  *
@@ -31,13 +32,14 @@ import { ChevronRight, CircleAlert, Wrench } from "lucide-react";
 import { memo, useCallback, useRef, useState, type ComponentType, type ReactNode, type SVGProps } from "react";
 
 import { StatusDot } from "@/components/status";
-import { ActivityBeam } from "./thinking-indicator.js";
+import { ActivityBeam, ThinkingIndicator } from "./thinking-indicator.js";
+import { activeToolLabel } from "@/components/thread/tool-groups";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Textarea } from "@/components/ui/textarea";
 import { duration as formatDuration } from "@/format";
 import { cn } from "@/lib/utils";
-import { toolDetailsDefaultOpen, useActivityDetailLevel, useLaserState, type ActivityDetailLevel } from "@/runtime";
+import { toolDetailsDefaultOpen, toolDisplayResult, useActivityDetailLevel, useLaserState, type ActivityDetailLevel } from "@/runtime";
 import { JsonViewer, parseJsonText } from "./json-viewer.js";
 
 import { activityRow, activityTrigger, collapsePanel, mono, pressable } from "./surfaces.js";
@@ -79,7 +81,8 @@ function ToolFallbackRoot({
   const lockScroll = useScrollLock(collapsibleRef, lockMs);
 
   const isControlled = controlledOpen !== undefined;
-  const isOpen = isControlled ? controlledOpen : uncontrolledOpen;
+  const reveal = useSearchReveal();
+  const isOpen = reveal || (isControlled ? controlledOpen : uncontrolledOpen);
 
   const handleOpenChange = useCallback(
     (next: boolean) => {
@@ -153,6 +156,7 @@ export function toolRowState(status: ToolCallMessagePartStatus | undefined, isEr
 export type ToolFallbackTriggerProps = Omit<React.ComponentProps<typeof CollapsibleTrigger>, "children"> & {
   /** Host Grotesk 500 verb: "Read", "Run", or the tool's name for an unknown tool. */
   verb: string;
+  activeLabel?: string | undefined;
   /** Typed fragment: a path, a command, a pattern. */
   summary?: string | undefined;
   /** Second typed fragment in tertiary ink, e.g. `L12–40`. */
@@ -169,6 +173,7 @@ export type ToolFallbackTriggerProps = Omit<React.ComponentProps<typeof Collapsi
 
 function ToolFallbackTrigger({
   verb,
+  activeLabel,
   summary,
   detail,
   icon,
@@ -188,8 +193,9 @@ function ToolFallbackTrigger({
   return (
     <CollapsibleTrigger
       data-slot="tool-fallback-trigger"
+      data-active={running || undefined}
       disabled={!expandable}
-      aria-label={`${verb} ${summary ?? ""}`.trim()}
+      aria-label={running && activeLabel ? activeLabel : `${verb} ${summary ?? ""}`.trim()}
       className={cn(
         activityTrigger,
         "disabled:cursor-default disabled:hover:bg-transparent disabled:active:bg-transparent",
@@ -207,13 +213,14 @@ function ToolFallbackTrigger({
           <LeadIcon className={cn("size-3.5", awaiting ? "text-attention" : "text-ink-3")} />
         )}
       </span>
-      <span
+      {running && activeLabel ? <ThinkingIndicator label={activeLabel} dot={false}
+        className="min-w-0 flex-1 overflow-hidden [&_[data-slot=thinking-indicator-label]]:truncate" /> : <span
         data-slot="tool-fallback-trigger-label"
         className={cn("min-w-0 truncate text-sm font-medium", cancelled ? "text-ink-3 line-through" : "text-ink-2", running && "shimmer-text")}
       >
         {verb}
-      </span>
-      {summary ? (
+      </span>}
+      {summary && !(running && activeLabel) ? (
         <span className={cn(mono, "min-w-0 truncate", cancelled ? "text-ink-3" : "text-ink-2")} title={summary}>
           {summary}
         </span>
@@ -627,8 +634,10 @@ function ToolFallbackApproval({
 
 const ToolFallbackImpl: ToolCallMessagePartComponent = ({
   toolName,
+  args,
   argsText,
-  result,
+  result: finalResult,
+  artifact,
   status,
   isError,
   addResult,
@@ -637,6 +646,7 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
   approval,
   respondToApproval,
 }) => {
+  const result = toolDisplayResult({ result: finalResult, artifact });
   const state = toolRowState(status, isError);
   const isRequiresAction = status?.type === "requires-action";
   const shouldRenderApproval = isRequiresAction && offersInterruptAction(status, approval, interrupt);
@@ -656,7 +666,7 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
       data-tool={toolName}
       data-status={status?.type}
     >
-      <ToolFallbackTrigger verb={toolName} state={state} expandable={hasBody} />
+      <ToolFallbackTrigger verb={toolName} activeLabel={activeToolLabel({ toolName, args })} state={state} expandable={hasBody} />
       {hasBody ? (
         <ToolFallbackContent>
           <ToolFallbackError status={status} />
