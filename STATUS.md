@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-07T03:33:17+03:00 · codex-2026-09-07-quota-release · HEAD: `75cd351`
+**Last updated:** 2026-09-07T03:36:17+03:00 · codex-2026-09-07-quota-release · HEAD: `e1fd1fe`
 
-**Current focus:** 0.2.7 release gate and dispatch: verified Codex allowance repair, search improvements and user-supplied source highlighting.
+**Current focus:** 0.2.7 commit/tag and stable release page dispatched. Installer/feed publication belongs to the pipeline; Actions not monitored by user request.
 
 ## Milestones
 
@@ -23,7 +23,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M9 CLI | done | planned tasks complete |
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
-| M12 Product experience | in-progress | 0.2.7 verified locally; release dispatch next |
+| M12 Product experience | done | 0.2.7 release dispatch complete |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
@@ -38,8 +38,8 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Recently done
 
+- M12-T60: `e1fd1fe`, `v0.2.7`, GitHub release created; staged build/typecheck/979 tests passed.
 - M12-T59: authenticated quota initial/manual refresh HTTP 200; build/typecheck/979 tests; four-layout quota review.
 - M12-T58: file-tool source highlighting; UI tests and four-layout browser review.
 - M12-T57: exact API-request find without duplicate previews; UI tests and four-layout review.
 - M12-T56: value-only tool search and highlights; 959 tests and responsive theme review.
-- M12-T55: transcript day dividers removed; timestamps retained; 458 UI tests and four-layout review.

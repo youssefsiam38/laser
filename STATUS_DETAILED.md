@@ -343,7 +343,7 @@ lane T's own if both were written.
 | M12-T57 | Navigate exact matches in captured API requests | done | codex-2026-09-07-request-find | 465 UI tests; UI typecheck/build; four-layout browser review | see notes |
 | M12-T58 | Highlight source code in file tools | done | codex-2026-09-07-tool-syntax | 467 UI tests; UI typecheck/build; desktop/phone dark/light browser review | see notes |
 | M12-T59 | Repair authenticated subscription allowance retrieval | done | codex-2026-09-07-quota-release | `pnpm verify` (979 tests); rebuilt-module authenticated initial/manual refresh HTTP 200; four-layout quota review | see notes |
-| M12-T60 | Release stable 0.2.7 | in-progress | codex-2026-09-07-quota-release | — | see notes |
+| M12-T60 | Release stable 0.2.7 | done | codex-2026-09-07-quota-release | `e1fd1fe`; `v0.2.7`; https://github.com/youssefsiam38/laser/releases/tag/v0.2.7; staged `pnpm verify` (979 tests) | see notes |
 
 #### M12-T1 notes
 - 2026-09-06 claimed: audit the shipped logo assets, theme presets, assistant-ui
@@ -1035,6 +1035,7 @@ lane T's own if both were written.
 #### M12-T60 notes
 - 2026-09-07 claimed: include the user's completed highlighting and accumulated search fixes; run the workspace gate, push the release commit/tag and create the release without monitoring Actions. Unrelated scratch files remain untouched.
 - 2026-09-07 checkpoint: all workspace versions are 0.2.7. Initial full gate passed build/typecheck/979 tests; authenticated rebuilt-module verification passed twice and four-layout quota review is complete. Staging release-owned changes before repeating the gate. Independent M3-T10 guide/planning edits and user scratch remain outside this release. User explicitly overrides the usual CI-wait step: dispatch only, no Actions polling.
+- 2026-09-07 done: staged full build/typecheck/979-test gate passed again (`/tmp/laser-027-staged-verify.log`); commit `e1fd1fe` and annotated tag `v0.2.7` pushed atomically. Stable release page created at https://github.com/youssefsiam38/laser/releases/tag/v0.2.7 with update guidance, quota fix and user highlighting. The page is deliberately not Latest until the existing release workflow uploads verified installers and updates feeds. Actions were neither waited on nor monitored, as requested; installer availability is not claimed. All temporary QA processes stopped; unrelated guide/planning edits and scratch files remain uncommitted.
 
 ## MX · Cross-cutting
 
