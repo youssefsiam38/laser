@@ -48,7 +48,9 @@ export function WebSearchTab({ cwd }: { cwd: string }) {
     try {
       const result = await client.request("web-search/configure", { cwd, change });
       if (request !== generation.current) return false;
-      setStatus(result); setNotice(change.action === "select" ? "Search provider selected. Feature enablement is unchanged." : "Search connection saved. Feature enablement is unchanged.");
+      setStatus(result); setNotice(change.action === "select" || (change.action === "configure" && change.activate)
+        ? `${WEB_SEARCH_PROVIDERS.find((p) => p.id === result.selectedProvider)?.name} passed the test and is the only selected search provider. Web search enablement is unchanged.`
+        : "Search connection updated. Other providers will not be used automatically.");
       return true;
     } catch (failure) {
       if (request === generation.current) setError(failure instanceof Error ? failure.message : "Could not save. Try again.");
@@ -58,7 +60,7 @@ export function WebSearchTab({ cwd }: { cwd: string }) {
   const toggle = async (enabled: boolean) => {
     setBusy(true); setError(undefined);
     try {
-      const result = await client.request("feature/set", { id: "web-search", scope: "global", enabled });
+      const result = await client.request("feature/set", { id: "web-search", scope: "global", enabled, cwd });
       // Reload with cwd so project overrides remain visible.
       await load();
       setNotice(result.restartPending ? "Saved. Search availability will change when the affected project can restart." : `Web search ${enabled ? "enabled" : "disabled"}. Your connections are unchanged.`);
@@ -78,7 +80,7 @@ export function WebSearchTab({ cwd }: { cwd: string }) {
         </header>
         <section className="rounded-xl border border-line bg-surface p-4" aria-label="Search availability">
           <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0"><div className="flex items-center gap-2"><Globe className="size-4 text-ink-2" /><h3 className="text-sm font-semibold">Enable web search</h3></div><p className="mt-1 text-sm leading-6 text-ink-2">Every-project default. Switching off keeps your connections saved.</p></div>
+            <div className="min-w-0"><div className="flex items-center gap-2"><Globe className="size-4 text-ink-2" /><h3 className="text-sm font-semibold">Enable web search</h3></div><p className="mt-1 text-sm leading-6 text-ink-2">Turning on tests the selected provider with a real search; charges may apply. Switching off keeps your connections saved.</p></div>
             <Toggle variant="outline" pressed={feature?.globalEnabled ?? false} disabled={busy || !feature} aria-label="Enable web search" onPressedChange={(enabled) => void toggle(enabled)}>{feature?.globalEnabled ? "On" : "Off"}</Toggle>
           </div>
           <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-line pt-3 text-sm"><span className="text-ink-2">Searches go to</span><span className="font-medium">{selected.name}</span><Badge variant="outline">{selectedStatus.configured ? selectedStatus.source === "none" ? "No key needed" : "Connection saved" : "Setup needed"}</Badge></div>
@@ -87,6 +89,7 @@ export function WebSearchTab({ cwd }: { cwd: string }) {
         </section>
         {error && <div role="alert" className="text-sm text-danger">{error}</div>}
         {status.sharedConnectionWarning && <p role="status" className="text-sm text-attention">{status.sharedConnectionWarning}</p>}
+        {busy && <p role="status" className="text-sm text-ink-2">Checking and saving… A connection test makes a real search call. Provider charges may apply.</p>}
         {notice && <p role="status" className="text-sm text-ink-2">{notice}</p>}
         <div className="flex flex-col gap-2"><h3 className="text-sm font-semibold">Search providers</h3><p className="text-sm leading-6 text-ink-2">Only the selected provider receives queries. Paid searches use its billing or account allowance. Model connections need your explicit permission.</p><Input aria-label="Find a search provider" placeholder="Find a provider…" value={filter} onChange={(event) => setFilter(event.target.value)} /></div>
         <div className="divide-y divide-line rounded-xl border border-line bg-surface">
@@ -115,7 +118,8 @@ function SearchConnection({ provider, connection, models, busy, selected, onChan
   const [baseUrl, setBaseUrl] = useState(connection.baseUrl ?? "");
   const [zone, setZone] = useState(connection.zone ?? "");
   const save = async (source: WebSearchConnection["source"], sharedProvider?: string, forget = false) => {
-    const ok = await onChange({ action: "configure", provider: provider.id, connection: { source, ...(sharedProvider ? { sharedProvider } : {}), ...(provider.endpoint && baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}), ...(provider.zone && zone.trim() ? { zone: zone.trim() } : {}) }, ...(forget ? { apiKey: null } : source === "dedicated" && key.trim() ? { apiKey: key.trim() } : {}) });
+    const activate = !forget && (source !== "none" || provider.key !== "required");
+    const ok = await onChange({ action: "configure", provider: provider.id, connection: { source, ...(sharedProvider ? { sharedProvider } : {}), ...(provider.endpoint && baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}), ...(provider.zone && zone.trim() ? { zone: zone.trim() } : {}) }, ...(forget ? { apiKey: null } : source === "dedicated" && key.trim() ? { apiKey: key.trim() } : {}), ...(activate ? { activate: true } : {}) });
     if (ok) setKey("");
   };
   const shared = models.filter((entry) => provider.sharedProviders.includes(entry.id));
@@ -124,18 +128,18 @@ function SearchConnection({ provider, connection, models, busy, selected, onChan
     {shared.length > 0 && <section className="flex flex-col gap-2" aria-label={`${provider.name} shared connections`}>
       {shared.map((entry) => <div key={entry.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-surface-2 p-3">
         <div className="min-w-0"><p className="flex items-center gap-2 text-sm font-medium"><Link2 className="size-4" />{entry.name}</p><p className="mt-1 text-xs text-ink-2">{entry.configured ? "Reuse this model connection; no second key is stored." : "Connect this provider in Models and dictation first."}</p></div>
-        <Button variant="secondary" size="sm" disabled={busy || (!entry.configured && !(connection.source === "shared" && connection.sharedProvider === entry.id))} onClick={() => void save(connection.source === "shared" && connection.sharedProvider === entry.id ? "none" : "shared", connection.source === "shared" && connection.sharedProvider === entry.id ? undefined : entry.id)}>{connection.source === "shared" && connection.sharedProvider === entry.id ? "Revoke search access" : "Allow for web search"}</Button>
+        <Button variant="secondary" size="sm" disabled={busy || (!entry.configured && !(connection.source === "shared" && connection.sharedProvider === entry.id))} onClick={() => void save(connection.source === "shared" && connection.sharedProvider === entry.id ? "none" : "shared", connection.source === "shared" && connection.sharedProvider === entry.id ? undefined : entry.id)}>{connection.source === "shared" && connection.sharedProvider === entry.id ? "Revoke search access" : "Allow, test and use"}</Button>
       </div>)}
     </section>}
     {provider.endpoint && <label className="flex flex-col gap-1 text-sm">SearXNG address<Input type="url" value={baseUrl} placeholder="https://search.example.com" onChange={(event) => setBaseUrl(event.target.value)} /></label>}
     {provider.zone && <label className="flex flex-col gap-1 text-sm">SERP zone<Input value={zone} placeholder="Your SERP zone name" onChange={(event) => setZone(event.target.value)} /></label>}
     {provider.key !== "none" && <label className="flex flex-col gap-1 text-sm"><span className="flex items-center gap-2"><KeyRound className="size-4 text-ink-2" />{shared.length ? "Or use a separate search-only key" : "Search API key"}</span><Input type="password" autoComplete="new-password" value={key} onChange={(event) => setKey(event.target.value)} placeholder={connection.hasKey ? "Saved key is never shown; paste to replace" : "Paste an API key"} /></label>}
     <div className="flex flex-wrap gap-2">
-      {provider.key !== "none" && <Button size="sm" variant="secondary" disabled={busy || (!key.trim() && !connection.hasKey)} onClick={() => void save("dedicated")}>Save search connection</Button>}
-      {provider.key !== "required" && <Button size="sm" variant="secondary" disabled={busy || (provider.endpoint && !baseUrl.trim())} onClick={() => void save("none")}>{provider.endpoint ? "Save instance" : "Use without a key"}</Button>}
+      {provider.key !== "none" && <Button size="sm" variant="secondary" disabled={busy || (!key.trim() && !connection.hasKey)} onClick={() => void save("dedicated")}>Test and use key</Button>}
+      {provider.key !== "required" && <Button size="sm" variant="secondary" disabled={busy || (provider.endpoint && !baseUrl.trim())} onClick={() => void save("none")}>{provider.endpoint ? "Test and use instance" : "Test and use without a key"}</Button>}
       {connection.hasKey && <Button size="sm" variant="ghost" disabled={busy} onClick={() => void save(connection.source === "shared" ? "shared" : "none", connection.sharedProvider, true)}>Remove search-only key</Button>}
-      <Button size="sm" disabled={busy || selected || !connection.configured} onClick={() => void onChange({ action: "select", provider: provider.id })}>{selected ? "Selected provider" : "Use for searches"}</Button>
+      <Button size="sm" disabled={busy || !connection.configured} onClick={() => void onChange({ action: "select", provider: provider.id })}>{selected ? "Test selected provider" : "Test and use saved connection"}</Button>
     </div>
-    <p className="text-xs leading-5 text-ink-3">Saving is not a paid connection test. Any provider rejection appears in the search result. No fallback provider is used.</p>
+    <p className="text-xs leading-5 text-ink-3">Testing makes a real search call and may incur provider charges. Only a successful test switches the selected provider. All other providers stay inactive, including free ones. No fallback is used.</p>
   </div>;
 }

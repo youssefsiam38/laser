@@ -36,11 +36,7 @@ export function toSessionGoal(goal: GoalSnapshot | null): SessionGoal | null {
     startedAt: goal.startedAt,
     updatedAt: goal.updatedAt,
     iteration: goal.iteration,
-    tokensUsed: goal.tokensUsed,
-    timeUsedSeconds: goal.timeUsedSeconds,
     automaticTurns: goal.automaticTurns,
-    ...(goal.activeStartedAt !== undefined ? { activeStartedAt: goal.activeStartedAt } : {}),
-    ...(goal.tokenBudget !== undefined ? { tokenBudget: goal.tokenBudget } : {}),
     ...(goal.latestReason !== undefined ? { latestReason: goal.latestReason } : {}),
     ...(goal.waitingUntil !== undefined ? { waitingUntil: goal.waitingUntil } : {}),
   };

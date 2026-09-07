@@ -1,0 +1,26 @@
+diff --git a/duckduckgo.ts b/duckduckgo.ts
+index d31a6b816985f03827e1a6a4cdd559d38261e684..f9f5ddb59098428f1f358d4dd18d925dc1a9f2a0 100644
+--- a/duckduckgo.ts
++++ b/duckduckgo.ts
+@@ -88,7 +88,11 @@ export async function searchWithDuckDuckGo(query: string, options: SearchOptions
+ 			throw new Error(`DuckDuckGo search error ${response.status}: ${body.slice(0, 300)}`);
+ 		}
+ 
+-		const { document } = parseHTML(await response.text());
++		const html = await response.text();
++		const { document } = parseHTML(html);
++		if (document.querySelector('#challenge-form, form[action*="anomaly.js"], iframe[src*="captcha"]')) {
++			throw new Error("DuckDuckGo requires bot verification (challenge response)");
++		}
+ 		const filters = normalizeDomainFilters(options.domainFilter);
+ 		const results: SearchResult[] = [];
+ 		let parseableResults = 0;
+@@ -105,7 +109,7 @@ export async function searchWithDuckDuckGo(query: string, options: SearchOptions
+ 			results.push({ title, url: resultUrl, snippet });
+ 			if (results.length >= normalizeCount(options.numResults)) break;
+ 		}
+-		if (parseableResults === 0) {
++		if (parseableResults === 0 && !document.querySelector(".no-results, .no-results__message, .result--no-result")) {
+ 			throw new Error("DuckDuckGo returned no parseable results (invalid response)");
+ 		}
+ 

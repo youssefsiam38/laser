@@ -156,6 +156,8 @@ export function toolRowState(status: ToolCallMessagePartStatus | undefined, isEr
 }
 
 export type ToolFallbackTriggerProps = Omit<React.ComponentProps<typeof CollapsibleTrigger>, "children"> & {
+  /** Lifecycle disclosures do not own a second usage/timing display. */
+  showDuration?: boolean;
   /** Host Grotesk 500 verb: "Read", "Run", or the tool's name for an unknown tool. */
   verb: string;
   activeLabel?: string | undefined;
@@ -182,6 +184,7 @@ function ToolFallbackTrigger({
   state = "done",
   elapsedMs,
   expandable = true,
+  showDuration = true,
   trailing,
   className,
   ...props
@@ -236,7 +239,7 @@ function ToolFallbackTrigger({
       {cancelled ? (
         <span className={cn(mono, "shrink-0 text-ink-3")}>cancelled</span>
       ) : (
-        <ToolFallbackDuration running={running} elapsedMs={elapsedMs} />
+        showDuration ? <ToolFallbackDuration running={running} elapsedMs={elapsedMs} /> : null
       )}
       {expandable ? (
         <ChevronRight

@@ -39,7 +39,7 @@ export function FeaturesScreen({ cwd }: { cwd?: string }) {
         id: feature.manifest.id,
         enabled,
         scope,
-        ...(scope === "project" && cwd ? { cwd } : {}),
+        ...(cwd ? { cwd } : {}),
       });
       setFeatures(result.features);
       actions.toast(

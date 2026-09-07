@@ -20,6 +20,7 @@ import { closeSync, openSync, readSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { defaultAgentDir } from "./paths.js";
 import type { SessionSummary } from "@lasercode/protocol";
+import { goalPromptId, toolOutputText } from "@lasercode/protocol";
 
 export interface CatalogEntry extends SessionSummary {
   size: number;
@@ -32,6 +33,7 @@ interface Scan {
   messageCount: number;
   firstMessage?: string | undefined;
   name?: string | undefined;
+  pendingGoal?: { id: string; text: string } | undefined;
 }
 
 interface CacheEntry {
@@ -245,6 +247,14 @@ function scanBody(path: string, size: number, from: Scan): Scan {
  */
 function applyLine(line: string, scan: Scan): void {
   if (line.length < 16) return;
+  if (scan.firstMessage === undefined && line.includes('"customType":"goal-state"')) {
+    try {
+      const entry = JSON.parse(line);
+      const goal = entry.type === "custom" ? entry.data?.goal : undefined;
+      scan.pendingGoal = goal && typeof goal.id === "string" && typeof goal.text === "string" ? { id: goal.id, text: goal.text } : undefined;
+    } catch { /* torn line */ }
+    return;
+  }
   if (line.includes('"type":"session_info"')) {
     try {
       const entry = JSON.parse(line) as { name?: unknown };
@@ -262,8 +272,10 @@ function applyLine(line: string, scan: Scan): void {
   if (!user || scan.firstMessage !== undefined) return;
   try {
     const entry = JSON.parse(line) as { message?: { content?: unknown } };
-    const text = textOf(entry.message?.content);
+    const raw = typeof entry.message?.content === "string" ? entry.message.content : toolOutputText(entry.message) ?? "";
+    const text = textOf(scan.pendingGoal && goalPromptId(raw) === scan.pendingGoal.id ? scan.pendingGoal.text : entry.message?.content);
     if (text) scan.firstMessage = text;
+    scan.pendingGoal = undefined;
   } catch {
     /* torn line */
   }

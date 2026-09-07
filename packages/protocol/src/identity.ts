@@ -35,6 +35,7 @@
 import { ENV, PRODUCT } from "./product.generated.js";
 
 export { ENV, PRODUCT };
+export { PRODUCT_VERSION } from "./product.generated.js";
 export type { EnvName, Product } from "./product.generated.js";
 
 /** The name in prose, in paths and in filenames: lower case, no spaces. */

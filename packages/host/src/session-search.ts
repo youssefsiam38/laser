@@ -1,6 +1,6 @@
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
-import { toolSearchContent, toolOutputText, type SearchableTool, type ClientRequests, type SessionSummary } from "@lasercode/protocol";
+import { goalPromptId, toolSearchContent, toolOutputText, type SearchableTool, type ClientRequests, type SessionSummary } from "@lasercode/protocol";
 
 type Source = "user" | "assistant" | "reasoning" | "tool";
 export const sourceRank = (source: Source) => source === "user" ? 0 : source === "assistant" ? 1 : 2;
@@ -49,6 +49,10 @@ export async function searchSessions(sessions: readonly SessionSummary[], query:
     const input = createReadStream(session.path, { encoding: "utf8" });
     const lines = createInterface({ input, crlfDelay: Infinity });
     const pending = new Map<string, SearchableTool>();
+    // Match the chat projection: only the first durable goal prompt is visible,
+    // as its original objective. Renewed guard IDs on resume share startedAt.
+    const goals = new Map<string, { objective: string; startedAt: number }>();
+    const shownGoals = new Set<number>();
     const collect = (parts: Array<{ text: string; source: Source }>) => {
       for (const part of parts) {
         const { text } = part;
@@ -67,6 +71,28 @@ export async function searchSessions(sessions: readonly SessionSummary[], query:
       for await (const line of lines) {
         let entry: unknown;
         try { entry = JSON.parse(line); } catch { continue; }
+        const e = entry as { type?: string; customType?: string; data?: { goal?: { id?: string; text?: string; startedAt?: number } }; message?: { role?: string; content?: unknown; toolCallId?: string; isError?: boolean } };
+        const goal = e?.type === "custom" && e.customType === "goal-state" ? e.data?.goal : undefined;
+        if (goal && typeof goal.id === "string" && typeof goal.text === "string" && typeof goal.startedAt === "number") goals.set(goal.id, { objective: goal.text, startedAt: goal.startedAt });
+        if (e?.message?.role === "user") {
+          const text = typeof e.message.content === "string" ? e.message.content : toolOutputText(e.message) ?? "";
+          const id = goalPromptId(text);
+          const known = id ? goals.get(id) : undefined;
+          if (known) {
+            if (!shownGoals.has(known.startedAt)) collect([{ text: known.objective, source: "user" }]);
+            shownGoals.add(known.startedAt);
+            continue;
+          }
+        }
+        if (e?.message?.role === "toolResult" && !e.message.isError && toolOutputText(e.message)?.startsWith("Goal complete:")) {
+          const call = pending.get(e.message.toolCallId ?? "");
+          const args = call?.args as { goal_id?: string; summary?: string } | undefined;
+          if (call?.name === "goal_complete" && typeof args?.goal_id === "string" && goals.has(args.goal_id) && typeof args.summary === "string") {
+            collect([{ text: args.summary, source: "tool" }]);
+            pending.delete(e.message.toolCallId ?? "");
+            continue;
+          }
+        }
         collect(searchableMessage(entry, pending));
       }
     } catch { result.unreadable++; }

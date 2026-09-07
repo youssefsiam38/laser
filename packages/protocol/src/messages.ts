@@ -801,6 +801,8 @@ export interface ProjectFiles {
 
 /** Client → host requests. */
 export interface ClientRequests {
+  /** Read-only release handshake; complete before hydrating or sending work. */
+  "pi/host/version": { params: {}; result: { version: string } };
   "session/new": { params: { cwd: string; parentPath?: string }; result: { state: SessionState } };
   "session/load": { params: { path: string; fromSeq?: number }; result: { state: SessionState; replayFrom: number } };
   "session/prompt": {

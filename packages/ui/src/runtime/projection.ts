@@ -37,9 +37,11 @@ import { namespaced, MESSAGE_METADATA_NS } from "@lasercode/protocol";
 import type { ThreadMessageLike } from "@assistant-ui/react";
 import type { MessageSpeaker, StopReason, UiDialogRequest, Usage } from "@lasercode/protocol";
 import type { Block, SessionView } from "../store.js";
+import { goalRecords, goalForPrompt, type GoalRecord } from "./goal-history.js";
 
 /** `data` part name used for transcript notices. */
 export const NOTICE_DATA_PART = namespaced("notice");
+export const GOAL_DATA_PART = namespaced("goal-record");
 
 export type ProjectedContentPart = Exclude<ThreadMessageLike["content"], string>[number];
 export type ProjectedToolCallPart = Extract<ProjectedContentPart, { type: "tool-call" }>;
@@ -51,6 +53,7 @@ export interface ProjectionInput {
   readonly blocks: readonly Block[];
   readonly running: boolean;
   readonly dialogs: readonly UiDialogRequest[];
+  readonly goals?: readonly GoalRecord[];
 }
 
 export interface ProjectionResult {
@@ -253,7 +256,7 @@ export function toolDisplayResult(part: { result?: unknown; artifact?: unknown }
   return artifact && typeof artifact === "object" && "partialOutput" in artifact ? artifact.partialOutput : undefined;
 }
 
-const userMessage = (block: Extract<Block, { kind: "user" }>): ThreadMessageLike => {
+const userMessage = (block: Extract<Block, { kind: "user" }>, ordinal: number, goal?: GoalRecord): ThreadMessageLike => {
   const content: ProjectedContentPart[] = [];
   if (block.text.trim()) content.push({ type: "text", text: block.text });
   if (block.images > 0) content.push({ type: "text", text: imagesNote(block.images) });
@@ -264,7 +267,7 @@ const userMessage = (block: Extract<Block, { kind: "user" }>): ThreadMessageLike
     content,
     ...(createdAt ? { createdAt } : {}),
     metadata: {
-      custom: { [MESSAGE_METADATA_NS]: { kind: "user", images: block.images, optimistic: block.optimistic === true } },
+      custom: { [MESSAGE_METADATA_NS]: { kind: "user", images: block.images, optimistic: block.optimistic === true, userOrdinal: ordinal, ...(goal ? { goalSetter: true } : {}) } },
     },
   };
 };
@@ -308,6 +311,11 @@ const turnMessage = (
 
     const dialog = toolDialogs.get(block.id);
     if (dialog) pendingDialog = dialog;
+    const completedGoal = input.goals?.find(goal => goal.completionToolId === block.id);
+    if (completedGoal) {
+      parts.push({ type: "data", name: GOAL_DATA_PART, data: completedGoal });
+      continue;
+    }
     parts.push(toolPartOf(block, dialog));
   }
 
@@ -387,6 +395,8 @@ export function projectMessages(input: ProjectionInput): ProjectionResult {
 
   const messages: ThreadMessageLike[] = [];
   let group: Extract<Block, { kind: "assistant" | "tool" }>[] = [];
+  let userOrdinal = 0;
+  const shownGoals = new Set<string>();
 
   const flush = (isTail: boolean): void => {
     if (group.length === 0) return;
@@ -395,6 +405,15 @@ export function projectMessages(input: ProjectionInput): ProjectionResult {
   };
 
   for (const block of input.blocks) {
+    if (block.kind === "user") {
+      const ordinal = userOrdinal++;
+      const goal = goalForPrompt(block.text, input.goals ?? []);
+      if (goal && shownGoals.has(goal.id)) continue;
+      flush(false);
+      if (goal) shownGoals.add(goal.id);
+      messages.push(userMessage(goal ? { ...block, text: goal.moments[0]!.objective } : block, ordinal, goal));
+      continue;
+    }
     if (isTurnBlock(block)) {
       // A change of speaker ends the group: a child run's words are its own
       // message with its own header, never folded into the reply above them.
@@ -403,7 +422,7 @@ export function projectMessages(input: ProjectionInput): ProjectionResult {
       continue;
     }
     flush(false);
-    messages.push(block.kind === "user" ? userMessage(block) : noticeMessage(block));
+    messages.push(noticeMessage(block));
   }
   flush(true);
 
@@ -413,7 +432,7 @@ export function projectMessages(input: ProjectionInput): ProjectionResult {
 /** Convenience wrapper over a `SessionView`; an absent view projects to nothing. */
 export function projectSessionView(view: SessionView | undefined): ProjectionResult {
   if (!view) return EMPTY_RESULT;
-  return projectMessages({ blocks: view.blocks, running: view.running, dialogs: view.dialogs });
+  return projectMessages({ blocks: view.blocks, running: view.running, dialogs: view.dialogs, goals: goalRecords(view.entries, view.blocks) });
 }
 
 // ---------------------------------------------------------------------------

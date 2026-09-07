@@ -584,6 +584,7 @@ export const clientParamsSchemas = {
   "session/cancel": z.object({ path: sessionPath }).strict(),
   "session/set_mode": z.object({ path: sessionPath, mode: z.string().min(1) }).strict(),
 
+  "pi/host/version": z.object({}).strict(),
   "pi/session/list": z.object({ cwd: z.string().min(1).optional() }).strict(),
   "session/search": z.object({ query: z.string().trim().min(1).max(200), cwd: z.string().min(1).optional(), after: z.string().datetime().optional(), before: z.string().datetime().optional(), cursor: z.number().int().nonnegative().optional() }).strict(),
   "pi/session/inbox": z
@@ -632,13 +633,14 @@ export const clientParamsSchemas = {
   "feature/list": z.object({ cwd: cwd.optional() }).strict(),
   "web-search/status": z.object({ cwd }).strict(),
   "web-search/configure": z.object({ cwd, change: z.discriminatedUnion("action", [
+    z.object({ action: z.literal("test") }).strict(),
     z.object({ action: z.literal("select"), provider: z.enum(WEB_SEARCH_PROVIDER_IDS) }).strict(),
     z.object({ action: z.literal("configure"), provider: z.enum(WEB_SEARCH_PROVIDER_IDS), connection: z.object({
       source: z.enum(["none", "dedicated", "shared"]),
       sharedProvider: z.string().min(1).max(80).optional(),
       baseUrl: z.string().trim().max(2048).optional(),
       zone: z.string().trim().max(120).optional(),
-    }).strict(), apiKey: z.string().trim().min(1).max(16384).regex(/^[^\x00-\x1f\x7f]+$/).nullable().optional() }).strict(),
+    }).strict(), apiKey: z.string().trim().min(1).max(16384).regex(/^[^\x00-\x1f\x7f]+$/).nullable().optional(), activate: z.boolean().optional() }).strict(),
   ]) }).strict(),
   "feature/set": z
     .object({ id: z.string().min(1).max(80), enabled: z.boolean().nullable(), scope: featureScopeSchema, cwd: cwd.optional() })
@@ -652,7 +654,7 @@ export const clientParamsSchemas = {
         z.object({ action: z.literal("resume") }).strict(),
         z.object({ action: z.literal("clear") }).strict(),
         z.object({ action: z.literal("edit"), objective: z.string().trim().min(1).max(4000) }).strict(),
-        z.object({ action: z.literal("start"), objective: z.string().trim().min(1).max(4000), tokenBudget: z.number().int().positive().optional() }).strict(),
+        z.object({ action: z.literal("start"), objective: z.string().trim().min(1).max(4000) }).strict(),
       ]),
     })
     .strict(),
@@ -749,6 +751,7 @@ export const jsonRpcRequestSchema = z
     id: jsonRpcId,
     method: z.string().min(1),
     params: z.unknown().optional(),
+    clientVersion: z.string().min(1).optional(),
   })
   .strict();
 

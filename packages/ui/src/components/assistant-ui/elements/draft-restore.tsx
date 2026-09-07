@@ -110,6 +110,14 @@ export function useComposerDraft(path: string | undefined): {
   const [saved, setSaved] = useState<SavedDraft | undefined>(() => (path ? readDraft(path) : undefined));
   const lastText = useRef(text);
 
+  useEffect(() => {
+    const save = () => {
+      if (path && lastText.current.trim()) writeDraft(path, lastText.current);
+    };
+    window.addEventListener("beforeunload", save);
+    return () => window.removeEventListener("beforeunload", save);
+  }, [path]);
+
   // A new session: read its draft, and forget the previous one's offer.
   useEffect(() => {
     setSaved(path ? readDraft(path) : undefined);

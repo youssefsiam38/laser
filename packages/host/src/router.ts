@@ -20,6 +20,7 @@
  */
 import { ErrorCodes, PRODUCT_NAME, ProtocolError, decisionPushPayload, parseClientRequest, type JsonRpcError, type JsonRpcResponse, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
 import { unlinkSync } from "node:fs";
+import { PRODUCT_VERSION } from "@lasercode/protocol";
 import type { AttentionTracker } from "./attention.js";
 import type { SessionCatalog } from "./catalog.js";
 import { searchSessions } from "./session-search.js";
@@ -137,6 +138,10 @@ export class Router {
     const id = (raw as { id?: string | number } | null)?.id ?? 0;
     try {
       const req = parseClientRequest(raw);
+      const clientVersion = (raw as { clientVersion?: string }).clientVersion;
+      if (req.method !== "pi/host/version" && clientVersion && clientVersion !== PRODUCT_VERSION) {
+        throw new ProtocolError(ErrorCodes.VersionMismatch, "Refresh this view to match the host before continuing.", { version: PRODUCT_VERSION });
+      }
       const result = await this.dispatch(req);
       return { jsonrpc: "2.0", id: req.id, result };
     } catch (error) {
@@ -206,6 +211,8 @@ export class Router {
       return this.deps.subagents.act(req.params);
     }
     switch (req.method) {
+      case "pi/host/version":
+        return { version: PRODUCT_VERSION };
       case "pi/session/list":
         return { sessions: this.sessions(req.params.cwd) };
 
@@ -373,6 +380,11 @@ export class Router {
       case "feature/list":
         return { features: this.features().list(req.params.cwd) };
       case "feature/set": {
+        if (req.params.id === "web-search" && (req.params.enabled === true || (req.params.enabled === null && this.features().list().find((f) => f.manifest.id === "web-search")?.globalEnabled))) {
+          const cwd = req.params.cwd ?? this.pool.cwds()[0];
+          if (!cwd) throw new Error("Open a project to test your search connection before enabling web search.");
+          await (await this.pool.get(cwd)).request("web-search/configure", { cwd, change: { action: "test" } });
+        }
         const features = this.features().set(req.params.id, req.params.enabled, req.params.scope, req.params.cwd);
         const targets = req.params.scope === "project" && req.params.cwd ? [req.params.cwd] : this.pool.cwds();
         let restartPending = false;

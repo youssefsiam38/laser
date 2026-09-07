@@ -171,6 +171,7 @@ const api = {
   identity: (): Promise<IdentitySummary> => ipcRenderer.invoke(IPC.identity) as Promise<IdentitySummary>,
 
   updates: {
+    restart: (): void => { ipcRenderer.send(IPC.updateInstall, { relaunch: true }); },
     status: (): Promise<UpdateStatus> => ipcRenderer.invoke(IPC.updateStatus) as Promise<UpdateStatus>,
     check: (): Promise<UpdateStatus> => ipcRenderer.invoke(IPC.updateCheck) as Promise<UpdateStatus>,
     install: (): void => {

@@ -6,6 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostNotificationMethod } from "@lasercode/protocol";
+import { PRODUCT_VERSION } from "@lasercode/protocol";
 import { HostClient } from "../src/client.js";
 
 // --- stubs -----------------------------------------------------------------
@@ -37,9 +38,10 @@ class FakeSocket {
     this.onclose?.();
   }
 
-  accept(): void {
+  accept(version: string | null = PRODUCT_VERSION): void {
     this.readyState = FakeSocket.OPEN;
     this.onopen?.();
+    if (version !== null) this.deliver({ jsonrpc: "2.0", id: 0, result: { version } });
   }
 
   deliver(message: unknown): void {
@@ -47,7 +49,7 @@ class FakeSocket {
   }
 
   frames(): Array<{ id?: number; method: string; params: Record<string, unknown> }> {
-    return this.sent.map((s) => JSON.parse(s) as { id?: number; method: string; params: Record<string, unknown> });
+    return this.sent.map((s) => JSON.parse(s) as { id?: number; method: string; params: Record<string, unknown> }).filter((s) => s.id !== 0);
   }
 }
 
@@ -119,6 +121,37 @@ const updateMessage = (seq: number) => ({
 });
 
 // --- tests -----------------------------------------------------------------
+
+it("does not load or resume sessions until the host release matches", async () => {
+  const { client } = build(); client.track("/s.jsonl", 4); client.connect();
+  const socket = FakeSocket.instances[0]!; socket.accept(null);
+  expect(client.connection).toBe("connecting"); expect(socket.frames()).toEqual([]);
+  await expect(client.request("session/new", { cwd: "/work" })).rejects.toThrow();
+  socket.deliver({ jsonrpc: "2.0", id: 0, result: { version: PRODUCT_VERSION } });
+  expect(client.connection).toBe("open"); expect(socket.frames()[0]?.method).toBe("session/load");
+  client.close();
+});
+
+it("stops reconnect and resume on a new host version without sending a cancellation", async () => {
+  vi.useFakeTimers(); const mismatch = vi.fn();
+  const { client } = build({ onVersionMismatch: mismatch });
+  client.track("/s.jsonl", 4); client.connect();
+  const socket = FakeSocket.instances[0]!; socket.accept("99.0.0");
+  expect(mismatch).toHaveBeenCalledExactlyOnceWith("99.0.0");
+  expect(socket.frames()).toEqual([]);
+  await expect(client.whenConnected()).rejects.toThrow(/Refresh/);
+  client.reconnect("visible"); doc.fire("visibilitychange"); vi.advanceTimersByTime(60_000);
+  expect(FakeSocket.instances).toHaveLength(1);
+  client.close();
+});
+
+it("does not allow a matching web bundle to hide an older Electron main", () => {
+  vi.stubGlobal("desktop", { version: "0.0.1" });
+  const mismatch = vi.fn(), { client } = build({ onVersionMismatch: mismatch });
+  client.connect(); FakeSocket.instances[0]!.accept();
+  expect(mismatch).toHaveBeenCalledWith(PRODUCT_VERSION);
+  expect(client.connection).toBe("closed"); client.close();
+});
 
 describe("visibility listener", () => {
   it("registers once per client and is removed on close", () => {

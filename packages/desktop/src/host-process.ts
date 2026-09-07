@@ -38,6 +38,7 @@ import {
   type LaserPaths,
 } from "@lasercode/cli";
 import { hostNeedsRefresh } from "./host-compatibility.js";
+import { installedHostVersion } from "./native-update.js";
 import { checkBundledAgent, type AgentCheck } from "./agent.js";
 import type { DesktopHostInfo } from "./api.js";
 import type { DesktopLog } from "./log.js";
@@ -68,6 +69,7 @@ export interface HostProcessOptions {
    */
   env?: Readonly<Record<string, string>>;
   onChange: (info: DesktopHostInfo) => void;
+  confirmHostRefresh?: (runningVersion: string) => Promise<boolean>;
 }
 
 /** A partial update to the published info. `message: null` clears the message. */
@@ -118,9 +120,16 @@ export class HostProcess {
     // would forget that we own it and leave it behind on quit.
     if (this.child && this.child.exitCode === null) return this.info;
 
+    if (this.options.packaged && installedHostVersion(this.options.resourcesPath) !== CLI_VERSION) {
+      return this.publish({ state: "failed", message: "An update is installed. Restart the app and host together when you are ready." });
+    }
+
     const existing = await inspectHost(paths);
     if (existing.state === "running") {
       if (hostNeedsRefresh(existing.record.cliVersion, CLI_VERSION)) {
+        if (!await this.options.confirmHostRefresh?.(existing.record.cliVersion)) {
+          return this.publish({ state: "failed", message: "The host is a different version. Restart the app and host together when you are ready." });
+        }
         log.line(
           `refreshing background service ${existing.record.cliVersion} to ${CLI_VERSION} (pid ${existing.record.pid})`,
         );
@@ -226,6 +235,9 @@ export class HostProcess {
   }
 
   private async spawnDaemon(): Promise<DesktopHostInfo> {
+    if (this.options.packaged && installedHostVersion(this.options.resourcesPath) !== CLI_VERSION) {
+      return this.publish({ state: "failed", message: "An update is installed. Restart the app and host together when you are ready." });
+    }
     const { paths, log } = this.options;
     const runtime = this.runtime;
     if (!runtime) return this.publish({ state: "failed", message: "The Node runtime was not resolved." });
@@ -264,6 +276,10 @@ export class HostProcess {
     while (Date.now() < deadline) {
       const status = await inspectHost(paths, 1000);
       if (status.state === "running") {
+        if (hostNeedsRefresh(status.record.cliVersion, CLI_VERSION)) {
+          await this.stop();
+          return this.publish({ state: "failed", message: "The installed version changed during startup. Restart the app and host together when you are ready." });
+        }
         // The host answers; the agent it will load is the last thing to prove.
         // Running an agent nobody pinned, or one that cannot load, is worse
         // than not starting — and it must be said now rather than at the first
@@ -348,10 +364,11 @@ export class HostProcess {
    * Stop the host we started, and wait for it: quitting the app while a Pi
    * session is mid-write is how a session file gets a torn tail.
    */
-  async stop(): Promise<void> {
+  async stop(includeAttached = false): Promise<void> {
     this.stopping = true;
     const child = this.child;
     if (!child || child.exitCode !== null) {
+      if (includeAttached) await stopHost(this.options.paths);
       this.publish({ state: "stopped", message: null });
       return;
     }

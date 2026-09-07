@@ -15,6 +15,20 @@ function save(id: string, entries: unknown[]) {
   return path;
 }
 describe("full-history search", () => {
+  it("indexes the clean goal and completion, never hidden continuation instructions or guard IDs", async () => {
+    const goal = { id: "private-guard", text: "Compare Apple stacks", startedAt: 1 };
+    const prompt = `<goal_id>private-guard</goal_id>\nInternal secret instructions\n<!-- pi-goal-prompt:nonce -->`;
+    const path = save("goal", [
+      { type: "custom", customType: "goal-state", data: { goal } },
+      message("user", prompt), message("user", [{ type: "text", text: prompt }]),
+      message("assistant", [{ type: "toolCall", id: "done", name: "goal_complete", arguments: { goal_id: goal.id, summary: "Apple stacks compared" } }]),
+      { type: "message", message: { role: "toolResult", toolCallId: "done", content: [{ type: "text", text: "Goal complete: Apple stacks compared" }] } },
+    ]);
+    const sessions = new SessionCatalog(dir).list();
+    expect((await searchSessions(sessions, "Apple")).hits).toEqual([{ path, count: 2, source: "user", excerpt: goal.text }]);
+    expect((await searchSessions(sessions, "secret")).hits).toEqual([]);
+    expect((await searchSessions(sessions, "private-guard")).hits).toEqual([]);
+  });
   it("finds deep history and prefers the user's excerpt over earlier reasoning and replies", async () => {
     const path = save("one", [message("user", "Start here"), message("assistant", [{ type: "thinking", thinking: "Apple internally" }, { type: "text", text: "Apple response" }]), message("user", "Please inspect Apple and APPLE")]);
     const result = await searchSessions(new SessionCatalog(dir).list(), "apple");

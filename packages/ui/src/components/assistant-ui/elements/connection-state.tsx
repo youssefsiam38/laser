@@ -13,7 +13,9 @@
  *   - `HostConnectionState` is the runtime-bound wrapper; it derives the four
  *     phases from the socket state and holds "resumed" for a moment.
  */
-import { CheckIcon, CloudOffIcon } from "lucide-react";
+import { CheckIcon, CloudOffIcon, RefreshCwIcon } from "lucide-react";
+import { PRODUCT_DISPLAY_NAME, PRODUCT_VERSION } from "@lasercode/protocol";
+import { refreshFrontend } from "@/pwa/register";
 import { useEffect, useRef, useState, type ComponentProps } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -92,6 +94,63 @@ export function ConnectionState({ phase, attempt, first = false, onRetry, classN
 
 /** How long "Back online" stays before the line goes away. */
 const RESUMED_MS = 2500;
+
+type DesktopUpdates = {
+  version: string;
+  updates: {
+    status(): Promise<{ state: string; version?: string; message?: string }>;
+    install(): void;
+    restart?(): void;
+    onStatus(listener: (status: { state: string; version?: string; message?: string }) => void): () => void;
+  };
+};
+
+export function VersionNotice({ hostVersion, desktopVersion, installedVersion, onRefresh, onRestart }: {
+  hostVersion?: string; desktopVersion?: string; installedVersion?: string;
+  onRefresh: () => void; onRestart?: () => void;
+}) {
+  const local = desktopVersion !== undefined;
+  const hostOlder = hostVersion !== undefined && hostVersion !== "unknown" &&
+    hostVersion.localeCompare(PRODUCT_VERSION, undefined, { numeric: true }) < 0;
+  const restart = local || hostOlder || hostVersion === "unknown";
+  return (
+    <div role="status" data-slot="version-notice" className="relative z-110 flex shrink-0 flex-wrap items-center gap-3 border-b border-line bg-surface px-4 py-3 text-sm">
+      <RefreshCwIcon aria-hidden="true" className="size-4 shrink-0 text-live" />
+      <div className="min-w-0 flex-1 basis-48">
+        <p className="font-medium text-ink">{restart ? `${PRODUCT_DISPLAY_NAME} is ready to restart` : "Refresh this view to continue"}</p>
+        <p className="mt-1 text-xs text-ink-2">{restart
+          ? "Restart the app and host together on the host computer when you are ready. Saved sessions are kept; active work will stop during restart."
+          : "The host has been updated. This refresh only updates your frontend. Your sessions and running agents will not be affected."}</p>
+        <p className="mt-1 text-xs text-ink-3">{installedVersion ? `Installed ${installedVersion} · Running ${desktopVersion}` : `This view ${PRODUCT_VERSION} · Host ${hostVersion}`}</p>
+      </div>
+      {restart ? (local && onRestart && <Button variant="outline" size="sm" onClick={onRestart}>Restart when ready…</Button>)
+        : <Button variant="outline" size="sm" onClick={onRefresh}>Refresh view</Button>}
+    </div>
+  );
+}
+
+/** Shared connection element; both native updates and remote version drift live here. */
+export function HostVersionNotice() {
+  const mismatch = useLaserState((s) => s.versionMismatch);
+  const desktop = (globalThis as typeof globalThis & { desktop?: DesktopUpdates }).desktop;
+  const [installed, setInstalled] = useState<string>();
+  useEffect(() => {
+    if (!desktop?.updates) return;
+    let active = true;
+    const receive = (status: { state: string; version?: string }) => {
+      if (active && status.state === "ready") setInstalled(status.version);
+    };
+    void desktop.updates.status().then(receive).catch(() => {});
+    const off = desktop.updates.onStatus(receive);
+    return () => { active = false; off(); };
+  }, [desktop]);
+  if (!mismatch && !installed) return null;
+  return <VersionNotice {...(mismatch ? { hostVersion: mismatch } : {})}
+    {...(desktop ? { desktopVersion: desktop.version } : {})}
+    {...(installed ? { installedVersion: installed } : {})}
+    {...(desktop?.updates?.restart ? { onRestart: () => mismatch ? desktop.updates.restart!() : desktop.updates.install() } : {})}
+    onRefresh={refreshFrontend} />;
+}
 
 /**
  * The socket state as a phase: `connecting` before the first open is

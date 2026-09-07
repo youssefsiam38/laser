@@ -1,4 +1,6 @@
 import { toolSearchContent } from "@lasercode/protocol";
+import { GOAL_DATA_PART } from "@/runtime/projection";
+import type { GoalRecord } from "@/runtime/goal-history";
 
 export interface TextMatch { start: number; end: number }
 
@@ -18,6 +20,10 @@ export function matchExcerpt(text: string, match: TextMatch) {
 
 /** Explicit textual channels; never index images or arbitrary provider metadata. */
 export function partSearchContent(part: { type: string; [key: string]: unknown }): string[] {
+  if (part.type === "data" && part.name === GOAL_DATA_PART) {
+    const goal = part.data as GoalRecord;
+    return [goal.moments[0]?.objective ?? goal.objective, goal.summary ?? "", ...goal.moments.flatMap((moment, index) => [index > 0 && moment.objective !== goal.moments[index - 1]?.objective ? moment.objective : "", moment.reason ?? ""])].filter(Boolean);
+  }
   if (part.type === "text" || part.type === "reasoning") return typeof part.text === "string" ? [part.text] : [];
   if (part.type !== "tool-call") return [];
   const result = part.result ?? (part.artifact as { partialOutput?: unknown } | undefined)?.partialOutput;

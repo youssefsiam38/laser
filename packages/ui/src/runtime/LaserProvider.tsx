@@ -385,6 +385,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         onHostNotification.current(method, params);
       },
       onConnection: (s) => dispatch({ type: "connection", state: s }),
+      onVersionMismatch: (version) => dispatch({ type: "versionMismatch", version }),
       // A worker that restarted numbers its updates from 1 again; without this
       // the reducer would dedupe every one of them as a replay and the session
       // would look alive but render nothing.

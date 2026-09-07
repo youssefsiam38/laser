@@ -6,6 +6,14 @@ settings:
 
 packageExtensionsChecksum: sha256-X/m6H256AOB3o8ONRISXJuVX3EaAHO5AEm1lVLw7vAI=
 
+patchedDependencies:
+  '@narumitw/pi-goal@0.54.4':
+    hash: 5cf227362e6c107769e4f53d16ad3339aaa7d1b92f761d68f0ddf4f1bc57e5cc
+    path: patches/@narumitw__pi-goal@0.54.4.patch
+  pi-web-access@0.28.0:
+    hash: e2d7ab2a7455333b175c467d4b25a12d28eea3409f7e0e0bb74a234b3a67f619
+    path: patches/pi-web-access@0.28.0.patch
+
 importers:
 
   .:
@@ -155,7 +163,7 @@ importers:
     dependencies:
       '@narumitw/pi-goal':
         specifier: 0.54.4
-        version: 0.54.4(@earendil-works/pi-ai@0.85.0(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-coding-agent@0.85.0(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-tui@0.85.0)(typebox@1.3.7)
+        version: 0.54.4(patch_hash=5cf227362e6c107769e4f53d16ad3339aaa7d1b92f761d68f0ddf4f1bc57e5cc)(@earendil-works/pi-ai@0.85.0(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-coding-agent@0.85.0(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-tui@0.85.0)(typebox@1.3.7)
     devDependencies:
       '@earendil-works/pi-coding-agent':
         specifier: 0.85.0
@@ -305,7 +313,7 @@ importers:
         version: 0.65.1(@earendil-works/pi-agent-core@0.85.0(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-ai@0.85.0(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-coding-agent@0.85.0(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-tui@0.85.0)(ws@8.21.3)(zod@4.5.4)
       pi-web-access:
         specifier: 0.28.0
-        version: 0.28.0(@earendil-works/pi-ai@0.85.0(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-coding-agent@0.85.0(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-tui@0.85.0)
+        version: 0.28.0(patch_hash=e2d7ab2a7455333b175c467d4b25a12d28eea3409f7e0e0bb74a234b3a67f619)(@earendil-works/pi-ai@0.85.0(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-coding-agent@0.85.0(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-tui@0.85.0)
       proper-lockfile:
         specifier: 4.1.2
         version: 4.1.2
@@ -7573,7 +7581,7 @@ snapshots:
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     optional: true
 
-  '@narumitw/pi-goal@0.54.4(@earendil-works/pi-ai@0.85.0(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-coding-agent@0.85.0(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-tui@0.85.0)(typebox@1.3.7)':
+  '@narumitw/pi-goal@0.54.4(patch_hash=5cf227362e6c107769e4f53d16ad3339aaa7d1b92f761d68f0ddf4f1bc57e5cc)(@earendil-works/pi-ai@0.85.0(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-coding-agent@0.85.0(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-tui@0.85.0)(typebox@1.3.7)':
     dependencies:
       '@earendil-works/pi-ai': 0.85.0(ws@8.21.3)(zod@4.5.4)
       '@earendil-works/pi-coding-agent': 0.85.0(ws@8.21.3)(zod@4.5.4)
@@ -11844,7 +11852,7 @@ snapshots:
       - ws
       - zod
 
-  pi-web-access@0.28.0(@earendil-works/pi-ai@0.85.0(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-coding-agent@0.85.0(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-tui@0.85.0):
+  pi-web-access@0.28.0(patch_hash=e2d7ab2a7455333b175c467d4b25a12d28eea3409f7e0e0bb74a234b3a67f619)(@earendil-works/pi-ai@0.85.0(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-coding-agent@0.85.0(ws@8.21.3)(zod@4.5.4))(@earendil-works/pi-tui@0.85.0):
     dependencies:
       '@earendil-works/pi-ai': 0.85.0(ws@8.21.3)(zod@4.5.4)
       '@earendil-works/pi-coding-agent': 0.85.0(ws@8.21.3)(zod@4.5.4)

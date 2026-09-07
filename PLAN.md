@@ -489,6 +489,10 @@ Depends on: M1, M2-T4, M4, M5-T1, M11.
 | M12-T64 | Built-in web search and provider consent | exact-pinned search engine exposes all supported search providers through Settings, independent feature enablement and explicit shared-credential permission; isolated execution, protocol/router tests, and responsive UI verification pass |
 | M12-T65 | Withdraw native reminders after viewing a session | viewed sessions dismiss only their own OS notifications; pending approvals remain pending; desktop lifecycle and real Linux withdrawal are verified |
 | M12-T66 | Release stable 0.2.9 | built-in web search and session notification dismissal pass staged verification and packaged checks; clean source CI precedes the tag; both architecture installers and signed native feeds publish |
+| M12-T67 | Persistent goal history without duplicate accounting | goals have no budget or usage accounting; exact objectives and lifecycle outcomes render as durable collapsible chat records without internal prompts; completion keeps its existing engine semantics; replay, live updates and responsive disclosure tests pass |
+| M12-T68 | Repair search selection and provider failures | configuring and choosing search connections is unambiguous; DuckDuckGo empty/challenge responses are distinguished; OpenAI API and Codex routes have regression coverage and bounded live verification; errors identify the selected provider without exposing credentials |
+| M12-T69 | Keep native notifications and desktop updates coherent | session reminders are withdrawn on acknowledgement and orderly exit; native package updates offer a full desktop restart, not just a daemon refresh; Linux protocol and lifecycle regressions are verified |
+| M12-T70 | Release stable 0.2.10 | goal history, search repairs and native lifecycle fixes pass staged verification and package checks; source, version tag and release are published |
 
 ---
 

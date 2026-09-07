@@ -174,6 +174,8 @@ export interface LaserDesktop {
   identity(): Promise<IdentitySummary>;
 
   updates: {
+    /** Ask before restarting this desktop and its host together. */
+    restart(): void;
     status(): Promise<UpdateStatus>;
     check(): Promise<UpdateStatus>;
     /** Quit and install a downloaded update. No-op unless the state is `ready`. */

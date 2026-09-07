@@ -22,21 +22,22 @@ const definition = (id: WebSearchProviderId) => {
 /** Locked storage is shared by project workers; keys never enter preferences. */
 export class WebSearchService {
   private readonly path: string;
-  constructor(private readonly agentDir = getAgentDir()) {
+  constructor(private readonly agentDir = getAgentDir(), private readonly executeSearch = runWebSearch) {
     this.path = join(agentDir, "search-connections.json");
   }
   private async readSettings(): Promise<SearchSettings> {
     try { return decode(await readFile(this.path, "utf8")); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return empty(); throw new Error("Could not read search connections. Check access to app data and retry."); }
   }
-  private async updateSettings(update: (settings: SearchSettings) => void) {
+  private async updateSettings(update: (settings: SearchSettings) => void | Promise<void>) {
     await mkdir(this.agentDir, { recursive: true, mode: 0o700 });
     // Lock the stable path, not the inode replaced by the atomic write.
-    const release = await lockfile.lock(this.path, { realpath: false, retries: { retries: 10, minTimeout: 20, maxTimeout: 200 } });
+    const release = await lockfile.lock(this.path, { realpath: false, retries: { retries: 10, minTimeout: 20, maxTimeout: 200 } })
+      .catch(() => { throw new Error("Another search connection is being saved or tested. Wait for it to finish and retry."); });
     const temporary = `${this.path}.${randomUUID()}.tmp`;
     try {
       const settings = await this.readSettings();
-      update(settings);
+      await update(settings);
       await writeFile(temporary, JSON.stringify(settings), { mode: 0o600, flag: "wx" });
       await rename(temporary, this.path);
       await chmod(this.path, 0o600);
@@ -63,6 +64,10 @@ export class WebSearchService {
     };
   }
   async configure(change: WebSearchChange): Promise<WebSearchStatus> {
+    if (change.action === "test") {
+      await this.updateSettings((settings) => this.test(settings));
+      return this.status();
+    }
     const provider = definition(change.provider);
     if (change.action === "configure") {
       const { connection, apiKey } = change;
@@ -81,12 +86,20 @@ export class WebSearchService {
       if (connection.zone && (!provider.zone || !/^[a-zA-Z0-9_-]+$/.test(connection.zone))) throw new Error("Enter the SERP zone name using letters, digits, underscores or hyphens.");
       if (apiKey && (!apiKey.trim() || /[\x00-\x1f\x7f]/.test(apiKey) || apiKey.length > 16384)) throw new Error("Enter a valid API key.");
     }
-    await this.updateSettings((settings) => {
+    await this.updateSettings(async (settings) => {
       if (change.action === "select") settings.selectedProvider = change.provider;
       else {
         settings.connections[change.provider] = change.connection;
         if (change.apiKey === null) delete settings.keys[change.provider];
         else if (change.apiKey !== undefined) settings.keys[change.provider] = change.apiKey.trim();
+      }
+      if (change.action === "select" || change.activate) {
+        settings.selectedProvider = change.provider;
+        // Test the candidate before either its credentials or selection become
+        // visible. A rejection leaves the previous provider and keys untouched.
+        await this.test(settings);
+      } else if (settings.selectedProvider === change.provider && (change.connection.source !== "none" || provider.key !== "required") && change.apiKey !== null) {
+        await this.test(settings);
       }
     });
     return this.status();
@@ -94,6 +107,16 @@ export class WebSearchService {
   async search(query: string, signal?: AbortSignal, options: { numResults?: number; recencyFilter?: "day" | "week" | "month" | "year"; domainFilter?: string[] } = {}) {
     signal?.throwIfAborted();
     const settings = await this.readSettings();
+    return this.searchWithSettings(settings, query, signal, options);
+  }
+  private async test(settings: SearchSettings) {
+    const response = JSON.parse(await this.searchWithSettings(settings, "What is the official website of Wikipedia? Return one source.", AbortSignal.timeout(65_000), { numResults: 1 }));
+    if (response.provider !== settings.selectedProvider || (!response.answer?.trim() && !response.results?.length)) {
+      throw new Error(`${definition(settings.selectedProvider).name} did not return a usable search result. The search provider was not changed.`);
+    }
+  }
+  private async searchWithSettings(settings: SearchSettings, query: string, signal?: AbortSignal, options: { numResults?: number; recencyFilter?: string; domainFilter?: string[] } = {}) {
+    signal?.throwIfAborted();
     const provider = definition(settings.selectedProvider);
     const connection = settings.connections[provider.id] ?? { source: "none" };
     let authentication: SearchAuthentication | undefined;
@@ -111,6 +134,6 @@ export class WebSearchService {
     if (provider.key === "required" && !authentication) throw new Error(`Connect ${provider.name} in Settings → Providers and models → Web search.`);
     if (provider.endpoint && !connection.baseUrl) throw new Error("Add your SearXNG instance address in Web search settings.");
     if (provider.zone && !connection.zone) throw new Error("Add your Bright Data SERP zone in Web search settings.");
-    return runWebSearch({ provider: provider.id, query, connection, authentication, options }, signal);
+    return this.executeSearch({ provider: provider.id, query, connection, authentication, options }, signal);
   }
 }

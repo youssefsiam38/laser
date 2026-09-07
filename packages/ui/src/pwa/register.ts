@@ -108,6 +108,12 @@ export function applyUpdate(): void {
   waiting.postMessage({ type: SW_SKIP_WAITING });
 }
 
+/** User-chosen view refresh only. Never asks the host to stop or reload. */
+export function refreshFrontend(): void {
+  if (waiting) applyUpdate();
+  else window.location.reload();
+}
+
 function subscribe(cb: () => void): () => void {
   listeners.add(cb);
   return () => listeners.delete(cb);

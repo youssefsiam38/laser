@@ -10,3 +10,6 @@ packageExtensions:
   "@earendil-works/pi-coding-agent":
     dependencies:
       "@earendil-works/pi-server": "0.85.0"
+patchedDependencies:
+  '@narumitw/pi-goal@0.54.4': patches/@narumitw__pi-goal@0.54.4.patch
+  pi-web-access@0.28.0: patches/pi-web-access@0.28.0.patch

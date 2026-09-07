@@ -7,6 +7,8 @@ export interface JsonRpcRequest<M extends string = string, P = unknown> {
   id: JsonRpcId;
   method: M;
   params: P;
+  /** Product clients send their compiled version; other ACP clients may omit it. */
+  clientVersion?: string;
 }
 
 export interface JsonRpcNotification<M extends string = string, P = unknown> {
@@ -44,6 +46,7 @@ export const ErrorCodes = {
   Unsupported: -32004,
   /** The project has trust-gated resources and nobody has approved it yet (M2-T4). */
   ProjectUntrusted: -32005,
+  VersionMismatch: -32006,
 } as const;
 
 export function isRequest(m: JsonRpcMessage): m is JsonRpcRequest {

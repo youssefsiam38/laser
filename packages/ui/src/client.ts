@@ -10,6 +10,7 @@
  * `session/update` notifications are coalesced to one flush per animation
  * frame; every other message flushes the buffer first, so order is preserved.
  */
+import { PRODUCT_VERSION } from "@lasercode/protocol";
 import type {
   ClientMethod,
   ClientRequests,
@@ -24,6 +25,7 @@ export type NotificationHandler = <M extends HostNotificationMethod>(method: M, 
 export type ConnectionState = "connecting" | "open" | "closed";
 
 export interface HostClientOptions {
+  onVersionMismatch?: (hostVersion: string) => void;
   url?: string;
   onNotification: NotificationHandler;
   onConnection?: (state: ConnectionState) => void;
@@ -63,6 +65,9 @@ export class HostClient {
   private closedByUser = false;
   private listening = false;
   private state: ConnectionState = "closed";
+  private versionBlocked = false;
+  private handshakeTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly handshakeMessages: JsonRpcMessage[] = [];
   private frameHandle: number | undefined;
   private timerHandle: ReturnType<typeof setTimeout> | undefined;
   /** Transcript deltas waiting for the next frame, in arrival (seq) order. */
@@ -77,7 +82,7 @@ export class HostClient {
    * closure would outlive the client and resurrect it on the next tab focus.
    */
   private readonly onVisible = (): void => {
-    if (this.closedByUser) return;
+    if (this.closedByUser || this.versionBlocked) return;
     if (document.visibilityState === "visible" && this.state !== "open") this.open();
   };
 
@@ -100,6 +105,7 @@ export class HostClient {
    * share one `pending` map, and that was the bug this method exists to avoid.
    */
   reconnect(reason: string): void {
+    if (this.versionBlocked) return;
     const dead = this.ws;
     this.ws = undefined;
     if (dead) {
@@ -119,6 +125,7 @@ export class HostClient {
   }
 
   close(): void {
+    clearTimeout(this.handshakeTimer);
     this.closedByUser = true;
     if (this.listening) {
       this.listening = false;
@@ -156,7 +163,8 @@ export class HostClient {
    * failure a sentence rather than a hang.
    */
   whenConnected(timeoutMs = 5000): Promise<void> {
-    if (this.ws?.readyState === WebSocket.OPEN) return Promise.resolve();
+    if (this.versionBlocked) return Promise.reject(new Error("Refresh this view to match the host before continuing."));
+    if (this.state === "open") return Promise.resolve();
     if (this.closedByUser) return Promise.reject(new Error("Not connected to the host."));
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -164,7 +172,7 @@ export class HostClient {
         reject(new Error("The desktop is not answering yet. It may still be starting."));
       }, timeoutMs);
       const poll = setInterval(() => {
-        if (this.ws?.readyState !== WebSocket.OPEN) return;
+        if (this.state !== "open") return;
         clearInterval(poll);
         clearTimeout(timer);
         resolve();
@@ -173,13 +181,13 @@ export class HostClient {
   }
 
   request<M extends ClientMethod>(method: M, params: ClientRequests[M]["params"]): Promise<ClientRequests[M]["result"]> {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+    if (this.versionBlocked || this.state !== "open" || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("Not connected to the host."));
     }
     const id = this.nextId++;
-    this.ws.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
+      this.ws!.send(JSON.stringify({ jsonrpc: "2.0", id, method, params, clientVersion: PRODUCT_VERSION }));
     });
   }
 
@@ -189,13 +197,44 @@ export class HostClient {
   }
 
   private open(): void {
+    if (this.closedByUser || this.versionBlocked) return;
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
     this.setState("connecting");
+    this.handshakeMessages.length = 0;
     const ws = new WebSocket(this.options.url ?? defaultHostUrl());
     this.ws = ws;
     ws.onopen = () => {
+      this.handshakeTimer = setTimeout(() => ws.close(), 5000);
+      ws.send(JSON.stringify({ jsonrpc: "2.0", id: 0, method: "pi/host/version", params: {} }));
+    };
+    ws.onmessage = (event) => this.onMessage(JSON.parse(String(event.data)) as JsonRpcMessage);
+    ws.onclose = () => {
+      clearTimeout(this.handshakeTimer);
+      this.flushUpdates();
+      this.setState("closed");
+      for (const p of this.pending.values()) p.reject(new Error("connection closed"));
+      this.pending.clear();
+      if (!this.closedByUser && !this.versionBlocked) {
+        setTimeout(() => this.open(), this.backoffMs);
+        this.backoffMs = Math.min(this.backoffMs * 2, 10_000);
+      }
+    };
+    ws.onerror = () => ws.close();
+  }
+
+  private acceptVersion(version: unknown): void {
+      clearTimeout(this.handshakeTimer);
+      const desktop = (globalThis as typeof globalThis & { desktop?: { version: string } }).desktop;
+      if (version !== PRODUCT_VERSION || (desktop && desktop.version !== PRODUCT_VERSION)) {
+        this.handshakeMessages.length = 0;
+        this.versionBlocked = true;
+        this.options.onVersionMismatch?.(typeof version === "string" ? version : "unknown");
+        this.ws?.close();
+        return;
+      }
       this.backoffMs = 500;
       this.setState("open");
+      for (const message of this.handshakeMessages.splice(0)) this.onMessage(message);
       for (const [path, seq] of [...this.attached]) {
         // A session the app has dropped must not be re-opened in a worker.
         if (this.options.shouldResume && !this.options.shouldResume(path)) {
@@ -208,19 +247,6 @@ export class HostClient {
           })
           .catch(() => {});
       }
-    };
-    ws.onmessage = (event) => this.onMessage(JSON.parse(String(event.data)) as JsonRpcMessage);
-    ws.onclose = () => {
-      this.flushUpdates();
-      this.setState("closed");
-      for (const p of this.pending.values()) p.reject(new Error("connection closed"));
-      this.pending.clear();
-      if (!this.closedByUser) {
-        setTimeout(() => this.open(), this.backoffMs);
-        this.backoffMs = Math.min(this.backoffMs * 2, 10_000);
-      }
-    };
-    ws.onerror = () => ws.close();
   }
 
   /**
@@ -290,6 +316,10 @@ export class HostClient {
 
   private onMessage(message: JsonRpcMessage): void {
     if ("id" in message && !("method" in message)) {
+      if (message.id === 0) {
+        this.acceptVersion((message.result as { version?: string } | undefined)?.version);
+        return;
+      }
       this.flushUpdates();
       const entry = this.pending.get(Number(message.id));
       if (!entry) return;
@@ -299,6 +329,11 @@ export class HostClient {
       return;
     }
     if ("method" in message) {
+      if (this.versionBlocked) return;
+      if (this.state !== "open") {
+        if (this.handshakeMessages.length < 1000) this.handshakeMessages.push(message);
+        return;
+      }
       const method = message.method as HostNotificationMethod;
       if (method === "session/update") {
         const params = message.params as SessionUpdateParams;

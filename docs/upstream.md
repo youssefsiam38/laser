@@ -16,6 +16,18 @@ small and self-contained (`AGENTS.md` §6).
 
 ## Prepared patches
 
+### pi-goal · host-owned usage policy and literal objectives (M12-T67)
+
+Local exact-version patch: `patches/@narumitw__pi-goal@0.54.4.patch`, applied
+through pnpm. It removes goal budgets, disables goal accounting, and parses
+objectives as literal task text rather than shell tokens. Continuation safety,
+completion termination and persistence remain upstream-owned. The source-map
+files are upstream originals; review the patched executable chunks when tracing
+this policy. Covered by `packages/pi-goal/test/policy.test.ts` against the actual
+installed dependency. No upstream PR filed; a future contribution should expose
+a host policy for accounting and preserve objective text, rather than impose
+Laser's budget-free product choice on all upstream users.
+
 Written and reviewed here, **not filed**. Each is small, self-contained, and
 justified on the upstream project's own terms (extensibility, headless-host
 support) — never on ours. Nothing about laser appears in a patch, a commit
@@ -440,3 +452,10 @@ for the fleet the same summary text `/subagents status` prints:
 
 Three guards and one summary formatter. No behaviour changes in a terminal.
 
+## pi-web-access 0.28.0: distinguish empty results and challenges (M12-T68)
+
+Local patch: `patches/pi-web-access@0.28.0.patch`, applied by the workspace lockfile.
+DuckDuckGo's explicit no-results markup returns an empty result list, while a
+challenge form raises an identifiable verification error. Unexpected HTML still
+fails; no challenge bypass or alternate provider is introduced. Offline tests use
+all three response shapes. No upstream issue/PR filed in this uncommitted repair.

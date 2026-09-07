@@ -56,5 +56,7 @@ for (const path of manifests) {
 }
 NODE
 
+node "$REPO_ROOT/scripts/identity/generate.mjs"
+
 printf '\nEverything is at %s. Next:\n\n' "$VERSION"
 printf '  git commit -am "chore: v%s" && git tag v%s && git push origin v%s\n\n' "$VERSION" "$VERSION" "$VERSION"

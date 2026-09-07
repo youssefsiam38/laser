@@ -39,6 +39,7 @@ import { connectedGpuVendors, linuxDisplayDecision, probeWaylandGlobals } from "
 import { loadSecrets } from "./keychain.js";
 import { DesktopLog } from "./log.js";
 import { Notifier } from "./notifications.js";
+import { NativeUpdateWatch } from "./native-update.js";
 import { installPermissionGates, microphoneStatus, openMicrophoneSettings, requestMicrophone } from "./permissions.js";
 import { TrayController } from "./tray.js";
 import { Updater } from "./updater.js";
@@ -92,6 +93,8 @@ let updateStatus: UpdateStatus = { state: "idle" };
 const pendingLinks: DeepLink[] = [];
 let mainReady = false;
 let quitting = false;
+let nativePromptOpen = false;
+let nativeVersion: string | undefined;
 
 // ------------------------------------------------------------ singleton ----
 
@@ -177,6 +180,12 @@ const host = new HostProcess({
   // nothing else has to change when it lands.)
   ...(devUiUrl ? { env: { [ENV.allowedOrigins]: originOf(devUiUrl) } } : {}),
   onChange: (info) => onHostChanged(info),
+  confirmHostRefresh: async () => (await dialog.showMessageBox({
+    type: "question", title: `Restart ${PRODUCT_NAME} and its host?`,
+    message: "The running host is a different version.",
+    detail: "Restart both together to continue. Saved sessions are kept, but active work will stop. Choose Later to leave the host running.",
+    buttons: ["Later", "Restart together"], defaultId: 0, cancelId: 0,
+  })).response === 1,
 });
 
 const link = new HostLink({
@@ -184,6 +193,7 @@ const link = new HostLink({
   onSnapshot: (snapshot: FleetSnapshot) => tray.setFleet(snapshot),
   onAttention: (change: AttentionChange) => notifier.handle(change),
   onSeen: (path) => notifier.clear(path),
+  onSessions: (sessions) => notifier.reconcile(sessions),
 });
 
 const notifier = new Notifier({
@@ -203,7 +213,7 @@ const tray = new TrayController({
     dispatchDeepLink(target);
   },
   onCheckForUpdates: () => void updater.check(),
-  onInstallUpdate: () => void quit({ install: true }),
+  onInstallUpdate: () => void installUpdate(),
   onQuit: () => void quit({}),
   onUnavailable: (error) => {
     log.error("no status icon on this desktop; the window is the app", error);
@@ -214,12 +224,39 @@ const updater = new Updater({
   packaged: app.isPackaged,
   log,
   onStatus: (status) => {
+    if (nativeVersion) return;
     updateStatus = status;
     tray.setUpdate(status);
     windows.broadcast(IPC.updateChanged, status);
   },
   quitAndInstall: () => void quit({ install: true }),
 });
+
+const nativeUpdate = new NativeUpdateWatch({
+  resources: process.resourcesPath, running: app.getVersion(),
+  onReady: (version) => {
+    nativeVersion = version;
+    updateStatus = { state: "ready", version, message: "Installed by your operating system. Restart the app and host together when you are ready." };
+    tray.setUpdate(updateStatus);
+    windows.broadcast(IPC.updateChanged, updateStatus);
+    void installUpdate(true);
+  },
+});
+
+async function installUpdate(announce = false, forceRelaunch = false): Promise<void> {
+  if (nativePromptOpen || quitting) return;
+  nativePromptOpen = true;
+  if (!forceRelaunch && !nativeUpdate.check()) { nativePromptOpen = false; if (!announce) updater.install(); return; }
+  try {
+  const { response } = await dialog.showMessageBox({
+    type: "question", title: `${PRODUCT_NAME} update ready`,
+    message: "Restart the app and host together?",
+    detail: "Saved sessions will be kept. Active work will stop during the restart. Choose Later to keep working; Restart is available from the system tray menu.",
+    buttons: ["Later", "Restart now"], defaultId: 0, cancelId: 0,
+  });
+  if (response === 1 && !quitting) await quit({ relaunch: true });
+  } finally { nativePromptOpen = false; }
+}
 
 // ----------------------------------------------------------- deep links ----
 
@@ -353,20 +390,23 @@ function openApp(): BrowserWindow {
   return window;
 }
 
-async function quit(options: { install?: boolean }): Promise<void> {
+async function quit(options: { install?: boolean; relaunch?: boolean }): Promise<void> {
   if (quitting) return;
   quitting = true;
   log.line(options.install ? "quitting to install an update" : "quitting");
   windows.beginQuit();
   updater.stop();
+  nativeUpdate.stop();
   link.close();
+  notifier.dispose();
   tray.destroy();
   try {
-    await host.stop();
+    await host.stop(options.relaunch || options.install);
   } catch (error) {
     log.error("stopping the host failed", error);
   }
   if (options.install && updater.quitAndInstall()) return;
+  if (options.relaunch) app.relaunch();
   app.quit();
 }
 
@@ -463,8 +503,9 @@ function installIpc(): void {
   ipcMain.handle(IPC.identity, () => identity);
 
   ipcMain.handle(IPC.updateStatus, () => updateStatus);
-  ipcMain.handle(IPC.updateCheck, () => updater.check());
-  ipcMain.on(IPC.updateInstall, () => updater.install());
+  ipcMain.handle(IPC.updateCheck, () => nativeUpdate.check() ? updateStatus : updater.check());
+  ipcMain.on(IPC.updateInstall, (_event, options: unknown) => void installUpdate(false,
+    !!options && typeof options === "object" && (options as { relaunch?: unknown }).relaunch === true));
 }
 
 // ----------------------------------------------------------------- menu ----
@@ -589,6 +630,7 @@ async function start(): Promise<void> {
 
   await host.start();
   updater.start();
+  if (app.isPackaged && process.platform === "linux") nativeUpdate.start();
 }
 
 start().catch((error: unknown) => {

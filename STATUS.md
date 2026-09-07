@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-07T06:22:52+03:00 · codex-2026-09-07-release-029 · HEAD: `8d1fb96`
+**Last updated:** 2026-09-07T08:29:04+03:00 · codex-2026-09-07-native-lifecycle · HEAD: `b48a91a`
 
-**Current focus:** 0.2.9 is Latest: web search and session notification dismissal published; both architecture builds and signed update feeds passed.
+**Current focus:** Release 0.2.10: goal history, search repair, notification ownership and user-controlled coupled updates. All local gates pass; source CI and publication dispatch remain.
 
 ## Milestones
 
@@ -13,8 +13,8 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M0 Foundation | done | clean public CI verified |
 | M1 Local loop | done | assistant-ui runtime |
 | MP Panel system | done | panel contract implemented |
-| M2 Many sessions, many projects | in-progress | platform notification proof remains |
-| M3 Subagent tabs | in-progress | live-bus resume and upstream PRs remain |
+| M2 Many sessions, many projects | in-progress | broader notification platform proof remains |
+| M3 Subagent tabs | in-progress | agents discovery and upstream work |
 | M4 Settings and logs | done | settings surfaces complete |
 | M5 Desktop shell | in-progress | broader platform proof remains |
 | M6 Relay and pairing | done | cryptographic foundations complete |
@@ -23,12 +23,12 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M9 CLI | done | planned tasks complete |
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
-| M12 Product experience | done | stable 0.2.9 published and verified |
+| M12 Product experience | in-progress | verified 0.2.10 awaiting publication dispatch |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
 
-- None.
+- Separate agents discovery: M3-T11 awaits remaining Q-8 product choices; its research changes remain uncommitted and outside this release.
 
 ## Next up
 
@@ -38,8 +38,8 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Recently done
 
-- M12-T66: `8d1fb96`, `v0.2.9`; clean CI, 12 release assets, both architecture builds and signed feeds published.
-- M12-T64: web search; build/typecheck/1,029 tests, 12 packaged checks and desktop/phone dark/light review.
-- M12-T65: session-scoped native dismissal; `5356f34`, real GNOME withdrawal proof.
-- M12-T63: `105eba5`, `v0.2.8`, stable release page; staged build/typecheck/1,008 tests pass.
-- M12-T62: composer picker, project-wide file search, skill source action; included in 0.2.8.
+- M12-T69: build/typecheck/1,065 tests, fresh packaged checks, native GNOME withdrawal and four-layout refresh/restart notices.
+- M12-T68: exclusive tested search activation and provider-specific errors; live probes and packaged/browser checks.
+- M12-T67: budget-free goals and durable, normally scrolling completion records; policy/history and browser proof.
+- M12-T66: `8d1fb96`, `v0.2.9`; both architectures and signed update feeds published.
+- M12-T64: web search; build/typecheck/1,029 tests and packaged/browser checks.

@@ -14,7 +14,7 @@ import { FleetSheet, RunTabs } from "@/components/subagents";
 import { mergeSessions, sessionTitle, useLaserStable, useLaserState, useLaserView } from "@/runtime";
 
 import { AddProjectDialog } from "./AddProjectDialog.js";
-import { HostConnectionState } from "@/components/assistant-ui/elements/connection-state";
+import { HostConnectionState, HostVersionNotice } from "@/components/assistant-ui/elements/connection-state";
 import { StartupRestorationGate } from "@/components/assistant-ui/elements/loading-state";
 import { CommandPaletteDialog } from "./CommandPalette.js";
 import { GlobalSearch } from "./GlobalSearch.js";
@@ -77,6 +77,7 @@ function useHash(): string {
 }
 
 export function Shell() {
+  const versionMismatch = useLaserState((state) => state.versionMismatch);
   const hash = useHash();
   const { startupRestoring } = useLaserStable();
   const connection = useLaserState((state) => state.connection);
@@ -91,13 +92,18 @@ export function Shell() {
   );
 
   return (
+    <div className="flex h-dvh min-h-0 flex-col">
+      <HostVersionNotice />
+      <div className="relative min-h-0 flex-1" inert={!!versionMismatch}>
     <StartupRestorationGate
       active={startupRestoring}
-      label={connection === "open" ? "Returning to your last session" : "Connecting to your workspace"}
+      label={versionMismatch ? "Waiting for the update before reconnecting" : connection === "open" ? "Returning to your last session" : "Connecting to your workspace"}
       notice={<HostConnectionState className="absolute inset-x-0 top-0 z-20" />}
     >
       {content}
     </StartupRestorationGate>
+      </div>
+    </div>
   );
 }
 

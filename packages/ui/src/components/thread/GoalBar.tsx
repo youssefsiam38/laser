@@ -1,7 +1,7 @@
 "use client";
 
 import { Pause, Pencil, Play, Target, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
 
 import { Badge } from "@/components/ui/badge";
@@ -19,18 +19,8 @@ export function GoalBar() {
   const [editing, setEditing] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [objective, setObjective] = useState("");
-  const [now, setNow] = useState(Date.now());
-
-  useEffect(() => {
-    if (!goal || goal.status !== "active") return undefined;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 1_000);
-    return () => clearInterval(timer);
-  }, [goal]);
 
   if (!goal) return null;
-  const elapsed = goal.timeUsedSeconds + (goal.status === "active" && goal.activeStartedAt ? Math.max(0, (now - goal.activeStartedAt) / 1000) : 0);
-  const budgetPercent = goal.tokenBudget ? Math.min(100, (goal.tokensUsed / goal.tokenBudget) * 100) : undefined;
   const resumable = goal.status !== "active" && goal.status !== "complete";
 
   return (
@@ -46,20 +36,12 @@ export function GoalBar() {
               <Badge variant={goal.status === "active" ? "live" : goal.status === "complete" ? "ok" : goal.status === "blocked" ? "danger" : "attention"} className="capitalize">
                 {goal.status.replace("_", " ")}
               </Badge>
-              <span className="text-xs tabular-nums text-ink-3">
-                {goal.iteration} evaluation{goal.iteration === 1 ? "" : "s"} · {formatDuration(elapsed)} · {formatTokens(goal.tokensUsed)}
+              <span className="text-xs tabular-nums text-ink-3" title="Times the goal automatically asked the agent to continue. Not tool calls or a separate evaluation.">
+                {goal.iteration} automatic continuation{goal.iteration === 1 ? "" : "s"}
               </span>
             </div>
-            <p className="mt-1 text-sm font-medium leading-5 text-ink">{goal.objective}</p>
+            <p className="mt-1 whitespace-pre-wrap wrap-break-word text-sm font-medium leading-5 text-ink">{goal.objective}</p>
             {goal.latestReason && <p className="mt-1 text-xs leading-5 text-ink-2">{goal.latestReason}</p>}
-            {budgetPercent !== undefined && (
-              <div className="mt-2 flex items-center gap-2" aria-label={`${Math.round(budgetPercent)} percent of goal token budget used`}>
-                <div className="h-1.5 min-w-20 flex-1 overflow-hidden rounded-full bg-surface-3">
-                  <div className="h-full rounded-full bg-live transition-[width] duration-(--motion-fast)" style={{ width: `${budgetPercent}%` }} />
-                </div>
-                <span className="text-xs tabular-nums text-ink-3">{formatTokens(goal.tokenBudget!)} budget</span>
-              </div>
-            )}
           </div>
           <div className="flex shrink-0 items-center gap-0.5">
             <TooltipIconButton
@@ -107,17 +89,4 @@ export function GoalBar() {
       </Dialog>
     </>
   );
-}
-
-function formatDuration(seconds: number): string {
-  const value = Math.max(0, Math.floor(seconds));
-  if (value < 60) return `${value}s`;
-  const minutes = Math.floor(value / 60);
-  if (minutes < 60) return `${minutes}m`;
-  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
-}
-
-function formatTokens(tokens: number): string {
-  if (tokens < 1_000) return `${Math.round(tokens)} tokens`;
-  return `${(tokens / 1_000).toFixed(tokens < 10_000 ? 1 : 0)}k tokens`;
 }

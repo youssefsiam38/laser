@@ -31,6 +31,7 @@ export interface HostLinkOptions {
   onSnapshot: (snapshot: FleetSnapshot) => void;
   onAttention: (change: AttentionChange) => void;
   onSeen?: (path: string) => void;
+  onSessions?: (sessions: readonly SessionSummary[]) => void;
 }
 
 export class HostLink {
@@ -149,6 +150,7 @@ export class HostLink {
         this.request<{ sessions: SessionSummary[] }>("pi/session/list", {}),
       ]);
       this.model.setProjects(projects.projects);
+      this.options.onSessions?.(sessions.sessions);
       const changes = this.model.setSessions(sessions.sessions);
       for (const change of changes) this.options.onAttention(change);
       this.options.onSnapshot(this.model.snapshot());

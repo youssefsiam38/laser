@@ -12,6 +12,7 @@ import {
 /** One valid params sample per method. The compiler-checked `satisfies` in schemas.ts
  *  guarantees the map is complete; this table guarantees each schema accepts a real shape. */
 const samples: Record<ClientMethod, unknown> = {
+  "pi/host/version": {},
   "session/new": { cwd: "/p" },
   "session/load": { path: "/s.jsonl", fromSeq: 12 },
   "session/search": { query: "Apple", cwd: "/p", after: "2026-01-01T00:00:00Z", before: "2026-07-01T00:00:00Z", cursor: 50 },
@@ -19,7 +20,7 @@ const samples: Record<ClientMethod, unknown> = {
   "session/cancel": { path: "/s.jsonl" },
   "session/set_mode": { path: "/s.jsonl", mode: "plan" },
   "session/goal/get": { path: "/s.jsonl" },
-  "session/goal/action": { path: "/s.jsonl", action: { action: "start", objective: "Ship the release", tokenBudget: 100_000 } },
+  "session/goal/action": { path: "/s.jsonl", action: { action: "start", objective: "Ship the release" } },
   "pi/session/list": {},
   "pi/session/inbox": { cwd: "/p", limit: 20 },
   "pi/session/seen": { path: "/s.jsonl", seq: 12 },
@@ -55,7 +56,7 @@ const samples: Record<ClientMethod, unknown> = {
   "feature/list": { cwd: "/p" },
   "feature/set": { id: "subagents", enabled: true, scope: "project", cwd: "/p" },
   "web-search/status": { cwd: "/p" },
-  "web-search/configure": { cwd: "/p", change: { action: "configure", provider: "openai", connection: { source: "shared", sharedProvider: "openai" } } },
+  "web-search/configure": { cwd: "/p", change: { action: "configure", provider: "openai", connection: { source: "shared", sharedProvider: "openai" }, activate: true } },
   "pi/packages/list": { cwd: "/p" },
   "pi/packages/install": { cwd: "/p", source: "pi-web-access", scope: "user", version: "1.4.2" },
   "pi/packages/catalog": { cwd: "/p", query: "web", limit: 40 },
@@ -114,6 +115,12 @@ const samples: Record<ClientMethod, unknown> = {
 };
 
 describe("client request schemas", () => {
+  it("round-trips the search connection probe without a provider override", () => {
+    const request = { jsonrpc: "2.0", id: 1, method: "web-search/configure", params: { cwd: "/p", change: { action: "test" } } };
+    expect(parseClientRequest(JSON.parse(JSON.stringify(request)))).toEqual(request);
+    expect(clientParamsSchemas["web-search/configure"].safeParse({ cwd: "/p", change: { action: "test", provider: "duckduckgo" } }).success).toBe(false);
+  });
+
   it("every method has a sample and every sample round-trips through JSON", () => {
     expect(Object.keys(samples).sort()).toEqual([...clientMethods].sort());
     for (const method of clientMethods) {
@@ -125,6 +132,7 @@ describe("client request schemas", () => {
   });
 
   it("rejects unknown keys, wrong enums, empty content", () => {
+    expect(() => clientParamsSchemas["session/goal/action"].parse({ path: "/s", action: { action: "start", objective: "Inspect", tokenBudget: 1000 } })).toThrow();
     expect(() => clientParamsSchemas["session/prompt"].parse({ path: "/s", content: [] })).toThrow();
     expect(() => clientParamsSchemas["pi/thinking/set"].parse({ path: "/s", level: "ultra" })).toThrow();
     expect(() => clientParamsSchemas["session/new"].parse({ cwd: "/p", extra: 1 })).toThrow();

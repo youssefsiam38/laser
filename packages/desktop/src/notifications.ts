@@ -16,7 +16,7 @@
  * notification is a door, not an announcement.
  */
 import { Notification } from "electron";
-import type { SessionAttention } from "@lasercode/protocol";
+import type { SessionAttention, SessionSummary } from "@lasercode/protocol";
 import type { DeepLink } from "./api.js";
 import type { AttentionChange } from "./fleet.js";
 import { shouldNotify } from "./fleet.js";
@@ -65,6 +65,7 @@ export class Notifier {
   private readonly lastAt = new Map<string, number>();
   private recent: number[] = [];
   private readonly active = new Map<string, Notification>();
+  private readonly issuedAt = new Map<string, number>();
 
   constructor(private readonly options: NotifierOptions) {}
 
@@ -103,6 +104,7 @@ export class Notifier {
       const path = change.session.path;
       this.clear(path);
       this.active.set(path, notification);
+      this.issuedAt.set(path, now);
       // Native delivery can finish after the user has already viewed the chat.
       notification.on("show", () => {
         if (this.active.get(path) !== notification) {
@@ -110,11 +112,14 @@ export class Notifier {
           catch (error) { this.options.log.error("could not dismiss a late notification", error); }
         }
       });
-      notification.on("click", () => this.options.onActivate({ kind: "session", path }));
+      notification.on("click", () => {
+        this.clear(path);
+        this.options.onActivate({ kind: "session", path });
+      });
       // Linux close means removal from the notification server. Other systems
       // may report a banner timeout while retaining notification-centre history.
       const forget = () => {
-        if (this.active.get(path) === notification) this.active.delete(path);
+        if (this.active.get(path) === notification) { this.active.delete(path); this.issuedAt.delete(path); }
       };
       notification.on("failed", forget);
       if (process.platform === "linux") notification.on("close", forget);
@@ -132,8 +137,23 @@ export class Notifier {
     const notification = this.active.get(path);
     if (!notification) return;
     this.active.delete(path);
+    this.issuedAt.delete(path);
     try { notification.close(); }
     catch (error) { this.options.log.error("could not dismiss a notification", error); }
+  }
+
+  /** Do not leave server-owned reminders behind when their handles are lost. */
+  dispose(): void {
+    for (const path of [...this.active.keys()]) this.clear(path);
+  }
+
+  /** Acknowledgement can happen while our socket is down; seenAt is durable. */
+  reconcile(sessions: readonly SessionSummary[]): void {
+    const byPath = new Map(sessions.map((session) => [session.path, session]));
+    for (const path of this.active.keys()) {
+      const session = byPath.get(path);
+      if (!session || (session.seenAt && Date.parse(session.seenAt) >= (this.issuedAt.get(path) ?? Infinity))) this.clear(path);
+    }
   }
 }
 

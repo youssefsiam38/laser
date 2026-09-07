@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { PRODUCT_NAME } from "@lasercode/protocol";
+import { PRODUCT_NAME, type SessionSummary } from "@lasercode/protocol";
 
 const { instances } = vi.hoisted(() => ({ instances: [] as any[] }));
 vi.mock("electron", () => ({
@@ -66,6 +66,29 @@ describe("native notification lifecycle", () => {
     expect(notifier.handle(a, 100_002)).toBe(false);
     notifier.clear(a.session.path);
     expect(instances[0].close).toHaveBeenCalledTimes(1);
+  });
+  it("withdraws every owned reminder on exit without touching another notifier", () => {
+    const notifier = make(), other = make();
+    notifier.handle(change("A", "finished_unread"), 100_000);
+    other.handle(change("B", "finished_unread"), 100_000);
+    notifier.dispose(); notifier.dispose();
+    expect(instances[0].close).toHaveBeenCalledOnce();
+    expect(instances[1].close).not.toHaveBeenCalled();
+  });
+  it("withdraws an activated notification without waiting for a host acknowledgement", () => {
+    const notifier = make();
+    notifier.handle(change("A", "finished_unread"), 100_000);
+    instances[0].listeners.get("click")?.();
+    expect(instances[0].close).toHaveBeenCalledOnce();
+  });
+  it("reconciles a seen event missed during disconnect without clearing unread reminders", () => {
+    const notifier = make();
+    notifier.handle(change("A", "waiting_for_input"), 100_000);
+    const session = { ...change("A", "waiting_for_input").session, id: "a", createdAt: "", messageCount: 1 };
+    notifier.reconcile([{ ...session, seenAt: new Date(90_000).toISOString() } as SessionSummary]);
+    expect(instances[0].close).not.toHaveBeenCalled();
+    notifier.reconcile([{ ...session, seenAt: new Date(100_001).toISOString() } as SessionSummary]);
+    expect(instances[0].close).toHaveBeenCalledOnce();
   });
   it("clears resolved reminders even while foreground suppression applies", () => {
     let foreground = false;

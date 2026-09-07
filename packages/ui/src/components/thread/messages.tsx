@@ -1,7 +1,10 @@
-import { WIRE_NAMESPACE } from "@lasercode/protocol";
+import { MESSAGE_METADATA_NS } from "@lasercode/protocol";
 import { MessagePrimitive, useAui, useAuiState, type MessageState } from "@assistant-ui/react";
 import type { ModelRef, ThinkingLevel } from "@lasercode/protocol";
-import { Info, TriangleAlert } from "lucide-react";
+import { Info, Target, TriangleAlert } from "lucide-react";
+import { GoalRecord } from "./GoalRecord.js";
+import { GOAL_DATA_PART } from "@/runtime/projection";
+import type { GoalRecord as GoalRecordData } from "@/runtime/goal-history";
 import { memo, useContext, useMemo, useState } from "react";
 import { FindSelectionContext, SearchMessageContext, useSearchReveal } from "./search-state.js";
 
@@ -32,7 +35,7 @@ import { useCopy } from "@/hooks/use-copy";
 import { duration as formatDuration } from "@/format";
 import { cn } from "@/lib/utils";
 import { NOTICE_DATA_PART, useLaserStable, useLaserState } from "@/runtime";
-import { continuationsOf, laterUserMessages, leafOf, userEntryAt } from "./entries.js";
+import { continuationsOf, leafOf, userEntryAt } from "./entries.js";
 import { THINKING_LEVELS, useSupportedThinkingLevels } from "@/components/assistant-ui/elements/reasoning-effort";
 import { useElapsed } from "./timing.js";
 import { toolGroupKey } from "./tool-groups.js";
@@ -44,13 +47,15 @@ interface LaserMeta {
   kind?: "user" | "turn" | "notice";
   images?: number;
   optimistic?: boolean;
+  userOrdinal?: number;
+  goalSetter?: boolean;
   level?: "info" | "warning" | "error";
   /** Which agent produced this message, when the session is a child run. */
   speaker?: Speaker;
 }
 
 const laserMeta = (message: MessageState): LaserMeta =>
-  ((message.metadata as { custom?: Record<string, unknown> } | undefined)?.custom?.[WIRE_NAMESPACE] as LaserMeta | undefined) ?? {};
+  ((message.metadata as { custom?: Record<string, unknown> } | undefined)?.custom?.[MESSAGE_METADATA_NS] as LaserMeta | undefined) ?? {};
 
 const MESSAGE_ROOT = "[content-visibility:auto] [contain-intrinsic-size:auto_320px]";
 
@@ -91,6 +96,7 @@ export function UserMessage() {
   const text = useMessageText();
   const images = useAuiState((s) => laserMeta(s.message).images ?? 0);
   const optimistic = useAuiState((s) => laserMeta(s.message).optimistic === true);
+  const goalSetter = useAuiState((s) => laserMeta(s.message).goalSetter === true);
   const busy = useAuiState((s) => s.thread.isRunning);
   const path = useSessionPath();
   const entries = useEntries();
@@ -101,13 +107,16 @@ export function UserMessage() {
   const requestAt = useAuiState(s => s.message.createdAt?.toISOString());
   const nextRequestAt = useAuiState(s => s.thread.messages.slice(s.message.index + 1).find(m => m.role === "user")?.createdAt?.toISOString());
 
-  // The n-th prompt on screen is the n-th user entry on disk (entries.ts).
+  // Hidden automatic goal prompts still occupy entries on disk. Use the raw
+  // ordinal stamped by projection, not the filtered on-screen position.
   const ordinal = useAuiState((s) => {
+    const original = laserMeta(s.message).userOrdinal;
+    if (original !== undefined) return original;
     let n = 0;
     for (let i = 0; i < s.message.index; i++) if (s.thread.messages[i]?.role === "user") n++;
     return n;
   });
-  const userCount = useAuiState((s) => s.thread.messages.reduce((n, m) => (m.role === "user" ? n + 1 : n), 0));
+  const laterMessages = useAuiState(s => s.thread.messages.slice(s.message.index + 1).filter(m => m.role === "user").length);
   const entryId = useMemo(() => (optimistic ? undefined : userEntryAt(entries, ordinal)), [entries, ordinal, optimistic]);
   const continuations = useMemo(() => (entryId ? continuationsOf(entries, entryId) : []), [entries, entryId]);
   const { quote, rest } = useMemo(() => splitLeadingQuote(text), [text]);
@@ -142,11 +151,12 @@ export function UserMessage() {
             onValueChange={setDraft}
             onSend={() => void sendEdit()}
             onCancel={() => setEditing(false)}
-            laterMessages={laterUserMessages(userCount, ordinal)}
+            laterMessages={laterMessages}
             busy={busy}
           />
         ) : (
           <UserBubble data-optimistic={optimistic || undefined} className={cn(optimistic && "opacity-70")}>
+            {goalSetter && <span className="mb-1 flex items-center gap-1.5 text-xs font-medium text-ink-2"><Target className="size-3.5 text-live" aria-hidden="true" />Goal set</span>}
             {quote ? <QuoteReply text={quote} /> : null}
             {rest ? (
               <p className="wrap-break-word whitespace-pre-wrap">
@@ -275,6 +285,7 @@ export function AssistantMessage() {
                   </div>
                 );
               case "data":
+                if (part.name === GOAL_DATA_PART) return <GoalRecord goal={part.data as GoalRecordData} />;
                 if (part.name === NOTICE_DATA_PART) return <Notice data={part.data} />;
                 return part.dataRendererUI;
               case "indicator":
@@ -380,6 +391,7 @@ function AssistantFooter() {
     if (i < 0) return undefined;
     let ordinal = 0;
     for (let j = 0; j < i; j++) if (s.thread.messages[j]?.role === "user") ordinal++;
+    ordinal = laserMeta(s.thread.messages[i] as MessageState).userOrdinal ?? ordinal;
     const text = s.thread.messages[i]!.content
       .map((p) => (p.type === "text" ? p.text : ""))
       .filter(Boolean)

@@ -77,6 +77,9 @@ function productModule() {
 
 export const PRODUCT = ${JSON.stringify(shape, null, 2)} as const;
 
+/** Build identity, captured in code so replacing installed files cannot change a running process. */
+export const PRODUCT_VERSION: string = ${JSON.stringify(JSON.parse(read("package.json")).version)};
+
 /**
  * Every environment variable the product reads, by its unprefixed name.
  *

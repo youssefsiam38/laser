@@ -1,0 +1,257 @@
+diff --git a/dist/chunks/chunk-QWIUWKRW.js b/dist/chunks/chunk-QWIUWKRW.js
+index 337f7dc01226f5d5a760a1a8ee1e75e0af44c9e6..6539d5cb809751469009211d590fe06fd9ca40c7 100644
+--- a/dist/chunks/chunk-QWIUWKRW.js
++++ b/dist/chunks/chunk-QWIUWKRW.js
+@@ -27,73 +27,35 @@ var REMOVED_QUEUE_COMMANDS = /* @__PURE__ */ new Set([
+   "pop",
+   "shift"
+ ]);
+-var TOKEN_BUDGET_COMPLETION = {
+-  value: "--tokens ",
+-  label: "--tokens",
+-  description: "Set a token budget before the goal"
+-};
+ var GOAL_ARGUMENT_COMPLETIONS = [
+   { value: "pause", label: "pause", description: "Pause the active goal" },
+-  { value: "resume", label: "resume", description: "Resume a stopped or budget-limited goal" },
+-  { value: "clear", label: "clear", description: "Clear the current goal" },
+-  { value: "edit", label: "edit", description: "Edit the current goal objective" },
+-  { value: "status", label: "status", description: "Show the current goal" },
+-  TOKEN_BUDGET_COMPLETION
++  { value: "resume", label: "resume", description: "Resume the goal" },
++  { value: "clear", label: "clear", description: "Clear the active goal" },
++  { value: "edit", label: "edit", description: "Edit the objective" },
++  { value: "status", label: "status", description: "Show the current goal" }
+ ];
+ function completeGoalArguments(argumentPrefix) {
+-  const prefix = argumentPrefix.trimStart();
+-  if (prefix === "") return [...GOAL_ARGUMENT_COMPLETIONS];
+-  const objectiveOption = /^edit\s+(\S*)$/.exec(prefix);
+-  if (objectiveOption) {
+-    const optionPrefix = objectiveOption[1] ?? "";
+-    return optionPrefix === "" || "--tokens".startsWith(optionPrefix) ? [
+-      {
+-        value: "edit --tokens ",
+-        label: "--tokens",
+-        description: "Set a token budget before the updated goal"
+-      }
+-    ] : null;
+-  }
+-  if (/\s/.test(prefix)) return null;
+-  const matches = GOAL_ARGUMENT_COMPLETIONS.filter(
+-    (item) => item.value.startsWith(prefix) || item.label.startsWith(prefix)
+-  );
+-  return matches.length > 0 ? matches : null;
++  return GOAL_ARGUMENT_COMPLETIONS.filter(item => item.value.startsWith(argumentPrefix.trimStart()));
+ }
++// The objective is task data, not shell syntax. Preserve quotes and newlines.
+ function parseCommand(args) {
+-  const tokens = tokenize(args.trim());
+-  if (tokens.length === 0) return { kind: "show" };
+-  const [first, ...rest] = tokens;
+-  if (first === "pause") return rest.length === 0 ? { kind: "pause" } : "Usage: /goal pause";
+-  if (first === "resume") return rest.length === 0 ? { kind: "resume" } : "Usage: /goal resume";
+-  if (first === "clear" || first === "stop")
+-    return rest.length === 0 ? { kind: "clear" } : "Usage: /goal clear";
+-  if (first === "status") return rest.length === 0 ? { kind: "show" } : "Usage: /goal status";
+-  if (first === "edit") return parseObjective("edit", rest);
+-  return parseObjective("start", tokens);
++  const text = args.trim();
++  if (!text) return { kind: "show" };
++  const first = /^\S+/.exec(text)[0];
++  const rest = text.slice(first.length).trim();
++  if (["pause", "resume", "clear", "stop", "status"].includes(first)) {
++    if (rest) return "Usage: /goal " + first;
++    return { kind: first === "stop" ? "clear" : first === "status" ? "show" : first };
++  }
++  return parseObjective(first === "edit" ? "edit" : "start", first === "edit" ? rest : text);
+ }
+ function isRemovedQueueCommand(args) {
+-  const [first] = tokenize(args.trim());
+-  return first !== void 0 && REMOVED_QUEUE_COMMANDS.has(first);
+-}
+-function parseObjective(kind, tokens) {
+-  let tokenBudget;
+-  const objectiveTokens = [...tokens];
+-  if (objectiveTokens[0] === "--tokens") {
+-    const rawBudget = objectiveTokens[1];
+-    if (!rawBudget) {
+-      return kind === "start" ? "Usage: /goal --tokens 100k <goal_to_complete>" : `Usage: /goal ${kind} --tokens 100k <goal_to_complete>`;
+-    }
+-    const parsedBudget = parseTokenBudget(rawBudget);
+-    if (parsedBudget === void 0) return `Invalid token budget: ${rawBudget}`;
+-    tokenBudget = parsedBudget;
+-    objectiveTokens.splice(0, 2);
+-  }
+-  if (objectiveTokens.length === 0) {
+-    if (kind === "start") return "Usage: /goal <goal_to_complete>";
+-    return `Usage: /goal ${kind} <goal_to_complete>`;
+-  }
+-  return { kind, objective: objectiveTokens.join(" "), tokenBudget };
++  return REMOVED_QUEUE_COMMANDS.has(args.trim().split(/\s/)[0]);
++}
++function parseObjective(kind, objective) {
++  if (/^--tokens(?:\s|$)/.test(objective)) return "Goals do not have token budgets. Use /goal <objective>.";
++  if (!objective) return "Usage: /goal " + (kind === "edit" ? "edit " : "") + "<objective>";
++  return { kind, objective };
+ }
+ function tokenize(input) {
+   const tokens = [];
+@@ -509,11 +471,12 @@ function normalizeLoadedGoal(goal) {
+     startedAt: isNonNegativeFiniteNumber(goal.startedAt) ? goal.startedAt : now,
+     updatedAt: isNonNegativeFiniteNumber(goal.updatedAt) ? goal.updatedAt : now,
+     iteration: Math.max(0, Math.floor(nonNegativeFiniteNumber(goal.iteration))),
+-    tokenBudget: normalizeTokenBudget(goal.tokenBudget),
+-    tokensUsed: nonNegativeFiniteNumber(goal.tokensUsed),
+-    timeUsedSeconds: nonNegativeFiniteNumber(goal.timeUsedSeconds),
+-    baselineTokens: nonNegativeFiniteNumber(goal.baselineTokens),
+-    activeStartedAt: goal.status === "active" && !waiting ? now : void 0,
++    tokenBudget: void 0,
++    status: goal.status === "budget_limited" ? "paused" : goal.status,
++    tokensUsed: 0,
++    timeUsedSeconds: 0,
++    baselineTokens: 0,
++    activeStartedAt: void 0,
+     automaticModelTurns: normalizeSafetyCounter(goal.automaticModelTurns),
+     toolFreeRepeatCount: normalizeSafetyCounter(goal.toolFreeRepeatCount),
+     lastToolFreeOutputFingerprint: normalizeOutputFingerprint(goal.lastToolFreeOutputFingerprint),
+@@ -1265,12 +1228,12 @@ var GoalRuntime = class {
+       expectedGoalId: goal.id,
+       cause,
+       abortTurn,
+-      reason: `${cause} (${count}; ${formatTokenCount(goal.tokensUsed)} tokens)`
++      reason: `${cause} (${count})`
+     });
+     if (!stoppedGoal) return false;
+     notifyTerminal(
+       ctx.ui,
+-      cause === "continuation_limit" ? `Automatic-work limit reached: ${stoppedGoal.automaticModelTurns} of ${automaticLimit} responses. Goal progress is saved with ${formatTokenCount(stoppedGoal.tokensUsed)} cumulative tokens. Open /goal to review and continue.` : `Goal paused: ${count}; ${formatTokenCount(stoppedGoal.tokensUsed)} cumulative tokens. Open /goal to review and continue.`,
++      cause === "continuation_limit" ? `Automatic-work limit reached: ${stoppedGoal.automaticModelTurns} of ${automaticLimit} responses. Goal progress is saved. Open /goal to review and continue.` : `Goal paused: ${count}. Open /goal to review and continue.`,
+       "warning"
+     );
+     return true;
+@@ -1705,11 +1668,11 @@ function createGoal(text, tokenBudget, baselineTokens) {
+     startedAt: now,
+     updatedAt: now,
+     iteration: 0,
+-    tokenBudget,
++    tokenBudget: void 0,
+     tokensUsed: 0,
+     timeUsedSeconds: 0,
+-    baselineTokens,
+-    activeStartedAt: now,
++    baselineTokens: 0,
++    activeStartedAt: void 0,
+     automaticModelTurns: 0,
+     toolFreeRepeatCount: 0
+   };
+@@ -1758,7 +1721,7 @@ function formatStatus(goal, automaticTurnLimit = DEFAULT_GOAL_SETTINGS.continuat
+   if (goal.status === "usage_limited") return `usage \xB7 ${automatic}`;
+   if (goal.status === "budget_limited") return `budget ${formatBudget2(goal)} \xB7 ${automatic}`;
+   if (goal.tokenBudget !== void 0) return `active ${formatBudget2(goal)} \xB7 ${automatic}`;
+-  return `active ${formatDuration(goal.timeUsedSeconds)} \xB7 ${automatic}`;
++  return `active \xB7 ${automatic}`;
+ }
+ function formatBudget2(goal) {
+   return `${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget ?? 0)}`;
+@@ -1773,8 +1736,7 @@ function goalSummary(goal, automaticTurnLimit = DEFAULT_GOAL_SETTINGS.continuati
+     ] : [],
+     `Iteration: ${goal.iteration}`,
+     automaticTurnLimit === null ? `Automatic work: ${goal.automaticModelTurns} responses \xB7 Unlimited` : `Automatic work: ${goal.automaticModelTurns} of ${automaticTurnLimit} responses`,
+-    `Active elapsed: ${formatDuration(goal.timeUsedSeconds)}`,
+-    `Tokens: ${goal.tokenBudget === void 0 ? formatTokenCount(goal.tokensUsed) : formatBudget2(goal)}`
++    "Usage is tracked by the session, not the goal."
+   ];
+   if (goal.safetyPauseCause) {
+     summary.push(
+diff --git a/dist/chunks/chunk-UQRRW4CY.js b/dist/chunks/chunk-UQRRW4CY.js
+index d3dccf8005f4552dd6d7994381245b74f0faeba3..1ef4c6af97512f102126639284d260701ed50e58 100644
+--- a/dist/chunks/chunk-UQRRW4CY.js
++++ b/dist/chunks/chunk-UQRRW4CY.js
+@@ -3,22 +3,13 @@
+ 
+ // src/accounting.ts
+ function checkpointGoalActiveTime(goal, now, continueClock) {
+-  const accumulated = nonNegativeFiniteNumber(goal.timeUsedSeconds);
+-  const startedAt = goal.activeStartedAt;
+-  if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
+-    goal.timeUsedSeconds = accumulated + Math.max(0, now - startedAt) / 1e3;
+-  } else {
+-    goal.timeUsedSeconds = accumulated;
+-  }
+-  goal.activeStartedAt = continueClock ? now : void 0;
++  // Session telemetry owns accounting. Neutral fields satisfy upstream's
++  // persistence validator without collecting a second set of usage metrics.
++  goal.timeUsedSeconds = 0;
++  goal.activeStartedAt = void 0;
+ }
+ function updateGoalUsage(goal, ctx, continueClock = goal.status === "active") {
+-  const now = Date.now();
+-  const baselineTokens = nonNegativeFiniteNumber(goal.baselineTokens);
+-  goal.baselineTokens = baselineTokens;
+-  goal.tokensUsed = Math.max(0, currentTokenTotal(ctx) - baselineTokens);
+-  checkpointGoalActiveTime(goal, now, continueClock);
+-  goal.updatedAt = now;
++  goal.updatedAt = Date.now();
+ }
+ function formatDuration(seconds) {
+   const wholeSeconds = Math.max(0, Math.floor(nonNegativeFiniteNumber(seconds)));
+@@ -65,8 +56,7 @@ function cumulativeAssistantTokens(entries) {
+   return total;
+ }
+ function currentTokenTotal(ctx) {
+-  const sessionManager = ctx.sessionManager;
+-  return cumulativeAssistantTokens(sessionManager?.getBranch?.() ?? []);
++  return 0;
+ }
+ 
+ // src/errors.ts
+diff --git a/dist/index.ts b/dist/index.ts
+index 88023ea7e232329a3cf4b26b23dd2078b837fb5d..2d0f524aa755d2fd9109b90c584eb01c0cd6eaf2 100644
+--- a/dist/index.ts
++++ b/dist/index.ts
+@@ -69,7 +69,7 @@ function registerGoalCommand(pi, runtime, commands, options = {}) {
+     options.loadGoalSettings ?? (() => import("./chunks/settings-ui-MVYTTBHW.js"))
+   );
+   pi.registerCommand("goal", {
+-    description: "Run a goal to completion: /goal [--tokens 100k] <goal_to_complete>",
++    description: "Run a goal to completion: /goal <objective>",
+     getArgumentCompletions: (prefix) => completeGoalArguments(prefix),
+     handler: async (args, ctx) => {
+       if (runtime.hasLegacyQueueInterface() && isRemovedQueueCommand(args)) {
+@@ -81,35 +81,6 @@ function registerGoalCommand(pi, runtime, commands, options = {}) {
+         reportCommandError(result, ctx);
+         return;
+       }
+-      if (result.kind === "show" && args.trim() === "") {
+-        const menuIsCurrent = captureMenuOwnership(runtime);
+-        let managerModule;
+-        try {
+-          managerModule = await loadGoalManager();
+-        } catch (error) {
+-          if (!menuIsCurrent()) return;
+-          throw error;
+-        }
+-        if (!menuIsCurrent()) return;
+-        const { showGoalManager } = managerModule;
+-        await showGoalManager(runtime, commands, ctx, async (menuCtx, target) => {
+-          const settingsAreCurrent = captureMenuOwnership(runtime);
+-          let settingsModule;
+-          try {
+-            settingsModule = await loadGoalSettings();
+-          } catch (error) {
+-            if (!settingsAreCurrent()) return;
+-            throw error;
+-          }
+-          if (!settingsAreCurrent()) return;
+-          const { showGoalSettings } = settingsModule;
+-          await showGoalSettings(runtime, menuCtx, {
+-            settingsPath: options.settingsPath,
+-            initialScreen: target
+-          });
+-        });
+-        return;
+-      }
+       switch (result.kind) {
+         case "show":
+           commands.showGoal(ctx);

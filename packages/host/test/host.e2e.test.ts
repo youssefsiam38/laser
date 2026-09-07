@@ -4,7 +4,7 @@
  * and receives seq-numbered updates. Requires `pnpm -r build` (spawns the
  * worker's dist). Sandboxed dirs; never touches ~/.pi/agent.
  */
-import { PRODUCT_NAME } from "@lasercode/protocol";
+import { PRODUCT_NAME, PRODUCT_VERSION } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -17,9 +17,16 @@ import { HostServer, defaultWorkerMain } from "../src/index.js";
 
 const REPLY = ["Hi ", "from ", "host"];
 
-function stubProvider(): Promise<{ server: Server; url: string; requests: Record<string, unknown>[] }> {
+function stubProvider(): Promise<{ server: Server; url: string; requests: Record<string, unknown>[]; search: { status: number; calls: number } }> {
   const requests: Record<string, unknown>[] = [];
+  const search = { status: 200, calls: 0 };
   const server = createServer((req, res) => {
+    if (req.url?.startsWith("/search?")) {
+      search.calls++;
+      res.writeHead(search.status, { "content-type": "application/json" });
+      res.end(JSON.stringify({ results: [{ title: "Connection test", url: "https://example.com", content: "Verified source" }] }));
+      return;
+    }
     let body = "";
     req.on("data", (c: Buffer) => (body += c.toString()));
     req.on("end", () => {
@@ -34,7 +41,7 @@ function stubProvider(): Promise<{ server: Server; url: string; requests: Record
     });
   });
   return new Promise((resolve) =>
-    server.listen(0, "127.0.0.1", () => resolve({ server, requests, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1` })),
+    server.listen(0, "127.0.0.1", () => resolve({ server, requests, search, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1` })),
   );
 }
 
@@ -47,9 +54,9 @@ class Client {
     this.ws.on("message", (d) => this.inbound.push(JSON.parse(d.toString()) as JsonRpcMessage));
     await new Promise<void>((r) => this.ws.once("open", () => r()));
   }
-  request<R>(method: string, params?: unknown): Promise<R> {
+  request<R>(method: string, params?: unknown, clientVersion?: string): Promise<R> {
     const id = this.nextId++;
-    this.ws.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
+    this.ws.send(JSON.stringify({ jsonrpc: "2.0", id, method, params, clientVersion }));
     return this.waitFor((m) => "id" in m && m.id === id).then((m) => {
       const r = m as { result?: R; error?: { message: string } };
       if (r.error) throw new Error(r.error.message);
@@ -115,7 +122,16 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
       expect(JSON.stringify(saved)).not.toContain("private-search-test-key");
       const features = await client.request<{ features: Array<{ manifest: { id: string }; enabled: boolean }> }>("feature/list", { cwd });
       expect(features.features.find((f) => f.manifest.id === "web-search")?.enabled).toBe(false);
+      await client.request("web-search/configure", { cwd, change: { action: "configure", provider: "searxng", connection: { source: "none", baseUrl: stub.url.replace(/\/v1$/, "") }, activate: true } });
+      expect(stub.search.calls).toBe(1);
+      stub.search.status = 503;
+      await expect(client.request("feature/set", { id: "web-search", enabled: true, scope: "global", cwd })).rejects.toThrow(/SearXNG/);
+      const rejected = await client.request<{ features: Array<{ manifest: { id: string }; enabled: boolean }> }>("feature/list", { cwd });
+      expect(rejected.features.find((f) => f.manifest.id === "web-search")?.enabled).toBe(false);
+      expect(stub.search.calls).toBe(2);
+      stub.search.status = 200;
       await client.request("feature/set", { id: "web-search", enabled: true, scope: "project", cwd });
+      expect(stub.search.calls).toBe(3);
       const status = await client.request<{ providers: Array<{ id: string; hasKey: boolean }> }>("web-search/status", { cwd });
       expect(status.providers.find((p) => p.id === "brave")?.hasKey).toBe(true);
       const { state } = await client.request<{ state: SessionState }>("session/new", { cwd });
@@ -137,6 +153,8 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
     await client.connect(url);
 
     // Empty catalog before any session exists.
+    expect(await client.request("pi/host/version", {})).toEqual({ version: PRODUCT_VERSION });
+    await expect(client.request("session/new", { cwd: join(base, "project") }, "99.0.0")).rejects.toThrow(/Refresh this view/);
     expect(await client.request("pi/session/list", {})).toEqual({ sessions: [] });
 
     // Open a session (spawns the worker) and see the worker come up.

@@ -60,6 +60,17 @@ const provider = createServer((req, res) => {
     const base = { id: "c", object: "chat.completion.chunk", created: 1, model: "stub-1" };
     const send = (o) => res.write(`data: ${JSON.stringify(o)}\n\n`);
     send({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] });
+    // Goal regression specimen: the real engine terminates on this tool with
+    // no assistant text. Its durable summary must remain readable in chat.
+    if (process.env.SANDBOX_GOAL === "1" && msgs.at(-1)?.role === "user" && prompt.includes("<goal_id>")) {
+      const goalId = /<goal_id>\s*([^\s<>]+)\s*<\/goal_id>/.exec(prompt)?.[1];
+      send({ ...base, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: randomUUID(), type: "function", function: {
+        name: "goal_complete", arguments: JSON.stringify({ goal_id: goalId, summary: "The root Compose file provides a persistent development stack. The docker directory contains the isolated CI test stack. Compared the service definitions and documented their intended use; no files were changed." }),
+      } }] }, finish_reason: null }] });
+      send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
+      res.end("data: [DONE]\n\n");
+      return;
+    }
     // Opt-in lifecycle specimen: real worker events, including partial command
     // output. Never runs unless the exact sandbox-only prompt is submitted.
     if (process.env.SANDBOX_ACTIVITY === "1" && msgs.at(-1)?.role === "user" && prompt === "sandbox activity") {
@@ -273,6 +284,7 @@ setInterval(() => {
 }, 1000).unref();
 
 function demoPanels() {
+  if (process.env.SANDBOX_GOAL === "1") return [];
   const now = Date.now();
   return [
     {

@@ -36,7 +36,7 @@ export const FEATURE_MANIFESTS: readonly FeatureManifest[] = [
   {
     id: "web-search",
     name: "Web search",
-    description: "Search the web with your chosen connection. Configure providers in Settings → Providers and models → Web search.",
+    description: "Search with one selected provider. Turning on tests its connection with a real search; provider charges may apply. Configure it in Providers and models → Web search.",
     defaultEnabled: false,
     scopes: ["global", "project"],
     dependencies: [],
@@ -65,7 +65,7 @@ export const FEATURE_MANIFESTS: readonly FeatureManifest[] = [
   },
 ] as const;
 
-export type GoalStatus = "active" | "paused" | "blocked" | "usage_limited" | "budget_limited" | "complete";
+export type GoalStatus = "active" | "paused" | "blocked" | "usage_limited" | "complete";
 
 export interface SessionGoal {
   id: string;
@@ -74,10 +74,6 @@ export interface SessionGoal {
   startedAt: number;
   updatedAt: number;
   iteration: number;
-  tokensUsed: number;
-  timeUsedSeconds: number;
-  activeStartedAt?: number;
-  tokenBudget?: number;
   automaticTurns: number;
   latestReason?: string;
   waitingUntil?: number;
@@ -88,4 +84,4 @@ export type GoalAction =
   | { action: "resume" }
   | { action: "clear" }
   | { action: "edit"; objective: string }
-  | { action: "start"; objective: string; tokenBudget?: number };
+  | { action: "start"; objective: string };

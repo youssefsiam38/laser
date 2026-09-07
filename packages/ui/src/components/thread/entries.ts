@@ -5,8 +5,9 @@
  *
  * The store's blocks carry no entry ids (`blocksFromEntries` mints its own),
  * so a user message is matched to its entry by ORDINAL: the n-th user
- * message on screen is the n-th user `message` entry in file order, because
- * both walk the same entries with the same filter. An optimistic prompt that
+ * message before presentation filtering is the n-th user `message` entry in
+ * file order. Projection preserves that ordinal in message metadata when it
+ * hides automatic goal prompts. An optimistic prompt that
  * Pi has not persisted yet has no entry and therefore no actions (R2).
  *
  * `pi/session/entries` returns the whole tree (`SessionManager.getEntries`),

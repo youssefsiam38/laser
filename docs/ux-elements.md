@@ -216,6 +216,12 @@ in the host before persistence; retention and summary-only gaps are explicit.
 
 ## Renderers
 
+The Connection state element also owns release notices: a compiled-version
+handshake blocks an incompatible frontend before session hydration. A remote
+Refresh view action only reloads the frontend and explicitly keeps agents and
+sessions running. Native update notices offer a person-chosen full app/host
+restart and warn that active work stops. No update is applied automatically.
+
 | Element | laser surface |
 | --- | --- |
 | Markdown text | The transcript renderer — **adopted**: `packages/ui/src/components/assistant-ui/elements/markdown-text.tsx`, the primitive plus our token-mapped component map, compact 14px prose and 8px block rhythm, remark-gfm and **no rehype-raw** (invariant 9), math via remark-math/rehype-katex, fences through the Shiki element, `mermaid` fences through the Mermaid element, footnote refs as citation chips, and a streaming caret on the last text block after text begins. Before any visible part arrives, the message surface owns the full thinking indicator instead. `dot.css` is not imported. Replaces `thread/MarkdownText.tsx` (deleted); `preview/MarkdownPreview.tsx` draws through it. The captured-request inspector reuses this exact component under `TextMessagePartProvider` for its optional Markdown view, so instructions and conversation content retain chat typography, spacing, code treatment and safety rather than creating a second renderer |

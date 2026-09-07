@@ -27,7 +27,7 @@ when Web search is enabled; registration failures remain module-local.
 ## Credentials and permission
 
 - Shared OpenAI API/Codex, Google API, Kimi Coding, xAI and Mistral connections
-  require an explicit **Allow for web search** action. The engine resolves the
+  require an explicit **Allow, test and use** action. The engine resolves the
   existing credential afresh for each call, including OAuth refresh. Only the
   selected provider's model/auth snapshot crosses into the search runner.
 - Search-only keys are literal, write-only fields. The worker stores them with
@@ -39,8 +39,15 @@ when Web search is enabled; registration failures remain module-local.
 - DuckDuckGo and Parallel MCP need no key; Exa and AnySearch offer optional
   keys. SearXNG requires an explicit instance URL; Bright Data also needs a
   SERP zone. Kimi needs Coding Plan credentials, not Moonshot API credentials.
-- Saving a key is not a provider validation request or a paid test. A rejected
-  search stays retryable and points back to connection settings.
+- Activating any connection (including a free provider) performs one real search
+  before atomically saving it as the only selected provider. A failed probe keeps
+  the previous selection and credentials unchanged. Saved inactive credentials
+  are never a fallback. Turning the feature on also tests the selected connection;
+  turning it off makes no provider call and preserves credentials. The UI warns
+  that probes may incur provider charges.
+- OpenAI API and Codex use separate upstream endpoints with only the explicitly
+  granted connection. Both routes passed bounded live search verification for
+  M12-T68; endpoint-shaped regression tests remain offline.
 
 ## Isolation and boundaries
 
@@ -58,6 +65,11 @@ commands, Google ADC and upstream's interactive curator are deliberately not
 product authentication paths. Gemini uses its API; Codex/xAI subscriptions use
 the existing explicit model connection. This covers every search provider, not
 every upstream terminal/browser authentication mode.
+
+The exact-pinned DuckDuckGo module carries a small local patch distinguishing
+an explicit empty-results page from a bot-verification page. Challenges are
+reported, never bypassed. Errors name the selected provider and safe HTTP status
+or failure category without including response bodies or credentials.
 
 SearXNG may be self-hosted: only addresses resolved from the configured instance
 receive a private-address exception. Upstream still validates DNS and redirects;

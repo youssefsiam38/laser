@@ -74,6 +74,9 @@ package reads the canonical `goal-state` session entries and maps them to
 `session/goal/action` without engine vocabulary.
 
 One goal belongs to one session and follows the active session branch. The
-engine owns continuation, token/time accounting, pause, block, wait, completion,
-compaction and loop-safety semantics. Laser owns the persistent row below the
-run tabs, its progress evidence and its pause, resume, edit and clear controls.
+engine owns continuation, pause, block, wait, completion, compaction and
+loop-safety semantics. A small exact-version pnpm patch removes goal budgets and
+disables goal accounting (session telemetry owns usage), and preserves literal
+objective punctuation/whitespace. It does not replace the loop or alter the
+terminating completion tool. Laser owns the persistent row below the run tabs,
+pause/resume/edit/clear controls and the durable completion disclosure in chat.

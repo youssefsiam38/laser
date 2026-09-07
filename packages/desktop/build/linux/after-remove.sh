@@ -20,6 +20,8 @@ esac
 
 # ----------------------------------------------------- 5. updates ----
 
+rm -f "$APP_DIR/resources/native-update.json" "$APP_DIR/resources/native-update.json.tmp"
+
 rm -f "/etc/apt/sources.list.d/$EXE.list"
 rm -f "/etc/yum.repos.d/$EXE.repo"
 

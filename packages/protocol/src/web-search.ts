@@ -38,8 +38,9 @@ export interface WebSearchStatus {
   sharedConnectionWarning?: string;
 }
 export type WebSearchChange =
+  | { action: "test" }
   | { action: "select"; provider: WebSearchProviderId }
-  | { action: "configure"; provider: WebSearchProviderId; connection: WebSearchConnection; apiKey?: string | null };
+  | { action: "configure"; provider: WebSearchProviderId; connection: WebSearchConnection; apiKey?: string | null; activate?: boolean };
 
 declare module "./messages.js" {
   interface ClientRequests {

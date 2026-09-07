@@ -6,7 +6,7 @@
 # distinguish an upgrade from a first install.
 #
 # It does six things and nothing else. after-remove.sh reverses the persistent
-# first five; the last is a one-time process signal and leaves nothing behind:
+# first five; the last publishes an end-of-install marker:
 #
 #   1. put `laser` on PATH
 #   2. give Chromium a usable sandbox on kernels that need the setuid helper
@@ -16,7 +16,7 @@
 #      Ubuntu 24.04 and later
 #   5. register the signed native package repository, so the operating
 #      system's normal updater discovers and announces later releases
-#   6. on an upgrade, ask the running bundled daemon to reload the new files
+#   6. announce installed files; only the user may restart the app and host
 #
 # Every step is guarded: a machine without `gtk-update-icon-cache` or without
 # AppArmor installs cleanly, it just does not get that step.
@@ -159,28 +159,17 @@ metadata_expire=6h
 EOF
 fi
 
-# ------------------------------------------------- 6. daemon refresh ----
+# ------------------------------------------------- 6. update ready ----
 
-# dpkg gives postinst `configure <old-version>` on an upgrade; rpm gives `%post`
-# the argument 2. Once the new files are completely in place, retire only a
-# daemon whose first three argv entries identify this exact native install.
-# SIGHUP is a graceful host shutdown: the desktop supervisor immediately starts
-# it again from the newly installed files. A command-started host stays stopped
-# until the person next opens Laser or runs `laser up`.
-if [ -n "${2:-}" ] || [ "${1:-}" = "2" ]; then
-    NODE="$APP_DIR/resources/runtime/node"
-    CLI="$APP_DIR/resources/app.asar.unpacked/node_modules/@lasercode/cli/dist/main.js"
-    for command_file in /proc/[0-9]*/cmdline; do
-        [ -r "$command_file" ] || continue
-        command_line=$(tr '\0' ' ' <"$command_file" 2>/dev/null || true)
-        case "$command_line" in
-            "$NODE $CLI __daemon "*)
-                pid=${command_file#/proc/}
-                pid=${pid%/cmdline}
-                kill -HUP "$pid" 2>/dev/null || true
-                ;;
-        esac
-    done
+# Atomic publication after installation. Never signal a running process here:
+# updating only the daemon leaves an old desktop around a new host, and stops
+# active work at a time the person did not choose.
+MANIFEST="$APP_DIR/resources/app.asar.unpacked/node_modules/@lasercode/cli/package.json"
+MARKER="$APP_DIR/resources/native-update.json"
+if [ -f "$MANIFEST" ]; then
+    cp "$MANIFEST" "$MARKER.tmp"
+    chmod 644 "$MARKER.tmp"
+    mv -f "$MARKER.tmp" "$MARKER"
 fi
 
 exit 0

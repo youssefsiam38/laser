@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +13,33 @@ beforeEach(async () => { directory = await mkdtemp(join(tmpdir(), "search-test-"
 afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
 
 describe("web search connections", () => {
+  it("tests before atomically replacing the selected provider and never falls back", async () => {
+    const execute = vi.fn(async (job) => JSON.stringify({ provider: job.provider, answer: "Verified", results: [{ url: "https://example.com" }] }));
+    const service = new WebSearchService(directory, execute);
+    await service.configure({ action: "configure", provider: "brave", connection: { source: "dedicated" }, apiKey: "good-key", activate: true });
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect((await service.status()).selectedProvider).toBe("brave");
+    execute.mockRejectedValueOnce(new Error("OpenAI search failed (HTTP 401)."));
+    await expect(service.configure({ action: "configure", provider: "openai", connection: { source: "dedicated" }, apiKey: "bad-key", activate: true })).rejects.toThrow(/401/);
+    expect((await service.status()).selectedProvider).toBe("brave");
+    expect(await readFile(join(directory, "search-connections.json"), "utf8")).not.toContain("bad-key");
+    await service.search("real query");
+    expect(execute.mock.calls.at(-1)![0].provider).toBe("brave");
+    await service.configure({ action: "select", provider: "duckduckgo" });
+    expect(execute.mock.calls.at(-1)![0].provider).toBe("duckduckgo");
+    expect((await service.status()).selectedProvider).toBe("duckduckgo");
+    expect((await service.status()).providers.find((p) => p.id === "brave")?.hasKey).toBe(true);
+    await service.configure({ action: "test" });
+    expect(execute.mock.calls.at(-1)![0].provider).toBe("duckduckgo");
+  });
+  it("leaves the prior connection intact on an empty or misrouted probe", async () => {
+    const execute = vi.fn(async () => JSON.stringify({ provider: "duckduckgo", answer: "", results: [] }));
+    const service = new WebSearchService(directory, execute);
+    await expect(service.configure({ action: "select", provider: "duckduckgo" })).rejects.toThrow(/usable/);
+    execute.mockResolvedValueOnce(JSON.stringify({ provider: "openai", answer: "wrong provider", results: [] }));
+    await expect(service.configure({ action: "select", provider: "duckduckgo" })).rejects.toThrow(/usable/);
+    expect((await service.status()).selectedProvider).toBe("duckduckgo");
+  });
   it("includes every provider in the exact-pinned upstream registry", async () => {
     const source = await readFile(new URL("../node_modules/pi-web-access/gemini-search.ts", import.meta.url), "utf8");
     const values = JSON.parse(source.match(/RESOLVED_SEARCH_PROVIDERS = (\[[^;]+\]) as const/)![1]!);

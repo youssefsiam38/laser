@@ -83,6 +83,7 @@ export interface SessionView {
 }
 
 export interface AppState {
+  versionMismatch?: string;
   connection: "connecting" | "open" | "closed";
   sessions: SessionSummary[];
   /** True once a `pi/session/list` has landed, so an empty list is real. */
@@ -104,6 +105,7 @@ export const initialState: AppState = {
 };
 
 export type Action =
+  | { type: "versionMismatch"; version: string }
   | { type: "connection"; state: AppState["connection"] }
   | { type: "sessions"; sessions: SessionSummary[] }
   | { type: "opened"; state: SessionState }
@@ -149,6 +151,8 @@ export function reduce(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "connection":
       return { ...state, connection: action.state };
+    case "versionMismatch":
+      return { ...state, versionMismatch: action.version };
     case "sessions":
       return { ...state, sessions: action.sessions, sessionsLoaded: true };
     case "opened": {
@@ -388,6 +392,15 @@ function lastOptimisticUserIndex(blocks: Block[]): number {
 
 export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
   switch (u.kind) {
+    case "entry_appended": {
+      // Durable goal lifecycle must reach presentation before agent_end, and
+      // survive the upstream complete -> null transition. Never rehydrate the
+      // whole transcript mid-stream just to observe an extension entry.
+      const entry = u.entry as { id?: string; type?: string; customType?: string } | undefined;
+      if (entry?.type !== "custom" || entry.customType !== "goal-state") return v;
+      if (entry.id && v.entries.some(raw => (raw as { id?: string })?.id === entry.id)) return v;
+      return { ...v, entries: [...v.entries, u.entry] };
+    }
     case "agent_start":
       return { ...v, running: true };
     case "agent_end":

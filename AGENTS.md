@@ -378,6 +378,16 @@ Explain full quit (including tray) after finishing work. Test new public methods
 through a real host and built worker, not only worker dispatch. Quota credential
 failures must leave loading and remain retryable without leaking auth details.
 
+**Native update regression:** this machine also retained an Electron 0.2.5 main
+around a 0.2.9 daemon. Inspect the renderer's `--desktop-env` version as well as
+the host record; installed manifests alone prove neither process. Native install
+hooks must never signal/restart the host. Publish the atomic completion marker,
+let the person choose a full app/host restart, and block spawning or adopting a
+different generation. Frontends must handshake their compiled release before
+hydration/resume; mismatches block requests and offer a user-chosen view refresh.
+Remote refresh must not stop/cancel any host work. Do not promise uninterrupted
+agents during a full host restart. Preserve drafts before frontend reload.
+
 ### Native reminders must follow session acknowledgement
 
 Retain native notification handles by session and withdraw them when that session
@@ -388,6 +398,12 @@ before foreground/throttle guards; preserve anti-spam history. Test late native
 delivery and replaced-handle close callbacks. On Linux, prove `CloseNotification`
 and the server's application-dismissed signal; banner timeout alone is not proof
 of removal from notification history or the dock's count.
+Reconcile durable `seenAt` after reconnect, and withdraw owned handles on orderly
+quit/relaunch. GNOME Dock derives counts from notification-centre objects;
+`app.setBadgeCount(0)` is not a substitute. Never guess lost notification IDs or
+change global dock preferences. Reminders orphaned by pre-fix processes or forced
+termination may need one manual dismissal; the standard API cannot enumerate
+their IDs. Test low-urgency finished notifications after their banner times out.
 
 ### Subscription allowance: prove the route, not only the parser
 
@@ -447,6 +463,23 @@ one Pi extension with one module per package (`src/modules/*`). Adding support
 for a new package means adding a module, not a package. Modules never import
 each other, detect their package at `session_start`, and fail individually
 (reported to the UI, never fatal to the session).
+
+### Goal policy and transcript regression checks
+
+- Goals have no budgets and no separate usage accounting. Preserve the exact
+  `@narumitw/pi-goal` pnpm policy patch when updating the engine; run
+  `packages/pi-goal/test/policy.test.ts` against the installed dependency.
+- Keep upstream completion terminating. Render its real summary as a durable
+  chat record from canonical goal-state entries plus an accepted completion
+  result. A later null clears active controls, not completed history. Never
+  fabricate another assistant response or conceal rejected/stale completions.
+- Hide only marker-bearing prompts associated with a known persisted goal ID.
+  Keep the first objective literal, keep original entry ordinals for message
+  actions, and exclude hidden scaffolding from search and catalog titles.
+- Message metadata uses `MESSAGE_METADATA_NS`, not the RPC `WIRE_NAMESPACE`.
+  Verify the visible goal-setter label, reload, session switching, detail modes
+  and keyboard disclosure. `SANDBOX_GOAL=1` exercises a tool-only completion
+  with the real engine and an isolated fake provider, without user credentials.
 
 ---
 

@@ -667,7 +667,7 @@ function goalCommand(action: GoalAction): string {
     case "edit":
       return `/goal edit ${action.objective}`;
     case "start":
-      return `/goal ${action.tokenBudget ? `--tokens ${action.tokenBudget} ` : ""}${action.objective}`;
+      return `/goal ${action.objective}`;
   }
 }
 

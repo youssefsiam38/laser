@@ -68,14 +68,26 @@ Three nouns, and the CLI uses the same words.
 
 A goal is the one durable objective governing the current session. It is not a
 run or a panel and does not compete for dock space. While present it stays in a
-single row directly below the run tabs with its status, objective, evaluations,
-active time, token use, optional budget and latest block/wait reason. Controls
+single row directly below the run tabs with its status, objective, automatic
+continuation count and latest block/wait reason. Goals have no budgets and no
+separate usage accounting; session telemetry owns consumption. Controls
 appear only when the current status permits them.
 
 Goal state is branch-local session data. Switching, starting or forking a
 session must never carry another session's goal across. Pi-native goal logic
 owns persistence and continuation safety; Laser owns the row and the neutral
 protocol. See [`product-boundary.md`](product-boundary.md).
+
+The first internal goal prompt projects as the exact original objective with a
+“Goal set” label; subsequent automatic prompts stay out of the visible chat.
+Accepted completion is a persistent activity disclosure outside tool aggregates:
+original objective, the actual completion summary, and an objective/status
+timeline. It survives automatic clearing and reload. It is collapsed by default
+and follows the session's full-detail preference. Use the adopted ToolFallback,
+Timeline and chat Markdown elements; do not synthesize an extra assistant answer
+or change the engine's terminating completion behavior. Failed/stale completions
+remain inspectable tool calls. Search indexes the displayed goal content, not
+the engine prompt or guard IDs. Raw session entries remain untouched.
 
 ## Navigating runs
 

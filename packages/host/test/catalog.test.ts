@@ -18,6 +18,14 @@ function session(slug: string, name: string, header: object, when: Date) {
 }
 
 describe("SessionCatalog", () => {
+  it("uses the objective for a goal-started session without exposing its internal prompt", () => {
+    const path = session("--goal--", "goal.jsonl", { id: "goal", cwd: "/project" }, new Date("2026-01-01"));
+    const catalog = new SessionCatalog(dir);
+    appendFileSync(path, JSON.stringify({ type: "custom", customType: "goal-state", data: { goal: { id: "guard", text: 'Compare "root Compose"  with CI' } } }) + "\n");
+    expect(catalog.get(path)?.firstMessage).toBeUndefined();
+    appendFileSync(path, JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text: "Internal instructions\n<goal_id>guard</goal_id>\n<!-- pi-goal-prompt:n -->" }] } }) + "\n");
+    expect(catalog.get(path)?.firstMessage).toBe('Compare "root Compose" with CI');
+  });
   it("lists sessions across projects newest first and resolves cwd from the header", () => {
     const a = session("--home-a--", "1_a.jsonl", { id: "a", cwd: "/home/a", timestamp: "2026-01-01T00:00:00Z" }, new Date("2026-01-01"));
     const b = session("--home-b--", "2_b.jsonl", { id: "b", cwd: "/home/b", timestamp: "2026-02-01T00:00:00Z", parentSession: a }, new Date("2026-02-01"));
