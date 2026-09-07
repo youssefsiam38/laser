@@ -31,6 +31,15 @@ it("supports keyboard focus and clears on scrolling or window blur", async () =>
   await act(async () => window.dispatchEvent(new Event("blur")));
   expect(preview()).toBeNull();
 });
+it("shows an editor path verbatim instead of resolving it against the web origin", async () => {
+  link.setAttribute("data-file-path", "/project/src/index.ts");
+  await act(async () => link.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
+  expect(preview()?.textContent).toBe("/project/src/index.ts");
+  await act(async () => { link.setAttribute("data-file-path", "/other/source.ts"); await new Promise(resolve => setTimeout(resolve, 0)); });
+  expect(preview()?.textContent).toBe("/other/source.ts");
+  await act(async () => { link.setAttribute("inert", ""); await new Promise(resolve => setTimeout(resolve, 0)); });
+  expect(preview()).toBeNull();
+});
 it("ignores touch, unsafe schemes and inert links", async () => {
   await act(async () => link.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "touch" })));
   expect(preview()).toBeNull();

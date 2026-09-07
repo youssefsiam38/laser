@@ -91,7 +91,7 @@ function SourceFileDetails({ item }: { item: Unstable_TriggerItem }) {
     try {
       if (desktop?.openSourceFile) {
         const result = await desktop.openSourceFile(path);
-        setMessage(result.opened ? "Opened in your default Markdown application." : result.reason ?? "Couldn’t open the file. Check your default Markdown application.");
+        setMessage(result.opened ? "Opened in your default text editor." : result.reason ?? "Couldn’t open the file. Check your default text editor.");
       } else {
         await navigator.clipboard.writeText(path);
         setMessage("Path copied. Open it in your editor on the project computer.");

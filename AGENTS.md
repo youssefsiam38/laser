@@ -527,6 +527,15 @@ conversation value-only selector there. Section search highlights rendered
 content once (not its duplicate preview/JSON), and request find owns separate
 native highlight names and modal-only scrolling/keyboard handling.
 
+Source disclosure regression checks: keep source menus inside the parent
+dialog's portal/scroll-lock boundary and test real wheel scrolling, not just
+overflow classes. Pointer details must anchor to the cursor, with keyboard
+fallback and no native `title` duplicate. Markdown file links resolve against
+their owning session/capture directory and call the native text-editor bridge;
+never resolve them against the web origin or use MIME-based file opening for
+scripts/HTML. Remote views copy the host path. File opening is explicit, without
+shell interpolation, and source controls never duplicate searchable prompt text.
+
 ### Instruction provenance regression checks
 
 - Capture sources from Pi's loaded prompt options and observed extension writes,

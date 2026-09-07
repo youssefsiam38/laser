@@ -21,6 +21,7 @@ import { ConversationSearch } from "@/components/assistant-ui/elements/conversat
 import { SyntaxHighlighter } from "@/components/assistant-ui/elements/shiki-highlighter";
 import { useRequestFind } from "./use-request-find.js";
 import { ConfidenceMarker } from "@/components/assistant-ui/elements/confidence-marker";
+import { FileLinkDirectory } from "@/components/ui/source-file-link";
 import { requestSourceSpans } from "./request-sources.js";
 
 export type ApiRequestTarget = { kind: "log"; entry: LogEntry } | {
@@ -93,7 +94,7 @@ export function ApiRequestDialog({ target, onClose }: { target: ApiRequestTarget
       {more && <p className="px-5 py-2 text-xs text-attention">Showing the latest retained page. More requests are available in Logs.</p>}
       {loading ? <div className="grid flex-1 place-items-center"><GenerationLoader label="Loading captured requests" /></div>
         : error ? <div role="alert" className="p-5 text-danger">{error}</div>
-        : entry ? <RequestBody key={`${entry.id}:${refresh}`} entry={entry} />
+        : entry ? <FileLinkDirectory.Provider value={entry.cwd}><RequestBody key={`${entry.id}:${refresh}`} entry={entry} /></FileLinkDirectory.Provider>
         : <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center"><FileText className="size-8 text-ink-3" /><h3 className="text-base font-medium">No captured request for this message</h3><p className="max-w-prose text-sm text-ink-2">It may not have reached a provider yet, or its logs were cleared or expired. Older versions did not record message links. Retained requests can also be inspected from Logs.</p></div>}
     </DialogContent>
   </Dialog>;

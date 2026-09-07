@@ -40,6 +40,8 @@ import remarkMath from "remark-math";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { useCopy } from "@/hooks/use-copy";
 import { cn } from "@/lib/utils";
+import { SourceFileLink } from "@/components/ui/source-file-link";
+import { markdownUrl } from "@/lib/file-links";
 
 import { citationChip } from "./inline-citation.js";
 import { MermaidDiagram } from "./mermaid-diagram.aui.js";
@@ -118,7 +120,7 @@ const defaultComponents = memoizeMarkdownComponents({
       return <a className={cn(citationChip, className)} {...props} />;
     }
     return (
-      <a
+      <SourceFileLink
         className={cn("text-live underline decoration-live/40 underline-offset-[3px] hover:decoration-live", className)}
         target="_blank"
         rel="noopener noreferrer"
@@ -218,6 +220,7 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ className, components }) => {
       remarkPlugins={remarkPlugins}
       rehypePlugins={rehypePlugins}
       preprocess={preprocess}
+      urlTransform={markdownUrl}
       components={markdownComponents}
       componentsByLanguage={componentsByLanguage}
       smooth={false}

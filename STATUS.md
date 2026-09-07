@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-07T14:24:00+03:00 · codex-2026-09-07-release-assets · HEAD: `d556723`
+**Last updated:** 2026-09-07T14:58:48+03:00 · codex-2026-09-07-source-navigation · HEAD: `f20bdaa`
 
-**Current focus:** M12-T76 complete: draft-first, asset-verified publication. 0.2.12 downloads are available and Latest; separate M3 work remains untouched.
+**Current focus:** M12-T77 complete: searchable sources, pointer-adjacent component-only tooltips, native editor file links. Local change only; no push or release.
 
 ## Milestones
 
@@ -23,7 +23,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M9 CLI | done | planned tasks complete |
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
-| M12 Product experience | done | 0.2.12 downloadable; future publication gated on verified uploads |
+| M12 Product experience | done | source navigation verified; 0.2.12 remains the published release |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
@@ -38,8 +38,8 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Recently done
 
+- M12-T77: 633 UI/desktop tests; builds/typechecks; desktop/phone dark/light interaction checks; real OS editor launch.
 - M12-T76: 13 publication regressions; 1,107 app tests, builds/typechecks and 76 installer checks; all eight 0.2.12 package links HTTP 200.
 - M12-T75: `e898598`, `v0.2.12`, stable release page; clean CI 34114769530, 1,107 tests and 76 installer checks pass.
 - M12-T74: workspace build/typecheck, 1,107 tests; real provider capture and four-layout source inspector review; `docs/prompt-provenance.md`.
 - M12-T73: `b1812fd`, `v0.2.11`, stable release page; clean CI 34090537860, 1,095 tests and 76 installer checks pass.
-- M12-T72: UI build/typecheck, 539 tests, real browser reuse/draft/first-send checks on desktop/phone in both themes.

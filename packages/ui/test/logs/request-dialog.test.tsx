@@ -51,6 +51,8 @@ it("shows source markers with keyboard/touch details without duplicating instruc
   const sourceButton=document.querySelector<HTMLButtonElement>('[aria-label="Recorded instruction sources"] button')!;
   await act(async()=>{sourceButton.focus();sourceButton.click();});
   expect(document.querySelector('[data-slot="popover-content"]')?.textContent).toContain("/project/AGENTS.md");
+  expect(document.querySelector('[data-slot="popover-content"]')?.closest('[data-slot="dialog-content"]')).not.toBeNull();
+  expect(document.querySelector('[data-request-source-text]')?.hasAttribute("title")).toBe(false);
   await act(async()=>sourceButton.click());
   await search("quartz");expect(count()).toBe("1 / 1");
   await search("AGENTS.md");expect(count()).toBe("No matches");

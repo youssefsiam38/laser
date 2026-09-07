@@ -11,6 +11,9 @@ export function LinkDestination() {
     const update = () => {
       if (!anchor?.isConnected) { clear(); return; }
       try {
+        if (anchor.closest('[inert], [aria-disabled="true"]')) { clear(); return; }
+        const file = anchor.getAttribute("data-file-path");
+        if (file) { setDestination(file); return; }
         const href = anchor.getAttribute("href");
         if (!href || anchor.closest('[inert], [aria-disabled="true"]')) { clear(); return; }
         const url = new URL(href, document.baseURI);
@@ -23,12 +26,12 @@ export function LinkDestination() {
     };
     const observer = new MutationObserver(update);
     const show = (target: EventTarget | null) => {
-      const link = target instanceof Element ? target.closest("a[href], area[href]") : null;
+      const link = target instanceof Element ? target.closest("a[href], area[href], [data-file-path]") : null;
       if (link === anchor) return;
       clear(); anchor = link;
       if (anchor) {
         update();
-        if (anchor) observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["href", "inert", "aria-disabled"] });
+        if (anchor) observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["href", "data-file-path", "inert", "aria-disabled"] });
       }
     };
     const over = (event: PointerEvent) => { if (event.pointerType !== "touch") show(event.target); };

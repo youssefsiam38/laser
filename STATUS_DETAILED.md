@@ -368,6 +368,13 @@ lane T's own if both were written.
 
 | M12-T76 | Publish releases only after downloads are complete | done | codex-2026-09-07-release-assets | `pnpm verify`; 13 publication regressions; 76 installer checks; eight live package links HTTP 200 | see notes |
 
+| M12-T77 | Make instruction sources navigable and file links native | done | codex-2026-09-07-source-navigation | UI/desktop builds and typechecks; 633 tests; four-layout browser checks; real GIO editor launch | see notes |
+
+#### M12-T77 notes
+- 2026-09-07 claimed: reproduce nested source-menu scrolling, implement searchable rich source rows and pointer-adjacent component-only details, and route local Markdown/source paths through the desktop editor bridge. LinkDestination only observes hover/focus; Markdown anchors currently navigate files as browser URLs. Preserve exact text/search and unrelated M3 work. No release requested.
+- 2026-09-07 checkpoint: source inventory reuses the installed command element, grouped by source kind with bounded scrolling and file actions. Portals stay inside the Dialog scroll lock. Virtual cursor anchors replace multi-line span anchors; markers have no native title. Exact instruction text and request-search counts remain unchanged. File links use the captured/session directory; browser views copy host paths. Desktop selects the default text editor with XDG/GIO, never a script/HTML MIME handler or shell command.
+- 2026-09-07 done: 550 UI tests and 83 desktop tests pass, including a real preload window. UI/desktop builds and typechecks pass. Browser checks at 1440×900 and 390×900 in both themes prove menu wheel scrolling (600px in a 288px viewport), filtering 25 sources to one, empty state, keyboard file activation, pointer-following component-only details and no page overflow. Screenshots: `/tmp/source-navigation-{menu,tip}-{1440,390}-{dark,light}.png`; browser driver: `/tmp/verify-source-navigation.mjs`. Real editor bridge opened `docs/prompt-provenance.md` successfully via the machine's configured text editor. Temporary QA page/server removed/stopped; production app/host untouched. No push or release requested. Regression rules added to AGENTS and provenance documentation.
+
 #### M12-T76 notes
 - 2026-09-07 done: draft-first publisher verifies the complete architecture inventory and every remote asset's size/state/SHA-256 before public visibility; includes offline provenance in the same upload, preserves published bytes, and handles draft discovery through the CLI's draft-aware resolver rather than the published-only REST tag route. CI and `pnpm verify` run 13 ordering/failure/retry tests. Workspace builds/typechecks and 1,107 app tests pass (`/tmp/release-assets-verify.log`); 76 installer checks pass. 0.2.12 now has all 12 assets and is Latest; all eight package download URLs return HTTP 200. Its original pipeline succeeded through uploads while this fix was developed; no tag moved or runtime restarted. Future no-monitor delivery reports dispatch, not publication. AGENTS and release guide record the rule; unrelated M3 work remains excluded.
 - 2026-09-07 claimed: 0.2.12 builds both succeeded, but the manually published page preceded the pipeline upload. Fix publication to use drafts, verify the complete asset set before visibility, include provenance in that transaction, and document that tag dispatch is not publication. Preserve unrelated M3 work and immutable 0.2.12 tag.
@@ -2667,3 +2674,9 @@ Decision: add M12-T76. Only the artifact publisher may make a release public, af
 Why: publishing a page before its downloads created a user-visible empty release despite healthy builds.
 Consequences: no-monitor requests mean dispatch the tag and report it as dispatched, not published. Failures remain drafts; previously published artifacts are not overwritten.
 Supersedes: D-136 and earlier release-page-before-artifacts practice.
+
+### D-138 · 2026-09-07 · Source navigation and native file links
+
+Decision: add M12-T77. Keep source disclosure within the active modal, anchor hover details to the pointer, and route local files through the desktop editor bridge. Browser/remote views offer a path-copy fallback rather than opening host paths on another machine.
+Why: long sources were difficult to inspect and ordinary Markdown anchors resolved project files against the web origin.
+Consequences: use the captured request directory for inspector-relative links; never execute a file or URL as a command. Native tooltip titles are absent from source markers; component disclosure retains keyboard and touch access.

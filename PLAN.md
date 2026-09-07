@@ -499,6 +499,7 @@ Depends on: M1, M2-T4, M4, M5-T1, M11.
 | M12-T74 | Record and display instruction provenance | request captures retain the loaded instruction sources and observed extension changes; the request inspector highlights their exact retained ranges with the adapted confidence-marker element, preserves Markdown and search, and explicitly identifies captures without recorded sources |
 | M12-T75 | Release stable 0.2.12 | instruction provenance passes release verification; matching source and tag are pushed and the stable release page is created without monitoring artifact jobs |
 | M12-T76 | Publish releases only after downloads are complete | releases remain drafts through upload and asset verification; failures cannot expose an empty or partial release; regression tests guard publication order |
+| M12-T77 | Make instruction sources navigable and file links native | searchable source inventory scrolls inside the request dialog; source details follow the pointer without native tooltip duplication; source paths and Markdown file links open safely in the OS editor rather than browser routes |
 
 ---
 

@@ -49,6 +49,27 @@ touch-accessible source details. Markdown remains one intact instance of the cha
 renderer, with a recorded-source inventory; it is not reparsed per source span.
 The saved machine-level content-view preference remains unchanged.
 
+The source inventory is a searchable, grouped command list with its own bounded
+scroll area. Its portal stays inside the request dialog's scroll-lock boundary;
+otherwise a list can look scrollable while the modal blocks wheel/touch events.
+Inline details use a pointer-sized virtual anchor (the first line when reached
+by keyboard), never the bounding box of a many-line span. Only the component
+tooltip renders: source markers have no native `title` attribute.
+
+File activation is explicit. Desktop source markers and Markdown file links call
+the native editor bridge; browsing a source never opens it automatically. Paths
+resolve against the owning session directory, or the captured request's `cwd`,
+not the browser origin. Browser/remote views copy the host path instead of trying
+to open it on a different computer. Missing capture directories never guess a
+browser route. Fragment-only citations and external URLs keep normal navigation.
+
+On Linux, the bridge queries the OS's `text/plain` default and launches that
+desktop entry through GIO, passing the file URI as an argument without a shell.
+It does not use the file's own MIME handler: HTML must open as source, not in a
+browser, and scripts must never execute. Existing regular text files are checked
+after symlink resolution; binary files and executable desktop shortcuts are
+rejected. A missing editor or file produces a retryable, human-readable error.
+
 Request find counts the instruction text once. Focusable inline text markers
 do not make action labels or source controls searchable. Full JSON
 still searches the original retained payload, never the provenance metadata.

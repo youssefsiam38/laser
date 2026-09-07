@@ -8,6 +8,7 @@ import { GoalBar } from "@/components/thread/GoalBar";
 import { Workbench, WorkbenchProvider } from "@/components/workbench";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { FileLinkDirectory } from "@/components/ui/source-file-link";
 import { useBreakpoint, useIsWide, useKeyboardInset } from "@/hooks";
 import { PanelAmbient, PanelDecisionSheet, PanelsProvider, POPOUT_HASH_PREFIX, PoppedOutPanel } from "@/panels";
 import { FleetSheet, RunTabs } from "@/components/subagents";
@@ -77,6 +78,7 @@ function useHash(): string {
 }
 
 export function Shell() {
+  const view = useLaserView();
   const versionMismatch = useLaserState((state) => state.versionMismatch);
   const hash = useHash();
   const { startupRestoring } = useLaserStable();
@@ -100,7 +102,7 @@ export function Shell() {
       label={versionMismatch ? "Waiting for the update before reconnecting" : connection === "open" ? "Returning to your last session" : "Connecting to your workspace"}
       notice={<HostConnectionState className="absolute inset-x-0 top-0 z-20" />}
     >
-      {content}
+      <FileLinkDirectory.Provider value={view?.state.cwd}>{content}</FileLinkDirectory.Provider>
     </StartupRestorationGate>
       </div>
     </div>

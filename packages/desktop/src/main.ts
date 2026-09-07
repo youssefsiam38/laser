@@ -495,7 +495,7 @@ function installIpc(): void {
   ipcMain.handle(IPC.microphoneStatus, () => microphoneStatus());
   ipcMain.handle(IPC.sourceFileOpen, (event, path: unknown) => {
     if (!windowOf(event) || event.senderFrame !== event.sender.mainFrame) return { opened: false, reason: "Open source files from the main application window." };
-    return openSourceFile(path, (file) => shell.openPath(file));
+    return openSourceFile(path);
   });
   ipcMain.handle(IPC.microphoneRequest, () => requestMicrophone(log));
   ipcMain.on(IPC.microphoneSettings, () => openMicrophoneSettings());
