@@ -370,9 +370,10 @@ lane T's own if both were written.
 
 | M12-T77 | Make instruction sources navigable and file links native | done | codex-2026-09-07-source-navigation | UI/desktop builds and typechecks; 633 tests; four-layout browser checks; real GIO editor launch | see notes |
 
-| M12-T78 | Release stable 0.2.13 | in-progress | codex-2026-09-07-release-0213 | — | see notes |
+| M12-T78 | Release stable 0.2.13 | done | codex-2026-09-07-release-0213 | `a701e69`; clean CI 34120775378; pushed `v0.2.13`; release draft and artifact publication dispatched | see notes |
 
 #### M12-T78 notes
+- 2026-09-07 done: workspace build/typecheck and 1,116 tests plus 13 publication checks pass (`/tmp/release-0213-verify.log`); 76 installer checks pass (`/tmp/release-0213-install.log`). Source `a701e69568c739001d745efae5a89d17cb96b831` pushed and clean CI 34120775378 succeeded before immutable `v0.2.13` was pushed. Draft release notes created; tag triggered the x64/ARM64 asset-verified publication pipeline. No artifact monitoring, download-readiness claim, manual public promotion, production restart or unrelated staged-file inclusion. Public publication remains the pipeline's responsibility.
 - 2026-09-07 claimed: publish the committed source-navigation fixes as stable 0.2.13. Preserve unrelated staged M3 work with an isolated index; verify the versioned source and installer, push source, pass clean CI, then push the immutable tag. Publication remains draft-first and asset-verified; do not monitor the artifact workflow or restart production processes.
 - 2026-09-07 checkpoint: versioned source staged separately; identity and 76 installer checks pass. First verification inherited GIT_INDEX_FILE into temporary-repository worker tests, causing an invalid-object test-environment failure. Reinitialized only the isolated staging index and reran without that environment override; never export an alternate index into test suites that create repositories. The user's real index and production processes are unchanged.
 
