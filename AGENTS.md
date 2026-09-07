@@ -376,6 +376,10 @@ new file, confirm no intended file remains under `git status` as `??`, then run
 files is not release evidence. After pushing, wait for the clean CI run to pass
 before creating or moving a release tag.
 
+An alternate `GIT_INDEX_FILE` may isolate release staging from unrelated work,
+but never export it into `pnpm verify` or tests: Git fixture repositories inherit
+it and read/write the wrong index. Scope it to individual staging/commit commands.
+
 ### A running service is not the installed version
 
 **Problem:** replacing package files left a 0.2.0 host running beneath 0.2.4

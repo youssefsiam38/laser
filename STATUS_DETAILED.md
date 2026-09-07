@@ -370,6 +370,12 @@ lane T's own if both were written.
 
 | M12-T77 | Make instruction sources navigable and file links native | done | codex-2026-09-07-source-navigation | UI/desktop builds and typechecks; 633 tests; four-layout browser checks; real GIO editor launch | see notes |
 
+| M12-T78 | Release stable 0.2.13 | in-progress | codex-2026-09-07-release-0213 | — | see notes |
+
+#### M12-T78 notes
+- 2026-09-07 claimed: publish the committed source-navigation fixes as stable 0.2.13. Preserve unrelated staged M3 work with an isolated index; verify the versioned source and installer, push source, pass clean CI, then push the immutable tag. Publication remains draft-first and asset-verified; do not monitor the artifact workflow or restart production processes.
+- 2026-09-07 checkpoint: versioned source staged separately; identity and 76 installer checks pass. First verification inherited GIT_INDEX_FILE into temporary-repository worker tests, causing an invalid-object test-environment failure. Reinitialized only the isolated staging index and reran without that environment override; never export an alternate index into test suites that create repositories. The user's real index and production processes are unchanged.
+
 #### M12-T77 notes
 - 2026-09-07 claimed: reproduce nested source-menu scrolling, implement searchable rich source rows and pointer-adjacent component-only details, and route local Markdown/source paths through the desktop editor bridge. LinkDestination only observes hover/focus; Markdown anchors currently navigate files as browser URLs. Preserve exact text/search and unrelated M3 work. No release requested.
 - 2026-09-07 checkpoint: source inventory reuses the installed command element, grouped by source kind with bounded scrolling and file actions. Portals stay inside the Dialog scroll lock. Virtual cursor anchors replace multi-line span anchors; markers have no native title. Exact instruction text and request-search counts remain unchanged. File links use the captured/session directory; browser views copy host paths. Desktop selects the default text editor with XDG/GIO, never a script/HTML MIME handler or shell command.
@@ -2680,3 +2686,8 @@ Supersedes: D-136 and earlier release-page-before-artifacts practice.
 Decision: add M12-T77. Keep source disclosure within the active modal, anchor hover details to the pointer, and route local files through the desktop editor bridge. Browser/remote views offer a path-copy fallback rather than opening host paths on another machine.
 Why: long sources were difficult to inspect and ordinary Markdown anchors resolved project files against the web origin.
 Consequences: use the captured request directory for inspector-relative links; never execute a file or URL as a command. Native tooltip titles are absent from source markers; component disclosure retains keyboard and touch access.
+
+### D-139 · 2026-09-07 · Release source navigation as 0.2.13
+Decision: add M12-T78 and dispatch stable patch 0.2.13 after the source gate.
+Why: the user explicitly requested commit, push and release of the completed fixes.
+Consequences: unrelated work remains excluded. Only the verified-asset publisher makes the release public; tag dispatch is not a claim that downloads are ready.

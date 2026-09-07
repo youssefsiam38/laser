@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-07T14:58:48+03:00 · codex-2026-09-07-source-navigation · HEAD: `f20bdaa`
+**Last updated:** 2026-09-07T15:13:00+03:00 · codex-2026-09-07-release-0213 · HEAD: `ef7704e`
 
-**Current focus:** M12-T77 complete: searchable sources, pointer-adjacent component-only tooltips, native editor file links. Local change only; no push or release.
+**Current focus:** M12-T78: prepare stable 0.2.13, verify source, then dispatch the asset-gated release. Unrelated M3 work remains untouched.
 
 ## Milestones
 
@@ -23,7 +23,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M9 CLI | done | planned tasks complete |
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
-| M12 Product experience | done | source navigation verified; 0.2.12 remains the published release |
+| M12 Product experience | in-progress | 0.2.13 release verification; artifact monitoring not requested |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers

@@ -500,6 +500,7 @@ Depends on: M1, M2-T4, M4, M5-T1, M11.
 | M12-T75 | Release stable 0.2.12 | instruction provenance passes release verification; matching source and tag are pushed and the stable release page is created without monitoring artifact jobs |
 | M12-T76 | Publish releases only after downloads are complete | releases remain drafts through upload and asset verification; failures cannot expose an empty or partial release; regression tests guard publication order |
 | M12-T77 | Make instruction sources navigable and file links native | searchable source inventory scrolls inside the request dialog; source details follow the pointer without native tooltip duplication; source paths and Markdown file links open safely in the OS editor rather than browser routes |
+| M12-T78 | Release stable 0.2.13 | verified source navigation fixes and matching workspace version are committed and pushed; clean source CI precedes the immutable release tag; artifact publication is dispatched without monitoring |
 
 ---
 
