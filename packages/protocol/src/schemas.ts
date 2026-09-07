@@ -7,6 +7,7 @@
  * refuse a new method in messages.ts that has no schema here.
  */
 import { z } from "zod";
+import { WEB_SEARCH_PROVIDER_IDS } from "./web-search.js";
 import { ErrorCodes, type JsonRpcRequest } from "./jsonrpc.js";
 import { PREFS_MAX_BYTES } from "./messages.js";
 import type { ClientMethod, ClientRequests } from "./messages.js";
@@ -629,6 +630,16 @@ export const clientParamsSchemas = {
     .strict(),
 
   "feature/list": z.object({ cwd: cwd.optional() }).strict(),
+  "web-search/status": z.object({ cwd }).strict(),
+  "web-search/configure": z.object({ cwd, change: z.discriminatedUnion("action", [
+    z.object({ action: z.literal("select"), provider: z.enum(WEB_SEARCH_PROVIDER_IDS) }).strict(),
+    z.object({ action: z.literal("configure"), provider: z.enum(WEB_SEARCH_PROVIDER_IDS), connection: z.object({
+      source: z.enum(["none", "dedicated", "shared"]),
+      sharedProvider: z.string().min(1).max(80).optional(),
+      baseUrl: z.string().trim().max(2048).optional(),
+      zone: z.string().trim().max(120).optional(),
+    }).strict(), apiKey: z.string().trim().min(1).max(16384).regex(/^[^\x00-\x1f\x7f]+$/).nullable().optional() }).strict(),
+  ]) }).strict(),
   "feature/set": z
     .object({ id: z.string().min(1).max(80), enabled: z.boolean().nullable(), scope: featureScopeSchema, cwd: cwd.optional() })
     .strict(),

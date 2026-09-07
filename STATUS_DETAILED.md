@@ -347,13 +347,27 @@ lane T's own if both were written.
 | M12-T61 | Explain and group account allowances | done | codex-2026-09-07-quota-ux | 480 UI tests; UI typecheck/build; compact/full desktop/phone dark/light browser review | see notes |
 | M12-T62 | Complete the composer suggestion experience | done | codex-2026-09-07-composer-picker | 493 UI tests; 13 focused worker tests; 7 desktop tests including real Electron bridge; UI/worker/desktop build and typecheck; desktop/phone both-theme browser review | see notes |
 | M12-T63 | Release stable 0.2.8 | done | codex-2026-09-07-release-028 | `105eba5`; `v0.2.8`; https://github.com/youssefsiam38/laser/releases/tag/v0.2.8; staged `pnpm verify` (1,008 tests) | see notes |
+| M12-T64 | Built-in web search and provider consent | done | codex-2026-09-07-web-search | `pnpm verify`; final `pnpm -r test` (1,029 tests); packaged clean-machine gate (12 checks); `docs/web-search.md` | see notes |
 | M12-T65 | Withdraw native reminders after viewing a session | done | codex-2026-09-07-notification-seen | 494 UI + 75 desktop + 171 host tests; typechecks; UI/desktop/protocol builds; real GNOME withdrawal | see notes |
+| M12-T66 | Release stable 0.2.9 | in-progress | codex-2026-09-07-release-029 | — | see notes |
+
+#### M12-T66 notes
+- 2026-09-07 checkpoint: 0.2.9 packaged clean-machine gate passes all 12 checks, including a real session and isolated upstream search with bundled Node/empty PATH; installer fixtures pass 76 checks (`/tmp/laser-029-clean.json`, `/tmp/laser-029-installer.log`). No implementation changes during release preparation. Publishing verified source for CI before creating its tag.
+- 2026-09-07 checkpoint: intended release source staged; identity and full build/typecheck/1,029 tests pass (`/tmp/laser-029-verify.log`). Version 0.2.9 is consistent across all manifests. Packaged clean-machine and installer checks are running; no paid search requests or production restart.
+- 2026-09-07 claimed: include M12-T64 and committed notification fix `5356f34`, bump all manifests to 0.2.9, stage only requested work and run workspace/packaged gates. Wait for source CI before tagging; verify published installers and feeds. Preserve unrelated reference, ignore-file and scratch work.
 
 #### M12-T65 notes
 - 2026-09-07 claimed: track native handles per session, forward an explicit seen acknowledgement independently of attention changes, preserve unanswered approvals and test native Linux dismissal. Avoid concurrent web-search files and leave release/version unchanged.
 - 2026-09-07 checkpoint: explicit host acknowledgement reaches the independent desktop connection in a real WebSocket test without starting a worker. Transcript acknowledgement moved onto the mounted chat surface: covered Settings/Logs, unfocused windows and hidden tabs do not count; pending approvals do, without answering them or sending per-token acknowledgements. Assistant-ui runtime guidance preserves the existing adapter/action seam.
 - 2026-09-07 native proof: built Notifier sent two synthetic critical reminders to GNOME 46. Withdrawing A generated `CloseNotification(34)` and GNOME `NotificationClosed(34, 3)` while B remained until explicitly withdrawn later (`35, 3`). No real session or existing notification was dismissed. Ubuntu Dock's installed notifications monitor recalculates its count on notification destruction; badge repaint itself was not visually measured. Probe and D-Bus monitor stopped. Evidence: `/tmp/notification-seen-dbus.log`.
 - 2026-09-07 done: 740 tests pass across UI/desktop/host; UI and host typechecks plus protocol/desktop/UI builds pass. Added guards for late delivery, late replaced-handle callbacks, foreground resolution, throttling, hidden/covered/unfocused views and approval acknowledgement. Tests and native proof are recorded under `/tmp/notification-seen-*`. No visual styling changed. Legacy orphaned reminders from an earlier process may need one manual clear; there is no blanket deletion or speculative notification-ID recovery. No version bump, push, release or installed-app restart.
+
+#### M12-T64 notes
+- 2026-09-07 done locally: exact-pinned pi-web-access 0.28.0, all 29 provider IDs, independent global/project feature choice, searchable provider settings with explicit shared-connection grants and write-only search keys. Engine registration lives in the single companion extension's web-access module; the worker owns storage/auth policy and isolated execution. Results remain transcript-only. No commit, stage, release, production restart or live paid-provider search performed.
+- 2026-09-07 evidence: `pnpm verify` passes; final `pnpm -r test` passes all 1,029 tests, including registration/disabled-state/failure isolation, consent/revocation, atomic saves, schemas, real host routing/tool exposure, local upstream search and cancellation. `pnpm -F @lasercode/desktop run pack` plus `node packages/desktop/scripts/clean-machine.mjs --json` passes 12 checks with bundled Node/empty PATH and a real search probe. Desktop 1280px and phone 390px reviewed in dark/light; keyboard disclosure, filtering, save/select, enable/disable retaining credentials and no horizontal overflow verified in the browser. Test key removed and sandbox stopped. External provider billing/auth endpoints remain untested live; browser-cookie and ADC auth deliberately excluded, documented in `docs/web-search.md`.
+- 2026-09-07 checkpoint: all 29 provider IDs match the upstream registry; literal-key, atomic cross-worker storage, consent/revocation, local SearXNG execution and cancellation tests pass. The real host routes settings and the enabled session exposes `web_search` to the model. Browser review is underway; desktop package built for the clean-machine search probe. An initial dependency-resolution failure was fixed by bundling the complete upstream search module. No user-provider search request has been made.
+- 2026-09-07 claimed: restore the search runtime as a reviewed built-in, audit upstream provider authentication, and add explicit search connection settings without reviving duplicate result panels. Preserve unrelated dirty reference work; no commit or release.
+- 2026-09-07 investigation: D-61 removed the collection adapter, then curated feature loading omitted the package altogether. pi-web-access 0.28.0 exposes 29 provider implementations but caches process-global configuration. Search execution will isolate each invocation from ambient credentials and configuration; shared credentials resolve from the existing model connection only after explicit consent.
 
 #### M12-T63 notes
 - 2026-09-07 claimed: bundle committed M12-T61 and the user's completed M12-T62 picker work, stage only release-owned changes, run the full workspace gate and publish commit/tag/release without monitoring Actions. Preserve unrelated guide/planning and ignore-file edits.
@@ -2456,6 +2470,18 @@ Consequences: run verification after staging all intended source, push the commi
 Decision: add M12-T65. The host publishes a seen acknowledgement independently of attention transitions. Desktop owns notification handles and withdraws only reminders for that session; viewing a question is not answering it.
 Why: native reminders otherwise remain in GNOME notification history and keep Ubuntu Dock's counter visible after the user returns.
 Consequences: preserve notification throttling, replace superseded reminders, and ignore late close callbacks from replaced handles. No blanket clearing of other sessions or operating-system notification history.
+
+### D-115 · 2026-09-07 · Built-in search with explicit connection policy
+
+Decision: add M12-T64; bundle exact-pinned pi-web-access search APIs, expose a Web search destination under Providers and models, and keep enablement independent of saved connections. Select one provider per request with no implicit fallback or broadcast. Retain D-61's transcript-only presentation.
+Why: the curated runtime currently offers no search capability; upstream's automatic credential discovery and terminal/browser configuration are not a suitable product permission boundary.
+Consequences: isolate search invocations, retain the engine's provider implementations, resolve shared authentication on demand, and keep search-only secrets out of preferences and responses. Browser-cookie extraction and automatic account discovery are not enabled by selecting an API provider.
+
+### D-117 · 2026-09-07 · Release web search and notification dismissal together
+
+Decision: add M12-T66 and publish the two requested features as stable 0.2.9.
+Why: the user explicitly authorized including both changes in one new release.
+Consequences: retain unrelated work locally; require staged verification, clean source CI and successful artifact/feed publication before declaring release complete.
 
 ## Status edits log
 

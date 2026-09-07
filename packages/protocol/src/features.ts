@@ -6,7 +6,7 @@
  * never crosses this boundary.
  */
 
-export type FeatureId = "subagents" | "goals";
+export type FeatureId = "subagents" | "goals" | "web-search";
 export type FeatureScope = "global" | "project";
 export type FeatureHealth = "ready" | "disabled" | "needs-restart" | "unavailable" | "error";
 
@@ -33,6 +33,16 @@ export interface FeatureState {
 }
 
 export const FEATURE_MANIFESTS: readonly FeatureManifest[] = [
+  {
+    id: "web-search",
+    name: "Web search",
+    description: "Search the web with your chosen connection. Configure providers in Settings → Providers and models → Web search.",
+    defaultEnabled: false,
+    scopes: ["global", "project"],
+    dependencies: [],
+    capabilities: ["web-search", "sources", "provider-choice"],
+    restart: "worker",
+  },
   {
     id: "subagents",
     name: "Subagents",

@@ -6,6 +6,8 @@ import { providerLogModule } from "./provider-log.js";
 import { subagentsModule } from "./subagents.js";
 import { transcribeModule } from "./transcribe.js";
 import { goalModule } from "./goal.js";
+import { webAccessModule, type WebSearchHandler } from "./web-access.js";
+export type { WebSearchHandler } from "./web-access.js";
 export { toSessionGoal } from "./goal.js";
 
 export type ModuleName = PiExtensionModuleName;
@@ -56,6 +58,7 @@ export function createPanelClaims(): PanelClaims {
 
 export interface ModuleContext {
   pi: ExtensionAPI;
+  webSearch?: WebSearchHandler;
   /** Fresh context for the session_start currently activating modules. */
   session?: ExtensionContext;
   send: (message: OutboundMessage) => void;
@@ -74,6 +77,8 @@ export interface ModuleContext {
 
 export interface LaserModule {
   name: ModuleName;
+  /** Register tools while Pi is collecting extension definitions. */
+  register?(ctx: ModuleContext): void;
   /** True if the package this module bridges is present in this session. */
   detect(ctx: ModuleContext): boolean | Promise<boolean>;
   /** Wire up; return a disposer if anything needs cleanup at session_shutdown. */
@@ -116,4 +121,5 @@ export const modules: readonly LaserModule[] = [
   goalModule,
   subagentsModule,
   transcribeModule,
+  webAccessModule,
 ];

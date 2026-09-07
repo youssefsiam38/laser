@@ -486,7 +486,9 @@ Depends on: M1, M2-T4, M4, M5-T1, M11.
 | M12-T61 | Explain and group account allowances | compact documented allowances in chat; Settings → Usage retains every dynamic window and credits; related windows share a heading; saved reset display switches between time remaining and exact local date/time; accessible help uses documented meanings and honest unknown-bucket fallback |
 | M12-T62 | Complete the composer suggestion experience | commands and mentions have ranked project-wide search, readable results, visible keyboard selection, pointer/touch selection, outside/focus/Escape dismissal, accessible states and viewport-safe layout; skill/prompt source files open separately through the desktop OS association with a browser copy-path fallback; completion preserves drafts and sending behavior; interaction tests and desktop/phone both-theme review pass |
 | M12-T63 | Release stable 0.2.8 | allowance presentation and user-supplied composer picker changes pass the staged workspace gate; matching source commit and version tag are pushed and stable release page created without waiting for Actions |
+| M12-T64 | Built-in web search and provider consent | exact-pinned search engine exposes all supported search providers through Settings, independent feature enablement and explicit shared-credential permission; isolated execution, protocol/router tests, and responsive UI verification pass |
 | M12-T65 | Withdraw native reminders after viewing a session | viewed sessions dismiss only their own OS notifications; pending approvals remain pending; desktop lifecycle and real Linux withdrawal are verified |
+| M12-T66 | Release stable 0.2.9 | built-in web search and session notification dismissal pass staged verification and packaged checks; clean source CI precedes the tag; both architecture installers and signed native feeds publish |
 
 ---
 

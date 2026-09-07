@@ -1,6 +1,6 @@
 {
   "name": "@lasercode/worker",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "private": true,
   "type": "module",
   "license": "AGPL-3.0-only",
@@ -21,7 +21,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/build-search.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "dev": "tsc -p tsconfig.json --watch",
@@ -34,6 +34,9 @@
     "@lasercode/pi-goal": "workspace:*",
     "@lasercode/protocol": "workspace:*",
     "pi-subagents": "0.65.1",
+    "pi-web-access": "0.28.0",
+    "proper-lockfile": "4.1.2",
     "pi-gpt-transcribe": "github:youssefsiam38/pi-gpt-transcribe#bee9cfffae2ab6badbf4bda727e680e423aea9fd"
-  }
+  },
+  "devDependencies": { "esbuild": "0.28.1", "@types/proper-lockfile": "4.1.4" }
 }

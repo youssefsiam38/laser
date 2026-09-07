@@ -60,6 +60,7 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { readLaserProjectSettings } from "../settings.js";
+import { WebSearchService } from "../web-search.js";
 import {
   DriverUnavailableError,
   type DriverEvent,
@@ -107,7 +108,9 @@ export class StableSdkDriver implements SessionDriver {
 
     const agentDir = options.agentDir ?? getAgentDir();
     const enabled = new Set<FeatureId>(options.features ?? ["subagents", "goals"]);
+    const search = enabled.has("web-search") ? new WebSearchService(agentDir) : undefined;
     const laser = createLaserExtension({
+      ...(search ? { webSearch: search.search.bind(search) } : {}),
       send: (message) => {
         if (message.type === "lasercode/account-usage/state") this.accountUsage = message.state;
         this.emit({ type: "extension", message });
@@ -118,6 +121,7 @@ export class StableSdkDriver implements SessionDriver {
         "account-usage",
         "panels",
         "transcribe",
+        ...(search ? ["web-access" as const] : []),
         ...(enabled.has("subagents") ? ["subagents" as const] : []),
         ...(enabled.has("goals") ? ["goal" as const] : []),
       ],

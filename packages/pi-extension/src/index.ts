@@ -26,6 +26,7 @@ import {
   type ModuleContext,
   type ModuleName,
   type OutboundMessage,
+  type WebSearchHandler,
 } from "./modules/index.js";
 
 export { createCommandBus, createPanelClaims, toSessionGoal } from "./modules/index.js";
@@ -40,6 +41,8 @@ export type {
 } from "./modules/index.js";
 
 export interface LaserExtensionOptions {
+  /** Credential/policy-aware search supplied only when its feature is enabled. */
+  webSearch?: WebSearchHandler;
   /** Delivers messages to the worker (in-process callback). */
   send: (message: OutboundMessage) => void;
   /**
@@ -72,9 +75,16 @@ export function createLaserExtension(options: LaserExtensionOptions): InlineExte
         pi,
         send: options.send,
         panels: createPanelClaims(),
+        ...(options.webSearch ? { webSearch: options.webSearch } : {}),
         ...(options.commands ? { commands: options.commands } : {}),
       };
       const wanted = new Set<ModuleName>(options.only ?? modules.map((m) => m.name));
+      const registrationErrors = new Map<ModuleName, string>();
+      for (const mod of modules) {
+        if (!wanted.has(mod.name)) continue;
+        try { mod.register?.(ctx); }
+        catch { registrationErrors.set(mod.name, "Could not register this capability. Restart the project or update the app."); }
+      }
 
       // Detection runs at session_start so extensions loaded after us are visible.
       pi.on("session_start", async (_event, session) => {
@@ -83,6 +93,8 @@ export function createLaserExtension(options: LaserExtensionOptions): InlineExte
         const failed: Array<{ module: ModuleName; error: string }> = [];
         for (const mod of modules) {
           if (!wanted.has(mod.name)) continue;
+          const registrationError = registrationErrors.get(mod.name);
+          if (registrationError) { failed.push({ module: mod.name, error: registrationError }); continue; }
           try {
             if (!(await mod.detect(ctx))) continue;
             const dispose = await mod.activate(ctx);

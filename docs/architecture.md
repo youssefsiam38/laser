@@ -76,7 +76,7 @@ then reports `laser/capabilities` to the worker. Modules:
 | `subagents` | pi-subagents in-process registries and `subagents:rpc:v1` bus | `globalThis[Symbol.for("pi-subagents.*")]` |
 | `goal` | canonical durable goal state | Goals feature enabled |
 | `transcribe` | pi-gpt-transcribe desktop dictation | matching command registered |
-| `web-access` | retired (D-61): pi-web-access stays in its transcript tool disclosure | — |
+| `web-access` | registers the transcript-only search tool; the worker supplies its credential/policy-aware executor (M12-T64). The duplicate panel adapter remains retired (D-61) | Web search feature enabled |
 
 Adding support for engine behavior means a reusable Pi-native package plus one
 module that translates it to the product protocol. Modules never import each

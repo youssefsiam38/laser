@@ -54,6 +54,8 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/settings/set": { cwd: "/p", scope: "global", changes: [{ path: "compaction.reserveTokens", op: "set", value: 8192 }] },
   "feature/list": { cwd: "/p" },
   "feature/set": { id: "subagents", enabled: true, scope: "project", cwd: "/p" },
+  "web-search/status": { cwd: "/p" },
+  "web-search/configure": { cwd: "/p", change: { action: "configure", provider: "openai", connection: { source: "shared", sharedProvider: "openai" } } },
   "pi/packages/list": { cwd: "/p" },
   "pi/packages/install": { cwd: "/p", source: "pi-web-access", scope: "user", version: "1.4.2" },
   "pi/packages/catalog": { cwd: "/p", query: "web", limit: 40 },

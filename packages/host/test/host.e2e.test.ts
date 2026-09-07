@@ -17,11 +17,13 @@ import { HostServer, defaultWorkerMain } from "../src/index.js";
 
 const REPLY = ["Hi ", "from ", "host"];
 
-function stubProvider(): Promise<{ server: Server; url: string }> {
+function stubProvider(): Promise<{ server: Server; url: string; requests: Record<string, unknown>[] }> {
+  const requests: Record<string, unknown>[] = [];
   const server = createServer((req, res) => {
     let body = "";
     req.on("data", (c: Buffer) => (body += c.toString()));
     req.on("end", () => {
+      requests.push(JSON.parse(body) as Record<string, unknown>);
       res.writeHead(200, { "content-type": "text/event-stream" });
       const base = { id: "c", object: "chat.completion.chunk", created: 1, model: "stub-1" };
       res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] })}\n\n`);
@@ -32,7 +34,7 @@ function stubProvider(): Promise<{ server: Server; url: string }> {
     });
   });
   return new Promise((resolve) =>
-    server.listen(0, "127.0.0.1", () => resolve({ server, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1` })),
+    server.listen(0, "127.0.0.1", () => resolve({ server, requests, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1` })),
   );
 }
 
@@ -101,6 +103,30 @@ afterEach(async () => {
 });
 
 describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
+  it("routes search settings through a real worker independently of enablement", async () => {
+    const { url } = await host.listen();
+    const client = new Client();
+    await client.connect(url);
+    const cwd = join(base, "project");
+    try {
+      const initial = await client.request<{ selectedProvider: string; providers: unknown[] }>("web-search/status", { cwd });
+      expect(initial.providers).toHaveLength(29);
+      const saved = await client.request("web-search/configure", { cwd, change: { action: "configure", provider: "brave", connection: { source: "dedicated" }, apiKey: "private-search-test-key" } });
+      expect(JSON.stringify(saved)).not.toContain("private-search-test-key");
+      const features = await client.request<{ features: Array<{ manifest: { id: string }; enabled: boolean }> }>("feature/list", { cwd });
+      expect(features.features.find((f) => f.manifest.id === "web-search")?.enabled).toBe(false);
+      await client.request("feature/set", { id: "web-search", enabled: true, scope: "project", cwd });
+      const status = await client.request<{ providers: Array<{ id: string; hasKey: boolean }> }>("web-search/status", { cwd });
+      expect(status.providers.find((p) => p.id === "brave")?.hasKey).toBe(true);
+      const { state } = await client.request<{ state: SessionState }>("session/new", { cwd });
+      await client.request("pi/model/set", { path: state.path, model: { provider: "stub", id: "stub-1" } });
+      await client.request("session/prompt", { path: state.path, content: [{ type: "text", text: "Check available tools" }] });
+      await client.waitFor((m) => "method" in m && m.method === "session/update" && (m.params as SessionUpdateParams).update.kind === "agent_settled");
+      expect(JSON.stringify(stub.requests.at(-1)?.tools)).toContain("web_search");
+      expect(logs.join("\n")).not.toContain("private-search-test-key");
+    } finally { client.close(); }
+  }, 60_000);
+
   it("serves health and placeholder UI, lists, opens, prompts, streams, resumes", async () => {
     const { url } = await host.listen();
     expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);

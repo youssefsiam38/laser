@@ -7,6 +7,7 @@
  */
 export * from "./identity.js";
 export * from "./features.js";
+export * from "./web-search.js";
 export * from "./jsonrpc.js";
 export * from "./messages.js";
 export * from "./panels.js";

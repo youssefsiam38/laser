@@ -11,9 +11,12 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createServer } from "node:http";
+import { once } from "node:events";
 
 import { PRODUCT_NAME } from "@lasercode/protocol";
 import { StableSdkDriver } from "./drivers/stable-sdk.js";
+import { WebSearchService } from "./web-search.js";
 
 export type PackagedSessionReport =
   | { ok: true; sessionId: string; modelCount: number }
@@ -22,6 +25,10 @@ export type PackagedSessionReport =
 export async function checkPackagedSession(): Promise<PackagedSessionReport> {
   const root = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-packaged-session-`));
   const driver = new StableSdkDriver();
+  const searchServer = createServer((_req, response) => {
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({ results: [{ title: "Packaged source", url: "https://example.com/source", content: "Search runtime verified" }] }));
+  });
   try {
     for (const name of ["project", "agent", "sessions", "subagents"]) {
       mkdirSync(join(root, name), { recursive: true });
@@ -32,9 +39,16 @@ export async function checkPackagedSession(): Promise<PackagedSessionReport> {
       sessionDir: join(root, "sessions"),
       subagentsTempRoot: join(root, "subagents"),
       projectTrusted: false,
-      features: ["subagents", "goals"],
+      features: ["subagents", "goals", "web-search"],
     });
     const models = await driver.listModels();
+    searchServer.listen(0, "127.0.0.1");
+    await once(searchServer, "listening");
+    const search = new WebSearchService(join(root, "agent"));
+    await search.configure({ action: "configure", provider: "searxng", connection: { source: "none", baseUrl: `http://127.0.0.1:${(searchServer.address() as { port: number }).port}` } });
+    await search.configure({ action: "select", provider: "searxng" });
+    const result = await search.search("packaged capability probe");
+    if (!result.includes("Search runtime verified")) throw new Error("The packaged search runtime did not return its source.");
     if (!driver.deliverExtensionCommand({ type: "lasercode/account-usage/refresh" })) {
       throw new Error("The bundled subscription allowance module did not accept refresh.");
     }
@@ -42,6 +56,8 @@ export async function checkPackagedSession(): Promise<PackagedSessionReport> {
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   } finally {
+    searchServer.closeAllConnections();
+    await new Promise<void>((done) => searchServer.close(() => done()));
     await driver.dispose().catch(() => undefined);
     rmSync(root, { recursive: true, force: true });
   }

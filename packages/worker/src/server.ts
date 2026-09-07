@@ -18,6 +18,7 @@ import { GitService } from "./git.js";
 import { KeybindingsAdapter } from "./keybindings.js";
 import { ModelsAdapter, PackagesAdapter } from "./packages.js";
 import { SettingsAdapter } from "./settings.js";
+import { WebSearchService } from "./web-search.js";
 import { TranscribeService } from "./transcribe.js";
 
 export interface WorkerServerOptions {
@@ -347,6 +348,12 @@ export class WorkerServer {
       case "pi/providers/list":
         this.assertCwd(req.params.cwd);
         return (await this.modelCatalog().providers()) satisfies Result<"pi/providers/list">;
+      case "web-search/status":
+        this.assertCwd(req.params.cwd);
+        return new WebSearchService(this.options.agentDir).status();
+      case "web-search/configure":
+        this.assertCwd(req.params.cwd);
+        return new WebSearchService(this.options.agentDir).configure(req.params.change);
       case "pi/providers/login/start": {
         this.assertCwd(req.params.cwd);
         const provider = req.params.provider;

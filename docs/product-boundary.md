@@ -51,6 +51,9 @@ does not reveal internally managed or unsupported engine settings.
 - The host rejects legacy package-management requests with a Features-directed
   product error.
 - Disabling Subagents retires its panels without deleting runs or transcripts.
+- Web search is bundled and opt-in. Its independent provider selection and
+  shared-connection consent live under Providers and models → Web search.
+  See [`web-search.md`](web-search.md) for credential and execution boundaries.
 
 Dictation is a core capability, not a feature toggle. Laser bundles the exact
 reviewed transcription core and shows provider readiness in Settings → Providers

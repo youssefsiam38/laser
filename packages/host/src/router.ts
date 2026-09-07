@@ -86,6 +86,8 @@ const CWD_ROUTED = new Set([
   "pi/settings/get",
   "pi/settings/set",
   "pi/providers/list",
+  "web-search/status",
+  "web-search/configure",
   "pi/models/catalog",
   // Signing in (M10-T6): every message names the cwd so the worker that holds
   // the flow is the one that hears the answer.

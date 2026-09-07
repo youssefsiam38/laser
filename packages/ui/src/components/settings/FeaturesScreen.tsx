@@ -1,7 +1,7 @@
 "use client";
 
 import { PRODUCT_DISPLAY_NAME, type FeatureScope, type FeatureState } from "@lasercode/protocol";
-import { Bot, Check, CircleDot, RotateCw, Target } from "lucide-react";
+import { Bot, Check, CircleDot, Globe, RotateCw, Target } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
@@ -79,7 +79,7 @@ export function FeaturesScreen({ cwd }: { cwd?: string }) {
         ) : (
           <div className="grid gap-3 md:grid-cols-2">
             {features.map((feature) => {
-              const Icon = feature.manifest.id === "goals" ? Target : Bot;
+              const Icon = feature.manifest.id === "goals" ? Target : feature.manifest.id === "web-search" ? Globe : Bot;
               const changing = busy === feature.manifest.id;
               const selected = scope === "global" ? feature.globalEnabled : feature.projectEnabled ?? feature.globalEnabled;
               return (
