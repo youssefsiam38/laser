@@ -345,6 +345,18 @@ lane T's own if both were written.
 | M12-T59 | Repair authenticated subscription allowance retrieval | done | codex-2026-09-07-quota-release | `pnpm verify` (979 tests); rebuilt-module authenticated initial/manual refresh HTTP 200; four-layout quota review | see notes |
 | M12-T60 | Release stable 0.2.7 | done | codex-2026-09-07-quota-release | `e1fd1fe`; `v0.2.7`; https://github.com/youssefsiam38/laser/releases/tag/v0.2.7; staged `pnpm verify` (979 tests) | see notes |
 | M12-T61 | Explain and group account allowances | done | codex-2026-09-07-quota-ux | 480 UI tests; UI typecheck/build; compact/full desktop/phone dark/light browser review | see notes |
+| M12-T62 | Complete the composer suggestion experience | done | codex-2026-09-07-composer-picker | 493 UI tests; 13 focused worker tests; 7 desktop tests including real Electron bridge; UI/worker/desktop build and typecheck; desktop/phone both-theme browser review | see notes |
+| M12-T63 | Release stable 0.2.8 | in-progress | codex-2026-09-07-release-028 | — | see notes |
+
+#### M12-T63 notes
+- 2026-09-07 claimed: bundle committed M12-T61 and the user's completed M12-T62 picker work, stage only release-owned changes, run the full workspace gate and publish commit/tag/release without monitoring Actions. Preserve unrelated guide/planning and ignore-file edits.
+- 2026-09-07 checkpoint: all intended source staged before `pnpm identity:check` and `pnpm verify`; full workspace build/typecheck/1,008 tests pass, including 493 UI tests and the real Electron bridge (`/tmp/laser-028-verify.log`). Version is 0.2.8 in all workspace manifests. Prior M12-T61/T62 responsive-theme evidence retained; no implementation changes made during release preparation. Committing and dispatching the verified source next.
+
+#### M12-T62 notes
+- 2026-09-07 claimed: audit the complete trigger interaction lifecycle; retain the adopted assistant-ui element and strengthen its search, navigation, dismissal and responsive presentation without changing command semantics. Leave all work uncommitted.
+- 2026-09-07 checkpoint: unified picker navigation/dismissal and project-wide debounced search implemented; 15 focused UI tests, six desktop source-opening/preload tests and four real worker skill tests pass. Browser review caught scroll anchoring after a phone-height resize; disabled anchoring and re-revealed selection after measured resizing.
+- 2026-09-07 scope addition from user: selected/hovered skill and prompt rows expose their existing source Markdown path. Desktop opens only validated Markdown through the OS association; browser/phone copies the path. Pi skill guidance keeps discovery in the existing resource loader; no global-engine config or replacement skill discovery.
+- 2026-09-07 done: project-index search is debounced, query/project scoped, refreshed on reopen and retryable; 600-file Git regression proves beyond-first-page search and excludes ignored/deleted files. Exact filenames outrank scattered matches; native separators work. Picker tests cover arrows/wrap/pages, scoped scrolling, outside/focus/Escape dismissal, IME, pointer selection, empty states, draft preservation and the independent source action. Browser review passed at 1280×720 and 390×844 in dark/light, plus 390×430 keyboard-sized space. Temporary review files/server removed. `pnpm identity:check` and `git diff --check` pass. All task changes deliberately remain uncommitted; no release, installation or production restart performed. Actual OS editor launch was not invoked; the real Electron bridge and validated opener are covered separately.
 
 #### M12-T1 notes
 - 2026-09-06 claimed: audit the shipped logo assets, theme presets, assistant-ui
@@ -2418,6 +2430,18 @@ Consequences: endpoint-specific tests and authenticated smoke checks supplement 
 Decision: add M12-T61. Group normalized windows by stable bucket identity, retaining every window and separate percentages; use names only when no identity exists. Add a shared reset-time display choice and source-linked help. Unknown provider buckets remain visible with qualified copy, not a guessed model or credit balance.
 Why: window duration is a view of one allowance, not a different model; OpenAI documents Spark and general usage, but no public definition of `gpt-reserve` was found.
 Consequences: Settings → Usage retains every dynamic window and purchased credits. The compact chat view shows only documented buckets, with a link to the full settings view. Exact reset times include the local date and timezone; the machine-persisted display preference is shared between views. Elapsed timestamps prompt refresh rather than claiming a renewed allowance.
+
+### D-113 · 2026-09-07 · One complete composer suggestion interaction
+
+Decision: add M12-T62. Upgrade the adopted composer trigger element on its existing assistant-ui state/selection primitives, rather than introducing a second command-menu keyboard owner. Preserve command identity matching and insertion semantics; add scoped scrolling, dismissal, focus retention and explicit result states for both triggers. The user's follow-up includes project-wide file search and opening skill/prompt source Markdown through the desktop OS association, with a copy-path fallback on browser/phone.
+Why: the installed primitive supplies selection and ARIA but no outside dismissal or selected-row scrolling; replacing it with a competing input component would risk draft, caret and send behavior. The filesystem service already supports full-index queries; local first-page filtering hid that capability.
+Consequences: interaction regressions cover the integrated primitive, not only matching strings. Only existing Markdown files may reach the desktop opener; no executable command strings or editor-specific URL schemes. No new dependency or engine command behavior.
+
+### D-114 · 2026-09-07 · Bundle allowance and composer improvements in 0.2.8
+
+Decision: add M12-T63 and publish the two requested changes as one stable patch, 0.2.8.
+Why: the user explicitly requested bundling their composer picker improvement with the completed allowance UX.
+Consequences: run verification after staging all intended source, push the commit/tag, and create the stable release page. Do not wait for Actions; installers and native feeds remain the release workflow's responsibility. Unrelated reference material stays outside the release.
 
 ## Status edits log
 

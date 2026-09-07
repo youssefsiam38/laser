@@ -29,6 +29,7 @@ import {
   type UpdateStatus,
 } from "./api.js";
 import { agentHome, desktopEnv } from "./agent-home.js";
+import { openSourceFile } from "./open-source-file.js";
 import { deepLinkFromArgv, parseDeepLink } from "./deep-links.js";
 import { statusPageUrl } from "./error-page.js";
 import type { AttentionChange, FleetSnapshot } from "./fleet.js";
@@ -451,6 +452,10 @@ function installIpc(): void {
   });
 
   ipcMain.handle(IPC.microphoneStatus, () => microphoneStatus());
+  ipcMain.handle(IPC.sourceFileOpen, (event, path: unknown) => {
+    if (!windowOf(event) || event.senderFrame !== event.sender.mainFrame) return { opened: false, reason: "Open source files from the main application window." };
+    return openSourceFile(path, (file) => shell.openPath(file));
+  });
   ipcMain.handle(IPC.microphoneRequest, () => requestMicrophone(log));
   ipcMain.on(IPC.microphoneSettings, () => openMicrophoneSettings());
 

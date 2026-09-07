@@ -1,5 +1,5 @@
 import { ComposerPrimitive, useAui, useAuiState, unstable_useMentionAdapter, unstable_useSlashCommandAdapter } from "@assistant-ui/react";
-import type { CommandInfo, ProjectFile } from "@lasercode/protocol";
+import type { CommandInfo } from "@lasercode/protocol";
 import { AtSign, Bot, FileText, FolderOpen, GitFork, History, ListX, Pencil, Plus, Shrink, SlashSquare, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 
@@ -27,6 +27,7 @@ import { finishActiveDictation } from "@/pwa";
 import { composerSendPlan, useLaserStable, useLaserView, useSessionMeta } from "@/runtime";
 import { completeLeadingSlash, matchLeadingSlash, rankSlashCommandMatches } from "./slash-completion.js";
 import { StatusLine } from "./StatusLine.js";
+import { useProjectFileSearch } from "./use-project-file-search.js";
 
 /**
  * The composer (DESIGN.md "Composer"), composed from the catalog: the
@@ -107,8 +108,8 @@ export function Composer() {
           </ComposerPrimitive.AttachmentDropzone>
         )}
         {/* `/` runs a laser command; `@` addresses a running subagent by handle. */}
-        <ComposerTriggerPopover char="/" matcher={matchLeadingSlash} adapter={slash.adapter} action={slash.action} {...(slash.iconMap ? { iconMap: slash.iconMap } : {})} fallbackIcon={SlashSquare} className="bottom-[calc(100%-2rem)]" />
-        <ComposerTriggerPopover char="@" adapter={mention.adapter} directive={mention.directive} fallbackIcon={AtSign} emptyItemsLabel="Nothing to mention here yet" className="bottom-[calc(100%-2rem)]" />
+        <ComposerTriggerPopover char="/" title="Commands & skills" matcher={matchLeadingSlash} adapter={slash.adapter} action={slash.action} {...(slash.iconMap ? { iconMap: slash.iconMap } : {})} fallbackIcon={SlashSquare} />
+        <ComposerTriggerPopover char="@" title="Files & agents" adapter={mention.adapter} directive={mention.directive} iconMap={MENTION_ICONS} fallbackIcon={AtSign} emptyItemsLabel="No project files or agents to mention yet." isLoading={mention.loading} onQueryChange={mention.setQuery} onOpenChange={mention.setOpen} notice={mention.failed ? <>Couldn’t search project files. <button type="button" className="underline underline-offset-2" onClick={mention.retry}>Try again</button></> : mention.truncated ? 'Showing the best 80 files. Keep typing to narrow the search.' : undefined} />
       </ComposerPrimitive.Root>
     </ComposerPrimitive.Unstable_TriggerPopoverRoot>
   );
@@ -367,10 +368,12 @@ function useSlashCommands() {
   const adapter = useMemo(
     () => ({
       ...slash.adapter,
-      search: (query: string) =>
-        rankSlashCommandMatches(slash.adapter.search?.("") ?? [], query),
+      search: (query: string) => rankSlashCommandMatches(slash.adapter.search?.("") ?? [], query).map((item) => {
+        const source = agent.find((command) => item.id === `agent:${command.source}:${command.name}`);
+        return { ...item, metadata: { ...item.metadata, kind: source?.source === 'skill' ? 'Skill' : source?.source === 'prompt' ? 'Prompt' : 'Command', ...(source?.filePath ? { filePath: source.filePath } : {}) } };
+      }),
     }),
-    [slash.adapter],
+    [slash.adapter, agent],
   );
   return useMemo(() => ({ ...slash, adapter }), [slash, adapter]);
 }
@@ -385,40 +388,16 @@ function useSlashCommands() {
 // files, so they never get buried.
 // ---------------------------------------------------------------------------
 
-/** How many file rows the popover holds. Its own filter narrows them as you type. */
-const MENTION_FILE_LIMIT = 500;
-
 const MENTION_ICONS = { agent: Bot, file: FileText } as const;
-
-/** The project's files. Empty until a project is open, and on any failure. */
-function useProjectFiles(cwd: string | undefined): ProjectFile[] {
-  const { client } = useLaserStable();
-  const [files, setFiles] = useState<ProjectFile[]>([]);
-  useEffect(() => {
-    if (!cwd) {
-      setFiles([]);
-      return;
-    }
-    let cancelled = false;
-    client
-      .request("pi/project/files", { cwd, limit: MENTION_FILE_LIMIT })
-      .then((result) => {
-        if (!cancelled) setFiles(result.files);
-      })
-      .catch(() => {
-        if (!cancelled) setFiles([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, cwd]);
-  return files;
-}
 
 function useHandleMentions() {
   const view = useLaserView();
+  const { currentProject } = useLaserStable();
   const entries = usePanelEntries(view?.path);
-  const files = useProjectFiles(view?.state.cwd);
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const search = useProjectFileSearch(view?.state.cwd ?? currentProject, query, open);
+  const files = search.files;
   const items = useMemo(
     () => [
       ...entries.flatMap((entry) => {
@@ -438,7 +417,18 @@ function useHandleMentions() {
     ],
     [entries, files],
   );
-  return unstable_useMentionAdapter({ items, includeModelContextTools: false, iconMap: MENTION_ICONS });
+  const mention = unstable_useMentionAdapter({ items, includeModelContextTools: false, iconMap: MENTION_ICONS });
+  const adapter = useMemo(() => ({
+    ...mention.adapter,
+    search: (nextQuery: string) => {
+      const all = mention.adapter.search?.("") ?? [];
+      const handles = rankSlashCommandMatches(all.filter((item) => item.type === "agent"), nextQuery);
+      // The service already ranks fuzzy path matches across the entire index.
+      // Applying the registry's substring filter again would discard them.
+      return [...handles, ...(nextQuery === query ? all.filter((item) => item.type === "file") : [])];
+    },
+  }), [mention.adapter, query]);
+  return { ...mention, ...search, adapter, setQuery, setOpen };
 }
 
 /** One line under a command row: what it does, and where it came from. */

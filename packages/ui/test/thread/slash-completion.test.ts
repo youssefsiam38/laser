@@ -12,6 +12,7 @@ describe("slash completion", () => {
     expect(matchLeadingSlash("before /go", "/", 10)).toBeNull();
     expect(matchLeadingSlash(" /go", "/", 4)).toBeNull();
     expect(matchLeadingSlash("/go keep this", "/", 13)).toBeNull();
+    expect(matchLeadingSlash("/goal keep this", "/", 3)).toEqual({ query: "go", offset: 0, endOffset: 5 });
   });
 
   it("completes the command without deleting the remaining draft", () => {

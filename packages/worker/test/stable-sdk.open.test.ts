@@ -116,6 +116,7 @@ describe("StableSdkDriver.open", () => {
     expect(commands.find((command) => command.name === "skill:product-user-skill")).toMatchObject({
       source: "skill",
       description: "product-user-skill test skill",
+      filePath: expect.stringContaining("SKILL.md"),
     });
   }, 60_000);
 });

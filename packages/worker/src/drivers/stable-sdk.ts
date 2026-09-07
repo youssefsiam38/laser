@@ -425,6 +425,7 @@ export class StableSdkDriver implements SessionDriver {
       commands.push({
         name: prompt.name,
         source: "prompt",
+        filePath: prompt.filePath,
         ...(prompt.description ? { description: prompt.description } : {}),
         ...(prompt.argumentHint ? { argumentHint: prompt.argumentHint } : {}),
         ...(originOf(prompt.sourceInfo) ? { origin: originOf(prompt.sourceInfo)! } : {}),
@@ -438,6 +439,7 @@ export class StableSdkDriver implements SessionDriver {
       commands.push({
         name: `skill:${skill.name}`,
         source: "skill",
+        filePath: skill.filePath,
         ...(skill.description ? { description: skill.description } : {}),
         ...(originOf(skill.sourceInfo) ? { origin: originOf(skill.sourceInfo)! } : {}),
       });

@@ -16,6 +16,7 @@ export const IPC = {
   windowStateChanged: "laser:window/state-changed",
   themeSet: "laser:theme/set",
   directorySelect: "laser:directory/select",
+  sourceFileOpen: "laser:source-file/open",
   microphoneStatus: "laser:microphone/status",
   microphoneRequest: "laser:microphone/request",
   microphoneSettings: "laser:microphone/settings",

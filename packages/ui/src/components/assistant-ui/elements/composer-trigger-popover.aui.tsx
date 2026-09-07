@@ -2,11 +2,11 @@
 /**
  * Composer trigger popover — the picker behind `/` and `@` in the composer
  * (docs/ux-elements.md "AUI-connected"). Installed from
- * `composer-trigger-popover` and restyled to DESIGN.md tokens; the behaviour
- * (categories, drill-down, keyboard, ARIA) is the registry's, untouched.
+ * `composer-trigger-popover`, with one shared interaction layer around the
+ * registry's selection, categories and ARIA. Focus stays in the composer.
  */
 
-import { memo, useRef, type ComponentPropsWithoutRef, type FC } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type ComponentPropsWithoutRef, type FC } from "react";
 import {
   ComposerPrimitive,
   unstable_defaultDirectiveFormatter,
@@ -14,7 +14,7 @@ import {
   type Unstable_DirectiveFormatter,
   type Unstable_TriggerItem,
 } from "@assistant-ui/react";
-import { ChevronLeftIcon, ChevronRightIcon, SparklesIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon, SearchIcon, SparklesIcon, XIcon, ExternalLinkIcon, CopyIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type IconComponent = FC<{ className?: string }>;
@@ -54,7 +54,161 @@ type ComposerTriggerPopoverBaseProps = Omit<
   emptyItemsLabel?: string;
   /** Label shown while an async adapter is resolving items. @default "Loading…" */
   loadingLabel?: string;
+  title?: string;
+  notice?: ReactNode;
+  onQueryChange?: ((query: string) => void) | undefined;
+  onOpenChange?: ((open: boolean) => void) | undefined;
 };
+
+const optionClass = "group flex min-h-11 w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-start text-sm text-ink outline-none transition-colors duration-(--motion-instant) hover:bg-surface-2 data-[highlighted]:bg-surface-2";
+
+/** Only scroll the results, never the conversation or the page behind them. */
+export function revealPickerOption(list: HTMLElement, option: HTMLElement): void {
+  const bounds = list.getBoundingClientRect();
+  const row = option.getBoundingClientRect();
+  if (row.top < bounds.top) list.scrollTop -= bounds.top - row.top;
+  else if (row.bottom > bounds.bottom) list.scrollTop += row.bottom - bounds.bottom;
+}
+
+function MatchLabel({ label, query }: { label: string; query: string }) {
+  let next = 0;
+  const needle = query.toLocaleLowerCase();
+  return <>{Array.from(label).map((char, index) => {
+    const matched = next < needle.length && char.toLocaleLowerCase() === needle[next];
+    if (matched) next += 1;
+    return matched ? <span key={index} className="font-semibold text-live">{char}</span> : char;
+  })}</>;
+}
+
+function SourceFileDetails({ item }: { item: Unstable_TriggerItem }) {
+  const path = String(item.metadata?.filePath ?? "");
+  const desktop = (globalThis as typeof globalThis & { desktop?: { openSourceFile?: (path: string) => Promise<{ opened: boolean; reason?: string }> } }).desktop;
+  const [message, setMessage] = useState("");
+  const [pending, setPending] = useState(false);
+  const open = async () => {
+    if (pending) return;
+    setPending(true);
+    try {
+      if (desktop?.openSourceFile) {
+        const result = await desktop.openSourceFile(path);
+        setMessage(result.opened ? "Opened in your default Markdown application." : result.reason ?? "Couldn’t open the file. Check your default Markdown application.");
+      } else {
+        await navigator.clipboard.writeText(path);
+        setMessage("Path copied. Open it in your editor on the project computer.");
+      }
+    } catch { setMessage("Couldn’t open or copy the path. Select the source path to copy it manually."); }
+    finally { setPending(false); }
+  };
+  return <div data-slot="composer-picker-source" className="shrink-0 px-3 py-2 hairline-t">
+    {item.description && <p className="line-clamp-3 text-xs leading-xs text-ink-2 group-data-[compact=true]/picker:hidden" title={item.description}>{item.description}</p>}
+    <div className="mt-2 flex items-center gap-2">
+      <span className="min-w-0 flex-1 truncate text-xs text-ink-3 select-text" title={path}>{path}</span>
+      <button data-picker-open-source type="button" disabled={pending} onClick={() => void open()} title={desktop?.openSourceFile ? 'Uses your system’s default application for Markdown. Alt+O' : 'Copy this source path. Alt+O'} className="flex min-h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs text-ink hover:bg-surface-2 focus-visible:outline focus-visible:outline-live disabled:opacity-50 pointer-coarse:min-h-11">
+        {desktop?.openSourceFile ? <ExternalLinkIcon aria-hidden className="size-3.5" /> : <CopyIcon aria-hidden className="size-3.5" />}
+        {pending ? 'Opening…' : desktop?.openSourceFile ? 'Open source file' : 'Copy source path'}
+      </button>
+    </div>
+    {message && <p role="status" className="mt-1 text-xs text-ink-2">{message}</p>}
+  </div>;
+}
+
+function PickerSurface({ title, notice, onQueryChange, onOpenChange, children }: {
+  title: string; notice: ReactNode; onQueryChange: ((query: string) => void) | undefined; onOpenChange: ((open: boolean) => void) | undefined; children: ReactNode;
+}) {
+  const scope = unstable_useTriggerPopoverScopeContext();
+  const listRef = useRef<HTMLDivElement>(null);
+  const latest = useRef(scope);
+  useLayoutEffect(() => { latest.current = scope; });
+  useEffect(() => { if (scope.open) onQueryChange?.(scope.query); }, [scope.open, scope.query, onQueryChange]);
+  useEffect(() => { onOpenChange?.(scope.open); }, [scope.open, onOpenChange]);
+
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!scope.open || !list) return;
+    const option = scope.highlightedItemId ? document.getElementById(scope.highlightedItemId) : null;
+    if (option) revealPickerOption(list, option);
+  }, [scope.open, scope.highlightedItemId, scope.query, scope.items, scope.categories]);
+
+  useEffect(() => {
+    const list = listRef.current;
+    const popup = list?.closest<HTMLElement>('[data-slot="composer-trigger-popover"]');
+    const input = popup?.closest('form')?.querySelector('textarea');
+    if (!scope.open || !popup || !input) return;
+    const doc = popup.ownerDocument;
+    const outside = (event: Event) => {
+      if (event.target instanceof Node && !popup.contains(event.target) && event.target !== input) latest.current.close();
+    };
+    const blur = () => latest.current.close();
+    const key = (event: globalThis.KeyboardEvent) => {
+      if (event.target !== input || !latest.current.open) return;
+      const state = latest.current;
+      // IME owns its Enter/arrows, including WebKit's legacy composition code.
+      if (event.isComposing || event.keyCode === 229) { event.stopPropagation(); return; }
+      if (event.altKey && !event.ctrlKey && !event.metaKey && event.key.toLowerCase() === 'o') {
+        const action = popup.querySelector<HTMLButtonElement>('[data-picker-open-source]');
+        if (action) { event.preventDefault(); event.stopPropagation(); action.click(); }
+        return;
+      }
+      if (event.key === 'Tab' && (event.shiftKey || state.items.length + state.categories.length === 0)) {
+        state.close(); event.stopPropagation(); return; // normal focus traversal
+      }
+      if (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key === 'PageDown' || event.key === 'PageUp') {
+        const rows = [...list!.querySelectorAll<HTMLElement>('[role="option"]')];
+        const height = rows[state.highlightedIndex]?.getBoundingClientRect().height || list!.clientHeight;
+        const step = Math.max(1, Math.floor(list!.clientHeight / height));
+        state.highlightIndex(Math.max(0, Math.min(rows.length - 1, state.highlightedIndex + (event.key === 'PageDown' ? step : -step))));
+        event.preventDefault(); event.stopPropagation(); return;
+      }
+      if (state.handleKeyDown(event)) event.stopPropagation();
+    };
+    const resize = () => {
+      const viewport = window.visualViewport;
+      const margin = parseFloat(getComputedStyle(popup).marginBottom) || 0;
+      const available = Math.max(0, popup.getBoundingClientRect().bottom - (viewport?.offsetTop ?? 0) - margin);
+      popup.style.setProperty('--composer-picker-height', `${available}px`);
+      popup.dataset.compact = String(available < margin * 40);
+      const active = latest.current.highlightedItemId ? doc.getElementById(latest.current.highlightedItemId) : null;
+      if (active && list) revealPickerOption(list, active);
+    };
+    resize();
+    const observer = new ResizeObserver(resize);
+    observer.observe(input);
+    observer.observe(list!);
+    doc.addEventListener('pointerdown', outside, true);
+    doc.addEventListener('focusin', outside, true);
+    input.addEventListener('keydown', key, true);
+    window.addEventListener('blur', blur);
+    window.addEventListener('resize', resize);
+    window.visualViewport?.addEventListener('resize', resize);
+    window.visualViewport?.addEventListener('scroll', resize);
+    return () => {
+      observer.disconnect();
+      doc.removeEventListener('pointerdown', outside, true);
+      doc.removeEventListener('focusin', outside, true);
+      input.removeEventListener('keydown', key, true);
+      window.removeEventListener('blur', blur);
+      window.removeEventListener('resize', resize);
+      window.visualViewport?.removeEventListener('resize', resize);
+      window.visualViewport?.removeEventListener('scroll', resize);
+    };
+  }, [scope.open]);
+  if (!scope.open) return null;
+  const count = scope.isSearchMode || scope.activeCategoryId ? scope.items.length : scope.categories.length;
+  const selected = scope.items[scope.highlightedIndex];
+  return <>
+    <div className="flex shrink-0 items-center gap-2 px-3 py-2 hairline-b">
+      <SearchIcon aria-hidden className="size-4 text-ink-3" />
+      <span className="flex-1 text-sm font-medium">{title}</span>
+      <span role="status" aria-live="polite" className="text-xs tabular-nums text-ink-3">{scope.isLoading ? 'Searching…' : `${count} ${count === 1 ? 'result' : 'results'}`}</span>
+      <button type="button" tabIndex={-1} aria-label="Close suggestions" onClick={() => scope.close()} className="flex size-8 shrink-0 items-center justify-center rounded-md text-ink-3 hover:bg-surface-2 hover:text-ink pointer-coarse:size-11"><XIcon aria-hidden className="size-4" /></button>
+    </div>
+    <div ref={listRef} data-slot="composer-picker-results" className="min-h-0 overflow-x-hidden overflow-y-auto overscroll-contain p-1 [overflow-anchor:none]" aria-busy={scope.isLoading}>{children}</div>
+    {selected && typeof selected.metadata?.filePath === 'string' && <SourceFileDetails key={selected.id} item={selected} />}
+    {notice && <div className="shrink-0 px-3 py-2 text-xs text-ink-2 hairline-t">{notice}</div>}
+    <div aria-hidden className="flex shrink-0 items-center gap-3 px-3 py-2 text-xs text-ink-3 hairline-t pointer-coarse:hidden group-data-[compact=true]/picker:hidden"><span>↑ ↓ navigate</span><span>Tab / ↵ select</span><span className="ms-auto">Esc close</span></div>
+  </>;
+}
 
 type ComposerTriggerPopoverProps = ComposerTriggerPopoverBaseProps &
   (
@@ -102,7 +256,8 @@ const Categories: FC<CategoriesProps> = ({
             <ComposerPrimitive.Unstable_TriggerPopoverCategoryItem
               key={cat.id}
               categoryId={cat.id}
-              className="flex cursor-pointer items-center justify-between gap-2 px-3 py-2 text-sm text-ink transition-colors duration-(--motion-instant) outline-none hover:bg-surface-2 focus:bg-surface-2 data-[highlighted]:bg-surface-2"
+              tabIndex={-1}
+              className={optionClass}
             >
               <span className="flex items-center gap-2">
                 <Icon className="size-4 text-ink-3" />
@@ -137,7 +292,7 @@ const Items: FC<ItemsProps> = ({
   emptyLabel,
   loadingLabel,
 }) => {
-  const { isLoading } = unstable_useTriggerPopoverScopeContext();
+  const { isLoading, query } = unstable_useTriggerPopoverScopeContext();
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverItems>
       {(items) => (
@@ -162,27 +317,33 @@ const Items: FC<ItemsProps> = ({
                   key={item.id}
                   item={item}
                   index={index}
-                  className="flex w-full cursor-pointer flex-col items-start gap-0.5 px-3 py-2 text-start transition-colors duration-(--motion-instant) outline-none hover:bg-surface-2 focus:bg-surface-2 data-[highlighted]:bg-surface-2"
+                  tabIndex={-1}
+                  aria-label={item.label}
+                  className={optionClass}
                 >
-                  <span className="flex items-center gap-2 text-sm font-medium text-ink">
-                    <Icon className="size-3.5 text-live" />
-                    {item.label}
+                  <Icon aria-hidden className="size-4 shrink-0 text-ink-3 group-data-[highlighted]:text-ink" />
+                  <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium" title={item.label}>
+                    <MatchLabel label={item.type === 'file' ? item.label.slice(item.label.lastIndexOf('/') + 1) : item.label} query={item.type === 'file' ? query.slice(query.lastIndexOf('/') + 1) : query} />
                   </span>
+                  {item.type === 'file' && <span className="mt-0.5 block truncate text-xs text-ink-3" title={item.label}><MatchLabel label={item.label} query={query} /></span>}
                   {item.description && (
                     // Two lines and no more: a skill's own description can run
                     // to a paragraph, and one row must never push the rest of
                     // the list off the screen. The full text is one keystroke
                     // away — this is a picker, not a reference.
-                    <span className="ms-5.5 line-clamp-2 text-xs leading-xs text-ink-2" title={item.description}>
+                    <span className="mt-0.5 block line-clamp-2 text-xs leading-xs text-ink-2" title={item.description}>
                       {item.description}
                     </span>
                   )}
+                  </span>
+                  {typeof item.metadata?.kind === 'string' && <span className="shrink-0 text-xs text-ink-3">{item.metadata.kind}</span>}
                 </ComposerPrimitive.Unstable_TriggerPopoverItem>
               );
             })}
             {items.length === 0 && (
-              <div className="px-3 py-2 text-sm text-ink-3">
-                {isLoading ? loadingLabel : emptyLabel}
+              <div className="px-3 py-5 text-sm text-ink-2">
+                {isLoading ? loadingLabel : query ? 'No matches. Try a shorter name or path.' : emptyLabel}
               </div>
             )}
           </div>
@@ -203,6 +364,10 @@ const ComposerTriggerPopoverImpl: FC<ComposerTriggerPopoverProps> = ({
   emptyCategoriesLabel = "No items available",
   emptyItemsLabel = "No matching items",
   loadingLabel = "Loading…",
+  title = "Suggestions",
+  notice,
+  onQueryChange,
+  onOpenChange,
   className,
   directive,
   action,
@@ -224,9 +389,12 @@ const ComposerTriggerPopoverImpl: FC<ComposerTriggerPopoverProps> = ({
     <ComposerPrimitive.Unstable_TriggerPopover
       data-slot="composer-trigger-popover"
       className={cn(
-        "absolute start-0 bottom-full z-50 mb-2 w-72 max-h-72 max-w-full overflow-x-hidden overflow-y-auto overscroll-contain rounded-xl border border-line bg-surface text-ink shadow-float",
+        "group/picker absolute start-0 bottom-full z-50 mb-2 flex w-full max-w-lg flex-col overflow-hidden rounded-xl border border-line bg-surface text-ink shadow-float",
         className,
       )}
+      aria-label={title}
+      style={{ maxHeight: 'min(calc(var(--spacing) * 96), var(--composer-picker-height, 50dvh))' }}
+      onMouseDown={(event) => event.preventDefault()}
       {...props}
     >
       {directive ? (
@@ -241,6 +409,7 @@ const ComposerTriggerPopoverImpl: FC<ComposerTriggerPopoverProps> = ({
           removeOnExecute={action.removeOnExecute}
         />
       ) : null}
+      <PickerSurface title={title} notice={notice} onQueryChange={onQueryChange} onOpenChange={onOpenChange}>
       <Categories
         iconMap={iconMap}
         fallbackIcon={fallbackIcon}
@@ -253,6 +422,7 @@ const ComposerTriggerPopoverImpl: FC<ComposerTriggerPopoverProps> = ({
         emptyLabel={emptyItemsLabel}
         loadingLabel={loadingLabel}
       />
+      </PickerSurface>
     </ComposerPrimitive.Unstable_TriggerPopover>
   );
 };

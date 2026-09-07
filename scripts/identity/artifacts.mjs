@@ -204,6 +204,7 @@ function ipcModule() {
     ["windowStateChanged", "window/state-changed"],
     ["themeSet", "theme/set"],
     ["directorySelect", "directory/select"],
+    ["sourceFileOpen", "source-file/open"],
     ["microphoneStatus", "microphone/status"], ["microphoneRequest", "microphone/request"],
     ["microphoneSettings", "microphone/settings"],
     ["identity", "identity"],

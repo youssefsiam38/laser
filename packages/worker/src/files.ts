@@ -100,8 +100,12 @@ export class ProjectFilesService {
   /** `git ls-files`, or undefined when this is not a repository (or git is absent). */
   private async git(): Promise<Scan | undefined> {
     let cached: string;
+    let deleted: string;
     try {
-      cached = await run("git", ["ls-files", "-z", "--cached"], this.options.cwd);
+      [cached, deleted] = await Promise.all([
+        run("git", ["ls-files", "-z", "--cached"], this.options.cwd),
+        run("git", ["ls-files", "-z", "--deleted"], this.options.cwd),
+      ]);
     } catch {
       // Not a repository, or no git on this machine. The walk answers instead.
       return undefined;
@@ -115,10 +119,11 @@ export class ProjectFilesService {
       others = "";
     }
     const files: ProjectFile[] = [];
+    const removed = new Set(deleted.split("\0"));
     const seen = new Set<string>();
     const take = (text: string, tracked: boolean): void => {
       for (const path of text.split("\0")) {
-        if (!path || seen.has(path) || files.length >= SCAN_CEILING) continue;
+        if (!path || removed.has(path) || seen.has(path) || files.length >= SCAN_CEILING) continue;
         seen.add(path);
         files.push({ path, name: path.slice(path.lastIndexOf("/") + 1), tracked });
       }
@@ -168,7 +173,7 @@ export class ProjectFilesService {
  */
 export function scoreMatch(path: string, query: string): number | undefined {
   const haystack = path.toLowerCase();
-  const needle = query.toLowerCase();
+  const needle = query.toLowerCase().replaceAll("\\", "/");
   if (needle === "") return 0;
   const nameStart = haystack.lastIndexOf("/") + 1;
   let score = 0;
@@ -184,7 +189,9 @@ export function scoreMatch(path: string, query: string): number | undefined {
     at = found + 1;
   }
   // A short path that matched is a better answer than a long one that also did.
-  return score - Math.floor(haystack.length / 16);
+  const name = haystack.slice(nameStart);
+  const specificity = haystack === needle ? 4 : name === needle ? 3 : name.startsWith(needle) ? 2 : name.includes(needle) ? 1 : 0;
+  return specificity * (needle.length * 20 + 100) + score - Math.floor(haystack.length / 16);
 }
 
 function rank(files: readonly ProjectFile[], query: string): ProjectFile[] {

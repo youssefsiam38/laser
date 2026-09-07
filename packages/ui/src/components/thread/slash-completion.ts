@@ -9,7 +9,7 @@ export const matchLeadingSlash: Unstable_TriggerMatcher = (text, triggerChar, cu
   return {
     query: text.slice(1, cursorPosition),
     offset: 0,
-    endOffset: cursorPosition,
+    endOffset: tokenEnd,
   };
 };
 

@@ -82,7 +82,7 @@ describe.runIf(runnable)("the bridge, in a real window", () => {
       expect(result.shape, `window.${DESKTOP_BRIDGE} was not exposed`).not.toBeNull();
       // The surfaces the renderer depends on. A bridge missing one of these is
       // a window where some control silently does nothing.
-      expect(result.shape).toEqual(expect.arrayContaining(["host", "window", "identity", "updates", "microphone"]));
+      expect(result.shape).toEqual(expect.arrayContaining(["host", "window", "identity", "updates", "microphone", "openSourceFile"]));
     } finally {
       rmSync(userData, { recursive: true, force: true });
     }

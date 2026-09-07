@@ -70,6 +70,8 @@ function groups(mod: string): BindingGroup[] {
         { keys: [["Shift", "Enter"]], what: "New line" },
         { keys: [[mod, "Enter"]], what: "Queue a follow-up", detail: "Runs after the current turn instead of interrupting it." },
         { keys: [["/"]], what: "Slash commands", detail: "At the start of an empty composer." },
+        { keys: [["↑"], ["↓"], ["PageUp"], ["PageDown"]], what: "Navigate composer suggestions", detail: "Selection stays visible. Tab or Enter selects; Escape or an outside click closes without changing your draft." },
+        { keys: [["Alt", "O"]], what: "Open selected skill or prompt source", detail: "While suggestions are open. Desktop uses your default Markdown application; browser and phone copy the source path." },
         { keys: [["@"]], what: "Mention a file" },
         { keys: [[mod, "V"]], what: "Paste an image as an attachment" },
       ],

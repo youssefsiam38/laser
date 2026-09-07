@@ -59,6 +59,7 @@ const IPC = {
   windowStateChanged: "laser:window/state-changed",
   themeSet: "laser:theme/set",
   directorySelect: "laser:directory/select",
+  sourceFileOpen: "laser:source-file/open",
   microphoneStatus: "laser:microphone/status",
   microphoneRequest: "laser:microphone/request",
   microphoneSettings: "laser:microphone/settings",
@@ -157,6 +158,7 @@ const api = {
   },
 
   chooseDirectory: (): Promise<string | null> => ipcRenderer.invoke(IPC.directorySelect) as Promise<string | null>,
+  openSourceFile: (path: string): Promise<{ opened: boolean; reason?: string }> => ipcRenderer.invoke(IPC.sourceFileOpen, path) as Promise<{ opened: boolean; reason?: string }>,
 
   microphone: {
     status: (): Promise<MicrophoneStatus> => ipcRenderer.invoke(IPC.microphoneStatus) as Promise<MicrophoneStatus>,

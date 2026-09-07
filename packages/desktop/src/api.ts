@@ -156,6 +156,8 @@ export interface LaserDesktop {
 
   /** Open the operating system's folder picker. Null means it was cancelled. */
   chooseDirectory(): Promise<string | null>;
+  /** Open a source Markdown file with its operating-system file association. */
+  openSourceFile(path: string): Promise<{ opened: boolean; reason?: string }>;
 
   microphone: {
     status(): Promise<MicrophoneStatus>;

@@ -757,6 +757,8 @@ export interface CommandInfo {
   argumentHint?: string;
   /** Product feature or project source, for the row's second line. */
   origin?: string;
+  /** Source Markdown for a loaded skill or prompt; never an executable command. */
+  filePath?: string;
 }
 
 /** A prompt template the agent loaded from disk (the prompt library). */
