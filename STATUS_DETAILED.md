@@ -360,6 +360,12 @@ lane T's own if both were written.
 
 | M12-T72 | Reuse an unstarted session when choosing New session | done | codex-2026-09-07-empty-session | UI build/typecheck; 539 UI tests; real host/browser desktop/phone checks in both themes | see notes |
 
+| M12-T73 | Release stable 0.2.11 | in-progress | codex-2026-09-07-release-0211 | — | see notes |
+
+#### M12-T73 notes
+- 2026-09-07 checkpoint: staged 0.2.11 passes `pnpm identity:check`, all builds/typechecks and 1,095 workspace tests (`/tmp/release-0211-verify.log`), plus 76 installer checks (`/tmp/release-0211-install.log`). Existing desktop/phone dark/light evidence remains in M12-T71/T72. Next publish source, satisfy the required clean-source CI gate, then tag and publish the page without waiting for release artifact jobs.
+- 2026-09-07 claimed: release the committed M12-T71/T72 changes as stable 0.2.11. Stage only release-owned files, run identity/workspace/installer gates, publish source and immutable tag, then create the release page without monitoring artifact jobs. Preserve the separate M3 specification and scratch work; do not restart the production app/host.
+
 #### M12-T72 notes
 - 2026-09-07 done: one shared launcher refreshes the catalog, prefers the current unstarted chat then the newest in the requested project, and coalesces rapid requests. Hydrates unknown candidates before reuse; archived/branched sessions, optimistic sends, pending work, dialogs and goal history are excluded. Reuse only selects the existing assistant-ui identity, preserving composer drafts and model choices. Build/typecheck, 539 UI tests (22 new regressions), identity and diff checks pass (`/tmp/empty-session-{build,typecheck,tests}.log`). Real isolated host/browser proved eight-click bursts, Ctrl+N, new creation during a first streaming response, return from history with draft intact, independent project drafts and fresh-client reuse. Desktop 1440×900 and phone 390×900 reviewed in both themes (`/tmp/empty-session-{dark,light}-{1440,390}.png`), no horizontal overflow or page errors. A pre-existing phone-sheet focus tooltip can cover the new-session button center; keyboard and the unobscured pointer area work. No production restart, backend API change, version bump, push or release.
 - 2026-09-07 claimed: put reuse and repeated-click protection in the shared UI session launcher; retain per-project identity, drafts, settings and archives. No release or push requested; preserve unrelated specification edits.
@@ -2559,6 +2565,12 @@ Consequences: no preview fetches or invented progress percentages. Saving a mode
 Decision: add M12-T72. New session reuses an unarchived, unstarted session in the requested project; prefer the current empty chat, then the most recent. Coalesce simultaneous requests in this UI.
 Why: an unused composition surface is already the new session the person wants. Other projects, archived history, goals and active work must not be mistaken for it.
 Consequences: reuse preserves the existing assistant-ui thread identity, draft and model settings. Existing duplicate sessions are not deleted, and explicit backend session creation/fork semantics are unchanged.
+
+### D-130 · 2026-09-07 · Publish the session and connection UX patch
+
+Decision: add M12-T73 and release 0.2.11 with M12-T71/T72. Keep 0.2.10 Latest until the existing pipeline uploads verified artifacts and promotes the new release.
+Why: user explicitly authorized publishing these changes; an assetless release page must not become the install target.
+Consequences: source/version/tag are coherent; release page is stable, not prerelease. Artifact and native feed publication remains pipeline-owned and is not monitored, per user preference.
 
 ## Status edits log
 
