@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, ChevronRight, Globe, KeyRound, Link2, RefreshCw } from "lucide-react";
+import { Check, ChevronRight, Globe, KeyRound, Link2, Loader2, RefreshCw } from "lucide-react";
 import { WEB_SEARCH_PROVIDERS, type FeatureState, type ProviderAuthInfo, type WebSearchChange, type WebSearchConnection, type WebSearchProvider, type WebSearchProviderStatus, type WebSearchStatus } from "@lasercode/protocol";
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
@@ -23,7 +23,8 @@ export function WebSearchTab({ cwd }: { cwd: string }) {
   const [feature, setFeature] = useState<FeatureState>();
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<{ provider?: string; label: string; target: "provider" | "availability" }>();
+  const busy = pending !== undefined;
   const [filter, setFilter] = useState("");
   const [expanded, setExpanded] = useState<string>();
   const generation = useRef(0);
@@ -40,10 +41,14 @@ export function WebSearchTab({ cwd }: { cwd: string }) {
       if (request === generation.current) setError(failure instanceof Error ? failure.message : "Could not load search connections. Try again.");
     }
   }, [client, cwd]);
-  useEffect(() => { setStatus(undefined); void load(); return () => { generation.current++; }; }, [load]);
+  useEffect(() => { setStatus(undefined); setPending(undefined); void load(); return () => { generation.current++; }; }, [load]);
   const change = async (change: WebSearchChange) => {
     if (busy) return false;
-    setBusy(true); setError(undefined); setNotice(undefined);
+    const testing = change.action !== "configure" || change.activate;
+    const providerId = change.action === "test" ? status!.selectedProvider : change.provider;
+    const name = WEB_SEARCH_PROVIDERS.find((provider) => provider.id === providerId)?.name ?? providerId;
+    setPending({ provider: providerId, target: "provider", label: testing ? `Testing ${name} connection…` : `Saving ${name} connection…` });
+    setError(undefined); setNotice(undefined);
     const request = generation.current;
     try {
       const result = await client.request("web-search/configure", { cwd, change });
@@ -55,17 +60,20 @@ export function WebSearchTab({ cwd }: { cwd: string }) {
     } catch (failure) {
       if (request === generation.current) setError(failure instanceof Error ? failure.message : "Could not save. Try again.");
       return false;
-    } finally { if (request === generation.current) setBusy(false); }
+    } finally { if (request === generation.current) setPending(undefined); }
   };
   const toggle = async (enabled: boolean) => {
-    setBusy(true); setError(undefined);
+    if (busy) return;
+    const name = WEB_SEARCH_PROVIDERS.find((provider) => provider.id === status?.selectedProvider)?.name ?? "search provider";
+    setPending({ target: "availability", label: enabled ? `Testing ${name} before enabling search…` : "Turning off web search…" });
+    setError(undefined); setNotice(undefined);
     try {
       const result = await client.request("feature/set", { id: "web-search", scope: "global", enabled, cwd });
       // Reload with cwd so project overrides remain visible.
       await load();
       setNotice(result.restartPending ? "Saved. Search availability will change when the affected project can restart." : `Web search ${enabled ? "enabled" : "disabled"}. Your connections are unchanged.`);
     } catch (failure) { setError(failure instanceof Error ? failure.message : "Could not change web search. Try again."); }
-    finally { setBusy(false); }
+    finally { setPending(undefined); }
   };
   if (!status) return <div className="p-4">{error ? <ErrorState title="Could not load web search" detail={error} onRetry={() => void load()} /> : <GenerationLoader label="Loading search connections" />}</div>;
   const selected = WEB_SEARCH_PROVIDERS.find((entry) => entry.id === status.selectedProvider)!;
@@ -85,11 +93,11 @@ export function WebSearchTab({ cwd }: { cwd: string }) {
           </div>
           <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-line pt-3 text-sm"><span className="text-ink-2">Searches go to</span><span className="font-medium">{selected.name}</span><Badge variant="outline">{selectedStatus.configured ? selectedStatus.source === "none" ? "No key needed" : "Connection saved" : "Setup needed"}</Badge></div>
           {!selectedStatus.configured && <p className="mt-2 text-sm text-attention">Configure {selected.name} below before searching.</p>}
+          {pending?.target === "availability" && <GenerationLoader className="mt-3" label={pending.label} layout="inline" />}
           {feature?.projectEnabled !== undefined && <p className="mt-2 text-sm text-attention">This project has its own choice: {feature.enabled ? "on" : "off"}. Change or clear it in Features → This project.</p>}
         </section>
         {error && <div role="alert" className="text-sm text-danger">{error}</div>}
         {status.sharedConnectionWarning && <p role="status" className="text-sm text-attention">{status.sharedConnectionWarning}</p>}
-        {busy && <p role="status" className="text-sm text-ink-2">Checking and saving… A connection test makes a real search call. Provider charges may apply.</p>}
         {notice && <p role="status" className="text-sm text-ink-2">{notice}</p>}
         <div className="flex flex-col gap-2"><h3 className="text-sm font-semibold">Search providers</h3><p className="text-sm leading-6 text-ink-2">Only the selected provider receives queries. Paid searches use its billing or account allowance. Model connections need your explicit permission.</p><Input aria-label="Find a search provider" placeholder="Find a provider…" value={filter} onChange={(event) => setFilter(event.target.value)} /></div>
         <div className="divide-y divide-line rounded-xl border border-line bg-surface">
@@ -100,8 +108,9 @@ export function WebSearchTab({ cwd }: { cwd: string }) {
                 <ChevronRight className={cn("size-4 shrink-0 text-ink-3 transition-transform duration-(--motion-fast)", expanded === provider.id && "rotate-90")} />
                 <span className="min-w-0 flex-1"><span className="block text-sm font-medium">{provider.name}</span><span className="block text-xs text-ink-2">{connection.source === "shared" ? `Shared · ${connection.sharedProvider}` : connection.hasKey ? "Search-only key saved" : provider.key === "none" ? provider.endpoint ? "Self-hosted instance" : "No key needed" : provider.key === "optional" ? "Key optional" : "API key or connection required"}</span></span>
                 {status.selectedProvider === provider.id && <Badge variant="outline"><Check className="size-3" /> Selected</Badge>}
+                {pending?.provider === provider.id && <Loader2 aria-label={pending.label} className="size-4 shrink-0 text-live motion-safe:animate-busy" />}
               </CollapsibleTrigger>
-              <CollapsibleContent><SearchConnection key={`${provider.id}:${connection.source}:${connection.sharedProvider ?? ""}`} provider={provider} connection={connection} models={models} busy={busy} selected={status.selectedProvider === provider.id} onChange={change} /></CollapsibleContent>
+              <CollapsibleContent><SearchConnection key={`${provider.id}:${connection.source}:${connection.sharedProvider ?? ""}`} provider={provider} connection={connection} models={models} busy={busy} progress={pending?.provider === provider.id ? pending.label : undefined} selected={status.selectedProvider === provider.id} onChange={change} /></CollapsibleContent>
             </Collapsible>;
           })}
           {!shown.length && <p className="p-4 text-sm text-ink-2">No providers match “{filter}”. Try another name.</p>}
@@ -111,8 +120,8 @@ export function WebSearchTab({ cwd }: { cwd: string }) {
   );
 }
 
-function SearchConnection({ provider, connection, models, busy, selected, onChange }: {
-  provider: WebSearchProvider; connection: WebSearchProviderStatus; models: ProviderAuthInfo[]; busy: boolean; selected: boolean; onChange: (change: WebSearchChange) => Promise<boolean>;
+function SearchConnection({ provider, connection, models, busy, progress, selected, onChange }: {
+  provider: WebSearchProvider; connection: WebSearchProviderStatus; models: ProviderAuthInfo[]; busy: boolean; progress?: string | undefined; selected: boolean; onChange: (change: WebSearchChange) => Promise<boolean>;
 }) {
   const [key, setKey] = useState("");
   const [baseUrl, setBaseUrl] = useState(connection.baseUrl ?? "");
@@ -123,17 +132,18 @@ function SearchConnection({ provider, connection, models, busy, selected, onChan
     if (ok) setKey("");
   };
   const shared = models.filter((entry) => provider.sharedProviders.includes(entry.id));
-  return <div className="flex flex-col gap-3 px-4 pb-4 pt-1">
+  return <div className="flex flex-col gap-3 px-4 pb-4 pt-1" aria-busy={progress !== undefined}>
     {provider.note && <p className="text-sm leading-6 text-ink-2">{provider.note}</p>}
+    {progress && <GenerationLoader className="sticky top-0 z-10 bg-surface py-2" label={progress} layout="inline" />}
     {shared.length > 0 && <section className="flex flex-col gap-2" aria-label={`${provider.name} shared connections`}>
       {shared.map((entry) => <div key={entry.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-surface-2 p-3">
         <div className="min-w-0"><p className="flex items-center gap-2 text-sm font-medium"><Link2 className="size-4" />{entry.name}</p><p className="mt-1 text-xs text-ink-2">{entry.configured ? "Reuse this model connection; no second key is stored." : "Connect this provider in Models and dictation first."}</p></div>
         <Button variant="secondary" size="sm" disabled={busy || (!entry.configured && !(connection.source === "shared" && connection.sharedProvider === entry.id))} onClick={() => void save(connection.source === "shared" && connection.sharedProvider === entry.id ? "none" : "shared", connection.source === "shared" && connection.sharedProvider === entry.id ? undefined : entry.id)}>{connection.source === "shared" && connection.sharedProvider === entry.id ? "Revoke search access" : "Allow, test and use"}</Button>
       </div>)}
     </section>}
-    {provider.endpoint && <label className="flex flex-col gap-1 text-sm">SearXNG address<Input type="url" value={baseUrl} placeholder="https://search.example.com" onChange={(event) => setBaseUrl(event.target.value)} /></label>}
-    {provider.zone && <label className="flex flex-col gap-1 text-sm">SERP zone<Input value={zone} placeholder="Your SERP zone name" onChange={(event) => setZone(event.target.value)} /></label>}
-    {provider.key !== "none" && <label className="flex flex-col gap-1 text-sm"><span className="flex items-center gap-2"><KeyRound className="size-4 text-ink-2" />{shared.length ? "Or use a separate search-only key" : "Search API key"}</span><Input type="password" autoComplete="new-password" value={key} onChange={(event) => setKey(event.target.value)} placeholder={connection.hasKey ? "Saved key is never shown; paste to replace" : "Paste an API key"} /></label>}
+    {provider.endpoint && <label className="flex flex-col gap-1 text-sm">SearXNG address<Input disabled={busy} type="url" value={baseUrl} placeholder="https://search.example.com" onChange={(event) => setBaseUrl(event.target.value)} /></label>}
+    {provider.zone && <label className="flex flex-col gap-1 text-sm">SERP zone<Input disabled={busy} value={zone} placeholder="Your SERP zone name" onChange={(event) => setZone(event.target.value)} /></label>}
+    {provider.key !== "none" && <label className="flex flex-col gap-1 text-sm"><span className="flex items-center gap-2"><KeyRound className="size-4 text-ink-2" />{shared.length ? "Or use a separate search-only key" : "Search API key"}</span><Input disabled={busy} type="password" autoComplete="new-password" value={key} onChange={(event) => setKey(event.target.value)} placeholder={connection.hasKey ? "Saved key is never shown; paste to replace" : "Paste an API key"} /></label>}
     <div className="flex flex-wrap gap-2">
       {provider.key !== "none" && <Button size="sm" variant="secondary" disabled={busy || (!key.trim() && !connection.hasKey)} onClick={() => void save("dedicated")}>Test and use key</Button>}
       {provider.key !== "required" && <Button size="sm" variant="secondary" disabled={busy || (provider.endpoint && !baseUrl.trim())} onClick={() => void save("none")}>{provider.endpoint ? "Test and use instance" : "Test and use without a key"}</Button>}

@@ -12,7 +12,7 @@
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { Check, Copy, ExternalLink, KeyRound } from "lucide-react";
+import { Check, Copy, ExternalLink, KeyRound, Loader2 } from "lucide-react";
 
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
@@ -63,6 +63,7 @@ export function ProviderSignIn({ cwd, provider, method, onDone, onCancel, classN
   const [flow, setFlow] = useState<Flow>(fresh);
   const [answer, setAnswer] = useState("");
   const [sending, setSending] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
   const flowRef = useRef(flow);
   flowRef.current = flow;
   /** Events that arrived before `start` answered with the id. */
@@ -119,6 +120,7 @@ export function ProviderSignIn({ cwd, provider, method, onDone, onCancel, classN
   const start = useCallback(async () => {
     setFlow(fresh());
     setAnswer("");
+    setSubmitted(false);
     early.current = [];
     doneRef.current = false;
     try {
@@ -154,14 +156,15 @@ export function ProviderSignIn({ cwd, provider, method, onDone, onCancel, classN
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const prompt = flow.prompt;
-    if (!prompt || !flow.id) return;
+    if (!prompt || !flow.id || sending) return;
     const value = answer.trim();
     if (value === "" && prompt.kind !== "select") return;
     setSending(true);
+    setSubmitted(true);
     try {
       await client.request("pi/providers/login/answer", { cwd, id: flow.id, promptId: prompt.id, value });
       setAnswer("");
-      setFlow((current) => (current.prompt?.id === prompt.id ? { ...current, prompt: undefined, progress: "Checking…" } : current));
+      setFlow((current) => (current.status === "waiting" && current.prompt?.id === prompt.id ? { ...current, prompt: undefined } : current));
     } catch (answerError) {
       setFlow((current) => ({ ...current, status: "error", error: answerError instanceof Error ? answerError.message : String(answerError) }));
     } finally {
@@ -171,11 +174,12 @@ export function ProviderSignIn({ cwd, provider, method, onDone, onCancel, classN
 
   const choose = async (optionId: string) => {
     const prompt = flow.prompt;
-    if (!prompt || !flow.id) return;
+    if (!prompt || !flow.id || sending) return;
     setSending(true);
+    setSubmitted(true);
     try {
       await client.request("pi/providers/login/answer", { cwd, id: flow.id, promptId: prompt.id, value: optionId });
-      setFlow((current) => (current.prompt?.id === prompt.id ? { ...current, prompt: undefined, progress: "Checking…" } : current));
+      setFlow((current) => (current.status === "waiting" && current.prompt?.id === prompt.id ? { ...current, prompt: undefined } : current));
     } catch (answerError) {
       setFlow((current) => ({ ...current, status: "error", error: answerError instanceof Error ? answerError.message : String(answerError) }));
     } finally {
@@ -184,6 +188,11 @@ export function ProviderSignIn({ cwd, provider, method, onDone, onCancel, classN
   };
 
   const methodLabel = method === "oauth" ? (provider.oauthLabel ?? "Sign in with your account") : "Use an API key";
+  // Model key storage does not perform an API probe. Do not claim a successful
+  // test; real engine progress overrides this fallback whenever it is available.
+  const waitingLabel = flow.progress ?? (sending || !flow.prompt
+    ? method === "api_key" ? submitted ? "Saving API key…" : "Preparing API key entry…" : flow.url || flow.device ? "Waiting for the sign-in to finish" : "Completing sign-in…"
+    : undefined);
 
   return (
     <div className={cn("flex flex-col gap-3 rounded-xl border border-line bg-surface-2 p-3", className)} aria-live="polite">
@@ -276,12 +285,14 @@ export function ProviderSignIn({ cwd, provider, method, onDone, onCancel, classN
                 autoFocus
                 spellCheck={false}
                 value={answer}
+                disabled={sending}
                 placeholder={flow.prompt.placeholder ?? (flow.prompt.kind === "manual_code" ? "Paste the code here" : undefined)}
                 onChange={(event) => setAnswer(event.target.value)}
                 className="min-w-48 flex-1 font-mono"
               />
               <Button type="submit" size="sm" disabled={sending || answer.trim() === ""}>
-                Continue
+                {sending && <Loader2 aria-hidden="true" className="motion-safe:animate-busy" />}
+                {sending ? "Connecting…" : "Continue"}
               </Button>
             </div>
           )}
@@ -294,15 +305,11 @@ export function ProviderSignIn({ cwd, provider, method, onDone, onCancel, classN
         </form>
       )}
 
-      {flow.progress && flow.status === "waiting" && <GenerationLoader label={flow.progress} layout="inline" />}
-
-      {flow.status === "waiting" && !flow.prompt && !flow.progress && (flow.url || flow.device) && (
-        <GenerationLoader label="Waiting for the sign-in to finish" layout="inline" />
-      )}
+      {waitingLabel && flow.status === "waiting" && <GenerationLoader label={waitingLabel} layout="inline" />}
 
       {flow.status === "done" && (
         <p className="flex items-center gap-2 text-sm font-medium text-ok" role="status">
-          <Check aria-hidden="true" className="size-4" /> Signed in to {provider.name}
+          <Check aria-hidden="true" className="size-4" /> {method === "api_key" ? `API key saved for ${provider.name}` : `Signed in to ${provider.name}`}
         </p>
       )}
 

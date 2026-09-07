@@ -62,9 +62,21 @@ it("does not switch providers while testing or after a rejected connection", asy
   mocks.request.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
   await click("Allow, test and use");
   expect(status.selectedProvider).toBe("duckduckgo");
-  expect(container.textContent).toContain("Checking and saving");
+  expect(container.querySelector('[data-slot="generation-loader"]')?.textContent).toContain("Testing OpenAI connection");
+  expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
   expect([...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Allow, test and use")!.disabled).toBe(true);
   await act(async () => reject(new Error("OpenAI search failed (HTTP 401). Check this connection.")));
   expect(status.selectedProvider).toBe("duckduckgo");
   expect(container.querySelector('[role="alert"]')?.textContent).toContain("HTTP 401");
+  expect(container.querySelector('[data-slot="generation-loader"]')).toBeNull();
+  expect([...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Allow, test and use")!.disabled).toBe(false);
+});
+it("shows testing beside availability until enabling finishes", async () => {
+  await render();
+  let resolve!: (value: unknown) => void;
+  mocks.request.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  await click("Enable web search");
+  expect(container.querySelector('[aria-label="Search availability"] [data-slot="generation-loader"]')?.textContent).toContain("Testing DuckDuckGo");
+  await act(async () => resolve({ restartPending: false }));
+  expect(container.querySelector('[data-slot="generation-loader"]')).toBeNull();
 });

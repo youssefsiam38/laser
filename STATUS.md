@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-07T08:33:15+03:00 · codex-2026-09-07-native-lifecycle · HEAD: `d229cac`
+**Last updated:** 2026-09-07T09:03:07+03:00 · codex-2026-09-07-link-progress · HEAD: `e0ce1d4`
 
-**Current focus:** 0.2.10 source, tag and release page published after passing source CI. Installer/feed publication dispatched; deliberately not monitored.
+**Current focus:** Link destination preview and visible provider connection progress verified locally. Separate M3 agents specification remains awaiting product choices; no new release requested.
 
 ## Milestones
 
@@ -14,7 +14,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M1 Local loop | done | assistant-ui runtime |
 | MP Panel system | done | panel contract implemented |
 | M2 Many sessions, many projects | in-progress | broader notification platform proof remains |
-| M3 Subagent tabs | in-progress | agents discovery and upstream work |
+| M3 Subagent tabs | in-progress | binding agent contracts and live-map direction recorded; final prompt awaits choices |
 | M4 Settings and logs | done | settings surfaces complete |
 | M5 Desktop shell | in-progress | broader platform proof remains |
 | M6 Relay and pairing | done | cryptographic foundations complete |
@@ -23,12 +23,12 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M9 CLI | done | planned tasks complete |
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
-| M12 Product experience | done | 0.2.10 release dispatched; assets not yet verified |
+| M12 Product experience | done | link/progress UX verified; 0.2.10 publication previously dispatched |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
 
-- Separate agents discovery: M3-T11 awaits remaining Q-8 product choices; its research changes remain uncommitted and outside this release.
+- M3-T11: remaining Q-8 choices await answers; agreed responsibility and visual contracts are in the three agents specification documents.
 
 ## Next up
 
@@ -38,8 +38,8 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Recently done
 
+- M12-T71: UI build/typecheck, 517 tests, long-link and pending-connection browser review at desktop/phone widths in both themes.
 - M12-T70: `d229cac`, `v0.2.10`, release page published; source CI 34087083663 passed. Release workflow not monitored.
 - M12-T69: build/typecheck/1,065 tests, fresh packaged checks, native GNOME withdrawal and four-layout refresh/restart notices.
 - M12-T68: exclusive tested search activation and provider-specific errors; live probes and packaged/browser checks.
 - M12-T67: budget-free goals and durable, normally scrolling completion records; policy/history and browser proof.
-- M12-T66: `8d1fb96`, `v0.2.9`; both architectures and signed update feeds published.

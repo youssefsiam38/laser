@@ -493,6 +493,7 @@ Depends on: M1, M2-T4, M4, M5-T1, M11.
 | M12-T68 | Repair search selection and provider failures | configuring and choosing search connections is unambiguous; DuckDuckGo empty/challenge responses are distinguished; OpenAI API and Codex routes have regression coverage and bounded live verification; errors identify the selected provider without exposing credentials |
 | M12-T69 | Keep native notifications and desktop updates coherent | session reminders are withdrawn on acknowledgement and orderly exit; native package updates offer a full desktop restart, not just a daemon refresh; Linux protocol and lifecycle regressions are verified |
 | M12-T70 | Release stable 0.2.10 | goal history, search repairs and native lifecycle fixes pass staged verification and package checks; source, version tag and release are published |
+| M12-T71 | Preview link destinations and expose provider connection progress | hovered and keyboard-focused links show a non-interactive bottom-left destination; sign-in and search tests expose truthful local busy states through completion/failure; desktop/phone and both themes verified |
 
 ---
 

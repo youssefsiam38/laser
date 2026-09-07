@@ -6,6 +6,12 @@ apply. Nothing is left unclaimed by accident.
 
 ## The rule
 
+Application chrome not represented by a catalog element stays in the shell:
+`LinkDestination` is one pointer-transparent bottom-left URL status strip, also
+covering keyboard focus and portalled links. It never fetches a preview. Provider
+connection waits reuse `GenerationLoader` beside their active controls; saving
+credentials must not be mislabeled as an API test.
+
 **Do not hand-roll a component that exists in the catalog.** Install it
 (`npx assistant-ui@latest add <name>`), then style it to
 [`packages/ui/DESIGN.md`](../packages/ui/DESIGN.md). Editing the copied
