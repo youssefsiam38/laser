@@ -55,6 +55,8 @@ export interface AttentionTrackerOptions {
   storePath?: string;
   /** Notified whenever a session's attention actually changes. */
   onChange?: (snapshot: AttentionSnapshot) => void;
+  /** A client viewed this session; independent of whether its attention changed. */
+  onSeen?: (path: string) => void;
   /**
    * The session file's mtime, so a session driven from a terminal — the case
    * the file layer exists for — can turn up unread without anybody opening it
@@ -181,6 +183,7 @@ export class AttentionTracker {
     }
     this.schedulePersist();
     this.publish(path, cwd);
+    this.options.onSeen?.(path);
   }
 
   /** Forget a session entirely (its file is gone). */

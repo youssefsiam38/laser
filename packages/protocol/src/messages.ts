@@ -1128,6 +1128,8 @@ export interface HostNotifications {
   "pi/worker/status": WorkerInfo;
   /** One session's attention changed (M2-T2). Cheaper than re-listing the catalog. */
   "pi/session/attention": { path: string; cwd: string; attention: SessionAttention; at: string };
+  /** Read acknowledgement, even when an unanswered approval keeps attention unchanged. */
+  "pi/session/seen": { path: string };
   /** The project set or a trust decision changed. Carries the whole list; it is small. */
   "pi/project/updated": { projects: ProjectInfo[] };
   /**

@@ -183,6 +183,7 @@ const link = new HostLink({
   log,
   onSnapshot: (snapshot: FleetSnapshot) => tray.setFleet(snapshot),
   onAttention: (change: AttentionChange) => notifier.handle(change),
+  onSeen: (path) => notifier.clear(path),
 });
 
 const notifier = new Notifier({

@@ -9,7 +9,9 @@ import { SelectionToolbar } from "@/components/assistant-ui/elements/quote.aui";
 import { ScrollAnchor } from "@/components/assistant-ui/elements/scroll-anchor";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { MobileIslands, PanelDecisionCards, PanelInlineCards, PanelInspectSheet } from "@/panels";
-import { useLaserStable, useLaserState } from "@/runtime";
+import { useLaserStable, useLaserState, useLaserView } from "@/runtime";
+import { useWorkbench } from "@/components/workbench/workbench-context";
+import { useSessionSeen } from "./use-session-seen.js";
 import { Composer } from "./Composer.js";
 import { EmptyState } from "./EmptyState.js";
 import { ThreadMessage } from "./messages.js";
@@ -46,6 +48,13 @@ const FOLLOW_UPS = AuiConfig({
 });
 
 export function Thread({ statusSlot }: ThreadProps = {}) {
+  const view = useLaserView();
+  const { actions } = useLaserStable();
+  const connected = useLaserState(s => s.connection === "open");
+  const { page } = useWorkbench();
+  useSessionSeen({ path: view?.path, seq: view?.lastSeq ?? 0, running: view?.running ?? false,
+    dialogs: view?.dialogs.map(dialog => dialog.id).join("\0") ?? "",
+    ready: connected && !!view?.hydrated, covered: page !== null, markSeen: actions.markSeen });
   const slots: ThreadSlots = statusSlot !== undefined ? { statusLine: statusSlot } : {};
   const aui = useAui();
   const find = useConversationFind();

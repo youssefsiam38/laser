@@ -30,6 +30,7 @@ export interface HostLinkOptions {
   log: DesktopLog;
   onSnapshot: (snapshot: FleetSnapshot) => void;
   onAttention: (change: AttentionChange) => void;
+  onSeen?: (path: string) => void;
 }
 
 export class HostLink {
@@ -190,6 +191,11 @@ export class HostLink {
 
   private onNotification(method: HostNotificationMethod, params: unknown): void {
     switch (method) {
+      case "pi/session/seen": {
+        const event = params as HostNotifications["pi/session/seen"];
+        this.options.onSeen?.(event.path);
+        return;
+      }
       case "pi/session/attention": {
         const event = params as HostNotifications["pi/session/attention"];
         const change = this.model.applyAttention(event);

@@ -347,6 +347,13 @@ lane T's own if both were written.
 | M12-T61 | Explain and group account allowances | done | codex-2026-09-07-quota-ux | 480 UI tests; UI typecheck/build; compact/full desktop/phone dark/light browser review | see notes |
 | M12-T62 | Complete the composer suggestion experience | done | codex-2026-09-07-composer-picker | 493 UI tests; 13 focused worker tests; 7 desktop tests including real Electron bridge; UI/worker/desktop build and typecheck; desktop/phone both-theme browser review | see notes |
 | M12-T63 | Release stable 0.2.8 | done | codex-2026-09-07-release-028 | `105eba5`; `v0.2.8`; https://github.com/youssefsiam38/laser/releases/tag/v0.2.8; staged `pnpm verify` (1,008 tests) | see notes |
+| M12-T65 | Withdraw native reminders after viewing a session | done | codex-2026-09-07-notification-seen | 494 UI + 75 desktop + 171 host tests; typechecks; UI/desktop/protocol builds; real GNOME withdrawal | see notes |
+
+#### M12-T65 notes
+- 2026-09-07 claimed: track native handles per session, forward an explicit seen acknowledgement independently of attention changes, preserve unanswered approvals and test native Linux dismissal. Avoid concurrent web-search files and leave release/version unchanged.
+- 2026-09-07 checkpoint: explicit host acknowledgement reaches the independent desktop connection in a real WebSocket test without starting a worker. Transcript acknowledgement moved onto the mounted chat surface: covered Settings/Logs, unfocused windows and hidden tabs do not count; pending approvals do, without answering them or sending per-token acknowledgements. Assistant-ui runtime guidance preserves the existing adapter/action seam.
+- 2026-09-07 native proof: built Notifier sent two synthetic critical reminders to GNOME 46. Withdrawing A generated `CloseNotification(34)` and GNOME `NotificationClosed(34, 3)` while B remained until explicitly withdrawn later (`35, 3`). No real session or existing notification was dismissed. Ubuntu Dock's installed notifications monitor recalculates its count on notification destruction; badge repaint itself was not visually measured. Probe and D-Bus monitor stopped. Evidence: `/tmp/notification-seen-dbus.log`.
+- 2026-09-07 done: 740 tests pass across UI/desktop/host; UI and host typechecks plus protocol/desktop/UI builds pass. Added guards for late delivery, late replaced-handle callbacks, foreground resolution, throttling, hidden/covered/unfocused views and approval acknowledgement. Tests and native proof are recorded under `/tmp/notification-seen-*`. No visual styling changed. Legacy orphaned reminders from an earlier process may need one manual clear; there is no blanket deletion or speculative notification-ID recovery. No version bump, push, release or installed-app restart.
 
 #### M12-T63 notes
 - 2026-09-07 claimed: bundle committed M12-T61 and the user's completed M12-T62 picker work, stage only release-owned changes, run the full workspace gate and publish commit/tag/release without monitoring Actions. Preserve unrelated guide/planning and ignore-file edits.
@@ -2443,6 +2450,12 @@ Consequences: interaction regressions cover the integrated primitive, not only m
 Decision: add M12-T63 and publish the two requested changes as one stable patch, 0.2.8.
 Why: the user explicitly requested bundling their composer picker improvement with the completed allowance UX.
 Consequences: run verification after staging all intended source, push the commit/tag, and create the stable release page. Do not wait for Actions; installers and native feeds remain the release workflow's responsibility. Unrelated reference material stays outside the release.
+
+### D-116 · 2026-09-07 · Session acknowledgement withdraws its native reminders
+
+Decision: add M12-T65. The host publishes a seen acknowledgement independently of attention transitions. Desktop owns notification handles and withdraws only reminders for that session; viewing a question is not answering it.
+Why: native reminders otherwise remain in GNOME notification history and keep Ubuntu Dock's counter visible after the user returns.
+Consequences: preserve notification throttling, replace superseded reminders, and ignore late close callbacks from replaced handles. No blanket clearing of other sessions or operating-system notification history.
 
 ## Status edits log
 

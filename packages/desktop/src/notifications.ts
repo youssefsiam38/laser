@@ -64,11 +64,14 @@ export interface NotifierOptions {
 export class Notifier {
   private readonly lastAt = new Map<string, number>();
   private recent: number[] = [];
+  private readonly active = new Map<string, Notification>();
 
   constructor(private readonly options: NotifierOptions) {}
 
   /** Fire, or explain to the log why it did not. Never throws. */
   handle(change: AttentionChange, now = Date.now()): boolean {
+    // Process acknowledgement/resolution before foreground and rate gates.
+    if (change.to === "idle" || change.to === "working") this.clear(change.session.path);
     if (!Notification.isSupported()) return false;
     if (!shouldNotify(change)) return false;
     if (this.options.isForeground()) return false;
@@ -97,18 +100,40 @@ export class Notifier {
         urgency: urgencyFor(change.to),
         silent: change.to === "finished_unread",
       });
-      notification.on("click", () => this.options.onActivate({ kind: "session", path: change.session.path }));
+      const path = change.session.path;
+      this.clear(path);
+      this.active.set(path, notification);
+      // Native delivery can finish after the user has already viewed the chat.
+      notification.on("show", () => {
+        if (this.active.get(path) !== notification) {
+          try { notification.close(); }
+          catch (error) { this.options.log.error("could not dismiss a late notification", error); }
+        }
+      });
+      notification.on("click", () => this.options.onActivate({ kind: "session", path }));
+      // Linux close means removal from the notification server. Other systems
+      // may report a banner timeout while retaining notification-centre history.
+      const forget = () => {
+        if (this.active.get(path) === notification) this.active.delete(path);
+      };
+      notification.on("failed", forget);
+      if (process.platform === "linux") notification.on("close", forget);
       notification.show();
       return true;
     } catch (error) {
+      this.clear(change.session.path);
       this.options.log.error("could not show a notification", error);
       return false;
     }
   }
 
-  /** Forget a session, so closing and reopening it can notify again. */
+  /** Withdraw this session's reminder, without resetting anti-spam history. */
   clear(path: string): void {
-    this.lastAt.delete(path);
+    const notification = this.active.get(path);
+    if (!notification) return;
+    this.active.delete(path);
+    try { notification.close(); }
+    catch (error) { this.options.log.error("could not dismiss a notification", error); }
   }
 }
 

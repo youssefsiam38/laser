@@ -229,6 +229,7 @@ export class HostServer {
       modifiedAt: (path) => this.catalog.get(path)?.modifiedAt,
       onChange: ({ path, cwd, attention, at }) =>
         this.notify("pi/session/attention", { path, cwd, attention, at }),
+      onSeen: (path) => this.notify("pi/session/seen", { path }),
     });
 
     this.projects = new ProjectRegistry({

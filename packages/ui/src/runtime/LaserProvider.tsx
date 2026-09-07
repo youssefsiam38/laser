@@ -134,7 +134,7 @@ export interface LaserActions {
   /** Start a crashed or retired worker again (`pi/worker/restart`). */
   restartWorker(cwd: string): Promise<void>;
   /** Tell the host this session has been read up to its latest update. */
-  markSeen(path: string, seq: number): void;
+  markSeen(path: string, seq: number, force?: boolean): void;
   dismissToast(id: number): void;
   toast(level: "info" | "warning" | "error", text: string): void;
 }
@@ -613,41 +613,17 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   }, [client, state.connection, state.current, state.open]);
 
   const markSeen = useCallback(
-    (path: string, seq: number) => {
-      if ((seenSeq.current.get(path) ?? -1) >= seq) return;
+    (path: string, seq: number, force = false) => {
+      if (!force && (seenSeq.current.get(path) ?? -1) >= seq) return;
       seenSeq.current.set(path, seq);
       // Fire and forget: attention is a convenience, and a failed mark is
       // corrected by the next one.
-      client.request("pi/session/seen", { path, seq }).catch(() => {});
+      client.request("pi/session/seen", { path, seq }).catch(() => {
+        if (seenSeq.current.get(path) === seq) seenSeq.current.delete(path);
+      });
     },
     [client],
   );
-
-  const currentPath = state.current;
-  const currentView = currentPath ? state.open[currentPath] : undefined;
-  const currentSeq = currentView?.lastSeq ?? 0;
-  const currentRunning = currentView?.running ?? false;
-
-  // Read = on screen and settled. While the agent is still working the row
-  // should stay "working"; it becomes read when it finishes under your eyes.
-  useEffect(() => {
-    if (!currentPath || state.connection !== "open" || currentRunning) return;
-    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-    markSeen(currentPath, currentSeq);
-  }, [currentPath, currentRunning, currentSeq, markSeen, state.connection]);
-
-  // Coming back to the tab counts as reading it.
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    const onVisible = () => {
-      const s = readState();
-      if (document.visibilityState !== "visible" || !s.current) return;
-      const view = s.open[s.current];
-      if (view && !view.running) markSeen(s.current, view.lastSeq);
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [markSeen]);
 
   // --- actions ------------------------------------------------------------
 

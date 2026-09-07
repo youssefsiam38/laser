@@ -378,6 +378,17 @@ Explain full quit (including tray) after finishing work. Test new public methods
 through a real host and built worker, not only worker dispatch. Quota credential
 failures must leave loading and remain retryable without leaking auth details.
 
+### Native reminders must follow session acknowledgement
+
+Retain native notification handles by session and withdraw them when that session
+is actually viewed. A host seen acknowledgement is distinct from attention:
+viewing an unanswered approval must dismiss its OS reminder, not answer it.
+Do not mark hidden, unfocused or Settings-covered transcripts read. Withdraw
+before foreground/throttle guards; preserve anti-spam history. Test late native
+delivery and replaced-handle close callbacks. On Linux, prove `CloseNotification`
+and the server's application-dismissed signal; banner timeout alone is not proof
+of removal from notification history or the dock's count.
+
 ### Subscription allowance: prove the route, not only the parser
 
 **Problem:** the first usage URL returned a 403 HTML security challenge for a

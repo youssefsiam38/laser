@@ -32,6 +32,18 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("AttentionTracker", () => {
+  it("acknowledges viewing even when an unanswered dialog keeps attention unchanged", () => {
+    const seen: string[] = [];
+    const a = new AttentionTracker({ onSeen: path => seen.push(path) });
+    a.observeUpdate(PATH, CWD, "agent_start", 1);
+    a.dialogRaised(PATH, CWD, "approval");
+    a.markSeen(PATH, CWD, 1);
+    expect(seen).toEqual([PATH]);
+    expect(a.attentionOf(PATH)).toBe("waiting_for_input");
+    a.dialogAnswered("approval");
+    expect(a.attentionOf(PATH)).toBe("working");
+    a.close();
+  });
   it("ranks a pending dialog above a running agent, and clears on the answer", () => {
     const changes: AttentionSnapshot[] = [];
     const a = tracker(changes);
