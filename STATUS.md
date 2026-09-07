@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-07T04:22:23+03:00 · codex-2026-09-07-quota-ux · HEAD: `dda9521`
+**Last updated:** 2026-09-07T05:23:00+03:00 · codex-2026-09-07-release-028 · HEAD: `105eba5`
 
-**Current focus:** compact chat allowances and full Settings → Usage complete locally. Version remains 0.2.7; no new release requested. Existing release Actions not monitored.
+**Current focus:** 0.2.8 source/tag and stable release page dispatched. Installer/feed publication belongs to the pipeline; Actions not monitored by user request.
 
 ## Milestones
 
@@ -23,7 +23,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M9 CLI | done | planned tasks complete |
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
-| M12 Product experience | done | allowance UX verified locally |
+| M12 Product experience | done | 0.2.8 release dispatch complete |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
@@ -38,8 +38,8 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Recently done
 
-- M12-T61: compact/full allowances, saved reset mode, source-linked help; 480 UI tests, typecheck/build and responsive theme review.
-- M12-T60: `e1fd1fe`, `v0.2.7`, release page created; staged build/typecheck/979 tests passed.
+- M12-T63: `105eba5`, `v0.2.8`, stable release page; staged build/typecheck/1,008 tests pass.
+- M12-T62: composer picker, project-wide file search, skill source action; responsive theme review; included in 0.2.8.
+- M12-T61: compact/full allowances, saved reset mode, source-linked help; `3039e34`, included in 0.2.8.
+- M12-T60: `e1fd1fe`, `v0.2.7`, release dispatched; staged build/typecheck/979 tests passed.
 - M12-T59: authenticated initial/manual quota refresh HTTP 200; full 979-test gate and responsive review.
-- M12-T58: file-tool source highlighting; UI tests and responsive theme review.
-- M12-T57: exact API-request find without duplicate previews; UI tests and responsive review.

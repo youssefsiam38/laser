@@ -346,11 +346,12 @@ lane T's own if both were written.
 | M12-T60 | Release stable 0.2.7 | done | codex-2026-09-07-quota-release | `e1fd1fe`; `v0.2.7`; https://github.com/youssefsiam38/laser/releases/tag/v0.2.7; staged `pnpm verify` (979 tests) | see notes |
 | M12-T61 | Explain and group account allowances | done | codex-2026-09-07-quota-ux | 480 UI tests; UI typecheck/build; compact/full desktop/phone dark/light browser review | see notes |
 | M12-T62 | Complete the composer suggestion experience | done | codex-2026-09-07-composer-picker | 493 UI tests; 13 focused worker tests; 7 desktop tests including real Electron bridge; UI/worker/desktop build and typecheck; desktop/phone both-theme browser review | see notes |
-| M12-T63 | Release stable 0.2.8 | in-progress | codex-2026-09-07-release-028 | — | see notes |
+| M12-T63 | Release stable 0.2.8 | done | codex-2026-09-07-release-028 | `105eba5`; `v0.2.8`; https://github.com/youssefsiam38/laser/releases/tag/v0.2.8; staged `pnpm verify` (1,008 tests) | see notes |
 
 #### M12-T63 notes
 - 2026-09-07 claimed: bundle committed M12-T61 and the user's completed M12-T62 picker work, stage only release-owned changes, run the full workspace gate and publish commit/tag/release without monitoring Actions. Preserve unrelated guide/planning and ignore-file edits.
 - 2026-09-07 checkpoint: all intended source staged before `pnpm identity:check` and `pnpm verify`; full workspace build/typecheck/1,008 tests pass, including 493 UI tests and the real Electron bridge (`/tmp/laser-028-verify.log`). Version is 0.2.8 in all workspace manifests. Prior M12-T61/T62 responsive-theme evidence retained; no implementation changes made during release preparation. Committing and dispatching the verified source next.
+- 2026-09-07 done: commit `105eba5` and annotated `v0.2.8` pushed atomically, including allowance commit `3039e34` and the user's composer picker work. Stable release page created with update guidance. It is not Latest until the workflow publishes verified installers and native feeds. Actions not monitored or waited on, as requested; installer availability is not claimed. Unrelated `.gitignore`, M3-T10 guide/planning and scratch files remain outside this release. No production restart performed.
 
 #### M12-T62 notes
 - 2026-09-07 claimed: audit the complete trigger interaction lifecycle; retain the adopted assistant-ui element and strengthen its search, navigation, dismissal and responsive presentation without changing command semantics. Leave all work uncommitted.
