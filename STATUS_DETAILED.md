@@ -354,7 +354,7 @@ lane T's own if both were written.
 | M12-T68 | Repair search selection and provider failures | done | codex-2026-09-07-search-repair | `pnpm verify`: 1,054 tests; identity; 12 packaged checks; live OpenAI API/Codex probes; desktop/phone dark/light review | see notes |
 
 | M12-T69 | Keep native notifications and desktop updates coherent | done | codex-2026-09-07-native-lifecycle | `pnpm verify`: 1,065 tests; fresh packaged clean-machine checks; live GNOME withdrawal; four-layout notices | see notes |
-| M12-T70 | Release stable 0.2.10 | in-progress | codex-2026-09-07-native-lifecycle | — | see notes |
+| M12-T70 | Release stable 0.2.10 | done | codex-2026-09-07-native-lifecycle | `d229cac`, `v0.2.10`; source CI 34087083663 success; GitHub release page published | see notes |
 
 #### M12-T69 notes
 - 2026-09-07 done: staged source passes all builds/typechecks and 1,065 tests (`/tmp/release-0210-final-verify.log`); freshly packaged 0.2.10 passes every clean-machine claim (`/tmp/release-0210-final-clean.log`). Remote refresh and local restart notices reviewed on desktop/phone in both themes, with no automatic restart or overflow. Remote refresh preserves host work and flushes the current draft; local restart explicitly warns that active work stops. Research: freedesktop notification protocol (https://specifications.freedesktop.org/notification/latest/protocol.html), Electron Linux libnotify implementation, and installed Ubuntu Dock notificationsMonitor.js establish that owned native notifications must be withdrawn, not merely hide their banners. Legacy orphaned notifications cannot be enumerated through the standard API: full quit/reopen after installing and one manual clear remain necessary for those old reminders. No production process was restarted.
@@ -362,6 +362,7 @@ lane T's own if both were written.
 - 2026-09-07 claimed: verify Ubuntu's actual notification ownership/counting, fix orderly cleanup and full-desktop native-update activation. Current renderer arguments prove main version 0.2.5 while installed CLI/host is 0.2.9; the previous main-process fix never loaded. Do not interrupt production workers or clear unrelated OS notifications.
 
 #### M12-T70 notes
+- 2026-09-07 done: source `d229cac` pushed; clean source CI https://github.com/youssefsiam38/laser/actions/runs/34087083663 passed before immutable tag `v0.2.10` was pushed. Release page https://github.com/youssefsiam38/laser/releases/tag/v0.2.10 published with human-readable notes and `latest=false`; the tag dispatches architecture builds and signed feeds. Per explicit user instruction, release workflow is not monitored: asset/feed completion is not claimed. Local installer fixtures pass 76 checks. Isolated sandbox and verification browser stopped; production remains running untouched. Separate M3 research, ignore-file and scratch changes remain uncommitted.
 - 2026-09-07 checkpoint: 0.2.10 is the single workspace version; intended source staged before the complete gate, fresh packaged checks pass. Publish source for clean branch CI before tagging, then dispatch publication without monitoring the release workflow, as requested. Unrelated agents research and scratch files remain outside the release.
 - 2026-09-07 claimed: bundle completed M12-T67/T68 with M12-T69 in the next stable patch; preserve unrelated reference/scratch changes.
 

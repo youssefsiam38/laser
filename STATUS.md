@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-07T08:29:04+03:00 · codex-2026-09-07-native-lifecycle · HEAD: `b48a91a`
+**Last updated:** 2026-09-07T08:33:15+03:00 · codex-2026-09-07-native-lifecycle · HEAD: `d229cac`
 
-**Current focus:** Release 0.2.10: goal history, search repair, notification ownership and user-controlled coupled updates. All local gates pass; source CI and publication dispatch remain.
+**Current focus:** 0.2.10 source, tag and release page published after passing source CI. Installer/feed publication dispatched; deliberately not monitored.
 
 ## Milestones
 
@@ -23,7 +23,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M9 CLI | done | planned tasks complete |
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
-| M12 Product experience | in-progress | verified 0.2.10 awaiting publication dispatch |
+| M12 Product experience | done | 0.2.10 release dispatched; assets not yet verified |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
@@ -38,8 +38,8 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Recently done
 
+- M12-T70: `d229cac`, `v0.2.10`, release page published; source CI 34087083663 passed. Release workflow not monitored.
 - M12-T69: build/typecheck/1,065 tests, fresh packaged checks, native GNOME withdrawal and four-layout refresh/restart notices.
 - M12-T68: exclusive tested search activation and provider-specific errors; live probes and packaged/browser checks.
 - M12-T67: budget-free goals and durable, normally scrolling completion records; policy/history and browser proof.
 - M12-T66: `8d1fb96`, `v0.2.9`; both architectures and signed update feeds published.
-- M12-T64: web search; build/typecheck/1,029 tests and packaged/browser checks.
