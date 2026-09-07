@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { PromptProvenanceObserver } from "../prompt-provenance.js";
 import type { PiExtensionCommand, PiExtensionMessage, PiExtensionModuleName } from "@lasercode/protocol";
 import { panelsModule } from "./panels.js";
 import { accountUsageModule } from "./account-usage.js";
@@ -57,6 +58,7 @@ export function createPanelClaims(): PanelClaims {
 }
 
 export interface ModuleContext {
+  requestProvenance?: PromptProvenanceObserver;
   pi: ExtensionAPI;
   webSearch?: WebSearchHandler;
   /** Fresh context for the session_start currently activating modules. */

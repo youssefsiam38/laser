@@ -50,6 +50,10 @@ export function requestFieldLabel(field: RequestField): string {
 
 export function requestFieldText(value: unknown): string | undefined {
   if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    const texts = value.map(requestFieldText).filter((text): text is string => text !== undefined);
+    return texts.length ? texts.join("\n\n") : undefined;
+  }
   const object = record(value);
   if (typeof object?.text === "string") return object.text;
   const content = object?.content ?? object?.parts;

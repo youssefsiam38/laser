@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { act } from "react";
+import { createHash, webcrypto } from "node:crypto";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { LogEntry } from "@lasercode/protocol";
@@ -36,6 +37,26 @@ it("loads exact message-linked requests and exposes tools, parameters, full JSON
   await click("Parameters");expect(document.body.textContent).toContain("temperature");
   await click("Full JSON");expect(document.querySelector('[data-slot="json-viewer"]')).not.toBeNull();
   await act(async()=>document.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click());expect(close).toHaveBeenCalledOnce();
+});
+
+it("shows source markers with keyboard/touch details without duplicating instruction search or changing Markdown",async()=>{
+  vi.stubGlobal("crypto",webcrypto);
+  const instructions="Project **quartz** rule.";
+  const source={kind:"file" as const,label:"AGENTS.md",path:"/project/AGENTS.md"};
+  const captured={...entry,detail:{instructions},requestContext:{...entry.requestContext,instructionSources:[{path:["instructions"],sha256:createHash("sha256").update(instructions).digest("hex"),spans:[{start:0,end:instructions.length,source}]}]}};
+  await act(async()=>root.render(<ApiRequestDialog target={{kind:"log",entry:captured}} onClose={()=>{}}/>));
+  await act(async()=>{await new Promise(resolve=>setTimeout(resolve,20));});
+  expect(document.querySelector('[data-slot="confidence-marker"]')).not.toBeNull();
+  expect(document.querySelector('[data-request-search-content]')?.textContent).toBe(instructions);
+  const sourceButton=document.querySelector<HTMLButtonElement>('[aria-label="Recorded instruction sources"] button')!;
+  await act(async()=>{sourceButton.focus();sourceButton.click();});
+  expect(document.querySelector('[data-slot="popover-content"]')?.textContent).toContain("/project/AGENTS.md");
+  await act(async()=>sourceButton.click());
+  await search("quartz");expect(count()).toBe("1 / 1");
+  await search("AGENTS.md");expect(count()).toBe("No matches");
+  await click("Markdown");expect(document.querySelector(".md-body strong")?.textContent).toBe("quartz");
+  await search("quartz");expect(count()).toBe("1 / 1");
+  await click("Full request");expect(count()).toBe("1 / 1");
 });
 it("labels timestamp fallback and excludes captures linked to a different message",async()=>{
   const {requestContext:_,...legacy}=entry;

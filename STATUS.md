@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-07T09:25:00+03:00 · codex-2026-09-07-release-0211 · HEAD: `b1812fd`
+**Last updated:** 2026-09-07T13:57:00+03:00 · codex-2026-09-07-prompt-sources · HEAD: `529c266`
 
-**Current focus:** Stable 0.2.11 source, tag and release page published; artifact jobs not monitored. Separate M3 specification work remains independent.
+**Current focus:** M12-T74 complete: captured instruction provenance in the API request inspector. Separate M3 work remains independent.
 
 ## Milestones
 
@@ -23,7 +23,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M9 CLI | done | planned tasks complete |
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
-| M12 Product experience | done | 0.2.11 publication dispatched after clean source CI |
+| M12 Product experience | done | source-aware request inspector verified; not released |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
@@ -38,8 +38,8 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Recently done
 
+- M12-T74: workspace build/typecheck, 1,107 tests; real provider capture and four-layout source inspector review; `docs/prompt-provenance.md`.
 - M12-T73: `b1812fd`, `v0.2.11`, stable release page; clean CI 34090537860, 1,095 tests and 76 installer checks pass.
 - M12-T72: UI build/typecheck, 539 tests, real browser reuse/draft/first-send checks on desktop/phone in both themes.
 - M12-T71: UI build/typecheck, 517 tests, long-link and pending-connection browser review at desktop/phone widths in both themes.
 - M12-T70: `d229cac`, `v0.2.10`, release page published; source CI 34087083663 passed. Release workflow not monitored.
-- M12-T69: build/typecheck/1,065 tests, fresh packaged checks, native GNOME withdrawal and four-layout refresh/restart notices.

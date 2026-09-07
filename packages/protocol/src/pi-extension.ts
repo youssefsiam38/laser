@@ -59,6 +59,27 @@ export interface ProviderRequestContext {
   provider?: string;
   model?: string;
   api?: string;
+  /** Offsets refer to captured string leaves, never to files read by the UI. */
+  instructionSources?: InstructionSourceMap[];
+}
+
+export interface InstructionSource {
+  kind: "agent" | "file" | "skill" | "extension" | "environment" | "unrecorded";
+  label: string;
+  path?: string;
+}
+export interface InstructionSourceSpan {
+  /** UTF-16 offsets, matching browser text ranges. */
+  start: number;
+  end: number;
+  source: InstructionSource;
+}
+export interface InstructionSourceMap {
+  /** Exact JSON path to one string in the provider payload. */
+  path: Array<string | number>;
+  /** Reject stale ranges after redaction, truncation or later transformation. */
+  sha256: string;
+  spans: InstructionSourceSpan[];
 }
 
 export interface ProviderResponseRecord {

@@ -85,7 +85,8 @@ describe("paging", () => {
 
 describe("filters", () => {
   it("links every request loop to its exact prompt, scoped to the session", () => {
-    const context = { promptEntryId:"prompt-1",provider:"openai",model:"test",api:"openai-responses" };
+    const context = { promptEntryId:"prompt-1",provider:"openai",model:"test",api:"openai-responses",
+      instructionSources:[{path:["instructions"],sha256:"a".repeat(64),spans:[{start:0,end:5,source:{kind:"file" as const,label:"AGENTS.md",path:"/p/AGENTS.md"}}]}] };
     for (const session of ["/a", "/a", "/b"]) store.observeExtensionMessage("/p",session,{
       type:"lasercode/provider/request",at:new Date().toISOString(),context,payload:{model:"test",authorization:"secret",input:"x".repeat(3000)},
     });

@@ -34,7 +34,7 @@ import {
   type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
 import { goalExtensionPath, goalStateFromEntries } from "@lasercode/pi-goal";
-import { createCommandBus, createLaserExtension, toSessionGoal } from "@lasercode/pi-extension";
+import { createCommandBus, createLaserExtension, createPromptProvenanceObserver, toSessionGoal } from "@lasercode/pi-extension";
 import { PROJECT_DIR_NAME } from "@lasercode/protocol";
 import type {
   CommandInfo,
@@ -109,7 +109,8 @@ export class StableSdkDriver implements SessionDriver {
     const agentDir = options.agentDir ?? getAgentDir();
     const enabled = new Set<FeatureId>(options.features ?? ["subagents", "goals"]);
     const search = enabled.has("web-search") ? new WebSearchService(agentDir) : undefined;
-    const laser = createLaserExtension({
+    const createCompanion = (requestProvenance: ReturnType<typeof createPromptProvenanceObserver>) => createLaserExtension({
+      requestProvenance,
       ...(search ? { webSearch: search.search.bind(search) } : {}),
       send: (message) => {
         if (message.type === "lasercode/account-usage/state") this.accountUsage = message.state;
@@ -128,6 +129,8 @@ export class StableSdkDriver implements SessionDriver {
     });
 
     const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
+      const requestProvenance = createPromptProvenanceObserver();
+      const laser = createCompanion(requestProvenance);
       const settingsManager = SettingsManager.create(cwd, agentDir, {
         // Laser never asks the engine to discover `<cwd>/.pi`. Project
         // settings arrive from `.laser` as curated in-memory overrides below.
@@ -179,6 +182,7 @@ export class StableSdkDriver implements SessionDriver {
         settingsManager,
         resourceLoaderOptions: {
           extensionFactories,
+          extensionsOverride: requestProvenance.extensionsOverride,
           noExtensions: true,
           noSkills: true,
           noPromptTemplates: true,
@@ -191,6 +195,7 @@ export class StableSdkDriver implements SessionDriver {
           ...(additionalPromptTemplatePaths.length > 0 ? { additionalPromptTemplatePaths } : {}),
         },
       });
+      requestProvenance.setResourceLoader(services.resourceLoader);
       return {
         ...(await createAgentSessionFromServices({
           services,

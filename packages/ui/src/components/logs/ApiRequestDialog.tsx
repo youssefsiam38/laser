@@ -2,7 +2,7 @@
 import { TextMessagePartProvider } from "@assistant-ui/react";
 import { useEffect, useMemo, useState } from "react";
 import { Braces, Check, Copy, FileText, Info, ListFilter, MessagesSquare, RefreshCw, Search, ShieldCheck, Wrench } from "lucide-react";
-import type { LogEntry } from "@lasercode/protocol";
+import type { InstructionSourceMap, InstructionSourceSpan, LogEntry } from "@lasercode/protocol";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { JsonViewer } from "@/components/assistant-ui/elements/json-viewer";
@@ -20,6 +20,8 @@ import { inspectRequest, requestFieldLabel, requestFieldText, type RequestField 
 import { ConversationSearch } from "@/components/assistant-ui/elements/conversation-search";
 import { SyntaxHighlighter } from "@/components/assistant-ui/elements/shiki-highlighter";
 import { useRequestFind } from "./use-request-find.js";
+import { ConfidenceMarker } from "@/components/assistant-ui/elements/confidence-marker";
+import { requestSourceSpans } from "./request-sources.js";
 
 export type ApiRequestTarget = { kind: "log"; entry: LogEntry } | {
   kind: "message"; path: string; entryId?: string; at?: string; beforeAt?: string;
@@ -227,17 +229,27 @@ function RequestBody({entry}:{entry:LogEntry}) {
         {/* Full search indexes the payload ONCE, never a concatenation of tabs.
             Section cards index their main text, not previews or duplicate JSON. */}
         {fullSearch||section==="json"?<RequestJson value={payload} search={searching} literalText={truncated&&typeof payload==="string"?payload:undefined}/>
-          : fields.length ? <div className="flex flex-col gap-3">{fields.map(field=><RequestFieldCard key={`${entry.id}:${field.path}`} field={field} expanded={section==="instructions"} reveal={searching} markdown={(section==="instructions"||section==="conversation")&&contentView==="markdown"}/>)}</div>
+          : fields.length ? <div className="flex flex-col gap-3">{fields.map(field=><RequestFieldCard key={`${entry.id}:${field.path}`} field={field} expanded={section==="instructions"} reveal={searching} markdown={(section==="instructions"||section==="conversation")&&contentView==="markdown"} sources={section==="instructions"?entry.requestContext?.instructionSources:undefined}/>)}</div>
           : <p className="py-8 text-center text-sm text-ink-3">No fields recorded in this section. Provider-specific fields remain in Parameters and Full JSON.</p>}
       </div>
-      <p className="shrink-0 border-t border-line px-4 py-2 text-xs text-ink-3">Captured at the engine's pre-request hook, not a network trace. Later extension rewrites or transport-added headers are not represented. A message may trigger several calls and retries.</p>
+      <p className="shrink-0 border-t border-line px-4 py-2 text-xs text-ink-3">Captured at the engine's pre-request hook, not a network trace.{entry.requestContext?.instructionSources ? " Includes registered extension rewrites; transport-added headers are not represented." : " Instruction sources were not recorded for this capture."} A message may trigger several calls and retries.</p>
     </div>
   </div>;
 }
 
-function RequestFieldCard({field,expanded,markdown,reveal}:{field:RequestField;expanded:boolean;markdown:boolean;reveal:boolean}) {
+function RequestFieldCard({field,expanded,markdown,reveal,sources}:{field:RequestField;expanded:boolean;markdown:boolean;reveal:boolean;sources?:InstructionSourceMap[]|undefined}) {
   const [open,setOpen]=useState(expanded);
   const text=requestFieldText(field.value);
+  const [spans,setSpans]=useState<InstructionSourceSpan[]>();
+  useEffect(()=>{
+    let live=true;
+    setSpans(undefined);
+    if(sources)void requestSourceSpans(field,sources).then(value=>{if(live)setSpans(value);}).catch(()=>{
+      if(live&&text)setSpans([{start:0,end:text.length,source:{kind:"unrecorded",label:"Source verification unavailable on this connection"}}]);
+    });
+    return()=>{live=false;};
+  },[field,sources,text]);
+  const markdownBody=text!==undefined&&<TextMessagePartProvider text={text} isRunning={false}><MarkdownText /></TextMessagePartProvider>;
   const preview = text ?? (field.value === null || typeof field.value === "number" || typeof field.value === "boolean" ? JSON.stringify(field.value) : undefined);
   return <Collapsible open={reveal||open} onOpenChange={setOpen} className={cn(activityRow,"border border-line")}>
     <CollapsibleTrigger className={cn(activityTrigger,"py-2")}>
@@ -248,8 +260,8 @@ function RequestFieldCard({field,expanded,markdown,reveal}:{field:RequestField;e
     </CollapsibleTrigger>
     <CollapsibleContent className={collapsePanel}>
       <div className="flex min-w-0 flex-col gap-3 border-t border-line p-3">
-        {text!==undefined&&<div data-request-search-content>{markdown?<TextMessagePartProvider text={text} isRunning={false}><MarkdownText /></TextMessagePartProvider>
-          :<p className="whitespace-pre-wrap wrap-break-word text-sm leading-relaxed text-ink">{text}</p>}</div>}
+        {text!==undefined&&(spans?.length ? <ConfidenceMarker claims={spans.map((span,i)=>({id:String(i),text:text.slice(span.start,span.end),source:span.source}))}>{markdown?markdownBody:undefined}</ConfidenceMarker>
+          :<div data-request-search-content>{markdown?markdownBody:<p className="whitespace-pre-wrap wrap-break-word text-sm leading-relaxed text-ink">{text}</p>}</div>)}
         {typeof field.value!=="string"&&<RequestJson value={field.value} search={reveal&&text===undefined} />}
       </div>
     </CollapsibleContent>

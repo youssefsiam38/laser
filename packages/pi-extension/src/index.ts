@@ -18,6 +18,8 @@
  */
 
 import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
+import type { PromptProvenanceObserver } from "./prompt-provenance.js";
+export { createPromptProvenanceObserver } from "./prompt-provenance.js";
 import { WIRE_NAMESPACE } from "@lasercode/protocol";
 import {
   createPanelClaims,
@@ -41,6 +43,7 @@ export type {
 } from "./modules/index.js";
 
 export interface LaserExtensionOptions {
+  requestProvenance?: PromptProvenanceObserver;
   /** Credential/policy-aware search supplied only when its feature is enabled. */
   webSearch?: WebSearchHandler;
   /** Delivers messages to the worker (in-process callback). */
@@ -75,6 +78,7 @@ export function createLaserExtension(options: LaserExtensionOptions): InlineExte
         pi,
         send: options.send,
         panels: createPanelClaims(),
+        ...(options.requestProvenance ? { requestProvenance: options.requestProvenance } : {}),
         ...(options.webSearch ? { webSearch: options.webSearch } : {}),
         ...(options.commands ? { commands: options.commands } : {}),
       };

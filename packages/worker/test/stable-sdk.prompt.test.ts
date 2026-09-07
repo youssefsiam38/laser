@@ -88,6 +88,26 @@ afterEach(async () => {
 });
 
 describe("StableSdkDriver.prompt", () => {
+  it("captures instruction provenance from a real session and the actual sent payload", async () => {
+    const path = join(base, "project", "AGENTS.md");
+    writeFileSync(path, "Recorded project instruction.\n");
+    const captures: Extract<DriverEvent, { type: "extension" }>[] = [];
+    const settled = new Promise<void>(resolve => driver.subscribe(event => {
+      if (event.type === "extension" && event.message.type === "lasercode/provider/request") captures.push(event);
+      if (event.type === "update" && event.update.kind === "agent_settled") resolve();
+    }));
+    await driver.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir: join(base, "sessions") });
+    await driver.setModel({ provider: "stub", id: "stub-1" });
+    await driver.prompt([{ type: "text", text: "hello" }]);
+    await settled;
+    expect(captures).toHaveLength(1);
+    const message = captures[0]!.message;
+    if (message.type !== "lasercode/provider/request") throw new Error("Missing request");
+    expect(message.payload).toEqual(stub.requests[0]);
+    expect(message.context?.instructionSources?.flatMap(map => map.spans).some(span => span.source.path === path)).toBe(true);
+    expect(message.context?.instructionSources?.flatMap(map => map.spans).filter(span => span.source.kind === "unrecorded")).toEqual([]);
+  }, 60_000);
+
   it("expands an explicitly invoked skill through Pi before calling the provider", async () => {
     const skillDir = join(base, "agent", "skills", "explicit-expansion-test");
     mkdirSync(skillDir, { recursive: true });

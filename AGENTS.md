@@ -516,6 +516,21 @@ conversation value-only selector there. Section search highlights rendered
 content once (not its duplicate preview/JSON), and request find owns separate
 native highlight names and modal-only scrolling/keyboard handling.
 
+### Instruction provenance regression checks
+
+- Capture sources from Pi's loaded prompt options and observed extension writes,
+  never by reopening current files or guessing from prompt headings. Verify the
+  pinned assembly adapter against the real engine builder when upgrading Pi.
+- Capture after all registered pre-request handlers, including in-place edits.
+  Keep observers isolated per runtime; diagnostic code must not alter requests.
+- Retain only source ranges/identities and digests beside the log, not a second
+  unredacted prompt. Validate retained text before applying ranges. Old captures,
+  changed text and unobserved overrides must not inherit invented attribution.
+- Source markers cannot change copied text, duplicate request-search hits, or
+  split the chat Markdown renderer into independently parsed source fragments.
+  Check keyboard and touch source details, long skill lists, and both themes.
+  See `docs/prompt-provenance.md`.
+
 ## 7. Commits
 
 - Commit only when the task owner asks or when a task reaches `done`.
