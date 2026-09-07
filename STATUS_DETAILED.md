@@ -360,9 +360,10 @@ lane T's own if both were written.
 
 | M12-T72 | Reuse an unstarted session when choosing New session | done | codex-2026-09-07-empty-session | UI build/typecheck; 539 UI tests; real host/browser desktop/phone checks in both themes | see notes |
 
-| M12-T73 | Release stable 0.2.11 | in-progress | codex-2026-09-07-release-0211 | — | see notes |
+| M12-T73 | Release stable 0.2.11 | done | codex-2026-09-07-release-0211 | `b1812fd`, `v0.2.11`; clean source CI 34090537860 passed; stable release page published | see notes |
 
 #### M12-T73 notes
+- 2026-09-07 done: source `b1812fd456ebcae42f863bda76315f1fddc5e0f0` and immutable `v0.2.11` pushed after clean source CI 34090537860 succeeded. https://github.com/youssefsiam38/laser/releases/tag/v0.2.11 is published (not draft, not prerelease), with curated notes and `latest=false` until verified artifacts land. Tag dispatches the existing architecture/signing/native-feed workflow. Per user instruction, artifact jobs were not monitored and download/feed readiness is not claimed. Unrelated M3 specification/scratch files remain uncommitted; production processes untouched.
 - 2026-09-07 checkpoint: staged 0.2.11 passes `pnpm identity:check`, all builds/typechecks and 1,095 workspace tests (`/tmp/release-0211-verify.log`), plus 76 installer checks (`/tmp/release-0211-install.log`). Existing desktop/phone dark/light evidence remains in M12-T71/T72. Next publish source, satisfy the required clean-source CI gate, then tag and publish the page without waiting for release artifact jobs.
 - 2026-09-07 claimed: release the committed M12-T71/T72 changes as stable 0.2.11. Stage only release-owned files, run identity/workspace/installer gates, publish source and immutable tag, then create the release page without monitoring artifact jobs. Preserve the separate M3 specification and scratch work; do not restart the production app/host.
 
