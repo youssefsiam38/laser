@@ -364,9 +364,10 @@ lane T's own if both were written.
 
 | M12-T74 | Record and display instruction provenance | done | codex-2026-09-07-prompt-sources | workspace build/typecheck; 1,107 tests; real provider capture; four-layout browser review; `docs/prompt-provenance.md` | see notes |
 
-| M12-T75 | Release stable 0.2.12 | in-progress | codex-2026-09-07-release-0212 | — | see notes |
+| M12-T75 | Release stable 0.2.12 | done | codex-2026-09-07-release-0212 | `e898598`; clean CI 34114769530; `v0.2.12`; published stable release page | see notes |
 
 #### M12-T75 notes
+- 2026-09-07 done: source `e898598cd02ac7b182d4bed0f356cf203f69cdfc` and immutable `v0.2.12` pushed after source CI 34114769530 succeeded. https://github.com/youssefsiam38/laser/releases/tag/v0.2.12 is published, not draft or prerelease. Latest promotion waits for the existing pipeline's verified artifacts. Artifact jobs were not monitored; download/feed readiness is not claimed. Unrelated M3 staged work and production processes remain untouched.
 - 2026-09-07 checkpoint: 0.2.12 passes all workspace builds/typechecks and 1,107 tests (`/tmp/release-0212-verify.log`), identity validation and 76 installer checks (`/tmp/release-0212-install.log`). Feature desktop/phone and both-theme evidence is recorded in M12-T74. Only release-owned files are staged in an isolated index; next push source and satisfy clean CI before tagging.
 - 2026-09-07 claimed: release committed instruction provenance as 0.2.12; preserve unrelated staged M3 work with an isolated index, verify source and installer, satisfy source CI before tagging, and publish the stable page without monitoring artifact jobs. Production processes remain untouched.
 
