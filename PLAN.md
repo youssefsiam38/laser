@@ -483,6 +483,7 @@ Depends on: M1, M2-T4, M4, M5-T1, M11.
 | M12-T58 | Highlight source code in file tools | read, write and edit bodies infer a supported language from the file path and use the existing token-driven Shiki renderer without losing diff semantics, search targets or plain-text fallback |
 | M12-T59 | Repair authenticated subscription allowance retrieval | the verified route succeeds with existing credentials; failures explain correct recovery; quota buckets retain identities, durations and resets; endpoint-specific tests and an authenticated smoke check pass |
 | M12-T60 | Release stable 0.2.7 | verified quota repair, accumulated search improvements and user-supplied highlighting are committed; version/tag agree; tag and release dispatched without waiting for Actions |
+| M12-T61 | Explain and group account allowances | compact documented allowances in chat; Settings → Usage retains every dynamic window and credits; related windows share a heading; saved reset display switches between time remaining and exact local date/time; accessible help uses documented meanings and honest unknown-bucket fallback |
 
 ---
 

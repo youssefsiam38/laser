@@ -13,30 +13,32 @@ import { cn } from "@/lib/utils";
 export interface QuotaBannerProps extends Omit<ComponentProps<"div">, "children"> {
   label: string;
   bucketLabel?: string;
+  hideBucketLabel?: boolean;
+  compact?: boolean;
   usedPercent: number;
   resetsLabel: string;
 }
 
-export function QuotaBanner({ label, bucketLabel, usedPercent, resetsLabel, className, ...props }: QuotaBannerProps) {
+export function QuotaBanner({ label, bucketLabel, hideBucketLabel, compact = false, usedPercent, resetsLabel, className, ...props }: QuotaBannerProps) {
   const used = Math.min(100, Math.max(0, usedPercent));
   const remaining = Math.max(0, 100 - used);
   const tone = remaining <= 10 ? "danger" : remaining <= 30 ? "attention" : "ok";
   return (
     <div data-slot="quota-banner" className={cn("rounded-xl border border-line bg-surface-2/70 p-3", className)} {...props}>
       <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          {bucketLabel ? <p className="mb-1 break-words text-xs font-medium leading-4 text-ink" title={bucketLabel}>{bucketLabel}</p> : null}
+        <div className={cn("min-w-0", compact && "flex w-full items-center justify-between gap-2")}>
+          {bucketLabel && !hideBucketLabel ? <p className="mb-1 break-words text-xs font-medium leading-4 text-ink" title={bucketLabel}>{bucketLabel}</p> : null}
           <p className="truncate text-xs leading-4 text-ink-3">{label}</p>
-          <p className="mt-0.5 font-mono text-lg font-semibold text-ink tnum">{formatPercent(remaining)} left</p>
+          <p className={cn("shrink-0 font-mono font-semibold text-ink tnum", compact ? "text-xs" : "mt-0.5 text-lg")}>{formatPercent(remaining)} left</p>
         </div>
-        <span
+        {!compact && <span
           className={cn(
             "flex size-9 shrink-0 items-center justify-center rounded-xl bg-surface",
             tone === "danger" ? "text-danger" : tone === "attention" ? "text-attention" : "text-ok",
           )}
         >
           <Gauge className="size-4" aria-hidden="true" />
-        </span>
+        </span>}
       </div>
       <div
         role="progressbar"
@@ -45,7 +47,7 @@ export function QuotaBanner({ label, bucketLabel, usedPercent, resetsLabel, clas
         aria-valuemax={100}
         aria-valuenow={Math.round(remaining)}
         aria-valuetext={`${formatPercent(remaining)} left; ${formatPercent(used)} used`}
-        className="mt-3 h-2 overflow-hidden rounded-full bg-surface"
+        className={cn("overflow-hidden rounded-full bg-surface", compact ? "mt-2 h-1" : "mt-3 h-2")}
       >
         <span
           className={cn(
@@ -55,9 +57,9 @@ export function QuotaBanner({ label, bucketLabel, usedPercent, resetsLabel, clas
           style={{ width: `${remaining}%` }}
         />
       </div>
-      <div className="mt-2 flex items-center justify-between gap-2 text-xs leading-4 text-ink-3">
-        <span>{formatPercent(used)} used</span>
-        <span className="flex items-center gap-1 text-end"><Clock3 className="size-3" aria-hidden="true" />{resetsLabel}</span>
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs leading-4 text-ink-3">
+        {!compact && <span>{formatPercent(used)} used</span>}
+        <span className="flex min-w-0 items-start gap-1"><Clock3 className="mt-0.5 size-3 shrink-0" aria-hidden="true" /><span>{resetsLabel}</span></span>
       </div>
     </div>
   );

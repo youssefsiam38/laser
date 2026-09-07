@@ -34,16 +34,16 @@ import { ModelsTab } from "./ModelsTab.js";
 import { FeaturesScreen } from "./FeaturesScreen.js";
 import { SettingsForm } from "./SettingsForm.js";
 import { TrustTab } from "./TrustTab.js";
+import { UsageTab } from "./UsageTab.js";
 
-type Tab = "general" | "advanced" | "appearance" | "features" | "models" | "keyboard" | "trust" | "device";
+type Tab = "general" | "advanced" | "appearance" | "features" | "models" | "usage" | "keyboard" | "trust" | "device";
 
 /**
- * Four of these are per project and three are not. `PROJECTLESS` is the list
- * of the three, so a screen that has nothing to do with a project directory
- * stays reachable before one is chosen: how the app looks, which keys it
- * answers to, and what this browser is allowed to do.
+ * `PROJECTLESS` lists tabs that do not require a selected project, keeping
+ * appearance, shortcuts, account usage and browser permissions reachable
+ * before a project is chosen.
  */
-const PROJECTLESS: readonly Tab[] = ["appearance", "keyboard", "trust", "device"];
+const PROJECTLESS: readonly Tab[] = ["appearance", "keyboard", "trust", "device", "usage"];
 
 /**
  * Extensions "for every project" and the provider/model settings are global —
@@ -62,6 +62,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "appearance", label: "Appearance" },
   { id: "features", label: "Features" },
   { id: "models", label: "Providers and models" },
+  { id: "usage", label: "Usage" },
   { id: "keyboard", label: "Help and shortcuts" },
   { id: "trust", label: "Trust" },
   { id: "device", label: "This device" },
@@ -96,7 +97,7 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
     };
   }, [client, project, setupCwd]);
 
-  const cwd = project ?? (GLOBAL_THROUGH_SETUP.includes(tab) ? setupCwd : undefined);
+  const cwd = tab === "usage" ? undefined : project ?? (GLOBAL_THROUGH_SETUP.includes(tab) ? setupCwd : undefined);
   const cwdRef = useRef(cwd);
   cwdRef.current = cwd;
 
@@ -178,15 +179,15 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
             </Button>
           ))}
         </div>
-        <div className="ms-auto flex items-center gap-2">
+        {tab !== "usage" && <div className="ms-auto flex items-center gap-2">
           {loading && <GenerationLoader label="Loading settings" layout="inline" />}
           <TooltipIconButton tooltip="Reload settings" onClick={() => void load()}>
             <RefreshCw />
           </TooltipIconButton>
-        </div>
+        </div>}
       </div>
 
-      {error && !needsProject && (
+      {error && !needsProject && tab !== "usage" && (
         <div className="m-3 flex items-start gap-2 rounded-lg bg-[color-mix(in_oklab,var(--danger)_10%,transparent)] px-3 py-2 text-sm text-danger">
           <AlertTriangle className="mt-0.5 size-4 shrink-0" />
           <div className="min-w-0">
@@ -211,6 +212,7 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
             {tab === "appearance" && <AppearanceTab />}
             {tab === "features" && <FeaturesScreen {...(cwd ? { cwd } : {})} />}
             {tab === "models" && cwd && <ModelsTab cwd={cwd} snapshot={snapshot} onApply={apply} />}
+            {tab === "usage" && <UsageTab />}
             {tab === "keyboard" && <KeyboardTab cwd={cwd} />}
             {tab === "trust" && <TrustTab />}
             {tab === "device" && <DeviceTab />}

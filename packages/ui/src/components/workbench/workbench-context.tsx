@@ -17,7 +17,7 @@ export type WorkbenchPage = "settings" | "logs";
  * knows the fix — a rejected credential opening "Providers and models" — so the
  * plain `open("settings")` still lands where it always did.
  */
-export type SettingsTab = "general" | "advanced" | "appearance" | "features" | "models" | "keyboard" | "trust" | "device";
+export type SettingsTab = "general" | "advanced" | "appearance" | "features" | "models" | "usage" | "keyboard" | "trust" | "device";
 
 export interface Workbench {
   page: WorkbenchPage | null;

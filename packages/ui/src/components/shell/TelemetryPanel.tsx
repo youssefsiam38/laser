@@ -1,6 +1,5 @@
 import type * as React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AccountCredits, AccountUsageState, AccountUsageWindow } from "@lasercode/protocol";
 import {
   Activity,
   ArrowDownToLine,
@@ -29,7 +28,8 @@ import { CostMeter } from "@/components/assistant-ui/elements/cost-meter";
 import { FileTree, useSessionFileChanges } from "@/components/assistant-ui/elements/file-tree";
 import { ProviderLogo } from "@/components/assistant-ui/elements/logos";
 import { NumberTicker } from "@/components/assistant-ui/elements/number-ticker";
-import { QuotaBanner } from "@/components/assistant-ui/elements/quota-banner";
+import { AccountUsage } from "./AccountUsage.js";
+import { useWorkbench } from "@/components/workbench/workbench-context";
 import { ToolTimeline, useThreadToolTimeline } from "@/components/assistant-ui/elements/tool-timeline";
 import { StatusRing } from "@/components/status";
 import { Badge } from "@/components/ui/badge";
@@ -287,6 +287,7 @@ function TokenComposition({ usage }: { usage: UsageTotals }) {
 type UsageView = "account" | "api";
 
 function UsageSection() {
+  const workbench = useWorkbench();
   const view = useLaserView();
   const entries = view?.entries;
   const panelEntries = usePanelEntries(view?.path);
@@ -315,7 +316,10 @@ function UsageSection() {
     >
       {mode === "mixed" ? <UsageTabs active={active} onChange={setPreferred} /> : null}
       {active === "account" ? (
-        <AccountUsage state={accountUsage} />
+        <>
+          <AccountUsage state={accountUsage} compact />
+          <Button variant="link" size="sm" className="justify-start text-xs" onClick={() => workbench.open("settings", "usage")}>All usage details <ChevronRight className="size-3" /></Button>
+        </>
       ) : (
         <ApiUsage entries={entries} background={background} usage={apiUsage} />
       )}
@@ -387,103 +391,6 @@ function ApiUsage({
       <p className="text-xs leading-4 text-ink-3">No API spend recorded. Totals appear after an API-billed response.</p>
     )
   );
-}
-
-function AccountUsage({ state }: { state: AccountUsageState | undefined }) {
-  const { actions } = useLaserStable();
-  const snapshot = state?.snapshot;
-  const loading = state?.status === "loading";
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <p className="text-xs font-medium text-ink">Subscription allowance</p>
-          <p className="truncate text-xs leading-4 text-ink-3">
-            {snapshot ? `Updated ${relativeTime(snapshot.fetchedAt)}` : "Current across every app using this account"}
-          </p>
-        </div>
-        <TooltipIconButton
-          tooltip="Refresh account allowance"
-          size="icon-sm"
-          variant="outline"
-          disabled={loading}
-          onClick={() => void actions.refreshAccountUsage()}
-        >
-          <RefreshCw className={cn(loading && "motion-safe:animate-sweep")} />
-        </TooltipIconButton>
-      </div>
-
-      {snapshot ? (
-        <>
-          <div className="grid gap-2">
-            {snapshot.windows.map((window) => <AllowanceWindow key={`${window.limitId ?? "codex"}:${window.kind}`} window={window} />)}
-          </div>
-          {snapshot.credits ? <CreditsCard credits={snapshot.credits} /> : null}
-          {state?.status === "unavailable" && state.message ? (
-            <p role="status" className="text-xs leading-4 text-attention">{state.message} Showing the last update.</p>
-          ) : null}
-        </>
-      ) : (
-        <InstrumentCard className="flex items-start gap-3">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-surface text-ink-3">
-            <Landmark className="size-4" aria-hidden="true" />
-          </span>
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-ink">{loading ? "Reading allowance…" : "Allowance unavailable"}</p>
-            <p className="mt-0.5 text-xs leading-4 text-ink-3">
-              {state?.message ?? "Refresh to read the latest limits from your connected account."}
-            </p>
-          </div>
-        </InstrumentCard>
-      )}
-    </div>
-  );
-}
-
-function AllowanceWindow({ window }: { window: AccountUsageWindow }) {
-  const label = allowanceWindowLabel(window.windowDurationMins, window.kind);
-  return (
-    <QuotaBanner label={label} bucketLabel={window.limitName ?? window.limitId ?? "Codex"} usedPercent={window.usedPercent} resetsLabel={resetLabel(window.resetsAt)} />
-  );
-}
-
-function CreditsCard({ credits }: { credits: AccountCredits }) {
-  const value = credits.unlimited ? "Unlimited" : credits.balance ?? (credits.hasCredits ? "Available" : "None");
-  return (
-    <InstrumentCard className="flex items-center gap-3">
-      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-surface text-live">
-        <CircleDollarSign className="size-5" aria-hidden="true" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="text-xs leading-4 text-ink-3">Purchased credits</p>
-        <p className="truncate font-mono text-sm font-semibold text-ink tnum">{value}</p>
-      </div>
-    </InstrumentCard>
-  );
-}
-
-function allowanceWindowLabel(minutes: number | undefined, kind: string): string {
-  if (minutes !== undefined && Math.abs(minutes - 300) <= 2) return "5-hour allowance";
-  if (minutes !== undefined && Math.abs(minutes - 10_080) <= 2) return "Weekly allowance";
-  if (minutes !== undefined && minutes < 1_440) return `${Math.round(minutes / 60)}-hour allowance`;
-  if (minutes !== undefined) return `${Math.round(minutes / 1_440)}-day allowance`;
-  return kind === "primary" ? "Primary allowance" : kind === "secondary" ? "Secondary allowance" : "Account allowance";
-}
-
-function resetLabel(timestamp: number | undefined): string {
-  if (timestamp === undefined) return "Reset unavailable";
-  const date = new Date(timestamp * 1_000);
-  if (Number.isNaN(date.getTime())) return "Reset unavailable";
-  return `Resets ${date.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}`;
-}
-
-function relativeTime(value: string): string {
-  const elapsed = Date.now() - Date.parse(value);
-  if (!Number.isFinite(elapsed) || elapsed < 0) return "just now";
-  const minutes = Math.floor(elapsed / 60_000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  return `${Math.floor(minutes / 60)}h ago`;
 }
 
 

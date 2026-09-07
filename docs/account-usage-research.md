@@ -103,3 +103,19 @@ not silently depend on a user's global CLI or its possibly different account.
 For this confirmed defect, the direct repair is smaller and preserves the Pi
 architecture. Reconsider the app-server approach if direct endpoint maintenance
 becomes a recurring burden.
+
+## Allowance presentation (M12-T61)
+
+- [Official speed documentation](https://learn.chatgpt.com/docs/agent-configuration/speed)
+  describes Spark as a separate, faster but less-capable interactive coding model
+  with its own limits—not standard Codex in fast mode.
+- [Official pricing documentation](https://learn.chatgpt.com/docs/pricing) explains
+  shared local/cloud usage, possible weekly limits, separate Spark limits,
+  GitHub-specific code-review allowances and credits after included limits.
+- No public definition of `gpt-reserve` was found in the reviewed official
+  sources. Do not invent its purpose from `base_model_inference` or its label.
+- Keep all server windows in Settings → Usage, including unknown buckets.
+  Only documented buckets belong in the compact chat rail. Group by stable ID
+  without combining percentages; duration is a period within an allowance.
+  Reset timestamps are provider data: an expired countdown means refresh is
+  needed, not proof the allowance has renewed.

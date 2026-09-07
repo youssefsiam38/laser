@@ -344,6 +344,7 @@ lane T's own if both were written.
 | M12-T58 | Highlight source code in file tools | done | codex-2026-09-07-tool-syntax | 467 UI tests; UI typecheck/build; desktop/phone dark/light browser review | see notes |
 | M12-T59 | Repair authenticated subscription allowance retrieval | done | codex-2026-09-07-quota-release | `pnpm verify` (979 tests); rebuilt-module authenticated initial/manual refresh HTTP 200; four-layout quota review | see notes |
 | M12-T60 | Release stable 0.2.7 | done | codex-2026-09-07-quota-release | `e1fd1fe`; `v0.2.7`; https://github.com/youssefsiam38/laser/releases/tag/v0.2.7; staged `pnpm verify` (979 tests) | see notes |
+| M12-T61 | Explain and group account allowances | done | codex-2026-09-07-quota-ux | 480 UI tests; UI typecheck/build; compact/full desktop/phone dark/light browser review | see notes |
 
 #### M12-T1 notes
 - 2026-09-06 claimed: audit the shipped logo assets, theme presets, assistant-ui
@@ -1036,6 +1037,12 @@ lane T's own if both were written.
 - 2026-09-07 claimed: include the user's completed highlighting and accumulated search fixes; run the workspace gate, push the release commit/tag and create the release without monitoring Actions. Unrelated scratch files remain untouched.
 - 2026-09-07 checkpoint: all workspace versions are 0.2.7. Initial full gate passed build/typecheck/979 tests; authenticated rebuilt-module verification passed twice and four-layout quota review is complete. Staging release-owned changes before repeating the gate. Independent M3-T10 guide/planning edits and user scratch remain outside this release. User explicitly overrides the usual CI-wait step: dispatch only, no Actions polling.
 - 2026-09-07 done: staged full build/typecheck/979-test gate passed again (`/tmp/laser-027-staged-verify.log`); commit `e1fd1fe` and annotated tag `v0.2.7` pushed atomically. Stable release page created at https://github.com/youssefsiam38/laser/releases/tag/v0.2.7 with update guidance, quota fix and user highlighting. The page is deliberately not Latest until the existing release workflow uploads verified installers and updates feeds. Actions were neither waited on nor monitored, as requested; installer availability is not claimed. All temporary QA processes stopped; unrelated guide/planning edits and scratch files remain uncommitted.
+
+#### M12-T61 notes
+- 2026-09-07 claimed: reuse the adopted QuotaBanner for linked windows, add reset-display choice and keyboard/touch help, and research provider meanings without guessing undocumented reserve semantics. UI-only change; no new release requested.
+- 2026-09-07 revised from user feedback: keep the chat rail compact and exclude undocumented buckets. Add Settings → Usage as the full dynamic view, including reserve, unknown buckets and credits. Both views share grouping, help, reset formatting and the host-persisted display choice; no second data parser.
+- 2026-09-07 checkpoint: compact/full allowance components reviewed at desktop and phone widths in both themes; related windows, unknown buckets, exact dates, keyboard radio selection and dismissible source-linked help verified. No horizontal overflow. Preference persistence and full settings wiring have regression coverage. Final UI gate pending.
+- 2026-09-07 done: 480 UI tests, UI typecheck and production build pass (`/tmp/laser-quota-ux-final-{tests,build}.log`). Compact and full components reviewed at 1280×900 and 390×844 in dark/light (`/tmp/laser-quota-ux-{chat,settings}-{desktop,phone}-{dark,light}.png`); keyboard radio navigation and Escape/focus restoration pass. Settings wiring, unknown-bucket retention and host-stored preferences have regression tests. Temporary QA files/server/browser removed; installed app untouched. Version remains 0.2.7; no push, tag or release requested.
 
 ## MX · Cross-cutting
 
@@ -2405,6 +2412,12 @@ searchable value regions and unknown/plain-text files retain their existing beha
 Decision: add M12-T59 and M12-T60. Keep Pi-owned authentication and query the verified account usage endpoint directly. Preserve named buckets as independent windows in the neutral protocol; never sum their percentages. Include user highlighting in stable 0.2.7 and dispatch without waiting for Actions.
 Why: authenticated probes reproduce a false reconnect error before the working endpoint is reached; a second CLI dependency is unnecessary for this fix.
 Consequences: endpoint-specific tests and authenticated smoke checks supplement mocked parser tests. Security challenges are not authentication failures. The endpoint remains an isolated maintenance boundary, not a claimed public REST contract.
+
+### D-112 · 2026-09-07 · Explain account buckets without inventing provider semantics
+
+Decision: add M12-T61. Group normalized windows by stable bucket identity, retaining every window and separate percentages; use names only when no identity exists. Add a shared reset-time display choice and source-linked help. Unknown provider buckets remain visible with qualified copy, not a guessed model or credit balance.
+Why: window duration is a view of one allowance, not a different model; OpenAI documents Spark and general usage, but no public definition of `gpt-reserve` was found.
+Consequences: Settings → Usage retains every dynamic window and purchased credits. The compact chat view shows only documented buckets, with a link to the full settings view. Exact reset times include the local date and timezone; the machine-persisted display preference is shared between views. Elapsed timestamps prompt refresh rather than claiming a renewed allowance.
 
 ## Status edits log
 
