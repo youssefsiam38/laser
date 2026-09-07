@@ -12,6 +12,9 @@ export type PiExtensionModuleName = "provider-log" | "account-usage" | "subagent
 
 /** One server-owned allowance window for an account-authenticated provider. */
 export interface AccountUsageWindow {
+  /** Server-owned allowance bucket; distinct buckets must never be summed. */
+  limitId?: string;
+  limitName?: string;
   kind: "primary" | "secondary" | "other";
   usedPercent: number;
   windowDurationMins?: number;

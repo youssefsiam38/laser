@@ -478,6 +478,11 @@ Depends on: M1, M2-T4, M4, M5-T1, M11.
 | M12-T53 | Compact project tree and single-location session attention | rounded single-line session rows nested under quiet folders; persistent chat pins have one canonical row; working sessions have a visible spinner; no duplicated inbox or project attention highlights; responsive themes and keyboard paths verified |
 | M12-T54 | Search full conversations and navigate exact matches | Ctrl/Cmd+F opens session find with live count and previous/next; Ctrl/Cmd+Shift+F and the sidebar magnifier search saved history with highlighted in-flow excerpts; older date ranges expand on demand; user messages rank above replies, then reasoning/tools; keyboard, stale responses and responsive themes are verified |
 | M12-T55 | Remove transcript day separators | no Today/Yesterday/date divider is rendered between messages; every message keeps its exact timestamp and the transcript spacing remains compact |
+| M12-T56 | Search displayed tool content rather than payload structure | session and history search share a documented searchable-content contract; tool field names and hidden metadata do not produce hits; visible values can be revealed and highlighted |
+| M12-T57 | Navigate exact matches in captured API requests | inspector section search highlights content in place; full-request search includes all retained JSON keys and values; counts, next/previous and keyboard navigation stay inside the modal |
+| M12-T58 | Highlight source code in file tools | read, write and edit bodies infer a supported language from the file path and use the existing token-driven Shiki renderer without losing diff semantics, search targets or plain-text fallback |
+| M12-T59 | Repair authenticated subscription allowance retrieval | the verified route succeeds with existing credentials; failures explain correct recovery; quota buckets retain identities, durations and resets; endpoint-specific tests and an authenticated smoke check pass |
+| M12-T60 | Release stable 0.2.7 | verified quota repair, accumulated search improvements and user-supplied highlighting are committed; version/tag agree; tag and release dispatched without waiting for Actions |
 
 ---
 

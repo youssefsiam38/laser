@@ -1,3 +1,5 @@
+import { toolSearchContent } from "@lasercode/protocol";
+
 export interface TextMatch { start: number; end: number }
 
 /** Literal, case-insensitive search. Escapes and regex metacharacters are data. */
@@ -15,9 +17,9 @@ export function matchExcerpt(text: string, match: TextMatch) {
 }
 
 /** Explicit textual channels; never index images or arbitrary provider metadata. */
-export function partSearchText(part: { type: string; [key: string]: unknown }): string {
-  if (part.type === "text" || part.type === "reasoning") return typeof part.text === "string" ? part.text : "";
-  if (part.type !== "tool-call") return "";
+export function partSearchContent(part: { type: string; [key: string]: unknown }): string[] {
+  if (part.type === "text" || part.type === "reasoning") return typeof part.text === "string" ? [part.text] : [];
+  if (part.type !== "tool-call") return [];
   const result = part.result ?? (part.artifact as { partialOutput?: unknown } | undefined)?.partialOutput;
-  return `${part.toolName ?? ""}\n${JSON.stringify(part.args ?? {})}\n${typeof result === "string" ? result : JSON.stringify(result ?? "")}`;
+  return toolSearchContent({ name: typeof part.toolName === "string" ? part.toolName : "", args: part.args, result, isError: part.isError === true });
 }

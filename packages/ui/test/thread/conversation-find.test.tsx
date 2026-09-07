@@ -7,6 +7,9 @@ import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { useConversationFind, findTextRanges } from "../../src/components/thread/use-conversation-find.js";
 import { SearchMessageContext, openConversationFind } from "../../src/components/thread/search-state.js";
 import { ToolGroupRoot, ToolGroupTrigger, ToolGroupContent } from "../../src/components/assistant-ui/elements/tool-group.aui.js";
+import { JsonViewer } from "../../src/components/assistant-ui/elements/json-viewer.js";
+import { ToolFallbackResult } from "../../src/components/assistant-ui/elements/tool-fallback.aui.js";
+import { toolSearchContent } from "@lasercode/protocol";
 
 let root: Root;
 let container: HTMLDivElement;
@@ -73,4 +76,16 @@ it("opens the excerpt's source instead of an earlier lower-priority mention", as
   await act(async () => openConversationFind("Apple", "user"));
   expect(container.querySelector('[role="status"]')?.textContent).toBe("2 / 3");
   expect(container.querySelector('[data-slot="tool-group-root"]')?.getAttribute("data-state")).toBe("closed");
+});
+it("reveals nested JSON values and highlights them, not identical keys, restoring folds after find", async () => {
+  const args = { command: "hello", nested: { command: "command value", deeper: { text: "another command" } } };
+  const render = (reveal: boolean) => <SearchMessageContext value={reveal}><div data-search-tool><span>command status</span><JsonViewer value={args} expandedDepth={1} /><ToolFallbackResult result={{ content: [{ type: "text", text: "command output" }], details: { hidden: "command" } }} /></div></SearchMessageContext>;
+  await act(async () => root.render(render(false)));
+  expect(findTextRanges(container, "command").map(r => r.toString())).toEqual(["command"]);
+  await act(async () => root.render(render(true)));
+  const content = toolSearchContent({ name: "future_tool", args, result: "command output" });
+  expect(findTextRanges(container, "command").map(r => r.toString())).toEqual(content.flatMap(text => text.match(/command/g) ?? []));
+  expect(findTextRanges(container, "helloanother")).toEqual([]);
+  await act(async () => root.render(render(false)));
+  expect(findTextRanges(container, "command")).toHaveLength(1);
 });

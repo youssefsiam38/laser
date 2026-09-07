@@ -822,14 +822,14 @@
   }
 }
 
-::highlight(conversation-matches) {
+::highlight(conversation-matches), ::highlight(request-matches) {
   background-color: color-mix(in oklab, var(--attention) 25%, transparent);
   color: var(--ink);
 }
 [data-message-id][data-search-selected] {
   content-visibility: visible;
 }
-::highlight(conversation-current) {
+::highlight(conversation-current), ::highlight(request-current) {
   background-color: var(--attention);
   color: var(--bg);
 }

@@ -56,7 +56,7 @@ export function ToolError({ message, name, target, compact = false, className, .
           ) : null}
         </div>
       ) : null}
-      <pre className="max-h-80 overflow-auto rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs leading-sm wrap-break-word whitespace-pre-wrap text-danger">
+      <pre data-search-content className="max-h-80 overflow-auto rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs leading-sm wrap-break-word whitespace-pre-wrap text-danger">
         {text}
       </pre>
     </div>

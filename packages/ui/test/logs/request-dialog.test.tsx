@@ -3,7 +3,10 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { LogEntry } from "@lasercode/protocol";
-import { ApiRequestDialog } from "../../src/components/logs/ApiRequestDialog.js";
+import { ApiRequestDialog as Inspector } from "../../src/components/logs/ApiRequestDialog.js";
+import { TooltipProvider } from "../../src/components/ui/tooltip.js";
+import type { ComponentProps } from "react";
+function ApiRequestDialog(props: ComponentProps<typeof Inspector>) { return <TooltipProvider><Inspector {...props}/></TooltipProvider>; }
 
 const client=vi.hoisted(()=>({request:vi.fn(),subscribe:vi.fn(()=>()=>{})}));
 vi.mock("@/runtime",()=>({useLaserStable:()=>({client})}));
@@ -12,8 +15,11 @@ let root:Root;
 const entry:LogEntry={id:1,at:"2026-09-06T10:00:00.000Z",section:"provider",kind:"provider_request",level:"info",summary:"test-model",sessionPath:"/session",
   requestContext:{promptEntryId:"user-1",provider:"openai",model:"test-model"},
   detail:{instructions:"Unique system instructions",tools:[{name:"read",parameters:{type:"object"}}],input:[{role:"user",content:"hello"}],temperature:0.2}};
-beforeEach(()=>{globalThis.IS_REACT_ACT_ENVIRONMENT=true;client.request.mockReset();client.subscribe.mockClear();container=document.createElement("div");document.body.append(container);root=createRoot(container);});
-afterEach(async()=>{await act(async()=>root.unmount());container.remove();});
+beforeEach(()=>{globalThis.IS_REACT_ACT_ENVIRONMENT=true;client.request.mockReset();client.request.mockResolvedValue({entries:[]});client.subscribe.mockClear();container=document.createElement("div");document.body.append(container);root=createRoot(container);
+  vi.stubGlobal("CSS",{...CSS,highlights:new Map()});vi.stubGlobal("Highlight",class extends Set<Range>{constructor(...ranges:Range[]){super(ranges);}});
+  vi.spyOn(Range.prototype,"getBoundingClientRect").mockReturnValue(new DOMRect(0,0,10,10));
+});
+afterEach(async()=>{await act(async()=>root.unmount());container.remove();vi.restoreAllMocks();vi.unstubAllGlobals();});
 const click=async(text:string)=>{const button=[...document.body.querySelectorAll("button")].find(button=>button.textContent?.includes(text));expect(button).toBeDefined();await act(async()=>button!.click());};
 
 it("loads exact message-linked requests and exposes tools, parameters, full JSON and close",async()=>{
@@ -55,5 +61,66 @@ it("restores the machine-level Markdown preference",async()=>{
   client.request.mockResolvedValue({entries:[{namespace:"request-inspector",value:{contentView:"markdown"}}]});
   await act(async()=>root.render(<ApiRequestDialog target={{kind:"log",entry}} onClose={()=>{}}/>));
   expect(document.querySelector(".md-body")).not.toBeNull();
-  expect(document.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')?.textContent).toBe("Markdown");
+  expect(document.querySelector<HTMLButtonElement>('[aria-label="Content view"] button[aria-pressed="true"]')?.textContent).toBe("Markdown");
+});
+
+async function search(value:string) {
+  await act(async()=>{
+    const input=document.querySelector<HTMLInputElement>('[role="search"] input')!;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value")!.set!.call(input,value);
+    input.dispatchEvent(new Event("input",{bubbles:true}));
+  });
+}
+const count=()=>document.querySelector('[role="search"] [role="status"]')?.textContent;
+const highlighted=()=>[...(CSS.highlights.get("request-matches")??[])].map((range:Range)=>range.toString());
+it("highlights instructions in place, preserves focus, wraps matches and clears search before closing the modal",async()=>{
+  const close=vi.fn();
+  await act(async()=>root.render(<ApiRequestDialog target={{kind:"log",entry:{...entry,detail:{instructions:"A needle here. Another needle there."}}}} onClose={close}/>));
+  const input=document.querySelector<HTMLInputElement>('[role="search"] input')!;input.focus();
+  await search("needle");expect(document.activeElement).toBe(input);expect(count()).toBe("1 / 2");expect(highlighted()).toEqual(["needle","needle"]);
+  await act(async()=>input.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",shiftKey:true,bubbles:true,cancelable:true})));
+  expect(count()).toBe("2 / 2");
+  await act(async()=>input.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",bubbles:true,cancelable:true})));
+  expect(count()).toBe("1 / 2");
+  await act(async()=>input.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true,cancelable:true})));
+  expect(close).not.toHaveBeenCalled();expect(document.querySelector('[role="search"]')).toBeNull();expect(CSS.highlights.has("request-matches")).toBe(false);
+});
+it("searches all retained JSON keys, values and syntax without filtering cards or changing Markdown preferences",async()=>{
+  await act(async()=>root.render(<ApiRequestDialog target={{kind:"log",entry}} onClose={()=>{}}/>));
+  await search("parameters");expect(count()).toBe("No matches");
+  expect(document.body.textContent).toContain("Unique system instructions");
+  await click("Full request");expect(count()).toBe("1 / 1");expect(highlighted()).toEqual(["parameters"]);
+  await search('"type": "object"');expect(count()).toBe("1 / 1");expect(highlighted()).toEqual(['"type": "object"']);
+  await search("hello");expect(count()).toBe("1 / 1");
+  expect(client.request.mock.calls.some(([method])=>method==="pi/prefs/set")).toBe(false);
+});
+it("finds across Markdown spans and scopes keyboard shortcuts to the request inspector",async()=>{
+  await act(async()=>root.render(<ApiRequestDialog target={{kind:"log",entry:{...entry,detail:{instructions:"An Ap**ple** instruction",other:{Apple:"outside"}}}}} onClose={()=>{}}/>));
+  await click("Markdown");await search("Apple");expect(count()).toBe("1 / 1");expect(highlighted()).toEqual(["Apple"]);
+  const input=document.querySelector<HTMLInputElement>('[role="search"] input')!;
+  await act(async()=>input.dispatchEvent(new KeyboardEvent("keydown",{key:"f",ctrlKey:true,shiftKey:true,bubbles:true,cancelable:true})));
+  expect(document.querySelector('[role="search"]')?.getAttribute("aria-label")).toBe("Find in full request");
+  expect(highlighted()).toEqual(["Apple"]); // raw Markdown spelling does not contain Apple
+  await act(async()=>input.dispatchEvent(new KeyboardEvent("keydown",{key:"f",ctrlKey:true,bubbles:true,cancelable:true})));
+  expect(document.querySelector('[role="search"]')?.getAttribute("aria-label")).toBe("Find in instructions");
+  expect(document.querySelector(".md-body")).not.toBeNull();expect(highlighted()).toEqual(["Apple"]);
+});
+it("reveals a folded conversation match only for find, without counting its JSON duplicate",async()=>{
+  await act(async()=>root.render(<ApiRequestDialog target={{kind:"log",entry}} onClose={()=>{}}/>));
+  await click("Conversation");
+  const card=document.querySelector('[data-slot="request-viewport"] [data-slot="collapsible"]')!;
+  expect(card.getAttribute("data-state")).toBe("closed");
+  await search("hello");expect(count()).toBe("1 / 1");expect(highlighted()).toEqual(["hello"]);expect(card.getAttribute("data-state")).toBe("open");
+  await act(async()=>document.querySelector<HTMLButtonElement>('[data-request-find] [aria-label="Close search"]')!.click());
+  expect(card.getAttribute("data-state")).toBe("closed");expect(CSS.highlights.has("request-matches")).toBe(false);
+});
+it("counts payload occurrences once across Instructions, Full request and Full JSON views",async()=>{
+  const detail={instructions:"quartz",input:[{role:"user",content:"quartz"}]};
+  await act(async()=>root.render(<ApiRequestDialog target={{kind:"log",entry:{...entry,detail}}} onClose={()=>{}}/>));
+  await search("quartz");expect(count()).toBe("1 / 1");expect(highlighted()).toHaveLength(1);
+  await click("Full request");expect(count()).toBe("1 / 2");expect(highlighted()).toHaveLength(2);
+  const section=async(name:string)=>act(async()=>[...document.querySelectorAll<HTMLButtonElement>('[aria-label="Request sections"] button')].find(b=>b.textContent?.startsWith(name))!.click());
+  await section("Full JSON");expect(count()).toBe("1 / 2");expect(highlighted()).toHaveLength(2);
+  await section("Conversation");expect(count()).toBe("1 / 1");expect(highlighted()).toHaveLength(1);
+  await section("Instructions");expect(count()).toBe("1 / 1");expect(highlighted()).toHaveLength(1);
 });

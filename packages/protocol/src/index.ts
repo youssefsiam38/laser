@@ -14,3 +14,4 @@ export * from "./pi-extension.js";
 export * from "./push.js";
 export * from "./schemas.js";
 export * from "./utf8.js";
+export * from "./search-content.js";

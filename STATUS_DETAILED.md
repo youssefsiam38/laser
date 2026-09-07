@@ -339,6 +339,11 @@ lane T's own if both were written.
 | M12-T53 | Compact project tree and single-location session attention | done | codex-2026-09-06-slash-skills | 448 UI tests; desktop/phone dark/light review; live spinner, pin persistence and 44px touch targets | see notes |
 | M12-T54 | Search full conversations and navigate exact matches | done | codex-2026-09-07-search | workspace build/typecheck; 954 tests; desktop/phone light/dark browser review | see notes |
 | M12-T55 | Remove transcript day separators | done | codex-2026-09-07-day-separators | 458 UI tests; UI typecheck/build; desktop/phone light/dark browser review | see notes |
+| M12-T56 | Search displayed tool content rather than payload structure | done | codex-2026-09-07-search-content | 959 workspace tests; workspace typecheck; UI/host/protocol build; browser values-only highlights | see notes |
+| M12-T57 | Navigate exact matches in captured API requests | done | codex-2026-09-07-request-find | 465 UI tests; UI typecheck/build; four-layout browser review | see notes |
+| M12-T58 | Highlight source code in file tools | done | codex-2026-09-07-tool-syntax | 467 UI tests; UI typecheck/build; desktop/phone dark/light browser review | see notes |
+| M12-T59 | Repair authenticated subscription allowance retrieval | done | codex-2026-09-07-quota-release | `pnpm verify` (979 tests); rebuilt-module authenticated initial/manual refresh HTTP 200; four-layout quota review | see notes |
+| M12-T60 | Release stable 0.2.7 | in-progress | codex-2026-09-07-quota-release | — | see notes |
 
 #### M12-T1 notes
 - 2026-09-06 claimed: audit the shipped logo assets, theme presets, assistant-ui
@@ -793,6 +798,7 @@ lane T's own if both were written.
   deployed the native APT and DNF update feeds.
 
 #### M12-T40 notes
+- 2026-09-07 research follow-up (codex-2026-09-07-quota-research): reproduced the installed module's exact reconnect error with a valid existing credential. `/backend-api/codex/usage` returns a 403 HTML security challenge; `/backend-api/wham/usage` returns 200 with the same credential and is accepted by the parser. The first 403 prevents the fallback. Additional quota buckets are dropped and the app-server duration fixture uses the wrong field. Official app-server API and direct-repair tradeoffs recorded in `docs/account-usage-research.md`. Diagnosis only: no product code/auth/process changes, push or release; repair awaits authorization.
 - 2026-09-06 claimed: expose OpenAI Codex allowance from the existing Pi OAuth
   session, classify persisted turns by billing mode, and make the telemetry
   section adapt between API, account and mixed views.
@@ -1006,6 +1012,29 @@ lane T's own if both were written.
 #### M12-T55 notes
 - 2026-09-07 claimed: remove the visual and semantic day-divider component from every message path while retaining per-message local timestamps and their full accessible date descriptions.
 - 2026-09-07 done: deleted the day-divider component and boundary selector instead of merely hiding them. The remaining `message-timestamp` element is mounted for user, assistant and notice messages and retains its full natural date label. All 458 UI tests, typecheck, build, identity and whitespace checks pass. Browser review at 1280×900 and 390×844 in light/dark found zero separator nodes, two timestamp nodes, and no horizontal overflow; evidence: `/tmp/laser-no-day-desktop-dark.png`, `/tmp/laser-no-day-desktop-light.png`, `/tmp/laser-no-day-phone-dark.png`, `/tmp/laser-no-day-phone-light.png`. Isolated preview processes stopped; production was untouched. No commit, push, version change or release was requested.
+
+#### M12-T56 notes
+- 2026-09-07 claimed: replace serialized tool payload indexing with shared content projections and align DOM highlights with searchable values; document the extension point for future renderers.
+- 2026-09-07 checkpoint: shared projections now feed host and session find. The existing bounded diff transform moved unchanged into the neutral package so omitted lines cannot become phantom matches. Tool JSON highlights opt into value regions, nested JSON and terminal elision reveal transiently, and live result envelopes display the same content as hydration.
+- 2026-09-07 done: all 959 workspace tests and workspace typecheck pass; protocol, host and UI build successfully. Isolated browser fixtures prove the key-only session is absent globally and has no local matches; actual commands/output remain hits; three nested JSON values highlight without their identical keys and next/previous navigation works. Desktop/phone, light/dark checks show no horizontal overflow. Evidence: `/tmp/laser-search-values-tests.log`, `/tmp/laser-search-values-global.png`, `/tmp/laser-search-values-desktop-light.png`, `/tmp/laser-search-values-phone-dark.png`. Contract: `docs/search-content.md` and AGENTS.md. QA processes stopped; production untouched; no push, tag or release.
+
+#### M12-T57 notes
+- 2026-09-07 claimed: replace field filtering with scoped in-place find and literal full-request JSON search; reuse the conversation search element while keeping diagnostic key/value search separate from chat semantics.
+- 2026-09-07 checkpoint: instruction text and Markdown highlight in place; full search exposes syntax-highlighted retained JSON and matches keys, values and syntax. Native ranges remain independent from session highlights. Keyboard tests caught Radix consuming Escape before the input; the modal now explicitly closes find first. Browser proof on an isolated real captured request locates 18 nested schema-key hits with zero underlying-session scroll movement.
+- 2026-09-07 done: 465 UI tests, UI typecheck/build and identity guard pass. Duplicate-count regression proves Instructions and Conversation each count their source occurrence once, while Full request and Full JSON each count the two genuine payload occurrences once, never the combined tab presentations. Desktop/phone and light/dark browser reviews show visible highlights, next/previous navigation and no horizontal overflow. Evidence: `/tmp/laser-request-find-tests.log`, `/tmp/laser-request-find-desktop-dark.png`, `/tmp/laser-request-find-desktop-light.png`, `/tmp/laser-request-find-phone-light.png`, `/tmp/laser-request-find-phone-dark.png`. Isolated QA server/browser stopped; production untouched; no push, tag or release.
+
+#### M12-T58 notes
+- 2026-09-07 claimed: infer file language once from the read/write/edit path, reuse the installed standalone Shiki element, and preserve the existing diff/search DOM contract.
+- 2026-09-07 checkpoint: read results now use the standalone source highlighter; edit/write tokenize displayed lines lazily and layer the tokens inside the existing two-gutter diff rows. Unknown extensions retain the plain fallback, and file-tool content remains opted into conversation search.
+- 2026-09-07 done: all 467 UI tests, UI typecheck, production build and `git diff --check` pass. Isolated browser review at 1280×720 and 390×844 in dark/light shows nine distinct source-token colours, intact add/delete backgrounds and gutters, internal horizontal scrolling, and zero page overflow. No commit, push, version change or release was requested.
+
+#### M12-T59 notes
+- 2026-09-07 claimed: replace the confirmed failing first route, distinguish recovery messages, retain quota bucket identity and add source-shaped coverage before an authenticated smoke test.
+- 2026-09-07 done: direct verified route, Pi-owned auth, explicit independent bucket parsing, bounded responses and actionable failure states implemented. Full build/typecheck/979 tests pass. Rebuilt-module initial and manual refresh both return HTTP 200 with four windows in three buckets, each with durations/resets; emitted states contain no credential fields. Existing credentials were read only, never rotated or written. Actual quota cards reviewed at 1280×900 and 390×844 in dark/light with no overflow; evidence `/tmp/laser-027-quota-{desktop,phone}-{dark,light}.png`. Temporary QA server/browser removed after review; installed app untouched.
+
+#### M12-T60 notes
+- 2026-09-07 claimed: include the user's completed highlighting and accumulated search fixes; run the workspace gate, push the release commit/tag and create the release without monitoring Actions. Unrelated scratch files remain untouched.
+- 2026-09-07 checkpoint: all workspace versions are 0.2.7. Initial full gate passed build/typecheck/979 tests; authenticated rebuilt-module verification passed twice and four-layout quota review is complete. Staging release-owned changes before repeating the gate. Independent M3-T10 guide/planning edits and user scratch remain outside this release. User explicitly overrides the usual CI-wait step: dispatch only, no Actions polling.
 
 ## MX · Cross-cutting
 
@@ -2348,6 +2377,33 @@ Why: repeated horizontal date dividers consume space and duplicate information
 already available on each message.
 Consequences: calendar transitions no longer add layout or a semantic separator;
 the timestamp remains the single source for when a message was created.
+
+### D-106 · 2026-09-07 · Tool search is a content contract
+
+Decision: add M12-T56. History and session find share engine-neutral tool content selectors; structural JSON keys are never search content. Renderer authors must maintain the selector and highlightable content together.
+Why: indexing serialized requests creates matches that cannot be meaningfully located in the conversation.
+Consequences: document the contract and test both indexing and rendered value highlights. No provider or engine imports enter the shared implementation.
+
+### D-108 · 2026-09-07 · Diagnostics search includes the complete retained payload
+
+Decision: add M12-T57. Request search offers current-section content and full retained request JSON, including keys, values and syntax. It does not inherit conversation tool-value exclusions.
+Why: request inspection is a low-level diagnostic surface; filtering whole cards does not locate an instruction or explain what matched.
+Consequences: highlight and navigate actual rendered text, reveal folded content transiently, preserve Markdown preferences and credential redaction, and never imply an oversized truncated capture is complete.
+
+### D-110 · 2026-09-07 · File tools share the transcript syntax grammar
+
+Decision: add M12-T58. Read, write and edit tool bodies infer language from their
+target path and reuse the established Shiki grammar, theme tokens and lazy load.
+Why: file tools currently preserve line-level changes but flatten source syntax,
+making code materially harder to scan than the same source in a Markdown fence.
+Consequences: highlighting remains presentational; tool payloads, diff semantics,
+searchable value regions and unknown/plain-text files retain their existing behavior.
+
+### D-111 · 2026-09-07 · Repair the verified quota route and release 0.2.7
+
+Decision: add M12-T59 and M12-T60. Keep Pi-owned authentication and query the verified account usage endpoint directly. Preserve named buckets as independent windows in the neutral protocol; never sum their percentages. Include user highlighting in stable 0.2.7 and dispatch without waiting for Actions.
+Why: authenticated probes reproduce a false reconnect error before the working endpoint is reached; a second CLI dependency is unnecessary for this fix.
+Consequences: endpoint-specific tests and authenticated smoke checks supplement mocked parser tests. Security challenges are not authentication failures. The endpoint remains an isolated maintenance boundary, not a claimed public REST contract.
 
 ## Status edits log
 

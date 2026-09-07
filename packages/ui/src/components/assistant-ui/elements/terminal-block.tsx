@@ -18,6 +18,7 @@ import { useMemo, useState, type ComponentProps } from "react";
 import { StatusDot } from "@/components/status";
 import { elideText } from "@/components/thread/tool-summary";
 import { cn } from "@/lib/utils";
+import { useSearchReveal } from "@/components/thread/search-state";
 
 export interface TerminalBlockProps extends Omit<ComponentProps<"div">, "children"> {
   command: string;
@@ -31,6 +32,7 @@ export interface TerminalBlockProps extends Omit<ComponentProps<"div">, "childre
 export function TerminalBlock({ command, output, exitCode, running, isError, className, ...props }: TerminalBlockProps) {
   const failed = !running && (isError || (exitCode !== undefined && exitCode !== 0));
   const [showAll, setShowAll] = useState(false);
+  const reveal = useSearchReveal();
   const elided = useMemo(() => elideText(output), [output]);
 
   return (
@@ -44,7 +46,7 @@ export function TerminalBlock({ command, output, exitCode, running, isError, cla
         <span aria-hidden="true" className="select-none text-terminal-ink-2">
           $
         </span>
-        <span className="min-w-0 flex-1 wrap-break-word whitespace-pre-wrap text-terminal-ink">{command}</span>
+        <span data-search-content className="min-w-0 flex-1 wrap-break-word whitespace-pre-wrap text-terminal-ink">{command}</span>
         <span className={cn("shrink-0 tabular-nums", running ? "text-live" : failed ? "text-danger" : "text-terminal-ink-2")}>
           {running ? (
             <StatusDot status="working" size="sm" label="Running" className="mt-1" />
@@ -57,12 +59,13 @@ export function TerminalBlock({ command, output, exitCode, running, isError, cla
       </div>
       {output || running ? (
         <pre
+          data-search-content
           className={cn(
             "max-h-80 overflow-auto px-3 py-2 wrap-break-word whitespace-pre-wrap",
             failed ? "text-terminal-ink" : "text-terminal-ink-2",
           )}
         >
-          {showAll ? output : elided.text}
+          {showAll || reveal ? output : elided.text}
           {running ? <span aria-hidden="true" className="caret" /> : null}
         </pre>
       ) : (

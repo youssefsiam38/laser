@@ -13,6 +13,8 @@
  *   ls    { path?, limit? }
  */
 
+import { toolOutputText } from "@lasercode/protocol";
+
 export type ToolKind = "read" | "write" | "edit" | "bash" | "grep" | "find" | "ls" | "other";
 
 export interface ToolSummary {
@@ -110,14 +112,7 @@ export function summarizeTool(name: string, args: unknown): ToolSummary {
  */
 export function resultText(result: unknown): string {
   if (result === undefined || result === null) return "";
-  if (typeof result === "string") return result;
-  if (isRecord(result) && Array.isArray(result["content"])) {
-    const texts = (result["content"] as unknown[])
-      .map((c) => (isRecord(c) && c["type"] === "text" ? str(c["text"]) : ""))
-      .filter(Boolean);
-    if (texts.length > 0) return texts.join("\n");
-  }
-  return pretty(result);
+  return toolOutputText(result) ?? pretty(result);
 }
 
 /** `details` of a live `AgentToolResult`, if any. */

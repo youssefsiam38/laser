@@ -58,7 +58,7 @@ export function DiffPreview({ patch, path, truncated, className }: DiffPreviewPr
       </div>
 
       <div data-island-scroll className="min-h-0 flex-1 overflow-auto">
-        <CodeDiffRows hunks={hunks} inset="px-4" stickyHeaders />
+        <CodeDiffRows hunks={hunks} path={path} inset="px-4" stickyHeaders />
         {clipped || truncated ? (
           <p className="typed px-4 py-2 text-ink-3 hairline-t">
             {clipped ? `Showing the first ${MAX_LINES.toLocaleString()} of ${total.toLocaleString()} lines. ` : null}

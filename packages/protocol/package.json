@@ -1,6 +1,6 @@
 {
   "name": "@lasercode/protocol",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./tool-diff": {
+      "types": "./dist/tool-diff.d.ts",
+      "import": "./dist/tool-diff.js"
     },
     "./identity": {
       "types": "./dist/identity.d.ts",

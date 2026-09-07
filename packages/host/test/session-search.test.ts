@@ -21,7 +21,7 @@ describe("full-history search", () => {
     expect(result.hits).toEqual([{ path, count: 4, source: "user", excerpt: "Please inspect Apple and APPLE" }]);
   });
   it("searches tools but never indexes image data or non-message metadata", () => {
-    expect(searchableMessage(message("assistant", [{ type: "image", data: "secret" }, { type: "toolCall", name: "read", arguments: { path: "file.ts" } }]))).toEqual([{ source: "tool", text: 'read {"path":"file.ts"}' }]);
+    expect(searchableMessage(message("assistant", [{ type: "image", data: "secret" }, { type: "toolCall", name: "read", arguments: { path: "file.ts" } }]))).toEqual([{ source: "tool", text: 'file.ts' }]);
     expect(searchableMessage({ type: "custom", data: "secret" })).toEqual([]);
   });
   it("keeps escapes literal and tolerates torn lines", async () => {
@@ -30,6 +30,15 @@ describe("full-history search", () => {
     const result = await searchSessions(new SessionCatalog(dir).list(), String.raw`\n`);
     expect(result.hits[0]?.excerpt).toContain(String.raw`\n`);
     expect(result.unreadable).toBe(0);
+  });
+  it("excludes tool keys and metadata but finds command in visible input/output and unfinished calls", async () => {
+    const call = (id: string, command: string) => message("assistant", [{ type: "toolCall", id, name: "bash", arguments: { command, timeout: 123456 } }]);
+    save("keys-only", [call("a", "echo hello"), { type: "message", message: { role: "toolResult", toolCallId: "a", toolName: "bash", content: [{ type: "text", text: "hello" }], details: { command: "hidden command" } } }]);
+    const visible = save("visible", [call("b", "command -v node"), { type: "message", message: { role: "toolResult", toolCallId: "b", toolName: "bash", content: [{ type: "text", text: "command found" }] } }, call("c", "command -v git")]);
+    const sessions = new SessionCatalog(dir).list();
+    expect((await searchSessions(sessions, "command")).hits).toEqual([{ path: visible, count: 3, source: "tool", excerpt: "command -v node" }]);
+    expect((await searchSessions(sessions, "123456")).hits).toEqual([]);
+    expect((await searchSessions(sessions, "bash")).hits).toEqual([]);
   });
   it("paginates dense results without losing sessions", async () => {
     for (let i = 0; i < 51; i++) save(String(i), [message("user", "Apple")]);

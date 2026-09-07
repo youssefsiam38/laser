@@ -416,7 +416,7 @@ function AccountUsage({ state }: { state: AccountUsageState | undefined }) {
       {snapshot ? (
         <>
           <div className="grid gap-2">
-            {snapshot.windows.map((window) => <AllowanceWindow key={`${window.kind}:${window.windowDurationMins ?? "unknown"}`} window={window} />)}
+            {snapshot.windows.map((window) => <AllowanceWindow key={`${window.limitId ?? "codex"}:${window.kind}`} window={window} />)}
           </div>
           {snapshot.credits ? <CreditsCard credits={snapshot.credits} /> : null}
           {state?.status === "unavailable" && state.message ? (
@@ -443,7 +443,7 @@ function AccountUsage({ state }: { state: AccountUsageState | undefined }) {
 function AllowanceWindow({ window }: { window: AccountUsageWindow }) {
   const label = allowanceWindowLabel(window.windowDurationMins, window.kind);
   return (
-    <QuotaBanner label={label} usedPercent={window.usedPercent} resetsLabel={resetLabel(window.resetsAt)} />
+    <QuotaBanner label={label} bucketLabel={window.limitName ?? window.limitId ?? "Codex"} usedPercent={window.usedPercent} resetsLabel={resetLabel(window.resetsAt)} />
   );
 }
 

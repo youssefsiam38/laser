@@ -86,6 +86,15 @@ export function shikiLanguage(language: string | undefined): string {
   return alias && alias in bundledLanguages ? alias : "text";
 }
 
+/** Infer a Shiki grammar from a file tool's target without loading file contents. */
+export function shikiLanguageFromPath(path: string | undefined): string {
+  const file = (path ?? "").split(/[\\/]/).at(-1)?.toLowerCase() ?? "";
+  const named = FILE_LANGUAGES[file];
+  if (named) return shikiLanguage(named);
+  const extension = file.includes(".") ? file.split(".").at(-1) ?? "" : "";
+  return shikiLanguage(EXTENSION_LANGUAGES[extension] ?? extension);
+}
+
 const ALIASES: Record<string, string> = {
   mts: "ts",
   cts: "ts",
@@ -109,6 +118,36 @@ const ALIASES: Record<string, string> = {
   make: "makefile",
   txt: "text",
   plaintext: "text",
+};
+
+const FILE_LANGUAGES: Record<string, string> = {
+  dockerfile: "dockerfile",
+  containerfile: "dockerfile",
+  makefile: "makefile",
+  gnumakefile: "makefile",
+  justfile: "just",
+  "cmakelists.txt": "cmake",
+  "meson.build": "meson",
+  "package.json": "json",
+  "tsconfig.json": "jsonc",
+};
+
+const EXTENSION_LANGUAGES: Record<string, string> = {
+  cjs: "js",
+  cts: "ts",
+  htm: "html",
+  json5: "json5",
+  jsonl: "json",
+  markdown: "md",
+  mjs: "js",
+  mts: "ts",
+  plist: "xml",
+  py: "python",
+  pyw: "python",
+  sh: "bash",
+  shell: "bash",
+  toml: "toml",
+  yml: "yaml",
 };
 
 export type SyntaxHighlighterProps = Omit<ShikiHighlighterProps, "children" | "theme" | "language"> & {

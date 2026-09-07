@@ -41,6 +41,7 @@ import { duration as formatDuration } from "@/format";
 import { cn } from "@/lib/utils";
 import { toolDetailsDefaultOpen, toolDisplayResult, useActivityDetailLevel, useLaserState, type ActivityDetailLevel } from "@/runtime";
 import { JsonViewer, parseJsonText } from "./json-viewer.js";
+import { toolOutputText } from "@lasercode/protocol";
 
 import { activityRow, activityTrigger, collapsePanel, mono, pressable } from "./surfaces.js";
 
@@ -97,6 +98,7 @@ function ToolFallbackRoot({
     <Collapsible
       ref={collapsibleRef}
       data-slot="tool-fallback-root"
+      data-search-tool
       data-tone={tone}
       open={isOpen}
       onOpenChange={handleOpenChange}
@@ -295,17 +297,20 @@ function ToolFallbackArgs({
 }
 
 function ToolFallbackResult({
-  result,
+  result: rawResult,
   className,
   ...props
 }: React.ComponentProps<"div"> & { result?: unknown }) {
+  // Transport envelopes are not conversation content. Hydrated and live calls
+  // show the same output; opaque non-envelope JSON retains its fallback viewer.
+  const result = toolOutputText(rawResult) ?? rawResult;
   if (result === undefined) return null;
   const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
   if (!text) return null;
   return (
     <div data-slot="tool-fallback-result" className={cn(className)} {...props}>
       <ToolFallbackSection label="result">
-        {typeof result === "string" && parseJsonText(result) === undefined ? <pre className="max-h-80 overflow-auto rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs leading-sm wrap-break-word whitespace-pre-wrap text-ink-2">{text}</pre> : <JsonViewer value={typeof result === "string" ? parseJsonText(result) : result} expandedDepth={1} className="max-h-80" />}
+        {typeof result === "string" && parseJsonText(result) === undefined ? <pre data-search-content className="max-h-80 overflow-auto rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs leading-sm wrap-break-word whitespace-pre-wrap text-ink-2">{text}</pre> : <JsonViewer value={typeof result === "string" ? parseJsonText(result) : result} expandedDepth={1} className="max-h-80" />}
       </ToolFallbackSection>
     </div>
   );

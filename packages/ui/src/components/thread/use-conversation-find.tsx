@@ -2,31 +2,47 @@ import { useAuiState } from "@assistant-ui/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConversationSearch, type SearchHit } from "@/components/assistant-ui/elements/conversation-search";
 import { motionMs } from "@/motion";
-import { matchExcerpt, partSearchText, textMatches } from "./search-text.js";
+import { matchExcerpt, partSearchContent, textMatches } from "./search-text.js";
 import type { SearchSource } from "./search-state.js";
 
 /** Build ranges across markup boundaries without changing React-owned DOM. */
 export function findTextRanges(root: HTMLElement, query: string): Range[] {
+  return findTextMatches(root, query).map(match => match.range);
+}
+
+/** Diagnostics opt into literal JSON; chat keeps its value-only display policy. */
+export function findTextMatches(root: HTMLElement, query: string, mode: "conversation" | "literal" = "conversation") {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  const nodes: Array<{ node: Text; start: number; end: number }> = [];
-  let text = "";
+  type TextRun = { text: string; nodes: Array<{ node: Text; start: number; end: number }> };
+  const runs: TextRun[] = [];
+  let region: Element | null = null;
+  let run: TextRun | undefined;
   let next: Node | null;
   while ((next = walker.nextNode())) {
     const parent = next.parentElement;
-    if (!parent || parent.closest("button, [hidden], [aria-hidden=true], textarea, script, style")) continue;
+    const content = mode === "conversation" ? parent?.closest("[data-search-content]") ?? null : null;
+    // Tool bodies are opt-in. JSON keys, status labels, gutters and transport
+    // wrappers must never consume the occurrence assigned to a real value.
+    if (!parent || parent.closest("button, [hidden], [aria-hidden=true], [data-search-exclude], textarea, script, style") ||
+      (mode === "conversation" && parent.closest('[data-search-tool], [data-slot="json-viewer"]') && !content)) {
+      run = undefined;
+      continue;
+    }
+    const nextRegion = content ?? root;
+    if (!run || region !== nextRegion) { run = { text: "", nodes: [] }; runs.push(run); region = nextRegion; }
     const value = next.textContent ?? "";
-    nodes.push({ node: next as Text, start: text.length, end: text.length + value.length });
-    text += value;
+    run.nodes.push({ node: next as Text, start: run.text.length, end: run.text.length + value.length });
+    run.text += value;
   }
-  return textMatches(text, query).flatMap(m => {
+  return runs.flatMap(({ text, nodes }) => textMatches(text, query).flatMap(m => {
     const first = nodes.find(n => n.end > m.start);
     const last = nodes.find(n => n.end >= m.end);
     if (!first || !last) return [];
     const range = document.createRange();
     range.setStart(first.node, m.start - first.start);
     range.setEnd(last.node, m.end - last.start);
-    return [range];
-  });
+    return [{ range, ...matchExcerpt(text, m) }];
+  }));
 }
 
 export function useConversationFind() {
@@ -45,9 +61,9 @@ export function useConversationFind() {
     return messages.flatMap(message => {
       let occurrence = 0;
       return message.content.flatMap((part, partIndex) => {
-        const text = partSearchText(part as unknown as { type: string; [key: string]: unknown });
+        const content = partSearchContent(part as unknown as { type: string; [key: string]: unknown });
         const source = part.type === "reasoning" ? "reasoning" : part.type === "tool-call" ? "tool" : message.role === "user" ? "user" : "assistant";
-        return textMatches(text, query).map((m): SearchHit => ({ id: `${message.id}:${partIndex}:${m.start}`, messageId: message.id, source, occurrence: occurrence++, ...matchExcerpt(text, m) }));
+        return content.flatMap((text, fieldIndex) => textMatches(text, query).map((m): SearchHit => ({ id: `${message.id}:${partIndex}:${fieldIndex}:${m.start}`, messageId: message.id, source, occurrence: occurrence++, ...matchExcerpt(text, m) })));
       });
     });
   }, [messages, query, open]);

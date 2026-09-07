@@ -378,6 +378,22 @@ Explain full quit (including tray) after finishing work. Test new public methods
 through a real host and built worker, not only worker dispatch. Quota credential
 failures must leave loading and remain retryable without leaking auth details.
 
+### Subscription allowance: prove the route, not only the parser
+
+**Problem:** the first usage URL returned a 403 HTML security challenge for a
+valid credential. The code treated it as an authentication failure and never
+reached the working URL; reconnecting could not help. Mocks accepting any URL
+ending in `/usage` hid the defect and repeated an incorrect duration field.
+
+**Fix/prevention:** the companion extension owns one verified usage route and
+keeps Pi responsible for OAuth. Assert the exact endpoint, test source-shaped
+multi-bucket/null-window responses and `windowDurationMins`, and distinguish
+security challenges, 401, permissions, throttling and network failures. Preserve
+the last good snapshot on refresh failure; never sum separate allowance buckets.
+Before claiming integration success, perform an authorized read-only live probe
+with current credentials, reporting only status/shape—not tokens, account IDs
+or raw bodies. A working undocumented endpoint is not a public API guarantee.
+
 ### Executable dependency source in packaged builds
 
 **Problem:** a dependency's `.ts` files are not necessarily development files.
@@ -440,6 +456,21 @@ each other, detect their package at `session_start`, and fail individually
   preference and focus; excerpts remain inside result rows, never overlays.
 
 ---
+
+## 6b. Searchable tool content
+
+Search must use the shared display projections in `packages/protocol/src/search-content.ts`,
+never serialized tool requests/results. Structural keys such as `command` are not
+content. When adding a specialized tool body, update its projection and mark its
+visible value regions with `data-search-content`; test key-only misses and actual
+value highlights. Generic JSON fallback tools inherit value-only search automatically.
+See [`docs/search-content.md`](docs/search-content.md) for the full contract.
+
+The API request inspector is deliberately different: its full-request search
+includes every retained JSON key, value and syntax character. Never apply the
+conversation value-only selector there. Section search highlights rendered
+content once (not its duplicate preview/JSON), and request find owns separate
+native highlight names and modal-only scrolling/keyboard handling.
 
 ## 7. Commits
 

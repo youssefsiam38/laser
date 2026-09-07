@@ -1,7 +1,9 @@
 "use client";
 
 import { ChevronRight } from "lucide-react";
+import { jsonSearchString } from "@lasercode/protocol";
 import { useState, type ReactNode } from "react";
+import { useSearchReveal } from "@/components/thread/search-state";
 
 import { cn } from "@/lib/utils";
 
@@ -41,7 +43,9 @@ function JsonNode({ name, value, depth, expandedDepth, tone, comma = false }: { 
   const structured = value !== null && typeof value === "object";
   const entries = structured ? Object.entries(value as Record<string, unknown>) : [];
   const array = Array.isArray(value);
-  const [open, setOpen] = useState(depth < expandedDepth);
+  const reveal = useSearchReveal();
+  const [userOpen, setOpen] = useState(depth < expandedDepth);
+  const open = reveal || userOpen;
   const key = name === undefined ? null : <><span className={tone === "terminal" ? "text-terminal-ink" : "text-ink"}>{JSON.stringify(name)}</span><span className="text-ink-3">: </span></>;
 
   if (!structured) {
@@ -82,9 +86,9 @@ function JsonNode({ name, value, depth, expandedDepth, tone, comma = false }: { 
 }
 
 function JsonPrimitive({ value }: { value: unknown }): ReactNode {
-  if (value === null) return <span className="text-ink-3">null</span>;
-  if (typeof value === "string") return <span className="text-live">{JSON.stringify(value)}</span>;
-  if (typeof value === "number") return <span className="text-attention">{String(value)}</span>;
-  if (typeof value === "boolean") return <span className="text-ok">{String(value)}</span>;
+  if (value === null) return <span data-search-content className="text-ink-3">null</span>;
+  if (typeof value === "string") return <span className="text-live">{"\""}<span data-search-content>{jsonSearchString(value)}</span>{"\""}</span>;
+  if (typeof value === "number") return <span data-search-content className="text-attention">{String(value)}</span>;
+  if (typeof value === "boolean") return <span data-search-content className="text-ok">{String(value)}</span>;
   return <span className="text-ink-3">{JSON.stringify(value) ?? String(value)}</span>;
 }

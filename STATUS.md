@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-07T02:11:48+03:00 · codex-2026-09-07-day-separators · HEAD: `2fc94cf`
+**Last updated:** 2026-09-07T03:33:17+03:00 · codex-2026-09-07-quota-release · HEAD: `75cd351`
 
-**Current focus:** M12-T55 complete locally; day separators are deleted and per-message timestamps remain.
+**Current focus:** 0.2.7 release gate and dispatch: verified Codex allowance repair, search improvements and user-supplied source highlighting.
 
 ## Milestones
 
@@ -23,12 +23,12 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M9 CLI | done | planned tasks complete |
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
-| M12 Product experience | done | day separators removed after 0.2.6 |
+| M12 Product experience | in-progress | 0.2.7 verified locally; release dispatch next |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
 
-- None. Production untouched; isolated QA processes stopped; `fixes.md` is user-owned.
+- None.
 
 ## Next up
 
@@ -38,8 +38,8 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Recently done
 
+- M12-T59: authenticated quota initial/manual refresh HTTP 200; build/typecheck/979 tests; four-layout quota review.
+- M12-T58: file-tool source highlighting; UI tests and four-layout browser review.
+- M12-T57: exact API-request find without duplicate previews; UI tests and four-layout review.
+- M12-T56: value-only tool search and highlights; 959 tests and responsive theme review.
 - M12-T55: transcript day dividers removed; timestamps retained; 458 UI tests and four-layout review.
-- M12-T51: [0.2.6 release](https://github.com/youssefsiam38/laser/releases/tag/v0.2.6), commit/tag pushed; no Actions monitoring.
-- M12-T54: prioritized history search and session find; 954 tests and four-layout review.
-- M12-T53: compact project tree, persisted pins and project labels; responsive theme review.
-- M12-T52: execution-owned edge-to-edge activity beams; zero-gap browser measurements.

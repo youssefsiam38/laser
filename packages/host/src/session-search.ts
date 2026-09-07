@@ -1,21 +1,36 @@
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
-import type { ClientRequests, SessionSummary } from "@lasercode/protocol";
+import { toolSearchContent, toolOutputText, type SearchableTool, type ClientRequests, type SessionSummary } from "@lasercode/protocol";
 
 type Source = "user" | "assistant" | "reasoning" | "tool";
 export const sourceRank = (source: Source) => source === "user" ? 0 : source === "assistant" ? 1 : 2;
 /** Search only message content, never images, credentials or session metadata. */
-export function searchableMessage(entry: unknown): Array<{ text: string; source: Source }> {
-  const e = entry as { type?: string; message?: { role?: string; content?: unknown } } | null;
+export function searchableMessage(entry: unknown, pending?: Map<string, SearchableTool>): Array<{ text: string; source: Source }> {
+  const e = entry as { type?: string; message?: { role?: string; content?: unknown; toolCallId?: string; toolName?: string; isError?: boolean } } | null;
   if (e?.type !== "message") return [];
   const content = e.message?.content;
+  if (e.message?.role === "toolResult") {
+    const id = e.message.toolCallId ?? "";
+    const call = pending?.get(id);
+    if (pending && !call) return []; // Hydration does not render orphan results.
+    pending?.delete(id);
+    // Saved-session hydration displays text content, not the live result envelope.
+    return toolSearchContent({ ...call, name: call?.name ?? e.message.toolName ?? "", result: toolOutputText(e.message), isError: e.message.isError }).map(text => ({ text, source: "tool" }));
+  }
   const source: Source = e.message?.role === "user" ? "user" : e.message?.role === "assistant" ? "assistant" : "tool";
   if (typeof content === "string") return [{ text: content, source }];
   if (!Array.isArray(content)) return [];
-  return content.flatMap((p: { type?: string; text?: string; thinking?: string; name?: string; arguments?: unknown }): Array<{ text: string; source: Source }> => {
+  return content.flatMap((p: { type?: string; text?: string; thinking?: string; id?: string; name?: string; arguments?: unknown }): Array<{ text: string; source: Source }> => {
     if (p?.type === "text" && typeof p.text === "string") return [{ text: p.text, source }];
     if (p?.type === "thinking" && typeof p.thinking === "string") return [{ text: p.thinking, source: "reasoning" }];
-    if (p?.type === "toolCall") return [{ text: `${p.name ?? ""} ${JSON.stringify(p.arguments ?? {})}`, source: "tool" }];
+    if (p?.type === "toolCall") {
+      const call = { name: p.name ?? "", args: p.arguments };
+      // Pair persisted call/result entries before projecting the displayed body
+      // (e.g. successful edits hide the confirmation text). Unfinished calls flush
+      // at EOF; neither their content nor completed results are counted twice.
+      if (pending && p.id) { pending.set(p.id, call); return []; }
+      return toolSearchContent(call).map(text => ({ text, source: "tool" }));
+    }
     return [];
   });
 }
@@ -33,25 +48,30 @@ export async function searchSessions(sessions: readonly SessionSummary[], query:
     let source: Source = "tool";
     const input = createReadStream(session.path, { encoding: "utf8" });
     const lines = createInterface({ input, crlfDelay: Infinity });
+    const pending = new Map<string, SearchableTool>();
+    const collect = (parts: Array<{ text: string; source: Source }>) => {
+      for (const part of parts) {
+        const { text } = part;
+        for (const match of text.matchAll(expression)) {
+          count++;
+          if (!excerpt || sourceRank(part.source) < sourceRank(source)) {
+            source = part.source;
+            const start = Math.max(0, match.index - 60);
+            const end = Math.min(text.length, match.index + match[0].length + 100);
+            excerpt = `${start ? "…" : ""}${text.slice(start, end)}${end < text.length ? "…" : ""}`;
+          }
+        }
+      }
+    };
     try {
       for await (const line of lines) {
         let entry: unknown;
         try { entry = JSON.parse(line); } catch { continue; }
-        for (const part of searchableMessage(entry)) {
-          const { text } = part;
-          for (const match of text.matchAll(expression)) {
-            count++;
-            if (!excerpt || sourceRank(part.source) < sourceRank(source)) {
-              source = part.source;
-              const start = Math.max(0, match.index - 60);
-              const end = Math.min(text.length, match.index + match[0].length + 100);
-              excerpt = `${start ? "…" : ""}${text.slice(start, end)}${end < text.length ? "…" : ""}`;
-            }
-          }
-        }
+        collect(searchableMessage(entry, pending));
       }
     } catch { result.unreadable++; }
     finally { lines.close(); input.destroy(); }
+    for (const call of pending.values()) collect(toolSearchContent(call).map(text => ({ text, source: "tool" })));
     if (count) {
       result.hits.push({ path: session.path, count, excerpt, source });
     }

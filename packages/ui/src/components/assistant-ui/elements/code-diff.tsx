@@ -14,7 +14,7 @@
  * Adds are a 10% tint of `--ok`, deletions of `--danger`, with the status
  * colour as the marker ink; the gutter is tabular mono in tertiary ink.
  */
-import type { ComponentProps } from "react";
+import { lazy, Suspense, type ComponentProps, type CSSProperties } from "react";
 
 import { diffStats, type DiffHunk, type DiffView } from "@/components/thread/diff";
 import { cn } from "@/lib/utils";
@@ -25,19 +25,23 @@ export interface CodeDiffProps extends Omit<ComponentProps<"div">, "children"> {
   view: DiffView;
 }
 
+const HighlightedCodeDiffRows = lazy(() =>
+  import("./tool-code-highlights.js").then((module) => ({ default: module.HighlightedCodeDiffRows })),
+);
+
 /** The card: header with path and `+n −m`, rows below, bounded and scrollable. */
 export function CodeDiff({ view, className, ...props }: CodeDiffProps) {
   const { added, removed } = diffStats(view.hunks);
   return (
     <div data-slot="code-diff" className={cn("overflow-hidden rounded-lg border border-line", className)} {...props}>
       <div className="flex items-center gap-3 border-b border-line bg-surface-2 px-3 py-1.5">
-        <span className={cn(mono, "min-w-0 flex-1 truncate text-ink-2")} title={view.path}>
+        <span data-search-content={view.path ? "" : undefined} className={cn(mono, "min-w-0 flex-1 truncate text-ink-2")} title={view.path}>
           {view.path ?? "diff"}
         </span>
         <DiffStat added={added} removed={removed} />
       </div>
       <div className={cn(codeScroll, "max-h-96 overflow-y-auto bg-surface")}>
-        <CodeDiffRows hunks={view.hunks} inset="px-3" />
+        <CodeDiffRows hunks={view.hunks} path={view.path} inset="px-3" />
         {view.truncated ? <p className={cn(mono, "border-t border-line px-3 py-1.5 text-ink-3")}>diff truncated</p> : null}
       </div>
     </div>
@@ -57,6 +61,8 @@ export function DiffStat({ added, removed, className }: { added: number; removed
 
 export interface CodeDiffRowsProps {
   hunks: readonly DiffHunk[];
+  /** File path used only to select a syntax grammar; unknown extensions stay plain. */
+  path?: string | undefined;
   /** Horizontal inset class for the outer cells (`px-3` in a card, `px-4` in a pane). */
   inset?: "px-3" | "px-4" | undefined;
   /** Hunk headers stick to the top of the scroll region in a long diff. */
@@ -65,9 +71,34 @@ export interface CodeDiffRowsProps {
 }
 
 /** The rows alone, as a table, for any container that owns its own scroll. */
-export function CodeDiffRows({ hunks, inset = "px-3", stickyHeaders = false, className }: CodeDiffRowsProps) {
+export function CodeDiffRows(props: CodeDiffRowsProps) {
+  const { hunks, path, inset = "px-3", stickyHeaders = false, className } = props;
+  const plain = <PlainCodeDiffRows hunks={hunks} inset={inset} stickyHeaders={stickyHeaders} className={className} />;
+  if (!path) return plain;
+  return (
+    <Suspense fallback={plain}>
+      <HighlightedCodeDiffRows {...props} />
+    </Suspense>
+  );
+}
+
+export interface SyntaxToken {
+  readonly content: string;
+  readonly color?: string | undefined;
+  /** Shiki bit flags: italic 1, bold 2, underline 4. */
+  readonly fontStyle?: number | undefined;
+}
+
+export interface PlainCodeDiffRowsProps extends CodeDiffRowsProps {
+  /** One token array per displayed diff line, in hunk order. */
+  tokens?: readonly (readonly SyntaxToken[])[] | undefined;
+}
+
+/** Synchronous rows used while the lazy grammar loads and by the highlighted renderer. */
+export function PlainCodeDiffRows({ hunks, inset = "px-3", stickyHeaders = false, className, tokens }: PlainCodeDiffRowsProps) {
   const start = inset === "px-4" ? "ps-4" : "ps-3";
   const end = inset === "px-4" ? "pe-4" : "pe-3";
+  let tokenOffset = 0;
   return (
     <table data-slot="code-diff-rows" className={cn("w-full border-collapse font-mono text-xs leading-sm", className)}>
       <tbody>
@@ -80,6 +111,7 @@ export function CodeDiffRows({ hunks, inset = "px-3", stickyHeaders = false, cla
             start={start}
             end={end}
             inset={inset}
+            tokens={tokens?.slice(tokenOffset, (tokenOffset += hunk.lines.length))}
           />
         ))}
       </tbody>
@@ -94,6 +126,7 @@ function Hunk({
   start,
   end,
   inset,
+  tokens,
 }: {
   hunk: DiffHunk;
   showHeader: boolean;
@@ -101,6 +134,7 @@ function Hunk({
   start: string;
   end: string;
   inset: string;
+  tokens?: readonly (readonly SyntaxToken[])[] | undefined;
 }) {
   return (
     <>
@@ -143,10 +177,30 @@ function Hunk({
             >
               {line.kind === "add" ? "+" : line.kind === "del" ? "−" : " "}
             </span>
-            <span className="whitespace-pre">{line.text}</span>
+            <span data-search-content className="whitespace-pre">
+              {tokens?.[i] ? <HighlightedLine tokens={tokens[i]} /> : line.text}
+            </span>
           </td>
         </tr>
       ))}
     </>
   );
+}
+
+function HighlightedLine({ tokens }: { tokens: readonly SyntaxToken[] }) {
+  return tokens.map((token, index) => (
+    <span key={index} style={syntaxTokenStyle(token)}>
+      {token.content}
+    </span>
+  ));
+}
+
+function syntaxTokenStyle(token: SyntaxToken): CSSProperties {
+  const fontStyle = token.fontStyle ?? 0;
+  return {
+    color: token.color,
+    fontStyle: fontStyle & 1 ? "italic" : undefined,
+    fontWeight: fontStyle & 2 ? "bold" : undefined,
+    textDecoration: fontStyle & 4 ? "underline" : undefined,
+  };
 }

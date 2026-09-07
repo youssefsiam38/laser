@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchExcerpt, partSearchText, textMatches } from "../../src/components/thread/search-text.js";
+import { matchExcerpt, partSearchContent, textMatches } from "../../src/components/thread/search-text.js";
 import { rankSearchThreads, type SearchableThread } from "../../src/components/assistant-ui/elements/thread-search.js";
 import { searchPeriod } from "../../src/components/shell/use-session-search.js";
 
@@ -16,9 +16,14 @@ describe("conversation search semantics", () => {
     expect(matchExcerpt(text, textMatches(text, "apple")[0]!)).toEqual({ before: "…" + "x".repeat(55), match: "Apple", after: "y".repeat(90) + "…" });
   });
   it("includes folded reasoning and partial tool output, excluding image payloads", () => {
-    expect(partSearchText({ type: "reasoning", text: "Apple" })).toBe("Apple");
-    expect(partSearchText({ type: "tool-call", toolName: "read", args: { path: "Apple" }, artifact: { partialOutput: "pear" } })).toContain("pear");
-    expect(partSearchText({ type: "image", image: "private-image" })).toBe("");
+    expect(partSearchContent({ type: "reasoning", text: "Apple" })).toEqual(["Apple"]);
+    expect(partSearchContent({ type: "tool-call", toolName: "read", args: { path: "Apple" }, artifact: { partialOutput: "pear" } })).toEqual(["Apple", "pear"]);
+    expect(partSearchContent({ type: "image", image: "private-image" })).toEqual([]);
+  });
+  it("does not search structural fields, tool names or invisible terminal parameters", () => {
+    const part = { type: "tool-call", toolName: "bash", args: { command: "echo hello", timeout: 123456, internal: "secret" } };
+    expect(partSearchContent(part)).toEqual(["echo hello"]);
+    expect(partSearchContent({ ...part, args: { command: "command -v node" }, artifact: { partialOutput: "command found" } })).toEqual(["command -v node", "command found"]);
   });
   it("ranks user messages ahead of replies, then reasoning/tools; newest breaks ties", () => {
     const row = (id: string, source?: SearchableThread["matchSource"], modifiedAt = "2026-09-01"): SearchableThread => ({ id, title: id, preview: "", group: "", status: "idle", matchSource: source, modifiedAt });

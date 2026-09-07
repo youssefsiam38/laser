@@ -1,7 +1,7 @@
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { useAuiState } from "@assistant-ui/react";
 import type { UiDialogRequest } from "@lasercode/protocol";
-import { memo, useCallback, useMemo, useState } from "react";
+import { lazy, memo, Suspense, useCallback, useMemo, useState } from "react";
 
 import { CodeDiff } from "@/components/assistant-ui/elements/code-diff";
 import { TerminalBlock } from "@/components/assistant-ui/elements/terminal-block";
@@ -41,6 +41,10 @@ const isInterruptPayload = (payload: unknown): payload is InterruptPayload => {
   const p = payload as Record<string, unknown>;
   return typeof p["requestId"] === "string" && typeof p["title"] === "string" && typeof p["method"] === "string";
 };
+
+const ToolSourceCode = lazy(() =>
+  import("@/components/assistant-ui/elements/tool-code-highlights").then((module) => ({ default: module.ToolSourceCode })),
+);
 
 /**
  * One tool call in the transcript. This is the laser glue between Pi's
@@ -122,12 +126,42 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
           <BashBody args={args} text={text} running={running} isError={failed} />
         ) : body === "diff" ? (
           <DiffBody kind={kind as "edit" | "write"} args={args} details={details} text={text} failed={failed} />
+        ) : kind === "read" ? (
+          <ReadBody args={args} text={text} failed={failed} />
         ) : (
           <TextBody args={args} text={text} failed={failed} />
         )
       ) : undefined}
     </ToolCall>
   );
+}
+
+function ReadBody({ args, text, failed }: { args: unknown; text: string; failed: boolean }) {
+  const path = typeof (args as { path?: unknown })?.path === "string" ? (args as { path: string }).path : undefined;
+  return (
+    <>
+      <ToolFallbackArgs argsText={pretty(args)} />
+      {text ? (
+        failed ? (
+          <ToolFallbackSection label="error">
+            <ToolError message={text} />
+          </ToolFallbackSection>
+        ) : (
+          <ToolFallbackSection label="result">
+            <div data-search-content>
+              <Suspense fallback={<PlainSource code={text} />}>
+                <ToolSourceCode path={path} code={text} />
+              </Suspense>
+            </div>
+          </ToolFallbackSection>
+        )
+      ) : null}
+    </>
+  );
+}
+
+function PlainSource({ code }: { code: string }) {
+  return <pre className="max-h-96 overflow-auto rounded-lg border border-line bg-surface-2 px-3.5 py-3.5 font-mono text-xs leading-sm whitespace-pre text-ink">{code}</pre>;
 }
 
 export const ToolRow = memo(ToolRowImpl);

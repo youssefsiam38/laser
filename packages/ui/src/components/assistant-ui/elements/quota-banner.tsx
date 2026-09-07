@@ -12,11 +12,12 @@ import { cn } from "@/lib/utils";
 
 export interface QuotaBannerProps extends Omit<ComponentProps<"div">, "children"> {
   label: string;
+  bucketLabel?: string;
   usedPercent: number;
   resetsLabel: string;
 }
 
-export function QuotaBanner({ label, usedPercent, resetsLabel, className, ...props }: QuotaBannerProps) {
+export function QuotaBanner({ label, bucketLabel, usedPercent, resetsLabel, className, ...props }: QuotaBannerProps) {
   const used = Math.min(100, Math.max(0, usedPercent));
   const remaining = Math.max(0, 100 - used);
   const tone = remaining <= 10 ? "danger" : remaining <= 30 ? "attention" : "ok";
@@ -24,6 +25,7 @@ export function QuotaBanner({ label, usedPercent, resetsLabel, className, ...pro
     <div data-slot="quota-banner" className={cn("rounded-xl border border-line bg-surface-2/70 p-3", className)} {...props}>
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
+          {bucketLabel ? <p className="mb-1 break-words text-xs font-medium leading-4 text-ink" title={bucketLabel}>{bucketLabel}</p> : null}
           <p className="truncate text-xs leading-4 text-ink-3">{label}</p>
           <p className="mt-0.5 font-mono text-lg font-semibold text-ink tnum">{formatPercent(remaining)} left</p>
         </div>
@@ -38,7 +40,7 @@ export function QuotaBanner({ label, usedPercent, resetsLabel, className, ...pro
       </div>
       <div
         role="progressbar"
-        aria-label={`${label} remaining`}
+        aria-label={`${bucketLabel ? `${bucketLabel} · ` : ""}${label} remaining`}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.round(remaining)}
