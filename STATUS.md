@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-07T13:57:00+03:00 · codex-2026-09-07-prompt-sources · HEAD: `529c266`
+**Last updated:** 2026-09-07T14:04:00+03:00 · codex-2026-09-07-release-0212 · HEAD: `2cb7083`
 
-**Current focus:** M12-T74 complete: captured instruction provenance in the API request inspector. Separate M3 work remains independent.
+**Current focus:** M12-T75: verify and publish stable 0.2.12 instruction provenance. Separate M3 work remains untouched.
 
 ## Milestones
 
@@ -23,7 +23,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M9 CLI | done | planned tasks complete |
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
-| M12 Product experience | done | source-aware request inspector verified; not released |
+| M12 Product experience | in-progress | stable 0.2.12 release verification |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers

@@ -364,6 +364,12 @@ lane T's own if both were written.
 
 | M12-T74 | Record and display instruction provenance | done | codex-2026-09-07-prompt-sources | workspace build/typecheck; 1,107 tests; real provider capture; four-layout browser review; `docs/prompt-provenance.md` | see notes |
 
+| M12-T75 | Release stable 0.2.12 | in-progress | codex-2026-09-07-release-0212 | — | see notes |
+
+#### M12-T75 notes
+- 2026-09-07 checkpoint: 0.2.12 passes all workspace builds/typechecks and 1,107 tests (`/tmp/release-0212-verify.log`), identity validation and 76 installer checks (`/tmp/release-0212-install.log`). Feature desktop/phone and both-theme evidence is recorded in M12-T74. Only release-owned files are staged in an isolated index; next push source and satisfy clean CI before tagging.
+- 2026-09-07 claimed: release committed instruction provenance as 0.2.12; preserve unrelated staged M3 work with an isolated index, verify source and installer, satisfy source CI before tagging, and publish the stable page without monitoring artifact jobs. Production processes remain untouched.
+
 #### M12-T74 notes
 - 2026-09-07 done: the public resource-loader seam observes the exact loaded base inputs and ordered extension prompt/request changes, including in-place mutation. Capture moves after registered pre-request handlers; a real Pi session proves its body equals the local provider's received request. Metadata contains only source identities, ranges and digests; retained-text validation rejects redaction/stale ranges without rereading files. The installed confidence-marker uses source identity, compact scrollable source details and inline focusable annotations, never confidence scores. Markdown remains one intact chat renderer with a source inventory; exact boundaries are shown in Plain. Search counts content once and excludes source chrome. Workspace build/typecheck and 1,107 tests pass (`/tmp/prompt-sources-verify.log`); final UI changes pass 37 targeted tests. Real browser verified desktop 1440×900 and phone 390×900 in both themes, search, source details, keyboard focus, Markdown and reduced motion, no errors/overflow (`/tmp/prompt-sources-{dark,light}-{1440,390}.png`). Temporary test service stopped; production untouched. No version bump, push or release.
 - 2026-09-07 checkpoint: verified the pinned builder against complete resource suffixes, custom/default prompts, source paths, skill escaping and disabled skills. UI review caught excessive source chips and inline-button layout gaps; replaced with a bounded source inventory and focusable inline text, preserving exact whitespace and the existing search implementation.
@@ -2641,3 +2647,9 @@ Consequences: source/version/tag are coherent; release page is stable, not prere
 Decision: add M12-T74. Record sources from the engine's loaded prompt inputs and observed extension transformations, alongside each captured request. Adapt the assistant-ui confidence-marker to source identity; it must not imply factual confidence. Old captures remain explicitly unrecorded.
 Why: a request inspector must explain how its actual instructions were composed, not match them against today's files.
 Consequences: provenance is diagnostic metadata only; it never changes the provider payload or rereads source files. Preserve the exact chat Markdown renderer and deduplicated request search. Unknown transformations must not inherit an earlier source label.
+
+### D-136 · 2026-09-07 · Release instruction provenance
+
+Decision: add M12-T75 and publish instruction provenance as stable 0.2.12.
+Why: the user requested a new release after accepting the completed feature.
+Consequences: include only the committed feature and release metadata; preserve unrelated M3 work. Source CI gates the tag; artifact readiness is delegated to the existing release pipeline and is not claimed at dispatch.
