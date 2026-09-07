@@ -494,6 +494,7 @@ Depends on: M1, M2-T4, M4, M5-T1, M11.
 | M12-T69 | Keep native notifications and desktop updates coherent | session reminders are withdrawn on acknowledgement and orderly exit; native package updates offer a full desktop restart, not just a daemon refresh; Linux protocol and lifecycle regressions are verified |
 | M12-T70 | Release stable 0.2.10 | goal history, search repairs and native lifecycle fixes pass staged verification and package checks; source, version tag and release are published |
 | M12-T71 | Preview link destinations and expose provider connection progress | hovered and keyboard-focused links show a non-interactive bottom-left destination; sign-in and search tests expose truthful local busy states through completion/failure; desktop/phone and both themes verified |
+| M12-T72 | Reuse an unstarted session when choosing New session | all UI entry points reuse an unarchived empty session in the same project, preserve its draft and settings, coalesce repeated clicks, and create a fresh session after work starts |
 
 ---
 

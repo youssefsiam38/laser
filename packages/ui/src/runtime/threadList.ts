@@ -287,7 +287,7 @@ export interface ThreadListDeps {
   archive: ArchiveStore;
   /** cwd a brand-new session is created in. */
   currentProject(): string | undefined;
-  /** `session/new` → returns the new session path. */
+  /** Select an unstarted session in this project, or create one; returns its path. */
   createSession(cwd: string): Promise<string>;
   /** `pi/session/rename`. */
   renameSession(path: string, name: string): Promise<void>;

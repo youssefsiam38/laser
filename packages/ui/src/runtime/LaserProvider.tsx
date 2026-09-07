@@ -57,6 +57,7 @@ import {
 import { HostClient } from "../client.js";
 import { initialState, reduce, type Action, type AppState, type SessionView } from "../store.js";
 import { createThreadAdapter, sendToSession, type SendBehavior } from "./adapter.js";
+import { createSessionLauncher } from "./new-session.js";
 import { useThemeSync } from "./prefs.js";
 import { projectSessionView, shareProjectedMessages, splitDialogs } from "./projection.js";
 import {
@@ -97,7 +98,7 @@ export type TrustRequest = HostNotifications["pi/project/trust_request"];
 export interface LaserActions {
   /** `session/load` (+ `pi/session/entries` on first open) and select it. */
   openSession(path: string): Promise<void>;
-  /** `session/new` in `cwd`; resolves with the new session path. */
+  /** Select an unstarted session in `cwd`, or create one; returns its path. */
   newSession(cwd: string): Promise<string>;
   /** Send to the current session with an explicit behavior. */
   send(content: ContentBlock[], behavior: SendBehavior): Promise<void>;
@@ -558,8 +559,17 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     [client],
   );
 
-  const newSession = useCallback(
-    async (cwd: string) => {
+  const newSession = useMemo(() => createSessionLauncher({
+    state: readState,
+    archived: (path) => archive.has(path),
+    refresh: async () => {
+      await client.whenConnected();
+      const { sessions } = await client.request("pi/session/list", {});
+      dispatch({ type: "sessions", sessions });
+    },
+    open: openSession,
+    select: (path) => dispatch({ type: "select", path }),
+    create: async (cwd) => {
       const { state: session } = await client.request("session/new", { cwd });
       client.track(session.path, 0);
       dispatch({ type: "opened", state: session });
@@ -568,8 +578,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       void refreshSessions();
       return session.path;
     },
-    [client, refreshSessions],
-  );
+  }), [archive, client, openSession, refreshSessions]);
 
   const requireCurrent = useCallback((): string => {
     const path = readState().current;

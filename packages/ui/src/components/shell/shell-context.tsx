@@ -25,7 +25,7 @@ export interface ShellContextValue {
   setToolsOpen(open: boolean): void;
   addProjectOpen: boolean;
   setAddProjectOpen(open: boolean): void;
-  /** `session/new` in the current project (Cmd+N). Surfaces its own errors. */
+  /** Open an unstarted session in the current project (Cmd+N). Surfaces its own errors. */
   newSession(): Promise<void>;
   /** A project is selected and the host is reachable. */
   canCreate: boolean;

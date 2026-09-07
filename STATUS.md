@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-07T09:03:07+03:00 · codex-2026-09-07-link-progress · HEAD: `e0ce1d4`
+**Last updated:** 2026-09-07T09:17:26+03:00 · codex-2026-09-07-empty-session · HEAD: `bbb7e0e`
 
-**Current focus:** Link destination preview and visible provider connection progress verified locally. Separate M3 agents specification remains awaiting product choices; no new release requested.
+**Current focus:** New session reuses an unstarted chat per project; verified locally, no push or release requested. Separate M3 specification work remains independent.
 
 ## Milestones
 
@@ -23,7 +23,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M9 CLI | done | planned tasks complete |
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
-| M12 Product experience | done | link/progress UX verified; 0.2.10 publication previously dispatched |
+| M12 Product experience | done | empty-session reuse and link/progress UX verified locally |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
@@ -38,8 +38,8 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Recently done
 
+- M12-T72: UI build/typecheck, 539 tests, real browser reuse/draft/first-send checks on desktop/phone in both themes.
 - M12-T71: UI build/typecheck, 517 tests, long-link and pending-connection browser review at desktop/phone widths in both themes.
 - M12-T70: `d229cac`, `v0.2.10`, release page published; source CI 34087083663 passed. Release workflow not monitored.
 - M12-T69: build/typecheck/1,065 tests, fresh packaged checks, native GNOME withdrawal and four-layout refresh/restart notices.
 - M12-T68: exclusive tested search activation and provider-specific errors; live probes and packaged/browser checks.
-- M12-T67: budget-free goals and durable, normally scrolling completion records; policy/history and browser proof.

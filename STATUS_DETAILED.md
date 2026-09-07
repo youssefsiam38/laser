@@ -358,6 +358,12 @@ lane T's own if both were written.
 
 | M12-T71 | Preview link destinations and expose provider connection progress | done | codex-2026-09-07-link-progress | UI build/typecheck; 517 UI tests; desktop/phone dark/light browser checks | see notes |
 
+| M12-T72 | Reuse an unstarted session when choosing New session | done | codex-2026-09-07-empty-session | UI build/typecheck; 539 UI tests; real host/browser desktop/phone checks in both themes | see notes |
+
+#### M12-T72 notes
+- 2026-09-07 done: one shared launcher refreshes the catalog, prefers the current unstarted chat then the newest in the requested project, and coalesces rapid requests. Hydrates unknown candidates before reuse; archived/branched sessions, optimistic sends, pending work, dialogs and goal history are excluded. Reuse only selects the existing assistant-ui identity, preserving composer drafts and model choices. Build/typecheck, 539 UI tests (22 new regressions), identity and diff checks pass (`/tmp/empty-session-{build,typecheck,tests}.log`). Real isolated host/browser proved eight-click bursts, Ctrl+N, new creation during a first streaming response, return from history with draft intact, independent project drafts and fresh-client reuse. Desktop 1440×900 and phone 390×900 reviewed in both themes (`/tmp/empty-session-{dark,light}-{1440,390}.png`), no horizontal overflow or page errors. A pre-existing phone-sheet focus tooltip can cover the new-session button center; keyboard and the unobscured pointer area work. No production restart, backend API change, version bump, push or release.
+- 2026-09-07 claimed: put reuse and repeated-click protection in the shared UI session launcher; retain per-project identity, drafts, settings and archives. No release or push requested; preserve unrelated specification edits.
+
 #### M12-T71 notes
 - 2026-09-07 done: document-delegated hover/focus previews include nested and portalled links, encoded URLs, credential omission, inert/unsafe-link suppression and stale cleanup; pointer-transparent fixed chrome never shifts layout. Provider sign-in indicates pending answer requests, preserves actual progress events and distinguishes key storage from API testing. Search testing names its provider inside the active disclosure with a sticky loader and collapsed-header spinner, plus an availability-local loader. Inputs are disabled during connection changes; success/failure exits busy state. UI build/typecheck and all 517 tests pass (`/tmp/link-progress-{build,typecheck,tests}.log`). Real app reviewed at 1440×900 and 390×900 in dark/light with deliberately held test responses and long URLs (`/tmp/link-signin-*.png`, `/tmp/provider-progress-*.png`); no paid probe or production credential write. Temporary isolated verification server only; no release/version change or push requested.
 - 2026-09-07 claimed: add one application-wide destination preview and use the adopted loading element beside provider controls while their real requests are pending. Preserve unrelated agents specification changes; no release requested.
@@ -2547,6 +2553,12 @@ Consequences: compiled PRODUCT_VERSION derives from the root workspace version t
 Decision: add M12-T71. One application-wide, pointer-transparent URL preview serves links including portalled dialogs; provider progress stays beside the active controls using the adopted loader.
 Why: link destinations should be inspectable before navigation and a disabled button alone does not explain a pending connection.
 Consequences: no preview fetches or invented progress percentages. Saving a model key is not described as testing it; search-provider tests name the provider actually being tested. No version bump or release in this task.
+
+### D-127 · 2026-09-07 · New session returns to unfinished composition
+
+Decision: add M12-T72. New session reuses an unarchived, unstarted session in the requested project; prefer the current empty chat, then the most recent. Coalesce simultaneous requests in this UI.
+Why: an unused composition surface is already the new session the person wants. Other projects, archived history, goals and active work must not be mistaken for it.
+Consequences: reuse preserves the existing assistant-ui thread identity, draft and model settings. Existing duplicate sessions are not deleted, and explicit backend session creation/fork semantics are unchanged.
 
 ## Status edits log
 
