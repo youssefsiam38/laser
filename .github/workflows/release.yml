@@ -217,12 +217,7 @@ jobs:
       - name: publish the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: scripts/release/publish.sh --tag "$LASERCODE_TAG" --dir release
-
-      - name: publish the offline provenance bundle
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$LASERCODE_TAG" "$RUNNER_TEMP/provenance.jsonl" --repo "youssefsiam38/laser" --clobber
+        run: scripts/release/publish.sh --tag "$LASERCODE_TAG" --dir release --provenance "$RUNNER_TEMP/provenance.jsonl"
 
   deploy-package-repositories:
     name: deploy package repositories

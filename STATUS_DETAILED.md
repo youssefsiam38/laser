@@ -366,6 +366,12 @@ lane T's own if both were written.
 
 | M12-T75 | Release stable 0.2.12 | done | codex-2026-09-07-release-0212 | `e898598`; clean CI 34114769530; `v0.2.12`; published stable release page | see notes |
 
+| M12-T76 | Publish releases only after downloads are complete | done | codex-2026-09-07-release-assets | `pnpm verify`; 13 publication regressions; 76 installer checks; eight live package links HTTP 200 | see notes |
+
+#### M12-T76 notes
+- 2026-09-07 done: draft-first publisher verifies the complete architecture inventory and every remote asset's size/state/SHA-256 before public visibility; includes offline provenance in the same upload, preserves published bytes, and handles draft discovery through the CLI's draft-aware resolver rather than the published-only REST tag route. CI and `pnpm verify` run 13 ordering/failure/retry tests. Workspace builds/typechecks and 1,107 app tests pass (`/tmp/release-assets-verify.log`); 76 installer checks pass. 0.2.12 now has all 12 assets and is Latest; all eight package download URLs return HTTP 200. Its original pipeline succeeded through uploads while this fix was developed; no tag moved or runtime restarted. Future no-monitor delivery reports dispatch, not publication. AGENTS and release guide record the rule; unrelated M3 work remains excluded.
+- 2026-09-07 claimed: 0.2.12 builds both succeeded, but the manually published page preceded the pipeline upload. Fix publication to use drafts, verify the complete asset set before visibility, include provenance in that transaction, and document that tag dispatch is not publication. Preserve unrelated M3 work and immutable 0.2.12 tag.
+
 #### M12-T75 notes
 - 2026-09-07 done: source `e898598cd02ac7b182d4bed0f356cf203f69cdfc` and immutable `v0.2.12` pushed after source CI 34114769530 succeeded. https://github.com/youssefsiam38/laser/releases/tag/v0.2.12 is published, not draft or prerelease. Latest promotion waits for the existing pipeline's verified artifacts. Artifact jobs were not monitored; download/feed readiness is not claimed. Unrelated M3 staged work and production processes remain untouched.
 - 2026-09-07 checkpoint: 0.2.12 passes all workspace builds/typechecks and 1,107 tests (`/tmp/release-0212-verify.log`), identity validation and 76 installer checks (`/tmp/release-0212-install.log`). Feature desktop/phone and both-theme evidence is recorded in M12-T74. Only release-owned files are staged in an isolated index; next push source and satisfy clean CI before tagging.
@@ -2654,3 +2660,10 @@ Consequences: provenance is diagnostic metadata only; it never changes the provi
 Decision: add M12-T75 and publish instruction provenance as stable 0.2.12.
 Why: the user requested a new release after accepting the completed feature.
 Consequences: include only the committed feature and release metadata; preserve unrelated M3 work. Source CI gates the tag; artifact readiness is delegated to the existing release pipeline and is not claimed at dispatch.
+
+### D-137 · 2026-09-07 · Downloads gate public releases
+
+Decision: add M12-T76. Only the artifact publisher may make a release public, after both architectures and all installer verification assets are uploaded and verified. Early notes may exist only in drafts.
+Why: publishing a page before its downloads created a user-visible empty release despite healthy builds.
+Consequences: no-monitor requests mean dispatch the tag and report it as dispatched, not published. Failures remain drafts; previously published artifacts are not overwritten.
+Supersedes: D-136 and earlier release-page-before-artifacts practice.

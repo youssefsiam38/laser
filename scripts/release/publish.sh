@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # Turn a staging directory of artifacts into a GitHub release.
 #
-#   scripts/release/publish.sh --tag v0.1.0 --dir release
-#   scripts/release/publish.sh --tag v0.1.0 --dir release --draft
+#   scripts/release/publish.sh --tag v0.1.0 --dir release --provenance /path/provenance.jsonl
+#   scripts/release/publish.sh --tag v0.1.0 --dir release --stage-only
 #
 # Run this once, after every architecture's artifacts are in one directory. It
 # rewrites SHA256SUMS over whatever is actually there (so a half-finished set
 # cannot ship a manifest that claims otherwise), signs it if a release key is
 # configured, and uploads install.sh alongside — the same install.sh that is in
 # this commit, so the script and the artifacts it verifies are one release.
+# Publication requires both Linux architectures and offline provenance. Uploads
+# stay in a draft until every remote size and SHA-256 digest matches. A manually
+# staged build without provenance can be tested locally, but cannot be published.
 set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -24,6 +27,7 @@ RELEASE_KEY="$(printenv "${product_env_prefix}_RELEASE_KEY" || true)"
 DRAFT=0
 NOTES=""
 STAGE_ONLY=0
+PROVENANCE=""
 
 die() {
   printf '\npublish: %s\n' "$1" >&2
@@ -55,6 +59,8 @@ while [ $# -gt 0 ]; do
       ;;
     --notes=*) NOTES="${1#--notes=}" ;;
     --draft) DRAFT=1 ;;
+    --provenance) shift; PROVENANCE="${1:-}" ;;
+    --provenance=*) PROVENANCE="${1#--provenance=}" ;;
     # Assemble the final set of files and stop. The release workflow uses this
     # to attest the exact bytes it is about to upload; running publish.sh again
     # afterwards regenerates a byte-identical manifest (sorted names, and
@@ -141,38 +147,11 @@ if [ "$STAGE_ONLY" = 1 ]; then
   exit 0
 fi
 
-printf '==> uploading to %s %s\n\n' "$REPO" "$TAG"
-assets=()
-while IFS= read -r f; do assets+=("$f"); done < <(find "$DIR" -maxdepth 1 -type f | LC_ALL=C sort)
+node "$HERE/publish-github.mjs" "$TAG" "$VERSION" "$REPO" "$DIR" "$PROVENANCE" "$DRAFT" "$NOTES"
 
-create_args=(release create "$TAG" --repo "$REPO" --title "$product_display $VERSION")
-edit_args=(release edit "$TAG" --repo "$REPO")
-# GitHub's /releases/latest route excludes prereleases. Keep that contract
-# mechanical: SemVer pre-release versions never become Latest, while a plain
-# release such as 0.1.0 is explicitly both stable and Latest.
-case "$VERSION" in
-  *-*)
-    create_args+=(--prerelease --latest=false)
-    edit_args+=(--prerelease --latest=false)
-    ;;
-  *)
-    create_args+=(--latest)
-    edit_args+=(--prerelease=false --latest)
-    ;;
-esac
-[ "$DRAFT" = 1 ] && create_args+=(--draft)
-if [ -n "$NOTES" ]; then
-  create_args+=(--notes "$NOTES")
-else
-  create_args+=(--generate-notes)
-fi
-
-if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-  printf '    release %s exists; replacing its assets\n' "$TAG"
-  gh release upload "$TAG" --repo "$REPO" --clobber "${assets[@]}"
-  gh "${edit_args[@]}"
-else
-  gh "${create_args[@]}" "${assets[@]}"
+if [ "$DRAFT" = 1 ]; then
+  printf '\nDraft verified. No public release was published.\n'
+  exit 0
 fi
 
 printf '\nPublished. Install it with:\n\n'

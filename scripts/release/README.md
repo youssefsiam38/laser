@@ -12,7 +12,7 @@ for the one thing a laptop cannot mint, the build attestation.
 | `manifest.sh` | Writes `SHA256SUMS` over a staging directory, in `sha256sum` format, sorted |
 | `sign.sh` | Creates the release key, and signs `SHA256SUMS` with it |
 | `package-repositories.sh` | Signs RPMs and builds the signed APT and DNF repositories used by native OS updaters |
-| `publish.sh` | Re-runs the manifest over the final set, adds `install.sh`, and uploads the lot to a GitHub release; CI adds the offline provenance bundle |
+| `publish.sh` | Finalizes the manifest and installer, uploads both architectures and offline provenance to a draft, verifies remote sizes/digests, then publishes |
 | `verify-install.sh` | Runs `install.sh` end to end against a local directory: install, upgrade, tamper, uninstall |
 
 ## By hand
@@ -38,8 +38,11 @@ scripts/release/build-linux.sh --arch x64 --out release
 # 3. On an aarch64 machine, into the same directory (rsync it over)
 scripts/release/build-linux.sh --arch arm64 --out release
 
-# 4. Once, from either
-scripts/release/publish.sh --tag v0.1.0 --dir release
+# 4. Stage and verify locally. Public publication also requires CI provenance.
+scripts/release/publish.sh --tag v0.1.0 --dir release --stage-only
+scripts/release/verify-install.sh --release release
+# The CI publisher supplies the signed bundle outside the attested directory:
+scripts/release/publish.sh --tag v0.1.0 --dir release --provenance /path/provenance.jsonl
 ```
 
 `build-linux.sh` runs `packages/desktop/scripts/clean-machine.mjs` against the
@@ -50,8 +53,22 @@ past `pnpm -r test` and past `doctor` run from a checkout; only that found them.
 A failure there stops the release rather than staging artifacts nobody can run.
 
 `publish.sh` writes the manifest, signs it when a key is configured, copies
-`install.sh` in beside the artifacts, and uploads everything. Re-running it
-replaces the assets on an existing release rather than failing.
+`install.sh` in beside the artifacts, and uploads everything to a **draft**.
+Both architectures' AppImage, tarball, DEB and RPM, the installer, checksum
+manifest and offline provenance are required. Every uploaded asset must have
+the expected size, SHA-256 digest and completed upload state before the draft
+becomes public. Configured signatures are included in the same check.
+An upload or verification failure leaves the release private. A retry can repair
+a draft; it cannot overwrite an already published release.
+
+Never manually publish an empty release page after pushing a tag. Early notes
+may be saved in a draft. If asked not to monitor builds, report **tag pushed;
+release building**, not **published**. The publisher owns public visibility and
+Latest promotion. Native repository deployment follows publication separately.
+Run `pnpm test:release` to verify these failure and ordering guards.
+
+This follows GitHub's [draft release flow](https://cli.github.com/manual/gh_release_create)
+and [asset digest metadata](https://docs.github.com/en/rest/releases/assets).
 
 In CI, `package-repositories.sh` runs before the manifest and attestation so the
 signed RPM bytes are the bytes both the release and DNF receive. It signs APT's

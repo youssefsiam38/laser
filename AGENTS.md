@@ -348,6 +348,17 @@ specifiers (Pi loads extensions this way and we match it), Node 24, pnpm.
 These rules exist because both failures below escaped a local green check and
 reached a pushed release candidate. Treat them as release blockers, not advice.
 
+### A tag is not a downloadable release
+
+Never publish a release page while architecture jobs are running. Push the tag;
+optional early notes must remain a draft. Only `scripts/release/publish.sh`
+publishes after complete x64/ARM64 installers, checksums and offline provenance
+are uploaded and their remote sizes and SHA-256 digests match. Upload failures
+remain drafts; published assets must not be overwritten. A no-monitor request
+means report "tag pushed; release building", not "published". Record download
+readiness only after checking the actual assets. Run the publication regression
+tests with `node --test scripts/release/test/*.test.mjs`.
+
 ### New files and the identity check
 
 **Problem:** `scripts/identity/check.mjs` intentionally scans tracked files. A

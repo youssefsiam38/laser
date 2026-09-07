@@ -217,12 +217,7 @@ jobs:
       - name: publish the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: scripts/release/publish.sh --tag "{{env.tag|shellvar}}" --dir release
-
-      - name: publish the offline provenance bundle
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "{{env.tag|shellvar}}" "$RUNNER_TEMP/provenance.jsonl" --repo "{{repository}}" --clobber
+        run: scripts/release/publish.sh --tag "{{env.tag|shellvar}}" --dir release --provenance "$RUNNER_TEMP/provenance.jsonl"
 
   deploy-package-repositories:
     name: deploy package repositories

@@ -41,3 +41,5 @@ jobs:
       # the only thing that checks the path a person on a clean machine takes,
       # and it is cheap enough to run on every change.
       - run: bash scripts/release/verify-install.sh
+
+      - run: node --test scripts/release/test/*.test.mjs

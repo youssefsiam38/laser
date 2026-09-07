@@ -498,6 +498,7 @@ Depends on: M1, M2-T4, M4, M5-T1, M11.
 | M12-T73 | Release stable 0.2.11 | empty-session reuse, destination previews and provider progress pass staged release checks; source, tag and release page are published without monitoring release artifact jobs |
 | M12-T74 | Record and display instruction provenance | request captures retain the loaded instruction sources and observed extension changes; the request inspector highlights their exact retained ranges with the adapted confidence-marker element, preserves Markdown and search, and explicitly identifies captures without recorded sources |
 | M12-T75 | Release stable 0.2.12 | instruction provenance passes release verification; matching source and tag are pushed and the stable release page is created without monitoring artifact jobs |
+| M12-T76 | Publish releases only after downloads are complete | releases remain drafts through upload and asset verification; failures cannot expose an empty or partial release; regression tests guard publication order |
 
 ---
 
