@@ -540,6 +540,7 @@ Depends on: M12.
 | M13-T10 | Integration verification: host and worker end-to-end delegation with a stub provider, sandbox scene, desktop and phone review in both themes with pointer and keyboard, full verify gate | evidence recorded per scenario in the ledger |
 | M13-T11 | Remove the retired pi-subagents file layer, its CLI commands and documents once nothing reads them | no `packages/host/src/subagents` observation code remains |
 | M13-T12 | Keep `.laser` project overrides through engine resource reloads: `resourceLoader.reload()` re-reads settings and drops `applyOverrides` values during service creation, so project settings and the blanked resource lists may not reach the engine | a real-engine test proves a `.laser/settings.json` value is in effect after session open and after a resource reload |
+| M13-T13 | Put the Beam and Chat workspaces under the state directory the host owns, create one before starting its worker, and recreate a missing workspace when a stored Beam or Chat session is opened | a Beam chat opens after its workspace folder is deleted, and a workspace that cannot be created refuses the session with the reason |
 
 ---
 

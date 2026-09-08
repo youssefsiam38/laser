@@ -70,7 +70,7 @@ import {
   type SessionDriver,
 } from "../driver.js";
 import { createUiBridge, type UiBridge } from "../ui-bridge.js";
-import { engineToolsFor, excludedEngineTools, filterSkills, wantsWebSearch } from "../agents/session-config.js";
+import { engineToolsFor, excludedEngineTools, filterSkills, wantsWebSearch, ensureWorkspaceSessionCwd } from "../agents/session-config.js";
 import { modelUnavailableMessage } from "../agents/harness.js";
 
 type PiModel = ReturnType<ModelRuntime["getModels"]>[number];
@@ -221,6 +221,13 @@ export class StableSdkDriver implements SessionDriver {
       if (agent) activateAgentTools(created.session, agent.definition);
       return { ...created, services, diagnostics: services.diagnostics };
     };
+
+    // Beam and Chat run in the app's own workspace. The engine records the
+    // directory in the session header and refuses to build a runtime whose
+    // stored directory is gone, so a workspace that vanished (a moved state
+    // directory, an older layout) is recreated here — before the runtime is
+    // built — rather than costing the person every chat in it.
+    if (agent) await ensureWorkspaceSessionCwd(agent.role.kind, options.cwd, options.sessionPath);
 
     const runtime = await createAgentSessionRuntime(createRuntime, {
       cwd: options.cwd,

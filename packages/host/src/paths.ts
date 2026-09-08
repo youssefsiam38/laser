@@ -24,6 +24,7 @@
  * directory.
  */
 import { DATA_DIR_NAME, WORKTREES_DIR_NAME } from "@lasercode/protocol";
+import { mkdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
 
@@ -50,17 +51,39 @@ export function defaultStateDir(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /**
- * The directories the built-in projectless agents run in. They live beside
- * `agent/` and `state/` under the product's own data directory: they are not
- * projects (the registry never lists them), just a working directory Beam and
- * Chat sessions can be created in.
+ * The directories the built-in projectless agents run in. They live under the
+ * host's own state directory (`<stateDir>/workspaces/beam`, `…/chat`): the
+ * host creates and owns that directory in every layout, so a workspace is
+ * never derived from a path some other layer chose. They are not projects
+ * (the registry never lists them), just a working directory Beam and Chat
+ * sessions can be created in.
  */
-export function beamWorkspaceDir(dataDir: string): string {
-  return join(dataDir, "beam");
+export function workspacesDir(stateDir: string): string {
+  return join(stateDir, "workspaces");
 }
 
-export function chatWorkspaceDir(dataDir: string): string {
-  return join(dataDir, "chat");
+export function beamWorkspaceDir(stateDir: string): string {
+  return join(workspacesDir(stateDir), "beam");
+}
+
+export function chatWorkspaceDir(stateDir: string): string {
+  return join(workspacesDir(stateDir), "chat");
+}
+
+/**
+ * Make sure a workspace directory exists. Returns the reason it could not be
+ * created, in words a person can act on, or undefined when it is there.
+ */
+export function ensureWorkspace(dir: string): string | undefined {
+  try {
+    mkdirSync(dir, { recursive: true });
+    if (!statSync(dir).isDirectory()) return `${dir} exists but is not a directory`;
+    return undefined;
+  } catch (error) {
+    const code = (error as { code?: string }).code;
+    const why = code === "EACCES" || code === "EPERM" ? "permission denied" : code === "ENOTDIR" ? "a parent of that path is a file" : code === "EROFS" ? "the file system is read-only" : error instanceof Error ? error.message : String(error);
+    return why;
+  }
 }
 
 /**

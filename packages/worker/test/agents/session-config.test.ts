@@ -89,3 +89,42 @@ describe("readSessionAgentRecord", () => {
     expect(await readSessionAgentRecord(path)).toBeUndefined();
   });
 });
+
+describe("workspace sessions whose folder is gone", () => {
+  it("reads the header cwd, recreates a Beam or Chat workspace, and leaves a project session to the engine", async () => {
+    const { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { ensureWorkspaceSessionCwd, readSessionHeaderCwd } = await import("../../src/agents/session-config.js");
+    const base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-workspace-cwd-`));
+    try {
+      const workspace = join(base, "old-layout", "beam");
+      const path = join(base, "beam.jsonl");
+      writeFileSync(path, `${JSON.stringify({ type: "session", version: 3, id: "s1", timestamp: "2026-09-08T10:00:00.000Z", cwd: workspace })}\n`);
+      expect(await readSessionHeaderCwd(path)).toBe(workspace);
+      expect(await readSessionHeaderCwd(join(base, "missing.jsonl"))).toBeUndefined();
+
+      expect(existsSync(workspace)).toBe(false);
+      await ensureWorkspaceSessionCwd("beam", workspace, path);
+      expect(existsSync(workspace)).toBe(true);
+      rmSync(workspace, { recursive: true, force: true });
+      await ensureWorkspaceSessionCwd("chat", workspace, path);
+      expect(existsSync(workspace)).toBe(true);
+
+      // A project session is never recreated: that directory is the person's.
+      rmSync(workspace, { recursive: true, force: true });
+      await ensureWorkspaceSessionCwd("root", workspace, path);
+      await ensureWorkspaceSessionCwd("child", workspace, path);
+      expect(existsSync(workspace)).toBe(false);
+
+      // Unwritable: refused in words, naming the folder and the way out.
+      mkdirSync(join(base, "file-parent"));
+      writeFileSync(join(base, "file-parent", "blocker"), "x");
+      const blocked = join(base, "blocked.jsonl");
+      writeFileSync(blocked, `${JSON.stringify({ type: "session", version: 3, id: "s2", timestamp: "2026-09-08T10:00:00.000Z", cwd: join(base, "file-parent", "blocker", "beam") })}\n`);
+      await expect(ensureWorkspaceSessionCwd("beam", join(base, "file-parent", "blocker", "beam"), blocked)).rejects.toThrow(/Beam's workspace folder .*blocker\/beam is missing and could not be recreated \(.*\)\. Start a new Beam chat/);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+});

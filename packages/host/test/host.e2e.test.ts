@@ -211,12 +211,12 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
     await client.connect(url);
     const project = join(base, "project");
     try {
-      // The workspaces exist beside the sandboxed state dir, and are not projects.
-      expect(existsSync(join(base, "beam"))).toBe(true);
-      expect(existsSync(join(base, "chat"))).toBe(true);
+      // The workspaces live under the host's own state dir, and are not projects.
+      expect(existsSync(join(base, "state", "workspaces", "beam"))).toBe(true);
+      expect(existsSync(join(base, "state", "workspaces", "chat"))).toBe(true);
       const listed = await client.request<{ agents: Array<{ name: string; kind: string }>; defaultAgent: string; workspaces: { beam: string; chat: string } }>("agents/list", {});
       expect(listed.agents.map((a) => `${a.name}:${a.kind}`)).toEqual(["default:custom", "beam:builtin", "chat:builtin", "namer:builtin"]);
-      expect(listed.workspaces).toEqual({ beam: join(base, "beam"), chat: join(base, "chat") });
+      expect(listed.workspaces).toEqual({ beam: join(base, "state", "workspaces", "beam"), chat: join(base, "state", "workspaces", "chat") });
       await expect(client.request("agents/sync", { snapshot: listed })).rejects.toThrow("The app sends this to its own workers.");
 
       // A save is broadcast to every client and persisted for the next host.

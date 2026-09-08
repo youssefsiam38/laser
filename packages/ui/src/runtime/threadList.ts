@@ -287,8 +287,9 @@ export function visibleProjectCwds(
   for (const project of projects) {
     if (project.pinned || project.sessionCount > (archivedByCwd.get(project.cwd) ?? 0)) append(project.cwd);
   }
-  for (const session of sessions) if (!archive.has(session.path)) append(session.cwd);
-  for (const view of Object.values(open)) if (view) append(view.state.cwd);
+  const workspaceKind = (kind: string | undefined) => kind === "beam" || kind === "chat";
+  for (const session of sessions) if (!archive.has(session.path) && !workspaceKind(session.agent?.kind)) append(session.cwd);
+  for (const view of Object.values(open)) if (view && !workspaceKind(view.state.agent?.kind)) append(view.state.cwd);
   return visible;
 }
 

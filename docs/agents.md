@@ -254,8 +254,8 @@ Background tasks and child agents share the fleet's run vocabulary.
 
 | Agent | Runs in | Tools | Integration |
 | --- | --- | --- | --- |
-| `beam` | `<data>/beam` (`workspaces.beam`) | all default tools plus `web_search`; scoped to the one Beam skill | one entry point: the spark at the bottom left beside Settings, present in chat, Settings and logs. It opens a bubble that grows out of the icon and holds the normal chat; before the first message the middle hints that Beam is the assistant for Laser; the first message creates a Beam session in Beam's group. No other Beam entry point exists |
-| `chat` | `<data>/chat` (`workspaces.chat`) | `web_search` only | the Chat tab, first in the sidebar before Code; projectless chats |
+| `beam` | `<state>/workspaces/beam` (`workspaces.beam`) | all default tools plus `web_search`; scoped to the one Beam skill | one entry point: the spark at the bottom left beside Settings, present in chat, Settings and logs. It opens a bubble that grows out of the icon and holds the normal chat; before the first message the middle hints that Beam is the assistant for Laser; the first message creates a Beam session in Beam's group. No other Beam entry point exists |
+| `chat` | `<state>/workspaces/chat` (`workspaces.chat`) | `web_search` only | the Chat tab, first in the sidebar before Code; projectless chats |
 | `namer` | the project's own worker | none | names things from a small context |
 
 **Beam's skill** (`packages/worker/src/agents/beam-skill.ts`) is written by the

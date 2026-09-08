@@ -11,7 +11,7 @@
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentRun, SessionState, SessionSummary } from "@lasercode/protocol";
@@ -66,10 +66,13 @@ function state(path: string, cwd: string): SessionState {
   };
 }
 
-const WORKSPACES = { beam: "/data/beam", chat: "/data/chat" };
+// Real directories: `session/new` creates a workspace before spawning its
+// worker, and refuses the session when it cannot.
+const WORKSPACE_ROOT = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-workspaces-`));
+const WORKSPACES = { beam: join(WORKSPACE_ROOT, "beam"), chat: join(WORKSPACE_ROOT, "chat") };
 
 /** A Router with fakes for everything but the piece under test. */
-function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string, string[]>; agents?: boolean } = {}) {
+function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string, string[]>; agents?: boolean; workspaces?: { beam: string; chat: string } } = {}) {
   const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-`));
   const catalogRows = options.catalogRows ?? [];
   const open = options.open ?? { [CWD_A]: [PATH_A] };
@@ -105,7 +108,7 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
 
   const attention = new AttentionTracker({});
   const projects = new ProjectRegistry({ catalog, agentDir: dir, exclude: [WORKSPACES.beam, WORKSPACES.chat] });
-  const agents = options.agents ? new AgentStore({ agentDir: join(dir, "agent"), workspaces: WORKSPACES }) : undefined;
+  const agents = options.agents ? new AgentStore({ agentDir: join(dir, "agent"), workspaces: options.workspaces ?? WORKSPACES }) : undefined;
   // Fixtures date from June; a fixed clock keeps retention from pruning them.
   const runs = options.agents ? new AgentRunRegistry({ now: () => new Date("2026-06-02T00:00:00.000Z") }) : undefined;
   const router = new Router(pool, catalog, { attention, projects, views: new ViewCache(2), agents, runs });
@@ -315,6 +318,28 @@ describe("Router · agents (docs/agents-leap)", () => {
       expect(h.workerRequests).toHaveLength(before);
     } finally {
       h.cleanup();
+    }
+  });
+
+  it("creates a workspace before starting its worker, and refuses the session with the reason when it cannot", async () => {
+    const root = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-blocked-`));
+    // A regular file where the workspaces root should be: nothing can be created beneath it.
+    writeFileSync(join(root, "blocked"), "not a directory\n");
+    const h = harness({ agents: true, workspaces: { beam: join(root, "blocked", "beam"), chat: join(root, "chat") } });
+    try {
+      expect(existsSync(join(root, "chat"))).toBe(false);
+      await rpc(h.router, "session/new", { cwd: join(root, "chat"), agentName: "chat" });
+      expect(existsSync(join(root, "chat"))).toBe(true);
+      expect(h.workerRequests.at(-1)).toMatchObject({ cwd: join(root, "chat"), params: { agentName: "chat" } });
+
+      const before = h.workerRequests.length;
+      const refused = await rpc(h.router, "session/new", { cwd: join(root, "blocked", "beam") });
+      expect(refused).toMatchObject({ error: { message: expect.stringMatching(/Beam's workspace folder could not be created at .*blocked\/beam: a parent of that path is a file/) } });
+      // No worker was started for a directory that does not exist.
+      expect(h.workerRequests).toHaveLength(before);
+    } finally {
+      h.cleanup();
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

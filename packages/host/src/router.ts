@@ -36,7 +36,7 @@ import { searchSessions } from "./session-search.js";
 import type { LogStore } from "./logstore.js";
 import { browseDirectories, type PackageService, type SetupService } from "./packages.js";
 import type { PanelHub } from "./panels/hub.js";
-import { projectRootOf } from "./paths.js";
+import { ensureWorkspace, projectRootOf } from "./paths.js";
 import type { PrefsStore } from "./prefs.js";
 import type { FeatureService } from "./features.js";
 import type { ProjectRegistry } from "./projects.js";
@@ -312,6 +312,20 @@ export class Router {
       case "session/new": {
         const { cwd } = req.params;
         const agentName = this.resolveStartAgent(cwd, req.params.agentName);
+        // A workspace must exist before a worker is started in it. The engine
+        // records the directory in the session header and refuses to open a
+        // session whose directory is gone, so a missing folder is refused
+        // here, with its reason, rather than becoming a session nobody can open.
+        const workspaceAgent = this.workspaceAgentOf(cwd);
+        if (workspaceAgent) {
+          const problem = ensureWorkspace(cwd);
+          if (problem) {
+            throw new ProtocolError(
+              ErrorCodes.Internal,
+              `${labelOf(workspaceAgent)}'s workspace folder could not be created at ${cwd}: ${problem}. Give ${PRODUCT_DISPLAY_NAME} a writable state directory, then try again.`,
+            );
+          }
+        }
         const worker = await this.pool.get(cwd);
         const result = await worker.request<{ state: SessionState }>(req.method, agentName ? { ...req.params, agentName } : req.params);
         this.pool.bindSession(result.state.path, cwd);
@@ -587,6 +601,16 @@ export class Router {
   }
 
   /**
+   * A Beam or Chat session by its own record, whatever directory its header
+   * names: a session created while the workspaces lived elsewhere must not
+   * turn that old directory into a project when it is opened.
+   */
+  private isWorkspaceSession(path: string): boolean {
+    const kind = this.catalog.list().find((session) => session.path === path)?.agent?.kind;
+    return kind === "beam" || kind === "chat";
+  }
+
+  /**
    * Anything the host does not answer itself goes to a worker: by `cwd` for the
    * per-project methods, by upload id for dictation chunks, by session path
    * for everything else.
@@ -636,7 +660,7 @@ export class Router {
         const worker = await this.workerFor(path);
         const result = await worker.request(req.method, req.params);
         const cwd = this.pool.cwdOfSession(path);
-        if (req.method === "session/load" && cwd && !this.isWorkspace(cwd)) this.deps.projects.touch(cwd);
+        if (req.method === "session/load" && cwd && !this.isWorkspace(cwd) && !this.isWorkspaceSession(path)) this.deps.projects.touch(cwd);
         // A fork answers with a new session path served by the same worker; a
         // navigate rewrites the leaf, so the cached transcript is stale.
         const state = (result as { state?: SessionState } | null)?.state;

@@ -153,8 +153,12 @@ export function sessionGroups(
   const byPath = new Map(merged.map((s) => [s.path, s]));
   const byCwd = new Map<string, SessionSummary[]>();
   for (const s of merged) {
-    const cwd = groupCwdOf(s, byPath, options.runs ?? {});
-    const kind = workspaceKindOf(cwd, workspaces);
+    // A Beam or Chat session belongs to its workspace by its own record even
+    // when its header names an older workspace directory (the workspaces
+    // moved under the state directory); the directory never becomes a group.
+    const recorded = s.agent?.kind === "beam" || s.agent?.kind === "chat" ? s.agent.kind : undefined;
+    const cwd = recorded && workspaces[recorded] !== undefined ? workspaces[recorded]! : groupCwdOf(s, byPath, options.runs ?? {});
+    const kind = recorded ?? workspaceKindOf(cwd, workspaces);
     // Each tab shows its own kind of conversation and nothing of the other's.
     if ((tab === "chat") !== (kind === "chat")) continue;
     const list = byCwd.get(cwd);

@@ -6,6 +6,7 @@
  * on `session/load` to recover which agent a stored session runs as. The
  * reader parses JSON only; it never opens an engine.
  */
+import { existsSync, mkdirSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { SESSION_AGENT_ENTRY_TYPE, type AgentDefinition, type SessionAgentKind, type SessionAgentRecord } from "@lasercode/protocol";
 import type { HarnessSessionRole } from "./bridge.js";
@@ -133,4 +134,60 @@ export async function readSessionAgentRecord(path: string): Promise<SessionAgent
     if (record) return record;
   }
   return undefined;
+}
+
+/**
+ * The working directory a stored session names in its header line, or
+ * undefined when the file cannot be read or has no header.
+ */
+export async function readSessionHeaderCwd(path: string): Promise<string | undefined> {
+  let first: string;
+  try {
+    const handle = await open(path, "r");
+    try {
+      const buffer = Buffer.alloc(8 * 1024);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      first = buffer.subarray(0, bytesRead).toString("utf8").split("\n")[0] ?? "";
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return undefined;
+  }
+  try {
+    const header = JSON.parse(first) as { type?: unknown; cwd?: unknown };
+    return header.type === "session" && typeof header.cwd === "string" && header.cwd.length > 0 ? header.cwd : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A Beam or Chat session's working directory is the app's own workspace, so
+ * a missing one is recreated rather than refused: the engine will not open a
+ * session whose stored directory is gone, and a person who moved their state
+ * directory or ran an older layout would otherwise lose every Beam chat.
+ * Never applied to a project session — a project that vanished is the
+ * person's to restore.
+ */
+export async function ensureWorkspaceSessionCwd(kind: SessionAgentKind, cwd: string, sessionPath?: string): Promise<void> {
+  if (kind !== "beam" && kind !== "chat") return;
+  const label = kind === "beam" ? "Beam" : "Chat";
+  const wanted = new Set([cwd]);
+  // A stored session may name an older workspace directory; the engine checks
+  // that one, so both are ensured.
+  if (sessionPath) {
+    const stored = await readSessionHeaderCwd(sessionPath);
+    if (stored) wanted.add(stored);
+  }
+  for (const dir of wanted) {
+    if (existsSync(dir)) continue;
+    try {
+      mkdirSync(dir, { recursive: true });
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      const why = code === "EACCES" || code === "EPERM" ? "permission denied" : code === "ENOTDIR" ? "a parent of that path is a file" : code === "EROFS" ? "the file system is read-only" : error instanceof Error ? error.message : String(error);
+      throw new Error(`${label}'s workspace folder ${dir} is missing and could not be recreated (${why}). Start a new ${label} chat; this one cannot be opened.`);
+    }
+  }
 }

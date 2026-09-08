@@ -157,7 +157,10 @@ in-memory engine overrides.
   policy and the Beam/Namer model choices. `<Laser data>/state/agent-runs.json`:
   every agent run the host has heard of, fed by worker `agents/run`
   notifications ([`agents.md`](agents.md) §8).
-- `<Laser data>/beam` and `<Laser data>/chat`: the working directories of the
-  projectless built-in agents; not projects.
+- `<Laser data>/state/workspaces/beam` and `.../chat`: the working directories
+  of the projectless built-in agents; not projects. They live under the state
+  directory the host creates and owns, so a sandboxed or relocated state
+  directory keeps its workspaces with it, and a Beam or Chat session whose
+  folder is gone has it recreated instead of becoming unopenable.
 - Keychain: root identity key, relay credentials.
 - `<project>/.laser/settings.json`: project-scoped product settings.

@@ -114,6 +114,42 @@ describe("StableSdkDriver with an agent definition", () => {
     await expect(driver.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), agent: agentOptions(definition) })).rejects.toThrow(/anthropic\/claude-sonnet-4-5 is not available: connect anthropic in Settings → Providers and models/);
   }, 60_000);
 
+  it("reopens a Beam session whose workspace folder vanished by recreating the folder", async () => {
+    ensureBeamSkill({ agentDir: join(base, "agent"), stateDir: join(base, "state") });
+    const beam = fallbackBeamAgent({ model: null, beamSkill: { name: BEAM_SKILL_NAME, path: join(base, "agent", "skills", BEAM_SKILL_NAME, "SKILL.md"), scope: "bundled" } });
+    const workspace = join(base, "state", "workspaces", "beam");
+    mkdirSync(workspace, { recursive: true });
+    const driver = new StableSdkDriver();
+    const state = await driver.open({ cwd: workspace, agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), projectTrusted: true, agent: agentOptions(beam, "beam") });
+    await driver.prompt([{ type: "text", text: "hello" }]);
+    await driver.dispose();
+    expect(existsSync(state.path)).toBe(true);
+
+    // The layout moved (or the folder was removed): the stored cwd is gone.
+    rmSync(workspace, { recursive: true, force: true });
+    expect(existsSync(workspace)).toBe(false);
+    const again = new StableSdkDriver();
+    const reopened = await again.open({ cwd: workspace, agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), sessionPath: state.path, projectTrusted: true, agent: agentOptions(beam, "beam") });
+    expect(reopened.path).toBe(state.path);
+    expect(reopened.cwd).toBe(workspace);
+    // `state.agent` is the worker's decoration, not the driver's; what matters
+    // here is that the session opened at all and its folder is back.
+    expect(existsSync(workspace)).toBe(true);
+    await again.dispose();
+
+    // A project session gets the engine's refusal, not a recreated directory.
+    const project = join(base, "vanishing-project");
+    mkdirSync(project, { recursive: true });
+    const plain = new StableSdkDriver();
+    const projectState = await plain.open({ cwd: project, agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), projectTrusted: true, agent: agentOptions(fallbackDefaultAgent()) });
+    await plain.prompt([{ type: "text", text: "hello" }]);
+    await plain.dispose();
+    rmSync(project, { recursive: true, force: true });
+    const back = new StableSdkDriver();
+    await expect(back.open({ cwd: project, agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), sessionPath: projectState.path, projectTrusted: true, agent: agentOptions(fallbackDefaultAgent()) })).rejects.toThrow(/does not exist/);
+    expect(existsSync(project)).toBe(false);
+  });
+
   it("writes the agent record as the first custom entry of a new session and recovers it on load", async () => {
     const definition: AgentDefinition = { ...fallbackDefaultAgent(), name: "recorder", model: { provider: "stub", id: "stub-1" } };
     // The engine flushes a new session's file on its first assistant message;

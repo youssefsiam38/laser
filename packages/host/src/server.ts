@@ -44,7 +44,7 @@ import { SessionCatalog, defaultSessionDir } from "./catalog.js";
 import { LogStore } from "./logstore.js";
 import { PackageService, SetupService } from "./packages.js";
 import { PanelHub } from "./panels/hub.js";
-import { beamWorkspaceDir, chatWorkspaceDir, defaultAgentDir, defaultStateDir } from "./paths.js";
+import { defaultAgentDir, defaultStateDir, ensureWorkspace, workspacesDir } from "./paths.js";
 import { ProjectRegistry } from "./projects.js";
 import { PushService } from "./push.js";
 import { subagentsTempRoots } from "./subagents/file-layer.js";
@@ -68,12 +68,13 @@ export interface HostServerOptions {
   /** Where laser keeps its own state (projects, attention). Default `~/.laser`. */
   stateDir?: string;
   /**
-   * The product's data directory, which the Beam and Chat workspaces live
-   * under (`<dataDir>/beam`, `<dataDir>/chat`). Defaults to the parent of
-   * `stateDir`, which is the data directory in every layout the CLI resolves —
-   * and keeps a sandboxed state directory's workspaces inside the sandbox.
+   * Where the Beam and Chat workspaces live (`<workspacesDir>/beam`,
+   * `<workspacesDir>/chat`). Defaults to `<stateDir>/workspaces`: the host
+   * creates and owns its state directory in every layout, whereas a parent
+   * of it may belong to someone else (a review container sets the state
+   * directory to an XDG root whose parent is not writable).
    */
-  dataDir?: string;
+  workspacesDir?: string;
   /** Idle time before an unused worker is retired; 0 disables retirement. */
   workerIdleMs?: number;
   /**
@@ -220,14 +221,13 @@ export class HostServer {
     this.uiDir = options.uiDir ?? defaultUiDir();
     const agentDir = options.agentDir ?? defaultAgentDir();
     const stateDir = options.stateDir ?? defaultStateDir();
-    const dataDir = options.dataDir ?? dirname(stateDir);
-    const workspaces = { beam: beamWorkspaceDir(dataDir), chat: chatWorkspaceDir(dataDir) };
+    const workspacesRoot = options.workspacesDir ?? workspacesDir(stateDir);
+    const workspaces = { beam: join(workspacesRoot, "beam"), chat: join(workspacesRoot, "chat") };
+    // Created here and again when a session asks for one (router.ts refuses
+    // the session with the reason when it still cannot be created).
     for (const dir of Object.values(workspaces)) {
-      try {
-        mkdirSync(dir, { recursive: true });
-      } catch (error) {
-        this.log(`could not create the workspace ${dir}: ${error instanceof Error ? error.message : String(error)}`);
-      }
+      const problem = ensureWorkspace(dir);
+      if (problem) this.log(`could not create the workspace ${dir}: ${problem}`);
     }
 
     // The log store is a nice-to-have: a host that cannot open SQLite still
