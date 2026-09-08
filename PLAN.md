@@ -547,6 +547,7 @@ Depends on: M12.
 | M13-T17 | Offer only connected providers wherever a model is chosen to use, from one shared rule, while the catalogue surfaces keep the full list | the composer, Agents, Beam, Settings defaults and onboarding all list connected providers only |
 | M13-T18 | Attach the goal engine's tools only while a goal is in play, instead of to every session with Goals on | a request carries them on a goal turn and not otherwise, proven against the real engine |
 | M13-T19 | Stop the blank agent form opening on a contradictory state that the host refuses | a new agent that starts nothing saves without the delegation toggle being touched |
+| M13-T20 | Put the caret in the model search whenever a model picker opens, everywhere in the app | opening a picker focuses its search and the first keystroke filters |
 
 ---
 

@@ -1183,6 +1183,7 @@ lane T's own if both were written.
 | M13-T17 | Model pickers list connected providers only | done | claude-2026-09-08-agents | `connected-models.test.ts`; worker real-engine cases; full gate; browser review | reported by the user |
 | M13-T18 | Goal tools only while a goal is in play | done | claude-2026-09-08-agents | worker real-engine `goal-tools.test.ts`; pi-extension gate tests; pinned names; full gate | asked and approved by the user |
 | M13-T19 | A blank agent form opens on a state it can save | done | claude-2026-09-08-agents | Agents page and model tests; full gate; browser save | reported by the user |
+| M13-T20 | The model picker opens with the caret in its search | done | claude-2026-09-08-agents | `model-picker-focus.test.tsx`; full gate; browser review | requested by the user |
 
 #### M13-T1 notes
 - 2026-09-08 claimed: write `packages/protocol/src/agents.ts` (definitions, policy, runs, events, `SessionAgentInfo`, methods, notifications), extend `SessionSummary`/`SessionState`/`session/new`, schemas and samples.
@@ -1263,6 +1264,11 @@ lane T's own if both were written.
 - 2026-09-08 done: the blank form opened on a state the host refuses. `defaultAgentDefinitionInput` seeded `allowedAgents` with every custom agent while `supportsSubagents` stayed false, and the validator rejects that pair, so Create agent was disabled on a form the person had not misfilled. The seed is now empty, and the editor's delegation toggle owns both halves: turning it on offers every agent it could start (the convenience the seed was for), turning it off empties the list, so a definition can never contradict itself. The host's validator stays as the backstop.
 - 2026-09-08 the test that should have caught it did the opposite: the create case turned the toggle on before saving, so the blank path was never exercised, and a unit test pinned the seeded list as correct. Both are replaced: a new agent that starts nothing now saves without the toggle being touched, and the toggle's on/off behaviour is asserted.
 - 2026-09-08 evidence: `packages/ui/test/agents/page/screen.test.tsx` (blank save reaches `agents/save` with `supportsSubagents: false, allowedAgents: []`; toggle on fills, toggle off empties), `test/agents/model.test.ts` (the blank input agrees with itself); full gate green, 1,400 tests. Browser (sandbox, 1440x900): a new agent filled with name, description and instructions alone showed no issues, Create agent was enabled, and saving reported "solo-reviewer saved" with the list moving to 2 agents.
+
+#### M13-T20 notes
+- 2026-09-08 claimed: the user asked that opening the model picker anywhere in the app put the caret in the model search.
+- 2026-09-08 done: `ModelSelectorContent` handles `onOpenAutoFocus` and focuses `[data-slot="model-selector-search"]` inside the panel, so every picker in the app gets it from one place — the composer, the Agents editor, Beam's dialog, Settings' defaults and thinking overrides, and the onboarding step all render through it. Radix would otherwise focus the panel and the first keystroke would go nowhere. The provider filter inside the provider/model menu is its own nested popover with its own input, so the query only ever finds the model search; a menu with no search box keeps Radix's behaviour, which the stock list needs for its hidden keyboard anchor. Any `onOpenAutoFocus` a caller passes runs first and can still prevent the default.
+- 2026-09-08 evidence: `packages/ui/test/thread/model-picker-focus.test.tsx` (the model picker and the provider-only picker each focus their search on open); full gate green, 1,402 tests. Browser (sandbox, 1440x900): opening the composer's picker put the caret in "Search stub models" and typing "stub" went straight there; the Agents editor's picker focused its search the same way.
 
 ## MX · Cross-cutting
 

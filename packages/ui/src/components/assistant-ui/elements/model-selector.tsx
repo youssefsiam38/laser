@@ -359,10 +359,21 @@ function ModelSelectorContent({
   sideOffset = 6,
   searchable,
   children,
+  onOpenAutoFocus,
   ...props
 }: ModelSelectorContentProps) {
   const { value } = useModelSelectorContext();
   const { side: renderedSide, popupRef } = useLazyFlipSide();
+  // `popupRef` is a callback ref (it watches `data-side`); the node is kept
+  // here as well so the open handler below can reach into the panel.
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const setContent = useCallback(
+    (node: HTMLDivElement | null) => {
+      contentRef.current = node;
+      popupRef(node);
+    },
+    [popupRef],
+  );
   const unfiltered =
     searchable === false || (!searchable && children === undefined);
   // Custom unfiltered menus can supply their own visible CommandInput. Adding
@@ -371,13 +382,34 @@ function ModelSelectorContent({
   // the stock, input-less list.
   const needsFocusAnchor = unfiltered && children === undefined;
 
+  /**
+   * Opening a model picker puts the caret in its search box, wherever the
+   * picker is: the person opened it to find a model, and every one of these
+   * menus is a list long enough to type through. Radix would otherwise focus
+   * the panel, leaving the first keystroke to go nowhere.
+   *
+   * The provider filter inside the provider/model menu is its own nested
+   * popover with its own input, so this only ever finds the model search.
+   * A menu with no search box keeps Radix's own behaviour (the stock list
+   * has a hidden keyboard anchor for exactly that).
+   */
+  const focusSearch = (event: Event) => {
+    onOpenAutoFocus?.(event as Parameters<NonNullable<ModelSelectorContentProps["onOpenAutoFocus"]>>[0]);
+    if (event.defaultPrevented) return;
+    const search = contentRef.current?.querySelector<HTMLInputElement>('[data-slot="model-selector-search"]');
+    if (!search) return;
+    event.preventDefault();
+    search.focus();
+  };
+
   return (
     <PopoverContent
-      ref={popupRef}
+      ref={setContent}
       data-slot="model-selector-content"
       align={align}
       side={renderedSide ?? side ?? "bottom"}
       sideOffset={sideOffset}
+      onOpenAutoFocus={focusSearch}
       className={cn(
         "w-80 min-w-(--radix-popover-trigger-width) gap-0 overflow-hidden rounded-xl p-0",
         className,
