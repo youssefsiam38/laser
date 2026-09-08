@@ -7,8 +7,6 @@
 import {
   AGENT_MAX_DEPTH_LIMIT,
   AGENT_NAME_MAX,
-  AGENT_RUN_TIMEOUT_DEFAULT_MINUTES,
-  AGENT_RUN_TIMEOUT_MAX_MINUTES,
   BUILTIN_AGENT_NAMES,
   DEFAULT_AGENT_NAME,
   FOREGROUND_COMMAND_SECONDS_MAX,
@@ -51,10 +49,8 @@ export const EDITOR_SECTIONS = [
   "instructions",
   "model",
   "thinkingLevel",
-  "tools",
   "allowedAgents",
   "skills",
-  "runTimeoutMinutes",
   "default",
 ] as const;
 export type EditorSection = (typeof EDITOR_SECTIONS)[number];
@@ -78,9 +74,6 @@ export function sectionOfField(field: string): EditorSection {
       return "instructions";
     case "thinking":
       return "thinkingLevel";
-    case "runTimeout":
-    case "timeout":
-      return "runTimeoutMinutes";
     default:
       return (EDITOR_SECTIONS as readonly string[]).includes(root) ? (root as EditorSection) : "name";
   }
@@ -193,16 +186,6 @@ export function describeThinking(level: ThinkingLevel | null): string {
   return level === null ? "Follows the default" : THINKING_LABEL[level];
 }
 
-export function describeTimeout(minutes: number | null): string {
-  if (minutes === null) return `Follows the default (${AGENT_RUN_TIMEOUT_DEFAULT_MINUTES} min)`;
-  return `${minutes} min`;
-}
-
-export function describeTools(tools: readonly string[]): string {
-  if (tools.length === 0) return "No tools";
-  return tools.map(toolLabel).join(", ");
-}
-
 export function describeSkills(agent: Pick<AgentDefinitionInput, "scopedSkills" | "skills">): string {
   if (!agent.scopedSkills) return "Every skill in the project and globally";
   const n = agent.skills.length;
@@ -280,12 +263,10 @@ export function sameDefinitionInput(a: AgentDefinitionInput, b: AgentDefinitionI
     (a.model?.provider ?? null) === (b.model?.provider ?? null) &&
     (a.model?.id ?? null) === (b.model?.id ?? null) &&
     a.thinkingLevel === b.thinkingLevel &&
-    sameStrings(a.tools, b.tools) &&
     a.supportsSubagents === b.supportsSubagents &&
     sameStrings(a.allowedAgents, b.allowedAgents) &&
     a.scopedSkills === b.scopedSkills &&
-    sameSkills(a.skills, b.skills) &&
-    a.runTimeoutMinutes === b.runTimeoutMinutes
+    sameSkills(a.skills, b.skills)
   );
 }
 
@@ -342,7 +323,6 @@ export const POLICY_LIMITS = {
   foregroundCommandSeconds: { min: FOREGROUND_COMMAND_SECONDS_MIN, max: FOREGROUND_COMMAND_SECONDS_MAX },
 } as const;
 
-export const TIMEOUT_LIMITS = { min: 1, max: AGENT_RUN_TIMEOUT_MAX_MINUTES } as const;
 
 /** A whole number within `[min, max]`, or the reason it is not. */
 export function checkRange(value: string, limits: { min: number; max: number }, unit: string): { value: number } | { error: string } {

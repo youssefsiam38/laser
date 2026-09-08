@@ -386,7 +386,6 @@ function readAgent(raw: unknown): AgentDefinition | undefined {
     : [];
   const level = value.thinkingLevel;
   const thinkingLevel = (["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const).find((known) => known === level) ?? null;
-  const timeout = value.runTimeoutMinutes;
   const created = isString(value.createdAt) ? value.createdAt : BUILTIN_STAMP;
   return {
     name: value.name,
@@ -396,12 +395,10 @@ function readAgent(raw: unknown): AgentDefinition | undefined {
     engineInstructions: value.engineInstructions === true,
     model: readModel(value.model),
     thinkingLevel,
-    tools: isStringList(value.tools) ? [...value.tools] : [],
     supportsSubagents: value.supportsSubagents === true,
     allowedAgents: isStringList(value.allowedAgents) ? [...value.allowedAgents] : [],
     scopedSkills: value.scopedSkills === true,
     skills,
-    runTimeoutMinutes: Number.isInteger(timeout) && (timeout as number) > 0 ? (timeout as number) : null,
     createdAt: created,
     updatedAt: isString(value.updatedAt) ? value.updatedAt : created,
   };

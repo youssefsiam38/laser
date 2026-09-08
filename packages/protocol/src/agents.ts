@@ -30,8 +30,6 @@ export const SESSION_NAME_MAX = 30;
 export const SESSION_NAME_MIN = 25;
 export const AGENT_MAX_DEPTH_DEFAULT = 3;
 export const AGENT_MAX_DEPTH_LIMIT = 6;
-export const AGENT_RUN_TIMEOUT_DEFAULT_MINUTES = 60;
-export const AGENT_RUN_TIMEOUT_MAX_MINUTES = 24 * 60;
 /** A foreground command becomes a background task after this many seconds. */
 export const FOREGROUND_COMMAND_SECONDS_DEFAULT = 120;
 export const FOREGROUND_COMMAND_SECONDS_MIN = 10;
@@ -46,11 +44,15 @@ export function isBuiltinAgentName(name: string): name is BuiltinAgentName {
   return (BUILTIN_AGENT_NAMES as readonly string[]).includes(name);
 }
 
-/** Tools an agent definition may enable. `web_search` needs the Web search feature. */
-export const AGENT_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls", "web_search"] as const;
-export type AgentToolName = (typeof AGENT_TOOL_NAMES)[number];
-/** New definitions start with every tool; `web_search` only takes effect while the Web search feature is on. */
-export const AGENT_DEFAULT_TOOLS: readonly AgentToolName[] = ["read", "bash", "edit", "write", "grep", "find", "ls", "web_search"];
+/**
+ * Tools are not part of an agent definition (D-144): every agent has every
+ * tool. What an agent is for is said in its instructions, and what it may
+ * reach beyond its own work is the allowed-agents list and its worktree — a
+ * per-agent tool list was a second, weaker answer to the same question, and
+ * one more thing to keep in step with the engine's own set.
+ *
+ * `web_search` is still gated by the Web search feature, for everyone at once.
+ */
 
 /** The harness tools the engine sees; listed so the UI can name them and search can project them. */
 export const HARNESS_TOOL_NAMES = [
@@ -99,15 +101,12 @@ export interface AgentDefinition {
   /** `null` follows the configured default model. */
   model: AgentModelChoice | null;
   thinkingLevel: ThinkingLevel | null;
-  tools: string[];
   supportsSubagents: boolean;
   /** Definitions this agent may start; meaningful only with `supportsSubagents`. */
   allowedAgents: string[];
   /** When true only `skills` are offered; otherwise every discovered skill is. */
   scopedSkills: boolean;
   skills: AgentSkillRef[];
-  /** `null` uses `AGENT_RUN_TIMEOUT_DEFAULT_MINUTES`. */
-  runTimeoutMinutes: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -190,9 +189,14 @@ export interface AgentSkillsListing {
 
 // ---------- runs ----------
 
-export type AgentRunStatus = "queued" | "running" | "completed" | "blocked" | "failed" | "cancelled" | "timed_out";
-export const AGENT_RUN_STATUSES: readonly AgentRunStatus[] = ["queued", "running", "completed", "blocked", "failed", "cancelled", "timed_out"];
-export const AGENT_RUN_TERMINAL: readonly AgentRunStatus[] = ["completed", "blocked", "failed", "cancelled", "timed_out"];
+/**
+ * A run's state. Nothing ends a run for taking too long (D-144): an agent may
+ * work for minutes or for months, and only the model, a person, a parent or a
+ * failure ends it. There is no timed-out state, and nothing reads one back.
+ */
+export type AgentRunStatus = "queued" | "running" | "completed" | "blocked" | "failed" | "cancelled";
+export const AGENT_RUN_STATUSES: readonly AgentRunStatus[] = ["queued", "running", "completed", "blocked", "failed", "cancelled"];
+export const AGENT_RUN_TERMINAL: readonly AgentRunStatus[] = ["completed", "blocked", "failed", "cancelled"];
 export function isTerminalRunStatus(status: AgentRunStatus): boolean {
   return AGENT_RUN_TERMINAL.includes(status);
 }
@@ -230,7 +234,6 @@ export interface AgentRun extends AgentRunIdentity {
   startedAt: string;
   updatedAt: string;
   endedAt?: string;
-  timeoutAt?: string;
 }
 
 export type AgentEventKind =
@@ -241,7 +244,6 @@ export type AgentEventKind =
   | "blocked"
   | "failed"
   | "cancelled"
-  | "timed_out"
   | "stop_requested";
 
 /** A transient inter-agent moment, owned by the node it happened in. */

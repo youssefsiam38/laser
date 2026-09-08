@@ -103,7 +103,6 @@ export class WorkerServer {
     const agentDir = options.agentDir;
     this.definitions = new DefinitionsCache({
       ...(agentDir ? { beamSkill: beamSkillRef(agentDir) } : {}),
-      webSearch: (options.features ?? []).includes("web-search"),
     });
     if (agentDir && !options.skipBeamSkill) {
       try {

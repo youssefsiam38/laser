@@ -235,8 +235,8 @@ describe("Router · agents (docs/agents-leap)", () => {
     try {
       const listed = (await rpc(h.router, "agents/list")) as { result: { agents: Array<{ name: string }>; defaultAgent: string } };
       expect(listed.result.agents.map((a) => a.name)).toEqual(["default", "beam", "chat", "namer"]);
-      const input = { name: "reviewer", description: "", instructions: "Review.", engineInstructions: false, model: null, thinkingLevel: null, tools: ["read"], supportsSubagents: false, allowedAgents: [], scopedSkills: false, skills: [], runTimeoutMinutes: null };
-      expect(await rpc(h.router, "agents/validate", { agent: { ...input, tools: ["nope"] } })).toMatchObject({ result: { issues: [{ field: "tools[0]" }] } });
+      const input = { name: "reviewer", description: "", instructions: "Review.", engineInstructions: false, model: null, thinkingLevel: null, supportsSubagents: false, allowedAgents: [], scopedSkills: false, skills: [] };
+      expect(await rpc(h.router, "agents/validate", { agent: { ...input, scopedSkills: true } })).toMatchObject({ result: { issues: [{ field: "skills" }] } });
       const saved = await rpc(h.router, "agents/save", { agent: input });
       expect(saved).toMatchObject({ result: { agent: { name: "reviewer", kind: "custom" }, snapshot: { revision: 1 } } });
       expect(await rpc(h.router, "agents/save", { agent: { ...input, name: "beam" } })).toMatchObject({ error: { data: { issues: [{ field: "name" }] } } });

@@ -68,7 +68,7 @@ export interface AgentCompletionData {
 
 /** The `AgentModelEvent` a parent received, as the `subagents` module attaches it in `details`. */
 export interface AgentEventData {
-  readonly type: "agent.completed" | "agent.blocked" | "agent.failed" | "agent.cancelled" | "agent.timed_out" | "agent.message";
+  readonly type: "agent.completed" | "agent.blocked" | "agent.failed" | "agent.cancelled" | "agent.message";
   readonly agentName: string;
   readonly subagentName: string;
   readonly sessionId: string;

@@ -522,15 +522,18 @@ blockers, not advice.
   completion; a child that settles without the call is not `completed`.
 - User termination carries `initiator: "user"` and the verbatim reason to the
   parent's `lasercode/agent-event`; the parent's own `stop_agent` is
-  `initiator: "parent"`; crashes, timeouts and worker loss are `harness`.
+  `initiator: "parent"`; crashes and worker loss are `harness`.
 - The catalog in the parent request is compact: `agent_name` and description
-  only. Instructions, tools and model load only in the child's request.
+  only. Instructions and model load only in the child's request.
+- Tools are not part of an agent definition: every agent has every tool
+  (D-144). Nothing ends a run for taking too long — no timeout, no default
+  limit, no timed-out state — and a project with a live run is never idle, so
+  its worker is never retired underneath it.
 - Test nesting depth (a child at `maxDepth` gets no `start_agent`), model
   access (a definition naming a model without a credential is refused), worktree
-  ownership (a run touches only the worktree it created), timeout
-  (`timed_out` with `timeoutAt`), settle-without-completion (not `completed`)
-  and reload attribution (`lasercode/agent` puts a child under its parent after
-  a host restart).
+  ownership (a run touches only the worktree it created), a run that outlives
+  any clock, settle-without-completion (not `completed`) and reload attribution
+  (`lasercode/agent` puts a child under its parent after a host restart).
 - Background promotion keeps the output already produced and the exit state;
   a promoted command is the same task, not a new one.
 - The live map never re-layouts on output or status updates; only a change in

@@ -11,25 +11,13 @@ import { open } from "node:fs/promises";
 import { SESSION_AGENT_ENTRY_TYPE, type AgentDefinition, type SessionAgentKind, type SessionAgentRecord } from "@lasercode/protocol";
 import type { HarnessSessionRole } from "./bridge.js";
 
-/** The engine's own tools an agent definition may switch on. `web_search` is an extension tool. */
+/**
+ * Every engine tool, in the engine's order. Every agent gets all of them
+ * (D-144): the engine's default four are on already, and the rest are
+ * switched on after the session opens. Web search is an extension tool and
+ * follows its feature, for every agent at once.
+ */
 export const ENGINE_BUILTIN_TOOLS: readonly string[] = ["read", "bash", "edit", "write", "grep", "find", "ls"];
-
-/** The built-in tool names to hand the engine for this definition, in the engine's order. */
-export function engineToolsFor(definition: Pick<AgentDefinition, "tools">): string[] {
-  const wanted = new Set(definition.tools);
-  return ENGINE_BUILTIN_TOOLS.filter((name) => wanted.has(name));
-}
-
-/** The built-in tools a definition leaves out: denied to the session outright. */
-export function excludedEngineTools(definition: Pick<AgentDefinition, "tools">): string[] {
-  const wanted = new Set(definition.tools);
-  return ENGINE_BUILTIN_TOOLS.filter((name) => !wanted.has(name));
-}
-
-/** True when this definition asks for web search (the feature must also be on). */
-export function wantsWebSearch(definition: Pick<AgentDefinition, "tools">): boolean {
-  return definition.tools.includes("web_search");
-}
 
 export interface SkillLike {
   name: string;

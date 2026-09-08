@@ -8,7 +8,6 @@
  * pill and sentence agree wherever they are drawn.
  */
 import {
-  AGENT_DEFAULT_TOOLS,
   DEFAULT_AGENT_NAME,
   isBuiltinAgentName,
   isTerminalRunStatus,
@@ -91,7 +90,6 @@ export const RUN_STATUS_LABEL: Readonly<Record<AgentRunStatus, string>> = {
   blocked: "Needs you",
   failed: "Failed",
   cancelled: "Ended",
-  timed_out: "Timed out",
 };
 
 export type AgentStatusTone = "live" | "attention" | "danger" | "ok" | "muted";
@@ -103,7 +101,6 @@ export const RUN_STATUS_TONE: Readonly<Record<AgentRunStatus, AgentStatusTone>> 
   blocked: "attention",
   failed: "danger",
   cancelled: "muted",
-  timed_out: "danger",
 };
 
 export function runStatusLabel(status: AgentRunStatus): string {
@@ -193,19 +190,17 @@ export function defaultAgentDefinitionInput(snapshot?: AgentsSnapshot | null): A
     engineInstructions: false,
     model: null,
     thinkingLevel: null,
-    tools: [...AGENT_DEFAULT_TOOLS],
     supportsSubagents: false,
     allowedAgents: custom,
     scopedSkills: false,
     skills: [],
-    runTimeoutMinutes: null,
   };
 }
 
 /** The editable form of an existing definition. */
 export function agentDefinitionInputOf(agent: AgentDefinition): AgentDefinitionInput {
   const { kind: _kind, createdAt: _createdAt, updatedAt: _updatedAt, ...input } = agent;
-  return { ...input, tools: [...input.tools], allowedAgents: [...input.allowedAgents], skills: input.skills.map((skill) => ({ ...skill })) };
+  return { ...input, allowedAgents: [...input.allowedAgents], skills: input.skills.map((skill) => ({ ...skill })) };
 }
 
 /** `skills[2]` → `skills`; `name` → `name`. The field a list-item issue belongs under. */

@@ -38,11 +38,9 @@ characters. There is no separate agent id, type or profile name.
 | Instructions | `instructions`, `engineInstructions` | Answers "how should this agent work?" The shipped `default` agent starts with `engineInstructions: true` (the engine's own prompt, readable through `agents/engine-instructions`) and a person may replace it with their own text |
 | Model | `model` | `{ provider, id }` or `null` to follow the configured default model |
 | Thinking | `thinkingLevel` | `null` follows the default |
-| Tools | `tools` | From `AGENT_TOOL_NAMES`: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `web_search` (needs the Web search feature) |
 | Supports subagents | `supportsSubagents` | When on, the agent gets `start_agent` and its siblings |
 | Agents it can run | `allowedAgents` | Multi-select of custom agents; never a built-in. Meaningful only with `supportsSubagents` |
 | Scoped skills | `scopedSkills`, `skills` | Off by default: every discovered skill is offered. On: only the listed `AgentSkillRef`s (`name`, `path`, `scope`), chosen from what the engine discovers at definition time (`agents/skills`, listing `<agentDir>/skills` and `~/.agents/skills` as `global`, `<project>/.laser/skills` and `<project>/.agents/skills` as `project` when the project is trusted) |
-| Run timeout | `runTimeoutMinutes` | `null` = 60 minutes; at most 24 hours |
 | Default | snapshot `defaultAgent` | "Default" only means the agent a new session opens with (the `i` mark beside the toggle says so). The current default cannot be deleted; pick another default first |
 
 Policy (`AgentPolicy`, `agents/set-policy`): `maxDepth` (default 3, at most 6)
@@ -72,7 +70,7 @@ model choices persist).
 A session that may delegate sees exactly one delegation tool, `start_agent`,
 whose description carries the compact catalog: `name — description; …` for
 the agents this session is allowed to start. The parent request never carries
-another agent's instructions, tools or model; the harness loads the full
+another agent's instructions or model; the harness loads the full
 configuration only when it starts that agent (in the child's own request).
 
 The only identities are the four the reference names:
@@ -118,7 +116,7 @@ harness knows renders as a `run` panel with id `agents:run:<runId>` and source
 ### Events at a safe boundary
 
 The harness pushes `AgentModelEvent`s (`agent.completed`, `agent.blocked`,
-`agent.failed`, `agent.cancelled`, `agent.timed_out`, `agent.message`) to the
+`agent.failed`, `agent.cancelled`, `agent.message`) to the
 parent through the bridge. The `subagents` module delivers each one as a
 custom message of type `lasercode/agent-event` (`AGENT_EVENT_MESSAGE_TYPE`)
 with `deliverAs: "steer"` and `triggerTurn: true`: a running parent sees it
@@ -131,13 +129,13 @@ UI renders the same entry as the parent-side card (Handoff row in
 ### States, and who sets them
 
 `AgentRunStatus`: `queued`, `running`, `completed`, `blocked`, `failed`,
-`cancelled`, `timed_out`. Terminal states are the last five.
+`cancelled`. Terminal states are the last four. There is no timed-out state:
+nothing ends a run for taking long (D-144).
 
 | State | Set by |
 | --- | --- |
 | `completed`, `blocked` | the child model, only through `complete_agent_run` |
 | `cancelled` | `stop_agent` (initiator `parent`), `agents/runs/stop` (initiator `user`), or the host when the child's session is deleted (initiator `user`, reason "The session was deleted.") |
-| `timed_out` | the harness when `runTimeoutMinutes` elapses (`timeoutAt` on the run) |
 | `failed` | the harness on an engine error, on a child that settles twice without `complete_agent_run`, on a child session that closes or refuses the task while busy; the host when a project's worker dies or when it loads `agent-runs.json` after a restart (nothing non-terminal survives, reason "The project's worker stopped before this run ended.") |
 
 `endedBy: { initiator: "parent" | "user" | "harness", reason? }` records who
@@ -215,7 +213,7 @@ shows or folds ended agents. Edges are ancestry, from `AgentRun.parent`.
 
 Transient events (`agents/event`: `started`, `message_sent`,
 `message_received`, `completed`, `blocked`, `failed`, `cancelled`,
-`timed_out`, `stop_requested`) appear as a gentle bubble inside the node that
+`stop_requested`) appear as a gentle bubble inside the node that
 owns them for a short while, then disappear.
 
 Layout is chosen by the measured size of the surface — a constrained panel, the
@@ -250,13 +248,28 @@ process-tree kill, output truncation stay the engine's) and adds:
 
 Background tasks and child agents share the fleet's run vocabulary.
 
+### Tools and time
+
+Every agent has every tool (D-144). A definition says what an agent is for in
+its instructions, and what it may reach beyond its own work through its
+allowed agents and its worktree; a per-agent tool list was a second, weaker
+answer to the same question and one more thing to keep in step with the
+engine's own set. `web_search` follows the Web search feature, for everyone at
+once.
+
+Nothing ends a run for taking too long. There is no run timeout, no default
+limit and no timed-out state: an agent may work for minutes or for months, and
+a run ends only when the agent reports through `complete_agent_run`, a person
+or its parent ends it, or it fails. A project with a run still going is never
+idle, so its worker is never retired underneath it.
+
 ## 7. Built-in agents
 
 | Agent | Runs in | Tools | Integration |
 | --- | --- | --- | --- |
-| `beam` | `<state>/workspaces/beam` (`workspaces.beam`) | all default tools plus `web_search`; scoped to the one Beam skill | two ways in (D-143): the spark at the bottom left beside Settings, present in chat, Settings and logs, which opens a bubble that grows out of the icon and holds the normal chat — before the first message the middle hints that Beam is the assistant for Laser, and the first message creates a Beam session in Beam's group — and the `+` on Beam's group in the sessions sidebar, which starts a chat in the window instead. The bubble's maximize control moves the chat it is showing into the window. No other Beam entry point exists |
-| `chat` | `<state>/workspaces/chat` (`workspaces.chat`) | `web_search` only | the Chat tab, first in the sidebar before Code; projectless chats |
-| `namer` | the project's own worker | none | names things from a small context |
+| `beam` | `<state>/workspaces/beam` (`workspaces.beam`) | every tool, like every agent; scoped to the one Beam skill | two ways in (D-143): the spark at the bottom left beside Settings, present in chat, Settings and logs, which opens a bubble that grows out of the icon and holds the normal chat — before the first message the middle hints that Beam is the assistant for Laser, and the first message creates a Beam session in Beam's group — and the `+` on Beam's group in the sessions sidebar, which starts a chat in the window instead. The bubble's maximize control moves the chat it is showing into the window. No other Beam entry point exists |
+| `chat` | `<state>/workspaces/chat` (`workspaces.chat`) | every tool, in its own scratch workspace | the Chat tab, first in the sidebar before Code; projectless chats |
+| `namer` | the project's own worker | not a session agent | names things from a small context |
 
 **Beam's skill** (`packages/worker/src/agents/beam-skill.ts`) is written by the
 worker on start, idempotently, at `<agentDir>/skills/<product>-beam/SKILL.md`
@@ -361,7 +374,7 @@ The binding list lives in `AGENTS.md` ("Agents harness regression checks"):
 - User termination carries `initiator: "user"` and the verbatim reason to the
   parent.
 - The catalog in the parent request is compact.
-- Test nesting depth, model access, worktree ownership, timeout,
+- Test nesting depth, model access, worktree ownership,
   settle-without-completion and reload attribution.
 - Background promotion keeps output and exit state.
 - The live map never re-layouts on output updates.

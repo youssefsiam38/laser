@@ -14,7 +14,6 @@ import {
   AGENT_MAX_DEPTH_LIMIT,
   AGENT_NAME_PATTERN,
   AGENT_RUN_STATUSES,
-  AGENT_RUN_TIMEOUT_MAX_MINUTES,
   FOREGROUND_COMMAND_SECONDS_MAX,
   FOREGROUND_COMMAND_SECONDS_MIN,
 } from "./agents.js";
@@ -600,12 +599,10 @@ export const agentDefinitionInputSchema = z
     engineInstructions: z.boolean(),
     model: agentModelChoiceSchema.nullable(),
     thinkingLevel: thinkingLevelSchema.nullable(),
-    tools: z.array(z.string().min(1).max(64)).max(32),
     supportsSubagents: z.boolean(),
     allowedAgents: z.array(agentNameSchema).max(100),
     scopedSkills: z.boolean(),
     skills: z.array(agentSkillRefSchema).max(200),
-    runTimeoutMinutes: z.number().int().positive().max(AGENT_RUN_TIMEOUT_MAX_MINUTES).nullable(),
   })
   .strict();
 export const agentPolicyPatchSchema = z

@@ -1,4 +1,4 @@
-import { AGENT_DEFAULT_TOOLS, AGENT_RUN_STATUSES } from "@lasercode/protocol";
+import { AGENT_RUN_STATUSES } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
 import {
   agentDefinitionInputOf,
@@ -31,7 +31,6 @@ describe("run status vocabulary", () => {
       blocked: "Needs you",
       failed: "Failed",
       cancelled: "Ended",
-      timed_out: "Timed out",
     });
     const tones = Object.fromEntries(AGENT_RUN_STATUSES.map((status) => [status, runStatusTone(status)]));
     expect(tones).toEqual({
@@ -41,11 +40,10 @@ describe("run status vocabulary", () => {
       blocked: "attention",
       failed: "danger",
       cancelled: "muted",
-      timed_out: "danger",
     });
     expect(isActiveRun({ status: "queued" })).toBe(true);
     expect(isActiveRun({ status: "running" })).toBe(true);
-    for (const status of ["completed", "blocked", "failed", "cancelled", "timed_out"] as const) expect(isActiveRun({ status })).toBe(false);
+    for (const status of ["completed", "blocked", "failed", "cancelled"] as const) expect(isActiveRun({ status })).toBe(false);
   });
 });
 
@@ -119,7 +117,7 @@ describe("runs", () => {
 });
 
 describe("definitions, warnings and issues", () => {
-  it("builds a blank custom agent with the default tools and the custom catalog as allowed agents", () => {
+  it("builds a blank custom agent with the custom catalog as allowed agents", () => {
     const input = defaultAgentDefinitionInput(snapshot());
     expect(input).toEqual({
       name: "",
@@ -128,15 +126,12 @@ describe("definitions, warnings and issues", () => {
       engineInstructions: false,
       model: null,
       thinkingLevel: null,
-      tools: [...AGENT_DEFAULT_TOOLS],
       supportsSubagents: false,
       allowedAgents: ["default", "reviewer"],
       scopedSkills: false,
       skills: [],
-      runTimeoutMinutes: null,
     });
     expect(defaultAgentDefinitionInput().allowedAgents).toEqual([]);
-    expect(defaultAgentDefinitionInput(null).tools).not.toBe(AGENT_DEFAULT_TOOLS);
     expect("kind" in input).toBe(false);
   });
 
@@ -147,7 +142,6 @@ describe("definitions, warnings and issues", () => {
     expect(input).not.toHaveProperty("createdAt");
     expect(input.skills).toEqual(definition.skills);
     expect(input.skills).not.toBe(definition.skills);
-    expect(input.tools).not.toBe(definition.tools);
   });
 
   it("lists a definition's warnings oldest first and shares one empty list", () => {

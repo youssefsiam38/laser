@@ -2,7 +2,7 @@
  * M13-T3 · the worker's definitions cache: built-in fallbacks before the first
  * sync, the host's snapshot afterwards, missing built-ins re-seeded, listeners.
  */
-import { AGENT_DEFAULT_TOOLS, DEFAULT_AGENT_NAME, PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
+import { DEFAULT_AGENT_NAME, PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
 import { DefinitionsCache, fallbackSnapshot, isStartable } from "../../src/agents/definitions.js";
 
@@ -11,13 +11,14 @@ describe("DefinitionsCache", () => {
     const cache = new DefinitionsCache({ beamSkill: { name: "x-beam", path: "/skills/x-beam/SKILL.md", scope: "global" }, webSearch: true });
     expect(cache.isSynced).toBe(false);
     const fallback = cache.defaultAgent();
-    expect(fallback).toMatchObject({ name: DEFAULT_AGENT_NAME, kind: "custom", engineInstructions: true, supportsSubagents: true, allowedAgents: [DEFAULT_AGENT_NAME], tools: [...AGENT_DEFAULT_TOOLS] });
+    expect(fallback).toMatchObject({ name: DEFAULT_AGENT_NAME, kind: "custom", engineInstructions: true, supportsSubagents: true, allowedAgents: [DEFAULT_AGENT_NAME] });
     const beam = cache.definition("beam")!;
-    expect(beam).toMatchObject({ kind: "builtin", scopedSkills: true, skills: [{ name: "x-beam" }], tools: expect.arrayContaining(["read", "bash", "web_search"]) });
+    expect(beam).toMatchObject({ kind: "builtin", scopedSkills: true, skills: [{ name: "x-beam" }] });
+    // Tools are not part of a definition (D-144).
+    expect(beam).not.toHaveProperty("tools");
     expect(beam.instructions).toContain(PRODUCT_DISPLAY_NAME);
-    expect(cache.definition("chat")).toMatchObject({ kind: "builtin", tools: ["web_search"] });
-    expect(new DefinitionsCache().definition("chat")?.tools).toEqual([]);
-    expect(cache.definition("namer")).toMatchObject({ kind: "builtin", tools: [] });
+    expect(cache.definition("chat")).toMatchObject({ kind: "builtin" });
+    expect(cache.definition("namer")).toMatchObject({ kind: "builtin" });
     expect(cache.policy()).toEqual({ maxDepth: 3, foregroundCommandSeconds: 120 });
     expect(cache.namerModel()).toBeNull();
     expect(cache.beamModel()).toBeNull();

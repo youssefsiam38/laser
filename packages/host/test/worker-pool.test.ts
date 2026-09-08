@@ -158,7 +158,7 @@ describe("WorkerPool", () => {
 
   it("retires an idle worker, but not one a client is attached to", async () => {
     let attached = true;
-    pool = makePool({ idleMs: 1, sweepMs: 0, isAttached: () => attached, sessionIds: () => new Set() });
+    pool = makePool({ idleMs: 1, sweepMs: 0, isAttached: () => attached, });
     await pool.get(project);
     pool.bindSession("/sessions/a.jsonl", project);
     await new Promise((r) => setTimeout(r, 5));
@@ -178,7 +178,7 @@ describe("WorkerPool", () => {
   });
 
   it("never retires a worker while one of its sessions is running", async () => {
-    pool = makePool({ idleMs: 1, sweepMs: 0, isAttached: () => false, sessionIds: () => new Set() });
+    pool = makePool({ idleMs: 1, sweepMs: 0, isAttached: () => false, });
     await pool.get(project);
     pool.bindSession("/sessions/a.jsonl", project);
     pool.noteRunning(project, "/sessions/a.jsonl", true);
@@ -190,6 +190,25 @@ describe("WorkerPool", () => {
 
     pool.noteRunning(project, "/sessions/a.jsonl", false);
     await new Promise((r) => setTimeout(r, 5));
+    pool["sweep"]();
+    await waitFor(() => statusesOf(project).at(-1) === "retired");
+  });
+
+  it("never retires a worker while one of its agents is still working, however long that takes", async () => {
+    // A child agent's turn is not a client request, so nothing else keeps the
+    // project alive; retiring here would kill the agent mid-sentence, and a
+    // run has no time limit at all (D-144).
+    let working = true;
+    pool = makePool({ idleMs: 1, sweepMs: 0, isAttached: () => false, hasLiveRun: (cwd) => working && cwd === project });
+    await pool.get(project);
+    pool.bindSession("/sessions/a.jsonl", project);
+    await new Promise((r) => setTimeout(r, 5));
+
+    // Months of an agent working alone, with nobody watching.
+    for (let i = 0; i < 5; i++) pool["sweep"]();
+    expect(statusesOf(project).at(-1)).toBe("ready");
+
+    working = false;
     pool["sweep"]();
     await waitFor(() => statusesOf(project).at(-1) === "retired");
   });

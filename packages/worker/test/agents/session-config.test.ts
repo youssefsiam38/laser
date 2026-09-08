@@ -8,19 +8,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { fallbackBeamAgent, fallbackChatAgent, fallbackDefaultAgent } from "../../src/agents/definitions.js";
-import { engineToolsFor, excludedEngineTools, filterSkills, parseSessionAgentRecord, readSessionAgentRecord, rootRecord, rootRole, wantsWebSearch } from "../../src/agents/session-config.js";
+import { ENGINE_BUILTIN_TOOLS, filterSkills, parseSessionAgentRecord, readSessionAgentRecord, rootRecord, rootRole } from "../../src/agents/session-config.js";
 
-describe("engineToolsFor", () => {
-  it("keeps only the engine's built-in tools, in the engine's order", () => {
-    expect(engineToolsFor({ tools: ["write", "read", "web_search", "bash", "nonsense"] })).toEqual(["read", "bash", "write"]);
-    expect(engineToolsFor(fallbackDefaultAgent())).toEqual(["read", "bash", "edit", "write", "grep", "find", "ls"]);
-    expect(engineToolsFor(fallbackChatAgent({ webSearch: true }))).toEqual([]);
-    expect(excludedEngineTools({ tools: ["read", "grep", "web_search"] })).toEqual(["bash", "edit", "write", "find", "ls"]);
-    expect(excludedEngineTools(fallbackDefaultAgent())).toEqual([]);
-    expect(wantsWebSearch(fallbackChatAgent({ webSearch: true }))).toBe(true);
-    // The default set lists web search; it only registers while the feature is on.
-    expect(wantsWebSearch(fallbackDefaultAgent())).toBe(true);
-    expect(wantsWebSearch({ tools: ["read", "bash"] })).toBe(false);
+describe("ENGINE_BUILTIN_TOOLS", () => {
+  it("is every engine tool, in the engine's order: no definition narrows it", () => {
+    expect(ENGINE_BUILTIN_TOOLS).toEqual(["read", "bash", "edit", "write", "grep", "find", "ls"]);
+    // Tools left the definition (D-144); nothing here reads one.
+    for (const definition of [fallbackDefaultAgent(), fallbackBeamAgent({ model: null }), fallbackChatAgent()]) {
+      expect(definition).not.toHaveProperty("tools");
+    }
   });
 });
 

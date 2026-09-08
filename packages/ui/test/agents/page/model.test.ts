@@ -89,9 +89,9 @@ describe("agents page model", () => {
     expect(checkRange("", { min: 1, max: 6 }, "levels")).toEqual({ error: "Enter a number." });
     expect(checkRange("2.5", { min: 1, max: 6 }, "levels")).toEqual({ error: "Whole numbers only." });
     expect(checkRange("9", { min: 1, max: 6 }, "levels")).toEqual({ error: "Between 1 and 6 levels." });
-    const a = agentDefinitionInputOf(agent({ name: "x", tools: ["read", "bash"] }));
-    expect(sameDefinitionInput(a, agentDefinitionInputOf(agent({ name: "x", tools: ["read", "bash"] })))).toBe(true);
-    expect(sameDefinitionInput(a, { ...a, tools: ["read"] })).toBe(false);
+    const a = agentDefinitionInputOf(agent({ name: "x", description: "Reviews a diff" }));
+    expect(sameDefinitionInput(a, agentDefinitionInputOf(agent({ name: "x", description: "Reviews a diff" })))).toBe(true);
+    expect(sameDefinitionInput(a, { ...a, description: "Something else" })).toBe(false);
     expect(describeStarts({ supportsSubagents: true, allowedAgents: ["a", "b"] })).toBe("May start a, b");
   });
 

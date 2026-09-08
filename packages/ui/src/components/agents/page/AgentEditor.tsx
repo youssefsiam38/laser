@@ -11,8 +11,6 @@
  */
 import {
   AGENT_DESCRIPTION_MAX,
-  AGENT_RUN_TIMEOUT_DEFAULT_MINUTES,
-  AGENT_TOOL_NAMES,
   DEFAULT_AGENT_NAME,
   type AgentDefinition,
   type AgentDefinitionInput,
@@ -46,15 +44,12 @@ import { DeleteAgentDialog } from "./dialogs.js";
 import { CheckRow, Hint, IssueNotice, Section, WarningNotice } from "./fields.js";
 import {
   THINKING_LABEL,
-  TIMEOUT_LIMITS,
   checkRange,
   deletability,
   describeModel,
   describeSkills,
   describeStarts,
   describeThinking,
-  describeTimeout,
-  describeTools,
   groupSkills,
   missingSkills,
   modelChoiceId,
@@ -241,10 +236,8 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
   const facts: AgentCardFact[] = [
     { label: "model", value: describeModel(draft.model, models), typed: draft.model !== null, title: draft.model ? modelChoiceId(draft.model) : undefined },
     { label: "thinking", value: describeThinking(draft.thinkingLevel) },
-    { label: "tools", value: describeTools(draft.tools) },
     { label: "starts", value: describeStarts(draft), tone: sectionWarnings("allowedAgents").length > 0 ? "attention" : undefined },
     { label: "skills", value: describeSkills(draft), tone: sectionWarnings("skills").length > 0 ? "attention" : undefined },
-    { label: "timeout", value: describeTimeout(draft.runTimeoutMinutes) },
   ];
 
   const setDefault = async () => {
@@ -409,28 +402,6 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
           <ThinkingField value={draft.thinkingLevel} levels={thinkingLevelsFor(draft.model, models)} onChange={(thinkingLevel) => patch({ thinkingLevel })} />
         </Section>
 
-        {/* Tools */}
-        <Section id="tools" title="Tools" description="What the agent may do on your machine." notices={<IssueNotice messages={byField.root.tools ?? []} />}>
-          <div role="group" aria-label="Tools" className="grid gap-0.5 sm:grid-cols-2">
-            {AGENT_TOOL_NAMES.map((tool) => {
-              const gated = tool === "web_search" && webSearch.known && !webSearch.enabled;
-              return (
-                <CheckRow
-                  key={tool}
-                  name={`tool:${tool}`}
-                  checked={draft.tools.includes(tool)}
-                  label={toolLabel(tool)}
-                  detail={gated ? "Needs the Web search feature (Settings → Features)" : tool}
-                  flagged={gated && draft.tools.includes(tool)}
-                  onChange={(event) =>
-                    patch({ tools: event.target.checked ? [...draft.tools.filter((t) => t !== tool), tool] : draft.tools.filter((t) => t !== tool) })
-                  }
-                />
-              );
-            })}
-          </div>
-        </Section>
-
         {/* Starting other agents */}
         <Section
           id="allowedAgents"
@@ -488,16 +459,6 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
               onChange={(skills) => patch({ skills })}
             />
           ) : null}
-        </Section>
-
-        {/* Timeout */}
-        <Section
-          id="runTimeoutMinutes"
-          title="Run timeout"
-          description="How long one run may take before it is stopped and its parent told."
-          notices={<IssueNotice messages={byField.root.runTimeoutMinutes ?? []} />}
-        >
-          <TimeoutField value={draft.runTimeoutMinutes} onChange={(runTimeoutMinutes) => patch({ runTimeoutMinutes })} />
         </Section>
 
         {/* Default */}
@@ -885,65 +846,3 @@ function SkillsField({
 // Timeout
 // ---------------------------------------------------------------------------
 
-function TimeoutField({ value, onChange }: { value: number | null; onChange(minutes: number | null): void }) {
-  const [text, setText] = useState(value === null ? "" : String(value));
-  const [error, setError] = useState<string>();
-  const id = useId();
-  useEffect(() => {
-    if (value !== null) setText(String(value));
-  }, [value]);
-  const commit = () => {
-    const result = checkRange(text, TIMEOUT_LIMITS, "minutes");
-    if ("error" in result) {
-      setError(result.error);
-      return;
-    }
-    setError(undefined);
-    onChange(result.value);
-  };
-  return (
-    <div className="flex flex-col gap-2">
-      <SettingsToggleRow
-        id={`${id}-follow`}
-        label={`Follow the default (${AGENT_RUN_TIMEOUT_DEFAULT_MINUTES} min)`}
-        detail={value === null ? "On: runs stop after the default." : "Off: runs stop after the minutes below."}
-        checked={value === null}
-        onCheckedChange={(follow) => {
-          if (follow) {
-            onChange(null);
-            setError(undefined);
-          } else {
-            onChange(AGENT_RUN_TIMEOUT_DEFAULT_MINUTES);
-            setText(String(AGENT_RUN_TIMEOUT_DEFAULT_MINUTES));
-          }
-        }}
-      />
-      {value !== null ? (
-        <div className="flex flex-col gap-1">
-          <label htmlFor={id} className="flex items-center gap-2 text-sm text-ink">
-            <Input
-              id={id}
-              type="number"
-              inputMode="numeric"
-              min={TIMEOUT_LIMITS.min}
-              max={TIMEOUT_LIMITS.max}
-              value={text}
-              aria-invalid={error ? true : undefined}
-              className="w-28 tnum"
-              onChange={(event) => setText(event.target.value)}
-              onBlur={commit}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  commit();
-                }
-              }}
-            />
-            minutes
-          </label>
-          {error ? <IssueNotice messages={[error]} /> : <Hint>Between {TIMEOUT_LIMITS.min} and {TIMEOUT_LIMITS.max} minutes.</Hint>}
-        </div>
-      ) : null}
-    </div>
-  );
-}

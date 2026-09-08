@@ -54,13 +54,10 @@ export { defaultToolSnippets, engineDefaultInstructions, stripWorkingDirectory }
 export {
   ENGINE_BUILTIN_TOOLS,
   RECORD_SCAN_BYTES,
-  engineToolsFor,
-  excludedEngineTools,
   filterSkills,
   parseSessionAgentRecord,
   readSessionAgentRecord,
   rootRecord,
   rootRole,
-  wantsWebSearch,
 } from "./session-config.js";
 export { listAgentSkills, skillRoots } from "./skills.js";

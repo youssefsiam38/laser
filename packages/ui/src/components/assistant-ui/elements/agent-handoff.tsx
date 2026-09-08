@@ -91,7 +91,7 @@ export function AgentHandoff({
 // transcript renderer stays the one Markdown renderer there is.
 // ---------------------------------------------------------------------------
 
-export type AgentEventKind = "agent.completed" | "agent.blocked" | "agent.failed" | "agent.cancelled" | "agent.timed_out" | "agent.message";
+export type AgentEventKind = "agent.completed" | "agent.blocked" | "agent.failed" | "agent.cancelled" | "agent.message";
 export type AgentEventInitiator = "parent" | "user" | "harness";
 
 /** The tone the event's dot and its sentence take. */
@@ -102,7 +102,6 @@ export function agentEventTone(kind: AgentEventKind): "ok" | "attention" | "dang
     case "agent.blocked":
       return "attention";
     case "agent.failed":
-    case "agent.timed_out":
       return "danger";
     case "agent.cancelled":
       return "muted";
@@ -120,7 +119,6 @@ export function agentEventSentence(name: string, kind: AgentEventKind, initiator
       return `${name} was blocked`;
     case "agent.failed":
       return `${name} failed`;
-    case "agent.timed_out":
       return `${name} timed out`;
     case "agent.message":
       return `${name} sent a message`;

@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AGENT_DEFAULT_TOOLS, type AgentDefinition, type AgentDefinitionInput, type AgentIssue, type AgentsSnapshot, type NamerState } from "@lasercode/protocol";
+import { type AgentDefinition, type AgentDefinitionInput, type AgentIssue, type AgentsSnapshot, type NamerState } from "@lasercode/protocol";
 
 import { initialState, reduce, type AppState } from "../../../src/store.js";
 import { agent, snapshot } from "../fixtures.js";
@@ -183,9 +183,11 @@ describe("Agents page", () => {
     const allowed = editor.querySelector('[data-slot="allowed-agents"]')!;
     expect([...allowed.querySelectorAll<HTMLInputElement>("input")].map((i) => i.name)).toEqual(["allowed:default", "allowed:reviewer"]);
     await click(allowed.querySelector<HTMLInputElement>('input[name="allowed:default"]')!);
-    // Web search is off, so the tool says what it needs.
+    // Tools are not part of a definition (D-144): every agent has every tool,
+    // so the form offers no tool choices at all.
     await settle();
-    expect(editor.querySelector('input[name="tool:web_search"]')!.closest("label")!.textContent).toContain("Needs the Web search feature");
+    expect(editor.querySelector('input[name^="tool:"]')).toBeNull();
+    expect(editor.textContent).not.toContain("Run timeout");
     // The host is asked on blur; with no issues the form can be saved.
     await blur(editor.querySelector('textarea[name="instructions"]')!);
     await settle();
@@ -206,9 +208,7 @@ describe("Agents page", () => {
       scopedSkills: false,
       skills: [],
       model: null,
-      runTimeoutMinutes: null,
     });
-    expect(input.tools).toEqual([...AGENT_DEFAULT_TOOLS]);
     // The saved agent is now selected and listed among yours.
     expect(q('[data-slot="agent-editor"]').dataset.agent).toBe("code-reviewer");
     expect(qa('[data-slot="agent-row"]').map((r) => r.dataset.agent)).toEqual(["default", "code-reviewer", "reviewer", "beam", "chat", "namer"]);

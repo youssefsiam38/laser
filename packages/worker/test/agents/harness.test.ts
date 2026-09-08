@@ -1,10 +1,9 @@
 /**
  * M13-T3 · the harness lifecycle with a fake host: start → running →
  * complete through the bridge; blocked; stops by a person and by the parent;
- * timeout; failure on close; settle-without-completion; waiting; follow-up
+ * no limit on a run's length; failure on close; settle-without-completion; waiting; follow-up
  * messages; nesting and allow-list refusals; run notifications; the run panel.
  */
-import { AGENT_RUN_TIMEOUT_DEFAULT_MINUTES, SESSION_RUN_ENTRY_TYPE, validatePanelEvent, type AgentDefinition, type AgentRun, type AgentsSnapshot, type ContentBlock, type SessionState, type UiDialogResponse } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DriverAgentOptions, DriverEvent, DriverListener, PromptOptions, SessionDriver } from "../../src/driver.js";
 import type { AgentModelEvent, HarnessSessionRole } from "../../src/agents/bridge.js";
@@ -13,6 +12,7 @@ import { AgentHarness, NUDGE_TEXT, runPanel, runPanelId, type SessionHost, type 
 import { HarnessError } from "../../src/agents/errors.js";
 import { rootRecord, rootRole } from "../../src/agents/session-config.js";
 import type { CreateWorktreeInput, Worktree } from "../../src/agents/worktrees.js";
+import { SESSION_RUN_ENTRY_TYPE, validatePanelEvent, type AgentDefinition, type AgentRun, type AgentsSnapshot, type ContentBlock, type SessionState, type UiDialogResponse } from "@lasercode/protocol";
 
 class FakeDriver implements SessionDriver {
   readonly kind = "stable-sdk" as const;
@@ -194,7 +194,8 @@ describe("AgentHarness", () => {
     // Notifications: the run, and the two started/message_sent moments.
     const running = world.runsNotified().at(-1)!;
     expect(running).toMatchObject({ agentName: "worker", subagentName: "fix-login", sessionId: "child-1", runId: result.runId, sessionPath: "/sessions/child-1.jsonl", status: "running", origin: "agent", depth: 1, parent: { sessionPath: root.path, sessionId: "root-1" }, goal: { id: "g1" }, projectCwd: "/repo", rootSessionPath: root.path });
-    expect(running.timeoutAt).toBeDefined();
+    // No deadline: nothing ends a run for taking long (D-144).
+    expect(running).not.toHaveProperty("timeoutAt");
     expect(world.events().map((e) => `${e.kind}@${e.sessionPath}`)).toEqual(["started@/sessions/child-1.jsonl", "message_sent@/sessions/root.jsonl"]);
     expect(world.harness.sessionInfo("/sessions/child-1.jsonl")).toEqual({ agentName: "worker", kind: "child", subagentName: "fix-login", parentPath: root.path, rootPath: root.path, runId: result.runId, runStatus: "running" });
 
@@ -275,7 +276,7 @@ describe("AgentHarness", () => {
     expect(received[0]!.message).toBe("The parent ended this run. Reason: no longer needed");
   });
 
-  it("times out a run, aborts the child and tells the parent", async () => {
+  it("lets a run go on with no limit of any kind: no clock ends it", async () => {
     vi.useFakeTimers();
     world = makeWorld();
     world.definitions.sync(snapshotWith([PARENT, WORKER, REVIEWER]));
@@ -283,16 +284,17 @@ describe("AgentHarness", () => {
     const received: AgentModelEvent[] = [];
     root.handle.bridge.onEvent((event) => received.push(event));
     const { runId } = await root.handle.bridge.startAgent({ agentName: "reviewer", subagentName: "r", task: "t" });
-    const run = world.harness.run(runId)!;
-    expect(new Date(run.timeoutAt!).getTime() - new Date(run.startedAt).getTime()).toBe(5 * 60_000);
-    await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
-    expect(world.harness.run(runId)).toMatchObject({ status: "timed_out", endedBy: { initiator: "harness" } });
-    expect(world.drivers.get("/sessions/child-1.jsonl")!.aborts).toBe(1);
-    expect(received[0]).toMatchObject({ type: "agent.timed_out", message: expect.stringMatching(/5-minute limit/) });
-    // The default timeout applies when the definition sets none.
-    const second = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "t" });
-    const secondRun = world.harness.run(second.runId)!;
-    expect(new Date(secondRun.timeoutAt!).getTime() - new Date(secondRun.startedAt).getTime()).toBe(AGENT_RUN_TIMEOUT_DEFAULT_MINUTES * 60_000);
+    // A run carries no deadline, and months of silence change nothing (D-144).
+    expect(world.harness.run(runId)).not.toHaveProperty("timeoutAt");
+    await vi.advanceTimersByTimeAsync(90 * 24 * 60 * 60_000);
+    expect(world.harness.run(runId)).toMatchObject({ status: "running" });
+    expect(world.drivers.get("/sessions/child-1.jsonl")!.aborts).toBe(0);
+    expect(received).toEqual([]);
+    // It ends when the agent says so, not when a timer does.
+    const childBridge = world.harness.bridgeOf("/sessions/child-1.jsonl")!;
+    expect(await childBridge.completeRun({ status: "completed", message: "done at last" })).toEqual({ ok: true, runId });
+    expect(world.harness.run(runId)).toMatchObject({ status: "completed" });
+    expect(received.at(-1)).toMatchObject({ type: "agent.completed" });
   });
 
   it("fails a run whose session closes", async () => {

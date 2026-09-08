@@ -50,9 +50,8 @@ export function timelineOf(node: AgentTreeNode): TimelineEvent[] {
       title: run.status === "queued" ? "Waiting to start" : action ? `Working · ${action}` : "Working",
       detail: counts || undefined,
     });
-    if (run.timeoutAt) events.push({ id: "timeout", when: "future", time: clockTime(run.timeoutAt), title: "Times out", detail: "Unless it finishes first" });
   } else {
-    const failed = run.status === "failed" || run.status === "timed_out";
+    const failed = run.status === "failed";
     events.push({
       id: "ended",
       when: "past",

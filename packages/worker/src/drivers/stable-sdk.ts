@@ -70,7 +70,7 @@ import {
   type SessionDriver,
 } from "../driver.js";
 import { createUiBridge, type UiBridge } from "../ui-bridge.js";
-import { engineToolsFor, excludedEngineTools, filterSkills, wantsWebSearch, ensureWorkspaceSessionCwd } from "../agents/session-config.js";
+import { ENGINE_BUILTIN_TOOLS, ensureWorkspaceSessionCwd, filterSkills } from "../agents/session-config.js";
 import { modelUnavailableMessage } from "../agents/harness.js";
 
 type PiModel = ReturnType<ModelRuntime["getModels"]>[number];
@@ -111,9 +111,9 @@ export class StableSdkDriver implements SessionDriver {
     const agentDir = options.agentDir ?? getAgentDir();
     const enabled = new Set<FeatureId>(options.features ?? ["subagents", "goals"]);
     const agent = options.agent;
-    // Web search is an extension tool: offered when the feature is on and,
-    // for an agent-defined session, only when its definition lists it.
-    const searchWanted = enabled.has("web-search") && (agent ? wantsWebSearch(agent.definition) : true);
+    // Web search is an extension tool: offered whenever its feature is on.
+    // Every agent has every tool (D-144), so no definition narrows this.
+    const searchWanted = enabled.has("web-search");
     const search = searchWanted ? new WebSearchService(agentDir) : undefined;
     const createCompanion = (requestProvenance: ReturnType<typeof createPromptProvenanceObserver>) => {
       const companion: LaserExtensionOptions = {
@@ -210,7 +210,6 @@ export class StableSdkDriver implements SessionDriver {
         // nothing inside the session can switch them back on. `tools:` is not
         // used: it is an allowlist that would also deny every extension tool
         // (the harness's, background work's, the goal's, web search's).
-        ...(agent ? { excludeTools: excludedEngineTools(agent.definition) } : {}),
         ...(selected ? { model: selected } : {}),
         ...(agent?.definition.thinkingLevel ? { thinkingLevel: agent.definition.thinkingLevel } : {}),
       });
@@ -218,7 +217,7 @@ export class StableSdkDriver implements SessionDriver {
       // find, ls) are switched on here. A settings override would be the
       // natural place, but the resource loader's reload re-reads settings
       // from disk during service creation and drops every override.
-      if (agent) activateAgentTools(created.session, agent.definition);
+      if (agent) activateEveryTool(created.session);
       return { ...created, services, diagnostics: services.diagnostics };
     };
 
@@ -595,10 +594,14 @@ function agentResourceOptions(agent: DriverAgentOptions): {
   };
 }
 
-/** Activate the definition's built-in tools beside every extension tool already active. */
-function activateAgentTools(session: AgentSession, definition: DriverAgentOptions["definition"]): void {
+/**
+ * Switch on every engine tool beside the extension tools already active. The
+ * engine starts a session with four of its own (read, bash, edit, write); the
+ * rest are enabled here, because every agent has every tool (D-144).
+ */
+function activateEveryTool(session: AgentSession): void {
   const active = new Set(session.getActiveToolNames());
-  for (const name of engineToolsFor(definition)) active.add(name);
+  for (const name of ENGINE_BUILTIN_TOOLS) active.add(name);
   session.setActiveToolsByName([...active]);
 }
 

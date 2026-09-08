@@ -20,7 +20,6 @@
  */
 import type { HostNotifications, JsonRpcNotification, WorkerInfo, WorkerStatus } from "@lasercode/protocol";
 import { ErrorCodes, ProtocolError } from "@lasercode/protocol";
-import { activeRuns, type ActiveRun } from "./subagents/file-layer.js";
 import { canonical } from "./trust.js";
 import { WorkerClient, type WorkerClientOptions } from "./worker-client.js";
 
@@ -50,7 +49,8 @@ export interface WorkerPoolOptions {
   /** True while a connected client is following a session in this directory. */
   isAttached?: (cwd: string) => boolean;
   /** Pi session ids of the sessions this worker holds; for the subagents guard. */
-  sessionIds?: (cwd: string) => Set<string>;
+  /** True while `cwd` has an agent run that has not ended; such a project is never idle. */
+  hasLiveRun?: (cwd: string) => boolean;
   /**
    * Runs after a worker reports `ready` and before `get()` resolves, so the
    * first request a worker answers already sees what the host knows (the
@@ -562,21 +562,12 @@ export class WorkerPool {
         !(this.options.isAttached?.(entry.cwd) ?? false),
     );
     if (candidates.length === 0) return;
-    // One filesystem pass for all candidates (`activeRuns` reads every root),
-    // but the answer stays per candidate: a background run in project A is no
-    // reason to keep idle workers for B and C alive.
-    let runs: ActiveRun[];
-    try {
-      runs = activeRuns();
-    } catch {
-      return; // unreadable temp roots: assume work is in flight, retire nothing
-    }
+    // A project with an agent still working is never idle, however long that
+    // agent takes: nothing limits a run's length (D-144), and retiring the
+    // worker would kill the child mid-sentence. The answer is per candidate —
+    // a run in project A is no reason to keep B and C alive.
     for (const entry of candidates) {
-      const ids = this.options.sessionIds?.(entry.cwd) ?? new Set<string>();
-      const busy = runs.some(
-        (run) => (run.sessionId !== undefined && ids.has(run.sessionId)) || run.cwd === entry.cwd,
-      );
-      if (busy) continue;
+      if (this.options.hasLiveRun?.(entry.cwd) ?? false) continue;
       void this.retire(entry, "retired after being idle").catch(() => {});
     }
   }

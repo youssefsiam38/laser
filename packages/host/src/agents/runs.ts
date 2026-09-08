@@ -15,7 +15,7 @@
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { isTerminalRunStatus, type AgentRun } from "@lasercode/protocol";
+import { AGENT_RUN_STATUSES, isTerminalRunStatus, type AgentRun } from "@lasercode/protocol";
 import { canonical } from "../trust.js";
 
 export interface AgentRunRegistryOptions {
@@ -63,6 +63,14 @@ export class AgentRunRegistry {
    * Every run, newest first; with `path`, the runs of the tree that session
    * belongs to (a child path resolves to its root through the runs it appears in).
    */
+  /** True while any run of `projectCwd` has not ended; the idle sweep asks this. */
+  hasLiveRun(projectCwd: string): boolean {
+    for (const run of this.runs.values()) {
+      if (run.projectCwd === projectCwd && !isTerminalRunStatus(run.status)) return true;
+    }
+    return false;
+  }
+
   list(path?: string): AgentRun[] {
     let runs = [...this.runs.values()];
     if (path !== undefined) {
@@ -244,6 +252,9 @@ function readRun(raw: unknown): AgentRun | undefined {
   if (!run || typeof run !== "object") return undefined;
   const strings = ["agentName", "subagentName", "sessionId", "runId", "sessionPath", "projectCwd", "rootSessionPath", "startedAt", "updatedAt"] as const;
   for (const key of strings) if (typeof run[key] !== "string") return undefined;
-  if (typeof run.status !== "string") return undefined;
+  // A status the current vocabulary does not have (a record written before
+  // `timed_out` was removed, D-144) is not read back: dropping the row is
+  // honest, and beta data is not migrated.
+  if (typeof run.status !== "string" || !(AGENT_RUN_STATUSES as readonly string[]).includes(run.status)) return undefined;
   return structuredClone(run as AgentRun);
 }

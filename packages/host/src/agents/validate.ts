@@ -9,8 +9,6 @@ import {
   AGENT_INSTRUCTIONS_MAX,
   AGENT_NAME_MAX,
   AGENT_NAME_PATTERN,
-  AGENT_RUN_TIMEOUT_MAX_MINUTES,
-  AGENT_TOOL_NAMES,
   DEFAULT_AGENT_NAME,
   isBuiltinAgentName,
   type AgentDefinition,
@@ -56,17 +54,6 @@ export function validateAgentInput(input: AgentDefinitionInput, context: Validat
     push("instructions", "Write instructions, or use the engine's built-in instructions.");
   }
 
-  // ---- tools
-  const seenTools = new Set<string>();
-  input.tools.forEach((tool, index) => {
-    if (!(AGENT_TOOL_NAMES as readonly string[]).includes(tool)) {
-      push(`tools[${index}]`, `"${tool}" is not a tool an agent can use.`);
-    } else if (seenTools.has(tool)) {
-      push(`tools[${index}]`, `"${tool}" is listed twice.`);
-    }
-    seenTools.add(tool);
-  });
-
   // ---- allowedAgents
   if (!input.supportsSubagents) {
     if (input.allowedAgents.length > 0) {
@@ -104,14 +91,6 @@ export function validateAgentInput(input: AgentDefinitionInput, context: Validat
       }
       seenSkills.add(skill.name);
     });
-  }
-
-  // ---- run timeout
-  if (input.runTimeoutMinutes !== null) {
-    const minutes = input.runTimeoutMinutes;
-    if (!Number.isInteger(minutes) || minutes < 1 || minutes > AGENT_RUN_TIMEOUT_MAX_MINUTES) {
-      push("runTimeoutMinutes", `Use a whole number of minutes between 1 and ${AGENT_RUN_TIMEOUT_MAX_MINUTES}, or leave it empty for the default.`);
-    }
   }
 
   // ---- model

@@ -221,7 +221,7 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
 
       // A save is broadcast to every client and persisted for the next host.
       const saved = await client.request<{ agent: { name: string }; snapshot: { revision: number } }>("agents/save", {
-        agent: { name: "reviewer", description: "Reviews", instructions: "Review.", engineInstructions: false, model: null, thinkingLevel: null, tools: ["read"], supportsSubagents: false, allowedAgents: [], scopedSkills: false, skills: [], runTimeoutMinutes: null },
+        agent: { name: "reviewer", description: "Reviews", instructions: "Review.", engineInstructions: false, model: null, thinkingLevel: null, supportsSubagents: false, allowedAgents: [], scopedSkills: false, skills: [] },
       });
       expect(saved.agent.name).toBe("reviewer");
       await client.waitFor((m) => "method" in m && m.method === "agents/updated" && (m.params as { revision: number }).revision === saved.snapshot.revision);

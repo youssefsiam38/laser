@@ -3,7 +3,7 @@
  * seeded, what may be saved, what may be deleted and why not, and that the
  * file survives a restart without the built-ins ever being frozen into it.
  */
-import { AGENT_DEFAULT_TOOLS, PRODUCT_NAME, type AgentDefinitionInput, type AgentsSnapshot } from "@lasercode/protocol";
+import { PRODUCT_NAME, type AgentDefinitionInput, type AgentsSnapshot } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,12 +27,10 @@ function custom(name: string, patch: Partial<AgentDefinitionInput> = {}): AgentD
     engineInstructions: false,
     model: null,
     thinkingLevel: null,
-    tools: ["read", "grep"],
     supportsSubagents: false,
     allowedAgents: [],
     scopedSkills: false,
     skills: [],
-    runTimeoutMinutes: null,
     ...patch,
   };
 }
@@ -53,13 +51,12 @@ describe("AgentStore · seeding", () => {
     expect(snapshot.agents.map((a) => `${a.name}:${a.kind}`)).toEqual(["default:custom", "beam:builtin", "chat:builtin", "namer:builtin"]);
     expect(snapshot.defaultAgent).toBe("default");
     const def = snapshot.agents[0]!;
-    expect(def).toMatchObject({ engineInstructions: true, instructions: "", supportsSubagents: true, allowedAgents: ["default"], tools: [...AGENT_DEFAULT_TOOLS] });
+    expect(def).toMatchObject({ engineInstructions: true, instructions: "", supportsSubagents: true, allowedAgents: ["default"] });
     const beam = snapshot.agents.find((a) => a.name === "beam")!;
     expect(beam.scopedSkills).toBe(true);
     expect(beam.skills).toEqual([{ name: `${PRODUCT_NAME}-beam`, path: join(dir, "agent", "skills", `${PRODUCT_NAME}-beam`, "SKILL.md"), scope: "bundled" }]);
-    expect(beam.tools).toContain("web_search");
-    expect(snapshot.agents.find((a) => a.name === "chat")).toMatchObject({ tools: ["web_search"], supportsSubagents: false });
-    expect(snapshot.agents.find((a) => a.name === "namer")).toMatchObject({ tools: [], instructions: "" });
+    expect(snapshot.agents.find((a) => a.name === "chat")).toMatchObject({ supportsSubagents: false });
+    expect(snapshot.agents.find((a) => a.name === "namer")).toMatchObject({ instructions: "" });
     expect(snapshot.policy).toEqual({ maxDepth: 3, foregroundCommandSeconds: 120 });
     expect(snapshot.beam).toEqual({ model: null, suggested: null, needsChoice: true });
     expect(snapshot.namer).toEqual({ status: "unqualified", model: null, candidates: [] });
@@ -104,10 +101,6 @@ describe("AgentStore · save and validate", () => {
     ]);
     expect(s.validate(custom("a", { instructions: "  " }))).toEqual([{ field: "instructions", message: "Write instructions, or use the engine's built-in instructions." }]);
     expect(s.validate(custom("a", { instructions: "", engineInstructions: true }))).toEqual([]);
-    expect(s.validate(custom("a", { tools: ["read", "teleport", "read"] }))).toEqual([
-      { field: "tools[1]", message: '"teleport" is not a tool an agent can use.' },
-      { field: "tools[2]", message: '"read" is listed twice.' },
-    ]);
     expect(s.validate(custom("a", { allowedAgents: ["default"] }))).toEqual([
       { field: "allowedAgents", message: "This agent does not start other agents, so it cannot list any." },
     ]);
@@ -120,9 +113,6 @@ describe("AgentStore · save and validate", () => {
     ]);
     const skill = { name: "review", path: "/skills/review/SKILL.md", scope: "global" as const };
     expect(s.validate(custom("a", { scopedSkills: true, skills: [skill, skill] }))).toEqual([{ field: "skills[1]", message: '"review" is listed twice.' }]);
-    expect(s.validate(custom("a", { runTimeoutMinutes: 0 }))).toEqual([
-      { field: "runTimeoutMinutes", message: "Use a whole number of minutes between 1 and 1440, or leave it empty for the default." },
-    ]);
     expect(s.validate(custom("a", { model: { provider: "", id: "x" } }))).toEqual([{ field: "model", message: "Choose a model, or leave it empty to follow the default model." }]);
   });
 

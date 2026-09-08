@@ -19,7 +19,8 @@ import {
   createReadToolDefinition,
   createWriteToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { AGENT_DEFAULT_TOOLS, ErrorCodes, ProtocolError } from "@lasercode/protocol";
+import { ErrorCodes, ProtocolError } from "@lasercode/protocol";
+import { ENGINE_BUILTIN_TOOLS } from "./session-config.js";
 
 interface SystemPromptModule {
   buildSystemPrompt(options: { cwd: string; selectedTools?: string[]; toolSnippets?: Record<string, string> }): string;
@@ -102,6 +103,6 @@ export function stripWorkingDirectory(text: string): string {
  */
 export async function engineDefaultInstructions(cwd: string): Promise<string> {
   const { buildSystemPrompt } = await loadSystemPromptModule();
-  const text = buildSystemPrompt({ cwd, selectedTools: [...AGENT_DEFAULT_TOOLS], toolSnippets: defaultToolSnippets(cwd) });
+  const text = buildSystemPrompt({ cwd, selectedTools: [...ENGINE_BUILTIN_TOOLS], toolSnippets: defaultToolSnippets(cwd) });
   return stripWorkingDirectory(text);
 }

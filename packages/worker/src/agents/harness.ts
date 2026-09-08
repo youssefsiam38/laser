@@ -2,7 +2,7 @@
  * AgentHarness — one per worker process; runs agents as persistent child
  * sessions (docs/agents-leap/references/agent-harness-architecture.md).
  *
- * The harness owns runs, child sessions, worktrees, timeouts and parent
+ * The harness owns runs, child sessions, worktrees and parent
  * notification. The companion extension's `subagents` module owns only what
  * must live inside the engine: the model-facing tools and delivering events
  * to the parent model at a safe boundary. They meet on `AgentHarnessBridge`,
@@ -23,8 +23,6 @@
 import { randomBytes } from "node:crypto";
 import {
   AGENT_MESSAGE_MAX,
-  AGENT_RUN_TIMEOUT_DEFAULT_MINUTES,
-  AGENT_RUN_TIMEOUT_MAX_MINUTES,
   AGENT_TASK_EXCERPT,
   AGENT_TASK_MAX,
   SESSION_RUN_ENTRY_TYPE,
@@ -146,7 +144,6 @@ interface Entry {
 
 interface RunState {
   run: AgentRun;
-  timer: NodeJS.Timeout | undefined;
   nudged: boolean;
   /** `complete_agent_run` was called for this run. */
   completedByTool: boolean;
@@ -158,7 +155,6 @@ const MODEL_EVENT_TYPE: Record<Exclude<AgentRunStatus, "queued" | "running">, Ag
   blocked: "agent.blocked",
   failed: "agent.failed",
   cancelled: "agent.cancelled",
-  timed_out: "agent.timed_out",
 };
 
 const LIFECYCLE: Record<AgentRunStatus, RunLifecycle> = {
@@ -168,7 +164,6 @@ const LIFECYCLE: Record<AgentRunStatus, RunLifecycle> = {
   blocked: "done",
   failed: "failed",
   cancelled: "cancelled",
-  timed_out: "failed",
 };
 
 function excerpt(text: string, max: number): string {
@@ -691,7 +686,6 @@ export class AgentHarness {
     const sessionId = entry.sessionId!;
     const runId = init.origin === "agent" && entry.role.runId && !this.runStates.has(entry.role.runId) ? entry.role.runId : newRunId();
     const startedAt = this.iso();
-    const minutes = Math.min(AGENT_RUN_TIMEOUT_MAX_MINUTES, Math.max(1, entry.definition.runTimeoutMinutes ?? AGENT_RUN_TIMEOUT_DEFAULT_MINUTES));
     const driver = this.host.driver(path);
     const parentPath = entry.record.parentPath;
     const run: AgentRun = {
@@ -715,30 +709,16 @@ export class AgentHarness {
       activity: { turns: 0, tools: 0, lastAt: startedAt },
       startedAt,
       updatedAt: startedAt,
-      timeoutAt: new Date(this.now() + minutes * 60_000).toISOString(),
     };
-    const state: RunState = { run, timer: undefined, nudged: false, completedByTool: false, lastAssistant: undefined };
+    const state: RunState = { run, nudged: false, completedByTool: false, lastAssistant: undefined };
     this.runStates.set(runId, state);
     this.runOrder.push(runId);
     entry.role = { ...entry.role, runId, ...(init.goal ? { goal: init.goal } : {}) };
     entry.abortOnTurn = false;
     this.announceRole(entry);
-    this.armTimeout(state, minutes);
     void this.persistMoment(run, "started");
     this.publish(state);
     return state;
-  }
-
-  private armTimeout(state: RunState, minutes: number): void {
-    const delay = Math.max(0, minutes * 60_000);
-    state.timer = setTimeout(() => {
-      state.timer = undefined;
-      if (isTerminalRunStatus(state.run.status)) return;
-      const driver = this.host.driver(state.run.sessionPath);
-      if (driver) void driver.abort().catch(() => undefined);
-      this.endRun(state, "timed_out", { error: `The run exceeded its ${minutes}-minute limit and was ended.`, endedBy: { initiator: "harness" } });
-    }, delay);
-    state.timer.unref?.();
   }
 
   /** Start the child's model loop; a refusal or a throw is the run's failure, never the caller's. */
@@ -792,10 +772,6 @@ export class AgentHarness {
     outcome: { result?: { status: "completed" | "blocked"; message: string }; error?: string; endedBy?: { initiator: AgentRunInitiator; reason?: string }; context?: string },
   ): void {
     if (isTerminalRunStatus(state.run.status)) return;
-    if (state.timer) {
-      clearTimeout(state.timer);
-      state.timer = undefined;
-    }
     const endedAt = this.iso();
     state.run = {
       ...state.run,
@@ -981,7 +957,6 @@ function statusWord(status: AgentRunStatus): string {
       return "failed";
     case "cancelled":
       return "was ended";
-    case "timed_out":
       return "timed out";
     default:
       return status;
@@ -998,7 +973,6 @@ function eventSummary(status: AgentRunStatus, run: AgentRun): string {
       return run.error ?? "Failed";
     case "cancelled":
       return run.endedBy?.initiator === "user" ? "Ended by the person" : run.endedBy?.initiator === "parent" ? "Ended by the parent" : "Ended";
-    case "timed_out":
       return "Timed out";
     default:
       return status;
@@ -1018,7 +992,6 @@ export function modelMessage(run: AgentRun, context: string | undefined): string
       body = run.endedBy?.reason ? `${who} Reason: ${run.endedBy.reason}` : who;
       break;
     }
-    case "timed_out":
       body = run.error ?? "The run exceeded its time limit and was ended.";
       break;
     case "failed":
@@ -1048,8 +1021,7 @@ function textOfMessage(message: unknown): string | undefined {
 export function runPanel(run: AgentRun): Panel | undefined {
   const parentId = run.parent?.runId ? runPanelId(run.parent.runId) : run.parent?.sessionPath;
   const terminalReason =
-    run.status === "timed_out" ? "timeout"
-    : run.status === "cancelled" ? (run.endedBy?.initiator === "user" ? "you ended it" : "the parent ended it")
+    run.status === "cancelled" ? (run.endedBy?.initiator === "user" ? "you ended it" : "the parent ended it")
     : run.status === "blocked" ? "blocked"
     : run.status === "failed" ? "failed"
     : undefined;

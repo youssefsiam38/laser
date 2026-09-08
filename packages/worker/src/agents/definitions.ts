@@ -9,7 +9,6 @@
  * agent rather than as nothing.
  */
 import {
-  AGENT_DEFAULT_TOOLS,
   AGENT_MAX_DEPTH_DEFAULT,
   BUILTIN_AGENT_NAMES,
   DEFAULT_AGENT_NAME,
@@ -26,8 +25,6 @@ import {
 export interface DefinitionsOptions {
   /** The Beam skill reference for this installation (the fallback Beam definition scopes to it). */
   beamSkill?: AgentSkillRef;
-  /** Whether the Web search feature is on, which decides whether `web_search` is offered to Chat. */
-  webSearch?: boolean;
 }
 
 const EPOCH = "1970-01-01T00:00:00.000Z";
@@ -41,12 +38,10 @@ function base(name: string, kind: AgentDefinition["kind"], partial: Partial<Agen
     engineInstructions: false,
     model: null,
     thinkingLevel: null,
-    tools: [...AGENT_DEFAULT_TOOLS],
     supportsSubagents: false,
     allowedAgents: [],
     scopedSkills: false,
     skills: [],
-    runTimeoutMinutes: null,
     createdAt: EPOCH,
     updatedAt: EPOCH,
     ...partial,
@@ -74,30 +69,27 @@ export function fallbackBeamAgent(options: { model: AgentModelChoice | null; bea
       "Be brief and specific. Quote the paths you read so the person can check.",
     ].join("\n"),
     model: options.model,
-    tools: ["read", "bash", "edit", "write", "grep", "find", "ls", "web_search"],
     scopedSkills: true,
     skills: options.beamSkill ? [options.beamSkill] : [],
   });
 }
 
-export function fallbackChatAgent(options: { webSearch: boolean }): AgentDefinition {
+export function fallbackChatAgent(): AgentDefinition {
   return base("chat", "builtin", {
     description: "A general assistant for conversations not tied to a project.",
     instructions: [
       "You are a general assistant. This conversation is not tied to any project or code base.",
-      "Answer directly and concisely. You have no file tools here; if the person wants work done in a project, tell them to open a project session.",
+      "Answer directly and concisely. You work in a scratch folder of your own, not in the person's project: if they want work done in one, tell them to open a session there.",
     ].join("\n"),
-    tools: options.webSearch ? ["web_search"] : [],
   });
 }
 
-/** Namer is a service, never a session: no tools, never startable. */
+/** Namer is a service, never a session: never startable. */
 export function fallbackNamerAgent(model: AgentModelChoice | null): AgentDefinition {
   return base("namer", "builtin", {
     description: "Names sessions and labels running tool calls. Not a session agent.",
     instructions: "Answer with the shortest accurate title.",
     model,
-    tools: [],
   });
 }
 
@@ -111,7 +103,7 @@ export function fallbackSnapshot(options: DefinitionsOptions = {}): AgentsSnapsh
     agents: [
       fallbackDefaultAgent(),
       fallbackBeamAgent({ model: null, ...(options.beamSkill ? { beamSkill: options.beamSkill } : {}) }),
-      fallbackChatAgent({ webSearch: options.webSearch ?? false }),
+      fallbackChatAgent(),
       fallbackNamerAgent(null),
     ],
     defaultAgent: DEFAULT_AGENT_NAME,
@@ -154,7 +146,7 @@ export class DefinitionsCache {
     for (const name of BUILTIN_AGENT_NAMES) {
       if (names.has(name)) continue;
       if (name === "beam") agents.push(fallbackBeamAgent({ model: snapshot.beam.model, ...(this.options.beamSkill ? { beamSkill: this.options.beamSkill } : {}) }));
-      else if (name === "chat") agents.push(fallbackChatAgent({ webSearch: this.options.webSearch ?? false }));
+      else if (name === "chat") agents.push(fallbackChatAgent());
       else agents.push(fallbackNamerAgent(snapshot.namer.model));
     }
     this.current = { ...snapshot, agents };

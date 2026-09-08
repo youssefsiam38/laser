@@ -4,14 +4,14 @@
  * Beam skill only for Beam), the model refusal, and the agent record written
  * on a new session and recovered on load.
  */
-import { AGENT_DEFAULT_TOOLS, PRODUCT_NAME, SESSION_AGENT_ENTRY_TYPE, type AgentDefinition } from "@lasercode/protocol";
+import { PRODUCT_NAME, SESSION_AGENT_ENTRY_TYPE, type AgentDefinition } from "@lasercode/protocol";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { BEAM_SKILL_NAME, ensureBeamSkill } from "../../src/agents/beam-skill.js";
 import { fallbackBeamAgent, fallbackDefaultAgent, fallbackPolicy } from "../../src/agents/definitions.js";
-import { readSessionAgentRecord, rootRecord, rootRole } from "../../src/agents/session-config.js";
+import { ENGINE_BUILTIN_TOOLS, readSessionAgentRecord, rootRecord, rootRole } from "../../src/agents/session-config.js";
 import { StableSdkDriver } from "../../src/drivers/stable-sdk.js";
 import type { DriverAgentOptions, DriverEvent } from "../../src/driver.js";
 import { startStubProvider, systemTextOf, toolNamesOf, writeStubModels, type StubProvider } from "./stub-provider.js";
@@ -53,25 +53,24 @@ async function openAndPrompt(definition: AgentDefinition, text = "hello"): Promi
 }
 
 describe("StableSdkDriver with an agent definition", () => {
-  it("applies custom instructions, filters built-in tools and sets the definition's model", async () => {
-    const definition: AgentDefinition = { ...fallbackDefaultAgent(), name: "reader", engineInstructions: false, instructions: "You are a careful reader who only inspects.", tools: ["read", "grep"], model: { provider: "stub", id: "stub-1" } };
+  it("applies custom instructions and sets the definition's model, and still hands over every tool", async () => {
+    const definition: AgentDefinition = { ...fallbackDefaultAgent(), name: "reader", engineInstructions: false, instructions: "You are a careful reader who only inspects.", model: { provider: "stub", id: "stub-1" } };
     const { driver } = await openAndPrompt(definition);
     expect(driver.state().model).toMatchObject({ provider: "stub", id: "stub-1" });
     const request = stub.requests[0]!;
     expect(systemTextOf(request).startsWith("You are a careful reader who only inspects.")).toBe(true);
     expect(systemTextOf(request)).not.toContain("expert coding assistant");
-    const tools = toolNamesOf(request);
-    expect(tools).toEqual(expect.arrayContaining(["read", "grep"]));
-    for (const name of ["bash", "edit", "write", "find", "ls"]) expect(tools).not.toContain(name);
+    // Every agent has every tool (D-144); what it is for is said in its instructions.
+    expect(toolNamesOf(request)).toEqual(expect.arrayContaining([...ENGINE_BUILTIN_TOOLS]));
   }, 60_000);
 
-  it("keeps the engine's built-in instructions and every default tool for the shipped default agent", async () => {
+  it("keeps the engine's built-in instructions and every tool for the shipped default agent", async () => {
     const definition: AgentDefinition = { ...fallbackDefaultAgent(), model: { provider: "stub", id: "stub-1" } };
     await openAndPrompt(definition);
     const request = stub.requests[0]!;
     expect(systemTextOf(request)).toContain("expert coding assistant");
-    // Every engine tool of the default set; `web_search` needs the Web search feature, which this session does not enable.
-    expect(toolNamesOf(request)).toEqual(expect.arrayContaining(AGENT_DEFAULT_TOOLS.filter((tool) => tool !== "web_search")));
+    expect(toolNamesOf(request)).toEqual(expect.arrayContaining([...ENGINE_BUILTIN_TOOLS]));
+    // Web search is an extension tool and follows its feature, which this session does not enable.
     expect(toolNamesOf(request)).not.toContain("web_search");
   }, 60_000);
 
@@ -148,7 +147,8 @@ describe("StableSdkDriver with an agent definition", () => {
     const back = new StableSdkDriver();
     await expect(back.open({ cwd: project, agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), sessionPath: projectState.path, projectTrusted: true, agent: agentOptions(fallbackDefaultAgent()) })).rejects.toThrow(/does not exist/);
     expect(existsSync(project)).toBe(false);
-  });
+    // Four real sessions against the engine; the default 5 s is not enough on a loaded machine.
+  }, 60_000);
 
   it("writes the agent record as the first custom entry of a new session and recovers it on load", async () => {
     const definition: AgentDefinition = { ...fallbackDefaultAgent(), name: "recorder", model: { provider: "stub", id: "stub-1" } };

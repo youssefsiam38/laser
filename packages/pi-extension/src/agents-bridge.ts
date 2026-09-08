@@ -3,7 +3,7 @@
  * companion extension's `subagents` and `background-work` modules.
  *
  * The harness (packages/worker/src/agents) owns runs, child sessions,
- * worktrees, timeouts and parent notification. The modules own only what must
+ * worktrees and parent notification. The modules own only what must
  * live inside the engine session: registering the model-facing tools,
  * injecting the child's role into its system prompt, and delivering events to
  * the parent model at a safe boundary. Both sides may import the engine; the
@@ -113,7 +113,7 @@ export type CompleteRunResult = { ok: true; runId: string } | { ok: false; error
  * architecture reference's `agent.completed` shape.
  */
 export interface AgentModelEvent {
-  type: "agent.completed" | "agent.blocked" | "agent.failed" | "agent.cancelled" | "agent.timed_out" | "agent.message";
+  type: "agent.completed" | "agent.blocked" | "agent.failed" | "agent.cancelled" | "agent.message";
   agentName: string;
   subagentName: string;
   sessionId: string;

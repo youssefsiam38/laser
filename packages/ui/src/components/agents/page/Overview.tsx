@@ -38,8 +38,8 @@ export function AgentsOverview({ snapshot, warnings, onNew, onOpen, compact = fa
         icon={<Bot />}
         description={
           firstRun
-            ? "An agent is a reusable way of working: a name other agents start it by, instructions that shape how it works, and the model, tools and skills it may use. Agents that start others delegate work to them in the background, each in its own session and worktree."
-            : "Every agent is a reusable way of working. Pick one on the left to change its instructions, model, tools or skills, or make a new one."
+            ? "An agent is a reusable way of working: a name other agents start it by, instructions that shape how it works, and the model and skills it uses. Every agent has every tool. Agents that start others delegate work to them in the background, each in its own session and worktree."
+            : "Every agent is a reusable way of working. Pick one on the left to change its instructions, model or skills, or make a new one."
         }
         actions={
           <Button type="button" onClick={onNew} data-slot="overview-new">
@@ -60,7 +60,7 @@ export function AgentsOverview({ snapshot, warnings, onNew, onOpen, compact = fa
             </li>
             <li className="flex gap-2">
               <span className="typed shrink-0 text-ink-3">3</span>
-              Choose its model, tools and skills, and whether it may start others.
+              Choose its model and skills, and whether it may start others.
             </li>
           </ul>
         ) : null}

@@ -18,12 +18,10 @@ const agentSample = {
   engineInstructions: false,
   model: { provider: "anthropic", id: "claude-sonnet-5" },
   thinkingLevel: "medium",
-  tools: ["read", "grep", "bash"],
   supportsSubagents: false,
   allowedAgents: [],
   scopedSkills: true,
   skills: [{ name: "code-review", path: "/home/me/.agents/skills/code-review/SKILL.md", scope: "global" }],
-  runTimeoutMinutes: 45,
 };
 
 const samples: Record<ClientMethod, unknown> = {

@@ -7,7 +7,7 @@
  * run of its own speaks the tree's own `working` / `idle`.
  */
 import type { AgentEventKind, AgentRun } from "@lasercode/protocol";
-import { ArrowDownLeft, ArrowUpRight, Ban, CircleAlert, CircleCheck, Hand, Hourglass, OctagonX, Play, type LucideIcon } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Ban, CircleAlert, CircleCheck, Hand, OctagonX, Play, type LucideIcon } from "lucide-react";
 
 import { agentDisplayName, runStatusLabel, type AgentStatusTone, type AgentTreeNode, type AgentTreeStatus } from "@/agents";
 import type { Status } from "@/components/status";
@@ -129,8 +129,6 @@ export function eventLook(kind: AgentEventKind): EventLook {
       return { icon: Hand, tone: "attention" };
     case "failed":
       return { icon: CircleAlert, tone: "danger" };
-    case "timed_out":
-      return { icon: Hourglass, tone: "danger" };
     case "cancelled":
       return { icon: Ban, tone: "muted" };
     case "stop_requested":

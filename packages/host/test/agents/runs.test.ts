@@ -121,4 +121,14 @@ describe("AgentRunRegistry", () => {
     registry.upsert(run("r", { status: "running", updatedAt: "2026-06-01T00:00:01.000Z" }));
     expect(registry.get("r")?.status).toBe("completed");
   });
+  it("calls a project busy while any of its runs is going, whatever its age", () => {
+    const registry = new AgentRunRegistry({ now: NOW });
+    registry.upsert(run("r1", { startedAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" }));
+    // A run started months ago and still going keeps its project alive (D-144).
+    expect(registry.hasLiveRun(PROJECT)).toBe(true);
+    expect(registry.hasLiveRun("/projects/b")).toBe(false);
+    registry.upsert(run("r1", { status: "completed", startedAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-06-01T12:00:00.000Z" }));
+    expect(registry.hasLiveRun(PROJECT)).toBe(false);
+  });
+
 });

@@ -370,7 +370,7 @@ export class HostServer {
       },
       resolveTrust: (cwd) => this.projects.ensureTrusted(cwd),
       isAttached: (cwd) => this.isAttached(cwd),
-      sessionIds: (cwd) => this.sessionIds(cwd),
+      hasLiveRun: (cwd) => this.runs.hasLiveRun(cwd),
     };
     this.pool = new WorkerPool(poolOptions);
 
@@ -707,16 +707,6 @@ export class HostServer {
       }
     }
     return false;
-  }
-
-  /** Pi session ids open in a worker; the pi-subagents retirement guard matches on them. */
-  private sessionIds(cwd: string): Set<string> {
-    const ids = new Set<string>();
-    for (const path of this.pool.openSessions(cwd)) {
-      const id = this.catalog.get(path)?.id;
-      if (id) ids.add(id);
-    }
-    return ids;
   }
 
   // ------------------------------------------------------------- sockets
