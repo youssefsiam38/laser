@@ -85,6 +85,7 @@ export {
 } from "./sessionPreferences.js";
 
 export {
+  forgetRememberedSessions,
   PROJECTS_STORAGE_KEY,
   PROJECT_STORAGE_KEY,
   LaserProvider,

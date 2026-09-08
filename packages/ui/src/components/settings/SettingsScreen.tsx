@@ -19,6 +19,8 @@ import { AlertTriangle, RefreshCw, Search, Sparkles } from "lucide-react";
 
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
 import { Badge } from "@/components/ui/badge";
+import { useWorkbench } from "@/components/workbench";
+import { rememberStep, requestSetupAgain } from "@/components/onboarding";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
@@ -233,7 +235,7 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
  * Settings that belong to this browser rather than to a project: notifications,
  * and the way back into first-run setup.
  */
-function DeviceTab() {
+export function DeviceTab() {
   return (
     <ScrollArea className="h-full">
       <div className="mx-auto flex max-w-160 flex-col gap-6 px-6 py-6">
@@ -248,17 +250,28 @@ function DeviceTab() {
  * The way back in. "Skip setup" on the welcome screen used to be permanent —
  * the flow is gated on one flag on the host and nothing in the app ever
  * cleared it — so one mis-click meant a new person never saw the onboarding
- * again. This clears it; the shell picks the change up on its next read.
+ * again.
+ *
+ * Pressing this starts setup **now**. It used to clear the host's flag and say
+ * setup would run "the next time" the app opened with no session, which was
+ * two promises the app did not keep: the shell holds its own copy of the
+ * host's answer and never re-read it, and a reload reopens the remembered
+ * session, so "no session open" never came around. The button now clears the
+ * flag, forgets the step the flow last stopped on (a fresh run, not a resume)
+ * and hands the request to the shell, which owns the flow.
  */
 function RunSetupAgain() {
   const { client, actions } = useLaserStable();
+  const workbench = useWorkbench();
   const [running, setRunning] = useState(false);
 
   const run = async () => {
     setRunning(true);
     try {
       await client.request("pi/setup/complete", { completed: false });
-      actions.toast("info", `Setup will start again the next time ${PRODUCT_NAME} opens with no session.`);
+      rememberStep(undefined);
+      requestSetupAgain();
+      workbench.close();
     } catch (error) {
       actions.toast("error", error instanceof Error ? error.message : String(error));
     } finally {
@@ -275,8 +288,9 @@ function RunSetupAgain() {
         </h3>
       </div>
       <p className="text-sm leading-6 text-ink-2">
-        The steps you saw the first time {PRODUCT_NAME} opened: connect a provider, choose a model, open a project. Nothing is
-        undone by running them again — anything already set up is skipped.
+        The steps you saw the first time {PRODUCT_NAME} opened: connect a provider, choose a model, open a project. They start
+        straight away and take over the window; the session you are reading stays in the sidebar. Nothing is undone by running
+        them again — anything already set up is skipped.
       </p>
       <div>
         {/* A button, not a line of text: this is the only way back to first run,

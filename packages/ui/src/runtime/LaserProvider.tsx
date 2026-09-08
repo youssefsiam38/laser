@@ -362,6 +362,15 @@ const writeString = (key: string, value: string | undefined): void => {
   }
 };
 
+/**
+ * Forget every remembered destination, so the next load opens no session.
+ * Setup owns the window only while nothing is open (D-47); without this, a
+ * reload during setup would restore the last session and hide the flow.
+ */
+export function forgetRememberedSessions(): void {
+  writeString(SESSION_STORAGE_KEY, undefined);
+}
+
 /** `{ "<project cwd>": "<session path>" }`, and never anything else. */
 const readStringMap = (key: string): Record<string, string> => {
   try {

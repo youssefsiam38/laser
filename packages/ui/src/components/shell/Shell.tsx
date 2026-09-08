@@ -1,5 +1,5 @@
 import { storageKey } from "@lasercode/protocol";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 
 // Agent map (M13-T7): the main-column view and its fullscreen host.
 import { AgentMapFullscreen, AgentMapView, useMapUi } from "@/components/agents/map";
@@ -26,7 +26,7 @@ import { HostConnectionState, HostVersionNotice } from "@/components/assistant-u
 import { StartupRestorationGate } from "@/components/assistant-ui/elements/loading-state";
 import { CommandPaletteDialog } from "./CommandPalette.js";
 import { GlobalSearch } from "./GlobalSearch.js";
-import { FirstRunFlow, useSetupPending } from "@/components/onboarding";
+import { FirstRunFlow, clearSetupRequest, honourSetupRequest, useSetupPending, useSetupRequested } from "@/components/onboarding";
 import { documentTitle, needYouCount } from "./model.js";
 import { Rail } from "./Rail.js";
 import { SessionsPanel } from "./SessionsPanel.js";
@@ -121,7 +121,7 @@ function ShellFrame() {
   const layout = useBreakpoint();
   const isWide = useIsWide();
   const desktop = layout === "desktop";
-  const { currentProject, actions } = useLaserStable();
+  const { currentProject, actions, dispatch } = useLaserStable();
   const view = useLaserView();
   const connection = useLaserState((s) => s.connection);
   const sessions = useLaserState((s) => s.sessions);
@@ -241,6 +241,31 @@ function ShellFrame() {
    * run above this line, so the branch below is a render decision only.
    */
   const firstRun = sessionsLoaded && !view && setup.pending === true;
+
+  /**
+   * Settings → This device → Run setup again. The button cleared the host's
+   * flag and left; the flow lives here, so this is where the request is
+   * honoured: read the host again (this component holds its own copy of the
+   * answer), then leave the open session, because setup owns the whole window
+   * and only renders while nothing is open. The session is not closed — its
+   * row stays in the sidebar — and the remembered destination is forgotten so
+   * a reload in the middle of setup does not bring it back.
+   */
+  const setupRequested = useSetupRequested();
+  const honoured = useRef(false);
+  useEffect(() => {
+    if (!setupRequested) {
+      honoured.current = false;
+      return;
+    }
+    if (honoured.current) return;
+    honoured.current = true;
+    honourSetupRequest({ refresh: setup.refresh, leaveSession: () => dispatch({ type: "select", path: undefined }) });
+  }, [dispatch, setup, setupRequested]);
+  // Spent once the flow is on screen, so a second press can ask again.
+  useEffect(() => {
+    if (setupRequested && firstRun) clearSetupRequest();
+  }, [firstRun, setupRequested]);
 
   const shell = useMemo<ShellContextValue>(
     () => ({

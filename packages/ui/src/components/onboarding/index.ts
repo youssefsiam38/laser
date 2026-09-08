@@ -19,3 +19,4 @@ export {
   type SetupFacts,
   type SetupStep,
 } from "./setup-model.js";
+export { clearSetupRequest, honourSetupRequest, requestSetupAgain, useSetupRequested } from "./setup-request.js";
