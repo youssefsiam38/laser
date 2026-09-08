@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-08T18:20:00+03:00 · claude-2026-09-08-agents · HEAD: `c81e864`
+**Last updated:** 2026-09-08T19:10:00+03:00 · claude-2026-09-08-agents · HEAD: `20c8bce`
 
-**Current focus:** M13 Agents Leap is in. The last four changes came from the user: workspaces under the state directory the host owns (D-141), Run setup again actually starting setup (D-142), a second way into Beam with the microphone in every composer (D-143), every agent having every tool with no limit on how long a run may take (D-144), and model pickers offering only connected providers (D-145). Remaining M13 rows are the retired pi-subagents file layer and the `.laser` override reload finding.
+**Current focus:** M13 Agents Leap is in. The last four changes came from the user: workspaces under the state directory the host owns (D-141), Run setup again actually starting setup (D-142), a second way into Beam with the microphone in every composer (D-143), every agent having every tool with no limit on how long a run may take (D-144), model pickers offering only connected providers (D-145), and the goal engine's tools travelling with the goal (D-146). Remaining M13 rows are the retired pi-subagents file layer and the `.laser` override reload finding.
 
 ## Milestones
 
@@ -24,7 +24,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
 | M12 Product experience | done | 0.2.13 dispatched; pipeline owns verified-download publication |
-| M13 Agents Leap | in-progress | T1–T10 and T13–T17 done; T11 (retire file layer) and T12 (`.laser` overrides through reloads) remain |
+| M13 Agents Leap | in-progress | T1–T10 and T13–T18 done; T11 (retire file layer) and T12 (`.laser` overrides through reloads) remain |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
@@ -39,6 +39,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Recently done
 
+- M13-T18: `20c8bce`; the goal engine's three tools reach a request only while a goal is in play, proven against the real engine; 1,398 tests.
 - M13-T17: `c81e864`; one rule narrows every "choose a model" control to connected providers; the catalogue surfaces keep the full list; 1,389 tests.
 - M13-T16: `f3fa5ed`; tools left the agent definition and every agent has them all; runs have no timeout and a project with a live run keeps its worker; 1,384 tests.
 - M13-T15: `6eb1479`; Beam starts from its sidebar group as well as the spark, maximize works on an empty bubble, and dictation belongs to the composer it was spoken into; 687 UI tests.
