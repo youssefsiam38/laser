@@ -168,6 +168,46 @@ describe("Agents page", () => {
     expect(q('[data-slot="agent-editor"]').dataset.agent).toBe("reviewer");
   });
 
+  it("saves a new agent that starts nothing, without the person touching the delegation toggle", async () => {
+    // The blank form used to open with every agent pre-listed while the toggle
+    // said the agent works alone. The host refuses that pair, so every new
+    // agent was blocked on "This agent does not start other agents, so it
+    // cannot list any." A blank form must open on a state it can save.
+    await mount();
+    await click(q('[data-slot="agents-new"]'));
+    const editor = q<HTMLFormElement>('[data-slot="agent-editor"]');
+    await type(editor.querySelector<HTMLInputElement>('input[name="name"]')!, "solo");
+    await type(editor.querySelector<HTMLTextAreaElement>('textarea[name="description"]')!, "Works alone");
+    await type(editor.querySelector<HTMLTextAreaElement>('textarea[name="instructions"]')!, "Do the thing.");
+    await blur(editor.querySelector('textarea[name="instructions"]')!);
+    await settle();
+    expect(mocks.agents.validate).toHaveBeenLastCalledWith(expect.objectContaining({ supportsSubagents: false, allowedAgents: [] }));
+    await click(button("Create agent"));
+    await settle();
+    expect(mocks.agents.save).toHaveBeenCalledWith(expect.objectContaining({ name: "solo", supportsSubagents: false, allowedAgents: [] }));
+  });
+
+  it("fills the allowed agents when delegation is turned on and empties them when it is turned off", async () => {
+    await mount();
+    await click(q('[data-slot="agents-new"]'));
+    const editor = q<HTMLFormElement>('[data-slot="agent-editor"]');
+    await type(editor.querySelector<HTMLInputElement>('input[name="name"]')!, "lead");
+    const toggle = q('[role="switch"][aria-label="Can start other agents"]');
+    // On: everything it could start, so it works without a second decision.
+    await click(toggle);
+    const allowed = editor.querySelector('[data-slot="allowed-agents"]')!;
+    expect([...allowed.querySelectorAll<HTMLInputElement>("input")].filter((i) => i.checked).map((i) => i.name)).toEqual(["allowed:default", "allowed:reviewer"]);
+    await blur(editor.querySelector('input[name="name"]')!);
+    await settle();
+    expect(mocks.agents.validate).toHaveBeenLastCalledWith(expect.objectContaining({ supportsSubagents: true, allowedAgents: ["default", "reviewer"] }));
+    // Off: nothing listed, so the definition never contradicts itself.
+    await click(toggle);
+    expect(editor.querySelector('[data-slot="allowed-agents"]')).toBeNull();
+    await blur(editor.querySelector('input[name="name"]')!);
+    await settle();
+    expect(mocks.agents.validate).toHaveBeenLastCalledWith(expect.objectContaining({ supportsSubagents: false, allowedAgents: [] }));
+  });
+
   it("creates an agent from the form and sends the definition to save", async () => {
     await mount();
     await click(q('[data-slot="agents-new"]'));

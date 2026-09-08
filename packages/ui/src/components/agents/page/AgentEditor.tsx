@@ -419,7 +419,16 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
             label="Can start other agents"
             detail={draft.supportsSubagents ? "Choose which definitions it may start." : "Off: this agent works alone."}
             checked={draft.supportsSubagents}
-            onCheckedChange={(supportsSubagents) => patch({ supportsSubagents })}
+            // The toggle owns both halves. Turning it on offers every agent it
+            // could start, so it works without a second decision; turning it
+            // off empties the list, because a definition that starts nothing
+            // and names agents anyway is one the host refuses.
+            onCheckedChange={(supportsSubagents) =>
+              patch({
+                supportsSubagents,
+                allowedAgents: supportsSubagents ? (draft.allowedAgents.length > 0 ? draft.allowedAgents : startable.map((option) => option.name)) : [],
+              })
+            }
           />
           {draft.supportsSubagents ? (
             <AllowedAgentsField

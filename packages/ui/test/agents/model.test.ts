@@ -117,7 +117,10 @@ describe("runs", () => {
 });
 
 describe("definitions, warnings and issues", () => {
-  it("builds a blank custom agent with the custom catalog as allowed agents", () => {
+  it("builds a blank custom agent that starts nothing and lists nothing", () => {
+    // The two have to agree: a definition that starts nothing and names agents
+    // anyway is one the host refuses, so a blank form would open unsaveable.
+    // The editor's delegation toggle fills the list when it is turned on.
     const input = defaultAgentDefinitionInput(snapshot());
     expect(input).toEqual({
       name: "",
@@ -127,7 +130,7 @@ describe("definitions, warnings and issues", () => {
       model: null,
       thinkingLevel: null,
       supportsSubagents: false,
-      allowedAgents: ["default", "reviewer"],
+      allowedAgents: [],
       scopedSkills: false,
       skills: [],
     });

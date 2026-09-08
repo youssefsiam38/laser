@@ -181,8 +181,7 @@ export function warningsFor(snapshot: AgentsSnapshot | null | undefined, agentNa
  * so switching "can start other agents" on offers what exists rather than
  * nothing.
  */
-export function defaultAgentDefinitionInput(snapshot?: AgentsSnapshot | null): AgentDefinitionInput {
-  const custom = (snapshot?.agents ?? []).filter((agent) => agent.kind === "custom").map((agent) => agent.name);
+export function defaultAgentDefinitionInput(_snapshot?: AgentsSnapshot | null): AgentDefinitionInput {
   return {
     name: "",
     description: "",
@@ -190,8 +189,11 @@ export function defaultAgentDefinitionInput(snapshot?: AgentsSnapshot | null): A
     engineInstructions: false,
     model: null,
     thinkingLevel: null,
+    // An agent that starts nothing lists nothing: the pair has to agree or the
+    // host refuses the definition, and a blank form must never open on a state
+    // it cannot save. The editor's toggle fills the list when it is turned on.
     supportsSubagents: false,
-    allowedAgents: custom,
+    allowedAgents: [],
     scopedSkills: false,
     skills: [],
   };
