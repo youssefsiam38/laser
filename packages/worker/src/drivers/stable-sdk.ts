@@ -70,6 +70,8 @@ import {
   type SessionDriver,
 } from "../driver.js";
 import { createUiBridge, type UiBridge } from "../ui-bridge.js";
+import { GOAL_TOOL_NAMES } from "@lasercode/pi-goal";
+import { isGoalCommand } from "@lasercode/pi-extension";
 import { ENGINE_BUILTIN_TOOLS, ensureWorkspaceSessionCwd, filterSkills } from "../agents/session-config.js";
 import { modelUnavailableMessage } from "../agents/harness.js";
 
@@ -326,6 +328,7 @@ export class StableSdkDriver implements SessionDriver {
   }
 
   async goalAction(action: GoalAction): Promise<SessionGoal | null> {
+    activateGoalTools(this.session());
     await this.session().prompt(goalCommand(action));
     const goal = await this.goalState();
     this.emit({ type: "extension", message: { type: "lasercode/goal/state", goal } });
@@ -345,6 +348,8 @@ export class StableSdkDriver implements SessionDriver {
   async prompt(content: ContentBlock[], options?: PromptOptions): Promise<{ accepted: boolean; queued: boolean }> {
     const session = this.session();
     const { text, images } = split(content);
+    // A goal command needs the goal tools before it dispatches (see below).
+    if (isGoalCommand(text)) activateGoalTools(session);
     const streaming = session.isStreaming;
     if (streaming && !options?.streamingBehavior) {
       return { accepted: false, queued: false };
@@ -606,6 +611,26 @@ function agentResourceOptions(agent: DriverAgentOptions): {
     ...(definition.engineInstructions ? {} : { systemPromptOverride: () => definition.instructions }),
     skillsOverride: (base) => ({ ...base, skills: filterSkills(base.skills, filter) }),
   };
+}
+
+/**
+ * The goal engine's tools, on before its command runs.
+ *
+ * They are attached only while a goal is in play (D-146), and the engine
+ * refuses to start or resume a goal whose tools are not already in the active
+ * allowlist. Its command dispatches before any extension hook the companion
+ * could use — `input` does not fire for a command — so the one place early
+ * enough is here, where the text about to become a command is still in hand.
+ */
+function activateGoalTools(session: AgentSession): void {
+  try {
+    const known = new Set(session.getAllTools().map((tool) => tool.name));
+    const active = session.getActiveToolNames();
+    const missing = GOAL_TOOL_NAMES.filter((name) => known.has(name) && !active.includes(name));
+    if (missing.length > 0) session.setActiveToolsByName([...active, ...missing]);
+  } catch {
+    // No goal engine in this session: nothing to switch on.
+  }
 }
 
 /**

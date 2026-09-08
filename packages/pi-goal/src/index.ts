@@ -15,6 +15,15 @@ export interface GoalSnapshot {
   waitingUntil?: number;
 }
 
+/**
+ * The tools the goal engine registers. They are attached to a session only
+ * while a goal is active (D-146), so the names have to be known here rather
+ * than discovered from the engine's private modules. `test/policy.test.ts`
+ * asserts this list against the installed dependency, so a version that
+ * renames or adds one fails there instead of silently un-gating the tools.
+ */
+export const GOAL_TOOL_NAMES: readonly string[] = ["goal_complete", "goal_blocked", "goal_wait"];
+
 /** Absolute entrypoint for Pi's own extension loader (which transpiles `.ts`). */
 export function goalExtensionPath(): string {
   const packageRoot = dirname(require.resolve("@narumitw/pi-goal/package.json"));

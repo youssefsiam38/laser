@@ -90,3 +90,15 @@ disables goal accounting (session telemetry owns usage), and preserves literal
 objective punctuation/whitespace. It does not replace the loop or alter the
 terminating completion tool. Laser owns the persistent row below the run tabs,
 pause/resume/edit/clear controls and the durable completion disclosure in chat.
+
+The engine's three tools (`goal_complete`, `goal_blocked`, `goal_wait`) reach a
+request only while a goal is in play (D-146). They are registered at load, so
+without this they sit in every request of every session and their descriptions
+have to argue that their own presence does not mean a goal exists. The engine
+refuses to start or resume a goal whose tools are not already active, and its
+command dispatches before any extension hook can see it, so the worker switches
+them on when it is handed `/goal` or a `session/goal/action`; the companion
+takes them away again on the first turn of a session that has no goal.
+`packages/pi-goal` owns the tool names and `test/policy.test.ts` pins them to
+the installed engine, so a version that renames one fails there rather than
+quietly leaving a tool attached everywhere.

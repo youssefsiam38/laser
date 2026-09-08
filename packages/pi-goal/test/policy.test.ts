@@ -2,12 +2,25 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { goalExtensionPath } from "../src/index.js";
+import { GOAL_TOOL_NAMES, goalExtensionPath } from "../src/index.js";
 
 const root = dirname(goalExtensionPath());
 // Deliberately exercise the exact patched dependency, not a copy of its parser.
 const engine = await import(pathToFileURL(join(root, "chunks/chunk-QWIUWKRW.js")).href);
 const accounting = await import(pathToFileURL(join(root, "chunks/chunk-UQRRW4CY.js")).href);
+
+describe("goal tool names", () => {
+  it("names exactly the tools the installed engine registers", () => {
+    // The gate that attaches these only while a goal is active (D-146) keys on
+    // the names, so a version that renames or adds one must fail here rather
+    // than quietly leaving a tool attached to every session.
+    expect([engine.GOAL_COMPLETE_TOOL, engine.GOAL_BLOCKED_TOOL, engine.GOAL_WAIT_TOOL]).toEqual([...GOAL_TOOL_NAMES]);
+    const source = readFileSync(goalExtensionPath(), "utf8");
+    const registered = [...source.matchAll(/pi\.registerTool\(([A-Za-z0-9_]+)\)/g)].map((match) => match[1]);
+    expect(registered).toEqual(["goalCompleteTool", "goalBlockedTool", "goalWaitTool"]);
+    expect(GOAL_TOOL_NAMES).toHaveLength(registered.length);
+  });
+});
 
 describe("goal policy", () => {
   it("preserves objective punctuation, spaces, quotes and newlines", () => {

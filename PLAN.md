@@ -545,6 +545,7 @@ Depends on: M12.
 | M13-T15 | Add the sidebar way into Beam, make maximize start a chat when the bubble is empty, and give every mounted composer a working microphone | the Beam group starts a chat in the window, maximize is never dead, and dictation lands in the composer it was spoken into |
 | M13-T16 | Take tools out of the agent definition so every agent has every tool, and remove the run timeout so an agent may work without limit | no definition carries tools or a timeout, a run advanced 90 days is still running, and a project with a live run keeps its worker |
 | M13-T17 | Offer only connected providers wherever a model is chosen to use, from one shared rule, while the catalogue surfaces keep the full list | the composer, Agents, Beam, Settings defaults and onboarding all list connected providers only |
+| M13-T18 | Attach the goal engine's tools only while a goal is in play, instead of to every session with Goals on | a request carries them on a goal turn and not otherwise, proven against the real engine |
 
 ---
 

@@ -11,7 +11,7 @@ import { transcribeModule } from "./transcribe.js";
 import { goalModule } from "./goal.js";
 import { webAccessModule, type WebSearchHandler } from "./web-access.js";
 export type { WebSearchHandler } from "./web-access.js";
-export { toSessionGoal } from "./goal.js";
+export { isGoalCommand, toSessionGoal } from "./goal.js";
 
 export type ModuleName = PiExtensionModuleName;
 export type OutboundMessage = PiExtensionMessage;

@@ -492,6 +492,12 @@ commands (`docs/agents.md`, `docs/pi-extension-modules.md`).
 - Goals have no budgets and no separate usage accounting. Preserve the exact
   `@narumitw/pi-goal` pnpm policy patch when updating the engine; run
   `packages/pi-goal/test/policy.test.ts` against the installed dependency.
+- The goal engine's tools belong in a request only while a goal is in play
+  (D-146): the worker switches them on for `/goal` and `session/goal/action`
+  before the engine's command dispatches, and the companion takes them away on
+  the first turn of a session with no goal. The engine refuses to start a goal
+  whose tools are not already active, so never gate them on an existing goal
+  alone. `packages/pi-goal` owns the names; `test/policy.test.ts` pins them.
 - Keep upstream completion terminating. Render its real summary as a durable
   chat record from canonical goal-state entries plus an accepted completion
   result. A later null clears active controls, not completed history. Never

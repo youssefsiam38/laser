@@ -36,7 +36,7 @@ import {
   type WebSearchHandler,
 } from "./modules/index.js";
 
-export { createCommandBus, createPanelClaims, toSessionGoal } from "./modules/index.js";
+export { createCommandBus, createPanelClaims, isGoalCommand, toSessionGoal } from "./modules/index.js";
 export type {
   CommandBus,
   CommandHandler,
