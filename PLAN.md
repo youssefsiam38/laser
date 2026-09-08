@@ -542,6 +542,7 @@ Depends on: M12.
 | M13-T12 | Keep `.laser` project overrides through engine resource reloads: `resourceLoader.reload()` re-reads settings and drops `applyOverrides` values during service creation, so project settings and the blanked resource lists may not reach the engine | a real-engine test proves a `.laser/settings.json` value is in effect after session open and after a resource reload |
 | M13-T13 | Put the Beam and Chat workspaces under the state directory the host owns, create one before starting its worker, and recreate a missing workspace when a stored Beam or Chat session is opened | a Beam chat opens after its workspace folder is deleted, and a workspace that cannot be created refuses the session with the reason |
 | M13-T14 | Make Settings > This device > Run setup again start setup immediately instead of promising a later run the app never reached | pressing it replaces the window with the first step, leaves the open session in the sidebar, and works again on a second press |
+| M13-T15 | Add the sidebar way into Beam, make maximize start a chat when the bubble is empty, and give every mounted composer a working microphone | the Beam group starts a chat in the window, maximize is never dead, and dictation lands in the composer it was spoken into |
 
 ---
 

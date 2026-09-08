@@ -10,6 +10,8 @@ import { ThreadList, ThreadListSearch } from "@/components/assistant-ui/elements
 import { BeamSpark } from "@/components/beam/BeamSpark";
 import { matchesThread, rankSearchThreads, ThreadSearch, threadSearchKeys, type SearchableThread } from "@/components/assistant-ui/elements/thread-search";
 import { StatusRing } from "@/components/status";
+import { useAgentsSnapshot } from "@/agents";
+import { startBeamSession } from "@/components/beam";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
@@ -79,6 +81,8 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
   );
   const connection = useLaserState((s) => s.connection);
   const chatCwd = useLaserState((s) => workspacesOf(s).chat);
+  const beamCwd = useLaserState((s) => workspacesOf(s).beam);
+  const snapshot = useAgentsSnapshot();
   const [query, setQuery] = useState("");
   const [activeId, setActiveId] = useState<string | undefined>(undefined);
   const search = useSessionSearch(query, tab === "code" ? list.filter : chatCwd);
@@ -90,19 +94,23 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
 
   const newSessionIn = useCallback(
     async (cwd: string) => {
-      setCurrentProject(cwd);
+      // Beam's group is a built-in feature, not a project: it starts its own
+      // agent, and it must not become the rail's current project.
+      const isBeam = beamCwd !== undefined && cwd === beamCwd;
+      if (!isBeam) setCurrentProject(cwd);
       if (connection !== "open") {
         actions.toast("warning", "Not connected to the host yet.");
         return;
       }
       try {
-        await actions.newSession(cwd);
+        if (isBeam) await startBeamSession(actions, snapshot);
+        else await actions.newSession(cwd);
         if (variant === "sheet") shell.setSessionsOpen(false);
       } catch (error) {
         actions.toast("error", errorText(error));
       }
     },
-    [actions, connection, setCurrentProject, shell, variant],
+    [actions, beamCwd, connection, setCurrentProject, shell, snapshot, variant],
   );
 
   // A chat is a conversation that is not about a project: it runs the

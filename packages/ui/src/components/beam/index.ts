@@ -19,4 +19,5 @@ export {
   beamWorkspace,
   bubbleOrigin,
   isBeamSession,
+  startBeamSession,
 } from "./beam-model.js";

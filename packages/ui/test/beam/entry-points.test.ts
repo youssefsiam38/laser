@@ -1,9 +1,10 @@
 /**
- * Beam has exactly one entry point (docs/agents.md "Beam"): the spark beside
- * Settings, rendered by the rail and, on a phone, by the sessions sheet's
- * footer. Nothing else creates a Beam session or opens the bubble — no menu
- * item, no palette command, no empty-state link. A grep is the cheapest guard
- * against a second door appearing.
+ * Beam has two ways in, and no more (D-143): the spark beside Settings, which
+ * is the only thing that opens the bubble, and the Beam group in the sessions
+ * sidebar, whose `+` starts a chat in the window. Nothing else creates a Beam
+ * session — no menu item, no palette command, no empty-state link — and the
+ * agent's own name is still spelled in one place. A grep is the cheapest
+ * guard against a third door appearing.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
@@ -26,7 +27,7 @@ function sourceFiles(dir: URL, prefix = ""): Array<{ name: string; text: string 
 const sources = sourceFiles(SRC);
 const count = (text: string, needle: RegExp): number => (text.match(needle) ?? []).length;
 
-describe("Beam's one entry point", () => {
+describe("Beam's ways in", () => {
   it("renders the spark once in the rail and once in the sheet footer, nowhere else", () => {
     const users = sources.filter(({ text }) => /<BeamSpark\b/.test(text)).map(({ name, text }) => [name, count(text, /<BeamSpark\b/g)] as const);
     expect(users).toEqual([
@@ -50,11 +51,14 @@ describe("Beam's one entry point", () => {
     expect(mounts).toEqual([["components/shell/Shell.tsx", 1]]);
   });
 
-  it("creates Beam sessions from the bubble alone", () => {
-    // The agent name is spelled once, in Beam's own model; every other file
-    // that could start a session with it would be a second entry point.
+  it("creates Beam sessions from the bubble and the sidebar's Beam group, and nowhere else", () => {
+    // The agent name and its workspace are spelled once, in Beam's own model.
+    // Anywhere else naming them would be starting Beam behind its own back.
     const creators = sources.filter(({ name, text }) => !name.startsWith("components/beam/") && /agentName:\s*["']beam["']|BEAM_AGENT_NAME|beamWorkspace\(/.test(text));
     expect(creators.map(({ name }) => name)).toEqual([]);
+    // One caller of the helper, in the sessions panel: the Beam group's `+`.
+    const starters = sources.filter(({ name, text }) => !name.startsWith("components/beam/") && /\bstartBeamSession\(/.test(text));
+    expect(starters.map(({ name }) => name)).toEqual(["components/shell/SessionsPanel.tsx"]);
   });
 
   it("offers no Beam command in the palette and no Beam link in the project empty state", () => {

@@ -1,5 +1,5 @@
 import { AuiIf, ComposerPrimitive, useAui, useAuiState } from "@assistant-ui/react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ComposerVoice, ComposerVoiceButton } from "@/components/assistant-ui/elements/composer";
 import { cn } from "@/lib/utils";
@@ -18,6 +18,7 @@ import {
   useEnvironment,
 } from "@/pwa";
 import { useLaserStable, useLaserView } from "@/runtime";
+import type { SessionView } from "@/store";
 
 /**
  * The composer's microphone, drawn by the `composer` element's voice pieces
@@ -42,22 +43,12 @@ export function DictateButton({ className, size }: { className?: string | undefi
   const view = useLaserView();
   const available = view?.capabilities.includes("transcribe") ?? false;
 
-  // The adapter outlives every session; tell it which one is being recorded.
-  useEffect(() => {
-    if (!view || !available) {
-      setDictationScope(undefined);
-      return;
-    }
-    setDictationScope({ cwd: view.state.cwd, path: view.path });
-    return () => setDictationScope(undefined);
-  }, [available, view]);
-
-  if (!available) return null;
+  if (!available || !view) return null;
   if (!env.microphone || !PhraseDictationAdapter.isSupported()) return null;
-  return <DictateControls className={className} size={size} />;
+  return <DictateControls className={className} size={size} view={view} />;
 }
 
-function DictateControls({ className, size }: { className?: string | undefined; size?: "icon-sm" | "icon-lg" | undefined }) {
+function DictateControls({ className, size, view }: { className?: string | undefined; size?: "icon-sm" | "icon-lg" | undefined; view: SessionView }) {
   const aui = useAui();
   const { actions } = useLaserStable();
   const phase = useDictationPhase();
@@ -68,8 +59,28 @@ function DictateControls({ className, size }: { className?: string | undefined; 
   const [startedAt, setStartedAt] = useState(() => Date.now());
 
   const insertTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  /**
+   * This composer, so a phrase lands in the box it was spoken into. More than
+   * one composer can be mounted (Beam's bubble over the session's own), and a
+   * document-wide query for a textarea would always find the first one.
+   */
+  const root = useRef<HTMLSpanElement>(null);
+  const composerTextarea = useCallback(
+    (): HTMLTextAreaElement | null => root.current?.closest('[data-slot="composer"]')?.querySelector<HTMLTextAreaElement>("textarea") ?? null,
+    [],
+  );
+
+  /**
+   * Which session a recording belongs to, claimed when this composer starts
+   * one. The adapter is one instance for the whole app and reads the scope at
+   * `begin`, so the claim is made on the way into dictation — not on mount,
+   * which would let the last composer to appear speak for every other one.
+   */
+  const claimScope = useCallback(() => setDictationScope({ cwd: view.state.cwd, path: view.path }), [view.path, view.state.cwd]);
+
   useEffect(() => {
     if (!active) return;
+    claimScope();
     setStartedAt(Date.now());
     setDictationPhraseSink((phrase) => {
       const textarea = composerTextarea();
@@ -92,9 +103,10 @@ function DictateControls({ className, size }: { className?: string | undefined; 
     });
     return () => {
       setDictationPhraseSink(undefined);
+      setDictationScope(undefined);
       if (insertTimer.current !== undefined) clearTimeout(insertTimer.current);
     };
-  }, [active, aui]);
+  }, [active, aui, claimScope, composerTextarea]);
 
   useEffect(() => {
     if (error === undefined) return;
@@ -106,10 +118,12 @@ function DictateControls({ className, size }: { className?: string | undefined; 
   const voicePhase = phase === "transcribing" ? "transcribing" : phase === "starting" ? "starting" : "listening";
 
   return (
-    <span data-slot="dictate" data-phase={phase} className={cn("flex items-center gap-1", className)}>
+    <span ref={root} data-slot="dictate" data-phase={phase} className={cn("flex items-center gap-1", className)}>
       <AuiIf condition={(s) => s.composer.dictation == null}>
         <ComposerPrimitive.Dictate asChild>
-          <ComposerVoiceButton active={false} aria-label="Dictate a message" {...(size ? { size } : {})} />
+          {/* The claim runs before the primitive begins: composed handlers run
+              the child's first, and the transport reads the scope at `begin`. */}
+          <ComposerVoiceButton active={false} aria-label="Dictate a message" onClick={claimScope} {...(size ? { size } : {})} />
         </ComposerPrimitive.Dictate>
       </AuiIf>
       <AuiIf condition={(s) => s.composer.dictation != null}>
@@ -129,6 +143,4 @@ function DictateControls({ className, size }: { className?: string | undefined; 
   );
 }
 
-function composerTextarea(): HTMLTextAreaElement | null {
-  return document.querySelector<HTMLTextAreaElement>('[data-slot="composer"] textarea');
-}
+

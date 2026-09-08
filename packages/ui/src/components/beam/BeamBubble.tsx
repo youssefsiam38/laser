@@ -14,7 +14,7 @@ import type { AppState } from "@/store";
 import { BeamEmptyState } from "./BeamEmptyState.js";
 import { BEAM_BUBBLE_ID } from "./BeamSpark.js";
 import { beamStore, useBeam } from "./beam-store.js";
-import { BEAM_FOLLOW_UPS, BEAM_NAME, BEAM_TAGLINE, BEAM_UNAVAILABLE, beamWorkspace, bubbleOrigin, isBeamSession } from "./beam-model.js";
+import { BEAM_FOLLOW_UPS, BEAM_NAME, BEAM_TAGLINE, BEAM_UNAVAILABLE, beamWorkspace, bubbleOrigin, isBeamSession, startBeamSession } from "./beam-model.js";
 
 /**
  * The bubble (docs/agents.md "Beam"): the ordinary chat — composer, tool
@@ -68,10 +68,21 @@ function BeamPanel({ onClose }: { onClose: () => void }) {
   const createIn = useCallback((state: AppState) => beamWorkspace(state.agents.snapshot), []);
   const ready = snapshot !== null;
 
-  const openInFullView = () => {
-    if (!path) return;
-    void actions.openSession(path);
-    onClose();
+  /**
+   * Move Beam into the window. With a chat on screen that is the chat; with an
+   * empty bubble it is a new one, because "open this in full view" and "start
+   * one in full view" are the same wish, and refusing on an empty bubble left
+   * the control dead exactly when a person had nothing to lose by pressing it.
+   */
+  const openInFullView = async (): Promise<void> => {
+    try {
+      if (path) await actions.openSession(path);
+      else await startBeamSession(actions, snapshot);
+      onClose();
+    } catch (error) {
+      // The bubble stays open: the chat is still here to try again from.
+      actions.toast("error", error instanceof Error ? error.message : String(error));
+    }
   };
 
   return (
@@ -83,7 +94,7 @@ function BeamPanel({ onClose }: { onClose: () => void }) {
         <TooltipIconButton tooltip="New chat" side="bottom" disabled={!path} onClick={() => beamStore.newChat()} data-slot="beam-new-chat">
           <SquarePen />
         </TooltipIconButton>
-        <TooltipIconButton tooltip="Open in full view" side="bottom" disabled={!path} onClick={openInFullView} data-slot="beam-open-full">
+        <TooltipIconButton tooltip={path ? "Open in full view" : "Start a chat in full view"} side="bottom" disabled={!ready} onClick={() => void openInFullView()} data-slot="beam-open-full">
           <Maximize2 />
         </TooltipIconButton>
         <TooltipIconButton tooltip="Close" shortcut="Esc" side="bottom" onClick={onClose} data-slot="beam-close">

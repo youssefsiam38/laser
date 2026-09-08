@@ -237,6 +237,24 @@ describe("the Beam bubble", () => {
     expect(bubble()).toBeNull();
   });
 
+  it("starts a chat in the window when the bubble is empty and maximize is pressed", async () => {
+    await mount();
+    await openBubble();
+    // Nothing said yet: there is no session to move, so this makes one.
+    expect(beamStore.getSnapshot().path).toBeUndefined();
+    const maximize = bubble()!.querySelector<HTMLButtonElement>('[data-slot="beam-open-full"]')!;
+    expect(maximize.disabled).toBe(false);
+    expect(maximize.getAttribute("aria-label") ?? maximize.getAttribute("title")).toContain("full view");
+    await act(async () => maximize.click());
+    await closeAndSettle();
+    const opened = container.querySelector('[data-slot="main-current"]')?.textContent;
+    expect(opened).toBeTruthy();
+    // A Beam chat, in Beam's workspace, in the window rather than the bubble.
+    expect(opened!.startsWith(`${BEAM_CWD}/`)).toBe(true);
+    expect(world.states[opened!]?.agent?.kind).toBe("beam");
+    expect(bubble()).toBeNull();
+  });
+
   it("shows the host's refusal to the person when the first message cannot start a session", async () => {
     const refusal = "The model acme/fast is not available: connect acme in Settings → Providers and models, or choose another model for beam.";
     world.overrides["session/new"] = () => {

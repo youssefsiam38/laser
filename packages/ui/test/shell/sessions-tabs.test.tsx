@@ -170,9 +170,28 @@ describe("Beam and children in the Code tab", () => {
     expect(groups.map((g) => g.dataset["kind"])).toEqual(["project", "project", "beam"]);
     const beam = groups.at(-1)!;
     expect(beam.querySelector('[data-slot="beam-mark"]')).not.toBeNull();
+    // Beam's group starts a Beam chat, not a session in a project.
     expect(beam.querySelector('[aria-label^="New session in"]')).toBeNull();
+    expect(beam.querySelector('[aria-label="New Beam chat"]')).not.toBeNull();
     expect(beam.querySelector('[data-slot="beam-row-mark"]')).not.toBeNull();
     expect(container.querySelector('[data-cwd="/one"] [data-slot="beam-row-mark"]')).toBeNull();
+  });
+
+  it("starts a Beam chat in the window from the group, without making the workspace the current project", async () => {
+    await mount();
+    stable.actions.newSession.mockClear();
+    stable.setCurrentProject.mockClear();
+    const beam = [...container.querySelectorAll<HTMLElement>("section[data-cwd]")].at(-1)!;
+    await act(async () => beam.querySelector<HTMLButtonElement>('[aria-label="New Beam chat"]')!.click());
+    // The Beam agent, in Beam's workspace, selected — the window, not the bubble.
+    expect(stable.actions.newSession).toHaveBeenCalledWith("/state/beam", { agentName: "beam" });
+    expect(stable.setCurrentProject).not.toHaveBeenCalled();
+    // A project group still starts an ordinary session and does adopt the project.
+    stable.actions.newSession.mockClear();
+    const project = container.querySelector<HTMLElement>('section[data-cwd="/two"]')!;
+    await act(async () => project.querySelector<HTMLButtonElement>('[aria-label^="New session in"]')!.click());
+    expect(stable.actions.newSession).toHaveBeenCalledWith("/two");
+    expect(stable.setCurrentProject).toHaveBeenCalledWith("/two");
   });
 
   it("nests a child under its parent on a lineage rail with its run status, and detaches an orphan", async () => {

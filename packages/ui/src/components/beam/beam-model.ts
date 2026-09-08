@@ -68,3 +68,21 @@ export function bubbleOrigin(
   const y = Math.round(spark.top + spark.height / 2 - bubble.top);
   return `${x}px ${y}px`;
 }
+
+/**
+ * Start a Beam chat in the main view.
+ *
+ * The bubble is where Beam usually lives, but it is not the only way in: the
+ * Beam group in the sessions sidebar starts one too, and a chat started there
+ * belongs in the window rather than in a corner (the person asked for it from
+ * the full-size list). Selecting it is what "full view" means; the bubble's
+ * own maximize control does the same thing for the chat it is showing.
+ */
+export async function startBeamSession(
+  actions: { newSession: (cwd: string, options?: { agentName?: string }) => Promise<string> },
+  snapshot: AgentsSnapshot | null | undefined,
+): Promise<string> {
+  const workspace = beamWorkspace(snapshot);
+  if (!workspace) throw new Error(BEAM_UNAVAILABLE);
+  return actions.newSession(workspace.cwd, { agentName: workspace.agentName });
+}

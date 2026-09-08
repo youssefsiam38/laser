@@ -254,7 +254,7 @@ Background tasks and child agents share the fleet's run vocabulary.
 
 | Agent | Runs in | Tools | Integration |
 | --- | --- | --- | --- |
-| `beam` | `<state>/workspaces/beam` (`workspaces.beam`) | all default tools plus `web_search`; scoped to the one Beam skill | one entry point: the spark at the bottom left beside Settings, present in chat, Settings and logs. It opens a bubble that grows out of the icon and holds the normal chat; before the first message the middle hints that Beam is the assistant for Laser; the first message creates a Beam session in Beam's group. No other Beam entry point exists |
+| `beam` | `<state>/workspaces/beam` (`workspaces.beam`) | all default tools plus `web_search`; scoped to the one Beam skill | two ways in (D-143): the spark at the bottom left beside Settings, present in chat, Settings and logs, which opens a bubble that grows out of the icon and holds the normal chat — before the first message the middle hints that Beam is the assistant for Laser, and the first message creates a Beam session in Beam's group — and the `+` on Beam's group in the sessions sidebar, which starts a chat in the window instead. The bubble's maximize control moves the chat it is showing into the window. No other Beam entry point exists |
 | `chat` | `<state>/workspaces/chat` (`workspaces.chat`) | `web_search` only | the Chat tab, first in the sidebar before Code; projectless chats |
 | `namer` | the project's own worker | none | names things from a small context |
 
@@ -365,4 +365,7 @@ The binding list lives in `AGENTS.md` ("Agents harness regression checks"):
   settle-without-completion and reload attribution.
 - Background promotion keeps output and exit state.
 - The live map never re-layouts on output updates.
-- Beam has exactly one entry point.
+- Beam has two ways in, and no more: the spark (the only thing that opens the
+  bubble) and the `+` on its sidebar group (which opens a chat in the window).
+- Dictation belongs to the composer that started it: with the bubble open,
+  two composers are mounted, and a phrase must land where it was spoken.

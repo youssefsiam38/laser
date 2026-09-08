@@ -51,6 +51,11 @@ export function setDictationScope(next: TranscribeScope | undefined): void {
   scope = next;
 }
 
+/** Which session a recording would be filed under right now. */
+export function readDictationScope(): TranscribeScope | undefined {
+  return scope;
+}
+
 /** One adapter per host client. Safe to call on every render. */
 export function getMobileDictationAdapter(client: RawRequestClient): PhraseDictationAdapter {
   if (instance?.client === client) return instance.adapter;

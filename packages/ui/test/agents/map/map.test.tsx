@@ -128,6 +128,14 @@ describe("the live map", () => {
   });
 
   it("keeps every node where it was when only a status changes, and moves the layout when a node arrives", async () => {
+    // The arrival marker lives for one morph plus a settle, and the assertions
+    // below sit inside that window: with a real clock a loaded machine can
+    // spend longer than the window between two `await`s. Fake timers make the
+    // window the test's to spend, not the machine's.
+    vi.useRealTimers();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-08T10:05:00.000Z"));
+    installBrowserShims({ clock: false });
     const { runs, sessions } = family();
     mounted = await mountMap({ store: seededStore({ runs, sessions }), size: PANEL });
     // The spawn plays over one morph; give the token a length so the window is observable.
@@ -146,8 +154,9 @@ describe("the live map", () => {
     // The root re-centres over two children; the first child keeps its column.
     expect(nodeAt(container, ROOT)?.style.transform).not.toBe(before[ROOT]);
     expect(nodeAt(container, "/p/a.jsonl")?.style.transform).toBe(before["/p/a.jsonl"]);
+    // Past the window: the node settles where the layout put it.
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 80));
+      await vi.advanceTimersByTimeAsync(500);
     });
     expect(fresh.hasAttribute("data-fresh")).toBe(false);
   });

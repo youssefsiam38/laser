@@ -535,8 +535,15 @@ blockers, not advice.
   a promoted command is the same task, not a new one.
 - The live map never re-layouts on output or status updates; only a change in
   the tree's structure recomputes positions. Test with a streaming child.
-- Beam has exactly one entry point: the spark beside Settings. No Beam control
-  elsewhere, in any state.
+- Beam has two ways in and no more (D-143): the spark beside Settings, which is
+  the only thing that opens the bubble, and the Beam group in the sessions
+  sidebar, whose `+` starts a chat in the window. No Beam control elsewhere, in
+  any state, and the agent's name is spelled in one place.
+- More than one composer can be on screen (Beam's bubble over the session's
+  own). Dictation belongs to the composer that started it: the transcription
+  scope is claimed on the way into recording, never on mount, and a finished
+  phrase is typed into the composer that owns the microphone, never into the
+  first textarea in the document.
 
 ---
 

@@ -472,8 +472,9 @@ const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, c
   const beam = group.kind === "beam";
   const count = group.roots.length + group.detached.length;
   const total = group.total;
-  // Beam sessions start from the Beam bubble and nowhere else (docs/agents.md §7).
-  const newSession = beam ? undefined : onNewSession;
+  // Beam's group starts a Beam chat, which opens in the window rather than in
+  // the bubble; the panel decides which agent a directory means (D-143).
+  const newSession = onNewSession;
   return (
     <section aria-labelledby={`${id}-name`} data-cwd={group.cwd} data-kind={group.kind} data-current={isCurrent || undefined} className="group/project">
       <div id={id} className="sticky top-0 z-10 flex h-8 items-center gap-0.5 rounded-lg bg-surface px-1">
@@ -503,7 +504,7 @@ const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, c
         </button>
         {newSession && (
           <TooltipIconButton
-            tooltip={`New session in ${group.name}`}
+            tooltip={beam ? `New ${group.name} chat` : `New session in ${group.name}`}
             size="icon-xs"
             className="text-ink-3 opacity-0 group-hover/project:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100 [@media(pointer:coarse)]:opacity-100"
             disabled={!canCreate}
