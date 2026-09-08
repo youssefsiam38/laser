@@ -23,9 +23,8 @@
  * Why a globalThis symbol and not an import: `@lasercode/worker` depends on this
  * package, so this package cannot depend on it. The worker's `TranscribeService`
  * publishes a two-method handle under `Symbol.for("lasercode.transcribe.v1")` and
- * this module looks it up. Same shape pi-subagents uses for its in-process
- * registries. Missing symbol → no dictation is running → `continue`, never a
- * hang.
+ * this module looks it up. Missing symbol → no dictation is running →
+ * `continue`, never a hang.
  */
 
 import { PRODUCT_NAME, symbolKey } from "@lasercode/protocol";

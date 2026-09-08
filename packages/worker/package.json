@@ -33,7 +33,6 @@
     "@lasercode/pi-extension": "workspace:*",
     "@lasercode/pi-goal": "workspace:*",
     "@lasercode/protocol": "workspace:*",
-    "pi-subagents": "0.65.1",
     "pi-web-access": "0.28.0",
     "proper-lockfile": "4.1.2",
     "pi-gpt-transcribe": "github:youssefsiam38/pi-gpt-transcribe#bee9cfffae2ab6badbf4bda727e680e423aea9fd"

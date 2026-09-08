@@ -18,12 +18,15 @@
  */
 
 import type {
+  AgentDefinition,
+  AgentPolicy,
   CommandInfo,
   ContentBlock,
   ModelRef,
   PromptInfo,
   PiExtensionCommand,
   PiExtensionMessage,
+  SessionAgentRecord,
   SessionState,
   SessionUpdate,
   ThinkingLevel,
@@ -34,6 +37,26 @@ import type {
   UiDialogResponse,
   UiFireAndForget,
 } from "@lasercode/protocol";
+import type { AgentHarnessBridge, BackgroundWorkOptions, HarnessSessionRole } from "./agents/bridge.js";
+
+/**
+ * Which agent a session runs as (M13). Everything here is product vocabulary:
+ * the definition names tools by their product names, the role is the
+ * companion extension's, and the record is what the session file carries so a
+ * catalog that only reads files can attribute it.
+ */
+export interface DriverAgentOptions {
+  definition: AgentDefinition;
+  role: HarnessSessionRole;
+  /** Written as the session's first custom entry (`SESSION_AGENT_ENTRY_TYPE`) on a new session. */
+  record: SessionAgentRecord;
+  /** The harness, scoped to this session; passed to the companion extension. */
+  bridge?: AgentHarnessBridge;
+  backgroundWork?: BackgroundWorkOptions;
+  policy: AgentPolicy;
+  /** The one skill only the Beam agent is offered; filtered out for everyone else. */
+  beamSkillName?: string;
+}
 
 export interface DriverOpenOptions {
   cwd: string;
@@ -56,6 +79,8 @@ export interface DriverOpenOptions {
   projectTrusted?: boolean;
   /** Laser-owned capabilities enabled for this project. */
   features?: FeatureId[];
+  /** The agent this session runs as. Absent for ephemeral, catalogue-only opens. */
+  agent?: DriverAgentOptions;
 }
 
 export type DriverEvent =
@@ -70,6 +95,8 @@ export type DriverListener = (event: DriverEvent) => void;
 
 export interface PromptOptions {
   streamingBehavior?: "steer" | "followUp";
+  /** False sends the text verbatim: no slash-command dispatch, no template expansion. */
+  expandPromptTemplates?: boolean;
 }
 
 /** One driver instance = one live Pi session inside one worker process. */
@@ -121,6 +148,14 @@ export interface SessionDriver {
   /** Durable goal control. Optional for engines that do not implement Goals. */
   goalState?(): Promise<SessionGoal | null>;
   goalAction?(action: GoalAction): Promise<SessionGoal | null>;
+
+  /**
+   * Persist a custom entry in this session's file (the harness writes run
+   * moments this way). Returns the entry id. Optional: the stub has no file.
+   */
+  appendEntry?(customType: string, data: unknown): Promise<string>;
+  /** The text of the last assistant message, for a run that ended without its final tool. */
+  lastAssistantText?(): string | undefined;
 
   dispose(): Promise<void>;
 }

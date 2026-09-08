@@ -15,6 +15,13 @@ export interface WorkerClientOptions {
   sessionDir?: string;
   subagentsTempRoot?: string;
   /**
+   * The host's own state directory (`agents.json`, `agent-runs.json`, the
+   * workspaces beside it). The worker needs it to write Beam's bundled skill
+   * and to describe the data layout; a worker that does not know the flag
+   * ignores it.
+   */
+  stateDir?: string;
+  /**
    * Whether Pi may load this project's own `.pi` resources (M2-T4). The host
    * decides (see projects.ts / trust.ts) and passes the answer down as
    * `--project-trusted yes|no`; omitting it leaves the worker on Pi's own
@@ -64,6 +71,7 @@ export class WorkerClient {
     if (options.agentDir) args.push("--agent-dir", options.agentDir);
     if (options.sessionDir) args.push("--session-dir", options.sessionDir);
     if (options.subagentsTempRoot) args.push("--subagents-temp-root", options.subagentsTempRoot);
+    if (options.stateDir) args.push("--state-dir", options.stateDir);
     if (options.projectTrusted !== undefined) args.push("--project-trusted", options.projectTrusted ? "yes" : "no");
 
     this.child = spawn(options.nodeBinary ?? process.execPath, args, {

@@ -34,8 +34,8 @@ import {
   type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
 import { goalExtensionPath, goalStateFromEntries } from "@lasercode/pi-goal";
-import { createCommandBus, createLaserExtension, createPromptProvenanceObserver, toSessionGoal } from "@lasercode/pi-extension";
-import { PROJECT_DIR_NAME } from "@lasercode/protocol";
+import { createCommandBus, createLaserExtension, createPromptProvenanceObserver, toSessionGoal, type LaserExtensionOptions } from "@lasercode/pi-extension";
+import { PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE } from "@lasercode/protocol";
 import type {
   CommandInfo,
   ContentBlock,
@@ -56,13 +56,13 @@ import type {
   Usage,
 } from "@lasercode/protocol";
 import { existsSync } from "node:fs";
-import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { readLaserProjectSettings } from "../settings.js";
 import { WebSearchService } from "../web-search.js";
 import {
   DriverUnavailableError,
+  type DriverAgentOptions,
   type DriverEvent,
   type DriverListener,
   type DriverOpenOptions,
@@ -70,9 +70,10 @@ import {
   type SessionDriver,
 } from "../driver.js";
 import { createUiBridge, type UiBridge } from "../ui-bridge.js";
+import { engineToolsFor, excludedEngineTools, filterSkills, wantsWebSearch } from "../agents/session-config.js";
+import { modelUnavailableMessage } from "../agents/harness.js";
 
 type PiModel = ReturnType<ModelRuntime["getModels"]>[number];
-const require = createRequire(import.meta.url);
 
 export class StableSdkDriver implements SessionDriver {
   readonly kind = "stable-sdk" as const;
@@ -104,29 +105,39 @@ export class StableSdkDriver implements SessionDriver {
   async open(options: DriverOpenOptions): Promise<SessionState> {
     if (this.runtime) throw new DriverUnavailableError(this.kind, "session already open");
     this.cwd = options.cwd;
+    // Kept for the retired file layer's sake: harmless when nothing reads it.
     if (options.subagentsTempRoot) process.env["PI_SUBAGENTS_TEMP_ROOT"] = options.subagentsTempRoot;
 
     const agentDir = options.agentDir ?? getAgentDir();
     const enabled = new Set<FeatureId>(options.features ?? ["subagents", "goals"]);
-    const search = enabled.has("web-search") ? new WebSearchService(agentDir) : undefined;
-    const createCompanion = (requestProvenance: ReturnType<typeof createPromptProvenanceObserver>) => createLaserExtension({
-      requestProvenance,
-      ...(search ? { webSearch: search.search.bind(search) } : {}),
-      send: (message) => {
-        if (message.type === "lasercode/account-usage/state") this.accountUsage = message.state;
-        this.emit({ type: "extension", message });
-      },
-      commands: this.extensionBus,
-      only: [
-        "provider-log",
-        "account-usage",
-        "panels",
-        "transcribe",
-        ...(search ? ["web-access" as const] : []),
-        ...(enabled.has("subagents") ? ["subagents" as const] : []),
-        ...(enabled.has("goals") ? ["goal" as const] : []),
-      ],
-    });
+    const agent = options.agent;
+    // Web search is an extension tool: offered when the feature is on and,
+    // for an agent-defined session, only when its definition lists it.
+    const searchWanted = enabled.has("web-search") && (agent ? wantsWebSearch(agent.definition) : true);
+    const search = searchWanted ? new WebSearchService(agentDir) : undefined;
+    const createCompanion = (requestProvenance: ReturnType<typeof createPromptProvenanceObserver>) => {
+      const companion: LaserExtensionOptions = {
+        requestProvenance,
+        ...(search ? { webSearch: search.search.bind(search) } : {}),
+        send: (message) => {
+          if (message.type === "lasercode/account-usage/state") this.accountUsage = message.state;
+          this.emit({ type: "extension", message });
+        },
+        commands: this.extensionBus,
+        only: [
+          "provider-log",
+          "account-usage",
+          "panels",
+          "transcribe",
+          ...(search ? ["web-access" as const] : []),
+          ...(enabled.has("subagents") ? ["subagents" as const, "background-work" as const] : []),
+          ...(enabled.has("goals") ? ["goal" as const] : []),
+        ],
+        ...(agent?.bridge ? { agents: agent.bridge } : {}),
+        ...(agent?.backgroundWork ? { backgroundWork: agent.backgroundWork } : {}),
+      };
+      return createLaserExtension(companion);
+    };
 
     const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
       const requestProvenance = createPromptProvenanceObserver();
@@ -164,13 +175,6 @@ export class StableSdkDriver implements SessionDriver {
         join(agentDir, "prompts"),
         ...(options.projectTrusted === false ? [] : [join(cwd, PROJECT_DIR_NAME, "prompts")]),
       ]);
-      if (enabled.has("subagents")) {
-        const entrypoint = require.resolve("pi-subagents");
-        const root = dirname(entrypoint);
-        additionalExtensionPaths.push(entrypoint);
-        additionalSkillPaths.push(join(root, "skills"));
-        additionalPromptTemplatePaths.push(join(root, "prompts"));
-      }
       if (enabled.has("goals")) {
         additionalExtensionPaths.push(goalExtensionPath());
       }
@@ -193,18 +197,29 @@ export class StableSdkDriver implements SessionDriver {
           ...(additionalExtensionPaths.length > 0 ? { additionalExtensionPaths } : {}),
           ...(additionalSkillPaths.length > 0 ? { additionalSkillPaths } : {}),
           ...(additionalPromptTemplatePaths.length > 0 ? { additionalPromptTemplatePaths } : {}),
+          ...(agent ? agentResourceOptions(agent) : {}),
         },
       });
       requestProvenance.setResourceLoader(services.resourceLoader);
-      return {
-        ...(await createAgentSessionFromServices({
-          services,
-          sessionManager,
-          ...(sessionStartEvent ? { sessionStartEvent } : {}),
-        })),
+      const selected = agent ? await resolveAgentModel(services.modelRuntime, agent) : undefined;
+      const created = await createAgentSessionFromServices({
         services,
-        diagnostics: services.diagnostics,
-      };
+        sessionManager,
+        ...(sessionStartEvent ? { sessionStartEvent } : {}),
+        // The built-in tools a definition leaves out are denied outright, so
+        // nothing inside the session can switch them back on. `tools:` is not
+        // used: it is an allowlist that would also deny every extension tool
+        // (the harness's, background work's, the goal's, web search's).
+        ...(agent ? { excludeTools: excludedEngineTools(agent.definition) } : {}),
+        ...(selected ? { model: selected } : {}),
+        ...(agent?.definition.thinkingLevel ? { thinkingLevel: agent.definition.thinkingLevel } : {}),
+      });
+      // The definition's built-ins beyond the engine's default four (grep,
+      // find, ls) are switched on here. A settings override would be the
+      // natural place, but the resource loader's reload re-reads settings
+      // from disk during service creation and drops every override.
+      if (agent) activateAgentTools(created.session, agent.definition);
+      return { ...created, services, diagnostics: services.diagnostics };
     };
 
     const runtime = await createAgentSessionRuntime(createRuntime, {
@@ -222,6 +237,12 @@ export class StableSdkDriver implements SessionDriver {
     }
 
     await this.applySession();
+    // A new agent-defined session carries its record as the first custom
+    // entry, so a catalog that only reads files can attribute it. A resumed
+    // session already has one.
+    if (agent && !options.sessionPath) {
+      this.session().sessionManager.appendCustomEntry(SESSION_AGENT_ENTRY_TYPE, agent.record);
+    }
     return this.state();
   }
 
@@ -305,6 +326,14 @@ export class StableSdkDriver implements SessionDriver {
     return goal;
   }
 
+  async appendEntry(customType: string, data: unknown): Promise<string> {
+    return this.session().sessionManager.appendCustomEntry(customType, data);
+  }
+
+  lastAssistantText(): string | undefined {
+    return this.session().getLastAssistantText();
+  }
+
   // ----------------------------------------------------------------- prompting
 
   async prompt(content: ContentBlock[], options?: PromptOptions): Promise<{ accepted: boolean; queued: boolean }> {
@@ -318,6 +347,7 @@ export class StableSdkDriver implements SessionDriver {
       await session.prompt(text, {
         ...(images.length > 0 ? { images } : {}),
         ...(options?.streamingBehavior ? { streamingBehavior: options.streamingBehavior } : {}),
+        ...(options?.expandPromptTemplates !== undefined ? { expandPromptTemplates: options.expandPromptTemplates } : {}),
       });
     } catch (error) {
       // `isStreaming` flips only after the agent loop starts, so a prompt sent in
@@ -422,7 +452,7 @@ export class StableSdkDriver implements SessionDriver {
       // Only reviewed, bundled features are loaded into this runtime. Expose
       // their complete registered command surface; filtering by two names made
       // valid Subagents commands disappear from autocomplete.
-      const feature = command.invocationName === "goal" ? "Goals" : "Subagents";
+      const feature = command.invocationName === "goal" ? "Goals" : "Agents";
       commands.push({
         name: command.invocationName,
         source: "feature",
@@ -539,6 +569,52 @@ function existingResourceRoots(paths: string[]): string[] {
     seen.add(path);
     return true;
   });
+}
+
+/**
+ * What an agent definition changes in the resource loader: its own
+ * instructions in place of the engine's (unless it keeps the built-in ones),
+ * and which discovered skills it is offered.
+ */
+function agentResourceOptions(agent: DriverAgentOptions): {
+  systemPromptOverride?: () => string | undefined;
+  skillsOverride: <T extends { skills: Array<{ name: string }>; diagnostics: unknown[] }>(base: T) => T;
+} {
+  const { definition, role } = agent;
+  const filter = { definition, role, ...(agent.beamSkillName !== undefined ? { beamSkillName: agent.beamSkillName } : {}) };
+  return {
+    ...(definition.engineInstructions ? {} : { systemPromptOverride: () => definition.instructions }),
+    skillsOverride: (base) => ({ ...base, skills: filterSkills(base.skills, filter) }),
+  };
+}
+
+/** Activate the definition's built-in tools beside every extension tool already active. */
+function activateAgentTools(session: AgentSession, definition: DriverAgentOptions["definition"]): void {
+  const active = new Set(session.getActiveToolNames());
+  for (const name of engineToolsFor(definition)) active.add(name);
+  session.setActiveToolsByName([...active]);
+}
+
+/**
+ * The definition's model, resolved against the engine's catalogue, or a
+ * refusal a person can act on. `null` on the definition follows the
+ * configured default, which the engine picks itself.
+ */
+async function resolveAgentModel(runtime: ModelRuntime, agent: DriverAgentOptions): Promise<PiModel | undefined> {
+  const choice = agent.definition.model;
+  if (!choice) return undefined;
+  const model = runtime.getModel(choice.provider, choice.id);
+  if (!model) throw new DriverUnavailableError("stable-sdk", modelUnavailableMessage(choice));
+  let authorized = runtime.hasConfiguredAuth(choice.provider);
+  if (!authorized) {
+    try {
+      authorized = (await runtime.checkAuth(choice.provider)) !== undefined;
+    } catch {
+      authorized = false;
+    }
+  }
+  if (!authorized) throw new DriverUnavailableError("stable-sdk", modelUnavailableMessage(choice));
+  return model;
 }
 
 // -------------------------------------------------------- pending tool calls

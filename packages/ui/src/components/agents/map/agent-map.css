@@ -1,0 +1,164 @@
+/*
+ * The live map's React Flow skin (docs/agents.md §5, M13-T7).
+ *
+ * `@xyflow/react/dist/base.css` is imported beside this file by AgentMap.tsx;
+ * this sheet maps every `--xy-*` variable the base sheet reads onto Laser's
+ * tokens (docs/ux-theme.md) and restyles the pieces the base sheet leaves
+ * bare — the pane, the handles, the minimap, the attribution — so both themes
+ * and every preset reach the canvas. No colour, size or duration is spelled
+ * here that is not a token or a geometric constant of the drawing.
+ */
+.agent-map .react-flow {
+  --xy-background-color-default: transparent;
+  --xy-background-pattern-dots-color-default: color-mix(in oklab, var(--ink-3) 28%, transparent);
+  --xy-background-pattern-lines-color-default: var(--line);
+  --xy-background-pattern-cross-color-default: var(--line);
+  --xy-edge-stroke-default: color-mix(in oklab, var(--ink-3) 55%, transparent);
+  --xy-edge-stroke-width-default: 1.5;
+  --xy-edge-stroke-selected-default: var(--live);
+  --xy-connectionline-stroke-default: var(--live);
+  --xy-connectionline-stroke-width-default: 1.5;
+  --xy-selection-background-color-default: color-mix(in oklab, var(--live) 8%, transparent);
+  --xy-selection-border-default: 1px dotted var(--live);
+  --xy-node-border-default: 1px solid var(--line);
+  --xy-node-border-selected-default: 1px solid var(--live);
+  --xy-node-color-default: var(--ink);
+  --xy-handle-background-color-default: transparent;
+  --xy-minimap-background-color-default: var(--surface);
+  --xy-minimap-mask-background-color-default: color-mix(in oklab, var(--bg) 55%, transparent);
+  --xy-minimap-mask-stroke-color-default: var(--line);
+  --xy-minimap-mask-stroke-width-default: 1;
+  --xy-minimap-node-background-color-default: var(--surface-2);
+  --xy-minimap-node-stroke-color-default: var(--line);
+  --xy-minimap-node-stroke-width-default: 1;
+  --xy-attribution-background-color-default: transparent;
+  --xy-resize-background-color-default: var(--live);
+  font-family: var(--font-sans);
+  color: var(--ink);
+}
+
+/* The pane: the page ground, a grab cursor while it can be dragged. */
+.agent-map .react-flow__pane {
+  cursor: grab;
+}
+.agent-map .react-flow__pane.dragging {
+  cursor: grabbing;
+}
+
+/* Handles exist for the edges' sake only; hidden by opacity, never display
+ * (the React Flow skill: display:none breaks the dimension pass). */
+.agent-map .react-flow__handle {
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  pointer-events: none;
+}
+
+/* The node wrapper is React Flow's; the focus ring lands on our card inside. */
+.agent-map .react-flow__node {
+  outline: none;
+}
+.agent-map .react-flow__node:focus-visible > [data-map-node] {
+  outline: 2px solid var(--live);
+  outline-offset: 2px;
+}
+.agent-map .react-flow__node.selected > [data-map-node] {
+  border-color: var(--live);
+  box-shadow: 0 0 0 1px var(--live);
+}
+.agent-map .react-flow__node.selectable:hover > [data-map-node] {
+  border-color: color-mix(in oklab, var(--line) 50%, var(--ink-3));
+}
+.agent-map .react-flow__node.selected.selectable:hover > [data-map-node] {
+  border-color: var(--live);
+}
+
+/* Spawn: the new node fades and scales in from its parent's position over
+ * one morph. `--map-from-x/y` are the offset to the parent, set inline by the
+ * node. Reduced motion: the morph token is 0ms, and the keyframes are off. */
+.agent-map [data-map-node][data-fresh] {
+  animation: agent-map-arrive var(--motion-morph) var(--motion-ease) both;
+}
+@keyframes agent-map-arrive {
+  from {
+    opacity: 0;
+    transform: translate(var(--map-from-x, 0px), var(--map-from-y, 0px)) scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Edges: parent → child. Emphasis when a message crosses them. */
+.agent-map .react-flow__edge-path.agent-map-edge {
+  transition:
+    stroke var(--motion-fast) var(--motion-ease),
+    stroke-width var(--motion-fast) var(--motion-ease),
+    stroke-opacity var(--motion-fast) var(--motion-ease);
+}
+.agent-map .react-flow__edge-path.agent-map-edge-active {
+  stroke: var(--live);
+  stroke-width: 2.5;
+}
+
+/* Event bubbles: a small slide up and a fade, then a fade out before the
+ * store lets the event go. Reduced motion shows and hides without moving. */
+.agent-map-bubble {
+  animation: agent-map-bubble-in var(--motion-fast) var(--motion-ease) both;
+  transition: opacity var(--motion-slow) var(--motion-ease);
+}
+.agent-map-bubble[data-leaving] {
+  opacity: 0;
+}
+@keyframes agent-map-bubble-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--space-unit));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The minimap and the credit, on Laser's ground. */
+.agent-map .react-flow__minimap {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.agent-map .react-flow__attribution {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading-xs);
+  padding: 0 calc(var(--space-unit) * 1.5);
+}
+.agent-map .react-flow__attribution a {
+  color: var(--ink-3);
+  opacity: 0.7;
+}
+.agent-map .react-flow__attribution a:hover,
+.agent-map .react-flow__attribution a:focus-visible {
+  color: var(--ink-2);
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-map [data-map-node][data-fresh],
+  .agent-map-bubble {
+    animation: none;
+  }
+  .agent-map .react-flow__edge-path.agent-map-edge,
+  .agent-map-bubble {
+    transition: none;
+  }
+}
+
+/* Panels (legend, controls, the empty caption) sit a spacing step in from the edge. */
+.agent-map .react-flow__panel {
+  margin: calc(var(--space-unit) * 2.5);
+}

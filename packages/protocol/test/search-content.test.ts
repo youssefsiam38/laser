@@ -22,3 +22,7 @@ it("treats a rendered error as literal text, while JSON fallback output searches
   expect(toolSearchContent({ name: "read", args: { path: "file" }, result, isError: true })).toEqual(["file", result]);
   expect(toolSearchContent({ name: "future_tool", args: {}, result, isError: true })).toEqual(["permission denied"]);
 });
+it("projects only the final message of complete_agent_run, never its status or the harness reply", () => {
+  expect(toolSearchContent({ name: "complete_agent_run", args: { status: "completed", message: "Counted the files." }, result: { content: [{ type: "text", text: "Run r1 ended with status completed." }], details: { runId: "r1", status: "completed" } } })).toEqual(["Counted the files."]);
+  expect(toolSearchContent({ name: "complete_agent_run", args: { status: "blocked" }, result: "ignored" })).toEqual([]);
+});

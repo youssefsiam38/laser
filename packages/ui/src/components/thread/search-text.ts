@@ -1,5 +1,5 @@
 import { toolSearchContent } from "@lasercode/protocol";
-import { GOAL_DATA_PART } from "@/runtime/projection";
+import { AGENT_COMPLETION_DATA_PART, AGENT_EVENT_DATA_PART, GOAL_DATA_PART, TASK_EVENT_DATA_PART, type AgentCompletionData, type AgentEventData, type TaskEventData } from "@/runtime/projection";
 import type { GoalRecord } from "@/runtime/goal-history";
 
 export interface TextMatch { start: number; end: number }
@@ -23,6 +23,21 @@ export function partSearchContent(part: { type: string; [key: string]: unknown }
   if (part.type === "data" && part.name === GOAL_DATA_PART) {
     const goal = part.data as GoalRecord;
     return [goal.moments[0]?.objective ?? goal.objective, goal.summary ?? "", ...goal.moments.flatMap((moment, index) => [index > 0 && moment.objective !== goal.moments[index - 1]?.objective ? moment.objective : "", moment.reason ?? ""])].filter(Boolean);
+  }
+  // Agent surfaces mark exactly these regions `data-search-content`
+  // (AgentCompletion, the Handoff event card, TaskEventNotice); labels,
+  // badges and clocks are chrome and stay out of the index.
+  if (part.type === "data" && part.name === AGENT_COMPLETION_DATA_PART) {
+    const completion = part.data as AgentCompletionData;
+    return completion.message ? [completion.message] : [];
+  }
+  if (part.type === "data" && part.name === AGENT_EVENT_DATA_PART) {
+    const event = part.data as Partial<AgentEventData> | undefined;
+    return [event?.endedBy?.reason ?? "", event?.message?.trim() ? event.message : ""].filter(Boolean);
+  }
+  if (part.type === "data" && part.name === TASK_EVENT_DATA_PART) {
+    const task = part.data as Partial<TaskEventData> | undefined;
+    return typeof task?.command === "string" && task.command ? [task.command] : [];
   }
   if (part.type === "text" || part.type === "reasoning") return typeof part.text === "string" ? [part.text] : [];
   if (part.type !== "tool-call") return [];

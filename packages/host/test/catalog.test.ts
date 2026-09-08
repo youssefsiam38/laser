@@ -1,4 +1,4 @@
-import { PRODUCT_NAME } from "@lasercode/protocol";
+import { PRODUCT_NAME, SESSION_AGENT_ENTRY_TYPE } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,6 +18,33 @@ function session(slug: string, name: string, header: object, when: Date) {
 }
 
 describe("SessionCatalog", () => {
+  it("attributes a session to its agent from the record the worker wrote, and a worktree to its project", () => {
+    const child = session("--worktree--", "child.jsonl", { id: "child", cwd: "/project/.worktrees/review-auth" }, new Date("2026-01-03"));
+    const catalog = new SessionCatalog(dir);
+    expect(catalog.get(child)).toMatchObject({ cwd: "/project" });
+    expect(catalog.get(child)?.agent).toBeUndefined();
+    appendFileSync(
+      child,
+      JSON.stringify({ type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, data: { agentName: "reviewer", kind: "child", subagentName: "review-auth", parentPath: "/sessions/root.jsonl", rootPath: "/sessions/root.jsonl", runId: "run_7", worktree: { path: "/project/.worktrees/review-auth", branch: "agent/review-auth", baseCommit: "abc" } } }) + "\n" +
+        JSON.stringify({ type: "message", message: { role: "user", content: "Review the auth changes" } }) + "\n",
+    );
+    utimesSync(child, new Date("2026-01-04"), new Date("2026-01-04"));
+    const entry = catalog.get(child)!;
+    // The run id and status are the registry's, added by the router; the file gives identity only.
+    expect(entry.agent).toEqual({ agentName: "reviewer", kind: "child", subagentName: "review-auth", parentPath: "/sessions/root.jsonl", rootPath: "/sessions/root.jsonl" });
+    expect(entry).toMatchObject({ cwd: "/project", firstMessage: "Review the auth changes", messageCount: 1 });
+    expect(catalog.list("/project").map((s) => s.id)).toEqual(["child"]);
+    expect(catalog.cwdCounts().get("/project")).toBe(1);
+
+    const beam = session("--beam--", "beam.jsonl", { id: "beam", cwd: "/data/beam" }, new Date("2026-01-05"));
+    appendFileSync(beam, JSON.stringify({ type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, data: { agentName: "beam", kind: "beam" } }) + "\n");
+    utimesSync(beam, new Date("2026-01-06"), new Date("2026-01-06"));
+    expect(catalog.get(beam)?.agent).toEqual({ agentName: "beam", kind: "beam" });
+    appendFileSync(beam, JSON.stringify({ type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, data: { agentName: "other", kind: "chat" } }) + "\n");
+    utimesSync(beam, new Date("2026-01-07"), new Date("2026-01-07"));
+    expect(catalog.get(beam)?.agent?.agentName).toBe("beam"); // the first record wins
+  });
+
   it("uses the objective for a goal-started session without exposing its internal prompt", () => {
     const path = session("--goal--", "goal.jsonl", { id: "goal", cwd: "/project" }, new Date("2026-01-01"));
     const catalog = new SessionCatalog(dir);

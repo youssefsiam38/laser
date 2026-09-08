@@ -9,7 +9,8 @@ export {
   type HostRelayDevice,
   defaultUiDir,
 } from "./server.js";
-export { laserDataDir, defaultAgentDir, defaultStateDir } from "./paths.js";
+export { laserDataDir, defaultAgentDir, defaultStateDir, beamWorkspaceDir, chatWorkspaceDir, projectRootOf } from "./paths.js";
+export * from "./agents/index.js";
 export {
   migrateFormerIdentities,
   ownedDirectories,

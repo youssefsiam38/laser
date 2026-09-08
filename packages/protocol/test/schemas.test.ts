@@ -11,6 +11,21 @@ import {
 
 /** One valid params sample per method. The compiler-checked `satisfies` in schemas.ts
  *  guarantees the map is complete; this table guarantees each schema accepts a real shape. */
+const agentSample = {
+  name: "reviewer",
+  description: "Independent verification of a change",
+  instructions: "You are an independent reviewer. Verify claims and report evidence.",
+  engineInstructions: false,
+  model: { provider: "anthropic", id: "claude-sonnet-5" },
+  thinkingLevel: "medium",
+  tools: ["read", "grep", "bash"],
+  supportsSubagents: false,
+  allowedAgents: [],
+  scopedSkills: true,
+  skills: [{ name: "code-review", path: "/home/me/.agents/skills/code-review/SKILL.md", scope: "global" }],
+  runTimeoutMinutes: 45,
+};
+
 const samples: Record<ClientMethod, unknown> = {
   "pi/host/version": {},
   "session/new": { cwd: "/p" },
@@ -112,6 +127,22 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/transcribe/chunk": { id: "upload-1", data: "AAAA" },
   "pi/transcribe/end": { id: "upload-1" },
   "pi/transcribe/cancel": { id: "upload-1" },
+
+  // --- M13 agents ---
+  "agents/list": {},
+  "agents/validate": { agent: agentSample },
+  "agents/save": { agent: agentSample },
+  "agents/delete": { name: "reviewer" },
+  "agents/set-default": { name: "reviewer" },
+  "agents/set-policy": { policy: { maxDepth: 2, foregroundCommandSeconds: 90 } },
+  "agents/skills": { cwd: "/p" },
+  "agents/engine-instructions": { cwd: "/p" },
+  "agents/runs/list": { path: "/s.jsonl" },
+  "agents/runs/stop": { runId: "run_7", reason: "Wrong direction" },
+  "agents/beam/set-model": { model: { provider: "openai", id: "gpt-5.6-luna" } },
+  "agents/namer/set-model": { model: null },
+  "agents/namer/qualify": { cwd: "/p" },
+  "agents/sync": { snapshot: { revision: 3, agents: [], defaultAgent: "default" } },
 };
 
 describe("client request schemas", () => {
@@ -129,6 +160,15 @@ describe("client request schemas", () => {
       expect(req.method).toBe(method);
       expect(req.params).toEqual(samples[method]);
     }
+  });
+
+  it("refuses agent names that are not lower-case identifiers and unknown policy keys", () => {
+    expect(clientParamsSchemas["agents/delete"].safeParse({ name: "Reviewer" }).success).toBe(false);
+    expect(clientParamsSchemas["agents/delete"].safeParse({ name: "-review" }).success).toBe(false);
+    expect(clientParamsSchemas["agents/save"].safeParse({ agent: { ...agentSample, name: "a".repeat(41) } }).success).toBe(false);
+    expect(clientParamsSchemas["agents/set-policy"].safeParse({ policy: { maxDepth: 0 } }).success).toBe(false);
+    expect(clientParamsSchemas["agents/set-policy"].safeParse({ policy: { budget: 3 } }).success).toBe(false);
+    expect(clientParamsSchemas["session/new"].safeParse({ cwd: "/p", agentName: "beam" }).success).toBe(true);
   });
 
   it("rejects unknown keys, wrong enums, empty content", () => {

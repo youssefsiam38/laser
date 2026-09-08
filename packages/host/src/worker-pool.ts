@@ -28,6 +28,8 @@ export interface WorkerPoolOptions {
   agentDir?: string;
   sessionDir?: string;
   subagentsTempRoot?: string;
+  /** Passed to every worker as `--state-dir` (see WorkerClientOptions). */
+  stateDir?: string;
   workerMain?: string;
   nodeBinary?: string;
   /** Extra environment for every worker (the bundled package manager, M10-T5). */
@@ -49,6 +51,14 @@ export interface WorkerPoolOptions {
   isAttached?: (cwd: string) => boolean;
   /** Pi session ids of the sessions this worker holds; for the subagents guard. */
   sessionIds?: (cwd: string) => Set<string>;
+  /**
+   * Runs after a worker reports `ready` and before `get()` resolves, so the
+   * first request a worker answers already sees what the host knows (the
+   * agent definitions, through `agents/sync`). A failure is reported through
+   * `onStderr` and never fails the spawn: an older worker that does not know
+   * the method is still a working worker.
+   */
+  prime?: (client: WorkerClient, cwd: string) => Promise<void>;
   /** Idle time before a retirement is considered. 0 disables retirement. */
   idleMs?: number;
   /** How often idleness is checked. */
@@ -146,6 +156,25 @@ export class WorkerPool {
       if (entry.client?.alive) out.push({ cwd: entry.cwd, client: entry.client });
     }
     return out;
+  }
+
+  /**
+   * Send one request to every ready worker. Never spawns, never throws: a
+   * worker that refuses (an older one without the method) is reported in the
+   * result and the others still hear it.
+   */
+  async broadcastRequest(method: string, params: unknown): Promise<Array<{ cwd: string; error?: string }>> {
+    const targets = [...this.entries.values()].filter((entry) => entry.client?.alive && entry.status === "ready");
+    return Promise.all(
+      targets.map(async (entry) => {
+        try {
+          await entry.client!.request(method, params);
+          return { cwd: entry.cwd };
+        } catch (error) {
+          return { cwd: entry.cwd, error: error instanceof Error ? error.message : String(error) };
+        }
+      }),
+    );
   }
 
   workerInfo(cwd: string): WorkerInfo | undefined {
@@ -333,6 +362,7 @@ export class WorkerPool {
       ...(this.options.agentDir ? { agentDir: this.options.agentDir } : {}),
       ...(this.options.sessionDir ? { sessionDir: this.options.sessionDir } : {}),
       ...(this.options.subagentsTempRoot ? { subagentsTempRoot: this.options.subagentsTempRoot } : {}),
+      ...(this.options.stateDir ? { stateDir: this.options.stateDir } : {}),
       ...(this.options.workerMain ? { workerMain: this.options.workerMain } : {}),
       ...(this.options.nodeBinary ? { nodeBinary: this.options.nodeBinary } : {}),
       ...((this.options.env || this.options.envForCwd)
@@ -363,6 +393,13 @@ export class WorkerPool {
     }
     // `ready` resolves on the worker's own `pi/worker/status: ready`, which the
     // handler below has already turned into an enriched notification.
+    if (this.options.prime && entry.client === client && client.alive) {
+      try {
+        await this.options.prime(client, entry.cwd);
+      } catch (error) {
+        this.options.onStderr?.(entry.cwd, `priming failed: ${error instanceof Error ? error.message : String(error)}\n`);
+      }
+    }
     return client;
   }
 

@@ -1,0 +1,277 @@
+// @vitest-environment happy-dom
+/**
+ * The Beam bubble over the real provider and scope, with the transcript
+ * replaced by a light stub (`thread-stub.tsx`) and the host by an in-memory
+ * peer (`fake-host.tsx`). What is under test: the spark opens and closes the
+ * bubble; the empty state and its chips; the first message creating a Beam
+ * session in Beam's workspace without moving the main view; the remembered
+ * session; "New chat"; Escape and focus.
+ */
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../../src/client.js", async (original) => ({
+  ...(await original<typeof import("../../src/client.js")>()),
+  HostClient: (await import("./fake-host.js")).FakeHostClient,
+}));
+vi.mock("@/components/thread/Thread", async () => ({ Thread: (await import("./thread-stub.js")).ThreadStub }));
+
+import { BeamBubble } from "../../src/components/beam/BeamBubble.js";
+import { BeamSpark } from "../../src/components/beam/BeamSpark.js";
+import { BEAM_SESSION_STORAGE_KEY, beamStore } from "../../src/components/beam/beam-store.js";
+import { ShellContext, type ShellContextValue } from "../../src/components/shell/shell-context.js";
+import { TooltipProvider } from "../../src/components/ui/tooltip.js";
+import { LaserProvider, useLaserState } from "../../src/runtime/LaserProvider.js";
+import { addSession, BEAM_CWD, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "./fake-host.js";
+
+const shell = (layout: ShellContextValue["layout"]): ShellContextValue => ({
+  layout,
+  sessionsOpen: false,
+  telemetryOpen: false,
+  setSessionsOpen: () => {},
+  setTelemetryOpen: () => {},
+  toggleSessions: () => {},
+  toggleTelemetry: () => {},
+  historyOpen: false,
+  setHistoryOpen: () => {},
+  openHistory: () => {},
+  toolsOpen: false,
+  setToolsOpen: () => {},
+  addProjectOpen: false,
+  setAddProjectOpen: () => {},
+  newSession: async () => {},
+  canCreate: true,
+});
+
+/** The main view's session, read outside the bubble: it must never move because of Beam. */
+function MainCurrent() {
+  const current = useLaserState((s) => s.current);
+  const toasts = useLaserState((s) => s.toasts.map((toast) => `${toast.level}:${toast.text}`).join("\n"));
+  return (
+    <>
+      <span data-slot="main-current">{current ?? ""}</span>
+      <span data-slot="main-toasts">{toasts}</span>
+    </>
+  );
+}
+
+function Harness({ layout = "desktop" as ShellContextValue["layout"] }) {
+  return (
+    <LaserProvider url="ws://test">
+      <TooltipProvider>
+        <ShellContext.Provider value={shell(layout)}>
+          <MainCurrent />
+          <BeamSpark side="right" size="icon" />
+          <BeamBubble />
+        </ShellContext.Provider>
+      </TooltipProvider>
+    </LaserProvider>
+  );
+}
+
+let container: HTMLDivElement;
+let root: Root;
+let world: World;
+
+beforeEach(() => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  localStorage.clear();
+  world = createWorld();
+  FakeHostClient.reset(world);
+  beamStore.reset();
+  container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+});
+afterEach(async () => {
+  await act(async () => root.unmount());
+  container.remove();
+});
+
+const mount = async (layout?: ShellContextValue["layout"]) => {
+  await act(async () => root.render(<Harness {...(layout ? { layout } : {})} />));
+  // The socket "opens" on a microtask; the catalog and agents list follow.
+  await act(async () => settle(10));
+};
+const spark = () => container.querySelector<HTMLButtonElement>('[data-slot="beam-spark"]')!;
+const bubble = () => document.querySelector<HTMLElement>('[data-slot="beam-bubble"]');
+const textarea = () => bubble()?.querySelector<HTMLTextAreaElement>("textarea") ?? null;
+const calls = (method: string) => world.calls.filter((call) => call.method === method);
+const openBubble = async () => {
+  await act(async () => spark().click());
+  await act(async () => settle(40));
+};
+const closeAndSettle = async () => {
+  await act(async () => settle(400));
+};
+
+async function typeAndSend(text: string) {
+  const input = textarea()!;
+  await act(async () => {
+    input.focus();
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, text);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => bubble()!.querySelector<HTMLButtonElement>('[data-slot="composer-send"]')!.click());
+  await act(async () => settle(30));
+}
+
+describe("the Beam bubble", () => {
+  it("opens from the spark into the empty state, focuses the composer, and leaves the main view alone", async () => {
+    await mount();
+    expect(spark().getAttribute("aria-expanded")).toBe("false");
+    expect(bubble()).toBeNull();
+    await openBubble();
+    expect(spark().getAttribute("aria-expanded")).toBe("true");
+    expect(spark().getAttribute("aria-controls")).toBe("beam-bubble");
+    const panel = bubble()!;
+    expect(panel.getAttribute("aria-label")).toBe("Beam");
+    expect(panel.querySelector('[data-slot="beam-empty-state"]')?.textContent).toContain("Beam");
+    expect(panel.querySelector('[data-slot="beam-empty-state"]')?.textContent).toContain("Ask about your sessions, logs, agents or settings.");
+    expect(panel.querySelectorAll('[data-slot="beam-suggestion"]')).toHaveLength(3);
+    expect(document.activeElement).toBe(textarea());
+    expect(container.querySelector('[data-slot="main-current"]')?.textContent).toBe("");
+    expect(calls("session/new")).toHaveLength(0);
+  });
+
+  it("fills the composer from a chip without sending", async () => {
+    await mount();
+    await openBubble();
+    const chip = bubble()!.querySelector<HTMLButtonElement>('[data-slot="beam-suggestion"]')!;
+    await act(async () => chip.click());
+    expect(textarea()!.value).toBe(chip.textContent);
+    expect(calls("session/new")).toHaveLength(0);
+    expect(calls("session/prompt")).toHaveLength(0);
+  });
+
+  it("creates a Beam session in Beam's workspace on the first message, prompts it, and remembers it", async () => {
+    addSession(world, `${PROJECT_CWD}/main.jsonl`, PROJECT_CWD);
+    await mount();
+    // The main view is on a project session; Beam must not replace it.
+    await act(async () => FakeHostClient.current.options.onNotification("pi/session/attention", { path: `${PROJECT_CWD}/main.jsonl`, attention: "idle" }));
+    await openBubble();
+    await typeAndSend("Which sessions need me?");
+    const created = calls("session/new");
+    expect(created).toHaveLength(1);
+    expect(created[0]!.params).toEqual({ cwd: BEAM_CWD, agentName: "beam" });
+    const path = `${BEAM_CWD}/session-1.jsonl`;
+    const prompts = calls("session/prompt");
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]!.params).toMatchObject({ path, content: [{ type: "text", text: "Which sessions need me?" }] });
+    // Adopted by the bubble and this browser, not by the main view.
+    expect(beamStore.getSnapshot().path).toBe(path);
+    expect(localStorage.getItem(BEAM_SESSION_STORAGE_KEY)).toBe(path);
+    expect(container.querySelector('[data-slot="main-current"]')?.textContent).toBe("");
+    expect(bubble()!.querySelector('[data-slot="thread-path"]')?.textContent).toBe(path);
+    expect(bubble()!.querySelector('[data-slot="beam-empty-state"]')).toBeNull();
+  });
+
+  it("reopens on the same session, and New chat starts a fresh one", async () => {
+    await mount();
+    await openBubble();
+    await typeAndSend("Hello");
+    const path = beamStore.getSnapshot().path!;
+    await act(async () => bubble()!.querySelector<HTMLButtonElement>('[data-slot="beam-close"]')!.click());
+    await closeAndSettle();
+    expect(bubble()).toBeNull();
+    expect(spark().getAttribute("aria-expanded")).toBe("false");
+    await openBubble();
+    expect(bubble()!.querySelector('[data-slot="thread-path"]')?.textContent).toBe(path);
+    expect(bubble()!.querySelector('[data-slot="beam-empty-state"]')).toBeNull();
+    await act(async () => bubble()!.querySelector<HTMLButtonElement>('[data-slot="beam-new-chat"]')!.click());
+    await act(async () => settle(20));
+    expect(beamStore.getSnapshot().path).toBeUndefined();
+    expect(localStorage.getItem(BEAM_SESSION_STORAGE_KEY)).toBeNull();
+    expect(bubble()!.querySelector('[data-slot="beam-empty-state"]')).not.toBeNull();
+    expect(bubble()!.querySelector<HTMLButtonElement>('[data-slot="beam-new-chat"]')!.disabled).toBe(true);
+  });
+
+  it("remembers a session across a reload, and starts fresh when it is gone", async () => {
+    const kept = `${BEAM_CWD}/kept.jsonl`;
+    addSession(world, kept, BEAM_CWD);
+    localStorage.setItem(BEAM_SESSION_STORAGE_KEY, kept);
+    beamStore.reset();
+    await mount();
+    await openBubble();
+    expect(calls("session/load").map((call) => (call.params as { path: string }).path)).toContain(kept);
+    expect(bubble()!.querySelector('[data-slot="thread-path"]')?.textContent).toBe(kept);
+    await act(async () => root.unmount());
+
+    localStorage.setItem(BEAM_SESSION_STORAGE_KEY, `${BEAM_CWD}/gone.jsonl`);
+    beamStore.reset();
+    world = createWorld();
+    FakeHostClient.reset(world);
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await mount();
+    await openBubble();
+    expect(beamStore.getSnapshot().path).toBeUndefined();
+    expect(localStorage.getItem(BEAM_SESSION_STORAGE_KEY)).toBeNull();
+    expect(bubble()!.querySelector('[data-slot="beam-empty-state"]')).not.toBeNull();
+  });
+
+  it("closes on Escape from inside and hands focus back to the spark; a taken Escape is left alone", async () => {
+    await mount();
+    await openBubble();
+    const taken = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    taken.preventDefault();
+    await act(async () => textarea()!.dispatchEvent(taken));
+    expect(bubble()).not.toBeNull();
+    await act(async () => textarea()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+    await closeAndSettle();
+    expect(bubble()).toBeNull();
+    expect(spark().getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(spark());
+  });
+
+  it("opens the session in the main view from the header and closes", async () => {
+    await mount();
+    await openBubble();
+    await typeAndSend("Hello");
+    const path = beamStore.getSnapshot().path!;
+    await act(async () => bubble()!.querySelector<HTMLButtonElement>('[data-slot="beam-open-full"]')!.click());
+    await closeAndSettle();
+    expect(container.querySelector('[data-slot="main-current"]')?.textContent).toBe(path);
+    expect(bubble()).toBeNull();
+  });
+
+  it("shows the host's refusal to the person when the first message cannot start a session", async () => {
+    const refusal = "The model acme/fast is not available: connect acme in Settings → Providers and models, or choose another model for beam.";
+    world.overrides["session/new"] = () => {
+      throw new Error(refusal);
+    };
+    await mount();
+    await openBubble();
+    await typeAndSend("Hello");
+    await act(async () => settle(50));
+    expect(calls("session/new")).toHaveLength(1);
+    expect(calls("session/prompt")).toHaveLength(0);
+    expect(beamStore.getSnapshot().path).toBeUndefined();
+    // Said where the person is looking: inside the bubble, above the composer.
+    expect(bubble()!.querySelector('[data-slot="beam-refusal"]')?.textContent).toContain(refusal);
+    // And not only as a corner toast: the refusal is the bubble's to explain.
+    expect(container.querySelector('[data-slot="main-toasts"]')?.textContent).toBe("");
+    // The next message tries again: the notice goes when the person types.
+    const input = textarea()!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "again");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(bubble()!.querySelector('[data-slot="beam-refusal"]')).toBeNull();
+  });
+
+  it("is a full-height sheet on a phone, with the same header", async () => {
+    await mount("mobile");
+    await openBubble();
+    const panel = bubble()!;
+    expect(panel.getAttribute("data-side")).toBe("bottom");
+    expect(panel.getAttribute("role")).toBe("dialog");
+    expect(panel.querySelector('[data-slot="beam-close"]')).not.toBeNull();
+    expect(panel.querySelector('[data-slot="beam-empty-state"]')).not.toBeNull();
+    await act(async () => panel.querySelector<HTMLButtonElement>('[data-slot="beam-close"]')!.click());
+    await closeAndSettle();
+    expect(bubble()).toBeNull();
+  });
+});

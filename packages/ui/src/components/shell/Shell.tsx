@@ -1,6 +1,8 @@
 import { storageKey } from "@lasercode/protocol";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+// Agent map (M13-T7): the main-column view and its fullscreen host.
+import { AgentMapFullscreen, AgentMapView, useMapUi } from "@/components/agents/map";
 import { Dock } from "@/components/dock";
 import { MobileSurfaces } from "@/components/mobile";
 import { Thread } from "@/components/thread/Thread";
@@ -12,6 +14,11 @@ import { FileLinkDirectory } from "@/components/ui/source-file-link";
 import { useBreakpoint, useIsWide, useKeyboardInset } from "@/hooks";
 import { PanelAmbient, PanelDecisionSheet, PanelsProvider, POPOUT_HASH_PREFIX, PoppedOutPanel } from "@/panels";
 import { FleetSheet, RunTabs } from "@/components/subagents";
+// Agents leap (Lane U2): the one "End agent?" confirmation, asked from row
+// menus, run tabs and the live map through `requestEndAgent`.
+import { EndAgentDialog } from "@/components/agents/EndAgentDialog";
+// Beam: the bubble and its model choice, mounted once (docs/agents.md "Beam").
+import { BeamBubble, BeamModelDialog } from "@/components/beam";
 import { mergeSessions, sessionTitle, useLaserStable, useLaserState, useLaserView } from "@/runtime";
 
 import { AddProjectDialog } from "./AddProjectDialog.js";
@@ -126,6 +133,8 @@ function ShellFrame() {
   const [addProjectOpen, setAddProjectOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const sessionsLoaded = useLaserState((s) => s.sessionsLoaded);
+  // Agent map (M13-T7): the top bar's toggle swaps the main column to the map.
+  const mapOpen = useMapUi().open;
   // First run (M10-T6): the host says whether setup is still pending; the
   // flow takes the conversation's place until it is finished or skipped.
   const setup = useSetupPending();
@@ -314,11 +323,14 @@ function ShellFrame() {
               {/* The thread's sticky footer owns the keyboard/safe-area inset
                   (Thread.tsx); adding it here too lifted the composer twice. */}
               <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-                <Thread statusSlot={<PanelAmbient />} />
+                {/* Agent map (M13-T7): the live map in place of the thread while toggled. */}
+                {mapOpen && view ? <AgentMapView /> : <Thread statusSlot={<PanelAmbient />} />}
               </div>
             </main>
             {layout !== "mobile" && <Dock path={view?.path} />}
             {desktop && telemetryOpen && <TelemetryPanel variant="panel" />}
+            {/* Agent map (M13-T7): the fullscreen host, under the workbench so Settings still wins. */}
+            <AgentMapFullscreen />
             <Workbench />
           </div>
         </div>
@@ -348,6 +360,9 @@ function ShellFrame() {
         <TrustDialog />
         <PanelDecisionSheet />
         <FleetSheet />
+        <EndAgentDialog />
+        <BeamBubble />
+        <BeamModelDialog />
         <Toasts />
         {/* The reconnect guard and service-worker plumbing on every width; the
             phone's notices and install sheet only under 768px. */}

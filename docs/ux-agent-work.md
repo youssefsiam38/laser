@@ -1,6 +1,11 @@
 # Runs, plans and ledgers — the domain model for agent work
 
-Status: **decided 2026-09-05 (D-19).** M3 builds on this. Every question below was resolved to its stated lean.
+Status: **decided 2026-09-05 (D-19); decisions 1 and 3 superseded by D-140
+(2026-09-08).** M3 built on this. Since D-140 the runs are Laser's own harness
+([`agents.md`](agents.md)): a child is a sub-session in the sidebar under its
+parent, and every top-level session has a full-screen live map. The panel-kind
+mapping below still holds — children still produce `run` panels — and the
+pi-subagents concepts in the tables are kept as the history that shaped it.
 
 ## How this relates to the panel contract
 
@@ -54,6 +59,16 @@ any origin. They differ by attributes, not by being different objects:
 | `control` | which of steer / stop / resume / interrupt actually work |
 | `depth` | position in the run tree |
 
+Since D-140 the harness's own run record is `AgentRun`
+(`packages/protocol/src/agents.ts`): `origin` is `agent` or `user`, `depth`
+counts from 1 for a child of a top-level session, and the state vocabulary is
+`AgentRunStatus` — `queued`, `running`, `completed`, `blocked`, `failed`,
+`cancelled`, `timed_out`. The child model may only choose `completed` or
+`blocked`, through `complete_agent_run`; the harness sets the rest, and
+`endedBy` says whether the parent, the person or the harness ended it. The UI
+maps these onto the five-word status language of `DESIGN.md` in one place
+(`packages/ui/src/agents/model.ts`).
+
 **A PLAN** is the intended shape of multi-run work: workflow phases and lanes,
 mission objectives, acceptance criteria. A plan is either *declared*, when
 pi-subagents persisted one, or *inferred*, when we rebuilt it from trace
@@ -106,6 +121,14 @@ around them is specific enough to specify here:
 - **Never a tree widget with expand arrows.** Trees are for files, not live
   work: an expanding tree makes you hunt for the thing that needs you, which is
   what R5 exists to prevent.
+- **Since D-140, a child is also a sub-session in the sidebar**, listed under
+  its parent (`SessionSummary.agent`), opened as the normal chat where the
+  person reads, queues or interrupts, and ends the run with a reason the parent
+  receives. And every top-level session has a **live map**: a read-only React
+  Flow view of the tree with status, transient event bubbles and a go-to-chat
+  action per node, laid out by the measured size of its surface
+  ([`agents.md`](agents.md) §4–5). The tab strip and breadcrumb above remain
+  the in-thread navigation; the map is the bird's-eye view.
 - The Fleet's all-runs view is different from that navigation strip: each
   session renders chronological root-first subtrees with a continuous lineage
   rail. A child is structurally inside its parent, never a globally sorted flat
@@ -121,7 +144,8 @@ disabled, when they do not apply.
 
 | Run path | Steer | Stop | Resume | Interrupt |
 | --- | --- | --- | --- | --- |
-| Background, via control inbox | yes | yes | no | yes |
+| Harness child (D-140): a sub-session, addressed by `sessionId` from the parent or from its own composer by the person | yes | yes | yes (a message to an idle child starts a new run) | yes |
+| Background, via control inbox (pi-subagents, retired) | yes | yes | no | yes |
 | Background, parent alive | yes | yes | yes | yes |
 | Foreground child | no | no | no | no |
 | Nested child | no | no | yes | yes |
@@ -148,7 +172,8 @@ scripted workflows we do not. Inferred connectors are dashed and labelled
 ## What this costs
 
 - **The session list narrows.** It stops being every Pi session on disk and
-  becomes things you started. Children live in their parent.
+  becomes things you started. Children live in their parent — since D-140,
+  literally: as rows under it.
 - **We render less than the data offers.** No live token stream for detached
   runs, no speculative graph for scripted workflows. Honesty over richness.
 - **Two navigation models to maintain**, the tab strip and the breadcrumb,
@@ -159,11 +184,15 @@ scripted workflows we do not. Inferred connectors are dashed and labelled
 1. **Do background children ever appear in the session list?** They are real
    Pi sessions with real files. *Lean: no — only inside their parent and in the
    fleet sheet, so the session list keeps meaning "things I started".*
+   **Superseded by D-140:** every child is a sub-session listed under its
+   parent in the sidebar, fully controllable from its own chat.
 2. **Where does an orphaned background run live** when its parent session is
    closed but it is still working? *Lean: the fleet sheet keeps it and the
    project ring shows attention; opening it reopens the parent read-only.*
 3. **Is a full-screen fleet board worth building**, as a peer of the thread?
    *Lean: the dock and a sheet are enough; revisit if you run many at once.*
+   **Superseded by D-140:** each top-level session has a live map, read-only,
+   at every width, with purpose-built layouts per surface size.
 4. **Do scheduled runs exist in v1?** Project-local files, and you have none.
    *Lean: defer. Add the noun when you have a use for it.*
 5. **Does the CLI speak these nouns** (`laser runs`, `laser plan`)?

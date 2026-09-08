@@ -80,9 +80,9 @@ export const panelsModule: LaserModule = {
 
     const offCommand = commands?.on((command) => {
       if (command.type !== "lasercode/panel/action") return false;
-      // A panel may have been declared by the host — the pi-subagents file
-      // layer watches disk and emits runs for sessions with no extension — and
-      // another module in this process can still answer for it. Replaying is
+      // A panel may have been declared by the host — it persists agent runs
+      // and can show them for sessions with no extension — and another module
+      // in this process can still answer for it. Replaying is
       // safe (nothing listens for an id nobody owns), and `handled` stays
       // honest by asking who claimed the namespace rather than the cache.
       const mine = known.has(command.id);

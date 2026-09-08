@@ -8,7 +8,7 @@
  * stream on stdout. When fd 3 is absent (run by hand), stdio is used and
  * console output is redirected to stderr.
  *
- * Args: --cwd <dir> [--agent-dir <dir>] [--session-dir <dir>]
+ * Args: --cwd <dir> [--agent-dir <dir>] [--session-dir <dir>] [--state-dir <dir>]
  *       [--subagents-temp-root <dir>] [--project-trusted yes|no]
  */
 import { Socket } from "node:net";
@@ -56,6 +56,9 @@ async function main(): Promise<void> {
   const cwd = arg("cwd") ?? process.cwd();
   const agentDir = arg("agent-dir");
   const sessionDir = arg("session-dir");
+  // The host's own state directory (agents, runs, prefs): the Beam skill is
+  // written from it. Optional; without it the worker assumes `<agentDir>/../state`.
+  const stateDir = arg("state-dir");
   const subagentsTempRoot = arg("subagents-temp-root");
   const projectTrusted = arg("project-trusted");
   if (projectTrusted !== undefined && projectTrusted !== "yes" && projectTrusted !== "no") {
@@ -93,6 +96,7 @@ async function main(): Promise<void> {
     send,
     ...(agentDir ? { agentDir } : {}),
     ...(sessionDir ? { sessionDir } : {}),
+    ...(stateDir ? { stateDir } : {}),
     ...(subagentsTempRoot ? { subagentsTempRoot } : {}),
     ...(projectTrusted !== undefined ? { projectTrusted: projectTrusted === "yes" } : {}),
     ...(npmCommand ? { npmCommand } : {}),

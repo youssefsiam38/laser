@@ -64,3 +64,6 @@ export {
   type WidgetState,
 } from "./transcribe.js";
 export * from "./resolve-pi.js";
+
+// M13 · the agent harness: definitions, runs, worktrees, Namer and the Beam skill.
+export * from "./agents/index.js";

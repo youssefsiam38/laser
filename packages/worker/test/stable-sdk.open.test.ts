@@ -81,7 +81,7 @@ describe("StableSdkDriver.open", () => {
     expect(models[0]).toMatchObject({ provider: expect.any(String), id: expect.any(String) });
   }, 60_000);
 
-  it("lists product, Agent Skills and every bundled feature command without reading .pi", async () => {
+  it("lists product, Agent Skills and the bundled feature commands without reading .pi", async () => {
     const writeSkill = (root: string, name: string, extra = "") => {
       const dir = join(root, name);
       mkdirSync(dir, { recursive: true });
@@ -109,10 +109,11 @@ describe("StableSdkDriver.open", () => {
       "skill:agent-standard-skill",
       "skill:product-project-skill",
       "goal",
-      "subagents",
-      "subagents-guide",
     ]));
     expect(names).not.toContain("skill:legacy-pi-skill");
+    // pi-subagents is no longer bundled (D-140): its commands must not appear.
+    expect(names).not.toContain("subagents");
+    expect(names).not.toContain("subagents-guide");
     expect(commands.find((command) => command.name === "skill:product-user-skill")).toMatchObject({
       source: "skill",
       description: "product-user-skill test skill",

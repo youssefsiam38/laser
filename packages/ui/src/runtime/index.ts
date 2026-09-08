@@ -5,7 +5,12 @@
  * reducer directly.
  */
 export {
+  AGENT_COMPLETION_DATA_PART,
+  AGENT_COMPLETION_TOOL,
+  AGENT_EVENT_DATA_PART,
   NOTICE_DATA_PART,
+  TASK_EVENT_DATA_PART,
+  agentCompletionOf,
   dialogActionReason,
   dialogToToolFields,
   projectMessages,
@@ -14,6 +19,9 @@ export {
   splitDialogs,
   toolStatus,
   toolDisplayResult,
+  type AgentCompletionData,
+  type AgentEventData,
+  type TaskEventData,
   type ProjectedContentPart,
   type ProjectedMessageStatus,
   type ProjectedToolCallPart,
@@ -66,6 +74,7 @@ export {
 } from "./adapter.js";
 
 export { THEME_PREFS_NAMESPACE, useThemeSync } from "./prefs.js";
+export { createSessionLauncher, isUnstartedSession, type NewSessionOptions, type SessionLauncher } from "./new-session.js";
 export {
   activityDetailLevel,
   activityGroupDefaultOpen,
@@ -79,6 +88,7 @@ export {
   PROJECTS_STORAGE_KEY,
   PROJECT_STORAGE_KEY,
   LaserProvider,
+  LaserThreadScope,
   useExtensionUi,
   useHostUiRequests,
   useLaser,
@@ -86,6 +96,7 @@ export {
   useLaserState,
   useLaserView,
   useSessionMeta,
+  useThreadScopeRefusal,
   useToasts,
   useTrustPrompts,
   type ExtensionUi,
@@ -96,6 +107,9 @@ export {
   type LaserContextValue,
   type LaserStable,
   type LaserProviderProps,
+  type LaserThreadScopeProps,
+  type ScopedSessionShape,
   type SessionMeta,
+  type ThreadScopeRefusal,
   type Toasts,
 } from "./LaserProvider.js";

@@ -5,7 +5,7 @@
  * is about; the body is the screen itself.
  */
 import { Suspense, lazy } from "react";
-import { FileClock, SlidersHorizontal, X } from "lucide-react";
+import { Bot, FileClock, SlidersHorizontal, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
@@ -23,14 +23,19 @@ const SettingsScreen = lazy(() =>
   import("@/components/settings/SettingsScreen.js").then((m) => ({ default: m.SettingsScreen })),
 );
 const LogsScreen = lazy(() => import("@/components/logs/LogsScreen.js").then((m) => ({ default: m.LogsScreen })));
+// The Agents page (M13-T5) is the third screen; it lazy-loads like the others.
+const AgentsScreen = lazy(() => import("@/components/agents/page/AgentsScreen.js").then((m) => ({ default: m.AgentsScreen })));
 
 const TABS: Array<{ id: WorkbenchPage; label: string; icon: typeof SlidersHorizontal }> = [
   { id: "settings", label: "Settings", icon: SlidersHorizontal },
+  { id: "agents", label: "Agents", icon: Bot },
   { id: "logs", label: "Logs", icon: FileClock },
 ];
 
+const PAGE_LABEL: Record<WorkbenchPage, string> = { settings: "Settings", agents: "Agents", logs: "Logs" };
+
 export function Workbench() {
-  const { page, tab: settingsTab, open, close } = useWorkbench();
+  const { page, tab: settingsTab, agents: agentsTarget, open, close } = useWorkbench();
   const { currentProject } = useLaserStable();
   const view = useLaserView();
   const cwd = currentProject ?? view?.state.cwd;
@@ -39,7 +44,7 @@ export function Workbench() {
 
   return (
     <section
-      aria-label={page === "settings" ? "Settings" : "Logs"}
+      aria-label={PAGE_LABEL[page]}
       className="absolute inset-0 z-30 flex min-w-0 flex-col bg-bg"
     >
       <header className="flex h-12 shrink-0 items-center gap-1 px-2 pt-[env(safe-area-inset-top)] hairline-b">
@@ -76,7 +81,13 @@ export function Workbench() {
 
       <div className="min-h-0 flex-1">
         <Suspense fallback={<ScreenSkeleton />}>
-          {page === "settings" ? <SettingsScreen cwd={cwd} initialTab={settingsTab} /> : <LogsScreen cwd={cwd} />}
+          {page === "settings" ? (
+            <SettingsScreen cwd={cwd} initialTab={settingsTab} />
+          ) : page === "agents" ? (
+            <AgentsScreen cwd={cwd} target={agentsTarget} />
+          ) : (
+            <LogsScreen cwd={cwd} />
+          )}
         </Suspense>
       </div>
     </section>

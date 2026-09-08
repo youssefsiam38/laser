@@ -84,7 +84,7 @@ preferences:
   frame can cross processes; that is a separate task, not a knob.
 - **`sleepApplication: false`.** A sleeping relay is a desktop nobody can reach.
 
-Also relevant, from `docs/research/findings.md`: Railway exempts WebSockets from
+Also relevant, from the original relay research notes: Railway exempts WebSockets from
 idle limits on paper but silent drops around 50 minutes are reported, which is
 what the 20 s app-level ping is for. `permessage-deflate` is disabled in code —
 compression over payloads the peers deliberately pad is a CRIME-class oracle, and

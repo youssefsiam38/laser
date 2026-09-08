@@ -18,7 +18,7 @@
  * The strip renders nothing at all when the session has no runs — no empty
  * bar, no placeholder row.
  */
-import { ChevronRight, ChevronLeft, Layers } from "lucide-react";
+import { ChevronRight, ChevronLeft, CircleStop, Ellipsis, Layers } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { StatusDot } from "@/components/status";
@@ -33,7 +33,9 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
 import { formatElapsed, openDecisionIds, usePanelActions, usePanelEntries, usePanelsState } from "@/panels";
 import { useTick } from "@/components/thread/timing";
-import { useLaserView } from "@/runtime";
+import { useLaserState, useLaserView } from "@/runtime";
+// Agents leap (Lane U2): a child tab's menu offers to end its run.
+import { requestEndAgent } from "@/components/agents/end-agent";
 
 import { openFleet } from "./fleet.js";
 import {
@@ -228,8 +230,27 @@ function Crumb({
   );
 }
 
+/** Panel id prefix the harness gives a run: `agents:run:<runId>` (docs/agents.md). */
+const AGENT_RUN_PANEL_PREFIX = "agents:run:";
+
+/**
+ * The run behind a tab, when it is one of the harness's and still going, so
+ * the tab can offer to end it. Read from the registry, not parsed from the
+ * id: the registry is what `agents/runs/stop` answers about.
+ */
+function useEndableRun(node: RunNode): string | undefined {
+  const active = node.entry.panel.kind === "run" && (node.entry.panel.lifecycle === "running" || node.entry.panel.lifecycle === "queued");
+  const runId = node.id.startsWith(AGENT_RUN_PANEL_PREFIX) ? node.id.slice(AGENT_RUN_PANEL_PREFIX.length) : undefined;
+  return useLaserState((s) => {
+    if (!active || runId === undefined) return undefined;
+    const run = s.agents.runs[runId];
+    return run && (run.status === "running" || run.status === "queued") ? run.runId : undefined;
+  });
+}
+
 function Tab({ node, first, onFocus, onReveal }: { node: RunNode; first: boolean; onFocus(): void; onReveal(): void }) {
   const hasChildren = node.children.length > 0;
+  const endable = useEndableRun(node);
   return (
     <span
       className={cn(
@@ -265,6 +286,31 @@ function Tab({ node, first, onFocus, onReveal }: { node: RunNode; first: boolean
         >
           <ChevronRight className="size-3.5" aria-hidden="true" />
         </button>
+      )}
+      {endable !== undefined && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              data-run-tab="true"
+              data-slot="run-tab-menu"
+              aria-label={`Actions for ${node.title}`}
+              title="Actions"
+              className={cn(
+                "relative flex h-6 w-5 items-center justify-center text-ink-3 outline-none transition-colors duration-(--motion-instant) hover:bg-surface-2 hover:text-ink active:bg-[color-mix(in_oklab,var(--surface-2)_80%,var(--ink))] focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live after:absolute after:-inset-y-2.5 after:inset-x-0 after:content-['']",
+                hasChildren ? "rounded-md" : "rounded-e-md",
+              )}
+            >
+              <Ellipsis className="size-3.5" aria-hidden="true" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-40">
+            <DropdownMenuItem data-slot="end-agent-item" className="text-danger focus:text-danger [&_svg]:text-danger" onSelect={() => requestEndAgent(endable)}>
+              <CircleStop />
+              End agent…
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       )}
     </span>
   );

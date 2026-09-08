@@ -14,7 +14,9 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SessionState, SessionSummary } from "@lasercode/protocol";
+import type { AgentRun, SessionState, SessionSummary } from "@lasercode/protocol";
+import { AgentRunRegistry } from "../src/agents/runs.js";
+import { AgentStore } from "../src/agents/store.js";
 import { AttentionTracker } from "../src/attention.js";
 import { SessionCatalog } from "../src/catalog.js";
 import { ProjectRegistry } from "../src/projects.js";
@@ -25,6 +27,27 @@ import type { WorkerPool } from "../src/worker-pool.js";
 const CWD_A = "/projects/a";
 const CWD_B = "/projects/b";
 const PATH_A = "/sessions/new-a.jsonl";
+
+function run(runId: string, patch: Partial<AgentRun> = {}): AgentRun {
+  return {
+    agentName: "reviewer",
+    subagentName: "review",
+    sessionId: `s-${runId}`,
+    runId,
+    sessionPath: `/sessions/child-${runId}.jsonl`,
+    projectCwd: CWD_A,
+    rootSessionPath: PATH_A,
+    depth: 1,
+    parent: { sessionPath: PATH_A, sessionId: "id-of-a" },
+    worktree: null,
+    origin: "agent",
+    status: "running",
+    task: "Review",
+    startedAt: "2026-06-01T00:00:00.000Z",
+    updatedAt: "2026-06-01T00:00:00.000Z",
+    ...patch,
+  };
+}
 
 function state(path: string, cwd: string): SessionState {
   return {
@@ -43,34 +66,49 @@ function state(path: string, cwd: string): SessionState {
   };
 }
 
+const WORKSPACES = { beam: "/data/beam", chat: "/data/chat" };
+
 /** A Router with fakes for everything but the piece under test. */
-function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string, string[]> } = {}) {
+function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string, string[]>; agents?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-`));
   const catalogRows = options.catalogRows ?? [];
   const open = options.open ?? { [CWD_A]: [PATH_A] };
+  const bound = new Map<string, string>();
 
   const catalog = {
     list: (cwd?: string) =>
       (cwd === undefined ? catalogRows : catalogRows.filter((row) => row.cwd === cwd)).map((row) => ({ ...row, size: 1 })),
     get: (path: string) => catalogRows.find((row) => row.path === path),
     cwdOf: (path: string) => catalogRows.find((row) => row.path === path)?.cwd,
+    cwdCounts: () => new Map<string, number>(),
+    invalidate: () => {},
   } as unknown as SessionCatalog;
 
   const workerRequests: Array<{ cwd: string; method: string; params: unknown }> = [];
   const pool = {
     openSessions: (cwd: string) => open[cwd] ?? [],
-    cwdOfSession: () => undefined,
+    cwdOfSession: (path: string) => bound.get(path),
+    bindSession: (path: string, cwd: string) => bound.set(path, cwd),
     get: async (cwd: string) => ({
       request: async (method: string, params: unknown) => {
         workerRequests.push({ cwd, method, params });
+        if (method === "session/new") return { state: state(`/sessions/new-${workerRequests.length}.jsonl`, cwd) };
+        if (method === "agents/runs/stop") {
+          const { runId, reason } = params as { runId: string; reason?: string };
+          return { run: { ...run(runId), status: "cancelled", endedBy: { initiator: "user", ...(reason ? { reason } : {}) } } };
+        }
+        if (method === "agents/namer/qualify") return { status: "ready", model: { provider: "openai", id: "gpt-5-nano" }, candidates: [] };
         return { commands: [{ name: "skill:test", source: "skill" }] };
       },
     }),
   } as unknown as WorkerPool;
 
   const attention = new AttentionTracker({});
-  const projects = new ProjectRegistry({ catalog, agentDir: dir });
-  const router = new Router(pool, catalog, { attention, projects, views: new ViewCache(2) });
+  const projects = new ProjectRegistry({ catalog, agentDir: dir, exclude: [WORKSPACES.beam, WORKSPACES.chat] });
+  const agents = options.agents ? new AgentStore({ agentDir: join(dir, "agent"), workspaces: WORKSPACES }) : undefined;
+  // Fixtures date from June; a fixed clock keeps retention from pruning them.
+  const runs = options.agents ? new AgentRunRegistry({ now: () => new Date("2026-06-02T00:00:00.000Z") }) : undefined;
+  const router = new Router(pool, catalog, { attention, projects, views: new ViewCache(2), agents, runs });
 
   // The Router only records a stub from inside `dispatch`; reach the private
   // recorder the same way `session/new` does, without standing up a worker.
@@ -82,6 +120,9 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
     catalogRows,
     open,
     workerRequests,
+    agents,
+    runs,
+    projects,
     cleanup: () => {
       projects.close();
       attention.close();
@@ -180,5 +221,137 @@ describe("Router · sessions not yet on disk", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.messageCount).toBe(5);
     h.cleanup();
+  });
+});
+
+const rpc = (router: Router, method: string, params: unknown = {}) => router.handle({ jsonrpc: "2.0", id: 1, method, params });
+
+describe("Router · agents (docs/agents-leap)", () => {
+  it("answers the definition methods from the store, never from a worker", async () => {
+    const h = harness({ agents: true });
+    try {
+      const listed = (await rpc(h.router, "agents/list")) as { result: { agents: Array<{ name: string }>; defaultAgent: string } };
+      expect(listed.result.agents.map((a) => a.name)).toEqual(["default", "beam", "chat", "namer"]);
+      const input = { name: "reviewer", description: "", instructions: "Review.", engineInstructions: false, model: null, thinkingLevel: null, tools: ["read"], supportsSubagents: false, allowedAgents: [], scopedSkills: false, skills: [], runTimeoutMinutes: null };
+      expect(await rpc(h.router, "agents/validate", { agent: { ...input, tools: ["nope"] } })).toMatchObject({ result: { issues: [{ field: "tools[0]" }] } });
+      const saved = await rpc(h.router, "agents/save", { agent: input });
+      expect(saved).toMatchObject({ result: { agent: { name: "reviewer", kind: "custom" }, snapshot: { revision: 1 } } });
+      expect(await rpc(h.router, "agents/save", { agent: { ...input, name: "beam" } })).toMatchObject({ error: { data: { issues: [{ field: "name" }] } } });
+      expect(await rpc(h.router, "agents/set-default", { name: "reviewer" })).toMatchObject({ result: { snapshot: { defaultAgent: "reviewer" } } });
+      expect(await rpc(h.router, "agents/delete", { name: "reviewer" })).toMatchObject({ error: { message: "This agent starts new sessions. Choose another default first." } });
+      expect(await rpc(h.router, "agents/set-policy", { policy: { maxDepth: 2 } })).toMatchObject({ result: { snapshot: { policy: { maxDepth: 2 } } } });
+      expect(await rpc(h.router, "agents/beam/set-model", { model: { provider: "openai", id: "gpt-5-mini" } })).toMatchObject({
+        result: { snapshot: { beam: { model: { provider: "openai", id: "gpt-5-mini" }, needsChoice: false } } },
+      });
+      expect(await rpc(h.router, "agents/namer/set-model", { model: null })).toMatchObject({ result: { snapshot: { namer: { status: "unqualified" } } } });
+      expect(await rpc(h.router, "agents/runs/list", {})).toMatchObject({ result: { runs: [] } });
+      expect(await rpc(h.router, "agents/sync", { snapshot: { revision: 1 } })).toMatchObject({ error: { message: "The app sends this to its own workers." } });
+      expect(h.workerRequests).toEqual([]);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("refuses every agents method with a reason when the host has no store", async () => {
+    const h = harness();
+    try {
+      expect(await rpc(h.router, "agents/list")).toMatchObject({ error: { message: expect.stringContaining("without agent definitions") } });
+      expect(await rpc(h.router, "agents/runs/list", {})).toMatchObject({ error: { message: expect.stringContaining("without a run registry") } });
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("routes the engine-owned methods by cwd and keeps the Namer verdict", async () => {
+    const h = harness({ agents: true });
+    try {
+      await rpc(h.router, "agents/skills", { cwd: CWD_A });
+      await rpc(h.router, "agents/engine-instructions", { cwd: CWD_B });
+      const qualified = await rpc(h.router, "agents/namer/qualify", { cwd: CWD_A });
+      expect(qualified).toMatchObject({ result: { status: "ready" } });
+      expect(h.workerRequests.map((r) => `${r.method}@${r.cwd}`)).toEqual(["agents/skills@/projects/a", "agents/engine-instructions@/projects/b", "agents/namer/qualify@/projects/a"]);
+      expect(h.agents!.snapshot().namer).toMatchObject({ status: "ready", model: { provider: "openai", id: "gpt-5-nano" } });
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("stops a run through the worker of the run's project and records the answer", async () => {
+    const h = harness({ agents: true });
+    try {
+      h.runs!.upsert(run("r7", { projectCwd: CWD_B }));
+      const stopped = await rpc(h.router, "agents/runs/stop", { runId: "r7", reason: "Wrong direction" });
+      expect(stopped).toMatchObject({ result: { run: { runId: "r7", status: "cancelled", endedBy: { initiator: "user", reason: "Wrong direction" } } } });
+      expect(h.workerRequests).toEqual([{ cwd: CWD_B, method: "agents/runs/stop", params: { runId: "r7", reason: "Wrong direction" } }]);
+      expect(h.runs!.get("r7")?.status).toBe("cancelled");
+      // Ended already: answered from the record, no worker asked.
+      await rpc(h.router, "agents/runs/stop", { runId: "r7" });
+      expect(h.workerRequests).toHaveLength(1);
+      expect(await rpc(h.router, "agents/runs/stop", { runId: "nope" })).toMatchObject({ error: { message: "That run is no longer known to the app." } });
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("session/new: a project starts the default agent, a workspace its own, and never Namer", async () => {
+    const h = harness({ agents: true });
+    try {
+      await rpc(h.router, "session/new", { cwd: CWD_A });
+      expect(h.workerRequests.at(-1)).toEqual({ cwd: CWD_A, method: "session/new", params: { cwd: CWD_A, agentName: "default" } });
+      expect(h.projects.list().map((p) => p.cwd)).toContain(CWD_A);
+
+      await rpc(h.router, "session/new", { cwd: WORKSPACES.beam });
+      expect(h.workerRequests.at(-1)).toMatchObject({ cwd: WORKSPACES.beam, params: { agentName: "beam" } });
+      await rpc(h.router, "session/new", { cwd: WORKSPACES.chat, agentName: "chat" });
+      expect(h.workerRequests.at(-1)).toMatchObject({ cwd: WORKSPACES.chat, params: { agentName: "chat" } });
+      expect(h.projects.list().map((p) => p.cwd)).not.toContain(WORKSPACES.beam);
+      expect(h.projects.list().map((p) => p.cwd)).not.toContain(WORKSPACES.chat);
+
+      const before = h.workerRequests.length;
+      expect(await rpc(h.router, "session/new", { cwd: CWD_A, agentName: "beam" })).toMatchObject({ error: { message: expect.stringContaining("Beam sessions start in") } });
+      expect(await rpc(h.router, "session/new", { cwd: WORKSPACES.beam, agentName: "default" })).toMatchObject({ error: { message: "Only Beam sessions start in the Beam workspace." } });
+      expect(await rpc(h.router, "session/new", { cwd: CWD_A, agentName: "namer" })).toMatchObject({ error: { message: expect.stringContaining("does not run a session") } });
+      expect(await rpc(h.router, "session/new", { cwd: CWD_A, agentName: "ghost" })).toMatchObject({ error: { data: { issues: [{ field: "agentName" }] } } });
+      expect(h.workerRequests).toHaveLength(before);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("routes a child session to its project's worker through the registry, else through the .worktrees rule", async () => {
+    const child = "/sessions/child-r1.jsonl";
+    const orphan = "/sessions/orphan.jsonl";
+    const row = (path: string, cwd: string): SessionSummary => ({ path, id: path, cwd, createdAt: "2026-01-01T00:00:00Z", modifiedAt: "2026-01-01T00:00:00Z", messageCount: 0 });
+    const h = harness({ agents: true, catalogRows: [row(child, `${CWD_B}/.worktrees/r1`), row(orphan, `${CWD_A}/.worktrees/lost`)] });
+    try {
+      h.runs!.upsert(run("r1", { sessionPath: child, projectCwd: CWD_A }));
+      await rpc(h.router, "session/load", { path: child });
+      expect(h.workerRequests.at(-1)).toMatchObject({ cwd: CWD_A, method: "session/load" });
+      await rpc(h.router, "session/load", { path: orphan });
+      expect(h.workerRequests.at(-1)).toMatchObject({ cwd: CWD_A, method: "session/load" });
+      expect(h.workerRequests.map((r) => r.cwd)).not.toContain(`${CWD_A}/.worktrees/lost`);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("decorates an agent's session row with its latest run, and cancels its runs on delete", async () => {
+    const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-child-`));
+    const child = join(dir, "child.jsonl");
+    writeFileSync(child, "");
+    const row: SessionSummary = { path: child, id: "c", cwd: CWD_A, createdAt: "2026-01-01T00:00:00Z", modifiedAt: "2026-01-01T00:00:00Z", messageCount: 0, agent: { agentName: "reviewer", kind: "child", subagentName: "review", parentPath: PATH_A, rootPath: PATH_A } };
+    const h = harness({ agents: true, catalogRows: [row], open: {} });
+    try {
+      h.runs!.upsert(run("r1", { sessionPath: child, startedAt: "2026-06-01T00:00:01.000Z", status: "completed" }));
+      h.runs!.upsert(run("r2", { sessionPath: child, startedAt: "2026-06-01T00:00:02.000Z" }));
+      const listed = (await rpc(h.router, "pi/session/list", {})) as { result: { sessions: SessionSummary[] } };
+      expect(listed.result.sessions[0]?.agent).toEqual({ agentName: "reviewer", kind: "child", subagentName: "review", parentPath: PATH_A, rootPath: PATH_A, runId: "r2", runStatus: "running" });
+      expect(await rpc(h.router, "pi/session/delete", { path: child })).toMatchObject({ result: {} });
+      expect(h.runs!.get("r2")?.status).toBe("cancelled");
+      expect(h.runs!.get("r1")?.status).toBe("completed");
+    } finally {
+      h.cleanup();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

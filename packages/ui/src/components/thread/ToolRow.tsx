@@ -1,8 +1,10 @@
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { useAuiState } from "@assistant-ui/react";
 import type { UiDialogRequest } from "@lasercode/protocol";
+import { Bot, MessageSquare } from "lucide-react";
 import { lazy, memo, Suspense, useCallback, useMemo, useState } from "react";
 
+import { useNamerLabel } from "@/agents/hooks";
 import { CodeDiff } from "@/components/assistant-ui/elements/code-diff";
 import { TerminalBlock } from "@/components/assistant-ui/elements/terminal-block";
 import { ToolCall } from "@/components/assistant-ui/elements/tool-call";
@@ -16,6 +18,7 @@ import {
   toolRowState,
 } from "@/components/assistant-ui/elements/tool-fallback.aui";
 import { TOOL_ICONS } from "@/components/assistant-ui/elements/tool-group.aui";
+import { Button } from "@/components/ui/button";
 import { useIsTouch } from "@/hooks/use-mobile";
 import { DecisionBody, dialogPanel, PanelToolDecision, uiResponseFor, useRegisterToolRow } from "@/panels";
 import { toolDetailsDefaultOpen, toolDisplayResult, useActivityDetailLevel, useLaserStable, useLaserState, type ActivityDetailLevel } from "@/runtime";
@@ -71,6 +74,10 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
   const isRequiresAction = status.type === "requires-action";
   const path = useLaserState((laser) => laser.current);
   const activityLevel = useActivityDetailLevel(path);
+  // Namer's early name for this call, while it runs: "Checking the test
+  // suite" instead of "Running pnpm test". Once the call ends the computed
+  // summary is the truth again (docs/agents.md §7, Namer).
+  const namerLabel = useNamerLabel(path, toolCallId);
 
   // A decision starts open, but its always-visible footer does not prevent
   // the reader from folding the args/result above it.
@@ -91,15 +98,55 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
       <PanelToolDecision toolCallId={toolCallId} />
     </>
   );
+  const activeLabel = running && namerLabel ? namerLabel : activeToolLabel({ toolName, args });
+
+  // The harness's own tools (docs/agents.md): starting an agent gets a row
+  // that names who was started and leads to its chat.
+  if (toolName === START_AGENT_TOOL) {
+    return (
+      <StartAgentRow
+        args={args}
+        result={result}
+        text={text}
+        details={details}
+        state={state}
+        elapsed={elapsed}
+        open={open}
+        onOpenChange={(next) => setUserOpen({ level: activityLevel, open: next })}
+        activeLabel={running && namerLabel ? namerLabel : undefined}
+        footer={footer}
+      />
+    );
+  }
 
   // A tool Pi does not ship draws as the catalog's fallback row; the footer
   // it renders itself covers approvals, so only the declared decision is added.
+  // Once Namer has named the call, the same row keeps that name in the
+  // trigger while it runs, so the row is composed here instead.
   if (kind === "other") {
+    if (namerLabel === undefined) {
+      return (
+        <>
+          <ToolFallback {...props} />
+          <PanelToolDecision toolCallId={toolCallId} />
+        </>
+      );
+    }
     return (
-      <>
-        <ToolFallback {...props} />
-        <PanelToolDecision toolCallId={toolCallId} />
-      </>
+      <ToolCall
+        icon={TOOL_ICONS.other}
+        verb={toolName}
+        activeLabel={activeLabel}
+        state={state}
+        elapsedMs={elapsed}
+        open={open}
+        onOpenChange={(next) => setUserOpen({ level: activityLevel, open: next })}
+        toolName={toolName}
+        peek={failed && text ? <ToolError message={text} compact /> : undefined}
+        footer={footer}
+      >
+        <TextBody args={args} text={text} failed={failed} />
+      </ToolCall>
     );
   }
 
@@ -110,7 +157,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
     <ToolCall
       icon={TOOL_ICONS[kind]}
       verb={summary.verb}
-      activeLabel={activeToolLabel({ toolName, args })}
+      activeLabel={activeLabel}
       summary={summary.summary}
       detail={summary.detail}
       state={state}
@@ -165,6 +212,113 @@ function PlainSource({ code }: { code: string }) {
 }
 
 export const ToolRow = memo(ToolRowImpl);
+
+// ---------------------------------------------------------------------------
+// start_agent — "Started explorer (default)" with the way to its chat
+// ---------------------------------------------------------------------------
+
+const START_AGENT_TOOL = "start_agent";
+
+interface StartAgentResultInfo {
+  sessionId?: string;
+  runId?: string;
+}
+
+/**
+ * What `start_agent` answered: live results carry the harness's own
+ * `details`, hydrated ones only the model's JSON view. Both name the run.
+ */
+function startAgentInfo(result: unknown, details: Record<string, unknown> | undefined, text: string): StartAgentResultInfo {
+  const pick = (source: Record<string, unknown> | undefined): StartAgentResultInfo => ({
+    ...(typeof source?.["sessionId"] === "string" ? { sessionId: source["sessionId"] as string } : {}),
+    ...(typeof source?.["runId"] === "string" ? { runId: source["runId"] as string } : {}),
+  });
+  const fromDetails = pick(details);
+  if (fromDetails.runId || fromDetails.sessionId) return fromDetails;
+  if (result === undefined || result === null) return {};
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return typeof parsed === "object" && parsed !== null ? pick(parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** The child's session path, once the registry or the catalog knows the run. */
+function useStartedSessionPath(info: StartAgentResultInfo): string | undefined {
+  return useLaserState((s) => {
+    if (info.runId) {
+      const run = s.agents.runs[info.runId];
+      if (run) return run.sessionPath;
+    }
+    return s.sessions.find(
+      (session) => (info.runId !== undefined && session.agent?.runId === info.runId) || (info.sessionId !== undefined && session.id === info.sessionId && session.agent?.kind === "child"),
+    )?.path;
+  });
+}
+
+function StartAgentRow({
+  args,
+  result,
+  text,
+  details,
+  state,
+  elapsed,
+  open,
+  onOpenChange,
+  activeLabel,
+  footer,
+}: {
+  args: unknown;
+  result: unknown;
+  text: string;
+  details: Record<string, unknown> | undefined;
+  state: ReturnType<typeof toolRowState>;
+  elapsed: number | undefined;
+  open: boolean;
+  onOpenChange(open: boolean): void;
+  activeLabel: string | undefined;
+  footer: React.ReactNode;
+}) {
+  const { actions } = useLaserStable();
+  const a = (args ?? {}) as { agent_name?: unknown; subagent_name?: unknown };
+  const subagent = typeof a.subagent_name === "string" ? a.subagent_name : "";
+  const agent = typeof a.agent_name === "string" ? a.agent_name : "";
+  const running = state === "running";
+  const failed = state === "failed";
+  const info = useMemo(() => startAgentInfo(result, details, text), [result, details, text]);
+  const childPath = useStartedSessionPath(info);
+  const summary = subagent ? `${subagent}${agent ? ` (${agent})` : ""}` : agent;
+  return (
+    <ToolCall
+      icon={Bot}
+      verb={running ? "Starting" : failed ? "Could not start" : "Started"}
+      activeLabel={activeLabel ?? `Starting ${summary || "an agent"}`}
+      summary={summary}
+      state={state}
+      elapsedMs={elapsed}
+      open={open}
+      onOpenChange={onOpenChange}
+      toolName={START_AGENT_TOOL}
+      peek={failed && text ? <ToolError message={text} compact /> : undefined}
+      footer={
+        <>
+          {childPath ? (
+            <div data-slot="start-agent-open" className="mb-1 ms-6 flex items-center">
+              <Button size="xs" variant="ghost" className="-ms-1.5 text-ink-2" onClick={() => void actions.openSession(childPath)}>
+                <MessageSquare />
+                Open chat
+              </Button>
+            </div>
+          ) : null}
+          {footer}
+        </>
+      }
+    >
+      <TextBody args={args} text={text} failed={failed} />
+    </ToolCall>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Bodies

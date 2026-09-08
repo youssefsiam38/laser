@@ -319,11 +319,14 @@ node packages/desktop/scripts/clean-machine.mjs
 ```
 
 It empties `PATH`, points `HOME` at a throwaway directory containing a **decoy**
-agent installation, and then proves ten things: the runtime is a real file
-inside the package, the dependency tree is files rather than links, the agent
-resolves from inside the package and its whole graph loads, the version on disk
-is the one pinned in git, the decoy is found, named and left byte-identical, and
-`doctor`'s packaging rows all pass with nothing on PATH.
+agent installation, and then proves the packaging claims one by one: the
+runtime is a real file inside the package, the dependency tree is files rather
+than links, the agent resolves from inside the package and its whole graph
+loads, the version on disk is the one pinned in git, a real session opens with
+every bundled feature and lists models, the agent harness modules (`subagents`,
+`background-work`) are active in that session and Beam's skill file exists
+where the worker says it is, the decoy is found, named and left
+byte-identical, and `doctor`'s packaging rows all pass with nothing on PATH.
 
 `scripts/release/build-linux.sh` runs it as a gate before it copies a single
 artifact out. Both of the packaging bugs above were invisible to `pnpm -r test`

@@ -1,16 +1,16 @@
 "use client";
 /**
  * The workbench: laser's full-window screens that are not a transcript —
- * Settings (M4-T2/T3/T4) and Logs (M4-T6).
+ * Settings (M4-T2/T3/T4), Logs (M4-T6) and Agents (M13-T5).
  *
  * They are one overlay rather than a route because the app has no router and
- * because both are things you step into and back out of: the project rail stays
- * put, Escape returns you to the session you were reading, and the transcript
- * behind keeps streaming.
+ * because all of them are things you step into and back out of: the project rail
+ * stays put, Escape returns you to the session you were reading, and the
+ * transcript behind keeps streaming.
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
-export type WorkbenchPage = "settings" | "logs";
+export type WorkbenchPage = "settings" | "logs" | "agents";
 
 /**
  * Which settings tab to land on. Only ever passed by something that already
@@ -19,11 +19,39 @@ export type WorkbenchPage = "settings" | "logs";
  */
 export type SettingsTab = "general" | "advanced" | "appearance" | "features" | "models" | "usage" | "keyboard" | "trust" | "device";
 
+/**
+ * A deep link into the Agents page: the agent to open, and the field to land
+ * on (an `AgentWarning.field` or `AgentIssue.field`, e.g. `skills`,
+ * `allowedAgents`, `model`). Passed by a warning badge or a run's refusal;
+ * the plain `open("agents")` lands on the list.
+ */
+export interface AgentsTarget {
+  agent: string;
+  field?: string | undefined;
+}
+
+/**
+ * `open` keeps its original two-argument shape for Settings and adds the
+ * agents form beside it: `open("settings", tab?)`, `open("agents", target?)`,
+ * `open("logs")`. A page opened without its argument clears the previous one.
+ */
+export interface WorkbenchOpen {
+  (page: "settings", tab?: SettingsTab): void;
+  (page: "agents", target?: AgentsTarget): void;
+  (page: "logs"): void;
+  (page: WorkbenchPage): void;
+}
+
 export interface Workbench {
   page: WorkbenchPage | null;
   /** Set only when the caller asked for a specific settings tab. */
   tab: SettingsTab | undefined;
-  open: (page: WorkbenchPage, tab?: SettingsTab) => void;
+  /**
+   * Set only when the caller asked for a specific agent. A fresh object per
+   * request, so asking for the same field twice re-runs the scroll and focus.
+   */
+  agents: AgentsTarget | undefined;
+  open: WorkbenchOpen;
   close: () => void;
 }
 
@@ -38,11 +66,13 @@ export function useWorkbench(): Workbench {
 export function WorkbenchProvider({ children }: { children: ReactNode }) {
   const [page, setPage] = useState<WorkbenchPage | null>(null);
   const [tab, setTab] = useState<SettingsTab>();
+  const [agents, setAgents] = useState<AgentsTarget>();
 
-  const open = useCallback((next: WorkbenchPage, nextTab?: SettingsTab) => {
+  const open = useCallback((next: WorkbenchPage, arg?: SettingsTab | AgentsTarget) => {
     setPage(next);
-    setTab(nextTab);
-  }, []);
+    setTab(next === "settings" && typeof arg === "string" ? arg : undefined);
+    setAgents(next === "agents" && arg !== undefined && typeof arg === "object" ? { ...arg } : undefined);
+  }, []) as WorkbenchOpen;
   const close = useCallback(() => setPage(null), []);
 
   // Escape closes the workbench, but never while a dialog, popover or a
@@ -59,6 +89,6 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
     return () => document.removeEventListener("keydown", onKey);
   }, [page, close]);
 
-  const value = useMemo<Workbench>(() => ({ page, tab, open, close }), [page, tab, open, close]);
+  const value = useMemo<Workbench>(() => ({ page, tab, agents, open, close }), [page, tab, agents, open, close]);
   return <WorkbenchContext.Provider value={value}>{children}</WorkbenchContext.Provider>;
 }

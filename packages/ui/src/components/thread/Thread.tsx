@@ -1,5 +1,5 @@
 import { AuiConfig, AuiIf, AuiProvider, Suggestions, ThreadPrimitive, useAui } from "@assistant-ui/react";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useMemo, type ReactNode } from "react";
 
 import { ConversationMapAui } from "@/components/assistant-ui/elements/conversation-map.aui";
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/elements/follow-up-suggestions.aui";
@@ -32,6 +32,13 @@ import { FindSelectionContext } from "./search-state.js";
  */
 export interface ThreadProps {
   statusSlot?: ReactNode;
+  /**
+   * The Beam bubble (`components/beam`) renders this same thread for a session
+   * that is not about a project: it swaps the project empty state and the
+   * repository follow-ups for its own. Absent, the project ones stand.
+   */
+  emptyState?: ReactNode;
+  followUps?: ReadonlyArray<{ title: string; label: string; prompt: string }>;
 }
 
 /**
@@ -47,8 +54,9 @@ const FOLLOW_UPS = AuiConfig({
   ]),
 });
 
-export function Thread({ statusSlot }: ThreadProps = {}) {
+export function Thread({ statusSlot, emptyState, followUps }: ThreadProps = {}) {
   const view = useLaserView();
+  const suggestions = useMemo(() => (followUps ? AuiConfig({ suggestions: Suggestions([...followUps]) }) : FOLLOW_UPS), [followUps]);
   const { actions } = useLaserStable();
   const connected = useLaserState(s => s.connection === "open");
   const { page } = useWorkbench();
@@ -62,7 +70,7 @@ export function Thread({ statusSlot }: ThreadProps = {}) {
     <FindSelectionContext value={find.selectedMessage}>
     <ThreadSlotsProvider slots={slots}>
       <TooltipProvider>
-        <AuiProvider extends={aui} config={FOLLOW_UPS}>
+        <AuiProvider extends={aui} config={suggestions}>
           <ThreadPrimitive.Root ref={find.root} data-slot="thread" className="relative flex h-full min-h-0 flex-col bg-bg">
             {find.bar}
             <ThreadPrimitive.Viewport autoScroll={!find.open} scrollToBottomOnRunStart={!find.open} data-slot="thread-viewport" className="flex flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain">
@@ -73,7 +81,7 @@ export function Thread({ statusSlot }: ThreadProps = {}) {
                   <ThreadLoading />
                 </AuiIf>
                 <AuiIf condition={(s) => s.thread.isEmpty && !s.thread.isLoading}>
-                  <EmptyState />
+                  {emptyState ?? <EmptyState />}
                 </AuiIf>
                 <div data-slot="thread-messages" className="flex flex-col gap-5 pt-5 pb-5 empty:hidden">
                   <ThreadPrimitive.Messages>{() => <ThreadMessage />}</ThreadPrimitive.Messages>

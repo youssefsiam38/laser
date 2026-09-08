@@ -9,19 +9,26 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./agents-bridge": {
+      "types": "./dist/agents-bridge.d.ts",
+      "import": "./dist/agents-bridge.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "typebox": "1.1.38",
+    "@earendil-works/pi-ai": "0.85.0",
     "@earendil-works/pi-coding-agent": "0.85.0",
     "@lasercode/pi-goal": "workspace:*",
-    "@lasercode/protocol": "workspace:*"
+    "@lasercode/protocol": "workspace:*",
+    "typebox": "1.1.38"
   }
 }

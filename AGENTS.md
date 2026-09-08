@@ -2,7 +2,7 @@
 
 laser is a web-tech desktop app and remote-control relay layered on top of the
 Pi coding agent (`@earendil-works/pi-coding-agent`). It visualizes Pi sessions,
-subagents (pi-subagents), settings, and low-level logs, and exposes the same UI
+agents and subagents (Laser's own harness, `docs/agents.md`), settings, and low-level logs, and exposes the same UI
 to phones through an end-to-end encrypted relay. It builds on the community's
 packages; it does not replace them.
 
@@ -119,8 +119,9 @@ dependencies are `done`, and done when its "done when" is met with evidence.
    grep -n "^## M1" PLAN.md
    ```
 5. Read `docs/architecture.md` if your task touches package boundaries, and
-   `docs/research/findings.md` if it touches Pi internals, pi-subagents, the relay,
-   or mobile.
+   `docs/agents.md` if it touches agents, `docs/agents-leap/references/` if it
+   touches the harness contract or what was learned from pi-subagents, and
+   `docs/security.md` if it touches the relay or mobile.
 6. Claim the task (section 3) **before** writing code.
 
 If `STATUS.md` says it was last updated by a session that never wrote a
@@ -255,10 +256,12 @@ adding dates or estimates, deleting done-when criteria. Any structural change to
 ## 4. Architecture invariants (violations are bugs, not style)
 
 1. **Nothing above the worker imports Pi.** Only `packages/worker` and
-   `packages/pi-extension` may import `@earendil-works/*` or `pi-subagents`.
-   Everything else speaks `@lasercode/protocol`. File watchers (pi-subagents runs,
-   missions, session catalog) live in the host and parse JSON only, so
-   terminal-started sessions stay visible without a worker.
+   `packages/pi-extension` may import `@earendil-works/*`.
+   Everything else speaks `@lasercode/protocol`. The session catalog watcher
+   lives in the host and parses JSON only, so terminal-started sessions stay
+   visible without a worker; agent runs reach the host as `agents/run`
+   notifications from the worker and live in its run registry
+   (`<state>/agent-runs.json`), never read from engine files.
 2. **The protocol is ACP-shaped.** `session/new`, `session/load`, `session/prompt`,
    `session/cancel`, `session/request_permission`, plus `pi/*` namespaced extras.
    New capabilities are added to `packages/protocol` first, then implemented.
@@ -270,7 +273,9 @@ adding dates or estimates, deleting done-when criteria. Any structural change to
    exact `@earendil-works/pi-coding-agent` version. The user's global Pi install is
    never used as the runtime. Bumping the pin is a task with its own row.
 5. **One worker process per project directory.** The host never runs two projects
-   in one Node process.
+   in one Node process. A worktree of a project runs in that project's worker:
+   a child agent's checkout under `<project>/.worktrees/` is part of its
+   project, never a second project (D-140).
 6. **Extension UI: portable surface only.** `select`, `confirm`, `input`, `editor`,
    `notify`, `setStatus`, `setWidget` (string lines), `setTitle`, `setEditorText`.
    Anything else cancels safely (never hangs). `custom()` is not emulated.
@@ -477,7 +482,10 @@ All in-process glue for community packages lives in `packages/pi-extension` as
 one Pi extension with one module per package (`src/modules/*`). Adding support
 for a new package means adding a module, not a package. Modules never import
 each other, detect their package at `session_start`, and fail individually
-(reported to the UI, never fatal to the session).
+(reported to the UI, never fatal to the session). Two modules are Laser's own
+rather than package glue: `subagents` registers the agent harness tools from
+the worker-supplied `AgentHarnessBridge` and `background-work` owns long
+commands (`docs/agents.md`, `docs/pi-extension-modules.md`).
 
 ### Goal policy and transcript regression checks
 
@@ -495,6 +503,40 @@ each other, detect their package at `session_start`, and fail individually
   Verify the visible goal-setter label, reload, session switching, detail modes
   and keyboard disclosure. `SANDBOX_GOAL=1` exercises a tool-only completion
   with the real engine and an isolated fake provider, without user credentials.
+
+### Agents harness regression checks
+
+The harness is Laser's own (D-140, `docs/agents.md`). These are release
+blockers, not advice.
+
+- One `start_agent` tool and four identities only (`agent_name`,
+  `subagent_name`, `sessionId`, `runId`). Never a tool per agent, never a
+  separate agent id, type or profile name.
+- Children never block: `start_agent` returns the identities before the child
+  has done anything; there is no foreground mode.
+- Every child gets a worktree under `<project>/.worktrees/` on
+  `agents/<slug>`, or a person-facing refusal (not a repository, no commit,
+  a path another agent owns). Never a child in the parent's checkout.
+- Completion only through `complete_agent_run`; its message is stored once,
+  as the child's final assistant message. Arbitrary last text is not
+  completion; a child that settles without the call is not `completed`.
+- User termination carries `initiator: "user"` and the verbatim reason to the
+  parent's `lasercode/agent-event`; the parent's own `stop_agent` is
+  `initiator: "parent"`; crashes, timeouts and worker loss are `harness`.
+- The catalog in the parent request is compact: `agent_name` and description
+  only. Instructions, tools and model load only in the child's request.
+- Test nesting depth (a child at `maxDepth` gets no `start_agent`), model
+  access (a definition naming a model without a credential is refused), worktree
+  ownership (a run touches only the worktree it created), timeout
+  (`timed_out` with `timeoutAt`), settle-without-completion (not `completed`)
+  and reload attribution (`lasercode/agent` puts a child under its parent after
+  a host restart).
+- Background promotion keeps the output already produced and the exit state;
+  a promoted command is the same task, not a new one.
+- The live map never re-layouts on output or status updates; only a change in
+  the tree's structure recomputes positions. Test with a streaming child.
+- Beam has exactly one entry point: the spark beside Settings. No Beam control
+  elsewhere, in any state.
 
 ---
 

@@ -11,7 +11,7 @@ relay can and cannot learn, what is left over after the encryption, and where th
 sharp edges are. It is written to be falsifiable: every claim maps to code.
 
 Related: `AGENTS.md` invariants 7 and 9, `docs/architecture.md`,
-`docs/research/findings.md` ("Relay and mobile"), decision D-10.
+the original relay research notes (not kept in the repository), decision D-10.
 
 ---
 

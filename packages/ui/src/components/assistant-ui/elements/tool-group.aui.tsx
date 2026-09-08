@@ -332,6 +332,12 @@ function ToolGroupImpl({ part, timingKey, children }: ToolGroupProps) {
   const { members, reasoning } = useGroupActivity(part);
   const path = useLaserState((state) => state.current);
   const activityLevel = useActivityDetailLevel(path);
+  // Namer's early name for the call in flight (agents leap): the aggregate
+  // says "Checking the test suite" while it runs and drops back to the
+  // computed summary when the call ends. The store keeps the label per call
+  // id, so only the running member's is read.
+  const activeId = members.find((member) => member.running)?.toolCallId;
+  const namerLabel = useLaserState((state) => (path !== undefined && activeId !== undefined ? state.open[path]?.namerLabels[activeId] : undefined));
   return (
     <ToolGroupSummaryRow
       members={members}
@@ -339,6 +345,7 @@ function ToolGroupImpl({ part, timingKey, children }: ToolGroupProps) {
       activityLevel={activityLevel}
       timingKey={timingKey}
       groupStatus={part.status}
+      activeLabel={namerLabel}
     >
       {children}
     </ToolGroupSummaryRow>
@@ -351,6 +358,7 @@ export function ToolGroupSummaryRow({
   activityLevel,
   timingKey,
   groupStatus,
+  activeLabel,
   children,
 }: {
   members: readonly ToolGroupMember[];
@@ -358,6 +366,8 @@ export function ToolGroupSummaryRow({
   activityLevel: ActivityDetailLevel;
   timingKey: string;
   groupStatus: GroupPart["status"];
+  /** A name for the call in flight that beats the computed one (Namer). */
+  activeLabel?: string | undefined;
   children: ReactNode;
 }) {
   const summary: ToolGroupSummary = useMemo(() => summarizeActivityGroup(members, reasoning), [members, reasoning]);
@@ -404,7 +414,7 @@ export function ToolGroupSummaryRow({
         elapsedMs={elapsed}
         lines={summary.lines}
         breakdown={summary.breakdown}
-        activeLabel={summary.activeLabel}
+        activeLabel={summary.running && activeLabel ? activeLabel : summary.activeLabel}
         open={open}
       />
       <ToolGroupContent>{children}</ToolGroupContent>

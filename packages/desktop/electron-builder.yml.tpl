@@ -46,11 +46,13 @@ files:
   # `scripts/clean-machine.mjs` catches this class; do not widen it again.
   - "!**/node_modules/*/{test,tests,__tests__,example,examples,docs,doc}/**"
   - "!**/node_modules/@*/*/{test,tests,__tests__,example,examples,docs,doc}/**"
-  # Do not strip TypeScript from dependencies. Pi extensions are executable
-  # source packages: pi-subagents, for example, exports index.ts and imports
-  # its implementation from src/**/*.ts. Pi's resource loader transpiles that
-  # source at runtime. Removing it produces an installer that launches but
-  # cannot open any session with the bundled Subagents feature enabled.
+  # Do not strip TypeScript from dependencies. Engine extensions may ship as
+  # executable source packages: a bundled feature can export index.ts and
+  # import its implementation from src/**/*.ts, and the engine's resource
+  # loader transpiles that source at runtime. Removing it produces an
+  # installer that launches but cannot open any session with that feature
+  # enabled. Read a package's `exports`, `files` and engine manifest before
+  # excluding a file type from it (AGENTS.md §5a).
   - "!**/node_modules/**/*.{md,markdown,map,flow}"
   # Prebuilt native audio bindings for every platform, ~28 MB, reachable from
   # exactly one function: pi-gpt-transcribe's openMic. Nothing here opens a

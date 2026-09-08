@@ -8,6 +8,16 @@
  */
 import { z } from "zod";
 import { WEB_SEARCH_PROVIDER_IDS } from "./web-search.js";
+import {
+  AGENT_DESCRIPTION_MAX,
+  AGENT_INSTRUCTIONS_MAX,
+  AGENT_MAX_DEPTH_LIMIT,
+  AGENT_NAME_PATTERN,
+  AGENT_RUN_STATUSES,
+  AGENT_RUN_TIMEOUT_MAX_MINUTES,
+  FOREGROUND_COMMAND_SECONDS_MAX,
+  FOREGROUND_COMMAND_SECONDS_MIN,
+} from "./agents.js";
 import { ErrorCodes, type JsonRpcRequest } from "./jsonrpc.js";
 import { PREFS_MAX_BYTES } from "./messages.js";
 import type { ClientMethod, ClientRequests } from "./messages.js";
@@ -573,10 +583,46 @@ export const keybindingChangeSchema = z.union([
   z.object({ id: keybindingIdSchema, op: z.literal("reset") }).strict(),
 ]);
 
+// ---------- agents (docs/agents-leap) ----------
+
+export const agentNameSchema = z.string().regex(AGENT_NAME_PATTERN, {
+  message: "lower case, starts with a letter, letters, digits and hyphens only, at most 40 characters",
+});
+export const agentModelChoiceSchema = z.object({ provider: z.string().min(1).max(100), id: z.string().min(1).max(200) }).strict();
+export const agentSkillRefSchema = z
+  .object({ name: z.string().min(1).max(64), path: z.string().min(1).max(4096), scope: z.enum(["global", "project", "bundled"]) })
+  .strict();
+export const agentDefinitionInputSchema = z
+  .object({
+    name: agentNameSchema,
+    description: z.string().max(AGENT_DESCRIPTION_MAX),
+    instructions: z.string().max(AGENT_INSTRUCTIONS_MAX),
+    engineInstructions: z.boolean(),
+    model: agentModelChoiceSchema.nullable(),
+    thinkingLevel: thinkingLevelSchema.nullable(),
+    tools: z.array(z.string().min(1).max(64)).max(32),
+    supportsSubagents: z.boolean(),
+    allowedAgents: z.array(agentNameSchema).max(100),
+    scopedSkills: z.boolean(),
+    skills: z.array(agentSkillRefSchema).max(200),
+    runTimeoutMinutes: z.number().int().positive().max(AGENT_RUN_TIMEOUT_MAX_MINUTES).nullable(),
+  })
+  .strict();
+export const agentPolicyPatchSchema = z
+  .object({
+    maxDepth: z.number().int().min(1).max(AGENT_MAX_DEPTH_LIMIT).optional(),
+    foregroundCommandSeconds: z.number().int().min(FOREGROUND_COMMAND_SECONDS_MIN).max(FOREGROUND_COMMAND_SECONDS_MAX).optional(),
+  })
+  .strict();
+export const agentRunStatusSchema = z.enum(AGENT_RUN_STATUSES as [string, ...string[]]);
+const runId = z.string().min(1).max(100);
+/** Loose on purpose: the host relays what a worker produced; the worker validated it. */
+const agentsSnapshotSchema = z.object({ revision: z.number().int().nonnegative() }).passthrough();
+
 // ---------- client → host request params, one per method ----------
 
 export const clientParamsSchemas = {
-  "session/new": z.object({ cwd: z.string().min(1), parentPath: sessionPath.optional() }).strict(),
+  "session/new": z.object({ cwd: z.string().min(1), parentPath: sessionPath.optional(), agentName: agentNameSchema.optional() }).strict(),
   "session/load": z.object({ path: sessionPath, fromSeq: z.number().int().nonnegative().optional() }).strict(),
   "session/prompt": z
     .object({ path: sessionPath, content, streamingBehavior: z.enum(["steer", "followUp"]).optional() })
@@ -733,6 +779,22 @@ export const clientParamsSchemas = {
   "pi/transcribe/chunk": z.object({ id: uploadId, data: audioChunk }).strict(),
   "pi/transcribe/end": z.object({ id: uploadId }).strict(),
   "pi/transcribe/cancel": z.object({ id: uploadId }).strict(),
+
+  // --- M13 agents (docs/agents-leap) ---
+  "agents/list": z.object({}).strict(),
+  "agents/validate": z.object({ agent: agentDefinitionInputSchema }).strict(),
+  "agents/save": z.object({ agent: agentDefinitionInputSchema }).strict(),
+  "agents/delete": z.object({ name: agentNameSchema }).strict(),
+  "agents/set-default": z.object({ name: agentNameSchema }).strict(),
+  "agents/set-policy": z.object({ policy: agentPolicyPatchSchema }).strict(),
+  "agents/skills": z.object({ cwd }).strict(),
+  "agents/engine-instructions": z.object({ cwd }).strict(),
+  "agents/runs/list": z.object({ path: sessionPath.optional() }).strict(),
+  "agents/runs/stop": z.object({ runId, reason: z.string().max(2000).optional() }).strict(),
+  "agents/beam/set-model": z.object({ model: agentModelChoiceSchema.nullable() }).strict(),
+  "agents/namer/set-model": z.object({ model: agentModelChoiceSchema.nullable() }).strict(),
+  "agents/namer/qualify": z.object({ cwd }).strict(),
+  "agents/sync": z.object({ snapshot: agentsSnapshotSchema }).strict(),
 } satisfies Record<ClientMethod, z.ZodTypeAny>;
 
 export const clientMethods = Object.keys(clientParamsSchemas) as ClientMethod[];

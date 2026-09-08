@@ -1,8 +1,10 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { AgentHarnessBridge, BackgroundWorkOptions } from "../agents-bridge.js";
 import type { PromptProvenanceObserver } from "../prompt-provenance.js";
 import type { PiExtensionCommand, PiExtensionMessage, PiExtensionModuleName } from "@lasercode/protocol";
 import { panelsModule } from "./panels.js";
 import { accountUsageModule } from "./account-usage.js";
+import { backgroundWorkModule } from "./background-work.js";
 import { providerLogModule } from "./provider-log.js";
 import { subagentsModule } from "./subagents.js";
 import { transcribeModule } from "./transcribe.js";
@@ -28,9 +30,9 @@ export interface CommandBus {
 /**
  * Panel ids a module will answer actions for, even ones it never emitted.
  *
- * Some panels are declared by the *host* — the pi-subagents file layer reads
- * runs off disk for sessions that have no extension at all — and an action on
- * one of those still has to reach the module that can perform it. A module
+ * Some panels are declared by the *host* — it persists agent runs and shows
+ * them for sessions that have no extension at all — and an action on one of
+ * those still has to reach the module that can perform it. A module
  * claims the id prefix it owns; the `panels` module asks this before dropping
  * a command for an id it has not seen.
  */
@@ -75,6 +77,16 @@ export interface ModuleContext {
    * predates it; a module must not require it.
    */
   panels?: PanelClaims;
+  /**
+   * The worker's agent harness for this session (`subagents` module). Absent
+   * when the agents feature is off; the harness tools are then not registered.
+   */
+  agents?: AgentHarnessBridge;
+  /**
+   * Shell execution for this session (`background-work` module). Absent when
+   * the worker does not own a shell here; the built-in `bash` then stays.
+   */
+  backgroundWork?: BackgroundWorkOptions;
 }
 
 export interface LaserModule {
@@ -122,6 +134,7 @@ export const modules: readonly LaserModule[] = [
   panelsModule,
   goalModule,
   subagentsModule,
+  backgroundWorkModule,
   transcribeModule,
   webAccessModule,
 ];

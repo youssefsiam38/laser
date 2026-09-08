@@ -5,10 +5,10 @@ small and self-contained (`AGENTS.md` §6).
 
 | Project | Change | Task | URL | Status |
 | --- | --- | --- | --- | --- |
-| pi-subagents | export `requestAsyncSteer` / `requestAsyncInterrupt` from `./control-channel` | M3-T9 | — | written, not filed |
-| pi-subagents | emit `workflowGraph` snapshot from scripted workflows | M3-T9 | — | written, not filed |
-| pi-subagents | live index of running foreground children | M3-T9 | — | written, not filed |
-| pi-subagents | guard `ctx.ui.custom()` call sites on `ctx.mode === "tui"` so RPC hosts get the `select` fallback | M3-T9 | — | written, not filed |
+| pi-subagents | export `requestAsyncSteer` / `requestAsyncInterrupt` from `./control-channel` | M3-T9 | — | moot after D-140; kept as history |
+| pi-subagents | emit `workflowGraph` snapshot from scripted workflows | M3-T9 | — | moot after D-140; kept as history |
+| pi-subagents | live index of running foreground children | M3-T9 | — | moot after D-140; kept as history |
+| pi-subagents | guard `ctx.ui.custom()` call sites on `ctx.mode === "tui"` so RPC hosts get the `select` fallback | M3-T9 | — | moot after D-140; kept as history |
 | pi-gpt-transcribe | non-tui entry point for hosts that provide the widget contract | M8-T2 | — | not filed |
 | earendil-works/pi | `dist/main.js` → `dist/experimental/server.js` imports `@earendil-works/pi-server`, undeclared in `package.json`; resolves only under npm's flat hoisting, fails under pnpm/strict installers with ERR_MODULE_NOT_FOUND. Fix: declare the dependency (or lazy-import the experimental server). Local workaround: `packageExtensions` in `pnpm-workspace.yaml`. | M0-T4 | — | not filed |
 
@@ -171,6 +171,12 @@ fork the same three files, and because `WidgetState` deserves to be a published
 contract rather than a shape people copy out of `src/widget.ts`.
 
 ### pi-subagents · four patches for hosts that are not a terminal (M3-T9)
+
+**Moot after D-140 (2026-09-08).** Laser no longer loads or bundles
+pi-subagents: the agent harness is Laser's own ([`agents.md`](agents.md)), so
+none of these patches is needed by this project and none will be filed from
+it. They are kept below as history; each still stands on the package's own
+terms should someone else want them.
 
 **Against:** `github.com/nicobailon/pi-subagents` @ 0.65.0. Four separate PRs —
 they touch different files and stand or fall independently. Each is justified

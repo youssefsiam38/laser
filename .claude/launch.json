@@ -10,6 +10,17 @@
       "port": 41441
     },
     {
+      "name": "sandbox-agents",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "PORT=41442",
+        "SANDBOX_AGENTS=1",
+        "node",
+        "scripts/sandbox.mjs"
+      ],
+      "port": 41442
+    },
+    {
       "name": "ui-dev",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": [

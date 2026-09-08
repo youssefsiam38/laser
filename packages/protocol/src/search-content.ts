@@ -73,6 +73,13 @@ export const TOOL_SEARCH_PROJECTIONS: Readonly<Record<string, ToolSearchProjecti
   grep: textBody,
   find: textBody,
   ls: textBody,
+  // A child's final message. The transcript hides this tool row and draws the
+  // message as the child's last assistant block; only that message is shown,
+  // so only that message is searchable (the status is a badge, not prose).
+  complete_agent_run: ({ args }) => {
+    const message = record(args)["message"];
+    return typeof message === "string" && message ? [message] : [];
+  },
 };
 
 export function toolSearchContent(tool: SearchableTool): string[] {

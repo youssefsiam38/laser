@@ -14,8 +14,27 @@
  * The fake provider ("stub/stub-1") echoes a short markdown reply with a code
  * fence so streaming, markdown, and tool-free turns can be exercised.
  * Requires `pnpm -r build` first.
+ *
+ * Opt-in scenes, each keyed by an environment variable:
+ *
+ *   SANDBOX_GOAL=1      a prompt carrying a `<goal_id>` ends through the goal
+ *                       completion tool with no assistant text (the durable
+ *                       summary regression, AGENTS.md §6a).
+ *   SANDBOX_ACTIVITY=1  the exact prompt "sandbox activity" streams reasoning,
+ *                       then runs a 30 s command so partial output is visible.
+ *   SANDBOX_AGENTS=1    the agent harness (docs/agents.md). A prompt containing
+ *                       the word "delegate" answers with one `start_agent` call
+ *                       (agent `default`, instance `explorer`). A request that
+ *                       is a subagent child — its tool list carries
+ *                       `complete_agent_run`, or its system prompt names the
+ *                       subagent role — answers `bash ls`, then, once that
+ *                       result is back, `complete_agent_run` with
+ *                       "Counted the files.". Everything else in this scene is
+ *                       one short text. The sandbox project is a git repository
+ *                       with one commit so every child gets a real worktree.
  */
 import { identity as product } from "./identity/identity.mjs";
+import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -31,6 +50,24 @@ const agentDir = join(base, "agent");
 mkdirSync(project, { recursive: true });
 mkdirSync(agentDir, { recursive: true });
 writeFileSync(join(project, "README.md"), `# Sandbox project\n\nA scratch project for ${product.name} demos.\n`);
+writeFileSync(join(project, "notes.txt"), "one\ntwo\nthree\n");
+
+// The project is a git repository with one commit. Subagent children are
+// mandatory worktrees under <project>/.worktrees (D-140), and a worktree needs
+// a commit to branch from; a bare directory would make every `start_agent`
+// a person-facing refusal instead of a demo.
+try {
+  const git = (...args) =>
+    execFileSync("git", ["-C", project, "-c", "user.name=Sandbox", "-c", "user.email=sandbox@example.invalid", "-c", "commit.gpgsign=false", ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  git("init", "-q", "-b", "main");
+  git("add", "-A");
+  git("commit", "-q", "-m", "Sandbox project");
+} catch (error) {
+  console.error(`sandbox: could not initialise a git repository in ${project}; subagent worktrees will be refused (${error instanceof Error ? error.message : String(error)})`);
+}
 const skillDir = join(agentDir, "skills", "sandbox-review");
 mkdirSync(skillDir, { recursive: true });
 writeFileSync(
@@ -49,17 +86,75 @@ const reply = (prompt) =>
     "}\n```\n\n",
     "Done.",
   ];
+const textOf = (content) =>
+  typeof content === "string" ? content : Array.isArray(content) ? content.map((p) => p?.text ?? "").join("") : "";
+
+/** The function name behind the most recent tool result, or undefined. */
+function lastToolName(msgs) {
+  const result = [...msgs].reverse().find((m) => m?.role === "tool");
+  if (!result) return undefined;
+  for (const m of msgs) {
+    for (const call of m?.tool_calls ?? []) {
+      if (call?.id === result.tool_call_id) return call.function?.name;
+    }
+  }
+  return undefined;
+}
+
 const provider = createServer((req, res) => {
   let body = "";
   req.on("data", (c) => (body += c));
   req.on("end", async () => {
-    const msgs = JSON.parse(body).messages ?? [];
+    const request = JSON.parse(body);
+    const msgs = request.messages ?? [];
     const last = msgs.at(-1)?.content;
-    const prompt = typeof last === "string" ? last : Array.isArray(last) ? last.map((p) => p.text ?? "").join("") : "";
+    const prompt = textOf(last);
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
     const base = { id: "c", object: "chat.completion.chunk", created: 1, model: "stub-1" };
     const send = (o) => res.write(`data: ${JSON.stringify(o)}\n\n`);
     send({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] });
+    const callTool = (name, args) => {
+      send({ ...base, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: randomUUID(), type: "function", function: {
+        name, arguments: JSON.stringify(args),
+      } }] }, finish_reason: null }] });
+      send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
+      res.end("data: [DONE]\n\n");
+    };
+    const sayShort = async (text) => {
+      for (const ch of text.match(/.{1,6}/gs) ?? []) {
+        send({ ...base, choices: [{ index: 0, delta: { content: ch }, finish_reason: null }] });
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 12, total_tokens: 22 } });
+      res.end("data: [DONE]\n\n");
+    };
+    // Agents scene (docs/agents.md). The parent delegates once; a child lists
+    // the directory and ends through `complete_agent_run`, the only successful
+    // ending the harness accepts. Child detection prefers the tool list — the
+    // harness registers `complete_agent_run` only in a child — and falls back
+    // to the role block the companion extension injects into a child's system
+    // prompt. A parent's own tool schema mentions `subagent_name`, so text
+    // alone would misfire; the fallback therefore also requires `start_agent`
+    // to be absent.
+    if (process.env.SANDBOX_AGENTS === "1") {
+      const lastRole = msgs.at(-1)?.role;
+      const toolNames = (request.tools ?? []).map((t) => t?.function?.name ?? t?.name).filter((n) => typeof n === "string");
+      const systemText = msgs.filter((m) => m?.role === "system").map((m) => textOf(m.content)).join("\n");
+      const isChild = toolNames.includes("complete_agent_run") || (/subagent/i.test(systemText) && !toolNames.includes("start_agent"));
+      const previousTool = lastToolName(msgs);
+      if (isChild) {
+        if (lastRole === "tool" && previousTool === "bash") return callTool("complete_agent_run", { status: "completed", message: "Counted the files." });
+        if (lastRole === "tool") return sayShort("Done.");
+        return callTool("bash", { command: "ls" });
+      }
+      if (lastRole === "user" && /\bdelegate\b/i.test(prompt)) {
+        return callTool("start_agent", { agent_name: "default", subagent_name: "explorer", task: "List the files here and report the count." });
+      }
+      if (lastRole === "tool" && previousTool === "start_agent") return sayShort("Started **explorer** in the background. I will report when it finishes.");
+      if (lastRole === "tool") return sayShort("Noted the result.");
+      if (/explorer|counted/i.test(prompt)) return sayShort("The explorer finished: it counted the files.");
+      return sayShort("Noted. Say **delegate** to start a subagent.");
+    }
     // Goal regression specimen: the real engine terminates on this tool with
     // no assistant text. Its durable summary must remain readable in chat.
     if (process.env.SANDBOX_GOAL === "1" && msgs.at(-1)?.role === "user" && prompt.includes("<goal_id>")) {
@@ -284,7 +379,7 @@ setInterval(() => {
 }, 1000).unref();
 
 function demoPanels() {
-  if (process.env.SANDBOX_GOAL === "1") return [];
+  if (process.env.SANDBOX_GOAL === "1" || process.env.SANDBOX_AGENTS === "1") return [];
   const now = Date.now();
   return [
     {

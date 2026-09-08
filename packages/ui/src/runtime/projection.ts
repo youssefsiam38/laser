@@ -33,15 +33,63 @@
  *
  * Pure: no React, no DOM, no network. Tested in test/runtime/projection.test.ts.
  */
-import { namespaced, MESSAGE_METADATA_NS } from "@lasercode/protocol";
+import { namespaced, AGENT_EVENT_MESSAGE_TYPE, MESSAGE_METADATA_NS, TASK_EVENT_MESSAGE_TYPE } from "@lasercode/protocol";
 import type { ThreadMessageLike } from "@assistant-ui/react";
-import type { MessageSpeaker, StopReason, UiDialogRequest, Usage } from "@lasercode/protocol";
+import type { AgentRun, MessageSpeaker, StopReason, UiDialogRequest, Usage } from "@lasercode/protocol";
 import type { Block, SessionView } from "../store.js";
 import { goalRecords, goalForPrompt, type GoalRecord } from "./goal-history.js";
 
 /** `data` part name used for transcript notices. */
 export const NOTICE_DATA_PART = namespaced("notice");
 export const GOAL_DATA_PART = namespaced("goal-record");
+/**
+ * A child's final message (docs/agents.md "Completion"): the
+ * `complete_agent_run` tool call, drawn as the child's last assistant block
+ * rather than as a tool row. Data: {@link AgentCompletionData}.
+ */
+export const AGENT_COMPLETION_DATA_PART = namespaced("agent-completion");
+/** A parent-side agent event (`lasercode/agent-event`). Data: {@link AgentEventData}. */
+export const AGENT_EVENT_DATA_PART = namespaced("agent-event");
+/** A background task's exit (`lasercode/task-event`). Data: {@link TaskEventData}. */
+export const TASK_EVENT_DATA_PART = namespaced("task-event");
+
+/** The harness tool a child ends its run with; its row is replaced by the final message. */
+export const AGENT_COMPLETION_TOOL = "complete_agent_run";
+
+export interface AgentCompletionData {
+  readonly toolCallId: string;
+  readonly status: "completed" | "blocked";
+  readonly message: string;
+  /** ISO time the call was made, when the block was stamped. */
+  readonly at?: string | undefined;
+  /** The harness has accepted the completion; before that the run is still ending. */
+  readonly done: boolean;
+}
+
+/** The `AgentModelEvent` a parent received, as the `subagents` module attaches it in `details`. */
+export interface AgentEventData {
+  readonly type: "agent.completed" | "agent.blocked" | "agent.failed" | "agent.cancelled" | "agent.timed_out" | "agent.message";
+  readonly agentName: string;
+  readonly subagentName: string;
+  readonly sessionId: string;
+  readonly runId: string;
+  readonly message: string;
+  readonly endedBy?: { initiator: "parent" | "user" | "harness"; reason?: string } | undefined;
+  readonly run?: AgentRun | undefined;
+}
+
+/** The summary the `background-work` module attaches to a task exit. */
+export interface TaskEventData {
+  readonly taskId: string;
+  readonly command: string;
+  readonly status: "running" | "completed" | "failed" | "stopped";
+  readonly exitCode: number | null;
+  readonly startedAt?: string | undefined;
+  readonly endedAt?: string | undefined;
+  readonly outputBytes?: number | undefined;
+  readonly background?: boolean | undefined;
+  readonly promoted?: boolean | undefined;
+}
 
 export type ProjectedContentPart = Exclude<ThreadMessageLike["content"], string>[number];
 export type ProjectedToolCallPart = Extract<ProjectedContentPart, { type: "tool-call" }>;
@@ -256,6 +304,43 @@ export function toolDisplayResult(part: { result?: unknown; artifact?: unknown }
   return artifact && typeof artifact === "object" && "partialOutput" in artifact ? artifact.partialOutput : undefined;
 }
 
+/**
+ * The child's final message, when this tool call is a `complete_agent_run`
+ * that was accepted (or is still being accepted). A refused completion keeps
+ * its tool row: the error is what the person needs to see, not a fake ending.
+ */
+export function agentCompletionOf(block: ToolBlock): AgentCompletionData | undefined {
+  if (block.name !== AGENT_COMPLETION_TOOL || block.isError === true) return undefined;
+  const args = isJsonObject(block.args) ? block.args : {};
+  const status = args["status"] === "blocked" ? "blocked" : "completed";
+  const message = typeof args["message"] === "string" ? args["message"] : "";
+  return { toolCallId: block.id, status, message, ...(block.at !== undefined ? { at: block.at } : {}), done: block.done };
+}
+
+const CUSTOM_DATA_PART: Readonly<Record<string, string>> = {
+  [AGENT_EVENT_MESSAGE_TYPE]: AGENT_EVENT_DATA_PART,
+  [TASK_EVENT_MESSAGE_TYPE]: TASK_EVENT_DATA_PART,
+};
+
+/**
+ * A custom message the transcript draws (an agent event, a task exit) is its
+ * own assistant message with one `data` part, like a notice: the shell owns
+ * the look, and a type nothing registered renders as nothing.
+ */
+const customMessage = (block: Extract<Block, { kind: "custom" }>): ThreadMessageLike | undefined => {
+  const name = CUSTOM_DATA_PART[block.customType];
+  if (!name) return undefined;
+  const createdAt = createdAtOf(block);
+  return {
+    id: block.id,
+    role: "assistant",
+    content: [{ type: "data", name, data: block.details }],
+    status: { type: "complete", reason: "stop" },
+    ...(createdAt ? { createdAt } : {}),
+    metadata: { custom: { [MESSAGE_METADATA_NS]: { kind: "custom", customType: block.customType, text: block.text } } },
+  };
+};
+
 const userMessage = (block: Extract<Block, { kind: "user" }>, ordinal: number, goal?: GoalRecord): ThreadMessageLike => {
   const content: ProjectedContentPart[] = [];
   if (block.text.trim()) content.push({ type: "text", text: block.text });
@@ -314,6 +399,11 @@ const turnMessage = (
     const completedGoal = input.goals?.find(goal => goal.completionToolId === block.id);
     if (completedGoal) {
       parts.push({ type: "data", name: GOAL_DATA_PART, data: completedGoal });
+      continue;
+    }
+    const completion = agentCompletionOf(block);
+    if (completion) {
+      parts.push({ type: "data", name: AGENT_COMPLETION_DATA_PART, data: completion });
       continue;
     }
     parts.push(toolPartOf(block, dialog));
@@ -419,6 +509,13 @@ export function projectMessages(input: ProjectionInput): ProjectionResult {
       // message with its own header, never folded into the reply above them.
       if (group.length > 0 && speakerKey(block) !== speakerKey(group[0]!)) flush(false);
       group.push(block);
+      continue;
+    }
+    if (block.kind === "custom") {
+      const message = customMessage(block);
+      if (!message) continue;
+      flush(false);
+      messages.push(message);
       continue;
     }
     flush(false);

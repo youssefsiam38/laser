@@ -18,9 +18,9 @@
  */
 import { closeSync, openSync, readSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { defaultAgentDir } from "./paths.js";
-import type { SessionSummary } from "@lasercode/protocol";
-import { goalPromptId, toolOutputText } from "@lasercode/protocol";
+import { defaultAgentDir, projectRootOf } from "./paths.js";
+import type { SessionAgentInfo, SessionAgentRecord, SessionSummary } from "@lasercode/protocol";
+import { SESSION_AGENT_ENTRY_TYPE, goalPromptId, toolOutputText } from "@lasercode/protocol";
 
 export interface CatalogEntry extends SessionSummary {
   size: number;
@@ -34,6 +34,8 @@ interface Scan {
   firstMessage?: string | undefined;
   name?: string | undefined;
   pendingGoal?: { id: string; text: string } | undefined;
+  /** From the session's agent record, when the worker wrote one (docs/agents-leap). */
+  agent?: SessionAgentInfo | undefined;
 }
 
 interface CacheEntry {
@@ -47,6 +49,8 @@ interface CacheEntry {
 const CHUNK = 256 * 1024;
 /** A row shows one line; keep the rest out of memory and off the wire. */
 const FIRST_MESSAGE_MAX = 200;
+/** The substring that marks the agent record, so the line is parsed only when it is one. */
+const AGENT_RECORD_MARK = `"customType":${JSON.stringify(SESSION_AGENT_ENTRY_TYPE)}`;
 
 export function defaultSessionDir(agentDir = defaultAgentDir()): string {
   return join(agentDir, "sessions");
@@ -141,6 +145,7 @@ export class SessionCatalog {
       messageCount: scan.messageCount,
       ...(scan.name ? { name: scan.name } : {}),
       ...(scan.firstMessage ? { firstMessage: scan.firstMessage } : {}),
+      ...(scan.agent ? { agent: scan.agent } : {}),
     };
     this.cache.set(path, { size: st.size, mtimeMs: st.mtimeMs, entry, scan });
     return entry;
@@ -181,7 +186,9 @@ function parseHeader(path: string, size: number, mtimeMs: number): Header | null
       entry: {
         path,
         id: header.id,
-        cwd: header.cwd,
+        // A child agent's header names its worktree; the row, the worker and
+        // the sidebar group are the project's (docs/agents-leap).
+        cwd: projectRootOf(header.cwd),
         createdAt: header.timestamp ?? new Date(mtimeMs).toISOString(),
         modifiedAt: new Date(mtimeMs).toISOString(),
         messageCount: 0,
@@ -247,6 +254,15 @@ function scanBody(path: string, size: number, from: Scan): Scan {
  */
 function applyLine(line: string, scan: Scan): void {
   if (line.length < 16) return;
+  if (scan.agent === undefined && line.includes(AGENT_RECORD_MARK)) {
+    try {
+      const entry = JSON.parse(line) as { type?: string; customType?: string; data?: SessionAgentRecord };
+      if (entry.type === "custom" && entry.customType === SESSION_AGENT_ENTRY_TYPE) scan.agent = agentInfoOf(entry.data);
+    } catch {
+      /* torn line */
+    }
+    return;
+  }
   if (scan.firstMessage === undefined && line.includes('"customType":"goal-state"')) {
     try {
       const entry = JSON.parse(line);
@@ -279,6 +295,24 @@ function applyLine(line: string, scan: Scan): void {
   } catch {
     /* torn line */
   }
+}
+
+/**
+ * The attribution a sidebar row needs, from the record the worker wrote. The
+ * run id and status are the registry's business (the router adds them), so a
+ * catalog that only reads files stays pure.
+ */
+function agentInfoOf(record: SessionAgentRecord | undefined): SessionAgentInfo | undefined {
+  if (!record || typeof record.agentName !== "string") return undefined;
+  const kind = record.kind;
+  if (kind !== "root" && kind !== "child" && kind !== "beam" && kind !== "chat") return undefined;
+  return {
+    agentName: record.agentName,
+    kind,
+    ...(typeof record.subagentName === "string" ? { subagentName: record.subagentName } : {}),
+    ...(typeof record.parentPath === "string" ? { parentPath: record.parentPath } : {}),
+    ...(typeof record.rootPath === "string" ? { rootPath: record.rootPath } : {}),
+  };
 }
 
 /** Pi content is a string or a list of parts; only text parts are shown. */

@@ -9,29 +9,40 @@
  *   pi/session/entries   from the hydrated-view cache when the file has not moved
  *   pi/project/*         the project registry (M2-T4)
  *   pi/worker/*          the worker pool (M2-T1)
+ *   agents/*             the agent store and the run registry (docs/agents-leap),
+ *                        except the three the engine must answer (below) and
+ *                        `agents/runs/stop`, which goes to the run's own worker
  *
  * Routed to one worker:
  *   session/new          worker for params.cwd
  *   session/load         worker for the cwd that owns the path (pool memory,
- *                        else the session file header via the catalog)
+ *                        else the run registry, else the session file header
+ *                        via the catalog — a child's worktree maps to its project)
+ *   agents/skills, agents/engine-instructions, agents/namer/qualify
+ *                        worker for params.cwd (they need the engine)
  *   everything with a path → same lookup
  *   pi/ui/response       every live worker (the worker that owns the dialog id
  *                        answers; the others ignore it)
  */
-import { ErrorCodes, PRODUCT_NAME, ProtocolError, decisionPushPayload, parseClientRequest, type JsonRpcError, type JsonRpcResponse, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
+import { ErrorCodes, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, ProtocolError, decisionPushPayload, isTerminalRunStatus, parseClientRequest, type AgentRun, type JsonRpcError, type JsonRpcResponse, type NamerState, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
 import { unlinkSync } from "node:fs";
 import { PRODUCT_VERSION } from "@lasercode/protocol";
+import type { AgentRunRegistry } from "./agents/runs.js";
+import { removeRunWorktree } from "./agents/worktrees.js";
+import type { AgentStore } from "./agents/store.js";
 import type { AttentionTracker } from "./attention.js";
 import type { SessionCatalog } from "./catalog.js";
 import { searchSessions } from "./session-search.js";
 import type { LogStore } from "./logstore.js";
 import { browseDirectories, type PackageService, type SetupService } from "./packages.js";
 import type { PanelHub } from "./panels/hub.js";
+import { projectRootOf } from "./paths.js";
 import type { PrefsStore } from "./prefs.js";
 import type { FeatureService } from "./features.js";
 import type { ProjectRegistry } from "./projects.js";
 import type { PushService } from "./push.js";
 import type { SubagentsLayer } from "./subagents/layer.js";
+import { canonical } from "./trust.js";
 import type { ViewCache } from "./views.js";
 import type { WorkerPool } from "./worker-pool.js";
 import { WorkerRpcError } from "./worker-client.js";
@@ -79,6 +90,10 @@ export interface RouterDeps {
   features?: FeatureService | undefined;
   /** The origin a phone opens, for the URLs inside a notification. */
   publicOrigin?: (() => string) | undefined;
+  /** Agent definitions (docs/agents-leap). Absent = the `agents/*` methods are refused. */
+  agents?: AgentStore | undefined;
+  /** Agent runs the host has heard of; routes a child session to its project's worker. */
+  runs?: AgentRunRegistry | undefined;
 }
 
 /** Methods answered by the worker that owns `params.cwd` (M4). */
@@ -109,6 +124,11 @@ const CWD_ROUTED = new Set([
   // The git status of a project. The UI always sends a `path` as well, but the
   // CLI and any cwd-only caller must still reach the right worker.
   "pi/project/git",
+  // The engine discovers skills and owns its built-in instructions; the Namer
+  // benchmark needs a provider. All three name the cwd whose worker answers.
+  "agents/skills",
+  "agents/engine-instructions",
+  "agents/namer/qualify",
 ]);
 
 /** Dictation methods that carry only an upload id, routed by `uploads`. */
@@ -161,7 +181,11 @@ export class Router {
     return this.deps.setup;
   }
 
-  /** Catalog rows with attention (and `seenAt`) filled in, plus sessions no worker has persisted yet. */
+  /**
+   * Catalog rows with attention (and `seenAt`) filled in, plus sessions no
+   * worker has persisted yet, plus — for a session an agent runs — the latest
+   * run's id and status from the registry.
+   */
   sessions(cwd?: string): SessionSummary[] {
     const rows = this.catalog.list(cwd).map(({ size: _size, ...summary }) => summary);
     const known = new Set(rows.map((row) => row.path));
@@ -175,7 +199,18 @@ export class Router {
       if (cwd !== undefined && summary.cwd !== cwd) continue;
       rows.unshift(summary);
     }
-    return this.deps.attention.decorate(rows);
+    return this.withRuns(this.deps.attention.decorate(rows));
+  }
+
+  /** Stamp the latest run onto every row that belongs to an agent. */
+  private withRuns<T extends SessionSummary>(rows: T[]): T[] {
+    const registry = this.deps.runs;
+    if (!registry || !rows.some((row) => row.agent)) return rows;
+    const latest = registry.latestByChildPath();
+    return rows.map((row) => {
+      const run = row.agent ? latest.get(row.path) : undefined;
+      return run ? { ...row, agent: { ...row.agent!, runId: run.runId, runStatus: run.status } } : row;
+    });
   }
 
   /** Remember a session the worker just opened, until Pi writes its file. */
@@ -227,7 +262,7 @@ export class Router {
 
       case "pi/session/seen": {
         const { path } = req.params;
-        const cwd = this.pool.cwdOfSession(path) ?? this.catalog.cwdOf(path);
+        const cwd = this.cwdOf(path);
         this.deps.attention.markSeen(path, cwd, req.params.seq);
         return { attention: this.deps.attention.attentionOf(path, this.catalog.get(path)?.modifiedAt) };
       }
@@ -251,6 +286,16 @@ export class Router {
         this.catalog.invalidate(path);
         this.deps.views.invalidate(path);
         this.unwritten.delete(path);
+        // A child's runs cannot go on without their session, and a deleted
+        // child's worktree has no owner left: remove it here, best effort.
+        const runs = this.deps.runs;
+        if (runs) {
+          const owned = runs.byChildPath(path);
+          runs.forgetSession(path);
+          const worktrees = new Map<string, AgentRun>();
+          for (const run of owned) if (run.worktree) worktrees.set(run.worktree.path, run);
+          await Promise.all([...worktrees.values()].map((run) => removeRunWorktree(run).catch(() => undefined)));
+        }
         return {};
       }
 
@@ -265,10 +310,14 @@ export class Router {
       }
 
       case "session/new": {
-        const worker = await this.pool.get(req.params.cwd);
-        const result = await worker.request<{ state: SessionState }>(req.method, req.params);
-        this.pool.bindSession(result.state.path, req.params.cwd);
-        this.deps.projects.touch(req.params.cwd);
+        const { cwd } = req.params;
+        const agentName = this.resolveStartAgent(cwd, req.params.agentName);
+        const worker = await this.pool.get(cwd);
+        const result = await worker.request<{ state: SessionState }>(req.method, agentName ? { ...req.params, agentName } : req.params);
+        this.pool.bindSession(result.state.path, cwd);
+        // A workspace is not a project: Beam and Chat sessions never put one
+        // in the project list.
+        if (!this.isWorkspace(cwd)) this.deps.projects.touch(cwd);
         this.noteUnwritten(result.state);
         return result;
       }
@@ -433,10 +482,108 @@ export class Router {
       // `pi/panel/action` carries a session path and falls through to the
       // default: the worker that owns the session delivers it to the extension.
 
+      // ---------------------------------------------------------- agents
+      case "agents/list":
+        return this.agents().snapshot();
+      case "agents/validate":
+        return { issues: this.agents().validate(req.params.agent) };
+      case "agents/save": {
+        const store = this.agents();
+        const agent = store.save(req.params.agent);
+        return { agent, snapshot: store.snapshot() };
+      }
+      case "agents/delete": {
+        const store = this.agents();
+        store.delete(req.params.name);
+        return { snapshot: store.snapshot() };
+      }
+      case "agents/set-default": {
+        const store = this.agents();
+        store.setDefault(req.params.name);
+        return { snapshot: store.snapshot() };
+      }
+      case "agents/set-policy": {
+        const store = this.agents();
+        store.setPolicy(req.params.policy);
+        return { snapshot: store.snapshot() };
+      }
+      case "agents/beam/set-model": {
+        const store = this.agents();
+        store.setBeamModel(req.params.model);
+        return { snapshot: store.snapshot() };
+      }
+      case "agents/namer/set-model": {
+        const store = this.agents();
+        store.setNamerModel(req.params.model);
+        return { snapshot: store.snapshot() };
+      }
+      case "agents/runs/list":
+        return { runs: this.runs().list(req.params.path) };
+      case "agents/runs/stop": {
+        // The run's own worker ends it (it holds the child session and tells
+        // the parent); the host records what the worker says it became.
+        const registry = this.runs();
+        const run = registry.get(req.params.runId);
+        if (!run) throw new ProtocolError(ErrorCodes.SessionNotFound, "That run is no longer known to the app.");
+        if (isTerminalRunStatus(run.status)) return { run };
+        const worker = await this.pool.get(run.projectCwd);
+        const result = await worker.request<{ run: AgentRun }>(req.method, req.params);
+        return { run: registry.upsert(result.run) };
+      }
+      case "agents/sync":
+        throw new ProtocolError(ErrorCodes.Unsupported, "The app sends this to its own workers.");
+
       default:
         break;
     }
     return this.forwardToWorker(req);
+  }
+
+  /**
+   * Which agent a new session starts with, and whether it may start here. A
+   * workspace only runs its own agent; a project never runs a built-in; Namer
+   * never runs a session at all. With no agent store the request is passed on
+   * untouched, so a host without the feature behaves as before.
+   */
+  private resolveStartAgent(cwd: string, requested: string | undefined): string | undefined {
+    const store = this.deps.agents;
+    if (!store) {
+      if (requested !== undefined) throw new ProtocolError(ErrorCodes.Unsupported, "This host has no agent definitions.");
+      return undefined;
+    }
+    const workspaceAgent = this.workspaceAgentOf(cwd);
+    const name = requested ?? workspaceAgent ?? store.defaultAgentName;
+    const agent = store.get(name);
+    if (!agent) {
+      throw new ProtocolError(ErrorCodes.InvalidParams, `There is no agent named "${name}". Choose one from the Agents page.`, {
+        issues: [{ field: "agentName", message: `There is no agent named "${name}".` }],
+      });
+    }
+    if (name === "namer") {
+      throw new ProtocolError(ErrorCodes.InvalidParams, "Namer names sessions and actions in the background; it does not run a session.");
+    }
+    if (workspaceAgent !== undefined && name !== workspaceAgent) {
+      throw new ProtocolError(ErrorCodes.InvalidParams, `Only ${labelOf(workspaceAgent)} sessions start in the ${labelOf(workspaceAgent)} workspace.`);
+    }
+    if (agent.kind === "builtin" && workspaceAgent !== name) {
+      throw new ProtocolError(ErrorCodes.InvalidParams, `${labelOf(name)} sessions start in ${PRODUCT_DISPLAY_NAME}'s own ${labelOf(name)} workspace, not in a project.`);
+    }
+    return name;
+  }
+
+  /** `beam` or `chat` when `cwd` is that built-in's workspace. */
+  private workspaceAgentOf(cwd: string): "beam" | "chat" | undefined {
+    const store = this.deps.agents;
+    if (!store) return undefined;
+    const key = canonical(cwd);
+    const { beam, chat } = store.workspaces;
+    if (key === canonical(beam)) return "beam";
+    if (key === canonical(chat)) return "chat";
+    return undefined;
+  }
+
+  private isWorkspace(cwd: string): boolean {
+    return this.workspaceAgentOf(cwd) !== undefined;
   }
 
   /**
@@ -464,6 +611,11 @@ export class Router {
         const id = (result as { id?: string } | null)?.id;
         if (id) this.uploads.set(id, cwd);
       }
+      // The benchmark's verdict is the host's to keep: every client and every
+      // worker hears it through the store's own change notification.
+      if (req.method === "agents/namer/qualify" && this.deps.agents && isNamerState(result)) {
+        this.deps.agents.setNamerState(result);
+      }
       return result;
     }
 
@@ -484,7 +636,7 @@ export class Router {
         const worker = await this.workerFor(path);
         const result = await worker.request(req.method, req.params);
         const cwd = this.pool.cwdOfSession(path);
-        if (req.method === "session/load" && cwd) this.deps.projects.touch(cwd);
+        if (req.method === "session/load" && cwd && !this.isWorkspace(cwd)) this.deps.projects.touch(cwd);
         // A fork answers with a new session path served by the same worker; a
         // navigate rewrites the leaf, so the cached transcript is stale.
         const state = (result as { state?: SessionState } | null)?.state;
@@ -505,6 +657,22 @@ export class Router {
           }
         }
         return result;
+  }
+
+  /** The agent store, or an error a person can act on. */
+  private agents(): AgentStore {
+    if (!this.deps.agents) {
+      throw new ProtocolError(ErrorCodes.Unsupported, "This host is running without agent definitions, so agents cannot be listed or changed.");
+    }
+    return this.deps.agents;
+  }
+
+  /** The run registry, or an error a person can act on. */
+  private runs(): AgentRunRegistry {
+    if (!this.deps.runs) {
+      throw new ProtocolError(ErrorCodes.Unsupported, "This host is running without a run registry, so agent runs cannot be listed or stopped.");
+    }
+    return this.deps.runs;
   }
 
   /** The panel hub, or an error a person can act on. */
@@ -559,14 +727,36 @@ export class Router {
     return this.deps.logs;
   }
 
+  /**
+   * The project that owns a session path: the pool's memory, else a run that
+   * mentions it (a child session is its project's, whatever its header says),
+   * else the session header — with a worktree mapped back to its project, so
+   * no worker is ever spawned for a `.worktrees/<name>` directory.
+   */
+  private cwdOf(path: string): string | undefined {
+    const known = this.pool.cwdOfSession(path) ?? this.deps.runs?.projectCwdOf(path);
+    if (known) return known;
+    const header = this.catalog.cwdOf(path);
+    return header === undefined ? undefined : projectRootOf(header);
+  }
+
   /** The worker that owns a session path, started if needed. */
   private async workerFor(path: string) {
-    const cwd = this.pool.cwdOfSession(path) ?? this.catalog.cwdOf(path);
+    const cwd = this.cwdOf(path);
     if (!cwd) throw new ProtocolError(ErrorCodes.SessionNotFound, `no project known for session ${path}`);
     const worker = await this.pool.get(cwd);
     this.pool.bindSession(path, cwd);
     return worker;
   }
+}
+
+function labelOf(name: string): string {
+  return name === "beam" ? "Beam" : name === "chat" ? "Chat" : name === "namer" ? "Namer" : name;
+}
+
+function isNamerState(value: unknown): value is NamerState {
+  const state = value as Partial<NamerState> | null;
+  return !!state && typeof state === "object" && typeof state.status === "string" && Array.isArray(state.candidates);
 }
 
 function toRpcError(error: unknown): JsonRpcError {

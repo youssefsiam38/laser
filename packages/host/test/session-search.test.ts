@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SESSION_AGENT_ENTRY_TYPE, SESSION_RUN_ENTRY_TYPE } from "@lasercode/protocol";
 import { SessionCatalog } from "../src/catalog.js";
 import { searchSessions, searchableMessage } from "../src/session-search.js";
 
@@ -37,6 +38,16 @@ describe("full-history search", () => {
   it("searches tools but never indexes image data or non-message metadata", () => {
     expect(searchableMessage(message("assistant", [{ type: "image", data: "secret" }, { type: "toolCall", name: "read", arguments: { path: "file.ts" } }]))).toEqual([{ source: "tool", text: 'file.ts' }]);
     expect(searchableMessage({ type: "custom", data: "secret" })).toEqual([]);
+  });
+  it("never indexes the agent record or run lifecycle entries of a child session", async () => {
+    const path = save("child", [
+      { type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, data: { agentName: "reviewer", kind: "child", subagentName: "review-pineapple", parentPath: "/pineapple.jsonl" } },
+      { type: "custom", customType: SESSION_RUN_ENTRY_TYPE, data: { runId: "run_pineapple", status: "running" } },
+      message("user", "Review the banana changes"),
+    ]);
+    const sessions = new SessionCatalog(dir).list();
+    expect((await searchSessions(sessions, "pineapple")).hits).toEqual([]);
+    expect((await searchSessions(sessions, "banana")).hits).toEqual([{ path, count: 1, source: "user", excerpt: "Review the banana changes" }]);
   });
   it("keeps escapes literal and tolerates torn lines", async () => {
     const path = save("escape", [message("assistant", [{ type: "text", text: String.raw`printf 'a\nb'` }])]);

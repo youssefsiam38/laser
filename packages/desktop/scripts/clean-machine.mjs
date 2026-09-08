@@ -218,7 +218,6 @@ const required = [
   "@lasercode/worker",
   "@lasercode/protocol",
   "@lasercode/pi-extension",
-  "pi-subagents",
 ];
 const missing = required.filter((name) => !packageNames.includes(name));
 record(
@@ -309,6 +308,43 @@ record(
     ? `session ${sessionReport.sessionId}; ${sessionReport.modelCount} models available to the picker`
     : sessionReport?.error ?? sessionRun.stderr.trim() ?? "no answer",
   "The packaged worker could not load a curated feature. Preserve executable dependency source and rebuild.",
+);
+
+// 7a ── the agent harness is active in that session (M13-T9) ----------------
+//
+// The harness is Laser's own: the `subagents` module registers `start_agent`
+// and its siblings from the worker's bridge, `background-work` owns long
+// commands. Neither reads a package off disk, so "the package is present" is
+// no evidence; only the session report's active module list is.
+const HARNESS_MODULES = ["subagents", "background-work"];
+const activeModules = Array.isArray(sessionReport?.modules) ? sessionReport.modules.filter((name) => typeof name === "string") : [];
+const missingModules = HARNESS_MODULES.filter((name) => !activeModules.includes(name));
+record(
+  "the agent harness modules are active in that session",
+  Boolean(sessionReport?.ok) && missingModules.length === 0,
+  sessionReport?.ok
+    ? missingModules.length === 0
+      ? `active: ${activeModules.join(", ")}`
+      : `missing: ${missingModules.join(", ")}; active: ${activeModules.join(", ") || "none"}`
+    : "the session did not open",
+  "The companion extension did not activate the harness. Check that the packaged worker builds the agents bridge for every session and that the extension's modules are bundled whole.",
+);
+
+// 7b ── Beam's skill is a real file the packaged worker can name ------------
+// The packaged worker writes the skill into the sandbox agent directory it
+// creates for the check and removes that sandbox on exit, so the proof is the
+// size it measured there; a path that still exists is measured again here.
+const beamSkillPath = typeof sessionReport?.beamSkillPath === "string" ? sessionReport.beamSkillPath : undefined;
+const beamSkillReported = typeof sessionReport?.beamSkillBytes === "number" && sessionReport.beamSkillBytes > 0;
+const beamSkillStillThere = Boolean(beamSkillPath) && existsSync(beamSkillPath) && lstatSync(beamSkillPath).isFile();
+const beamSkillBytes = beamSkillStillThere ? bytesOf(beamSkillPath) : sessionReport?.beamSkillBytes;
+record(
+  "Beam's skill file is written by the packaged worker",
+  Boolean(sessionReport?.ok) && (beamSkillReported || beamSkillStillThere),
+  beamSkillPath
+    ? `${beamSkillPath} (${beamSkillReported || beamSkillStillThere ? `${human(beamSkillBytes)}${beamSkillStillThere ? "" : ", measured inside the check's sandbox"}` : "missing or empty"})`
+    : "the session report named no Beam skill",
+  "The worker must write `<agentDir>/skills/<product>-beam/SKILL.md` on start and report its path and size from check-packaged-session.",
 );
 
 // 8 ── the machine's own agent is found and not used ------------------------

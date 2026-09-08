@@ -324,7 +324,9 @@ export class HostClient {
       const entry = this.pending.get(Number(message.id));
       if (!entry) return;
       this.pending.delete(Number(message.id));
-      if (message.error) entry.reject(new Error(message.error.message));
+      // Keep the code and structured data: a refused agent save carries
+      // `data.issues` so the form can land each refusal on its field.
+      if (message.error) entry.reject(Object.assign(new Error(message.error.message), { code: message.error.code, data: message.error.data }));
       else entry.resolve(message.result);
       return;
     }

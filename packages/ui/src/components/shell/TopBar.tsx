@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   ChevronLeft,
+  ChevronRight,
   Copy,
   Ellipsis,
   GitBranch,
@@ -15,9 +16,15 @@ import {
   Shrink,
   Search,
   SquarePen,
+  Waypoints,
 } from "lucide-react";
 
+// Agent map (M13-T7): the toggle that swaps the main column between the thread and the live map.
+import { mapUi, useMapUi } from "@/components/agents/map";
+import { useSessionAgent } from "@/agents/hooks";
 import { ContextRingButton } from "@/components/assistant-ui/elements/context-display";
+// Beam: the quiet mark on one of its sessions (view styling, not an entry point).
+import { BeamSessionMark } from "@/components/beam/BeamSessionMark";
 import { StatusDot } from "@/components/status";
 import { preserveReadingPosition } from "@/components/thread/preserve-reading-position";
 import { openConversationFind } from "@/components/thread/search-state";
@@ -85,6 +92,8 @@ export function TopBar() {
   const [renaming, setRenaming] = useState(false);
   const [compactOpen, setCompactOpen] = useState(false);
   const activityLevel = useActivityDetailLevel(view?.path);
+  // Agent map (M13-T7): shown in place of the thread while `open`.
+  const mapOpen = useMapUi().open;
 
   const summary = useMemo(() => (view ? sessions.find((s) => s.path === view.path) : undefined), [sessions, view]);
   const status = sessionStatus(view, summary);
@@ -148,6 +157,11 @@ export function TopBar() {
         ) : (
           currentProject && <span className="eyebrow hidden sm:inline">{shortCwd(currentProject)}</span>
         )}
+        <BeamSessionMark path={view?.path} />
+
+        {/* Agents leap (Lane U2): a child session an agent started shows where
+            it came from — its parent's title, one press away — before its own. */}
+        {view && !renaming ? <ParentCrumb path={view.path} /> : null}
 
         {renaming && view ? (
           <InlineRename
@@ -232,6 +246,16 @@ export function TopBar() {
             composer carries the same element next to Send. */}
         <ContextRingButton side="bottom" className="me-1" />
         <TooltipIconButton tooltip="Find in conversation" shortcut="Ctrl+F" onClick={() => openConversationFind()}><Search /></TooltipIconButton>
+        {/* Agent map (M13-T7): the live map of this session's agents, in place of the thread. */}
+        <TooltipIconButton
+          tooltip={mapOpen ? "Show conversation" : "Show agent map"}
+          aria-pressed={mapOpen}
+          disabled={!view}
+          data-slot="agent-map-toggle"
+          onClick={() => mapUi.toggleOpen()}
+        >
+          <Waypoints />
+        </TooltipIconButton>
 
         {dockable && (
           <TooltipIconButton
@@ -317,6 +341,39 @@ export function TopBar() {
 
       <CompactDialog open={compactOpen} onOpenChange={setCompactOpen} />
     </header>
+  );
+}
+
+/** "{parent title} ›" before a child session's title; nothing for a top-level session. */
+function ParentCrumb({ path }: { path: string }) {
+  const { actions } = useLaserStable();
+  const agent = useSessionAgent(path);
+  const parentPath = agent?.kind === "child" ? agent.parentPath : undefined;
+  const parentTitle = useLaserState((s) => {
+    if (parentPath === undefined) return undefined;
+    const summary = s.sessions.find((session) => session.path === parentPath);
+    const view = s.open[parentPath];
+    if (summary) return sessionTitle(summary, view);
+    return view?.state.name ?? view?.title ?? "Parent session";
+  });
+  if (parentPath === undefined || parentTitle === undefined) return null;
+  return (
+    <span data-slot="parent-crumb" className="flex min-w-0 shrink items-center gap-1">
+      <button
+        type="button"
+        onClick={() => void actions.openSession(parentPath)}
+        title={`Open ${parentTitle}
+${parentPath}`}
+        className={cn(
+          "max-w-24 truncate rounded px-1 text-sm leading-5 text-ink-2 outline-none sm:max-w-40",
+          "transition-colors duration-(--motion-instant) hover:bg-surface-2 hover:text-ink active:bg-[color-mix(in_oklab,var(--surface-2)_80%,var(--ink))]",
+          "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live motion-reduce:transition-none",
+        )}
+      >
+        {parentTitle}
+      </button>
+      <ChevronRight className="size-3 shrink-0 text-ink-3" aria-hidden="true" />
+    </span>
   );
 }
 

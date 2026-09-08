@@ -13,7 +13,7 @@
  *
  * The builders below are pure and tested in test/runtime/threadList.test.ts.
  */
-import { storageKey } from "@lasercode/protocol";
+import { storageKey, WORKTREES_DIR_NAME } from "@lasercode/protocol";
 import type { RemoteThreadListAdapter } from "@assistant-ui/react";
 import type { ProjectInfo, SessionAttention, SessionSummary } from "@lasercode/protocol";
 import type { SessionView } from "../store.js";
@@ -67,12 +67,18 @@ export function sessionAttention(summary: SessionSummary, view?: SessionView | u
  * Clipped to one line and a sane width here rather than in CSS, because this
  * string is also the browser tab title and a notification's heading, where
  * `truncate` does not reach.
+ *
+ * A child session an agent started carries the instance name its parent gave
+ * it (`agent.subagentName`); before its first message, that name is what the
+ * parent calls it, so it is what the person sees.
  */
 export function sessionTitle(summary: SessionSummary, view?: SessionView | undefined): string {
   const named = summary.name ?? view?.title;
   if (named) return named;
   const first = summary.firstMessage?.trim() || firstUserText(view);
-  return first ? clipToTitle(first) : "New session";
+  if (first) return clipToTitle(first);
+  const subagent = summary.agent?.subagentName ?? view?.state.agent?.subagentName;
+  return subagent ? clipToTitle(subagent) : "New session";
 }
 
 /** The transcript's own first user line, for a session opened before the catalog scanned it. */
@@ -132,6 +138,10 @@ export function mergeSessions(
       createdAt: at,
       modifiedAt: at,
       messageCount: view.state.messageCount,
+      // A child an agent just started is attributed by its own state before
+      // the catalog scans the file, so it nests under its parent at once.
+      ...(view.state.agent !== undefined ? { agent: view.state.agent } : {}),
+      ...(view.state.agent?.parentPath !== undefined ? { parentPath: view.state.agent.parentPath } : {}),
     });
   }
   return [...merged.values()];
@@ -153,9 +163,20 @@ export function toThreadMetadata(
       cwd: summary.cwd,
       attention: sessionAttention(summary, view),
       modifiedAt: summary.modifiedAt,
-      ...(summary.parentPath !== undefined ? { parentPath: summary.parentPath } : {}),
+      createdAt: summary.createdAt,
+      ...(parentPathOf(summary) !== undefined ? { parentPath: parentPathOf(summary) } : {}),
+      // Agent attribution (agents leap): the sessions panel nests a child
+      // under its parent and labels it with the instance name.
+      ...(summary.agent !== undefined ? { agentKind: summary.agent.kind, agentName: summary.agent.agentName } : {}),
+      ...(summary.agent?.subagentName !== undefined ? { subagentName: summary.agent.subagentName } : {}),
+      ...(summary.agent?.runId !== undefined ? { runId: summary.agent.runId } : {}),
     },
   };
+}
+
+/** The parent a child session names: the catalog's own link, else the agent record's. */
+export function parentPathOf(summary: Pick<SessionSummary, "parentPath" | "agent">): string | undefined {
+  return summary.parentPath ?? summary.agent?.parentPath;
 }
 
 // ---------------------------------------------------------------------------
@@ -228,12 +249,25 @@ export function createArchiveStore(storage?: Pick<Storage, "getItem" | "setItem"
  * make the project look active. Open work remains reachable even when its
  * transcript was archived.
  */
+/**
+ * The project a directory belongs to: a child agent's worktree under
+ * `<project>/.worktrees/<slug>` is part of that project, never a project of
+ * its own (D-140).
+ */
+export function projectRootOfCwd(cwd: string): string {
+  const marker = `/${WORKTREES_DIR_NAME}/`;
+  const at = cwd.indexOf(marker);
+  return at > 0 ? cwd.slice(0, at) : cwd;
+}
+
 export function visibleProjectCwds(
   projects: readonly ProjectInfo[],
   sessions: readonly SessionSummary[],
   open: Readonly<Record<string, SessionView | undefined>>,
   archive: ArchiveStore,
+  options: { /** Directories that are never projects: the Beam and Chat workspaces. */ exclude?: readonly string[] } = {},
 ): string[] {
+  const excluded = new Set(options.exclude ?? []);
   const archivedByCwd = new Map<string, number>();
   for (const session of sessions) {
     if (!archive.has(session.path)) continue;
@@ -241,8 +275,9 @@ export function visibleProjectCwds(
   }
   const visible: string[] = [];
   const seen = new Set<string>();
-  const append = (cwd: string) => {
-    if (seen.has(cwd)) return;
+  const append = (raw: string) => {
+    const cwd = projectRootOfCwd(raw);
+    if (seen.has(cwd) || excluded.has(cwd)) return;
     seen.add(cwd);
     visible.push(cwd);
   };
@@ -394,9 +429,18 @@ export function threadListSignature(
   const merged = sortSessions(mergeSessions(sessions, views), views);
   return merged
     .map((s) =>
-      [s.path, sessionTitle(s, views[s.path]), sessionAttention(s, views[s.path]), s.modifiedAt, archive.has(s.path) ? "a" : "r"].join(
-        "\u0001",
-      ),
+      [
+        s.path,
+        sessionTitle(s, views[s.path]),
+        sessionAttention(s, views[s.path]),
+        s.modifiedAt,
+        archive.has(s.path) ? "a" : "r",
+        // A child attributed after the fact moves under its parent: the list
+        // has to reload for that, so the attribution is part of the signature.
+        s.agent?.kind ?? "",
+        parentPathOf(s) ?? "",
+        s.agent?.subagentName ?? "",
+      ].join("\u0001"),
     )
     .join("\u0002");
 }

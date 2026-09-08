@@ -22,13 +22,15 @@ import { accountUsageRefreshError } from "./account-usage-error.js";
 import { PRODUCT_NAME, storageKey } from "@lasercode/protocol";
 import {
   AssistantRuntimeProvider,
+  AuiConfig,
+  AuiProvider,
   useAui,
   useAuiEvent,
   useAuiState,
   useExternalStoreRuntime,
   useRemoteThreadListRuntime,
 } from "@assistant-ui/react";
-import type { AssistantRuntime, ThreadMessageLike } from "@assistant-ui/react";
+import type { AssistantRuntime, RemoteThreadListAdapter, ThreadMessageLike } from "@assistant-ui/react";
 import type {
   ContentBlock,
   GoalAction,
@@ -36,6 +38,7 @@ import type {
   HostNotifications,
   ModelRef,
   ProjectInfo,
+  SessionAgentInfo,
   SessionState,
   SessionSummary,
   ThinkingLevel,
@@ -54,10 +57,11 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
+import { createAgentsActions, type AgentsActions } from "../agents/actions.js";
 import { HostClient } from "../client.js";
 import { initialState, reduce, type Action, type AppState, type SessionView } from "../store.js";
 import { createThreadAdapter, sendToSession, type SendBehavior } from "./adapter.js";
-import { createSessionLauncher } from "./new-session.js";
+import { createSessionLauncher, type NewSessionOptions } from "./new-session.js";
 import { useThemeSync } from "./prefs.js";
 import { projectSessionView, shareProjectedMessages, splitDialogs } from "./projection.js";
 import {
@@ -98,8 +102,12 @@ export type TrustRequest = HostNotifications["pi/project/trust_request"];
 export interface LaserActions {
   /** `session/load` (+ `pi/session/entries` on first open) and select it. */
   openSession(path: string): Promise<void>;
-  /** Select an unstarted session in `cwd`, or create one; returns its path. */
-  newSession(cwd: string): Promise<string>;
+  /**
+   * Select an unstarted session in `cwd`, or create one; returns its path.
+   * `agentName` picks the definition (omitted: the default agent); an empty
+   * session is only reused for the same agent.
+   */
+  newSession(cwd: string, options?: NewSessionOptions): Promise<string>;
   /** Send to the current session with an explicit behavior. */
   send(content: ContentBlock[], behavior: SendBehavior): Promise<void>;
   abort(): Promise<void>;
@@ -138,6 +146,8 @@ export interface LaserActions {
   markSeen(path: string, seq: number, force?: boolean): void;
   dismissToast(id: number): void;
   toast(level: "info" | "warning" | "error", text: string): void;
+  /** Agent definitions, runs, Beam and Namer (`agents/*`). See agents/actions.ts for failure styles. */
+  agents: AgentsActions;
 }
 
 export interface LaserContextValue {
@@ -166,6 +176,25 @@ export type LaserStable = Omit<LaserContextValue, "state" | "view">;
 const LaserStableContext = createContext<LaserStable | null>(null);
 const LaserStateContext = createContext<StateStore | null>(null);
 
+/**
+ * What a `LaserThreadScope` needs from the provider and nothing else sees:
+ * the real store, the client, the quiet session open and the actions
+ * factory. Internal to this file on purpose.
+ */
+interface LaserInternals {
+  store: StateStore;
+  client: HostClient;
+  dispatch: (action: Action) => void;
+  onError: (error: unknown) => void;
+  openSession: (path: string, options?: { select?: boolean }) => Promise<void>;
+  buildActions: (readScoped: () => AppState) => LaserActions;
+  archive: ArchiveStore;
+  refreshSessions: () => Promise<void>;
+  /** Keep `path` attached on the host while a scope shows it; returns the release. */
+  attach: (path: string) => () => void;
+}
+const LaserInternalsContext = createContext<LaserInternals | null>(null);
+
 export function useLaserStable(): LaserStable {
   const value = useContext(LaserStableContext);
   if (!value) throw new Error("useLaser must be used inside <LaserProvider>.");
@@ -188,22 +217,35 @@ export function useLaserState<T>(selector: (state: AppState) => T, isEqual: (a: 
   selectorRef.current = selector;
   const isEqualRef = useRef(isEqual);
   isEqualRef.current = isEqual;
-  const cache = useRef<{ state: AppState; value: T } | undefined>(undefined);
+  const cache = useRef<{ state: AppState; selector: (state: AppState) => T; value: T } | undefined>(undefined);
 
   const getSnapshot = useCallback((): T => {
     const state = store.getSnapshot();
+    const selector = selectorRef.current;
     const previous = cache.current;
-    if (previous && previous.state === state) return previous.value;
-    const next = selectorRef.current(state);
+    // The selector is part of the key: one that closes over a prop (a session
+    // path, a project list) must answer for the new prop even when no state
+    // has changed since. A memoized selector still pays nothing per render.
+    if (previous && previous.state === state && previous.selector === selector) return previous.value;
+    const next = selector(state);
     if (previous && isEqualRef.current(previous.value, next)) {
-      cache.current = { state, value: previous.value };
+      cache.current = { state, selector, value: previous.value };
       return previous.value;
     }
-    cache.current = { state, value: next };
+    cache.current = { state, selector, value: next };
     return next;
   }, [store]);
 
   return useSyncExternalStore(store.subscribe, getSnapshot, getSnapshot);
+}
+
+/**
+ * Test seam: mount the state hooks over a bare store, with no host connection.
+ * Only {@link useLaserState} and what is built on it work inside; anything that
+ * needs actions or the client still requires the full provider.
+ */
+export function LaserStoreProvider({ store, children }: { store: StateStore; children: ReactNode }): ReactNode {
+  return <LaserStateContext.Provider value={store}>{children}</LaserStateContext.Provider>;
 }
 
 /** The currently open session view. Identity is stable while it does not change. */
@@ -227,14 +269,14 @@ export function useLaser(): LaserContextValue {
 // `useSyncExternalStore` so consumers can subscribe per slice.
 // ---------------------------------------------------------------------------
 
-interface StateStore {
+export interface StateStore {
   getSnapshot(): AppState;
   subscribe(listener: () => void): () => void;
   dispatch(action: Action): void;
 }
 
-function createStateStore(): StateStore {
-  let current = initialState;
+export function createStateStore(initial: AppState = initialState): StateStore {
+  let current = initial;
   const listeners = new Set<() => void>();
   return {
     getSnapshot: () => current,
@@ -508,12 +550,25 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    * The thread-list `fetch` and the per-thread `isMain` effect both open a
    * thread; without this they race and each one's snapshot clobbers the other.
    */
-  const openInFlight = useRef(new Map<string, Promise<void>>());
+  const openInFlight = useRef(new Map<string, { promise: Promise<void>; select: boolean }>());
 
+  /**
+   * `select: false` loads without making the session current: a scoped
+   * surface (`LaserThreadScope`, the Beam bubble) reads its session this way
+   * so the main view stays where it is.
+   */
   const openSession = useCallback(
-    (path: string): Promise<void> => {
+    (path: string, options: { select?: boolean } = {}): Promise<void> => {
+      const select = options.select !== false;
       const running = openInFlight.current.get(path);
-      if (running) return running;
+      if (running) {
+        // A selecting open that joins a quiet one still has to land on the
+        // session once it is there; a quiet one joins a selecting one as-is.
+        if (!select || running.select) return running.promise;
+        return running.promise.then(() => {
+          if (readState().open[path] && readState().current !== path) dispatch({ type: "select", path });
+        });
+      }
       const work = (async () => {
         // The page and the socket come up together: without this the first
         // session someone clicks after a reload was a dead click.
@@ -526,7 +581,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           path,
           ...(hydrated ? { fromSeq: view.lastSeq } : {}),
         });
-        dispatch({ type: "opened", state: session });
+        dispatch({ type: "opened", state: session, ...(select ? {} : { select: false }) });
         // `replayFrom` is the earliest seq the worker can actually replay. Below
         // what we hold means a fresh worker epoch; *above* it means its replay
         // buffer no longer reaches back to us and there is a hole. Either way
@@ -550,11 +605,14 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         const { goal } = await client.request("session/goal/get", { path });
         dispatch({ type: "goal", path, goal });
       })();
-      const tracked = work.finally(() => {
-        if (openInFlight.current.get(path) === tracked) openInFlight.current.delete(path);
-      });
-      openInFlight.current.set(path, tracked);
-      return tracked;
+      const entry = {
+        select,
+        promise: work.finally(() => {
+          if (openInFlight.current.get(path) === entry) openInFlight.current.delete(path);
+        }),
+      };
+      openInFlight.current.set(path, entry);
+      return entry.promise;
     },
     [client],
   );
@@ -569,10 +627,17 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     },
     open: openSession,
     select: (path) => dispatch({ type: "select", path }),
-    create: async (cwd) => {
-      const { state: session } = await client.request("session/new", { cwd });
+    // A session with no attribution runs the default agent, and so does a
+    // request with no `agentName`: both resolve through the snapshot so the
+    // launcher compares definitions, not the presence of a field.
+    resolveAgent: (name) => name ?? readState().agents.snapshot?.defaultAgent,
+    create: async (cwd, options) => {
+      const { state: session } = await client.request("session/new", {
+        cwd,
+        ...(options.agentName !== undefined ? { agentName: options.agentName } : {}),
+      });
       client.track(session.path, 0);
-      dispatch({ type: "opened", state: session });
+      dispatch({ type: "opened", state: session, ...(options.select === false ? { select: false } : {}) });
       dispatch({ type: "hydrate", path: session.path, entries: [] });
       dispatch({ type: "goal", path: session.path, goal: null });
       void refreshSessions();
@@ -580,11 +645,23 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     },
   }), [archive, client, openSession, refreshSessions]);
 
-  const requireCurrent = useCallback((): string => {
-    const path = readState().current;
-    if (!path) throw new Error("No session is open.");
-    return path;
-  }, []);
+  // `requireCurrent`, `send`, `answerDialog` and `fork` live inside
+  // `buildActions` below: they read "the current session" through the state
+  // reader they are built with, so a `LaserThreadScope` can rebind the same
+  // actions to its own session.
+
+  // --- agents -------------------------------------------------------------
+
+  const agentsActions = useMemo(() => createAgentsActions({ client, dispatch, guard }), [client, guard]);
+
+  // Definitions and the run registry come up with the connection and again
+  // after every reconnect: a restarted host may hold different agents, and a
+  // run that ended while we were away is only in its list.
+  useEffect(() => {
+    if (state.connection !== "open") return;
+    void agentsActions.refresh();
+    void agentsActions.runs();
+  }, [agentsActions, state.connection]);
 
   // --- attention ("seen") -------------------------------------------------
 
@@ -604,13 +681,33 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    * whole Pi runtime — resident for the life of the window.
    */
   const detached = useRef(new Set<string>());
+  /**
+   * Sessions a `LaserThreadScope` is showing (the Beam bubble). They are on
+   * screen too, so they stay attached for as long as the scope holds them;
+   * the counter re-runs the effect when a scope comes or goes.
+   */
+  const scopedPaths = useRef(new Map<string, number>());
+  const [scopeRevision, setScopeRevision] = useState(0);
+  const attachScope = useCallback((path: string): (() => void) => {
+    scopedPaths.current.set(path, (scopedPaths.current.get(path) ?? 0) + 1);
+    // The scope's own `session/load` re-attaches it on the host; forget the
+    // detach so it is sent again once the scope lets go.
+    detached.current.delete(path);
+    setScopeRevision((n) => n + 1);
+    return () => {
+      const left = (scopedPaths.current.get(path) ?? 1) - 1;
+      if (left <= 0) scopedPaths.current.delete(path);
+      else scopedPaths.current.set(path, left);
+      setScopeRevision((n) => n + 1);
+    };
+  }, []);
   useEffect(() => {
     if (state.connection !== "open") {
       detached.current.clear();
       return;
     }
     for (const path of Object.keys(state.open)) {
-      if (path === state.current) {
+      if (path === state.current || scopedPaths.current.has(path)) {
         detached.current.delete(path);
         continue;
       }
@@ -620,7 +717,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       // through the `session/load` that `openSession` always sends.
       client.request("pi/session/detach", { path }).catch(() => detached.current.delete(path));
     }
-  }, [client, state.connection, state.current, state.open]);
+  }, [client, scopeRevision, state.connection, state.current, state.open]);
 
   const markSeen = useCallback(
     (path: string, seq: number, force = false) => {
@@ -637,37 +734,12 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
 
   // --- actions ------------------------------------------------------------
 
-  const send = useCallback(
-    async (content: ContentBlock[], behavior: SendBehavior) => {
-      const path = requireCurrent();
-      // One implementation of the optimistic block and its rollback, shared
-      // with the thread adapter.
-      await sendToSession(client, path, content, behavior, dispatch);
-    },
-    [client, requireCurrent],
-  );
-
-  const answerDialog = useCallback(
-    async (response: UiDialogResponse) => {
-      const path = readState().current;
-      const dialog = path ? readState().open[path]?.dialogs.find((d) => d.id === response.id) : undefined;
-      dispatch({ type: "dialogAnswered", id: response.id, ...(path !== undefined ? { path } : {}) });
-      try {
-        await client.request("pi/ui/response", response);
-      } catch (error) {
-        // The extension is still blocked on `ask()`: put the card back rather
-        // than strand it with no way to answer.
-        if (path !== undefined && dialog) {
-          dispatch({ type: "notification", method: "pi/ui/request", params: { path, ...dialog } });
-        }
-        throw error;
-      }
-    },
-    [client],
-  );
-
+  // A refreshed snapshot of a session that is already current where it was
+  // asked for (`setModel`, `setThinking`): never a selection. Inside a
+  // `LaserThreadScope` a selecting `opened` would drag the main view onto the
+  // bubble's session.
   const applyState = useCallback((session: SessionState) => {
-    dispatch({ type: "opened", state: session });
+    dispatch({ type: "opened", state: session, select: false });
   }, []);
 
   /**
@@ -725,13 +797,56 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         }
         return;
       }
+      case "agents/run": {
+        // A run in a session we have never listed is a child an agent just
+        // started: list again so its row and its map node have a title.
+        const { run } = params as HostNotifications["agents/run"];
+        if (!readState().sessions.some((summary) => summary.path === run.sessionPath)) scheduleSessionRefresh();
+        return;
+      }
       default:
         return;
     }
   };
 
-  const fork = useCallback(
-    async (entryId: string) => {
+  /**
+   * The actions, built over a state reader. The provider's own actions read
+   * the real store, so "the current session" is `state.current`; a
+   * `LaserThreadScope` builds a second set over a store whose `current` is its
+   * own session, and every session-bound verb below follows it — the composer
+   * inside the Beam bubble sets Beam's model, not the main session's.
+   */
+  const buildActions = useCallback((readScoped: () => AppState): LaserActions => {
+    const requireCurrent = (): string => {
+      const path = readScoped().current;
+      if (!path) throw new Error("No session is open.");
+      return path;
+    };
+
+    const send = async (content: ContentBlock[], behavior: SendBehavior) => {
+      const path = requireCurrent();
+      // One implementation of the optimistic block and its rollback, shared
+      // with the thread adapter.
+      await sendToSession(client, path, content, behavior, dispatch);
+    };
+
+    const answerDialog = async (response: UiDialogResponse) => {
+      const path = readScoped().current;
+      const dialog = path ? readScoped().open[path]?.dialogs.find((d) => d.id === response.id) : undefined;
+      dispatch({ type: "dialogAnswered", id: response.id, ...(path !== undefined ? { path } : {}) });
+      try {
+        await client.request("pi/ui/response", response);
+      } catch (error) {
+        // The extension is still blocked on `ask()`: put the card back rather
+        // than strand it with no way to answer.
+        if (path !== undefined && dialog) {
+          dispatch({ type: "notification", method: "pi/ui/request", params: { path, ...dialog } });
+        }
+        throw error;
+      }
+    };
+
+    const fork = async (entryId: string) => {
       const path = requireCurrent();
       const { state: session, editorText } = await client.request("pi/session/fork", { path, entryId });
       client.untrack(path);
@@ -747,14 +862,11 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         });
       }
       void refreshSessions();
-    },
-    [client, refreshSessions, requireCurrent],
-  );
+    };
 
-  const actions = useMemo<LaserActions>(
-    () => ({
+    return {
       openSession: (path) => guard(() => openSession(path)).then(() => undefined),
-      newSession: (cwd) => newSession(cwd),
+      newSession: (cwd, options) => newSession(cwd, options),
       send: (content, behavior) => send(content, behavior),
       abort: () => guard(async () => client.request("session/cancel", { path: requireCurrent() })).then(() => undefined),
       answerDialog: (response) => guard(() => answerDialog(response)).then(() => undefined),
@@ -890,22 +1002,22 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       markSeen,
       dismissToast: (id) => dispatch({ type: "dismissToast", id }),
       toast: (level, text) => dispatch({ type: "toast", level, text }),
-    }),
-    [
-      answerDialog,
-      applyState,
-      client,
-      fork,
-      guard,
-      markSeen,
-      newSession,
-      openSession,
-      refreshProjects,
-      refreshSessions,
-      requireCurrent,
-      send,
-    ],
-  );
+      agents: agentsActions,
+    };
+  }, [
+    agentsActions,
+    applyState,
+    archive,
+    client,
+    guard,
+    markSeen,
+    newSession,
+    openSession,
+    refreshProjects,
+    refreshSessions,
+  ]);
+
+  const actions = useMemo<LaserActions>(() => buildActions(readState), [buildActions, readState]);
 
   const actionsRef = useRef<LaserActions>(actions);
   actionsRef.current = actions;
@@ -920,8 +1032,9 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   // string key so the array identity survives a delta — it feeds the stable
   // half of the context.
   const projectsKey = useMemo(() => {
-    return visibleProjectCwds(projectList, state.sessions, state.open, archive).join("\n");
-  }, [archive, archiveRevision, projectList, state.open, state.sessions]);
+    const workspaces = state.agents.snapshot?.workspaces;
+    return visibleProjectCwds(projectList, state.sessions, state.open, archive, { exclude: workspaces ? [workspaces.beam, workspaces.chat] : [] }).join("\n");
+  }, [archive, archiveRevision, projectList, state.open, state.sessions, state.agents.snapshot?.workspaces]);
   const projects = useMemo(() => (projectsKey ? projectsKey.split("\n") : []), [projectsKey]);
   const projectInfo = useMemo(() => {
     const map: Record<string, ProjectInfo> = {};
@@ -1119,13 +1232,20 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     [actions, archive, client, currentProject, dispatch, projectInfo, projects, setCurrentProject, startupRestoring, trustRequests],
   );
 
+  const internals = useMemo<LaserInternals>(
+    () => ({ store, client, dispatch, onError, openSession, buildActions, archive, refreshSessions, attach: attachScope }),
+    [archive, attachScope, buildActions, client, dispatch, onError, openSession, refreshSessions, store],
+  );
+
   return (
     <LaserStateContext.Provider value={store}>
       <LaserStableContext.Provider value={stable}>
-        <AssistantRuntimeProvider runtime={runtime}>
-          <ThreadSelectionSync />
-          {children}
-        </AssistantRuntimeProvider>
+        <LaserInternalsContext.Provider value={internals}>
+          <AssistantRuntimeProvider runtime={runtime}>
+            <ThreadSelectionSync />
+            {children}
+          </AssistantRuntimeProvider>
+        </LaserInternalsContext.Provider>
       </LaserStableContext.Provider>
     </LaserStateContext.Provider>
   );
@@ -1214,6 +1334,295 @@ function useThreadRuntime(store: SnapshotStore<RuntimeSnapshot>): AssistantRunti
   );
 
   return useExternalStoreRuntime<ThreadMessageLike>(adapter);
+}
+
+// ---------------------------------------------------------------------------
+// A second thread, scoped: the Beam bubble
+// ---------------------------------------------------------------------------
+
+/**
+ * The same app state with `current` replaced by the scope's session, so every
+ * `useLaserState`, `useLaserView` and `useSessionMeta` under the scope reads
+ * that session while the store itself stays one. Derived lazily and cached
+ * per underlying state, so identity survives every unrelated delta.
+ */
+function createScopedStateStore(store: StateStore, path: string | undefined): StateStore {
+  let source: AppState | undefined;
+  let derived: AppState | undefined;
+  return {
+    getSnapshot: () => {
+      const state = store.getSnapshot();
+      if (state !== source || derived === undefined) {
+        source = state;
+        derived = state.current === path ? state : { ...state, current: path };
+      }
+      return derived;
+    },
+    subscribe: store.subscribe,
+    dispatch: store.dispatch,
+  };
+}
+
+/** Everything the scope's filter is asked about, for catalog rows and open views alike. */
+export interface ScopedSessionShape {
+  cwd: string;
+  agent?: SessionAgentInfo | undefined;
+}
+
+export interface LaserThreadScopeProps {
+  /** The session this scope shows; `undefined` is a thread that does not exist yet. */
+  path: string | undefined;
+  /**
+   * The scope adopted a session: its first message created one, or the one it
+   * was given cannot be opened any more (then `undefined`).
+   */
+  onPathChange: (path: string | undefined) => void;
+  /** Which sessions belong to this scope's thread list. */
+  filter: (session: ScopedSessionShape, state: AppState) => boolean;
+  /**
+   * Where a brand-new session is created and which agent runs it. `undefined`
+   * (the host has not said yet) refuses creation with `unavailable`, written
+   * for the person who just pressed Enter.
+   */
+  createIn: (state: AppState) => { cwd: string; agentName?: string } | undefined;
+  unavailable: string;
+  children: ReactNode;
+}
+
+const ISOLATED_ROOT = AuiConfig({});
+
+/**
+ * A failure the scope has already put in front of the person (its refusal
+ * notice); the thread adapter's error path must not toast it a second time.
+ */
+const SURFACED = Symbol.for("lasercode.scope.surfaced");
+const markSurfaced = (error: unknown): Error => {
+  const wrapped = error instanceof Error ? error : new Error(String(error));
+  (wrapped as Error & { [SURFACED]?: true })[SURFACED] = true;
+  return wrapped;
+};
+const isSurfaced = (error: unknown): boolean => error instanceof Error && (error as Error & { [SURFACED]?: true })[SURFACED] === true;
+
+export interface ThreadScopeRefusal {
+  /** Why the last message could not start a session, in the host's words; `undefined` when nothing is wrong. */
+  refusal: string | undefined;
+  dismissRefusal(): void;
+}
+
+const ThreadScopeRefusalContext = createContext<ThreadScopeRefusal>({ refusal: undefined, dismissRefusal: () => {} });
+
+/** The scope's refusal, for a notice rendered inside the scope (the Beam bubble). */
+export function useThreadScopeRefusal(): ThreadScopeRefusal {
+  return useContext(ThreadScopeRefusalContext);
+}
+
+/**
+ * A second, independent thread over the same host connection and store
+ * (AGENTS.md invariant 8 holds: one session is still written by one worker;
+ * this only reads it from a second place).
+ *
+ * The bubble and the main view show different sessions at once, so the scope
+ * owns three things: a state store whose `current` is its own session (so the
+ * ordinary `Thread`, composer and status line inside read it), a set of
+ * actions bound to that store (so "set model" inside the bubble sets Beam's
+ * model), and its own `useRemoteThreadListRuntime` under an isolated aui root
+ * — nested under the main runtime it would silently become a no-op bound to
+ * the main thread. Sessions it opens are opened quietly (`select: false`),
+ * so the main view never moves.
+ */
+export function LaserThreadScope({ path, onPathChange, filter, createIn, unavailable, children }: LaserThreadScopeProps): ReactNode {
+  const internals = useContext(LaserInternalsContext);
+  if (!internals) throw new Error("LaserThreadScope must be used inside <LaserProvider>.");
+  const parent = useLaserStable();
+  const { store, client, dispatch, onError, openSession, buildActions, archive, refreshSessions, attach } = internals;
+
+  // Latest props for callbacks that must keep their identity (the adapter is
+  // built once; swapping it drops cached threads).
+  const pathRef = useRef(path);
+  pathRef.current = path;
+  const filterRef = useRef(filter);
+  filterRef.current = filter;
+  const createInRef = useRef(createIn);
+  createInRef.current = createIn;
+
+  // Inside the scope "the current project" is the scope's own workspace: the
+  // composer must not refuse to send for want of a project, and what it asks
+  // about a directory (commands, files, the default model) is asked there.
+  const workspace = useLaserState(useCallback((s: AppState) => createInRef.current(s)?.cwd, []));
+  const scopedStore = useMemo(() => createScopedStateStore(store, path), [store, path]);
+  const stable = useMemo<LaserStable>(
+    () => ({ ...parent, ...(workspace !== undefined ? { currentProject: workspace } : {}), actions: buildActions(scopedStore.getSnapshot) }),
+    [parent, buildActions, scopedStore, workspace],
+  );
+  const unavailableRef = useRef(unavailable);
+  unavailableRef.current = unavailable;
+  const onPathChangeRef = useRef(onPathChange);
+  onPathChangeRef.current = onPathChange;
+  const newSessionRef = useRef(parent.actions.newSession);
+  newSessionRef.current = parent.actions.newSession;
+
+  // On screen means attached, for as long as the scope holds the session.
+  useEffect(() => (path ? attach(path) : undefined), [attach, path]);
+
+  // A first message the host refused (no model Beam can call, no workspace
+  // yet): said inside the scope, and the message handed back to the composer,
+  // rather than lost to a corner toast. `lastText` is the composer's last
+  // non-empty text, remembered because a send clears it before the host answers.
+  const [refusal, setRefusal] = useState<string | undefined>(undefined);
+  const lastText = useRef("");
+  const dismissRefusal = useCallback(() => setRefusal(undefined), []);
+  const refusalValue = useMemo<ThreadScopeRefusal>(() => ({ refusal, dismissRefusal }), [refusal, dismissRefusal]);
+  const scopedOnError = useCallback((error: unknown) => {
+    if (!isSurfaced(error)) onError(error);
+  }, [onError]);
+
+  const sessions = useCallback((): SessionSummary[] => {
+    const state = store.getSnapshot();
+    return state.sessions.filter((session) => filterRef.current(session, state));
+  }, [store]);
+  const views = useCallback((): Record<string, SessionView> => {
+    const state = store.getSnapshot();
+    const mine: Record<string, SessionView> = {};
+    for (const [key, view] of Object.entries(state.open)) {
+      if (view && filterRef.current({ cwd: view.state.cwd, agent: view.state.agent }, state)) mine[key] = view;
+    }
+    return mine;
+  }, [store]);
+
+  const [initializing, setInitializing] = useState(0);
+  const adapter = useMemo<RemoteThreadListAdapter>(
+    () =>
+      createThreadListAdapter({
+        sessions,
+        views,
+        archive,
+        currentProject: () => createInRef.current(store.getSnapshot())?.cwd,
+        createSession: async (cwd) => {
+          try {
+            const target = createInRef.current(store.getSnapshot());
+            if (!target) throw new Error(unavailableRef.current);
+            const created = await newSessionRef.current(cwd, {
+              ...(target.agentName !== undefined ? { agentName: target.agentName } : {}),
+              select: false,
+            });
+            // Adopt once assistant-ui has mapped the new thread onto this path
+            // (its `initialize` settles in the same microtask turn). Changing
+            // the controlled `threadId` synchronously here would make it fetch
+            // the session a second time as a stranger.
+            setTimeout(() => onPathChangeRef.current(created), 0);
+            setRefusal(undefined);
+            return created;
+          } catch (error) {
+            setRefusal(error instanceof Error ? error.message : String(error));
+            throw markSurfaced(error);
+          }
+        },
+        renameSession: async (target, name) => {
+          await client.request("pi/session/rename", { path: target, name });
+        },
+        deleteSession: async (target) => {
+          await client.request("pi/session/delete", { path: target });
+        },
+        loadSession: (target) =>
+          openSession(target, { select: false }).catch((error: unknown) => {
+            // The remembered session is gone: start fresh rather than sit on a
+            // thread that cannot load.
+            if (target === pathRef.current) onPathChangeRef.current(undefined);
+            throw error;
+          }),
+        refreshSessions,
+        beginInitialize: () => setInitializing((n) => n + 1),
+        endInitialize: () => setInitializing((n) => Math.max(0, n - 1)),
+      }),
+    [archive, client, openSession, refreshSessions, sessions, store, views],
+  );
+
+  const snapshotStore = useMemo(
+    () => createSnapshotStore<RuntimeSnapshot>({ store, client, dispatch, onError: scopedOnError, openSession: (target) => openSession(target, { select: false }) }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- created once; kept in sync below
+    [],
+  );
+  useEffect(() => {
+    snapshotStore.set({ store, client, dispatch, onError: scopedOnError, openSession: (target) => openSession(target, { select: false }) });
+  }, [snapshotStore, store, client, dispatch, scopedOnError, openSession]);
+
+  const runtimeHook = useCallback(
+    // oxlint-disable-next-line react-hooks/rules-of-hooks -- invoked by useRemoteThreadListRuntime at a stable hook position
+    () => useThreadRuntime(snapshotStore),
+    [snapshotStore],
+  );
+
+  const onThreadIdChange = useCallback((threadId: string | undefined) => {
+    if (threadId !== undefined && threadId !== pathRef.current) onPathChangeRef.current(threadId);
+  }, []);
+
+  // The list's signature over this scope's sessions only; the parent store
+  // is read here, above the scoped provider.
+  const archiveRevision = useSyncExternalStore(archive.subscribe, archive.getSnapshot, archive.getSnapshot);
+  const signature = useLaserState(
+    useCallback(() => threadListSignature(sessions(), views(), archive), [archive, archiveRevision, sessions, views]),
+  );
+
+  return (
+    <LaserStateContext.Provider value={scopedStore}>
+      <LaserStableContext.Provider value={stable}>
+        <ThreadScopeRefusalContext.Provider value={refusalValue}>
+          <AuiProvider extends={null} config={ISOLATED_ROOT}>
+            <ScopedRuntime adapter={adapter} threadId={path} onThreadIdChange={onThreadIdChange} runtimeHook={runtimeHook} signature={signature} initializing={initializing}>
+              <ScopeComposerMemory lastText={lastText} refusal={refusal} />
+              {children}
+            </ScopedRuntime>
+          </AuiProvider>
+        </ThreadScopeRefusalContext.Provider>
+      </LaserStableContext.Provider>
+    </LaserStateContext.Provider>
+  );
+}
+
+/**
+ * Remembers the composer's last non-empty text and, when the host refuses
+ * the message that cleared it, puts it back so nothing the person typed is
+ * lost. Lives under the scope's runtime so it reads the scope's composer.
+ */
+function ScopeComposerMemory({ lastText, refusal }: { lastText: { current: string }; refusal: string | undefined }): null {
+  const aui = useAui();
+  const text = useAuiState((s) => s.composer.text);
+  useEffect(() => {
+    if (text.trim()) lastText.current = text;
+  }, [lastText, text]);
+  useEffect(() => {
+    if (refusal === undefined || !lastText.current) return;
+    if (!aui.composer.getState().text.trim()) aui.composer.setText(lastText.current);
+  }, [aui, lastText, refusal]);
+  return null;
+}
+
+interface ScopedRuntimeProps {
+  adapter: RemoteThreadListAdapter;
+  threadId: string | undefined;
+  onThreadIdChange: (threadId: string | undefined) => void;
+  runtimeHook: () => AssistantRuntime;
+  signature: string;
+  initializing: number;
+  children: ReactNode;
+}
+
+/** Rendered under the isolated aui root, so the hook builds a real runtime. */
+function ScopedRuntime({ adapter, threadId, onThreadIdChange, runtimeHook, signature, initializing, children }: ScopedRuntimeProps): ReactNode {
+  const runtime: AssistantRuntime = useRemoteThreadListRuntime({
+    allowNesting: true,
+    adapter,
+    threadId,
+    onThreadIdChange,
+    runtimeHook,
+  });
+  // Same discipline as the provider: reload on a signature change, held back
+  // while a freshly created thread is being adopted.
+  useEffect(() => {
+    if (initializing > 0) return;
+    void runtime.threads.reload().catch(() => {});
+  }, [runtime, signature, initializing]);
+  return <AssistantRuntimeProvider runtime={runtime}>{children}</AssistantRuntimeProvider>;
 }
 
 // ---------------------------------------------------------------------------

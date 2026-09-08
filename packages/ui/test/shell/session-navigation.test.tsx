@@ -13,7 +13,7 @@ const fixture = vi.hoisted(() => ({ state: { sessions: [
   { path: "/one/working.jsonl", cwd: "/one", name: "Active work", modifiedAt: "2026-09-07T03:00:00Z", messageCount: 2, attention: "working" },
   { path: "/one/finished.jsonl", cwd: "/one", name: "Finished work", modifiedAt: "2026-09-07T02:00:00Z", messageCount: 2, attention: "finished_unread" },
   { path: "/two/waiting.jsonl", cwd: "/two", name: "Review needed", modifiedAt: "2026-09-07T01:00:00Z", messageCount: 2, attention: "waiting_for_input" },
-], open: {}, workers: {} } }));
+], open: {}, workers: {}, agents: { snapshot: null, loading: false, error: null, runs: {}, events: [], chooseBeamModel: null } } }));
 vi.mock("@/runtime", async () => ({
   ...await import("../../src/runtime/threadList.js"),
   useLaserState: (selector: (s: unknown) => unknown) => selector(fixture.state),

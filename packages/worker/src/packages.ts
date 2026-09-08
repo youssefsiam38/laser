@@ -341,6 +341,11 @@ export class ModelsAdapter {
     return this.runtime;
   }
 
+  /** The shared runtime, for services that complete or check auth outside a session (Namer, the harness). */
+  modelRuntime(): Promise<ModelRuntime> {
+    return this.models;
+  }
+
   async providers(): Promise<{ providers: ProviderAuthInfo[]; error?: string }> {
     const runtime = await this.models;
     const providers = runtime.getProviders().map((provider): ProviderAuthInfo => {

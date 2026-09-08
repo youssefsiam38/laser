@@ -3,7 +3,10 @@ import { MessagePrimitive, useAui, useAuiState, type MessageState } from "@assis
 import type { ModelRef, ThinkingLevel } from "@lasercode/protocol";
 import { Info, Target, TriangleAlert } from "lucide-react";
 import { GoalRecord } from "./GoalRecord.js";
-import { GOAL_DATA_PART } from "@/runtime/projection";
+import { AgentCompletion } from "./AgentCompletion.js";
+import { AgentEventMessage } from "./AgentEventMessage.js";
+import { TaskEventNotice } from "./TaskEventNotice.js";
+import { AGENT_COMPLETION_DATA_PART, AGENT_EVENT_DATA_PART, GOAL_DATA_PART, TASK_EVENT_DATA_PART, type AgentCompletionData } from "@/runtime/projection";
 import type { GoalRecord as GoalRecordData } from "@/runtime/goal-history";
 import { memo, useContext, useMemo, useState } from "react";
 import { FindSelectionContext, SearchMessageContext, useSearchReveal } from "./search-state.js";
@@ -44,7 +47,8 @@ import { ApiRequestDialog } from "@/components/logs/ApiRequestDialog";
 
 /** `metadata.custom.laser` the projection stamps on every message. */
 interface LaserMeta {
-  kind?: "user" | "turn" | "notice";
+  /** `custom`: a message the transcript draws itself (an agent event, a task exit). */
+  kind?: "user" | "turn" | "notice" | "custom";
   images?: number;
   optimistic?: boolean;
   userOrdinal?: number;
@@ -231,7 +235,9 @@ function stopReason(reason: string, detail: string | undefined): { reason: strin
 export function AssistantMessage() {
   const searchReveal = useSearchReveal();
   const streaming = useAuiState((s) => s.message.role === "assistant" && s.message.status?.type === "running");
-  const isNotice = useAuiState((s) => laserMeta(s.message).kind === "notice");
+  // Notices and the custom messages the transcript draws (agent events, task
+  // exits) are records, not replies: no actions, no regenerate, a clock only.
+  const isNotice = useAuiState((s) => laserMeta(s.message).kind === "notice" || laserMeta(s.message).kind === "custom");
   const speaker = useAuiState((s) => laserMeta(s.message).speaker);
   const messageId = useAuiState((s) => s.message.id);
   // Two primitive selectors rather than one object, so the row does not re-render on every state change.
@@ -287,6 +293,10 @@ export function AssistantMessage() {
               case "data":
                 if (part.name === GOAL_DATA_PART) return <GoalRecord goal={part.data as GoalRecordData} />;
                 if (part.name === NOTICE_DATA_PART) return <Notice data={part.data} />;
+                // Agents leap: a child's final message, a parent's agent event, a task exit.
+                if (part.name === AGENT_COMPLETION_DATA_PART) return <AgentCompletion data={part.data as AgentCompletionData} />;
+                if (part.name === AGENT_EVENT_DATA_PART) return <AgentEventMessage data={part.data} />;
+                if (part.name === TASK_EVENT_DATA_PART) return <TaskEventNotice data={part.data} />;
                 return part.dataRendererUI;
               case "indicator":
                 // A turn that has started and sent nothing yet. The catalog

@@ -12,6 +12,15 @@ adapter because its panel duplicated the transcript. That was the whole
 ceremony, and it is deliberate: a second extension would mean a second
 `session_start`, a second failure domain, and a second thing to install.
 
+Two modules are not package glue at all. `subagents` registers the agent
+harness tools (`start_agent`, `send_agent_message`, `list_agents`,
+`wait_for_agents`, `stop_agent`; `complete_agent_run` in a child), appends the
+child's role to its system prompt and delivers agent events to the parent
+model — every call goes to the worker-supplied `AgentHarnessBridge`
+(`src/agents-bridge.ts`). `background-work` owns long commands. Both are
+Laser's own (D-140, [`agents.md`](agents.md)); they follow every rule below,
+and their "package" is the worker.
+
 ---
 
 ## 1. What a module is
@@ -46,10 +55,11 @@ Three rules, and they are not style:
 - **A module fails alone.** `createLaserExtension` wraps every `detect` and
   `activate` in a try/catch and reports failures in `laser/capabilities`
   under `failed`. Never let a module throw out of a Pi event handler.
-- **Nothing here reads files.** File watchers live in `@lasercode/host` so that
-  sessions started from a terminal — which have no worker and no extension —
-  stay visible. If your integration is "watch a directory", it belongs in the
-  host, not here.
+- **Nothing here reads files.** The host owns durable observation — the
+  session catalog watcher, and the agent run registry fed by the worker's
+  `agents/run` notifications — so that sessions started from a terminal, and
+  runs whose worker is gone, stay visible. If your integration is "watch a
+  directory", it belongs in the host, not here.
 
 ---
 
@@ -98,6 +108,13 @@ its four tools in `config.json`; a name match would silently stop working.
 **Never guess "yes".** Wrap the probe in a try/catch that returns `false`.
 Detection is an offer of an affordance: a wrong "no" costs a feature that was
 not there anyway, a wrong "yes" costs a button that fails when it is pressed.
+
+The harness modules detect nothing on the engine: `subagents` is present when
+the worker passed `ctx.agents` (the Subagents feature is on for this
+session) and `background-work` when it passed `ctx.backgroundWork`. Their
+tools are registered in `register()`, while the engine is still collecting
+extension definitions, because a tool added at `session_start` is too late for
+the first turn.
 
 ### How detection reaches the UI
 
@@ -273,8 +290,13 @@ process**, but the dependency only points one way: the worker depends on this
 package, so this package can never import the worker.
 
 When something in the worker has to be reachable from a Pi event handler, the
-worker publishes a small handle on a well-known symbol and the module looks it
-up — the same shape pi-subagents uses for its own in-process registries:
+worker either passes it explicitly — the agent harness arrives as
+`createLaserExtension({ agents, backgroundWork })` and modules read
+`ctx.agents` / `ctx.backgroundWork`, with the interface declared on both sides
+in `src/agents-bridge.ts` and `packages/worker/src/agents/bridge.ts` — or, for
+a handle that must be found from code that has no context, publishes it on a
+well-known symbol and the module looks it up (the shape the retired
+pi-subagents module used for that package's registries):
 
 ```ts
 const BRIDGE = Symbol.for("laser.transcribe.v1");   // declared on both sides, imported by neither
@@ -309,24 +331,35 @@ Rules for a bridge:
    Detection against a live Pi is not a unit test; the mapping from the
    package's shape to a panel is.
 8. Note the package, its version and what you verified in
-   `docs/research/findings.md` if you read its source to write the module.
+   [`docs/upstream.md`](upstream.md) if you read its source to write the
+   module. What was learned from pi-subagents before D-140 is in
+   [`docs/agents-leap/references/pi-subagents-reference.md`](agents-leap/references/pi-subagents-reference.md).
 
 ### The modules today
 
 | Module | Bridges | Detection | What it produces |
 | --- | --- | --- | --- |
 | `provider-log` | Pi's own provider hooks | always | `laser/provider/*` for the logs page |
+| `account-usage` | the subscription allowance route | an account-authenticated provider | `laser/account-usage/state` |
 | `panels` | the declared panel protocol | always | validates `laser:panel` → `laser/panel/upsert` |
-| `subagents` | pi-subagents registries and its rpc bus | `globalThis` symbols | `laser/subagents/event` |
+| `goal` | `@narumitw/pi-goal` state entries | Goals feature enabled | `laser/goal/state` |
+| `subagents` | the worker's agent harness (`AgentHarnessBridge`) | `ctx.agents` present | the harness tools, the child's role block, `laser/agent-event` custom messages in the parent |
+| `background-work` | the worker's shell (`BackgroundWorkOptions`) | `ctx.backgroundWork` present | `bash` with a background flag and timeout promotion, `task_*` tools, `tasks:*` run panels, `laser/task-event` |
 | `transcribe` | pi-gpt-transcribe | the `/transcribe` command | detection + the pre-send transform |
 | `web-access` | pi-web-access | retired by D-61 | no module; the transcript tool disclosure is the single presentation |
+
+Historical: before D-140 `subagents` probed pi-subagents' `globalThis`
+registries and its `subagents:rpc:v1` bus and emitted `laser/subagents/event`.
+That module is gone with the package.
 
 ---
 
 ## Related
 
 - [`docs/ux-panels.md`](ux-panels.md) — the panel contract these modules emit into.
-- [`docs/architecture.md`](architecture.md) — why file watching is in the host.
-- [`docs/research/findings.md`](research/findings.md) — what was verified about
-  each package, including which are terminal-only.
+- [`docs/architecture.md`](architecture.md) — why durable observation is in the host.
+- [`docs/agents.md`](agents.md) — the agent harness the `subagents` and
+  `background-work` modules are the model-facing half of.
+- [`docs/agents-leap/references/pi-subagents-reference.md`](agents-leap/references/pi-subagents-reference.md)
+  — what was verified about pi-subagents before it was replaced.
 - [`docs/upstream.md`](upstream.md) — patches we would like upstream, with diffs.

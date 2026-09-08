@@ -6,7 +6,12 @@
  * `entry_appended` only for extension custom entries, so it is not the source
  * of transcript state). Past sessions hydrate from `pi/session/entries`.
  */
+import { AGENT_EVENT_MESSAGE_TYPE, TASK_EVENT_MESSAGE_TYPE } from "@lasercode/protocol";
 import type {
+  AgentEvent,
+  AgentModelChoice,
+  AgentRun,
+  AgentsSnapshot,
   HostNotificationMethod,
   HostNotifications,
   MessageSpeaker,
@@ -49,7 +54,19 @@ export type Block =
       speaker?: MessageSpeaker;
     }
   | { kind: "tool"; id: string; at?: string; name: string; args: unknown; partial?: string; result?: unknown; isError?: boolean; done: boolean }
-  | { kind: "notice"; id: string; at?: string; level: "info" | "warning" | "error"; text: string };
+  | { kind: "notice"; id: string; at?: string; level: "info" | "warning" | "error"; text: string }
+  /**
+   * A custom message the transcript draws itself (Lane U2, agents leap): an
+   * agent event a parent received (`lasercode/agent-event`) or a background
+   * task's exit (`lasercode/task-event`). `details` is the structured payload
+   * the module attached; `text` is the block the model read. Only the types in
+   * {@link CUSTOM_MESSAGE_BLOCK_TYPES} become blocks; every other custom
+   * message stays invisible, as before.
+   */
+  | { kind: "custom"; id: string; at?: string; customType: string; text: string; details: unknown };
+
+/** Custom message types that render as transcript blocks. */
+export const CUSTOM_MESSAGE_BLOCK_TYPES: ReadonlySet<string> = new Set([AGENT_EVENT_MESSAGE_TYPE, TASK_EVENT_MESSAGE_TYPE]);
 
 export interface SessionView {
   path: string;
@@ -80,7 +97,46 @@ export interface SessionView {
   capabilities: PiExtensionModuleName[];
   /** Durable objective for this session, or null when Goal mode is inactive. */
   goal: SessionGoal | null;
+  /**
+   * Namer's early labels for tool calls still running, by tool call id
+   * (`lasercode/namer/label`). A label that does not change leaves the view
+   * identity alone, like `capabilities`.
+   */
+  namerLabels: Record<string, string>;
 }
+
+/**
+ * Everything the agents feature holds outside a session: the definitions
+ * snapshot, the live run registry and the transient inter-agent moments.
+ * Runs and events are keyed by the identities the protocol names — `runId`
+ * and the event's own `id` — never by position.
+ */
+export interface AgentsSlice {
+  /** From `agents/list`, kept current by `agents/updated`. */
+  snapshot: AgentsSnapshot | null;
+  /** True while `agents/list` is in flight. */
+  loading: boolean;
+  /** The last `agents/list` or `agents/runs/list` failure, written for a person. */
+  error: string | null;
+  /** Every run the host has told us about, by `runId`. */
+  runs: Record<string, AgentRun>;
+  /** Newest last, capped at {@link AGENT_EVENTS_MAX}, deduplicated by id. */
+  events: AgentEvent[];
+  /** `agents/beam/choose-model` is pending until the UI picks or dismisses. */
+  chooseBeamModel: { suggested: AgentModelChoice | null } | null;
+}
+
+/** Bubbles are transient; anything older than the newest hundred is history the transcript already holds. */
+export const AGENT_EVENTS_MAX = 100;
+
+export const initialAgents: AgentsSlice = {
+  snapshot: null,
+  loading: false,
+  error: null,
+  runs: {},
+  events: [],
+  chooseBeamModel: null,
+};
 
 export interface AppState {
   versionMismatch?: string;
@@ -92,6 +148,7 @@ export interface AppState {
   current: string | undefined;
   workers: Record<string, { status: string; message?: string }>;
   toasts: Array<{ id: number; level: "info" | "warning" | "error"; text: string }>;
+  agents: AgentsSlice;
 }
 
 export const initialState: AppState = {
@@ -102,13 +159,19 @@ export const initialState: AppState = {
   current: undefined,
   workers: {},
   toasts: [],
+  agents: initialAgents,
 };
 
 export type Action =
   | { type: "versionMismatch"; version: string }
   | { type: "connection"; state: AppState["connection"] }
   | { type: "sessions"; sessions: SessionSummary[] }
-  | { type: "opened"; state: SessionState }
+  /**
+   * A session was loaded or created. `select: false` keeps `current` where it
+   * is: a scoped surface (the Beam bubble) opening its own session must not
+   * move the main view (runtime/LaserProvider.tsx `LaserThreadScope`).
+   */
+  | { type: "opened"; state: SessionState; select?: boolean }
   | { type: "select"; path: string | undefined }
   | { type: "closeView"; path: string }
   /**
@@ -133,7 +196,24 @@ export type Action =
   | { type: "dialogAnswered"; id: string; path?: string }
   | { type: "toast"; level: "info" | "warning" | "error"; text: string }
   | { type: "notification"; method: HostNotificationMethod; params: HostNotifications[HostNotificationMethod] }
-  | { type: "dismissToast"; id: number };
+  | { type: "dismissToast"; id: number }
+  // --- agents ---
+  /** `agents/list` is in flight. */
+  | { type: "agents/loading" }
+  /** `agents/list` landed: authoritative, replaces whatever revision we held. */
+  | { type: "agents/loaded"; snapshot: AgentsSnapshot }
+  /** `agents/updated`, or the snapshot inside a mutation's result. Older revisions are ignored. */
+  | { type: "agents/updated"; snapshot: AgentsSnapshot }
+  | { type: "agents/run"; run: AgentRun }
+  /**
+   * `agents/runs/list`. Without `path` the list is the whole registry; with it,
+   * only the tree containing `path`, so runs of other trees are kept.
+   */
+  | { type: "agents/runs/loaded"; runs: AgentRun[]; path?: string }
+  | { type: "agents/event"; event: AgentEvent }
+  | { type: "agents/choose-beam-model"; suggested: AgentModelChoice | null }
+  | { type: "agents/choose-beam-model/clear" }
+  | { type: "agents/error"; error: string };
 
 let blockCounter = 0;
 let toastCounter = 0;
@@ -175,8 +255,9 @@ export function reduce(state: AppState, action: Action): AppState {
             entries: [],
             capabilities,
             goal: null,
+            namerLabels: {},
           };
-      return { ...state, open: { ...state.open, [view.path]: view }, current: view.path };
+      return { ...state, open: { ...state.open, [view.path]: view }, current: action.select === false ? state.current : view.path };
     }
     case "forked": {
       // The old view's live state moved to a new path; carry the transcript over.
@@ -184,7 +265,7 @@ export function reduce(state: AppState, action: Action): AppState {
       const { [action.from]: _gone, ...rest } = state.open;
       const view: SessionView = old
         ? { ...old, path: action.state.path, state: action.state, lastSeq: 0, hydrated: false, entries: [], goal: null }
-        : { path: action.state.path, state: action.state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, dialogs: [], statuses: {}, widgets: {}, openedAt: new Date().toISOString(), hydrated: false, entries: [], capabilities: [], goal: null };
+        : { path: action.state.path, state: action.state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, dialogs: [], statuses: {}, widgets: {}, openedAt: new Date().toISOString(), hydrated: false, entries: [], capabilities: [], goal: null, namerLabels: {} };
       return { ...state, open: { ...rest, [view.path]: view }, current: view.path };
     }
     case "select":
@@ -238,6 +319,37 @@ export function reduce(state: AppState, action: Action): AppState {
     }
     case "notification":
       return applyNotification(state, action.method, action.params);
+    case "agents/loading":
+      return updateAgents(state, (a) => (a.loading ? a : { ...a, loading: true }));
+    case "agents/loaded":
+      return updateAgents(state, (a) => ({ ...a, snapshot: action.snapshot, loading: false, error: null }));
+    case "agents/updated":
+      return updateAgents(state, (a) =>
+        // A broadcast and a mutation result can cross on the wire; the revision
+        // says which one is the truth. Equal revisions replace, so a snapshot
+        // that carries fresher warnings under the same number still lands.
+        a.snapshot && a.snapshot.revision > action.snapshot.revision ? a : { ...a, snapshot: action.snapshot },
+      );
+    case "agents/run":
+      return updateAgents(state, (a) => {
+        const existing = a.runs[action.run.runId];
+        if (existing && (sameRun(existing, action.run) || isOlderRun(action.run, existing))) return a;
+        return { ...a, runs: { ...a.runs, [action.run.runId]: action.run } };
+      });
+    case "agents/runs/loaded":
+      return updateAgents(state, (a) => ({ ...a, error: null, runs: mergeRuns(a.runs, action.runs, action.path) }));
+    case "agents/event":
+      return updateAgents(state, (a) => {
+        if (a.events.some((e) => e.id === action.event.id)) return a;
+        const events = [...a.events, action.event];
+        return { ...a, events: events.length > AGENT_EVENTS_MAX ? events.slice(events.length - AGENT_EVENTS_MAX) : events };
+      });
+    case "agents/choose-beam-model":
+      return updateAgents(state, (a) => ({ ...a, chooseBeamModel: { suggested: action.suggested } }));
+    case "agents/choose-beam-model/clear":
+      return updateAgents(state, (a) => (a.chooseBeamModel === null ? a : { ...a, chooseBeamModel: null }));
+    case "agents/error":
+      return updateAgents(state, (a) => ({ ...a, loading: false, error: action.error }));
   }
 }
 
@@ -248,6 +360,72 @@ function updateView(state: AppState, path: string, fn: (v: SessionView) => Sessi
   // A reducer that returns the same view must not produce a new state object,
   // or every no-op notification re-renders every subscriber.
   return next === view ? state : { ...state, open: { ...state.open, [path]: next } };
+}
+
+function updateAgents(state: AppState, fn: (a: AgentsSlice) => AgentsSlice): AppState {
+  const next = fn(state.agents);
+  return next === state.agents ? state : { ...state, agents: next };
+}
+
+const runTime = (value: string | undefined): number => {
+  const time = value === undefined ? Number.NaN : Date.parse(value);
+  return Number.isNaN(time) ? 0 : time;
+};
+
+/** A replayed or reordered notification must never rewind a run. */
+function isOlderRun(incoming: AgentRun, existing: AgentRun): boolean {
+  return runTime(incoming.updatedAt) < runTime(existing.updatedAt);
+}
+
+/** The fields a re-sent run could differ in; identical ones keep the store identity. */
+function sameRun(a: AgentRun, b: AgentRun): boolean {
+  return (
+    a.status === b.status &&
+    a.updatedAt === b.updatedAt &&
+    a.endedAt === b.endedAt &&
+    a.error === b.error &&
+    a.result?.status === b.result?.status &&
+    a.result?.message === b.result?.message &&
+    a.endedBy?.initiator === b.endedBy?.initiator &&
+    a.endedBy?.reason === b.endedBy?.reason &&
+    a.activity?.lastAt === b.activity?.lastAt &&
+    a.activity?.currentTool === b.activity?.currentTool &&
+    a.activity?.label === b.activity?.label &&
+    a.activity?.turns === b.activity?.turns &&
+    a.activity?.tools === b.activity?.tools &&
+    a.worktree?.path === b.worktree?.path &&
+    a.model?.id === b.model?.id &&
+    a.model?.provider === b.model?.provider
+  );
+}
+
+/**
+ * Fold an `agents/runs/list` answer into the registry. The host's list is the
+ * truth for the range it covers — the whole registry, or one tree — except
+ * where a live notification already moved a run past what the list says.
+ */
+function mergeRuns(current: Record<string, AgentRun>, listed: AgentRun[], scope: string | undefined): Record<string, AgentRun> {
+  const root = scope === undefined ? undefined : rootOfScope(current, listed, scope);
+  const next: Record<string, AgentRun> = {};
+  if (root !== undefined) {
+    for (const [id, run] of Object.entries(current)) if (run.rootSessionPath !== root) next[id] = run;
+  }
+  for (const run of listed) {
+    const existing = current[run.runId];
+    next[run.runId] = existing && isOlderRun(run, existing) ? existing : run;
+  }
+  return next;
+}
+
+/** The root of the tree a scoped list covers: from the list, else from what we hold, else the path itself. */
+function rootOfScope(current: Record<string, AgentRun>, listed: AgentRun[], scope: string): string {
+  const fromList = listed[0]?.rootSessionPath;
+  if (fromList !== undefined) return fromList;
+  for (const run of Object.values(current)) {
+    if (run.sessionPath === scope) return run.rootSessionPath;
+    if (run.rootSessionPath === scope) return scope;
+  }
+  return scope;
 }
 
 function applyNotification(state: AppState, method: HostNotificationMethod, params: unknown): AppState {
@@ -296,6 +474,12 @@ function applyNotification(state: AppState, method: HostNotificationMethod, para
       if (p.message.type === "lasercode/module/log" && p.message.level === "error") {
         return pushToast(state, "error", `${p.message.module}: ${p.message.message}`);
       }
+      if (p.message.type === "lasercode/namer/label") {
+        const { toolCallId, label } = p.message;
+        return updateView(state, p.path, (v) =>
+          v.namerLabels[toolCallId] === label ? v : { ...v, namerLabels: { ...v.namerLabels, [toolCallId]: label } },
+        );
+      }
       return state;
     }
     case "pi/worker/status": {
@@ -303,6 +487,14 @@ function applyNotification(state: AppState, method: HostNotificationMethod, para
       const next = { ...state, workers: { ...state.workers, [p.cwd]: { status: p.status, ...(p.message ? { message: p.message } : {}) } } };
       return p.status === "crashed" ? pushToast(next, "error", `Worker for ${p.cwd} crashed: ${p.message ?? ""}`) : next;
     }
+    case "agents/updated":
+      return reduce(state, { type: "agents/updated", snapshot: params as HostNotifications["agents/updated"] });
+    case "agents/run":
+      return reduce(state, { type: "agents/run", run: (params as HostNotifications["agents/run"]).run });
+    case "agents/event":
+      return reduce(state, { type: "agents/event", event: params as HostNotifications["agents/event"] });
+    case "agents/beam/choose-model":
+      return reduce(state, { type: "agents/choose-beam-model", suggested: (params as HostNotifications["agents/beam/choose-model"]).suggested });
     default:
       return state;
   }
@@ -453,6 +645,12 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
         const block = v.blocks[index] as Extract<Block, { kind: "user" }>;
         return { ...v, blocks: replaceAt(v.blocks, index, { ...block, text: text || block.text, optimistic: false }) };
       }
+      // A custom message the transcript renders (an agent event, a task exit)
+      // becomes its own block. It carries no speaker, so nothing above claims it.
+      if (msg?.role === "custom" && !u.speaker) {
+        const block = customBlock(msg, undefined);
+        return block ? { ...v, blocks: [...closeStreaming(v.blocks), block] } : v;
+      }
       if (msg?.role === "assistant" || (msg?.role === "custom" && u.speaker)) {
         const a = lastAssistant(v.blocks);
         if (!a) return v;
@@ -494,6 +692,13 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
     default:
       return v;
   }
+}
+
+/** A `custom` block for a message whose type the transcript draws; `undefined` for the rest. */
+function customBlock(message: { customType?: unknown; content?: unknown; details?: unknown } | undefined, at: string | undefined): Extract<Block, { kind: "custom" }> | undefined {
+  const customType = message?.customType;
+  if (typeof customType !== "string" || !CUSTOM_MESSAGE_BLOCK_TYPES.has(customType)) return undefined;
+  return { kind: "custom", id: nextBlockId(), ...(at ? { at } : {}), customType, text: textOf(message?.content), details: message?.details };
 }
 
 function closeStreaming(blocks: Block[]): Block[] {
@@ -545,6 +750,13 @@ export function blocksFromEntries(entries: unknown[]): Block[] {
         errorMessage?: unknown;
       };
     };
+    // A custom message the transcript draws (an agent event, a task exit) is
+    // persisted as its own entry type, with the message fields at the top.
+    if (e.type === "custom_message") {
+      const block = customBlock(raw as { customType?: unknown; content?: unknown; details?: unknown }, entryTimestamp(e.timestamp));
+      if (block) blocks.push(block);
+      continue;
+    }
     if (e.type !== "message" || !e.message) continue;
     const m = e.message;
     const at = entryTimestamp(e.timestamp ?? m.timestamp);
@@ -579,6 +791,9 @@ export function blocksFromEntries(entries: unknown[]): Block[] {
           blocks.push({ kind: "tool", id: p.id, ...(at ? { at } : {}), name: p.name ?? "tool", args: p.arguments, done: false });
         }
       }
+    } else if (m.role === "custom") {
+      const block = customBlock(m as { customType?: unknown; content?: unknown; details?: unknown }, at);
+      if (block) blocks.push(block);
     } else if (m.role === "toolResult" && m.toolCallId) {
       const i = toolIndex.get(m.toolCallId);
       const result = textOf(m.content);

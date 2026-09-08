@@ -11,7 +11,7 @@
 ┌───────────────┴────────────────────────────────────────────┐
 │  packages/host — supervisor (imports no Pi)                 │
 │  worker pool (1 per cwd) · session catalog · local WS      │
-│  pi-subagents file layer (any session, incl. terminal)     │
+│  agent store + run registry (agents.json, agent-runs.json) │
 │  relay client (outbound only) · log store (SQLite)         │
 └───────────────▲────────────────────────────────────────────┘
                 │ protocol over stdio/socket, one worker per project
@@ -21,9 +21,12 @@
 │                  └── ChordDriver (stub, seam test)          │
 │  ui-bridge (ExtensionUIContext → pi/ui/*)                   │
 │  engine adapter + Laser-owned feature loader                 │
-│  loads packages/pi-extension into the session:              │
-│    one extension, modules/{provider-log,subagents,          │
-│    transcribe,panels,...} activated by detection            │
+│  agent harness: child sessions, .worktrees/, timeouts,     │
+│  parent events; Beam skill; Namer (docs/agents.md)         │
+│  loads packages/pi-extension into the session:             │
+│    one extension, modules/{provider-log,subagents,         │
+│    background-work,transcribe,panels,...} activated        │
+│    by detection or by a worker-supplied bridge             │
 └─────────────────────────────────────────────────────────────┘
 
 packages/relay  ← dumb byte forwarder on Railway, 2 sockets per channel
@@ -73,15 +76,20 @@ then reports `laser/capabilities` to the worker. Modules:
 | Module | Bridges | Detection |
 | --- | --- | --- |
 | `provider-log` | Pi's `before_provider_request` / `after_provider_response` hooks | always |
-| `subagents` | pi-subagents in-process registries and `subagents:rpc:v1` bus | `globalThis[Symbol.for("pi-subagents.*")]` |
+| `subagents` | the agent harness tools — `start_agent`, `send_agent_message`, `list_agents`, `wait_for_agents`, `stop_agent` for a session that may delegate, `complete_agent_run` for a child — the child's role block in its system prompt, and agent events delivered to the parent model as `lasercode/agent-event`; all from the worker-supplied `AgentHarnessBridge` (`src/agents-bridge.ts`, [`agents.md`](agents.md)) | the worker passed a bridge (Subagents feature enabled) |
+| `background-work` | long commands: `bash` with an explicit background flag, promotion to a background task after the foreground timeout, `task_list`/`task_output`/`task_wait`/`task_stop`, `tasks:*` run panels and `lasercode/task-event` | the worker passed `BackgroundWorkOptions` |
 | `goal` | canonical durable goal state | Goals feature enabled |
 | `transcribe` | pi-gpt-transcribe desktop dictation | matching command registered |
 | `web-access` | registers the transcript-only search tool; the worker supplies its credential/policy-aware executor (M12-T64). The duplicate panel adapter remains retired (D-61) | Web search feature enabled |
 
 Adding support for engine behavior means a reusable Pi-native package plus one
-module that translates it to the product protocol. Modules never import each
-other and fail individually. File-based observation is not here; it is in the
-host.
+module that translates it to the product protocol. The agent harness is the
+deliberate exception (D-140): `subagents` and `background-work` are Laser's
+own, fed by the worker, because no community package provides the semantics
+the binding references require. Modules never import each other and fail
+individually. Nothing here reads files; the host keeps the durable run
+registry from `agents/run` notifications and the session catalog from its own
+watcher.
 
 ## Protocol shape
 
@@ -91,11 +99,15 @@ ACP-inspired JSON-RPC:
   `session/cancel`, `session/set_mode`, plus `pi/*` extras such as
   `pi/session/steer`, `pi/session/follow_up`, `pi/session/fork`,
   `pi/model/set`, `pi/thinking/set`, `pi/compact`, `pi/settings/*`,
-  `pi/subagents/*`, `pi/logs/*`. Legacy `pi/packages/*` requests are rejected;
+  `pi/logs/*`. Legacy `pi/packages/*` requests are rejected;
   package installation is not a Laser capability.
 - New product capabilities use engine-neutral methods: `feature/list`,
-  `feature/set`, `session/goal/get`, `session/goal/action`. Remaining `pi/*`
-  methods are internal wire compatibility and are not product vocabulary.
+  `feature/set`, `session/goal/get`, `session/goal/action`, and the `agents/*`
+  family (definitions, policy, runs, Beam and Namer; `session/new` takes an
+  `agentName`) with the `agents/updated`, `agents/run`, `agents/event` and
+  `agents/beam/choose-model` notifications — see [`agents.md`](agents.md).
+  Remaining `pi/*` methods are internal wire compatibility and are not
+  product vocabulary.
 - Notifications (host → client): `session/update` with a monotonically
   increasing `seq` per session; clients resume with `session/load { fromSeq }`.
 - Requests (host → client): `session/request_permission` and `pi/ui/request`
@@ -107,8 +119,10 @@ ACP-inspired JSON-RPC:
 - Host: one long-lived process (inside Electron main in the desktop build, or
   standalone).
 - Worker: one process per project directory, spawned from a bundled stock Node
-  binary, with a pinned Pi. Retired when idle and no presentation is attached and
-  no background subagent run references the session.
+  binary, with a pinned Pi. Retired when idle, no presentation is attached and
+  no agent run of its project is still going. Child agent sessions run inside
+  the same worker as their project: a checkout under `<project>/.worktrees/`
+  is part of that project, never a second project (D-140).
 - Never two workers for one cwd. Never two writers on one Pi session file.
 - A deb/rpm upgrade sends the exact `/opt/Laser` daemon a graceful SIGHUP only
   after the new files are installed. Its Electron supervisor restarts it from
@@ -122,9 +136,14 @@ ACP-inspired JSON-RPC:
 - `<Laser data>/agent/sessions/**/*.jsonl` — session files (append-only, no lock).
 - `<Laser data>/agent/settings.json` — private engine state, written only through
   `SettingsManager`.
-- `<Laser data>/agent/missions/**` — Subagents mission ledgers.
-- `$PI_SUBAGENTS_TEMP_ROOT/async-subagent-runs/<runId>/{status.json,events.jsonl,control/}` — pi-subagents background runs. We pin `PI_SUBAGENTS_TEMP_ROOT` for workers we start and also scan the default uid-scoped roots.
-- `<Laser data>/agent/sessions/<slug>/subagent-artifacts/*_transcript.jsonl` — foreground children.
+- Session custom entries `lasercode/agent` (which agent a session runs as, and
+  for a child its parent, run and worktree), `lasercode/agent-run` (run
+  moments in the child) and the parent's `lasercode/agent-event` messages —
+  written by the worker, read by the host's catalog to attribute sessions.
+- `<Laser data>/agent/skills/<product>-beam/SKILL.md` — the Beam skill, written
+  by the worker on start from this installation's real paths.
+- `<project>/.worktrees/<slug>` — a child agent's checkout on branch
+  `agents/<slug>`, hidden through `<gitdir>/info/exclude`.
 
 Laser does not discover `<project>/.pi`. Project configuration is owned at
 `<project>/.laser/settings.json`, validated by the worker and applied as
@@ -134,5 +153,11 @@ in-memory engine overrides.
 
 - Host SQLite: provider round-trips, tool events, session index cache, attention
   state, device list, relay channel state.
+- `<Laser data>/state/agents.json`: agent definitions, the default agent, the
+  policy and the Beam/Namer model choices. `<Laser data>/state/agent-runs.json`:
+  every agent run the host has heard of, fed by worker `agents/run`
+  notifications ([`agents.md`](agents.md) §8).
+- `<Laser data>/beam` and `<Laser data>/chat`: the working directories of the
+  projectless built-in agents; not projects.
 - Keychain: root identity key, relay credentials.
 - `<project>/.laser/settings.json`: project-scoped product settings.

@@ -1,23 +1,28 @@
 /**
  * @lasercode/pi-extension — the single companion extension (D-13).
  *
- * The worker passes `createLaserExtension({ send })` as an inline extension
- * factory when it builds the session's ResourceLoader. Inside the Pi process
- * it owns everything that must run in-process:
+ * The worker passes `createLaserExtension({ send, ... })` as an inline
+ * extension factory when it builds the session's ResourceLoader. Inside the
+ * Pi process it owns everything that must run in-process:
  *   - capability detection (which supported packages are present)
- *   - pi-subagents in-process registries and the `subagents:rpc:v1` bus
+ *   - the model-facing half of the agent harness (D-140): `start_agent` and
+ *     its siblings for parents, `complete_agent_run` for children, the child's
+ *     role in its system prompt, and agent events delivered to the parent
+ *   - long commands as background tasks (`bash` override plus `task_*` tools)
  *   - provider request/response hooks for the logs page
- *   - per-package glue (transcribe, subagents, ...)
+ *   - per-package glue (transcribe, goal, ...)
  *
  * Rules:
- *   - One module per community package under ./modules. Modules never import
- *     each other. A module that fails to activate is reported, not fatal.
+ *   - One module per capability under ./modules. Modules never import each
+ *     other. A module that fails to activate is reported, not fatal.
  *   - Nothing that reads files lives here; file watchers are in @lasercode/host so
  *     terminal-started sessions (no worker, no extension) stay visible.
- *   - Never load inside pi-subagents child sessions (PI_SUBAGENT_CHILD guard).
+ *   - Child agent sessions load this extension like any other session: the
+ *     harness bridge tells a module what role the session plays.
  */
 
 import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
+import type { AgentHarnessBridge, BackgroundWorkOptions } from "./agents-bridge.js";
 import type { PromptProvenanceObserver } from "./prompt-provenance.js";
 export { createPromptProvenanceObserver } from "./prompt-provenance.js";
 import { WIRE_NAMESPACE } from "@lasercode/protocol";
@@ -41,11 +46,32 @@ export type {
   ModuleContext,
   LaserModule,
 } from "./modules/index.js";
+export type {
+  AgentCatalogEntry,
+  AgentHarnessBridge,
+  AgentModelEvent,
+  AgentRunSummary,
+  BackgroundWorkOptions,
+  CompleteRunInput,
+  CompleteRunResult,
+  HarnessSessionRole,
+  SendAgentMessageInput,
+  SendAgentMessageResult,
+  StartAgentInput,
+  StartAgentResult,
+  StopAgentInput,
+  WaitForAgentsInput,
+  WaitForAgentsResult,
+} from "./agents-bridge.js";
 
 export interface LaserExtensionOptions {
   requestProvenance?: PromptProvenanceObserver;
   /** Credential/policy-aware search supplied only when its feature is enabled. */
   webSearch?: WebSearchHandler;
+  /** The worker's agent harness for this session; omit when the agents feature is off. */
+  agents?: AgentHarnessBridge;
+  /** Shell execution with background promotion; omit to keep the engine's own `bash`. */
+  backgroundWork?: BackgroundWorkOptions;
   /** Delivers messages to the worker (in-process callback). */
   send: (message: OutboundMessage) => void;
   /**
@@ -72,7 +98,6 @@ export function createLaserExtension(options: LaserExtensionOptions): InlineExte
   return {
     name: LASER_EXTENSION_NAME,
     factory: (pi: ExtensionAPI) => {
-      if (process.env["PI_SUBAGENT_CHILD"] === "1") return;
       const disposers: Array<() => void> = [];
       const ctx: ModuleContext = {
         pi,
@@ -80,6 +105,8 @@ export function createLaserExtension(options: LaserExtensionOptions): InlineExte
         panels: createPanelClaims(),
         ...(options.requestProvenance ? { requestProvenance: options.requestProvenance } : {}),
         ...(options.webSearch ? { webSearch: options.webSearch } : {}),
+        ...(options.agents ? { agents: options.agents } : {}),
+        ...(options.backgroundWork ? { backgroundWork: options.backgroundWork } : {}),
         ...(options.commands ? { commands: options.commands } : {}),
       };
       const wanted = new Set<ModuleName>(options.only ?? modules.map((m) => m.name));

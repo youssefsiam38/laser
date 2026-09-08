@@ -7,7 +7,7 @@
 import { PRODUCT_NAME, PRODUCT_VERSION } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -204,6 +204,46 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
     client.close();
     client2.close();
   }, 90_000);
+
+  it("answers the agents methods over a real socket, primes the real worker, and keeps the workspaces out of the project list", async () => {
+    const { url } = await host.listen();
+    const client = new Client();
+    await client.connect(url);
+    const project = join(base, "project");
+    try {
+      // The workspaces exist beside the sandboxed state dir, and are not projects.
+      expect(existsSync(join(base, "beam"))).toBe(true);
+      expect(existsSync(join(base, "chat"))).toBe(true);
+      const listed = await client.request<{ agents: Array<{ name: string; kind: string }>; defaultAgent: string; workspaces: { beam: string; chat: string } }>("agents/list", {});
+      expect(listed.agents.map((a) => `${a.name}:${a.kind}`)).toEqual(["default:custom", "beam:builtin", "chat:builtin", "namer:builtin"]);
+      expect(listed.workspaces).toEqual({ beam: join(base, "beam"), chat: join(base, "chat") });
+      await expect(client.request("agents/sync", { snapshot: listed })).rejects.toThrow("The app sends this to its own workers.");
+
+      // A save is broadcast to every client and persisted for the next host.
+      const saved = await client.request<{ agent: { name: string }; snapshot: { revision: number } }>("agents/save", {
+        agent: { name: "reviewer", description: "Reviews", instructions: "Review.", engineInstructions: false, model: null, thinkingLevel: null, tools: ["read"], supportsSubagents: false, allowedAgents: [], scopedSkills: false, skills: [], runTimeoutMinutes: null },
+      });
+      expect(saved.agent.name).toBe("reviewer");
+      await client.waitFor((m) => "method" in m && m.method === "agents/updated" && (m.params as { revision: number }).revision === saved.snapshot.revision);
+      await expect(client.request("agents/delete", { name: "default" })).rejects.toThrow("This agent starts new sessions. Choose another default first.");
+
+      // The real worker is primed with the definitions before its first
+      // answer; whether or not it knows the method yet, it still runs sessions.
+      const { state } = await client.request<{ state: SessionState }>("session/new", { cwd: project });
+      expect(state.cwd).toBe(project);
+      expect(await client.request("agents/runs/list", { path: state.path })).toEqual({ runs: [] });
+      const projects = await client.request<{ projects: Array<{ cwd: string }> }>("pi/project/list", {});
+      expect(projects.projects.map((p) => p.cwd)).toEqual([project]);
+      await expect(client.request("session/new", { cwd: project, agentName: "beam" })).rejects.toThrow(/Beam sessions start in/);
+      await expect(client.request("session/new", { cwd: project, agentName: "namer" })).rejects.toThrow(/does not run a session/);
+
+      host.agents.close(); // flush the debounced write, as shutdown does
+      expect(JSON.parse(readFileSync(join(base, "state", "agents.json"), "utf8")).agents.map((a: { name: string }) => a.name)).toEqual(["default", "reviewer"]);
+      expect(existsSync(join(base, "state", "agent-runs.json"))).toBe(false); // nothing to persist yet
+    } finally {
+      client.close();
+    }
+  }, 60_000);
 
   it("never runs two workers for one cwd", async () => {
     await host.listen();

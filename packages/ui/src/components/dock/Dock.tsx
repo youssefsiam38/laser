@@ -38,6 +38,9 @@ import {
   type PointerEvent,
 } from "react";
 
+// Agent map (M13-T7): the map held in the dock is Laser-owned and client-only,
+// so it takes a fixed first slot here rather than a place in the panel store.
+import { MAP_ISLAND_MIN_HEIGHT, MapDockIsland, useMapDockRoot } from "@/components/agents/map";
 import { CanvasSplitDivider, CanvasSplitPane } from "@/components/assistant-ui/elements/canvas-split";
 import { StatusDot } from "@/components/status";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -61,20 +64,30 @@ export interface DockProps {
 export function useDockHasIslands(path: string | undefined): boolean {
   const entries = useIslandEntries(path, "desktop");
   const dock = useDock(path);
-  return entries.some((e) => !dock.dismissed.includes(e.key));
+  const mapRoot = useMapDockRoot(path);
+  return mapRoot !== undefined || entries.some((e) => !dock.dismissed.includes(e.key));
 }
 
 export function Dock({ path, className }: DockProps) {
   const dock = useDock(path);
   const entries = useIslandEntries(path, "desktop");
   const visible = useMemo(() => entries.filter((e) => !dock.dismissed.includes(e.key)), [entries, dock.dismissed]);
+  // Agent map (M13-T7): a docked map counts as something to show, and "Show in
+  // dock" on a hidden dock reveals it — the map is what the person asked to keep watching.
+  const mapRoot = useMapDockRoot(path);
+  const actions = usePanelActions();
+  const hadMap = useRef(mapRoot);
+  useEffect(() => {
+    if (mapRoot !== undefined && hadMap.current === undefined && dock.hidden) actions.setHidden(false);
+    hadMap.current = mapRoot;
+  }, [actions, dock.hidden, mapRoot]);
   // Nothing to show → nothing rendered. The frame below mounts with its
   // measurements when the first island arrives.
-  if (!path || visible.length === 0 || dock.hidden) return null;
-  return <DockFrame path={path} dock={dock} visible={visible} className={className} />;
+  if (!path || (visible.length === 0 && mapRoot === undefined) || dock.hidden) return null;
+  return <DockFrame path={path} dock={dock} visible={visible} mapRoot={mapRoot} className={className} />;
 }
 
-function DockFrame({ path, dock, visible, className }: { path: string; dock: DockState; visible: PanelEntry[]; className?: string | undefined }) {
+function DockFrame({ path, dock, visible, mapRoot, className }: { path: string; dock: DockState; visible: PanelEntry[]; mapRoot: string | undefined; className?: string | undefined }) {
   const actions = usePanelActions();
   const body = useRef<HTMLDivElement>(null);
   const aside = useRef<HTMLElement>(null);
@@ -122,7 +135,12 @@ function DockFrame({ path, dock, visible, className }: { path: string; dock: Doc
     };
   }, [actions, path]);
 
-  const layout: DockLayout = useMemo(() => layoutDock(dock, size.width, size.height), [dock, size.width, size.height]);
+  // Agent map (M13-T7): the map island takes the top of the dock — all of it
+  // when it is alone, otherwise a readable share — and the panel islands are
+  // laid out in what remains.
+  const mapHeight = mapRoot === undefined ? 0 : visible.length === 0 ? size.height : Math.max(MAP_ISLAND_MIN_HEIGHT, Math.round(size.height * 0.45));
+  const islandsHeight = Math.max(0, size.height - mapHeight);
+  const layout: DockLayout = useMemo(() => layoutDock(dock, size.width, islandsHeight), [dock, size.width, islandsHeight]);
   const sortableKeys = useMemo(
     () => visible.map((entry) => entry.key).filter((key) => layout.rects[key] && !layout.rects[key]!.hidden),
     [layout.rects, visible],
@@ -159,9 +177,11 @@ function DockFrame({ path, dock, visible, className }: { path: string; dock: Doc
         onChange={(width) => actions.setWidth(width, maxWidth())}
       />
       <div ref={body} className="relative min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+        {/* Agent map (M13-T7): the fixed first slot. */}
+        {mapRoot !== undefined && size.width > 0 && <MapDockIsland rootPath={mapRoot} height={mapHeight} />}
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={reorder}>
           <SortableContext items={sortableKeys} strategy={rectSortingStrategy}>
-            <div className="relative" style={{ height: Math.max(size.height, layout.contentHeight) }}>
+            <div className="relative" style={{ height: Math.max(islandsHeight, layout.contentHeight) }}>
               {size.width > 0 &&
                 visible.map((entry) => {
                   const rect = layout.rects[entry.key];

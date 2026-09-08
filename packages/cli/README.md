@@ -161,6 +161,12 @@ Resolution order, used identically by every command:
 | subagents root | `--subagents-temp-root` → `LASER_SUBAGENTS_TEMP_ROOT` → `PI_SUBAGENTS_TEMP_ROOT` → `<state>/subagents` |
 | port | `--port` → `LASER_PORT` → `41441` |
 
+The subagents root, doctor's `subagents root`/`subagents uids` rows and the
+`runs`, `plan` and `missions` commands observe the retired pi-subagents file
+layer (D-140): Laser's own agent harness records its runs in
+`<state>/agent-runs.json` and nothing writes to that root any more. They are
+still present and will be removed by M13-T11.
+
 `<data>` is laser's own directory — `$XDG_DATA_HOME/laser` (usually
 `~/.local/share/laser`) on Linux, `~/Library/Application Support/laser` on
 macOS, `%LOCALAPPDATA%\laser` on Windows. It is **not** the agent's. If you

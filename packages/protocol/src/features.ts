@@ -46,11 +46,11 @@ export const FEATURE_MANIFESTS: readonly FeatureManifest[] = [
   {
     id: "subagents",
     name: "Subagents",
-    description: "Delegate focused work and coordinate multi-lane workflows inside a session.",
+    description: "Let agents start other agents as persistent sub-sessions, each in its own isolated worktree, and run long commands as background tasks.",
     defaultEnabled: true,
     scopes: ["global", "project"],
     dependencies: [],
-    capabilities: ["delegation", "workflows", "fleet", "missions"],
+    capabilities: ["delegation", "sub-sessions", "worktrees", "background-tasks", "live-map"],
     restart: "worker",
   },
   {

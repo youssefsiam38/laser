@@ -1,9 +1,13 @@
 import { PRODUCT_NAME } from "@lasercode/protocol";
 import type * as React from "react";
 import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
-import { FileClock, FolderPlus, Moon, Plus, Search, Settings, Sun, X } from "lucide-react";
+import { FileClock, FolderPlus, MessageSquarePlus, Moon, Plus, Search, Settings, Sun, X } from "lucide-react";
 
+// Agents page (M13-T5): the phone's way in, from the sessions sheet footer.
+import { AgentsButton } from "@/components/agents/page/AgentsButton";
 import { ThreadList, ThreadListSearch } from "@/components/assistant-ui/elements/thread-list.aui";
+// Beam: its one entry point, in the sheet footer on a phone (docs/agents.md "Beam").
+import { BeamSpark } from "@/components/beam/BeamSpark";
 import { matchesThread, rankSearchThreads, ThreadSearch, threadSearchKeys, type SearchableThread } from "@/components/assistant-ui/elements/thread-search";
 import { StatusRing } from "@/components/status";
 import { Button } from "@/components/ui/button";
@@ -16,7 +20,7 @@ import { cn } from "@/lib/utils";
 import { useLaserStable, useLaserState } from "@/runtime";
 import type { AppState } from "@/store";
 
-import { groupsFor, sameGroups, sessionsList, useSessionsList } from "./session-groups.js";
+import { SESSIONS_TABS, groupsFor, sameGroups, sessionsList, useSessionsList, workspacesOf, type SessionsTab } from "./session-groups.js";
 import { errorText, useShell } from "./shell-context.js";
 import { useSessionSearch } from "./use-session-search.js";
 import { SessionSearchProgress } from "./SessionSearchProgress.js";
@@ -44,7 +48,12 @@ function useClock(ms = 30_000): void {
  * swaps it for the `thread-search` element while a query is typed
  * (docs/ux-elements.md "AUI-connected" and "Thread"). The rail filters and
  * jumps to a group rather than replacing the list. This file owns the frame:
- * header, filter strip, empty and sheet footer. Attention stays on the chat row.
+ * header, tabs, filter strip, empty and sheet footer. Attention stays on the
+ * chat row.
+ *
+ * Two tabs since the agents leap (docs/agents.md §7): **Chat**, the
+ * projectless conversations of the built-in Chat agent, and **Code**, the
+ * projects. The choice persists per browser; search searches the tab it is on.
  */
 export function SessionsPanel({ variant }: SessionsPanelProps) {
   const { projects } = useLaserStable();
@@ -55,24 +64,29 @@ export function SessionsPanel({ variant }: SessionsPanelProps) {
   return <SessionsPanelBody key={projects.join("\n")} variant={variant} />;
 }
 
+const TAB_LABEL: Record<SessionsTab, string> = { chat: "Chat", code: "Code" };
+
 function SessionsPanelBody({ variant }: SessionsPanelProps) {
   const { projects, currentProject, setCurrentProject, actions } = useLaserStable();
   const shell = useShell();
   const list = useSessionsList();
+  const tab = list.tab;
   useClock();
 
   const groups = useLaserState(
-    useCallback((s: AppState) => groupsFor(projects, s), [projects]),
+    useCallback((s: AppState) => groupsFor(projects, s, tab), [projects, tab]),
     sameGroups,
   );
   const connection = useLaserState((s) => s.connection);
+  const chatCwd = useLaserState((s) => workspacesOf(s).chat);
   const [query, setQuery] = useState("");
   const [activeId, setActiveId] = useState<string | undefined>(undefined);
-  const search = useSessionSearch(query, list.filter);
+  const search = useSessionSearch(query, tab === "code" ? list.filter : chatCwd);
 
   const total = groups.reduce((n, g) => n + g.rows.length, 0);
-  const filteredName = list.filter ? shortCwd(list.filter) : undefined;
+  const filteredName = tab === "code" && list.filter ? shortCwd(list.filter) : undefined;
   const searching = query.trim() !== "";
+  const chat = tab === "chat";
 
   const newSessionIn = useCallback(
     async (cwd: string) => {
@@ -91,12 +105,32 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
     [actions, connection, setCurrentProject, shell, variant],
   );
 
-  // Search rows: every session (the rail's filter still applies), with the
-  // project as the group and the list row's subtitle as the preview.
+  // A chat is a conversation that is not about a project: it runs the
+  // built-in Chat agent in its own workspace, never in the current project.
+  const canChat = connection === "open" && chatCwd !== undefined;
+  const newChat = useCallback(async () => {
+    if (connection !== "open") {
+      actions.toast("warning", "Not connected to the host yet.");
+      return;
+    }
+    if (chatCwd === undefined) {
+      actions.toast("warning", "Chat is not ready yet. Try again in a moment.");
+      return;
+    }
+    try {
+      await actions.newSession(chatCwd, { agentName: "chat" });
+      if (variant === "sheet") shell.setSessionsOpen(false);
+    } catch (error) {
+      actions.toast("error", errorText(error));
+    }
+  }, [actions, chatCwd, connection, shell, variant]);
+
+  // Search rows: every session of the tab (the rail's filter still applies),
+  // with the project as the group and the list row's subtitle as the preview.
   const searchable = useMemo<SearchableThread[]>(
     () =>
       groups
-        .filter((g) => !list.filter || g.cwd === list.filter)
+        .filter((g) => chat || !list.filter || g.cwd === list.filter)
         .flatMap((g) =>
           g.rows.map((row) => ({
             id: row.path,
@@ -111,7 +145,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
             matchSource: search.hits.find(h => h.path === row.path)?.source,
           })),
         ).filter(row => !search.after || !row.modifiedAt || row.modifiedAt >= search.after).sort(rankSearchThreads),
-    [groups, list.filter, search.hits, search.after],
+    [groups, chat, list.filter, search.hits, search.after],
   );
   const ordered = useMemo(() => searchable.filter((t) => matchesThread(t, query)), [searchable, query]);
   useEffect(() => {
@@ -124,7 +158,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
     (id: string) => {
       const cwd = cwdOf(id);
       if (cwd) {
-        setCurrentProject(cwd);
+        if (!chat) setCurrentProject(cwd);
         void actions.openSession(id).then(() => {
           if (variant === "sheet") shell.setSessionsOpen(false);
           requestAnimationFrame(() => requestAnimationFrame(() => openConversationFind(query, searchable.find(row => row.id === id)?.matchSource)));
@@ -132,8 +166,12 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
       }
       setQuery("");
     },
-    [cwdOf, actions, setCurrentProject, variant, shell, query, searchable],
+    [cwdOf, chat, actions, setCurrentProject, variant, shell, query, searchable],
   );
+
+  const newLabel = chat ? "New chat" : `New session${currentProject ? ` in ${shortCwd(currentProject)}` : ""}`;
+  const onNew = chat ? () => void newChat() : () => void shell.newSession();
+  const canNew = chat ? canChat : shell.canCreate;
 
   return (
     <section
@@ -150,22 +188,25 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
         <TooltipIconButton tooltip="Search all sessions" shortcut="Ctrl+Shift+F" onClick={() => { if (variant === "sheet") shell.setSessionsOpen(false); openGlobalSearch(); }}><Search /></TooltipIconButton>
         {variant === "panel" && (
           <TooltipIconButton
-            tooltip={currentProject ? `New session in ${shortCwd(currentProject)}` : "New session"}
-            shortcut={shortcutLabel("N")}
-            onClick={() => void shell.newSession()}
-            disabled={!shell.canCreate}
+            tooltip={newLabel}
+            {...(chat ? {} : { shortcut: shortcutLabel("N") })}
+            onClick={onNew}
+            disabled={!canNew}
+            data-slot={chat ? "new-chat" : "new-session"}
           >
-            <Plus />
+            {chat ? <MessageSquarePlus /> : <Plus />}
           </TooltipIconButton>
         )}
       </header>
 
+      <SessionsTabs tab={tab} onChange={(next) => { sessionsList.setTab(next); setQuery(""); }} />
+
       {variant === "sheet" && (
         <div className="flex shrink-0 items-center px-3 py-2 hairline-b">
-          <Button size="sm" variant="outline" className="w-full justify-start" onClick={() => void shell.newSession()} disabled={!shell.canCreate}>
-            <Plus />
-            <span className="truncate">New session{currentProject ? ` in ${shortCwd(currentProject)}` : ""}</span>
-            <Kbd className="ms-auto">{shortcutLabel("N")}</Kbd>
+          <Button size="sm" variant="outline" className="w-full justify-start" onClick={onNew} disabled={!canNew} data-slot={chat ? "new-chat" : "new-session"}>
+            {chat ? <MessageSquarePlus /> : <Plus />}
+            <span className="truncate">{newLabel}</span>
+            {!chat && <Kbd className="ms-auto">{shortcutLabel("N")}</Kbd>}
           </Button>
         </div>
       )}
@@ -181,6 +222,8 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
             aria-expanded={searching}
             aria-controls="sessions-search-results"
             aria-activedescendant={searching && activeId ? `sessions-search-results-${activeId}` : undefined}
+            placeholder={chat ? "Search chats" : "Search sessions"}
+            aria-label={chat ? "Search chats" : "Search sessions"}
           />
         </div>
       )}
@@ -198,9 +241,25 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div id="sessions-tabpanel" role="tabpanel" aria-labelledby={`sessions-tab-${tab}`} className="min-h-0 flex-1 overflow-y-auto">
         {searching ? (
           <ThreadSearch id="sessions-search-results" grouped={false} loading={search.busy} threads={searchable} query={query} activeId={activeId} onActiveChange={setActiveId} onSelect={selectSearch} />
+        ) : chat ? (
+          groups.length === 0 ? (
+            <EmptyState
+              icon={<MessageSquarePlus className="size-4 text-ink-3" />}
+              title="No chats yet"
+              body="Chats are conversations that are not about a project. Ask anything; nothing here touches your code."
+              action={
+                <Button size="sm" variant="outline" onClick={() => void newChat()} disabled={!canChat} data-slot="new-chat">
+                  <MessageSquarePlus />
+                  New chat
+                </Button>
+              }
+            />
+          ) : (
+            <ThreadList projects={projects} tab="chat" onOpen={variant === "sheet" ? () => shell.setSessionsOpen(false) : undefined} />
+          )
         ) : (
           <>
             {groups.length === 0 ? (
@@ -217,6 +276,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
             ) : (
               <ThreadList
                 projects={projects}
+                tab="code"
                 canCreate={connection === "open"}
                 onNewSession={(cwd) => void newSessionIn(cwd)}
                 onOpen={variant === "sheet" ? () => shell.setSessionsOpen(false) : undefined}
@@ -230,6 +290,64 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
 
       {variant === "sheet" && shell.layout === "mobile" && <SheetFooter />}
     </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Tabs: Chat | Code
+// ---------------------------------------------------------------------------
+
+/**
+ * A two-segment control, a real tablist: arrows move between the segments,
+ * the active one is `aria-selected`, and the panel below is what it controls.
+ */
+function SessionsTabs({ tab, onChange }: { tab: SessionsTab; onChange(tab: SessionsTab): void }) {
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home" && event.key !== "End") return;
+    event.preventDefault();
+    const index = SESSIONS_TABS.indexOf(tab);
+    const next =
+      event.key === "Home" ? 0
+      : event.key === "End" ? SESSIONS_TABS.length - 1
+      : (index + (event.key === "ArrowRight" ? 1 : SESSIONS_TABS.length - 1)) % SESSIONS_TABS.length;
+    const target = SESSIONS_TABS[next]!;
+    onChange(target);
+    (event.currentTarget.querySelector<HTMLButtonElement>(`[data-tab="${target}"]`))?.focus();
+  };
+  return (
+    <div className="shrink-0 px-3 pt-2 pb-1">
+      <div
+        role="tablist"
+        aria-label="Kind of session"
+        data-slot="sessions-tabs"
+        onKeyDown={onKeyDown}
+        className="grid grid-cols-2 gap-0.5 rounded-lg bg-surface-2 p-0.5"
+      >
+        {SESSIONS_TABS.map((kind) => {
+          const selected = kind === tab;
+          return (
+            <button
+              key={kind}
+              type="button"
+              role="tab"
+              id={`sessions-tab-${kind}`}
+              data-tab={kind}
+              aria-selected={selected}
+              aria-controls="sessions-tabpanel"
+              tabIndex={selected ? 0 : -1}
+              onClick={() => onChange(kind)}
+              className={cn(
+                "h-7 rounded-md text-xs font-medium outline-none transition-[background-color,color,box-shadow] duration-(--motion-fast) motion-reduce:transition-none pointer-coarse:h-9",
+                "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
+                selected ? "bg-surface text-ink shadow-float-sm" : "text-ink-2 hover:text-ink active:bg-[color-mix(in_oklab,var(--surface)_60%,transparent)]",
+              )}
+            >
+              {TAB_LABEL[kind]}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -253,13 +371,16 @@ function SheetFooter() {
       <TooltipIconButton tooltip="Add project" side="top" onClick={() => shell.setAddProjectOpen(true)}>
         <FolderPlus />
       </TooltipIconButton>
-      {/* There is no rail on mobile, so settings and logs are reachable here. */}
+      {/* There is no rail on mobile, so agents, settings and logs are reachable here. */}
+      <AgentsButton side="top" afterOpen={() => shell.setSessionsOpen(false)} className="text-ink-2" />
       <TooltipIconButton tooltip="Logs" side="top" onClick={() => openWorkbench("logs")}>
         <FileClock />
       </TooltipIconButton>
       <TooltipIconButton tooltip="Settings" side="top" onClick={() => openWorkbench("settings")}>
         <Settings />
       </TooltipIconButton>
+      {/* Beam's spark, beside Settings: the rail's affordance, rendered where a phone has room for it. */}
+      <BeamSpark side="top" onOpen={() => shell.setSessionsOpen(false)} />
       <span className="ms-auto pe-1 typed text-ink-3">{PRODUCT_NAME}</span>
     </footer>
   );
@@ -269,11 +390,11 @@ function SheetFooter() {
 // Empty
 // ---------------------------------------------------------------------------
 
-function EmptyState({ title, body, action }: { title: string; body: React.ReactNode; action: React.ReactNode }) {
+function EmptyState({ icon, title, body, action }: { icon?: React.ReactNode; title: string; body: React.ReactNode; action: React.ReactNode }) {
   return (
     <div className="flex h-full min-h-48 flex-col items-center justify-center gap-4 px-6 py-8 text-center">
       <StatusRing status="idle" size={40} thickness={2} aria-hidden="true">
-        <Plus className="size-4 text-ink-3" />
+        {icon ?? <Plus className="size-4 text-ink-3" />}
       </StatusRing>
       <div className="max-w-56">
         <p className="text-sm font-semibold text-ink">{title}</p>

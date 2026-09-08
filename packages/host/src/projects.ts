@@ -50,6 +50,12 @@ export interface ProjectRegistryOptions {
   hasClients?: () => boolean;
   /** How long a trust prompt stays open before it declines for this run. */
   trustTimeoutMs?: number;
+  /**
+   * Directories that are never projects: the Beam and Chat workspaces. Their
+   * sessions are listed and grouped by the UI as what they are; they are
+   * neither listed here nor remembered by `touch`.
+   */
+  exclude?: readonly string[];
   now?: () => Date;
 }
 
@@ -77,12 +83,19 @@ export class ProjectRegistry {
 
   // ------------------------------------------------------------- the list
 
+  /** True for a directory that is deliberately not a project (a built-in workspace). */
+  isExcluded(cwd: string): boolean {
+    const key = canonical(cwd);
+    return (this.options.exclude ?? []).some((excluded) => canonical(excluded) === key);
+  }
+
   /** Pinned projects ∪ directories the catalog has seen, by saved priority then name. */
   list(): ProjectInfo[] {
     const counts = this.options.catalog.cwdCounts();
     const cwds = new Set<string>([...this.stored.keys(), ...counts.keys()]);
     const out: ProjectInfo[] = [];
     for (const cwd of cwds) {
+      if (this.isExcluded(cwd)) continue;
       const stored = this.stored.get(cwd);
       const { trust, reasons } = this.trustOf(cwd);
       out.push({
@@ -178,6 +191,7 @@ export class ProjectRegistry {
   /** Record that a session in this directory was just used. */
   touch(cwd: string): void {
     const key = canonical(cwd);
+    if (this.isExcluded(key)) return;
     const existing = this.stored.get(key) ?? { addedAt: this.now().toISOString(), pinned: false };
     this.stored.set(key, { ...existing, lastUsedAt: this.now().toISOString() });
     this.persist();

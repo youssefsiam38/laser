@@ -504,6 +504,45 @@ Depends on: M1, M2-T4, M4, M5-T1, M11.
 
 ---
 
+## M13 · Agents Leap
+
+Goal: agents are first-class in Laser. A person creates reusable agent
+definitions on an Agents page; any session can start other agents through one
+`start_agent` tool; every child is an isolated-worktree sub-session the person
+can chat with; a live React Flow map shows each top-level session's agent tree
+in real time; long commands run as background tasks; Beam, Chat and Namer are
+built-in agents with their own product integrations. Binding references:
+`docs/agents-leap/references/original-request.md` and
+`docs/agents-leap/references/agent-harness-architecture.md`.
+
+Done when: an agent created in the Agents page is startable from a session
+through `start_agent`; the child runs in `.worktrees/`, appears under its parent
+in the sessions sidebar, accepts user messages, ends through
+`complete_agent_run` and its parent is told; the live map shows the tree with
+status and transient events at every width; a person can end a child with a
+reason that reaches the parent; Beam opens from the one spark button; the Chat
+tab holds projectless chats; Namer names sessions and running tools; the
+packaged build passes the clean-machine gate with the harness bundled.
+
+Depends on: M12.
+
+| ID | Task | Done when |
+| --- | --- | --- |
+| M13-T1 | Protocol: agent definitions, policy, runs, events, session agent attribution, `agents/*` methods and notifications, Namer and Beam state | every method has a schema, a round-trip sample and a router owner |
+| M13-T2 | Host: durable agent store with validation and periodic scoped-skill checks, run registry, child-session routing to the project worker, catalog attribution of agent sessions, built-in workspaces, first-provider Beam/Namer prompts | agents survive a host restart; a child session routes to its project's worker; warnings name the agent and field |
+| M13-T3 | Worker harness: per-agent session configuration, `start_agent` lifecycle (start, message/interrupt, list, wait, stop, completion, failure, cancellation, timeout), mandatory `.worktrees/` isolation and ownership, nesting and model-access enforcement, goal and role context, Namer service, Beam skill | a stub-provider child completes through `complete_agent_run` and its parent receives one structured event |
+| M13-T4 | Companion extension: `subagents` harness tools with the compact catalog, child role injection, parent delivery at a safe boundary; `background-work` bash override with explicit background execution and timeout promotion, task tools and run panels; retire the pi-subagents bridge | tools register per role; a promoted command keeps its output and exit state |
+| M13-T5 | UI: agents store and client; Agents page with create, edit, select, validate, delete, default toggle, built-in cards, policy, warning deep links | every form state, warning and error is designed; keyboard complete |
+| M13-T6 | UI: sub-sessions in the sidebar, Chat and Code tabs, Beam group mark, end-agent modal with optional reason, transcript projections for final messages, agent events and Namer labels | a child is reachable from the sidebar and the parent's card; ending it records the reason |
+| M13-T7 | UI: React Flow live map per top-level session with ancestry, status, ended-agent toggle, transient event bubbles, chat navigation; purpose-built layouts for constrained panel, full sidebar, fullscreen, desktop and phone | read-only map at every width in both themes with reduced-motion parity |
+| M13-T8 | UI: Beam spark and bubble with the normal chat, empty-state hint, first-message session creation, Beam model choice dialog; projectless Chat area | one entry point, one bubble, both widths |
+| M13-T9 | Packaging and runtime: remove pi-subagents bundling, packaged session check exercises the harness, clean-machine gate, docs and element inventory | `clean-machine.mjs` passes with the harness tools and Beam skill present |
+| M13-T10 | Integration verification: host and worker end-to-end delegation with a stub provider, sandbox scene, desktop and phone review in both themes with pointer and keyboard, full verify gate | evidence recorded per scenario in the ledger |
+| M13-T11 | Remove the retired pi-subagents file layer, its CLI commands and documents once nothing reads them | no `packages/host/src/subagents` observation code remains |
+| M13-T12 | Keep `.laser` project overrides through engine resource reloads: `resourceLoader.reload()` re-reads settings and drops `applyOverrides` values during service creation, so project settings and the blanked resource lists may not reach the engine | a real-engine test proves a `.laser/settings.json` value is in effect after session open and after a resource reload |
+
+---
+
 ## MX · Cross-cutting (runs alongside every milestone)
 
 | ID | Task | Done when |

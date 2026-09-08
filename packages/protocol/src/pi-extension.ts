@@ -8,7 +8,7 @@
 import type { Panel } from "./panels.js";
 import type { SessionGoal } from "./features.js";
 
-export type PiExtensionModuleName = "provider-log" | "account-usage" | "subagents" | "transcribe" | "web-access" | "panels" | "goal";
+export type PiExtensionModuleName = "provider-log" | "account-usage" | "subagents" | "background-work" | "transcribe" | "web-access" | "panels" | "goal";
 
 /** One server-owned allowance window for an account-authenticated provider. */
 export interface AccountUsageWindow {
@@ -98,6 +98,8 @@ export type PiExtensionMessage =
   | ({ type: "lasercode/provider/response" } & ProviderResponseRecord)
   | { type: "lasercode/account-usage/state"; state: AccountUsageState }
   | { type: "lasercode/subagents/event"; event: unknown }
+  /** Namer's early label for a tool call still running (`lasercode/namer/label`). */
+  | { type: "lasercode/namer/label"; toolCallId: string; label: string }
   | { type: "lasercode/goal/state"; goal: SessionGoal | null }
   /** The `panels` module: a validated `laser:panel` event, or a close (docs/ux-panels.md). */
   | { type: "lasercode/panel/upsert"; panel: Panel }

@@ -1,549 +1,347 @@
 /**
- * subagents — the in-process half of laser's pi-subagents support (M3-T1).
+ * subagents — the model-facing half of the agent harness (D-140).
  *
- * ## The division of labour
+ * The worker's harness (packages/worker/src/agents) owns runs, child
+ * sessions, worktrees, timeouts and the parent notification. What only this
+ * module can do, because it runs inside the engine session:
  *
- * pi-subagents 0.65 has no sockets and no IPC, so almost everything a person
- * wants to see lives in files under `$PI_SUBAGENTS_TEMP_ROOT`. Those are read
- * by `@lasercode/host` (`src/subagents/`), not here, because a session started
- * from a terminal has no worker and no extension and must still be visible
- * (AGENTS.md invariant 1: "nothing that reads files lives here").
+ *   1. **Register the tools the model sees.** A parent-capable session gets
+ *      exactly `start_agent`, `send_agent_message`, `list_agents`,
+ *      `wait_for_agents` and `stop_agent`; a child gets `complete_agent_run`,
+ *      the only successful ending of a run. `start_agent` is one generic tool
+ *      over a compact catalog — never one tool per agent
+ *      (docs/agents-leap/references/agent-harness-architecture.md).
+ *   2. **Tell a child who it is.** Its role — instance name, definition,
+ *      task, the person's goal for the parent and the worktree it owns — is
+ *      appended to the system prompt each turn; nothing is written into the
+ *      transcript.
+ *   3. **Deliver agent events to the parent model** at a safe boundary, as
+ *      one custom message per event (`AGENT_EVENT_MESSAGE_TYPE`), so the
+ *      transcript stores each event once and the UI can render it.
  *
- * What only this module can do, because it is inside the Pi process:
- *
- *   1. **Probe what actually works** — the `subagents:rpc:v1` bus answers
- *      `ping` with its own method list and capability map. That is R11 made
- *      literal: ask what works, never what version it is, and always with a
- *      timeout, because a session that filtered the extension out looks
- *      exactly like the extension being absent.
- *   2. **Resume** — the only control that cannot be reached from a file. The
- *      control inbox carries steer, stop and interrupt; resume goes only
- *      through the owning session's bus (docs/research/findings.md).
- *   3. **External runs** — other extensions register runs in an in-process
- *      registry on a `globalThis` symbol. No file ever mentions them, so
- *      without this module they simply do not exist.
- *   4. **Take completions immediately** — `subagent:async-complete` and
- *      `subagent:foreground-complete` fire the instant a child finishes,
- *      ~1 s before the next status poll. Consuming them here is what R12
- *      ("consume results promptly") asks for.
- *
- * ## It dogfoods the declared protocol
- *
- * Every panel this module produces is emitted on `laser:panel` — the same
- * public bus event any third-party extension would use (docs/ux-panels.md,
- * "The contract", way 2). It gets no private path into the host, so if the
- * declared protocol is not good enough for pi-subagents it is not good enough
- * for anyone, and we find that out in our own code.
- *
- * ## Panel ids are shared with the host on purpose
- *
- * `runPanelId` and friends below produce byte-identical ids to
- * `@lasercode/host` `src/subagents/panels.ts`. That is what makes "a child seen
- * by both paths appears exactly once" true by construction: two producers, one
- * id, one panel, replaced in place (R6/R9). They are duplicated rather than
- * imported because this package may only depend on `@lasercode/protocol`; the
- * REQUEST to move them into the protocol package is in the lane report.
- *
- * The rule that keeps it true: this module emits a panel only when it can
- * derive the *same* id the file layer will. Where the bus does not carry the
- * identity the file layer keys on — a completion covering several children —
- * it emits nothing rather than an id nobody else writes
- * ({@link completionEvent}).
+ * Every call delegates to the {@link AgentHarnessBridge}; a rejection is
+ * rethrown so the engine marks the tool result as an error. The module never
+ * touches sessions, files or worktrees itself.
  */
-import { WIRE_NAMESPACE } from "@lasercode/protocol";
+import { StringEnum } from "@earendil-works/pi-ai";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
-  PANEL_ACTION_EVENT,
-  PANEL_CLOSE_EVENT,
-  PANEL_EVENT,
-  type PanelEvent,
-  type RunLifecycle,
+  AGENT_EVENT_MESSAGE_TYPE,
+  AGENT_MESSAGE_MAX,
+  AGENT_NAME_MAX,
+  AGENT_TASK_EXCERPT,
+  AGENT_TASK_MAX,
+  SUBAGENT_NAME_MAX,
 } from "@lasercode/protocol";
-import type { ModuleContext, LaserModule } from "./index.js";
+import { Type } from "typebox";
+import type {
+  AgentCatalogEntry,
+  AgentHarnessBridge,
+  AgentModelEvent,
+  AgentRunSummary,
+  HarnessSessionRole,
+} from "../agents-bridge.js";
+import type { LaserModule, ModuleContext } from "./index.js";
+
+interface State {
+  /** The catalog `start_agent` was last registered with; re-registered only when it changes. */
+  catalogKey: string;
+  offRoleChange?: () => void;
+}
+
+const states = new WeakMap<ModuleContext, State>();
 
 // ---------------------------------------------------------------------------
-// pi-subagents' public in-process surface, as constants (never an import)
+// Text the model reads
 // ---------------------------------------------------------------------------
 
-const RPC_REQUEST = "subagents:rpc:v1:request";
-const RPC_READY = "subagents:rpc:v1:ready";
-const RPC_REPLY_PREFIX = "subagents:rpc:v1:reply:";
-const ASYNC_COMPLETE = "subagent:async-complete";
-const FOREGROUND_COMPLETE = "subagent:foreground-complete";
-const CHILD_STATUS = "subagent:child-status";
+/** The reference's description with the compact catalog appended: `name — description; …`. */
+export function startAgentDescription(catalog: AgentCatalogEntry[]): string {
+  const entries = catalog.map((entry) => `${entry.agentName} — ${entry.description}`).join("; ");
+  return `Start another agent for an independent piece of work. Available agents: ${entries || "none are allowed for this session"}.`;
+}
 
 /**
- * Registry symbols pi-subagents publishes. Only present once something has
- * touched the registry, so they are a positive signal and never a negative
- * one — absence proves nothing, which is why the probe below exists.
+ * One event, as a compact block the model can read: the type, the four
+ * identities, who ended it (with the person's verbatim reason) and the message.
  */
-const REGISTRY_KEYS = [
-  "pi-subagents.background-work.v1",
-  "pi-subagents.external-runs.v2",
-  "pi-subagents.external-runs.v1",
-  "pi-subagents.external-job-provider.v1",
-  "pi-subagents.completion-owner-id",
-];
-
-/** How long discovery waits for a `ping` before deciding nobody is there (R11). */
-const PROBE_TIMEOUT_MS = 750;
-/** How often the external-run registry is re-read. It changes only when another extension writes it. */
-const EXTERNAL_POLL_MS = 2000;
-
-export const PANEL_SOURCE = "pi-subagents";
-const PREFIX = "subagents:";
-
-export const runPanelId = (runId: string): string => `${PREFIX}run:${runId}`;
-export const childPanelId = (runId: string, childKey: string): string => `${PREFIX}child:${runId}:${childKey}`;
-export const foregroundPanelId = (runId: string, index: number | undefined): string =>
-  `${PREFIX}fg:${runId}${index === undefined ? "" : `:${index}`}`;
-export const externalPanelId = (source: string, id: string): string => `${PREFIX}external:${source}:${id}`;
-
-/** `subagents:run:<runId>` / `subagents:child:<runId>:<key>` → the run id inside. */
-export function runIdOfPanel(panelId: string): string | undefined {
-  if (panelId.startsWith(`${PREFIX}run:`)) return panelId.slice(`${PREFIX}run:`.length);
-  // `child:<runId>:<key>` and `nested:<runId>:<i>:<childId>` both name the run
-  // that owns them first. A nested child has no control path of its own, so
-  // its Resume is the owning run's Resume (docs/ux-agent-work.md).
-  for (const prefix of [`${PREFIX}child:`, `${PREFIX}nested:`]) {
-    if (!panelId.startsWith(prefix)) continue;
-    const rest = panelId.slice(prefix.length);
-    const colon = rest.indexOf(":");
-    return colon === -1 ? rest : rest.slice(0, colon);
+export function formatEvent(event: AgentModelEvent): string {
+  const lines = [
+    event.type,
+    `agent_name: ${event.agentName}`,
+    `subagent_name: ${event.subagentName}`,
+    `sessionId: ${event.sessionId}`,
+    `runId: ${event.runId}`,
+  ];
+  if (event.endedBy) {
+    lines.push(`endedBy: ${event.endedBy.initiator}${event.endedBy.reason ? ` — ${event.endedBy.reason}` : ""}`);
   }
-  return undefined;
+  lines.push("", event.message);
+  return lines.join("\n");
 }
-
-// ---------------------------------------------------------------------------
-// The bus
-// ---------------------------------------------------------------------------
-
-interface EventBusLike {
-  on(event: string, handler: (data: unknown) => void): (() => void) | void;
-  emit(event: string, data: unknown): void;
-}
-
-interface RpcReply {
-  requestId?: unknown;
-  success?: unknown;
-  data?: unknown;
-  error?: { code?: unknown; message?: unknown };
-}
-
-interface PingData {
-  version?: number;
-  methods?: string[];
-  capabilities?: Record<string, unknown>;
-  session?: { cwd?: string; sessionId?: string; sessionFile?: string | null };
-}
-
-let requestCounter = 0;
 
 /**
- * One request on the bus. Every call has a timeout: pi-subagents may be
- * installed, filtered out of this session, or mid-reload, and all three look
- * identical from here.
+ * What is appended to the system prompt. A child learns its role; a
+ * parent-capable session gets a two-sentence reminder of how delegation
+ * works. A child that can also delegate gets both.
  */
-function rpc(events: EventBusLike, method: string, params: unknown, timeoutMs = PROBE_TIMEOUT_MS): Promise<unknown> {
-  const requestId = `${WIRE_NAMESPACE}-${Date.now().toString(36)}-${(requestCounter += 1)}`;
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const off = events.on(`${RPC_REPLY_PREFIX}${requestId}`, (raw) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      off?.();
-      const reply = (raw ?? {}) as RpcReply;
-      if (reply.success === true) resolve(reply.data);
-      else reject(new Error(typeof reply.error?.message === "string" ? reply.error.message : `subagents ${method} failed`));
-    });
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      off?.();
-      reject(new Error(`pi-subagents did not answer ${method} in time`));
-    }, timeoutMs);
-    timer.unref?.();
-    try {
-      events.emit(RPC_REQUEST, { version: 1, requestId, method, params, source: { extension: WIRE_NAMESPACE } });
-    } catch (error) {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      off?.();
-      reject(error instanceof Error ? error : new Error(String(error)));
+export function roleBlock(role: HarnessSessionRole, canDelegate: boolean, cwd: string): string | undefined {
+  const parts: string[] = [];
+  if (role.kind === "child") {
+    const instance = role.subagentName ?? role.agentName;
+    const parent = role.parent
+      ? `your parent agent "${role.parent.agentName}"${role.parent.subagentName ? ` (${role.parent.subagentName})` : ""}, session ${role.parent.sessionId},`
+      : "your parent agent";
+    const task = excerpt(role.task ?? "", AGENT_TASK_EXCERPT);
+    parts.push(
+      "# Your role",
+      `You are "${instance}", an instance of the agent "${role.agentName}", started by ${parent} to do this task:`,
+      task ? task.split("\n").map((line) => `> ${line}`).join("\n") : "> (the task is in the first message)",
+    );
+    if (role.goal) {
+      parts.push(
+        `The person's active goal for the parent is: "${role.goal.objective}". Your role is only your task toward that goal; the parent owns the goal itself.`,
+      );
     }
+    parts.push(
+      'End your work by calling complete_agent_run with status "completed" or "blocked" and a self-contained final message: what you did, the evidence, and any important next step. It is the only way this run ends; do not write a closing reply instead of it. Do not ask the parent questions you can answer yourself by reading the code. Work only inside your own worktree: ' +
+        cwd +
+        ".",
+    );
+  }
+  if (canDelegate) {
+    parts.push(
+      "You can start other agents with start_agent; they run in the background in isolated worktrees and their results arrive here as messages. Use wait_for_agents when you need a result before continuing, and stop_agent for work that is no longer needed.",
+    );
+  }
+  return parts.length > 0 ? parts.join("\n") : undefined;
+}
+
+function excerpt(text: string, max: number): string {
+  const trimmed = text.trim();
+  return trimmed.length > max ? `${trimmed.slice(0, max)}…` : trimmed;
+}
+
+/** The reference's vocabulary for the model: `agent_name` / `subagent_name`, never camel case. */
+function modelView(summary: AgentRunSummary | (Omit<AgentRunSummary, "startedAt"> & { startedAt?: string })): Record<string, unknown> {
+  const { agentName, subagentName, ...rest } = summary;
+  return { agent_name: agentName, subagent_name: subagentName, ...rest };
+}
+
+function asResult(view: unknown, details: unknown) {
+  return { content: [{ type: "text" as const, text: JSON.stringify(view, null, 2) }], details };
+}
+
+// ---------------------------------------------------------------------------
+// Tools
+// ---------------------------------------------------------------------------
+
+function registerStartAgent(pi: ExtensionAPI, bridge: AgentHarnessBridge, catalog: AgentCatalogEntry[]): void {
+  pi.registerTool({
+    name: "start_agent",
+    label: "Start an agent",
+    description: startAgentDescription(catalog),
+    promptSnippet: "Start another agent in the background for an independent piece of work",
+    promptGuidelines: [
+      "Use start_agent for independent work another agent can do in parallel; it returns immediately with sessionId and runId, so continue working or call wait_for_agents rather than polling with list_agents.",
+      "Give start_agent a self-contained task: the new agent sees none of this conversation.",
+    ],
+    parameters: Type.Object({
+      agent_name: Type.String({ minLength: 1, maxLength: AGENT_NAME_MAX, description: "The unique name of the reusable agent to start." }),
+      subagent_name: Type.String({ minLength: 1, maxLength: SUBAGENT_NAME_MAX, description: "A short name for this running instance and its task." }),
+      task: Type.String({ minLength: 1, maxLength: AGENT_TASK_MAX, description: "The complete task and all context the new agent needs." }),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const result = await bridge.startAgent(
+        { agentName: params.agent_name, subagentName: params.subagent_name, task: params.task },
+        signal,
+      );
+      return asResult(modelView(result), result);
+    },
   });
 }
 
-const registryPresent = (): boolean => {
-  const g = globalThis as Record<PropertyKey, unknown>;
-  return REGISTRY_KEYS.some((key) => g[Symbol.for(key)] !== undefined);
-};
-
-// ---------------------------------------------------------------------------
-// External runs (in-process only — no file ever mentions them)
-// ---------------------------------------------------------------------------
-
-interface ExternalRun {
-  id: string;
-  sessionId: string;
-  source: string;
-  label: string;
-  state: "queued" | "running" | "completed" | "failed" | "stopped";
-  startedAt: number;
-  endedAt?: number;
-  currentAction?: string;
-  preview?: string;
-  transcriptPath?: string;
-  reportPath?: string;
-}
-
-const EXTERNAL_LIFECYCLE: Readonly<Record<ExternalRun["state"], RunLifecycle>> = {
-  queued: "queued",
-  running: "running",
-  completed: "done",
-  failed: "failed",
-  stopped: "cancelled",
-};
-
-function readExternalRuns(sessionId: string | undefined): ExternalRun[] {
-  if (!sessionId) return [];
-  const g = globalThis as Record<PropertyKey, unknown>;
-  const out: ExternalRun[] = [];
-  for (const key of ["pi-subagents.external-runs.v2", "pi-subagents.external-runs.v1"]) {
-    const registry = g[Symbol.for(key)] as { runs?: Map<string, unknown> } | undefined;
-    const runs = registry?.runs;
-    if (!(runs instanceof Map)) continue;
-    for (const value of runs.values()) {
-      const run = value as Partial<ExternalRun>;
-      if (typeof run.id !== "string" || typeof run.source !== "string" || run.sessionId !== sessionId) continue;
-      if (typeof run.label !== "string" || typeof run.startedAt !== "number") continue;
-      const state = run.state;
-      if (state === undefined || !(state in EXTERNAL_LIFECYCLE)) continue;
-      out.push(run as ExternalRun);
-    }
-    if (out.length > 0) break;
-  }
-  return out.slice(0, 64);
-}
-
-/**
- * An external run, read-only by contract: we did not start it and cannot
- * touch it, so it declares no actions at all (R2). Its usage is `null` with a
- * reason rather than zero, because nobody measured it.
- */
-function externalRunEvent(run: ExternalRun): PanelEvent {
-  return {
-    v: 1,
-    id: externalPanelId(run.source, run.id),
-    kind: "run",
-    intent: "follow",
-    title: run.label,
-    source: PANEL_SOURCE,
-    data: {
-      lifecycle: EXTERNAL_LIFECYCLE[run.state],
-      origin: `${run.source} (another extension)`,
-      ...(run.currentAction !== undefined ? { activity: run.currentAction } : run.preview !== undefined ? { activity: run.preview } : {}),
-      startedAt: new Date(run.startedAt).toISOString(),
-      ...(run.endedAt !== undefined ? { endedAt: new Date(run.endedAt).toISOString() } : {}),
-      usage: { costUsd: null, unavailableReason: `${run.source} reports no token accounting` },
-      ...(run.transcriptPath !== undefined ? { output: { ref: `file:${run.transcriptPath}` } } : {}),
-      ...(run.reportPath !== undefined ? { artifacts: [{ label: "Report", ref: `file:${run.reportPath}` }] } : {}),
+function registerParentTools(pi: ExtensionAPI, bridge: AgentHarnessBridge): void {
+  pi.registerTool({
+    name: "send_agent_message",
+    label: "Message an agent",
+    description:
+      "Send a message to an agent you started, addressed by its sessionId. A running agent receives it as its next instruction; an idle agent starts a new run and the result carries the new runId.",
+    promptSnippet: "Continue a conversation with an agent you started, by sessionId",
+    promptGuidelines: [
+      "Use send_agent_message with sessionId to continue a conversation with an agent; set interrupt true only when it must change course now.",
+    ],
+    parameters: Type.Object({
+      sessionId: Type.String({ minLength: 1, description: "The sessionId returned by start_agent." }),
+      message: Type.String({ minLength: 1, maxLength: AGENT_MESSAGE_MAX, description: "What the agent should do or know next." }),
+      interrupt: Type.Optional(
+        Type.Boolean({ description: "Deliver now, interrupting current work. Default false: the message waits for the current work to finish." }),
+      ),
+    }),
+    async execute(_toolCallId, params) {
+      const result = await bridge.sendAgentMessage({ sessionId: params.sessionId, message: params.message, interrupt: params.interrupt === true });
+      return asResult(result, result);
     },
-  };
-}
+  });
 
-// ---------------------------------------------------------------------------
-// Completions (R12)
-// ---------------------------------------------------------------------------
-
-interface CompletionEvent {
-  runId?: unknown;
-  state?: unknown;
-  agent?: unknown;
-  summary?: unknown;
-  success?: unknown;
-  exitCode?: unknown;
-  taskIndex?: unknown;
-  /** One entry per child of a multi-child run; absent or empty for a single one. */
-  results?: unknown;
-  /** "workflow" for a run whose panels are a plan plus children, never one run. */
-  mode?: unknown;
-  source?: unknown;
-  timedOut?: unknown;
-  stopped?: unknown;
-  interrupted?: unknown;
-}
-
-const COMPLETION_LIFECYCLE: Readonly<Record<string, RunLifecycle>> = {
-  complete: "done",
-  completed: "done",
-  partial: "done",
-  failed: "failed",
-  stopped: "cancelled",
-  paused: "paused",
-  detached: "running",
-};
-
-/**
- * A finished child, the instant pi-subagents says so. Deliberately thin: the
- * host's file layer holds the same id and far more detail, and it replaces
- * this in place within the second (R6). What this buys is the second in
- * between, which is exactly the second a person is looking at the dot.
- *
- * ## Why a multi-child completion emits nothing
- *
- * `subagent:async-complete` fires once per *run*, and for a run with several
- * children it carries them in `results[]`. The file layer gives such a run a
- * `subagents:plan:<runId>` plus one `subagents:child:<runId>:<key>` per step,
- * where the key is `childId ?? workflowKey ?? index` — and the bus event
- * carries none of those three for its children. Claiming
- * `subagents:run:<runId>` anyway (which is what this did) mints a panel id
- * nothing on the disk path ever upserts or closes, so a workflow left a
- * permanent extra island beside its real children, each child overwriting the
- * last. There is no id here that is provably the file layer's, so this path
- * stands down for those runs and the poll a second later owns them. R9's "one
- * id, one panel" is worth more than one second of latency.
- */
-function completionEvent(event: CompletionEvent, foreground: boolean): PanelEvent | undefined {
-  const runId = typeof event.runId === "string" ? event.runId : undefined;
-  if (!runId) return undefined;
-  if (!foreground && multiChild(event)) return undefined;
-  const state = typeof event.state === "string" ? event.state : event.success === true ? "complete" : "failed";
-  const lifecycle = COMPLETION_LIFECYCLE[state] ?? "done";
-  const agent = typeof event.agent === "string" ? event.agent : "child";
-  const index = typeof event.taskIndex === "number" ? event.taskIndex : undefined;
-  const summary = typeof event.summary === "string" ? event.summary.split("\n").find((l) => l.trim().length > 0)?.trim() : undefined;
-  const reason = event.timedOut === true
-    ? "it ran out of time"
-    : event.stopped === true
-      ? "you stopped it"
-      : event.interrupted === true
-        ? "it was interrupted"
-        : undefined;
-  return {
-    v: 1,
-    id: foreground ? foregroundPanelId(runId, index) : runPanelId(runId),
-    kind: "run",
-    intent: "follow",
-    title: index === undefined ? agent : `${agent}#${index + 1}`,
-    source: PANEL_SOURCE,
-    data: {
-      lifecycle,
-      handle: `@${agent}`,
-      ...(reason !== undefined ? { terminalReason: reason } : {}),
-      ...(summary !== undefined ? { activity: summary } : {}),
-      origin: foreground ? "a parent agent (foreground)" : "a parent agent",
-      endedAt: new Date().toISOString(),
-      usage: null,
+  pi.registerTool({
+    name: "list_agents",
+    label: "List agents",
+    description: "List the agents this session started, newest first, with each one's status and result when it has ended.",
+    promptSnippet: "List the agents this session started and their status",
+    promptGuidelines: ["Use list_agents to see what is running or has ended; use wait_for_agents, not repeated list_agents calls, to wait for a result."],
+    parameters: Type.Object({}),
+    async execute() {
+      const runs = await bridge.listAgents();
+      return asResult({ agents: runs.map(modelView) }, { runs });
     },
-  };
+  });
+
+  pi.registerTool({
+    name: "wait_for_agents",
+    label: "Wait for agents",
+    description:
+      "Block until the given runs have ended or the timeout passes. Returns each run's status and final message; timedOut is true when some were still running.",
+    promptSnippet: "Wait for runs you started to end, by runId",
+    promptGuidelines: ["Use wait_for_agents with the runIds you need before continuing; it returns each run's final message, so you do not need to read child sessions."],
+    parameters: Type.Object({
+      runIds: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 100, description: "The runIds to wait for." }),
+      timeoutSeconds: Type.Optional(Type.Number({ minimum: 1, description: "Return with timedOut true after this many seconds; omit for the harness default." })),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const result = await bridge.waitForAgents(
+        { runIds: params.runIds, ...(params.timeoutSeconds !== undefined ? { timeoutSeconds: params.timeoutSeconds } : {}) },
+        signal,
+      );
+      return asResult({ runs: result.runs.map(modelView), timedOut: result.timedOut }, result);
+    },
+  });
+
+  pi.registerTool({
+    name: "stop_agent",
+    label: "Stop an agent",
+    description: "End one run now. The agent's session stays and can be messaged again later.",
+    promptSnippet: "Stop a run that is no longer needed, by runId",
+    promptGuidelines: ["Use stop_agent only for work that is no longer needed; give a reason."],
+    parameters: Type.Object({
+      runId: Type.String({ minLength: 1, description: "The runId to stop." }),
+      reason: Type.Optional(Type.String({ maxLength: 1000, description: "Why it is no longer needed; recorded with the run." })),
+    }),
+    async execute(_toolCallId, params) {
+      const result = await bridge.stopAgent({ runId: params.runId, ...(params.reason !== undefined ? { reason: params.reason } : {}) });
+      return asResult(modelView(result), result);
+    },
+  });
 }
 
-/**
- * A completion that covers several children: `results[]` with more than one
- * entry, or a workflow run, which always has a plan panel rather than a run
- * panel on the disk path.
- */
-function multiChild(event: CompletionEvent): boolean {
-  if (event.mode === "workflow") return true;
-  return Array.isArray(event.results) && event.results.length > 1;
+function registerCompleteRun(pi: ExtensionAPI, bridge: AgentHarnessBridge): void {
+  pi.registerTool({
+    name: "complete_agent_run",
+    label: "Complete this run",
+    description: "Finish the current run and publish its final message.",
+    promptSnippet: "Finish the current run and publish its final message",
+    promptGuidelines: [
+      "Call complete_agent_run exactly once, as your last action, with a self-contained final message; it ends the run, so do not write a separate closing reply.",
+    ],
+    parameters: Type.Object({
+      status: StringEnum(["completed", "blocked"] as const, {
+        description: "completed when the task is done; blocked when it cannot be finished — say what is missing in the message.",
+      }),
+      message: Type.String({ minLength: 1, maxLength: AGENT_MESSAGE_MAX, description: "The final result, evidence, and any important next step." }),
+    }),
+    async execute(_toolCallId, { status, message }) {
+      const result = await bridge.completeRun({ status, message });
+      if (!result.ok) throw new Error(result.error);
+      return {
+        content: [{ type: "text" as const, text: `Run ${result.runId} ended with status ${status}. Do not send another message.` }],
+        details: { runId: result.runId, status },
+        terminate: true,
+      };
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------
 // The module
 // ---------------------------------------------------------------------------
 
-interface Probe {
-  methods: string[];
-  sessionId: string | undefined;
-}
-
-/** One probe, shared between `detect` and `activate` so the bus is pinged once. */
-let lastProbe: { at: number; probe: Probe | undefined } | undefined;
-
-async function probe(events: EventBusLike): Promise<Probe | undefined> {
-  if (lastProbe && Date.now() - lastProbe.at < 5000) return lastProbe.probe;
-  let result: Probe | undefined;
-  try {
-    const data = (await rpc(events, "ping", {})) as PingData;
-    result = {
-      methods: Array.isArray(data?.methods) ? data.methods.filter((m): m is string => typeof m === "string") : [],
-      sessionId: typeof data?.session?.sessionId === "string" ? data.session.sessionId : undefined,
-    };
-  } catch {
-    result = undefined;
-  }
-  lastProbe = { at: Date.now(), probe: result };
-  return result;
-}
-
 export const subagentsModule: LaserModule = {
   name: "subagents",
 
-  /**
-   * Present if the bus answers, or if a registry symbol exists. The ping is
-   * the authority — a registry symbol can be left behind by another package —
-   * but it is tried second so an installed-and-idle pi-subagents that has not
-   * built its bridge yet is still detected.
-   */
-  async detect({ pi }: ModuleContext) {
-    if (await probe(pi.events as unknown as EventBusLike)) return true;
-    return registryPresent();
+  detect: (ctx) => Boolean(ctx.agents),
+
+  register(ctx) {
+    const bridge = ctx.agents;
+    if (!bridge) return;
+    const { pi } = ctx;
+    const state: State = { catalogKey: "" };
+    states.set(ctx, state);
+
+    const role = bridge.role();
+    if (role.kind === "child") registerCompleteRun(pi, bridge);
+    if (bridge.canDelegate()) {
+      const catalog = bridge.catalog();
+      state.catalogKey = JSON.stringify(catalog);
+      registerStartAgent(pi, bridge, catalog);
+      registerParentTools(pi, bridge);
+    }
+
+    // A new run on this session may change which agents it may start. Only
+    // `start_agent` carries the catalog, and re-registering the same name
+    // replaces it in place; everything else stays as it was registered.
+    state.offRoleChange = bridge.onRoleChange(() => {
+      if (!bridge.canDelegate() || !state.catalogKey) return;
+      const catalog = bridge.catalog();
+      const key = JSON.stringify(catalog);
+      if (key === state.catalogKey) return;
+      state.catalogKey = key;
+      try {
+        registerStartAgent(pi, bridge, catalog);
+      } catch (error) {
+        ctx.send({ type: "lasercode/module/log", module: "subagents", level: "warn", message: `could not refresh start_agent: ${describe(error)}` });
+      }
+    });
   },
 
-  activate({ pi, send, panels }: ModuleContext) {
-    // Steer, stop and resume can land on a run the host discovered on disk and
-    // this module never emitted. Claiming the namespace is what lets the
-    // `panels` module replay those actions here instead of dropping them.
-    const releaseClaim = panels?.claim(PREFIX);
-    const events = pi.events as unknown as EventBusLike;
-    const disposers: Array<(() => void) | void> = [];
-    /** id → last emitted panel, so the bus carries changes, not heartbeats (R9). */
-    const emitted = new Map<string, string>();
-    let session: string | undefined;
-    let methods: string[] = [];
+  activate(ctx) {
+    const bridge = ctx.agents;
+    if (!bridge) return;
+    const { pi } = ctx;
+    let disposed = false;
 
-    const emit = (event: PanelEvent): void => {
-      const serialized = JSON.stringify(event);
-      if (emitted.get(event.id) === serialized) return;
-      emitted.set(event.id, serialized);
-      events.emit(PANEL_EVENT, event);
-    };
-
-    const log = (level: "info" | "warn" | "error", message: string): void =>
-      send({ type: "lasercode/module/log", module: "subagents", level, message });
-
-    /**
-     * Tell the host what this bus can do, so the UI shows exactly those
-     * controls (R2) — in practice this is what makes Resume appear at all.
-     */
-    const announce = (found: Probe | undefined): void => {
-      methods = found?.methods ?? [];
-      session = found?.sessionId;
-      send({
-        type: "lasercode/subagents/event",
-        event: { type: "bus", reachable: found !== undefined, methods, ...(session !== undefined ? { sessionId: session } : {}) },
-      });
-    };
-
-    void probe(events).then(announce);
-    disposers.push(
-      events.on(RPC_READY, () => {
-        lastProbe = undefined;
-        void probe(events).then(announce);
-      }),
-    );
-
-    // --- completions, taken the moment they fire (R12) ---------------------
-    // These handlers are synchronous and do no I/O: `pi.events.emit` is
-    // synchronous, and pi-subagents' completion observer runs inside it. A
-    // handler that awaited anything here would hold up the parent's turn.
-    disposers.push(
-      events.on(ASYNC_COMPLETE, (raw) => {
-        const event = completionEvent((raw ?? {}) as CompletionEvent, false);
-        if (event) emit(event);
-      }),
-    );
-    disposers.push(
-      events.on(FOREGROUND_COMPLETE, (raw) => {
-        const event = completionEvent((raw ?? {}) as CompletionEvent, true);
-        if (event) emit(event);
-      }),
-    );
-    disposers.push(
-      events.on(CHILD_STATUS, (raw) => {
-        const data = (raw ?? {}) as { runId?: unknown; childId?: unknown; status?: unknown; agent?: unknown };
-        if (typeof data.runId !== "string" || typeof data.childId !== "string") return;
-        if (data.status !== "stopping" && data.status !== "stopped") return;
-        emit({
-          v: 1,
-          id: childPanelId(data.runId, data.childId),
-          kind: "run",
-          intent: "follow",
-          title: typeof data.agent === "string" ? data.agent : data.childId,
-          source: PANEL_SOURCE,
-          data: {
-            lifecycle: data.status === "stopped" ? "cancelled" : "running",
-            terminalReason: data.status === "stopped" ? "you stopped it" : undefined,
-            activity: data.status === "stopping" ? "stopping…" : undefined,
-            usage: null,
-          },
-        });
-      }),
-    );
-
-    // --- external runs -----------------------------------------------------
-    const known = new Set<string>();
-    const sweepExternal = (): void => {
-      const runs = readExternalRuns(session);
-      const present = new Set<string>();
-      for (const run of runs) {
-        const id = externalPanelId(run.source, run.id);
-        present.add(id);
-        known.add(id);
-        emit(externalRunEvent(run));
-      }
-      for (const id of [...known]) {
-        if (present.has(id)) continue;
-        known.delete(id);
-        emitted.delete(id);
-        events.emit(PANEL_CLOSE_EVENT, { v: 1, id, reason: "the extension that owned it let it go" });
-      }
-    };
-    const externalTimer = setInterval(sweepExternal, EXTERNAL_POLL_MS);
-    externalTimer.unref?.();
-    disposers.push(() => clearInterval(externalTimer));
-
-    // --- actions the files cannot perform ----------------------------------
-    disposers.push(
-      events.on(PANEL_ACTION_EVENT, (raw) => {
-        const action = (raw ?? {}) as { id?: unknown; actionId?: unknown; value?: unknown };
-        if (typeof action.id !== "string" || typeof action.actionId !== "string") return;
-        if (!action.id.startsWith(PREFIX)) return;
-        const runId = runIdOfPanel(action.id);
-        if (!runId) return;
-        const message = typeof action.value === "string" ? action.value.trim() : "";
-        void handle(action.actionId, runId, message);
-      }),
-    );
-
-    const handle = async (actionId: string, runId: string, message: string): Promise<void> => {
-      if (actionId === "resume") {
-        if (!methods.includes("resume")) {
-          log("warn", "this pi-subagents build does not expose resume on its bus");
-          return;
-        }
-        if (!message) {
-          log("warn", "resume needs something to say; the host should have asked first");
-          return;
-        }
-        try {
-          await rpc(events, "resume", { runId, message }, 30_000);
-        } catch (error) {
-          log("error", `resume failed: ${error instanceof Error ? error.message : String(error)}`);
-        }
-        return;
-      }
-      // steer / stop / interrupt normally travel through the control inbox in
-      // the host, which works for terminal-started runs too. Answering them
-      // here as well costs nothing and covers a run whose temp directory this
-      // process can reach but the host cannot (a different uid's root).
-      if (actionId === "steer" && message && methods.includes("steer")) {
-        await rpc(events, "steer", { runId, message }, 10_000).catch((error: unknown) =>
-          log("error", `steer failed: ${error instanceof Error ? error.message : String(error)}`),
+    // Parent side: each event becomes one custom message, stored once in this
+    // transcript. `steer` lands it before the next model call of a running
+    // turn; `triggerTurn` wakes an idle parent so a result is never left
+    // waiting for the person to type something.
+    const offEvent = bridge.onEvent((event) => {
+      if (disposed) return;
+      try {
+        pi.sendMessage(
+          { customType: AGENT_EVENT_MESSAGE_TYPE, content: formatEvent(event), display: true, details: event },
+          { deliverAs: "steer", triggerTurn: true },
         );
+      } catch (error) {
+        ctx.send({ type: "lasercode/module/log", module: "subagents", level: "warn", message: `could not deliver an agent event: ${describe(error)}` });
       }
-    };
+    });
 
-    log("info", "pi-subagents bridged; runs and plans come from the panel contract");
+    // Child side (and the delegation reminder): re-read the role every turn,
+    // because a follow-up message starts a new run with a new task.
+    pi.on("before_agent_start", (event, session) => {
+      if (disposed) return undefined;
+      const block = roleBlock(bridge.role(), bridge.canDelegate(), session.cwd);
+      if (!block) return undefined;
+      return { systemPrompt: `${event.systemPrompt}\n\n${block}` };
+    });
 
     return () => {
-      releaseClaim?.();
-      for (const dispose of disposers) dispose?.();
-      emitted.clear();
-      known.clear();
-      lastProbe = undefined;
+      disposed = true;
+      offEvent();
+      states.get(ctx)?.offRoleChange?.();
     };
   },
 };
+
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

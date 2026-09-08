@@ -10,9 +10,9 @@
  * Pending extension dialogs are re-emitted on load for the same reason.
  */
 
-import { ErrorCodes, PRODUCT_NAME, ProtocolError, parseClientRequest, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionState, type SessionUpdateParams, type TypedClientRequest } from "@lasercode/protocol";
-import { resolve } from "node:path";
-import type { DriverEvent, SessionDriver } from "./driver.js";
+import { AGENT_MAX_DEPTH_LIMIT, ErrorCodes, PRODUCT_NAME, ProtocolError, parseClientRequest, type AgentDefinition, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type TypedClientRequest } from "@lasercode/protocol";
+import { dirname, join, resolve } from "node:path";
+import type { DriverAgentOptions, DriverEvent, SessionDriver } from "./driver.js";
 import { ProjectFilesService } from "./files.js";
 import { GitService } from "./git.js";
 import { KeybindingsAdapter } from "./keybindings.js";
@@ -20,6 +20,15 @@ import { ModelsAdapter, PackagesAdapter } from "./packages.js";
 import { SettingsAdapter } from "./settings.js";
 import { WebSearchService } from "./web-search.js";
 import { TranscribeService } from "./transcribe.js";
+import type { HarnessSessionRole } from "./agents/bridge.js";
+import { BEAM_SKILL_NAME, beamSkillRef, ensureBeamSkill } from "./agents/beam-skill.js";
+import { DefinitionsCache } from "./agents/definitions.js";
+import { engineDefaultInstructions } from "./agents/engine-instructions.js";
+import { AGENT_PANEL_PREFIX, AgentHarness, type SessionHandle, type SessionHost } from "./agents/harness.js";
+import { NamerService } from "./agents/namer.js";
+import { readSessionAgentRecord, rootRecord, rootRole } from "./agents/session-config.js";
+import { listAgentSkills } from "./agents/skills.js";
+import { WorktreeManager } from "./agents/worktrees.js";
 
 export interface WorkerServerOptions {
   cwd: string;
@@ -27,6 +36,8 @@ export interface WorkerServerOptions {
   send: (message: JsonRpcMessage) => void;
   agentDir?: string;
   sessionDir?: string;
+  /** The host's state directory (agents, runs, prefs). Defaults to `<agentDir>/../state`. */
+  stateDir?: string;
   subagentsTempRoot?: string;
   /** Host-resolved Pi project trust for `cwd`; see `DriverOpenOptions.projectTrusted`. */
   projectTrusted?: boolean;
@@ -35,6 +46,8 @@ export interface WorkerServerOptions {
   replayBuffer?: number;
   /** The package manager to run when settings name none (M10-T5): the one the host bundles. */
   npmCommand?: string[];
+  /** Skip writing the Beam skill on construction (tests that never open Beam). */
+  skipBeamSkill?: boolean;
 }
 
 interface Live {
@@ -43,6 +56,8 @@ interface Live {
   buffer: SessionUpdateParams[];
   unsubscribe: () => void;
   path: string;
+  /** The harness's view of this session, once attached. */
+  handle?: SessionHandle;
 }
 
 type Result<M extends keyof ClientRequests> = ClientRequests[M]["result"];
@@ -57,7 +72,7 @@ export class WorkerServer {
    * can dedupe this: a desktop and a phone are two clients, and the pool's
    * crash recovery can race a client's own reconnect.
    */
-  private readonly opening = new Map<string, Promise<SessionState>>();
+  private readonly opening = new Map<string, Promise<Live>>();
   private readonly replayBuffer: number;
   /**
    * M4 adapters. Built on first use: constructing a `SettingsManager` reads two
@@ -78,9 +93,51 @@ export class WorkerServer {
   private activeModules = new Set<PiExtensionModuleName>();
   /** Coalesce simultaneous new-chat command requests into one read-only runtime. */
   private commandCatalogInFlight: Promise<CommandInfo[]> | undefined;
+  /** M13 · agents: the host's definitions, the harness that runs them, and Namer. */
+  private readonly definitions: DefinitionsCache;
+  private readonly harness: AgentHarness;
+  private readonly namer: NamerService;
 
   constructor(private readonly options: WorkerServerOptions) {
     this.replayBuffer = options.replayBuffer ?? 5000;
+    const agentDir = options.agentDir;
+    this.definitions = new DefinitionsCache({
+      ...(agentDir ? { beamSkill: beamSkillRef(agentDir) } : {}),
+      webSearch: (options.features ?? []).includes("web-search"),
+    });
+    if (agentDir && !options.skipBeamSkill) {
+      try {
+        ensureBeamSkill({ agentDir, stateDir: options.stateDir ?? join(dirname(agentDir), "state") });
+      } catch (error) {
+        console.error(`${PRODUCT_NAME} worker: could not write the Beam skill:`, error instanceof Error ? error.message : error);
+      }
+    }
+    const host: SessionHost = {
+      openChild: (open) => this.openChild(open),
+      driver: (path) => this.sessions.get(path)?.driver,
+      notify: (method, params) => this.notify(method, params),
+      modelAvailable: (model) => this.modelAvailable(model),
+    };
+    this.harness = new AgentHarness({
+      host,
+      definitions: this.definitions,
+      worktrees: new WorktreeManager(),
+      backgroundWork: (cwd) => ({ cwd, foregroundCommandSeconds: this.definitions.policy().foregroundCommandSeconds }),
+      beamSkillName: BEAM_SKILL_NAME,
+    });
+    this.namer = new NamerService({
+      models: () => this.modelCatalog().modelRuntime(),
+      model: () => this.definitions.namerModel(),
+      catalog: async () => {
+        const [catalog, providers] = await Promise.all([this.modelCatalog().catalog(false), this.modelCatalog().providers()]);
+        return { models: catalog.models, configuredProviders: new Set(providers.providers.filter((p) => p.configured).map((p) => p.id)) };
+      },
+    });
+  }
+
+  /** The harness, for tests and for the packaged probe. */
+  agents(): AgentHarness {
+    return this.harness;
   }
 
   /** Paths of sessions currently open in this worker. */
@@ -129,10 +186,16 @@ export class WorkerServer {
       case "session/load":
         return this.sessionLoad(req.params);
       case "session/prompt": {
-        const { driver } = this.live(req.params.path);
-        const r = await driver.prompt(req.params.content, {
+        const live = this.live(req.params.path);
+        const text = textOf(req.params.content);
+        // A person prompting a child that has no active run starts one of
+        // their own, so the run map and the parent's summary keep working.
+        if (!req.params.streamingBehavior && !live.driver.state().isStreaming) this.harness.startUserRun(live.path, text);
+        const unnamed = !live.driver.state().name;
+        const r = await live.driver.prompt(req.params.content, {
           ...(req.params.streamingBehavior ? { streamingBehavior: req.params.streamingBehavior } : {}),
         });
+        if (r.accepted && unnamed && text.trim() !== "") void this.nameSession(live, text);
         return r satisfies Result<"session/prompt">;
       }
       case "session/cancel":
@@ -168,11 +231,12 @@ export class WorkerServer {
           // requests by the new path find it. Clients learn the new path from
           // the result and from the state update that follows.
           this.sessions.delete(live.path);
+          this.harness.rekeySession(live.path, state.path);
           live.path = state.path;
           this.sessions.set(state.path, live);
         }
         this.onDriverEvent(live, { type: "update", update: { kind: "state", state } });
-        return forked satisfies Result<"pi/session/fork">;
+        return { ...forked, state: this.decorate(live, forked.state) } satisfies Result<"pi/session/fork">;
       }
       case "pi/session/navigate": {
         const { driver } = this.live(req.params.path);
@@ -224,6 +288,11 @@ export class WorkerServer {
 
       // -------------------------------------------------------- panels ---
       case "pi/panel/action": {
+        // Run panels are the harness's own: `open` is a navigation the UI
+        // performs, `stop` ends the run on the person's behalf.
+        if (req.params.id.startsWith(AGENT_PANEL_PREFIX)) {
+          return { delivered: await this.harness.handlePanelAction(req.params.id, req.params.actionId) } satisfies Result<"pi/panel/action">;
+        }
         // The extension that declared the panel answers on Pi's bus; `false`
         // means nobody holds that id any more (it closed, or the session
         // restarted), which the client turns into a sentence.
@@ -377,6 +446,40 @@ export class WorkerServer {
         this.assertCwd(req.params.cwd);
         return (await this.modelCatalog().catalog(req.params.refresh ?? false)) satisfies Result<"pi/models/catalog">;
 
+      // ------------------------------------------------------ M13 agents ---
+      case "agents/sync":
+        this.definitions.sync(req.params.snapshot);
+        return {} satisfies Result<"agents/sync">;
+      case "agents/skills":
+        this.assertCwd(req.params.cwd);
+        return listAgentSkills({
+          cwd: this.options.cwd,
+          agentDir: this.settings().agentDir,
+          ...(this.options.projectTrusted !== undefined ? { projectTrusted: this.options.projectTrusted } : {}),
+          exclude: [BEAM_SKILL_NAME],
+        }) satisfies Result<"agents/skills">;
+      case "agents/engine-instructions":
+        this.assertCwd(req.params.cwd);
+        return { text: await engineDefaultInstructions(this.options.cwd) } satisfies Result<"agents/engine-instructions">;
+      case "agents/namer/qualify":
+        this.assertCwd(req.params.cwd);
+        return (await this.namer.qualify()) satisfies Result<"agents/namer/qualify">;
+      case "agents/runs/stop": {
+        const reason = req.params.reason?.trim();
+        const run = await this.harness.stopRun(req.params.runId, { initiator: "user", ...(reason ? { reason } : {}) });
+        return { run } satisfies Result<"agents/runs/stop">;
+      }
+      case "agents/list":
+      case "agents/validate":
+      case "agents/save":
+      case "agents/delete":
+      case "agents/set-default":
+      case "agents/set-policy":
+      case "agents/runs/list":
+      case "agents/beam/set-model":
+      case "agents/namer/set-model":
+        throw new ProtocolError(ErrorCodes.Unsupported, `${req.method} is answered by the host's agent store, not a worker`);
+
       case "pi/logs/query":
       case "pi/logs/content":
       case "pi/logs/stats":
@@ -483,12 +586,27 @@ export class WorkerServer {
     if (params.cwd !== this.options.cwd) {
       throw new ProtocolError(ErrorCodes.InvalidParams, `this worker serves ${this.options.cwd}, not ${params.cwd}`);
     }
-    const state = await this.openAndAttach({
-      cwd: this.options.cwd,
-      ...(params.parentPath ? { parentSessionPath: params.parentPath } : {}),
-      ...this.commonOpen(),
-    });
-    return { state: this.withCapabilities(state) };
+    const agentName = params.agentName ?? this.definitions.defaultAgent().name;
+    if (agentName === "namer") throw new ProtocolError(ErrorCodes.InvalidParams, "Namer names things; it does not run sessions.");
+    const definition = this.definitions.definition(agentName);
+    if (!definition) throw new ProtocolError(ErrorCodes.InvalidParams, `No agent is called "${agentName}".`);
+    if (definition.model && !(await this.modelAvailable(definition.model))) {
+      throw new ProtocolError(
+        ErrorCodes.InvalidParams,
+        `The model ${definition.model.provider}/${definition.model.id} is not available: connect ${definition.model.provider} in Settings → Providers and models, or choose another model for ${definition.name}.`,
+      );
+    }
+    const handle = this.harness.prepareSession({ role: rootRole(agentName), definition, record: rootRecord(agentName), projectCwd: this.options.cwd });
+    const live = await this.openAndAttach(
+      {
+        cwd: this.options.cwd,
+        ...(params.parentPath ? { parentSessionPath: params.parentPath } : {}),
+        ...this.commonOpen(),
+        agent: this.agentOptions(definition, handle),
+      },
+      handle,
+    );
+    return { state: this.decorate(live, live.driver.state()) };
   }
 
   private async sessionLoad(params: ClientRequests["session/load"]["params"]): Promise<Result<"session/load">> {
@@ -496,29 +614,105 @@ export class WorkerServer {
     if (existing) {
       const state = existing.driver.state();
       this.replay(existing, params.fromSeq);
-      return { state: this.withCapabilities(state), replayFrom: this.replayFloor(existing, params.fromSeq) };
+      return { state: this.decorate(existing, state), replayFrom: this.replayFloor(existing, params.fromSeq) };
     }
     const inFlight = this.opening.get(params.path);
     if (inFlight) {
-      const state = await inFlight;
-      const live = this.sessions.get(state.path);
-      if (!live) return { state: this.withCapabilities(state), replayFrom: 0 };
+      const live = await inFlight;
+      const state = live.driver.state();
       this.replay(live, params.fromSeq);
-      return { state: this.withCapabilities(state), replayFrom: this.replayFloor(live, params.fromSeq) };
+      return { state: this.decorate(live, state), replayFrom: this.replayFloor(live, params.fromSeq) };
     }
     // Registered synchronously, before `open()` gets a chance to yield.
-    const promise = this.openAndAttach({ cwd: this.options.cwd, sessionPath: params.path, ...this.commonOpen() });
+    const promise = (async () => {
+      // Which agent this stored session runs as: its own record, else the
+      // synced default. Read from the file only; the engine is not open yet.
+      const { definition, role, record } = await this.recoverAgent(params.path);
+      const handle = this.harness.prepareSession({ role, definition, record, projectCwd: this.options.cwd });
+      return this.openAndAttach({ cwd: this.options.cwd, sessionPath: params.path, ...this.commonOpen(), agent: this.agentOptions(definition, handle) }, handle);
+    })();
     this.opening.set(params.path, promise);
     try {
-      const state = await promise;
-      return { state: this.withCapabilities(state), replayFrom: 0 };
+      const live = await promise;
+      return { state: this.decorate(live, live.driver.state()), replayFrom: 0 };
     } finally {
       this.opening.delete(params.path);
     }
   }
 
-  private withCapabilities(state: SessionState): SessionState {
-    return { ...state, capabilities: [...this.activeModules] };
+  /** The capability report and the agent this session runs as, on every state a client sees. */
+  private decorate(live: Live, state: SessionState): SessionState {
+    const agent = this.harness.sessionInfo(live.path);
+    return { ...state, capabilities: [...this.activeModules], ...(agent ? { agent } : {}) };
+  }
+
+  private agentOptions(definition: AgentDefinition, handle: SessionHandle): DriverAgentOptions {
+    return {
+      definition,
+      role: handle.role,
+      record: handle.record,
+      bridge: handle.bridge,
+      policy: this.definitions.policy(),
+      backgroundWork: { cwd: this.options.cwd, foregroundCommandSeconds: this.definitions.policy().foregroundCommandSeconds },
+      beamSkillName: BEAM_SKILL_NAME,
+    };
+  }
+
+  /**
+   * Which agent a stored session runs as. A child's depth is not in its
+   * record, so it is counted up the parent chain (bounded, and every hop is a
+   * file read, never an engine).
+   */
+  private async recoverAgent(path: string): Promise<{ definition: AgentDefinition; role: HarnessSessionRole; record: SessionAgentRecord }> {
+    const record = (await readSessionAgentRecord(path)) ?? rootRecord(this.definitions.defaultAgent().name);
+    const definition = this.definitions.definition(record.agentName) ?? this.definitions.defaultAgent();
+    if (record.kind !== "child" || !record.parentPath) {
+      return { definition, role: rootRole(record.agentName), record };
+    }
+    let depth = 1;
+    let parent = await readSessionAgentRecord(record.parentPath);
+    while (parent?.kind === "child" && parent.parentPath && depth < AGENT_MAX_DEPTH_LIMIT) {
+      depth += 1;
+      parent = await readSessionAgentRecord(parent.parentPath);
+    }
+    const role: HarnessSessionRole = {
+      agentName: record.agentName,
+      kind: "child",
+      ...(record.subagentName !== undefined ? { subagentName: record.subagentName } : {}),
+      depth,
+      parent: {
+        sessionPath: record.parentPath,
+        sessionId: record.parentSessionId ?? "",
+        agentName: parent?.agentName ?? this.definitions.defaultAgent().name,
+        ...(parent?.subagentName !== undefined ? { subagentName: parent.subagentName } : {}),
+      },
+    };
+    return { definition, role, record };
+  }
+
+  /** The harness opens a child session here: same worker, the worktree as cwd. */
+  private async openChild(open: { cwd: string; parentSessionPath: string; agent: DriverAgentOptions }): Promise<SessionState> {
+    const live = await this.openAndAttach({ cwd: open.cwd, parentSessionPath: open.parentSessionPath, ...this.commonOpen(), agent: open.agent });
+    return live.driver.state();
+  }
+
+  private async modelAvailable(model: AgentModelChoice): Promise<boolean> {
+    try {
+      const runtime = await this.modelCatalog().modelRuntime();
+      if (!runtime.getModel(model.provider, model.id)) return false;
+      if (runtime.hasConfiguredAuth(model.provider)) return true;
+      return (await runtime.checkAuth(model.provider)) !== undefined;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Namer names a session after its first prompt, unless the person got there first. */
+  private async nameSession(live: Live, text: string): Promise<void> {
+    if (!this.namer.enabled()) return;
+    const name = await this.namer.nameSession(text);
+    if (!name || !this.sessions.has(live.path) || live.driver.state().name) return;
+    await live.driver.rename(name).catch(() => undefined);
   }
 
   /**
@@ -551,7 +745,7 @@ export class WorkerServer {
    * report at `session_start`) while `open()` is still running. Those events
    * are queued and flushed once the session path is known.
    */
-  private async openAndAttach(openOptions: Parameters<SessionDriver["open"]>[0]): Promise<SessionState> {
+  private async openAndAttach(openOptions: Parameters<SessionDriver["open"]>[0], handle?: SessionHandle): Promise<Live> {
     const driver = this.options.createDriver();
     const live: Live = { driver, seq: 0, buffer: [], unsubscribe: () => {}, path: "" };
     const queued: DriverEvent[] = [];
@@ -564,19 +758,25 @@ export class WorkerServer {
         // Someone else got there first (a `session/new` that landed on an
         // existing path, say). One writer per session file, always.
         live.unsubscribe();
+        handle?.discard();
         await driver.dispose().catch(() => {});
-        return already.driver.state();
+        return already;
       }
       live.path = state.path;
       this.sessions.set(state.path, live);
+      if (handle) {
+        handle.attach(state.path, state.id);
+        live.handle = handle;
+      }
       ready = true;
       for (const event of queued) this.onDriverEvent(live, event);
       // Capture "since the session started" for the git line. Fire and forget:
       // a failure here means the line shows nothing, never that the open fails.
       void this.git().baseline(state.path);
-      return state;
+      return live;
     } catch (error) {
       live.unsubscribe();
+      handle?.discard();
       await driver.dispose().catch(() => {});
       throw error;
     }
@@ -648,17 +848,23 @@ export class WorkerServer {
   }
 
   private onDriverEvent(live: Live, event: DriverEvent): void {
+    // The harness sees every event of every session; it ignores paths it
+    // does not know. Before `closed` removes the session, so a live run is
+    // recorded as failed rather than left running.
+    this.harness.onDriverEvent(live.path, event);
     switch (event.type) {
       case "update": {
+        const update = event.update.kind === "state" ? { kind: "state" as const, state: this.decorate(live, event.update.state) } : event.update;
         const params: SessionUpdateParams = {
           sessionPath: live.path,
           seq: ++live.seq,
-          update: event.update,
+          update,
           at: new Date().toISOString(),
         };
         live.buffer.push(params);
         if (live.buffer.length > this.replayBuffer) live.buffer.splice(0, live.buffer.length - this.replayBuffer);
         this.notify("session/update", params);
+        if (update.kind === "tool_execution_start") void this.labelTool(live, update.toolCallId, update.toolName, update.args);
         return;
       }
       case "ui_request":
@@ -679,6 +885,14 @@ export class WorkerServer {
         this.gitService?.forget(live.path);
         return;
     }
+  }
+
+  /** Namer labels a tool call the moment it starts; at most one label in flight per session. */
+  private async labelTool(live: Live, toolCallId: string, toolName: string, args: unknown): Promise<void> {
+    if (!this.namer.enabled()) return;
+    const label = await this.namer.labelTool(live.path, toolName, args);
+    if (!label || !this.sessions.has(live.path)) return;
+    this.notify("pi/extension/message", { path: live.path, message: { type: "lasercode/namer/label", toolCallId, label } });
   }
 
   /** Re-send buffered updates after `fromSeq`, then any dialogs still waiting. */
@@ -706,4 +920,12 @@ export class WorkerServer {
     };
     this.options.send(response);
   }
+}
+
+/** The text blocks of a prompt, joined; images contribute nothing to a name. */
+function textOf(content: ContentBlock[]): string {
+  return content
+    .filter((block): block is Extract<ContentBlock, { type: "text" }> => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
 }

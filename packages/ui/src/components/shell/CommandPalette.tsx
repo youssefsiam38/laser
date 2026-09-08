@@ -1,4 +1,4 @@
-import { FileClock, FolderPlus, GitBranch, GitFork, Moon, PanelLeft, PanelRight, Plus, Settings, Shrink, Sun } from "lucide-react";
+import { Bot, FileClock, FolderPlus, GitBranch, GitFork, Moon, PanelLeft, PanelRight, Plus, Settings, Shrink, Sun } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { CommandPalette as CommandPaletteElement, matchesCommand, type PaletteCommand } from "@/components/assistant-ui/elements/command-palette";
@@ -88,6 +88,8 @@ function usePaletteCommands(): RunnableCommand[] {
       { id: "sessions", group: "App", label: shell.sessionsOpen ? "Hide sessions" : "Show sessions", keys: ["["], icon: PanelLeft, run: () => shell.toggleSessions() },
       { id: "telemetry", group: "App", label: shell.telemetryOpen ? "Hide telemetry" : "Show telemetry", keys: ["]"], icon: PanelRight, run: () => shell.toggleTelemetry() },
       { id: "settings", group: "App", label: "Settings", icon: Settings, run: () => workbench.open("settings") },
+      // Agents page (M13-T5).
+      { id: "agents", group: "App", label: "Agents", icon: Bot, run: () => workbench.open("agents") },
       { id: "logs", group: "App", label: "Logs", icon: FileClock, run: () => workbench.open("logs") },
       { id: "theme", group: "App", label: theme === "dark" ? "Light theme" : "Dark theme", icon: theme === "dark" ? Sun : Moon, run: () => toggle() },
     ];

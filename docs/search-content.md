@@ -22,6 +22,8 @@ requests or result envelopes for indexing.
 | Edit/write | Displayed path and bounded diff lines; error text on failure | Hidden success confirmation, omitted diff lines, gutters |
 | Read/grep/find/list | Argument JSON values and displayed output | JSON keys, result-envelope metadata and images |
 | Unknown tool | Nested argument/result JSON values, or plain output text | JSON keys and content-envelope metadata/images |
+| Agent completion (`complete_agent_run`) | The final message, drawn as the child's last assistant block | The status badge, the clock, the harness's reply |
+| Agent event / task exit (custom messages) | The child's message and the person's reason; the task's command | The sentence, labels, clocks and the Output action |
 
 For example, `{ "command": "echo hello" }` does **not** match `command`.
 `{ "command": "command -v node" }` does. Text inside commands, source code,

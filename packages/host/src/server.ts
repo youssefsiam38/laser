@@ -9,6 +9,9 @@
  *   AttentionTracker who needs you, fed from the worker event stream (M2-T2)
  *   ViewCache        last N hydrated transcripts (M2-T3)
  *   ProjectRegistry  the project list and the trust gate (M2-T4)
+ *   AgentStore       the agent definitions, pushed to every worker (docs/agents-leap)
+ *   AgentRunRegistry every agent run a worker reported, kept past the worker
+ *   SkillsCheck      periodic validation of what definitions point at
  *
  * Every connected client receives every notification; a per-session
  * subscription is not worth its complexity for a handful of local clients, and
@@ -23,13 +26,17 @@
  * and tests (which send none) keep working.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
-import { basename, extname, join, normalize, resolve as resolvePath, sep } from "node:path";
+import { basename, dirname, extname, join, normalize, resolve as resolvePath, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@lasercode/crypto";
-import { ENV, PRODUCT_NAME, decisionPushPayload, type HostNotifications, type JsonRpcNotification, type LogEntry, type SessionUpdateParams } from "@lasercode/protocol";
+import { ENV, PRODUCT_NAME, decisionPushPayload, type ClientRequests, type HostNotifications, type JsonRpcNotification, type LogEntry, type NamerState, type SessionUpdateParams } from "@lasercode/protocol";
+import { suggestBeamModel } from "./agents/models.js";
+import { AgentRunRegistry } from "./agents/runs.js";
+import { SkillsCheck } from "./agents/skills-check.js";
+import { AgentStore } from "./agents/store.js";
 import { AttentionTracker } from "./attention.js";
 import { FeatureService } from "./features.js";
 import { PrefsStore } from "./prefs.js";
@@ -37,7 +44,7 @@ import { SessionCatalog, defaultSessionDir } from "./catalog.js";
 import { LogStore } from "./logstore.js";
 import { PackageService, SetupService } from "./packages.js";
 import { PanelHub } from "./panels/hub.js";
-import { defaultAgentDir, defaultStateDir } from "./paths.js";
+import { beamWorkspaceDir, chatWorkspaceDir, defaultAgentDir, defaultStateDir } from "./paths.js";
 import { ProjectRegistry } from "./projects.js";
 import { PushService } from "./push.js";
 import { subagentsTempRoots } from "./subagents/file-layer.js";
@@ -45,6 +52,7 @@ import { SubagentsLayer } from "./subagents/layer.js";
 import { RelayClient, type RelayClientState, type RelayClientStats } from "./relay-client.js";
 import { Router } from "./router.js";
 import { ViewCache } from "./views.js";
+import type { WorkerClient } from "./worker-client.js";
 import { WorkerPool, type WorkerPoolOptions } from "./worker-pool.js";
 
 export interface HostServerOptions {
@@ -59,6 +67,13 @@ export interface HostServerOptions {
   uiDir?: string;
   /** Where laser keeps its own state (projects, attention). Default `~/.laser`. */
   stateDir?: string;
+  /**
+   * The product's data directory, which the Beam and Chat workspaces live
+   * under (`<dataDir>/beam`, `<dataDir>/chat`). Defaults to the parent of
+   * `stateDir`, which is the data directory in every layout the CLI resolves —
+   * and keeps a sandboxed state directory's workspaces inside the sandbox.
+   */
+  dataDir?: string;
   /** Idle time before an unused worker is retired; 0 disables retirement. */
   workerIdleMs?: number;
   /**
@@ -174,6 +189,12 @@ export class HostServer {
   readonly prefs: PrefsStore;
   /** Laser-owned capability policy; implementation packages stay hidden. */
   readonly features: FeatureService;
+  /** Agent definitions (docs/agents-leap): the person's, the seeded default, the three built-ins. */
+  readonly agents: AgentStore;
+  /** Every agent run a worker reported, kept after the worker is gone. */
+  readonly runs: AgentRunRegistry;
+  /** Periodic validation of scoped skills and child lists. */
+  readonly skillsCheck: SkillsCheck;
   readonly router: Router;
   private readonly http: Server;
   private readonly wss: WebSocketServer;
@@ -191,12 +212,23 @@ export class HostServer {
   private readonly relayClients: RelayClient[] = [];
   /** Listeners for host notifications, so a relayed device sees the same stream. */
   private readonly notificationListeners = new Set<(n: JsonRpcNotification) => void>();
+  /** The Beam choose-model dialog is offered once per host run. */
+  private beamPrompted = false;
 
   constructor(private readonly options: HostServerOptions = {}) {
     this.log = options.log ?? (() => {});
     this.uiDir = options.uiDir ?? defaultUiDir();
     const agentDir = options.agentDir ?? defaultAgentDir();
     const stateDir = options.stateDir ?? defaultStateDir();
+    const dataDir = options.dataDir ?? dirname(stateDir);
+    const workspaces = { beam: beamWorkspaceDir(dataDir), chat: chatWorkspaceDir(dataDir) };
+    for (const dir of Object.values(workspaces)) {
+      try {
+        mkdirSync(dir, { recursive: true });
+      } catch (error) {
+        this.log(`could not create the workspace ${dir}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
 
     // The log store is a nice-to-have: a host that cannot open SQLite still
     // runs sessions, and `pi/logs/*` explains itself instead of failing blank.
@@ -236,6 +268,7 @@ export class HostServer {
       catalog: this.catalog,
       agentDir,
       storePath: join(stateDir, "projects.json"),
+      exclude: [workspaces.beam, workspaces.chat],
       ...(options.trustTimeoutMs !== undefined ? { trustTimeoutMs: options.trustTimeoutMs } : {}),
       onChange: (projects) => this.notify("pi/project/updated", { projects }),
       onTrustRequest: (request) => {
@@ -262,6 +295,31 @@ export class HostServer {
     });
     this.features = new FeatureService(this.prefs);
 
+    // The definitions live here; every worker gets a copy when it starts
+    // (`prime`, below) and again whenever they change. Clients hear the same
+    // snapshot as `agents/updated`.
+    this.agents = new AgentStore({
+      storePath: join(stateDir, "agents.json"),
+      agentDir,
+      workspaces,
+      onChange: (snapshot) => {
+        this.notify("agents/updated", snapshot);
+        void this.pool?.broadcastRequest("agents/sync", { snapshot }).then((results) => {
+          for (const result of results) {
+            if (result.error) this.log(`agents: the worker for ${result.cwd} did not take the definitions: ${result.error}`);
+          }
+        });
+      },
+    });
+    this.runs = new AgentRunRegistry({
+      storePath: join(stateDir, "agent-runs.json"),
+      onRun: (run) => this.notify("agents/run", { run }),
+    });
+    this.skillsCheck = new SkillsCheck({
+      agents: () => this.agents.snapshot().agents,
+      report: (warnings) => this.agents.setWarnings(warnings),
+    });
+
     // The host resolves the package manager the workers should use — the one
     // the packaged app bundles, or the one on PATH on a developer machine —
     // and hands it down as environment (M10-T5). Settings still win inside.
@@ -281,9 +339,14 @@ export class HostServer {
       envForCwd: (cwd) => ({ [ENV.features]: JSON.stringify(this.features.enabled(cwd)) }),
       ...(options.sessionDir ? { sessionDir: options.sessionDir } : {}),
       ...(options.subagentsTempRoot ? { subagentsTempRoot: options.subagentsTempRoot } : {}),
+      stateDir,
       ...(options.workerMain ? { workerMain: options.workerMain } : {}),
       ...(options.nodeBinary ? { nodeBinary: options.nodeBinary } : {}),
       ...(options.workerIdleMs !== undefined ? { idleMs: options.workerIdleMs } : {}),
+      // A worker's first request already sees the agent definitions.
+      prime: async (client) => {
+        await client.request("agents/sync", { snapshot: this.agents.snapshot() });
+      },
       onNotification: (cwd, n) => {
         this.observe(cwd, n);
         this.broadcast(n);
@@ -296,10 +359,12 @@ export class HostServer {
         if (info.status === "crashed") {
           this.attention.workerCrashed(info.cwd, info.message ?? "worker crashed");
           this.forgetSessionsOf(info.cwd, "the worker stopped");
+          this.runs.workerLost(info.cwd);
         } else if (info.status === "ready") this.attention.workerRecovered(info.cwd);
         else if (info.status === "retired") {
           this.attention.workerRetired(info.cwd);
           this.forgetSessionsOf(info.cwd, "the worker went to sleep");
+          this.runs.workerLost(info.cwd);
         }
         this.logs?.observeWorkerStatus(info);
       },
@@ -346,6 +411,8 @@ export class HostServer {
       publicOrigin: () => this.publicOrigin(),
       packages: this.packages,
       setup: this.setup,
+      agents: this.agents,
+      runs: this.runs,
     });
 
     this.http = createServer((req, res) => this.serveHttp(req, res));
@@ -373,6 +440,7 @@ export class HostServer {
         // and a panel emitted before there is a server to broadcast from is
         // just work thrown away.
         this.subagents.start();
+        this.skillsCheck.start();
         resolve();
       });
     });
@@ -439,6 +507,7 @@ export class HostServer {
     this.relayClients.length = 0;
     this.notificationListeners.clear();
     this.subagents.stop();
+    this.skillsCheck.stop();
     if (this.logFlush) clearTimeout(this.logFlush);
     this.logFlush = undefined;
     this.pendingLogRows = [];
@@ -446,10 +515,13 @@ export class HostServer {
     this.projects.close();
     this.attention.close();
     this.prefs.close();
+    this.agents.close();
     for (const ws of this.clients) ws.close(1001, "host shutting down");
     this.clients.clear();
     this.attached.clear();
     await this.pool.stopAll();
+    // After the workers: their exit fails what was still running.
+    this.runs.close();
     await new Promise<void>((resolve) => this.wss.close(() => resolve()));
     await new Promise<void>((resolve) => this.http.close(() => resolve()));
   }
@@ -541,8 +613,71 @@ export class HostServer {
         this.logs?.observeExtensionMessage(cwd, params.path, params.message);
         return;
       }
+      case "agents/run": {
+        // The worker owns the run while it lives; the host keeps the record so
+        // it outlives the worker. `agents/event` is transient and only broadcast.
+        const { run } = notification.params as HostNotifications["agents/run"];
+        this.runs.upsert(run);
+        return;
+      }
+      case "pi/providers/login/event": {
+        const params = notification.params as HostNotifications["pi/providers/login/event"];
+        // After the event is on its way to the clients, never in its path.
+        if (params.event.type === "done") setImmediate(() => void this.onProviderConnected(cwd));
+        return;
+      }
       default:
         return;
+    }
+  }
+
+  // ---------------------------------------------------------------- agents
+
+  /**
+   * A provider was just connected. If Beam has no model yet, propose one and
+   * open the choice (once per host run); if Namer has never been qualified,
+   * ask this worker to benchmark the cheap models. Neither blocks anything:
+   * the login has already been answered, and a failure only logs.
+   */
+  private async onProviderConnected(cwd: string): Promise<void> {
+    const snapshot = this.agents.snapshot();
+    const wantsBeam = snapshot.beam.model === null && snapshot.beam.needsChoice && !this.beamPrompted;
+    const wantsNamer = snapshot.namer.status === "unqualified";
+    if (!wantsBeam && !wantsNamer) return;
+    let worker: WorkerClient;
+    try {
+      worker = await this.pool.get(cwd);
+    } catch (error) {
+      this.log(`agents: no worker for ${cwd} after sign-in: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    if (wantsBeam) {
+      this.beamPrompted = true;
+      try {
+        const [providers, catalog] = await Promise.all([
+          worker.request<ClientRequests["pi/providers/list"]["result"]>("pi/providers/list", { cwd }),
+          worker.request<ClientRequests["pi/models/catalog"]["result"]>("pi/models/catalog", { cwd }),
+        ]);
+        const configured = new Set(providers.providers.filter((provider) => provider.configured).map((provider) => provider.id));
+        const suggested = suggestBeamModel(catalog.models, { configuredProviders: configured });
+        this.agents.setBeamSuggestion(suggested);
+        this.notify("agents/beam/choose-model", { suggested });
+      } catch (error) {
+        // Nothing was shown, so the next sign-in may try again.
+        this.beamPrompted = false;
+        this.log(`agents: could not propose a Beam model: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (wantsNamer) {
+      this.agents.setNamerState({ ...snapshot.namer, status: "qualifying" });
+      try {
+        const state = await worker.request<NamerState>("agents/namer/qualify", { cwd });
+        this.agents.setNamerState(state);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        this.agents.setNamerState({ ...snapshot.namer, status: "unqualified", reason });
+        this.log(`agents: Namer could not be qualified: ${reason}`);
+      }
     }
   }
 

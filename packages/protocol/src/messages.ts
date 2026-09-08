@@ -8,6 +8,7 @@
  * `seq`. Clients resume with `session/load { fromSeq }`.
  */
 
+import type { SessionAgentInfo } from "./agents.js";
 import { WIRE_NAMESPACE } from "./identity.js";
 import type { AccountUsageState, PiExtensionMessage, PiExtensionModuleName } from "./pi-extension.js";
 import type { FeatureScope, FeatureState, GoalAction, SessionGoal } from "./features.js";
@@ -159,6 +160,8 @@ export interface SessionSummary {
   attention?: SessionAttention;
   /** ISO time the client last marked this session seen (`pi/session/seen`). */
   seenAt?: string;
+  /** Which agent runs this session and, for a child, whose child it is. */
+  agent?: SessionAgentInfo;
 }
 
 export interface SessionState {
@@ -185,6 +188,8 @@ export interface SessionState {
   accountUsage?: AccountUsageState;
   /** `tokens`/`percent` are null right after compaction, before the next response. */
   contextUsage?: { tokens: number | null; contextWindow: number; percent: number | null };
+  /** Which agent runs this session and, for a child, whose child it is. */
+  agent?: SessionAgentInfo;
 }
 
 // ---------- Session updates (host → client notifications) ----------
@@ -803,7 +808,8 @@ export interface ProjectFiles {
 export interface ClientRequests {
   /** Read-only release handshake; complete before hydrating or sending work. */
   "pi/host/version": { params: {}; result: { version: string } };
-  "session/new": { params: { cwd: string; parentPath?: string }; result: { state: SessionState } };
+  /** `agentName` picks a definition; omitted means the default agent. */
+  "session/new": { params: { cwd: string; parentPath?: string; agentName?: string }; result: { state: SessionState } };
   "session/load": { params: { path: string; fromSeq?: number }; result: { state: SessionState; replayFrom: number } };
   "session/prompt": {
     params: { path: string; content: ContentBlock[]; streamingBehavior?: "steer" | "followUp" };

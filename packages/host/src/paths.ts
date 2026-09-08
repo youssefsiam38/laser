@@ -23,9 +23,9 @@
  * deliberate lever for a person who genuinely wants both to share one
  * directory.
  */
-import { DATA_DIR_NAME } from "@lasercode/protocol";
+import { DATA_DIR_NAME, WORKTREES_DIR_NAME } from "@lasercode/protocol";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
 /** `$XDG_DATA_HOME/laser` and the platform equivalents. */
 export function laserDataDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -47,4 +47,30 @@ export function defaultAgentDir(env: NodeJS.ProcessEnv = process.env): string {
 /** laser's own state: host record, log, project list, attention, prefs. */
 export function defaultStateDir(env: NodeJS.ProcessEnv = process.env): string {
   return join(laserDataDir(env), "state");
+}
+
+/**
+ * The directories the built-in projectless agents run in. They live beside
+ * `agent/` and `state/` under the product's own data directory: they are not
+ * projects (the registry never lists them), just a working directory Beam and
+ * Chat sessions can be created in.
+ */
+export function beamWorkspaceDir(dataDir: string): string {
+  return join(dataDir, "beam");
+}
+
+export function chatWorkspaceDir(dataDir: string): string {
+  return join(dataDir, "chat");
+}
+
+/**
+ * The project a session directory belongs to. A child agent runs in a worktree
+ * under `<project>/.worktrees/<name>`; its session header records the
+ * worktree, but its worker, its project row and its sidebar group are the
+ * project's. Any other directory is its own project.
+ */
+export function projectRootOf(cwd: string): string {
+  const marker = `${sep}${WORKTREES_DIR_NAME}${sep}`;
+  const at = cwd.indexOf(marker);
+  return at > 0 ? cwd.slice(0, at) : cwd;
 }

@@ -226,6 +226,36 @@ describe("WorkerPool", () => {
     expect(info.message).toMatch(/could not start/);
   });
 
+  it("passes --state-dir and primes a worker before get() resolves, surviving a refused prime", async () => {
+    const primed: string[] = [];
+    const stderr: string[] = [];
+    pool = makePool({
+      stateDir: join(dir, "state"),
+      onStderr: (_cwd, text) => stderr.push(text),
+      prime: async (client, cwd) => {
+        const result = await client.request<{ ok: boolean; method: string }>("agents/sync", { snapshot: { revision: 1 } });
+        primed.push(`${cwd}:${result.method}`);
+      },
+    });
+    const client = await pool.get(project);
+    expect(primed).toEqual([`${project}:agents/sync`]); // before anyone else could ask
+    const { argv } = await client.request<{ argv: string[] }>("pi/test/argv", {});
+    expect(argv[argv.indexOf("--state-dir") + 1]).toBe(join(dir, "state"));
+
+    const other = join(dir, "other");
+    const refusing = makePool({
+      onStderr: (_cwd, text) => stderr.push(text),
+      prime: async () => {
+        throw new Error("unknown method agents/sync");
+      },
+    });
+    const survivor = await refusing.get(other);
+    expect(survivor.alive).toBe(true);
+    expect(stderr.join("")).toContain("priming failed: unknown method agents/sync");
+    expect(await refusing.broadcastRequest("agents/sync", {})).toEqual([{ cwd: other }]);
+    await refusing.stopAll();
+  });
+
   it("passes the host's trust decision to the worker and refuses the spawn when trust throws", async () => {
     pool = makePool({ resolveTrust: () => Promise.resolve(false) });
     const client = await pool.get(project);
