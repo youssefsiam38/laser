@@ -70,13 +70,15 @@ describe("StableSdkDriver.open", () => {
     ).rejects.toThrow(/already open/);
   }, 60_000);
 
-  it("lists models from the pinned Pi catalog", async () => {
+  it("falls back to the whole catalogue when the machine has no credential at all", async () => {
     await driver.open({
       cwd: join(base, "project"),
       agentDir: join(base, "agent"),
       sessionDir: join(base, "sessions"),
     });
     const models = await driver.listModels();
+    // Connected providers only (D-145) — but an empty answer would be a picker
+    // with nothing in it, so with no credential the catalogue stands.
     expect(models.length).toBeGreaterThan(10);
     expect(models[0]).toMatchObject({ provider: expect.any(String), id: expect.any(String) });
   }, 60_000);

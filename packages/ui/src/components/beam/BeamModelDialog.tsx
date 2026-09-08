@@ -6,6 +6,7 @@ import { useAgentsActions, useAgentsSnapshot, useBeamChoice } from "@/agents";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
 import { ProviderModelPicker, modelOptionId } from "@/components/assistant-ui/elements/model-selector";
+import { narrowToConnected } from "@/components/assistant-ui/elements/connected-models";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -51,13 +52,11 @@ export function BeamModelDialog() {
     setCatalog(null);
     void Promise.all([
       client.request("pi/models/catalog", { cwd }),
-      client.request("pi/providers/list", { cwd }).catch(() => ({ providers: [] })),
+      client.request("pi/providers/list", { cwd }).then(({ providers }) => providers, () => undefined),
     ])
-      .then(([result, { providers }]) => {
+      .then(([result, providers]) => {
         if (!live) return;
-        const configured = new Set(providers.filter((provider) => provider.configured).map((provider) => provider.id));
-        const models = result.models.filter((model) => model.enabled && (configured.size === 0 || configured.has(model.provider)));
-        setCatalog({ models });
+        setCatalog({ models: narrowToConnected(result.models, providers).models });
       })
       .catch((error: unknown) => {
         if (live) setCatalog({ error: error instanceof Error ? error.message : String(error) });

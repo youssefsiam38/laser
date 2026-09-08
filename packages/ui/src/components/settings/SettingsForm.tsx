@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ProviderModelMultiPicker, ProviderModelPicker, ProviderPicker, modelProvenance, modelOptionId } from "@/components/assistant-ui/elements/model-selector";
+import { narrowToConnected } from "@/components/assistant-ui/elements/connected-models";
 import { ProviderLogo } from "@/components/assistant-ui/elements/logos";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -47,7 +48,7 @@ export function SettingsForm({ audience, cwd, catalog, snapshot, onApply }: Sett
   const [section, setSection] = useState<string>(catalog.sections[0]?.id ?? "model");
   const [query, setQuery] = useState("");
   const [showFull, setShowFull] = useState(false);
-  const [modelCatalog, setModelCatalog] = useState<{ models: ModelCatalogEntry[]; defaultProvider?: string; defaultModel?: string }>({ models: [] });
+  const [modelCatalog, setModelCatalog] = useState<{ models: ModelCatalogEntry[]; connected: ModelCatalogEntry[]; defaultProvider?: string; defaultModel?: string }>({ models: [], connected: [] });
   const [modelCatalogLoading, setModelCatalogLoading] = useState(true);
   const [modelCatalogError, setModelCatalogError] = useState<string>();
 
@@ -55,16 +56,24 @@ export function SettingsForm({ audience, cwd, catalog, snapshot, onApply }: Sett
     let live = true;
     setModelCatalogLoading(true);
     setModelCatalogError(undefined);
-    void client.request("pi/models/catalog", { cwd }).then((result) => {
+    void Promise.all([
+      client.request("pi/models/catalog", { cwd }),
+      // The pickers below choose a model to use, so they show connected
+      // providers only (D-145). The enabled-models control keeps the whole
+      // catalogue: that one curates it, including for a provider not yet
+      // connected.
+      client.request("pi/providers/list", { cwd }).then(({ providers }) => providers, () => undefined),
+    ]).then(([result, providers]) => {
       if (!live) return;
       setModelCatalog({
         models: result.models,
+        connected: narrowToConnected(result.models, providers).models,
         ...(result.defaultProvider ? { defaultProvider: result.defaultProvider } : {}),
         ...(result.defaultModel ? { defaultModel: result.defaultModel } : {}),
       });
     }).catch((error) => {
       if (live) {
-        setModelCatalog({ models: [] });
+        setModelCatalog({ models: [], connected: [] });
         setModelCatalogError(error instanceof Error ? error.message : String(error));
       }
     }).finally(() => {
@@ -364,7 +373,8 @@ function FieldRowView({
   scope: SettingsScope;
   showSection: boolean;
   catalog: SettingsCatalog;
-  modelCatalog: { models: ModelCatalogEntry[]; defaultProvider?: string; defaultModel?: string };
+  /** `models` is the whole catalogue (curating it); `connected` is what a person can choose to use (D-145). */
+  modelCatalog: { models: ModelCatalogEntry[]; connected: ModelCatalogEntry[]; defaultProvider?: string; defaultModel?: string };
   modelCatalogLoading: boolean;
   modelCatalogError: string | undefined;
   onApply: (scope: SettingsScope, changes: SettingChange[]) => Promise<boolean>;
@@ -406,7 +416,7 @@ function FieldRowView({
       <div className="flex min-w-0 flex-1 flex-col gap-1.5">
         {field.path === "defaultProvider" ? (
           <ProviderPicker
-            models={modelCatalog.models}
+            models={modelCatalog.connected}
             {...((typeof displayed === "string" ? displayed : modelCatalog.defaultProvider) ? { value: typeof displayed === "string" ? displayed : modelCatalog.defaultProvider } : {})}
             disabled={!writable || modelCatalogLoading}
             loading={modelCatalogLoading}
@@ -415,7 +425,7 @@ function FieldRowView({
           />
         ) : field.path === "defaultModel" ? (
           <ProviderModelPicker
-            models={modelCatalog.models}
+            models={modelCatalog.connected}
             {...((typeof displayed === "string" ? displayed : modelCatalog.defaultModel) && provider
               ? { value: `${provider}/${typeof displayed === "string" ? displayed : modelCatalog.defaultModel}` }
               : {})}
@@ -443,7 +453,7 @@ function FieldRowView({
           />
         ) : field.path === "modelThinkingLevels" ? (
           <ModelThinkingMapField
-            models={modelCatalog.models}
+            models={modelCatalog.connected}
             value={displayed}
             disabled={!writable}
             onCommit={(value) => void onApply(scope, [value === undefined ? { path: field.path, op: "unset" } : { path: field.path, op: "set", value }])}

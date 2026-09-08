@@ -74,6 +74,21 @@ describe("StableSdkDriver with an agent definition", () => {
     expect(toolNamesOf(request)).not.toContain("web_search");
   }, 60_000);
 
+  it("lists only the models of a connected provider, so a picker cannot offer one that would be refused", async () => {
+    const driver = new StableSdkDriver();
+    drivers.push(driver);
+    await driver.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), projectTrusted: true, agent: agentOptions(fallbackDefaultAgent()) });
+    const models = await driver.listModels();
+    // The stub is the credential this sandbox writes, so it is offered.
+    expect(models).toContainEqual({ provider: "stub", id: "stub-1", name: "Stub One", contextWindow: 8000, reasoning: false, vision: false });
+    // And the offer is a small part of the catalogue, not all of it: the
+    // pinned engine knows over a thousand models across forty-odd providers,
+    // and a picker may only show the ones that can answer (D-145). Which
+    // others qualify depends on the credentials on this machine, so what is
+    // asserted is the narrowing, not a fixed list.
+    expect(models.length).toBeLessThan(200);
+  }, 60_000);
+
   it("offers the Beam skill only to Beam and honours scoped skills", async () => {
     ensureBeamSkill({ agentDir: join(base, "agent"), stateDir: join(base, "state") });
     writeSkill(join(base, "agent", "skills"), "alpha-skill");

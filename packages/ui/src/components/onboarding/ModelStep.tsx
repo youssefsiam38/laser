@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Check, Eye, Sparkles } from "lucide-react";
 
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
+import { narrowToConnected } from "@/components/assistant-ui/elements/connected-models";
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
 import { ProviderLogo } from "@/components/assistant-ui/elements/logos";
 import { Badge } from "@/components/ui/badge";
@@ -58,9 +59,11 @@ export function ModelStep({ cwd, onChosen }: ModelStepProps) {
     void load();
   }, [load]);
 
-  const configured = useMemo(() => new Set(providers.filter((p) => p.configured).map((p) => p.id)), [providers]);
   const providerName = useMemo(() => new Map(providers.map((p) => [p.id, p.name])), [providers]);
-  const available = useMemo(() => (models ?? []).filter((m) => configured.has(m.provider) && m.enabled), [models, configured]);
+  // One rule for every "choose a model" surface (D-145).
+  const narrowed = useMemo(() => narrowToConnected(models ?? [], providers), [models, providers]);
+  const available = narrowed.models;
+  const noProvider = narrowed.none;
   const groups = useMemo(() => {
     const byProvider = new Map<string, ModelCatalogEntry[]>();
     for (const model of available) {
@@ -107,7 +110,7 @@ export function ModelStep({ cwd, onChosen }: ModelStepProps) {
       <div className="rounded-xl border border-line px-3 py-6 text-center">
         <p className="text-sm font-medium text-ink">No models to choose from yet</p>
         <p className="mt-1 text-sm leading-6 text-ink-2">
-          {configured.size === 0
+          {noProvider
             ? "Sign in to a provider first; its models appear here."
             : "The provider you signed in to lists no models right now. Try again in a moment, or sign in to another."}
         </p>

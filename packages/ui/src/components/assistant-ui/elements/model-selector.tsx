@@ -35,6 +35,7 @@ import {
 import { cva, type VariantProps } from "class-variance-authority";
 import type { ModelRef, SettingChange } from "@lasercode/protocol";
 import { CheckIcon, ChevronDownIcon, ChevronsUpDown, Cpu } from "lucide-react";
+import { narrowToConnected } from "./connected-models.js";
 import { cn } from "@/lib/utils";
 import {
   Popover,
@@ -1070,11 +1071,14 @@ export function SessionModelSelector({ className }: { className?: string | undef
     if (!open || models !== null || !cwd) return;
     let live = true;
     setError(null);
-    const request = sessionPath
+    // With a session the worker already answers with the models it can switch
+    // to; without one the catalogue is narrowed here to the same rule (D-145).
+    const request: Promise<ModelRef[]> = sessionPath
       ? actions.listModels()
-      : client.request("pi/models/catalog", { cwd }).then(({ models: catalog }) =>
-          catalog.filter((entry) => entry.enabled),
-        );
+      : Promise.all([
+          client.request("pi/models/catalog", { cwd }),
+          client.request("pi/providers/list", { cwd }).then(({ providers }) => providers, () => undefined),
+        ]).then(([catalog, providers]) => narrowToConnected(catalog.models, providers).models);
     request
       .then((list) => {
         if (live) setModels(list);

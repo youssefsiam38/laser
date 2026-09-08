@@ -385,8 +385,22 @@ export class StableSdkDriver implements SessionDriver {
 
   // -------------------------------------------------------------------- model
 
+  /**
+   * The models this session can actually switch to: only providers with a
+   * credential (D-145). `setModel` refuses the rest, so offering them is
+   * offering a choice that cannot be made. The engine answers from its own
+   * auth state; a failure falls back to the full list rather than an empty
+   * picker.
+   */
   async listModels(): Promise<ModelRef[]> {
-    return this.session().modelRuntime.getModels().map(toModelRef);
+    const runtime = this.session().modelRuntime;
+    try {
+      const available = await runtime.getAvailable();
+      if (available.length > 0) return available.map(toModelRef);
+    } catch {
+      // Fall through: a picker with every model beats a picker with none.
+    }
+    return runtime.getModels().map(toModelRef);
   }
 
   async setModel(model: ModelRef): Promise<SessionState> {

@@ -10,6 +10,7 @@ import type { AgentSkillsListing, ModelCatalogEntry } from "@lasercode/protocol"
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useAgentsActions } from "@/agents";
+import { narrowToConnected } from "@/components/assistant-ui/elements/connected-models";
 import { useLaserStable } from "@/runtime";
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -73,7 +74,12 @@ export function useModelCatalog(cwd: string | undefined, enabled = true): Loaded
     if (fresh) catalogCache.delete(key);
     let pending = catalogCache.get(key);
     if (!pending) {
-      pending = client.request("pi/models/catalog", { cwd: key }).then((catalog) => catalog.models.filter((model) => model.enabled));
+      // Only providers the person has connected (D-145): an agent set to a
+      // model nobody can call is a refusal waiting to happen.
+      pending = Promise.all([
+        client.request("pi/models/catalog", { cwd: key }),
+        client.request("pi/providers/list", { cwd: key }).then(({ providers }) => providers, () => undefined),
+      ]).then(([catalog, providers]) => narrowToConnected(catalog.models, providers).models);
       pending.catch(() => catalogCache.delete(key));
       catalogCache.set(key, pending);
     }
