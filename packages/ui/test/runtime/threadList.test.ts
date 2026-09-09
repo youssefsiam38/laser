@@ -323,7 +323,11 @@ describe("createThreadListAdapter", () => {
     // No "refresh": refreshing here changes the thread-list signature while
     // assistant-ui is still adopting the new thread, and the reload it triggers
     // makes the runtime throw `useClientLookup: key … not found`. The host
-    // reloads once `end` closes the bracket instead.
+    // reloads once `end` closes the bracket instead — and the bracket closes
+    // only on the next macrotask, after the runtime has applied the result
+    // (M13-T53), so nothing the host holds back can land in between.
+    expect(calls).toEqual(["begin", "new:/proj"]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(calls).toEqual(["begin", "new:/proj", "end"]);
   });
 
@@ -340,6 +344,7 @@ describe("createThreadListAdapter", () => {
     });
     await expect(adapter.initialize("local-1")).rejects.toThrow(/worker is down/);
     // A leaked "begin" would gate every later thread-list reload forever.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(calls).toEqual(["begin", "end"]);
   });
 

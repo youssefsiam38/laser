@@ -1135,10 +1135,12 @@ export function readGlobalSettingsFile(agentDir: string): Doc {
 
 /**
  * What the product's model switches resolve to right now: the global file
- * merged with the project's `.laser` values, read fresh. A live session's
- * own settings manager is not reloaded after a Settings write, so anything
- * that must reflect the switches immediately — a session's picker — reads
- * the files rather than the session (M13-T49).
+ * merged with the project's `.laser` values, read fresh. A Settings write
+ * reloads a live session's engine settings (M13-T55), but `disabledModels`
+ * is a product key the engine never receives, and a write the reload does
+ * not reach (another checkout's `.laser`, an edit by hand) must still show
+ * on the picker's next open, so a session's picker reads the files rather
+ * than the session (M13-T49).
  */
 export function readEffectiveProductSettings(cwd: string, agentDir: string, projectTrusted: boolean | undefined): Doc {
   return mergeSettings(readGlobalSettingsFile(agentDir), projectTrusted === false ? {} : readLaserProjectSettings(cwd));

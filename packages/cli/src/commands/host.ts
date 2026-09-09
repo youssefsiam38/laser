@@ -9,7 +9,7 @@ import { resolve } from "node:path";
 import type { HostNotifications } from "@lasercode/protocol";
 import { bool } from "../args.js";
 import type { Command } from "../command.js";
-import { hostUrl, type LaserPaths } from "../config.js";
+import { hostUrl, wsUrl, type LaserPaths } from "../config.js";
 import { runDaemon } from "../daemon.js";
 import { CliError, ExitCode } from "../errors.js";
 import { shortCwd } from "../format.js";
@@ -225,7 +225,7 @@ session commands will use it — but \`${PRODUCT_NAME} down\` still refuses to s
     let projectCount: number | undefined;
     let rpc: HostRpc | undefined;
     try {
-      rpc = await HostRpc.connect({ url: `ws://${status.record.host}:${status.record.port}/ws`, connectTimeoutMs: 3000 });
+      rpc = await HostRpc.connect({ url: wsUrl(status.record), connectTimeoutMs: 3000 });
       const sessions = await listSessions(rpc);
       sessionCount = sessions.length;
       projectCount = new Set(sessions.map((session) => session.cwd)).size;
@@ -341,7 +341,7 @@ async function adoptForeignHost(paths: LaserPaths): Promise<HostRecord | undefin
 export async function connect(paths: LaserPaths, onNotification?: NotificationHandler): Promise<HostRpc> {
   const record = await requireHost(paths);
   return HostRpc.connect({
-    url: `ws://${record.host}:${record.port}/ws`,
+    url: wsUrl(record),
     ...(onNotification ? { onNotification } : {}),
   });
 }

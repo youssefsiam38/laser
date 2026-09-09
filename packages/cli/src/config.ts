@@ -36,6 +36,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { HOST_BIND_ADDRESS, HOST_DEFAULT_PORT, defaultAgentDir, defaultStateDir, laserDataDir } from "@lasercode/host";
 import type { FlagSpecs, ParsedArgs } from "./args.js";
 import { num, str } from "./args.js";
+import { isProcessAlive, isRecordedProcess, readHostFile } from "./hostfile.js";
 
 export const PI_AGENT_DIR_ENV = "PI_CODING_AGENT_DIR";
 export const PI_SESSION_DIR_ENV = "PI_CODING_AGENT_SESSION_DIR";
@@ -126,10 +127,52 @@ export function piEnv(paths: LaserPaths, base: NodeJS.ProcessEnv = process.env):
   };
 }
 
+/**
+ * The *configured* address: where a host would be started, and where one is
+ * looked for when nothing is recorded. Not necessarily where the app is —
+ * see `appAddress` for that.
+ */
 export function hostUrl(paths: Pick<LaserPaths, "host" | "port">): string {
   return `http://${paths.host}:${paths.port}`;
 }
 
 export function wsUrl(paths: Pick<LaserPaths, "host" | "port">): string {
   return `ws://${paths.host}:${paths.port}/ws`;
+}
+
+export interface AppAddress {
+  host: string;
+  port: number;
+  /** `http://host:port`, no trailing slash: prepend it to a deep link. */
+  url: string;
+  /** Where the address came from: the live host record, or the configured port. */
+  source: "record" | "configured";
+}
+
+/**
+ * Where the running app is, for anything that prints or opens a URL.
+ *
+ * The configured port (`--port` ▸ `LASER_PORT` ▸ default) says where to *start*
+ * a host and where to look when there is no record of one. Once a host is
+ * running, `<state-dir>/host.json` is the address, whatever this command was
+ * told: that is what `status`, `up` and every session verb already do to
+ * reach it (`inspectHost` ▸ `requireHost`), so a printed URL that formatted
+ * the configured port could name a port nothing listens on — a sandbox on
+ * 41493 answered `new`, and `new` printed 41441.
+ *
+ * Record first, when its process is alive and is still the process the record
+ * describes; otherwise the configured address. Read-only: a stale record is
+ * left for `inspectHost` to clear, this never touches the file.
+ */
+export function appAddress(paths: Pick<LaserPaths, "host" | "port" | "hostFile">): AppAddress {
+  const record = readHostFile(paths.hostFile);
+  if (record && isProcessAlive(record.pid) && isRecordedProcess(record) !== false) {
+    return { host: record.host, port: record.port, url: record.url, source: "record" };
+  }
+  return { host: paths.host, port: paths.port, url: hostUrl(paths), source: "configured" };
+}
+
+/** `appAddress(paths).url`: the base every printed or opened app URL starts from. */
+export function appUrl(paths: Pick<LaserPaths, "host" | "port" | "hostFile">): string {
+  return appAddress(paths).url;
 }

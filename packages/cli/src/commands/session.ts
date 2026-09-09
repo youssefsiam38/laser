@@ -9,7 +9,7 @@ import { resolve } from "node:path";
 import type { SessionState, SessionSummary, SessionUpdateParams } from "@lasercode/protocol";
 import { bool, num, str } from "../args.js";
 import type { Command, CommandContext } from "../command.js";
-import { hostUrl } from "../config.js";
+import { appUrl } from "../config.js";
 import { CliError, ExitCode } from "../errors.js";
 import { openBrowser } from "../host-control.js";
 import { ago, clip, sessionLabel, shortCwd, shortId } from "../format.js";
@@ -173,7 +173,7 @@ directory. The session appears in the app immediately.
       // Pi has not written the file yet, so nothing else could find this
       // session by scanning. Note it for the next command in this directory.
       rememberSession(context.paths.stateDir, cwd, state.path);
-      const url = `${hostUrl(context.paths)}${sessionFragment(state.path)}`;
+      const url = `${appUrl(context.paths)}${sessionFragment(state.path)}`;
       if (bool(context.args, "open")) openBrowser(url);
 
       if (term.json) {
@@ -220,7 +220,7 @@ directory.
     try {
       const summary = await pick(rpc, context, context.args.positionals[0]);
       const state = await loadSession(rpc, summary.path);
-      const url = `${hostUrl(context.paths)}${sessionFragment(state.path)}`;
+      const url = `${appUrl(context.paths)}${sessionFragment(state.path)}`;
       const opened = bool(context.args, "open") ? openBrowser(url) : false;
 
       if (term.json) {

@@ -10,7 +10,7 @@
  * Pending extension dialogs are re-emitted on load for the same reason.
  */
 
-import { AGENT_MAX_DEPTH_LIMIT, ErrorCodes, PRODUCT_NAME, ProtocolError, parseClientRequest, type AgentDefinition, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type TypedClientRequest } from "@lasercode/protocol";
+import { AGENT_MAX_DEPTH_LIMIT, ErrorCodes, PRODUCT_NAME, ProtocolError, parseClientRequest, type AgentDefinition, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type SettingsScope, type TypedClientRequest } from "@lasercode/protocol";
 import { dirname, join, resolve } from "node:path";
 import type { DriverAgentOptions, DriverEvent, SessionDriver } from "./driver.js";
 import { ProjectFilesService } from "./files.js";
@@ -414,9 +414,9 @@ export class WorkerServer {
       }
       case "pi/settings/set": {
         this.assertCwd(req.params.cwd);
-        return {
-          snapshot: await this.settings().apply(req.params.scope, req.params.changes),
-        } satisfies Result<"pi/settings/set">;
+        const snapshot = await this.settings().apply(req.params.scope, req.params.changes);
+        await this.reloadLiveSettings(req.params.scope);
+        return { snapshot } satisfies Result<"pi/settings/set">;
       }
 
       case "pi/packages/list":
@@ -526,6 +526,30 @@ export class WorkerServer {
     if (resolve(cwd) !== resolve(this.options.cwd)) {
       throw new ProtocolError(ErrorCodes.InvalidParams, `this worker serves ${this.options.cwd}, not ${cwd}`);
     }
+  }
+
+  /**
+   * A settings write reached the files; the sessions it touches read them
+   * again (M13-T55). A global write reaches every open session; a project
+   * write only those running in this project's own checkout, because a
+   * worktree session or a workspace session reads its own `.laser` file. The
+   * write has already happened, so a session that cannot reload keeps the
+   * request from failing: it is reported, not thrown.
+   */
+  private async reloadLiveSettings(scope: SettingsScope): Promise<void> {
+    const cwd = resolve(this.options.cwd);
+    await Promise.all(
+      [...this.sessions.values()].map(async (live) => {
+        const driver = live.driver;
+        if (!driver.reloadSettings) return;
+        try {
+          if (scope === "project" && resolve(driver.state().cwd) !== cwd) return;
+          await driver.reloadSettings();
+        } catch (error) {
+          console.error(`${PRODUCT_NAME} worker: could not reload settings in ${live.path}:`, error instanceof Error ? error.message : error);
+        }
+      }),
+    );
   }
 
   private settings(): SettingsAdapter {

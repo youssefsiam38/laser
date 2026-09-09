@@ -161,6 +161,15 @@ export interface SessionDriver {
   /** The text of the last assistant message, for a run that ended without its final tool. */
   lastAssistantText?(): string | undefined;
 
+  /**
+   * Re-read the settings files into this session's engine settings after a
+   * Settings write (M13-T55), through the engine's own settings reload with
+   * the project's `.laser` values kept durable across it. Never mid-turn: a
+   * reload asked for while a turn or a compaction runs is deferred to its end
+   * and answered `deferred: true`. Optional: the stub holds no settings.
+   */
+  reloadSettings?(): Promise<{ deferred: boolean }>;
+
   dispose(): Promise<void>;
 }
 

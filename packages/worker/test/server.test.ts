@@ -3,7 +3,11 @@
  * load, dialog notifications, and error mapping. The real driver is covered
  * by stable-sdk.*.test.ts.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { PRODUCT_NAME, PROJECT_DIR_NAME } from "@lasercode/protocol";
 import type { JsonRpcMessage, SessionState, UiDialogRequest } from "@lasercode/protocol";
 import { WorkerServer } from "../src/server.js";
 import type { DriverEvent, DriverListener, SessionDriver } from "../src/driver.js";
@@ -43,6 +47,11 @@ class FakeDriver implements SessionDriver {
     return this.st;
   }
   state() { return this.st; }
+  /** Where this session runs, for the settings fan-out's project-scope check. */
+  setCwd(cwd: string) { this.st = { ...this.st, cwd }; }
+  /** Settings reloads asked of this driver (M13-T55). Optional on the interface, so tests can take it away. */
+  reloads = 0;
+  reloadSettings?: () => Promise<{ deferred: boolean }> = async () => { this.reloads += 1; return { deferred: false }; };
   subscribe(l: DriverListener) { this.listeners.add(l); return () => this.listeners.delete(l); }
   emit(e: DriverEvent) { for (const l of this.listeners) l(e); }
   async prompt() {
@@ -342,5 +351,87 @@ describe("WorkerServer", () => {
     expect(h.server.openSessions()).toEqual(["/tmp/other.jsonl"]);
     await h.server.dispose();
     expect(h.server.openSessions()).toEqual([]);
+  });
+});
+
+/**
+ * M13-T55: a settings write makes the sessions it touches read it again. The
+ * adapter writes real files, so this harness owns a temp project and agent
+ * directory; the user's own are never touched.
+ */
+describe("WorkerServer settings writes and live sessions", () => {
+  let base: string;
+
+  afterEach(() => {
+    if (base) rmSync(base, { recursive: true, force: true });
+  });
+
+  /** Two sessions: one in the project's checkout, one in a worktree of it. */
+  async function twoSessions() {
+    base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-server-settings-`));
+    const cwd = join(base, "project");
+    const agentDir = join(base, "agent");
+    mkdirSync(cwd, { recursive: true });
+    mkdirSync(agentDir, { recursive: true });
+    const out: JsonRpcMessage[] = [];
+    const drivers: FakeDriver[] = [];
+    const server = new WorkerServer({
+      cwd,
+      agentDir,
+      projectTrusted: true,
+      createDriver: () => { const d = new FakeDriver(); drivers.push(d); return d; },
+      send: (m) => out.push(m),
+    });
+    const call = async (id: number, method: string, params?: unknown) => {
+      await server.handle({ jsonrpc: "2.0", id, method, params });
+      return out.find((m) => "id" in m && m.id === id) as { result?: { snapshot?: { effective: Record<string, unknown> } }; error?: { code: number } };
+    };
+    await call(1, "session/new", { cwd });
+    await call(2, "session/load", { path: join(cwd, ".worktrees", "child", "s2.jsonl") });
+    const [project, worktree] = drivers as [FakeDriver, FakeDriver];
+    project.setCwd(cwd);
+    worktree.setCwd(join(cwd, ".worktrees", "child"));
+    return { cwd, agentDir, server, call, project, worktree };
+  }
+
+  it("a global write reaches every open session, after the file holds it", async () => {
+    const h = await twoSessions();
+    const written = await h.call(3, "pi/settings/set", { cwd: h.cwd, scope: "global", changes: [{ path: "steeringMode", op: "set", value: "all" }] });
+    expect(written.error).toBeUndefined();
+    expect(written.result?.snapshot?.effective["steeringMode"]).toBe("all");
+    expect(JSON.parse(readFileSync(join(h.agentDir, "settings.json"), "utf8"))).toMatchObject({ steeringMode: "all" });
+    expect(h.project.reloads).toBe(1);
+    expect(h.worktree.reloads).toBe(1);
+    await h.server.dispose();
+  });
+
+  it("a project write reaches only the sessions in this project's checkout", async () => {
+    const h = await twoSessions();
+    const written = await h.call(3, "pi/settings/set", { cwd: h.cwd, scope: "project", changes: [{ path: "defaultThinkingLevel", op: "set", value: "high" }] });
+    expect(written.error).toBeUndefined();
+    expect(JSON.parse(readFileSync(join(h.cwd, PROJECT_DIR_NAME, "settings.json"), "utf8"))).toEqual({ defaultThinkingLevel: "high" });
+    // The worktree session reads its own `.laser`, which this write did not touch.
+    expect(h.project.reloads).toBe(1);
+    expect(h.worktree.reloads).toBe(0);
+    await h.server.dispose();
+  });
+
+  it("a refused write reloads nothing", async () => {
+    const h = await twoSessions();
+    const refused = await h.call(3, "pi/settings/set", { cwd: h.cwd, scope: "global", changes: [{ path: "steeringMode", op: "set", value: "sideways" }] });
+    expect(refused.error).toBeDefined();
+    expect(h.project.reloads).toBe(0);
+    expect(h.worktree.reloads).toBe(0);
+    await h.server.dispose();
+  });
+
+  it("a session that cannot reload, or a driver without the verb, never fails the write", async () => {
+    const h = await twoSessions();
+    h.project.reloadSettings = async () => { throw new Error("engine says no"); };
+    h.worktree.reloadSettings = undefined;
+    const written = await h.call(3, "pi/settings/set", { cwd: h.cwd, scope: "global", changes: [{ path: "steeringMode", op: "set", value: "all" }] });
+    expect(written.error).toBeUndefined();
+    expect(written.result?.snapshot?.effective["steeringMode"]).toBe("all");
+    await h.server.dispose();
   });
 });

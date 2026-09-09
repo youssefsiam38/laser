@@ -1,5 +1,5 @@
 diff --git a/dist/react/runtimes/RemoteThreadListHookInstanceManager.js b/dist/react/runtimes/RemoteThreadListHookInstanceManager.js
-index 2949e5059ae1e289cb7f12ceb7352268f72ee60a..dfd3db4ffc5ff99502bbb4b898626b6a5ef56d0e 100644
+index 2949e5059ae1e289cb7f12ceb7352268f72ee60a..276b2e600006062c99a65b80a2ed244ac2b5576b 100644
 --- a/dist/react/runtimes/RemoteThreadListHookInstanceManager.js
 +++ b/dist/react/runtimes/RemoteThreadListHookInstanceManager.js
 @@ -155,7 +155,22 @@ var RemoteThreadListHookInstanceManager = class extends BaseSubscribable {
@@ -26,3 +26,29 @@ index 2949e5059ae1e289cb7f12ceb7352268f72ee60a..dfd3db4ffc5ff99502bbb4b898626b6a
  	}
  	stopThreadRuntime(threadId) {
  		const instance = this.instances.get(threadId);
+diff --git a/dist/react/runtimes/RemoteThreadListThreadListRuntimeCore.js b/dist/react/runtimes/RemoteThreadListThreadListRuntimeCore.js
+index 699583e56f4bc47954178a36b8245fc40be0c407..a936e825f99e2fd1a3278cdc9fb86e477f92bd19 100644
+--- a/dist/react/runtimes/RemoteThreadListThreadListRuntimeCore.js
++++ b/dist/react/runtimes/RemoteThreadListThreadListRuntimeCore.js
+@@ -503,6 +503,21 @@ var RemoteThreadListThreadListRuntimeCore = class extends BaseSubscribable {
+ 				const orphan = listedMappingId !== void 0 && listedMappingId !== mappingId ? state.threadData[listedMappingId] : void 0;
+ 				const threadData = { ...state.threadData };
+ 				if (orphan !== void 0) delete threadData[listedMappingId];
++				// Vendor patch (M13-T53): the orphan may be the main thread.
++				// `list()` can return the remote id this initialize is about to
++				// adopt (a session created elsewhere that `initialize` reused),
++				// and a switch onto that row lands `_mainThreadId` on it before
++				// the result arrives. Deleting it then leaves the main thread
++				// pointing at nothing and every render throws
++				// `useClientLookup: key "<remoteId>" not found`. Re-point the
++				// main thread at the adopting entry — `_replaceWithThreads` does
++				// the same when its entry goes away — and drop the orphan's
++				// runtime, the same way `_replaceWithThreads` retires an entry
++				// the new list no longer names.
++				if (orphan !== void 0) {
++					if (this._mainThreadId === orphan.id) this._mainThreadId = mappingId;
++					this._hookManager.stopThreadRuntime(orphan.id);
++				}
+ 				threadData[mappingId] = {
+ 					...data,
+ 					initializeTask: Promise.resolve({

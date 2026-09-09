@@ -157,6 +157,12 @@ Resolution order, used identically by every command:
 | state dir | `--state-dir` → `LASER_STATE_DIR` → `<data>/state`, or `<agent>/laser` when the agent dir was overridden |
 | port | `--port` → `LASER_PORT` → `41441` |
 
+The port is where a host is *started*, and where one is looked for when nothing
+is recorded. Once a host is running, `host.json` is the address: `status`, `new`,
+`open` and every other verb reach it there and print that URL, whatever `--port`
+was given — so `laser new` against a host on 41493 prints `…:41493/#/session/…`,
+never the default port.
+
 Laser's own agent harness records every run in `<state>/agent-runs.json`
 (D-140). There is no subagent temp root, no `--subagents-temp-root` flag and no
 doctor row for one: `laser runs` reads the harness, and nothing writes a file

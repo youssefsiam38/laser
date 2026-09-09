@@ -1282,7 +1282,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     snapshotStore.set({ store, client, dispatch, onError, openSession });
   }, [snapshotStore, store, client, dispatch, onError, openSession]);
 
-  /** Number of `initialize()` calls in flight; gates the thread-list reload. */
+  /** Number of `initialize()` calls in flight; gates the thread-list reload and the controlled selection. */
   const [initializing, setInitializing] = useState(0);
 
   const threadListAdapter = useMemo(
@@ -1292,7 +1292,12 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         views: () => readState().open,
         archive,
         currentProject: () => projectRef.current ?? Object.values(readState().open)[0]?.state.cwd,
-        createSession: (cwd) => actionsRef.current.newSession(cwd),
+        // Quietly: the runtime is adopting this path into its "new" thread and
+        // selects it through `onThreadIdChange` once that is done. Selecting
+        // here — in particular a listed, unstarted session the launcher reuses
+        // (one the CLI created, M13-T53) — moved the runtime onto a row it was
+        // about to drop, and every render threw.
+        createSession: (cwd) => actionsRef.current.newSession(cwd, { select: false }),
         renameSession: async (path, name) => {
           await client.request("pi/session/rename", { path, name });
         },
@@ -1311,6 +1316,9 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
 
   const onThreadIdChange = useCallback((threadId: string | undefined) => {
     if (!threadId || threadId === readState().current) return;
+    // A session already here (the one a first send just created or reused)
+    // becomes current at once; the open below only catches it up.
+    if (readState().open[threadId]) dispatch({ type: "select", path: threadId });
     void actionsRef.current.openSession(threadId);
   }, []);
 
@@ -1326,7 +1334,11 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   const runtime: AssistantRuntime = useRemoteThreadListRuntime({
     allowNesting: true,
     adapter: threadListAdapter,
-    threadId: state.current,
+    // Held while a thread is being initialized: a selection that moves the
+    // runtime onto a row it is about to fold into the new thread leaves the
+    // main thread pointing at nothing (M13-T53). It catches up once the
+    // bracket closes, by which time the path resolves to the adopted thread.
+    threadId: useHeldWhile(initializing > 0, state.current),
     onThreadIdChange,
     runtimeHook,
   });
@@ -1380,6 +1392,17 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       </LaserStableContext.Provider>
     </LaserStateContext.Provider>
   );
+}
+
+/**
+ * `value`, except while `hold` is true, when it is the value from just before
+ * the hold began. Decided during render (the "adjust state while rendering"
+ * pattern) so a held value never reaches a consumer for even one commit.
+ */
+function useHeldWhile<T>(hold: boolean, value: T): T {
+  const [held, setHeld] = useState(value);
+  if (!hold && held !== value) setHeld(value);
+  return hold ? held : value;
 }
 
 /**
@@ -1743,7 +1766,8 @@ function ScopedRuntime({ adapter, threadId, onThreadIdChange, runtimeHook, signa
   const runtime: AssistantRuntime = useRemoteThreadListRuntime({
     allowNesting: true,
     adapter,
-    threadId,
+    // Same discipline as the provider: the selection waits for the adoption.
+    threadId: useHeldWhile(initializing > 0, threadId),
     onThreadIdChange,
     runtimeHook,
   });

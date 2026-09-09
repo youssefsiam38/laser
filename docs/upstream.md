@@ -561,3 +561,15 @@ synchronously, so `__internal_isThreadRunning` still reads back immediately; onl
 subscriber notification is deferred to a microtask, coalesced per instance. A version bump of
 `@assistant-ui/core` must re-apply or retire it.
 
+**Second hunk in the same patch (M13-T53).** `RemoteThreadListThreadListRuntimeCore`'s
+`initialize().then` adopts the returned `remoteId` into the thread being initialized and
+deletes any listed entry that already carried that id as an "orphan" — without re-pointing
+`_mainThreadId` when the orphan *is* the main thread (its own `_replaceWithThreads` does
+re-point in the analogous case). A host whose thread list can already hold the session being
+initialized (a session created outside the app and listed by the catalog, then reused on
+the first send) then throws `useClientLookup: key … not found` from every render. The hunk
+re-points `_mainThreadId` at the adopting entry and stops the orphan's runtime. Our adapter
+also stops selecting from inside `initialize` and holds the controlled thread id while
+initializing, so the hunk is the guard for a switch the runtime makes on its own. Worth an
+upstream issue with the reproduction in `packages/ui/test/runtime/catalog-arrival.test.tsx`.
+

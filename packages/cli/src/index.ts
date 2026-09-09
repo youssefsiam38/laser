@@ -10,6 +10,8 @@ export { parseArgs, bool, str, num, list, distance, type FlagSpec, type FlagSpec
 export { findCommand, type Command, type CommandContext, type CommandGroup } from "./command.js";
 export { laserDataDir, defaultAgentDir, defaultStateDir, migrateFormerIdentities } from "@lasercode/host";
 export {
+  appAddress,
+  appUrl,
   expandPath,
   hostUrl,
   piEnv,
@@ -19,6 +21,7 @@ export {
   PORT_FLAG,
   PI_AGENT_DIR_ENV,
   PI_SESSION_DIR_ENV,
+  type AppAddress,
   type LaserPaths,
 } from "./config.js";
 export { runDaemon, type DaemonOptions } from "./daemon.js";

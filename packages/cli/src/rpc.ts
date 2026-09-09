@@ -147,7 +147,7 @@ export class HostRpc {
   private onClose(reason: string): void {
     const error = new CliError(`the ${PRODUCT_NAME} host connection closed (${reason})`, {
       exitCode: ExitCode.NoHost,
-      fix: `Run \`${PRODUCT_NAME} status\`. The host log is at <agent-dir>/${PRODUCT_NAME}/host.log.`,
+      fix: `Run \`${PRODUCT_NAME} status\`. The host log is at <state-dir>/host.log.`,
     });
     for (const entry of this.pending.values()) entry.reject(error);
     this.pending.clear();

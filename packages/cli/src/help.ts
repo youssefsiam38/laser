@@ -2,7 +2,7 @@
  * Help output. Generated from the command table, never hand-maintained, so a
  * command that exists is a command that is documented.
  */
-import { DATA_DIR_NAME, ENV, PRODUCT_NAME } from "@lasercode/protocol";
+import { ENV, PRODUCT_NAME } from "@lasercode/protocol";
 import type { FlagSpec, FlagSpecs } from "./args.js";
 import type { Command } from "./command.js";
 import { GLOBAL_FLAGS } from "./flags.js";
@@ -151,13 +151,18 @@ relay's job, never an open port.
 
 While it runs, \`<state-dir>/host.json\` holds its pid, port and the directories
 it was started with; \`<state-dir>/host.log\` holds its output. The state
-directory is \`~/.${DATA_DIR_NAME}\` unless \`--state-dir\` or \`${ENV.stateDir}\` says
-otherwise. Both files are removed when the host exits cleanly.
+directory is \`<data>/state\` (the app's own data directory) unless \`--state-dir\` or
+\`${ENV.stateDir}\` says otherwise, or a non-default agent directory moves it under
+that agent directory. Both files are removed when the host exits cleanly.
 
 "Is it running" is always decided by asking /healthz, not by trusting the file.
 The record also carries an identity for the process itself, so a record that
 outlived a reboot is recognised as stale instead of pointing \`${PRODUCT_NAME} down\` at
 whatever program inherited the pid.
+
+\`--port\` (or \`${ENV.port}\`) says where to *start* a host and where to look when
+none is recorded. Once one is running, its record is the address: every command
+reaches it there and prints that URL, whatever \`--port\` was given.
 `,
   },
   {

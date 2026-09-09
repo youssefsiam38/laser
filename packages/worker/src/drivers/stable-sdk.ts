@@ -44,7 +44,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { goalExtensionPath, goalStateFromEntries } from "@lasercode/pi-goal";
 import { createCommandBus, createLaserExtension, createPromptProvenanceObserver, toSessionGoal, type LaserExtensionOptions } from "@lasercode/pi-extension";
-import { PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE } from "@lasercode/protocol";
+import { PRODUCT_NAME, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE } from "@lasercode/protocol";
 import type {
   CommandInfo,
   ContentBlock,
@@ -68,7 +68,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { disabledModelRefs, engineSettingsOnly, modelSwitchedOff, readEffectiveProductSettings, readLaserProjectSettings } from "../settings.js";
-import { applyDurableOverrides } from "../settings-overrides.js";
+import { applyDurableOverrides, type EngineSettingsOverrides } from "../settings-overrides.js";
 import { WebSearchService } from "../web-search.js";
 import {
   DriverUnavailableError,
@@ -101,6 +101,8 @@ export class StableSdkDriver implements SessionDriver {
   private unsubscribe: (() => void) | undefined;
   private cwd = "";
   private projectTrusted: boolean | undefined;
+  /** A settings reload asked for mid-turn, owed once the session is idle (M13-T55). */
+  private settingsReloadWanted = false;
   private agentDir = "";
   /**
    * A user `message_end` waiting one microtask for Pi to persist its message
@@ -174,16 +176,7 @@ export class StableSdkDriver implements SessionDriver {
       // reloads the resource loader — which reloads settings — before the
       // session exists. A plain override would be gone by then, taking this
       // project's `.laser` values and the discovery switches with it (M13-T12).
-      applyDurableOverrides(settingsManager, {
-        ...(options.projectTrusted === false ? {} : engineSettingsOnly(readLaserProjectSettings(cwd))),
-        // Packages and loose resources are an engine implementation detail.
-        // Features below are the only reviewed extensions in the runtime.
-        packages: [],
-        extensions: [],
-        skills: [],
-        prompts: [],
-        themes: [],
-      });
+      applyDurableOverrides(settingsManager, this.engineOverrides(cwd));
 
       const extensionFactories: InlineExtension[] = [];
       const additionalExtensionPaths: string[] = [];
@@ -446,9 +439,12 @@ export class StableSdkDriver implements SessionDriver {
    * allow-list when it matches anything, then the product's own
    * `disabledModels` switches. Without it a session's picker would keep
    * offering what Settings → Providers and models says is hidden. Both lists
-   * are read from the files, not the session: a Settings write does not
-   * reload a live session's settings manager, and the picker must show a
-   * switch on its next open.
+   * are read from the files, not the session, even now that a Settings write
+   * reloads live sessions (M13-T55): `disabledModels` is a product key that
+   * never enters the engine's settings, so the session's manager cannot
+   * answer it, and a write the reload does not reach — a worktree session's
+   * own `.laser`, a file edited by hand — must still show on the picker's
+   * next open. A file read is the one source that covers all of them.
    */
   private async offeredModels(available: readonly PiModel[]): Promise<PiModel[]> {
     const effective = readEffectiveProductSettings(this.cwd, this.agentDir, this.projectTrusted);
@@ -613,6 +609,75 @@ export class StableSdkDriver implements SessionDriver {
     return this.ui.pending();
   }
 
+  // --------------------------------------------------------- settings reload
+
+  /**
+   * A Settings write reached the files; make this session read them (M13-T55).
+   *
+   * The path is the engine's own settings reload — `SettingsManager.reload()`,
+   * which `applyDurableOverrides` wraps so the `.laser` values survive it —
+   * with the `.laser` file re-read first, because a project-scope write is
+   * exactly a change to those durable values. The queue modes are then synced
+   * into the agent the way `AgentSession.reload()` does it, and a `state`
+   * update carries the new values to the UI. The full `AgentSession.reload()`
+   * is not used: it also shuts down and restarts every extension, which would
+   * end the background work and harness state the companion holds.
+   *
+   * Never mid-turn. The engine reads compaction, retry and queue settings while
+   * a turn runs, so a turn finishes under the settings it started with; a
+   * reload asked for meanwhile runs when the session is next idle.
+   */
+  async reloadSettings(): Promise<{ deferred: boolean }> {
+    const session = this.session();
+    if (!session.isIdle) {
+      this.settingsReloadWanted = true;
+      return { deferred: true };
+    }
+    await this.applySettingsReload();
+    return { deferred: false };
+  }
+
+  private async applySettingsReload(): Promise<void> {
+    this.settingsReloadWanted = false;
+    const session = this.session();
+    const manager = session.settingsManager;
+    // Fresh `.laser` values replace the durable set (never stack), and the
+    // wrapped reload re-applies them over the re-read global file.
+    applyDurableOverrides(manager, this.engineOverrides(session.sessionManager.getCwd()));
+    await manager.reload();
+    // What `AgentSession.reload()` does after its settings reload: the agent
+    // holds its own copy of the two queue modes.
+    session.agent.steeringMode = manager.getSteeringMode();
+    session.agent.followUpMode = manager.getFollowUpMode();
+    this.push({ kind: "state", state: this.state() });
+  }
+
+  /** A reload that arrived mid-turn, run once the turn has settled. */
+  private runDeferredSettingsReload(): void {
+    if (!this.settingsReloadWanted || !this.runtime || !this.runtime.session.isIdle) return;
+    void this.applySettingsReload().catch((error: unknown) => {
+      console.error(`${PRODUCT_NAME} worker: could not reload settings after the turn:`, error instanceof Error ? error.message : error);
+    });
+  }
+
+  /**
+   * The engine's in-memory overrides for a session in `cwd`: the project's
+   * `.laser` values when the project is trusted, and the switches that keep
+   * engine-owned discovery off. Packages and loose resources are an engine
+   * implementation detail; the features are the only reviewed extensions in
+   * the runtime.
+   */
+  private engineOverrides(cwd: string): EngineSettingsOverrides {
+    return {
+      ...(this.projectTrusted === false ? {} : engineSettingsOnly(readLaserProjectSettings(cwd))),
+      packages: [],
+      extensions: [],
+      skills: [],
+      prompts: [],
+      themes: [],
+    };
+  }
+
   // ------------------------------------------------------------------ internals
 
   private session(): AgentSession {
@@ -673,6 +738,7 @@ export class StableSdkDriver implements SessionDriver {
     ) {
       this.push({ kind: "state", state: this.state() });
     }
+    if (event.type === "agent_settled" || event.type === "compaction_end") this.runDeferredSettingsReload();
   }
 
   /** Send the held user `message_end`, with its entry when Pi has written it. */

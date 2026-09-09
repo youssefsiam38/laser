@@ -332,7 +332,11 @@ export interface ThreadListDeps {
   archive: ArchiveStore;
   /** cwd a brand-new session is created in. */
   currentProject(): string | undefined;
-  /** Select an unstarted session in this project, or create one; returns its path. */
+  /**
+   * Reuse an unstarted session in this project, or create one; returns its
+   * path. Must not make it current: the runtime does that itself once it has
+   * adopted the path (`onThreadIdChange`), see `beginInitialize`.
+   */
   createSession(cwd: string): Promise<string>;
   /** `pi/session/rename`. */
   renameSession(path: string, name: string): Promise<void>;
@@ -343,7 +347,8 @@ export interface ThreadListDeps {
   /** `pi/session/list` refresh. */
   refreshSessions(): Promise<void>;
   /**
-   * Brackets `initialize()` so the host can hold back `threads.reload()`.
+   * Brackets `initialize()` so the host can hold back `threads.reload()` and
+   * the controlled selection.
    *
    * Creating a session dispatches into the store, which changes the thread-list
    * signature, which fires a reload. If that reload lands while assistant-ui is
@@ -352,6 +357,16 @@ export interface ThreadListDeps {
    * screen until a reload. Verified in the sandbox: every first send from the
    * empty state crashed this way. The host counts these brackets and defers the
    * reload until the count returns to zero.
+   *
+   * The selection is held for the same reason (M13-T53). The runtime adopts
+   * the returned path into the "new" thread and, when the catalog already
+   * listed that path under its own row — a session the CLI created, reused by
+   * the launcher — drops that row as an orphan. Had the host moved the runtime
+   * onto the row meanwhile (a deep link, the launcher selecting what it
+   * reused), the main thread pointed at an entry that no longer existed and
+   * every render threw. So `createSession` never selects, and the controlled
+   * `threadId` stays where it was until `endInitialize`, which fires only after
+   * the runtime has finished adopting the result (see `initialize`).
    */
   beginInitialize?(): void;
   endInitialize?(): void;
@@ -410,7 +425,11 @@ export function createThreadListAdapter(deps: ThreadListDeps): RemoteThreadListA
         // bracket only widens the window described on `beginInitialize`.
         return { remoteId: path, externalId: path };
       } finally {
-        deps.endInitialize?.();
+        // The runtime applies this result on the microtask after the promise
+        // settles; a bracket closed synchronously here would let the reload
+        // and the selection catch-up land in between. The next macrotask is
+        // strictly after that adoption.
+        setTimeout(() => deps.endInitialize?.(), 0);
       }
     },
 
