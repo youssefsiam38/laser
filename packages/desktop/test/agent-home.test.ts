@@ -18,11 +18,9 @@ describe("desktopEnv", () => {
       HOME: home,
       PI_CODING_AGENT_DIR: "/home/example/.pi/agent",
       PI_CODING_AGENT_SESSION_DIR: "/home/example/.pi/agent/sessions",
-      PI_SUBAGENTS_TEMP_ROOT: "/tmp/theirs",
     });
     expect(env["PI_CODING_AGENT_DIR"]).toBeUndefined();
     expect(env["PI_CODING_AGENT_SESSION_DIR"]).toBeUndefined();
-    expect(env["PI_SUBAGENTS_TEMP_ROOT"]).toBeUndefined();
     expect(env[ENV.agentDir]).toBe(join(laserDataDir({ HOME: home }), "agent"));
     expect(env[ENV.stateDir]).toBe(join(laserDataDir({ HOME: home }), "state"));
   });

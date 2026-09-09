@@ -58,7 +58,6 @@ export interface HostServerOptions {
   port?: number;
   agentDir?: string;
   sessionDir?: string;
-  subagentsTempRoot?: string;
   workerMain?: string;
   nodeBinary?: string;
   /** Directory of the built UI; defaults to the workspace `@lasercode/ui/dist` if present. */
@@ -337,7 +336,6 @@ export class HostServer {
       ...(npmCommand ? { env: { [ENV.npmCommand]: JSON.stringify(npmCommand) } } : {}),
       envForCwd: (cwd) => ({ [ENV.features]: JSON.stringify(this.features.enabled(cwd)) }),
       ...(options.sessionDir ? { sessionDir: options.sessionDir } : {}),
-      ...(options.subagentsTempRoot ? { subagentsTempRoot: options.subagentsTempRoot } : {}),
       stateDir,
       ...(options.workerMain ? { workerMain: options.workerMain } : {}),
       ...(options.nodeBinary ? { nodeBinary: options.nodeBinary } : {}),

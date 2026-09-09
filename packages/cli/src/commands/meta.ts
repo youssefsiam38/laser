@@ -135,7 +135,7 @@ _${PRODUCT_NAME}() {
   fi
 
   case "$prev" in
-    --agent-dir|--session-dir|--state-dir|--subagents-temp-root|--project|-P)
+    --agent-dir|--session-dir|--state-dir|--project|-P)
       COMPREPLY=( $(compgen -d -- "$cur") ); return 0 ;;
     --color)
       COMPREPLY=( $(compgen -W "auto always never" -- "$cur") ); return 0 ;;

@@ -68,8 +68,8 @@ export const URL_SCHEME_PREFIX = `${PRODUCT.urlScheme}://`;
  *
  * It spells the relay's WebSocket subprotocol (`<ns>.channel.<id>`), the Pi
  * event-bus events the companion extension listens on (`<ns>:panel`), the
- * `<ns>/…` session-message types, the HKDF labels that derive a paired device's
- * channel keys, and the marker written into pi-subagents' control files.
+ * `<ns>/…` session-message types, and the HKDF labels that derive a paired
+ * device's channel keys.
  * Renaming those would make two already-paired peers derive different keys and
  * fail to connect with nothing to explain why, and would break every
  * third-party extension that emits a panel.

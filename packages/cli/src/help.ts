@@ -224,10 +224,9 @@ not, what is the smallest thing you could change.
 It checks the Node version, that the pinned Pi resolves and boots, that the
 agent and session directories are writable and have room, which providers have
 credentials (names only — it never reads or prints a secret), that a default
-model resolves, that the port is free or held by ${PRODUCT_NAME} itself, and that the
-pi-subagents temp roots are usable. Finally it spawns a throwaway worker in a
-temporary directory and opens a session in it, which is the only check that
-proves the whole chain works.
+model resolves, and that the port is free or held by ${PRODUCT_NAME} itself. Finally
+it spawns a throwaway worker in a temporary directory and opens a session in
+it, which is the only check that proves the whole chain works.
 
 Every failing row prints a fix. The exit code is 1 if any row FAILs, 0 if the
 worst is a WARN.
@@ -241,17 +240,15 @@ Read by ${PRODUCT_NAME}:
 
 ${envRow(ENV.agentDir, "agent directory (same as --agent-dir)")}
 ${envRow(ENV.sessionDir, "session directory (same as --session-dir)")}
-${envRow(ENV.subagentsTempRoot, "pi-subagents temp root")}
 ${envRow(ENV.port, "host port (same as --port)")}
 ${envRow(ENV.stateDir, `${PRODUCT_NAME}'s own state directory (same as --state-dir)`)}
 ${envRow("NO_COLOR / FORCE_COLOR", "colour, per no-color.org")}
 ${envRow("PI_CODING_AGENT_DIR", `used when ${ENV.agentDir} is unset`)}
 ${envRow("PI_CODING_AGENT_SESSION_DIR", `used when ${ENV.sessionDir} is unset`)}
-${envRow("PI_SUBAGENTS_TEMP_ROOT", `used when ${ENV.subagentsTempRoot} is unset`)}
 
 Set internally by ${PRODUCT_NAME} for its bundled engine:
 
-  PI_CODING_AGENT_DIR, PI_CODING_AGENT_SESSION_DIR, PI_SUBAGENTS_TEMP_ROOT, ${ENV_PREFIX}=1
+  PI_CODING_AGENT_DIR, PI_CODING_AGENT_SESSION_DIR, ${ENV_PREFIX}=1
 `,
   },
   {

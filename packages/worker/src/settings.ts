@@ -47,6 +47,7 @@ import type {
 } from "@lasercode/protocol";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { applyDurableOverrides } from "./settings-overrides.js";
 
 export const LASER_PROJECT_DIR_NAME = PROJECT_DIR_NAME;
 
@@ -1420,7 +1421,10 @@ export class SettingsAdapter {
 
   private applyProjectOverrides(): void {
     const project = this.trust.trusted ? readLaserProjectSettings(this.cwd) : {};
-    this.manager.applyOverrides(mergeSettings(project, ENGINE_PRIVATE_OVERRIDES));
+    // Durable: any reload of this manager — ours in `refresh()`, or one from a
+    // consumer we hand it to — otherwise recomputes settings from the two files
+    // and drops these values (M13-T12).
+    applyDurableOverrides(this.manager, mergeSettings(project, ENGINE_PRIVATE_OVERRIDES));
   }
 }
 

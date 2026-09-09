@@ -389,7 +389,6 @@ interface CuratedPackage {
  */
 export const CURATED_PACKAGES: readonly CuratedPackage[] = [
   { name: "pi-web-access", description: "Search the web, read pages and PDFs, clone repositories, watch YouTube transcripts.", homepage: "https://pi.dev/packages/pi-web-access" },
-  { name: "pi-subagents", description: "Delegate parts of a task to parallel agents and run multi-step workflows.", homepage: "https://pi.dev/packages/pi-subagents" },
   { name: "pi-mcp-adapter", description: "Use tools from any Model Context Protocol server.", homepage: "https://pi.dev/packages/pi-mcp-adapter" },
   { name: "pi-background-tasks", description: "Long-running shell commands that keep going after the turn and report back.", homepage: "https://pi.dev/packages/pi-background-tasks" },
   { name: "pi-lens", description: "Language servers, linters, formatters and type checks as feedback to the agent.", homepage: "https://pi.dev/packages/pi-lens" },

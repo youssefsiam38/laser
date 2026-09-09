@@ -9,7 +9,6 @@
  *   state dir          --state-dir ▸ LASER_STATE_DIR ▸ <data>/state, or <agent>/laser
  *                      when --agent-dir/LASER_AGENT_DIR names a non-default agent
  *                      directory, so two agent directories never share one host
- *   subagents root     --subagents-temp-root ▸ LASER_SUBAGENTS_TEMP_ROOT ▸ <state>/subagents
  *   port               --port ▸ LASER_PORT ▸ 41441
  *
  * `<data>` is `laserDataDir()`: `$XDG_DATA_HOME/laser` on Linux and the
@@ -38,13 +37,11 @@ import { num, str } from "./args.js";
 
 export const PI_AGENT_DIR_ENV = "PI_CODING_AGENT_DIR";
 export const PI_SESSION_DIR_ENV = "PI_CODING_AGENT_SESSION_DIR";
-export const PI_SUBAGENTS_TEMP_ROOT_ENV = "PI_SUBAGENTS_TEMP_ROOT";
 
 export interface LaserPaths {
   /** Pi's agent directory: settings.json, auth.json, sessions, missions. */
   agentDir: string;
   sessionDir: string;
-  subagentsTempRoot: string;
   /**
    * laser's own state (host record, log, project list, attention). Shared
    * with a host started any other way, unless the agent dir was overridden —
@@ -66,11 +63,6 @@ export const PATH_FLAGS: FlagSpecs = {
   "agent-dir": { type: "string", description: `Agent directory (default <${PRODUCT_NAME} data dir>/agent)`, placeholder: "<dir>" },
   "session-dir": { type: "string", description: "Session storage directory (default <agent-dir>/sessions)", placeholder: "<dir>" },
   "state-dir": { type: "string", description: `${PRODUCT_NAME}'s own state directory (default <${PRODUCT_NAME} data dir>/state)`, placeholder: "<dir>" },
-  "subagents-temp-root": {
-    type: "string",
-    description: `Subagent temp root ${PRODUCT_NAME} pins for its children`,
-    placeholder: "<dir>",
-  },
 };
 
 export const PORT_FLAG: FlagSpecs = {
@@ -103,9 +95,6 @@ export function resolvePaths(parsed: ParsedArgs, env: NodeJS.ProcessEnv = proces
     pick(str(parsed, "state-dir"), env[ENV.stateDir]) ??
       (agentDirOverride ? join(agentDir, DATA_DIR_NAME) : defaultStateDir(env)),
   );
-  const subagentsTempRoot = expandPath(
-    pick(str(parsed, "subagents-temp-root"), env[ENV.subagentsTempRoot]) ?? join(stateDir, "subagents"),
-  );
   const portFlag = num(parsed, "port");
   const portEnv = env[ENV.port] ? Number(env[ENV.port]) : undefined;
   const port = portFlag ?? (Number.isFinite(portEnv) ? (portEnv as number) : HOST_DEFAULT_PORT);
@@ -113,7 +102,6 @@ export function resolvePaths(parsed: ParsedArgs, env: NodeJS.ProcessEnv = proces
   return {
     agentDir,
     sessionDir,
-    subagentsTempRoot,
     stateDir,
     hostFile: join(stateDir, "host.json"),
     logFile: join(stateDir, "host.log"),
@@ -132,7 +120,6 @@ export function piEnv(paths: LaserPaths, base: NodeJS.ProcessEnv = process.env):
     ...base,
     [PI_AGENT_DIR_ENV]: paths.agentDir,
     [PI_SESSION_DIR_ENV]: paths.sessionDir,
-    [PI_SUBAGENTS_TEMP_ROOT_ENV]: paths.subagentsTempRoot,
     [ENV_PREFIX]: "1",
   };
 }

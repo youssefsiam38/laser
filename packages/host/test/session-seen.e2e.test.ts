@@ -10,7 +10,7 @@ import type { DesktopLog } from "../../desktop/src/log.js";
 
 it("delivers a real seen request to the independent desktop listener without starting a worker", async () => {
   const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-seen-`));
-  const host = new HostServer({ agentDir: join(dir, "agent"), sessionDir: join(dir, "sessions"), stateDir: join(dir, "state"), logFile: false, subagentsTempRoot: join(dir, "subagents") });
+  const host = new HostServer({ agentDir: join(dir, "agent"), sessionDir: join(dir, "sessions"), stateDir: join(dir, "state"), logFile: false });
   const seen = vi.fn(), snapshots = vi.fn();
   const link = new HostLink({ log: { error: vi.fn(), line: vi.fn() } as unknown as DesktopLog,
     onAttention: vi.fn(), onSnapshot: snapshots, onSeen: seen });

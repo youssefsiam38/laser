@@ -13,7 +13,6 @@ export interface WorkerClientOptions {
   cwd: string;
   agentDir?: string;
   sessionDir?: string;
-  subagentsTempRoot?: string;
   /**
    * The host's own state directory (`agents.json`, `agent-runs.json`, the
    * workspaces beside it). The worker needs it to write Beam's bundled skill
@@ -56,6 +55,8 @@ export class WorkerClient {
   private readonly pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private nextId = 1;
   private exited = false;
+  /** Set when `stop()` closes the pipe, before the child has actually exited. */
+  private ending = false;
   /** Set once, so a spawn `error` followed by an `exit` reports one incident. */
   private reported = false;
   /**
@@ -70,7 +71,6 @@ export class WorkerClient {
     const args = [options.workerMain ?? defaultWorkerMain(), "--cwd", options.cwd];
     if (options.agentDir) args.push("--agent-dir", options.agentDir);
     if (options.sessionDir) args.push("--session-dir", options.sessionDir);
-    if (options.subagentsTempRoot) args.push("--subagents-temp-root", options.subagentsTempRoot);
     if (options.stateDir) args.push("--state-dir", options.stateDir);
     if (options.projectTrusted !== undefined) args.push("--project-trusted", options.projectTrusted ? "yes" : "no");
 
@@ -150,23 +150,45 @@ export class WorkerClient {
     return this.child.pid;
   }
 
+  /**
+   * Whether this worker can still be given work.
+   *
+   * False from the moment `stop()` closes the pipe, not from the moment the
+   * child exits: between those two there is a window where the process is
+   * alive but the stream is finished, and a write into it throws
+   * `ERR_STREAM_WRITE_AFTER_END` as an unhandled stream error rather than a
+   * rejected request. Background work that outlives a request — Namer's
+   * qualification is the one that found this — asks here before sending.
+   */
   get alive(): boolean {
-    return !this.exited;
+    return !this.exited && !this.ending;
   }
 
   request<R = unknown>(method: string, params: unknown): Promise<R> {
-    if (this.exited) return Promise.reject(new WorkerRpcError({ code: ErrorCodes.DriverUnavailable, message: "worker exited" }));
+    if (!this.alive) return Promise.reject(new WorkerRpcError({ code: ErrorCodes.DriverUnavailable, message: "worker exited" }));
     const id = this.nextId++;
     return new Promise<R>((resolve, reject) => {
       this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
-      this.pipe.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+      try {
+        this.pipe.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+      } catch (error) {
+        // The pipe closed between the check above and the write. The caller
+        // gets a refusal it can report; the process does not get an unhandled
+        // stream error.
+        this.pending.delete(id);
+        reject(new WorkerRpcError({ code: ErrorCodes.DriverUnavailable, message: error instanceof Error ? error.message : "worker exited" }));
+      }
     });
   }
 
   /** Close the pipe (worker retires itself) and wait for exit. */
   async stop(graceMs = 5000): Promise<void> {
     if (this.exited) return;
-    this.pipe.end();
+    // Before `end()`, so a request racing this one is refused rather than
+    // written into a finished stream.
+    const alreadyEnding = this.ending;
+    this.ending = true;
+    if (!alreadyEnding) this.pipe.end();
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
         this.child.kill("SIGKILL");

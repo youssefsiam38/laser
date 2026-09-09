@@ -266,13 +266,11 @@ writeFileSync(
 // temp dir; without it a demo run would write to the real ~/.laser.
 const sessionDir = join(base, "sessions");
 const stateDir = join(base, "state");
-const subagentsTempRoot = join(stateDir, "subagents");
 const host = new HostServer({
   port: PORT,
   agentDir,
   sessionDir,
   stateDir,
-  subagentsTempRoot,
   log: (l) => console.error(l),
 });
 const { url, port } = await host.listen();
@@ -291,7 +289,6 @@ writeHostFile(hostFile, {
   agentDir,
   sessionDir,
   stateDir,
-  subagentsTempRoot,
   startedAt: new Date().toISOString(),
   cliVersion: "sandbox",
   ...(identity ? { identity } : {}),

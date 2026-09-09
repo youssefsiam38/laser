@@ -10,6 +10,7 @@ small and self-contained (`AGENTS.md` §6).
 | pi-subagents | live index of running foreground children | M3-T9 | — | moot after D-140; kept as history |
 | pi-subagents | guard `ctx.ui.custom()` call sites on `ctx.mode === "tui"` so RPC hosts get the `select` fallback | M3-T9 | — | moot after D-140; kept as history |
 | pi-gpt-transcribe | non-tui entry point for hosts that provide the widget contract | M8-T2 | — | not filed |
+| earendil-works/pi | `SettingsManager.applyOverrides()` is not durable: `reload()` and `setProjectTrusted()` recompute settings from the two files and drop it, and `createAgentSessionServices()` reloads the resource loader (hence settings) before the session exists. Fix: retain applied overrides and re-merge them after every recompute, or expose a hook to re-apply. Local workaround: `packages/worker/src/settings-overrides.ts`. | M13-T12 | — | not filed |
 | earendil-works/pi | `dist/main.js` → `dist/experimental/server.js` imports `@earendil-works/pi-server`, undeclared in `package.json`; resolves only under npm's flat hoisting, fails under pnpm/strict installers with ERR_MODULE_NOT_FOUND. Fix: declare the dependency (or lazy-import the experimental server). Local workaround: `packageExtensions` in `pnpm-workspace.yaml`. | M0-T4 | — | not filed |
 
 ---
@@ -498,6 +499,42 @@ Both are small and self-contained, and both are useful to a terminal Pi too
 required by laser: the tray above makes the engine's queues a delivery
 mechanism rather than a place a person edits, which is the better boundary
 anyway — the engine owns the turn, laser owns the waiting.
+
+## pi-coding-agent 0.85: settings overrides do not survive a reload (M13-T12)
+
+**Not filed. Worked around locally, and the workaround is tested.**
+
+`SettingsManager.applyOverrides(overrides)` does `settings = merge(settings,
+overrides)` and keeps no record of what was applied. Three methods recompute
+`settings` from the global and project files and therefore discard it:
+
+- `reload()` — `settings = merge(globalSettings, projectSettings)`;
+- `setProjectTrusted()` — the same, in both directions;
+- everything that calls them: `ResourceLoader.reload()` calls
+  `settingsManager.reload()`, `createAgentSessionServices()` calls
+  `resourceLoader.reload()`, and `AgentSession.reload()` calls both again.
+
+So an override applied to a manager that is then handed to
+`createAgentSessionServices()` is gone before the session exists — not "lost
+partway through", but never in effect at all. Verified against the pinned
+0.85.0 dist and pinned by `packages/worker/test/settings-overrides.test.ts`,
+whose first `describe` asserts the *engine's* behaviour so an upstream fix
+shows up as a failing expectation rather than as silent dead code.
+
+Why it matters here: overrides are the only route a project's configuration
+takes into the engine (nothing is written to disk), and they are how package,
+extension, skill, prompt and theme discovery is switched off. A probe with
+`packages` listed in the global settings file and `packages: []` applied as an
+override ran a real `npm install` during service creation.
+
+The upstream change is small and useful to any embedder: retain the applied
+overrides on the manager and re-merge them at the end of `reload()` and
+`setProjectTrusted()`, or — if overrides are meant to be one-shot — expose the
+recompute as a hook so an embedder can re-apply. No public signature changes.
+
+The local workaround wraps `reload` and `setProjectTrusted` on the manager
+instances this project creates and re-applies its own registered overrides
+after each. It touches no engine file and no settings file on disk.
 
 ## assistant-ui · React 19 resource update during render
 

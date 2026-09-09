@@ -52,14 +52,14 @@ const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "hi
  * Keys here are therefore pinned twice — by the extension release and by the
  * dependency release whose script was inspected. A future extension version
  * gets no inherited approval and fails closed until it is reviewed.
+ *
+ * Empty since D-140 took delegation in-house: no curated extension currently
+ * ships a setup script, so every install fails closed until one is reviewed
+ * and added here. The mechanism stays — the next reviewed release needs it.
  */
-const REVIEWED_INSTALL_SCRIPTS: Readonly<Record<string, Readonly<Record<string, true>>>> = {
-  "npm:pi-subagents@0.65.1": {
-    "esbuild@0.28.1": true,
-    "@google/genai@1.52.0": true,
-    "protobufjs@7.6.6": true,
-  },
-};
+export type ReviewedInstallScripts = Readonly<Record<string, Readonly<Record<string, true>>>>;
+
+const REVIEWED_INSTALL_SCRIPTS: ReviewedInstallScripts = {};
 
 /** Best-effort classification of a package source string, matching Pi's own parsing. */
 function sourceType(source: string): "npm" | "git" {
@@ -226,8 +226,10 @@ export function applyReviewedInstallScripts(
   agentDir: string,
   scope: PackageScope,
   source: string,
+  /** The reviewed table. Only a test passes another one. */
+  table: ReviewedInstallScripts = REVIEWED_INSTALL_SCRIPTS,
 ): boolean {
-  const reviewed = REVIEWED_INSTALL_SCRIPTS[source];
+  const reviewed = table[source];
   if (!reviewed) return false;
 
   const installRoot = scope === "project" ? join(resolve(cwd), ".pi", "npm") : join(resolve(agentDir), "npm");

@@ -112,10 +112,10 @@ describe("describeInstallFailure", () => {
     expect(describeInstallFailure("x", "Project is not trusted; refusing to access project package storage")).toMatch(/not trusted yet/);
     expect(
       describeInstallFailure(
-        "pi-subagents",
+        "pi-lens",
         "npm error code ESTRICTALLOWSCRIPTS\nnpm error 3 package(s) have install scripts not covered by allowScripts",
       ),
-    ).toBe(`Could not install pi-subagents: one of its components needs to run setup code that ${PRODUCT_NAME} has not reviewed yet. Nothing was installed.`);
+    ).toBe(`Could not install pi-lens: one of its components needs to run setup code that ${PRODUCT_NAME} has not reviewed yet. Nothing was installed.`);
     const long = describeInstallFailure("x", `npm ERR! ${"y".repeat(400)}`);
     expect(long.length).toBeLessThan(240);
     expect(long.endsWith("…")).toBe(true);

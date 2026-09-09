@@ -39,7 +39,6 @@ export interface WorkerServerOptions {
   sessionDir?: string;
   /** The host's state directory (agents, runs, prefs). Defaults to `<agentDir>/../state`. */
   stateDir?: string;
-  subagentsTempRoot?: string;
   /** Host-resolved Pi project trust for `cwd`; see `DriverOpenOptions.projectTrusted`. */
   projectTrusted?: boolean;
   features?: FeatureId[];
@@ -836,7 +835,6 @@ export class WorkerServer {
     return {
       ...(this.options.agentDir ? { agentDir: this.options.agentDir } : {}),
       ...(this.options.sessionDir ? { sessionDir: this.options.sessionDir } : {}),
-      ...(this.options.subagentsTempRoot ? { subagentsTempRoot: this.options.subagentsTempRoot } : {}),
       ...(this.options.projectTrusted !== undefined ? { projectTrusted: this.options.projectTrusted } : {}),
       ...(this.options.features ? { features: this.options.features } : {}),
     };

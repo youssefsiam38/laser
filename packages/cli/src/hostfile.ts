@@ -20,7 +20,6 @@ export interface HostRecord {
   agentDir: string;
   sessionDir: string;
   stateDir: string;
-  subagentsTempRoot: string;
   startedAt: string;
   /** Version of the CLI that started it, so a stale daemon is identifiable. */
   cliVersion: string;
@@ -62,7 +61,6 @@ export function readHostFile(path: string): HostRecord | undefined {
       agentDir: parsed.agentDir ?? "",
       sessionDir: parsed.sessionDir ?? "",
       stateDir: parsed.stateDir ?? "",
-      subagentsTempRoot: parsed.subagentsTempRoot ?? "",
       startedAt: parsed.startedAt ?? "",
       cliVersion: parsed.cliVersion ?? "unknown",
       ...(typeof parsed.identity === "string" ? { identity: parsed.identity } : {}),

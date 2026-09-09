@@ -68,8 +68,6 @@ export interface DriverOpenOptions {
   agentDir?: string;
   /** Override of the session storage dir (default <agentDir>/sessions). */
   sessionDir?: string;
-  /** Where pi-subagents should keep its file layer for this worker. */
-  subagentsTempRoot?: string;
   /**
    * Host-resolved Pi project trust (M2-T4). The SDK never runs Pi's own trust
    * flow and `SettingsManager` defaults to trusted, so without this a project

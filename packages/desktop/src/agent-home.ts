@@ -29,7 +29,7 @@ import { join } from "node:path";
 import { laserDataDir } from "@lasercode/cli";
 
 /** Pi's own variable names. In a GUI they describe the *other* installation. */
-const AGENT_ENV_VARS = ["PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR", "PI_SUBAGENTS_TEMP_ROOT"] as const;
+const AGENT_ENV_VARS = ["PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR"] as const;
 
 export interface AgentHome {
   /** The one directory laser owns. Everything below it is laser's. */

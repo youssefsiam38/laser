@@ -19,7 +19,6 @@ export {
   PORT_FLAG,
   PI_AGENT_DIR_ENV,
   PI_SESSION_DIR_ENV,
-  PI_SUBAGENTS_TEMP_ROOT_ENV,
   type LaserPaths,
 } from "./config.js";
 export { runDaemon, type DaemonOptions } from "./daemon.js";

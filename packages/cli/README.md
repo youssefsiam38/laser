@@ -67,7 +67,7 @@ window is the wrong shape for.
 
 Global options — accepted before or after the command name: `--json`,
 `--color <auto\|always\|never>` / `--no-color`, `--port`, `--agent-dir`,
-`--session-dir`, `--state-dir`, `--subagents-temp-root`, `--help`.
+`--session-dir`, `--state-dir`, `--help`.
 
 Exit codes: `0` success · `1` it did not work (or `doctor` found a FAIL) ·
 `2` bad command line · `3` no host running · `4` the host answered with an
@@ -134,14 +134,11 @@ $ laser doctor
   PASS  providers       anthropic (oauth), openai; env: OPENAI_API_KEY
   FAIL  port            127.0.0.1:41441 is in use by another program
                         → See what holds it (`lsof -nP -iTCP:41441 -sTCP:LISTEN`), or run laser on another port (`--port`).
-  PASS  subagents root  /home/you/.laser/subagents (469 GiB free)
-  WARN  subagents uids  roots for another uid exist: /tmp/pi-subagents-uid-0
-                        → Background subagent runs started under that uid are invisible to a laser running as uid 1000.
   PASS  worker          spawned, opened a session and closed it (4.9s)
   PASS  default model   anthropic/claude-sonnet-4-6 (312 available)
   PASS  model auth      anthropic is ready
 
-11 passed, 1 warning, 1 failed
+10 passed, 1 failed
 ```
 
 Exit code 1, because a row FAILed. `--json` gives the same rows with their
@@ -158,14 +155,12 @@ Resolution order, used identically by every command:
 | agent dir | `--agent-dir` → `LASER_AGENT_DIR` → `PI_CODING_AGENT_DIR` → `<data>/agent` |
 | session dir | `--session-dir` → `LASER_SESSION_DIR` → `PI_CODING_AGENT_SESSION_DIR` → `<agent>/sessions` |
 | state dir | `--state-dir` → `LASER_STATE_DIR` → `<data>/state`, or `<agent>/laser` when the agent dir was overridden |
-| subagents root | `--subagents-temp-root` → `LASER_SUBAGENTS_TEMP_ROOT` → `PI_SUBAGENTS_TEMP_ROOT` → `<state>/subagents` |
 | port | `--port` → `LASER_PORT` → `41441` |
 
-The subagents root, doctor's `subagents root`/`subagents uids` rows and the
-`runs`, `plan` and `missions` commands observe the retired pi-subagents file
-layer (D-140): Laser's own agent harness records its runs in
-`<state>/agent-runs.json` and nothing writes to that root any more. They are
-still present and will be removed by M13-T11.
+Laser's own agent harness records every run in `<state>/agent-runs.json`
+(D-140). There is no subagent temp root, no `--subagents-temp-root` flag and no
+doctor row for one: `laser runs` reads the harness, and nothing writes a file
+layer under `/tmp` any more (M13-T11).
 
 `<data>` is laser's own directory — `$XDG_DATA_HOME/laser` (usually
 `~/.local/share/laser`) on Linux, `~/Library/Application Support/laser` on

@@ -13,10 +13,10 @@
  *   retired   it was stopped on purpose: idle, or asked to stop
  *
  * Retirement is deliberately conservative. A worker is only retired when no
- * client is attached to any of its sessions, none of them is running, and no
- * pi-subagents background run refers to them (checked through the run's own
- * `status.json` and the recorded runner pid, never through `lastUpdate` — see
- * docs/research/findings.md on the session-reaping hazard).
+ * client is attached to any of its sessions, none of them is running, and the
+ * project has no live agent run (`hasLiveRun`, answered from the host's run
+ * registry — see docs/agents.md). Nothing ends a run for taking too long, so a
+ * project with an agent still working is never idle however long it takes.
  */
 import type { HostNotifications, JsonRpcNotification, WorkerInfo, WorkerStatus } from "@lasercode/protocol";
 import { ErrorCodes, ProtocolError } from "@lasercode/protocol";
@@ -26,7 +26,6 @@ import { WorkerClient, type WorkerClientOptions } from "./worker-client.js";
 export interface WorkerPoolOptions {
   agentDir?: string;
   sessionDir?: string;
-  subagentsTempRoot?: string;
   /** Passed to every worker as `--state-dir` (see WorkerClientOptions). */
   stateDir?: string;
   workerMain?: string;
@@ -361,7 +360,6 @@ export class WorkerPool {
       cwd: entry.cwd,
       ...(this.options.agentDir ? { agentDir: this.options.agentDir } : {}),
       ...(this.options.sessionDir ? { sessionDir: this.options.sessionDir } : {}),
-      ...(this.options.subagentsTempRoot ? { subagentsTempRoot: this.options.subagentsTempRoot } : {}),
       ...(this.options.stateDir ? { stateDir: this.options.stateDir } : {}),
       ...(this.options.workerMain ? { workerMain: this.options.workerMain } : {}),
       ...(this.options.nodeBinary ? { nodeBinary: this.options.nodeBinary } : {}),

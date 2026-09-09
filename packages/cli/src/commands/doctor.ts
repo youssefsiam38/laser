@@ -3,8 +3,8 @@
  *
  * Every check answers a question a broken setup actually raises, in the order a
  * failure would cascade: the runtime, the bundled agent, the directories, the
- * credentials, the port, the subagent roots, and finally a real worker with a
- * real session, which is the only check that proves the whole chain.
+ * credentials, the port, and finally a real worker with a real session, which
+ * is the only check that proves the whole chain.
  *
  * The first two rows exist to make one claim checkable rather than marketing:
  * **nothing laser runs comes from this machine.** The runtime is the Node
@@ -22,7 +22,6 @@
 import { ENV, PRODUCT_DISPLAY_NAME, PRODUCT_NAME } from "@lasercode/protocol";
 import { execFile } from "node:child_process";
 import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statfsSync } from "node:fs";
-import { readdir } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
@@ -60,8 +59,8 @@ export const doctorCommand: Command = {
 Checks the runtime ${PRODUCT_NAME} ships, the agent ${PRODUCT_NAME} ships (that it is there,
 that it is the pinned version, and that the whole of it loads), the agent,
 session and state directories, provider credentials (names only — never a
-secret), the host port, the subagent temp roots, and finally spawns a throwaway
-worker in a temporary directory and opens a session in it.
+secret), the host port, and finally spawns a throwaway worker in a temporary
+directory and opens a session in it.
 
 It also says whether this machine has an agent of its own — and that ${PRODUCT_NAME} is
 not using it.
@@ -97,7 +96,6 @@ Exits 1 if any check FAILs, 0 if the worst is a WARN, so it is safe in CI.
     checks.push(checkWritableDir("state dir", paths.stateDir, true, "--state-dir"));
     checks.push(checkProviders(paths));
     checks.push(await checkPort(paths));
-    checks.push(...(await checkSubagentRoots(paths)));
 
     if (bool(args, "skip-worker")) {
       checks.push({
@@ -141,7 +139,6 @@ Exits 1 if any check FAILs, 0 if the worst is a WARN, so it is safe in CI.
           agentDir: paths.agentDir,
           sessionDir: paths.sessionDir,
           stateDir: paths.stateDir,
-          subagentsTempRoot: paths.subagentsTempRoot,
           port: paths.port,
         },
         checks,
@@ -602,51 +599,6 @@ async function checkPort(paths: LaserPaths): Promise<Check> {
 }
 
 /**
- * pi-subagents has no IPC: everything crosses processes through files under a
- * temp root, and the default root is uid-scoped. A root owned by another uid is
- * a real trap — runs started as root are invisible to a laser running as you.
- */
-async function checkSubagentRoots(paths: LaserPaths): Promise<Check[]> {
-  const checks: Check[] = [
-    checkWritableDir("subagents root", paths.subagentsTempRoot, true, "--subagents-temp-root"),
-  ];
-
-  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-  if (uid === undefined) return checks;
-
-  let foreign: string[] = [];
-  try {
-    const entries = await readdir(tmpdir());
-    foreign = entries
-      .filter((entry) => /^pi-subagents-uid-\d+$/.test(entry))
-      .filter((entry) => entry !== `pi-subagents-uid-${uid}`)
-      .map((entry) => join(tmpdir(), entry));
-  } catch {
-    return checks;
-  }
-
-  if (foreign.length === 0) {
-    checks.push({
-      name: "subagents uids",
-      status: "pass",
-      detail: `only uid ${uid} roots under ${tmpdir()}`,
-      data: { uid, foreign: [] },
-    });
-    return checks;
-  }
-  checks.push({
-    name: "subagents uids",
-    status: "warn",
-    detail: `roots for another uid exist: ${foreign.join(", ")}`,
-    fix:
-      `Background subagent runs started under that uid are invisible to a ${PRODUCT_NAME} running as uid ${uid}. ` +
-      `Run everything as one user, or point both at one root with --subagents-temp-root.`,
-    data: { uid, foreign },
-  });
-  return checks;
-}
-
-/**
  * The end-to-end check: spawn a real worker in a throwaway project with a
  * throwaway session directory, open a session, and read the model list back.
  * It proves the pinned Pi loads, the driver works, and a model resolves — and
@@ -670,7 +622,6 @@ async function checkWorker(
       cwd,
       agentDir: paths.agentDir,
       sessionDir,
-      subagentsTempRoot: join(root, "subagents"),
       onNotification: () => {},
       onExit: () => {},
       onStderr: (text) => (stderr += text),

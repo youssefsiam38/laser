@@ -39,7 +39,6 @@ function printRecord(term: Terminal, record: HostRecord, extra: Array<[string, s
     ["uptime", uptime(record.startedAt)],
     ["agent dir", record.agentDir],
     ["session dir", record.sessionDir],
-    ["subagents root", record.subagentsTempRoot],
     ...extra,
   ];
   const pad = Math.max(...rows.map(([label]) => label.length));
@@ -102,7 +101,6 @@ tmux startup script, or muscle memory.
         browserOpened: opened,
         agentDir: record.agentDir,
         sessionDir: record.sessionDir,
-        subagentsTempRoot: record.subagentsTempRoot,
       });
       return;
     }
@@ -334,7 +332,6 @@ async function adoptForeignHost(paths: LaserPaths): Promise<HostRecord | undefin
     agentDir: paths.agentDir,
     sessionDir: paths.sessionDir,
     stateDir: paths.stateDir,
-    subagentsTempRoot: paths.subagentsTempRoot,
     startedAt: "",
     cliVersion: "unknown",
   };

@@ -132,8 +132,6 @@ export function daemonArgs(paths: LaserPaths): string[] {
     paths.sessionDir,
     "--state-dir",
     paths.stateDir,
-    "--subagents-temp-root",
-    paths.subagentsTempRoot,
   ];
 }
 

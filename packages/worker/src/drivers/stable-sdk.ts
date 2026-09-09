@@ -59,6 +59,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readLaserProjectSettings } from "../settings.js";
+import { applyDurableOverrides } from "../settings-overrides.js";
 import { WebSearchService } from "../web-search.js";
 import {
   DriverUnavailableError,
@@ -107,8 +108,6 @@ export class StableSdkDriver implements SessionDriver {
   async open(options: DriverOpenOptions): Promise<SessionState> {
     if (this.runtime) throw new DriverUnavailableError(this.kind, "session already open");
     this.cwd = options.cwd;
-    // Kept for the retired file layer's sake: harmless when nothing reads it.
-    if (options.subagentsTempRoot) process.env["PI_SUBAGENTS_TEMP_ROOT"] = options.subagentsTempRoot;
 
     const agentDir = options.agentDir ?? getAgentDir();
     const enabled = new Set<FeatureId>(options.features ?? ["subagents", "goals"]);
@@ -151,7 +150,12 @@ export class StableSdkDriver implements SessionDriver {
         // settings arrive from `.laser` as curated in-memory overrides below.
         projectTrusted: false,
       });
-      settingsManager.applyOverrides({
+      // Durable, not `applyOverrides`: the engine recomputes settings from the
+      // two files on every reload, and `createAgentSessionServices()` below
+      // reloads the resource loader — which reloads settings — before the
+      // session exists. A plain override would be gone by then, taking this
+      // project's `.laser` values and the discovery switches with it (M13-T12).
+      applyDurableOverrides(settingsManager, {
         ...(options.projectTrusted === false ? {} : readLaserProjectSettings(cwd)),
         // Packages and loose resources are an engine implementation detail.
         // Features below are the only reviewed extensions in the runtime.
@@ -218,9 +222,9 @@ export class StableSdkDriver implements SessionDriver {
         ...(agent?.definition.thinkingLevel ? { thinkingLevel: agent.definition.thinkingLevel } : {}),
       });
       // The definition's built-ins beyond the engine's default four (grep,
-      // find, ls) are switched on here. A settings override would be the
-      // natural place, but the resource loader's reload re-reads settings
-      // from disk during service creation and drops every override.
+      // find, ls) are switched on here, not through a `defaultTools` setting:
+      // that setting names built-ins only, and D-144 gives every agent every
+      // tool — the harness's, background work's, the goal's, web search's.
       if (agent) activateEveryTool(created.session);
       return { ...created, services, diagnostics: services.diagnostics };
     };

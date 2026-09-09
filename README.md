@@ -1,8 +1,9 @@
 # laser
 
 A visualization and control layer on top of the [Pi coding agent](https://github.com/earendil-works/pi):
-a web-tech desktop app with multi-project, multi-session navigation, subagent tab
-groups (pi-subagents), a full settings surface, and realtime low-level logs.
+a web-tech desktop app with multi-project, multi-session navigation, its own
+agent harness with live child sessions, a full settings surface, and realtime
+low-level logs.
 Phone remote control through the encrypted relay is coming soon.
 
 Builds on the community's packages; does not replace them.
@@ -102,7 +103,7 @@ built and what it contains.
 packages/protocol          ACP-shaped messages + pi/* extras
 packages/worker            per-project Pi host (pinned Pi), SessionDriver + two drivers, UI bridge
 packages/pi-extension      the one companion Pi extension, a module per supported package
-packages/host              supervisor, session catalog, pi-subagents file layer, local WebSocket, relay client, log store
+packages/host              supervisor, session catalog, agent-run registry, local WebSocket, relay client, log store
 packages/ui                the one web app (desktop renderer, browser, PWA)
 packages/desktop           Electron shell with bundled Node
 packages/crypto            Noise handshake, pairing, device list
@@ -116,7 +117,7 @@ packages/cli               the `laser` command: host lifecycle, session verbs, p
 pnpm install && pnpm -r build
 
 laser                 # start the host and open the app (attaches if one is already up)
-laser doctor          # check Node, the pinned Pi, credentials, ports, subagent roots — with fixes
+laser doctor          # check Node, the pinned Pi, credentials and ports — with fixes
 laser sessions        # every session, newest first
 laser send "run the tests"     # prompt the newest session here and stream the answer
 laser tail --follow            # watch it work
@@ -124,9 +125,9 @@ laser pi --help                # Pi's own help, from the copy laser pins
 ```
 
 `laser pi` runs the **pinned** Pi — the same copy the app runs — with
-laser's `PI_CODING_AGENT_DIR` and `PI_SUBAGENTS_TEMP_ROOT`, so a session or a
-background subagent run started from a terminal shows up in the app. Every
-command takes `--json`; data goes to stdout and everything else to stderr.
+laser's `PI_CODING_AGENT_DIR` and `PI_CODING_AGENT_SESSION_DIR`, so a session
+started from a terminal shows up in the app. Every command takes `--json`; data
+goes to stdout and everything else to stderr.
 
 Full command table, examples and the environment it reads:
 [`packages/cli/README.md`](packages/cli/README.md).

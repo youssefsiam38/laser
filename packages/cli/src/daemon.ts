@@ -89,7 +89,6 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
     agentDir: paths.agentDir,
     sessionDir: paths.sessionDir,
     stateDir: paths.stateDir,
-    subagentsTempRoot: paths.subagentsTempRoot,
     // Extra browser origins allowed to open the WebSocket, comma separated.
     // The desktop shell sets this when the UI is served by a dev server: Vite
     // proxies the browser's own Origin through, and the host has never heard
@@ -117,7 +116,6 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
     agentDir: paths.agentDir,
     sessionDir: paths.sessionDir,
     stateDir: paths.stateDir,
-    subagentsTempRoot: paths.subagentsTempRoot,
     startedAt: new Date().toISOString(),
     cliVersion: CLI_VERSION,
     ...(identity !== undefined ? { identity } : {}),
