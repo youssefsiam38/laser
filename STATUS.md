@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-09T04:15:00+03:00 · claude-2026-09-09-agents · HEAD: a98d376
+**Last updated:** 2026-09-09T09:10:00+03:00 · claude-2026-09-09-agents · HEAD: 5ebe979
 
-**Current focus:** M13 Agents Leap is essentially in. The panel system is gone and the fleet is a permanent column beside the monitor (D-147); a failed action no longer paints the block red (D-148); a queued message waits by default and steering is a verb you press (D-149); the opening screen is one screen (D-150); an `edit` aimed at a file that moved is explained rather than refused (D-151, D-152); editing history moves the leaf instead of forking (D-153); finished work is dimmed, never green (D-154). Remaining M13 rows are the retired pi-subagents file layer, the `.laser` override reload finding, and an upstream React #520.
+**Current focus:** M13 Agents Leap is in. This session's round of the user's UX changes landed: the fleet is one session's tree and a deleted session's work is a named line, never a ghost (D-160); the logo and every sidebar row return to the chat from anywhere; a model has a switch, a provider has Enable all / Disable all, and "off" is a Laser-owned disable list because the engine's allow-list has no negation (D-161); a jump hands its prompt's text to the composer; a person's worktree removal stamps the run so the fleet stops offering it twice. Remaining M13 rows are a dead protocol message, three findings from this pass, and a research sweep.
 
 ## Milestones
 
@@ -24,7 +24,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
 | M12 Product experience | done | 0.2.13 dispatched |
-| M13 Agents Leap | in-progress | T1–T37 done; T38 (a dead protocol message) remains |
+| M13 Agents Leap | in-progress | T1–T52 and T56 done; T38, T53, T54, T55 todo; T37 (research sweep) in progress |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
@@ -33,17 +33,14 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Next up
 
-1. M13-T38: retire the dead `lasercode/subagents/event` message (protocol inventory is a release gate).
-2. M10-T10: prove the in-app updater installation seam.
-3. M2/M5/M7: the broader platform proofs those milestones still owe.
+1. M13-T55: a settings write does not reach a live session's engine settings; the model lists are read from disk as a workaround.
+2. M13-T38: retire the dead `lasercode/subagents/event` message (protocol inventory is a release gate).
+3. M13-T53 / M13-T54: the one-off black screen after creating a session from the project screen, and the CLI printing the default port in its app URL.
 
 ## Recently done
 
-- M13-T12: `.laser` overrides never reached any session at all; made durable, and the engine's own behaviour is pinned beside ours (D-155).
-- M13-T11: the pi-subagents flag, env, path, host-record field, doctor check and catalogue row are gone; the boundary mentions stay.
-- M13-T37: the React #520 on a session's first prompt is gone, through a pinned patch that notifies outside the render phase; verified on a plain chat, the agents scene and a 30 s turn.
-- M13-T31: finished work is dimmed in all four places it was green, both folds lost the tick, the fleet gained Clear; 1,510 tests.
-- M13-T36: the match is the freshness proof, so an `edit` is explained and never blocked (D-152).
-- M13-T35: editing a message or running a reply again changes this session; forking is the second choice (D-153).
-- M13-T34: the goal-tools test asserts on the request it sent rather than the last one to arrive.
-- M13-T33/T32/T30/T29/T28: the file-freshness module, one opening screen, a task is not an agent, quiet failures, and the steer tray.
+- M13-T52: text handed back by a jump reaches the composer; the store had parked it and nothing read it (`handed-back-text.test.tsx`).
+- M13-T51: the fleet is one session's tree, a child shows its root's tree with its row marked, a deleted session's work is a named line (D-160; fleet model +5, panel +11).
+- M13-T50: the logo and every sidebar row return to the chat from the map, Settings, Logs and the sheets; the logo never creates a session (15 tests).
+- M13-T49: a hidden model says why and can be let back in; a switch on every row, provider-wide Enable/Disable all, a View menu, and a Laser-owned disable list (D-161; models-tab 20, model-offer 9).
+- M13-T42: a person's worktree removal, from the fleet or a delete, stamps the runs that owned it; both dialogs verified in the browser.
