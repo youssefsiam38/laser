@@ -8,7 +8,7 @@
  *
  *   media (audio)    dictation — pi-gpt-transcribe's whole point
  *   clipboard-*      copying a command or a diff out of the transcript
- *   fullscreen       the maximized panel state in docs/ux-panels.md
+ *   fullscreen       a surface asking for the whole window
  *
  * Everything else — geolocation, MIDI, HID, serial, USB, notifications from
  * the page (the shell raises those itself, so it can deep-link them) — is

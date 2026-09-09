@@ -1,7 +1,7 @@
 "use client";
 /**
  * Which run a person is being asked to end. An external store, like the
- * fleet's (`components/subagents/fleet.ts`), because the things that ask are
+ * fleet's (`src/fleet/fleet-state.ts`), because the things that ask are
  * far apart in the tree — a sessions-panel row menu, a run tab under the top
  * bar, a node on the live map — and the one dialog that answers is mounted
  * once in the shell. A context would have to wrap the whole app to carry one

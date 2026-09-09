@@ -7,9 +7,8 @@
 export { AgentMap, type AgentMapProps } from "./AgentMap.js";
 export { AgentMapConnected, AgentMapView, useMapRoot, type AgentMapConnectedProps } from "./AgentMapView.js";
 export { AgentMapFullscreen } from "./AgentMapFullscreen.js";
-export { MapDockIsland, MAP_ISLAND_MIN_HEIGHT, useMapDockRoot } from "./MapDockIsland.js";
 export { MapHostProvider, useMapHost, type MapHost } from "./map-context.js";
-export { mapUi, useMapDocked, useMapRootState, useMapUi, type MapRootState, type MapUiState } from "./map-state.js";
+export { mapUi, useMapRootState, useMapUi, type MapRootState, type MapUiState } from "./map-state.js";
 export {
   CONSTRAINED_HEIGHT,
   CONSTRAINED_WIDTH,

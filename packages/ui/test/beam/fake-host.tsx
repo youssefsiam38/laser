@@ -120,12 +120,19 @@ function handle(world: World, method: string, params: Record<string, unknown>): 
     case "session/load": {
       const state = world.states[params.path as string];
       if (!state) throw new Error(`There is no session at ${String(params.path)}.`);
-      return { state, replayFrom: 0 };
+      // No buffered updates in this world, so the watermark is 0 and nothing
+      // is replayed. A fake that models the replay buffer, for the re-open
+      // contract itself, lives in test/runtime/fake-worker.ts.
+      return { state, replayFrom: 0, seq: 0 };
     }
     case "pi/session/entries":
       return { entries: [] };
     case "session/goal/get":
       return { goal: null };
+    // Every session open asks for its pending tray; a test that cares about
+    // the rows overrides this (see thread/message-queue.test.tsx).
+    case "session/pending/list":
+      return { messages: [] };
     case "session/new": {
       const cwd = params.path as string | undefined ?? (params.cwd as string);
       const agentName = params.agentName as string | undefined;
@@ -154,8 +161,9 @@ function handle(world: World, method: string, params: Record<string, unknown>): 
       return { models: world.catalog, enabledModels: null, defaultProvider: "openai", defaultModel: "gpt-fast" };
     case "pi/providers/list":
       return { providers: world.providers };
-    case "agents/beam/set-model": {
+    case "agents/builtin/set-model": {
       const model = params.model as AgentsSnapshot["beam"]["model"];
+      if (params.name !== "beam") throw new Error(`The Beam bubble only ever sets Beam's model, not ${String(params.name)}.`);
       world.snapshot = { ...world.snapshot, revision: world.snapshot.revision + 1, beam: { ...world.snapshot.beam, model, needsChoice: false } };
       return { snapshot: world.snapshot };
     }

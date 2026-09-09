@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { splitLeadingQuote } from "../../src/components/assistant-ui/elements/quote-reply.js";
-import { continuationsOf, laterUserMessages, leafOf, userEntryAt, userEntryIds } from "../../src/components/thread/entries.js";
+import { activePathIds, continuationsOf, laterUserMessages, leafOf, userEntryAt, userEntryIds, versionsOf } from "../../src/components/thread/entries.js";
 
 const msg = (id: string, parentId: string | null, role: string) => ({ id, parentId, type: "message", message: { role } });
 
@@ -26,10 +26,28 @@ const tree = [
 ];
 
 describe("entries: ordinals", () => {
-  it("lists user entries in file order, the same walk the store makes", () => {
-    expect(userEntryIds(tree)).toEqual(["u1", "u2", "u3"]);
+  it("lists the user entries on the branch in play, not every branch in the file", () => {
+    // Nothing said which leaf: the engine reads the last entry, so the branch
+    // through u3 is live and u2 — which lives on the abandoned one — is not
+    // on screen and must not take an ordinal.
+    expect(userEntryIds(tree)).toEqual(["u1", "u3"]);
     expect(userEntryAt(tree, 0)).toBe("u1");
-    expect(userEntryAt(tree, 2)).toBe("u3");
+    expect(userEntryAt(tree, 1)).toBe("u3");
+    // Sitting on the other branch answers with the other prompt.
+    expect(userEntryIds(tree, "a2")).toEqual(["u1", "u2"]);
+    expect(userEntryAt(tree, 1, "a2")).toBe("u2");
+  });
+  it("keeps a plain list of messages a plain list, parents or no parents", () => {
+    const flat = [
+      { id: "x1", type: "message", message: { role: "user" } },
+      { id: "x2", type: "message", message: { role: "assistant" } },
+      { id: "x3", type: "message", message: { role: "user" } },
+    ];
+    expect(activePathIds(flat)).toBeUndefined();
+    expect(userEntryIds(flat)).toEqual(["x1", "x3"]);
+    const linear = [msg("v1", null, "user"), msg("b1", "v1", "assistant"), msg("v2", "b1", "user")];
+    expect(activePathIds(linear)).toBeUndefined();
+    expect(userEntryIds(linear)).toEqual(["v1", "v2"]);
   });
   it("has no entry for a prompt that is not persisted yet", () => {
     expect(userEntryAt(tree, 3)).toBeUndefined();
@@ -53,6 +71,49 @@ describe("entries: branches", () => {
     expect(leafOf(tree, "a1")).toBe("a2");
     expect(leafOf(tree, "u3")).toBe("t");
     expect(leafOf(tree, "a2")).toBe("a2");
+  });
+
+  it("walks the live branch from the leaf back to the root", () => {
+    expect([...activePathIds(tree, "t")!]).toEqual(["t", "a3", "u3", "u1"]);
+    expect([...activePathIds(tree, "a2")!]).toEqual(["a2", "u2", "a1", "u1"]);
+    // A leaf reset to before the first entry: nothing in the file is live.
+    expect([...activePathIds(tree, null)!]).toEqual([]);
+  });
+});
+
+/**
+ * Two versions of one prompt. Editing a message in place moves the session to
+ * before it and sends the new text there, so the versions are SIBLINGS —
+ * children of the same parent — not children of the message itself.
+ *
+ *   (root) ─ e1 ─ b1
+ *          └─ e2 ─ b2
+ */
+const versions = [
+  msg("e1", null, "user"),
+  msg("b1", "e1", "assistant"),
+  msg("e2", null, "user"),
+  msg("b2", "e2", "assistant"),
+];
+
+describe("entries: versions of one message", () => {
+  it("counts the siblings of a prompt, oldest first, itself included", () => {
+    expect(versionsOf(versions, "e1")).toEqual(["e1", "e2"]);
+    expect(versionsOf(versions, "e2")).toEqual(["e1", "e2"]);
+    // Deeper in the tree, an edited middle message is a sibling under its reply.
+    expect(versionsOf(tree, "u2")).toEqual(["u2"]);
+    expect(versionsOf(tree, "u1")).toEqual(["u1"]);
+  });
+  it("says nothing for an entry the file no longer holds, or one with no place in the tree", () => {
+    expect(versionsOf(versions, "gone")).toEqual([]);
+    expect(versionsOf([{ id: "x1", type: "message", message: { role: "user" } }], "x1")).toEqual([]);
+  });
+  it("switches versions through the version's own last entry, never the prompt", () => {
+    // Navigating onto a prompt puts the session BEFORE it; its leaf is the reply.
+    expect(leafOf(versions, "e1")).toBe("b1");
+    expect(leafOf(versions, "e2")).toBe("b2");
+    expect(userEntryIds(versions, leafOf(versions, "e1"))).toEqual(["e1"]);
+    expect(userEntryIds(versions, leafOf(versions, "e2"))).toEqual(["e2"]);
   });
 });
 

@@ -12,7 +12,7 @@ const NONE: FooterAnchor = { bottom: 0, left: 0, width: 0 };
 
 /**
  * Where the thread footer (composer + its cards) sits in the layout viewport. Islands and notices on a phone sit
- * directly above the composer (docs/ux-panels.md), and the footer already
+ * directly above the composer, and the footer already
  * rides the keyboard and the safe area, so anchoring to it is what keeps them
  * visible when the keyboard is up.
  *

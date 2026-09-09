@@ -6,15 +6,17 @@
  * `entry_appended` only for extension custom entries, so it is not the source
  * of transcript state). Past sessions hydrate from `pi/session/entries`.
  */
-import { AGENT_EVENT_MESSAGE_TYPE, TASK_EVENT_MESSAGE_TYPE } from "@lasercode/protocol";
+import { AGENT_EVENT_MESSAGE_TYPE, SESSION_RUN_ENTRY_TYPE, TASK_EVENT_MESSAGE_TYPE, isTerminalRunStatus } from "@lasercode/protocol";
 import type {
   AgentEvent,
+  BackgroundTask,
   AgentModelChoice,
   AgentRun,
   AgentsSnapshot,
   HostNotificationMethod,
   HostNotifications,
   MessageSpeaker,
+  PendingMessage,
   PiExtensionModuleName,
   SessionState,
   SessionGoal,
@@ -26,13 +28,34 @@ import type {
   Usage,
 } from "@lasercode/protocol";
 
+import { activePathIds } from "./components/thread/entries.js";
+
+/**
+ * A user message a parent agent put into this child session, rather than the
+ * person at the keyboard: the opening task, or a later `send_agent_message`
+ * (docs/agents.md "Follow-up messages and user-origin runs").
+ *
+ * The harness records it durably in the child's own file — a
+ * `lasercode/agent-run` custom entry with `moment: "started"`, written
+ * immediately before the child is prompted — so the attribution is rebuilt
+ * from disk after a reload or a host restart, never guessed from the text.
+ * A message a person typed into a child carries none of this: those runs have
+ * `origin: "user"` and no marker.
+ */
+export interface SentByParent {
+  /** The parent session's file path — the identity the header's parent control already opens. */
+  parentPath: string;
+  /** The run this task started, when the marker named one. */
+  runId?: string;
+}
+
 /**
  * `at` is the ISO timestamp the block first appeared (from the notification's
  * `at`, or the persisted entry's `timestamp`). Optional: a block assembled by
  * `applyUpdate` outside the reducer has none.
  */
 export type Block =
-  | { kind: "user"; id: string; at?: string; text: string; images: number; optimistic?: boolean }
+  | { kind: "user"; id: string; at?: string; text: string; images: number; optimistic?: boolean; sentBy?: SentByParent }
   | {
       kind: "assistant";
       id: string;
@@ -75,6 +98,13 @@ export interface SessionView {
   lastSeq: number;
   running: boolean;
   queue: { steering: string[]; followUp: string[] };
+  /**
+   * The pending tray: what the person wrote while the agent was working, in
+   * order, with an id each (`@lasercode/protocol` `pending.ts`). Laser's own
+   * list, so a row can be steered, edited or dropped on its own; the engine's
+   * `queue` above holds only what has already been steered into it.
+   */
+  pending: PendingMessage[];
   dialogs: UiDialogRequest[];
   statuses: Record<string, string>;
   widgets: Record<string, { lines: string[]; placement: "aboveEditor" | "belowEditor" }>;
@@ -88,8 +118,16 @@ export interface SessionView {
    */
   openedAt: string;
   hydrated: boolean;
-  /** Raw persisted entries (for the history/tree panel). */
+  /** Raw persisted entries (for the history/tree panel): every branch of the tree. */
   entries: unknown[];
+  /**
+   * The entry the session is sitting on. The conversation is the path from the
+   * root to it; anything off that path is a version the person can go back to
+   * through the message's version picker. `null` is a leaf reset to before the
+   * first entry (editing the opening message); `undefined` is "not told", and
+   * then the last entry stands in, as the engine itself does on re-open.
+   */
+  leafId?: string | null | undefined;
   /**
    * Reviewed engine modules active in this session. The session snapshot is
    * authoritative; later capability notifications keep it current.
@@ -103,6 +141,16 @@ export interface SessionView {
    * identity alone, like `capabilities`.
    */
   namerLabels: Record<string, string>;
+  /**
+   * The attribution the next parent-sent user message gets, live. The harness
+   * writes its durable marker straight to the session file, which raises no
+   * engine event, so a transcript that is already open cannot read it before
+   * the next hydration: the `agents/run` notification the harness publishes
+   * *before* it prompts the child is the live source instead, and it says the
+   * same thing. Cleared when a user block consumes it, and on hydration, where
+   * the file's own marker takes over.
+   */
+  pendingSentBy?: SentByParent | undefined;
 }
 
 /**
@@ -125,6 +173,19 @@ export interface AgentsSlice {
   /** `agents/beam/choose-model` is pending until the UI picks or dismisses. */
   chooseBeamModel: { suggested: AgentModelChoice | null } | null;
 }
+
+/**
+ * Every background command the host knows about, by task id. One flat map
+ * rather than a per-session one: the fleet shows work across sessions, and a
+ * task's own `sessionPath` is what groups it (docs/ux-fleet.md).
+ */
+export interface TasksSlice {
+  tasks: Record<string, BackgroundTask>;
+  /** Sessions whose `tasks/list` has landed, so an empty fleet group is real. */
+  listed: string[];
+}
+
+export const initialTasks: TasksSlice = { tasks: {}, listed: [] };
 
 /** Bubbles are transient; anything older than the newest hundred is history the transcript already holds. */
 export const AGENT_EVENTS_MAX = 100;
@@ -149,6 +210,8 @@ export interface AppState {
   workers: Record<string, { status: string; message?: string }>;
   toasts: Array<{ id: number; level: "info" | "warning" | "error"; text: string }>;
   agents: AgentsSlice;
+  /** Background commands agents left running (docs/ux-fleet.md). */
+  tasks: TasksSlice;
 }
 
 export const initialState: AppState = {
@@ -160,6 +223,7 @@ export const initialState: AppState = {
   workers: {},
   toasts: [],
   agents: initialAgents,
+  tasks: initialTasks,
 };
 
 export type Action =
@@ -179,10 +243,19 @@ export type Action =
    * round trip: when live updates advanced `lastSeq` while `pi/session/entries`
    * was in flight the snapshot is stale, so only `entries` is refreshed and the
    * live blocks are kept.
+   *
+   * `seq` is the worker's watermark for the session when it handed the snapshot
+   * over (`session/load`'s `seq`). Stamping it is what makes the *next* open ask
+   * for the updates it is actually missing: a view left at 0 asks from 0 and the
+   * worker replays its whole buffer on top of the transcript already on screen.
+   * It only ever raises the watermark, so an update that overtook the snapshot
+   * still wins.
    */
-  | { type: "hydrate"; path: string; entries: unknown[]; expectSeq?: number }
-  | { type: "entries"; path: string; entries: unknown[] }
+  | { type: "hydrate"; path: string; entries: unknown[]; leafId?: string | null | undefined; expectSeq?: number; seq?: number }
+  | { type: "entries"; path: string; entries: unknown[]; leafId?: string | null | undefined }
   | { type: "goal"; path: string; goal: SessionGoal | null }
+  /** `session/pending/list`, the tray's opening snapshot for a client that just arrived. */
+  | { type: "pending"; path: string; messages: PendingMessage[] }
   /**
    * The worker that owns this session restarted its per-process `seq` counter
    * (worker crash, host restart). Adopt the new epoch and re-hydrate, or every
@@ -213,7 +286,11 @@ export type Action =
   | { type: "agents/event"; event: AgentEvent }
   | { type: "agents/choose-beam-model"; suggested: AgentModelChoice | null }
   | { type: "agents/choose-beam-model/clear" }
-  | { type: "agents/error"; error: string };
+  | { type: "agents/error"; error: string }
+  // --- background tasks ---
+  | { type: "tasks/update"; task: BackgroundTask }
+  /** `tasks/list`. Without `path` the list is every session's. */
+  | { type: "tasks/loaded"; tasks: BackgroundTask[]; path?: string };
 
 let blockCounter = 0;
 let toastCounter = 0;
@@ -247,6 +324,7 @@ export function reduce(state: AppState, action: Action): AppState {
             lastSeq: 0,
             running: action.state.isStreaming,
             queue: { steering: [], followUp: [] },
+            pending: [],
             dialogs: [],
             statuses: {},
             widgets: {},
@@ -265,7 +343,7 @@ export function reduce(state: AppState, action: Action): AppState {
       const { [action.from]: _gone, ...rest } = state.open;
       const view: SessionView = old
         ? { ...old, path: action.state.path, state: action.state, lastSeq: 0, hydrated: false, entries: [], goal: null }
-        : { path: action.state.path, state: action.state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, dialogs: [], statuses: {}, widgets: {}, openedAt: new Date().toISOString(), hydrated: false, entries: [], capabilities: [], goal: null, namerLabels: {} };
+        : { path: action.state.path, state: action.state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, pending: [], dialogs: [], statuses: {}, widgets: {}, openedAt: new Date().toISOString(), hydrated: false, entries: [], capabilities: [], goal: null, namerLabels: {} };
       return { ...state, open: { ...rest, [view.path]: view }, current: view.path };
     }
     case "select":
@@ -275,15 +353,18 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, open: rest, current: state.current === action.path ? undefined : state.current };
     }
     case "hydrate":
-      return updateView(state, action.path, (v) =>
+      return updateView(state, action.path, (v) => {
+        // The snapshot came from the worker at `seq`; a live update that
+        // overtook it is further ahead, so the watermark never goes backwards.
+        const lastSeq = action.seq !== undefined && action.seq > v.lastSeq ? action.seq : v.lastSeq;
         // Live updates landed while the snapshot was in flight: they already
         // carry what the snapshot has, plus what it does not.
-        action.expectSeq !== undefined && v.lastSeq !== action.expectSeq
-          ? { ...v, entries: action.entries, hydrated: true }
-          : { ...v, blocks: blocksFromEntries(action.entries), entries: action.entries, hydrated: true },
-      );
+        return action.expectSeq !== undefined && v.lastSeq !== action.expectSeq
+          ? { ...v, entries: action.entries, leafId: action.leafId, hydrated: true, lastSeq }
+          : { ...v, blocks: blocksFromEntries(action.entries, action.leafId), entries: action.entries, leafId: action.leafId, hydrated: true, pendingSentBy: undefined, lastSeq };
+      });
     case "entries":
-      return updateView(state, action.path, (v) => ({ ...v, entries: action.entries }));
+      return updateView(state, action.path, (v) => ({ ...v, entries: action.entries, leafId: action.leafId }));
     case "goal":
       return updateView(state, action.path, (v) => ({ ...v, goal: action.goal }));
     case "resync":
@@ -317,6 +398,10 @@ export function reduce(state: AppState, action: Action): AppState {
       for (const [path, v] of Object.entries(state.open)) open[path] = drop(v);
       return { ...state, open };
     }
+    case "pending":
+      return updateView(state, action.path, (v) =>
+        v.pending.length === 0 && action.messages.length === 0 ? v : { ...v, pending: action.messages },
+      );
     case "notification":
       return applyNotification(state, action.method, action.params);
     case "agents/loading":
@@ -330,12 +415,17 @@ export function reduce(state: AppState, action: Action): AppState {
         // that carries fresher warnings under the same number still lands.
         a.snapshot && a.snapshot.revision > action.snapshot.revision ? a : { ...a, snapshot: action.snapshot },
       );
-    case "agents/run":
-      return updateAgents(state, (a) => {
+    case "agents/run": {
+      // The first time we hear of a run is the only time it can be the start
+      // of one; every later publication is activity on a run we already know.
+      const first = state.agents.runs[action.run.runId] === undefined;
+      const next = updateAgents(state, (a) => {
         const existing = a.runs[action.run.runId];
         if (existing && (sameRun(existing, action.run) || isOlderRun(action.run, existing))) return a;
         return { ...a, runs: { ...a.runs, [action.run.runId]: action.run } };
       });
+      return first ? expectParentTask(next, action.run) : next;
+    }
     case "agents/runs/loaded":
       return updateAgents(state, (a) => ({ ...a, error: null, runs: mergeRuns(a.runs, action.runs, action.path) }));
     case "agents/event":
@@ -350,6 +440,27 @@ export function reduce(state: AppState, action: Action): AppState {
       return updateAgents(state, (a) => (a.chooseBeamModel === null ? a : { ...a, chooseBeamModel: null }));
     case "agents/error":
       return updateAgents(state, (a) => ({ ...a, loading: false, error: action.error }));
+    case "tasks/update":
+      return updateTasks(state, (t) => {
+        const existing = t.tasks[action.task.id];
+        if (existing && sameTask(existing, action.task)) return t;
+        return { ...t, tasks: { ...t.tasks, [action.task.id]: action.task } };
+      });
+    case "tasks/loaded":
+      return updateTasks(state, (t) => {
+        // The host's list is the truth for the range it covers: a task it no
+        // longer holds is gone, not hidden.
+        const next: Record<string, BackgroundTask> = {};
+        for (const [id, task] of Object.entries(t.tasks)) {
+          if (action.path === undefined || task.sessionPath === action.path) continue;
+          next[id] = task;
+        }
+        for (const task of action.tasks) next[task.id] = task;
+        const listed = action.path === undefined
+          ? [...new Set(action.tasks.map((task) => task.sessionPath))]
+          : t.listed.includes(action.path) ? t.listed : [...t.listed, action.path];
+        return { ...t, tasks: next, listed };
+      });
   }
 }
 
@@ -362,9 +473,44 @@ function updateView(state: AppState, path: string, fn: (v: SessionView) => Sessi
   return next === view ? state : { ...state, open: { ...state.open, [path]: next } };
 }
 
+/**
+ * A run a parent just started on a session we hold open: the prompt that
+ * carries its task has not arrived yet, so arm the attribution for it. A run
+ * the person started (`origin: "user"`) is their own message and gets none,
+ * and a run that is already over never had a live prompt to attribute.
+ */
+function expectParentTask(state: AppState, run: AgentRun): AppState {
+  if (run.origin !== "agent" || !run.parent || isTerminalRunStatus(run.status)) return state;
+  const sentBy: SentByParent = { parentPath: run.parent.sessionPath, runId: run.runId };
+  return updateView(state, run.sessionPath, (v) => ({ ...v, pendingSentBy: sentBy }));
+}
+
 function updateAgents(state: AppState, fn: (a: AgentsSlice) => AgentsSlice): AppState {
   const next = fn(state.agents);
   return next === state.agents ? state : { ...state, agents: next };
+}
+
+function updateTasks(state: AppState, fn: (t: TasksSlice) => TasksSlice): AppState {
+  const next = fn(state.tasks);
+  return next === state.tasks ? state : { ...state, tasks: next };
+}
+
+/**
+ * The fields a re-sent task could differ in. A task that grew no bytes and
+ * changed no state keeps the store identity, so a chatty running command does
+ * not re-render the fleet on every heartbeat.
+ */
+function sameTask(a: BackgroundTask, b: BackgroundTask): boolean {
+  return (
+    a.status === b.status &&
+    a.outputBytes === b.outputBytes &&
+    a.activity === b.activity &&
+    a.endedAt === b.endedAt &&
+    a.exitCode === b.exitCode &&
+    a.terminalReason === b.terminalReason &&
+    a.error === b.error &&
+    a.title === b.title
+  );
 }
 
 const runTime = (value: string | undefined): number => {
@@ -495,6 +641,8 @@ function applyNotification(state: AppState, method: HostNotificationMethod, para
       return reduce(state, { type: "agents/event", event: params as HostNotifications["agents/event"] });
     case "agents/beam/choose-model":
       return reduce(state, { type: "agents/choose-beam-model", suggested: (params as HostNotifications["agents/beam/choose-model"]).suggested });
+    case "tasks/update":
+      return reduce(state, { type: "tasks/update", task: (params as HostNotifications["tasks/update"]).task });
     default:
       return state;
   }
@@ -602,12 +750,24 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
       return { ...v, state: u.state, running: u.state.isStreaming };
     case "message_start": {
       if (u.role === "user") {
-        // An optimistic block already stands in for this message.
+        // An optimistic block already stands in for this message — the person
+        // typed it, so it keeps no attribution and consumes none.
         if (lastOptimisticUserIndex(v.blocks) !== -1) return v;
-        return { ...v, blocks: [...v.blocks, { kind: "user", id: nextBlockId(), text: "", images: 0 }] };
+        const sentBy = v.pendingSentBy;
+        return {
+          ...v,
+          pendingSentBy: undefined,
+          blocks: [...v.blocks, { kind: "user", id: nextBlockId(), text: "", images: 0, ...(sentBy ? { sentBy } : {}) }],
+        };
       }
       if (u.role === "assistant") {
-        return { ...v, blocks: [...closeStreaming(v.blocks), { kind: "assistant", id: nextBlockId(), text: "", thinking: "", streaming: true }] };
+        // The child spoke before any prompt landed: whatever was armed was not
+        // this turn's, and holding it would attribute a later message wrongly.
+        return {
+          ...v,
+          pendingSentBy: undefined,
+          blocks: [...closeStreaming(v.blocks), { kind: "assistant", id: nextBlockId(), text: "", thinking: "", streaming: true }],
+        };
       }
       // A custom message with a speaker is a child run talking into this
       // session — the one case where words arrive that the session's own agent
@@ -681,6 +841,8 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
       };
     case "queue_update":
       return { ...v, queue: { steering: u.steering, followUp: u.followUp } };
+    case "pending_update":
+      return { ...v, pending: u.pending };
     case "compaction_start":
       return notice(v, "info", "Compacting context…");
     case "compaction_end":
@@ -731,11 +893,25 @@ function stringify(value: unknown): string {
 /** The stop reasons that draw a stopped row; every other ending is an ordinary one. */
 const STOPPED_SHORT = new Set<string>(["aborted", "length", "error", "deferred"]);
 
-/** Rebuild blocks from persisted Pi entries (session-format.md). Unknown shapes are ignored. */
-export function blocksFromEntries(entries: unknown[]): Block[] {
+/**
+ * Rebuild blocks from persisted Pi entries (session-format.md). Unknown shapes
+ * are ignored.
+ *
+ * The file is a tree, not a list: editing a message in place, or running a
+ * reply again, leaves the previous version in the file beside the new one.
+ * Only the branch the session is sitting on is the conversation, so entries
+ * off the path from the root to `leafId` are skipped here — they are reached
+ * through the message's version picker instead. Passing no `leafId` reads the
+ * last entry as the leaf, which is what the engine does on re-open.
+ */
+export function blocksFromEntries(entries: unknown[], leafId?: string | null): Block[] {
   const blocks: Block[] = [];
   const toolIndex = new Map<string, number>();
+  const branch = activePathIds(entries, leafId);
+  /** Armed by a run-started marker; the prompt that follows it is the parent's. */
+  let armed: SentByParent | undefined;
   for (const raw of entries) {
+    if (branch && !branch.has((raw as { id?: string } | null)?.id ?? "")) continue;
     const e = raw as {
       type?: string;
       timestamp?: unknown;
@@ -757,11 +933,28 @@ export function blocksFromEntries(entries: unknown[]): Block[] {
       if (block) blocks.push(block);
       continue;
     }
+    // The harness's run marker is a plain custom entry, not a message: it
+    // draws nothing of its own, it says who the next prompt came from.
+    if (e.type === "custom") {
+      const marker = sentByOfMarker(raw);
+      if (marker) armed = marker;
+      continue;
+    }
     if (e.type !== "message" || !e.message) continue;
     const m = e.message;
     const at = entryTimestamp(e.timestamp ?? m.timestamp);
+    // A marker attributes the very next message and nothing after it.
+    const sentBy = armed;
+    armed = undefined;
     if (m.role === "user") {
-      blocks.push({ kind: "user", id: nextBlockId(), ...(at ? { at } : {}), text: textOf(m.content), images: countImages(m.content) });
+      blocks.push({
+        kind: "user",
+        id: nextBlockId(),
+        ...(at ? { at } : {}),
+        text: textOf(m.content),
+        images: countImages(m.content),
+        ...(sentBy ? { sentBy } : {}),
+      });
     } else if (m.role === "assistant") {
       const parts = Array.isArray(m.content) ? (m.content as Array<{ type?: string; text?: string; thinking?: string; id?: string; name?: string; arguments?: unknown }>) : [];
       const text = parts.filter((p) => p.type === "text").map((p) => p.text ?? "").join("");
@@ -804,6 +997,24 @@ export function blocksFromEntries(entries: unknown[]): Block[] {
     }
   }
   return blocks;
+}
+
+/**
+ * The attribution a `lasercode/agent-run` entry carries, or `undefined` for
+ * every other custom entry and for the moments that end a run rather than
+ * start one. `origin: "user"` is the person's own run: their message is theirs.
+ *
+ * A message the parent sends to a child that is already busy is queued by the
+ * engine and starts no run, so it has no marker and stays unattributed —
+ * inventing one from the text would be a guess, and this never guesses.
+ */
+function sentByOfMarker(raw: unknown): SentByParent | undefined {
+  const entry = raw as { customType?: unknown; data?: unknown } | undefined;
+  if (entry?.customType !== SESSION_RUN_ENTRY_TYPE) return undefined;
+  const data = entry.data as { moment?: unknown; origin?: unknown; parentPath?: unknown; runId?: unknown } | undefined;
+  if (!data || data.moment !== "started" || data.origin !== "agent") return undefined;
+  if (typeof data.parentPath !== "string" || data.parentPath === "") return undefined;
+  return { parentPath: data.parentPath, ...(typeof data.runId === "string" ? { runId: data.runId } : {}) };
 }
 
 /** Pi entries stamp `timestamp` as epoch ms or an ISO string; both become ISO. */

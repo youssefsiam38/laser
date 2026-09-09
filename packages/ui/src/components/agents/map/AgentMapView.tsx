@@ -64,7 +64,6 @@ export function AgentMapConnected({ rootPath, frame, focusPath, chrome = true }:
     load();
   }, [rootPath, load]);
 
-  const dockAvailable = shell !== undefined && shell.layout !== "mobile" && frame !== "dock";
   const host = useMemo<MapHost>(
     () => ({
       frame,
@@ -76,15 +75,8 @@ export function AgentMapConnected({ rootPath, frame, focusPath, chrome = true }:
       requestEndAgent,
       openFullscreen: () => mapUi.setFullscreen(true),
       closeFullscreen: () => mapUi.setFullscreen(false),
-      showInDock: dockAvailable
-        ? () => {
-            mapUi.setDocked(rootPath, true);
-            mapUi.setFullscreen(false);
-            mapUi.setOpen(false);
-          }
-        : undefined,
     }),
-    [actions, dockAvailable, frame, rootPath],
+    [actions, frame, rootPath],
   );
 
   if (!tree) return null;

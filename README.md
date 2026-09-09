@@ -19,11 +19,11 @@ has** — one of six panel kinds — and laser decides **how it looks and where
 it goes**. Extensions never ship a component, a colour, or a layout. A package
 that knows nothing about laser still renders correctly; one that opts into
 the contract renders natively. That contract is
-[`docs/ux-panels.md`](docs/ux-panels.md), and it is binding on every surface.
+[`docs/ux-fleet.md`](docs/ux-fleet.md), and it is binding on every surface.
 
 - Start here: [`AGENTS.md`](AGENTS.md) (how to work in this repo)
 - Plan: [`PLAN.md`](PLAN.md) · Status: [`STATUS.md`](STATUS.md) · Ledger: [`STATUS_DETAILED.md`](STATUS_DETAILED.md)
-- Panel contract: [`docs/ux-panels.md`](docs/ux-panels.md) · Agent work: [`docs/ux-agent-work.md`](docs/ux-agent-work.md)
+- The fleet: [`docs/ux-fleet.md`](docs/ux-fleet.md) · Agent work: [`docs/ux-agent-work.md`](docs/ux-agent-work.md)
 - Element inventory: [`docs/ux-elements.md`](docs/ux-elements.md) · Theme system: [`docs/ux-theme.md`](docs/ux-theme.md) · Default preset: [`packages/ui/DESIGN.md`](packages/ui/DESIGN.md)
 - Architecture: [`docs/architecture.md`](docs/architecture.md)
 - Research: [`docs/research/findings.md`](docs/research/findings.md)

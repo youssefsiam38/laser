@@ -163,6 +163,15 @@ export interface BeamState {
   needsChoice: boolean;
 }
 
+/**
+ * Chat's model. Every built-in's model is the person's to choose; Chat has no
+ * suggestion engine and no benchmark behind it, so its state is the choice
+ * alone. `null` means it follows the configured default model.
+ */
+export interface ChatState {
+  model: AgentModelChoice | null;
+}
+
 export interface AgentsSnapshot {
   revision: number;
   agents: AgentDefinition[];
@@ -172,6 +181,7 @@ export interface AgentsSnapshot {
   policy: AgentPolicy;
   namer: NamerState;
   beam: BeamState;
+  chat: ChatState;
   /** Directories the built-in projectless agents run in. */
   workspaces: { beam: string; chat: string };
 }
@@ -294,8 +304,6 @@ export const SESSION_RUN_ENTRY_TYPE = "lasercode/agent-run";
 export const AGENT_EVENT_MESSAGE_TYPE = "lasercode/agent-event";
 /** The custom message type a session receives when one of its background tasks exits. */
 export const TASK_EVENT_MESSAGE_TYPE = "lasercode/task-event";
-/** Panel id prefix for background tasks: `tasks:<taskId>`. */
-export const TASK_PANEL_PREFIX = "tasks:";
 
 // ---------- methods ----------
 
@@ -315,8 +323,13 @@ declare module "./messages.js" {
     "agents/runs/list": { params: { path?: string }; result: { runs: AgentRun[] } };
     /** A person ends a run. Recorded as user-initiated; the parent is told, with the reason when given. */
     "agents/runs/stop": { params: { runId: string; reason?: string }; result: { run: AgentRun } };
-    "agents/beam/set-model": { params: { model: AgentModelChoice | null }; result: { snapshot: AgentsSnapshot } };
-    "agents/namer/set-model": { params: { model: AgentModelChoice | null }; result: { snapshot: AgentsSnapshot } };
+    /**
+     * A person chooses a built-in agent's model. One method for all three:
+     * Beam, Chat and Namer are the same choice made in the same control, and
+     * `null` returns that agent to the configured default (for Namer, to the
+     * next qualification). Beam's pending choice is closed either way.
+     */
+    "agents/builtin/set-model": { params: { name: BuiltinAgentName; model: AgentModelChoice | null }; result: { snapshot: AgentsSnapshot } };
     /** Benchmark nominated cheap models and pick Namer's. Routed to the built-in workspace worker. */
     "agents/namer/qualify": { params: { cwd: string }; result: NamerState };
     /** Host → worker only: the current definitions. Refused from clients. */

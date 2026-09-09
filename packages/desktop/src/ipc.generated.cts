@@ -5,8 +5,6 @@ const IPC = {
   hostInfo: "laser:host/info",
   hostChanged: "laser:host/changed",
   hostRetry: "laser:host/retry",
-  panelPopOut: "laser:panel/pop-out",
-  panelClose: "laser:panel/close",
   deepLink: "laser:deep-link",
   deepLinkPending: "laser:deep-link/pending",
   windowMinimize: "laser:window/minimize",

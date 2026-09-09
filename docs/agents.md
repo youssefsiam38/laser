@@ -61,7 +61,11 @@ between ticks.
 Kinds: `custom` (a person's, including the seeded `default`) and `builtin`
 (Beam, Chat, Namer — visible at the bottom of the Agents page, never editable,
 never deletable, never the default, never another agent's child; only their
-model choices persist).
+model choices persist). All three take their model from the person, through
+the same control on the Agents page and the same picker — connected providers
+only (D-145). `AgentsSnapshot` carries `beam`, `chat` and `namer` state; Chat's
+is the choice alone, because it has neither a suggestion nor a benchmark
+behind it.
 
 ## 2. The harness
 
@@ -109,9 +113,11 @@ once ("You stopped without calling complete_agent_run…", `NUDGE_TEXT` in
 the run is `failed` with "Ended without complete_agent_run" and the last
 assistant text kept as context — never `completed`.
 
-`wait_for_agents` waits 600 s by default and at most 3600 s; every run the
-harness knows renders as a `run` panel with id `agents:run:<runId>` and source
-`agents`, which is how the dock and the fleet see it.
+`wait_for_agents` waits 600 s by default and at most 3600 s. Every run the
+harness knows is published exactly once, as `agents/run` (M13-T26): that
+notification and `agents/runs/list` are the single truth, and the fleet, the
+sidebar and the live map all read it. There is no second publication of the
+same facts.
 
 ### Events at a safe boundary
 
@@ -238,9 +244,10 @@ process-tree kill, output truncation stay the engine's) and adds:
 - `task_list`, `task_output`, `task_wait` (300 s default, 3600 s at most) and
   `task_stop` (`BACKGROUND_TOOL_NAMES`) to follow tasks; a task is `running`,
   `completed`, `failed` or `stopped`;
-- one `run` panel per task, id `tasks:<taskId>` (`TASK_PANEL_PREFIX`), source
-  `shell`, whose `output` is the file the task streams into so the UI follows
-  it through `pi/panel/read`; re-emits for output growth are throttled;
+- one `lasercode/task/update` per task carrying a `BackgroundTaskUpdate`
+  (`packages/protocol/src/tasks.ts`), including the log file it streams into,
+  so the host can serve `tasks/output` and the fleet can follow it; re-emits
+  for output growth are throttled (M13-T26);
 - exit notifications as a `lasercode/task-event` custom message
   (`TASK_EVENT_MESSAGE_TYPE`): a promoted task wakes an idle model
   (`triggerTurn: true`, it was told it would hear back); an explicitly
@@ -333,8 +340,7 @@ Requests (client → host unless noted):
 | `agents/engine-instructions` | `{ cwd }` → `{ text }` (routed by cwd) |
 | `agents/runs/list` | `{ path? }` → `{ runs }` (`path` narrows to that session's tree) |
 | `agents/runs/stop` | `{ runId, reason? }` → `{ run }` (recorded as user-initiated; the parent is told) |
-| `agents/beam/set-model` | `{ model }` → `{ snapshot }` |
-| `agents/namer/set-model` | `{ model }` → `{ snapshot }` |
+| `agents/builtin/set-model` | `{ name, model }` → `{ snapshot }` (`name` is `beam`, `chat` or `namer`; `null` follows the default model, and for Namer returns it to the next qualification) |
 | `agents/namer/qualify` | `{ cwd }` → `NamerState` (routed to the built-in workspace worker) |
 | `agents/sync` | host → worker only; refused from clients |
 | `session/new` | gains `agentName?` (omitted = the default agent) |

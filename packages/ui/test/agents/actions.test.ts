@@ -101,25 +101,44 @@ describe("agents actions", () => {
     await expect(broken.actions.qualifyNamer("/p")).rejects.toThrow();
   });
 
-  it("sets the Beam and Namer models, clearing the pending Beam choice on success only", async () => {
+  it("sets each built-in's model through one method, clearing the pending Beam choice on success only", async () => {
     const choice = { suggested: { provider: "openai", id: "gpt-5.6-luna" } };
     const h = harness({
-      "agents/beam/set-model": ({ model }: { model: { provider: string; id: string } | null }) => ({ snapshot: snapshot({ revision: 8, beam: { model, suggested: null, needsChoice: false } }) }),
-      "agents/namer/set-model": ({ model }: { model: { provider: string; id: string } | null }) => ({ snapshot: snapshot({ revision: 9, namer: { status: "ready", model, candidates: [] } }) }),
+      "agents/builtin/set-model": ({ name, model }: { name: string; model: { provider: string; id: string } | null }) => ({
+        snapshot: snapshot({
+          revision: 8,
+          ...(name === "beam" ? { beam: { model, suggested: null, needsChoice: false } } : {}),
+          ...(name === "chat" ? { chat: { model } } : {}),
+          ...(name === "namer" ? { namer: { status: model ? "ready" : "unqualified", model, candidates: [] } } : {}),
+        }),
+      }),
     });
     h.dispatch({ type: "notification", method: "agents/beam/choose-model", params: choice });
     expect(h.state.agents.chooseBeamModel).toEqual(choice);
-    await h.actions.setBeamModel(choice.suggested);
+
+    await h.actions.setBuiltinModel("beam", choice.suggested);
+    expect(h.request).toHaveBeenLastCalledWith("agents/builtin/set-model", { name: "beam", model: choice.suggested });
     expect(h.state.agents.snapshot?.beam.model).toEqual(choice.suggested);
     expect(h.state.agents.chooseBeamModel).toBeNull();
-    await h.actions.setNamerModel(null);
+
+    const chatModel = { provider: "anthropic", id: "claude-haiku" };
+    await h.actions.setBuiltinModel("chat", chatModel);
+    expect(h.state.agents.snapshot?.chat.model).toEqual(chatModel);
+    await h.actions.setBuiltinModel("chat", null);
+    expect(h.state.agents.snapshot?.chat.model).toBeNull();
+
+    await h.actions.setBuiltinModel("namer", null);
     expect(h.state.agents.snapshot?.namer.model).toBeNull();
 
     const broken = harness({});
     broken.dispatch({ type: "notification", method: "agents/beam/choose-model", params: choice });
-    await broken.actions.setBeamModel(choice.suggested);
-    expect(broken.toasts).toEqual(["unknown method agents/beam/set-model"]);
+    await broken.actions.setBuiltinModel("beam", choice.suggested);
+    expect(broken.toasts).toEqual(["unknown method agents/builtin/set-model"]);
+    // A failure leaves the choice open: the person still has to make it.
     expect(broken.state.agents.chooseBeamModel).toEqual(choice);
+    // A failed Chat or Namer choice toasts and changes nothing.
+    await broken.actions.setBuiltinModel("chat", choice.suggested);
+    expect(broken.state.agents.snapshot?.chat.model ?? null).toBeNull();
     broken.actions.dismissBeamChoice();
     expect(broken.state.agents.chooseBeamModel).toBeNull();
   });

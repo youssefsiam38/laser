@@ -1,6 +1,6 @@
 import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
-import type { Panel, SessionState, SessionSummary } from "@lasercode/protocol";
+import type { AgentRun, SessionState, SessionSummary } from "@lasercode/protocol";
 
 import {
   backgroundUsageSources,
@@ -230,46 +230,44 @@ describe("entries", () => {
     expect(sessionBillingMode([mixed[1]])).toBe("api");
   });
 
-  it("counts every subagent under the model that served it without counting plan roll-ups", () => {
-    const panels: Panel[] = [
-      {
-        kind: "plan",
-        id: "plan",
-        source: "Subagents",
-        title: "Parallel",
-        intent: "follow",
-        steps: [],
-        usage: { input: 999, output: 999, costUsd: 99 },
-      },
-      {
-        kind: "run",
-        id: "child",
-        source: "Subagents",
-        title: "researcher",
-        intent: "follow",
-        lifecycle: "done",
-        usage: { input: 160, output: 30, costUsd: 0.4 },
-        usageByModel: [
-          { model: "openai-codex/gpt-5.6", usage: { input: 100, output: 20, turns: 2, costUsd: 0 } },
-          { model: "anthropic/claude-sonnet", usage: { input: 60, output: 10, turns: 1, costUsd: 0.4 } },
-        ],
-      },
-    ];
-    const background = backgroundUsageSources(panels);
+  it("puts a session in the mixed billing view when a child agent ran on another provider", () => {
+    // The harness records what a run *is*, never what it spent (D-140), so a
+    // child contributes its model and nothing else. That is enough to decide
+    // the billing view, and inventing numbers would be worse than having none.
+    const run = (runId: string, provider: string, id: string): AgentRun =>
+      ({
+        runId,
+        agentName: "researcher",
+        subagentName: "researcher",
+        sessionId: runId,
+        sessionPath: `/sessions/${runId}.jsonl`,
+        projectCwd: "/p",
+        rootSessionPath: "/sessions/root.jsonl",
+        depth: 1,
+        parent: null,
+        worktree: null,
+        origin: "agent",
+        status: "completed",
+        task: "look",
+        model: { provider, id },
+        startedAt: "2026-09-08T10:00:00.000Z",
+        updatedAt: "2026-09-08T10:01:00.000Z",
+      }) as AgentRun;
+
     const accountParent = [
       { type: "message", message: { role: "assistant", provider: "openai-codex", usage: { input: 20, output: 5, cost: { total: 1 } } } },
     ];
-    expect(background).toHaveLength(2);
-    expect(sessionBillingMode(accountParent, background)).toBe("mixed");
-    expect(usageFromEntries(accountParent, "api", background)).toEqual({
-      input: 60,
-      output: 10,
-      cacheRead: 0,
-      cacheWrite: 0,
-      total: 70,
-      cost: 0.4,
-      turns: 1,
-    });
+    const apiChild = backgroundUsageSources([run("r1", "anthropic", "claude-sonnet")]);
+    expect(apiChild).toEqual([{ model: "anthropic/claude-sonnet" }]);
+    expect(sessionBillingMode(accountParent, apiChild)).toBe("mixed");
+    // No usage means no numbers added, not zeroes: the parent's own totals stand.
+    expect(usageFromEntries(accountParent, "all", apiChild)).toMatchObject({ input: 20, output: 5, cost: 1 });
+
+    // A child on the same account provider keeps the session in one view.
+    const accountChild = backgroundUsageSources([run("r2", "openai-codex", "gpt-5.6")]);
+    expect(sessionBillingMode(accountParent, accountChild)).toBe("account");
+    // A run with no model recorded says nothing about billing.
+    expect(backgroundUsageSources([{ ...run("r3", "anthropic", "x"), model: undefined } as AgentRun])).toEqual([{}]);
   });
 
   it("flattens the tree with branch depth, folded tool results, and labels on targets", () => {

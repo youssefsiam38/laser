@@ -43,12 +43,10 @@ import { PrefsStore } from "./prefs.js";
 import { SessionCatalog, defaultSessionDir } from "./catalog.js";
 import { LogStore } from "./logstore.js";
 import { PackageService, SetupService } from "./packages.js";
-import { PanelHub } from "./panels/hub.js";
+import { TaskRegister } from "./tasks/register.js";
 import { defaultAgentDir, defaultStateDir, ensureWorkspace, workspacesDir } from "./paths.js";
 import { ProjectRegistry } from "./projects.js";
 import { PushService } from "./push.js";
-import { subagentsTempRoots } from "./subagents/file-layer.js";
-import { SubagentsLayer } from "./subagents/layer.js";
 import { RelayClient, type RelayClientState, type RelayClientStats } from "./relay-client.js";
 import { Router } from "./router.js";
 import { ViewCache } from "./views.js";
@@ -180,10 +178,9 @@ export class HostServer {
   /** M4 log store, or undefined when it could not be opened (see `logsUnavailable`). */
   readonly logs: LogStore | undefined;
   readonly logsUnavailable: string | undefined;
-  /** Panels declared by extensions, per session (docs/ux-panels.md). */
-  readonly panels: PanelHub;
+  /** Background commands the agent left running, per session (docs/ux-fleet.md). */
+  readonly tasks: TaskRegister;
   /** Runs, plans and missions read off disk — including sessions with no worker (M3). */
-  readonly subagents: SubagentsLayer;
   /** Web Push to paired phones (M7-T5). Inert until a device subscribes. */
   readonly push: PushService;
   /** laser's own preferences (M11-T6) — the theme among them. */
@@ -215,6 +212,12 @@ export class HostServer {
   private readonly notificationListeners = new Set<(n: JsonRpcNotification) => void>();
   /** The Beam choose-model dialog is offered once per host run. */
   private beamPrompted = false;
+  /** Set by `close()`: background work started behind a request must not outlive the host. */
+  private closing = false;
+  /** One Namer benchmark at a time for the whole host; it costs a completion per candidate. */
+  private namerQualifying = false;
+  /** Provider sets already benchmarked this run, so a failure is not retried on every worker. */
+  private readonly namerQualified = new Set<string>();
 
   constructor(private readonly options: HostServerOptions = {}) {
     this.log = options.log ?? (() => {});
@@ -279,11 +282,7 @@ export class HostServer {
       hasClients: () => this.clients.size > 0,
     });
 
-    this.panels = new PanelHub({
-      notify: (method, params) => this.notify(method, params),
-      attention: this.attention,
-      ...(this.logs ? { logContent: (ref, maxBytes) => this.logs!.content(ref, maxBytes) } : {}),
-    });
+    this.tasks = new TaskRegister({ notify: (method, params) => this.notify(method, params) });
 
     this.push = new PushService({ agentDir, log: (line) => this.log(line) });
 
@@ -344,8 +343,12 @@ export class HostServer {
       ...(options.nodeBinary ? { nodeBinary: options.nodeBinary } : {}),
       ...(options.workerIdleMs !== undefined ? { idleMs: options.workerIdleMs } : {}),
       // A worker's first request already sees the agent definitions.
-      prime: async (client) => {
+      prime: async (client, cwd) => {
         await client.request("agents/sync", { snapshot: this.agents.snapshot() });
+        // Naming must not wait for a sign-in this run may never see. The first
+        // worker to come up benchmarks Namer, after priming so nothing that
+        // opened this worker waits on it.
+        setImmediate(() => void this.qualifyNamer(cwd, client));
       },
       onNotification: (cwd, n) => {
         this.observe(cwd, n);
@@ -374,37 +377,13 @@ export class HostServer {
     };
     this.pool = new WorkerPool(poolOptions);
 
-    this.subagents = new SubagentsLayer({
-      sink: {
-        upsert: (cwd, path, panel) => this.panels.upsert(cwd, path, panel),
-        close: (path, id, reason) => this.panels.close(path, id, reason),
-      },
-      // The catalog is the host's list of every session on disk, which is what
-      // lets a run started from a terminal find the session that owns it.
-      sessions: () =>
-        this.catalog.list().map((entry) => ({ path: entry.path, cwd: entry.cwd, modifiedAt: entry.modifiedAt })),
-      enabled: (cwd) => this.features.enabled(cwd).includes("subagents"),
-      ...(options.agentDir ? { agentDir: options.agentDir } : {}),
-      ...(options.subagentsTempRoot ? { roots: [options.subagentsTempRoot, ...subagentsTempRoots()] } : {}),
-      // Resume is the one control that is not a file: it goes back through the
-      // owning session's bus, which means through that session's worker.
-      forward: async (path, command) => {
-        const cwd = this.pool.cwdOfSession(path) ?? this.catalog.cwdOf(path);
-        if (!cwd) return false;
-        const worker = await this.pool.get(cwd);
-        const result = await worker.request<{ delivered?: boolean }>("pi/panel/action", { path, ...command });
-        return result?.delivered === true;
-      },
-    });
-
     this.router = new Router(this.pool, this.catalog, {
       attention: this.attention,
       projects: this.projects,
       views: this.views,
       logs: this.logs,
       logsUnavailable: this.logsUnavailable,
-      panels: this.panels,
-      subagents: this.subagents,
+      tasks: this.tasks,
       push: this.push,
       prefs: this.prefs,
       features: this.features,
@@ -436,10 +415,6 @@ export class HostServer {
     await new Promise<void>((resolve, reject) => {
       this.http.once("error", reject);
       this.http.listen(this.options.port ?? 0, host, () => {
-        // Only once the port is bound: the layer's first tick emits panels,
-        // and a panel emitted before there is a server to broadcast from is
-        // just work thrown away.
-        this.subagents.start();
         this.skillsCheck.start();
         resolve();
       });
@@ -503,10 +478,10 @@ export class HostServer {
   }
 
   async close(): Promise<void> {
+    this.closing = true;
     await Promise.all(this.relayClients.map((client) => client.stop("host shutting down").catch(() => {})));
     this.relayClients.length = 0;
     this.notificationListeners.clear();
-    this.subagents.stop();
     this.skillsCheck.stop();
     if (this.logFlush) clearTimeout(this.logFlush);
     this.logFlush = undefined;
@@ -527,13 +502,11 @@ export class HostServer {
   }
 
   /**
-   * A worker went away. Its panels end (saying which way, R7) and the sessions
-   * it held stop offering the controls that need a live bus.
+   * A worker went away. Every background command it was running died with it,
+   * so the fleet is told rather than left with a row that spins forever.
    */
   private forgetSessionsOf(cwd: string, reason: string): void {
-    const paths = this.pool.openSessions(cwd);
-    this.panels.workerLost(paths, reason);
-    for (const path of paths) this.subagents.sessionClosed(path);
+    this.tasks.workerLost(this.pool.openSessions(cwd), reason);
   }
 
   /**
@@ -604,12 +577,8 @@ export class HostServer {
       }
       case "pi/extension/message": {
         const params = notification.params as HostNotifications["pi/extension/message"];
-        // The subagents layer listens for the module's capability announcement
-        // (that is what makes Resume appear) and for panels it also owns, so
-        // one id stays one panel (R9).
-        this.subagents.observeExtensionMessage(params.path, params.message);
-        // Panel messages become `pi/panel/*` broadcasts; nothing else needs them.
-        if (this.panels.observeExtensionMessage(cwd, params.path, params.message)) return;
+        // Task messages become `tasks/update` broadcasts; nothing else needs them.
+        if (this.tasks.observeExtensionMessage(params.path, params.message)) return;
         this.logs?.observeExtensionMessage(cwd, params.path, params.message);
         return;
       }
@@ -635,14 +604,14 @@ export class HostServer {
 
   /**
    * A provider was just connected. If Beam has no model yet, propose one and
-   * open the choice (once per host run); if Namer has never been qualified,
-   * ask this worker to benchmark the cheap models. Neither blocks anything:
-   * the login has already been answered, and a failure only logs.
+   * open the choice (once per host run); if Namer still has no model, the new
+   * provider set is a reason to benchmark again. Neither blocks anything: the
+   * login has already been answered, and a failure only logs.
    */
   private async onProviderConnected(cwd: string): Promise<void> {
     const snapshot = this.agents.snapshot();
     const wantsBeam = snapshot.beam.model === null && snapshot.beam.needsChoice && !this.beamPrompted;
-    const wantsNamer = snapshot.namer.status === "unqualified";
+    const wantsNamer = this.namerNeedsQualifying();
     if (!wantsBeam && !wantsNamer) return;
     let worker: WorkerClient;
     try {
@@ -651,6 +620,7 @@ export class HostServer {
       this.log(`agents: no worker for ${cwd} after sign-in: ${error instanceof Error ? error.message : String(error)}`);
       return;
     }
+    if (wantsNamer) void this.qualifyNamer(cwd, worker);
     if (wantsBeam) {
       this.beamPrompted = true;
       try {
@@ -668,7 +638,41 @@ export class HostServer {
         this.log(`agents: could not propose a Beam model: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
-    if (wantsNamer) {
+  }
+
+  /**
+   * Benchmark Namer against this worker's configured providers.
+   *
+   * Naming used to wait for a sign-in performed through the UI during this
+   * host run, so an installation whose providers were already connected — the
+   * normal case — never qualified and never named anything. Any worker that
+   * comes up is enough: the pool primes it, then this runs behind the
+   * request that started it.
+   *
+   * One benchmark at a time for the whole host, one per provider set per run
+   * (connecting another provider is a new set and so a new attempt), and a
+   * failure only logs and leaves the state retryable.
+   */
+  private async qualifyNamer(cwd: string, existing?: WorkerClient): Promise<void> {
+    if (this.closing || this.namerQualifying || !this.namerNeedsQualifying()) return;
+    this.namerQualifying = true;
+    try {
+      const worker = existing ?? (await this.pool.get(cwd));
+      // Nothing here is worth a request into a worker that is going away: the
+      // benchmark is background work behind somebody else's request.
+      if (this.closing || !worker.alive) return;
+      const listed = await worker.request<ClientRequests["pi/providers/list"]["result"]>("pi/providers/list", { cwd });
+      const configured = listed.providers.filter((provider) => provider.configured).map((provider) => provider.id).sort();
+      // Nothing to name with yet. The sign-in that connects the first provider
+      // brings us straight back here.
+      if (configured.length === 0) return;
+      const providerSet = configured.join(",");
+      if (this.namerQualified.has(providerSet)) return;
+      // Another attempt may have finished while the provider list was read.
+      const snapshot = this.agents.snapshot();
+      if (!this.namerNeedsQualifying()) return;
+      if (this.closing || !worker.alive) return;
+      this.namerQualified.add(providerSet);
       this.agents.setNamerState({ ...snapshot.namer, status: "qualifying" });
       try {
         const state = await worker.request<NamerState>("agents/namer/qualify", { cwd });
@@ -678,7 +682,22 @@ export class HostServer {
         this.agents.setNamerState({ ...snapshot.namer, status: "unqualified", reason });
         this.log(`agents: Namer could not be qualified: ${reason}`);
       }
+    } catch (error) {
+      this.log(`agents: Namer could not be qualified from ${cwd}: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      this.namerQualifying = false;
     }
+  }
+
+  /**
+   * Namer has no model of its own yet. `unavailable` counts: it is a verdict
+   * about the providers of the moment, and connecting one is exactly what
+   * makes it wrong. A model a person picked, or one a benchmark chose, is
+   * `ready` and is never benchmarked over.
+   */
+  private namerNeedsQualifying(): boolean {
+    const { status, model } = this.agents.snapshot().namer;
+    return model === null && (status === "unqualified" || status === "unavailable");
   }
 
   // -------------------------------------------------------------- log store

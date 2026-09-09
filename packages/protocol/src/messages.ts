@@ -13,6 +13,9 @@ import { WIRE_NAMESPACE } from "./identity.js";
 import type { AccountUsageState, PiExtensionMessage, PiExtensionModuleName } from "./pi-extension.js";
 import type { FeatureScope, FeatureState, GoalAction, SessionGoal } from "./features.js";
 import type { PushConfig, PushDeviceInfo, PushSubscriptionJson } from "./push.js";
+// Type-only, and erased: `pending.ts` augments the interfaces below, so the
+// cycle exists in the type graph and never in the emitted modules.
+import type { PendingMessage } from "./pending.js";
 
 // ---------- Shared value types (no Pi types allowed here) ----------
 
@@ -238,6 +241,12 @@ export type SessionUpdate =
   | { kind: "tool_execution_end"; toolCallId: string; result: unknown; isError: boolean; oversized?: boolean }
   | { kind: "bash_execution_update"; id?: string; delta: string }
   | { kind: "queue_update"; steering: string[]; followUp: string[] }
+  /**
+   * The session's pending tray, whole (`./pending.ts`). Laser's own, not the
+   * engine's: it rides the same numbered stream as everything else so a
+   * reconnecting client replays it in order and never renders a stale list.
+   */
+  | { kind: "pending_update"; pending: PendingMessage[] }
   | { kind: "compaction_start" }
   | { kind: "compaction_end"; ok: boolean }
   | { kind: "auto_retry_start"; attempt: number; maxAttempts: number }
@@ -810,7 +819,16 @@ export interface ClientRequests {
   "pi/host/version": { params: {}; result: { version: string } };
   /** `agentName` picks a definition; omitted means the default agent. */
   "session/new": { params: { cwd: string; parentPath?: string; agentName?: string }; result: { state: SessionState } };
-  "session/load": { params: { path: string; fromSeq?: number }; result: { state: SessionState; replayFrom: number } };
+  /**
+   * `replayFrom` is the earliest seq this reply actually covers; `seq` is the
+   * worker's current watermark for the session at the moment it answered.
+   *
+   * A client that hydrates from `pi/session/entries` must stamp its view with
+   * `seq`, not with 0: "I have received no live update" and "I hold nothing"
+   * are different states, and conflating them makes the next `session/load`
+   * ask for `fromSeq: 0` and receive the whole buffer a second time.
+   */
+  "session/load": { params: { path: string; fromSeq?: number }; result: { state: SessionState; replayFrom: number; seq: number } };
   "session/prompt": {
     params: { path: string; content: ContentBlock[]; streamingBehavior?: "steer" | "followUp" };
     result: { accepted: boolean; queued: boolean };
@@ -865,8 +883,17 @@ export interface ClientRequests {
   "pi/session/rename": { params: { path: string; name: string }; result: {} };
   /** Permanently remove a closed persisted transcript. */
   "pi/session/delete": { params: { path: string }; result: {} };
-  /** Persisted Pi session entries (opaque; see Pi's session-format.md) for transcript hydration. */
-  "pi/session/entries": { params: { path: string }; result: { entries: unknown[] } };
+  /**
+   * Persisted Pi session entries (opaque; see Pi's session-format.md) for
+   * transcript hydration. The file is an append-only *tree*, so `entries` is
+   * every branch, not the conversation on screen: `leafId` is the entry the
+   * session is currently sitting on, and the live conversation is the path
+   * from the root to it. `null` means the leaf was reset to before the first
+   * entry (editing the opening message); `undefined` means this answer did
+   * not carry one — read the last entry as the leaf, which is what the engine
+   * itself does when it re-opens a file.
+   */
+  "pi/session/entries": { params: { path: string }; result: { entries: unknown[]; leafId?: string | null } };
   "pi/session/compact": { params: { path: string; instructions?: string }; result: {} };
   "pi/model/list": { params: { path: string }; result: { models: ModelRef[] } };
   "pi/model/set": { params: { path: string; model: ModelRef }; result: { state: SessionState } };

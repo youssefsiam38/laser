@@ -23,8 +23,6 @@ import type {
   DesktopPlatform,
   IdentitySummary,
   MicrophoneStatus,
-  PanelDescriptor,
-  PanelWindowDescriptor,
   UpdateStatus,
   WindowChromeState,
 } from "./api.js";
@@ -48,8 +46,6 @@ const IPC = {
   hostInfo: "laser:host/info",
   hostChanged: "laser:host/changed",
   hostRetry: "laser:host/retry",
-  panelPopOut: "laser:panel/pop-out",
-  panelClose: "laser:panel/close",
   deepLink: "laser:deep-link",
   deepLinkPending: "laser:deep-link/pending",
   windowMinimize: "laser:window/minimize",
@@ -108,7 +104,6 @@ const bootstrap = readArgument<Bootstrap>("env") ?? {
   platform: process.platform as DesktopPlatform,
   chrome: { controls: "custom", height: 44, insetLeft: 0, insetRight: 0 },
 };
-const panel = readArgument<PanelWindowDescriptor>("panel") ?? null;
 
 /** Subscribe to a main-process channel and hand back the unsubscribe. */
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
@@ -121,18 +116,11 @@ const api = {
   version: bootstrap.version,
   platform: bootstrap.platform,
   chrome: bootstrap.chrome,
-  panel,
 
   host: (): Promise<DesktopHostInfo> => ipcRenderer.invoke(IPC.hostInfo) as Promise<DesktopHostInfo>,
   onHost: (listener: (info: DesktopHostInfo) => void): (() => void) => subscribe(IPC.hostChanged, listener),
   retryHost: (): void => {
     ipcRenderer.send(IPC.hostRetry);
-  },
-
-  popOutPanel: (descriptor: PanelDescriptor): Promise<{ opened: boolean; reason?: string }> =>
-    ipcRenderer.invoke(IPC.panelPopOut, descriptor) as Promise<{ opened: boolean; reason?: string }>,
-  closePanelWindow: (): void => {
-    ipcRenderer.send(IPC.panelClose);
   },
 
   onDeepLink: (listener: (link: DeepLink) => void): (() => void) => subscribe(IPC.deepLink, listener),
@@ -153,8 +141,8 @@ const api = {
       subscribe(IPC.windowStateChanged, listener),
   },
 
-  setTheme: (theme: "light" | "dark"): void => {
-    ipcRenderer.send(IPC.themeSet, theme);
+  setTheme: (theme: "light" | "dark", ground?: unknown): void => {
+    ipcRenderer.send(IPC.themeSet, theme, ground);
   },
 
   chooseDirectory: (): Promise<string | null> => ipcRenderer.invoke(IPC.directorySelect) as Promise<string | null>,

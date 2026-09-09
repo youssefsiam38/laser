@@ -5,7 +5,7 @@ import { useFooterAnchor } from "./use-footer-anchor.js";
 
 /**
  * The strip directly above the composer where a phone's islands and notices
- * live (docs/ux-panels.md: "On a phone they live directly above the
+ * live (on a phone they live directly above the
  * composer"). One fixed column, anchored to the thread footer so it rides the
  * keyboard with it; children are laid out bottom-up so the newest thing sits
  * nearest the thumb. The container itself never eats taps.

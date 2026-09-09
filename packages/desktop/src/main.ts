@@ -25,13 +25,13 @@ import {
   type DeepLink,
   type DesktopHostInfo,
   type IdentitySummary,
-  type PanelDescriptor,
   type UpdateStatus,
 } from "./api.js";
 import { agentHome, desktopEnv } from "./agent-home.js";
 import { openSourceFile } from "./open-source-file.js";
 import { deepLinkFromArgv, parseDeepLink } from "./deep-links.js";
-import { statusPageUrl } from "./error-page.js";
+import { startingPageUrl, statusPageUrl } from "./error-page.js";
+import { frameColours, parseStartupGround, readStartupGround, writeStartupGround, type StartupGround } from "./startup-ground.js";
 import type { AttentionChange, FleetSnapshot } from "./fleet.js";
 import { HostLink } from "./host-link.js";
 import { HostProcess } from "./host-process.js";
@@ -93,6 +93,11 @@ let updateStatus: UpdateStatus = { state: "idle" };
 const pendingLinks: DeepLink[] = [];
 let mainReady = false;
 let quitting = false;
+/**
+ * What the app last told us it paints with, so the opening screen and the
+ * window frame are the person's own colours from the first frame (M13-T32).
+ */
+let startupGround: StartupGround | undefined = readStartupGround(paths.stateDir);
 let nativePromptOpen = false;
 let nativeVersion: string | undefined;
 
@@ -159,6 +164,7 @@ const windows = new WindowManager({
   },
   origin: () => (devUiUrl ? originOf(devUiUrl) : hostInfo ? originOf(hostInfo.url) : ""),
   entryUrl: () => devUiUrl ?? hostInfo?.url ?? "",
+  frame: () => frameColours(startupGround, nativeTheme.shouldUseDarkColors),
   onMainWindowState: () => {},
   // "Ready" means the renderer is listening for deep links, which it says by
   // draining the queue — not merely that a document finished loading.
@@ -354,15 +360,10 @@ function routeMainWindow(): void {
     );
     return;
   }
-  windows.navigateMain(
-    statusPageUrl({
-      title: `Starting ${PRODUCT_NAME}`,
-      message:
-        `${PRODUCT_NAME} is starting the agent host that runs your sessions. This is only slow the first time after an update.`,
-      logFile: hostInfo?.logFile ?? paths.logFile,
-      busy: true,
-    }),
-  );
+  // One opening screen, not two: the same mark and beams the app itself
+  // mounts, in the same colours, so the app taking over is a handover rather
+  // than a second screen (M13-T32).
+  windows.navigateMain(startingPageUrl(startupGround, nativeTheme.shouldUseDarkColors));
 }
 
 /**
@@ -445,16 +446,6 @@ function installIpc(): void {
   ipcMain.handle(IPC.hostInfo, () => hostInfo);
   ipcMain.on(IPC.hostRetry, () => void host.start());
 
-  ipcMain.handle(IPC.panelPopOut, (_event, descriptor: PanelDescriptor) => {
-    if (!descriptor || typeof descriptor.id !== "string" || descriptor.id.length === 0) {
-      return { opened: false, reason: "That panel has no id." };
-    }
-    return windows.popOutPanel(descriptor);
-  });
-  ipcMain.on(IPC.panelClose, (event) => {
-    const window = windowOf(event);
-    if (window) windows.closePanelWindow(window);
-  });
 
   ipcMain.handle(IPC.deepLinkPending, () => {
     mainReady = true;
@@ -476,9 +467,18 @@ function installIpc(): void {
     return window ? windows.stateOf(window) : { maximized: false, fullScreen: false, focused: false };
   });
 
-  ipcMain.on(IPC.themeSet, (_event, theme: unknown) => {
+  // The app has applied a theme. Two things follow: the native frame changes
+  // colour with it, and the few declarations the opening screen needs are kept
+  // on disk so the next launch starts in this theme rather than in the default
+  // one (M13-T32).
+  ipcMain.on(IPC.themeSet, (_event, theme: unknown, ground: unknown) => {
     if (theme !== "light" && theme !== "dark") return;
-    windows.applyTheme(theme);
+    const recorded = parseStartupGround(ground);
+    if (recorded) {
+      startupGround = recorded;
+      writeStartupGround(paths.stateDir, recorded);
+    }
+    windows.applyTheme();
   });
 
   ipcMain.handle(IPC.directorySelect, async (event) => {

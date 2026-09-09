@@ -35,13 +35,12 @@ import type { SessionCatalog } from "./catalog.js";
 import { searchSessions } from "./session-search.js";
 import type { LogStore } from "./logstore.js";
 import { browseDirectories, type PackageService, type SetupService } from "./packages.js";
-import type { PanelHub } from "./panels/hub.js";
+import type { TaskRegister } from "./tasks/register.js";
 import { ensureWorkspace, projectRootOf } from "./paths.js";
 import type { PrefsStore } from "./prefs.js";
 import type { FeatureService } from "./features.js";
 import type { ProjectRegistry } from "./projects.js";
 import type { PushService } from "./push.js";
-import type { SubagentsLayer } from "./subagents/layer.js";
 import { canonical } from "./trust.js";
 import type { ViewCache } from "./views.js";
 import type { WorkerPool } from "./worker-pool.js";
@@ -66,14 +65,8 @@ export interface RouterDeps {
   logs?: LogStore | undefined;
   /** Why the log store is missing, so `pi/logs/*` can say so instead of 404ing. */
   logsUnavailable?: string | undefined;
-  /** The panel hub (docs/ux-panels.md): answers `pi/panel/list` and `pi/panel/read`. */
-  panels?: PanelHub | undefined;
-  /**
-   * The pi-subagents file layer. It owns the panels it discovered on disk, so
-   * it also answers their actions: a terminal-started session has no worker to
-   * route `pi/panel/action` to, and steering one is a file, not an RPC.
-   */
-  subagents?: SubagentsLayer | undefined;
+  /** Background tasks (docs/ux-fleet.md): answers `tasks/list`, `tasks/output` and `tasks/stop`. */
+  tasks?: TaskRegister | undefined;
   /** Web Push (M7-T5). */
   push?: PushService | undefined;
   /**
@@ -240,11 +233,6 @@ export class Router {
   }
 
   private async dispatch(req: TypedClientRequest): Promise<unknown> {
-    // Panels the host discovered itself are answered by the host. Checked
-    // before the switch so everything else still routes to a worker unchanged.
-    if (req.method === "pi/panel/action" && this.deps.subagents?.handles(req.params.id)) {
-      return this.deps.subagents.act(req.params);
-    }
     switch (req.method) {
       case "pi/host/version":
         return { version: PRODUCT_VERSION };
@@ -302,10 +290,13 @@ export class Router {
       case "pi/session/entries": {
         const { path } = req.params;
         const cached = this.deps.views.get(path);
-        if (cached) return { entries: cached };
+        // The leaf travels with the entries: a navigation moves it without
+        // appending anything, so a cache that kept only the entries would
+        // hand back the branch the person just left.
+        if (cached) return cached;
         const worker = await this.workerFor(path);
-        const result = await worker.request<{ entries: unknown[] }>(req.method, req.params);
-        this.deps.views.set(path, result.entries);
+        const result = await worker.request<{ entries: unknown[]; leafId?: string | null }>(req.method, req.params);
+        this.deps.views.set(path, result);
         return result;
       }
 
@@ -488,13 +479,31 @@ export class Router {
         return { delivered: sent.delivered, ...(sent.error !== undefined ? { error: sent.error } : {}) };
       }
 
-      // ---------------------------------------------------------- panels
-      case "pi/panel/list":
-        return this.panels().list(req.params.path);
-      case "pi/panel/read":
-        return this.panels().read(req.params);
-      // `pi/panel/action` carries a session path and falls through to the
-      // default: the worker that owns the session delivers it to the extension.
+      // ------------------------------------------------ background tasks
+      case "tasks/list":
+        return { tasks: this.tasks().list(req.params.path) };
+      case "tasks/output":
+        return this.tasks().read(req.params.path, req.params.id, req.params.fromByte);
+      case "tasks/stop": {
+        // The register is the authority on which session owns the task; the
+        // worker that runs it is the only party that can end it. A task that
+        // already ended answers as it is rather than failing.
+        const tasks = this.tasks();
+        const task = tasks.get(req.params.path, req.params.id);
+        if (!task) {
+          throw new ProtocolError(ErrorCodes.InvalidParams, "That task is not one of this session's, so it cannot be stopped from here.");
+        }
+        if (task.status !== "running") return { task };
+        const worker = await this.workerFor(req.params.path);
+        const { delivered } = await worker.request<{ delivered: boolean }>("pi/task/stop", req.params);
+        if (!delivered) {
+          throw new ProtocolError(
+            ErrorCodes.InvalidParams,
+            "That task is no longer running in its session — the session may have restarted since it started.",
+          );
+        }
+        return { task: tasks.get(req.params.path, req.params.id) ?? task };
+      }
 
       // ---------------------------------------------------------- agents
       case "agents/list":
@@ -521,14 +530,9 @@ export class Router {
         store.setPolicy(req.params.policy);
         return { snapshot: store.snapshot() };
       }
-      case "agents/beam/set-model": {
+      case "agents/builtin/set-model": {
         const store = this.agents();
-        store.setBeamModel(req.params.model);
-        return { snapshot: store.snapshot() };
-      }
-      case "agents/namer/set-model": {
-        const store = this.agents();
-        store.setNamerModel(req.params.model);
+        store.setBuiltinModel(req.params.name, req.params.model);
         return { snapshot: store.snapshot() };
       }
       case "agents/runs/list":
@@ -699,15 +703,15 @@ export class Router {
     return this.deps.runs;
   }
 
-  /** The panel hub, or an error a person can act on. */
-  private panels(): PanelHub {
-    if (!this.deps.panels) {
+  /** The background-task register, or an error a person can act on. */
+  private tasks(): TaskRegister {
+    if (!this.deps.tasks) {
       throw new ProtocolError(
         ErrorCodes.Unsupported,
-        "This host is running without the panel hub, so panels cannot be listed or read.",
+        "This host is running without the task register, so background work cannot be listed or read.",
       );
     }
-    return this.deps.panels;
+    return this.deps.tasks;
   }
 
   /** The preference store, or an error a person can act on. */

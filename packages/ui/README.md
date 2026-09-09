@@ -49,8 +49,16 @@ through the queue adapter, so both lanes funnel into one place:
 
 | lane | idle | running |
 | --- | --- | --- |
-| queue (Enter idle, Cmd/Ctrl+Enter) | `session/prompt` | `pi/session/follow_up` |
-| steer (Enter while running) | `session/prompt` | `pi/session/steer` |
+| queue (Enter) | `session/prompt` | `session/pending/add` |
+| steer (Cmd/Ctrl+Enter) | `session/prompt` | `pi/session/steer` |
+
+Writing while the agent works never interrupts it: the message becomes a row in
+the *pending tray* (`@lasercode/protocol` `pending.ts`, `worker/src/pending.ts`)
+that the person can steer, edit or drop one at a time, and that the worker
+delivers in order when the run ends. Interrupting is the deliberate act — the
+row's Steer button, or Cmd/Ctrl+Enter on the way in. The engine's own queues
+still exist and still have no per-item verb, so a message that has been steered
+into them is drawn without controls.
 
 Thread selection is two-way and loop-guarded: sidebar → assistant-ui through the
 controlled `threadId` prop, assistant-ui → laser through `onThreadIdChange`

@@ -71,7 +71,8 @@ describe("the live map", () => {
     expect(toggle.getAttribute("aria-pressed")).toBe("true");
     expect(nodeAt(container, "/p/b.jsonl")).not.toBeNull();
     expect(nodeAt(container, "/p/b.jsonl")?.querySelector('[data-slot="agent-map-status"]')?.textContent).toContain("Done");
-    expect(nodeAt(container, "/p/b.jsonl")?.querySelector('[data-slot="status-dot"]')?.getAttribute("data-tone")).toBe("ok");
+    // A finished agent is muted on the map too, never green (D-154).
+    expect(nodeAt(container, "/p/b.jsonl")?.querySelector('[data-slot="status-dot"]')?.getAttribute("data-tone")).toBe("muted");
     await act(async () => toggle.click());
     expect(nodeAt(container, "/p/b.jsonl")).toBeNull();
     expect(mapUi.get().roots[ROOT]?.showEnded).toBe(false);

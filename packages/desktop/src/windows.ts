@@ -1,5 +1,5 @@
 /**
- * Windows: the app window, and one window per popped-out panel (M5-T1).
+ * Windows: the app window (M5-T1).
  *
  * The titlebar treatment is the reason this file is not four lines. laser
  * draws its own top bar, so the native one is hidden — but "hidden" means three
@@ -28,14 +28,10 @@ import { BrowserWindow, clipboard, dialog, nativeTheme, screen, shell, type Brow
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { DesktopChrome, PanelDescriptor, WindowChromeState } from "./api.js";
+import type { DesktopChrome, WindowChromeState } from "./api.js";
 import type { DesktopLog } from "./log.js";
 import { plainText } from "./text.js";
 import { LINUX_CHROME, LINUX_WINDOW_FRAME } from "./window-frame.js";
-
-/** DESIGN.md `--bg`, so the frame matches the page before the page exists. */
-const GROUND = { light: "#F5F7FA", dark: "#0B0F14" };
-const INK = { light: "#131A22", dark: "#E6EDF3" };
 
 /** The top bar height in DESIGN.md terms: 44px, which is also the touch floor. */
 const TITLE_BAR_HEIGHT = 44;
@@ -147,6 +143,12 @@ export interface WindowManagerOptions {
   onMainWindowState: (state: WindowChromeState) => void;
   /** The app window started loading a document: whatever was listening is gone. */
   onMainNavigating: () => void;
+  /**
+   * The page's own ground and ink, so the frame is the app's colours before the
+   * app exists — the person's theme where one has been recorded, the default
+   * preset otherwise. Asked again on every theme change (M13-T32).
+   */
+  frame: () => { background: string; ink: string };
 }
 
 /** `--laser-<name>=<url-encoded json>`, read back by the preload from argv. */
@@ -174,7 +176,6 @@ function sameOrigin(a: string, b: string): boolean {
 
 export class WindowManager {
   private main: BrowserWindow | undefined;
-  private readonly panels = new Map<string, BrowserWindow>();
   private readonly state: WindowState;
   private saveTimer: NodeJS.Timeout | undefined;
   /** Set while the app is really quitting, so `close` stops meaning `hide`. */
@@ -190,7 +191,7 @@ export class WindowManager {
   }
 
   allWindows(): BrowserWindow[] {
-    return [this.main, ...this.panels.values()].filter((window): window is BrowserWindow => window !== undefined);
+    return [this.main].filter((window): window is BrowserWindow => window !== undefined);
   }
 
   beginQuit(): void {
@@ -218,7 +219,7 @@ export class WindowManager {
       minHeight: MIN_HEIGHT,
       show: false,
       title: PRODUCT_NAME,
-      backgroundColor: nativeTheme.shouldUseDarkColors ? GROUND.dark : GROUND.light,
+      backgroundColor: this.options.frame().background,
       webPreferences: this.webPreferences(),
     });
     this.main = window;
@@ -277,63 +278,6 @@ export class WindowManager {
     void window.loadURL(url);
   }
 
-  /**
-   * A panel in its own window (docs/ux-panels.md, D-20). Identity is the panel
-   * id: asking twice focuses the window that already exists rather than opening
-   * a second copy of the same run.
-   */
-  popOutPanel(descriptor: PanelDescriptor): { opened: boolean; reason?: string } {
-    const existing = this.panels.get(descriptor.id);
-    if (existing && !existing.isDestroyed()) {
-      if (existing.isMinimized()) existing.restore();
-      existing.focus();
-      return { opened: true };
-    }
-    const entry = this.options.entryUrl();
-    if (!entry) return { opened: false, reason: "The agent host is not running yet." };
-
-    const window = new BrowserWindow({
-      ...this.frameOptions(),
-      width: 560,
-      height: 720,
-      minWidth: 360,
-      minHeight: 320,
-      show: false,
-      title: plainText(descriptor.title, 80) || PRODUCT_NAME,
-      backgroundColor: nativeTheme.shouldUseDarkColors ? GROUND.dark : GROUND.light,
-      webPreferences: {
-        ...this.webPreferences(),
-        // The descriptor reaches the preload before the page runs, so the UI
-        // can render the panel on its first paint instead of flashing the
-        // whole app and then replacing it.
-        additionalArguments: [
-          launchArgument("env", this.options.bootstrap),
-          launchArgument("panel", descriptor),
-        ],
-      },
-    });
-    this.panels.set(descriptor.id, window);
-    this.harden(window);
-    window.once("ready-to-show", () => window.show());
-    window.on("closed", () => {
-      if (this.panels.get(descriptor.id) === window) this.panels.delete(descriptor.id);
-    });
-    // The agent renames things mid-run; the window title follows.
-    window.on("page-title-updated", (event) => event.preventDefault());
-    void window.loadURL(entry);
-    return { opened: true };
-  }
-
-  closePanelWindow(window: BrowserWindow): void {
-    for (const [id, candidate] of this.panels) {
-      if (candidate === window) {
-        this.panels.delete(id);
-        break;
-      }
-    }
-    if (!window.isDestroyed()) window.close();
-  }
-
   /** Send something to every window that is alive. */
   broadcast(channel: string, payload: unknown): void {
     for (const window of this.allWindows()) {
@@ -361,7 +305,7 @@ export class WindowManager {
   }
 
   private frameOptions(): BrowserWindowConstructorOptions {
-    const dark = nativeTheme.shouldUseDarkColors;
+    const frame = this.options.frame();
     if (process.platform === "darwin") {
       return {
         titleBarStyle: "hiddenInset",
@@ -372,8 +316,8 @@ export class WindowManager {
       return {
         titleBarStyle: "hidden",
         titleBarOverlay: {
-          color: dark ? GROUND.dark : GROUND.light,
-          symbolColor: dark ? INK.dark : INK.light,
+          color: frame.background,
+          symbolColor: frame.ink,
           height: TITLE_BAR_HEIGHT,
         },
       };
@@ -470,16 +414,21 @@ export class WindowManager {
     });
   }
 
-  /** Keep the native frame in step with the theme, on every window. */
-  applyTheme(theme?: "light" | "dark"): void {
-    const dark = theme ? theme === "dark" : nativeTheme.shouldUseDarkColors;
+  /**
+   * Keep the native frame in step with the theme, on every window. The colours
+   * come from what the app is actually painting, not from a copy of the
+   * palette kept here: a frame in last year's blue around a black page is the
+   * flash the design bar forbids.
+   */
+  applyTheme(): void {
+    const frame = this.options.frame();
     for (const window of this.allWindows()) {
       if (window.isDestroyed()) continue;
-      window.setBackgroundColor(dark ? GROUND.dark : GROUND.light);
+      window.setBackgroundColor(frame.background);
       if (process.platform === "win32") {
         window.setTitleBarOverlay({
-          color: dark ? GROUND.dark : GROUND.light,
-          symbolColor: dark ? INK.dark : INK.light,
+          color: frame.background,
+          symbolColor: frame.ink,
           height: TITLE_BAR_HEIGHT,
         });
       }

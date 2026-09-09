@@ -7,7 +7,7 @@
  * Node ids are session paths, so a node keeps its identity across rebuilds and
  * a map can animate it rather than replace it. Children are in creation order
  * — the order their first run started — never attention order: a map that
- * reshuffles is a map you cannot learn (mirrors components/subagents/run-tree).
+ * reshuffles is a map you cannot learn (mirrors src/fleet/model.ts).
  */
 import {
   DEFAULT_AGENT_NAME,

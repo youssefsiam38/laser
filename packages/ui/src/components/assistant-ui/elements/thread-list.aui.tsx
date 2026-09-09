@@ -34,6 +34,26 @@
  *     its run's status; a parent shows how many agents it has. A child whose
  *     parent is no longer listed sits under a "Detached" mini-header rather
  *     than vanishing. Selecting a child opens it like any session.
+ *
+ * Since M13-T24, that nest folds, in two layers (`session-folds.ts`):
+ *   - **A parent's sub-sessions fold** behind a disclosure in the row's own
+ *     leading gutter — not a row of its own, so the list keeps one row per
+ *     session. It opens itself while anything under it is live and stays open
+ *     once opened; the person's toggle wins over that default and is
+ *     remembered per device.
+ *   - **The settled ones fold again**, into a second disclosure beneath the
+ *     live ones, closed by default and dimmed when open. It names how many and
+ *     how many failed, and a failed child keeps its normal ink and its danger
+ *     dot inside it: dimming must never be the reason you cannot find the one
+ *     that went wrong.
+ *   - A branch is "settled" only when its whole subtree is, so a completed
+ *     child that still has a working grandchild stays with the live ones —
+ *     the fleet sheet's rule (docs/ux-elements.md "Subagent list"), for the
+ *     same reason: moving a finished parent away from live work is tidier and
+ *     structurally false. "Needs you" is live here even though the protocol
+ *     calls it terminal: a question for the person is the last thing to hide.
+ *   - A typed query flattens the tree (below), so **search is never folded
+ *     away**: every match is a root of its group and renders unconditionally.
  */
 import {
   AuiIf,
@@ -68,6 +88,9 @@ import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRe
 
 import { latestRunForSession, runStatusLabel, runStatusTone, type AgentStatusTone } from "@/agents/model";
 import { requestEndAgent } from "@/components/agents/end-agent";
+import { collapsePanel } from "@/components/assistant-ui/elements/surfaces";
+import { foldKey, sessionFolds, useFoldOpen } from "@/components/assistant-ui/elements/session-folds";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { InlineRename } from "@/components/shell/InlineRename";
 import { SessionActivity } from "@/components/shell/SessionActivity";
 import {
@@ -105,6 +128,8 @@ export interface ThreadListNode {
   /** Index into `s.threads.threadIds`. */
   index: number;
   path: string;
+  /** What the row is called: the instance name a parent gave it, else its title. */
+  label: string;
   children: ThreadListNode[];
 }
 
@@ -114,6 +139,8 @@ export interface ThreadListGroup {
   kind: SessionGroupKind;
   /** Top-level rows, newest first; each carries its children. */
   roots: ThreadListNode[];
+  /** Pinned top-level rows, with their children; rendered in the Pinned section. */
+  pinned: ThreadListNode[];
   /** Children whose parent is not in the list any more, newest first. */
   detached: ThreadListNode[];
   /** Unpinned top-level indices, newest first (the flattened `roots`). */
@@ -123,10 +150,26 @@ export interface ThreadListGroup {
   total: number;
 }
 
-/** What a parent row shows about the rows beneath it. */
-export interface ChildStats {
-  count: number;
+/**
+ * What a parent row knows about the rows beneath it: the two folds, and the
+ * tally its chip shows without opening either of them.
+ */
+export interface BranchInfo {
+  /** Direct children whose branch still has work in it, in start order. */
+  live: readonly ThreadListNode[];
+  /** Direct children whose whole branch has settled, in start order. */
+  finished: readonly ThreadListNode[];
+  /** How many rows the finished fold holds, at every depth. */
+  finishedRows: number;
+  /** How many of those failed. Named on the fold, never hidden inside it. */
+  finishedFailed: number;
+  /** Every row beneath this one, at every depth. */
+  total: number;
   running: number;
+  /** Runs waiting on the person. Terminal to the protocol; live to a reader. */
+  blocked: number;
+  /** Queued, or a child whose run the registry has not named yet. */
+  waiting: number;
 }
 
 const modified = (item: { custom?: Record<string, unknown> | undefined; lastMessageAt?: Date | undefined }): number => {
@@ -147,6 +190,8 @@ interface ItemMeta {
   path: string;
   cwd: string;
   title: string;
+  /** The row's spoken name: the instance name its parent gave it, else its title. */
+  label: string;
   parentPath: string | undefined;
   child: boolean;
   modifiedAt: number;
@@ -155,6 +200,14 @@ interface ItemMeta {
 }
 
 const ACTIVE_RUN: ReadonlySet<AgentRunStatus> = new Set<AgentRunStatus>(["running", "queued"]);
+
+/**
+ * What the finished fold may swallow. The protocol calls `blocked` terminal
+ * (`AGENT_RUN_TERMINAL`) because the run's own loop has stopped, but to a
+ * reader it is "Needs you" — the single most attention-worthy thing the panel
+ * can show (DESIGN.md "Status language"). It stays with the live children.
+ */
+const SETTLED_RUN: ReadonlySet<AgentRunStatus> = new Set<AgentRunStatus>(["completed", "failed", "cancelled"]);
 
 // One `latestRunForSession` pass per run registry, not one per row per render:
 // the registry object only changes when a run does.
@@ -202,11 +255,15 @@ export function useThreadListGroups(
       const custom = item.custom ?? {};
       const run = latest.get(path);
       const parentPath = str(custom["parentPath"]);
+      const title = item.title ?? "";
       const meta: ItemMeta = {
         index,
         path,
         cwd: str(custom["cwd"]) ?? "",
-        title: item.title ?? "",
+        title,
+        // A child answers to the instance name its parent gave it; that is
+        // what its row leads with, so that is what its disclosure is called.
+        label: str(custom["subagentName"]) ?? (title !== "" ? title : (path.split("/").pop() ?? path)),
         parentPath,
         child: custom["agentKind"] === "child" || parentPath !== undefined,
         modifiedAt: modified(item),
@@ -265,6 +322,7 @@ export function useThreadListGroups(
     const nodeOf = (meta: ItemMeta, trail: Set<string>): ThreadListNode => ({
       index: meta.index,
       path: meta.path,
+      label: meta.label,
       children: (childrenOf.get(meta.path) ?? [])
         .filter((child) => !trail.has(child.path))
         .map((child) => nodeOf(child, new Set([...trail, child.path]))),
@@ -300,51 +358,151 @@ export function useThreadListGroups(
         const held = byCwd.get(cwd) ?? { roots: [], detached: [] };
         const isPinned = (node: ThreadListNode) => pinned.has(node.path);
         const unpinned = held.roots.filter((node) => !isPinned(node));
+        // A pinned row keeps its whole branch: it moves to the Pinned section
+        // with its children, rather than leaving them nowhere in the list.
+        const pinnedRoots = held.roots.filter(isPinned);
         return {
           cwd,
           name: groupNameOf(cwd, kind),
           kind,
           roots: unpinned,
+          pinned: pinnedRoots,
           detached: held.detached,
           indices: unpinned.map((node) => node.index),
-          pinnedIndices: held.roots.filter(isPinned).map((node) => node.index),
+          pinnedIndices: pinnedRoots.map((node) => node.index),
           total: countNodes(held.roots) + countNodes(held.detached),
         };
       });
   }, [threadIds, threadItems, runs, projects, filter, needle, pinned, tab, workspaces]);
 }
 
-/** How many rows sit under each parent, and how many of them are still working. */
-function childStatsOf(groups: readonly ThreadListGroup[], runs: Readonly<Record<string, AgentRun>>): ReadonlyMap<string, ChildStats> {
+/**
+ * What sits under each parent: the two folds and the tally its chip shows.
+ * One walk per (tree, run registry) pair — a row never recomputes this, and a
+ * status change never moves a row that did not change fold.
+ *
+ * Only rows that actually have children get an entry, so "no children" needs
+ * no empty affordance anywhere: there is simply nothing to draw.
+ */
+function branchInfoOf(groups: readonly ThreadListGroup[], runs: Readonly<Record<string, AgentRun>>): ReadonlyMap<string, BranchInfo> {
   const latest = latestRunsBySession(runs);
-  const stats = new Map<string, ChildStats>();
+  const statusOf = (node: ThreadListNode): AgentRunStatus | undefined => latest.get(node.path)?.status;
+  const info = new Map<string, BranchInfo>();
+
+  // A branch has settled only when everything inside it has. A completed child
+  // with a working grandchild stays with the live ones (docs/ux-elements.md
+  // "Subagent list": lifecycle partitioning moves whole branches).
+  const settled = (node: ThreadListNode): boolean => {
+    const status = statusOf(node);
+    return status !== undefined && SETTLED_RUN.has(status) && node.children.every(settled);
+  };
+  const rows = (node: ThreadListNode): number => 1 + node.children.reduce((n, child) => n + rows(child), 0);
+  const failures = (node: ThreadListNode): number =>
+    (statusOf(node) === "failed" ? 1 : 0) + node.children.reduce((n, child) => n + failures(child), 0);
+
   const walk = (node: ThreadListNode): void => {
-    if (node.children.length > 0) {
-      stats.set(node.path, {
-        count: node.children.length,
-        running: node.children.filter((child) => {
-          const status = latest.get(child.path)?.status;
-          return status !== undefined && ACTIVE_RUN.has(status);
-        }).length,
-      });
-    }
     node.children.forEach(walk);
+    if (node.children.length === 0) return;
+    const live: ThreadListNode[] = [];
+    const finished: ThreadListNode[] = [];
+    for (const child of node.children) (settled(child) ? finished : live).push(child);
+    let total = 0;
+    let running = 0;
+    let blocked = 0;
+    let waiting = 0;
+    const tally = (child: ThreadListNode): void => {
+      total += 1;
+      const status = statusOf(child);
+      if (status === "running") running += 1;
+      else if (status === "blocked") blocked += 1;
+      else if (status === "queued" || status === undefined) waiting += 1;
+      child.children.forEach(tally);
+    };
+    node.children.forEach(tally);
+    info.set(node.path, {
+      live,
+      finished,
+      finishedRows: finished.reduce((n, child) => n + rows(child), 0),
+      finishedFailed: finished.reduce((n, child) => n + failures(child), 0),
+      total,
+      running,
+      blocked,
+      waiting,
+    });
   };
   for (const group of groups) {
     group.roots.forEach(walk);
+    group.pinned.forEach(walk);
     group.detached.forEach(walk);
   }
-  return stats;
+  return info;
+}
+
+/**
+ * The one line a parent row shows about its agents, and the tone it shows it
+ * in. It has to agree with what the two folds hold without opening either, so
+ * it names the most attention-worthy thing under the row and counts every
+ * depth. Order follows DESIGN.md "Status language": needs you, then failed,
+ * then working, then waiting, then done.
+ */
+export function branchChip(info: BranchInfo): { text: string; tone: AgentStatusTone } {
+  if (info.blocked > 0) return { text: `${info.blocked} needs you`, tone: "attention" };
+  if (info.finishedFailed > 0 && info.running === 0 && info.waiting === 0) return { text: `${info.finishedFailed} failed`, tone: "danger" };
+  if (info.running > 0) return { text: `${info.running} running`, tone: "live" };
+  if (info.waiting > 0) return { text: `${info.waiting} waiting`, tone: "muted" };
+  return { text: `${info.total} finished`, tone: "muted" };
+}
+
+/** The whole picture, for the chip's tooltip: every count, in one sentence. */
+export function branchSummary(info: BranchInfo): string {
+  const parts: string[] = [];
+  if (info.running > 0) parts.push(`${info.running} working`);
+  if (info.blocked > 0) parts.push(`${info.blocked} needs you`);
+  if (info.waiting > 0) parts.push(`${info.waiting} waiting`);
+  const done = info.total - info.running - info.blocked - info.waiting;
+  if (done > 0) parts.push(info.finishedFailed > 0 ? `${done} finished, ${info.finishedFailed} of them failed` : `${done} finished`);
+  return `${info.total} agent${info.total === 1 ? "" : "s"} under this session${parts.length > 0 ? `: ${parts.join(", ")}` : ""}`;
+}
+
+/** The rows between a group and one path, outermost first; empty when it is not here. */
+function lineageTo(nodes: readonly ThreadListNode[], path: string): ThreadListNode[] {
+  for (const node of nodes) {
+    if (node.path === path) return [node];
+    const below = lineageTo(node.children, path);
+    if (below.length > 0) return [node, ...below];
+  }
+  return [];
 }
 
 // ---------------------------------------------------------------------------
 // Contexts the rows read (a row reads its item from scope, not from props)
 // ---------------------------------------------------------------------------
 
-const EMPTY_STATS: ReadonlyMap<string, ChildStats> = new Map();
-const TreeContext = createContext<ReadonlyMap<string, ChildStats>>(EMPTY_STATS);
-/** `nested`: under a lineage rail; `flat`: the Chat tab's ungrouped list. */
-const LayoutContext = createContext<{ nested: boolean; flat: boolean }>({ nested: false, flat: false });
+const EMPTY_TREE: ReadonlyMap<string, BranchInfo> = new Map();
+const TreeContext = createContext<ReadonlyMap<string, BranchInfo>>(EMPTY_TREE);
+
+/**
+ * How the rows of one list are drawn.
+ *   - `nested`: under a lineage rail, one step in from its parent.
+ *   - `flat`: a list with no folder indent (the Chat tab, the Pinned section).
+ *   - `gutter`: this list reserves the leading disclosure column, because at
+ *     least one row in it has children. Reserving it per list rather than per
+ *     row keeps siblings on one text edge; leaving it out where nothing nests
+ *     keeps a flat list from looking indented for no reason.
+ *   - `dimmed`: inside a finished fold. The row quiets down — except a failed
+ *     one, which is exactly what the reader came in here to find.
+ */
+interface RowLayout {
+  nested: boolean;
+  flat: boolean;
+  gutter: boolean;
+  dimmed: boolean;
+}
+const ROOT_LAYOUT: RowLayout = { nested: false, flat: false, gutter: false, dimmed: false };
+const LayoutContext = createContext<RowLayout>(ROOT_LAYOUT);
+
+/** Does any row of this list have children? Then the whole list keeps the gutter. */
+const needsGutter = (nodes: readonly ThreadListNode[]): boolean => nodes.some((node) => node.children.length > 0);
 const WorkspacesContext = createContext<Workspaces>({});
 
 // ---------------------------------------------------------------------------
@@ -370,21 +528,20 @@ export const ThreadList: FC<ThreadListProps> = ({ projects, query = "", onOpen, 
   const workspaces = useLaserState((s) => s.agents.snapshot?.workspaces, sameWorkspaces) ?? EMPTY_WORKSPACES;
   const runs = useLaserState((s) => s.agents.runs);
   const groups = useThreadListGroups(projects, tab === "code" ? list.filter : undefined, query, tab, workspaces);
-  const stats = useMemo(() => childStatsOf(groups, runs), [groups, runs]);
+  const tree = useMemo(() => branchInfoOf(groups, runs), [groups, runs]);
   const archivedCount = useAuiState((s) => s.threads.archivedThreadIds.length);
   const { currentProject } = useLaserStable();
   const [editing, setEditing] = useState<string | undefined>(undefined);
-  const threadIds = useAuiState((s) => s.threads.threadIds);
-  const threadItems = useAuiState((s) => s.threads.threadItems);
-  const pinnedIndices = useMemo(() => {
+  const openPath = useAuiState((s) => {
+    const item = s.threads.threadItems.find((candidate) => candidate.id === s.threads.mainThreadId);
+    return item?.externalId ?? item?.remoteId ?? "";
+  });
+  const pinnedNodes = useMemo(() => {
     const order = new Map([...list.pinned].map((path, index) => [path, index]));
-    const byId = new Map(threadItems.map((item) => [item.id, item]));
-    const position = (index: number) => {
-      const item = byId.get(threadIds[index]!);
-      return order.get(item?.externalId ?? item?.remoteId ?? "") ?? 0;
-    };
-    return groups.flatMap((group) => group.pinnedIndices).sort((a, b) => position(a) - position(b));
-  }, [groups, list.pinned, threadIds, threadItems]);
+    return groups
+      .flatMap((group) => group.pinned)
+      .sort((a, b) => (order.get(a.path) ?? 0) - (order.get(b.path) ?? 0));
+  }, [groups, list.pinned]);
 
   // The rail asked for a group: bring its header to the top of the list.
   useEffect(() => {
@@ -393,12 +550,30 @@ export const ThreadList: FC<ThreadListProps> = ({ projects, query = "", onOpen, 
     document.getElementById(groupDomId(list.jump.cwd))?.scrollIntoView({ block: "start", behavior: reduced ? "auto" : "smooth" });
   }, [list.jump]);
 
+  // Wherever the open session lives, its lineage opens: selecting a child from
+  // the map, a link or a reload must never leave the person looking at a list
+  // that does not contain the thing they are reading. It only ever opens, so a
+  // branch they closed by hand stays closed until they open that session.
+  useEffect(() => {
+    if (!openPath) return;
+    for (const group of groups) {
+      const chain = lineageTo([...group.roots, ...group.pinned, ...group.detached], openPath);
+      if (chain.length < 2) continue;
+      chain.slice(0, -1).forEach((ancestor, depth) => {
+        sessionFolds.reveal(foldKey("children", ancestor.path));
+        if (tree.get(ancestor.path)?.finished.includes(chain[depth + 1]!)) sessionFolds.reveal(foldKey("finished", ancestor.path));
+      });
+      return;
+    }
+  }, [openPath, groups, tree]);
+
   const chat = tab === "chat";
-  const layout = useMemo(() => ({ nested: false, flat: chat }), [chat]);
+  const layout = useMemo<RowLayout>(() => ({ ...ROOT_LAYOUT, flat: chat }), [chat]);
+  const pinnedLayout = useMemo<RowLayout>(() => ({ ...ROOT_LAYOUT, flat: true, gutter: needsGutter(pinnedNodes) }), [pinnedNodes]);
 
   return (
     <WorkspacesContext value={workspaces}>
-    <TreeContext value={stats}>
+    <TreeContext value={tree}>
     <LayoutContext value={layout}>
     <ThreadListPrimitive.Root data-slot="aui_thread-list-root" data-tab={tab} className="flex flex-col gap-3 px-2 pt-1 pb-3">
       <AuiIf condition={(s) => s.threads.isLoading && s.threads.threadIds.length === 0}>
@@ -410,12 +585,18 @@ export const ThreadList: FC<ThreadListProps> = ({ projects, query = "", onOpen, 
             No session matches “{query.trim()}”.
           </p>
         ) : null}
-        {pinnedIndices.length > 0 && (
+        {pinnedNodes.length > 0 && (
           <section aria-label="Pinned sessions" data-slot="pinned-sessions">
             <div className="flex h-8 items-center gap-2 px-2 text-xs text-ink-3"><Pin className="size-3.5" /> Pinned</div>
-            <div role="list">
-              {pinnedIndices.map((index) => <ThreadListPrimitive.ItemByIndex key={threadIds[index]} index={index} components={{ ThreadListItem: itemComponent(editing, setEditing, onOpen) }} />)}
-            </div>
+            <LayoutContext value={pinnedLayout}>
+              <div role="list">
+                {/* A pinned parent brings its branch with it, folds and all;
+                    leaving its children behind would make them unreachable. */}
+                {pinnedNodes.map((node) => (
+                  <SessionBranch key={node.path} node={node} editing={editing} onEdit={setEditing} onOpen={onOpen} />
+                ))}
+              </div>
+            </LayoutContext>
           </section>
         )}
         {chat
@@ -567,14 +748,18 @@ const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, c
 
 /** The Chat tab: no folder, no header — the conversations themselves, newest first. */
 function ChatGroup({ group, editing, onEdit, onOpen }: { group: ThreadListGroup; editing: string | undefined; onEdit(id: string | undefined): void; onOpen?: (() => void) | undefined }) {
+  const layout = useContext(LayoutContext);
+  const own = useMemo<RowLayout>(() => ({ ...layout, gutter: needsGutter(group.roots) }), [layout, group.roots]);
   return (
     <section aria-label="Chats" data-cwd={group.cwd} data-kind="chat">
+      <LayoutContext value={own}>
       <div role="list">
         {group.roots.map((node) => (
           <SessionBranch key={node.path} node={node} editing={editing} onEdit={onEdit} onOpen={onOpen} />
         ))}
         {group.detached.length > 0 && <DetachedRows nodes={group.detached} editing={editing} onEdit={onEdit} onOpen={onOpen} />}
       </div>
+      </LayoutContext>
     </section>
   );
 }
@@ -590,39 +775,145 @@ interface BranchProps {
  * One row and, beneath it, the rows an agent started from it. Nesting is
  * structural — a child's list lives inside its parent's branch — and drawn
  * as a continuous rail, so lineage survives scrolling, hovering and reflow.
+ *
+ * The rail folds. Its disclosure sits in the row's own leading gutter rather
+ * than on a row of its own, so the list keeps its one-row-per-session rhythm
+ * and the fold reads as a property of the parent, not as another thing in the
+ * list. It is a real button: name, `aria-expanded`, `aria-controls`, hover,
+ * focus and pressed states, Enter and Space. It deliberately does not bind
+ * ArrowRight/ArrowLeft — `ThreadListItemPrimitive.Root` already spends those
+ * moving between a row and its more-menu, and one list may only have one
+ * keyboard model.
  */
 function SessionBranch({ node, editing, onEdit, onOpen }: BranchProps) {
   const threadIds = useAuiState((s) => s.threads.threadIds);
   const layout = useContext(LayoutContext);
-  const nestedLayout = useMemo(() => ({ nested: true, flat: layout.flat }), [layout.flat]);
+  const info = useContext(TreeContext).get(node.path);
+  const live = info?.live.length ?? 0;
+  const childrenKey = foldKey("children", node.path);
+  // The default: open while there is live work under the row. `reveal` pins
+  // that the moment it is true, so the branch stays put when the work ends.
+  const open = useFoldOpen(childrenKey, live > 0);
+  useEffect(() => {
+    if (live > 0) sessionFolds.reveal(childrenKey);
+  }, [live, childrenKey]);
+
+  const contentId = `${branchDomId(node.path)}-children`;
+  const nestedLayout = useMemo<RowLayout>(
+    () => ({ nested: true, flat: layout.flat, gutter: needsGutter(node.children), dimmed: layout.dimmed }),
+    [layout.flat, layout.dimmed, node.children],
+  );
+  const count = info?.total ?? 0;
   return (
     <div
       data-slot="session-branch"
       data-depth={layout.nested ? undefined : 0}
       className={cn("relative min-w-0", layout.nested && "before:absolute before:-start-1.5 before:top-4 before:h-px before:w-1.5 before:bg-line before:content-['']")}
     >
-      <ThreadListPrimitive.ItemByIndex key={threadIds[node.index]} index={node.index} components={{ ThreadListItem: itemComponent(editing, onEdit, onOpen) }} />
-      {node.children.length > 0 && (
-        <LayoutContext value={nestedLayout}>
-          <div
-            role="list"
-            data-slot="session-children"
-            className={cn("relative flex flex-col border-s border-line ps-1.5", layout.nested ? "ms-3" : layout.flat ? "ms-3" : "ms-9")}
+      <div className="relative min-w-0">
+        {info && (
+          <button
+            type="button"
+            data-slot="session-fold"
+            aria-expanded={open}
+            aria-controls={contentId}
+            aria-label={`${open ? "Hide" : "Show"} the ${count === 1 ? "agent" : `${count} agents`} under ${node.label}`}
+            onClick={() => sessionFolds.set(childrenKey, !open)}
+            className={cn(
+              // Full row height, and on a coarse pointer the full width of the
+              // gutter it sits in — never a pixel past it, or it would start
+              // eating taps meant for the row (DESIGN.md, touch targets).
+              "absolute inset-y-0 z-10 flex w-5 cursor-pointer items-center justify-center rounded-md text-ink-3 outline-none",
+              "transition-colors duration-(--motion-instant) hover:bg-surface-2 hover:text-ink active:bg-surface-2 motion-reduce:transition-none",
+              "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
+              layout.nested || layout.flat ? "start-0.5 pointer-coarse:w-6" : "start-2 pointer-coarse:w-7",
+            )}
           >
-            {node.children.map((child) => (
-              <SessionBranch key={child.path} node={child} editing={editing} onEdit={onEdit} onOpen={onOpen} />
-            ))}
-          </div>
-        </LayoutContext>
+            <ChevronRight aria-hidden="true" className={cn("size-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none", open && "rotate-90")} />
+          </button>
+        )}
+        <ThreadListPrimitive.ItemByIndex key={threadIds[node.index]} index={node.index} components={{ ThreadListItem: itemComponent(editing, onEdit, onOpen) }} />
+      </div>
+      {info && (
+        <Collapsible open={open} onOpenChange={(next) => sessionFolds.set(childrenKey, next)}>
+          <CollapsibleContent id={contentId} className={collapsePanel}>
+            <LayoutContext value={nestedLayout}>
+              <div
+                role="list"
+                data-slot="session-children"
+                className={cn("relative flex flex-col border-s border-line ps-1.5", layout.nested ? "ms-3" : layout.flat ? "ms-3" : "ms-9")}
+              >
+                {info.live.map((child) => (
+                  <SessionBranch key={child.path} node={child} editing={editing} onEdit={onEdit} onOpen={onOpen} />
+                ))}
+                {info.finished.length > 0 && <FinishedFold parent={node} info={info} editing={editing} onEdit={onEdit} onOpen={onOpen} />}
+              </div>
+            </LayoutContext>
+          </CollapsibleContent>
+        </Collapsible>
       )}
     </div>
   );
 }
 
+/**
+ * The second fold: the agents that are done, under the ones that are not.
+ * Closed by default — finished work is history, and history does not get to
+ * push live work off the screen — and dimmed when open, except a failure,
+ * which keeps its ink and is counted on the trigger itself.
+ */
+function FinishedFold({ parent, info, editing, onEdit, onOpen }: { parent: ThreadListNode; info: BranchInfo } & Omit<BranchProps, "node">) {
+  const layout = useContext(LayoutContext);
+  const key = foldKey("finished", parent.path);
+  const open = useFoldOpen(key, false);
+  const dimmedLayout = useMemo<RowLayout>(() => ({ ...layout, gutter: needsGutter(info.finished), dimmed: true }), [layout, info.finished]);
+  return (
+    <Collapsible open={open} onOpenChange={(next) => sessionFolds.set(key, next)} data-slot="finished-sessions">
+      <CollapsibleTrigger
+        data-slot="finished-fold"
+        // Several branches can show "3 finished" at once, so the name says
+        // whose, and says out loud what the red count says in colour.
+        aria-label={`${open ? "Hide" : "Show"} the ${info.finishedRows === 1 ? "finished agent" : `${info.finishedRows} finished agents`} under ${parent.label}${info.finishedFailed > 0 ? `, ${info.finishedFailed} failed` : ""}`}
+        className={cn(
+          "group/finished flex h-7 w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1 text-start text-ink-3 outline-none",
+          "transition-colors duration-(--motion-instant) hover:bg-surface-2 hover:text-ink-2 active:bg-surface-2 motion-reduce:transition-none",
+          "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live pointer-coarse:h-11",
+        )}
+      >
+        <ChevronRight aria-hidden="true" className="size-3 shrink-0 transition-transform duration-(--motion-fast) group-data-[state=open]/finished:rotate-90 motion-reduce:transition-none" />
+        <span className="min-w-0 truncate text-xs leading-4">
+          <span className="tnum">{info.finishedRows}</span> finished
+        </span>
+        {info.finishedFailed > 0 && (
+          <span data-slot="finished-failed" className="shrink-0 text-xs leading-4 text-danger">
+            <span className="tnum">{info.finishedFailed}</span> failed
+          </span>
+        )}
+      </CollapsibleTrigger>
+      <CollapsibleContent className={collapsePanel}>
+        <LayoutContext value={dimmedLayout}>
+          <div role="list" data-slot="finished-children">
+            {info.finished.map((child) => (
+              <SessionBranch key={child.path} node={child} editing={editing} onEdit={onEdit} onOpen={onOpen} />
+            ))}
+          </div>
+        </LayoutContext>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+/** A stable DOM id for one branch's fold, so its button can name what it controls. */
+function branchDomId(path: string): string {
+  let h = 0;
+  for (let i = 0; i < path.length; i++) h = (h * 31 + path.charCodeAt(i)) >>> 0;
+  return `session-branch-${h.toString(36)}`;
+}
+
 /** Children whose parent is gone from the list: still reachable, and labelled as such. */
 function DetachedRows({ nodes, editing, onEdit, onOpen }: { nodes: readonly ThreadListNode[] } & Omit<BranchProps, "node">) {
   const layout = useContext(LayoutContext);
-  const nestedLayout = useMemo(() => ({ nested: true, flat: layout.flat }), [layout.flat]);
+  const nestedLayout = useMemo<RowLayout>(() => ({ nested: true, flat: layout.flat, gutter: needsGutter(nodes), dimmed: false }), [layout.flat, nodes]);
   return (
     <div data-slot="detached-sessions" className={cn("mt-1", layout.flat ? "ps-1" : "ps-7")}>
       <div className="flex h-7 items-center gap-1.5 px-2 text-xs text-ink-3">
@@ -788,7 +1079,7 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
   const { pinned } = useSessionsList();
   const workspaces = useContext(WorkspacesContext);
   const layout = useContext(LayoutContext);
-  const stats = useContext(TreeContext).get(path ?? "");
+  const info = useContext(TreeContext).get(path ?? "");
   const isPinned = !archived && !row.child && pinned.has(path ?? "");
   const isEditing = editing === id;
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -802,6 +1093,10 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
   const activeRun = row.runStatus !== undefined && ACTIVE_RUN.has(row.runStatus);
   const stateWord = row.child && row.runStatus !== undefined && (activeRun || row.runStatus === "blocked") ? runStatusLabel(row.runStatus) : undefined;
   const stateTone: AgentStatusTone | undefined = row.runStatus !== undefined ? runStatusTone(row.runStatus) : undefined;
+  // Inside the finished fold the row quiets down — but a failure keeps its ink
+  // and its dot, and so does the session you are reading right now.
+  const dimmed = layout.dimmed && row.runStatus !== "failed" && !active;
+  const chip = info && !archived ? branchChip(info) : undefined;
 
   return (
     <ThreadListItemPrimitive.Root
@@ -811,6 +1106,7 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
       data-child={row.child || undefined}
       data-run-status={row.runStatus}
       data-beam={beam || undefined}
+      data-dimmed={dimmed || undefined}
       className={cn("group relative rounded-lg", active && "bg-surface-2")}
     >
       {isEditing ? (
@@ -834,7 +1130,10 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
             "transition-colors duration-(--motion-instant) outline-none",
             "hover:bg-[color-mix(in_oklab,var(--surface-2)_70%,transparent)] active:bg-surface-2",
             "focus-visible:-outline-offset-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live",
-            isPinned || layout.nested || layout.flat ? "ps-3" : "ps-9",
+            // A root row's folder indent already holds the disclosure; a
+            // nested or flat list only widens when something in it nests, so
+            // one sibling gaining a child never moves the other siblings' text.
+            layout.nested || layout.flat ? (layout.gutter ? "ps-6" : "ps-3") : isPinned ? "ps-3" : "ps-9",
           )}
         >
           {row.child && row.runStatus !== undefined && stateTone ? <RunDot status={row.runStatus} tone={stateTone} /> : null}
@@ -844,7 +1143,10 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
             // The row's own title, so a name the column cuts is still readable
             // and still the accessible name (DESIGN.md, legibility floor).
             title={childLabel ? `${childLabel} · ${shownTitle}` : shownTitle}
-            className={cn("flex min-w-0 flex-1 items-baseline gap-1.5 text-sm leading-5", row.untitled && !childLabel ? "text-ink-3" : active ? "text-ink" : "text-ink-2")}
+            className={cn(
+              "flex min-w-0 flex-1 items-baseline gap-1.5 text-sm leading-5",
+              dimmed || (row.untitled && !childLabel) ? "text-ink-3" : active ? "text-ink" : "text-ink-2",
+            )}
           >
             {childLabel ? (
               <>
@@ -856,13 +1158,26 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
             )}
           </span>
           {isPinned && row.cwd && <span data-slot="pinned-session-project" title={row.cwd} aria-label={`Project: ${row.cwd}`} className="max-w-16 shrink-0 truncate rounded-sm bg-surface-2 px-1 text-xs leading-4 text-ink-3">{shortCwd(row.cwd)}</span>}
-          {stats && !archived && (
+          {chip && info && (
+            // The count agrees with the folds without opening either of them:
+            // it names the most attention-worthy thing under the row and
+            // counts every depth, and the tooltip spells the rest out.
             <span
               data-slot="session-children-chip"
-              className={cn("shrink-0 rounded-sm px-1 text-xs leading-4 tnum", stats.running > 0 ? "bg-[color-mix(in_oklab,var(--live)_12%,transparent)] text-live" : "bg-surface-2 text-ink-3")}
-              title={`${stats.count} agent${stats.count === 1 ? "" : "s"} started here${stats.running > 0 ? `, ${stats.running} still working` : ""}`}
+              data-tone={chip.tone}
+              className={cn(
+                "shrink-0 rounded-sm px-1 text-xs leading-4 tnum",
+                chip.tone === "live"
+                  ? "bg-[color-mix(in_oklab,var(--live)_12%,transparent)] text-live"
+                  : chip.tone === "attention"
+                    ? "bg-[color-mix(in_oklab,var(--attention)_14%,transparent)] text-attention"
+                    : chip.tone === "danger"
+                      ? "bg-[color-mix(in_oklab,var(--danger)_12%,transparent)] text-danger"
+                      : "bg-surface-2 text-ink-3",
+              )}
+              title={branchSummary(info)}
             >
-              {stats.running > 0 ? `${stats.running} running` : `${stats.count} agent${stats.count === 1 ? "" : "s"}`}
+              {chip.text}
             </span>
           )}
           {stateWord ? (

@@ -172,6 +172,9 @@ describe("AgentStore · policy, Beam and Namer", () => {
     s.setBeamModel({ provider: "openai", id: "gpt-5-mini" });
     expect(s.get("beam")?.model).toEqual({ provider: "openai", id: "gpt-5-mini" });
 
+    s.setBuiltinModel("beam", { provider: "openai", id: "gpt-5-mini" });
+    expect(s.get("beam")?.model).toEqual({ provider: "openai", id: "gpt-5-mini" });
+
     s.setNamerModel({ provider: "google", id: "gemini-flash-lite" });
     expect(s.snapshot().namer).toMatchObject({ status: "ready", model: { provider: "google", id: "gemini-flash-lite" } });
     expect(s.get("namer")?.model).toEqual({ provider: "google", id: "gemini-flash-lite" });
@@ -202,8 +205,9 @@ describe("AgentStore · persistence", () => {
     first.save(custom("lead", { supportsSubagents: true, allowedAgents: ["reviewer"] }));
     first.setDefault("lead");
     first.setPolicy({ maxDepth: 2 });
-    first.setBeamModel({ provider: "openai", id: "gpt-5-mini" });
-    first.setNamerModel({ provider: "openai", id: "gpt-5-nano" });
+    first.setBuiltinModel("beam", { provider: "openai", id: "gpt-5-mini" });
+    first.setBuiltinModel("chat", { provider: "anthropic", id: "claude-haiku" });
+    first.setBuiltinModel("namer", { provider: "openai", id: "gpt-5-nano" });
     first.close();
 
     const stored = JSON.parse(readFileSync(file, "utf8")) as { version: number; revision: number; agents: Array<{ name: string }>; defaultAgent: string };
@@ -220,7 +224,11 @@ describe("AgentStore · persistence", () => {
     expect(snapshot.policy.maxDepth).toBe(2);
     expect(snapshot.beam).toEqual({ model: { provider: "openai", id: "gpt-5-mini" }, suggested: null, needsChoice: false });
     expect(snapshot.namer).toMatchObject({ status: "ready", model: { provider: "openai", id: "gpt-5-nano" } });
+    expect(snapshot.chat).toEqual({ model: { provider: "anthropic", id: "claude-haiku" } });
     expect(second.get("beam")?.model).toEqual({ provider: "openai", id: "gpt-5-mini" });
+    // The choice reaches the definition the worker runs, not only the snapshot's state block.
+    expect(second.get("chat")?.model).toEqual({ provider: "anthropic", id: "claude-haiku" });
+    expect(second.get("namer")?.model).toEqual({ provider: "openai", id: "gpt-5-nano" });
   });
 
   it("does not re-seed a deleted default, and repairs a default that names nobody", () => {
@@ -238,6 +246,25 @@ describe("AgentStore · persistence", () => {
     writeFile(file, broken);
     const third = store({ storePath: file });
     expect(third.snapshot().defaultAgent).toBe("lead");
+  });
+
+  it("reads a file written before Chat had a model, and drops a chat value it cannot read", () => {
+    const file = join(dir, "old-agents.json");
+    // Exactly what an earlier release wrote: no `chat` key at all.
+    writeFile(file, { version: 1, revision: 4, agents: [], defaultAgent: "default", beam: { model: null, suggested: null, needsChoice: false } });
+    const old = store({ storePath: file });
+    expect(old.snapshot().chat).toEqual({ model: null });
+    expect(old.get("chat")?.model).toBeNull();
+
+    // Hand-edited nonsense is dropped, never thrown on: the store must still boot.
+    for (const chat of [{ model: { provider: "openai" } }, { model: "gpt-5-mini" }, {}]) {
+      const junk = join(dir, `junk-${JSON.stringify(chat).length}-agents.json`);
+      writeFile(junk, { version: 1, revision: 1, agents: [], defaultAgent: "default", chat });
+      expect(store({ storePath: junk }).snapshot().chat).toEqual({ model: null });
+    }
+    const wrongType = join(dir, "wrong-agents.json");
+    writeFile(wrongType, { version: 1, revision: 1, agents: [], defaultAgent: "default", chat: "gpt-5-mini" });
+    expect(store({ storePath: wrongType }).snapshot().chat).toEqual({ model: null });
   });
 
   it("starts from the seed on a corrupt file and recovers on the next write", () => {

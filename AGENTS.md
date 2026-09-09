@@ -46,9 +46,9 @@ That sets the bar for every screen, every command and every transition:
 
 Three documents are the constitution for this, and they are binding on
 every UI change: [`packages/ui/DESIGN.md`](packages/ui/DESIGN.md) for the
-visual system, [`docs/ux-panels.md`](docs/ux-panels.md) for how anything
-renders, and [`docs/ux-agent-work.md`](docs/ux-agent-work.md) for the model
-behind agent work, [`docs/ux-elements.md`](docs/ux-elements.md) for which
+visual system, [`docs/ux-fleet.md`](docs/ux-fleet.md) for where work in flight
+and questions to a person render, and [`docs/ux-agent-work.md`](docs/ux-agent-work.md)
+for the model behind agent work, [`docs/ux-elements.md`](docs/ux-elements.md) for which
 assistant-ui element owns each surface, and [`docs/ux-theme.md`](docs/ux-theme.md)
 for the token system. A UI change that does not fit them is either a bug or a
 decision recorded in `STATUS_DETAILED.md` — never a quiet exception.
@@ -85,8 +85,8 @@ component, check [`docs/ux-elements.md`](docs/ux-elements.md): it maps all
 apply. If the thing you are about to build has a row there, install that
 element (`npx assistant-ui@latest add <name>`) and restyle it. Editing the
 copied source is expected; starting from an empty file is not. Standalone
-elements ship with demo props — strip them and feed the component from a
-panel payload. If you build something the inventory claims, a reviewer will
+elements ship with demo props — strip them and feed the component from the
+real payload the surface already carries. If you build something the inventory claims, a reviewer will
 send it back.
 
 This file is the contract for every agent (human or model) working here. Read it
@@ -279,17 +279,18 @@ adding dates or estimates, deleting done-when criteria. Any structural change to
 6. **Extension UI: portable surface only.** `select`, `confirm`, `input`, `editor`,
    `notify`, `setStatus`, `setWidget` (string lines), `setTitle`, `setEditorText`.
    Anything else cancels safely (never hangs). `custom()` is not emulated.
-6a. **Pi owns the logic, laser owns the experience.** Anything an extension
-   wants to show renders through the panel contract in
-   [`docs/ux-panels.md`](docs/ux-panels.md): six kinds (`run`, `plan`,
-   `document`, `stream`, `collection`, `decision`), four surfaces (ambient,
-   inline, dock, sheet), and a placement table that laser owns. An extension
-   declares a kind and an intent; it never names a surface and never ships
-   presentation. Do not invent a bespoke view for one package — either it maps
-   onto an existing kind, or adding a kind is a decision recorded in
-   `STATUS_DETAILED.md`. Agent work (subagents, workflows, missions) has a
-   domain model of its own in [`docs/ux-agent-work.md`](docs/ux-agent-work.md):
-   runs, plans and ledgers, which feed the `run` and `plan` kinds.
+6a. **Pi owns the logic, laser owns the experience.** There is no UI bus and
+   no declarative panel contract; an extension never declares a surface, a kind
+   or an intent, and never ships presentation (D-147). There are exactly three
+   places anything an extension does can appear, and laser owns all three:
+   the **tool call** in the transcript that did it, the **fleet** for work that
+   outlives a turn (agent runs and background commands, `docs/ux-fleet.md`), and
+   **inline in the transcript** for a question the person has to answer, beside
+   the tool approvals already there. Anything that fits none of them is a
+   decision recorded in `STATUS_DETAILED.md`, not a bespoke view for one
+   package. Agent work has a domain model of its own in
+   [`docs/ux-agent-work.md`](docs/ux-agent-work.md), read from typed sources —
+   the run registry and the background-task surface — never from declared UI.
 6b. **Laser is the product; Pi is an internal engine.** No normal Laser surface
    mirrors Pi's settings, package manager, extension vocabulary or branding.
    Laser defines its own settings schema and curated feature manifests. Low-level
@@ -482,10 +483,11 @@ All in-process glue for community packages lives in `packages/pi-extension` as
 one Pi extension with one module per package (`src/modules/*`). Adding support
 for a new package means adding a module, not a package. Modules never import
 each other, detect their package at `session_start`, and fail individually
-(reported to the UI, never fatal to the session). Two modules are Laser's own
+(reported to the UI, never fatal to the session). Three modules are Laser's own
 rather than package glue: `subagents` registers the agent harness tools from
-the worker-supplied `AgentHarnessBridge` and `background-work` owns long
-commands (`docs/agents.md`, `docs/pi-extension-modules.md`).
+the worker-supplied `AgentHarnessBridge`, `background-work` owns long commands,
+and `file-freshness` explains an `edit` aimed at a file that moved under the
+agent (`docs/agents.md`, `docs/pi-extension-modules.md`).
 
 ### Goal policy and transcript regression checks
 
@@ -542,6 +544,15 @@ blockers, not advice.
   (`lasercode/agent` puts a child under its parent after a host restart).
 - Background promotion keeps the output already produced and the exit state;
   a promoted command is the same task, not a new one.
+- Nothing is ever blocked over file freshness: the engine's `edit` matches
+  `oldText` against the file as it is on disk and refuses a match it cannot find
+  or one that is not unique, so the match itself is the proof (D-152, superseding
+  the refusal in D-151). An `edit` aimed at a file that changed since the agent
+  last read it gets one appended sentence — why the match failed when it failed,
+  or a note that the file carries unseen changes when it succeeded. A `write` is
+  never annotated but is still recorded, or the agent's own write makes its own
+  next edit speak. The module holds file metadata only, never the file's
+  contents, says nothing when it has no record, and never throws.
 - The live map never re-layouts on output or status updates; only a change in
   the tree's structure recomputes positions. Test with a streaming child.
 - Beam has two ways in and no more (D-143): the spark beside Settings, which is

@@ -5,7 +5,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="color-scheme" content="dark light" />
     <!-- The default preset's --bg; the boot script and the applier keep it on the active theme's ground. -->
-    <meta name="theme-color" content="#0e0f11" />
+    <meta name="theme-color" content="%THEME_DEFAULT_BG%" />
+    <!--
+      The first frame, before the bundle's stylesheet exists. Without this the
+      page is the browser's white canvas for as long as the CSS takes to
+      arrive, which on a dark theme is exactly the flash the design bar
+      forbids. The value is the default preset's ground, which is what
+      globals.css is about to paint; a stored theme overrides it in the boot
+      script below, before the first paint either way.
+    -->
+    <style>
+      html {
+        background-color: %THEME_DEFAULT_BG%;
+      }
+    </style>
     <title>%PRODUCT_DISPLAY_NAME%</title>
     <!-- PWA (M7-T1): installable on both platforms; the service worker is registered by src/pwa/boot.ts. -->
     <link rel="manifest" href="/manifest.webmanifest" />
@@ -50,6 +63,9 @@
           root.setAttribute("data-base", entry.base);
           root.classList.toggle("dark", entry.base === "dark");
           if (entry.bg) {
+            // The ground for the frames before the stylesheet lands, and the
+            // browser chrome (PWA title bar, mobile status bar) after it.
+            root.style.backgroundColor = entry.bg;
             var meta = document.querySelector('meta[name="theme-color"]');
             if (meta) meta.setAttribute("content", entry.bg);
           }
@@ -71,7 +87,7 @@
     <link rel="preload" as="font" type="font/woff2" href="/fonts/jetbrains-mono-latin.woff2" crossorigin />
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">%STARTUP_SCREEN%</div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

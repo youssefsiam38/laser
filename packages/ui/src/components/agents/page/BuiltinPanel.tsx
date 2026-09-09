@@ -1,12 +1,14 @@
 "use client";
 /**
- * The three shipped agents, read-only. Each card says what the agent does;
- * Beam's shows its model with a way to change it, Namer's shows the state of
- * its qualification and the candidates it tried.
+ * The three shipped agents, read-only apart from the one thing that is
+ * theirs: the model. Beam, Chat and Namer each show the model they run on and
+ * open the same picker to change it; Namer's card also shows the state of its
+ * qualification and the candidates it tried, beside — never instead of — the
+ * choice a person can make by hand.
  */
 import type { AgentModelChoice, AgentsSnapshot, BuiltinAgentName, NamerCandidate, NamerState } from "@lasercode/protocol";
 import { Check, RotateCw, X, Zap } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { agentDisplayName, useAgentsActions } from "@/agents";
 import { AgentCard, type AgentCardFact } from "@/components/assistant-ui/elements/agent-card";
@@ -17,7 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
 import { AgentMarkIcon } from "./AgentList.js";
-import { BeamModelDialog } from "./dialogs.js";
+import { BuiltinModelDialog } from "./dialogs.js";
 import { Hint } from "./fields.js";
 import { builtinBlurb, formatLatency, modelChoiceId, namerSummary } from "./model.js";
 
@@ -33,31 +35,79 @@ export interface BuiltinPanelProps {
 export function BuiltinPanel({ name, snapshot, routeCwd }: BuiltinPanelProps) {
   return (
     <div className="mx-auto flex w-full max-w-180 flex-col gap-4 px-4 py-5 md:px-6">
-      {name === "beam" ? <BeamCard snapshot={snapshot} routeCwd={routeCwd} /> : name === "namer" ? <NamerCard snapshot={snapshot} routeCwd={routeCwd} /> : <ChatCard />}
-      <Hint>Built-in agents cannot be edited or deleted; each is part of the app.</Hint>
+      {name === "beam" ? (
+        <BeamCard snapshot={snapshot} routeCwd={routeCwd} />
+      ) : name === "namer" ? (
+        <NamerCard snapshot={snapshot} routeCwd={routeCwd} />
+      ) : (
+        <ChatCard snapshot={snapshot} routeCwd={routeCwd} />
+      )}
+      <Hint>Built-in agents cannot be edited or deleted; each is part of the app. Their model is yours to choose.</Hint>
     </div>
   );
 }
 
-function BeamCard({ snapshot, routeCwd }: { snapshot: AgentsSnapshot; routeCwd: string | undefined }) {
+/**
+ * The shared "which model does this built-in run on?" control. One dialog, one
+ * button, one wording rule for all three, so the choice is the same choice
+ * wherever it is made.
+ */
+function useBuiltinModel(name: BuiltinAgentName): {
+  open: boolean;
+  busy: boolean;
+  /** Open the dialog from the card's button. */
+  show: () => void;
+  /** The dialog's own open/close, refused while a save is in flight. */
+  onOpenChange: (open: boolean) => void;
+  pick: (choice: AgentModelChoice) => void;
+  clear: () => void;
+} {
   const agents = useAgentsActions();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const model = snapshot.beam.model;
-  const facts: AgentCardFact[] = [
-    model
-      ? { label: "model", value: modelChoiceId(model), typed: true }
-      : { label: "model", value: snapshot.beam.suggested ? `Not chosen yet · suggested ${modelChoiceId(snapshot.beam.suggested)}` : "Not chosen yet", tone: "attention" },
-  ];
-  const pick = async (choice: AgentModelChoice) => {
-    setBusy(true);
-    try {
-      await agents.setBeamModel(choice);
-      setOpen(false);
-    } finally {
-      setBusy(false);
-    }
+  // The save settles either way: a failure toasts where the person can read
+  // it, and the dialog closes so the card — which only moves on success —
+  // shows what actually happened.
+  const apply = useCallback(
+    (model: AgentModelChoice | null) => {
+      setBusy(true);
+      void agents
+        .setBuiltinModel(name, model)
+        .then(() => setOpen(false))
+        .finally(() => setBusy(false));
+    },
+    [agents, name],
+  );
+  return {
+    open,
+    busy,
+    show: () => setOpen(true),
+    onOpenChange: (next) => {
+      if (!busy) setOpen(next);
+    },
+    pick: (choice) => apply(choice),
+    clear: () => apply(null),
   };
+}
+
+/** The button every built-in card carries, worded by whether a model is chosen. */
+function ChangeModelButton({ model, onOpen }: { model: AgentModelChoice | null; onOpen(): void }) {
+  return (
+    <Button type="button" variant="secondary" size="sm" onClick={onOpen}>
+      {model ? "Change model" : "Choose a model"}
+    </Button>
+  );
+}
+
+/** The model fact, with the resting state said plainly rather than apologetically. */
+function modelFact(model: AgentModelChoice | null, resting: string, tone?: AgentCardFact["tone"]): AgentCardFact {
+  return model ? { label: "model", value: modelChoiceId(model), typed: true } : { label: "model", value: resting, ...(tone ? { tone } : {}) };
+}
+
+function BeamCard({ snapshot, routeCwd }: { snapshot: AgentsSnapshot; routeCwd: string | undefined }) {
+  const control = useBuiltinModel("beam");
+  const model = snapshot.beam.model;
+  const resting = snapshot.beam.suggested ? `Not chosen yet · suggested ${modelChoiceId(snapshot.beam.suggested)}` : "Not chosen yet";
   return (
     <>
       <AgentCard
@@ -66,28 +116,48 @@ function BeamCard({ snapshot, routeCwd }: { snapshot: AgentsSnapshot; routeCwd: 
         eyebrow="Built in"
         icon={<AgentMarkIcon mark="beam" />}
         description={builtinBlurb("beam")}
-        facts={facts}
-        actions={
-          <Button type="button" variant="secondary" size="sm" onClick={() => setOpen(true)}>
-            {model ? "Change model" : "Choose a model"}
-          </Button>
-        }
+        facts={[modelFact(model, resting, "attention")]}
+        actions={<ChangeModelButton model={model} onOpen={control.show} />}
       />
-      <BeamModelDialog open={open} cwd={routeCwd ?? snapshot.workspaces.beam} current={model} busy={busy} onOpenChange={setOpen} onPick={(choice) => void pick(choice)} />
+      <BuiltinModelDialog
+        name="beam"
+        open={control.open}
+        cwd={routeCwd ?? snapshot.workspaces.beam}
+        current={model}
+        busy={control.busy}
+        onOpenChange={control.onOpenChange}
+        onPick={control.pick}
+        onClear={control.clear}
+      />
     </>
   );
 }
 
-function ChatCard() {
+function ChatCard({ snapshot, routeCwd }: { snapshot: AgentsSnapshot; routeCwd: string | undefined }) {
+  const control = useBuiltinModel("chat");
+  const model = snapshot.chat?.model ?? null;
   return (
-    <AgentCard
-      data-agent="chat"
-      name={agentDisplayName("chat")}
-      eyebrow="Built in"
-      icon={<AgentMarkIcon mark="chat" />}
-      description={builtinBlurb("chat")}
-      facts={[{ label: "model", value: "Follows the default model" }, { label: "where", value: "The Chat tab of the sessions list" }]}
-    />
+    <>
+      <AgentCard
+        data-agent="chat"
+        name={agentDisplayName("chat")}
+        eyebrow="Built in"
+        icon={<AgentMarkIcon mark="chat" />}
+        description={builtinBlurb("chat")}
+        facts={[modelFact(model, "Follows the default model"), { label: "where", value: "The Chat tab of the sessions list" }]}
+        actions={<ChangeModelButton model={model} onOpen={control.show} />}
+      />
+      <BuiltinModelDialog
+        name="chat"
+        open={control.open}
+        cwd={routeCwd ?? snapshot.workspaces.chat}
+        current={model}
+        busy={control.busy}
+        onOpenChange={control.onOpenChange}
+        onPick={control.pick}
+        onClear={control.clear}
+      />
+    </>
   );
 }
 
@@ -127,6 +197,7 @@ const CANDIDATE_COLUMNS: readonly DataTableColumn<NamerCandidate>[] = [
 
 function NamerCard({ snapshot, routeCwd }: { snapshot: AgentsSnapshot; routeCwd: string | undefined }) {
   const agents = useAgentsActions();
+  const control = useBuiltinModel("namer");
   // The snapshot is the truth; a run in flight is held here so the card can
   // say "Qualifying…" the instant the button is pressed and show the result
   // before the broadcast lands.
@@ -152,45 +223,58 @@ function NamerCard({ snapshot, routeCwd }: { snapshot: AgentsSnapshot; routeCwd:
 
   const tone: AgentCardFact["tone"] = summary.status === "ready" ? "ok" : summary.status === "unavailable" || summary.status === "unqualified" ? "attention" : undefined;
   return (
-    <AgentCard
-      data-agent="namer"
-      data-namer-status={state.status}
-      name={agentDisplayName("namer")}
-      eyebrow="Built in"
-      icon={<AgentMarkIcon mark="namer" />}
-      description={builtinBlurb("namer")}
-      badges={
-        state.status === "qualifying" ? (
-          <Badge variant="live">
-            <RotateCw className="motion-safe:animate-busy" />
-            Qualifying
-          </Badge>
-        ) : null
-      }
-      facts={[
-        { label: "model", value: summary.title, typed: summary.status === "ready", tone, title: summary.detail },
-        ...(summary.detail ? [{ label: "detail", value: summary.detail }] : []),
-        ...(state.qualifiedAt ? [{ label: "checked", value: new Date(state.qualifiedAt).toLocaleString(), typed: true }] : []),
-      ]}
-      actions={
-        <>
-          <Button type="button" variant="secondary" size="sm" disabled={running} aria-busy={running || undefined} onClick={() => void qualify()}>
-            {running ? <RotateCw className="motion-safe:animate-busy" /> : <Zap />}
-            {running ? "Qualifying…" : state.status === "unqualified" ? "Run qualification" : "Run qualification again"}
-          </Button>
-        </>
-      }
-    >
-      {error !== undefined ? <ErrorState title="Couldn’t qualify a model" detail={error} onRetry={() => void qualify()} /> : null}
-      {state.candidates.length > 0 ? (
-        <DataTable
-          caption="Models tried for Namer"
-          columns={CANDIDATE_COLUMNS}
-          rows={state.candidates}
-          rowKey={(row) => modelChoiceId(row.model)}
-          rowClassName={(row) => (state.model && row.model.provider === state.model.provider && row.model.id === state.model.id ? "bg-[color-mix(in_oklab,var(--ok)_8%,transparent)]" : undefined)}
-        />
-      ) : null}
-    </AgentCard>
+    <>
+      <AgentCard
+        data-agent="namer"
+        data-namer-status={state.status}
+        name={agentDisplayName("namer")}
+        eyebrow="Built in"
+        icon={<AgentMarkIcon mark="namer" />}
+        description={builtinBlurb("namer")}
+        badges={
+          state.status === "qualifying" ? (
+            <Badge variant="live">
+              <RotateCw className="motion-safe:animate-busy" />
+              Qualifying
+            </Badge>
+          ) : null
+        }
+        facts={[
+          { label: "model", value: summary.title, typed: summary.status === "ready", tone, title: summary.detail },
+          ...(summary.detail ? [{ label: "detail", value: summary.detail }] : []),
+          ...(state.qualifiedAt ? [{ label: "checked", value: new Date(state.qualifiedAt).toLocaleString(), typed: true }] : []),
+        ]}
+        actions={
+          <>
+            <ChangeModelButton model={state.model} onOpen={control.show} />
+            <Button type="button" variant="ghost" size="sm" disabled={running} aria-busy={running || undefined} onClick={() => void qualify()}>
+              {running ? <RotateCw className="motion-safe:animate-busy" /> : <Zap />}
+              {running ? "Qualifying…" : state.status === "unqualified" ? "Run qualification" : "Run qualification again"}
+            </Button>
+          </>
+        }
+      >
+        {error !== undefined ? <ErrorState title="Couldn’t qualify a model" detail={error} onRetry={() => void qualify()} /> : null}
+        {state.candidates.length > 0 ? (
+          <DataTable
+            caption="Models tried for Namer"
+            columns={CANDIDATE_COLUMNS}
+            rows={state.candidates}
+            rowKey={(row) => modelChoiceId(row.model)}
+            rowClassName={(row) => (state.model && row.model.provider === state.model.provider && row.model.id === state.model.id ? "bg-[color-mix(in_oklab,var(--ok)_8%,transparent)]" : undefined)}
+          />
+        ) : null}
+      </AgentCard>
+      <BuiltinModelDialog
+        name="namer"
+        open={control.open}
+        cwd={cwd}
+        current={state.model}
+        busy={control.busy}
+        onOpenChange={control.onOpenChange}
+        onPick={control.pick}
+        onClear={control.clear}
+      />
+    </>
   );
 }

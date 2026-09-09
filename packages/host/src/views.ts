@@ -10,8 +10,14 @@
  */
 import { statSync } from "node:fs";
 
-interface Cached {
+/** What `pi/session/entries` answered: every branch, and which one is live. */
+export interface CachedView {
   entries: unknown[];
+  /** The entry the session sits on; `undefined` when the answer carried none. */
+  leafId?: string | null;
+}
+
+interface Cached extends CachedView {
   size: number;
   mtimeMs: number;
   /** Insertion/refresh time; the eviction order. */
@@ -26,8 +32,8 @@ export class ViewCache {
     private readonly now: () => number = Date.now,
   ) {}
 
-  /** Cached entries for a path, or undefined when absent or stale. */
-  get(path: string): unknown[] | undefined {
+  /** The cached answer for a path, or undefined when absent or stale. */
+  get(path: string): CachedView | undefined {
     const hit = this.cache.get(path);
     if (!hit) return undefined;
     let size: number;
@@ -45,10 +51,10 @@ export class ViewCache {
     // Refresh recency: a Map keeps insertion order, so re-set to move to the end.
     this.cache.delete(path);
     this.cache.set(path, { ...hit, at: this.now() });
-    return hit.entries;
+    return { entries: hit.entries, ...(hit.leafId !== undefined ? { leafId: hit.leafId } : {}) };
   }
 
-  set(path: string, entries: unknown[]): void {
+  set(path: string, view: CachedView): void {
     let size: number;
     let mtimeMs: number;
     try {
@@ -59,7 +65,7 @@ export class ViewCache {
       return;
     }
     this.cache.delete(path);
-    this.cache.set(path, { entries, size, mtimeMs, at: this.now() });
+    this.cache.set(path, { ...view, size, mtimeMs, at: this.now() });
     while (this.cache.size > this.limit) {
       const oldest = this.cache.keys().next();
       if (oldest.done) break;

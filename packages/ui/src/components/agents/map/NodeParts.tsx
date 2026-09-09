@@ -14,10 +14,10 @@ import { Button } from "@/components/ui/button";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { useTick } from "@/components/thread/timing";
 import { cn } from "@/lib/utils";
-import { formatElapsed } from "@/panels/values";
+import { formatElapsed } from "@/format";
 
 import { useMapHost } from "./map-context.js";
-import { agentMark, nodeElapsed, nodeIsActive, nodeStatusLabel, TONE_VAR, toneStatus } from "./node-model.js";
+import { agentMark, nodeElapsed, nodeIsActive, nodeStatusLabel, toneStatus } from "./node-model.js";
 
 /** The agent's mark: two letters of its name in a rounded square; the root carries the conversation glyph. */
 export function AgentMarkBadge({ node, size = "sm", className }: { node: AgentTreeNode; size?: "sm" | "md" | "lg"; className?: string | undefined }) {
@@ -41,8 +41,9 @@ export function AgentMarkBadge({ node, size = "sm", className }: { node: AgentTr
 }
 
 /**
- * The status dot in the five-word vocabulary. `ok` rides on the still idle
- * shape in the success colour: a finished agent is calm, not grey.
+ * The status dot in the five-word vocabulary. A finished run is muted like an
+ * ended one (D-154): green is reserved for work that is happening now, so the
+ * dot no longer paints success, and the node's own word says which it was.
  */
 export function ToneDot({ tone, label, size = "sm", className }: { tone: AgentStatusTone; label: string; size?: "sm" | "md"; className?: string | undefined }) {
   return (
@@ -52,7 +53,6 @@ export function ToneDot({ tone, label, size = "sm", className }: { tone: AgentSt
       label={label}
       data-tone={tone}
       className={className}
-      style={tone === "ok" ? ({ "--dot": TONE_VAR.ok } as CSSProperties) : undefined}
     />
   );
 }

@@ -25,7 +25,7 @@
 │  parent events; Beam skill; Namer (docs/agents.md)         │
 │  loads packages/pi-extension into the session:             │
 │    one extension, modules/{provider-log,subagents,         │
-│    background-work,transcribe,panels,...} activated        │
+│    background-work,transcribe,goal,...} activated          │
 │    by detection or by a worker-supplied bridge             │
 └─────────────────────────────────────────────────────────────┘
 
@@ -77,10 +77,10 @@ then reports `laser/capabilities` to the worker. Modules:
 | --- | --- | --- |
 | `provider-log` | Pi's `before_provider_request` / `after_provider_response` hooks | always |
 | `subagents` | the agent harness tools — `start_agent`, `send_agent_message`, `list_agents`, `wait_for_agents`, `stop_agent` for a session that may delegate, `complete_agent_run` for a child — the child's role block in its system prompt, and agent events delivered to the parent model as `lasercode/agent-event`; all from the worker-supplied `AgentHarnessBridge` (`src/agents-bridge.ts`, [`agents.md`](agents.md)) | the worker passed a bridge (Subagents feature enabled) |
-| `background-work` | long commands: `bash` with an explicit background flag, promotion to a background task after the foreground timeout, `task_list`/`task_output`/`task_wait`/`task_stop`, `tasks:*` run panels and `lasercode/task-event` | the worker passed `BackgroundWorkOptions` |
+| `background-work` | long commands: `bash` with an explicit background flag, promotion to a background task after the foreground timeout, `task_list`/`task_output`/`task_wait`/`task_stop`, `lasercode/task/update` for the fleet and `lasercode/task-event` | the worker passed `BackgroundWorkOptions` |
 | `goal` | canonical durable goal state | Goals feature enabled |
 | `transcribe` | pi-gpt-transcribe desktop dictation | matching command registered |
-| `web-access` | registers the transcript-only search tool; the worker supplies its credential/policy-aware executor (M12-T64). The duplicate panel adapter remains retired (D-61) | Web search feature enabled |
+| `web-access` | registers the transcript-only search tool; the worker supplies its credential/policy-aware executor (M12-T64). The duplicate result list remains retired (D-61) | Web search feature enabled |
 
 Adding support for engine behavior means a reusable Pi-native package plus one
 module that translates it to the product protocol. The agent harness is the

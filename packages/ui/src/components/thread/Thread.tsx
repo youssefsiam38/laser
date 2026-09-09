@@ -8,7 +8,7 @@ import { GenerationLoader } from "@/components/assistant-ui/elements/loading-sta
 import { SelectionToolbar } from "@/components/assistant-ui/elements/quote.aui";
 import { ScrollAnchor } from "@/components/assistant-ui/elements/scroll-anchor";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { MobileIslands, PanelDecisionCards, PanelInlineCards, PanelInspectSheet } from "@/panels";
+import { ThreadDialogCards, WaitingNotice } from "@/dialogs";
 import { useLaserStable, useLaserState, useLaserView } from "@/runtime";
 import { useWorkbench } from "@/components/workbench/workbench-context";
 import { useSessionSeen } from "./use-session-seen.js";
@@ -86,22 +86,19 @@ export function Thread({ statusSlot, emptyState, followUps }: ThreadProps = {}) 
                 <div data-slot="thread-messages" className="flex flex-col gap-5 pt-5 pb-5 empty:hidden">
                   <ThreadPrimitive.Messages>{() => <ThreadMessage />}</ThreadPrimitive.Messages>
                 </div>
-                {/* The inline surface (docs/ux-panels.md): panels arrive during a
-                    turn, so the tail of the transcript is the point they happened.
-                    They scroll with it rather than sitting in the footer. */}
-                <PanelInlineCards className="pb-6" />
                 <ThreadPrimitive.ViewportFooter
                   data-slot="thread-footer"
                   className="sticky bottom-0 z-10 mt-auto flex flex-col gap-3 bg-bg pt-2 pb-[calc(var(--spacing)*4+max(env(safe-area-inset-bottom),var(--kb)))]"
                 >
                   <ScrollAnchor />
-                  {/* Above the composer, in the order the eye reads them
-                      (docs/ux-panels.md): what the app will not do here, the
-                      question that blocks the turn, then on a phone the island
-                      pills, the follow-ups, then the composer itself. */}
+                  {/* Above the composer, in the order the eye reads them:
+                      what the app will not do here, the question that blocks
+                      the turn, the follow-ups, then the composer itself. */}
                   <TrustGuardrail />
-                  <PanelDecisionCards />
-                  <MobileIslands />
+                  {/* A question inside a tool row can be scrolled away; the
+                      one in the footer never is. */}
+                  <WaitingNotice />
+                  <ThreadDialogCards />
                   <ThreadFollowupSuggestions />
                   <Composer />
                 </ThreadPrimitive.ViewportFooter>
@@ -109,8 +106,6 @@ export function Thread({ statusSlot, emptyState, followUps }: ThreadProps = {}) 
             </ThreadPrimitive.Viewport>
             {/* Select transcript text: quote it into the composer. */}
             <SelectionToolbar />
-            {/* `inspect` means "now": it opens over the thread on every width. */}
-            <PanelInspectSheet />
             <EntriesRefresh />
           </ThreadPrimitive.Root>
         </AuiProvider>

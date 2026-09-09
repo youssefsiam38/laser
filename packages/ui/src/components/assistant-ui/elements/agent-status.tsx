@@ -5,7 +5,7 @@
  * and rebuilt as the island header's leading control, for every kind and every
  * size: the pill a minimal island *is*, and the dot-title-values row the
  * compact and expanded headers carry. One element, so the dot's sweep and the
- * title node survive a size change (docs/ux-panels.md "one element per panel").
+ * title node survive a size change.
  *
  * Divergences from the registry copy:
  *   - `state` is the five-word status vocabulary (R1), drawn by `StatusDot`,
@@ -22,7 +22,6 @@ import type { ComponentProps } from "react";
 import { StatusDot, type Status } from "@/components/status";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import type { LiveValue } from "@/panels/values";
 
 import { NumberTicker } from "./number-ticker.js";
 import { mono } from "./surfaces.js";
@@ -31,6 +30,20 @@ import { mono } from "./surfaces.js";
 const pressed = "active:bg-[color-mix(in_oklab,var(--surface-2)_80%,var(--ink))]";
 
 export type AgentStatusSize = "minimal" | "compact" | "expanded";
+
+/**
+ * One live number an agent surface shows. Owned here rather than by a wire
+ * type: what a surface chooses to put on a row is a presentation decision.
+ */
+export interface LiveValue {
+  /** What the value is, for the tooltip and the accessible name. */
+  label: string;
+  /** Rendered in Martian Mono with tabular numerals. */
+  text: string;
+  /** Rolls its digits: the one number that changes while you watch it. */
+  ticking?: boolean;
+  tone?: "attention" | "danger" | "muted";
+}
 
 const VALUE_TONE: Record<NonNullable<LiveValue["tone"]>, string> = {
   attention: "text-attention",

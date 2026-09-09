@@ -97,7 +97,11 @@ export type AgentStatusTone = "live" | "attention" | "danger" | "ok" | "muted";
 export const RUN_STATUS_TONE: Readonly<Record<AgentRunStatus, AgentStatusTone>> = {
   queued: "muted",
   running: "live",
-  completed: "ok",
+  // Not `ok`. Green in this app means *happening now* — the live dot, the
+  // running badge — so green on something finished reads as "look at me" for
+  // the one thing that needs no looking at (D-154). Finished work is history:
+  // it is dimmed, and it is counted, and it is one click away.
+  completed: "muted",
   blocked: "attention",
   failed: "danger",
   cancelled: "muted",

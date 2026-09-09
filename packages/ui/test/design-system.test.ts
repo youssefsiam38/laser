@@ -41,7 +41,7 @@ describe("toneForPercent", () => {
 
 /**
  * The legibility floor and the token system are binding (AGENTS.md,
- * DESIGN.md, docs/ux-panels.md R13) and both are trivially broken by one
+ * DESIGN.md, docs/ux-fleet.md R10) and both are trivially broken by one
  * plausible-looking class. Neither shows up as a failing render, so this is
  * the cheapest place to catch it.
  */

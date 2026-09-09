@@ -12,10 +12,15 @@
  *   - Left-aligned like everything else in the thread; no `items-center`.
  *   - Cells are `--ink-3`, the label is `--ink-2`; no `foreground/55` alphas.
  */
-import { useEffect, useId, useState, type ComponentProps, type ReactNode } from "react";
+import { createElement, useEffect, useId, useState, type ComponentProps, type ReactNode } from "react";
 import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
+import {
+  STARTUP_SCREEN_EXIT_CLASS,
+  STARTUP_SCREEN_ROOT_CLASS,
+  startupScene,
+  type StartupNode,
+} from "@lasercode/protocol/startup-screen";
 
-import { LaserMark } from "@/components/brand/Logo";
 import { useTick } from "@/components/thread/timing";
 import { cn } from "@/lib/utils";
 import { motionMs } from "@/motion";
@@ -84,110 +89,73 @@ interface StartupRestorationScreenProps {
 }
 
 /**
+ * Attribute names that React spells differently from HTML. Everything else in
+ * the scene — `viewBox`, `gradientUnits`, `pathLength`, `x1` — React already
+ * passes through under its own name.
+ */
+const REACT_ATTRIBUTE: Record<string, string> = {
+  class: "className",
+  "stop-color": "stopColor",
+  "stop-opacity": "stopOpacity",
+};
+
+/** The shared scene, as React elements. The tree itself lives in the protocol. */
+function renderNode(node: StartupNode, key: number): ReactNode {
+  const props: Record<string, unknown> = { key };
+  for (const [name, value] of Object.entries(node.attrs ?? {})) {
+    props[REACT_ATTRIBUTE[name] ?? name] = value;
+  }
+  if (node.text !== undefined) return createElement(node.tag, props, node.text);
+  return createElement(node.tag, props, (node.children ?? []).map(renderNode));
+}
+
+/**
+ * The document paints this screen before React exists — `index.html` carries
+ * the same scene, and in the desktop the shell has been showing it while the
+ * host started. So the first mount of the session takes over something
+ * identical and must not fade in over it; a later one, when a session
+ * reconnects mid-flight, is a real arrival and keeps the animation.
+ */
+let takingOverTheFirstFrame = true;
+
+/**
  * Full-window form of the catalog Loader. The converging SVG paths follow
  * Magic UI's Animated Beam composition, but use Laser's mark, motion tokens
  * and theme colours instead of the registry demo's integration logos.
+ *
+ * The composition is not written here. It comes from
+ * `@lasercode/protocol/startup-screen`, which the desktop shell serializes to
+ * a standalone document and shows while the host is still starting — so the
+ * screen a person is already looking at is this one, and the app taking over
+ * changes nothing on the glass. Its rules live in `globals.css` between the
+ * `@startup-screen` markers, pinned to the same module by
+ * `test/startup-screen.test.ts`.
  */
 export function StartupRestorationScreen({ label, exiting = false, notice, onExited }: StartupRestorationScreenProps) {
-  const gradientPrefix = useId().replaceAll(":", "");
-  const gradients = {
-    left: `${gradientPrefix}-left`,
-    right: `${gradientPrefix}-right`,
-    topLeft: `${gradientPrefix}-top-left`,
-    bottomLeft: `${gradientPrefix}-bottom-left`,
-    topRight: `${gradientPrefix}-top-right`,
-    bottomRight: `${gradientPrefix}-bottom-right`,
-  };
+  const idPrefix = useId().replaceAll(":", "");
+  const [continuing] = useState(() => {
+    if (exiting || !takingOverTheFirstFrame) return false;
+    takingOverTheFirstFrame = false;
+    return true;
+  });
 
   return (
     <div
       data-slot="startup-restoration"
       data-exiting={exiting || undefined}
+      data-continuing={continuing || undefined}
       role={exiting ? undefined : "status"}
       aria-live={exiting ? undefined : "polite"}
       aria-busy={exiting ? undefined : "true"}
       aria-label={exiting ? undefined : label}
       aria-hidden={exiting || undefined}
-      className={cn(
-        "startup-restoration fixed inset-0 z-100 grid overflow-hidden bg-bg text-ink",
-        exiting && "startup-restoration-exit pointer-events-none",
-      )}
+      className={cn(STARTUP_SCREEN_ROOT_CLASS, exiting && STARTUP_SCREEN_EXIT_CLASS)}
       onAnimationEnd={(event) => {
         if (exiting && event.currentTarget === event.target) onExited?.();
       }}
     >
       {!exiting && notice}
-      <svg
-        aria-hidden="true"
-        viewBox="0 0 1200 800"
-        preserveAspectRatio="none"
-        className="startup-restoration-beams absolute inset-0 size-full"
-      >
-        <defs>
-          <linearGradient id={gradients.left} gradientUnits="userSpaceOnUse" x1="0" y1="400" x2="590" y2="400">
-            <stop offset="0" stopColor="var(--live)" stopOpacity="0" />
-            <stop offset="0.18" stopColor="var(--live)" stopOpacity="0.72" />
-            <stop offset="0.72" stopColor="var(--live)" />
-            <stop offset="1" stopColor="var(--live)" stopOpacity="0" />
-          </linearGradient>
-          <linearGradient id={gradients.right} gradientUnits="userSpaceOnUse" x1="1200" y1="400" x2="610" y2="400">
-            <stop offset="0" stopColor="var(--live)" stopOpacity="0" />
-            <stop offset="0.18" stopColor="var(--live)" stopOpacity="0.72" />
-            <stop offset="0.72" stopColor="var(--live)" />
-            <stop offset="1" stopColor="var(--live)" stopOpacity="0" />
-          </linearGradient>
-          <linearGradient id={gradients.topLeft} gradientUnits="userSpaceOnUse" x1="360" y1="0" x2="590" y2="400">
-            <stop offset="0" stopColor="var(--live)" stopOpacity="0" />
-            <stop offset="0.2" stopColor="var(--live)" stopOpacity="0.58" />
-            <stop offset="0.8" stopColor="var(--live)" />
-            <stop offset="1" stopColor="var(--live)" stopOpacity="0" />
-          </linearGradient>
-          <linearGradient id={gradients.bottomLeft} gradientUnits="userSpaceOnUse" x1="360" y1="800" x2="590" y2="400">
-            <stop offset="0" stopColor="var(--live)" stopOpacity="0" />
-            <stop offset="0.2" stopColor="var(--live)" stopOpacity="0.58" />
-            <stop offset="0.8" stopColor="var(--live)" />
-            <stop offset="1" stopColor="var(--live)" stopOpacity="0" />
-          </linearGradient>
-          <linearGradient id={gradients.topRight} gradientUnits="userSpaceOnUse" x1="840" y1="0" x2="610" y2="400">
-            <stop offset="0" stopColor="var(--live)" stopOpacity="0" />
-            <stop offset="0.2" stopColor="var(--live)" stopOpacity="0.58" />
-            <stop offset="0.8" stopColor="var(--live)" />
-            <stop offset="1" stopColor="var(--live)" stopOpacity="0" />
-          </linearGradient>
-          <linearGradient id={gradients.bottomRight} gradientUnits="userSpaceOnUse" x1="840" y1="800" x2="610" y2="400">
-            <stop offset="0" stopColor="var(--live)" stopOpacity="0" />
-            <stop offset="0.2" stopColor="var(--live)" stopOpacity="0.58" />
-            <stop offset="0.8" stopColor="var(--live)" />
-            <stop offset="1" stopColor="var(--live)" stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        <g className="startup-beam-tracks">
-          <path d="M0 400C250 400 450 400 590 400" stroke={`url(#${gradients.left})`} />
-          <path d="M1200 400C950 400 750 400 610 400" stroke={`url(#${gradients.right})`} />
-          <path d="M360 0C360 164 402 248 484 300C548 341 578 369 590 400" stroke={`url(#${gradients.topLeft})`} />
-          <path d="M360 800C360 636 402 552 484 500C548 459 578 431 590 400" stroke={`url(#${gradients.bottomLeft})`} />
-          <path d="M840 0C840 164 798 248 716 300C652 341 622 369 610 400" stroke={`url(#${gradients.topRight})`} />
-          <path d="M840 800C840 636 798 552 716 500C652 459 622 431 610 400" stroke={`url(#${gradients.bottomRight})`} />
-        </g>
-        <g className="startup-beam-live">
-          <path d="M0 400C250 400 450 400 590 400" pathLength="1" stroke={`url(#${gradients.left})`} />
-          <path d="M1200 400C950 400 750 400 610 400" pathLength="1" stroke={`url(#${gradients.right})`} />
-          <path d="M360 0C360 164 402 248 484 300C548 341 578 369 590 400" pathLength="1" stroke={`url(#${gradients.topLeft})`} />
-          <path d="M360 800C360 636 402 552 484 500C548 459 578 431 590 400" pathLength="1" stroke={`url(#${gradients.bottomLeft})`} />
-          <path d="M840 0C840 164 798 248 716 300C652 341 622 369 610 400" pathLength="1" stroke={`url(#${gradients.topRight})`} />
-          <path d="M840 800C840 636 798 552 716 500C652 459 622 431 610 400" pathLength="1" stroke={`url(#${gradients.bottomRight})`} />
-        </g>
-      </svg>
-
-      <div className="startup-aperture relative z-10 m-auto flex flex-col items-center">
-        <div aria-hidden="true" className="startup-aperture-halo absolute left-1/2 top-0 -translate-x-1/2" />
-        <LaserMark aria-hidden="true" className="startup-mark relative z-10 size-20" />
-        <p className="mt-7 text-xl font-semibold tracking-title">{PRODUCT_DISPLAY_NAME}</p>
-        <p className="mt-2 text-sm text-ink-2">{label}</p>
-        <span aria-hidden="true" className="startup-signal mt-5 block h-px w-24 overflow-hidden bg-line">
-          <span className="block h-full w-1/2 bg-live" />
-        </span>
-      </div>
+      {startupScene({ idPrefix, title: PRODUCT_DISPLAY_NAME, label }).map(renderNode)}
     </div>
   );
 }

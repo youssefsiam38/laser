@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AppendMessage } from "@assistant-ui/react";
-import type { ClientMethod, ClientRequests, SessionState } from "@lasercode/protocol";
+import type { ClientMethod, ClientRequests, PendingMessage, SessionState } from "@lasercode/protocol";
 import type { Action, SessionView } from "../../src/store.js";
 import {
   composerSendPlan,
@@ -8,6 +8,7 @@ import {
   createThreadAdapter,
   imageContentFromDataUrl,
   isSteerQueueItemId,
+  pendingIdOfQueueItemId,
   queueItemsOf,
   requestIdOfInterruptPayload,
   resolveSendBehavior,
@@ -70,6 +71,7 @@ const view = (over: Partial<SessionView> = {}): SessionView => ({
   lastSeq: 0,
   running: false,
   queue: { steering: [], followUp: [] },
+  pending: [],
   dialogs: [],
   statuses: {},
   widgets: {},
@@ -77,6 +79,15 @@ const view = (over: Partial<SessionView> = {}): SessionView => ({
   hydrated: true,
   entries: [],
   ...over,
+});
+
+const pendingMessage = (id: string, text: string): PendingMessage => ({
+  id,
+  content: [{ type: "text", text }],
+  text,
+  images: 0,
+  createdAt: "2026-09-08T00:00:00.000Z",
+  state: "waiting",
 });
 
 // --- content ---------------------------------------------------------------
@@ -125,9 +136,10 @@ describe("resolveSendBehavior", () => {
     expect(resolveSendBehavior({ running: false, lane: "steer" })).toBe("prompt");
   });
 
-  it("steers on the steer lane and follows up on the queue lane while running", () => {
+  it("steers on the steer lane and waits in the tray on the queue lane while running", () => {
     expect(resolveSendBehavior({ running: true, lane: "steer" })).toBe("steer");
-    expect(resolveSendBehavior({ running: true, lane: "queue" })).toBe("followUp");
+    // The default outcome of writing mid-run is a waiting row, not an interrupt.
+    expect(resolveSendBehavior({ running: true, lane: "queue" })).toBe("pending");
   });
 
   it("honours an explicit runConfig.custom.streamingBehavior while running", () => {
@@ -135,8 +147,11 @@ describe("resolveSendBehavior", () => {
     expect(resolveSendBehavior({ running: true, lane: "steer", message: followUp })).toBe("followUp");
     const steer = message({ runConfig: { custom: { streamingBehavior: "steer" } } });
     expect(resolveSendBehavior({ running: true, lane: "queue", message: steer })).toBe("steer");
+    const pending = message({ runConfig: { custom: { streamingBehavior: "pending" } } });
+    expect(resolveSendBehavior({ running: true, lane: "steer", message: pending })).toBe("pending");
     // …but a steer with nothing to interrupt is just a prompt.
     expect(resolveSendBehavior({ running: false, lane: "queue", message: steer })).toBe("prompt");
+    expect(resolveSendBehavior({ running: false, lane: "queue", message: pending })).toBe("prompt");
   });
 });
 
@@ -149,14 +164,16 @@ describe("composerSendPlan", () => {
     ...over,
   });
 
-  it("Enter prompts when idle and steers while running", () => {
+  it("Enter prompts when idle and queues a waiting row while running", () => {
     expect(composerSendPlan(key(), false)).toMatchObject({ action: "send", behavior: "prompt", sendOptions: { steer: false } });
-    expect(composerSendPlan(key(), true)).toMatchObject({ action: "send", behavior: "steer", sendOptions: { steer: true } });
+    // The queue lane, not the steer lane: pressing Enter mid-run interrupts
+    // nothing, which is the whole change in M13-T28.
+    expect(composerSendPlan(key(), true)).toMatchObject({ action: "send", behavior: "pending", sendOptions: { steer: false } });
   });
 
-  it("Cmd/Ctrl+Enter follows up while running", () => {
-    expect(composerSendPlan(key({ metaKey: true }), true)).toMatchObject({ behavior: "followUp", sendOptions: { steer: false } });
-    expect(composerSendPlan(key({ ctrlKey: true }), true)).toMatchObject({ behavior: "followUp" });
+  it("Cmd/Ctrl+Enter is the one keyboard path to steer", () => {
+    expect(composerSendPlan(key({ metaKey: true }), true)).toMatchObject({ behavior: "steer", sendOptions: { steer: true } });
+    expect(composerSendPlan(key({ ctrlKey: true }), true)).toMatchObject({ behavior: "steer" });
     expect(composerSendPlan(key({ ctrlKey: true }), false)).toMatchObject({ behavior: "prompt" });
   });
 
@@ -172,8 +189,9 @@ describe("composerSendPlan", () => {
 
   it("carries the behavior in runConfig so onNew can see it", () => {
     expect(composerSendPlan(key({ metaKey: true }), true).runConfig).toEqual({
-      custom: { streamingBehavior: "followUp" },
+      custom: { streamingBehavior: "steer" },
     });
+    expect(composerSendPlan(key(), true).runConfig).toEqual({ custom: { streamingBehavior: "pending" } });
   });
 });
 
@@ -270,6 +288,23 @@ describe("queueItemsOf", () => {
     expect(isSteerQueueItemId("followUp:0")).toBe(false);
   });
 
+  it("puts the tray first in the waiting lane, carrying the worker's id in each row", () => {
+    const { items } = queueItemsOf(
+      view({
+        pending: [pendingMessage("p-1", "run the tests"), pendingMessage("p-2", "then commit")],
+        queue: { steering: [], followUp: ["f0"] },
+      }),
+    );
+    expect(items.map((i) => i.id)).toEqual(["pending:p-1", "pending:p-2", "followUp:0"]);
+    // The id is the whole point: it is what Steer, Edit and Drop each name.
+    expect(items.map((i) => pendingIdOfQueueItemId(i.id))).toEqual(["p-1", "p-2", undefined]);
+  });
+
+  it("names an image-only message rather than drawing an empty row", () => {
+    const { items } = queueItemsOf(view({ pending: [{ ...pendingMessage("p-1", ""), images: 2 }] }));
+    expect(items[0]!.prompt).toBe("2 images");
+  });
+
   it("is empty without a view", () => {
     expect(queueItemsOf(undefined)).toEqual({ items: [], steerItems: [] });
   });
@@ -319,18 +354,42 @@ describe("createThreadAdapter", () => {
     expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: "optimisticUser", path: "/s.jsonl", text: "hello", images: 0 }));
   });
 
-  it("queue.steer steers and queue.enqueue follows up while running", async () => {
+  it("queue.steer steers and queue.enqueue trays the message while running", async () => {
     const { adapter, client } = build({ view: view({ running: true }) });
     adapter.queue!.steer(message());
     adapter.queue!.enqueue(message());
     await flush();
-    expect(client.calls.map((c) => c.method)).toEqual(["pi/session/steer", "pi/session/follow_up"]);
+    expect(client.calls.map((c) => c.method)).toEqual(["pi/session/steer", "session/pending/add"]);
   });
 
   it("onNew takes the queue lane", async () => {
     const { adapter, client } = build({ view: view({ running: true }) });
     await adapter.onNew(message());
-    expect(client.calls.map((c) => c.method)).toEqual(["pi/session/follow_up"]);
+    expect(client.calls.map((c) => c.method)).toEqual(["session/pending/add"]);
+  });
+
+  it("steers, edits and drops one tray row by the worker's id, and ignores a row that is not ours", async () => {
+    const pending = [pendingMessage("p-1", "run the tests")];
+    const { adapter, client } = build({ view: view({ running: true, pending, queue: { steering: ["s0"], followUp: ["f0"] } }) });
+    adapter.queue!.move("pending:p-1", { lane: "steer", insertAfter: null });
+    adapter.queue!.edit("pending:p-1", message({ content: [{ type: "text", text: "run them twice" }] }));
+    adapter.queue!.remove("pending:p-1");
+    await flush();
+    expect(client.calls).toEqual([
+      { method: "session/pending/steer", params: { path: "/s.jsonl", id: "p-1" } },
+      { method: "session/pending/edit", params: { path: "/s.jsonl", id: "p-1", content: [{ type: "text", text: "run them twice" }] } },
+      { method: "session/pending/remove", params: { path: "/s.jsonl", id: "p-1" } },
+    ]);
+
+    // A row the engine owns has no id of ours: the UI draws no control for it,
+    // and a stray call is a no-op rather than a request that cannot mean
+    // anything. A move that is not into the steer lane is not ours either.
+    client.calls.length = 0;
+    adapter.queue!.remove("steer:0");
+    adapter.queue!.remove("followUp:0");
+    adapter.queue!.move("pending:p-1", { lane: "queue" });
+    await flush();
+    expect(client.calls).toEqual([]);
   });
 
   it("onNew falls back to a steer when session/prompt is refused", async () => {

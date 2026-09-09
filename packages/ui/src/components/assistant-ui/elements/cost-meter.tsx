@@ -13,7 +13,7 @@
  *   - Colours read tokens: the first model `--live`, the second a 55% mix,
  *     the rest `--ink-3`.
  *   - "Not measured" is a state: when no usage was recorded the card says
- *     so instead of drawing `$0` (docs/ux-panels.md "Usage is raw").
+ *     so instead of drawing `$0`: absent is not zero.
  */
 import type { ComponentProps } from "react";
 

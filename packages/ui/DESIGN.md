@@ -98,7 +98,7 @@ timestamps, hints, durations, the "waiting for you" subtitle — and measured
   component.
 
 
-## Legibility floor (binding everywhere, not just panels)
+## Legibility floor (binding everywhere)
 
 - **No data below 12px.** The 11px size is for uppercase eyebrows with
   `0.08em` tracking only — a category label, never a value. This holds at
@@ -134,16 +134,21 @@ Desktop (≥1024px), four columns left to right:
 3. **Thread** (flex): the assistant-ui thread. Max width 84ch (`--measure-thread`) centered, sticky
    top bar (session title, model, thinking, context ring, more menu), floating
    composer at the bottom with queue chips above it.
-4. **Telemetry** (320px, collapsible with `]`): context ring with tokens;
+4. **Fleet** (320px, collapsible with `\`): every piece of agent work in every
+   project — child agents and the background commands they left running —
+   grouped by session, nested as it really nests, opening in place
+   ([`docs/ux-fleet.md`](../../docs/ux-fleet.md)). Hidden by default under 1280px.
+5. **Monitor** (320px, collapsible with `]`): context ring with tokens;
    billing-aware usage (API cost/tokens or account allowance/resets/credits,
-   with Account/API tabs only when both occur). Every subagent run contributes
-   its own per-model attempts to the parent session, while plan roll-ups are
-   ignored to prevent double-counting; model and thinking, worker status,
-   extension status pills,
-   extension widgets (string lines rendered in `--font-mono`), history/tree
-   panel (fork, jump, labels). Hidden by default under 1280px.
+   with Account/API tabs only when both occur). A child agent contributes its
+   model, never invented numbers; model and thinking, worker status,
+   extension status pills, history/tree panel (fork, jump, labels). Hidden by
+   default under 1280px.
 
-Tablet (768–1023px): rail + thread; sessions and telemetry become sheets.
+The fleet sits immediately left of the monitor: from the right edge inward,
+monitor then fleet. Each collapses on its own.
+
+Tablet (768–1023px): rail + thread; sessions, fleet and monitor become sheets.
 
 Mobile (<768px): thread only. Top bar shows a back chevron that opens the
 sessions sheet; project switcher inside it. Composer is `position: fixed`
@@ -216,13 +221,22 @@ autosizes to 8 lines. Left: attach image (paste also works). Right: model
 selector (popover with search), thinking level (the levels this model accepts,
 of Pi's seven incl. `max`; hidden when the model does not reason), send/stop.
 
-Three keys, and only three: **Enter** = prompt when idle, steer when running;
-**Shift+Enter** = newline; **Cmd/Ctrl+Enter** = follow-up when running. On a
-touch keyboard plain Enter is a newline and Send submits. Any other Enter
+Three keys, and only three: **Enter** = prompt when idle, join the queue when
+running; **Shift+Enter** = newline; **Cmd/Ctrl+Enter** = steer when running. On
+a touch keyboard plain Enter is a newline and Send submits. Any other Enter
 combination is swallowed on purpose (`composerSendPlan`), so no fourth binding
-can arrive from a library default. Queue chips above the
-composer: steer = solid `--live` outline, follow-up = dashed; "clear queue"
-restores text into the composer.
+can arrive from a library default.
+
+Writing while the agent works never interrupts it. The message becomes a row
+directly above the composer that says what happens if it is left alone —
+"After this turn" — and carries the three acts that change that: **Steer**
+(one click, goes in at the next step), the delete icon (drops just this one)
+and **⋯** (edit it back into the composer, copy it, drop them all). A row
+already handed to the engine reads "Up next" with a solid `--live` rule and no
+controls, because there is no verb behind them; a waiting row is dashed. A
+delivery that failed keeps its message and shows the reason. Steering never
+stops anything, so the transcript records only the message and the reply —
+"You stopped it" belongs to the Stop button and to nothing else.
 
 ## Motion
 
@@ -235,11 +249,12 @@ component.
 
 1. **The status sweep** — a run that is working (`StatusDot`, `StatusRing`).
 2. **The streaming caret** on the last text part.
-3. **The morph** — a panel changing size or moving between the dock and the
-   full window. One element, never destroyed and re-created: rectangle,
-   radius and border move together (`--motion-morph`).
-4. **Arrival** — an island appearing plays a short scale-in once, so a panel
-   that opens itself is noticed rather than found later.
+3. **The morph** — a surface changing size or moving between hosts (a fleet
+   row opening its detail, the map going full-screen). One element, never
+   destroyed and re-created: rectangle, radius and border move together
+   (`--motion-morph`).
+4. **Arrival** — something that opens itself plays a short scale-in once, so
+   it is noticed rather than found later.
 5. **Sheets and popovers** — slide and fade in `--motion-slow`.
 6. **Collapsibles** — a measured height, played by `--motion-fast`.
 7. **Digit rolls** — a number that changes rolls rather than jumps

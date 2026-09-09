@@ -14,7 +14,7 @@
  *     a finished one, `--danger` for a failure.
  *   - No time-to-first-token span: Pi's `after_provider_response` hook gives a
  *     host the status and headers, not the stream, so TTFT is not measured
- *     and is not drawn (docs/ux-panels.md R3).
+ *     and is not drawn (docs/ux-fleet.md R5, provenance honesty).
  */
 import type { ComponentProps } from "react";
 

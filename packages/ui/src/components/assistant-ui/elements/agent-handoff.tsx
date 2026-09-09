@@ -98,7 +98,9 @@ export type AgentEventInitiator = "parent" | "user" | "harness";
 export function agentEventTone(kind: AgentEventKind): "ok" | "attention" | "danger" | "muted" | "live" {
   switch (kind) {
     case "agent.completed":
-      return "ok";
+      // Muted, not `ok`. Green means happening now in this app, and a run that
+      // has finished is the one thing that needs no attention (D-154).
+      return "muted";
     case "agent.blocked":
       return "attention";
     case "agent.failed":
@@ -119,7 +121,6 @@ export function agentEventSentence(name: string, kind: AgentEventKind, initiator
       return `${name} was blocked`;
     case "agent.failed":
       return `${name} failed`;
-      return `${name} timed out`;
     case "agent.message":
       return `${name} sent a message`;
     case "agent.cancelled":

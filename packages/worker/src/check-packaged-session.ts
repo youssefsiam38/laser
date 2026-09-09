@@ -29,7 +29,7 @@ export type PackagedSessionReport =
   | { ok: false; error: string };
 
 /** The companion modules a packaged build must activate for a project session with every feature on. */
-const REQUIRED_MODULES: readonly PiExtensionModuleName[] = ["subagents", "background-work"];
+const REQUIRED_MODULES: readonly PiExtensionModuleName[] = ["subagents", "background-work", "file-freshness"];
 
 export async function checkPackagedSession(): Promise<PackagedSessionReport> {
   const root = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-packaged-session-`));

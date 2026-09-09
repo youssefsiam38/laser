@@ -99,9 +99,10 @@ ask again") say so under the option. When several questions are waiting, the
 oldest is the card and the rest are counted under it as `+N more waiting behind
 this one`.
 
-Two questions go elsewhere, because the placement table says so
-(docs/ux-panels.md): one that blocks a single tool call renders inside that
-tool's row, and one that blocks the whole session takes a sheet.
+One question goes elsewhere (docs/ux-fleet.md, "Questions"): one raised while
+a single tool runs renders inside that tool's row, where the reader is. If
+that row is scrolled away, a line above the composer says so and takes you to
+it. There is no sheet: a question is part of the conversation that raised it.
 
 ### Notifications
 
@@ -140,8 +141,9 @@ Recordings are capped at 90 s.
   under the composer until the next focus change.
 - **LAN `http://` addresses** cannot install, notify, record or work offline.
   Use the relay link.
-- **The dock does not exist on a phone.** Panels that would be watched in a
-  dock open as sheets; the island strip above the composer is the panel bar.
+- **The side columns do not exist on a phone.** The fleet and the monitor are
+  sheets below 1280px, opened from the top bar; the fleet's toggle carries a
+  mark when something needs a person.
 - **Push payloads are capped** at about 3.9 KB by the push services; the
   document carries a title, one clipped line and a link, never a transcript.
 - **Notification buttons cannot answer by themselves.** A service worker has
@@ -158,9 +160,8 @@ Recordings are capped at 90 s.
    indicator.
 3. In the sandbox session run `/confirm`: the card appears above the composer
    with full-width controls, **No** opens the reason field, and **Send and
-   decline** sends both. Panels that would be watched in a dock appear as
-   pills above the card; tapping one opens it as a sheet with a close control
-   in its header.
+   decline** sends both. The fleet's toggle in the top bar opens the fleet as
+   a bottom sheet, with the same rows the desktop column draws.
 4. Lock the phone for ten minutes with a turn streaming; unlock: the
    transcript catches up with no gap and no duplicate.
 5. Settings → Notifications → **Turn on**, then **Send a test**: the

@@ -11,14 +11,14 @@
  *     row of `aria-pressed` buttons: one tab stop, every level reachable.
  *   - The "budget spent" progress bar is gone. Pi reports no thinking budget
  *     and no thinking token count per level, and a bar that cannot be filled
- *     is a fake (docs/ux-panels.md R3).
+ *     is a fake (docs/ux-fleet.md R5, provenance honesty).
  *   - `ThinkingEffort` is the runtime-bound wrapper behind one compact
  *     popover at every width, so the composer never becomes a settings bar.
  *   - Only the levels the *open session's model* accepts are offered
  *     (`ModelCatalogEntry.thinkingLevels`; Pi maps the rest to null). A
  *     control appears only if it actually works here — and when a model does
  *     not reason at all the control is gone, with the reason in a tooltip
- *     where it would have been (docs/ux-panels.md R2).
+ *     where it would have been (docs/ux-fleet.md R4, capability honesty).
  */
 import type { ModelCatalogEntry, ThinkingLevel } from "@lasercode/protocol";
 import { Brain } from "lucide-react";

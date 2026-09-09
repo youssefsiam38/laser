@@ -1,0 +1,2152 @@
+{
+  "package": "pi-subagents",
+  "version": "0.65.1",
+  "gitHead": "83be9c3de2cde1553c0269f383efc1eb1194dc8b",
+  "tarball": "https://registry.npmjs.org/pi-subagents/-/pi-subagents-0.65.1.tgz",
+  "integrity": "sha512-t5Ik4pHNp/E87a36cuHpTrWaXPEQZzb2mOyZzKRuRtBXm5Z9Ht91nu9mZHrjKj83XYL3SL1kXJdmwBWqm/9fmg==",
+  "files": [
+    {
+      "path": "CHANGELOG.md",
+      "bytes": 263010,
+      "lines": 2398,
+      "sha256": "97ecaf5460bccad50a0ebff69487a5d58f52d0f71c92db15de10b4b6d1c15960",
+      "installedMatch": true
+    },
+    {
+      "path": "LICENSE",
+      "bytes": 1068,
+      "lines": 21,
+      "sha256": "2d20dfacd9742706e564470dc77438608a1e54b0ed46959f080709389209093c",
+      "installedMatch": true
+    },
+    {
+      "path": "README.md",
+      "bytes": 7908,
+      "lines": 126,
+      "sha256": "b6a565a34675d45912eba125e785b314308d4ffb89160f32f9ea2a18fbccda6c",
+      "installedMatch": true
+    },
+    {
+      "path": "agents/claude-code-writer.md",
+      "bytes": 618,
+      "lines": 15,
+      "sha256": "333319b2d9772af592d9be302a9ce725f6118adea4a7887c6b81a82e718bc9f2",
+      "installedMatch": true
+    },
+    {
+      "path": "agents/claude-code.md",
+      "bytes": 577,
+      "lines": 15,
+      "sha256": "20598e6ce3754a88fecc90d2dc26af48672cb13892b37ebb2616045931983e0c",
+      "installedMatch": true
+    },
+    {
+      "path": "agents/codex-exec-writer.md",
+      "bytes": 498,
+      "lines": 15,
+      "sha256": "e02f28e7ade228dd0555e2d1147cb377dc082c6d0bd0b8ba208242e033827ce5",
+      "installedMatch": true
+    },
+    {
+      "path": "agents/codex-exec.md",
+      "bytes": 402,
+      "lines": 15,
+      "sha256": "768fb852b33a649516557a2ca651fc19221481e85c0ab2c3b5a67cc9da15b36c",
+      "installedMatch": true
+    },
+    {
+      "path": "agents/cursor-agent-writer.md",
+      "bytes": 481,
+      "lines": 14,
+      "sha256": "2156c0d70b79cd9fcb8c1b6a58459199b51699f384bba6d8ccb7f9995bfe6529",
+      "installedMatch": true
+    },
+    {
+      "path": "agents/cursor-agent.md",
+      "bytes": 394,
+      "lines": 14,
+      "sha256": "fdb9ef25dca0c119881ceb0f7f4e35206a6bfe5f801d34054d847e5c6a44f84e",
+      "installedMatch": true
+    },
+    {
+      "path": "agents/delegate.md",
+      "bytes": 1088,
+      "lines": 14,
+      "sha256": "d00beec4247404b343d22532988aeec0051cefd1c7b18f2e2ede9249ab02e99d",
+      "installedMatch": true
+    },
+    {
+      "path": "agents/oracle.md",
+      "bytes": 6059,
+      "lines": 78,
+      "sha256": "67562b7d8921e36a2a4b2f692863e20ee6d451c9611d511528ebe2486863ab92",
+      "installedMatch": true
+    },
+    {
+      "path": "agents/researcher.md",
+      "bytes": 2071,
+      "lines": 52,
+      "sha256": "9bd314f434cb57b2e672869e6ee3f90c00f64f973cd7286131fb8857f10a51a0",
+      "installedMatch": true
+    },
+    {
+      "path": "agents/reviewer.md",
+      "bytes": 4779,
+      "lines": 89,
+      "sha256": "bc444b16d46bf9c2bc0b214a2018c2eec40f6f705c61708db7a52e143f234df7",
+      "installedMatch": true
+    },
+    {
+      "path": "agents/scout.md",
+      "bytes": 2216,
+      "lines": 50,
+      "sha256": "5f760ca722d943128c98988bb0392e839984f41a6f23bea03d1cba341136013b",
+      "installedMatch": true
+    },
+    {
+      "path": "agents/worker.md",
+      "bytes": 4273,
+      "lines": 59,
+      "sha256": "29acb356c6a1c6d398a7c02350646a4eef79813530bc871c422879078ca3558b",
+      "installedMatch": true
+    },
+    {
+      "path": "async-retention-discovery-worker.mjs",
+      "bytes": 7147,
+      "lines": 180,
+      "sha256": "9f0adac449093fb8ea6fa375a52a087575b20b57d3411efb057453186c568102",
+      "installedMatch": true
+    },
+    {
+      "path": "docs/agents.md",
+      "bytes": 41623,
+      "lines": 495,
+      "sha256": "351dcf01cec87956f0c87a412a5aebcd89dea8049e4a611915a460373ce58fa4",
+      "installedMatch": true
+    },
+    {
+      "path": "docs/configuration.md",
+      "bytes": 37703,
+      "lines": 542,
+      "sha256": "f6aeabb0025ae23c4cc283c739d36a5c56992fc8286542a74aeee1f466832a50",
+      "installedMatch": true
+    },
+    {
+      "path": "docs/extension-api.md",
+      "bytes": 34378,
+      "lines": 455,
+      "sha256": "2db86d564db28b15172ce1b583ecfdeab8605b0b73de0591f53b0dac8e19b37a",
+      "installedMatch": true
+    },
+    {
+      "path": "docs/missions.md",
+      "bytes": 8653,
+      "lines": 123,
+      "sha256": "83e3944e0fd2a29e35f99cedc5a5c5f8a3555c780100a2d439f93d75321d2427",
+      "installedMatch": true
+    },
+    {
+      "path": "docs/models.md",
+      "bytes": 13993,
+      "lines": 258,
+      "sha256": "54be9c684c7d4ae31f4be5c0ee94b9f075e1436549249654ccfe6a0d58b216ae",
+      "installedMatch": true
+    },
+    {
+      "path": "docs/observability.md",
+      "bytes": 20138,
+      "lines": 263,
+      "sha256": "873ec82e5782c1ae05a3e7a1257ad9f5560a58f8e086b72d8fed9f2dcbb034c4",
+      "installedMatch": true
+    },
+    {
+      "path": "docs/tool-reference.md",
+      "bytes": 46839,
+      "lines": 489,
+      "sha256": "0adaaa4e1922c462b75d60c867a617072a7af8f5b11439319c0bcb2a5a81440d",
+      "installedMatch": true
+    },
+    {
+      "path": "docs/watchdog.md",
+      "bytes": 9157,
+      "lines": 154,
+      "sha256": "5adbc65a9fef6566e829576979ab2a33525bfba1234b17b326ddda24a597b46d",
+      "installedMatch": true
+    },
+    {
+      "path": "docs/workflows.md",
+      "bytes": 31267,
+      "lines": 485,
+      "sha256": "3708d046da530df0765e27408b88071df467cfd6922d7d8397ffdb95b0d17026",
+      "installedMatch": true
+    },
+    {
+      "path": "index.ts",
+      "bytes": 377,
+      "lines": 10,
+      "sha256": "a2f11dbe8e200bd8c590441316a9c6ab222318d2aa738670dedcf0e72592dde3",
+      "installedMatch": true
+    },
+    {
+      "path": "inspector-runner.mjs",
+      "bytes": 345,
+      "lines": 11,
+      "sha256": "b244650d431f589af1f363812a118d07fa0d30bd618ef05a92e8753d3f3e4517",
+      "installedMatch": true
+    },
+    {
+      "path": "install.mjs",
+      "bytes": 2711,
+      "lines": 93,
+      "sha256": "c6ba2957acf6cc48754be559691d55c2e247e1c20261919902057382818b6647",
+      "installedMatch": true
+    },
+    {
+      "path": "package.json",
+      "bytes": 3076,
+      "lines": 110,
+      "sha256": "c62f3e6c0a28bd50545f968dc2aea67f5b9fa7937690a5fcfcb55d2a4ecb6d7d",
+      "installedMatch": true
+    },
+    {
+      "path": "prompts/council.md",
+      "bytes": 3082,
+      "lines": 60,
+      "sha256": "d9d4f9c159006a17720ba19b37e0030649a45cf4f252b594de52304025b39403",
+      "installedMatch": true
+    },
+    {
+      "path": "prompts/gather-context-and-clarify.md",
+      "bytes": 756,
+      "lines": 13,
+      "sha256": "d1eab578f7e4094a3a4265acb288b914a3e1a8ca4c9b316c5e55bcbcb6c1342b",
+      "installedMatch": true
+    },
+    {
+      "path": "prompts/parallel-cleanup.md",
+      "bytes": 4270,
+      "lines": 59,
+      "sha256": "4491517710a21defb578c8b29a8999498ed8317ec6862678ba19ba9e0a380bec",
+      "installedMatch": true
+    },
+    {
+      "path": "prompts/parallel-research.md",
+      "bytes": 2523,
+      "lines": 50,
+      "sha256": "7a279437a1ec4cfc442df321df7585afe0c41c0e96856bd0a02c558e6a95db19",
+      "installedMatch": true
+    },
+    {
+      "path": "prompts/parallel-review.md",
+      "bytes": 4565,
+      "lines": 58,
+      "sha256": "67bf13cbe84435f377d8c19e1048e8f38190fc4825e07e426c4c72523a2ea683",
+      "installedMatch": true
+    },
+    {
+      "path": "prompts/review-loop.md",
+      "bytes": 5275,
+      "lines": 47,
+      "sha256": "bf2be67fbf41e08d9407799fa71d1713444525a963dda0bc4a0b38b25a7a30c1",
+      "installedMatch": true
+    },
+    {
+      "path": "runner-server-preload.mjs",
+      "bytes": 503,
+      "lines": 13,
+      "sha256": "2386a4feb1cb107c4100056db8c6c95805df9be26f51116879abfef495f814ef",
+      "installedMatch": true
+    },
+    {
+      "path": "skills/council-mode/SKILL.md",
+      "bytes": 4311,
+      "lines": 59,
+      "sha256": "31be86e2177a283a53d9e36044cdb655a5060cf217fcc0594d163ea44e8642e4",
+      "installedMatch": true
+    },
+    {
+      "path": "skills/council-mode/references/pass-contracts.md",
+      "bytes": 4565,
+      "lines": 150,
+      "sha256": "f2eb16d989d4396e0fc3147ba2108db08e4e89b9020ab68629a86cb2957836a3",
+      "installedMatch": true
+    },
+    {
+      "path": "skills/pi-subagents/SKILL.md",
+      "bytes": 7474,
+      "lines": 104,
+      "sha256": "b0c42c4c4cdc44f722d81946f2e63f1e9d4594f00299c81453a39817cc9e6ad0",
+      "installedMatch": true
+    },
+    {
+      "path": "skills/pi-subagents/references/constraints-and-recipes.md",
+      "bytes": 8812,
+      "lines": 70,
+      "sha256": "cb16883069148c73d1d42d96d18097309f55e4132856df5724ee4cf30397430c",
+      "installedMatch": true
+    },
+    {
+      "path": "skills/pi-subagents/references/execution-controls.md",
+      "bytes": 47669,
+      "lines": 543,
+      "sha256": "0f24f94336f7475e15121dd585d692955e849537dabc058c8d726d06863316ae",
+      "installedMatch": true
+    },
+    {
+      "path": "skills/pi-subagents/references/management-authoring-rpc.md",
+      "bytes": 12025,
+      "lines": 161,
+      "sha256": "5af6d942eb4eed421b20c20c2916b57cf3a9435c96247fc6ae2e10f7b1974265",
+      "installedMatch": true
+    },
+    {
+      "path": "skills/pi-subagents/references/multi-lane-orchestration.md",
+      "bytes": 5940,
+      "lines": 53,
+      "sha256": "4646ffd569688909fe5cb76489079b504bb1b5126f6fe267db2c470781d51922",
+      "installedMatch": true
+    },
+    {
+      "path": "skills/pi-subagents/references/prompting-and-roles.md",
+      "bytes": 31418,
+      "lines": 295,
+      "sha256": "de5958c84b8adb0d95f5f10817e62c1e671bcc1c5a400e88dc4a4e3e46351458",
+      "installedMatch": true
+    },
+    {
+      "path": "skills/pi-subagents/references/review-and-validation.md",
+      "bytes": 3547,
+      "lines": 73,
+      "sha256": "f0fb898793ee88d1c421872124dc8a47b4a2477d03beb8e84fdf6fe452ee22da",
+      "installedMatch": true
+    },
+    {
+      "path": "src/agents/agent-management.ts",
+      "bytes": 75365,
+      "lines": 1405,
+      "sha256": "06c6052b07a09751651819977094dc78be7ad9f1e2f81827543e897a0b8e6c71",
+      "installedMatch": true
+    },
+    {
+      "path": "src/agents/agent-memory.ts",
+      "bytes": 10153,
+      "lines": 254,
+      "sha256": "ef4bc855b6512498fb7d763e95737b0ad259eaf40b01fe385b1c338fc28c3b9d",
+      "installedMatch": true
+    },
+    {
+      "path": "src/agents/agent-refinements.ts",
+      "bytes": 26341,
+      "lines": 624,
+      "sha256": "aba761e241326306c1aeb71af4bff17e86c6b4fbed1d67b7c44a7262f3af55a4",
+      "installedMatch": true
+    },
+    {
+      "path": "src/agents/agent-scope.ts",
+      "bytes": 219,
+      "lines": 6,
+      "sha256": "22b567ec03196e4f4007957a62ad5b2456154a471786442e24538a997090da0f",
+      "installedMatch": true
+    },
+    {
+      "path": "src/agents/agent-selection.ts",
+      "bytes": 844,
+      "lines": 25,
+      "sha256": "937862b01c6ef004708a30b72da85174d7d480511249a790106affd38ace1b8b",
+      "installedMatch": true
+    },
+    {
+      "path": "src/agents/agent-serializer.ts",
+      "bytes": 7657,
+      "lines": 179,
+      "sha256": "944a48e3602ea239115a07779a8210879909dbb07452a285229b9274ac1e4a34",
+      "installedMatch": true
+    },
+    {
+      "path": "src/agents/agents.ts",
+      "bytes": 127771,
+      "lines": 2790,
+      "sha256": "02c2e5a5631d365cc4b1bc89f8c1e7e7edf73e68ca060b219f55393087ac275e",
+      "installedMatch": true
+    },
+    {
+      "path": "src/agents/builtin-names.ts",
+      "bytes": 251,
+      "lines": 15,
+      "sha256": "ed7aebb05169368dde372a43998381817d24f752715c69acd598868d42944383",
+      "installedMatch": true
+    },
+    {
+      "path": "src/agents/chain-serializer.ts",
+      "bytes": 11400,
+      "lines": 280,
+      "sha256": "16b128bff8d0a3cb48071df650fce7b48e1eae931bab3d265c47299c40aaff06",
+      "installedMatch": true
+    },
+    {
+      "path": "src/agents/frontmatter.ts",
+      "bytes": 5256,
+      "lines": 153,
+      "sha256": "5ba39cb6eb57e552d76e7e4a0b5cfab3393b8ea61af1b7b3174199c799f2f574",
+      "installedMatch": true
+    },
+    {
+      "path": "src/agents/identity.ts",
+      "bytes": 1472,
+      "lines": 30,
+      "sha256": "994092630217e368d8501879775be22c10e8340d739492d51e893c747fbbdde2",
+      "installedMatch": true
+    },
+    {
+      "path": "src/agents/proactive-skills.ts",
+      "bytes": 6876,
+      "lines": 194,
+      "sha256": "b36f4b7cecbd0f4abcd106dfb3e5b37473ffb8bb908f7b807d20ac4d81530888",
+      "installedMatch": true
+    },
+    {
+      "path": "src/agents/runtime-agent-events.ts",
+      "bytes": 3037,
+      "lines": 70,
+      "sha256": "b160682a12a041978a8ce939dbb3793545a6f35d2ff566edceac6e3eca9f2e32",
+      "installedMatch": true
+    },
+    {
+      "path": "src/agents/runtime-agent-registry.ts",
+      "bytes": 25331,
+      "lines": 429,
+      "sha256": "6945887b12aaffe5b42405b9ddff825670f37b962c7be2b523564ff83618c445",
+      "installedMatch": true
+    },
+    {
+      "path": "src/agents/skills.ts",
+      "bytes": 25262,
+      "lines": 754,
+      "sha256": "e17c0b224da5b264dc8973731dacc31d21c497efbda78443a015b0ab15903e14",
+      "installedMatch": true
+    },
+    {
+      "path": "src/api/agents.ts",
+      "bytes": 584,
+      "lines": 12,
+      "sha256": "672abbc64e98086dcbb61ac2608a4d5cb2a1651cd6dfcf1b65717f8755c7d1a4",
+      "installedMatch": true
+    },
+    {
+      "path": "src/api/background-work.ts",
+      "bytes": 8677,
+      "lines": 206,
+      "sha256": "225cc247412b53860f0ce1f42ea2edf8dd0d082057701f7af17f0bee6bfc68d8",
+      "installedMatch": true
+    },
+    {
+      "path": "src/api/capability-ceiling.ts",
+      "bytes": 581,
+      "lines": 16,
+      "sha256": "ff477539fc599db096c2421e20acb0ca97de052cb40398eaf513eaf7c535c90d",
+      "installedMatch": true
+    },
+    {
+      "path": "src/api/child-tool-plan.ts",
+      "bytes": 139,
+      "lines": 5,
+      "sha256": "4287dabcb1cc1bcedc3c1b4766fba4c0ab4f954641d71fe4f6c744861bf146f3",
+      "installedMatch": true
+    },
+    {
+      "path": "src/api/control-channel.ts",
+      "bytes": 95,
+      "lines": 4,
+      "sha256": "b0677202725765104ec05f9cefda56934441cf1ccbbe4055e44dd1bdbb4dcbdf",
+      "installedMatch": true
+    },
+    {
+      "path": "src/api/delegation.ts",
+      "bytes": 3298,
+      "lines": 112,
+      "sha256": "aadeca03d164519642413b9cea1875d9e191a8598e4825d99f74e28148ab7819",
+      "installedMatch": true
+    },
+    {
+      "path": "src/api/external-job-provider.ts",
+      "bytes": 8993,
+      "lines": 195,
+      "sha256": "249874fdf318ae39398fcac3f11c3458d2e0066693a40b7d8b1246b729fa4a4e",
+      "installedMatch": true
+    },
+    {
+      "path": "src/api/external-runs.ts",
+      "bytes": 12630,
+      "lines": 282,
+      "sha256": "318b3163478f057e9edf0dc9c139517885f4a4fd21af8d5d8e6fd3d74a674c5c",
+      "installedMatch": true
+    },
+    {
+      "path": "src/api/intercom-bridge.ts",
+      "bytes": 81,
+      "lines": 3,
+      "sha256": "58d4ca7b79fb732e8efaaa4eac21b5bcecc0867d3d92fb3a04b9ea553c744822",
+      "installedMatch": true
+    },
+    {
+      "path": "src/api/preflight.ts",
+      "bytes": 25362,
+      "lines": 504,
+      "sha256": "e04e6d4cb4dc1b35407103173df24b2a715822b3186e35dfeaf4aaa3ad60f441",
+      "installedMatch": true
+    },
+    {
+      "path": "src/api/project-panes.ts",
+      "bytes": 905,
+      "lines": 32,
+      "sha256": "35993ca8ae5fc2ab74e57f0b1df48898414ceeb3421bda4aad16d845ea5cd27b",
+      "installedMatch": true
+    },
+    {
+      "path": "src/api/shared-types.ts",
+      "bytes": 642,
+      "lines": 27,
+      "sha256": "7422db1b7f5f0b6b1877a2b111cb1741973637d05db94ce2cd3194a9202e2467",
+      "installedMatch": true
+    },
+    {
+      "path": "src/extension/config.ts",
+      "bytes": 13538,
+      "lines": 257,
+      "sha256": "68e4d3472cd141f85f96d12386fcc6cfc23f20fc1e6b4c5bd1d7aeb3581de6b4",
+      "installedMatch": true
+    },
+    {
+      "path": "src/extension/control-notices.ts",
+      "bytes": 2260,
+      "lines": 58,
+      "sha256": "78a3e7a4a9bd62da32d0ecaf54b4b613667f1f770e88a5ba6aff471cac66256e",
+      "installedMatch": true
+    },
+    {
+      "path": "src/extension/doctor.ts",
+      "bytes": 10610,
+      "lines": 270,
+      "sha256": "8d63473950da1614cf266a0ec9930c4a24e6ae34f8fa0f8c96b3602f54990f00",
+      "installedMatch": true
+    },
+    {
+      "path": "src/extension/fanout-child.ts",
+      "bytes": 8549,
+      "lines": 203,
+      "sha256": "87fd60892a3059ca0f82fdabd9db6ca1e45c9d4d291260c2926695b8d64a14f9",
+      "installedMatch": true
+    },
+    {
+      "path": "src/extension/index.ts",
+      "bytes": 48724,
+      "lines": 1144,
+      "sha256": "fdb86864e6acaec948206cb5f830b256dcf50f1b3a103f31076501df81d37384",
+      "installedMatch": true
+    },
+    {
+      "path": "src/extension/public-execution.ts",
+      "bytes": 12822,
+      "lines": 224,
+      "sha256": "59fc5cfa01f5b12ae05aefd33e6cbac3732092edfc70da7f2fdc27b615b2b4ca",
+      "installedMatch": true
+    },
+    {
+      "path": "src/extension/rpc.ts",
+      "bytes": 33392,
+      "lines": 861,
+      "sha256": "34c52b0351a596c45bb63f26a754d4a7995b7e68504c7b714cc57d9474a8f150",
+      "installedMatch": true
+    },
+    {
+      "path": "src/extension/schemas.ts",
+      "bytes": 30514,
+      "lines": 420,
+      "sha256": "9e5c09a37e2017212e3cbe3b674567bcc454e3d9c5cbbba580476d8653139e01",
+      "installedMatch": true
+    },
+    {
+      "path": "src/extension/steering-notices.ts",
+      "bytes": 1391,
+      "lines": 35,
+      "sha256": "b1ecb53128b0fd56a1c6ed2e677f1a8bbee049a84409b0cb4428f8283b342995",
+      "installedMatch": true
+    },
+    {
+      "path": "src/extension/subagent-guide.ts",
+      "bytes": 1267,
+      "lines": 39,
+      "sha256": "5ce0cbeaada17f2abcf13727a6c7c85a153311933983f2f2c3168e0b86753853",
+      "installedMatch": true
+    },
+    {
+      "path": "src/extension/tool-description.ts",
+      "bytes": 27816,
+      "lines": 226,
+      "sha256": "e0e5ff1fe670fb452dcda7dac80b2fb6548b8165dd8e81b6f660852a36bae060",
+      "installedMatch": true
+    },
+    {
+      "path": "src/extension/tool-result.ts",
+      "bytes": 719,
+      "lines": 19,
+      "sha256": "14fb8162d7c0a5948c0068b5990c82c4b1f4fbf04176c04618286a71e7f55b87",
+      "installedMatch": true
+    },
+    {
+      "path": "src/inspectors/herdr/actions.ts",
+      "bytes": 12680,
+      "lines": 235,
+      "sha256": "f380ad5c3b1ea6758c2ebc0fa161e722e1544360df9f7a09194503a9449c837f",
+      "installedMatch": true
+    },
+    {
+      "path": "src/inspectors/herdr/client.ts",
+      "bytes": 5930,
+      "lines": 130,
+      "sha256": "2de5033041ed5dfc84176f224653aeaeca177f4d2d7c1111c779d8dd206c078d",
+      "installedMatch": true
+    },
+    {
+      "path": "src/inspectors/herdr/focus.ts",
+      "bytes": 2551,
+      "lines": 55,
+      "sha256": "baf08c80695992a9d3911d3c9f8d86a78c0b3d287dfa51b7bbbe2576c0dc6f4c",
+      "installedMatch": true
+    },
+    {
+      "path": "src/inspectors/herdr/inspector-runner.ts",
+      "bytes": 8145,
+      "lines": 153,
+      "sha256": "80035d1fe9fd96e09e90e07a24ff0e98f49809fbc066d7310247f615c8b2f5b5",
+      "installedMatch": true
+    },
+    {
+      "path": "src/inspectors/herdr/project-panes.ts",
+      "bytes": 34224,
+      "lines": 730,
+      "sha256": "7e36343657f1e1242b92856e8cc3ef663fe268bb4a0faa01ab69b2e6bf6c42dc",
+      "installedMatch": true
+    },
+    {
+      "path": "src/inspectors/herdr/session-roots-codec.ts",
+      "bytes": 1776,
+      "lines": 42,
+      "sha256": "06d5071dd05ed99007f51057be3e96cadbf662c74e7e3e4b988af7f3594b0e92",
+      "installedMatch": true
+    },
+    {
+      "path": "src/inspectors/herdr/shell-command.ts",
+      "bytes": 834,
+      "lines": 16,
+      "sha256": "1fd53e036e639fa65a0b1e765ea230db61a196bafb0180e27baa282fa8014e03",
+      "installedMatch": true
+    },
+    {
+      "path": "src/integrations/herdr-status.ts",
+      "bytes": 13981,
+      "lines": 400,
+      "sha256": "4ad239ed7f9b8909250cf2aa730d112013ee702a80378e571f0cddb420b661c1",
+      "installedMatch": true
+    },
+    {
+      "path": "src/integrations/pi-web-session-liveness.ts",
+      "bytes": 3140,
+      "lines": 73,
+      "sha256": "3dcf92d21cbdeca3161a2006e6af9934f3b6df84c82eef806d4152707acd14b7",
+      "installedMatch": true
+    },
+    {
+      "path": "src/intercom/intercom-bridge.ts",
+      "bytes": 8922,
+      "lines": 191,
+      "sha256": "e015bab790d7451eea8a849bc045c9cde08faf98fc83f97db7b6ff6d5c832351",
+      "installedMatch": true
+    },
+    {
+      "path": "src/intercom/native-supervisor-channel.ts",
+      "bytes": 34726,
+      "lines": 876,
+      "sha256": "9ebcfea13c86124aaaed93bc692503e5fb7078d1338f053f82d6379aabe9c6df",
+      "installedMatch": true
+    },
+    {
+      "path": "src/intercom/result-intercom.ts",
+      "bytes": 17841,
+      "lines": 423,
+      "sha256": "136b122eb87153a3173ff6d619f7aebb9f764989fc739cfe30e6e66675f4f682",
+      "installedMatch": true
+    },
+    {
+      "path": "src/intercom/supervisor-ui.ts",
+      "bytes": 9515,
+      "lines": 244,
+      "sha256": "ea5a33b4afe5e48f9162112d874422f41b50c906ba547bc57ae4a92862487b61",
+      "installedMatch": true
+    },
+    {
+      "path": "src/missions/actions.ts",
+      "bytes": 22023,
+      "lines": 433,
+      "sha256": "2af845c59e9180bbb20410923882bbe69f5a94b695aed923455fa815f61609f9",
+      "installedMatch": true
+    },
+    {
+      "path": "src/missions/goal-driver.ts",
+      "bytes": 6975,
+      "lines": 164,
+      "sha256": "a6d8dfc3e3909993cf5b974e268fe6b7d752e3424400b646766b4399ac983e7d",
+      "installedMatch": true
+    },
+    {
+      "path": "src/missions/lifecycle.ts",
+      "bytes": 17954,
+      "lines": 367,
+      "sha256": "da9499a69313f7e06cf13cba63fc08e1433baafdcc394c7604576633b032f58b",
+      "installedMatch": true
+    },
+    {
+      "path": "src/missions/store.ts",
+      "bytes": 29311,
+      "lines": 584,
+      "sha256": "d7dcf1763eb6ced32894c93b7c01d5a36c6ea1670f8212490196a3c9afbe3846",
+      "installedMatch": true
+    },
+    {
+      "path": "src/missions/types.ts",
+      "bytes": 4469,
+      "lines": 190,
+      "sha256": "dc0e98cb19250e93be8f7a55772a4ef6438ab2e0cabd7bc6774f389a722384d9",
+      "installedMatch": true
+    },
+    {
+      "path": "src/missions/workflow-state.ts",
+      "bytes": 10356,
+      "lines": 281,
+      "sha256": "62240e07c2eb427ebea2e20d9f924a5de06cce3e11773a153afbe9df0744bd97",
+      "installedMatch": true
+    },
+    {
+      "path": "src/policy/authority.ts",
+      "bytes": 1644,
+      "lines": 46,
+      "sha256": "9b63de153344c60f1ced6fe03eb1974898a34b6555274cd10f8af3db9ad98914",
+      "installedMatch": true
+    },
+    {
+      "path": "src/profiles/profiles.ts",
+      "bytes": 27943,
+      "lines": 662,
+      "sha256": "5219d05856b83a1fac31bf4a8abc040bea18321fd1062cb806c3484e3e75da57",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/active-async-capacity.ts",
+      "bytes": 24898,
+      "lines": 516,
+      "sha256": "d593f1487198fee0dffe5fcadc69c74249a1204af81efcb0b7b55a5dd797e9ae",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/active-run-index.ts",
+      "bytes": 4854,
+      "lines": 139,
+      "sha256": "1d06b549c95302ea16837a80c6de514e6bdc2c82b47a166c491b984731d11569",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/async-execution.ts",
+      "bytes": 98973,
+      "lines": 2106,
+      "sha256": "5d7d4446ce66d54e324a275b1d649878d0bd4b77d35160caf4ac76c5d0bc534d",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/async-job-tracker.ts",
+      "bytes": 34603,
+      "lines": 792,
+      "sha256": "3c289de8fb4f7427f140ee0ff5802a24b5f2250a1fa935a4f3f6ca2631700b1a",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/async-resume.ts",
+      "bytes": 42323,
+      "lines": 642,
+      "sha256": "355d503cfb61925a7ffdfc494675b2fbd9ae9a5bae6ce1a1f87fc86fdaffed65",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/async-retention.ts",
+      "bytes": 41344,
+      "lines": 912,
+      "sha256": "2471937b1ec0d40c111efef3114007fa57ef9c1a6def99c1f685f78c5c272514",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/async-status-snapshot.ts",
+      "bytes": 2017,
+      "lines": 48,
+      "sha256": "755b0db87eeca8d1c119644b8572065f65fa9b976168f73f4e3d06d2a96a0d3d",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/async-status.ts",
+      "bytes": 39589,
+      "lines": 752,
+      "sha256": "678422a4d67b3a17297dd16fda7faa5ee4d725b96914fd64b9d4cb8e6980d2d8",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/auto-drain.ts",
+      "bytes": 2616,
+      "lines": 68,
+      "sha256": "986e6ce75769f941d3d2380e34c97b4e1ca4c2c5435eff953bb9584204e2066e",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/chain-append.ts",
+      "bytes": 12211,
+      "lines": 321,
+      "sha256": "842ddeaf9eacdb06781283b154dec31639bb7037702f96a0dc5b41277c3fdc86",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/chain-root-attachment.ts",
+      "bytes": 13018,
+      "lines": 270,
+      "sha256": "d1bb1c42b7b161acbb65a8278ccef43b379f54c387a6004d2b6461738fa0e653",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/completion-batcher.ts",
+      "bytes": 5547,
+      "lines": 168,
+      "sha256": "a6935ae375623fcfcb167c178cac4032316dbd93e8edfd7c300bf91e798f5da0",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/completion-dedupe.ts",
+      "bytes": 1849,
+      "lines": 58,
+      "sha256": "e9ea4c620a59983d187292706a08af1df7fe87c3d5b64c4fdb967db92888319b",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/completion-replay.ts",
+      "bytes": 11475,
+      "lines": 287,
+      "sha256": "1028f628ef14c4ebbb2ca388fcd2a0253ff1a99c7d5f61810f4fddf5047084e6",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/control-channel.ts",
+      "bytes": 21529,
+      "lines": 566,
+      "sha256": "09011807a4f537dfb0a243bd441091fcb7d997fddaf0751f4c118c403e290bb8",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/fleet-view.ts",
+      "bytes": 31126,
+      "lines": 620,
+      "sha256": "5334c23616c59be6ea643832a96c0ce974ca9553c2355683e5edf203399fb938",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/index-segment.ts",
+      "bytes": 2314,
+      "lines": 59,
+      "sha256": "1ee5e60273c5a45ba7b16ac21c4ae049af5dd914a7a7f3053ec838f0d60dd7ee",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/inspect-rpc.ts",
+      "bytes": 22389,
+      "lines": 443,
+      "sha256": "6562fff97153527e830995fdf936b73dc4edf984a44be6eba083551caf1a4189",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/notify.ts",
+      "bytes": 27901,
+      "lines": 647,
+      "sha256": "1f71db71ca1d8d815dc20fdd9da04d88aec9b65bfa7854232705e3da1e38d83f",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/owned-process-tree.ts",
+      "bytes": 4084,
+      "lines": 104,
+      "sha256": "2eb4242149bafe04cf3409d0707466737300e109bd5af8dca4cbeb733a1e8ae9",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/parallel-groups.ts",
+      "bytes": 1757,
+      "lines": 45,
+      "sha256": "e4d8323ae801a303d1dcae6eb8235bee92ab98e7017a9e727ef4c5133ba2d1ab",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/process-terminal.ts",
+      "bytes": 16829,
+      "lines": 310,
+      "sha256": "d63819d81445258e6d4c644bcb949064cb83634984d84461d455deb593349a83",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/result-delivery-ownership.ts",
+      "bytes": 1779,
+      "lines": 45,
+      "sha256": "97ab7c94cbb81902fdc034edd24acde5cdc38d663026149cce6bea1f38ebfbf0",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/result-files.ts",
+      "bytes": 22299,
+      "lines": 519,
+      "sha256": "ac49985bd3e99f0cc9a2dab5fd62c92b58c56a260074e6418acda2bbca231344",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/result-watcher.ts",
+      "bytes": 32985,
+      "lines": 792,
+      "sha256": "8f70643a1d4366708c27dc3d96ce8a2dbe4685c13a1dbbdc8f5fa82069e09dc8",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/resume-guidance.ts",
+      "bytes": 3539,
+      "lines": 56,
+      "sha256": "7e3033f369f630672b1a5aa62a64096b84d9715a11bec5000f17d8f79262e963",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/retained-children.ts",
+      "bytes": 7461,
+      "lines": 135,
+      "sha256": "961534bf0ef2e21c93d3624d2be853202b4f3afcd06de22201cfd285a775883a",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/retained-nested-route-tracker.ts",
+      "bytes": 3339,
+      "lines": 96,
+      "sha256": "1a46a708450cf4d75b9f5aa35f6904b29547206aecb21f5250b9b2157b2a1d76",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/run-child-session.ts",
+      "bytes": 24455,
+      "lines": 614,
+      "sha256": "86f302832a21afdb0e79446d20d58be242d23c09f3d425bf4db254a09c10c940",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/run-id-query.ts",
+      "bytes": 333,
+      "lines": 7,
+      "sha256": "d83cf9c2a68c130bf772bdb9dfbd6f4216a62065c3ce009fe8a5617115438e07",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/run-id-resolver.ts",
+      "bytes": 8435,
+      "lines": 175,
+      "sha256": "81efa2f0e31f9a5148aaa39f3c136243675896af911190f379a6227a5d7654fe",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/run-status.ts",
+      "bytes": 47355,
+      "lines": 713,
+      "sha256": "b769381f7778361d1db3718d5fb45c6ee7d345294d1f3096ca147c43ddbf4ab7",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/runner-aliases.ts",
+      "bytes": 7419,
+      "lines": 152,
+      "sha256": "fcb63d19d1f8279f86fa2c7067b9fdcb53da5eabd9b50225823b04c139079e4f",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/runner-child-sessions.ts",
+      "bytes": 1709,
+      "lines": 31,
+      "sha256": "b73067527deaa6319c28b14d2bc5c04bdb1523a987b0e1ab7b770183123b4957",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/scheduled-runs.ts",
+      "bytes": 47261,
+      "lines": 979,
+      "sha256": "f3c0f4ff10b970b9627679c958563ba33e65a53c301d9662066777ce367e6e60",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/stale-run-reconciler.ts",
+      "bytes": 17538,
+      "lines": 410,
+      "sha256": "de717a2f6485fc2f87ea60854f8fbb99b8f01eefd2d691c96f93209081261c6f",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/steering.ts",
+      "bytes": 11274,
+      "lines": 242,
+      "sha256": "6d22c26873e724f477cbddf7ae77355983baab4cb800d80f2ac5141adbbaa78d",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/subagent-runner.ts",
+      "bytes": 241789,
+      "lines": 5001,
+      "sha256": "0468a7895fce4e7b54c7cb6616abb711c1860c531c103b963869c04072bf3a72",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/subagent-wait.ts",
+      "bytes": 34348,
+      "lines": 725,
+      "sha256": "846125347a6a09ec4e39d923ef32d68ca0357dc9d569d8b532a1f9027265dcc0",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/terminal-run-index.ts",
+      "bytes": 5137,
+      "lines": 138,
+      "sha256": "a69cdd59bd6976963f430f21f485918ef2ffc688d3e823412f207213140fa9f9",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/top-level-async.ts",
+      "bytes": 382,
+      "lines": 14,
+      "sha256": "c0c60cf72bbe7beea845d3a4f802b8930af78b7932790cff5adcbf0dd545b6ba",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/wait-completions.ts",
+      "bytes": 9008,
+      "lines": 209,
+      "sha256": "a19e19a91ae576d897e977ae5774705eb7a6192084be0ebc0ec7d3101bbbc4c1",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/wait-config.ts",
+      "bytes": 2621,
+      "lines": 50,
+      "sha256": "51a0faf216a858a6beda0c3f41cb1b48cc3975ac7d8514758fb7ec2397c42c66",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/wait-subscriptions.ts",
+      "bytes": 13895,
+      "lines": 348,
+      "sha256": "ee21a0e5bf06ee3b0d9e033ded1e0d2ea493921759f8fd657758e7da58f3cb02",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/background/wait-tool.ts",
+      "bytes": 3637,
+      "lines": 43,
+      "sha256": "5ed1670e1c560834ca1c2a857440aa6b8152958236a183f86909b36b3d3a1e4f",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/foreground/async-dismiss-action.ts",
+      "bytes": 3387,
+      "lines": 86,
+      "sha256": "33e078a983b6fe73f7a6522c83a14fb2f65eb85ad6e67ffc4dd707313436718d",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/foreground/async-steering-action.ts",
+      "bytes": 16281,
+      "lines": 246,
+      "sha256": "4e29cbff688be4a1239c600e92990ab32547d213170e980299eed67936fbd96a",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/foreground/async-stop-action.ts",
+      "bytes": 3455,
+      "lines": 86,
+      "sha256": "740c8dd4b246ab26f8066db48252377106d2b90d7742cfdd8d838adb02ffb07a",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/foreground/execution.ts",
+      "bytes": 94647,
+      "lines": 2269,
+      "sha256": "54017d93d1c8cd03d64be5b1bc532c624cae3755f6952017fd8eaf34e76efb61",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/foreground/foreground-control.ts",
+      "bytes": 5652,
+      "lines": 157,
+      "sha256": "dce544341f1fc46c07f6e0494a86c6f4c5fb70e9a3e4119af96f9fef39e9860b",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/foreground/foreground-history.ts",
+      "bytes": 8657,
+      "lines": 162,
+      "sha256": "b868cdd3ab021bff67e94d99b53b3f4e59e9134cfa7d4799e5cb9b23534eaad3",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/foreground/prompt-audit.ts",
+      "bytes": 7018,
+      "lines": 176,
+      "sha256": "5f3a8a811f6474d98b2799b86166508af87f45074b8b2e703514923d6f1d485e",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/foreground/subagent-executor.ts",
+      "bytes": 382434,
+      "lines": 7038,
+      "sha256": "82fe372a9f6b72c09099be45820bd8503da4824bbcbc788deb3c10c125f805be",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/foreground/workflow-detach-reconcile.ts",
+      "bytes": 14582,
+      "lines": 299,
+      "sha256": "774fe3548416522d0f3bc1b3d0bbc2a6821eb5c63e6410da889c437260fc9a22",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/foreground/workflow-foreground-steering.ts",
+      "bytes": 6401,
+      "lines": 114,
+      "sha256": "21af755ace09bbd5b38e88b297de80211aaab99616cf804a170e7e9757179e24",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/abort-recovery.ts",
+      "bytes": 5855,
+      "lines": 119,
+      "sha256": "6094c6f4b6df6934aa5bb3bfe4842b28c58aeed382b9a44c1e4859b75046001e",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/acceptance.ts",
+      "bytes": 72082,
+      "lines": 1538,
+      "sha256": "fbf64795bc82acd4a8f1b5eaa8c95b5e1578f17b1b7c55482eb580f07ef18d59",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/agent-contract.ts",
+      "bytes": 1744,
+      "lines": 38,
+      "sha256": "9c381e9b94dbf50a25a7c67db270d06fccacbdd74af5612fb9d494a962300c12",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/async-status-projection.ts",
+      "bytes": 25500,
+      "lines": 565,
+      "sha256": "4d85941bcaafd8fa8b2d73deb47fcb18681d299c6648dcb0051dcd034eb8d496",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/background-process-options.ts",
+      "bytes": 205,
+      "lines": 9,
+      "sha256": "0bcd3a3f69e5610030185ea05dc6074c1e80439205ada8f8dd558cb815ad8bd7",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/capability-ceiling.ts",
+      "bytes": 10182,
+      "lines": 209,
+      "sha256": "d5d808eb4049103b1eaa2a3ef45ad2f46525b04cbe15921235f43e5b00a091a5",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/chain-outputs.ts",
+      "bytes": 5424,
+      "lines": 116,
+      "sha256": "f7d8b03500c7c7f582673a70a7bc1a7d2fa562c64cb7d2705190663f2e843354",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/child-hooks.ts",
+      "bytes": 1275,
+      "lines": 25,
+      "sha256": "4f7dda7368ff66f5027c3a9db514906c52f6919a71ef30ee381d42250cdc016b",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/child-identity.ts",
+      "bytes": 2503,
+      "lines": 62,
+      "sha256": "233bad64e349cac4beaa8655cc1bc2cfd3da814b9678ffe456ca2610cfcfa78d",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/child-launch-plan.ts",
+      "bytes": 5419,
+      "lines": 151,
+      "sha256": "a5e1b36ca879f98af383ee94ffb8fdb1d4a872b7451e7a5ce9d59e98e8650c23",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/child-launch.ts",
+      "bytes": 14684,
+      "lines": 314,
+      "sha256": "7c4cb9e6d6bea8b3a1f5b685a2685dffe81d326d5d0d95161b2eeacc871191f2",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/child-lifecycle.ts",
+      "bytes": 1128,
+      "lines": 25,
+      "sha256": "6ae09d45e96306e22afb653e07e4df1233480a5f14330ed17af2319cc7d7343c",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/child-runtime-config.ts",
+      "bytes": 5039,
+      "lines": 126,
+      "sha256": "3e091d5c3a42eeec804a0d503791595841e02a07318c250cb4cd00e71d320f7f",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/child-session.ts",
+      "bytes": 14314,
+      "lines": 337,
+      "sha256": "04cf6190c9aa466d481ccafc033ff3a37c1b9b962a18e2c175cf4963b5bf1556",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/child-tool-plan.ts",
+      "bytes": 19890,
+      "lines": 530,
+      "sha256": "114eb786d10d6ab52f141d549077ea2baa77d3098c6edccebf25367d60085a4c",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/claude-code-adapter.ts",
+      "bytes": 5097,
+      "lines": 133,
+      "sha256": "2404e14388410a50aa9c8077af39f21722e3c9dcdcdfe0bc6af19a3fd555b212",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/codex-exec-adapter.ts",
+      "bytes": 5357,
+      "lines": 129,
+      "sha256": "1ce2efd60aae251800196d3ad5b58a2852bcd5b65e8fb1e6b9505161788687a2",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/completion-evidence.ts",
+      "bytes": 3338,
+      "lines": 89,
+      "sha256": "93823250ad1b430d4a135455815e863e2ba3f17e3280f2fad951c922ccee1232",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/completion-guard.ts",
+      "bytes": 12803,
+      "lines": 252,
+      "sha256": "0c649aa9e615622951145e9cb5b608dcbae61cd2eaf81b3a8de8b6d5889304a1",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/context-mode.ts",
+      "bytes": 1502,
+      "lines": 44,
+      "sha256": "baefa0ce44f200b0ba44ffb0009ffbbdfe5c6ccd368d72b0535a0b6cafe53e16",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/cursor-agent-adapter.ts",
+      "bytes": 4721,
+      "lines": 114,
+      "sha256": "b0ea563c6bc1956dfe77f0d9511cb45e998e5f38e098d7b8aa88d56b9ef00096",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/dynamic-fanout.ts",
+      "bytes": 15094,
+      "lines": 297,
+      "sha256": "cc7c0cc5c19f4a161d2b234e2465c57fd434750b201fadeb16e3af4b631935c9",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/extension-bindings.ts",
+      "bytes": 4553,
+      "lines": 78,
+      "sha256": "55bf824caa684eb49be04ba3760325b19ee5cee8f01a6082be4ba530fe26c8d2",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/external-cli-contract.ts",
+      "bytes": 8954,
+      "lines": 167,
+      "sha256": "850d53a1ef1aa13c2f6da9e342a685325bac39e83e7ce8486c06cc80ec34e665",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/external-cli-preflight.ts",
+      "bytes": 5597,
+      "lines": 138,
+      "sha256": "5126e0a02b97b8a3fb6ce1b559eb34b5555c2586d56ce8273ceaebd462a02062",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/external-cli-runner.ts",
+      "bytes": 18745,
+      "lines": 429,
+      "sha256": "51f41fc6ee753ca3d96cfb93a083e64c62acc5d359ac4169e0f9e357967ca0e0",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/external-job-bridge.ts",
+      "bytes": 19011,
+      "lines": 460,
+      "sha256": "52eaa9728740d044c0b8308b6ecec68931642c3dc4e451d7600b3ead19223187",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/external-job-runner.ts",
+      "bytes": 18913,
+      "lines": 389,
+      "sha256": "1978d02e0cb7a7279af48acf299d9e0cd8a8e77dd4d21214845eab691c286100",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/fast-mode-extension.ts",
+      "bytes": 515,
+      "lines": 10,
+      "sha256": "b12b8dec3b767f624c1b868c47c88de97b7dca76e9090e8f31a15771cdb4b4c4",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/host-step-status.ts",
+      "bytes": 12054,
+      "lines": 231,
+      "sha256": "e6cece925cee958b5232dd24b22ca5cbffa54a202356ff125fd0d9921eae99b3",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/lane-metadata.ts",
+      "bytes": 7880,
+      "lines": 126,
+      "sha256": "907c5205df44c9acd941a573f6eae1cb6a54a5dacc3569bcf5289349a7508bfb",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/launch-cwd.ts",
+      "bytes": 741,
+      "lines": 16,
+      "sha256": "8183da336c62c872ebf80eb9ec1b2120476e14ff874533cb07e4b8cf327df2f5",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/llm-intent-arbiter.ts",
+      "bytes": 11721,
+      "lines": 311,
+      "sha256": "dd22a58bc6e1cc8b2058947476efaad5e1529168483e9a3333379e2b61834c06",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/long-running-guard.ts",
+      "bytes": 6896,
+      "lines": 221,
+      "sha256": "688b70444acbf505ec155442567851a906716f630aa502f6838a00bbe3c556f0",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/mcp-config-sources.ts",
+      "bytes": 17804,
+      "lines": 422,
+      "sha256": "16fbb42e44cfdc3206e3d1e276cf82391f2c3636e931555729e22eecf1b44ebf",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/mcp-direct-tool-allowlist.ts",
+      "bytes": 18638,
+      "lines": 484,
+      "sha256": "138d933e3335b3fd331a64b4d3b5698aa51af63149d139cdde482288faf6ba3f",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/mcp-direct-tool-grant.ts",
+      "bytes": 7351,
+      "lines": 194,
+      "sha256": "4c764aeef56b1553b52d1df7e96f36ae80538151b3ad7c9b68fa02c734bf7f3b",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/model-exclusions.ts",
+      "bytes": 14162,
+      "lines": 374,
+      "sha256": "9f0ca19213cc13bd944bc94e4af6637d4aad06316ac095f7aac8c91c1b80acf3",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/model-fallback.ts",
+      "bytes": 28805,
+      "lines": 650,
+      "sha256": "1fec27878e544486bcd75f6507e2e5a43c518b3a8ef6c322d14db4c223725aba",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/model-scope.ts",
+      "bytes": 8318,
+      "lines": 205,
+      "sha256": "cddbd03c5f767ecba490f4f342faf925f9e133c76add37607127152c8b34d68c",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/mutation-evidence.ts",
+      "bytes": 9490,
+      "lines": 199,
+      "sha256": "212f37bfd48886bfdb5606ef283d22fba38783bfa48c05e31fe80daeb7b29ed2",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/nested-events.ts",
+      "bytes": 51610,
+      "lines": 1070,
+      "sha256": "963ce41a986bd981c4d52834446e6d914610e76fa7cf89a5850adc4e096346fd",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/nested-path.ts",
+      "bytes": 1440,
+      "lines": 38,
+      "sha256": "8d739b977062bbc1cb97489212e393d52fe2dfb7342400e32609384a477e69c8",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/nested-render.ts",
+      "bytes": 6254,
+      "lines": 127,
+      "sha256": "430bbe99e89ec452f10ee31bc0ede12789a5c11caf0d6228cace8fa5f31b17f3",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/orca-progress-tabs.ts",
+      "bytes": 21081,
+      "lines": 504,
+      "sha256": "492adaf8a186b34d6d7a7277928040b1ed9ae6ca998558ec10b82ce3bc29c9a0",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/parallel-handoff.ts",
+      "bytes": 37900,
+      "lines": 696,
+      "sha256": "1cbf6b6d2f25b8928e259c97926107e0283fdb389291625cdebc8e46e9bab12b",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/parallel-utils.ts",
+      "bytes": 9262,
+      "lines": 274,
+      "sha256": "4cee58d31247c70049405f28891cff69e2fbef3742876ecf134aa76f328d4c11",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/permissions.ts",
+      "bytes": 4475,
+      "lines": 86,
+      "sha256": "46a89ae1fdc5997bda952d4564841d78347334a541b546966f69c30d5a5709c5",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/pi-spawn.ts",
+      "bytes": 5989,
+      "lines": 197,
+      "sha256": "80066a47c0127fa9f2527a59a4a50df32c00de9b2e18e468f28a4789211c01f9",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/process-signal.ts",
+      "bytes": 1396,
+      "lines": 35,
+      "sha256": "a434e6be485af04004763e650419bbbde1ad8fd7c6011bc78d5deca8ef92705d",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/run-fanout-budget.ts",
+      "bytes": 11290,
+      "lines": 267,
+      "sha256": "fb4d5627bb00cfa5695fa9913144efd4fe070c2dcde566ebefcd73cb4eb23da6",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/run-history.ts",
+      "bytes": 6138,
+      "lines": 201,
+      "sha256": "7a20f4dbd5c1c07e24403bf3092a451bd4f5068b9c62a679ccb55242f5482f0c",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/runtime-acknowledged-extensions.ts",
+      "bytes": 1815,
+      "lines": 44,
+      "sha256": "938a6a8c7e6a41331d426c60eebca9e7209308f2ac5b1998d098c4d8e9733231",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/session-lease.ts",
+      "bytes": 11886,
+      "lines": 293,
+      "sha256": "e39dfeb2da0c1d8bb25c717f251deb4dd51bafea5a366b00e98ecb6a1439a205",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/single-output.ts",
+      "bytes": 12580,
+      "lines": 304,
+      "sha256": "030313a8a9e14706452f0dda05d567ab5f787e4c83800b495de045827b40aaa3",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/spawn-budget.ts",
+      "bytes": 4976,
+      "lines": 128,
+      "sha256": "fbc12ffc3623444fd4f802a5dce3165924a2864c06a151c562d8de59e3a4a7f8",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/structured-output.ts",
+      "bytes": 10952,
+      "lines": 236,
+      "sha256": "b251a8f692e9b8ddaa42692e30b751acb53529f34033c544f909bac9eaf90127",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/subagent-control.ts",
+      "bytes": 14194,
+      "lines": 294,
+      "sha256": "24b0e72b448f6e048afc67857f94b6222169d59c1485e2165a02e49a0299ac1c",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/subagent-prompt-runtime.ts",
+      "bytes": 25044,
+      "lines": 527,
+      "sha256": "6dea623d2b7623970737b3ea182a5c5d539ecf526b03105da68bb835f729fdd1",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/task-intent.ts",
+      "bytes": 12088,
+      "lines": 211,
+      "sha256": "32a58cb7e29341f9c53c1b947a5d188b7ecaec39559384d4e8b89dfbccc7ea4d",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/tool-availability.ts",
+      "bytes": 2403,
+      "lines": 37,
+      "sha256": "42bf4153c1fc38a04076befe701520e4bc4b1a1158cc692dd1601f7d9537195b",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/tool-budget.ts",
+      "bytes": 3520,
+      "lines": 66,
+      "sha256": "44e4d091777a146d84c36aaa943bb06852b04ebc1243d596f189189874fd750f",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/tool-timeout.ts",
+      "bytes": 3673,
+      "lines": 93,
+      "sha256": "8d78e82f613721d73424c8440ff84987cc260137b2483f31d4a2e295fc51430c",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/usage-budget.ts",
+      "bytes": 3624,
+      "lines": 65,
+      "sha256": "c2ac0c5e99948435c1f9aee4cdd0ce3b97ffe3f7ea66922ab7626f0c5cb12b7f",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/workflow-graph.ts",
+      "bytes": 8698,
+      "lines": 225,
+      "sha256": "cfbae18cde3f3d4fe7183aeff3df1f8749691dcd6ea5a5e028f40a1381a53d9f",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/worktree-cleanup-plan.ts",
+      "bytes": 42497,
+      "lines": 869,
+      "sha256": "9261bd4f74a4d1874a50002306642f648985fda4863f00c57eb3f45b1dd3a60a",
+      "installedMatch": true
+    },
+    {
+      "path": "src/runs/shared/worktree.ts",
+      "bytes": 54664,
+      "lines": 1358,
+      "sha256": "e804f49e2f4f2eb5639c1fc3d3cc31ec0d9599306ebd2b1b9889c31c1292f950",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/accessible-dir.ts",
+      "bytes": 1637,
+      "lines": 47,
+      "sha256": "699f633e244ea23631c6af54939de43942b8432d90e95f826efc82e0bd0d0dbd",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/agent-stream-options.ts",
+      "bytes": 221,
+      "lines": 5,
+      "sha256": "a07f91f98c1f0a7d386777656f73418ad04e62dfb68040b58bd9ffe8979f7ba4",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/artifacts.ts",
+      "bytes": 9801,
+      "lines": 281,
+      "sha256": "ccca09e94181458bb53c2431dc6b96ec434544187d64cc411c46f1e7f4c22003",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/atomic-json.ts",
+      "bytes": 3343,
+      "lines": 83,
+      "sha256": "ddcfeb46f88eb2fac5ff6decf4f03b881978abaf1b496be02112318702af9198",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/capacity-resilient-json.ts",
+      "bytes": 3638,
+      "lines": 102,
+      "sha256": "a4798e256114606d18a504527e35f487904b05099c151ccb51f0e7dbedd404de",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/child-session-name.ts",
+      "bytes": 2007,
+      "lines": 46,
+      "sha256": "6c31ea098ae2d7c3750dbfd9f66978b62cea36d58a06662c63a0bfaf61122838",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/child-transcript.ts",
+      "bytes": 8636,
+      "lines": 264,
+      "sha256": "a8d5505d8c6719f68e3823a444ead4d0efa1c16a8745c89bb5a8f671436e9e65",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/completion-owner.ts",
+      "bytes": 473,
+      "lines": 14,
+      "sha256": "5c65179fb61a555aaa573ce068e838351388e4a47283aed99398a6e3ed5ffe8f",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/display-text.ts",
+      "bytes": 5196,
+      "lines": 150,
+      "sha256": "1d48751f0270ef46521923492dbc7576fd995d264f22250f7a98cf9950491d6b",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/extension-context.ts",
+      "bytes": 861,
+      "lines": 24,
+      "sha256": "5ae4e69605da88a16489fa5df22fd7e26074ac143dca401d2fc9d32d80f3d405",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/file-coalescer.ts",
+      "bytes": 1244,
+      "lines": 49,
+      "sha256": "c677b8e93f75f8d32f87a41aa10fddedca435443cce6e9201f95dd2ebfdf8c55",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/file-system-retry.ts",
+      "bytes": 3896,
+      "lines": 95,
+      "sha256": "85101173fc14c0b74698496d8c2034ad6a664d58f765b82dd1a2787015be4acb",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/fork-context.ts",
+      "bytes": 11646,
+      "lines": 293,
+      "sha256": "a8680eb2df950267246ddddcec8cc16f7d9c4ff7008da6df5cd833476b309056",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/fork-session-cwd.ts",
+      "bytes": 1171,
+      "lines": 27,
+      "sha256": "d1696c6c00f08791ca090c108275830d2a85749f2507d4325d2d09c7d7d213f5",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/formatters.ts",
+      "bytes": 5531,
+      "lines": 146,
+      "sha256": "cafb1e738a3c4d132dbb35d8c295e96b4583140eaace2d0de3d275883d6fd526",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/jsonl-writer.ts",
+      "bytes": 2257,
+      "lines": 92,
+      "sha256": "e38e82bef61c7baed0b47891c4f80dc0ad2e1b17ba9a705904fe4027850c318f",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/launch-contract.ts",
+      "bytes": 4990,
+      "lines": 138,
+      "sha256": "bf320b6b34240b3616cbb2dca4a84c37d45ad9026d0e361d5550c1a45b71ba5c",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/model-info.ts",
+      "bytes": 4267,
+      "lines": 101,
+      "sha256": "a1972b79c6d91a7bad46303c786788f484aa3e29a59482452d441a3690e6c346",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/model-response-aliases.ts",
+      "bytes": 787,
+      "lines": 13,
+      "sha256": "a205b0a510c58337ed8ae6f6185674b3eae1420bbdd6a271d18d51da8ee01222",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/node-executable.ts",
+      "bytes": 734,
+      "lines": 21,
+      "sha256": "cb744d872082859a98332a59ba3ee78d7a87fcca017924ea195700653ebb6fe2",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/prompt-resources.ts",
+      "bytes": 407,
+      "lines": 11,
+      "sha256": "798808a2f50bf02b62c9cc77c5c975d30bcd8aac6184e6ff88d7a6235658669a",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/pruned-fork.ts",
+      "bytes": 21584,
+      "lines": 450,
+      "sha256": "d1c9c3091faaf464cf6eecb1fd265a6fd89406b4fa0ff1b64d6fced87b850e41",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/session-file-trust.ts",
+      "bytes": 778,
+      "lines": 19,
+      "sha256": "daca5e095066c5f526dfda6148ebd3a5e1920bae92b6d52adc2828c26d9f658f",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/session-identity.ts",
+      "bytes": 402,
+      "lines": 10,
+      "sha256": "856d15b4e1afba45e35d9c2fcd82c44403027535d38905629548e22a27803872",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/session-tokens.ts",
+      "bytes": 2029,
+      "lines": 55,
+      "sha256": "799a917ced6cfb8547a46cfddc5073f5588a799bc98e02ceea74aada95a3e5a9",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/settings.ts",
+      "bytes": 13768,
+      "lines": 409,
+      "sha256": "e8018b03b8176d48f1d9ee093e7f5c0342b56b468574eebdaa1547d030222b1a",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/shortcuts.ts",
+      "bytes": 562,
+      "lines": 17,
+      "sha256": "677feea68ea1d670f2c52e8f8919f3bbf25af3d90e8ac3843e5487f25e1b3413",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/status-format.ts",
+      "bytes": 2622,
+      "lines": 55,
+      "sha256": "0c8bb72be421361b1ce3f67b0f56098c88706aefb89666757192525389d0bbf3",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/thinking-ceiling.ts",
+      "bytes": 2208,
+      "lines": 46,
+      "sha256": "750db0ad4bde28c0b07dfa0997b2cafe68f43b6200682335a7ddd8d5a7937255",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/types.ts",
+      "bytes": 97191,
+      "lines": 2907,
+      "sha256": "a08a934ef803bfabe9c8018964612643a9771572453588d81807ed9141a9c96c",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/utf8.ts",
+      "bytes": 510,
+      "lines": 11,
+      "sha256": "b6caa640aff53a36896a9b02f40cc89421522f637c48fba546d4b66e1d2405e3",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/utils.ts",
+      "bytes": 22657,
+      "lines": 603,
+      "sha256": "79ec244af424f23d567d59fbeb821ab47d06c79a34d017c0c2e48dbddbe2fb39",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/watch-strategy.ts",
+      "bytes": 434,
+      "lines": 12,
+      "sha256": "7bc56b30410a911cbecc5645d1d7166f9d20d2e6f1b6a378efd2e97272505f6f",
+      "installedMatch": true
+    },
+    {
+      "path": "src/shared/workflow-child-permit.ts",
+      "bytes": 9025,
+      "lines": 207,
+      "sha256": "1a6f0c671252cb7337a9f97b15283d56ee17fc0cd28d556e14578eab5df3c3a7",
+      "installedMatch": true
+    },
+    {
+      "path": "src/slash/delegation-adapters.ts",
+      "bytes": 15279,
+      "lines": 426,
+      "sha256": "0f7ed4a25013779464023466ae646cc74b0726f7204e92e34f14ef5d03732f6e",
+      "installedMatch": true
+    },
+    {
+      "path": "src/slash/delegation-json.ts",
+      "bytes": 4098,
+      "lines": 108,
+      "sha256": "a36297f52c984acf98298768262bd4c6ac2cc8194081a30bac6e0778d8cc20f0",
+      "installedMatch": true
+    },
+    {
+      "path": "src/slash/delegation-request.ts",
+      "bytes": 8069,
+      "lines": 162,
+      "sha256": "306269e285a5eace15b0a5b4fe98e58e1f04310aee68a78bdf7373a580b5c1d3",
+      "installedMatch": true
+    },
+    {
+      "path": "src/slash/prompt-template-bridge.ts",
+      "bytes": 16368,
+      "lines": 419,
+      "sha256": "56a9f2ab683a3c75c9f7dfe919f6c92e295666a2fd11b1c3b2843f209a68bc6a",
+      "installedMatch": true
+    },
+    {
+      "path": "src/slash/prompt-workflows.ts",
+      "bytes": 9420,
+      "lines": 287,
+      "sha256": "b059fd64c7710688f99aee907350ab4b864ed35b2cac43fe816cab86661885d1",
+      "installedMatch": true
+    },
+    {
+      "path": "src/slash/selector.ts",
+      "bytes": 5698,
+      "lines": 147,
+      "sha256": "595841a54bc04452299470dba6fc8a37570db979f77bf3596b774c3716406f1c",
+      "installedMatch": true
+    },
+    {
+      "path": "src/slash/slash-bridge.ts",
+      "bytes": 5680,
+      "lines": 192,
+      "sha256": "f74851147e82ef8f666e002d15e4959bb0d6b1fee39bb2f59a2ca482dd45c560",
+      "installedMatch": true
+    },
+    {
+      "path": "src/slash/slash-commands.ts",
+      "bytes": 53278,
+      "lines": 1330,
+      "sha256": "6ccf4a73bcb693662309ae895974e02c7a4b3233cdcfed96999681317bef29b5",
+      "installedMatch": true
+    },
+    {
+      "path": "src/slash/slash-live-state.ts",
+      "bytes": 9850,
+      "lines": 310,
+      "sha256": "db61ef7b228687579171624dbb7a10416f85a7fb32b0d0829562da289ed05a9b",
+      "installedMatch": true
+    },
+    {
+      "path": "src/slash/subagents-admin.ts",
+      "bytes": 21933,
+      "lines": 449,
+      "sha256": "40fdddb09374dd1f0eba89d12ceb02169a15914988dc9c5b961635f7f87eed9b",
+      "installedMatch": true
+    },
+    {
+      "path": "src/tui/fleet-status.ts",
+      "bytes": 42070,
+      "lines": 964,
+      "sha256": "2bf6c00517fac67e938a622d85e4efc2944fa6ec3f6b106f1c35ffa0647ba6c6",
+      "installedMatch": true
+    },
+    {
+      "path": "src/tui/fleet-transcript.ts",
+      "bytes": 21731,
+      "lines": 536,
+      "sha256": "908c039d01b2183268b82bcba1efc674bb0e0ca2caa04a304e64c6329f790567",
+      "installedMatch": true
+    },
+    {
+      "path": "src/tui/fleet.ts",
+      "bytes": 70198,
+      "lines": 1440,
+      "sha256": "ffcba5f65c956f8eebdb8dbe2a89ac1f9a634b58b27f95798145a4b382580a3e",
+      "installedMatch": true
+    },
+    {
+      "path": "src/tui/render-helpers.ts",
+      "bytes": 3919,
+      "lines": 111,
+      "sha256": "934f572f4a959d01357916caf0ce640cf690b5a96c7d1a1d36f6107da1d8006a",
+      "installedMatch": true
+    },
+    {
+      "path": "src/tui/render.ts",
+      "bytes": 170164,
+      "lines": 3572,
+      "sha256": "d78cc54586243ce8e28d1b016625dae977582dda911ab95edbd47c8c77d2fc38",
+      "installedMatch": true
+    },
+    {
+      "path": "src/types/pi-runtime-compat.d.ts",
+      "bytes": 190,
+      "lines": 8,
+      "sha256": "88b3d4bc13a80ce00fc1a5cb113241135673fd3ab3015c6c2c24b7aefc827866",
+      "installedMatch": true
+    },
+    {
+      "path": "src/watchdog/change-signature.ts",
+      "bytes": 10297,
+      "lines": 260,
+      "sha256": "68fb6e82a06b4882820dbff5700cba450a0dac811a3c62960ecac2894ad6b7b4",
+      "installedMatch": true
+    },
+    {
+      "path": "src/watchdog/child-status.ts",
+      "bytes": 10681,
+      "lines": 225,
+      "sha256": "57c6b24156c6b63854cd5f8e53a3cdf529fbb5a4edb7df80401d1ea47d45eba8",
+      "installedMatch": true
+    },
+    {
+      "path": "src/watchdog/diff-tool.ts",
+      "bytes": 4073,
+      "lines": 77,
+      "sha256": "78b83c466f4d14f37d42316b934c36b62167750c7ed50d7b9fc573115a750c38",
+      "installedMatch": true
+    },
+    {
+      "path": "src/watchdog/emission-guard.ts",
+      "bytes": 4467,
+      "lines": 125,
+      "sha256": "fd9d63e7988cd98e78eb04eda7687507b3324e39bf80cf1261ad8bbfca3b270d",
+      "installedMatch": true
+    },
+    {
+      "path": "src/watchdog/guidance.ts",
+      "bytes": 709,
+      "lines": 20,
+      "sha256": "9cce91a765ccb24db97f03c88a37e091143ff72f3864c941b6610eef9f01b389",
+      "installedMatch": true
+    },
+    {
+      "path": "src/watchdog/lsp-diagnostics.ts",
+      "bytes": 18608,
+      "lines": 538,
+      "sha256": "cffcb229043aaf1f3e5ff12e327560b34c262ebd8b2bc035900bae153807a7c0",
+      "installedMatch": true
+    },
+    {
+      "path": "src/watchdog/model-selection.ts",
+      "bytes": 7065,
+      "lines": 167,
+      "sha256": "7c97b99e7416dcbd193b9300a8dffcfaf134a0f3e16a7c2455fd76cd119c2d7d",
+      "installedMatch": true
+    },
+    {
+      "path": "src/watchdog/permission-arbiter.ts",
+      "bytes": 7188,
+      "lines": 154,
+      "sha256": "a89244e4b378fc476b4d14778b26ed2f84b62d9ea16cf35bc9f2d301e79dea3b",
+      "installedMatch": true
+    },
+    {
+      "path": "src/watchdog/register-child.ts",
+      "bytes": 4662,
+      "lines": 120,
+      "sha256": "6b6e46c5d4ca99dc5a8b799b3f90513204ac3a69b9580d231e35b1458c266e73",
+      "installedMatch": true
+    },
+    {
+      "path": "src/watchdog/register-main.ts",
+      "bytes": 19185,
+      "lines": 441,
+      "sha256": "ee36a380009156fd92f6da000323cd9048a88aa0c3a84f868dc507f2cd2a2e62",
+      "installedMatch": true
+    },
+    {
+      "path": "src/watchdog/render.ts",
+      "bytes": 2619,
+      "lines": 53,
+      "sha256": "ff33ab86cef39640abe62eb38b046812e5b220a0591e36ff990a97e1c7367285",
+      "installedMatch": true
+    },
+    {
+      "path": "src/watchdog/review.ts",
+      "bytes": 15056,
+      "lines": 314,
+      "sha256": "687c02a776d3e4d5bee6a6cc9f81cc063319e51788f6171d52ab83de4bad8fc8",
+      "installedMatch": true
+    },
+    {
+      "path": "src/watchdog/rules.ts",
+      "bytes": 3574,
+      "lines": 70,
+      "sha256": "73a4967117d6afbf8dda296aab6464d4c6af23c01f5880dca306678acb24a0be",
+      "installedMatch": true
+    },
+    {
+      "path": "src/watchdog/runtime.ts",
+      "bytes": 32753,
+      "lines": 851,
+      "sha256": "0323bef8855ac984199c7beadffdbb470197aa642ff6e9c872ad9baa4c0628bd",
+      "installedMatch": true
+    },
+    {
+      "path": "src/watchdog/scope.ts",
+      "bytes": 1597,
+      "lines": 51,
+      "sha256": "8b5d311d797d208ed66639eab5208fd41a64280a9507f407ccf236eec13624fd",
+      "installedMatch": true
+    },
+    {
+      "path": "src/watchdog/settings.ts",
+      "bytes": 22513,
+      "lines": 512,
+      "sha256": "c2fe94e30b5775a99bd9894299ad3acc4dd61b3bd4bf6e26f8ef8a5c050f3560",
+      "installedMatch": true
+    },
+    {
+      "path": "src/watchdog/tool-actions.ts",
+      "bytes": 6969,
+      "lines": 155,
+      "sha256": "442a0abb62cbd69419539dd027cce9d67a04b875ef4a02552d998fb3f8a98a46",
+      "installedMatch": true
+    },
+    {
+      "path": "src/watchdog/turn-delta.ts",
+      "bytes": 6898,
+      "lines": 161,
+      "sha256": "bb7a7332cd4397aea03037f9fd52b8e906c3892822ddde17e2be864e07c6b07c",
+      "installedMatch": true
+    },
+    {
+      "path": "src/watchdog/types.ts",
+      "bytes": 4849,
+      "lines": 184,
+      "sha256": "4de558366b1c7c0a49ce2d3af1a140d0fb136156136edf1e484f86b25e451485",
+      "installedMatch": true
+    },
+    {
+      "path": "src/watchdog/warning-format.ts",
+      "bytes": 2499,
+      "lines": 72,
+      "sha256": "2b10c10dd94b4e53304cfa7996cf6b53c361e524b479fadb72b2f35b5edb7213",
+      "installedMatch": true
+    },
+    {
+      "path": "src/workflows/chat-progress.ts",
+      "bytes": 6198,
+      "lines": 152,
+      "sha256": "ac637f976c939f51e3a40562caf3649862f966b592af16877d6d67c5ba2886ec",
+      "installedMatch": true
+    },
+    {
+      "path": "src/workflows/host-command.ts",
+      "bytes": 12292,
+      "lines": 235,
+      "sha256": "74aa9dcc29ec66f92cb9b419bb8c57d154cffa2b0bdd5aef6489baae72c56c6e",
+      "installedMatch": true
+    },
+    {
+      "path": "src/workflows/scripted-workflow.ts",
+      "bytes": 135313,
+      "lines": 2256,
+      "sha256": "feb80335b34927ae21e62a14e44becf5146357641a9294b127b6aa27a6cbb275",
+      "installedMatch": true
+    },
+    {
+      "path": "src/workflows/workflow-checklist.ts",
+      "bytes": 22411,
+      "lines": 440,
+      "sha256": "eb72c909cbd3d14fc9de2261d36cdb850b4c7d0663ab8f5a57c40109353a4104",
+      "installedMatch": true
+    },
+    {
+      "path": "src/workflows/workflow-child-summary.ts",
+      "bytes": 7806,
+      "lines": 121,
+      "sha256": "23f045b23d70e80b2d630e9034b547114c358d28fcbfb22d034d603b0ebddba5",
+      "installedMatch": true
+    },
+    {
+      "path": "src/workflows/workflow-preflight.ts",
+      "bytes": 14229,
+      "lines": 297,
+      "sha256": "b10540b38a751ac22f0b0808728ced285e9df251e76abfdcfc155941dcc210f4",
+      "installedMatch": true
+    },
+    {
+      "path": "src/workflows/workflow-receipt.ts",
+      "bytes": 29824,
+      "lines": 366,
+      "sha256": "d8eab05a8207314cb37559e728995e37fd4082d550ad5cfa61fdd073a6da202e",
+      "installedMatch": true
+    },
+    {
+      "path": "src/workflows/workflow-resources.ts",
+      "bytes": 6973,
+      "lines": 150,
+      "sha256": "b60e499be418bfb50f96c2ca8a84e0d2a2ca9f558c26e29050fd2be9d5ed606f",
+      "installedMatch": true
+    },
+    {
+      "path": "src/workflows/workflow-settlement.ts",
+      "bytes": 11185,
+      "lines": 246,
+      "sha256": "37211dd7ae080c8291f20dabe789fb4dfd9485f1599737c049d11aae0fa199bd",
+      "installedMatch": true
+    }
+  ],
+  "installedDifferences": []
+}

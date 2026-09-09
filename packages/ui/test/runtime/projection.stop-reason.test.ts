@@ -90,6 +90,26 @@ describe("stop reason", () => {
     });
   });
 
+  it("a steer leaves no stop notice, while a real stop still does (M13-T28)", () => {
+    // Steering does not abort: the engine delivers the steering message at the
+    // next turn boundary, so the turn it interrupted ends the ordinary way and
+    // the transcript is the person's message and the reply, nothing else.
+    const steered = run([
+      ...turn("working on it", { stopReason: "toolUse" }),
+      { kind: "queue_update", steering: ["use the other file"], followUp: [] },
+      { kind: "message_start", role: "user" },
+      { kind: "message_end", message: { role: "user", content: [{ type: "text", text: "use the other file" }] }, role: "user" },
+      ...turn("on it", { stopReason: "stop" }),
+    ]);
+    const { messages } = projectSessionView(steered);
+    expect(messages.map((message) => message.status?.type)).not.toContain("incomplete");
+
+    // Pressing Stop is a different act and keeps its row: a turn that ended
+    // short with nothing to show is worse than one that says why.
+    const stopped = projectSessionView(run(turn("half a th", { stopReason: "aborted" })));
+    expect(stopped.messages.at(-1)?.status).toEqual({ type: "incomplete", reason: "cancelled" });
+  });
+
   it("a turn still streaming is running, whatever the last message said", () => {
     const streaming = { ...run(turn("part", { stopReason: "aborted" })), running: true };
     // The tail is live again (a retry), so the stopped row must not appear over

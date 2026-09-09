@@ -28,7 +28,6 @@ import {
   SESSION_RUN_ENTRY_TYPE,
   SUBAGENT_NAME_MAX,
   isTerminalRunStatus,
-  validatePanelEvent,
   type AgentDefinition,
   type AgentEvent,
   type AgentModelChoice,
@@ -36,8 +35,6 @@ import {
   type AgentRunInitiator,
   type AgentRunStatus,
   type HostNotifications,
-  type Panel,
-  type RunLifecycle,
   type SessionAgentInfo,
   type SessionAgentRecord,
   type SessionState,
@@ -70,11 +67,6 @@ export interface WorktreeProvider {
   remove(root: string, path: string, branch?: string): Promise<void>;
   ownedBy(runId: string): Worktree | undefined;
 }
-
-/** Panel id prefix for runs: `agents:run:<runId>`. */
-export const AGENT_PANEL_PREFIX = "agents:";
-export const RUN_PANEL_SOURCE = "agents";
-export const runPanelId = (runId: string): string => `${AGENT_PANEL_PREFIX}run:${runId}`;
 
 /** What a child is told when it stops without its final tool. */
 export const NUDGE_TEXT = "You stopped without calling complete_agent_run. Call complete_agent_run now with status completed or blocked and your final message.";
@@ -155,15 +147,6 @@ const MODEL_EVENT_TYPE: Record<Exclude<AgentRunStatus, "queued" | "running">, Ag
   blocked: "agent.blocked",
   failed: "agent.failed",
   cancelled: "agent.cancelled",
-};
-
-const LIFECYCLE: Record<AgentRunStatus, RunLifecycle> = {
-  queued: "queued",
-  running: "running",
-  completed: "done",
-  blocked: "done",
-  failed: "failed",
-  cancelled: "cancelled",
 };
 
 function excerpt(text: string, max: number): string {
@@ -321,7 +304,7 @@ export class AgentHarness {
     return state.run;
   }
 
-  /** A person ends a run (`agents/runs/stop` or the panel's action). */
+  /** A person ends a run (`agents/runs/stop`, from the fleet or a row menu). */
   async stopRun(runId: string, endedBy: { initiator: AgentRunInitiator; reason?: string }): Promise<AgentRun> {
     const state = this.runStates.get(runId);
     if (!state) throw new HarnessError(`No run is called ${runId}.`);
@@ -333,28 +316,11 @@ export class AgentHarness {
     return state.run;
   }
 
-  /** `pi/panel/action` for an `agents:` panel. False when the id is not a run of this worker. */
-  async handlePanelAction(panelId: string, actionId: string): Promise<boolean> {
-    if (!panelId.startsWith(`${AGENT_PANEL_PREFIX}run:`)) return false;
-    const runId = panelId.slice(`${AGENT_PANEL_PREFIX}run:`.length);
-    if (!this.runStates.has(runId)) return false;
-    if (actionId === "open") return true; // a navigation; the UI performs it
-    if (actionId === "stop") {
-      await this.stopRun(runId, { initiator: "user" });
-      return true;
-    }
-    return false;
-  }
-
-  /** Best effort: remove a deleted child session's worktree and retire its panels. */
+  /** Best effort: remove a deleted child session's worktree. */
   async removeWorktreeFor(sessionPath: string): Promise<void> {
     const entry = this.byPath.get(sessionPath);
     const record = entry?.record ?? this.runs().find((run) => run.sessionPath === sessionPath);
     const worktree = record?.worktree;
-    for (const run of this.runs()) {
-      if (run.sessionPath !== sessionPath || !run.parent) continue;
-      this.host.notify("pi/extension/message", { path: run.parent.sessionPath, message: { type: "lasercode/panel/close", id: runPanelId(run.runId), reason: "session deleted" } });
-    }
     if (!worktree) return;
     const owned = this.runs().find((run) => run.worktree?.path === worktree.path);
     const root = owned ? this.worktrees.ownedBy(owned.runId)?.root : undefined;
@@ -845,12 +811,15 @@ export class AgentHarness {
     if (publish) this.publish(state);
   }
 
+  /**
+   * `agents/run` is the single truth about a run (D-140). It used to be
+   * published twice — once as itself and once as a parent-side `run` panel —
+   * and the second copy is gone with the panels: the fleet reads the typed
+   * record, so a run said one way cannot drift from the same run said the
+   * other way.
+   */
   private publish(state: RunState): void {
-    const run = state.run;
-    this.host.notify("agents/run", { run });
-    if (!run.parent) return;
-    const panel = runPanel(run);
-    if (panel) this.host.notify("pi/extension/message", { path: run.parent.sessionPath, message: { type: "lasercode/panel/upsert", panel } });
+    this.host.notify("agents/run", { run: state.run });
   }
 
   private async persistMoment(run: AgentRun, moment: AgentRunStatus | "started"): Promise<void> {
@@ -1017,39 +986,3 @@ function textOfMessage(message: unknown): string | undefined {
   return text === "" ? undefined : text;
 }
 
-/** The parent-side `run` panel for a run, validated against the panel contract. */
-export function runPanel(run: AgentRun): Panel | undefined {
-  const parentId = run.parent?.runId ? runPanelId(run.parent.runId) : run.parent?.sessionPath;
-  const terminalReason =
-    run.status === "cancelled" ? (run.endedBy?.initiator === "user" ? "you ended it" : "the parent ended it")
-    : run.status === "blocked" ? "blocked"
-    : run.status === "failed" ? "failed"
-    : undefined;
-  const activity = run.activity?.label ?? (run.activity?.currentTool ? `Running ${run.activity.currentTool}` : undefined);
-  const data: Record<string, unknown> = {
-    handle: run.subagentName,
-    lifecycle: LIFECYCLE[run.status],
-    origin: run.origin === "user" ? "you" : "agent",
-    startedAt: run.startedAt,
-    ...(parentId ? { parent: { id: parentId, relation: "spawned-by" } } : {}),
-    ...(terminalReason ? { terminalReason } : {}),
-    ...(activity ? { activity } : {}),
-    ...(run.model ? { model: `${run.model.provider}/${run.model.id}` } : {}),
-    ...(run.endedAt ? { endedAt: run.endedAt } : {}),
-    ...(run.error !== undefined ? { error: run.error } : {}),
-  };
-  const result = validatePanelEvent({
-    v: 1,
-    id: runPanelId(run.runId),
-    kind: "run",
-    intent: "follow",
-    title: run.subagentName,
-    source: RUN_PANEL_SOURCE,
-    data,
-    actions: [
-      { id: "open", label: "Open chat" },
-      ...(isTerminalRunStatus(run.status) ? [] : [{ id: "stop", label: "End agent…", confirm: `End ${run.subagentName}? Its parent will be told.` }]),
-    ],
-  }, RUN_PANEL_SOURCE);
-  return result.ok ? result.panel : undefined;
-}

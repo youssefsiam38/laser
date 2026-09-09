@@ -61,8 +61,7 @@ export {
   type RelayClientState,
   type RelayClientStats,
 } from "./relay-client.js";
-export * from "./subagents/index.js";
-export * from "./panels/index.js";
+export * from "./tasks/index.js";
 export {
   PushService,
   b64url,

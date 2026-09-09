@@ -22,8 +22,6 @@ import { doctorCommand } from "./commands/doctor.js";
 import { hostCommands } from "./commands/host.js";
 import { logsCommand } from "./commands/logs.js";
 import { metaCommands } from "./commands/meta.js";
-import { missionsCommand } from "./commands/missions.js";
-import { planCommand } from "./commands/plan.js";
 import { projectsCommand } from "./commands/projects.js";
 import { relayCommand } from "./commands/relay.js";
 import { runsCommand } from "./commands/runs.js";
@@ -35,8 +33,6 @@ export const COMMANDS: readonly Command[] = [
   ...hostCommands,
   ...sessionCommands,
   runsCommand,
-  planCommand,
-  missionsCommand,
   projectsCommand,
   settingsCommand,
   relayCommand,

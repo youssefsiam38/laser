@@ -32,6 +32,14 @@ by the active theme.
 (`--composer-radius`, `--dock-width`, `--island-min-height`). Each falls back
 to a semantic token, so a theme that says nothing about it still works.
 
+A derived shade is layer 3 too, and it is mixed from layer-2 tokens in
+`globals.css` rather than added to the theme data. `--color-danger-quiet`
+(`--danger` held back towards `--ink-3`) and `--color-terminal-danger`
+(`--ansi-1` held back towards `--terminal-ink-2`) are the pair that names a
+shell command which ran and came back non-zero: a result, not a fault, so it
+never earns `--danger` itself (T3). A mix of two contrast-guarded text tokens
+lands between their lightnesses, so it clears any ground either end clears.
+
 A component may only ever read layer 2 or 3. A literal colour, a `px` font
 size, or a raw hex in a component is a bug, and the reviewer greps for them.
 

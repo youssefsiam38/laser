@@ -11,7 +11,6 @@
  * the tooltip, and a row with nothing to say is not drawn rather than drawn
  * as "—" (R3).
  */
-import type { RunPanel } from "@lasercode/protocol";
 import type { ComponentProps } from "react";
 
 import { shortCwd, tokens } from "@/format";
@@ -29,23 +28,6 @@ export interface SpecRow {
 
 const row = (label: string, value: string | number | undefined | null, typed = false): SpecRow[] =>
   value === undefined || value === null || value === "" ? [] : [{ label, value: String(value), typed }];
-
-/** What a `run` panel knows about itself, in the order a person asks. */
-export function runSpecRows(panel: RunPanel): SpecRow[] {
-  const usage = panel.usage ?? undefined;
-  const total = usage && (usage.input ?? 0) + (usage.output ?? 0) > 0 ? (usage.input ?? 0) + (usage.output ?? 0) : undefined;
-  return [
-    ...row("model", panel.model, true),
-    ...(panel.requested?.model && panel.requested.model !== panel.model ? row("requested", panel.requested.model, true) : []),
-    ...row("thinking", panel.requested?.thinking, true),
-    ...row("origin", panel.origin),
-    ...row("handle", panel.handle, true),
-    ...(panel.parent ? row(panel.parent.relation === "step-of" ? "step of" : "spawned by", panel.parent.id, true) : []),
-    ...(total !== undefined ? row("tokens", tokens(total), true) : []),
-    ...(panel.usage === null && panel.usage !== undefined ? row("usage", "not measured") : []),
-    ...row("id", panel.id, true),
-  ];
-}
 
 export interface SessionSpec {
   model?: string | undefined;

@@ -14,6 +14,7 @@ import { AGENT_MAX_DEPTH_LIMIT, ErrorCodes, PRODUCT_NAME, ProtocolError, parseCl
 import { dirname, join, resolve } from "node:path";
 import type { DriverAgentOptions, DriverEvent, SessionDriver } from "./driver.js";
 import { ProjectFilesService } from "./files.js";
+import { PendingTray } from "./pending.js";
 import { GitService } from "./git.js";
 import { KeybindingsAdapter } from "./keybindings.js";
 import { ModelsAdapter, PackagesAdapter } from "./packages.js";
@@ -24,8 +25,8 @@ import type { HarnessSessionRole } from "./agents/bridge.js";
 import { BEAM_SKILL_NAME, beamSkillRef, ensureBeamSkill } from "./agents/beam-skill.js";
 import { DefinitionsCache } from "./agents/definitions.js";
 import { engineDefaultInstructions } from "./agents/engine-instructions.js";
-import { AGENT_PANEL_PREFIX, AgentHarness, type SessionHandle, type SessionHost } from "./agents/harness.js";
-import { NamerService } from "./agents/namer.js";
+import { AgentHarness, type SessionHandle, type SessionHost } from "./agents/harness.js";
+import { NamerService, type NamerModelRuntime } from "./agents/namer.js";
 import { readSessionAgentRecord, rootRecord, rootRole } from "./agents/session-config.js";
 import { listAgentSkills } from "./agents/skills.js";
 import { WorktreeManager } from "./agents/worktrees.js";
@@ -48,7 +49,12 @@ export interface WorkerServerOptions {
   npmCommand?: string[];
   /** Skip writing the Beam skill on construction (tests that never open Beam). */
   skipBeamSkill?: boolean;
+  /** Test seam: the model runtime Namer completes through. Defaults to the engine's. */
+  namerModels?: () => Promise<NamerModelRuntime>;
 }
+
+/** Sessions whose first prompt may wait for a Namer model; a worker holds few at once. */
+const UNNAMED_MAX = 32;
 
 interface Live {
   driver: SessionDriver;
@@ -58,6 +64,12 @@ interface Live {
   path: string;
   /** The harness's view of this session, once attached. */
   handle?: SessionHandle;
+  /**
+   * Messages the person wrote while the agent was working. Laser's own list,
+   * not the engine's: see `packages/worker/src/pending.ts`. Attached once the
+   * session's path is known, because every publication names it.
+   */
+  pending?: PendingTray;
 }
 
 type Result<M extends keyof ClientRequests> = ClientRequests[M]["result"];
@@ -97,6 +109,15 @@ export class WorkerServer {
   private readonly definitions: DefinitionsCache;
   private readonly harness: AgentHarness;
   private readonly namer: NamerService;
+  /**
+   * First prompts still waiting for a Namer model, by session path. A prompt
+   * that arrives before the host's `agents/sync` (or before qualification
+   * finishes) would otherwise be the one prompt that never names its session.
+   * Bounded, because a run with naming off must not grow this for ever.
+   */
+  private readonly unnamed = new Map<string, string>();
+  /** Tool calls currently running, by session path: a label for a finished call is never shown. */
+  private readonly runningTools = new Map<string, Set<string>>();
 
   constructor(private readonly options: WorkerServerOptions) {
     this.replayBuffer = options.replayBuffer ?? 5000;
@@ -125,13 +146,18 @@ export class WorkerServer {
       beamSkillName: BEAM_SKILL_NAME,
     });
     this.namer = new NamerService({
-      models: () => this.modelCatalog().modelRuntime(),
+      models: options.namerModels ?? (() => this.modelCatalog().modelRuntime()),
       model: () => this.definitions.namerModel(),
       catalog: async () => {
         const [catalog, providers] = await Promise.all([this.modelCatalog().catalog(false), this.modelCatalog().providers()]);
         return { models: catalog.models, configuredProviders: new Set(providers.providers.filter((p) => p.configured).map((p) => p.id)) };
       },
     });
+    // The host's first `agents/sync` (and every later one) can be what turns
+    // naming on: until it lands the cache answers `namer.model === null`, and
+    // qualification itself finishes seconds after the first prompt. A session
+    // whose first prompt found no model is named the moment one appears.
+    this.definitions.onChange(() => this.nameWaitingSessions());
   }
 
   /** The harness, for tests and for the packaged probe. */
@@ -174,6 +200,8 @@ export class WorkerServer {
       await live.driver.dispose().catch(() => {});
     }
     this.sessions.clear();
+    this.runningTools.clear();
+    this.unnamed.clear();
   }
 
   // ------------------------------------------------------------- dispatch
@@ -184,19 +212,8 @@ export class WorkerServer {
         return this.sessionNew(req.params);
       case "session/load":
         return this.sessionLoad(req.params);
-      case "session/prompt": {
-        const live = this.live(req.params.path);
-        const text = textOf(req.params.content);
-        // A person prompting a child that has no active run starts one of
-        // their own, so the run map and the parent's summary keep working.
-        if (!req.params.streamingBehavior && !live.driver.state().isStreaming) this.harness.startUserRun(live.path, text);
-        const unnamed = !live.driver.state().name;
-        const r = await live.driver.prompt(req.params.content, {
-          ...(req.params.streamingBehavior ? { streamingBehavior: req.params.streamingBehavior } : {}),
-        });
-        if (r.accepted && unnamed && text.trim() !== "") void this.nameSession(live, text);
-        return r satisfies Result<"session/prompt">;
-      }
+      case "session/prompt":
+        return (await this.promptLive(this.live(req.params.path), req.params.content, req.params.streamingBehavior)) satisfies Result<"session/prompt">;
       case "session/cancel":
         await this.live(req.params.path).driver.abort();
         return {};
@@ -221,6 +238,26 @@ export class WorkerServer {
         return {};
       case "pi/session/clear_queue":
         return this.live(req.params.path).driver.clearQueue();
+
+      // --- the pending tray (pending.ts) ---
+      case "session/pending/list":
+        // Deliberately not part of `session/load`'s answer or of `replay()`:
+        // both run before the response is written, so a client that has just
+        // reconnected would be told about a tray for a session it does not
+        // hold yet. Asking for it is one request and no ordering to get wrong.
+        return { messages: this.tray(req.params.path).list() } satisfies Result<"session/pending/list">;
+      case "session/pending/add":
+        return {
+          message: this.tray(req.params.path).add(await this.withDictation(req.params.path, req.params.content)),
+        } satisfies Result<"session/pending/add">;
+      case "session/pending/edit":
+        return { message: this.tray(req.params.path).edit(req.params.id, req.params.content) } satisfies Result<"session/pending/edit">;
+      case "session/pending/remove":
+        return { message: this.tray(req.params.path).remove(req.params.id) } satisfies Result<"session/pending/remove">;
+      case "session/pending/steer":
+        return { steered: await this.tray(req.params.path).steer(req.params.id) } satisfies Result<"session/pending/steer">;
+      case "session/pending/clear":
+        return { messages: this.tray(req.params.path).clear() } satisfies Result<"session/pending/clear">;
       case "pi/session/fork": {
         const live = this.live(req.params.path);
         const forked = await live.driver.fork(req.params.entryId);
@@ -248,7 +285,7 @@ export class WorkerServer {
         await this.live(req.params.path).driver.rename(req.params.name);
         return {};
       case "pi/session/entries":
-        return { entries: await this.live(req.params.path).driver.entries() } satisfies Result<"pi/session/entries">;
+        return (await this.live(req.params.path).driver.entries()) satisfies Result<"pi/session/entries">;
       case "pi/session/compact":
         await this.live(req.params.path).driver.compact(req.params.instructions);
         return {};
@@ -285,32 +322,16 @@ export class WorkerServer {
         return { delivered: true } satisfies Result<"pi/ui/response">;
       }
 
-      // -------------------------------------------------------- panels ---
-      case "pi/panel/action": {
-        // Run panels are the harness's own: `open` is a navigation the UI
-        // performs, `stop` ends the run on the person's behalf.
-        if (req.params.id.startsWith(AGENT_PANEL_PREFIX)) {
-          return { delivered: await this.harness.handlePanelAction(req.params.id, req.params.actionId) } satisfies Result<"pi/panel/action">;
-        }
-        // The extension that declared the panel answers on Pi's bus; `false`
-        // means nobody holds that id any more (it closed, or the session
-        // restarted), which the client turns into a sentence.
+      // ------------------------------------------- background tasks ---
+      case "pi/task/stop": {
+        // The companion extension owns the process, so Stop is a command to
+        // the session that started it. `delivered: false` means nobody in
+        // this session holds that id any more, which the host turns into a
+        // sentence rather than a silent no-op.
         const { driver } = this.live(req.params.path);
-        const delivered =
-          driver.deliverExtensionCommand?.({
-            type: "lasercode/panel/action",
-            id: req.params.id,
-            actionId: req.params.actionId,
-            ...(req.params.value !== undefined ? { value: req.params.value } : {}),
-          }) ?? false;
-        return { delivered } satisfies Result<"pi/panel/action">;
+        const delivered = driver.deliverExtensionCommand?.({ type: "lasercode/task/stop", id: req.params.id }) ?? false;
+        return { delivered } satisfies Result<"pi/task/stop">;
       }
-      case "pi/panel/list":
-      case "pi/panel/read":
-        throw new ProtocolError(
-          ErrorCodes.Unsupported,
-          `${req.method} is answered by the host's panel hub, not a worker`,
-        );
 
       // ---------------------------------------------------- M8 dictation ---
       case "pi/transcribe/status":
@@ -475,8 +496,7 @@ export class WorkerServer {
       case "agents/set-default":
       case "agents/set-policy":
       case "agents/runs/list":
-      case "agents/beam/set-model":
-      case "agents/namer/set-model":
+      case "agents/builtin/set-model":
         throw new ProtocolError(ErrorCodes.Unsupported, `${req.method} is answered by the host's agent store, not a worker`);
 
       case "pi/logs/query":
@@ -613,14 +633,14 @@ export class WorkerServer {
     if (existing) {
       const state = existing.driver.state();
       this.replay(existing, params.fromSeq);
-      return { state: this.decorate(existing, state), replayFrom: this.replayFloor(existing, params.fromSeq) };
+      return { state: this.decorate(existing, state), replayFrom: this.replayFloor(existing, params.fromSeq), seq: existing.seq };
     }
     const inFlight = this.opening.get(params.path);
     if (inFlight) {
       const live = await inFlight;
       const state = live.driver.state();
       this.replay(live, params.fromSeq);
-      return { state: this.decorate(live, state), replayFrom: this.replayFloor(live, params.fromSeq) };
+      return { state: this.decorate(live, state), replayFrom: this.replayFloor(live, params.fromSeq), seq: live.seq };
     }
     // Registered synchronously, before `open()` gets a chance to yield.
     const promise = (async () => {
@@ -633,7 +653,11 @@ export class WorkerServer {
     this.opening.set(params.path, promise);
     try {
       const live = await promise;
-      return { state: this.decorate(live, live.driver.state()), replayFrom: 0 };
+      // Opening the session already emitted updates (the companion's
+      // `session_start` report, the first state); the reply carries the state
+      // they produced and the transcript snapshot that follows covers them, so
+      // the client is told the watermark it may safely stamp.
+      return { state: this.decorate(live, live.driver.state()), replayFrom: 0, seq: live.seq };
     } finally {
       this.opening.delete(params.path);
     }
@@ -708,10 +732,37 @@ export class WorkerServer {
 
   /** Namer names a session after its first prompt, unless the person got there first. */
   private async nameSession(live: Live, text: string): Promise<void> {
-    if (!this.namer.enabled()) return;
+    if (!this.namer.enabled()) {
+      this.waitToName(live.path, text);
+      return;
+    }
     const name = await this.namer.nameSession(text);
     if (!name || !this.sessions.has(live.path) || live.driver.state().name) return;
     await live.driver.rename(name).catch(() => undefined);
+  }
+
+  /** Hold a first prompt until a Namer model exists, oldest dropped past the cap. */
+  private waitToName(path: string, text: string): void {
+    this.unnamed.delete(path);
+    this.unnamed.set(path, text);
+    while (this.unnamed.size > UNNAMED_MAX) {
+      const oldest = this.unnamed.keys().next();
+      if (oldest.done) break;
+      this.unnamed.delete(oldest.value);
+    }
+  }
+
+  /** A model just appeared: name every session whose first prompt was waiting for one. */
+  private nameWaitingSessions(): void {
+    if (!this.namer.enabled() || this.unnamed.size === 0) return;
+    for (const [path, text] of [...this.unnamed]) {
+      this.unnamed.delete(path);
+      const live = this.sessions.get(path);
+      // Gone, or named since — by the person, or by the harness after its
+      // `subagent_name`. Namer never renames over either.
+      if (!live || live.driver.state().name) continue;
+      void this.nameSession(live, text);
+    }
   }
 
   /**
@@ -822,6 +873,41 @@ export class WorkerServer {
     return live;
   }
 
+  /** The session's pending tray, made on first use so an idle session pays nothing. */
+  private tray(path: string): PendingTray {
+    const live = this.live(path);
+    if (!live.pending) {
+      live.pending = new PendingTray({
+        steer: (content) => live.driver.steer(content),
+        prompt: (content) => this.promptLive(live, content),
+        streaming: () => live.driver.state().isStreaming,
+        publish: (pending) => this.onDriverEvent(live, { type: "update", update: { kind: "pending_update", pending } }),
+      });
+    }
+    return live.pending;
+  }
+
+  /**
+   * One turn from one message, whoever asked: a client's `session/prompt`, or
+   * the pending tray delivering what was written while the agent worked. Both
+   * start a user run and both can name an unnamed session, because from the
+   * person's side they are the same act — they wrote it and it went in.
+   */
+  private async promptLive(
+    live: Live,
+    content: ContentBlock[],
+    streamingBehavior?: "steer" | "followUp",
+  ): Promise<{ accepted: boolean; queued: boolean }> {
+    const text = textOf(content);
+    // A person prompting a child that has no active run starts one of
+    // their own, so the run map and the parent's summary keep working.
+    if (!streamingBehavior && !live.driver.state().isStreaming) this.harness.startUserRun(live.path, text);
+    const unnamed = !live.driver.state().name;
+    const result = await live.driver.prompt(content, { ...(streamingBehavior ? { streamingBehavior } : {}) });
+    if (result.accepted && unnamed && text.trim() !== "") void this.nameSession(live, text);
+    return result;
+  }
+
   /**
    * The session whose UI bridge is holding `id`. Drivers that cannot report
    * their pending dialogs (the stub) fall back to the only open session, so a
@@ -863,7 +949,14 @@ export class WorkerServer {
         live.buffer.push(params);
         if (live.buffer.length > this.replayBuffer) live.buffer.splice(0, live.buffer.length - this.replayBuffer);
         this.notify("session/update", params);
-        if (update.kind === "tool_execution_start") void this.labelTool(live, update.toolCallId, update.toolName, update.args);
+        if (update.kind === "tool_execution_start") {
+          this.running(live.path).add(update.toolCallId);
+          void this.labelTool(live, update.toolCallId, update.toolName, update.args);
+        } else if (update.kind === "tool_execution_end") this.running(live.path).delete(update.toolCallId);
+        // The run is over: whatever the person wrote while it ran goes in now,
+        // in the order they wrote it. Fire and forget — a delivery that fails
+        // keeps its message and its reason in the tray, and says so there.
+        else if (update.kind === "agent_settled" && live.pending) void live.pending.drain();
         return;
       }
       case "ui_request":
@@ -882,14 +975,34 @@ export class WorkerServer {
         live.unsubscribe();
         this.sessions.delete(live.path);
         this.gitService?.forget(live.path);
+        this.runningTools.delete(live.path);
+        this.unnamed.delete(live.path);
+        this.namer.forget(live.path);
         return;
     }
   }
 
-  /** Namer labels a tool call the moment it starts; at most one label in flight per session. */
+  /** Tool calls running in one session; the set is dropped when the session closes. */
+  private running(path: string): Set<string> {
+    let ids = this.runningTools.get(path);
+    if (!ids) {
+      ids = new Set();
+      this.runningTools.set(path, ids);
+    }
+    return ids;
+  }
+
+  /**
+   * Namer labels a tool call the moment it starts, so the aggregate row says
+   * what is happening without being opened. A few labels per session run at
+   * once (a turn fires calls in bursts) and one that ends before its label
+   * arrives is dropped rather than shown late.
+   */
   private async labelTool(live: Live, toolCallId: string, toolName: string, args: unknown): Promise<void> {
     if (!this.namer.enabled()) return;
-    const label = await this.namer.labelTool(live.path, toolName, args);
+    const label = await this.namer.labelTool(live.path, toolCallId, toolName, args, {
+      stillRunning: () => this.runningTools.get(live.path)?.has(toolCallId) === true,
+    });
     if (!label || !this.sessions.has(live.path)) return;
     this.notify("pi/extension/message", { path: live.path, message: { type: "lasercode/namer/label", toolCallId, label } });
   }

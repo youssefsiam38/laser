@@ -11,6 +11,7 @@ import {
   isBuiltinAgent,
   isWorkspaceCwd,
   latestRunForSession,
+  RUN_STATUS_TONE,
   runStatusLabel,
   runStatusTone,
   runsForRoot,
@@ -18,6 +19,7 @@ import {
   sessionAgentName,
   warningsFor,
 } from "../../src/agents/index.js";
+import { agentEventTone } from "../../src/components/assistant-ui/elements/agent-handoff.js";
 import { sessionTitle } from "../../src/runtime/threadList.js";
 import { agent, run, sessionState, snapshot, summary, view } from "./fixtures.js";
 
@@ -36,7 +38,8 @@ describe("run status vocabulary", () => {
     expect(tones).toEqual({
       queued: "muted",
       running: "live",
-      completed: "ok",
+      // Green means happening now, so a finished run is muted (D-154).
+      completed: "muted",
       blocked: "attention",
       failed: "danger",
       cancelled: "muted",
@@ -44,6 +47,15 @@ describe("run status vocabulary", () => {
     expect(isActiveRun({ status: "queued" })).toBe(true);
     expect(isActiveRun({ status: "running" })).toBe(true);
     for (const status of ["completed", "blocked", "failed", "cancelled"] as const) expect(isActiveRun({ status })).toBe(false);
+  });
+
+  it("never paints a run status in the success colour", () => {
+    // D-154: green is "happening now" in this app. `ok` stays in the tone
+    // vocabulary for genuinely positive confirmations elsewhere, but no run
+    // status may reach for it, in the sidebar, the fleet or the live map.
+    expect(Object.values(RUN_STATUS_TONE)).not.toContain("ok");
+    const kinds = ["agent.completed", "agent.blocked", "agent.failed", "agent.cancelled", "agent.message"] as const;
+    expect(kinds.map(agentEventTone)).not.toContain("ok");
   });
 });
 

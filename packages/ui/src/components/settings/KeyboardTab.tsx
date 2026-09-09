@@ -6,7 +6,7 @@
  * `modKey()` the command palette uses so a Mac shows ⌘ and everything else
  * shows Ctrl. This is a reference, not an editor, and it says so: laser's
  * shortcuts are fixed in this version, and a control that pretends otherwise
- * would be a lie (docs/ux-panels.md R2).
+ * would be a lie.
  *
  * Below it, the agent's own bindings — its actions and its editor keys, read
  * and written through `pi/keybindings/get|set`, which goes to the agent's own
@@ -66,9 +66,9 @@ function groups(mod: string): BindingGroup[] {
       title: "Composer",
       detail: "While the cursor is in the message box. What Enter does depends on whether the agent is working.",
       bindings: [
-        { keys: [["Enter"]], what: "Send", detail: "Prompts an idle session; steers one that is already working." },
+        { keys: [["Enter"]], what: "Send", detail: "Prompts an idle session. While the agent is working it joins the queue above the composer and goes in when the turn ends." },
         { keys: [["Shift", "Enter"]], what: "New line" },
-        { keys: [[mod, "Enter"]], what: "Queue a follow-up", detail: "Runs after the current turn instead of interrupting it." },
+        { keys: [[mod, "Enter"]], what: "Steer", detail: "Interrupts the working agent with this message instead of waiting. The Steer button on a queued message does the same thing." },
         { keys: [["/"]], what: "Slash commands", detail: "At the start of an empty composer." },
         { keys: [["↑"], ["↓"], ["PageUp"], ["PageDown"]], what: "Navigate composer suggestions", detail: "Selection stays visible. Tab or Enter selects; Escape or an outside click closes without changing your draft." },
         { keys: [["Alt", "O"]], what: "Open selected skill or prompt source", detail: "While suggestions are open. Desktop uses your default Markdown application; browser and phone copy the source path." },

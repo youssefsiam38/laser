@@ -31,20 +31,16 @@ import { applyUpdate, blocksFromEntries, initialState, reduce, type Block } from
 import { run, sessionState, view } from "../agents/fixtures.js";
 
 const stable = vi.hoisted(() => ({ actions: { openSession: vi.fn(async () => undefined), toast: vi.fn(), send: vi.fn() } }));
-const panels = vi.hoisted(() => ({
-  entries: [] as Array<{ key: string; path: string; panel: { id: string; kind: string }; closed?: unknown }>,
-  actions: { setSize: vi.fn(), watched: vi.fn(), markSeen: vi.fn() },
-}));
+const fleet = vi.hoisted(() => ({ reveal: vi.fn() }));
 vi.mock("@/runtime", async (importActual) => ({ ...(await importActual<typeof import("../../src/runtime/index.js")>()), useLaserStable: () => stable }));
-vi.mock("@/panels", () => ({
-  PanelToolDecision: () => null,
+vi.mock("@/dialogs", () => ({
+  ToolRowDialog: () => null,
   useRegisterToolRow: () => {},
-  DecisionBody: () => null,
-  dialogPanel: () => ({}),
+  DialogBody: () => null,
+  dialogFormOf: () => ({}),
   uiResponseFor: () => ({}),
-  usePanelEntries: () => panels.entries,
-  usePanelActions: () => panels.actions,
 }));
+vi.mock("@/fleet", () => ({ revealInFleet: fleet.reveal }));
 vi.mock("@/components/preview/MarkdownPreview", () => ({ MarkdownPreview: ({ text }: { text: string }) => <p data-slot="markdown">{text}</p> }));
 vi.mock("@assistant-ui/react", async (original) => ({ ...(await original<typeof import("@assistant-ui/react")>()), useToolCallElapsed: () => undefined }));
 
@@ -127,8 +123,7 @@ describe("rendering", () => {
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
     stable.actions.openSession.mockClear();
-    panels.entries = [];
-    panels.actions.setSize.mockClear();
+    fleet.reveal.mockClear();
     let state = reduce(initialState, { type: "opened", state: sessionState({ path: PATH }) });
     state = reduce(state, { type: "agents/run", run: event.run });
     store = createStateStore(state);
@@ -177,8 +172,24 @@ describe("rendering", () => {
     expect(stable.actions.openSession).toHaveBeenCalledWith("/p/child.jsonl");
   });
 
-  it("reports a task exit in one line and reveals its island from the Output action", async () => {
-    panels.entries = [{ key: `${PATH} tasks:t1`, path: PATH, panel: { id: "tasks:t1", kind: "run" } }];
+  it("reports a task exit in one line and reveals its fleet row from the Output action", async () => {
+    // The button exists only while the host still holds the task; once the
+    // register has forgotten it there is no row to lead to.
+    await act(async () =>
+      store.dispatch({
+        type: "tasks/update",
+        task: {
+          id: "t1",
+          sessionPath: PATH,
+          command: "pnpm test --filter ui",
+          title: "pnpm test --filter ui",
+          status: "completed",
+          origin: "background",
+          startedAt: "2026-09-08T10:00:00.000Z",
+          outputBytes: 12,
+        },
+      }),
+    );
     await mount(<TaskEventNotice data={taskSummary} />);
     const line = container.querySelector<HTMLElement>('[data-slot="task-event"]')!;
     expect(line.textContent).toContain("Background task");
@@ -186,8 +197,9 @@ describe("rendering", () => {
     expect(line.textContent).toContain("exited with code 0");
     expect(line.textContent).toContain("2m 14s");
     await act(async () => line.querySelector<HTMLButtonElement>('[data-slot="task-event-output"]')!.click());
-    expect(panels.actions.setSize).toHaveBeenCalledWith(PATH, `${PATH} tasks:t1`, "expanded");
-    panels.entries = [];
+    expect(fleet.reveal).toHaveBeenCalledWith("task:t1", { sheet: true });
+
+    await act(async () => store.dispatch({ type: "tasks/loaded", tasks: [], path: PATH }));
     await mount(<TaskEventNotice data={{ ...taskSummary, status: "failed", exitCode: 1 }} />);
     expect(container.querySelector('[data-slot="task-event"]')?.getAttribute("data-failed")).toBe("true");
     expect(container.querySelector('[data-slot="task-event-output"]')).toBeNull();

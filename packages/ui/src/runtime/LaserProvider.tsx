@@ -58,6 +58,7 @@ import {
   type ReactNode,
 } from "react";
 import { createAgentsActions, type AgentsActions } from "../agents/actions.js";
+import { createTasksActions, type TasksActions } from "../fleet/actions.js";
 import { HostClient } from "../client.js";
 import { initialState, reduce, type Action, type AppState, type SessionView } from "../store.js";
 import { createThreadAdapter, sendToSession, type SendBehavior } from "./adapter.js";
@@ -119,15 +120,30 @@ export interface LaserActions {
   compact(instructions?: string): Promise<void>;
   /** Fork before `entryId` into a new session and select it. */
   fork(entryId: string): Promise<void>;
-  /** Move the session's leaf to `entryId` and re-hydrate. */
+  /**
+   * Move this session's leaf to `entryId`, in this file, and re-hydrate.
+   * Answers with the engine's own text for that entry when it is a prompt —
+   * navigating onto a user message puts the session *before* it, which is what
+   * makes editing and re-running land beside the old version instead of after
+   * it. `false` when nothing moved: a feature vetoed it, a turn is running, or
+   * the entry is gone. Whatever the reason, the person has already been told.
+   */
+  navigate(entryId: string): Promise<{ editorText?: string } | false>;
+  /** `navigate`, plus the engine's text into the composer. The menu's "Jump to this entry". */
   jump(entryId: string): Promise<void>;
   refreshSessions(): Promise<void>;
   refreshEntries(): Promise<void>;
   /** Refresh cross-app allowance for the session's account provider. */
   refreshAccountUsage(): Promise<void>;
   goal(action: GoalAction): Promise<void>;
-  /** `pi/session/clear_queue`; resolves with the text to restore into the composer. */
+  /**
+   * Empty both queues: the pending tray and whatever the engine already holds.
+   * Resolves with the text of everything dropped, so the composer can offer it
+   * back rather than lose it.
+   */
   clearQueue(): Promise<string>;
+  // Per-message tray operations (steer, edit, drop) go through the thread
+  // adapter's queue, which is the one route to the worker — see adapter.ts.
   /**
    * `pi/project/add` — server-side, so every client and the CLI see it.
    * Resolves with the host's record, or `undefined` when the add failed (the
@@ -148,6 +164,8 @@ export interface LaserActions {
   toast(level: "info" | "warning" | "error", text: string): void;
   /** Agent definitions, runs, Beam and Namer (`agents/*`). See agents/actions.ts for failure styles. */
   agents: AgentsActions;
+  /** Background commands the agent left running (`tasks/*`). See fleet/actions.ts. */
+  tasks: TasksActions;
 }
 
 export interface LaserContextValue {
@@ -586,7 +604,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         const hydrated = view?.hydrated === true;
         // Not hydrated yet: the snapshot below carries the whole transcript, so
         // asking the worker to replay its buffer would only duplicate it.
-        const { state: session, replayFrom } = await client.request("session/load", {
+        const { state: session, replayFrom, seq: loadedSeq } = await client.request("session/load", {
           path,
           ...(hydrated ? { fromSeq: view.lastSeq } : {}),
         });
@@ -603,16 +621,30 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           seenSeq.current.delete(path);
           client.resync(path, replayFrom);
           dispatch({ type: "resync", path, lastSeq: replayFrom });
-        } else {
-          client.track(path, hydrated ? view.lastSeq : 0);
         }
         if (!hydrated || needsResync) {
           const seqBefore = readState().open[path]?.lastSeq ?? 0;
-          const { entries } = await client.request("pi/session/entries", { path });
-          dispatch({ type: "hydrate", path, entries, expectSeq: seqBefore });
+          const { entries, leafId } = await client.request("pi/session/entries", { path });
+          // The snapshot is the transcript as the worker held it at `loadedSeq`,
+          // so that — not 0 — is the watermark this view now carries. Leaving it
+          // at 0 makes the next open ask for `fromSeq: 0` and receive the whole
+          // replay buffer on top of the transcript it already shows. `expectSeq`
+          // still owns the race: an update that landed while the snapshot was in
+          // flight keeps the live blocks, and its higher seq wins the stamp.
+          dispatch({ type: "hydrate", path, entries, leafId, expectSeq: seqBefore, seq: loadedSeq });
         }
+        // Monotonic: the resume `session/load` after a dropped socket asks from
+        // here, so an unstamped view would replay its whole buffer there too.
+        client.track(path, readState().open[path]?.lastSeq ?? loadedSeq);
         const { goal } = await client.request("session/goal/get", { path });
         dispatch({ type: "goal", path, goal });
+        // The pending tray, once, now that the view exists. Every later change
+        // arrives as a numbered `pending_update` on the session's own stream;
+        // this snapshot is what a reload (which has no watermark to replay
+        // from) starts it with, and the worker computes it after any update it
+        // has already sent, so it can never be the stale one.
+        const { messages } = await client.request("session/pending/list", { path });
+        dispatch({ type: "pending", path, messages });
       })();
       const entry = {
         select,
@@ -662,6 +694,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   // --- agents -------------------------------------------------------------
 
   const agentsActions = useMemo(() => createAgentsActions({ client, dispatch, guard }), [client, guard]);
+  const tasksActions = useMemo(() => createTasksActions({ client, dispatch, guard }), [client, guard]);
 
   // Definitions and the run registry come up with the connection and again
   // after every reconnect: a restarted host may hold different agents, and a
@@ -860,9 +893,13 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       const { state: session, editorText } = await client.request("pi/session/fork", { path, entryId });
       client.untrack(path);
       client.track(session.path, 0);
+      // Read the fork's transcript before putting it on screen. Switching
+      // first and hydrating after an await shows an empty transcript for a
+      // frame and rebuilds the thread runtime twice; both dispatches land in
+      // one task instead.
+      const { entries, leafId } = await client.request("pi/session/entries", { path: session.path });
       dispatch({ type: "forked", from: path, state: session });
-      const { entries } = await client.request("pi/session/entries", { path: session.path });
-      dispatch({ type: "hydrate", path: session.path, entries });
+      dispatch({ type: "hydrate", path: session.path, entries, leafId });
       if (editorText) {
         dispatch({
           type: "notification",
@@ -871,6 +908,23 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         });
       }
       void refreshSessions();
+    };
+
+    /**
+     * Move the leaf inside this session file (Pi's `navigateTree`). The engine
+     * refuses while a turn is streaming and an extension may veto it; both are
+     * answered here rather than swallowed, so no control is a silent no-op.
+     */
+    const navigate = async (entryId: string): Promise<{ editorText?: string } | false> => {
+      const path = requireCurrent();
+      const { editorText, cancelled } = await client.request("pi/session/navigate", { path, entryId });
+      if (cancelled) {
+        dispatch({ type: "toast", level: "warning", text: "A feature stopped that change." });
+        return false;
+      }
+      const { entries, leafId } = await client.request("pi/session/entries", { path });
+      dispatch({ type: "hydrate", path, entries, leafId });
+      return editorText !== undefined ? { editorText } : {};
     };
 
     return {
@@ -911,19 +965,27 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           });
         }).then(() => undefined),
       fork: (entryId) => guard(() => fork(entryId)).then(() => undefined),
+      navigate: (entryId) => guard(() => navigate(entryId)).then((result) => result ?? false),
       jump: (entryId) =>
         guard(async () => {
           const path = requireCurrent();
-          await client.request("pi/session/navigate", { path, entryId });
-          const { entries } = await client.request("pi/session/entries", { path });
-          dispatch({ type: "hydrate", path, entries });
+          const moved = await navigate(entryId);
+          // Navigating onto a prompt leaves the session before it and hands
+          // its text back: that text belongs in the composer, not nowhere.
+          if (moved && moved.editorText !== undefined) {
+            dispatch({
+              type: "notification",
+              method: "pi/ui/event",
+              params: { path, method: "setEditorText", text: moved.editorText },
+            });
+          }
         }).then(() => undefined),
       refreshSessions,
       refreshEntries: () =>
         guard(async () => {
           const path = requireCurrent();
-          const { entries } = await client.request("pi/session/entries", { path });
-          dispatch({ type: "entries", path, entries });
+          const { entries, leafId } = await client.request("pi/session/entries", { path });
+          dispatch({ type: "entries", path, entries, leafId });
         }).then(() => undefined),
       refreshAccountUsage: () =>
         guard(async () => {
@@ -938,8 +1000,14 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         }).then(() => undefined),
       clearQueue: () =>
         guard(async () => {
-          const { steering, followUp } = await client.request("pi/session/clear_queue", { path: requireCurrent() });
-          return [...steering, ...followUp].join("\n\n");
+          const path = requireCurrent();
+          // Both, always: the person asked for an empty queue, and a tray left
+          // behind by a control called "Clear queue" is the control lying.
+          const [{ messages }, { steering, followUp }] = await Promise.all([
+            client.request("session/pending/clear", { path }),
+            client.request("pi/session/clear_queue", { path }),
+          ]);
+          return [...steering, ...followUp, ...messages.map((message) => message.text)].filter(Boolean).join("\n\n");
         }).then((text) => text ?? ""),
       addProject: (cwd) =>
         guard(async () => {
@@ -1012,9 +1080,11 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       dismissToast: (id) => dispatch({ type: "dismissToast", id }),
       toast: (level, text) => dispatch({ type: "toast", level, text }),
       agents: agentsActions,
+      tasks: tasksActions,
     };
   }, [
     agentsActions,
+    tasksActions,
     applyState,
     archive,
     client,

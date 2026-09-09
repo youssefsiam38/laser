@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 
 // Agent map (M13-T7): the main-column view and its fullscreen host.
 import { AgentMapFullscreen, AgentMapView, useMapUi } from "@/components/agents/map";
-import { Dock } from "@/components/dock";
+import { FleetPanel, FleetSheet } from "@/components/fleet";
 import { MobileSurfaces } from "@/components/mobile";
 import { Thread } from "@/components/thread/Thread";
 import { GoalBar } from "@/components/thread/GoalBar";
@@ -12,8 +12,7 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FileLinkDirectory } from "@/components/ui/source-file-link";
 import { useBreakpoint, useIsWide, useKeyboardInset } from "@/hooks";
-import { PanelAmbient, PanelDecisionSheet, PanelsProvider, POPOUT_HASH_PREFIX, PoppedOutPanel } from "@/panels";
-import { FleetSheet, RunTabs } from "@/components/subagents";
+import { closeFleetSheet, setFleetSheetOpen, useFleetReconcile, useFleetSheetOpen } from "@/fleet";
 // Agents leap (Lane U2): the one "End agent?" confirmation, asked from row
 // menus, run tabs and the live map through `requestEndAgent`.
 import { EndAgentDialog } from "@/components/agents/EndAgentDialog";
@@ -36,21 +35,30 @@ import { Toasts } from "./Toasts.js";
 import { TrustDialog } from "./TrustDialog.js";
 import { TopBar } from "./TopBar.js";
 
-export const PANELS_STORAGE_KEY = storageKey("panels");
+/**
+ * The remembered shape of the window. The key is unchanged on purpose: it is
+ * a `storageKey()` value people already have, and renaming the string would
+ * silently drop everyone's saved layout. Only the fields inside it changed —
+ * `fleet` joined `sessions` and `telemetry` when the fleet became a column.
+ */
+export const COLUMNS_STORAGE_KEY = storageKey("panels");
 
-interface PanelPrefs {
+interface ColumnPrefs {
   sessions?: boolean;
+  /** Absent = follow the viewport (open at ≥1280px). */
+  fleet?: boolean;
   /** Absent = follow the viewport (open at ≥1280px). */
   telemetry?: boolean;
 }
 
-const readPrefs = (): PanelPrefs => {
+const readPrefs = (): ColumnPrefs => {
   try {
-    const parsed: unknown = JSON.parse(globalThis.localStorage?.getItem(PANELS_STORAGE_KEY) ?? "{}");
+    const parsed: unknown = JSON.parse(globalThis.localStorage?.getItem(COLUMNS_STORAGE_KEY) ?? "{}");
     if (!parsed || typeof parsed !== "object") return {};
     const p = parsed as Record<string, unknown>;
     return {
       ...(typeof p.sessions === "boolean" ? { sessions: p.sessions } : {}),
+      ...(typeof p.fleet === "boolean" ? { fleet: p.fleet } : {}),
       ...(typeof p.telemetry === "boolean" ? { telemetry: p.telemetry } : {}),
     };
   } catch {
@@ -58,47 +66,29 @@ const readPrefs = (): PanelPrefs => {
   }
 };
 
-const writePrefs = (prefs: PanelPrefs): void => {
+const writePrefs = (prefs: ColumnPrefs): void => {
   try {
-    globalThis.localStorage?.setItem(PANELS_STORAGE_KEY, JSON.stringify(prefs));
+    globalThis.localStorage?.setItem(COLUMNS_STORAGE_KEY, JSON.stringify(prefs));
   } catch {
     /* ignore */
   }
 };
 
 /**
- * The app frame. Desktop: rail | sessions | thread | telemetry. Tablet: rail
- * + thread with sessions/telemetry as sheets. Mobile: thread only; the top
- * bar's back chevron opens the sessions sheet. The body never scrolls; the
- * thread viewport does, and on mobile the main column keeps its bottom edge
- * above the on-screen keyboard through `--kb`.
+ * The app frame. Desktop: rail | sessions | thread | fleet | monitor — three
+ * independently collapsible columns around the conversation, the monitor
+ * outermost and the fleet immediately inside it. Tablet: rail + thread, with
+ * every column as a sheet. Mobile: thread only; the top bar's back chevron
+ * opens the sessions sheet. The body never scrolls; the thread viewport does,
+ * and on mobile the main column keeps its bottom edge above the on-screen
+ * keyboard through `--kb`.
  */
-/** The location hash, live. A popped-out panel is a whole page of its own. */
-function useHash(): string {
-  const [hash, setHash] = useState(() => globalThis.location?.hash ?? "");
-  useEffect(() => {
-    const onChange = () => setHash(globalThis.location?.hash ?? "");
-    window.addEventListener("hashchange", onChange);
-    return () => window.removeEventListener("hashchange", onChange);
-  }, []);
-  return hash;
-}
-
 export function Shell() {
   const view = useLaserView();
   const versionMismatch = useLaserState((state) => state.versionMismatch);
-  const hash = useHash();
   const { startupRestoring } = useLaserStable();
   const connection = useLaserState((state) => state.connection);
-  const content = hash.startsWith(POPOUT_HASH_PREFIX) ? (
-    <TooltipProvider>
-      <PanelsProvider>
-        <PoppedOutPanel hash={hash} />
-      </PanelsProvider>
-    </TooltipProvider>
-  ) : (
-    <ShellFrame />
-  );
+  const content = <ShellFrame />;
 
   return (
     <div className="flex h-dvh min-h-0 flex-col">
@@ -126,28 +116,46 @@ function ShellFrame() {
   const connection = useLaserState((s) => s.connection);
   const sessions = useLaserState((s) => s.sessions);
 
-  const [prefs, setPrefs] = useState<PanelPrefs>(readPrefs);
+  const [prefs, setPrefs] = useState<ColumnPrefs>(readPrefs);
   const [sheets, setSheets] = useState({ sessions: false, telemetry: false });
   const [historyOpen, setHistoryOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const sessionsLoaded = useLaserState((s) => s.sessionsLoaded);
+  const fleetSheetOpen = useFleetSheetOpen();
   // Agent map (M13-T7): the top bar's toggle swaps the main column to the map.
   const mapOpen = useMapUi().open;
   // First run (M10-T6): the host says whether setup is still pending; the
   // flow takes the conversation's place until it is finished or skipped.
   const setup = useSetupPending();
 
-  // Sheets belong to the compact layouts; a resize to desktop drops them.
+  // The fleet is primed on connect and after a reconnect; notifications alone
+  // would leave a reloaded column quietly wrong.
+  useFleetReconcile();
+
+  /**
+   * The fleet is a *column* only where a third column fits. There is room for
+   * the sessions column and one right column at 1024; a second right column
+   * there leaves the conversation about eighty pixels, which is not a narrower
+   * layout but a broken one. Below 1280 the fleet is the sheet instead — the
+   * same content, summoned rather than resident.
+   */
+  const fleetIsColumn = desktop && isWide;
+
+  // Sheets belong to the compact layouts; a resize into them drops them.
   useEffect(() => {
     if (desktop) setSheets({ sessions: false, telemetry: false });
   }, [desktop]);
+  useEffect(() => {
+    if (fleetIsColumn) closeFleetSheet();
+  }, [fleetIsColumn]);
 
   const sessionsOpen = desktop ? (prefs.sessions ?? true) : sheets.sessions;
+  const fleetOpen = fleetIsColumn ? (prefs.fleet ?? true) : fleetSheetOpen;
   const telemetryOpen = desktop ? (prefs.telemetry ?? isWide) : sheets.telemetry;
 
-  const updatePrefs = useCallback((patch: PanelPrefs) => {
+  const updatePrefs = useCallback((patch: ColumnPrefs) => {
     setPrefs((current) => {
       const next = { ...current, ...patch };
       writePrefs(next);
@@ -162,6 +170,13 @@ function ShellFrame() {
     },
     [desktop, updatePrefs],
   );
+  const setFleetOpen = useCallback(
+    (open: boolean) => {
+      if (fleetIsColumn) updatePrefs({ fleet: open });
+      else setFleetSheetOpen(open);
+    },
+    [fleetIsColumn, updatePrefs],
+  );
   const setTelemetryOpen = useCallback(
     (open: boolean) => {
       if (desktop) updatePrefs({ telemetry: open });
@@ -170,6 +185,9 @@ function ShellFrame() {
     [desktop, updatePrefs],
   );
   const toggleSessions = useCallback(() => setSessionsOpen(!sessionsOpen), [sessionsOpen, setSessionsOpen]);
+  const toggleFleet = useCallback(() => setFleetOpen(!fleetOpen), [fleetOpen, setFleetOpen]);
+  // The fleet's column state must not be remembered as "closed" just because
+  // the window narrowed past the width a third column needs.
   const toggleTelemetry = useCallback(() => setTelemetryOpen(!telemetryOpen), [telemetryOpen, setTelemetryOpen]);
 
   const openHistory = useCallback(() => {
@@ -220,11 +238,14 @@ function ShellFrame() {
       } else if (e.key === "]") {
         e.preventDefault();
         toggleTelemetry();
+      } else if (e.key === "\\") {
+        e.preventDefault();
+        toggleFleet();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [newSession, toggleSessions, toggleTelemetry]);
+  }, [newSession, toggleFleet, toggleSessions, toggleTelemetry]);
 
   // Tab title carries the same vocabulary as the dots: "(2) name · laser".
   // Derived in the selector: a streamed token that changes no session's
@@ -271,10 +292,13 @@ function ShellFrame() {
     () => ({
       layout,
       sessionsOpen,
+      fleetOpen,
       telemetryOpen,
       setSessionsOpen,
+      setFleetOpen,
       setTelemetryOpen,
       toggleSessions,
+      toggleFleet,
       toggleTelemetry,
       historyOpen,
       setHistoryOpen,
@@ -289,15 +313,18 @@ function ShellFrame() {
     [
       addProjectOpen,
       canCreate,
+      fleetOpen,
       historyOpen,
       layout,
       newSession,
       openHistory,
       sessionsOpen,
+      setFleetOpen,
       setSessionsOpen,
       setTelemetryOpen,
       telemetryOpen,
       toolsOpen,
+      toggleFleet,
       toggleSessions,
       toggleTelemetry,
     ],
@@ -328,7 +355,6 @@ function ShellFrame() {
 
   return (
     <TooltipProvider>
-      <PanelsProvider>
       <WorkbenchProvider>
       <ShellContext.Provider value={shell}>
         <div className="flex h-full w-full overflow-hidden bg-bg text-ink">
@@ -339,20 +365,18 @@ function ShellFrame() {
             {desktop && sessionsOpen && <SessionsPanel variant="panel" />}
             <main className="flex min-h-0 min-w-0 flex-1 flex-col">
               <TopBar />
-              {/* The run tree: one level of children of whatever is focused
-                  (docs/ux-agent-work.md). Renders nothing when the session has
-                  no agent work. */}
-              <RunTabs />
               <GoalBar />
               <HostConnectionState />
               {/* The thread's sticky footer owns the keyboard/safe-area inset
                   (Thread.tsx); adding it here too lifted the composer twice. */}
               <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
                 {/* Agent map (M13-T7): the live map in place of the thread while toggled. */}
-                {mapOpen && view ? <AgentMapView /> : <Thread statusSlot={<PanelAmbient />} />}
+                {mapOpen && view ? <AgentMapView /> : <Thread />}
               </div>
             </main>
-            {layout !== "mobile" && <Dock path={view?.path} />}
+            {/* The two right columns, outermost last: the fleet, then the
+                monitor (docs/ux-fleet.md "The layout"). */}
+            {fleetIsColumn && fleetOpen && <FleetPanel variant="panel" onClose={() => setFleetOpen(false)} />}
             {desktop && telemetryOpen && <TelemetryPanel variant="panel" />}
             {/* Agent map (M13-T7): the fullscreen host, under the workbench so Settings still wins. */}
             <AgentMapFullscreen />
@@ -383,8 +407,7 @@ function ShellFrame() {
         <CommandPaletteDialog open={paletteOpen} onOpenChange={setPaletteOpen} />
         <GlobalSearch />
         <TrustDialog />
-        <PanelDecisionSheet />
-        <FleetSheet />
+        {!fleetIsColumn && <FleetSheet />}
         <EndAgentDialog />
         <BeamBubble />
         <BeamModelDialog />
@@ -394,7 +417,6 @@ function ShellFrame() {
         <MobileSurfaces />
       </ShellContext.Provider>
       </WorkbenchProvider>
-      </PanelsProvider>
     </TooltipProvider>
   );
 }

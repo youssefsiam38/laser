@@ -16,7 +16,7 @@ describe("startup restoration", () => {
     expect(markup).toContain('role="status"');
     expect(markup).toContain('aria-label="Returning to your last session"');
     expect(markup).not.toContain('/icons/mark-192.png');
-    expect(markup).toContain("startup-mark relative");
+    expect(markup).toContain('class="startup-mark"');
     expect(markup).toContain('class="startup-beam-live"');
     expect(markup.match(/pathLength="1"/g)).toHaveLength(6);
     expect(markup).toContain("C548 341 578 369 590 400");

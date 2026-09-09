@@ -13,7 +13,6 @@
  * stay free of any `electron` import.
  */
 import { PRODUCT_NAME, URL_SCHEME } from "@lasercode/protocol";
-import type { PanelKind } from "@lasercode/protocol";
 
 export type DesktopPlatform = "darwin" | "win32" | "linux";
 
@@ -58,21 +57,6 @@ export interface DesktopHostInfo {
   /** Where the host writes its log, for an error state that needs a next step. */
   logFile: string;
 }
-
-/** A panel asked to live in its own window. Identity survives the move (R6). */
-export interface PanelDescriptor {
-  /** The panel id from the panel contract; the window is keyed on it. */
-  id: string;
-  kind: PanelKind;
-  /** Untrusted text. Used as the window title, never as markup. */
-  title: string;
-  /** The session the panel belongs to, so the window can load it. */
-  sessionPath?: string;
-  cwd?: string;
-}
-
-/** Set on `window.laser.panel` inside a popped-out window; null in the main one. */
-export type PanelWindowDescriptor = PanelDescriptor;
 
 export type DeepLink =
   | { kind: "session"; path: string }
@@ -126,18 +110,10 @@ export interface LaserDesktop {
   readonly version: string;
   readonly platform: DesktopPlatform;
   readonly chrome: DesktopChrome;
-  /** Non-null only inside a popped-out panel window. */
-  readonly panel: PanelWindowDescriptor | null;
-
   host(): Promise<DesktopHostInfo>;
   onHost(listener: (info: DesktopHostInfo) => void): () => void;
   /** Try to start the host again after a failure. Safe to call when it is up. */
   retryHost(): void;
-
-  /** Open a panel in its own window. Returns `opened: false` with a reason. */
-  popOutPanel(descriptor: PanelDescriptor): Promise<{ opened: boolean; reason?: string }>;
-  /** From inside a panel window: put the panel back and close this window. */
-  closePanelWindow(): void;
 
   onDeepLink(listener: (link: DeepLink) => void): () => void;
   /** Links that arrived before the UI could listen (a cold start from a link). */
@@ -151,8 +127,17 @@ export interface LaserDesktop {
     onState(listener: (state: WindowChromeState) => void): () => void;
   };
 
-  /** Keep the native frame (Windows overlay, macOS vibrancy) in step with the UI theme. */
-  setTheme(theme: "light" | "dark"): void;
+  /**
+   * Keep the native frame (Windows overlay, macOS vibrancy) in step with the UI
+   * theme, and record what the opening screen should be painted with.
+   *
+   * `ground` carries the declarations in `STARTUP_SCREEN_TOKEN_NAMES` for the
+   * applied theme and for both halves of the follow-the-system pair. The shell
+   * keeps them so the screen it shows before the app exists is the person's own
+   * theme rather than the default preset (M13-T32). It is validated in the main
+   * process; sending nothing is allowed and simply leaves the last record.
+   */
+  setTheme(theme: "light" | "dark", ground?: unknown): void;
 
   /** Open the operating system's folder picker. Null means it was cancelled. */
   chooseDirectory(): Promise<string | null>;

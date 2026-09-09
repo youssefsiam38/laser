@@ -1,25 +1,26 @@
 # Writing a module for the companion extension
 
 Status: **binding for `packages/pi-extension`** (M8-T5). Read
-[`AGENTS.md`](../AGENTS.md) §6a and [`docs/ux-panels.md`](ux-panels.md) first —
+[`AGENTS.md`](../AGENTS.md) §6a and [`docs/ux-fleet.md`](ux-fleet.md) first —
 this file is how you obey them in code.
 
 Support for a community package is **a module, never a package**. There is one
 Pi extension in this repo, `@lasercode/pi-extension`, and it carries one module
 per package it knows about. Adding pi-web-access support meant adding
 one module and one line in `src/modules/index.ts`; D-61 later retired that
-adapter because its panel duplicated the transcript. That was the whole
+adapter because its second list duplicated the transcript. That was the whole
 ceremony, and it is deliberate: a second extension would mean a second
 `session_start`, a second failure domain, and a second thing to install.
 
-Two modules are not package glue at all. `subagents` registers the agent
+Three modules are not package glue at all. `subagents` registers the agent
 harness tools (`start_agent`, `send_agent_message`, `list_agents`,
 `wait_for_agents`, `stop_agent`; `complete_agent_run` in a child), appends the
 child's role to its system prompt and delivers agent events to the parent
 model — every call goes to the worker-supplied `AgentHarnessBridge`
-(`src/agents-bridge.ts`). `background-work` owns long commands. Both are
-Laser's own (D-140, [`agents.md`](agents.md)); they follow every rule below,
-and their "package" is the worker.
+(`src/agents-bridge.ts`). `background-work` owns long commands.
+`file-freshness` explains an `edit` to a file that moved under the agent
+(§8). All three are Laser's own (D-140, [`agents.md`](agents.md)); they follow
+every rule below, and their "package" is the worker or the engine itself.
 
 ---
 
@@ -37,7 +38,7 @@ export interface LaserModule {
 export interface ModuleContext {
   pi: ExtensionAPI;                 // the Pi extension API for this session
   send: (message: OutboundMessage) => void;   // → the worker, in-process
-  commands?: CommandBus;            // ← the worker (panel actions today)
+  commands?: CommandBus;            // ← the worker (Stop on a task, a usage refresh)
 }
 ```
 
@@ -79,7 +80,7 @@ The three probes, in order of preference:
 
 ```ts
 // 1. A registered tool — the strongest signal, and the one that survives a rename.
-// This is the historical pi-web-access adapter's probe; D-61 retired its panel.
+// This is the historical pi-web-access adapter's probe; D-61 retired its second list.
 pi.getAllTools().some((tool) => fromPackage(tool.sourceInfo, "pi-web-access"));
 
 // 2. A registered command.
@@ -169,61 +170,46 @@ ends up in *that* prompt rather than the next one. If you do this:
 
 ---
 
-## 4. Showing something: the panel contract
+## 4. Showing something, and asking something
 
-**An extension declares a kind and an intent. laser decides how it looks and
-where it goes.** Read [`docs/ux-panels.md`](ux-panels.md) — six kinds
-(`run`, `plan`, `document`, `stream`, `collection`, `decision`), four surfaces,
-and a placement table that laser owns. A module never ships a component, a
-colour or a width.
+**There is no general-purpose display bus.** There used to be — six panel
+kinds and four surfaces (`docs/ux-panels.md`, retired by M13-T26) — and it was
+a second app inside the app. A module now has exactly two roads, and both are
+narrow on purpose.
 
-Emit on Pi's event bus, exactly as a third-party extension that opted into the
-contract would:
+### Showing: the tool call that produced it
 
-```ts
-import { PANEL_EVENT, type PanelEvent } from "@lasercode/protocol";
+Whatever a module found, it found inside a tool call, and the tool call is
+already a row in the transcript with its request, its result and a disclosure.
+Put the finding there. Web search is the worked example: its results render in
+its own tool row, and the second list the panel system drew beside them was
+showing one thing twice ([`docs/ux-elements.md`](ux-elements.md), "Web
+search"). If the row needs a specialised body, that is a body in
+`packages/ui/src/components/thread/`, a search projection in
+`packages/protocol/src/search-content.ts`, and a row in
+[`docs/search-content.md`](search-content.md).
 
-const panel: PanelEvent = {
-  v: 1,
-  id: `package:${recordId}`,             // stable; re-emit to update in place (R6)
-  kind: "collection",
-  intent: "inline",
-  source: "example-package",             // the badge on the panel
-  title: "8 matching items",
-  data: { layout: "list", items },       // kind-specific, strict JSON
-};
-pi.events.emit(PANEL_EVENT, panel);
-```
+### Long work: the fleet
 
-`modules/panels.ts` validates it, drops an identical re-emit, and forwards it to
-the worker. `PANEL_CLOSE_EVENT` retires a panel; actions a person presses come
-back on `PANEL_ACTION_EVENT`.
+Work that outlives its tool call — a command left running, an agent started —
+is *fleet* work, and the fleet has a typed domain model rather than a bus
+([`docs/ux-fleet.md`](ux-fleet.md)). `background-work` is the worked example:
+it publishes `laser/task/update` with a `BackgroundTaskUpdate`, the worker
+stamps the session path, the host keeps the register and the column draws it.
 
-Going through the public bus rather than a private `send(...)` is on purpose:
-our own adapters are the contract's first users, so a gap in it is our problem
-before it is anyone else's. A terminal Pi has nobody listening and the emit
-costs nothing.
+Adding a third kind of fleet work means adding a type to
+`packages/protocol/src/tasks.ts` and a decision in `STATUS_DETAILED.md`. That
+friction is the feature: a general bus had none, and grew six kinds and four
+surfaces before anyone noticed.
 
-Four rules the validator enforces, and one it cannot:
+### Asking: the four dialogs
 
-1. **No presentation, at any depth.** `html`, `className`, `style`, `color`,
-   `width`, `icon`, `component`, `surface` and their friends are refused by
-   name. If you want a different look, you want a new kind, which is a decision
-   in `STATUS_DETAILED.md`.
-2. **Generic shapes, never domain values (R12a).** A collection row has
-   `primary`, `secondary` and `meta: [{ label, value }]`. The moment a payload
-   grows a `url` field for a search hit, the next producer — grep hits, package
-   lists, citations — does not fit. Put the URL in a `meta` row; the label is
-   yours, the shape is everyone's.
-3. **References, never bytes.** Content is a `ref` the host reads in ranges. No
-   payload carries a megabyte.
-4. **Say when you inferred it (R3).** The validator cannot check this. If you
-   rebuilt structure from timestamps, mark it `inferred` so it draws dashed.
-
-Sizes the schema enforces, so you clamp before you emit: a collection item's
-`primary` ≤ 1000 characters, `secondary` ≤ 4000, each `meta` value ≤ 400, at
-most 20 meta rows and 2000 items. A payload that fails validation is dropped
-whole and logged — clamp a long URL rather than lose the panel.
+`select`, `confirm`, `input` and `editor` through Pi's own `ctx.ui`. They reach
+the worker's UI bridge as `pi/ui/request` and are answered **inline in the
+transcript** — inside the tool row that raised them when that row is on screen,
+otherwise as a card above the composer. A module needs no code for this beyond
+calling `ctx.ui`; `ctx.ui.custom()` is not emulated (AGENTS.md invariant 6),
+and anything laser cannot draw is cancelled rather than left hanging.
 
 ### Where to get the data
 
@@ -278,8 +264,8 @@ meter looks dead while someone is talking.
 
 Native replacements live in the UI, not here:
 `packages/ui/src/components/preview/` renders markdown, unified diffs, images
-and source text as `document` panel bodies, and says plainly that it will not
-draw a PDF rather than showing a broken viewer.
+and source text wherever bytes turn up, and says plainly that it will not draw
+a PDF rather than showing a broken viewer.
 
 ---
 
@@ -323,13 +309,13 @@ Rules for a bridge:
 3. Register it in `packages/pi-extension/src/modules/index.ts` — import and add
    to the `modules` array. Order is for log readability only.
 4. Write `detect` against Pi's registries, returning `false` on any throw.
-5. Write `activate`. Emit panels on the bus; report problems with
-   `laser/module/log`; return a disposer if you subscribed to anything.
+5. Write `activate`. Report problems with `laser/module/log`; return a
+   disposer if you subscribed to anything.
 6. If the UI must change behaviour, gate it on the module name appearing in
    `laser/capabilities`, never on a version or a setting.
 7. Test only what is subtle — a payload mapping, a parser, a state machine.
    Detection against a live Pi is not a unit test; the mapping from the
-   package's shape to a panel is.
+   package's shape to a typed payload is.
 8. Note the package, its version and what you verified in
    [`docs/upstream.md`](upstream.md) if you read its source to write the
    module. What was learned from pi-subagents before D-140 is in
@@ -341,12 +327,12 @@ Rules for a bridge:
 | --- | --- | --- | --- |
 | `provider-log` | Pi's own provider hooks | always | `laser/provider/*` for the logs page |
 | `account-usage` | the subscription allowance route | an account-authenticated provider | `laser/account-usage/state` |
-| `panels` | the declared panel protocol | always | validates `laser:panel` → `laser/panel/upsert` |
 | `goal` | `@narumitw/pi-goal` state entries | Goals feature enabled | `laser/goal/state` |
 | `subagents` | the worker's agent harness (`AgentHarnessBridge`) | `ctx.agents` present | the harness tools, the child's role block, `laser/agent-event` custom messages in the parent |
-| `background-work` | the worker's shell (`BackgroundWorkOptions`) | `ctx.backgroundWork` present | `bash` with a background flag and timeout promotion, `task_*` tools, `tasks:*` run panels, `laser/task-event` |
+| `background-work` | the worker's shell (`BackgroundWorkOptions`) | `ctx.backgroundWork` present | `bash` with a background flag and timeout promotion, `task_*` tools, `laser/task/update` for the fleet, `laser/task-event` |
+| `file-freshness` | the engine's own `read`/`write`/`edit` tools | always | one appended sentence on an `edit` to a file that changed since the agent last saw it (§8) |
 | `transcribe` | pi-gpt-transcribe | the `/transcribe` command | detection + the pre-send transform |
-| `web-access` | pi-web-access | retired by D-61 | no module; the transcript tool disclosure is the single presentation |
+| `web-access` | pi-web-access | retired by D-61 | the module is a stub; the transcript tool disclosure is the single presentation |
 
 Historical: before D-140 `subagents` probed pi-subagents' `globalThis`
 registries and its `subagents:rpc:v1` bus and emitted `laser/subagents/event`.
@@ -354,9 +340,86 @@ That module is gone with the package.
 
 ---
 
+## 8. Guarding the engine's own tools
+
+`file-freshness` is the worked example of a module that adds a rule to a tool
+the engine already owns, rather than bridging a package (M13-T33).
+
+**The rule is content-based, not clock-based** (M13-T36, replacing the refusal
+recorded as D-151). Pi's `edit` replaces exact text: it matches every
+`edits[].oldText` against the file *as it is on disk right now*, refuses a match
+it cannot find, and refuses a match that occurs more than once — verified
+against `core/tools/edit-diff.js` in pinned Pi 0.85 and against the real tool in
+`test/file-freshness.test.ts`. That match **is** the freshness proof. An edit
+whose old text still matches, uniquely, in the current file is safe to apply no
+matter how old the agent's reading of the file is.
+
+**So the module blocks nothing.** There is no `tool_call` handler; the hook it
+uses to look before a tool runs — `tool_execution_start` — has no result type at
+all, so it is structurally incapable of stopping a call. A wrong record can no
+longer cost the agent a turn.
+
+**Hooks, not an override.** `tool_execution_start` fires before a tool executes,
+which is the only moment "did this file change *before* the edit?" can be asked:
+by `tool_result` a successful `edit` has already moved the mtime itself.
+`tool_result` fires after, with `isError`, so what is recorded is what actually
+happened, and it may replace the result's `content`. Re-registering
+`read`/`write`/`edit` would inherit a maintenance burden on every engine bump for
+no extra power. `background-work` overrides `bash` only because it genuinely
+replaces execution; if you are only adding a rule, use the two hooks.
+
+**What it says.** A successful `read`, `write` **or** `edit` records the file's
+`mtimeMs` and `size` against its resolved path. On an `edit` to a path whose
+record no longer matched disk when the call started, one sentence is *appended*
+to the engine's own result — never replacing it — and there are exactly two:
+
+- the edit **failed to match**: the engine has said the text was not found; ours
+  says why (the file moved under you) and that the recovery is one re-read;
+- the edit **succeeded**: it matched the current text and was applied, and the
+  file still carries changes the agent has not seen, so it should re-read before
+  any further edit that depends on the surrounding lines.
+
+Everything else is silent. Those two strings are the whole user interface of the
+feature: an agent reads them and nothing else, and `test/file-freshness.test.ts`
+pins both verbatim.
+
+- **Only a match failure is explained.** `MATCH_FAILURE_PATTERNS` is pinned to
+  the engine's own wording for "could not find", "found N occurrences" and
+  "produced identical content". An unreadable path, an empty `oldText`,
+  overlapping edits or an abort have nothing to do with freshness and get no
+  sentence; a test provokes each one through the real engine tool, so an engine
+  bump that rewords an error fails a test rather than quietly annotating
+  everything or nothing.
+- **`write` is untouched**, as is every other tool. A write replaces the file
+  whole, so it makes no claim about what was there. It still records, or the
+  agent's own write would trip its own next edit — that is the single most
+  important detail in the module, and the reason the old refusal produced false
+  alarms on the agent's own work (anthropics/claude-code #3513, #7443, #10437,
+  #11463, #48390). A test drives five consecutive edits to one file through the
+  real engine tool and asserts silence on all five.
+- The module **never throws**, and **says nothing when it has no claim**: no
+  record, a missing file, or a failed stat are all silence. The tool reports its
+  own errors; this module must not invent one, and a failure to annotate leaves
+  the engine's result exactly as it was.
+- **Metadata only.** No content, no snapshot, no digest: a session that reads a
+  thousand files costs a thousand small structs. The record store is bounded
+  (2048 entries, least-recently-touched evicted) because the map is memory too,
+  and an evicted record simply means nothing to say.
+- **Per session, not per process.** Records live in a `WeakMap` keyed by the
+  module context, like `background-work`'s task state, and are dropped by the
+  disposer at `session_shutdown`. A child agent in its own worktree must never
+  see its parent's records.
+- A file changed by a `bash` command needs no special case: its mtime moved,
+  so the ordinary rule catches it.
+
+Deliberately **not** implemented: requiring a read before editing a file that
+was never read. That is a stricter rule, and it is not this one.
+
+---
+
 ## Related
 
-- [`docs/ux-panels.md`](ux-panels.md) — the panel contract these modules emit into.
+- [`docs/ux-fleet.md`](ux-fleet.md) — where long work and questions render.
 - [`docs/architecture.md`](architecture.md) — why durable observation is in the host.
 - [`docs/agents.md`](agents.md) — the agent harness the `subagents` and
   `background-work` modules are the model-facing half of.

@@ -9,13 +9,13 @@
  * Divergences from the registry copy:
  *   - The fields are real controls, not the demo's static values: a text
  *     input, a textarea (⌘/Ctrl+Enter submits), choice buttons, a checkbox.
- *     They follow the payload's `DecisionField` type (R12a).
+ *     They follow the payload's `DialogField` type (R12a).
  *   - Values and their changes belong to the controller; this is a form.
  *   - The action row is the caller's words: Submit or "<Decline> and send", an
  *     optional secondary (Back, or the rejection label), Cancel.
  *   - No card chrome; the surface supplies it.
  */
-import type { DecisionField } from "@lasercode/protocol";
+import type { DialogField } from "@/dialogs/model";
 import { MessageSquareText } from "lucide-react";
 import { useId, type ComponentProps, type ReactNode } from "react";
 
@@ -31,7 +31,7 @@ export type ElicitationFormProps = Omit<ComponentProps<"form">, "children" | "ti
   DecisionHeaderProps & {
     touch: boolean;
     busy: boolean;
-    fields: readonly DecisionField[];
+    fields: readonly DialogField[];
     values: FieldValues;
     onChange(fieldId: string, value: string | boolean): void;
     onSubmit(): void;
@@ -111,7 +111,7 @@ export function ElicitationForm({
 }
 
 interface FieldProps {
-  field: DecisionField;
+  field: DialogField;
   value: string | boolean | undefined;
   focus: "data-autofocus" | "data-rejection" | undefined;
   onChange(value: string | boolean): void;

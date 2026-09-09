@@ -1,16 +1,25 @@
 import { DESKTOP_BRIDGE } from "./api.js";
-import { PRODUCT_NAME } from "@lasercode/protocol";
+import { PRODUCT_DISPLAY_NAME, PRODUCT_NAME } from "@lasercode/protocol";
+import { startupScreenPageHtml } from "@lasercode/protocol/startup-screen";
+import { activeGround, groundPair, type StartupGround } from "./startup-ground.js";
 /**
  * The two screens that are not the app: "starting" and "cannot start".
  *
  * They exist because the alternative is a blank window, and a blank window is a
- * placeholder. Each says what is happening, what to do, and where the log is —
- * in that order, in words, with no stack trace — and both are drawn in the app's
- * own palette so they read as laser rather than as a browser error.
+ * placeholder. "Cannot start" says what happened, what to do, and where the log
+ * is, in that order, in words, with no stack trace. (Its palette is still the
+ * one this file was written with, which predates the theme system; it is not a
+ * loader and was deliberately left alone here.)
  *
- * The starting screen only appears if the host takes longer than a moment. A
- * fast start goes straight to the app, so the common case never sees a splash
- * that flashes and disappears.
+ * "Starting" is not a screen of its own any more (M13-T32). It is the app's own
+ * opening screen — the mark with the beams — drawn from
+ * `@lasercode/protocol/startup-screen`, the same composition the renderer
+ * mounts, in the person's own recorded colours. There is one opening screen,
+ * and the app taking over does not replace it with a different one.
+ *
+ * It still only appears if the host takes longer than a moment. A fast start
+ * goes straight to the app, so the common case never sees a splash that
+ * flashes and disappears.
  *
  * Served as a `data:` URL rather than a file so they work identically inside
  * `app.asar` and in a development run, and so there is nothing to forget to
@@ -33,6 +42,28 @@ const escapeHtml = (value: string): string =>
     }
   });
 
+/**
+ * The opening screen, for the window that has one before the app does.
+ *
+ * `ground` is what the app last told us it was painting with; without it the
+ * page falls back to the default presets and follows the desktop's light/dark
+ * setting, which is what the app does on a first launch too.
+ */
+export function startingPageHtml(ground: StartupGround | undefined, systemDark: boolean): string {
+  return startupScreenPageHtml({
+    title: PRODUCT_DISPLAY_NAME,
+    // The same slot the app fills with "Connecting to your workspace": one
+    // line, no full stop, about the person's work rather than our processes.
+    label: "Starting your workspace",
+    tokens: activeGround(ground, systemDark),
+    pair: groundPair(ground),
+  });
+}
+
+export function startingPageUrl(ground: StartupGround | undefined, systemDark: boolean): string {
+  return `data:text/html;charset=utf-8,${encodeURIComponent(startingPageHtml(ground, systemDark))}`;
+}
+
 export interface StatusPageContent {
   /** One line, sentence case, no full stop. */
   title: string;
@@ -40,20 +71,16 @@ export interface StatusPageContent {
   message: string;
   /** Absolute path to the host log, shown small and selectable. */
   logFile: string;
-  /** A working screen shows a quiet progress line instead of a button. */
-  busy?: boolean;
 }
 
 export function statusPageUrl(content: StatusPageContent): string {
   return `data:text/html;charset=utf-8,${encodeURIComponent(statusPageHtml(content))}`;
 }
 
-export function statusPageHtml({ title, message, logFile, busy = false }: StatusPageContent): string {
+export function statusPageHtml({ title, message, logFile }: StatusPageContent): string {
   // DESIGN.md tokens, both themes, no web fonts: this page renders before
   // anything has been downloaded, so it uses the platform's own UI stack.
-  const action = busy
-    ? `<div class="progress" role="progressbar" aria-label="Starting"><span></span></div>`
-    : `<button id="retry" type="button">Try again</button>`;
+  const action = `<button id="retry" type="button">Try again</button>`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -124,28 +151,6 @@ export function statusPageHtml({ title, message, logFile, busy = false }: Status
   button:active { filter: brightness(0.94); }
   button:disabled { opacity: 0.6; cursor: default; filter: none; }
   button:focus-visible { outline: 2px solid var(--live); outline-offset: 2px; }
-  .progress {
-    height: 2px;
-    background: var(--surface-2);
-    border-radius: 2px;
-    overflow: hidden;
-    margin: 6px 0 20px;
-  }
-  .progress span {
-    display: block;
-    height: 100%;
-    width: 40%;
-    border-radius: 2px;
-    background: var(--live);
-    animation: slide 1.4s ease-in-out infinite;
-  }
-  @keyframes slide {
-    0% { transform: translateX(-100%); }
-    100% { transform: translateX(250%); }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .progress span { animation: none; width: 100%; opacity: 0.5; }
-  }
 </style>
 </head>
 <body>

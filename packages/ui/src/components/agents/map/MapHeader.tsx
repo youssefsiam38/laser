@@ -1,10 +1,10 @@
 "use client";
 /**
  * The row above the map: what it is, how the tree is doing, "Show ended" with
- * its count, and the way to the other hosts — fullscreen, the dock, back.
+ * its count, and the way to the other hosts — fullscreen, back.
  * The fullscreen host draws the same header with a way back at the start.
  */
-import { ChevronLeft, Maximize2, PanelRightOpen, Waypoints, X } from "lucide-react";
+import { ChevronLeft, Maximize2, Waypoints, X } from "lucide-react";
 import type { ComponentProps } from "react";
 
 import type { AgentTreeNode } from "@/agents";
@@ -29,7 +29,7 @@ export interface MapHeaderProps extends Omit<ComponentProps<"header">, "children
   showEnded: boolean;
   /** Narrow fullscreen: a back chevron instead of the close control. */
   phone?: boolean;
-  /** `slim` keeps the controls and drops the title: the dock island has its own header. */
+  /** `slim` keeps the controls and drops the title. */
   variant?: "full" | "slim";
 }
 
@@ -90,11 +90,6 @@ export function MapHeader({ rootPath, nodes, visible, composition, showEnded, ph
           <Maximize2 />
           Open map
         </Button>
-      )}
-      {!fullscreen && host.showInDock && (
-        <TooltipIconButton tooltip="Show in dock" onClick={host.showInDock} data-slot="agent-map-dock">
-          <PanelRightOpen />
-        </TooltipIconButton>
       )}
       {!fullscreen && composition !== "constrained" && (
         <TooltipIconButton tooltip="Open fullscreen" onClick={host.openFullscreen} data-slot="agent-map-open">

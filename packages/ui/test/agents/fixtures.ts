@@ -33,6 +33,7 @@ export const snapshot = (over: Partial<AgentsSnapshot> = {}): AgentsSnapshot => 
   policy: { maxDepth: 3, foregroundCommandSeconds: 120 },
   namer: { status: "unqualified", model: null, candidates: [] },
   beam: { model: null, suggested: null, needsChoice: false },
+  chat: { model: null },
   workspaces: { beam: "/state/beam", chat: "/state/chat" },
   ...over,
 });

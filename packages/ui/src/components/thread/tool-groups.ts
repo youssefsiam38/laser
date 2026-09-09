@@ -14,6 +14,13 @@ export interface ToolGroupMember {
   readonly toolName: string;
   readonly args: unknown;
   readonly isError: boolean;
+  /**
+   * The member is a shell command that ran and came back non-zero
+   * (`isNonZeroExit`). It is an error to the model, and the breakdown still
+   * says so, but it is an ordinary result to the group: it does not tint the
+   * aggregate, count towards its failures, or open it.
+   */
+  readonly nonZeroExit?: boolean;
   readonly running: boolean;
   /** An approval or interrupt is waiting on a person. */
   readonly awaiting: boolean;
@@ -41,6 +48,7 @@ export interface ToolGroupSummary {
   /** Typed fragment after the label: the live call while running, or "· 3 edits" when calls outnumber files. */
   readonly detail: string | undefined;
   readonly count: number;
+  /** Something in the group actually broke. A non-zero shell exit does not. */
   readonly hasError: boolean;
   readonly hasDecision: boolean;
   readonly running: boolean;
@@ -169,7 +177,7 @@ export function summarizeToolGroup(members: readonly ToolGroupMember[]): ToolGro
   if (combineFileChanges) families.delete("write");
   const family: ToolGroupFamily = families.size === 1 ? [...families][0]! : "mixed";
   const running = members.some((m) => m.running);
-  const hasError = members.some((m) => m.isError);
+  const hasError = members.some((m) => m.isError && m.nonZeroExit !== true);
   const hasDecision = members.some((m) => m.awaiting);
   const live = members.find((m) => m.running || m.awaiting);
   const active = members.find((m) => m.running);
@@ -202,7 +210,19 @@ export function summarizeToolGroup(members: readonly ToolGroupMember[]): ToolGro
 
   const lines = members.map((m) => {
     const s = summarizeTool(m.toolName, m.args);
-    const status = m.isError ? " — failed" : m.cancelled ? " — cancelled" : m.awaiting ? " — waiting for you" : m.running ? " — running" : "";
+    // Quiet is not hidden: the line a screen reader and the tooltip read still
+    // says a command came back non-zero, it just does not call it a failure.
+    const status = m.nonZeroExit === true
+      ? " — exited non-zero"
+      : m.isError
+        ? " — failed"
+        : m.cancelled
+          ? " — cancelled"
+          : m.awaiting
+            ? " — waiting for you"
+            : m.running
+              ? " — running"
+              : "";
     return `${s.verb} ${s.summary || (pathOf(m.args) ? shortPath(pathOf(m.args)!) : "")}`.trim() + status;
   });
 
@@ -293,7 +313,8 @@ export function summarizeActivityGroup(
 /**
  * Open by default when something in the group wants eyes: an error to read or
  * a decision to make (DESIGN.md "Transcript"). Otherwise collapsed, because
- * a finished run of reads is noise until you ask.
+ * a finished run of reads is noise until you ask — and so is a `grep` that
+ * found nothing, which is why a non-zero shell exit is not an error here.
  */
 export function toolGroupDefaultOpen(summary: Pick<ToolGroupSummary, "hasError" | "hasDecision">): boolean {
   return summary.hasError || summary.hasDecision;

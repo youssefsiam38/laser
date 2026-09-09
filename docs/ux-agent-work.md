@@ -1,32 +1,31 @@
 # Runs, plans and ledgers — the domain model for agent work
 
 Status: **decided 2026-09-05 (D-19); decisions 1 and 3 superseded by D-140
-(2026-09-08).** M3 built on this. Since D-140 the runs are Laser's own harness
+(2026-09-08); the rendering half superseded by M13-T26 (2026-09-08).** M3 built
+on this. Since D-140 the runs are Laser's own harness
 ([`agents.md`](agents.md)): a child is a sub-session in the sidebar under its
-parent, and every top-level session has a full-screen live map. The panel-kind
-mapping below still holds — children still produce `run` panels — and the
-pi-subagents concepts in the tables are kept as the history that shaped it.
+parent, and every top-level session has a full-screen live map. The
+pi-subagents concepts in the tables below are kept as the history that shaped
+it, not as anything that still ships.
 
-## How this relates to the panel contract
+## How this relates to the fleet
 
-[`docs/ux-panels.md`](ux-panels.md) is the **rendering** system: six panel
-kinds, four surfaces, and a table that decides where a panel goes. It applies
-to everything any extension produces.
+[`docs/ux-fleet.md`](ux-fleet.md) is the **rendering** system: two kinds of
+work, one permanent column, and where a question to the person is answered.
 
-This document is the **domain** model for one slice of that: agent work.
-It answers a different question — not *how does it render*, but *what are the
-things*. Its output feeds two of the six kinds:
+This document is the **domain** model behind it. It answers a different
+question — not *how does it render*, but *what are the things*:
 
-| This document | Panel kind |
+| This document | Where it renders |
 | --- | --- |
-| a **run** | `run` |
-| a **plan** | `plan` |
-| a **ledger** | rendered as `document` (missions) and `collection` (history) |
-| a **session goal** | persistent row below the run tabs; never a panel |
+| a **run** | a fleet item of kind `agent`, and a sub-session in the sidebar |
+| a **plan** | history: nothing persists a plan since D-140 |
+| a **ledger** | history: the mission ledger went with pi-subagents |
+| a **session goal** | a persistent row below the top bar; never a fleet item |
 
-Read the panel contract first. This one exists because agent work is the
-richest domain laser has, and without a model for it the `run` and `plan`
-panels would be a grab bag.
+Read the fleet document first. This one exists because agent work is the
+richest domain laser has, and without a model for it a run would be a grab
+bag of fields.
 
 ## The problem
 
@@ -82,8 +81,8 @@ Three nouns, and the CLI uses the same words.
 ## Session goals
 
 A goal is the one durable objective governing the current session. It is not a
-run or a panel and does not compete for dock space. While present it stays in a
-single row directly below the run tabs with its status, objective, automatic
+run and it is not fleet work. While present it stays in a single row directly
+below the top bar with its status, objective, automatic
 continuation count and latest block/wait reason. Goals have no budgets and no
 separate usage accounting; session telemetry owns consumption. Controls
 appear only when the current status permits them.
@@ -106,40 +105,34 @@ the engine prompt or guard IDs. Raw session entries remain untouched.
 
 ## Navigating runs
 
-The run tree is the tab group. It renders as `run` panels, but the navigation
-around them is specific enough to specify here:
+Three ways in, each for a different question, and no sticky tab strip: the run
+tabs under the top bar went with the panels (M13-T26), because a strip that
+shows one level of one session answers a narrower question than the fleet does
+and cost a permanent band of vertical space to do it.
 
-- The focused run is the trunk; its children are tabs **under** it, never
-  siblings in the session list.
-- Desktop: a horizontal tab strip below the top bar. Up to five children, then
-  an overflow chip. Each tab is a status dot, the agent name, elapsed time.
-- Mobile: a breadcrumb back-stack, `hubtrix › orchestrator › worker#2`,
-  because two axes do not fit on a phone. Tapping a crumb opens that level's
-  siblings as a sheet.
-- Arbitrary depth works because the strip shows exactly **one level** — the
-  children of whatever is focused. Depth lives in the breadcrumb.
-- **Never a tree widget with expand arrows.** Trees are for files, not live
-  work: an expanding tree makes you hunt for the thing that needs you, which is
-  what R5 exists to prevent.
-- **Since D-140, a child is also a sub-session in the sidebar**, listed under
-  its parent (`SessionSummary.agent`), opened as the normal chat where the
-  person reads, queues or interrupts, and ends the run with a reason the parent
-  receives. And every top-level session has a **live map**: a read-only React
-  Flow view of the tree with status, transient event bubbles and a go-to-chat
-  action per node, laid out by the measured size of its surface
-  ([`agents.md`](agents.md) §4–5). The tab strip and breadcrumb above remain
-  the in-thread navigation; the map is the bird's-eye view.
-- The Fleet's all-runs view is different from that navigation strip: each
-  session renders chronological root-first subtrees with a continuous lineage
-  rail. A child is structurally inside its parent, never a globally sorted flat
-  row that merely looks indented. Attention rolls up to the ancestor's status
-  without moving the branch. When Pi persists both an aggregate workflow step
-  and that child's detailed status file, both records resolve to the child's
-  launched run id and update one row rather than duplicating the worker.
+- **The fleet column** — *what is going on anywhere?* Every run and every
+  background command, across sessions, nested as it really nests, with the
+  loudest state rolled up to the row you can see
+  ([`ux-fleet.md`](ux-fleet.md)).
+- **The sidebar** — *where is this conversation?* Since D-140 a child is a
+  sub-session listed under its parent (`SessionSummary.agent`), opened as the
+  normal chat.
+- **The live map** — *what is the shape of this tree?* Full-screen, per
+  top-level session.
+In the sidebar, a child is opened as the normal chat where the person reads,
+queues or interrupts, and ends the run with a reason the parent receives. The
+map is a read-only React Flow view of the tree with status, transient event
+bubbles and a go-to-chat action per node, laid out by the measured size of its
+surface ([`agents.md`](agents.md) §4–5).
+
+The fleet renders each session's work as chronological root-first subtrees with
+a continuous lineage rail. A child is structurally inside its parent, never a
+globally sorted flat row that merely looks indented; attention rolls up to the
+ancestor's status without moving the branch.
 
 ## What each run path actually permits
 
-This is R2 (capability honesty) made concrete. Controls are hidden, not
+This is capability honesty (`ux-fleet.md` R4) made concrete. Controls are hidden, not
 disabled, when they do not apply.
 
 | Run path | Steer | Stop | Resume | Interrupt |
@@ -151,23 +144,14 @@ disabled, when they do not apply.
 | Nested child | no | no | yes | yes |
 | External run | no | no | no | no |
 
-## Plans
+## Plans (history)
 
-A plan renders by island size, because a phase column needs width a dock pane
-does not have (D-20):
-
-- **Expanded in the dock**: phases as vertical collapsible sections. Each
-  section header carries the phase title, a `done/total` count, and a row of
-  small squares — one per step, filled as it completes. Expanding a phase
-  shows its steps as a table: name, model, tokens, time, and a check when
-  done. Cost and tokens for the whole plan sit at the top (R8).
-- **Maximized**: phases as columns, steps as run islands inside them.
-- **Minimal**: the plan name and `done/total`.
-
-Dependencies are drawn only where they were declared. This is deliberately
-**not** a free-form graph canvas: a canvas implies we know the graph, and for
-scripted workflows we do not. Inferred connectors are dashed and labelled
-`inferred` (R3).
+A plan was the intended shape of several runs: phases, steps, dependencies. It
+came from pi-subagents' workflow graphs, and nothing persists one since D-140 —
+the harness has runs and nothing above them. The rule the plan renderer existed
+to enforce outlived it and is now `ux-fleet.md` R5: dependencies are drawn only
+where they were declared, and a reconstruction is labelled as one. A canvas
+implies we know the graph; for scripted work we did not.
 
 ## What this costs
 
@@ -176,8 +160,8 @@ scripted workflows we do not. Inferred connectors are dashed and labelled
   literally: as rows under it.
 - **We render less than the data offers.** No live token stream for detached
   runs, no speculative graph for scripted workflows. Honesty over richness.
-- **Two navigation models to maintain**, the tab strip and the breadcrumb,
-  though they share one data model.
+- **Three ways into a run to keep consistent** — the fleet, the sidebar and the
+  map — though they share one data model (`agents/run`).
 
 ## Decisions (each resolved to its lean, D-19)
 
@@ -187,12 +171,14 @@ scripted workflows we do not. Inferred connectors are dashed and labelled
    **Superseded by D-140:** every child is a sub-session listed under its
    parent in the sidebar, fully controllable from its own chat.
 2. **Where does an orphaned background run live** when its parent session is
-   closed but it is still working? *Lean: the fleet sheet keeps it and the
-   project ring shows attention; opening it reopens the parent read-only.*
+   closed but it is still working? *Lean: the fleet keeps it and the project
+   ring shows attention; opening it reopens the parent read-only.*
+   **Settled by M13-T26:** the fleet is a permanent column, and an orphaned
+   group says "session closed".
 3. **Is a full-screen fleet board worth building**, as a peer of the thread?
-   *Lean: the dock and a sheet are enough; revisit if you run many at once.*
-   **Superseded by D-140:** each top-level session has a live map, read-only,
-   at every width, with purpose-built layouts per surface size.
+   *Lean: a sheet is enough; revisit if you run many at once.*
+   **Superseded by D-140 and M13-T26:** each top-level session has a live map,
+   and the fleet is a permanent column rather than a sheet you summon.
 4. **Do scheduled runs exist in v1?** Project-local files, and you have none.
    *Lean: defer. Add the noun when you have a use for it.*
 5. **Does the CLI speak these nouns** (`laser runs`, `laser plan`)?
@@ -200,12 +186,12 @@ scripted workflows we do not. Inferred connectors are dashed and labelled
    feel like two products.*
 6. **Are read-only foreground children acceptable?** You decided to support
    them (D-3), but they have no index, no controls and no live status, so under
-   R2 and R4 they are read-only cards that appear late. *Lean: ship them
+   capability and fidelity honesty they are read-only cards that appear late. *Lean: ship them
    read-only and file the upstream index patch — unless late-appearing cards
    feel broken to you, in which case that patch is a prerequisite for M3.*
 
-The sheet separates lifecycle without flattening lineage: a root tree belongs
-to **In progress** while any descendant is queued, running, paused, pending or
-blocked, then moves whole to the collapsible **Finished** section. Completed,
-failed and cancelled rows keep their own terminal labels. Background terminal
-processes can join this model later, but are not represented as fleet work yet.
+The fleet separates lifecycle without flattening lineage: a branch belongs to
+**In progress** while anything inside it is still going, then moves whole to
+the collapsible **Finished** section. Completed, failed and cancelled rows keep
+their own terminal labels. Since M13-T26 background commands *are* fleet work,
+listed beside agent runs under the session that started them.

@@ -14,7 +14,6 @@
  *   - The arrival animation is gone; steps are replaced by index (R10), so a
  *     slide-in on every re-emit would be motion without meaning.
  */
-import type { PlanStepState } from "@lasercode/protocol";
 import { Check, CircleAlert, Minus } from "lucide-react";
 import type { ComponentProps } from "react";
 
@@ -24,12 +23,15 @@ import { cn } from "@/lib/utils";
 export interface TodoItem {
   id: string;
   text: string;
-  status: PlanStepState;
+  status: TodoStatus;
   /** Set when the step is a real run: the row opens it. */
   onOpen?: (() => void) | undefined;
 }
 
-export const STEP_WORDS: Record<PlanStepState, string> = {
+/** The states a checklist item can be in. Owned here: this element has no wire type behind it. */
+export type TodoStatus = "pending" | "running" | "done" | "failed" | "skipped" | "blocked";
+
+export const STEP_WORDS: Record<TodoStatus, string> = {
   pending: "pending",
   running: "running",
   done: "done",
@@ -38,7 +40,7 @@ export const STEP_WORDS: Record<PlanStepState, string> = {
   blocked: "blocked",
 };
 
-function Mark({ status }: { status: PlanStepState }) {
+function Mark({ status }: { status: TodoStatus }) {
   switch (status) {
     case "done":
       return (

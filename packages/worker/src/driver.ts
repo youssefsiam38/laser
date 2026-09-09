@@ -142,8 +142,13 @@ export interface SessionDriver {
   commands(): Promise<CommandInfo[]>;
   prompts(): Promise<PromptInfo[]>;
 
-  /** Replay persisted entries (for reattach). Returns entries and the seq they were last emitted at. */
-  entries(): Promise<unknown[]>;
+  /**
+   * Replay persisted entries (for reattach). The session file is a tree, so
+   * this is every branch; `leafId` says which one is live — the conversation
+   * is the path from the root to that entry. `null` is a leaf reset to before
+   * the first entry (`SessionManager.resetLeaf`).
+   */
+  entries(): Promise<{ entries: unknown[]; leafId: string | null }>;
 
   /** Durable goal control. Optional for engines that do not implement Goals. */
   goalState?(): Promise<SessionGoal | null>;

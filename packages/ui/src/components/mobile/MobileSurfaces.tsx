@@ -23,7 +23,7 @@ import { InsecureOriginNotice, NotifyHint, OfflineNotice, UpdateReady } from "./
  * strip plus the install sheet.
  *
  * Decisions are deliberately *not* here. They render as cards above the
- * composer on every width (docs/ux-panels.md placement table, DESIGN.md
+ * composer on every width (docs/ux-fleet.md "Questions", DESIGN.md
  * "Transcript"), through `PanelDecisionCards`, which is also what a fallback
  * dialog and a declared `decision` panel both become. One surface, one code
  * path; the phone gets bigger controls inside it, not a second component.

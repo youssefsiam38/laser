@@ -220,6 +220,28 @@ export function parseBashOutput(text: string, isError: boolean): { output: strin
   return { output: text, exitCode: isError ? undefined : 0 };
 }
 
+/**
+ * True when a shell command **ran to completion and came back non-zero** — as
+ * opposed to a tool that could not run at all.
+ *
+ * This is the only distinction the data actually carries, and it is worth
+ * writing down where it comes from. Pi's shell tool (`core/tools/bash.js`)
+ * throws on a non-zero exit with the command's output plus a trailing
+ * `Command exited with code N`; the agent turns any thrown tool error into
+ * `{ isError: true, text: error.message }`. Every *other* way that tool fails
+ * throws without that trailer — a spawn error, `Command aborted`,
+ * `Command timed out after N seconds`, an invalid timeout, a blocked or
+ * unknown tool. So the trailer, and nothing else, separates "ran fine, exited
+ * non-zero" from "could not run", and it survives into a reloaded session
+ * because it is part of the stored result text.
+ *
+ * A command interrupted or cancelled by a person is neither: it has no
+ * trailer, so it is not quiet here, and its own `cancelled` row state wins.
+ */
+export function isNonZeroExit(toolName: string, isError: boolean, text: string): boolean {
+  return isError && toolKind(toolName) === "bash" && EXIT_RE.test(text);
+}
+
 /** Which expanded body a tool row shows. */
 export type ToolBody = "terminal" | "diff" | "text";
 

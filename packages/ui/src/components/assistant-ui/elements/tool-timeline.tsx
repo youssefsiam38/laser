@@ -15,7 +15,7 @@ import { ChevronRight } from "lucide-react";
 import { useMemo, type ComponentProps } from "react";
 
 import { diffStats, diffViewForTool } from "@/components/thread/diff";
-import { resultDetails, shortPath, summarizeTool, type ToolKind } from "@/components/thread/tool-summary";
+import { isNonZeroExit, resultDetails, resultText, shortPath, summarizeTool, type ToolKind } from "@/components/thread/tool-summary";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 
@@ -61,7 +61,12 @@ export function toolTimelineFromParts(messages: readonly MessageLike[]): ToolTim
       const p = part as ToolPart;
       const s = summarizeTool(p.toolName, p.args);
       const running = p.status.type === "running" || p.status.type === "requires-action";
-      const failed = p.isError === true || (p.status.type === "incomplete" && p.status.reason !== "cancelled");
+      // A command that ran and came back non-zero is a result, not a failure
+      // (D-148). The transcript stopped calling it one; the monitor's chips
+      // read from the same predicate so the two cannot disagree.
+      const failed =
+        (p.isError === true || (p.status.type === "incomplete" && p.status.reason !== "cancelled")) &&
+        !isNonZeroExit(p.toolName, p.isError === true, resultText(p.result));
       streaming ||= running;
       steps.push({ id: p.toolCallId, kind: s.kind, verb: s.verb, chip: s.summary || s.verb, running, failed });
       if ((s.kind === "edit" || s.kind === "write") && !failed) {

@@ -6,7 +6,7 @@ import {
   Ellipsis,
   GitBranch,
   GitFork,
-  Layers,
+  Radio,
   PanelLeft,
   PanelLeftClose,
   PanelRight,
@@ -55,7 +55,7 @@ import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { shortCwd } from "@/format";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
-import { useDock, useIslandEntries, usePanelActions } from "@/panels";
+import { useFleet, type FleetView } from "@/fleet";
 import {
   sessionTitle,
   setActivityDetailLevel,
@@ -102,11 +102,8 @@ export function TopBar() {
   // One rule for what a session is called, everywhere (runtime/threadList.ts).
   const title = view ? (summary ? sessionTitle(summary, view) : (view.state.name ?? view.title ?? firstUserLine(view) ?? "New session")) : "New session";
   const untitled = view ? title === "New session" : false;
-  // Islands live in the dock; the toggle appears only when there is something to toggle.
-  const islands = useIslandEntries(view?.path, "desktop");
-  const dock = useDock(view?.path);
-  const panelActions = usePanelActions();
-  const dockable = shell.layout !== "mobile" && islands.some((e) => !dock.dismissed.includes(e.key));
+  // The fleet's own count, so the toggle says what it is hiding.
+  const fleet = useFleet();
   const busy = meta.running || meta.compacting;
 
   const copyPath = async () => {
@@ -257,15 +254,28 @@ export function TopBar() {
           <Waypoints />
         </TooltipIconButton>
 
-        {dockable && (
-          <TooltipIconButton
-            tooltip={dock.hidden ? `Show panels (${islands.length})` : "Hide panels"}
-            aria-pressed={!dock.hidden}
-            onClick={() => panelActions.setHidden(!dock.hidden)}
-          >
-            <Layers />
-          </TooltipIconButton>
-        )}
+        {/* The fleet, immediately left of the monitor, with the same grammar
+            as its toggle: a count of what needs a person wins over a count of
+            what is merely going. */}
+        <TooltipIconButton
+          tooltip={shell.fleetOpen ? "Hide the fleet" : fleetTooltip(fleet)}
+          shortcut="\\"
+          aria-pressed={shell.fleetOpen}
+          data-slot="fleet-toggle"
+          onClick={shell.toggleFleet}
+          className="relative"
+        >
+          <Radio />
+          {!shell.fleetOpen && (fleet.needsYou > 0 || fleet.running > 0) && (
+            <span
+              aria-hidden="true"
+              className={cn(
+                "absolute end-1 top-1 size-1.5 rounded-full border border-bg",
+                fleet.needsYou > 0 ? "bg-attention motion-safe:animate-attention" : "bg-live",
+              )}
+            />
+          )}
+        </TooltipIconButton>
 
         <TooltipIconButton
           tooltip={shell.telemetryOpen ? "Hide telemetry" : "Show telemetry"}
@@ -431,4 +441,11 @@ function CompactDialog({ open, onOpenChange }: { open: boolean; onOpenChange(ope
       </DialogContent>
     </Dialog>
   );
+}
+
+/** What the fleet's toggle says when it is closed: the loudest true thing. */
+function fleetTooltip(fleet: FleetView): string {
+  if (fleet.needsYou > 0) return `Show the fleet — ${fleet.needsYou} ${fleet.needsYou === 1 ? "needs" : "need"} you`;
+  if (fleet.running > 0) return `Show the fleet — ${fleet.running} going`;
+  return "Show the fleet";
 }

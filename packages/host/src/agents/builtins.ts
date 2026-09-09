@@ -47,6 +47,7 @@ export function seedDefaultAgent(at: string): AgentDefinition {
 export interface BuiltinContext {
   agentDir: string;
   beamModel: AgentModelChoice | null;
+  chatModel: AgentModelChoice | null;
   namerModel: AgentModelChoice | null;
   /** Stamped on every built-in as both `createdAt` and `updatedAt`. */
   at: string;
@@ -91,7 +92,7 @@ export function builtinAgents(context: BuiltinContext): AgentDefinition[] {
       description: "A general assistant for conversations that are not about a project.",
       instructions: CHAT_INSTRUCTIONS,
       engineInstructions: false,
-      model: null,
+      model: context.chatModel,
       thinkingLevel: null,
       supportsSubagents: false,
       allowedAgents: [],

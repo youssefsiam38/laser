@@ -49,6 +49,7 @@ export {
 
 export {
   FOLLOW_UP_QUEUE_PREFIX,
+  PENDING_QUEUE_PREFIX,
   STEER_QUEUE_PREFIX,
   composerSendPlan,
   contentBlocksFromAppendMessage,
@@ -56,6 +57,9 @@ export {
   imageContentFromDataUrl,
   imageCountOfContentBlocks,
   isSteerQueueItemId,
+  pendingIdOfQueueItemId,
+  pendingQueueItem,
+  pendingQueueItemId,
   queueItemId,
   queueItemsOf,
   requestIdOfInterruptPayload,

@@ -19,10 +19,10 @@ import { ComposerQuotePreview, quoteAsMarkdown } from "@/components/assistant-ui
 import { MobileComposer, MobileComposerButtonClass } from "@/components/assistant-ui/elements/mobile-composer";
 import { SessionModelSelector } from "@/components/assistant-ui/elements/model-selector";
 import { ThinkingEffort } from "@/components/assistant-ui/elements/reasoning-effort";
+import { useRunsForRoot } from "@/agents";
 import { DictateButton } from "@/components/mobile";
 import { useShell } from "@/components/shell/shell-context";
 import { useIsMobile, useIsTouch } from "@/hooks/use-mobile";
-import { usePanelEntries } from "@/panels";
 import { finishActiveDictation } from "@/pwa";
 import { composerSendPlan, useLaserStable, useLaserView, useSessionMeta } from "@/runtime";
 import { completeLeadingSlash, matchLeadingSlash, rankSlashCommandMatches } from "./slash-completion.js";
@@ -34,9 +34,11 @@ import { useProjectFileSearch } from "./use-project-file-search.js";
  * `composer` element's card and controls, `message-queue` above it, the
  * `draft-restore` offer, `model-selector`, `reasoning-effort`,
  * `context-display`, and `composer-trigger-popover` for `/` and `@`
- * (docs/ux-elements.md "Composer"). Enter = prompt when idle / steer while
- * running, Shift+Enter = newline, Cmd/Ctrl+Enter = follow-up while running —
- * decided by `composerSendPlan` from the runtime module.
+ * (docs/ux-elements.md "Composer"). Enter = prompt when idle / a waiting row in
+ * the queue while running, Shift+Enter = newline, Cmd/Ctrl+Enter = steer while
+ * running — decided by `composerSendPlan` from the runtime module. Interrupting
+ * is the deliberate act: this chord, or the Steer button on the row itself
+ * (M13-T28). Neither draws a stop notice, because neither stops anything.
  *
  * On a phone the same primitives take the `mobile-composer` layout: a pill
  * between two 44px controls, the microphone inside the pill.
@@ -140,7 +142,9 @@ function usePlaceholder(): string {
   const disabled = useAuiState((s) => s.thread.isDisabled);
   const blocked = useNothingToSendTo();
   if (blocked) return blocked;
-  return disabled ? "Reconnecting to the host…" : running ? "Steer the agent…" : "Message the agent…";
+  // While the agent works, what Enter does is join the queue — say so, rather
+  // than promise an interrupt the person has to ask for separately.
+  return disabled ? "Reconnecting to the host…" : running ? "Queue a message…" : "Message the agent…";
 }
 
 function useComposerKeys(): (e: KeyboardEvent<HTMLTextAreaElement>) => void {
@@ -231,14 +235,14 @@ function SendOrStop({ mobile = false }: { mobile?: boolean }) {
     <ComposerPrimitive.Send asChild>
       <ComposerSend
         streaming={false}
-        tooltip={running ? "Steer" : "Send"}
+        tooltip={running ? "Queue for when this turn ends" : "Send"}
         shortcut="⏎"
         size={size}
         className={className}
         onClick={(event) => {
           const prepare = () => {
             foldQuote(aui);
-            aui.composer.setRunConfig({ custom: { streamingBehavior: running ? "steer" : "prompt" } });
+            aui.composer.setRunConfig({ custom: { streamingBehavior: running ? "pending" : "prompt" } });
           };
           if (!dictating) {
             prepare();
@@ -321,7 +325,7 @@ function useSlashCommands() {
       { id: "compact", label: "/compact", description: busy ? "Waits for the turn to finish" : "Summarise the conversation so far and keep going", icon: "compact", execute: () => void actions.compact() },
       { id: "fork", label: "/fork", description: "Start a new session from the last prompt", icon: "fork", execute: () => void forkFromLastPrompt() },
       { id: "new", label: "/new", description: "A new session in this project", icon: "new", execute: () => void shell.newSession() },
-      { id: "queue", label: "/clear-queue", description: "Drop the queued steers and follow-ups back into the composer", icon: "queue", execute: () => void clearQueue() },
+      { id: "queue", label: "/clear-queue", description: "Drop every waiting message back into the composer", icon: "queue", execute: () => void clearQueue() },
       { id: "history", label: "/history", description: "Open the session tree", icon: "history", execute: () => shell.openHistory() },
       { id: "project", label: "/project", description: "Add a project directory", icon: "project", execute: () => shell.setAddProjectOpen(true) },
       ...agent.map((command) => ({
@@ -393,18 +397,18 @@ const MENTION_ICONS = { agent: Bot, file: FileText } as const;
 function useHandleMentions() {
   const view = useLaserView();
   const { currentProject } = useLaserStable();
-  const entries = usePanelEntries(view?.path);
+  const childRuns = useRunsForRoot(view?.path);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const search = useProjectFileSearch(view?.state.cwd ?? currentProject, query, open);
   const files = search.files;
   const items = useMemo(
     () => [
-      ...entries.flatMap((entry) => {
-        const panel = entry.panel;
-        if (panel.kind !== "run" || !panel.handle) return [];
-        return [{ id: panel.handle, type: "agent", label: panel.handle, description: panel.title, icon: "agent" }];
-      }),
+      // @name completes to a child agent of this session, by the name the
+      // person gave it when they (or their agent) started it.
+      ...childRuns.flatMap((run) =>
+        run.subagentName ? [{ id: run.subagentName, type: "agent", label: run.subagentName, description: run.task, icon: "agent" }] : [],
+      ),
       ...files.map((file) => ({
         id: file.path,
         type: "file",
@@ -415,7 +419,7 @@ function useHandleMentions() {
         icon: "file",
       })),
     ],
-    [entries, files],
+    [childRuns, files],
   );
   const mention = unstable_useMentionAdapter({ items, includeModelContextTools: false, iconMap: MENTION_ICONS });
   const adapter = useMemo(() => ({

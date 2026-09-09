@@ -129,7 +129,9 @@ export class StableSdkDriver implements SessionDriver {
         only: [
           "provider-log",
           "account-usage",
-          "panels",
+          // A safety guard over the engine's own file tools, not a feature:
+          // on in every session, with nothing to enable (M13-T33).
+          "file-freshness",
           "transcribe",
           ...(search ? ["web-access" as const] : []),
           ...(enabled.has("subagents") ? ["subagents" as const, "background-work" as const] : []),
@@ -319,8 +321,13 @@ export class StableSdkDriver implements SessionDriver {
     };
   }
 
-  async entries(): Promise<unknown[]> {
-    return this.session().sessionManager.getEntries();
+  async entries(): Promise<{ entries: unknown[]; leafId: string | null }> {
+    const manager = this.session().sessionManager;
+    // Every branch, plus the pointer that says which one is the conversation.
+    // The leaf is in-memory only — the engine rebuilds it as the last entry in
+    // the file — so a navigation that has appended nothing yet is visible here
+    // and nowhere else.
+    return { entries: manager.getEntries(), leafId: manager.getLeafId() };
   }
 
   async goalState(): Promise<SessionGoal | null> {

@@ -1,7 +1,7 @@
 import { MESSAGE_METADATA_NS } from "@lasercode/protocol";
 import { MessagePrimitive, useAui, useAuiState, type MessageState } from "@assistant-ui/react";
 import type { ModelRef, ThinkingLevel } from "@lasercode/protocol";
-import { Info, Target, TriangleAlert } from "lucide-react";
+import { Bot, Info, Target, TriangleAlert } from "lucide-react";
 import { GoalRecord } from "./GoalRecord.js";
 import { AgentCompletion } from "./AgentCompletion.js";
 import { AgentEventMessage } from "./AgentEventMessage.js";
@@ -37,8 +37,8 @@ import { ActivityReasoning, ToolGroup } from "@/components/assistant-ui/elements
 import { useCopy } from "@/hooks/use-copy";
 import { duration as formatDuration } from "@/format";
 import { cn } from "@/lib/utils";
-import { NOTICE_DATA_PART, useLaserStable, useLaserState } from "@/runtime";
-import { continuationsOf, leafOf, userEntryAt } from "./entries.js";
+import { NOTICE_DATA_PART, sessionTitle, useLaserStable, useLaserState } from "@/runtime";
+import { leafOf, userEntryAt, versionsOf } from "./entries.js";
 import { THINKING_LEVELS, useSupportedThinkingLevels } from "@/components/assistant-ui/elements/reasoning-effort";
 import { useElapsed } from "./timing.js";
 import { toolGroupKey } from "./tool-groups.js";
@@ -53,6 +53,8 @@ interface LaserMeta {
   optimistic?: boolean;
   userOrdinal?: number;
   goalSetter?: boolean;
+  /** Set when a parent agent, not the person, sent this prompt into a child session. */
+  sentBy?: { parentPath: string; runId?: string };
   level?: "info" | "warning" | "error";
   /** Which agent produced this message, when the session is a child run. */
   speaker?: Speaker;
@@ -68,6 +70,13 @@ const EMPTY_ENTRIES: readonly unknown[] = [];
 /** The whole session tree, as Pi persisted it; stable between hydrations. */
 const useEntries = (): readonly unknown[] => useLaserState((s) => (s.current ? s.open[s.current]?.entries : undefined)) ?? EMPTY_ENTRIES;
 
+/**
+ * The entry the session is sitting on. The tree above holds every version of
+ * every message; this says which branch is the conversation, so a message maps
+ * to the entry the person is actually looking at.
+ */
+const useLeafId = (): string | null | undefined => useLaserState((s) => (s.current ? s.open[s.current]?.leafId : undefined));
+
 /** Text of every text part of the message in scope, for copying. */
 const useMessageText = (): string =>
   useAuiState((s) =>
@@ -80,6 +89,26 @@ const useMessageText = (): string =>
 function useSessionPath(): string | undefined {
   return useLaserState((s) => s.current);
 }
+
+/**
+ * A fork hands the forked prompt back for the composer (`setEditorText`), and
+ * the action that forked has just sent it; leaving a copy in the box would
+ * read as an unsent message. Take it out — but only while it is still exactly
+ * that text, so a draft typed in the meantime is never eaten.
+ *
+ * Inside a message, `aui.composer` is that message's *edit* composer, which
+ * throws "Composer is not available" whenever nothing is being edited. The
+ * thread's own composer is the one that holds a handed-back prompt, and a
+ * surface without one (a read-only transcript) simply has nothing to clear.
+ */
+const clearHandedBackPrompt = (aui: ReturnType<typeof useAui>, sent: string) => {
+  try {
+    const composer = aui.thread.composer();
+    if (composer.getState().text.trim() === sent.trim()) composer.setText("");
+  } catch {
+    // No thread composer on this surface.
+  }
+};
 
 /** Chooser: assistant-ui's `ThreadPrimitive.Messages` render function target. */
 export function ThreadMessage() {
@@ -101,9 +130,12 @@ export function UserMessage() {
   const images = useAuiState((s) => laserMeta(s.message).images ?? 0);
   const optimistic = useAuiState((s) => laserMeta(s.message).optimistic === true);
   const goalSetter = useAuiState((s) => laserMeta(s.message).goalSetter === true);
+  // A primitive, so the selector keeps its identity across re-renders.
+  const parentPath = useAuiState((s) => laserMeta(s.message).sentBy?.parentPath);
   const busy = useAuiState((s) => s.thread.isRunning);
   const path = useSessionPath();
   const entries = useEntries();
+  const leafId = useLeafId();
   const { copied, copy } = useCopy();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(text);
@@ -121,8 +153,11 @@ export function UserMessage() {
     return n;
   });
   const laterMessages = useAuiState(s => s.thread.messages.slice(s.message.index + 1).filter(m => m.role === "user").length);
-  const entryId = useMemo(() => (optimistic ? undefined : userEntryAt(entries, ordinal)), [entries, ordinal, optimistic]);
-  const continuations = useMemo(() => (entryId ? continuationsOf(entries, entryId) : []), [entries, entryId]);
+  const entryId = useMemo(() => (optimistic ? undefined : userEntryAt(entries, ordinal, leafId)), [entries, leafId, ordinal, optimistic]);
+  // Every version of this prompt, oldest first: editing it in place, and
+  // running its reply again, both leave the previous one here.
+  const versions = useMemo(() => (entryId ? versionsOf(entries, entryId) : []), [entries, entryId]);
+  const versionIndex = entryId ? versions.indexOf(entryId) : -1;
   const { quote, rest } = useMemo(() => splitLeadingQuote(text), [text]);
   const attachments = useMemo<MessageAttachmentItem[]>(
     () => Array.from({ length: images }, (_, i) => ({ id: `image-${i}`, name: images === 1 ? "Image" : `Image ${i + 1}`, kind: "image" })),
@@ -138,12 +173,27 @@ export function UserMessage() {
         setEditing(true);
       }
     : undefined;
-  const sendEdit = async () => {
+  /**
+   * Editing changes THIS session by default: the engine moves the leaf to
+   * before this prompt, and the edited text lands beside the old one as
+   * another version of it — nothing is deleted, and the version picker under
+   * the bubble reaches what was here before. "In a new session" is the same
+   * edit into a fork, and leaves this session untouched.
+   */
+  const sendEdit = async (where: "here" | "fork") => {
     if (!entryId) return;
+    if (where === "here") {
+      // Stay in the editor when it did not happen: the person's words are
+      // still in the box, and the reason is already on screen.
+      if (!(await actions.navigate(entryId))) return;
+      setEditing(false);
+      await actions.send([{ type: "text", text: draft }], "prompt");
+      return;
+    }
     setEditing(false);
     await actions.fork(entryId);
     await actions.send([{ type: "text", text: draft }], "prompt");
-    aui.composer.setText("");
+    clearHandedBackPrompt(aui, text);
   };
 
   return (
@@ -153,13 +203,24 @@ export function UserMessage() {
           <EditMessage
             value={draft}
             onValueChange={setDraft}
-            onSend={() => void sendEdit()}
+            onSend={() => void sendEdit("here")}
+            onSendInNewSession={() => void sendEdit("fork")}
             onCancel={() => setEditing(false)}
             laterMessages={laterMessages}
             busy={busy}
           />
         ) : (
-          <UserBubble data-optimistic={optimistic || undefined} className={cn(optimistic && "opacity-70")}>
+          <UserBubble
+            data-optimistic={optimistic || undefined}
+            data-sent-by={parentPath ? "parent" : undefined}
+            className={cn(
+              optimistic && "opacity-70",
+              // A task, not something the person typed: a live hairline marks
+              // it without touching the text or the bubble's shape.
+              parentPath && "ring-1 ring-[color-mix(in_oklab,var(--live)_35%,transparent)]",
+            )}
+          >
+            {parentPath ? <ParentTask parentPath={parentPath} /> : null}
             {goalSetter && <span className="mb-1 flex items-center gap-1.5 text-xs font-medium text-ink-2"><Target className="size-3.5 text-live" aria-hidden="true" />Goal set</span>}
             {quote ? <QuoteReply text={quote} /> : null}
             {rest ? (
@@ -173,10 +234,13 @@ export function UserMessage() {
         )}
         <MessageFooter className="ms-0 me-0 h-auto min-h-6 justify-end">
           <MessageBranches
-            count={continuations.length}
+            {...(versionIndex >= 0 ? { index: versionIndex } : {})}
+            count={versions.length}
             busy={busy}
             onIndexChange={(i) => {
-              const target = continuations[i];
+              // A version is reached through its own last entry: navigating
+              // onto a prompt would put the session before it instead of on it.
+              const target = versions[i];
               if (target) void actions.jump(leafOf(entries, target));
             }}
           />
@@ -196,6 +260,46 @@ export function UserMessage() {
       </div>
       {requestOpen && path && <ApiRequestDialog target={{ kind: "message", path, ...(entryId ? { entryId } : {}), ...(requestAt ? { at: requestAt } : {}), ...(nextRequestAt ? { beforeAt: nextRequestAt } : {}) }} onClose={() => setRequestOpen(false)} />}
     </MessagePrimitive.Root>
+  );
+}
+
+/**
+ * Who asked. A child session's opening prompt — and every later
+ * `send_agent_message` — is a task its parent sent, not something the person
+ * typed, and an anonymous bubble left nobody able to tell on arrival
+ * (docs/agents.md "Follow-up messages and user-origin runs").
+ *
+ * The parent's name is the catalog's, so it reads the same here as in the
+ * header's parent control, and the button is that same navigation rather than
+ * a second one. `data-search-exclude` keeps this label out of find: the task
+ * text beside it is untouched and stays selectable, copyable and searchable.
+ */
+function ParentTask({ parentPath }: { parentPath: string }) {
+  const { actions } = useLaserStable();
+  const label = useLaserState((s) => {
+    const summary = s.sessions.find((session) => session.path === parentPath);
+    const open = s.open[parentPath];
+    if (summary) return sessionTitle(summary, open);
+    return open?.state.name ?? open?.title ?? "the parent session";
+  });
+  return (
+    <span data-slot="parent-task" data-search-exclude className="mb-1 flex min-w-0 items-center gap-1.5 text-xs leading-xs text-ink-2">
+      <Bot className="size-3.5 shrink-0 text-live" aria-hidden="true" />
+      <span className="shrink-0">Task from</span>
+      <button
+        type="button"
+        onClick={() => void actions.openSession(parentPath)}
+        title={`Open ${label}
+${parentPath}`}
+        className={cn(
+          "min-w-0 truncate rounded px-1 font-medium text-ink outline-none",
+          "transition-colors duration-(--motion-instant) hover:bg-[color-mix(in_oklab,var(--surface-2)_80%,var(--ink))]",
+          "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live motion-reduce:transition-none",
+        )}
+      >
+        {label}
+      </button>
+    </span>
   );
 }
 
@@ -376,16 +480,23 @@ function AssistantStopped({ reason, detail, tone }: ReturnType<typeof stopReason
 }
 
 /**
- * Under the reply: copy, fork-and-re-run with another model or thinking
- * level, the session path; and the turn's timing on the end. The re-run
- * forks before the prompt that produced this reply and sends it again.
+ * Under the reply: copy, try again, try again with another model or thinking
+ * level, the session path; and the turn's timing on the end.
+ *
+ * Trying again changes THIS session: the engine moves the leaf to before the
+ * prompt that produced this reply and runs it again, so the new answer stands
+ * beside the old one as another version of the same question rather than
+ * after it. The old reply is one click away in the version picker under that
+ * prompt. "In a new session" is the same re-run into a fork.
  */
 function AssistantFooter() {
+  const aui = useAui();
   const { actions } = useLaserStable();
   const text = useMessageText();
   const { copied, copy } = useCopy();
   const path = useSessionPath();
   const entries = useEntries();
+  const leafId = useLeafId();
   const busy = useAuiState((s) => s.thread.isRunning);
   const model = useLaserState((s) => (s.current ? s.open[s.current]?.state.model ?? null : null));
   const thinking = useLaserState((s) => (s.current ? s.open[s.current]?.state.thinkingLevel : undefined));
@@ -415,14 +526,25 @@ function AssistantFooter() {
     const at = prompt.indexOf("\u0000");
     return [Number(prompt.slice(0, at)), prompt.slice(at + 1)] as const;
   }, [prompt]);
-  const promptEntryId = promptOrdinal === undefined ? undefined : userEntryAt(entries, promptOrdinal);
+  const promptEntryId = promptOrdinal === undefined ? undefined : userEntryAt(entries, promptOrdinal, leafId);
 
-  const regenerate = async (pick: RegeneratePick) => {
-    if (!promptEntryId || promptText === undefined) return;
-    await actions.fork(promptEntryId);
-    if ("model" in pick) await actions.setModel(pick.model as ModelRef);
-    else await actions.setThinking(pick.thinking as ThinkingLevel);
-    await actions.send([{ type: "text", text: promptText }], "prompt");
+  const rerun = async (where: "here" | "fork", pick?: RegeneratePick) => {
+    if (!promptEntryId) return;
+    let prompt = promptText;
+    if (where === "here") {
+      const moved = await actions.navigate(promptEntryId);
+      if (!moved) return;
+      // The engine's own text for that entry, rather than one re-derived from
+      // what the transcript happens to render.
+      if (moved.editorText !== undefined) prompt = moved.editorText;
+    } else {
+      await actions.fork(promptEntryId);
+    }
+    if (prompt === undefined) return;
+    if (pick && "model" in pick) await actions.setModel(pick.model as ModelRef);
+    else if (pick) await actions.setThinking(pick.thinking as ThinkingLevel);
+    await actions.send([{ type: "text", text: prompt }], "prompt");
+    if (where === "fork") clearHandedBackPrompt(aui, prompt);
   };
 
   return (
@@ -432,6 +554,8 @@ function AssistantFooter() {
         copied={copied}
         onCopy={() => void copy(text)}
         onCopyPath={path ? () => void copy(path) : undefined}
+        onRegenerate={promptEntryId ? () => void rerun("here") : undefined}
+        onRegenerateFork={promptEntryId ? () => void rerun("fork") : undefined}
         busy={busy}
         regenerate={
           promptEntryId ? (
@@ -440,7 +564,7 @@ function AssistantFooter() {
               thinkingLevels={thinkingLevels}
               currentModel={model}
               currentThinking={thinking}
-              onPick={(pick) => void regenerate(pick)}
+              onPick={(pick) => void rerun("here", pick)}
               disabled={busy}
             />
           ) : undefined

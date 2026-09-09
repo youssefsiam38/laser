@@ -17,7 +17,7 @@
  *      or output update never moves anything (memoise on {@link structureKey}).
  *
  * Every number here is a position or a box the graph is drawn at, not type or
- * colour (the same rule the dock's `layout.ts` and `flow-graph.tsx` follow).
+ * colour.
  * Tested in test/agents/map/layout.test.ts.
  */
 import type { AgentTree, AgentTreeNode } from "@/agents";

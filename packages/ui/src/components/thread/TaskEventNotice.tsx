@@ -3,20 +3,18 @@
  * A background task ended (docs/agents.md §6): the `lasercode/task-event`
  * custom message, projected as {@link TASK_EVENT_DATA_PART}. One quiet line —
  * what ran, how it ended, how long it took — and the way to its output, which
- * is the task's own `run` island (`tasks:<taskId>`), expanded in the dock or
- * opened in the fleet sheet on a phone. It shares the notice row's grammar,
- * not a card's: a task exiting is bookkeeping, not a reply.
+ * is the task's own row in the fleet: expanded in place in the column, or in
+ * the sheet where there is no column. It shares the notice row's grammar, not
+ * a card's: a task exiting is bookkeeping, not a reply.
  */
-import { TASK_PANEL_PREFIX } from "@lasercode/protocol";
 import { SquareTerminal } from "lucide-react";
 import { useCallback } from "react";
 
-import { openFleet } from "@/components/subagents/fleet";
+import { useShellOptional } from "@/components/shell/shell-context";
 import { Button } from "@/components/ui/button";
+import { revealInFleet } from "@/fleet";
 import { duration } from "@/format";
-import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
-import { usePanelActions, usePanelEntries } from "@/panels";
 import { useLaserState, type TaskEventData } from "@/runtime";
 import { oneLine } from "./tool-summary.js";
 
@@ -39,22 +37,19 @@ export function taskElapsed(data: Pick<TaskEventData, "startedAt" | "endedAt">):
 
 export function TaskEventNotice({ data }: { data: unknown }) {
   const task = isTaskData(data) ? data : undefined;
-  const path = useLaserState((s) => s.current);
-  const entries = usePanelEntries(path);
-  const actions = usePanelActions();
-  const mobile = useIsMobile();
-  const panelId = task ? `${TASK_PANEL_PREFIX}${task.taskId}` : undefined;
-  const entry = panelId ? entries.find((candidate) => candidate.panel.id === panelId && !candidate.closed) : undefined;
+  // The task is only findable while the host still holds it; the register
+  // prunes finished ones eventually, and the button goes with them rather
+  // than leading to a row that is not there.
+  const known = useLaserState((s) => (task ? s.tasks.tasks[task.taskId] !== undefined : false));
+  const shell = useShellOptional();
   const reveal = useCallback(() => {
-    if (!entry) return;
-    actions.markSeen(entry.key);
-    if (mobile) {
-      openFleet(entry.panel.id);
-      return;
-    }
-    actions.setSize(entry.path, entry.key, "expanded");
-    actions.watched(entry.path, entry.key);
-  }, [actions, entry, mobile]);
+    if (!task) return;
+    // The column is already on screen: expand the row in place rather than
+    // covering the conversation you are reading. Anywhere else, open the sheet.
+    const inColumn = shell?.layout === "desktop" && shell.fleetOpen;
+    if (shell && !inColumn && shell.layout === "desktop") shell.setFleetOpen(true);
+    revealInFleet(`task:${task.taskId}`, { sheet: shell?.layout !== "desktop" });
+  }, [shell, task]);
   if (!task) return null;
   const outcome = taskOutcome(task);
   const elapsed = taskElapsed(task);
@@ -76,7 +71,7 @@ export function TaskEventNotice({ data }: { data: unknown }) {
         {outcome.text}
         {elapsed !== undefined ? <span className="typed text-ink-3 tnum"> · {duration(elapsed)}</span> : null}
       </span>
-      {entry ? (
+      {known ? (
         <Button size="xs" variant="ghost" onClick={reveal} data-slot="task-event-output" className="shrink-0 text-ink-2">
           Output
         </Button>

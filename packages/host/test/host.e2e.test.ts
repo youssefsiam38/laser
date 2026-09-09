@@ -94,6 +94,11 @@ beforeEach(async () => {
     join(base, "agent", "models.json"),
     JSON.stringify({ providers: { stub: { baseUrl: stub.url, api: "openai-completions", apiKey: "k", models: [{ id: "stub-1", contextWindow: 8000, maxTokens: 500 }] } } }),
   );
+  // Only the stub is enabled. A developer machine may have a real provider
+  // configured from its environment, and Namer benchmarks whatever is
+  // connected when a worker comes up — this keeps that offer to the stub, so
+  // the run stays hermetic and costs nothing.
+  writeFileSync(join(base, "agent", "settings.json"), JSON.stringify({ enabledModels: ["stub/stub-1"] }));
   logs = [];
   host = new HostServer({
     agentDir: join(base, "agent"),
@@ -174,6 +179,15 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
     const prompted = await client.request("session/prompt", { path: state.path, content: [{ type: "text", text: "hello" }] });
     expect(prompted).toEqual({ accepted: true, queued: false });
     await client.waitFor((m) => "method" in m && m.method === "session/update" && (m.params as SessionUpdateParams).update.kind === "agent_settled");
+    // M13-T22: no provider was signed in during this run — the stub's
+    // credentials were already on disk — so Namer qualified from the worker
+    // coming up, and the session is named from its first prompt.
+    const named = await client.waitFor((m) => {
+      if (!("method" in m) || m.method !== "session/update") return false;
+      const { update } = m.params as SessionUpdateParams;
+      return update.kind === "state" && typeof update.state.name === "string" && update.state.name !== "";
+    });
+    expect((named as { params: SessionUpdateParams }).params.update).toMatchObject({ kind: "state", state: { name: REPLY.join("") } });
 
     const updates = client.updates();
     expect(updates.map((u) => u.seq)).toEqual(updates.map((_, i) => i + 1)); // contiguous from 1

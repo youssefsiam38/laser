@@ -248,70 +248,14 @@ writeFileSync(
     },
   });
 
-  // The declared panel protocol (docs/ux-panels.md). One of each kind, so the
-  // dock, the phone strip and the popped-out page all have something real to
-  // draw without pi-subagents being installed.
-  const emitPanels = () => {
-      const now = Date.now();
-      pi.events.emit("lasercode:panel", {
-        v: 1, id: "sandbox:run", kind: "run", intent: "follow",
-        title: "worker#2", source: "sandbox", handle: "@sandbox",
-        lifecycle: "running", activity: "reading the repository",
-        phase: { label: "survey", index: 1, total: 3 },
-        startedAt: new Date(now - 42_000).toISOString(),
-        usage: { input: 84_800, output: 7_000, cacheRead: 328_000, cacheWrite: 0, costUsd: 0.032 },
-        actions: [{ id: "stop", label: "Stop", destructive: true, confirm: "Stop worker#2?" }],
-      });
-      pi.events.emit("lasercode:panel", {
-        v: 1, id: "sandbox:plan", kind: "plan", intent: "follow",
-        title: "Workflow · 2 lanes", source: "sandbox", objective: "Ship the sandbox demo",
-        inferred: true,
-        steps: [
-          { id: "s1", label: "survey", phase: "preflight", state: "done" },
-          { id: "s2", label: "patch", phase: "work", state: "running", runId: "sandbox:run" },
-          { id: "s3", label: "verify", phase: "work", state: "pending" },
-        ],
-        usage: null,
-      });
-      pi.events.emit("lasercode:panel", {
-        v: 1, id: "sandbox:doc", kind: "document", intent: "follow",
-        title: "README.md", source: "sandbox", mediaType: "text/markdown", renderable: true,
-        content: { inline: "# Sandbox project\n\nA scratch project for demos.\n\n- one\n- two\n" },
-      });
-      pi.events.emit("lasercode:panel", {
-        v: 1, id: "sandbox:hits", kind: "collection", intent: "inline",
-        title: '3 results for "noise protocol"', source: "sandbox", layout: "list",
-        items: [
-          { id: "a", primary: "Noise Protocol Framework", secondary: "The specification", meta: [{ label: "url", value: "https://noiseprotocol.org" }] },
-          { id: "b", primary: "Noise_KK", secondary: "Both parties know each other's static key" },
-          { id: "c", primary: "Noise explained", secondary: "A walkthrough" },
-        ],
-        total: 3,
-      });
-      pi.events.emit("lasercode:panel", {
-        v: 1, id: "sandbox:ask", kind: "decision", intent: "inspect",
-        title: "Publish the sandbox build?", source: "sandbox", blocking: "turn",
-        message: "Nothing is published; this only shows a toast.",
-        fields: [
-          { id: "confirm", label: "Publish the sandbox build?", type: "confirm" },
-          { id: "why", label: "Tell the sandbox why", type: "longtext" },
-        ],
-        rejection: { label: "No", field: "why" },
-      });
-  };
-
-  // Emitted at session start so the panel gallery is immediately visible.
-  // The registered command remains available in the composer's live catalogue
-  // for testing explicit command invocation as well.
-  pi.on("session_start", () => { console.error("[sandbox-ext] session_start"); setTimeout(() => { try { emitPanels(); console.error("[sandbox-ext] panels emitted"); } catch (e) { console.error("[sandbox-ext] emit failed: " + e); } }, 400); });
-
-  pi.registerCommand("panels", { description: "sandbox: re-emit the demo panels", handler: async () => emitPanels() });
-
-  // Answering closes the question, which is what makes "delivered" true rather
-  // than a claim. The stream kind is covered by /widget, whose lines the host
-  // turns into a stream panel through the fallback.
-  pi.events.on("lasercode:panel:action", (event) => {
-    if (event.id === "sandbox:ask") pi.events.emit("lasercode:panel:close", { id: "sandbox:ask", reason: "answered" });
+  // Questions are the only thing an extension can ask a person, and they are
+  // answered inline in the transcript (docs/ux-fleet.md, "Questions").
+  pi.registerCommand("ask", {
+    description: "sandbox: ask a select inline",
+    handler: async (args, ctx) => {
+      const answer = await ctx.ui.select("Which branch?", ["main", "next", "always allow"]);
+      ctx.ui.notify(answer ? "picked " + answer : "cancelled", "info");
+    },
   });
 }
 `,
@@ -358,69 +302,82 @@ console.log(
     `  cli:      ${product.env.stateDir}=${stateDir} ${product.env.agentDir}=${agentDir} ${product.binary} status`,
 );
 
-// ---- demo panels, seeded from the host ----
+// ---- demo background work, seeded from the host ----
 //
-// The extension above emits the same five panels on Pi's bus, which is the
-// path a real package takes. It is registered in `settings.extensions`, but Pi
-// 0.85 builds a session's extension set from its *package manager*, so a bare
-// path there is not enough to load it and the demo would be empty. Seeding the
-// panel hub directly keeps the sandbox honest — it is the same hub, the same
-// broadcast and the same panels a client would receive — and it is marked
-// `source: "sandbox"` so nobody mistakes it for an extension that ran.
+// The fleet's two kinds of work come from two typed sources: the harness
+// publishes `agents/run`, and the companion's background-work module publishes
+// `lasercode/task/update`. Pi 0.85 builds a session's extension set from its
+// package manager, so a bare path in `settings.extensions` is not enough to
+// load the demo extension and the fleet would be empty. Seeding the host's own
+// task register keeps the sandbox honest — same register, same broadcast, same
+// rows a client would receive — and the commands say `sandbox` so nobody
+// mistakes them for something that ran.
+const taskLog = join(stateDir, "sandbox-task.log");
+mkdirSync(stateDir, { recursive: true });
+writeFileSync(
+  taskLog,
+  [
+    "  VITE v7.1.0  ready in 412 ms",
+    "",
+    "  \u001b[32m\u2192\u001b[0m  Local:   http://localhost:5173/",
+    "  \u001b[32m\u2192\u001b[0m  Network: http://192.168.1.24:5173/",
+    "",
+    "10:04:12 [vite] page reload src/App.tsx",
+    "10:04:31 [vite] hmr update src/routes/index.tsx",
+    "",
+  ].join("\n"),
+);
+
 const seeded = new Set();
 setInterval(() => {
+  if (process.env.SANDBOX_GOAL === "1") return;
   for (const worker of host.pool.workers()) {
     for (const path of host.pool.openSessions(worker.cwd)) {
       if (seeded.has(path)) continue;
       seeded.add(path);
-      for (const panel of demoPanels()) host.panels.upsert(worker.cwd, path, panel);
+      for (const task of demoTasks(path)) host.tasks.upsert(path, task, taskLog);
+      // A live one keeps growing, so the column has something that moves.
+      let bytes = 240;
+      const timer = setInterval(() => {
+        bytes += 37;
+        host.tasks.upsert(
+          path,
+          { ...demoTasks(path)[0], outputBytes: bytes, activity: `page reload ${Math.round(bytes / 37)} · 12 ms` },
+          taskLog,
+        );
+      }, 2000);
+      timer.unref();
     }
   }
 }, 1000).unref();
 
-function demoPanels() {
-  if (process.env.SANDBOX_GOAL === "1" || process.env.SANDBOX_AGENTS === "1") return [];
+function demoTasks(sessionPath) {
   const now = Date.now();
   return [
     {
-      kind: "run", id: "sandbox:run", source: "sandbox", title: "worker#2", intent: "follow", handle: "@sandbox",
-      lifecycle: "running", activity: "reading the repository",
-      phase: { label: "survey", index: 1, total: 3 },
+      id: "t-sandbox-dev",
+      sessionPath,
+      command: "pnpm vite dev --host --port 5173",
+      title: "pnpm vite dev --host --port 5173",
+      status: "running",
+      origin: "background",
       startedAt: new Date(now - 42_000).toISOString(),
-      usage: { input: 84_800, output: 7_000, cacheRead: 328_000, cacheWrite: 0, costUsd: 0.032 },
-      actions: [{ id: "stop", label: "Stop", destructive: true, confirm: "Stop worker#2?" }],
+      outputBytes: 240,
+      activity: "ready in 412 ms · http://localhost:5173",
     },
     {
-      kind: "plan", id: "sandbox:plan", source: "sandbox", title: "Workflow · 2 lanes", intent: "follow",
-      objective: "Ship the sandbox demo", inferred: true, usage: null,
-      steps: [
-        { id: "s1", label: "survey", phase: "preflight", state: "done" },
-        { id: "s2", label: "patch", phase: "work", state: "running", runId: "sandbox:run" },
-        { id: "s3", label: "verify", phase: "work", state: "pending" },
-      ],
-    },
-    {
-      kind: "document", id: "sandbox:doc", source: "sandbox", title: "README.md", intent: "follow",
-      mediaType: "text/markdown", renderable: true,
-      content: { inline: "# Sandbox project\n\nA scratch project for demos.\n\n- one\n- two\n" },
-    },
-    {
-      kind: "collection", id: "sandbox:hits", source: "sandbox", title: '3 results for "noise protocol"',
-      intent: "inline", layout: "list", total: 3,
-      items: [
-        { id: "a", primary: "Noise Protocol Framework", secondary: "The specification", meta: [{ label: "url", value: "https://noiseprotocol.org" }] },
-        { id: "b", primary: "Noise_KK", secondary: "Both parties know each other's static key" },
-        { id: "c", primary: "Noise explained", secondary: "A walkthrough" },
-      ],
-    },
-    {
-      kind: "decision", id: "sandbox:ask", source: "sandbox", title: "Publish the sandbox build?", intent: "inspect",
-      blocking: "turn", message: "Nothing is published; this only shows a card.",
-      fields: [
-        { id: "confirm", label: "Publish the sandbox build?", type: "confirm" },
-        { id: "why", label: "Tell the sandbox why", type: "longtext" },
-      ],
-      rejection: { label: "No", field: "why" },
+      id: "t-sandbox-test",
+      sessionPath,
+      command: "pnpm -r test",
+      title: "pnpm -r test",
+      status: "failed",
+      origin: "promoted",
+      startedAt: new Date(now - 300_000).toISOString(),
+      endedAt: new Date(now - 120_000).toISOString(),
+      exitCode: 1,
+      outputBytes: 4096,
+      terminalReason: "exit code 1",
+      activity: "1 failed | 660 passed (661)",
     },
   ];
 }

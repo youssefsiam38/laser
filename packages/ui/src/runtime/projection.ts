@@ -3,7 +3,10 @@
  *
  * Rules (see PLAN M1-T10 / DESIGN.md "Transcript"):
  * - A `user` block becomes one user message (text part, plus a short note part
- *   when the prompt carried images — the store keeps only the count).
+ *   when the prompt carried images — the store keeps only the count). A prompt
+ *   a parent agent sent into a child carries the store's `sentBy` on its
+ *   metadata, so the bubble can say whose task it is; the text is never
+ *   rewritten, wrapped or shortened for it.
  * - A maximal run of consecutive `assistant` + `tool` blocks becomes ONE
  *   assistant message whose parts keep the streaming order they arrived in:
  *   reasoning (from the block's `thinking`), text, then the tool calls that
@@ -352,7 +355,19 @@ const userMessage = (block: Extract<Block, { kind: "user" }>, ordinal: number, g
     content,
     ...(createdAt ? { createdAt } : {}),
     metadata: {
-      custom: { [MESSAGE_METADATA_NS]: { kind: "user", images: block.images, optimistic: block.optimistic === true, userOrdinal: ordinal, ...(goal ? { goalSetter: true } : {}) } },
+      custom: {
+        [MESSAGE_METADATA_NS]: {
+          kind: "user",
+          images: block.images,
+          optimistic: block.optimistic === true,
+          userOrdinal: ordinal,
+          ...(goal ? { goalSetter: true } : {}),
+          // Who asked, when it was not the person: the task a parent agent
+          // sent into this child. The text itself is untouched, so it stays
+          // selectable, copyable and searchable like any other prompt.
+          ...(block.sentBy ? { sentBy: block.sentBy } : {}),
+        },
+      },
     },
   };
 };

@@ -11,8 +11,8 @@
  *   - promotion — after `foregroundCommandSeconds` a still-running foreground
  *     command keeps running as a task and the tool returns the output so far;
  *   - `task_list`, `task_output`, `task_wait`, `task_stop` to follow tasks;
- *   - one `run` panel per task on the declared panel bus, whose `output` is a
- *     file the task streams into, so the UI follows it through `pi/panel/read`.
+ *   - a `lasercode/task/update` for every task the person can see, carrying the
+ *     log file it streams into so the host can serve `tasks/output`.
  *
  * Execution itself — shell resolution, `PI_*` environment, the process tree
  * kill on abort, output truncation for the model — stays the engine's. The
@@ -39,7 +39,13 @@ import {
   type BashToolDetails,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { PANEL_EVENT, TASK_EVENT_MESSAGE_TYPE, TASK_PANEL_PREFIX, WIRE_NAMESPACE, type PanelEvent } from "@lasercode/protocol";
+import {
+  TASK_COMMAND_MAX,
+  TASK_EVENT_MESSAGE_TYPE,
+  TASK_LINE_MAX,
+  WIRE_NAMESPACE,
+  type BackgroundTaskUpdate,
+} from "@lasercode/protocol";
 import { Type } from "typebox";
 import type { BackgroundWorkOptions } from "../agents-bridge.js";
 import type { LaserModule, ModuleContext } from "./index.js";
@@ -51,12 +57,10 @@ const PROMOTED_TAIL_LINES = 40;
 const TITLE_MAX = 80;
 const WAIT_DEFAULT_SECONDS = 300;
 const WAIT_MAX_SECONDS = 3600;
-/** Minimum spacing between two panel re-emits for output growth alone. */
-const PANEL_THROTTLE_MS = 500;
+/** Minimum spacing between two task re-emits for output growth alone. */
+const PUBLISH_THROTTLE_MS = 500;
 /** How long `task_stop` waits for the killed process to be reaped. */
 const STOP_GRACE_MS = 5000;
-
-export const PANEL_SOURCE = "shell";
 
 export type TaskStatus = "running" | "completed" | "failed" | "stopped";
 type TaskMode = "foreground" | "promoted" | "background";
@@ -88,8 +92,8 @@ interface TaskRecord {
   done: Promise<void>;
   /** Stops forwarding the engine's streamed updates to a tool call that has returned. */
   detach: () => void;
-  panelTimer: NodeJS.Timeout | undefined;
-  lastPanelAt: number;
+  publishTimer: NodeJS.Timeout | undefined;
+  lastPublishAt: number;
 }
 
 interface State {
@@ -158,42 +162,37 @@ const STOP_REASONS: Readonly<Record<StoppedBy, string>> = {
 };
 
 // ---------------------------------------------------------------------------
-// Panels
+// The task record on the wire
 // ---------------------------------------------------------------------------
 
-export function taskPanelId(taskId: string): string {
-  return `${TASK_PANEL_PREFIX}${taskId}`;
-}
-
-function panelFor(task: TaskRecord): PanelEvent {
-  const lifecycle = task.status === "running" ? "running" : task.status === "completed" ? "done" : task.status === "failed" ? "failed" : "cancelled";
-  const activity = lastLines(task.tail.text(), 1).slice(0, 1000);
-  const origin =
-    task.mode === "background" ? "the agent, in the background" : task.mode === "promoted" ? "the agent; promoted after the foreground limit" : "the agent";
+/**
+ * What the fleet renders. A foreground command that finished inside the limit
+ * is not here on purpose: it already carried its result in its own tool row,
+ * and a fleet row for every quick `ls` would bury the real work.
+ */
+export function taskUpdate(task: TaskRecord): BackgroundTaskUpdate {
+  const activity = lastLines(task.tail.text(), 1).slice(0, TASK_LINE_MAX);
   return {
-    v: 1,
-    id: taskPanelId(task.id),
-    kind: "run",
-    intent: "follow",
-    source: PANEL_SOURCE,
+    id: task.id,
+    command: task.command.slice(0, TASK_COMMAND_MAX),
     title: firstLine(task.command),
-    data: {
-      lifecycle,
-      handle: task.id,
-      origin,
-      startedAt: task.startedAt,
-      ...(task.endedAt !== undefined ? { endedAt: task.endedAt } : {}),
-      ...(activity ? { activity } : {}),
-      ...(task.status === "stopped" ? { terminalReason: STOP_REASONS[task.stoppedBy ?? "agent"] } : {}),
-      ...(task.status === "failed"
-        ? {
-            terminalReason: typeof task.exitCode === "number" ? `exit code ${task.exitCode}` : "it did not finish",
-            ...(task.error ? { error: task.error.slice(0, 4000) } : {}),
-          }
-        : {}),
-      output: { ref: `file:${task.logPath}`, bytes: task.bytes },
-    },
-    ...(task.status === "running" ? { actions: [{ id: "stop", label: "Stop" }] } : {}),
+    status: task.status,
+    origin: task.mode === "background" ? "background" : "promoted",
+    startedAt: task.startedAt,
+    ...(task.endedAt !== undefined ? { endedAt: task.endedAt } : {}),
+    // A killed process has no code, and saying so is not the same as saying
+    // zero: a terminal task always carries the field, `null` included.
+    ...(task.exitCode !== undefined ? { exitCode: task.exitCode } : task.status === "running" ? {} : { exitCode: null }),
+    outputBytes: task.bytes,
+    ...(activity ? { activity } : {}),
+    ...(task.status === "stopped" ? { terminalReason: STOP_REASONS[task.stoppedBy ?? "agent"] } : {}),
+    ...(task.status === "failed"
+      ? {
+          terminalReason: typeof task.exitCode === "number" ? `exit code ${task.exitCode}` : "it did not finish",
+          ...(task.error ? { error: task.error.slice(0, 4000) } : {}),
+        }
+      : {}),
+    ...(task.logPath ? { logPath: task.logPath } : {}),
   };
 }
 
@@ -223,7 +222,7 @@ function sessionIdFor(state: State, toolCtx: ExtensionContext): string {
   return state.sessionId;
 }
 
-function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOptions, input: StartInput, emitPanel: (task: TaskRecord) => void): TaskRecord {
+function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOptions, input: StartInput, publish: (task: TaskRecord) => void): TaskRecord {
   const id = newTaskId();
   const dir = join(tmpdir(), `${WIRE_NAMESPACE}-tasks`, sessionIdFor(state, input.toolCtx));
   const logPath = join(dir, `${id}.log`);
@@ -250,8 +249,8 @@ function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOpti
     detach: () => {
       forwardUpdates = false;
     },
-    panelTimer: undefined,
-    lastPanelAt: 0,
+    publishTimer: undefined,
+    lastPublishAt: 0,
   };
   state.tasks.set(id, task);
 
@@ -266,14 +265,14 @@ function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOpti
     ctx.send({ type: "lasercode/module/log", module: "background-work", level: "warn", message: `task ${id} has no log file: ${describe(error)}` });
   }
 
-  const schedulePanel = (): void => {
-    if (task.panelTimer || task.status !== "running") return;
-    const wait = Math.max(0, PANEL_THROTTLE_MS - (Date.now() - task.lastPanelAt));
-    task.panelTimer = setTimeout(() => {
-      task.panelTimer = undefined;
-      if (task.status === "running") emitPanel(task);
+  const schedulePublish = (): void => {
+    if (task.publishTimer || task.status !== "running") return;
+    const wait = Math.max(0, PUBLISH_THROTTLE_MS - (Date.now() - task.lastPublishAt));
+    task.publishTimer = setTimeout(() => {
+      task.publishTimer = undefined;
+      if (task.status === "running") publish(task);
     }, wait);
-    task.panelTimer.unref?.();
+    task.publishTimer.unref?.();
   };
 
   const local = createLocalBashOperations(options.shellPath ? { shellPath: options.shellPath } : {});
@@ -286,7 +285,7 @@ function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOpti
           task.tail.append(data);
           task.stream?.write(data);
           execOptions.onData(data);
-          schedulePanel();
+          schedulePublish();
         },
       });
       task.exitCode = result.exitCode;
@@ -320,20 +319,20 @@ function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOpti
       task.status = controller.signal.aborted ? "stopped" : "failed";
     }
     task.endedAt = new Date().toISOString();
-    if (task.panelTimer) {
-      clearTimeout(task.panelTimer);
-      task.panelTimer = undefined;
+    if (task.publishTimer) {
+      clearTimeout(task.publishTimer);
+      task.publishTimer = undefined;
     }
     task.stream?.end();
     task.stream = undefined;
-    emitPanel(task);
+    publish(task);
     // The rule: promoted → wake the model; explicit background → record only;
     // foreground → the tool call itself carried the result.
     if (task.mode !== "foreground") state.notify?.(task);
     settle();
   })();
 
-  emitPanel(task);
+  publish(task);
   return task;
 }
 
@@ -404,17 +403,11 @@ export const backgroundWorkModule: LaserModule = {
     states.set(ctx, state);
     const seconds = options.foregroundCommandSeconds;
 
-    const emitPanel = (task: TaskRecord): void => {
-      // Only background work is fleet work: a foreground command that finishes
-      // within the limit already carried its result in its own tool row, and a
-      // dock island or run tab for every quick `ls` would bury the real tasks.
+    const publish = (task: TaskRecord): void => {
+      // Only background work is fleet work (see `taskUpdate`).
       if (task.mode === "foreground") return;
-      task.lastPanelAt = Date.now();
-      try {
-        pi.events.emit(PANEL_EVENT, panelFor(task));
-      } catch {
-        // A terminal engine has no bus listener; the panel is an offer, not a requirement.
-      }
+      task.lastPublishAt = Date.now();
+      ctx.send({ type: "lasercode/task/update", task: taskUpdate(task) });
     };
 
     const requireTask = (taskId: string): TaskRecord => {
@@ -450,7 +443,7 @@ export const backgroundWorkModule: LaserModule = {
       }),
       async execute(toolCallId, { command, timeout, background }, signal, onUpdate, toolCtx): Promise<AgentToolResult<BashOverrideDetails>> {
         if (background === true) {
-          const task = startTask(ctx, state, options, { command, timeout, mode: "background", toolCallId, toolCtx, onUpdate: undefined }, emitPanel);
+          const task = startTask(ctx, state, options, { command, timeout, mode: "background", toolCallId, toolCtx, onUpdate: undefined }, publish);
           return {
             content: text(
               `Started background task ${task.id}: ${firstLine(command)}. Use task_output ${task.id} to read its output, task_wait to block until it exits, or task_stop to end it. Its exit is reported as a message.`,
@@ -459,7 +452,7 @@ export const backgroundWorkModule: LaserModule = {
           };
         }
 
-        const task = startTask(ctx, state, options, { command, timeout, mode: "foreground", toolCallId, toolCtx, onUpdate }, emitPanel);
+        const task = startTask(ctx, state, options, { command, timeout, mode: "foreground", toolCallId, toolCtx, onUpdate }, publish);
         // The turn's cancel reaches the process only while the call is foreground.
         const onTurnAbort = (): void => stopTask(task, "turn");
         if (signal?.aborted) onTurnAbort();
@@ -479,7 +472,7 @@ export const backgroundWorkModule: LaserModule = {
         }
         task.mode = "promoted";
         task.detach();
-        emitPanel(task);
+        publish(task);
         return {
           content: text(promotedText(task, seconds)),
           details: { taskId: task.id, promoted: true },
@@ -606,21 +599,19 @@ export const backgroundWorkModule: LaserModule = {
       }
     };
 
-    // A person presses Stop on the task's panel: the worker sends the action
-    // here. Claiming the prefix keeps the panels module's `handled` honest for
-    // ids it has not seen itself.
-    const releaseClaim = ctx.panels?.claim(TASK_PANEL_PREFIX);
+    // A person presses Stop in the fleet: `tasks/stop` reaches the worker,
+    // which sends the command here. A task this session does not own is not
+    // ours to answer, so the worker learns it was not delivered.
     const offCommand = ctx.commands?.on((command) => {
-      if (command.type !== "lasercode/panel/action" || !command.id.startsWith(TASK_PANEL_PREFIX)) return false;
-      const task = state.tasks.get(command.id.slice(TASK_PANEL_PREFIX.length));
+      if (command.type !== "lasercode/task/stop") return false;
+      const task = state.tasks.get(command.id);
       if (!task) return false;
-      if (command.actionId === "stop") stopTask(task, "person");
+      stopTask(task, "person");
       return true;
     });
 
     return () => {
       disposed = true;
-      releaseClaim?.();
       offCommand?.();
       for (const task of state.tasks.values()) stopTask(task, "shutdown");
     };

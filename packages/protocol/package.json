@@ -17,6 +17,10 @@
     "./identity": {
       "types": "./dist/identity.d.ts",
       "import": "./dist/identity.js"
+    },
+    "./startup-screen": {
+      "types": "./dist/startup-screen.d.ts",
+      "import": "./dist/startup-screen.js"
     }
   },
   "files": ["dist"],

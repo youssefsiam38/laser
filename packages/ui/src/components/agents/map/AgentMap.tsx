@@ -31,7 +31,7 @@ export interface AgentMapProps {
   tree: AgentTree;
   /** The session the person came from: a child is highlighted on arrival. */
   focusPath?: string | undefined;
-  /** The header row; off inside the dock island, which has a header of its own. */
+  /** The header row. */
   chrome?: boolean;
   /** A notice above the body — the store's error, written for a person. */
   notice?: ReactNode;

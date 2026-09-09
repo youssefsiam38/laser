@@ -109,3 +109,25 @@ export function shortcutLabel(key: string): string {
   const mod = modKey();
   return mod === "⌘" ? `${mod}${key}` : `${mod}+${key}`;
 }
+
+/**
+ * Elapsed in the coarse form the fleet and the map use: 12s · 1m 05s · 1h 02m.
+ * `duration` above stops at minutes, and agent work measured in minutes past
+ * the thousand is a number nobody can read.
+ */
+export function formatElapsed(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, "0")}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${String(m % 60).padStart(2, "0")}m`;
+}
+
+/** A byte count a person can read: 812 B · 4.1 KB · 2.3 MB. */
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}

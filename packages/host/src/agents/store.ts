@@ -4,7 +4,7 @@
  * Same discipline as PrefsStore: load on construct, memory-only without a
  * path, debounced atomic writes, `close()` flushes. Only what a person owns is
  * persisted — their custom agents (the seeded `default` among them), which one
- * starts new sessions, the policy, and the model choices for Beam and Namer.
+ * starts new sessions, the policy, and the model choice of each built-in.
  * The three built-ins are rebuilt from `builtins.ts` on every load so a copy
  * change ships with the next release instead of being frozen in a file.
  *
@@ -33,6 +33,8 @@ import {
   type AgentWarning,
   type AgentsSnapshot,
   type BeamState,
+  type BuiltinAgentName,
+  type ChatState,
   type NamerState,
 } from "@lasercode/protocol";
 import { builtinAgents, seedDefaultAgent } from "./builtins.js";
@@ -59,6 +61,7 @@ interface Stored {
   policy: AgentPolicy;
   namer: NamerState;
   beam: BeamState;
+  chat: ChatState;
 }
 
 const DELETE_DEFAULT_MESSAGE = "This agent starts new sessions. Choose another default first.";
@@ -70,6 +73,7 @@ export class AgentStore {
   private policy: AgentPolicy = { maxDepth: AGENT_MAX_DEPTH_DEFAULT, foregroundCommandSeconds: FOREGROUND_COMMAND_SECONDS_DEFAULT };
   private namer: NamerState = { status: "unqualified", model: null, candidates: [] };
   private beam: BeamState = { model: null, suggested: null, needsChoice: true };
+  private chat: ChatState = { model: null };
   private warningList: AgentWarning[] = [];
   private revision = 0;
   private writeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -96,6 +100,7 @@ export class AgentStore {
       policy: this.policy,
       namer: this.namer,
       beam: this.beam,
+      chat: this.chat,
       workspaces: this.options.workspaces,
     });
   }
@@ -212,9 +217,26 @@ export class AgentStore {
     return { ...this.policy };
   }
 
+  /**
+   * A person chooses a built-in's model. The same choice for all three, made
+   * in the same control: `null` returns that agent to the configured default,
+   * and for Namer to the next qualification.
+   */
+  setBuiltinModel(name: BuiltinAgentName, model: AgentModelChoice | null): void {
+    if (name === "beam") this.setBeamModel(model);
+    else if (name === "chat") this.setChatModel(model);
+    else this.setNamerModel(model);
+  }
+
   /** A person chose (or dismissed with `null`): either way the dialog is done. */
   setBeamModel(model: AgentModelChoice | null): void {
     this.beam = { ...this.beam, model: model ? { ...model } : null, needsChoice: false };
+    this.commit();
+  }
+
+  /** Chat has no benchmark and no suggestion; `null` follows the default model. */
+  setChatModel(model: AgentModelChoice | null): void {
+    this.chat = { model: model ? { ...model } : null };
     this.commit();
   }
 
@@ -264,6 +286,7 @@ export class AgentStore {
     return builtinAgents({
       agentDir: this.options.agentDir,
       beamModel: this.beam.model,
+      chatModel: this.chat.model,
       namerModel: this.namer.model,
       at: BUILTIN_STAMP,
     });
@@ -307,6 +330,9 @@ export class AgentStore {
     if (namer) this.namer = namer;
     const beam = readBeam(parsed?.beam);
     if (beam) this.beam = beam;
+    // Written before Chat had a model of its own: missing is "follow the default".
+    const chat = readChat(parsed?.chat);
+    if (chat) this.chat = chat;
 
     // A store with nothing in it (first run) is seeded; one whose person
     // deleted `default` after choosing another default is left alone. The
@@ -344,6 +370,7 @@ export class AgentStore {
       policy: this.policy,
       namer: this.namer,
       beam: this.beam,
+      chat: this.chat,
     };
     try {
       mkdirSync(dirname(file), { recursive: true });
@@ -424,6 +451,12 @@ function readNamer(raw: unknown): NamerState | undefined {
     ...(isString(value.qualifiedAt) ? { qualifiedAt: value.qualifiedAt } : {}),
     ...(isString(value.reason) ? { reason: value.reason } : {}),
   };
+}
+
+function readChat(raw: unknown): ChatState | undefined {
+  const value = raw as Partial<ChatState> | null | undefined;
+  if (!value || typeof value !== "object") return undefined;
+  return { model: readModel(value.model) };
 }
 
 function readBeam(raw: unknown): BeamState | undefined {

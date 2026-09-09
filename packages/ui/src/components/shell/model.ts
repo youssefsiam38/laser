@@ -3,7 +3,7 @@
  * Tested in test/shell/model.test.ts.
  */
 import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
-import type { Panel, PanelUsage, ProjectInfo, ProjectTrust, SessionSummary } from "@lasercode/protocol";
+import type { AgentRun, ProjectInfo, ProjectTrust, SessionSummary } from "@lasercode/protocol";
 import { mergeSessions, sessionAttention, sessionTitle, sortSessions } from "../../runtime/threadList.js";
 import { textOf, type Block, type SessionView } from "../../store.js";
 import { shortCwd, summariseArgs } from "../../format.js";
@@ -314,31 +314,27 @@ export function isAccountProvider(provider: string | undefined): boolean {
   return provider === "openai-codex" || /^openai-codex-\d+$/.test(provider ?? "");
 }
 
+/**
+ * One child agent's contribution to this session's billing view.
+ *
+ * `usage` is absent, and that is the honest answer: the harness measures a
+ * run's identity, status and model, never its tokens (D-140). What the model
+ * *is* still decides which billing view the session is in — an account-billed
+ * child makes the session "mixed" whatever the parent used — so the mode is
+ * derived and the numbers are not invented.
+ */
 export interface BackgroundUsageSource {
-  /** Pi model reference (`provider/model`) when the producer knows it. */
+  /** Model reference (`provider/model`) when the run recorded one. */
   model?: string;
-  usage?: PanelUsage;
+  usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; costUsd?: number; turns?: number };
 }
 
 const providerOfModel = (model: string | undefined): string | undefined => model?.split("/", 1)[0];
 const isAccountModel = (model: string | undefined): boolean => isAccountProvider(providerOfModel(model));
 
-/**
- * Every run panel is one agent. Plan panels are deliberately ignored because
- * their usage is a roll-up of those same children. Per-attempt slices retain
- * failed fallback consumption under the provider that actually served it.
- */
-export function backgroundUsageSources(panels: readonly Panel[]): BackgroundUsageSource[] {
-  const sources: BackgroundUsageSource[] = [];
-  for (const panel of panels) {
-    if (panel.kind !== "run") continue;
-    if (panel.usageByModel?.length) {
-      for (const slice of panel.usageByModel) sources.push({ ...(slice.model ? { model: slice.model } : {}), usage: slice.usage });
-    } else {
-      sources.push({ ...(panel.model ? { model: panel.model } : {}), ...(panel.usage ? { usage: panel.usage } : {}) });
-    }
-  }
-  return sources;
+/** Every child agent that executed in this session's tree is one source. */
+export function backgroundUsageSources(runs: readonly AgentRun[]): BackgroundUsageSource[] {
+  return runs.map((run) => (run.model ? { model: `${run.model.provider}/${run.model.id}` } : {}));
 }
 
 /** Billing views represented by the main agent and every child agent. */

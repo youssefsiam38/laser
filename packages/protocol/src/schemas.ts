@@ -14,21 +14,14 @@ import {
   AGENT_MAX_DEPTH_LIMIT,
   AGENT_NAME_PATTERN,
   AGENT_RUN_STATUSES,
+  BUILTIN_AGENT_NAMES,
   FOREGROUND_COMMAND_SECONDS_MAX,
   FOREGROUND_COMMAND_SECONDS_MIN,
 } from "./agents.js";
 import { ErrorCodes, type JsonRpcRequest } from "./jsonrpc.js";
 import { PREFS_MAX_BYTES } from "./messages.js";
 import type { ClientMethod, ClientRequests } from "./messages.js";
-import {
-  DEFAULT_INTENT,
-  PANEL_INTENTS,
-  PANEL_KINDS,
-  PANEL_READ_MAX_BYTES,
-  type Panel,
-  type PanelActionEvent,
-  type PanelCloseEvent,
-} from "./panels.js";
+import { TASK_COMMAND_MAX, TASK_LINE_MAX } from "./tasks.js";
 
 // ---------- the product's identity ----------
 
@@ -116,6 +109,8 @@ export const uiDialogResponseSchema = z.union([
 
 const sessionPath = z.string().min(1);
 const content = z.array(contentBlockSchema).min(1);
+/** A pending-tray id, as the worker mints it: `p-` and hex. */
+const pendingId = z.string().regex(/^p-[0-9a-f]{8,32}$/);
 
 // ---------- M4 values (settings, packages, providers, logs) ----------
 
@@ -174,329 +169,47 @@ export const logQuerySchema = z
   })
   .strict();
 
-// ---------- panels (docs/ux-panels.md) ----------
+// ---------- background tasks (docs/ux-fleet.md) ----------
 
-const panelId = z.string().min(1).max(200);
-const panelText = z.string().max(4000);
-const ref = z.string().min(1).max(2000);
+const taskId = z.string().min(1).max(200);
 const isoDate = z.string().min(1).max(40);
 
-export const panelKindSchema = z.enum(PANEL_KINDS as [Panel["kind"], ...Panel["kind"][]]);
-export const panelIntentSchema = z.enum(PANEL_INTENTS as [Panel["intent"], ...Panel["intent"][]]);
-export const attentionSchema = z.enum(["idle", "working", "waiting_for_input", "error", "finished_unread"]);
+export const backgroundTaskStatusSchema = z.enum(["running", "completed", "failed", "stopped"]);
+export const backgroundTaskOriginSchema = z.enum(["background", "promoted"]);
 
-export const actionSchema = z
+/**
+ * One background task as it travels extension → worker → host → client.
+ * Strict: a module that starts inventing fields is asking for a change to the
+ * domain model, not for a wider bag.
+ */
+export const backgroundTaskUpdateSchema = z
   .object({
-    id: z.string().min(1).max(100),
-    label: z.string().min(1).max(80),
-    confirm: z.string().max(400).optional(),
-    destructive: z.boolean().optional(),
-  })
-  .strict();
-
-export const usageSchema = z
-  .object({
-    input: z.number().nonnegative().optional(),
-    output: z.number().nonnegative().optional(),
-    cacheRead: z.number().nonnegative().optional(),
-    cacheWrite: z.number().nonnegative().optional(),
-    turns: z.number().int().nonnegative().optional(),
-    costUsd: z.number().nonnegative().nullable().optional(),
-    unavailableReason: z.string().max(200).optional(),
-  })
-  .strict();
-
-const panelBase = {
-  id: panelId,
-  source: z.string().min(1).max(100),
-  title: z.string().min(1).max(300),
-  intent: panelIntentSchema,
-};
-
-const runPanelSchema = z
-  .object({
-    ...panelBase,
-    kind: z.literal("run"),
-    handle: z.string().max(100).optional(),
-    lifecycle: z.enum(["queued", "running", "paused", "done", "failed", "cancelled"]),
+    id: taskId,
+    command: z.string().min(1).max(TASK_COMMAND_MAX),
+    title: z.string().min(1).max(TASK_LINE_MAX),
+    status: backgroundTaskStatusSchema,
+    origin: backgroundTaskOriginSchema,
+    startedAt: isoDate,
+    endedAt: isoDate.optional(),
+    exitCode: z.number().int().nullable().optional(),
+    outputBytes: z.number().int().nonnegative(),
+    activity: z.string().max(TASK_LINE_MAX).optional(),
     terminalReason: z.string().max(300).optional(),
-    attention: attentionSchema.optional(),
-    activity: z.string().max(1000).optional(),
-    // `index` is 1-based, so it reads as "index of total" with no arithmetic
-    // anywhere between the producer and the stepper (docs/ux-panels.md).
-    phase: z
-      .object({ label: z.string().max(100), index: z.number().int().positive().optional(), total: z.number().int().positive().optional() })
-      .strict()
-      .optional(),
-    progress: z
-      .union([z.object({ done: z.number().nonnegative(), total: z.number().positive() }).strict(), z.literal("indeterminate")])
-      .optional(),
-    origin: z.string().max(200).optional(),
-    parent: z.object({ id: panelId, relation: z.enum(["spawned-by", "step-of"]) }).strict().optional(),
-    requested: z.object({ model: z.string().max(200).optional(), thinking: z.string().max(40).optional() }).strict().optional(),
-    model: z.string().max(200).optional(),
-    startedAt: isoDate.optional(),
-    endedAt: isoDate.optional(),
-    usage: usageSchema.nullable().optional(),
-    usageByModel: z
-      .array(z.object({ model: z.string().max(200).optional(), usage: usageSchema }).strict())
-      .max(16)
-      .optional(),
-    output: z.object({ ref, bytes: z.number().int().nonnegative().optional() }).strict().optional(),
-    artifacts: z.array(z.object({ label: z.string().min(1).max(200), ref }).strict()).max(200).optional(),
-    actions: z.array(actionSchema).max(20).optional(),
     error: z.string().max(4000).optional(),
+    /** Host-side only; the host reads it and never forwards it to a client. */
+    logPath: z.string().min(1).max(4096).optional(),
   })
   .strict();
-
-const planStepSchema = z
-  .object({
-    id: panelId,
-    label: z.string().min(1).max(300),
-    phase: z.string().max(100).optional(),
-    state: z.enum(["pending", "running", "done", "failed", "skipped", "blocked"]),
-    runId: panelId.optional(),
-    dependsOn: z.array(panelId).max(100).optional(),
-    model: z.string().max(200).optional(),
-    usage: usageSchema.nullable().optional(),
-    startedAt: isoDate.optional(),
-    endedAt: isoDate.optional(),
-  })
-  .strict();
-
-const planPanelSchema = z
-  .object({
-    ...panelBase,
-    kind: z.literal("plan"),
-    objective: z.string().max(2000).optional(),
-    inferred: z.boolean().optional(),
-    steps: z.array(planStepSchema).max(1000),
-    approval: z.object({ decisionId: panelId }).strict().optional(),
-    usage: usageSchema.nullable().optional(),
-    actions: z.array(actionSchema).max(20).optional(),
-  })
-  .strict();
-
-const documentPanelSchema = z
-  .object({
-    ...panelBase,
-    kind: z.literal("document"),
-    mediaType: z.string().min(1).max(120),
-    content: z
-      .union([z.object({ ref }).strict(), z.object({ inline: z.string().max(512 * 1024) }).strict()])
-      .optional(),
-    renderable: z.boolean(),
-    version: z.object({ label: z.string().min(1).max(100), previousRef: ref.optional() }).strict().optional(),
-    path: z.string().max(2000).optional(),
-    actions: z.array(actionSchema).max(20).optional(),
-  })
-  .strict();
-
-const streamPanelSchema = z
-  .object({
-    ...panelBase,
-    kind: z.literal("stream"),
-    encoding: z.enum(["text", "ansi", "jsonl"]),
-    ref,
-    bytes: z.number().int().nonnegative().optional(),
-    truncated: z.enum(["head", "tail", "rotated"]).optional(),
-    follow: z.boolean().optional(),
-    actions: z.array(actionSchema).max(20).optional(),
-  })
-  .strict();
-
-const collectionItemSchema = z
-  .object({
-    id: panelId,
-    primary: z.string().min(1).max(1000),
-    secondary: panelText.optional(),
-    meta: z.array(z.object({ label: z.string().max(60), value: z.string().max(400) }).strict()).max(20).optional(),
-    ref: ref.optional(),
-    actions: z.array(actionSchema).max(10).optional(),
-  })
-  .strict();
-
-const collectionPanelSchema = z
-  .object({
-    ...panelBase,
-    kind: z.literal("collection"),
-    layout: z.enum(["list", "table"]).optional(),
-    items: z.array(collectionItemSchema).max(2000),
-    total: z.number().int().nonnegative().optional(),
-    cursor: z.string().max(500).optional(),
-    actions: z.array(actionSchema).max(20).optional(),
-  })
-  .strict();
-
-const decisionFieldSchema = z
-  .object({
-    id: z.string().min(1).max(100),
-    label: z.string().min(1).max(300),
-    type: z.enum(["choice", "text", "longtext", "confirm"]),
-    options: z.array(z.string().max(300)).max(100).optional(),
-    default: z.string().max(4000).optional(),
-    required: z.boolean().optional(),
-  })
-  .strict();
-
-const decisionPanelSchema = z
-  .object({
-    ...panelBase,
-    kind: z.literal("decision"),
-    message: panelText.optional(),
-    blocking: z.enum(["tool", "turn", "session"]),
-    toolCallId: z.string().max(200).optional(),
-    fields: z.array(decisionFieldSchema).min(1).max(50),
-    rejection: z.object({ label: z.string().min(1).max(100), field: z.string().min(1).max(100) }).strict().optional(),
-    timeoutMs: z.number().int().positive().optional(),
-  })
-  .strict();
-
-/** A complete panel as it travels host → client. Strict: unknown keys are refused. */
-export const panelSchema: z.ZodType<Panel> = z
-  .discriminatedUnion("kind", [
-    runPanelSchema,
-    planPanelSchema,
-    documentPanelSchema,
-    streamPanelSchema,
-    collectionPanelSchema,
-    decisionPanelSchema,
-  ])
-  // "No" opens a field, so the field has to exist — a rejection pointing at
-  // nothing would make declining a dead end, which is the one thing it must never be.
-  .superRefine((panel, ctx) => {
-    if (panel.kind === "decision" && panel.rejection && !panel.fields.some((f) => f.id === panel.rejection?.field)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["rejection", "field"],
-        message: "rejection.field must name one of the decision's fields",
-      });
-    }
-  }) as unknown as z.ZodType<Panel>;
 
 /**
- * Presentation never crosses the bus: an extension that sends any of these,
- * at any depth of `data`, is asking for a new kind, not a new look. Named so
- * the refusal can say which field, rather than "unrecognized key".
+ * Params of a ranged output read. At most {@link TASK_OUTPUT_MAX_BYTES} come
+ * back per call, and `path` names the session the task must belong to: the
+ * relay makes a client an arbitrary remote peer, and the task's own session is
+ * the only thing between a task id and a file on disk.
  */
-export const PRESENTATION_KEYS: ReadonlySet<string> = new Set([
-  "html",
-  "innerHTML",
-  "className",
-  "class",
-  "style",
-  "styles",
-  "css",
-  "color",
-  "colour",
-  "background",
-  "width",
-  "height",
-  "icon",
-  "component",
-  "render",
-  "layoutHint",
-  "surface",
-]);
-
-/** First presentation key found anywhere in `value` (dotted path), or undefined. */
-export function findPresentationKey(value: unknown, path = ""): string | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  if (Array.isArray(value)) {
-    for (let i = 0; i < value.length; i++) {
-      const hit = findPresentationKey(value[i], `${path}[${i}]`);
-      if (hit) return hit;
-    }
-    return undefined;
-  }
-  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    const here = path ? `${path}.${key}` : key;
-    if (PRESENTATION_KEYS.has(key)) return here;
-    const hit = findPresentationKey(child, here);
-    if (hit) return hit;
-  }
-  return undefined;
-}
-
-export const panelEventSchema = z
-  .object({
-    v: z.literal(1),
-    id: panelId,
-    kind: panelKindSchema,
-    intent: panelIntentSchema.optional(),
-    title: z.string().min(1).max(300),
-    source: z.string().min(1).max(100).optional(),
-    data: z.record(z.string(), z.unknown()),
-    actions: z.array(actionSchema).max(20).optional(),
-  })
+export const taskOutputParamsSchema = z
+  .object({ path: sessionPath, id: taskId, fromByte: z.number().int().nonnegative() })
   .strict();
-
-export const panelCloseEventSchema = z
-  .object({ v: z.literal(1).optional(), id: panelId, reason: z.string().max(300).optional() })
-  .strict();
-
-export const panelActionEventSchema = z
-  .object({ id: panelId, actionId: z.string().min(1).max(100), value: z.string().max(64 * 1024).optional() })
-  .strict();
-
-export type PanelValidation = { ok: true; panel: Panel } | { ok: false; error: string };
-
-/**
- * Validate a `laser:panel` bus event and flatten it into a `Panel`.
- * Strict at both layers; the error is one sentence naming the field, so the
- * extension author can act on it when it shows up in the logs.
- */
-export function validatePanelEvent(raw: unknown, defaultSource = "extension"): PanelValidation {
-  const event = panelEventSchema.safeParse(raw);
-  if (!event.success) return { ok: false, error: describeIssues(event.error.issues) };
-  const presentation = findPresentationKey(event.data.data, "data");
-  if (presentation) {
-    return { ok: false, error: `presentation is not accepted (${presentation}); declare a kind and data only` };
-  }
-  const e = event.data;
-  const candidate: Record<string, unknown> = {
-    ...e.data,
-    kind: e.kind,
-    id: e.id,
-    title: e.title,
-    source: e.source ?? defaultSource,
-    intent: e.intent ?? DEFAULT_INTENT[e.kind],
-    ...(e.actions ? { actions: e.actions } : {}),
-  };
-  const panel = panelSchema.safeParse(candidate);
-  if (!panel.success) return { ok: false, error: describeIssues(panel.error.issues) };
-  return { ok: true, panel: panel.data };
-}
-
-export function validatePanelClose(raw: unknown): { ok: true; event: PanelCloseEvent } | { ok: false; error: string } {
-  const parsed = panelCloseEventSchema.safeParse(raw);
-  return parsed.success ? { ok: true, event: parsed.data } : { ok: false, error: describeIssues(parsed.error.issues) };
-}
-
-export function validatePanelAction(raw: unknown): { ok: true; event: PanelActionEvent } | { ok: false; error: string } {
-  const parsed = panelActionEventSchema.safeParse(raw);
-  return parsed.success ? { ok: true, event: parsed.data } : { ok: false, error: describeIssues(parsed.error.issues) };
-}
-
-function describeIssues(issues: readonly z.ZodIssue[]): string {
-  const first = issues[0];
-  if (!first) return "invalid panel";
-  const where = first.path.length > 0 ? first.path.map(String).join(".") : "payload";
-  return `${where}: ${first.message}`;
-}
-
-/**
- * Params of a ranged read: `to` is exclusive and at most PANEL_READ_MAX_BYTES
- * past `from`, and both are byte offsets. `path` names the session the read is
- * made from, so a grant that belongs to another session is refused.
- */
-export const panelReadParamsSchema = z
-  .object({ path: sessionPath, ref, from: z.number().int().nonnegative(), to: z.number().int().nonnegative() })
-  .strict()
-  .refine((p) => p.to > p.from, { message: "to must be greater than from" })
-  .refine((p) => p.to - p.from <= PANEL_READ_MAX_BYTES, {
-    message: `read at most ${PANEL_READ_MAX_BYTES} bytes per request`,
-  });
 
 // ---------- M7 push / M8 dictation values ----------
 
@@ -588,6 +301,7 @@ export const agentNameSchema = z.string().regex(AGENT_NAME_PATTERN, {
   message: "lower case, starts with a letter, letters, digits and hyphens only, at most 40 characters",
 });
 export const agentModelChoiceSchema = z.object({ provider: z.string().min(1).max(100), id: z.string().min(1).max(200) }).strict();
+export const builtinAgentNameSchema = z.enum(BUILTIN_AGENT_NAMES);
 export const agentSkillRefSchema = z
   .object({ name: z.string().min(1).max(64), path: z.string().min(1).max(4096), scope: z.enum(["global", "project", "bundled"]) })
   .strict();
@@ -616,6 +330,25 @@ const runId = z.string().min(1).max(100);
 /** Loose on purpose: the host relays what a worker produced; the worker validated it. */
 const agentsSnapshotSchema = z.object({ revision: z.number().int().nonnegative() }).passthrough();
 
+/**
+ * The bookkeeping half of a `session/load` reply.
+ *
+ * `state` is the engine's own snapshot and is not re-validated here; the two
+ * sequence numbers are the part a client reasons about, and getting either of
+ * them wrong duplicates or holes a transcript, so they are checked. Strict, so
+ * a third counter cannot appear without this schema and its round-trip sample
+ * saying what it means.
+ */
+export const sessionLoadResultSchema = z
+  .object({
+    state: z.unknown(),
+    /** Earliest seq the reply covers; a mismatch with `fromSeq` means resync. */
+    replayFrom: z.number().int().nonnegative(),
+    /** The worker's watermark for this session as it answered. */
+    seq: z.number().int().nonnegative(),
+  })
+  .strict();
+
 // ---------- client → host request params, one per method ----------
 
 export const clientParamsSchemas = {
@@ -638,6 +371,15 @@ export const clientParamsSchemas = {
   "pi/session/steer": z.object({ path: sessionPath, content }).strict(),
   "pi/session/follow_up": z.object({ path: sessionPath, content }).strict(),
   "pi/session/clear_queue": z.object({ path: sessionPath }).strict(),
+
+  // The pending tray (pending.ts). Laser's own list, so every operation names
+  // one message by the id the worker minted for it.
+  "session/pending/list": z.object({ path: sessionPath }).strict(),
+  "session/pending/add": z.object({ path: sessionPath, content }).strict(),
+  "session/pending/edit": z.object({ path: sessionPath, id: pendingId, content }).strict(),
+  "session/pending/remove": z.object({ path: sessionPath, id: pendingId }).strict(),
+  "session/pending/steer": z.object({ path: sessionPath, id: pendingId }).strict(),
+  "session/pending/clear": z.object({ path: sessionPath }).strict(),
   "pi/session/fork": z.object({ path: sessionPath, entryId: z.string().min(1) }).strict(),
   "pi/session/navigate": z
     .object({ path: sessionPath, entryId: z.string().min(1), summarize: z.boolean().optional(), label: z.string().optional() })
@@ -735,12 +477,11 @@ export const clientParamsSchemas = {
   "pi/logs/stats": z.object({}).strict(),
   "pi/logs/clear": z.object({ sections: z.array(logSectionSchema).min(1).max(5).optional() }).strict(),
 
-  // --- panels (docs/ux-panels.md) ---
-  "pi/panel/action": z
-    .object({ path: sessionPath, id: panelId, actionId: z.string().min(1).max(100), value: z.string().max(64 * 1024).optional() })
-    .strict(),
-  "pi/panel/read": panelReadParamsSchema,
-  "pi/panel/list": z.object({ path: sessionPath }).strict(),
+  // --- background tasks (docs/ux-fleet.md) ---
+  "tasks/list": z.object({ path: sessionPath.optional() }).strict(),
+  "tasks/output": taskOutputParamsSchema,
+  "tasks/stop": z.object({ path: sessionPath, id: z.string().min(1).max(200) }).strict(),
+  "pi/task/stop": z.object({ path: sessionPath, id: z.string().min(1).max(200) }).strict(),
 
   // --- M11 prefs (host-owned; never Pi's settings file) ---
   "pi/prefs/get": z.object({ namespace: prefsNamespaceSchema.optional() }).strict(),
@@ -788,8 +529,7 @@ export const clientParamsSchemas = {
   "agents/engine-instructions": z.object({ cwd }).strict(),
   "agents/runs/list": z.object({ path: sessionPath.optional() }).strict(),
   "agents/runs/stop": z.object({ runId, reason: z.string().max(2000).optional() }).strict(),
-  "agents/beam/set-model": z.object({ model: agentModelChoiceSchema.nullable() }).strict(),
-  "agents/namer/set-model": z.object({ model: agentModelChoiceSchema.nullable() }).strict(),
+  "agents/builtin/set-model": z.object({ name: builtinAgentNameSchema, model: agentModelChoiceSchema.nullable() }).strict(),
   "agents/namer/qualify": z.object({ cwd }).strict(),
   "agents/sync": z.object({ snapshot: agentsSnapshotSchema }).strict(),
 } satisfies Record<ClientMethod, z.ZodTypeAny>;

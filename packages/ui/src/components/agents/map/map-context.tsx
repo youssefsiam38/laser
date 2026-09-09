@@ -3,9 +3,9 @@
  * The two contexts a map node reads.
  *
  * `MapHost` is what the surface around the map can do — open a chat, end an
- * agent, go fullscreen, hold the map in the dock. The connected view wires it
- * to the app's actions; a test wires it to spies. Nodes, rows and the
- * inspector never import the runtime themselves.
+ * agent, go fullscreen. The connected view wires it to the app's actions; a
+ * test wires it to spies. Nodes, rows and the inspector never import the
+ * runtime themselves.
  *
  * `MapData` is the drawn tree and the composition, so a React Flow node gets
  * everything it needs from `data.path` alone: the node objects handed to the
@@ -25,10 +25,8 @@ export interface MapHost {
   requestEndAgent?: ((runId: string) => void) | undefined;
   openFullscreen(): void;
   closeFullscreen(): void;
-  /** Hold the map in the dock; absent where the dock does not exist. */
-  showInDock?: (() => void) | undefined;
   /** The host drawing this map. */
-  frame: "column" | "fullscreen" | "dock";
+  frame: "column" | "fullscreen";
 }
 
 const HostContext = createContext<MapHost | null>(null);

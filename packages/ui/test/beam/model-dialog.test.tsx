@@ -2,7 +2,7 @@
 /**
  * "Choose Beam's model": opened by the store flag the host's
  * `agents/beam/choose-model` sets, preselected to the suggestion, saved
- * through `agents/beam/set-model`, dismissed with "Later" without a request.
+ * through `agents/builtin/set-model`, dismissed with "Later" without a request.
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -84,9 +84,9 @@ describe("the Beam model choice", () => {
     await choose();
     await act(async () => dialog()!.querySelector<HTMLButtonElement>('[data-slot="beam-model-use"]')!.click());
     await act(async () => settle(20));
-    const set = world.calls.filter((call) => call.method === "agents/beam/set-model");
+    const set = world.calls.filter((call) => call.method === "agents/builtin/set-model");
     expect(set).toHaveLength(1);
-    expect(set[0]!.params).toEqual({ model: SUGGESTED });
+    expect(set[0]!.params).toEqual({ name: "beam", model: SUGGESTED });
     expect(dialog()).toBeNull();
   });
 
@@ -96,14 +96,14 @@ describe("the Beam model choice", () => {
     await act(async () => dialog()!.querySelector<HTMLButtonElement>('[data-slot="beam-model-later"]')!.click());
     await act(async () => settle(10));
     expect(dialog()).toBeNull();
-    expect(world.calls.some((call) => call.method === "agents/beam/set-model")).toBe(false);
+    expect(world.calls.some((call) => call.method === "agents/builtin/set-model")).toBe(false);
     await act(async () => container.querySelector<HTMLButtonElement>('[data-slot="reopen"]')!.click());
     await act(async () => settle(20));
     expect(dialog()).not.toBeNull();
   });
 
   it("says so, in the dialog, when the save fails", async () => {
-    world.overrides["agents/beam/set-model"] = () => {
+    world.overrides["agents/builtin/set-model"] = () => {
       throw new Error("The host is not reachable.");
     };
     await mount();

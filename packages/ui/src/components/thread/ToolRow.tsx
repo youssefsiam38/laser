@@ -20,12 +20,12 @@ import {
 import { TOOL_ICONS } from "@/components/assistant-ui/elements/tool-group.aui";
 import { Button } from "@/components/ui/button";
 import { useIsTouch } from "@/hooks/use-mobile";
-import { DecisionBody, dialogPanel, PanelToolDecision, uiResponseFor, useRegisterToolRow } from "@/panels";
+import { DialogBody, dialogFormOf, ToolRowDialog, uiResponseFor, useRegisterToolRow } from "@/dialogs";
 import { toolDetailsDefaultOpen, toolDisplayResult, useActivityDetailLevel, useLaserStable, useLaserState, type ActivityDetailLevel } from "@/runtime";
 import { activeToolLabel } from "./tool-groups.js";
 import { diffViewForTool } from "./diff.js";
 import { useElapsed } from "./timing.js";
-import { parseBashOutput, pretty, resultDetails, resultText, summarizeTool, toolBody } from "./tool-summary.js";
+import { isNonZeroExit, parseBashOutput, pretty, resultDetails, resultText, summarizeTool, toolBody } from "./tool-summary.js";
 
 /** Shape of `interrupt.payload` the projection builds for select/input/editor dialogs. */
 interface InterruptPayload {
@@ -56,9 +56,8 @@ const ToolSourceCode = lazy(() =>
  * `tool-error` the failure, the `tool-fallback` parts the args, result and
  * approval, and `ToolFallback` itself the whole row for a tool we do not know.
  *
- * A decision that names this call renders inside the row (docs/ux-panels.md:
- * `decision × inline` is "in its tool row"), so the row registers itself
- * while it is on screen.
+ * A question that names this call renders inside the row (docs/ux-fleet.md,
+ * "Questions"), so the row registers itself while it is on screen.
  */
 function ToolRowImpl(props: ToolCallMessagePartProps) {
   const { toolCallId, toolName, args, isError, status, approval, interrupt, timing } = props;
@@ -67,7 +66,11 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
 
   const summary = useMemo(() => summarizeTool(toolName, args), [toolName, args]);
   const kind = summary.kind;
-  const state = toolRowState(status, isError);
+  const text = useMemo(() => resultText(result), [result]);
+  // A shell command that ran and came back non-zero is a result, not a failure
+  // of the app: the row stays ordinary and only the command turns
+  // (`isNonZeroExit`, tool-summary.ts).
+  const state = toolRowState(status, isError, isNonZeroExit(toolName, isError === true, text));
   const running = state === "running";
   const awaiting = state === "awaiting";
   const failed = state === "failed";
@@ -87,7 +90,6 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
   const localElapsed = useElapsed(toolCallId, running || awaiting ? "running" : "done");
   const elapsed = timing ? (timing.completedAt ?? Date.now()) - timing.startedAt : localElapsed;
 
-  const text = useMemo(() => resultText(result), [result]);
   const details = useMemo(() => resultDetails(result), [result]);
   const footer = (
     <>
@@ -95,7 +97,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
       {interrupt && isInterruptPayload(interrupt.payload) ? (
         <InterruptFooter payload={interrupt.payload} resume={props.resume} />
       ) : null}
-      <PanelToolDecision toolCallId={toolCallId} />
+      <ToolRowDialog toolCallId={toolCallId} />
     </>
   );
   const activeLabel = running && namerLabel ? namerLabel : activeToolLabel({ toolName, args });
@@ -128,7 +130,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
       return (
         <>
           <ToolFallback {...props} />
-          <PanelToolDecision toolCallId={toolCallId} />
+          <ToolRowDialog toolCallId={toolCallId} />
         </>
       );
     }
@@ -409,21 +411,20 @@ function RowApproval(props: ToolCallMessagePartProps) {
 // ---------------------------------------------------------------------------
 
 /**
- * A question raised while exactly one tool runs renders inside that tool's row
- * (docs/ux-panels.md: `decision` × `blocking: "tool"`). It is the same
- * `DecisionBody` as the card above the composer and the session-blocking
- * sheet — one renderer, so a question never looks like two different things
- * depending on where it happened to be asked.
+ * A question raised while exactly one tool runs, rendered inside that tool's
+ * row. It is the same `DialogBody` as the card above the composer — one
+ * renderer, so a question never looks like two different things depending on
+ * where it happened to be asked.
  *
- * It answers through assistant-ui's `resume` rather than the panel store,
- * because the payload reached this row through the tool call, not the panel
- * stream — the store deliberately leaves a dialog alone once its tool row has
- * it (`fallbackPanels`).
+ * It answers through assistant-ui's `resume` rather than `pi/ui/response`,
+ * because this payload reached the row through the tool call itself. The
+ * other road — a question that arrives on the `pi/ui/request` stream — is
+ * `ToolRowDialog`, mounted in the same footer.
  */
 function InterruptFooter({ payload, resume }: { payload: InterruptPayload; resume: (payload: unknown) => void }) {
-  const panel = useMemo(
+  const form = useMemo(
     () =>
-      dialogPanel(
+      dialogFormOf(
         {
           id: payload.requestId,
           method: payload.method,
@@ -441,8 +442,8 @@ function InterruptFooter({ payload, resume }: { payload: InterruptPayload; resum
   const touch = useIsTouch();
   return (
     <div data-slot="interrupt-footer" className="mb-2 ms-6 border-s-2 border-attention py-1 ps-3">
-      <DecisionBody
-        panel={panel}
+      <DialogBody
+        form={form}
         touch={touch}
         onAnswer={async (values: Record<string, string | boolean> | undefined) => {
           const response = uiResponseFor(payload.requestId, payload.method, values);

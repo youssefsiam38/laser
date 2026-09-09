@@ -61,6 +61,9 @@ describe("nominateNamerCandidates", () => {
     expect(picked.slice(0, 4)).toEqual(["mistral/ministral", "openai/gpt-5-nano", "google/gemini-flash", "mistral/mistral-small"]);
     expect(picked).not.toContain("anthropic/claude-haiku");
     expect(nominateNamerCandidates(models, new Set())).toEqual([]);
+    // A model the person switched off is not a candidate.
+    const off = models.map((model) => (model.id === "ministral" ? { ...model, enabled: false } : model));
+    expect(nominateNamerCandidates(off, configured)[0]).toMatchObject({ id: "gpt-5-nano" });
   });
 });
 
@@ -98,27 +101,71 @@ describe("NamerService", () => {
     expect(await missing.nameSession("x")).toBeNull();
   });
 
-  it("labels one tool call per session at a time", async () => {
+  it("labels a burst of calls up to the cap, per session, and frees the slots again", async () => {
     const pending: Array<(value: string) => void> = [];
     const runtime = fakeRuntime(() => new Promise<string>((resolve) => pending.push(resolve)));
     const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
     const namer = new NamerService({ models: async () => runtime, model: () => ({ provider: "stub", id: "stub-1" }) });
-    const first = namer.labelTool("/s1", "grep", { pattern: "auth" });
+    // A turn that fires four calls in one tick: three are labelled, the fourth
+    // is dropped rather than queued behind them.
+    const burst = [
+      namer.labelTool("/s1", "t1", "grep", { pattern: "auth" }),
+      namer.labelTool("/s1", "t2", "read", { path: "x" }),
+      namer.labelTool("/s1", "t3", "bash", { command: "ls" }),
+      namer.labelTool("/s1", "t4", "read", { path: "z" }),
+    ];
+    const other = namer.labelTool("/s2", "t5", "read", { path: "y" }); // another session has its own cap
     await settle();
-    expect(await namer.labelTool("/s1", "read", { path: "x" })).toBeNull(); // in flight for /s1
-    const other = namer.labelTool("/s2", "read", { path: "y" }); // another session is not throttled
-    await settle();
-    expect(pending).toHaveLength(2);
+    expect(pending).toHaveLength(4);
+    expect(await burst[3]).toBeNull();
     pending[0]!("searching auth handlers.");
-    pending[1]!("reading y");
-    expect(await first).toBe("Searching auth handlers");
-    expect(await other).toBe("Reading y");
-    expect(runtime.calls).toBe(2);
-    // The slot frees afterwards.
-    const second = namer.labelTool("/s1", "bash", { command: "ls" });
-    await settle();
+    pending[1]!("reading x");
     pending[2]!("listing files");
-    expect(await second).toBe("Listing files");
+    pending[3]!("reading y");
+    expect(await burst[0]).toBe("Searching auth handlers");
+    expect(await burst[1]).toBe("Reading x");
+    expect(await burst[2]).toBe("Listing files");
+    expect(await other).toBe("Reading y");
+    expect(runtime.calls).toBe(4);
+    // The slots free afterwards, and a fresh call id is labelled again.
+    const later = namer.labelTool("/s1", "t6", "bash", { command: "pwd" });
+    await settle();
+    pending[4]!("printing the directory");
+    expect(await later).toBe("Printing the directory");
+  });
+
+  it("labels one call id once, even after the slot frees", async () => {
+    const runtime = fakeRuntime(() => "reading x");
+    const namer = new NamerService({ models: async () => runtime, model: () => ({ provider: "stub", id: "stub-1" }) });
+    expect(await namer.labelTool("/s1", "t1", "read", { path: "x" })).toBe("Reading x");
+    expect(await namer.labelTool("/s1", "t1", "read", { path: "x" })).toBeNull();
+    expect(runtime.calls).toBe(1);
+    // The same id in another session is another call, and `forget` clears the memory.
+    expect(await namer.labelTool("/s2", "t1", "read", { path: "x" })).toBe("Reading x");
+    namer.forget("/s1");
+    expect(await namer.labelTool("/s1", "t1", "read", { path: "x" })).toBe("Reading x");
+    expect(runtime.calls).toBe(3);
+  });
+
+  it("pays for no label the call will not show", async () => {
+    let running = false;
+    const runtime = fakeRuntime(() => "reading x");
+    const namer = new NamerService({ models: async () => runtime, model: () => ({ provider: "stub", id: "stub-1" }) });
+    // Already finished when the label was asked for: no completion at all.
+    expect(await namer.labelTool("/s1", "t1", "read", { path: "x" }, { stillRunning: () => running })).toBeNull();
+    expect(runtime.calls).toBe(0);
+    // Finished while the completion was in flight: the answer is dropped.
+    running = true;
+    const ended = fakeRuntime(() => {
+      running = false;
+      return "reading x";
+    });
+    const late = new NamerService({ models: async () => ended, model: () => ({ provider: "stub", id: "stub-1" }) });
+    expect(await late.labelTool("/s1", "t2", "read", { path: "x" }, { stillRunning: () => running })).toBeNull();
+    expect(ended.calls).toBe(1);
+    // Still running: the label is kept.
+    running = true;
+    expect(await namer.labelTool("/s1", "t3", "read", { path: "x" }, { stillRunning: () => running })).toBe("Reading x");
   });
 
   it("qualifies the fastest valid cheap model and reports every candidate", async () => {

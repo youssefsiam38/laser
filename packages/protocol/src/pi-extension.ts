@@ -5,10 +5,10 @@
  * (AGENTS.md invariant 2: protocol first, then implementation).
  */
 
-import type { Panel } from "./panels.js";
 import type { SessionGoal } from "./features.js";
+import type { BackgroundTaskUpdate } from "./tasks.js";
 
-export type PiExtensionModuleName = "provider-log" | "account-usage" | "subagents" | "background-work" | "transcribe" | "web-access" | "panels" | "goal";
+export type PiExtensionModuleName = "provider-log" | "account-usage" | "subagents" | "background-work" | "file-freshness" | "transcribe" | "web-access" | "goal";
 
 /** One server-owned allowance window for an account-authenticated provider. */
 export interface AccountUsageWindow {
@@ -101,12 +101,24 @@ export type PiExtensionMessage =
   /** Namer's early label for a tool call still running (`lasercode/namer/label`). */
   | { type: "lasercode/namer/label"; toolCallId: string; label: string }
   | { type: "lasercode/goal/state"; goal: SessionGoal | null }
-  /** The `panels` module: a validated `laser:panel` event, or a close (docs/ux-panels.md). */
-  | { type: "lasercode/panel/upsert"; panel: Panel }
-  | { type: "lasercode/panel/close"; id: string; reason?: string }
+  /**
+   * The `background-work` module: one of this session's long commands
+   * appeared or changed (docs/ux-fleet.md). The worker stamps the session
+   * path on the way past; the host keeps `logPath` and never forwards it.
+   */
+  | { type: "lasercode/task/update"; task: BackgroundTaskUpdate }
   | {
       type: "lasercode/module/log";
       module: PiExtensionModuleName;
       level: "info" | "warn" | "error";
       message: string;
     };
+
+/**
+ * Worker → companion extension. Fire-and-forget: the handler answers whether
+ * it recognised the command, never what it produced.
+ */
+export type PiExtensionCommand =
+  /** A person pressed Stop on a background task in the fleet. */
+  | { type: "lasercode/task/stop"; id: string }
+  | { type: "lasercode/account-usage/refresh" };

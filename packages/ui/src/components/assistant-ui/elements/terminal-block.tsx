@@ -26,11 +26,17 @@ export interface TerminalBlockProps extends Omit<ComponentProps<"div">, "childre
   output: string;
   exitCode?: number | undefined;
   running: boolean;
+  /** The tool itself broke — it could not run, or it was killed. Not a non-zero exit. */
   isError: boolean;
 }
 
 export function TerminalBlock({ command, output, exitCode, running, isError, className, ...props }: TerminalBlockProps) {
-  const failed = !running && (isError || (exitCode !== undefined && exitCode !== 0));
+  // Two different facts, and only one of them is an alarm. A command that ran
+  // and came back non-zero says so in its own line, on the terminal's own red;
+  // a command that could not run at all keeps the loud treatment.
+  const nonZero = !running && exitCode !== undefined && exitCode !== 0;
+  const broken = !running && isError && !nonZero;
+  const failed = nonZero || broken;
   const [showAll, setShowAll] = useState(false);
   const reveal = useSearchReveal();
   const elided = useMemo(() => elideText(output), [output]);
@@ -46,8 +52,13 @@ export function TerminalBlock({ command, output, exitCode, running, isError, cla
         <span aria-hidden="true" className="select-none text-terminal-ink-2">
           $
         </span>
-        <span data-search-content className="min-w-0 flex-1 wrap-break-word whitespace-pre-wrap text-terminal-ink">{command}</span>
-        <span className={cn("shrink-0 tabular-nums", running ? "text-live" : failed ? "text-danger" : "text-terminal-ink-2")}>
+        <span
+          data-search-content
+          className={cn("min-w-0 flex-1 wrap-break-word whitespace-pre-wrap", nonZero ? "text-terminal-danger" : "text-terminal-ink")}
+        >
+          {command}
+        </span>
+        <span className={cn("shrink-0 tabular-nums", running ? "text-live" : broken ? "text-danger" : "text-terminal-ink-2")}>
           {running ? (
             <StatusDot status="working" size="sm" label="Running" className="mt-1" />
           ) : exitCode !== undefined ? (

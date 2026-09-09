@@ -63,7 +63,12 @@ export function ToolCall({
   className,
 }: ToolCallProps) {
   const expandable = children !== undefined && children !== null && children !== false;
-  const tone = state === "failed" ? "danger" : state === "awaiting" ? "attention" : undefined;
+  // No tone for a failure of any kind. A rail down the side of the row reads
+  // as "the app is broken" for what is usually an agent probing — a file it
+  // looked for and did not find, a command that came back non-zero. What went
+  // wrong is written, in red, in the row's own body. `awaiting` keeps its
+  // rail: that one is a question waiting on a person, not a result.
+  const tone = state === "awaiting" ? "attention" : undefined;
   return (
     <ToolFallbackRoot
       data-slot="tool-call"

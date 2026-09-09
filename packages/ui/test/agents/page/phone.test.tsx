@@ -19,8 +19,7 @@ const mocks = vi.hoisted(() => {
     engineInstructions: vi.fn(async () => "engine"),
     runs: vi.fn(),
     stopRun: vi.fn(),
-    setBeamModel: vi.fn(),
-    setNamerModel: vi.fn(),
+    setBuiltinModel: vi.fn(),
     qualifyNamer: vi.fn(),
     dismissBeamChoice: vi.fn(),
   };

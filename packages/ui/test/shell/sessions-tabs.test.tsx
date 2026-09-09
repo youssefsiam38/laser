@@ -14,6 +14,7 @@ import type { SessionSummary } from "@lasercode/protocol";
 import { SessionsPanel } from "../../src/components/shell/SessionsPanel.js";
 import { ShellContext, type ShellContextValue } from "../../src/components/shell/shell-context.js";
 import { SESSIONS_TAB_STORAGE_KEY, sessionsList } from "../../src/components/shell/session-groups.js";
+import { sessionFolds } from "../../src/components/assistant-ui/elements/session-folds.js";
 import { clearEndAgentRequest, useEndAgentRequest } from "../../src/components/agents/end-agent.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { LaserStoreProvider, createStateStore, type StateStore } from "../../src/runtime/LaserProvider.js";
@@ -97,6 +98,7 @@ beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   localStorage.clear();
   sessionsList.reset();
+  sessionFolds.reset();
   clearEndAgentRequest();
   store = createStateStore(seed());
   container = document.createElement("div");
@@ -205,14 +207,24 @@ describe("Beam and children in the Code tab", () => {
     expect(child.textContent).toContain("Counting files");
     expect(child.querySelector('[data-slot="run-dot"]')?.getAttribute("data-run-status")).toBe("running");
     expect(child.querySelector('[data-slot="run-state"]')?.textContent).toBe("Working");
-    // One step per depth: the grandchild sits inside the child's own rail.
-    const innerRail = rail.querySelector('[data-slot="session-children"]')!;
+    // One step per depth: the grandchild sits inside the child's own rail —
+    // and, having finished, behind the child's second fold (M13-T24).
+    const childBranch = child.closest('[data-slot="session-branch"]')!;
+    // Nothing live under the child, so its own fold starts closed; opening it
+    // lands on the finished fold's summary rather than on an empty list.
+    expect(childBranch.querySelector('[data-slot="session-children"]')).toBeNull();
+    await act(async () => childBranch.querySelector<HTMLButtonElement>('[data-slot="session-fold"]')!.click());
+    const finished = childBranch.querySelector<HTMLButtonElement>('[data-slot="finished-fold"]')!;
+    expect(finished.textContent).toContain("1 finished");
+    expect(childBranch.querySelector('[data-slot="finished-children"]')).toBeNull();
+    await act(async () => finished.click());
+    const innerRail = childBranch.querySelector('[data-slot="session-children"]')!;
     const grandchild = innerRail.querySelector('[data-slot="aui_thread-list-item"][data-child]')!;
     expect(grandchild.querySelector('[data-slot="subagent-name"]')?.textContent).toBe("digger");
     expect(grandchild.querySelector('[data-slot="run-state"]')).toBeNull();
     // The parent counts what is under it, running first.
     expect(parent.querySelector('[data-slot="session-children-chip"]')?.textContent).toBe("1 running");
-    expect(child.querySelector('[data-slot="session-children-chip"]')?.textContent).toBe("1 agent");
+    expect(child.querySelector('[data-slot="session-children-chip"]')?.textContent).toBe("1 finished");
     // A child whose parent is gone sits under Detached, in its project's group.
     const detached = container.querySelector('[data-cwd="/one"] [data-slot="detached-sessions"]')!;
     expect(detached.textContent).toContain("Detached");
@@ -232,9 +244,13 @@ describe("Beam and children in the Code tab", () => {
     expect(endRequest?.runId).toBe("r1");
     await act(async () => document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
 
-    // The run ends: the item goes, the chip and the state word settle.
+    // The run ends: the item goes, the chip and the state word settle, and the
+    // child moves into the parent's finished fold — one more action to open.
     await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[0]!, status: "completed", updatedAt: "2026-09-08T03:30:00Z", endedAt: "2026-09-08T03:30:00Z" } }));
-    expect(rowTitled("Ship the release")?.querySelector('[data-slot="session-children-chip"]')?.textContent).toBe("1 agent");
+    const branch = rowTitled("Ship the release")!.closest('[data-slot="session-branch"]')!;
+    expect(branch.querySelector('[data-slot="session-children-chip"]')?.textContent).toBe("2 finished");
+    expect(rowTitled("Counting files")).toBeUndefined();
+    await act(async () => branch.querySelector<HTMLButtonElement>('[data-slot="finished-fold"]')!.click());
     expect(rowTitled("Counting files")?.querySelector('[data-slot="run-state"]')).toBeNull();
     menu = await openMenu("Actions for explorer");
     expect(menu?.querySelector('[data-slot="end-agent-item"]')).toBeNull();

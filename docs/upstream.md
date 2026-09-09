@@ -465,3 +465,56 @@ DuckDuckGo's explicit no-results markup returns an empty result list, while a
 challenge form raises an identifiable verification error. Unexpected HTML still
 fails; no challenge bypass or alternate provider is introduced. Offline tests use
 all three response shapes. No upstream issue/PR filed in this uncommitted repair.
+
+## pi-coding-agent 0.85: per-item operations on the message queues (M13-T28)
+
+**Not filed, and not blocking.** `AgentSession` exposes `steer(text, images?)`,
+`followUp(text, images?)` and `clearQueue()`, which empties both queues and hands
+their text back. There is no remove, no edit, no reorder, and
+`_steeringMessages` / `_followUpMessages` are private (`getSteeringMessages()`
+and `getFollowUpMessages()` are read-only views). So a UI can offer exactly one
+action for the whole queue, which is why laser's composer used to make a person
+press **Stop** to force one message through — and why the transcript then said
+"You stopped it" about something nobody stopped.
+
+M13-T28 ships route 1 of the two the task set out: the waiting lane is laser's
+own ordered list in the worker (`@lasercode/protocol` `pending.ts`,
+`packages/worker/src/pending.ts`), with per-item add/edit/remove/steer and a
+delivery on `agent_settled`. A steered message leaves that list for the engine's
+steering queue in the same call, so a message is never in both places and the
+two can never disagree.
+
+The API worth proposing upstream, if it is ever wanted there:
+
+```ts
+/** Remove one queued message by its position in the lane; returns what was removed. */
+removeQueued(lane: "steering" | "followUp", index: number): string | undefined;
+/** Replace one queued message in place. */
+replaceQueued(lane: "steering" | "followUp", index: number, text: string): boolean;
+```
+
+Both are small and self-contained, and both are useful to a terminal Pi too
+(`/queue` could then drop one line instead of all of them). They are *not*
+required by laser: the tray above makes the engine's queues a delivery
+mechanism rather than a place a person edits, which is the better boundary
+anyway — the engine owns the turn, laser owns the waiting.
+
+## assistant-ui · React 19 resource update during render
+
+`@assistant-ui/core` 0.3.17 (under `@assistant-ui/react` 0.15.18) raises an uncaught
+React #520 — *"Cannot update a resource while rendering a different resource"* — on the
+first prompt of a fresh session.
+
+`RemoteThreadListHookInstanceManager._publishThreadRuntime` runs as the `publish` callback
+of a `useResources` resource, so it executes during render. It calls `_trackRunning`, which
+calls `_setRunning` synchronously, which notifies `runningSubscribers` — and one of those
+subscribers is a React store update. React 19 refuses a store update raised during another
+resource's render.
+
+Reproduced on a plain chat with no agent work, a clean state directory and a clean browser
+origin. The turn completes and the app keeps working; the error reaches the console.
+
+A fix belongs upstream — notifying `runningSubscribers` outside the render phase (a
+microtask or a layout effect) rather than inline in `_setRunning`. Not filed yet; tracked as
+M13-T37. Do not work around it by reaching into the dependency's internals.
+

@@ -155,6 +155,44 @@ describe("WorkerServer", () => {
     expect(h.drivers).toHaveLength(1); // attached, not reopened
   });
 
+  it("reports its current seq so a client that read the file can stamp it", async () => {
+    // The defect this exists for: a session that ran while nothing was
+    // attached (a child agent) is read through `pi/session/entries`, so the
+    // client has the whole transcript and has seen no live update. If it then
+    // re-opens from seq 0 the worker dutifully replays every buffered update
+    // on top of what is already on screen, and the transcript doubles.
+    const h = harness();
+    await h.call(1, "session/new", { cwd: "/tmp/fake" });
+    const d = h.drivers[0]!;
+    for (let i = 0; i < 3; i++) d.emit({ type: "update", update: { kind: "turn_start" } });
+
+    // A fresh open (no `fromSeq`): nothing is replayed, and the reply says
+    // which watermark the snapshot the client is about to read corresponds to.
+    h.out.length = 0;
+    const opened = await h.call(2, "session/load", { path: "/tmp/fake/s1.jsonl" });
+    expect(opened.result).toMatchObject({ replayFrom: 0, seq: 3 });
+    expect(h.notifications("session/update")).toHaveLength(0);
+
+    // Asking from 0 really does replay everything — this is the doubling, and
+    // it is why `seq` has to be stamped rather than inferred from silence.
+    h.out.length = 0;
+    const naive = await h.call(3, "session/load", { path: "/tmp/fake/s1.jsonl", fromSeq: 0 });
+    expect(naive.result).toMatchObject({ replayFrom: 0, seq: 3 });
+    expect(h.notifications("session/update").map((n) => (n.params as { seq: number }).seq)).toEqual([1, 2, 3]);
+
+    // Asking from the stamped watermark replays nothing.
+    h.out.length = 0;
+    const truthful = await h.call(4, "session/load", { path: "/tmp/fake/s1.jsonl", fromSeq: 3 });
+    expect(truthful.result).toMatchObject({ replayFrom: 3, seq: 3 });
+    expect(h.notifications("session/update")).toHaveLength(0);
+  });
+
+  it("reports seq 0 for a session it has only just opened", async () => {
+    const h = harness();
+    const loaded = await h.call(1, "session/load", { path: "/tmp/fake/s2.jsonl" });
+    expect(loaded.result).toMatchObject({ replayFrom: 0, seq: 0 });
+  });
+
   it("opens one driver for concurrent loads of the same session file", async () => {
     // Two writers on one Pi session file is AGENTS.md invariant 8. A desktop
     // and a phone, or the pool's crash recovery racing a client's reconnect,

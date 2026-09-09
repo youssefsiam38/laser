@@ -1,16 +1,21 @@
 "use client";
 /**
- * Regenerate with (`elements-regenerate-menu`): fork before the prompt that
- * produced this reply and run it again with a different model or thinking
- * level. The reply on screen stays in the original session; the re-run lands
- * in the fork, which becomes the open session.
+ * Try again with (`elements-regenerate-menu`): run the prompt that produced
+ * this reply again, in this session, with a different model or thinking
+ * level. The reply on screen is not lost — it stays in the file as the other
+ * version of this answer, reachable from the version picker under the prompt.
+ *
+ * It is the second half of a pair: "Try again" in `message-actions` re-runs
+ * with what the session already uses, and this chevron beside it is the same
+ * action with something changed. "In a new session" lives in the overflow.
  *
  * Divergences from the registry copy: a real `DropdownMenu` (keyboard,
  * collision-aware) rather than an inline list toggled by a button; two groups
- * (models, thinking) instead of one flat list; the menu names the fork.
+ * (models, thinking) instead of one flat list; the trigger is a chevron
+ * because the plain re-run owns the refresh icon next to it.
  */
 import type { ModelRef, ThinkingLevel } from "@lasercode/protocol";
-import { RefreshCw } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { PopoverTrigger } from "@/components/ui/popover";
@@ -77,12 +82,12 @@ export function RegenerateMenu({ loadModels, thinkingLevels, currentModel, curre
           type="button"
           variant="ghost"
           size="icon-xs"
-          aria-label="Fork and re-run with another model or thinking level"
-          title="Fork and re-run with…"
+          aria-label="Try again with another model or thinking level"
+          title="Try again with…"
           className={cn("text-ink-3", className)}
           disabled={disabled}
         >
-          <RefreshCw />
+          <ChevronDown />
         </Button>
       </PopoverTrigger>
       <ProviderModelMenu
@@ -99,7 +104,7 @@ export function RegenerateMenu({ loadModels, thinkingLevels, currentModel, curre
         }}
         beforeFilters={(
           <div className="grid gap-2 border-b border-line p-2">
-            <p className="text-xs leading-4 text-ink-2">Re-runs this prompt in a fork. This reply stays here.</p>
+            <p className="text-xs leading-4 text-ink-2">Answers here again. This reply is kept as the other version.</p>
             <label className="grid grid-cols-[4.25rem_minmax(0,1fr)] items-center gap-2">
               <span className="eyebrow text-ink-3">Thinking</span>
               <select

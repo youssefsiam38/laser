@@ -17,10 +17,17 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { transformWithEsbuild, type Plugin } from "vite";
 import { DECLARATIVE_WEB_PUSH_VERSION, FORMER_NAMES, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, STORAGE_PREFIX, dottedStorageKey, storageKey, SW_SKIP_WAITING, SW_PUSH_CHANGED } from "@lasercode/protocol";
+import { STARTUP_SCREEN_ROOT_CLASS, renderStartupNodes, startupScene } from "@lasercode/protocol/startup-screen";
 
 import { compileVars } from "../theme/compile.js";
 import { DEFAULT_LIGHT_PRESET_ID, DEFAULT_PRESET, getPreset } from "../theme/presets.js";
 import type { Theme, ThemePreset } from "../theme/types.js";
+
+/** A preset is a theme plus the one line the gallery shows beside it. */
+const asTheme = (preset: ThemePreset): Theme => {
+  const { tagline: _tagline, ...theme } = preset;
+  return theme;
+};
 
 /** Shell files copied from `public/`; they never appear in the Rollup bundle. */
 const PUBLIC_SHELL = [
@@ -46,10 +53,6 @@ const PUBLIC_SHELL = [
  * other surface uses.
  */
 function offlineStyle(): string {
-  const asTheme = (preset: ThemePreset): Theme => {
-    const { tagline: _tagline, ...theme } = preset;
-    return theme;
-  };
   const dark = compileVars(asTheme(DEFAULT_PRESET));
   const light = compileVars(asTheme(getPreset(DEFAULT_LIGHT_PRESET_ID) ?? DEFAULT_PRESET));
   const pick = (vars: Record<string, string>, name: string): string => vars[name] ?? "";
@@ -98,6 +101,33 @@ export interface LaserPwaOptions {
  * placeholders, filled from product.json here, and a rename reaches the title,
  * the iOS home-screen name and the storage key with no second edit.
  */
+/**
+ * The opening screen, in the shell HTML (M13-T32).
+ *
+ * The bundle takes a moment to parse and run, and until it does there is
+ * nothing in `#root`. That moment used to be bare ground between the shell's
+ * screen and the app's — the "two screens" a person actually sees. So the same
+ * scene the React screen renders, and that the desktop shell draws before this
+ * page exists, is also the document's own first frame; React replaces it with
+ * the identical thing and, on that first mount, without an arrival animation.
+ *
+ * The stylesheet is a render-blocking `<link>` in a built app, so this is
+ * styled from the first paint. In a dev run the styles arrive with the module
+ * graph, so it is briefly unstyled — a development-only cost.
+ */
+function startupScreenMarkup(): string {
+  const scene = renderStartupNodes(
+    startupScene({
+      idPrefix: "boot",
+      title: PRODUCT_DISPLAY_NAME,
+      // The same words the app's own screen opens with, so the first thing
+      // React does is not change the sentence.
+      label: "Connecting to your workspace",
+    }),
+  );
+  return `<div class="${STARTUP_SCREEN_ROOT_CLASS}" data-continuing role="status" aria-live="polite" aria-busy="true" aria-label="Connecting to your workspace">${scene}</div>`;
+}
+
 export function productIdentityHtml(): Plugin {
   const values: Record<string, string> = {
     PRODUCT_DISPLAY_NAME,
@@ -110,6 +140,12 @@ export function productIdentityHtml(): Plugin {
       dottedStorageKey("theme"),
       ...FORMER_NAMES.map((former) => `${former.storagePrefix}.theme`),
     ]),
+    // The ground the very first frame is painted with, before the bundle's
+    // stylesheet exists and before the boot script has anything stored to
+    // replay. Compiled from the default preset rather than written down, so a
+    // change to the palette cannot leave a white flash behind (M13-T32).
+    THEME_DEFAULT_BG: compileVars(asTheme(DEFAULT_PRESET))["--bg"] ?? "",
+    STARTUP_SCREEN: startupScreenMarkup(),
   };
   return {
     name: `${PRODUCT_NAME}:identity`,

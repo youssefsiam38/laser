@@ -1,10 +1,10 @@
 "use client";
 /**
- * The page's three questions: delete an agent, leave unsaved changes, pick
- * Beam's model. Each names what it is about and what it affects; none is a
+ * The page's three questions: delete an agent, leave unsaved changes, pick a
+ * built-in's model. Each names what it is about and what it affects; none is a
  * bare "Are you sure?".
  */
-import type { AgentModelChoice } from "@lasercode/protocol";
+import type { AgentModelChoice, BuiltinAgentName } from "@lasercode/protocol";
 import { RotateCw, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -73,15 +73,23 @@ export function DiscardChangesDialog({ open, onKeep, onDiscard }: { open: boolea
   );
 }
 
-/** Beam's model, chosen from the same provider-first picker every agent uses. */
-export function BeamModelDialog({
+/**
+ * One built-in's model, chosen from the same provider-first picker every agent
+ * uses. Beam, Chat and Namer share this dialog: the choice is the same choice,
+ * and only the words around it change. `onClear` returns the agent to the
+ * default model, so a person is never stuck with what they picked.
+ */
+export function BuiltinModelDialog({
+  name,
   open,
   cwd,
   current,
   busy = false,
   onOpenChange,
   onPick,
+  onClear,
 }: {
+  name: BuiltinAgentName;
   open: boolean;
   /** The directory the catalog is routed through. */
   cwd: string | undefined;
@@ -89,28 +97,29 @@ export function BeamModelDialog({
   busy?: boolean | undefined;
   onOpenChange(open: boolean): void;
   onPick(model: AgentModelChoice): void;
+  /** Back to the default model (for Namer, to the next qualification). */
+  onClear?: (() => void) | undefined;
 }) {
   const catalog = useModelCatalog(cwd, open);
   const [choice, setChoice] = useState<AgentModelChoice | null>(current);
   useEffect(() => {
     if (open) setChoice(current);
   }, [open, current]);
-  const picked = choice ? modelChoiceId(choice) : undefined;
+  const picked = choice ? modelChoiceId(choice) : NO_MODEL_CHOSEN;
+  const copy = BUILTIN_MODEL_COPY[name];
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <DialogContent data-slot="beam-model-dialog">
+      <DialogContent data-slot="builtin-model-dialog" data-agent={name}>
         <DialogHeader>
-          <DialogTitle>Beam's model</DialogTitle>
-          <DialogDescription>
-            Beam answers questions about your sessions, agents, settings and logs. A quick, capable model keeps it feeling instant; the most powerful one is rarely worth the wait here.
-          </DialogDescription>
+          <DialogTitle>{copy.title}</DialogTitle>
+          <DialogDescription>{copy.description}</DialogDescription>
         </DialogHeader>
         {catalog.error !== undefined ? (
           <ErrorState title="Couldn’t load the model list" detail={catalog.error} onRetry={catalog.reload} />
         ) : (
           <ProviderModelPicker
             models={catalog.data ?? []}
-            {...(picked !== undefined ? { value: picked } : {})}
+            value={picked}
             loading={catalog.loading}
             placeholder="Choose a model"
             onValueChange={(next) => {
@@ -120,6 +129,11 @@ export function BeamModelDialog({
           />
         )}
         <DialogFooter>
+          {onClear && current ? (
+            <Button type="button" variant="ghost" className="w-full sm:mr-auto sm:w-auto" disabled={busy} onClick={onClear}>
+              {copy.clear}
+            </Button>
+          ) : null}
           <Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
@@ -132,3 +146,36 @@ export function BeamModelDialog({
     </Dialog>
   );
 }
+
+/**
+ * "Nothing chosen", as a value the picker can hold.
+ *
+ * The picker is uncontrolled while its `value` is empty, and an uncontrolled
+ * one selects the first model in the list — so a dialog opened with no model
+ * would show one it is not going to save, beside a disabled button. Every real
+ * option is `provider/id`, so a sentinel without a slash matches nothing and
+ * the placeholder stands.
+ */
+const NO_MODEL_CHOSEN = "no-model-chosen";
+
+/** What each built-in's model dialog says. One voice, three subjects. */
+const BUILTIN_MODEL_COPY: Readonly<Record<BuiltinAgentName, { title: string; description: string; clear: string }>> = {
+  beam: {
+    title: "Beam’s model",
+    description:
+      "Beam answers questions about your sessions, agents, settings and logs. A quick, capable model keeps it feeling instant; the most powerful one is rarely worth the wait here.",
+    clear: "Follow the default model",
+  },
+  chat: {
+    title: "Chat’s model",
+    description:
+      "Chat is for conversations that belong to no project: questions, drafts, explanations. Pick the model that answers them, or leave it following the model new sessions use.",
+    clear: "Follow the default model",
+  },
+  namer: {
+    title: "Namer’s model",
+    description:
+      "Namer titles sessions and labels running work. It runs often on a tiny task, so the fastest inexpensive model is usually right. Qualification suggests one; this choice overrides it until you clear it.",
+    clear: "Back to qualification",
+  },
+};

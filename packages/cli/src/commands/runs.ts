@@ -1,19 +1,18 @@
 /**
  * `laser runs` — the fleet, in a terminal.
  *
- * The nouns are the app's nouns on purpose (D-19 §5): a **run** is a unit of
- * agent work with a lifecycle, a **plan** is the intended shape of several of
- * them, a **ledger** is the durable record. Different vocabulary in the
- * terminal and in the window would make laser feel like two products.
+ * The nouns are the app's nouns on purpose: a **run** is one execution of an
+ * agent inside its own session, and a **task** is a long command the agent left
+ * running. Different vocabulary in the terminal and in the window would make
+ * laser feel like two products, so this is the same two lists the fleet column
+ * draws, from the same two typed sources — `agents/runs/list` and `tasks/list`.
  *
- * The data is the host's panel data — the same `pi/panel/list` the app reads,
- * so a run shown here is the same object, with the same id, as the island in
- * the dock. This file therefore has no parser of its own and no idea where
- * pi-subagents keeps its files; if the host cannot see a run, neither can the
- * terminal, and that is the correct answer rather than a second opinion.
+ * No parser of its own, and no idea where anything keeps its files: if the host
+ * cannot see a run, neither can the terminal, and that is the correct answer
+ * rather than a second opinion.
  */
-import { PRODUCT_NAME } from "@lasercode/protocol";
-import type { Panel, PlanPanel, RunPanel, SessionSummary } from "@lasercode/protocol";
+import { PRODUCT_NAME, isTerminalRunStatus } from "@lasercode/protocol";
+import type { AgentRun, AgentRunStatus, BackgroundTask, SessionSummary } from "@lasercode/protocol";
 import { bool, str } from "../args.js";
 import type { Command, CommandContext } from "../command.js";
 import { CliError, ExitCode } from "../errors.js";
@@ -23,78 +22,119 @@ import { HostRpcError, describeRpcError, type HostRpc } from "../rpc.js";
 import { listSessions, resolveProject } from "../session-ref.js";
 import { connect } from "./host.js";
 
-/** One run, joined to the session it belongs to. */
-export interface RunRow {
-  panel: RunPanel;
+/** One line of the fleet: an agent run or a background task, joined to its session. */
+export interface FleetRow {
+  kind: "agent" | "task";
+  /** `runId` or `taskId`. */
+  id: string;
+  title: string;
+  /** The subagent's name, or the task's id — what you would address it by. */
+  handle: string | null;
+  state: FleetState;
+  live: boolean;
+  model: string | null;
+  activity: string | null;
+  terminalReason: string | null;
+  startedAt: string | null;
+  endedAt: string | null;
   session: SessionSummary;
+  run?: AgentRun;
+  task?: BackgroundTask;
 }
+
+export type FleetState = AgentRunStatus | BackgroundTask["status"];
 
 export interface FleetSnapshot {
-  runs: RunRow[];
-  plans: Array<{ panel: PlanPanel; session: SessionSummary }>;
-  /** Every panel, keyed by session path, for callers that want more (plan, missions). */
-  bySession: Map<string, { session: SessionSummary; panels: Panel[] }>;
-  /** Sessions whose panels could not be read, so a partial answer says so. */
-  unreadable: number;
+  rows: FleetRow[];
+  /** True when the host is too old to answer one of the two lists. */
+  partial: boolean;
 }
-
-/** Sessions asked at once. The host answers from memory; this only bounds the socket. */
-const CONCURRENCY = 8;
 
 /**
- * Every panel the host holds, for the sessions we care about. A host that
- * predates the panel hub answers `Unsupported`; that is reported once, as a
- * sentence, rather than as one error per session.
+ * Every run and task the host holds, for the sessions in scope. Both lists are
+ * one request each — the host answers from memory — so this does not fan out
+ * per session the way reading files would.
  */
 export async function readFleet(rpc: HostRpc, sessions: readonly SessionSummary[]): Promise<FleetSnapshot> {
-  const bySession = new Map<string, { session: SessionSummary; panels: Panel[] }>();
-  let unreadable = 0;
-  let unsupported: HostRpcError | undefined;
+  const inScope = new Map(sessions.map((session) => [session.path, session]));
+  let partial = false;
 
-  const queue = [...sessions];
-  const workers = Array.from({ length: Math.min(CONCURRENCY, queue.length) }, async () => {
-    for (let session = queue.shift(); session !== undefined; session = queue.shift()) {
-      try {
-        const { panels } = await rpc.request("pi/panel/list", { path: session.path });
-        // Every string below this line is agent-authored: a run's title, a
-        // plan step's label, a mission's summary. Escapes are stripped once,
-        // here, rather than at each of the two dozen places they are printed
-        // (`render.ts`: "a tool result is untrusted bytes").
-        if (panels.length > 0) bySession.set(session.path, { session, panels: sanitizeDeep(panels) });
-      } catch (error) {
-        if (error instanceof HostRpcError && error.isUnsupported) unsupported = error;
-        else unreadable += 1;
+  const ask = async <T>(work: () => Promise<T>, fallback: T): Promise<T> => {
+    try {
+      return await work();
+    } catch (error) {
+      if (error instanceof HostRpcError && error.isUnsupported) {
+        partial = true;
+        return fallback;
       }
+      throw error;
     }
-  });
-  await Promise.all(workers);
+  };
 
-  if (unsupported) {
-    throw new CliError("this host does not keep panels, so it cannot list runs", {
-      fix: `Update the host (\`${PRODUCT_NAME} restart\` after an upgrade) and try again.`,
+  const { runs } = await ask(() => rpc.request("agents/runs/list", {}), { runs: [] as AgentRun[] });
+  const { tasks } = await ask(() => rpc.request("tasks/list", {}), { tasks: [] as BackgroundTask[] });
+
+  // Every string below this line is agent-authored: a subagent's name, a task's
+  // command, a run's activity label. Escapes are stripped once, here, rather
+  // than at each place they are printed (`render.ts`: untrusted bytes).
+  const rows: FleetRow[] = [];
+  for (const run of sanitizeDeep(runs)) {
+    const session = inScope.get(run.sessionPath);
+    if (!session) continue;
+    rows.push({
+      kind: "agent",
+      id: run.runId,
+      title: run.subagentName || run.agentName,
+      handle: run.subagentName || null,
+      state: run.status,
+      live: !isTerminalRunStatus(run.status),
+      model: run.model ? `${run.model.provider}/${run.model.id}` : null,
+      activity: run.activity?.label ?? (run.activity?.currentTool ? `Running ${run.activity.currentTool}` : null),
+      terminalReason: reasonOfRun(run),
+      startedAt: run.startedAt,
+      endedAt: run.endedAt ?? null,
+      session,
+      run,
     });
   }
-
-  const runs: RunRow[] = [];
-  const plans: FleetSnapshot["plans"] = [];
-  for (const { session, panels } of bySession.values()) {
-    for (const panel of panels) {
-      if (panel.kind === "run") runs.push({ panel, session });
-      else if (panel.kind === "plan") plans.push({ panel, session });
-    }
+  for (const task of sanitizeDeep(tasks)) {
+    const session = inScope.get(task.sessionPath);
+    if (!session) continue;
+    rows.push({
+      kind: "task",
+      id: task.id,
+      title: task.title,
+      handle: task.id,
+      state: task.status,
+      live: task.status === "running",
+      model: null,
+      activity: task.activity ?? null,
+      terminalReason: task.terminalReason ?? null,
+      startedAt: task.startedAt,
+      endedAt: task.endedAt ?? null,
+      session,
+      task,
+    });
   }
-  return { runs, plans, bySession, unreadable };
+  return { rows, partial };
 }
 
-const LIVE = new Set<RunPanel["lifecycle"]>(["running", "queued"]);
+function reasonOfRun(run: AgentRun): string | null {
+  if (run.endedBy?.reason) return run.endedBy.reason;
+  if (run.error) return run.error;
+  if (run.status === "cancelled") return run.endedBy?.initiator === "user" ? "you ended it" : "the parent ended it";
+  return null;
+}
 
 /** Live first, then most recently started. The order a person scans in. */
-export function orderRuns(rows: readonly RunRow[]): RunRow[] {
-  const rank = (row: RunRow): number => (LIVE.has(row.panel.lifecycle) ? 0 : row.panel.lifecycle === "paused" ? 1 : 2);
-  return [...rows].sort((a, b) => rank(a) - rank(b) || started(b.panel) - started(a.panel));
+export function orderRuns(rows: readonly FleetRow[]): FleetRow[] {
+  return [...rows].sort((a, b) => Number(b.live) - Number(a.live) || started(b) - started(a));
 }
 
-const started = (panel: RunPanel): number => (panel.startedAt ? Date.parse(panel.startedAt) : 0);
+const started = (row: FleetRow): number => {
+  const value = row.startedAt === null ? Number.NaN : Date.parse(row.startedAt);
+  return Number.isNaN(value) ? 0 : value;
+};
 
 /**
  * Elapsed in the coarse form the app uses. `render.ts`'s `formatDuration` stops
@@ -111,50 +151,33 @@ export function formatElapsed(ms: number): string {
   return `${Math.floor(hours / 24)}d ${String(hours % 24).padStart(2, "0")}h`;
 }
 
-export function elapsedOf(panel: RunPanel, now = Date.now()): number | undefined {
-  const start = started(panel);
+export function elapsedOf(row: FleetRow, now = Date.now()): number | undefined {
+  const start = started(row);
   if (!start) return undefined;
-  const end = panel.endedAt ? Date.parse(panel.endedAt) : LIVE.has(panel.lifecycle) ? now : undefined;
+  const end = row.endedAt ? Date.parse(row.endedAt) : row.live ? now : undefined;
   return end === undefined || Number.isNaN(end) ? undefined : Math.max(0, end - start);
 }
 
-/** Tokens and cost, or the words that say they were never measured (R8). */
-export function usageCells(panel: RunPanel | PlanPanel): { tokens: string; cost: string } {
-  const usage = panel.usage;
-  if (usage === null) return { tokens: "not measured", cost: "—" };
-  if (usage === undefined) return { tokens: "—", cost: "—" };
-  const total = [usage.input, usage.output].filter((n): n is number => typeof n === "number").reduce((a, b) => a + b, 0);
-  const counted = usage.input !== undefined || usage.output !== undefined;
-  return {
-    tokens: counted ? total.toLocaleString("en-US") : "not measured",
-    cost:
-      typeof usage.costUsd !== "number"
-        ? "—"
-        : usage.costUsd === 0
-          ? "$0"
-          : `$${usage.costUsd.toFixed(usage.costUsd < 0.1 ? 4 : 2)}`,
-  };
-}
-
-const STATE_WORD: Record<RunPanel["lifecycle"], string> = {
+const STATE_WORD: Readonly<Record<FleetState, string>> = {
   queued: "queued",
   running: "running",
-  paused: "paused",
-  done: "done",
+  blocked: "blocked",
+  completed: "done",
   failed: "failed",
   cancelled: "stopped",
+  stopped: "stopped",
 };
 
 /** Colour follows the app's five states, and degrades to plain words in a pipe. */
-export function paintState(lifecycle: RunPanel["lifecycle"], paint: CommandContext["term"]["out"]): string {
-  const word = STATE_WORD[lifecycle];
-  switch (lifecycle) {
+export function paintState(state: FleetState, paint: CommandContext["term"]["out"]): string {
+  const word = STATE_WORD[state] ?? state;
+  switch (state) {
     case "running":
     case "queued":
       return paint.cyan(word);
     case "failed":
       return paint.red(word);
-    case "paused":
+    case "blocked":
       return paint.yellow(word);
     default:
       return paint.dim(word);
@@ -180,26 +203,23 @@ export async function sessionsInScope(rpc: HostRpc, ctx: CommandContext): Promis
 export const runsCommand: Command = {
   name: "runs",
   group: "Sessions",
-  summary: "list agent runs — subagents, workflows and background jobs",
+  summary: "list agent work — child agents and background commands",
   usage: `${PRODUCT_NAME} runs [--project <dir>] [--session <ref>] [--running] [--json]`,
   description: `
-A run is one unit of agent work with a lifecycle: a subagent, a workflow lane,
-a background job, or a run another extension contributed. Children are listed
-under the session that started them, not as sessions of their own.
+Two kinds of thing, one list, exactly as the fleet column shows them: a **run**
+is one execution of an agent in its own child session, and a **task** is a long
+command an agent left running in the background.
 
-Reads the host's panels, so this is exactly what the app shows — including runs
-started from a terminal, which the host sees through the subagent extension's
-own files.
-
-Controls are honest: a run that cannot be steered from here is not offered a
-steer. Use \`${PRODUCT_NAME} plan\` for the shape of a multi-step run.`,
+A child is listed under the session that started it, not as a session of its
+own. The data is the host's own — the run registry and the task register — so
+this is exactly what the app shows.`,
   flags: {
-    project: { type: "string", description: "only runs in this project directory" },
-    session: { type: "string", description: "only runs in this session (id, path, or suffix)" },
-    running: { type: "boolean", description: "only runs that are still going" },
+    project: { type: "string", description: "only work in this project directory" },
+    session: { type: "string", description: "only work in this session (id, path, or suffix)" },
+    running: { type: "boolean", description: "only work that is still going" },
   },
   examples: [
-    { command: `${PRODUCT_NAME} runs`, note: "every run the host can see" },
+    { command: `${PRODUCT_NAME} runs`, note: "every run and task the host can see" },
     { command: `${PRODUCT_NAME} runs --running --json`, note: "machine-readable, live only" },
   ],
   async run(ctx) {
@@ -208,32 +228,31 @@ steer. Use \`${PRODUCT_NAME} plan\` for the shape of a multi-step run.`,
       const sessions = await sessionsInScope(rpc, ctx);
       const fleet = await readFleet(rpc, sessions);
       const onlyLive = bool(ctx.args, "running");
-      const rows = orderRuns(fleet.runs).filter((row) => !onlyLive || LIVE.has(row.panel.lifecycle));
+      const rows = orderRuns(fleet.rows).filter((row) => !onlyLive || row.live);
 
       ctx.term.data({
-        runs: rows.map(({ panel, session }) => ({
-          id: panel.id,
-          title: panel.title,
-          handle: panel.handle ?? null,
-          lifecycle: panel.lifecycle,
-          terminalReason: panel.terminalReason ?? null,
-          activity: panel.activity ?? null,
-          model: panel.model ?? null,
-          requested: panel.requested ?? null,
-          origin: panel.origin ?? null,
-          parent: panel.parent ?? null,
-          startedAt: panel.startedAt ?? null,
-          endedAt: panel.endedAt ?? null,
-          elapsedMs: elapsedOf(panel) ?? null,
-          usage: panel.usage ?? null,
-          actions: (panel.actions ?? []).map((action) => action.id),
-          session: { path: session.path, cwd: session.cwd, id: session.id },
+        runs: rows.map((row) => ({
+          kind: row.kind,
+          id: row.id,
+          title: row.title,
+          handle: row.handle,
+          state: row.state,
+          live: row.live,
+          terminalReason: row.terminalReason,
+          activity: row.activity,
+          model: row.model,
+          startedAt: row.startedAt,
+          endedAt: row.endedAt,
+          elapsedMs: elapsedOf(row) ?? null,
+          exitCode: row.task?.exitCode ?? null,
+          parent: row.run?.parent ?? null,
+          worktree: row.run?.worktree ?? null,
+          session: { path: row.session.path, cwd: row.session.cwd, id: row.session.id },
         })),
-        unreadableSessions: fleet.unreadable,
       });
 
       if (rows.length === 0) {
-        ctx.term.print(onlyLive ? "Nothing is running." : "No runs. Start one from a session, and it will show up here.");
+        ctx.term.print(onlyLive ? "Nothing is running." : "No agent work. Start an agent from a session, and it will show up here.");
         return ExitCode.Ok;
       }
 
@@ -241,13 +260,12 @@ steer. Use \`${PRODUCT_NAME} plan\` for the shape of a multi-step run.`,
       for (const line of table(
         rows,
         [
-          { header: "state", get: (row) => paintState(row.panel.lifecycle, ctx.term.out) },
-          { header: "run", get: (row) => row.panel.title },
-          { header: "agent", get: (row) => row.panel.handle ?? "—" },
-          { header: "model", get: (row) => row.panel.model ?? "—" },
-          { header: "elapsed", get: (row) => { const ms = elapsedOf(row.panel, now); return ms === undefined ? "—" : formatElapsed(ms); }, align: "right" },
-          { header: "tokens", get: (row) => usageCells(row.panel).tokens, align: "right" },
-          { header: "cost", get: (row) => usageCells(row.panel).cost, align: "right" },
+          { header: "state", get: (row) => paintState(row.state, ctx.term.out) },
+          { header: "kind", get: (row) => (row.kind === "agent" ? "agent" : "task") },
+          { header: "what", get: (row) => row.title },
+          { header: "name", get: (row) => row.handle ?? "—" },
+          { header: "model", get: (row) => row.model ?? "—" },
+          { header: "elapsed", get: (row) => { const ms = elapsedOf(row, now); return ms === undefined ? "—" : formatElapsed(ms); }, align: "right" },
           { header: "project", get: (row) => shortCwd(row.session.cwd) },
         ],
         ctx.term.out,
@@ -255,16 +273,16 @@ steer. Use \`${PRODUCT_NAME} plan\` for the shape of a multi-step run.`,
         ctx.term.print(line);
       }
 
-      const live = rows.filter((row) => LIVE.has(row.panel.lifecycle)).length;
+      const live = rows.filter((row) => row.live).length;
       ctx.term.note("");
-      ctx.term.note(ctx.term.err.dim(`${plural(rows.length, "run")}, ${live} still going`));
-      if (fleet.unreadable > 0) {
-        ctx.term.warn(`${plural(fleet.unreadable, "session")} could not be read; this list is incomplete.`);
+      ctx.term.note(ctx.term.err.dim(`${plural(rows.length, "item")}, ${live} still going`));
+      if (fleet.partial) {
+        ctx.term.warn(`This host is older than one of the two lists, so this is incomplete. Restart it (\`${PRODUCT_NAME} restart\`) after an upgrade.`);
       }
       return ExitCode.Ok;
     } catch (error) {
       if (error instanceof CliError) throw error;
-      throw describeRpcError(error, "could not list runs");
+      throw describeRpcError(error, "could not list agent work");
     } finally {
       rpc.close();
     }

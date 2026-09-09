@@ -1,4 +1,4 @@
-export { Shell, PANELS_STORAGE_KEY } from "./Shell.js";
+export { Shell, COLUMNS_STORAGE_KEY } from "./Shell.js";
 export { Rail } from "./Rail.js";
 export { SessionsPanel, type SessionsPanelProps } from "./SessionsPanel.js";
 export { TrustDialog } from "./TrustDialog.js";

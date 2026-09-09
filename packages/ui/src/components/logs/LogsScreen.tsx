@@ -14,13 +14,12 @@
  * is a parsed view of the same bytes. `ProviderCeilingNote` says exactly that
  * on every provider response row.
  *
- * This screen is for *searching* the record. Watching one section while you
- * keep working is what the dock is for: "Watch" opens that section as a
- * `stream` island (docs/ux-panels.md), the same island an extension's output
- * gets, so there is one thing to learn and one place live output appears.
+ * This screen is the whole record with a query over it, which is strictly
+ * more than a live tail — so a live tail of a log section is not a second
+ * surface any more (docs/ux-fleet.md, "The two kinds of work").
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChartGantt, ChevronUp, Layers, Loader2, Pause, Play, Trash2 } from "lucide-react";
+import { ChartGantt, ChevronUp, Loader2, Pause, Play, Trash2 } from "lucide-react";
 
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
 import { TraceWaterfall } from "@/components/assistant-ui/elements/trace-waterfall";
@@ -38,7 +37,6 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { clockTime } from "@/format";
 import { cn } from "@/lib/utils";
-import { usePanelActions } from "@/panels";
 import { useLaserStable, useLaserView } from "@/runtime";
 import type { LogEntry, LogLevel, LogSection, LogStats } from "@lasercode/protocol";
 
@@ -320,7 +318,6 @@ function Toolbar({
             The loaded rows on one time axis: each provider request from send to response, each tool from start to end.
           </TooltipContent>
         </Tooltip>
-        <WatchInDock section={section} />
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -394,31 +391,6 @@ function Toolbar({
 
       {stats && <StatsLine stats={stats} />}
     </div>
-  );
-}
-
-/**
- * Send this section to the dock as a `stream` island, so it keeps arriving
- * next to the conversation. Hidden with no session open (there is no dock to
- * put it in) and for "All", which is a query, not a stream.
- */
-function WatchInDock({ section }: { section: LogSection | "all" }) {
-  const view = useLaserView();
-  const actions = usePanelActions();
-  if (!view || section === "all") return null;
-  const label = LOG_SECTIONS.find((entry) => entry.id === section)?.label ?? section;
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => actions.watchLogs(view.path, section)}>
-          <Layers />
-          Watch
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" className="max-w-72">
-        Keeps the {label.toLowerCase()} beside the conversation, in the dock, while you work.
-      </TooltipContent>
-    </Tooltip>
   );
 }
 

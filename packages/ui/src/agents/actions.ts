@@ -9,7 +9,7 @@
  *   The form, dialog or sheet that asked shows the message where the person
  *   is looking; a toast over a form is the wrong place.
  * - Methods that only *settle* (`remove`, `setDefault`, `setPolicy`,
- *   `setBeamModel`, `setNamerModel`) toast on failure and resolve; the
+ *   `setBuiltinModel`) toast on failure and resolve; the
  *   snapshot only moves on success, so a toggle that failed snaps back.
  * - `refresh` and `runs` record failure in `state.agents.error`, where the
  *   Agents page draws its error state with a retry.
@@ -22,6 +22,7 @@ import type {
   AgentPolicy,
   AgentRun,
   AgentSkillsListing,
+  BuiltinAgentName,
   NamerState,
 } from "@lasercode/protocol";
 import type { HostClient } from "../client.js";
@@ -48,10 +49,12 @@ export interface AgentsActions {
   runs(path?: string): Promise<void>;
   /** `agents/runs/stop`; the returned run is also folded into the store. Rejects on failure. */
   stopRun(runId: string, reason?: string): Promise<AgentRun>;
-  /** `agents/beam/set-model`; success also clears the pending choice. Toasts on failure. */
-  setBeamModel(model: AgentModelChoice | null): Promise<void>;
-  /** `agents/namer/set-model`. Toasts on failure. */
-  setNamerModel(model: AgentModelChoice | null): Promise<void>;
+  /**
+   * `agents/builtin/set-model` for Beam, Chat or Namer; `null` returns that
+   * agent to the default model. Choosing Beam's also clears its pending
+   * choice. Toasts on failure.
+   */
+  setBuiltinModel(name: BuiltinAgentName, model: AgentModelChoice | null): Promise<void>;
   /** `agents/namer/qualify` in `cwd`. Rejects on failure. */
   qualifyNamer(cwd: string): Promise<NamerState>;
   /** Close the Beam model choice without picking; the host keeps `beam.needsChoice`. */
@@ -121,16 +124,11 @@ export function createAgentsActions({ client, dispatch, guard }: AgentsActionsDe
       dispatch({ type: "agents/run", run });
       return run;
     },
-    setBeamModel: (model) =>
+    setBuiltinModel: (name, model) =>
       settle(async () => {
-        const { snapshot } = await client.request("agents/beam/set-model", { model });
+        const { snapshot } = await client.request("agents/builtin/set-model", { name, model });
         dispatch({ type: "agents/updated", snapshot });
-        dispatch({ type: "agents/choose-beam-model/clear" });
-      }),
-    setNamerModel: (model) =>
-      settle(async () => {
-        const { snapshot } = await client.request("agents/namer/set-model", { model });
-        dispatch({ type: "agents/updated", snapshot });
+        if (name === "beam") dispatch({ type: "agents/choose-beam-model/clear" });
       }),
     qualifyNamer: (cwd) => client.request("agents/namer/qualify", { cwd }),
     dismissBeamChoice: () => dispatch({ type: "agents/choose-beam-model/clear" }),

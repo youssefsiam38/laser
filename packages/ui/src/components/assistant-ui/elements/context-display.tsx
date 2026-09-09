@@ -16,7 +16,7 @@
  *     and the status dots speak one vocabulary.
  *   - The per-kind token breakdown (input, cached, output, reasoning) is
  *     gone: Pi hands a host one total, and a breakdown that cannot be filled
- *     is a fake (docs/ux-panels.md R3).
+ *     is a fake (docs/ux-fleet.md R5, provenance honesty).
  *   - One `Tooltip`, no nested `TooltipProvider`; the app mounts one.
  *   - `ContextRingButton` binds the ring to the open session and makes it the
  *     compact control when the session is idle, as the composer had.

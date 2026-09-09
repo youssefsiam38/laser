@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-08T19:55:00+03:00 · claude-2026-09-08-agents · HEAD: `72233bc`
+**Last updated:** 2026-09-09T04:15:00+03:00 · claude-2026-09-09-agents · HEAD: pending
 
-**Current focus:** M13 Agents Leap is in. The last four changes came from the user: workspaces under the state directory the host owns (D-141), Run setup again actually starting setup (D-142), a second way into Beam with the microphone in every composer (D-143), every agent having every tool with no limit on how long a run may take (D-144), model pickers offering only connected providers (D-145), the goal engine's tools travelling with the goal (D-146), and a blank agent form that opens on a state it can save. Remaining M13 rows are the retired pi-subagents file layer and the `.laser` override reload finding.
+**Current focus:** M13 Agents Leap. The panel system is gone and the fleet is a permanent column beside the monitor (D-147); a failed action no longer paints the block red (D-148); a queued message waits by default and steering is a verb you press (D-149); the opening screen is one screen (D-150); an `edit` aimed at a file that moved is explained rather than refused (D-151, D-152); editing history moves the leaf instead of forking (D-153); finished work is dimmed, never green (D-154). Remaining M13 rows are the retired pi-subagents file layer, the `.laser` override reload finding, and an upstream React #520.
 
 ## Milestones
 
@@ -12,7 +12,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | --- | --- | --- |
 | M0 Foundation | done | clean public CI verified |
 | M1 Local loop | done | assistant-ui runtime |
-| MP Panel system | done | panel contract implemented |
+| MP Panel system | dropped | removed by D-147; the fleet replaced it |
 | M2 Many sessions, many projects | in-progress | broader notification platform proof remains |
 | M3 Subagent tabs | in-progress | superseded in substance by M13 (D-140); M3-T9 upstream patches are moot |
 | M4 Settings and logs | done | settings surfaces complete |
@@ -23,13 +23,13 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M9 CLI | done | planned tasks complete |
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
-| M12 Product experience | done | 0.2.13 dispatched; pipeline owns verified-download publication |
-| M13 Agents Leap | in-progress | T1–T10 and T13–T19 done; T11 (retire file layer) and T12 (`.laser` overrides through reloads) remain |
+| M12 Product experience | done | 0.2.13 dispatched |
+| M13 Agents Leap | in-progress | T1–T10, T13–T33 and T34–T36 done; T11, T12 and T37 remain |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
 
-- None.
+- M13-T37: an uncaught React #520 on the first prompt of a session, inside `@assistant-ui/core` 0.3.17. Reproduced on a plain chat with no agent work; blocked on an upstream fix or a pinned patch (`docs/upstream.md`).
 
 ## Next up
 
@@ -39,14 +39,8 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Recently done
 
-- M13-T19: `72233bc`; creating an agent is no longer blocked by a contradiction the blank form opened with; 1,400 tests.
-- M13-T18: `20c8bce`; the goal engine's three tools reach a request only while a goal is in play, proven against the real engine; 1,398 tests.
-- M13-T17: `c81e864`; one rule narrows every "choose a model" control to connected providers; the catalogue surfaces keep the full list; 1,389 tests.
-- M13-T16: `f3fa5ed`; tools left the agent definition and every agent has them all; runs have no timeout and a project with a live run keeps its worker; 1,384 tests.
-- M13-T15: `6eb1479`; Beam starts from its sidebar group as well as the spark, maximize works on an empty bubble, and dictation belongs to the composer it was spoken into; 687 UI tests.
-- M13-T14: `98349ce`; Run setup again starts the flow now, leaves the open session in the sidebar and survives a reload; 682 UI tests.
-- M13-T13: `f3ae096`; workspaces under `<state>/workspaces`, a workspace created before its worker, a missing built-in workspace recreated on open; full gate and packaged gate green.
-- M13-T10: full workspace gate (identity, build, typecheck, 1,373 tests, release tests), packaged clean-machine gate, wire-level delegation scene, desktop/phone browser review.
-- M13-T9: packaged build opens a real session with `subagents` and `background-work` active and writes the Beam skill; pi-subagents unbundled.
-- M13-T7/T8: React Flow live map at four measured compositions; Beam spark and bubble over an isolated thread scope.
-- M13-T1..T6: protocol `agents/*`, worker harness with worktrees, host store and run registry, UI store, Agents page, sidebar sub-sessions and projections.
+- M13-T31: finished work is dimmed in all four places it was green, both folds lost the tick, the fleet gained Clear; 1,510 tests.
+- M13-T36: the match is the freshness proof, so an `edit` is explained and never blocked (D-152).
+- M13-T35: editing a message or running a reply again changes this session; forking is the second choice (D-153).
+- M13-T34: the goal-tools test asserts on the request it sent rather than the last one to arrive.
+- M13-T33/T32/T30/T29/T28: the file-freshness module, one opening screen, a task is not an agent, quiet failures, and the steer tray.

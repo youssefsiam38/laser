@@ -15,7 +15,7 @@
  * the pane is already at actual size (R2: a control that does nothing is not
  * shown disabled, it is not shown).
  *
- * `src` is a data: or blob: URL the panel reader produced from `pi/panel/read`.
+ * `src` is a data: or blob: URL, produced by whoever read the bytes.
  * `alt` comes from the panel title, rendered as text, never as markup.
  */
 import { Maximize2, Minimize2 } from "lucide-react";

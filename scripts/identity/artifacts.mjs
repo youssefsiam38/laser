@@ -200,7 +200,6 @@ function inlineBlock(relativePath, label, block) {
 function ipcModule() {
   const channels = [
     ["hostInfo", "host/info"], ["hostChanged", "host/changed"], ["hostRetry", "host/retry"],
-    ["panelPopOut", "panel/pop-out"], ["panelClose", "panel/close"],
     ["deepLink", "deep-link"], ["deepLinkPending", "deep-link/pending"],
     ["windowMinimize", "window/minimize"], ["windowToggleMaximize", "window/toggle-maximize"],
     ["windowClose", "window/close"], ["windowState", "window/state"],

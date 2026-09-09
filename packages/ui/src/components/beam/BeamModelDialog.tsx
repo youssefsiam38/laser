@@ -23,7 +23,7 @@ type Catalog = { models: ModelRef[] } | { error: string } | null;
  * while the choice is still pending. The picker is the catalog's
  * `model-selector` (provider first), preselected to the host's suggestion.
  *
- * "Use this model" saves through `actions.agents.setBeamModel`, which clears
+ * "Use this model" saves through `actions.agents.setBuiltinModel`, which clears
  * the pending choice on success; "Later" only clears it here — Beam follows
  * the default model until a model is chosen on the Agents page.
  */
@@ -88,11 +88,11 @@ export function BeamModelDialog() {
     if (!chosen) return;
     setSaving(true);
     setSaveError(undefined);
-    await agents.setBeamModel({ provider: chosen.provider, id: chosen.id });
+    await agents.setBuiltinModel("beam", { provider: chosen.provider, id: chosen.id });
     setSaving(false);
     setSaved((n) => n + 1);
   };
-  // `setBeamModel` settles either way: success clears the pending choice and
+  // `setBuiltinModel` settles either way: success clears the pending choice and
   // this dialog with it; a failure toasts and leaves the choice open. Say it
   // here too, where the person is looking, rather than only in a corner.
   useEffect(() => {

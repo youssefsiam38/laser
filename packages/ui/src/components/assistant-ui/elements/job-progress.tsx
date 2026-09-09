@@ -7,7 +7,7 @@
  *
  * Divergences from the registry copy:
  *   - No ETA and no weighted stages: none of the four run producers has a
- *     percentage or a duration estimate (docs/ux-panels.md "Nobody has a
+ *     percentage or a duration estimate (docs/ux-fleet.md R6, "Nobody has a
  *     progress percentage"), so the bar draws `done/total` or an
  *     indeterminate sweep, and the stage row draws the producer's `phase`
  *     (`index` is 1-based) — a stepper, not a bar.

@@ -2,17 +2,17 @@
  * M13-T3 · the harness lifecycle with a fake host: start → running →
  * complete through the bridge; blocked; stops by a person and by the parent;
  * no limit on a run's length; failure on close; settle-without-completion; waiting; follow-up
- * messages; nesting and allow-list refusals; run notifications; the run panel.
+ * messages; nesting and allow-list refusals; run notifications.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DriverAgentOptions, DriverEvent, DriverListener, PromptOptions, SessionDriver } from "../../src/driver.js";
 import type { AgentModelEvent, HarnessSessionRole } from "../../src/agents/bridge.js";
 import { DefinitionsCache, fallbackDefaultAgent, fallbackSnapshot } from "../../src/agents/definitions.js";
-import { AgentHarness, NUDGE_TEXT, runPanel, runPanelId, type SessionHost, type WorktreeProvider } from "../../src/agents/harness.js";
+import { AgentHarness, NUDGE_TEXT, type SessionHost, type WorktreeProvider } from "../../src/agents/harness.js";
 import { HarnessError } from "../../src/agents/errors.js";
 import { rootRecord, rootRole } from "../../src/agents/session-config.js";
 import type { CreateWorktreeInput, Worktree } from "../../src/agents/worktrees.js";
-import { SESSION_RUN_ENTRY_TYPE, validatePanelEvent, type AgentDefinition, type AgentRun, type AgentsSnapshot, type ContentBlock, type SessionState, type UiDialogResponse } from "@lasercode/protocol";
+import { SESSION_RUN_ENTRY_TYPE, type AgentDefinition, type AgentRun, type AgentsSnapshot, type ContentBlock, type SessionState, type UiDialogResponse } from "@lasercode/protocol";
 
 class FakeDriver implements SessionDriver {
   readonly kind = "stable-sdk" as const;
@@ -117,9 +117,9 @@ function makeWorld() {
   };
   const runsNotified = () => notifications.filter((n) => n.method === "agents/run").map((n) => (n.params as { run: AgentRun }).run);
   const events = () => notifications.filter((n) => n.method === "agents/event").map((n) => n.params as { kind: string; sessionPath: string; runId?: string; summary: string });
-  const panels = () => notifications.filter((n) => n.method === "pi/extension/message").map((n) => n.params as { path: string; message: { type: string; panel?: unknown; id?: string } });
+  const extensionMessages = () => notifications.filter((n) => n.method === "pi/extension/message").map((n) => n.params as { path: string; message: { type: string } });
   return {
-    harness, definitions, drivers, notifications, opened, worktrees, openRoot, runsNotified, events, panels,
+    harness, definitions, drivers, notifications, opened, worktrees, openRoot, runsNotified, events, extensionMessages,
     setUnavailable: (value: boolean) => { unavailable = value; },
     setFailOpen: (value: boolean) => { failOpen = value; },
   };
@@ -255,8 +255,8 @@ describe("AgentHarness", () => {
     expect(received[0]).toMatchObject({ type: "agent.cancelled", endedBy: { initiator: "user", reason: "wrong branch, start over" } });
     expect(received[0]!.message).toBe("The person ended this run. Reason: wrong branch, start over");
     expect(world.events().map((e) => e.kind)).toEqual(["started", "message_sent", "stop_requested", "cancelled", "message_received"]);
-    // Idempotent, and a second stop from the panel changes nothing.
-    expect(await world.harness.handlePanelAction(runPanelId(runId), "stop")).toBe(true);
+    // Idempotent: a second stop changes nothing.
+    await world.harness.stopRun(runId, { initiator: "user" });
     expect(world.runsNotified().filter((r) => r.status === "cancelled")).toHaveLength(1);
     // Without a reason the sentence stands alone.
     const second = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w2", task: "t" });
@@ -431,23 +431,24 @@ describe("AgentHarness", () => {
     expect(await root.handle.bridge.listAgents()).toEqual([]);
   });
 
-  it("emits a valid run panel to the parent and keeps its lifecycle current", async () => {
+  it("says a run exactly once, as `agents/run`, and never a second time as something else", async () => {
     const root = world.openRoot("lead");
     const { runId } = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "fix-login", task: "t" });
-    const upserts = world.panels().filter((p) => p.message.type === "lasercode/panel/upsert");
-    expect(upserts.at(-1)).toMatchObject({ path: root.path, message: { panel: { id: runPanelId(runId), kind: "run", lifecycle: "running", handle: "fix-login", title: "fix-login", intent: "follow", source: "agents", parent: { id: root.path, relation: "spawned-by" } } } });
-    const panel = runPanel(world.harness.run(runId)!)!;
-    expect(panel.kind === "run" && panel.actions?.map((a) => a.id)).toEqual(["open", "stop"]);
-    // The same payload, as an extension would emit it, passes the panel contract.
-    const { id, kind, title, intent, source, actions, ...data } = panel as unknown as Record<string, unknown> & { actions: unknown };
-    expect(validatePanelEvent({ v: 1, id, kind, title, intent, source, actions, data }).ok).toBe(true);
+    // D-140: `agents/run` is the single truth. The parent-side run panel that
+    // used to carry the same facts is gone with the panels, so there is no
+    // second copy to drift.
+    expect(world.runsNotified().at(-1)).toMatchObject({
+      runId,
+      subagentName: "fix-login",
+      status: "running",
+      sessionPath: "/sessions/child-1.jsonl",
+      parent: { sessionPath: root.path },
+    });
+    expect(world.extensionMessages().some((m) => m.message.type.startsWith("lasercode/panel"))).toBe(false);
+
     await world.harness.bridgeOf("/sessions/child-1.jsonl")!.completeRun({ status: "completed", message: "done" });
-    const last = world.panels().filter((p) => p.message.type === "lasercode/panel/upsert").at(-1)!;
-    expect(last.message.panel).toMatchObject({ id: runPanelId(runId), lifecycle: "done", endedAt: expect.any(String) });
-    expect((last.message.panel as { actions: Array<{ id: string }> }).actions.map((a) => a.id)).toEqual(["open"]);
-    expect(await world.harness.handlePanelAction(runPanelId(runId), "open")).toBe(true);
-    expect(await world.harness.handlePanelAction("subagents:run:x", "open")).toBe(false);
-    expect(await world.harness.handlePanelAction(runPanelId("run_missing"), "stop")).toBe(false);
+    expect(world.runsNotified().at(-1)).toMatchObject({ runId, status: "completed", endedAt: expect.any(String) });
+    expect(world.extensionMessages().some((m) => m.message.type.startsWith("lasercode/panel"))).toBe(false);
   });
 
   it("buffers parent events until the parent's module listens, and re-announces roles on a definitions change", async () => {

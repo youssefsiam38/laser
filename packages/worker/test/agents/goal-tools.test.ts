@@ -46,6 +46,19 @@ const open = () =>
 
 const goalToolsIn = (index: number): string[] => toolNamesOf(stub.requests[index]!).filter((name) => GOAL_TOOL_NAMES.includes(name));
 
+/** Every user turn in a request, flattened, so a request can be found by what was said. */
+const userTextOf = (request: { messages: Array<{ role: string; content: unknown }> }): string =>
+  request.messages
+    .filter((message) => message.role === "user")
+    .map((message) =>
+      typeof message.content === "string"
+        ? message.content
+        : Array.isArray(message.content)
+          ? message.content.map((part) => (part as { text?: string })?.text ?? "").join(" ")
+          : "",
+    )
+    .join(" ");
+
 describe("the goal engine's tools", () => {
   it("are absent from an ordinary session, present from the first goal turn, and gone once the goal is cleared", async () => {
     await open();
@@ -66,10 +79,23 @@ describe("the goal engine's tools", () => {
     expect(goalToolsIn(stub.requests.length - 1)).toEqual([...GOAL_TOOL_NAMES]);
 
     // 3 · Cleared: the next request carries none of them again.
+    //
+    // Not "the last request". The goal's own turn may still be running, and the
+    // engine's automatic continuation can land another goal-bearing request
+    // after `clear()` returns — under full-suite load it reliably did, which is
+    // what made this test flaky (M13-T34). Wait for the session to go idle, then
+    // assert on the request that actually carries the words sent below.
+    await vi.waitFor(() => expect(driver.state().isStreaming).toBe(false), { timeout: 20_000, interval: 25 });
     await driver.goalAction?.({ action: "clear" });
-    const before = stub.requests.length;
     await driver.prompt([{ type: "text", text: "And again." }]);
-    await vi.waitFor(() => expect(stub.requests.length).toBeGreaterThan(before), { timeout: 20_000, interval: 25 });
-    expect(goalToolsIn(stub.requests.length - 1)).toEqual([]);
+    const cleared = await vi.waitFor(
+      () => {
+        const at = stub.requests.findLastIndex((request) => userTextOf(request).includes("And again."));
+        expect(at).toBeGreaterThan(-1);
+        return at;
+      },
+      { timeout: 20_000, interval: 25 },
+    );
+    expect(goalToolsIn(cleared)).toEqual([]);
   }, 120_000);
 });

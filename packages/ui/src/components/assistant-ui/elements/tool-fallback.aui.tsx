@@ -144,13 +144,25 @@ function ToolFallbackDuration({
 // Trigger — `[icon] verb summary ····· duration ›`
 // ---------------------------------------------------------------------------
 
-export type ToolRowState = "running" | "awaiting" | "done" | "failed" | "cancelled";
+/**
+ * `nonzero` is a shell command that ran and came back non-zero: a settled
+ * result, not a failure of the app. It draws as an ordinary finished row —
+ * no rail, no alert icon, no error excerpt — with the command itself in the
+ * quiet danger ink. `failed` stays what it is: a tool that broke.
+ */
+export type ToolRowState = "running" | "awaiting" | "done" | "failed" | "nonzero" | "cancelled";
 
-export function toolRowState(status: ToolCallMessagePartStatus | undefined, isError: boolean | undefined): ToolRowState {
+export function toolRowState(
+  status: ToolCallMessagePartStatus | undefined,
+  isError: boolean | undefined,
+  /** `isNonZeroExit(...)` for this call; see `thread/tool-summary.ts`. */
+  nonZeroExit = false,
+): ToolRowState {
   if (!status) return "done";
   if (status.type === "running") return "running";
   if (status.type === "requires-action") return "awaiting";
   if (status.type === "incomplete" && status.reason === "cancelled") return "cancelled";
+  if (nonZeroExit) return "nonzero";
   if (isError === true || status.type === "incomplete") return "failed";
   return "done";
 }
@@ -193,6 +205,7 @@ function ToolFallbackTrigger({
   const failed = state === "failed";
   const awaiting = state === "awaiting";
   const cancelled = state === "cancelled";
+  const nonZero = state === "nonzero";
   const LeadIcon = icon ?? Wrench;
 
   return (
@@ -200,7 +213,11 @@ function ToolFallbackTrigger({
       data-slot="tool-fallback-trigger"
       data-active={running || undefined}
       disabled={!expandable}
-      aria-label={running && activeLabel ? activeLabel : `${verb} ${summary ?? ""}`.trim()}
+      // Quiet, not hidden: the row says nothing about the exit visually beyond
+      // the colour of the command, so the accessible name says it in words.
+      aria-label={
+        running && activeLabel ? activeLabel : `${`${verb} ${summary ?? ""}`.trim()}${nonZero ? ", exited non-zero" : ""}`
+      }
       className={cn(
         activityTrigger,
         "disabled:cursor-default disabled:hover:bg-transparent disabled:active:bg-transparent",
@@ -226,7 +243,11 @@ function ToolFallbackTrigger({
         {verb}
       </span>}
       {summary && !(running && activeLabel) ? (
-        <span className={cn(mono, "min-w-0 truncate", cancelled ? "text-ink-3" : "text-ink-2")} title={summary}>
+        <span
+          data-slot="tool-fallback-trigger-summary"
+          className={cn(mono, "min-w-0 truncate", cancelled ? "text-ink-3" : nonZero ? "text-danger-quiet" : "text-ink-2")}
+          title={summary}
+        >
           {summary}
         </span>
       ) : null}

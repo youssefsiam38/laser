@@ -10,7 +10,7 @@ deep-link back into a session, the OS keychain, and updates.
 ┌─────────────────────────────────────────────┐
 │ Electron main  (this package)               │
 │   window · tray · notifications · keychain  │
-│   deep links · updater · panel pop-out      │
+│   deep links · updater                     │
 └──────┬───────────────────────┬──────────────┘
        │ spawn                 │ ws (read-only: sessions, attention)
 ┌──────▼───────────────────────▼──────────────┐
@@ -129,9 +129,7 @@ phone and this window on one code path.
 | | |
 | --- | --- |
 | `version`, `platform`, `chrome` | Version, OS, and the titlebar geometry the UI must respect: `chrome.height` of draggable strip, `chrome.insetLeft` clear of the macOS traffic lights, and `chrome.insetRight` clear of the Windows controls. Linux uses its native frame because Electron 44's frameless frame view can deliver input against the wrong geometry. |
-| `panel` | The `PanelDescriptor` when this window *is* a popped-out panel; `null` in the app window. Available before first paint. |
 | `host()`, `onHost()`, `retryHost()` | The host's state, url and ws url. |
-| `popOutPanel(descriptor)`, `closePanelWindow()` | docs/ux-panels.md D-20. Asking twice for one panel id focuses the window that exists rather than opening a second copy. On the web, the UI opens a tab instead. |
 | `onDeepLink()`, `pendingDeepLinks()` | `laser://session/<path>`, `laser://project/<cwd>`, `laser://open`. Call `pendingDeepLinks()` once on mount: it drains links that arrived before the UI was listening (a cold start from a notification) **and** is how the shell learns the UI is ready. |
 | `window.*` | minimise / toggle maximise / close, and the maximised-fullscreen-focused state, for the custom titlebar. |
 | `setTheme("light" \| "dark")` | Keeps the native frame in step; call it whenever the UI's theme changes. |

@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { PANEL_EVENT, TASK_EVENT_MESSAGE_TYPE, TASK_PANEL_PREFIX, WIRE_NAMESPACE, validatePanelEvent, type RunPanel } from "@lasercode/protocol";
+import { TASK_EVENT_MESSAGE_TYPE, WIRE_NAMESPACE, backgroundTaskUpdateSchema, type BackgroundTaskUpdate } from "@lasercode/protocol";
 import { createLaserExtension } from "../src/index.js";
-import { createCommandBus, createPanelClaims, type ModuleContext } from "../src/modules/index.js";
+import { createCommandBus, type ModuleContext } from "../src/modules/index.js";
 import { backgroundWorkModule, lastLines, TailBuffer } from "../src/modules/background-work.js";
 
 interface FakeTool {
@@ -34,38 +34,34 @@ afterEach(() => {
 
 function harness(foregroundCommandSeconds = 0.3) {
   const tools = new Map<string, FakeTool>();
-  const panels: unknown[] = [];
   const sendMessage = vi.fn();
   const pi = {
     on: vi.fn(),
     registerTool: (tool: FakeTool) => tools.set(tool.name, tool),
     sendMessage,
-    events: {
-      on: () => () => {},
-      emit: (name: string, data: unknown) => {
-        if (name === PANEL_EVENT) panels.push(data);
-      },
-    },
+    events: { on: () => () => {}, emit: () => {} },
   } as unknown as ExtensionAPI;
   const commands = createCommandBus();
-  const claims = createPanelClaims();
   const send = vi.fn();
   const cwd = mkdtempSync(join(tmpdir(), "background-work-"));
   dirs.push(cwd);
-  const ctx: ModuleContext = { pi, send, commands, panels: claims, backgroundWork: { cwd, foregroundCommandSeconds } };
+  const ctx: ModuleContext = { pi, send, commands, backgroundWork: { cwd, foregroundCommandSeconds } };
   backgroundWorkModule.register!(ctx);
   const dispose = backgroundWorkModule.activate(ctx) as (() => void) | undefined;
   if (dispose) open.push(dispose);
   const toolCtx = { cwd, sessionManager: { getSessionId: () => SESSION_ID, getSessionFile: () => undefined } } as unknown as ExtensionContext;
   const call = (name: string, params: Record<string, unknown>, signal?: AbortSignal, onUpdate?: (update: unknown) => void) =>
     tools.get(name)!.execute("call-1", params, signal, onUpdate, toolCtx);
-  const validated = () =>
-    panels.map((raw) => {
-      const result = validatePanelEvent(raw);
-      if (!result.ok) throw new Error(result.error);
-      return result.panel as RunPanel;
-    });
-  return { tools, panels, validated, sendMessage, commands, claims, cwd, call, dispose, send };
+  /**
+   * Every `lasercode/task/update` the module published, validated against the
+   * wire schema — a fleet row nobody can parse is not a fleet row.
+   */
+  const published = (): BackgroundTaskUpdate[] =>
+    send.mock.calls
+      .map(([message]) => message as { type: string; task?: unknown })
+      .filter((message) => message.type === "lasercode/task/update")
+      .map((message) => backgroundTaskUpdateSchema.parse(message.task) as BackgroundTaskUpdate);
+  return { tools, published, sendMessage, commands, cwd, call, dispose, send };
 }
 
 const logPath = (taskId: string) => join(tmpdir(), `${WIRE_NAMESPACE}-tasks`, SESSION_ID, `${taskId}.log`);
@@ -102,8 +98,8 @@ describe("background-work: the bash override", () => {
     const after = await h.call("task_list", {});
     expect(after.details.tasks[1]).toMatchObject({ status: "failed", exitCode: 3 });
     // Foreground commands that finish within the limit are not fleet work:
-    // their tool row carries the result, so no run panel is offered.
-    expect(h.validated()).toEqual([]);
+    // their tool row carries the result, so no task is published.
+    expect(h.published()).toEqual([]);
   });
 
   it("promotes a long foreground command and reports its exit with a turn-triggering message", async () => {
@@ -133,14 +129,19 @@ describe("background-work: the bash override", () => {
     expect(message.content).toContain(`Background task ${taskId} (echo a; sleep 0.5; echo b) exited with code 0.`);
     expect(message.content).toContain("Last lines:\na\nb");
 
-    const panels = h.validated();
-    expect(panels.every((p) => p.id === `${TASK_PANEL_PREFIX}${taskId}`)).toBe(true);
-    // The first panel appears at promotion, so it may already carry output.
-    expect(panels[0]).toMatchObject({ kind: "run", intent: "follow", source: "shell", title: "echo a; sleep 0.5; echo b", handle: taskId, lifecycle: "running", actions: [{ id: "stop", label: "Stop" }] });
-    expect(panels[0]!.output).toEqual({ ref: `file:${logPath(taskId)}`, bytes: expect.any(Number) });
-    expect(panels.at(-1)).toMatchObject({ lifecycle: "done", output: { ref: `file:${logPath(taskId)}`, bytes: 4 } });
-    expect(panels.at(-1)!.actions).toBeUndefined();
-    expect(panels.at(-1)!.endedAt).toBeDefined();
+    // A promoted task is the same task, keeping the output it already made.
+    const tasks = h.published();
+    expect(tasks.every((t) => t.id === taskId)).toBe(true);
+    expect(tasks[0]).toMatchObject({
+      title: "echo a; sleep 0.5; echo b",
+      command: "echo a; sleep 0.5; echo b",
+      status: "running",
+      origin: "promoted",
+      logPath: logPath(taskId),
+    });
+    expect(tasks[0]!.outputBytes).toEqual(expect.any(Number));
+    expect(tasks.at(-1)).toMatchObject({ status: "completed", exitCode: 0, outputBytes: 4, activity: "b" });
+    expect(tasks.at(-1)!.endedAt).toBeDefined();
   });
 
   it("returns immediately for an explicit background command and reports its exit without waking the model", async () => {
@@ -165,22 +166,21 @@ describe("background-work: the bash override", () => {
     const stopped = await h.call("task_stop", { taskId: details.taskId });
     expect(stopped.details).toEqual({ taskId: details.taskId, status: "stopped", exitCode: null });
     expect(stopped.content[0]!.text).toBe(`Task ${details.taskId} stopped.`);
-    expect(h.validated().at(-1)).toMatchObject({ lifecycle: "cancelled", terminalReason: "the agent stopped it" });
+    expect(h.published().at(-1)).toMatchObject({ status: "stopped", terminalReason: "the agent stopped it", exitCode: null });
     const again = await h.call("task_stop", { taskId: details.taskId });
     expect(again.content[0]!.text).toContain("already ended with status stopped");
     expect(h.sendMessage.mock.calls[0]![0].content).toContain("was stopped (the agent stopped it)");
   });
 
-  it("answers the panel's Stop action from the worker command bus", async () => {
+  it("answers the fleet's Stop from the worker command bus", async () => {
     const h = harness(5);
     const { details } = await h.call("bash", { command: "sleep 30", background: true });
-    const id = `${TASK_PANEL_PREFIX}${details.taskId}`;
-    expect(h.claims.claimed(id)).toBe(true);
-    expect(h.commands.deliver({ type: "lasercode/panel/action", id: `${TASK_PANEL_PREFIX}nope`, actionId: "stop" })).toBe(false);
-    expect(h.commands.deliver({ type: "lasercode/panel/action", id, actionId: "stop" })).toBe(true);
+    // A task this session does not own is not ours to answer.
+    expect(h.commands.deliver({ type: "lasercode/task/stop", id: "t-nope" })).toBe(false);
+    expect(h.commands.deliver({ type: "lasercode/task/stop", id: details.taskId })).toBe(true);
     const waited = await h.call("task_wait", { taskIds: [details.taskId], timeoutSeconds: 5 });
     expect(waited.details.tasks[0]).toMatchObject({ status: "stopped" });
-    expect(h.validated().at(-1)).toMatchObject({ lifecycle: "cancelled", terminalReason: "you stopped it" });
+    expect(h.published().at(-1)).toMatchObject({ status: "stopped", terminalReason: "you stopped it" });
   });
 
   it("times out a wait, honours its abort signal and rejects unknown tasks", async () => {
@@ -222,7 +222,7 @@ describe("background-work: the bash override", () => {
     open.length = 0;
     const waited = await h.call("task_wait", { taskIds: [details.taskId], timeoutSeconds: 5 });
     expect(waited.details.tasks[0]).toMatchObject({ status: "stopped" });
-    expect(h.validated().at(-1)).toMatchObject({ lifecycle: "cancelled", terminalReason: "the session ended" });
+    expect(h.published().at(-1)).toMatchObject({ status: "stopped", terminalReason: "the session ended" });
     expect(h.sendMessage).not.toHaveBeenCalled();
     expect(existsSync(logPath(details.taskId))).toBe(true);
   });

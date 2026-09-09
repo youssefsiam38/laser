@@ -8,15 +8,22 @@
  * send. So both lanes and `onNew` funnel into one place, and the laser verb
  * is decided by {@link resolveSendBehavior}:
  *
- * | lane   | idle   | running   |
- * | ------ | ------ | --------- |
- * | queue  | prompt | follow-up |
- * | steer  | prompt | steer     |
+ * | lane   | idle   | running |
+ * | ------ | ------ | ------- |
+ * | queue  | prompt | pending |
+ * | steer  | prompt | steer   |
  *
- * which is exactly DESIGN.md's composer contract: Enter prompts when idle and
- * steers while running, Cmd/Ctrl+Enter queues a follow-up. A `session/prompt`
- * the worker refuses (`accepted: false`, an extension is holding the prompt)
- * falls back to a steer so the message is never silently dropped.
+ * Writing while the agent works puts the message in the *pending tray* — a
+ * waiting row the person can steer, edit or drop one at a time — and leaving it
+ * alone is what happens by default (M13-T28). Interrupting is the deliberate
+ * act: the row's Steer button, or Cmd/Ctrl+Enter on the way in, which is the
+ * one keyboard path to it. A `session/prompt` the worker refuses
+ * (`accepted: false`, an extension is holding the prompt) falls back to a steer
+ * so the message is never silently dropped.
+ *
+ * Steering never aborts anything. The engine delivers a steer at the next turn
+ * boundary, so the transcript keeps only the message and the reply — no stop
+ * notice for a person who redirected rather than stopped.
  *
  * Everything above `createThreadAdapter` is pure and unit-tested.
  */
@@ -28,21 +35,33 @@ import type {
   QueueItemState,
   ThreadMessageLike,
 } from "@assistant-ui/react";
-import type { ContentBlock, ImageContent, UiDialogResponse } from "@lasercode/protocol";
+import type { ContentBlock, ImageContent, PendingMessage, UiDialogResponse } from "@lasercode/protocol";
 import type { HostClient } from "../client.js";
 import { asRawClient, getMobileDictationAdapter } from "../pwa/index.js";
 import { newBlockId, type Action, type SessionView } from "../store.js";
 import { projectSessionView, type ProjectionResult } from "./projection.js";
 
-export type SendBehavior = "prompt" | "steer" | "followUp";
+/** `pending` is the tray; the other three go straight to the engine. */
+export type SendBehavior = "prompt" | "steer" | "followUp" | "pending";
 /** Which assistant-ui queue lane a send arrived on. */
 export type SendLane = "queue" | "steer";
 
 export const STEER_QUEUE_PREFIX = "steer:";
 export const FOLLOW_UP_QUEUE_PREFIX = "followUp:";
+/** The tray's own rows carry the worker's id, so every action names one message. */
+export const PENDING_QUEUE_PREFIX = "pending:";
 
 export function queueItemId(mode: "steer" | "followUp", index: number): string {
   return `${mode}:${index}`;
+}
+
+export function pendingQueueItemId(id: string): string {
+  return `${PENDING_QUEUE_PREFIX}${id}`;
+}
+
+/** The worker's pending id inside a queue item id, or undefined for another lane. */
+export function pendingIdOfQueueItemId(id: string): string | undefined {
+  return id.startsWith(PENDING_QUEUE_PREFIX) ? id.slice(PENDING_QUEUE_PREFIX.length) : undefined;
 }
 
 export function isSteerQueueItemId(id: string): boolean {
@@ -97,9 +116,13 @@ export function imageCountOfContentBlocks(blocks: readonly ContentBlock[]): numb
   return blocks.filter((b) => b.type === "image").length;
 }
 
+const EXPLICIT_BEHAVIORS = new Set<string>(["prompt", "steer", "followUp", "pending"]);
+
 /**
  * An explicit `runConfig.custom.streamingBehavior` wins (a caller that knows
- * what it wants); otherwise the lane plus the run state decide.
+ * what it wants — a denied approval still interrupts); otherwise the lane plus
+ * the run state decide. With nothing running there is nothing to wait behind
+ * and nothing to interrupt, so every lane is an ordinary prompt.
  */
 export function resolveSendBehavior(options: {
   running: boolean;
@@ -107,12 +130,11 @@ export function resolveSendBehavior(options: {
   message?: AppendMessage | undefined;
 }): SendBehavior {
   const requested = options.message?.runConfig?.custom?.["streamingBehavior"];
-  if (requested === "steer" || requested === "followUp" || requested === "prompt") {
-    // A steer/follow-up is meaningless with no run to interrupt.
-    return options.running ? requested : "prompt";
+  if (typeof requested === "string" && EXPLICIT_BEHAVIORS.has(requested)) {
+    return options.running ? (requested as SendBehavior) : "prompt";
   }
   if (!options.running) return "prompt";
-  return options.lane === "steer" ? "steer" : "followUp";
+  return options.lane === "steer" ? "steer" : "pending";
 }
 
 // ---------------------------------------------------------------------------
@@ -173,10 +195,15 @@ export interface ComposerSendPlan {
 }
 
 /**
- * Enter = prompt when idle / steer while running; Shift+Enter = newline;
- * Cmd/Ctrl+Enter = follow-up while running (a plain prompt when idle).
- * Those three are the whole contract (DESIGN.md "Composer") and the whole of
- * the composer's key legend.
+ * Enter = prompt when idle / a waiting row in the tray while running;
+ * Shift+Enter = newline; Cmd/Ctrl+Enter = steer while running (a plain prompt
+ * when idle). Those three are the whole contract (DESIGN.md "Composer") and
+ * the whole of the composer's key legend.
+ *
+ * The two mid-run bindings changed places in M13-T28. Enter used to interrupt,
+ * which made the safe outcome the one that needed a chord and left people
+ * pressing Stop to force a message in. Now the message waits unless the person
+ * says otherwise — with the row's Steer button, or with this one chord.
  *
  * Cmd/Ctrl+Shift+Enter is `suppress`, not `newline`: assistant-ui's own
  * `ComposerInput` handler treats it as "send with steer" whenever a queue
@@ -186,9 +213,9 @@ export interface ComposerSendPlan {
 export function composerSendPlan(event: ComposerKeyState, running: boolean): ComposerSendPlan {
   if (event.key !== "Enter") return plan("ignore", "prompt");
   if (event.shiftKey) return plan(event.metaKey || event.ctrlKey ? "suppress" : "newline", "prompt");
-  const followUp = event.metaKey || event.ctrlKey;
+  const steer = event.metaKey || event.ctrlKey;
   if (!running) return plan("send", "prompt");
-  return plan("send", followUp ? "followUp" : "steer");
+  return plan("send", steer ? "steer" : "pending");
 }
 
 const plan = (action: ComposerSendPlan["action"], behavior: SendBehavior): ComposerSendPlan => ({
@@ -226,6 +253,13 @@ export async function sendToSession(
     await client.request("pi/session/follow_up", { path, content });
     return "followUp";
   }
+  if (behavior === "pending") {
+    // Laser's own tray, not the engine's queue: the row that appears can be
+    // steered, edited or dropped on its own, and nothing has interrupted the
+    // run to put it there.
+    await client.request("session/pending/add", { path, content });
+    return "pending";
+  }
   const optimisticId = newBlockId();
   dispatch?.({
     type: "optimisticUser",
@@ -256,6 +290,19 @@ export async function sendToSession(
 // Queue
 // ---------------------------------------------------------------------------
 
+/**
+ * The two lanes assistant-ui draws, in the order it draws them
+ * (`[...steerItems, ...items]`):
+ *
+ *   - `steerItems` — already handed to the engine: what the person steered,
+ *     plus anything the engine queued itself. It goes in at the next turn
+ *     boundary, and nothing above can take it back one item at a time.
+ *   - `items` — the pending tray, Laser's own, with the id the worker minted
+ *     inside each row's id so Steer / Edit / Drop can each name one message.
+ *     The engine's follow-up queue joins this lane on the rare occasion
+ *     something else put a message there; those rows carry no id of ours and
+ *     so offer none of the three (a control that cannot work is not drawn).
+ */
 export function queueItemsOf(view: SessionView | undefined): {
   items: QueueItemState[];
   steerItems: QueueItemState[];
@@ -266,9 +313,17 @@ export function queueItemsOf(view: SessionView | undefined): {
     parts: [{ type: "text", text }],
   });
   return {
-    items: (view?.queue.followUp ?? []).map(toItem("followUp")),
+    items: [
+      ...(view?.pending ?? []).map(pendingQueueItem),
+      ...(view?.queue.followUp ?? []).map(toItem("followUp")),
+    ],
     steerItems: (view?.queue.steering ?? []).map(toItem("steer")),
   };
+}
+
+export function pendingQueueItem(message: PendingMessage): QueueItemState {
+  const text = message.text || (message.images > 0 ? `${message.images} image${message.images === 1 ? "" : "s"}` : "");
+  return { id: pendingQueueItemId(message.id), prompt: text, parts: [{ type: "text", text }] };
 }
 
 // ---------------------------------------------------------------------------
@@ -342,16 +397,38 @@ export function createThreadAdapter(deps: ThreadAdapterDeps): ExternalStoreAdapt
   };
 
   const { items, steerItems } = queueItemsOf(deps.view);
+  /** Run `work` for the tray row `queueItemId`, or do nothing if it is not one. */
+  const onPending = (queueItemId: string, work: (path: string, id: string) => Promise<unknown>): void => {
+    const id = pendingIdOfQueueItemId(queueItemId);
+    // A row from the engine's own queue has no id of ours. The UI does not draw
+    // these controls on such a row; a stray call is a no-op, never a throw.
+    if (!id || !deps.path) return;
+    fireAndForget(work(deps.path, id));
+  };
   const queue: ExternalThreadQueueAdapter = {
     items,
     steerItems,
     enqueue: (message) => fireAndForget(send(message, "queue")),
     steer: (message) => fireAndForget(send(message, "steer")),
-    // Pi owns the queue server-side and exposes no per-item operations. These
-    // deliberately no-op rather than throw on an unguarded click.
-    move: () => {},
-    edit: () => {},
-    remove: () => {},
+    /**
+     * Only one placement is ours: into the steer lane. assistant-ui's default
+     * for that is to cancel the live run and dispatch the item; the worker
+     * instead hands the message to the engine's steering queue, which delivers
+     * it at the next turn boundary. Nothing is aborted, so the transcript
+     * carries no stop notice for a person who redirected the agent.
+     */
+    move: (queueItemId, placement) => {
+      if (placement.lane !== "steer") return;
+      onPending(queueItemId, (path, id) => deps.client.request("session/pending/steer", { path, id }));
+    },
+    edit: (queueItemId, message) => {
+      const content = contentBlocksFromAppendMessage(message);
+      if (content.length === 0) return;
+      onPending(queueItemId, (path, id) => deps.client.request("session/pending/edit", { path, id, content }));
+    },
+    remove: (queueItemId) => {
+      onPending(queueItemId, (path, id) => deps.client.request("session/pending/remove", { path, id }));
+    },
     // Keep the queue paused across a cancel so a cancelled run does not promote
     // the next queued prompt into a fresh run.
     __internal_notifyCancelled: () => {},

@@ -3,17 +3,21 @@ import { createContext, useContext } from "react";
 export type ShellLayout = "mobile" | "tablet" | "desktop";
 
 /**
- * Panel state shared by the rail, top bar, sessions and telemetry panels.
- * On desktop `sessionsOpen` / `telemetryOpen` are the docked columns; on
- * tablet and mobile they are the sheets.
+ * Column state shared by the rail, the top bar and the three side columns.
+ * On desktop `sessionsOpen` / `fleetOpen` / `telemetryOpen` are the docked
+ * columns, each collapsing on its own; on tablet and mobile they are sheets.
  */
 export interface ShellContextValue {
   layout: ShellLayout;
   sessionsOpen: boolean;
+  /** The fleet: agent work, immediately left of the monitor. */
+  fleetOpen: boolean;
   telemetryOpen: boolean;
   setSessionsOpen(open: boolean): void;
+  setFleetOpen(open: boolean): void;
   setTelemetryOpen(open: boolean): void;
   toggleSessions(): void;
+  toggleFleet(): void;
   toggleTelemetry(): void;
   /** History section inside the telemetry panel. */
   historyOpen: boolean;
@@ -40,9 +44,9 @@ export function useShell(): ShellContextValue {
 }
 
 /**
- * The same, for a component that also renders outside the shell — a popped-out
- * panel window, a test harness. It offers the shell's verbs when they are
- * there and hides them when they are not, rather than throwing.
+ * The same, for a component that also renders outside the shell — a test
+ * harness, a scoped surface. It offers the shell's verbs when they are there
+ * and hides them when they are not, rather than throwing.
  */
 export function useShellOptional(): ShellContextValue | undefined {
   return useContext(ShellContext) ?? undefined;

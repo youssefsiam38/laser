@@ -46,9 +46,10 @@ const FIT = { padding: 0.18, maxZoom: 1, interpolate: "linear" } as const;
 const LEGEND: ReadonlyArray<{ tone: AgentStatusTone; word: string }> = [
   { tone: "live", word: "Working" },
   { tone: "attention", word: "Needs you" },
-  { tone: "ok", word: "Done" },
   { tone: "danger", word: "Failed" },
-  { tone: "muted", word: "Ended" },
+  // One muted row, because finished and ended now share a colour (D-154).
+  // Each node still says which it was in its own word.
+  { tone: "muted", word: "Done or ended" },
 ];
 
 export interface MapCanvasProps {

@@ -2,9 +2,9 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { AgentHarnessBridge, BackgroundWorkOptions } from "../agents-bridge.js";
 import type { PromptProvenanceObserver } from "../prompt-provenance.js";
 import type { PiExtensionCommand, PiExtensionMessage, PiExtensionModuleName } from "@lasercode/protocol";
-import { panelsModule } from "./panels.js";
 import { accountUsageModule } from "./account-usage.js";
 import { backgroundWorkModule } from "./background-work.js";
+import { fileFreshnessModule } from "./file-freshness.js";
 import { providerLogModule } from "./provider-log.js";
 import { subagentsModule } from "./subagents.js";
 import { transcribeModule } from "./transcribe.js";
@@ -27,38 +27,6 @@ export interface CommandBus {
   on(handler: CommandHandler): () => void;
 }
 
-/**
- * Panel ids a module will answer actions for, even ones it never emitted.
- *
- * Some panels are declared by the *host* — it persists agent runs and shows
- * them for sessions that have no extension at all — and an action on one of
- * those still has to reach the module that can perform it. A module
- * claims the id prefix it owns; the `panels` module asks this before dropping
- * a command for an id it has not seen.
- */
-export interface PanelClaims {
-  /** Register a prefix. The returned function releases it. */
-  claim(prefix: string): () => void;
-  /** Has any module claimed the namespace this id is in? */
-  claimed(id: string): boolean;
-}
-
-export function createPanelClaims(): PanelClaims {
-  const prefixes = new Set<string>();
-  return {
-    claim(prefix) {
-      prefixes.add(prefix);
-      return () => {
-        prefixes.delete(prefix);
-      };
-    },
-    claimed(id) {
-      for (const prefix of prefixes) if (id.startsWith(prefix)) return true;
-      return false;
-    },
-  };
-}
-
 export interface ModuleContext {
   requestProvenance?: PromptProvenanceObserver;
   pi: ExtensionAPI;
@@ -67,16 +35,11 @@ export interface ModuleContext {
   session?: ExtensionContext;
   send: (message: OutboundMessage) => void;
   /**
-   * Commands from the worker (a panel action a person pressed). Absent when
-   * the worker that loaded this extension predates commands; modules must
-   * cope, and the panels module then simply has no inbound path.
+   * Commands from the worker (Stop on a background task, a usage refresh).
+   * Absent when the worker that loaded this extension predates commands;
+   * modules must cope, and simply have no inbound path.
    */
   commands?: CommandBus;
-  /**
-   * Panel id namespaces modules answer for. Absent only in a worker that
-   * predates it; a module must not require it.
-   */
-  panels?: PanelClaims;
   /**
    * The worker's agent harness for this session (`subagents` module). Absent
    * when the agents feature is off; the harness tools are then not registered.
@@ -131,10 +94,10 @@ export function createCommandBus(): CommandBus & { deliver(command: PiExtensionC
 export const modules: readonly LaserModule[] = [
   providerLogModule,
   accountUsageModule,
-  panelsModule,
   goalModule,
   subagentsModule,
   backgroundWorkModule,
+  fileFreshnessModule,
   transcribeModule,
   webAccessModule,
 ];

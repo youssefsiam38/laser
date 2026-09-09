@@ -16,7 +16,7 @@
 import { useMemo, type CSSProperties } from "react";
 
 import { cn } from "@/lib/utils";
-import { cssColor, parseAnsi, type AnsiSpan } from "@/panels/ansi";
+import { cssColor, parseAnsi, type AnsiSpan } from "@/lib/ansi";
 
 export function ansiSpanStyle(span: AnsiSpan): CSSProperties | undefined {
   const fg = cssColor(span.inverse ? span.bg : span.fg);

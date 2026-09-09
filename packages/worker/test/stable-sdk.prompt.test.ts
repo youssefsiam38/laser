@@ -221,9 +221,14 @@ describe("StableSdkDriver.prompt", () => {
     await driver.prompt([{ type: "text", text: "two" }]);
     await done;
 
-    const entries = (await driver.entries()) as Array<{ type: string; id: string; message?: { role: string } }>;
+    const { entries, leafId } = (await driver.entries()) as unknown as {
+      entries: Array<{ type: string; id: string; message?: { role: string } }>;
+      leafId: string | null;
+    };
     const firstUser = entries.find((e) => e.type === "message" && e.message?.role === "user")!;
     expect(firstUser).toBeDefined();
+    // The leaf is the branch in play: a session nobody has navigated sits on its last entry.
+    expect(leafId).toBe(entries.at(-1)!.id);
 
     const { state, editorText } = await driver.fork(firstUser.id);
     expect(state.path).not.toBe(first);

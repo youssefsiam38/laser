@@ -229,6 +229,24 @@ describe("Router · sessions not yet on disk", () => {
 
 const rpc = (router: Router, method: string, params: unknown = {}) => router.handle({ jsonrpc: "2.0", id: 1, method, params });
 
+describe("Router · the pending tray", () => {
+  it("routes every tray operation to the worker holding that session, and answers nothing itself", async () => {
+    const h = harness({ catalogRows: [{ path: PATH_A, cwd: CWD_A } as SessionSummary] });
+    // The tray is per session and lives in the worker; the host has no copy to
+    // serve from and must not grow one, or two clients would see two trays.
+    const calls = [
+      ["session/pending/add", { path: PATH_A, content: [{ type: "text", text: "then commit" }] }],
+      ["session/pending/edit", { path: PATH_A, id: "p-9f2c1a04", content: [{ type: "text", text: "then push" }] }],
+      ["session/pending/remove", { path: PATH_A, id: "p-9f2c1a04" }],
+      ["session/pending/steer", { path: PATH_A, id: "p-9f2c1a04" }],
+      ["session/pending/clear", { path: PATH_A }],
+    ] as const;
+    for (const [method, params] of calls) await rpc(h.router, method, params);
+    expect(h.workerRequests.map((request) => [request.cwd, request.method])).toEqual(calls.map(([method]) => [CWD_A, method]));
+    h.cleanup();
+  });
+});
+
 describe("Router · agents (docs/agents-leap)", () => {
   it("answers the definition methods from the store, never from a worker", async () => {
     const h = harness({ agents: true });
@@ -243,10 +261,17 @@ describe("Router · agents (docs/agents-leap)", () => {
       expect(await rpc(h.router, "agents/set-default", { name: "reviewer" })).toMatchObject({ result: { snapshot: { defaultAgent: "reviewer" } } });
       expect(await rpc(h.router, "agents/delete", { name: "reviewer" })).toMatchObject({ error: { message: "This agent starts new sessions. Choose another default first." } });
       expect(await rpc(h.router, "agents/set-policy", { policy: { maxDepth: 2 } })).toMatchObject({ result: { snapshot: { policy: { maxDepth: 2 } } } });
-      expect(await rpc(h.router, "agents/beam/set-model", { model: { provider: "openai", id: "gpt-5-mini" } })).toMatchObject({
+      // One method, three built-ins: each carries its choice to the agent of that name.
+      expect(await rpc(h.router, "agents/builtin/set-model", { name: "beam", model: { provider: "openai", id: "gpt-5-mini" } })).toMatchObject({
         result: { snapshot: { beam: { model: { provider: "openai", id: "gpt-5-mini" }, needsChoice: false } } },
       });
-      expect(await rpc(h.router, "agents/namer/set-model", { model: null })).toMatchObject({ result: { snapshot: { namer: { status: "unqualified" } } } });
+      const chatSet = (await rpc(h.router, "agents/builtin/set-model", { name: "chat", model: { provider: "openai", id: "gpt-5-nano" } })) as {
+        result: { snapshot: { chat: { model: unknown }; agents: Array<{ name: string; model: unknown }> } };
+      };
+      expect(chatSet.result.snapshot.chat).toEqual({ model: { provider: "openai", id: "gpt-5-nano" } });
+      expect(chatSet.result.snapshot.agents.find((a) => a.name === "chat")?.model).toEqual({ provider: "openai", id: "gpt-5-nano" });
+      expect(await rpc(h.router, "agents/builtin/set-model", { name: "chat", model: null })).toMatchObject({ result: { snapshot: { chat: { model: null } } } });
+      expect(await rpc(h.router, "agents/builtin/set-model", { name: "namer", model: null })).toMatchObject({ result: { snapshot: { namer: { status: "unqualified" } } } });
       expect(await rpc(h.router, "agents/runs/list", {})).toMatchObject({ result: { runs: [] } });
       expect(await rpc(h.router, "agents/sync", { snapshot: { revision: 1 } })).toMatchObject({ error: { message: "The app sends this to its own workers." } });
       expect(h.workerRequests).toEqual([]);

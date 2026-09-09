@@ -38,7 +38,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { money, tokens } from "@/format";
 import { cn } from "@/lib/utils";
-import { usePanelEntries } from "@/panels";
+import { useRunsForRoot } from "@/agents";
 import { useLaserStable, useLaserView, useSessionMeta } from "@/runtime";
 
 import { CheckpointHistory } from "@/components/assistant-ui/elements/checkpoint-history";
@@ -290,10 +290,10 @@ function UsageSection() {
   const workbench = useWorkbench();
   const view = useLaserView();
   const entries = view?.entries;
-  const panelEntries = usePanelEntries(view?.path);
+  const childRuns = useRunsForRoot(view?.path);
   const background = useMemo(
-    () => backgroundUsageSources(panelEntries.map((entry) => entry.panel)),
-    [panelEntries],
+    () => backgroundUsageSources(childRuns),
+    [childRuns],
   );
   const transcriptMode = useMemo(
     () => (entries ? sessionBillingMode(entries, background) : "none"),
@@ -518,10 +518,9 @@ function ToolsSection() {
   );
 }
 
-// Extension output is not a rail section any more: `setWidget` lines render as
-// `stream` islands in the dock (or as pills above the composer on a phone) and
-// `setStatus` as entries in the status line, both through the panel contract's
-// fallback (docs/ux-panels.md, src/panels/fallback.ts).
+// Extension output is not a section here. What an extension has to *show*
+// arrives in the tool call that produced it; what it has to *ask* is answered
+// inline in the transcript (docs/ux-fleet.md, "Questions").
 
 function HistorySection() {
   const { actions } = useLaserStable();

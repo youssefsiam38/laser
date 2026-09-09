@@ -269,7 +269,7 @@ describe("reconnect resume", () => {
 
     const socket = reconnect(client);
     const load = socket.frames().find((f) => f.method === "session/load")!;
-    socket.deliver({ jsonrpc: "2.0", id: load.id, result: { state: {}, replayFrom: 0 } });
+    socket.deliver({ jsonrpc: "2.0", id: load.id, result: { state: {}, replayFrom: 0, seq: 0 } });
 
     return Promise.resolve().then(() => {
       // The third argument is the `fromSeq` this very request carried, which

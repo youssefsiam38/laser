@@ -11,7 +11,7 @@ export { EmptyState } from "./EmptyState.js";
 // The queue chips, the model picker and the thinking control are catalog
 // elements now (docs/ux-elements.md): `elements/message-queue`,
 // `elements/model-selector`, `elements/reasoning-effort`.
-export { ComposerQueue, MessageQueue, QueuedChip } from "@/components/assistant-ui/elements/message-queue";
+export { ComposerQueue, MessageQueue, QueuedRow } from "@/components/assistant-ui/elements/message-queue";
 export { SessionModelSelector } from "@/components/assistant-ui/elements/model-selector";
 export { ReasoningEffort, ThinkingEffort, THINKING_LEVELS } from "@/components/assistant-ui/elements/reasoning-effort";
 export { MarkdownText } from "@/components/assistant-ui/elements/markdown-text";
@@ -31,6 +31,7 @@ export {
   type DiffView,
 } from "./diff.js";
 export {
+  isNonZeroExit,
   oneLine,
   parseBashOutput,
   pretty,

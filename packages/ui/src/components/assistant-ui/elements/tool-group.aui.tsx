@@ -19,7 +19,7 @@ import { useSearchReveal } from "@/components/thread/search-state";
  *     `MessagePrimitive.GroupedParts`, not the deprecated start/end indices.
  */
 import { useAuiState, useScrollLock, type MessagePrimitive } from "@assistant-ui/react";
-import { ChevronRight, CircleAlert, FilePen, FilePlus, FileText, FolderOpen, FolderSearch, ScanText, Search, SquareTerminal, Wrench } from "lucide-react";
+import { ChevronRight, FilePen, FilePlus, FileText, FolderOpen, FolderSearch, ScanText, Search, SquareTerminal, Wrench } from "lucide-react";
 import {
   memo,
   useCallback,
@@ -43,11 +43,12 @@ import {
   type ToolGroupMember,
   type ToolGroupSummary,
 } from "@/components/thread/tool-groups";
+import { isNonZeroExit, resultText } from "@/components/thread/tool-summary";
 import { elapsedOf, markDone, markRunning, useElapsed, useTick } from "@/components/thread/timing";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { duration } from "@/format";
 import { cn } from "@/lib/utils";
-import { activityGroupDefaultOpen, useActivityDetailLevel, useLaserState, type ActivityDetailLevel } from "@/runtime";
+import { activityGroupDefaultOpen, toolDisplayResult, useActivityDetailLevel, useLaserState, type ActivityDetailLevel } from "@/runtime";
 
 import { ReasoningText } from "./reasoning.js";
 import { activityRow, activityTrigger, collapsePanel, mono } from "./surfaces.js";
@@ -118,7 +119,11 @@ function ToolGroupRoot({
       onOpenChange={handleOpenChange}
       className={cn(
         activityRow, "group/toolgroup",
-        tone === "danger" && "before:absolute before:inset-y-1 before:start-0 before:w-0.5 before:rounded-full before:bg-danger",
+        // No rail for a failure, on purpose. A red bar down the side of the
+        // block reads as "something is wrong with the app" for what is usually
+        // an agent probing: a file that was not there, a command that came back
+        // non-zero. The failure says so in its own text, inside. `attention`
+        // keeps its rail — that one is a question waiting on a person.
         tone === "attention" &&
           "before:absolute before:inset-y-1 before:start-0 before:w-0.5 before:rounded-full before:bg-attention",
         className,
@@ -141,10 +146,9 @@ export type ToolGroupTriggerProps = Omit<React.ComponentProps<typeof Collapsible
   detail?: string | undefined;
   icon?: Icon | undefined;
   active?: boolean | undefined;
+  /** Said in the accessible name only: quiet is not the same as hidden. */
   failed?: boolean | undefined;
   attention?: boolean | undefined;
-  /** "2 failed", shown while collapsed. */
-  trailing?: string | undefined;
   elapsedMs?: number | undefined;
   /** One line per call, for the tooltip and the accessible name. */
   lines?: readonly string[] | undefined;
@@ -162,7 +166,6 @@ function ToolGroupTrigger({
   active = false,
   failed = false,
   attention = false,
-  trailing,
   elapsedMs,
   lines,
   breakdown,
@@ -183,7 +186,9 @@ function ToolGroupTrigger({
       data-slot="tool-group-trigger"
       data-active={active || undefined}
       title={lines?.join("\n")}
-      aria-label={`${accessibleSummary}. ${open ? "Collapse" : "Expand"} details.`}
+      // Nothing here goes red for a failure, so the accessible name is where
+      // a failure is still said out loud.
+      aria-label={`${accessibleSummary}.${failed ? " Something in it failed." : ""} ${open ? "Collapse" : "Expand"} details.`}
       className={cn(
         activityTrigger,
         className,
@@ -194,8 +199,6 @@ function ToolGroupTrigger({
       <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
         {active ? (
           <StatusDot status="working" size="sm" aria-hidden="true" />
-        ) : failed ? (
-          <CircleAlert className="size-3.5 text-danger" />
         ) : (
           <LeadIcon className={cn("size-3.5", attention ? "text-attention" : "text-ink-3")} />
         )}
@@ -234,7 +237,6 @@ function ToolGroupTrigger({
           <span className={cn(mono, "min-w-0 truncate", active || attention ? "text-ink-2" : "text-ink-3")}>{detail}</span>
         ) : null}
       </span>
-      {trailing && !open ? <span className={cn(mono, "shrink-0 text-danger")}>{trailing}</span> : null}
       {elapsedMs !== undefined ? (
         <span className={cn(mono, "shrink-0 tnum", active ? "text-live" : "text-ink-3")}>{duration(elapsedMs)}</span>
       ) : null}
@@ -314,11 +316,15 @@ function useGroupActivity(part: GroupPart): GroupActivity {
       const status = p.status;
       const running = status.type === "running";
       const awaiting = status.type === "requires-action";
+      const isError = p.isError === true || (status.type === "incomplete" && status.reason !== "cancelled");
       out.push({
         toolCallId: p.toolCallId,
         toolName: p.toolName,
         args: p.args,
-        isError: p.isError === true || (status.type === "incomplete" && status.reason !== "cancelled"),
+        isError,
+        // A command that ran and exited non-zero is a result: the aggregate
+        // reads exactly as it would had it exited 0 (tool-summary.ts).
+        nonZeroExit: isError && isNonZeroExit(p.toolName, true, resultText(toolDisplayResult(p))),
         running,
         awaiting,
         cancelled: status.type === "incomplete" && status.reason === "cancelled",
@@ -392,14 +398,19 @@ export function ToolGroupSummaryRow({
   }, undefined);
   const elapsed = reasoning.count > 0 ? activityElapsed : toolElapsed;
 
+  // A settled group that contains a failure is still a settled group. Nothing
+  // about the block goes red — no rail, no icon, no count — because a failure
+  // inside an agent's work is ordinary: a file it looked for and did not find,
+  // a command that came back non-zero. What went wrong is written, in red, on
+  // the row it happened to, and a group that broke still opens itself so that
+  // row is in front of the person rather than behind a fold.
   const failed = summary.hasError && isSettled(groupStatus);
-  const failures = members.filter((m) => m.isError).length;
 
   return (
     <ToolGroupRoot
       open={open}
       onOpenChange={(next) => setUserOpen({ level: activityLevel, open: next })}
-      tone={failed ? "danger" : summary.hasDecision ? "attention" : undefined}
+      tone={summary.hasDecision ? "attention" : undefined}
       data-family={summary.family}
       data-count={summary.count}
     >
@@ -410,7 +421,6 @@ export function ToolGroupSummaryRow({
         active={summary.running}
         failed={failed}
         attention={summary.hasDecision}
-        trailing={failures > 0 ? (failures === members.length ? "failed" : `${failures} failed`) : undefined}
         elapsedMs={elapsed}
         lines={summary.lines}
         breakdown={summary.breakdown}

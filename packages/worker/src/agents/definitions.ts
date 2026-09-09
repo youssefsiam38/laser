@@ -74,13 +74,14 @@ export function fallbackBeamAgent(options: { model: AgentModelChoice | null; bea
   });
 }
 
-export function fallbackChatAgent(): AgentDefinition {
+export function fallbackChatAgent(model: AgentModelChoice | null = null): AgentDefinition {
   return base("chat", "builtin", {
     description: "A general assistant for conversations not tied to a project.",
     instructions: [
       "You are a general assistant. This conversation is not tied to any project or code base.",
       "Answer directly and concisely. You work in a scratch folder of your own, not in the person's project: if they want work done in one, tell them to open a session there.",
     ].join("\n"),
+    model,
   });
 }
 
@@ -111,6 +112,7 @@ export function fallbackSnapshot(options: DefinitionsOptions = {}): AgentsSnapsh
     policy: fallbackPolicy(),
     namer: { status: "unqualified", model: null, candidates: [] },
     beam: { model: null, suggested: null, needsChoice: false },
+    chat: { model: null },
     workspaces: { beam: "", chat: "" },
   };
 }
@@ -146,7 +148,7 @@ export class DefinitionsCache {
     for (const name of BUILTIN_AGENT_NAMES) {
       if (names.has(name)) continue;
       if (name === "beam") agents.push(fallbackBeamAgent({ model: snapshot.beam.model, ...(this.options.beamSkill ? { beamSkill: this.options.beamSkill } : {}) }));
-      else if (name === "chat") agents.push(fallbackChatAgent());
+      else if (name === "chat") agents.push(fallbackChatAgent(snapshot.chat?.model ?? null));
       else agents.push(fallbackNamerAgent(snapshot.namer.model));
     }
     this.current = { ...snapshot, agents };
@@ -179,6 +181,11 @@ export class DefinitionsCache {
 
   beamModel(): AgentModelChoice | null {
     return this.current.beam.model;
+  }
+
+  /** Chat's model; null means the Chat agent follows the configured default. */
+  chatModel(): AgentModelChoice | null {
+    return this.current.chat?.model ?? null;
   }
 
   onChange(listener: (snapshot: AgentsSnapshot) => void): () => void {

@@ -5,7 +5,7 @@
  * The transcript draws diffs through the `code-diff` element — as a *card*, a
  * bordered box capped at 24rem inside a tool row. A document panel is the
  * opposite shape: no box (the island is the box), and it fills its share of
- * the dock with its own scroll. Both draw the same `CodeDiffRows` from the
+ * a column with its own scroll. Both draw the same `CodeDiffRows` from the
  * same pure `diff.ts`, so the colours, the gutter and the line semantics
  * cannot drift; only the geometry differs, which is the thing that actually
  * has to.

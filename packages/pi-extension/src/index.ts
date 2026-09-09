@@ -27,7 +27,6 @@ import type { PromptProvenanceObserver } from "./prompt-provenance.js";
 export { createPromptProvenanceObserver } from "./prompt-provenance.js";
 import { WIRE_NAMESPACE } from "@lasercode/protocol";
 import {
-  createPanelClaims,
   modules,
   type CommandBus,
   type ModuleContext,
@@ -36,11 +35,10 @@ import {
   type WebSearchHandler,
 } from "./modules/index.js";
 
-export { createCommandBus, createPanelClaims, isGoalCommand, toSessionGoal } from "./modules/index.js";
+export { createCommandBus, isGoalCommand, toSessionGoal } from "./modules/index.js";
 export type {
   CommandBus,
   CommandHandler,
-  PanelClaims,
   ModuleName,
   OutboundMessage,
   ModuleContext,
@@ -102,7 +100,6 @@ export function createLaserExtension(options: LaserExtensionOptions): InlineExte
       const ctx: ModuleContext = {
         pi,
         send: options.send,
-        panels: createPanelClaims(),
         ...(options.requestProvenance ? { requestProvenance: options.requestProvenance } : {}),
         ...(options.webSearch ? { webSearch: options.webSearch } : {}),
         ...(options.agents ? { agents: options.agents } : {}),

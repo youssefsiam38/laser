@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   ErrorCodes,
   ProtocolError,
+  backgroundTaskUpdateSchema,
   clientMethods,
   clientParamsSchemas,
   parseClientRequest,
   parseJsonLine,
+  sessionLoadResultSchema,
   type ClientMethod,
+  type ClientRequests,
 } from "../src/index.js";
 
 /** One valid params sample per method. The compiler-checked `satisfies` in schemas.ts
@@ -40,6 +43,12 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/session/steer": { path: "/s.jsonl", content: [{ type: "image", mimeType: "image/png", data: "AAAA" }] },
   "pi/session/follow_up": { path: "/s.jsonl", content: [{ type: "text", text: "later" }] },
   "pi/session/clear_queue": { path: "/s.jsonl" },
+  "session/pending/list": { path: "/s.jsonl" },
+  "session/pending/add": { path: "/s.jsonl", content: [{ type: "text", text: "check the migration too" }] },
+  "session/pending/edit": { path: "/s.jsonl", id: "p-9f2c1a04", content: [{ type: "text", text: "check the migration first" }] },
+  "session/pending/remove": { path: "/s.jsonl", id: "p-9f2c1a04" },
+  "session/pending/steer": { path: "/s.jsonl", id: "p-9f2c1a04" },
+  "session/pending/clear": { path: "/s.jsonl" },
   "pi/session/fork": { path: "/s.jsonl", entryId: "abc" },
   "pi/session/navigate": { path: "/s.jsonl", entryId: "abc", summarize: true, label: "x" },
   "pi/session/rename": { path: "/s.jsonl", name: "feature" },
@@ -91,11 +100,13 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/logs/stats": {},
   "pi/logs/clear": { sections: ["tools", "provider"] },
 
-  // --- panels ---
-  "pi/panel/action": { path: "/s.jsonl", id: "web-access:search:42", actionId: "open", value: "https://example.com" },
   "pi/account-usage/refresh": { path: "/s.jsonl" },
-  "pi/panel/read": { path: "/tmp/session.jsonl", ref: "file:/tmp/run/events.jsonl", from: 0, to: 65536 },
-  "pi/panel/list": { path: "/s.jsonl" },
+
+  // --- background tasks ---
+  "tasks/list": { path: "/s.jsonl" },
+  "tasks/output": { path: "/s.jsonl", id: "t-9f2c1a04", fromByte: 0 },
+  "tasks/stop": { path: "/s.jsonl", id: "t-9f2c1a04" },
+  "pi/task/stop": { path: "/s.jsonl", id: "t-9f2c1a04" },
 
   // --- M11 prefs ---
   "pi/prefs/get": { namespace: "theme" },
@@ -137,8 +148,7 @@ const samples: Record<ClientMethod, unknown> = {
   "agents/engine-instructions": { cwd: "/p" },
   "agents/runs/list": { path: "/s.jsonl" },
   "agents/runs/stop": { runId: "run_7", reason: "Wrong direction" },
-  "agents/beam/set-model": { model: { provider: "openai", id: "gpt-5.6-luna" } },
-  "agents/namer/set-model": { model: null },
+  "agents/builtin/set-model": { name: "chat", model: { provider: "openai", id: "gpt-5.6-luna" } },
   "agents/namer/qualify": { cwd: "/p" },
   "agents/sync": { snapshot: { revision: 3, agents: [], defaultAgent: "default" } },
 };
@@ -148,6 +158,19 @@ describe("client request schemas", () => {
     const request = { jsonrpc: "2.0", id: 1, method: "web-search/configure", params: { cwd: "/p", change: { action: "test" } } };
     expect(parseClientRequest(JSON.parse(JSON.stringify(request)))).toEqual(request);
     expect(clientParamsSchemas["web-search/configure"].safeParse({ cwd: "/p", change: { action: "test", provider: "duckduckgo" } }).success).toBe(false);
+  });
+
+  it("a built-in's model is set by name, for each of the three, and nulls back to the default", () => {
+    const schema = clientParamsSchemas["agents/builtin/set-model"];
+    for (const name of ["beam", "chat", "namer"]) {
+      expect(schema.safeParse({ name, model: null }).success).toBe(true);
+      expect(schema.safeParse({ name, model: { provider: "openai", id: "gpt-5-mini" } }).success).toBe(true);
+    }
+    // Only the built-ins: a custom agent's model is part of its definition.
+    expect(schema.safeParse({ name: "reviewer", model: null }).success).toBe(false);
+    expect(schema.safeParse({ model: null }).success).toBe(false);
+    expect(schema.safeParse({ name: "chat" }).success).toBe(false);
+    expect(schema.safeParse({ name: "chat", model: { provider: "openai", id: "x" }, extra: 1 }).success).toBe(false);
   });
 
   it("every method has a sample and every sample round-trips through JSON", () => {
@@ -167,6 +190,17 @@ describe("client request schemas", () => {
     expect(clientParamsSchemas["agents/set-policy"].safeParse({ policy: { maxDepth: 0 } }).success).toBe(false);
     expect(clientParamsSchemas["agents/set-policy"].safeParse({ policy: { budget: 3 } }).success).toBe(false);
     expect(clientParamsSchemas["session/new"].safeParse({ cwd: "/p", agentName: "beam" }).success).toBe(true);
+  });
+
+  it("names one pending message by the id the worker minted, never by index or text", () => {
+    const steer = clientParamsSchemas["session/pending/steer"];
+    expect(steer.safeParse({ path: "/s.jsonl", id: "p-9f2c1a04" }).success).toBe(true);
+    for (const id of ["", "0", "steer:0", "p-", "p-XYZ", "p-9f2c1a04!", "../p-9f2c1a04"]) {
+      expect(steer.safeParse({ path: "/s.jsonl", id }).success).toBe(false);
+    }
+    // An edit with nothing in it would empty the row rather than change it.
+    expect(clientParamsSchemas["session/pending/edit"].safeParse({ path: "/s.jsonl", id: "p-9f2c1a04", content: [] }).success).toBe(false);
+    expect(clientParamsSchemas["session/pending/add"].safeParse({ path: "/s.jsonl", content: [{ type: "text", text: "x" }], lane: "steer" }).success).toBe(false);
   });
 
   it("rejects unknown keys, wrong enums, empty content", () => {
@@ -227,6 +261,72 @@ describe("client request schemas", () => {
     expect(() =>
       clientParamsSchemas["pi/packages/install"].parse({ cwd: "/p", source: "x", scope: "user", version: "1.2.3-rc.1" }),
     ).not.toThrow();
+  });
+
+  it("round-trips a background task and refuses a widened one", () => {
+    const task = {
+      id: "t-9f2c1a04",
+      command: "pnpm -r test",
+      title: "pnpm -r test",
+      status: "running",
+      origin: "promoted",
+      startedAt: "2026-09-08T10:00:00.000Z",
+      outputBytes: 4096,
+      activity: "PASS packages/protocol",
+      logPath: "/tmp/lasercode-tasks/s/t-9f2c1a04.log",
+    };
+    expect(backgroundTaskUpdateSchema.parse(task)).toEqual(task);
+    // A terminal task keeps the reason it ended, and the exit code may be null.
+    expect(() =>
+      backgroundTaskUpdateSchema.parse({
+        ...task,
+        status: "stopped",
+        endedAt: "2026-09-08T10:04:00.000Z",
+        exitCode: null,
+        terminalReason: "you stopped it",
+      }),
+    ).not.toThrow();
+    expect(() => backgroundTaskUpdateSchema.parse({ ...task, status: "flying" })).toThrow();
+    expect(() => backgroundTaskUpdateSchema.parse({ ...task, className: "danger" })).toThrow();
+    expect(() => backgroundTaskUpdateSchema.parse({ ...task, outputBytes: -1 })).toThrow();
+  });
+
+  it("refuses a task output read for a task without a session", () => {
+    expect(() => clientParamsSchemas["tasks/output"].parse({ id: "t-1", fromByte: 0 })).toThrow();
+    expect(() => clientParamsSchemas["tasks/output"].parse({ path: "/s.jsonl", id: "t-1", fromByte: -1 })).toThrow();
+  });
+
+  it("round-trips a session/load result and keeps both sequence numbers", () => {
+    // The shape a client reads to decide whether it missed anything: `seq` is
+    // the watermark it stamps on a freshly hydrated view, `replayFrom` the
+    // earliest seq the reply covers. Dropping `seq` is what made a re-opened
+    // session ask from 0 and receive its whole transcript twice.
+    const result: ClientRequests["session/load"]["result"] = {
+      state: {
+        path: "/s.jsonl",
+        id: "s",
+        cwd: "/p",
+        model: null,
+        thinkingLevel: "medium",
+        isStreaming: false,
+        isCompacting: false,
+        steeringMode: "one-at-a-time",
+        followUpMode: "one-at-a-time",
+        autoCompactionEnabled: true,
+        messageCount: 2,
+        pendingMessageCount: 0,
+      },
+      replayFrom: 12,
+      seq: 41,
+    };
+    expect(sessionLoadResultSchema.parse(result)).toEqual(result);
+    // A fresh open answers it too, so "no live update yet" is 0, never absent.
+    expect(() => sessionLoadResultSchema.parse({ state: result.state, replayFrom: 0, seq: 0 })).not.toThrow();
+    expect(() => sessionLoadResultSchema.parse({ state: result.state, replayFrom: 0 })).toThrow();
+    expect(() => sessionLoadResultSchema.parse({ state: result.state, replayFrom: 0, seq: -1 })).toThrow();
+    expect(() => sessionLoadResultSchema.parse({ state: result.state, replayFrom: 0, seq: 1.5 })).toThrow();
+    // Strict: another counter cannot arrive without saying what it means.
+    expect(() => sessionLoadResultSchema.parse({ ...result, tail: 9 })).toThrow();
   });
 
   it("refuses a log content ref that is not a sha256", () => {

@@ -1,7 +1,7 @@
 # Product boundary
 
 Laser is the product. Pi is an exact-pinned internal coding engine. A person
-uses Laser settings, Laser features, Laser commands and Laser panels; engine
+uses Laser settings, Laser features, Laser commands and Laser surfaces; engine
 package names, paths and terminal-only controls do not cross the normal UI.
 Project settings live at `<project>/.laser/settings.json`. Laser never reads or
 writes `<project>/.pi`, adopts Pi trust state, exposes Pi passthrough, or offers

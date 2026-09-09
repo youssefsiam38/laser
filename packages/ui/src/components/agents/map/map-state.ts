@@ -2,7 +2,7 @@
  * The map's own UI state, outside React (docs/agents.md §5).
  *
  * Two hosts draw the same map — the main column and the fullscreen overlay —
- * and a third can hold it in the dock. They are different React trees, so what
+ * They are different React trees, so what
  * a person did to the map (which node is selected, where they panned, whether
  * ended agents are shown) lives here, keyed by the tree's root, and survives
  * the switch between hosts. The top bar's toggle and the shell read the same
