@@ -4,7 +4,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 **Last updated:** 2026-09-09T12:00:00+03:00 · claude-2026-09-09-agents · HEAD: 7e068e3 (v0.3.0)
 
-**Current focus:** 0.3.0, the Agents Leap, is tagged: `feat/agents` is on `main` at `7e068e3`, CI was clean before the tag, the draft carries the notes, and the publication pipeline (run 34331715953) owns public visibility and Latest. Until it finishes the state is "tag pushed; release building". No M13 row is open.
+**Current focus:** 0.3.0, the Agents Leap, is tagged: `feat/agents` is on `main` at `7e068e3`, CI was clean before the tag, the draft carries the notes, and the publication pipeline (run 34331715953) published it: public, Latest, twelve assets for x64 and ARM64. No M13 row is open.
 
 ## Milestones
 
@@ -39,7 +39,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Recently done
 
-- M13-T66: 0.3.0 tagged at `7e068e3` after clean CI 34331351877; draft with notes; publication pipeline 34331715953 dispatched (D-167).
+- M13-T66: 0.3.0 tagged at `7e068e3` after clean CI 34331351877 and published by pipeline 34331715953: public, Latest, twelve assets (D-167).
 - M13-T65: a fork is a top-level session beside its origin (D-166).
 - M13-T60/T61: the fleet's task detail is the `terminal-block` element; seven unmounted element files removed.
 - M13-T64: Namer labels every top-level call at once and no child's (D-165).
