@@ -550,6 +550,7 @@ Depends on: M12.
 | M13-T20 | Put the caret in the model search whenever a model picker opens, everywhere in the app | opening a picker focuses its search and the first keystroke filters |
 
 ---
+| M13-T66 | Release stable 0.3.0 | the Agents Leap — Laser's own harness, the fleet, Beam and Chat, the map, worktrees per child, one `inspect_fleet`, a Chat session that moves to a project — passes the staged workspace gate, the publication checks and the installer checks; source is on main, clean CI precedes the immutable tag; publication and Latest promotion are the pipeline's |
 
 ## MX · Cross-cutting (runs alongside every milestone)
 
