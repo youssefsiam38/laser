@@ -122,6 +122,20 @@ export const PI_SETTINGS_TOP_LEVEL_KEYS: readonly string[] = [
   "fullscreenCopyOnSelect",
 ];
 
+/**
+ * Keys the product defines for itself (AGENTS.md 6b). They live beside the
+ * engine's keys in both settings files, are read and written only by the
+ * product, and never cross into the engine as overrides.
+ *
+ * `disabledModels` is the off side of the model switches in Providers and
+ * models (M13-T49). The engine's `enabledModels` is a pure allow-list with no
+ * negation, so "everything except this one" cannot be written as a pattern
+ * without enumerating every other model — and an enumerated list silently
+ * hides every model added later. The disable list holds exact `provider/id`
+ * references instead; a model it does not name stays offered.
+ */
+export const LASER_SETTINGS_KEYS: readonly string[] = ["disabledModels"];
+
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: "model", title: "Model and thinking", description: "Which model starts a session, and how hard it thinks." },
   { id: "interface", title: "Interface", description: "Theme, editor, and startup behaviour." },
@@ -227,6 +241,16 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     section: "model",
     type: { control: "string-list", placeholder: "claude-*", hint: "One glob per line. The list replaces the global one; it does not extend it." },
     scopes: BOTH,
+  },
+  {
+    path: "disabledModels",
+    key: "disabledModels",
+    label: "Switched-off models",
+    description: "Models switched off in Providers and models, one per line as provider/id. Everything else stays offered, including models added later.",
+    section: "model",
+    type: { control: "string-list", placeholder: "openai/gpt-5", hint: "Exact references only, matched without regard to case. The project list replaces the global one; it does not extend it." },
+    scopes: BOTH,
+    advanced: true,
   },
   {
     path: "hideThinkingBlock",
@@ -1014,16 +1038,17 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
 ];
 
 const FIELD_BY_PATH = new Map(SETTINGS_FIELDS.map((field) => [field.path, field]));
-const PRODUCT_SETTING_KEYS = new Set(
-  SETTINGS_CLASSIFICATIONS
+const PRODUCT_SETTING_KEYS = new Set([
+  ...SETTINGS_CLASSIFICATIONS
     .filter((entry) => entry.disposition === "general" || entry.disposition === "advanced")
     .map((entry) => entry.key),
-);
+  ...LASER_SETTINGS_KEYS,
+]);
 
 export function settingsCatalog(): SettingsCatalog {
   const disposition = new Map(SETTINGS_CLASSIFICATIONS.map((entry) => [entry.key, entry.disposition]));
   const fields = SETTINGS_FIELDS.flatMap((field) => {
-    const audience = disposition.get(field.key);
+    const audience = LASER_SETTINGS_KEYS.includes(field.key) ? "general" : disposition.get(field.key);
     if (audience !== "general" && audience !== "advanced") return [];
     return [{ ...field, audience, advanced: field.advanced ?? fullConfigurationOnly(field.path) }];
   });
@@ -1063,15 +1088,29 @@ const ENGINE_PRIVATE_OVERRIDES: Doc = {
   themes: [],
 };
 
-/** Only product-owned settings may cross from `.laser` into the engine. */
+/** Only product-owned settings are read from `.laser`: the curated engine keys and the product's own. */
 export function laserEngineSettings(value: unknown): Doc {
   if (!isPlainObject(value)) return {};
-  const allowed = new Set(
-    SETTINGS_CLASSIFICATIONS
-      .filter((entry) => entry.disposition === "general" || entry.disposition === "advanced")
-      .map((entry) => entry.key),
-  );
-  return Object.fromEntries(Object.entries(value).filter(([key]) => allowed.has(key)));
+  return Object.fromEntries(Object.entries(value).filter(([key]) => PRODUCT_SETTING_KEYS.has(key)));
+}
+
+/** The engine's share of a settings document: the product's own keys never cross into it. */
+export function engineSettingsOnly(doc: Doc): Doc {
+  return Object.fromEntries(Object.entries(doc).filter(([key]) => !LASER_SETTINGS_KEYS.includes(key)));
+}
+
+/**
+ * The `disabledModels` list as a set of lower-cased canonical references,
+ * tolerant of a document that holds anything else there.
+ */
+export function disabledModelRefs(value: unknown): Set<string> {
+  if (!Array.isArray(value)) return new Set();
+  return new Set(value.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim().toLowerCase()).filter((entry) => entry !== ""));
+}
+
+/** Whether a person switched this model off. Exact reference only: a model the list does not name is on. */
+export function modelSwitchedOff(model: { provider: string; id: string }, refs: ReadonlySet<string>): boolean {
+  return refs.has(`${model.provider}/${model.id}`.toLowerCase());
 }
 
 export function readLaserProjectSettings(cwd: string): Doc {
@@ -1082,6 +1121,27 @@ export function readLaserProjectSettings(cwd: string): Doc {
   } catch {
     return {};
   }
+}
+
+/** The engine's global settings file as written, or `{}` when absent or unreadable. */
+export function readGlobalSettingsFile(agentDir: string): Doc {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(resolve(agentDir), "settings.json"), "utf8").replace(/^\uFEFF/, ""));
+    return isPlainObject(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * What the product's model switches resolve to right now: the global file
+ * merged with the project's `.laser` values, read fresh. A live session's
+ * own settings manager is not reloaded after a Settings write, so anything
+ * that must reflect the switches immediately — a session's picker — reads
+ * the files rather than the session (M13-T49).
+ */
+export function readEffectiveProductSettings(cwd: string, agentDir: string, projectTrusted: boolean | undefined): Doc {
+  return mergeSettings(readGlobalSettingsFile(agentDir), projectTrusted === false ? {} : readLaserProjectSettings(cwd));
 }
 
 /** Read a dotted path. Returns undefined when any link is missing or not an object. */
@@ -1424,7 +1484,7 @@ export class SettingsAdapter {
     // Durable: any reload of this manager — ours in `refresh()`, or one from a
     // consumer we hand it to — otherwise recomputes settings from the two files
     // and drops these values (M13-T12).
-    applyDurableOverrides(this.manager, mergeSettings(project, ENGINE_PRIVATE_OVERRIDES));
+    applyDurableOverrides(this.manager, mergeSettings(engineSettingsOnly(project), ENGINE_PRIVATE_OVERRIDES));
   }
 }
 

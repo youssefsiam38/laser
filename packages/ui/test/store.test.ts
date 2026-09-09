@@ -79,6 +79,36 @@ describe("applyUpdate", () => {
     expect(v.blocks[0]).toMatchObject({ kind: "user", text: "hi", optimistic: false });
   });
 
+  it("stamps a prompt's entry on its block the moment the engine writes it, and lends it to the tree", () => {
+    const opened = { ...view(), entries: [{ type: "message", id: "u1", parentId: null, message: { role: "user", content: [] } }, { type: "message", id: "a1", parentId: "u1", message: { role: "assistant", content: [] } }], leafId: "a1" };
+    let v = reduce({ ...initialState, open: { "/s.jsonl": opened } }, { type: "optimisticUser", path: "/s.jsonl", text: "next", images: 0 }).open["/s.jsonl"]!;
+    v = run(v, [
+      { kind: "agent_start" },
+      { kind: "message_start", role: "user" },
+      { kind: "message_end", role: "user", message: { role: "user", content: [{ type: "text", text: "next" }] }, entry: { id: "u2", parentId: "a1" } },
+      { kind: "message_start", role: "assistant" },
+      { kind: "text_delta", delta: "on it", contentIndex: 0 },
+    ]);
+    // Mid-turn: the block knows its entry, and the tree holds a copy of it
+    // so versions can be counted, while the leaf stays where the last read
+    // put it — nothing between has been read yet.
+    expect(v.running).toBe(true);
+    expect(v.blocks[0]).toMatchObject({ kind: "user", text: "next", optimistic: false, entryId: "u2" });
+    expect(v.entries.map((e) => (e as { id: string }).id)).toEqual(["u1", "a1", "u2"]);
+    expect(v.entries[2]).toMatchObject({ type: "message", id: "u2", parentId: "a1", message: { role: "user" } });
+    expect(v.leafId).toBe("a1");
+    // Already read (a refresh raced the event): no duplicate.
+    const again = applyUpdate(v, { kind: "message_end", role: "user", message: { role: "user", content: [{ type: "text", text: "next" }] }, entry: { id: "u2", parentId: "a1" } });
+    expect(again.entries).toHaveLength(3);
+  });
+
+  it("leaves a prompt without an entry to the ordinal lookup", () => {
+    let v = reduce({ ...initialState, open: { "/s.jsonl": view() } }, { type: "optimisticUser", path: "/s.jsonl", text: "hi", images: 0 }).open["/s.jsonl"]!;
+    v = run(v, [{ kind: "message_end", role: "user", message: { role: "user", content: [{ type: "text", text: "hi" }] } }]);
+    expect(v.blocks[0]).not.toHaveProperty("entryId");
+    expect(v.entries).toEqual([]);
+  });
+
   it("ignores replayed duplicates by seq and records queue, notices, and state", () => {
     let s = reduce({ ...initialState, open: { "/s.jsonl": view() } }, {
       type: "notification", method: "session/update",
@@ -132,8 +162,19 @@ describe("blocksFromEntries", () => {
     ]);
     expect(blocks.map((b) => b.kind)).toEqual(["user", "assistant", "tool"]);
     expect(blocks[0]).toMatchObject({ text: "do it", images: 1 });
+    // An entry without an id (a hand-written fixture) stamps nothing.
+    expect(blocks[0]).not.toHaveProperty("entryId");
     expect(blocks[1]).toMatchObject({ text: "ok", thinking: "t" });
     expect(blocks[2]).toMatchObject({ name: "bash", result: "a b", done: true });
+  });
+
+  it("stamps each prompt with the entry it was rebuilt from", () => {
+    const blocks = blocksFromEntries([
+      { type: "message", id: "u1", parentId: null, message: { role: "user", content: [{ type: "text", text: "one" }] } },
+      { type: "message", id: "a1", parentId: "u1", message: { role: "assistant", content: [{ type: "text", text: "1" }] } },
+      { type: "message", id: "u2", parentId: "a1", message: { role: "user", content: [{ type: "text", text: "two" }] } },
+    ]);
+    expect(blocks.filter((b) => b.kind === "user").map((b) => (b as { entryId?: string }).entryId)).toEqual(["u1", "u2"]);
   });
 
   it("keeps a turn that ended short, even when it said nothing", () => {

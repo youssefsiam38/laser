@@ -58,6 +58,7 @@ import {
   type ReactNode,
 } from "react";
 import { createAgentsActions, type AgentsActions } from "../agents/actions.js";
+import { takeWorktreeDisposition } from "../agents/worktree.js";
 import { createTasksActions, type TasksActions } from "../fleet/actions.js";
 import { HostClient } from "../client.js";
 import { initialState, reduce, type Action, type AppState, type SessionView } from "../store.js";
@@ -100,6 +101,15 @@ export type TrustRequest = HostNotifications["pi/project/trust_request"];
 // Context
 // ---------------------------------------------------------------------------
 
+/**
+ * How a session-tree move treats a running turn. The engine will not move the
+ * leaf mid-turn; `stopFirst` has the worker stop the turn and then move, as
+ * one request. Without it a move during a turn is refused, as it always was.
+ */
+export interface MoveOptions {
+  stopFirst?: boolean;
+}
+
 export interface LaserActions {
   /** `session/load` (+ `pi/session/entries` on first open) and select it. */
   openSession(path: string): Promise<void>;
@@ -118,19 +128,26 @@ export interface LaserActions {
   listModels(): Promise<ModelRef[]>;
   rename(name: string): Promise<void>;
   compact(instructions?: string): Promise<void>;
-  /** Fork before `entryId` into a new session and select it. */
-  fork(entryId: string): Promise<void>;
+  /**
+   * Fork before `entryId` into a new session and select it. `stopFirst` is
+   * for a fork asked for while a turn runs: the worker stops that turn first
+   * (recorded on the branch being left, exactly as the Stop button would)
+   * and forks only then, in one request — so a fork that fails leaves the
+   * session stopped and untouched, never half-moved (M13-T46).
+   */
+  fork(entryId: string, options?: MoveOptions): Promise<void>;
   /**
    * Move this session's leaf to `entryId`, in this file, and re-hydrate.
    * Answers with the engine's own text for that entry when it is a prompt —
    * navigating onto a user message puts the session *before* it, which is what
    * makes editing and re-running land beside the old version instead of after
-   * it. `false` when nothing moved: a feature vetoed it, a turn is running, or
-   * the entry is gone. Whatever the reason, the person has already been told.
+   * it. `false` when nothing moved: a feature vetoed it, a turn is running and
+   * `stopFirst` was not asked for, or the entry is gone. Whatever the reason,
+   * the person has already been told.
    */
-  navigate(entryId: string): Promise<{ editorText?: string } | false>;
+  navigate(entryId: string, options?: MoveOptions): Promise<{ editorText?: string } | false>;
   /** `navigate`, plus the engine's text into the composer. The menu's "Jump to this entry". */
-  jump(entryId: string): Promise<void>;
+  jump(entryId: string, options?: MoveOptions): Promise<void>;
   refreshSessions(): Promise<void>;
   refreshEntries(): Promise<void>;
   /** Refresh cross-app allowance for the session's account provider. */
@@ -160,6 +177,8 @@ export interface LaserActions {
   restartWorker(cwd: string): Promise<void>;
   /** Tell the host this session has been read up to its latest update. */
   markSeen(path: string, seq: number, force?: boolean): void;
+  /** The composer has taken the text a jump or fork handed back for `path`. */
+  takeEditorText(path: string): void;
   dismissToast(id: number): void;
   toast(level: "info" | "warning" | "error", text: string): void;
   /** Agent definitions, runs, Beam and Namer (`agents/*`). See agents/actions.ts for failure styles. */
@@ -578,6 +597,14 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    * thread; without this they race and each one's snapshot clobbers the other.
    */
   const openInFlight = useRef(new Map<string, { promise: Promise<void>; select: boolean }>());
+  /**
+   * Sessions whose leaf is being moved right now (`navigate`, `fork`). A
+   * move that stops a turn first settles that turn *inside* the request, and
+   * the transcript re-reads the tree whenever a turn settles: that re-read
+   * would race the move — and after a fork the old path is not served at all.
+   * The move re-hydrates when it lands, so the re-read has nothing to add.
+   */
+  const moving = useRef(new Set<string>());
 
   /**
    * `select: false` loads without making the session current: a scoped
@@ -888,16 +915,28 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       }
     };
 
-    const fork = async (entryId: string) => {
+    const fork = async (entryId: string, options?: MoveOptions) => {
       const path = requireCurrent();
-      const { state: session, editorText } = await client.request("pi/session/fork", { path, entryId });
-      client.untrack(path);
-      client.track(session.path, 0);
-      // Read the fork's transcript before putting it on screen. Switching
-      // first and hydrating after an await shows an empty transcript for a
-      // frame and rebuilds the thread runtime twice; both dispatches land in
-      // one task instead.
-      const { entries, leafId } = await client.request("pi/session/entries", { path: session.path });
+      moving.current.add(path);
+      let session: SessionState;
+      let editorText: string | undefined;
+      let entries: unknown[];
+      let leafId: string | null | undefined;
+      try {
+        // A stop asked for here reaches this store as the original session's
+        // own updates (the aborted reply, then settled) before the reply
+        // below: its transcript records the stop before it is left behind.
+        ({ state: session, editorText } = await client.request("pi/session/fork", { path, entryId, ...(options?.stopFirst ? { stopFirst: true } : {}) }));
+        client.untrack(path);
+        client.track(session.path, 0);
+        // Read the fork's transcript before putting it on screen. Switching
+        // first and hydrating after an await shows an empty transcript for a
+        // frame and rebuilds the thread runtime twice; both dispatches land in
+        // one task instead.
+        ({ entries, leafId } = await client.request("pi/session/entries", { path: session.path }));
+      } finally {
+        moving.current.delete(path);
+      }
       dispatch({ type: "forked", from: path, state: session });
       dispatch({ type: "hydrate", path: session.path, entries, leafId });
       if (editorText) {
@@ -915,16 +954,23 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
      * refuses while a turn is streaming and an extension may veto it; both are
      * answered here rather than swallowed, so no control is a silent no-op.
      */
-    const navigate = async (entryId: string): Promise<{ editorText?: string } | false> => {
+    const navigate = async (entryId: string, options?: MoveOptions): Promise<{ editorText?: string } | false> => {
       const path = requireCurrent();
-      const { editorText, cancelled } = await client.request("pi/session/navigate", { path, entryId });
-      if (cancelled) {
-        dispatch({ type: "toast", level: "warning", text: "A feature stopped that change." });
-        return false;
+      moving.current.add(path);
+      try {
+        // The worker owns stop-then-move: a failure after the stop leaves the
+        // session stopped and unmoved, and the error reaches `guard` as usual.
+        const { editorText, cancelled } = await client.request("pi/session/navigate", { path, entryId, ...(options?.stopFirst ? { stopFirst: true } : {}) });
+        if (cancelled) {
+          dispatch({ type: "toast", level: "warning", text: "A feature stopped that change." });
+          return false;
+        }
+        const { entries, leafId } = await client.request("pi/session/entries", { path });
+        dispatch({ type: "hydrate", path, entries, leafId });
+        return editorText !== undefined ? { editorText } : {};
+      } finally {
+        moving.current.delete(path);
       }
-      const { entries, leafId } = await client.request("pi/session/entries", { path });
-      dispatch({ type: "hydrate", path, entries, leafId });
-      return editorText !== undefined ? { editorText } : {};
     };
 
     return {
@@ -964,12 +1010,12 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
             ...(instructions !== undefined ? { instructions } : {}),
           });
         }).then(() => undefined),
-      fork: (entryId) => guard(() => fork(entryId)).then(() => undefined),
-      navigate: (entryId) => guard(() => navigate(entryId)).then((result) => result ?? false),
-      jump: (entryId) =>
+      fork: (entryId, options) => guard(() => fork(entryId, options)).then(() => undefined),
+      navigate: (entryId, options) => guard(() => navigate(entryId, options)).then((result) => result ?? false),
+      jump: (entryId, options) =>
         guard(async () => {
           const path = requireCurrent();
-          const moved = await navigate(entryId);
+          const moved = await navigate(entryId, options);
           // Navigating onto a prompt leaves the session before it and hands
           // its text back: that text belongs in the composer, not nowhere.
           if (moved && moved.editorText !== undefined) {
@@ -984,6 +1030,9 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       refreshEntries: () =>
         guard(async () => {
           const path = requireCurrent();
+          // A move in flight re-hydrates this session itself; a read now
+          // could land after it with the leaf as it was.
+          if (moving.current.has(path)) return;
           const { entries, leafId } = await client.request("pi/session/entries", { path });
           dispatch({ type: "entries", path, entries, leafId });
         }).then(() => undefined),
@@ -1079,6 +1128,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       markSeen,
       dismissToast: (id) => dispatch({ type: "dismissToast", id }),
       toast: (level, text) => dispatch({ type: "toast", level, text }),
+      takeEditorText: (path) => dispatch({ type: "editorTextTaken", path }),
       agents: agentsActions,
       tasks: tasksActions,
     };
@@ -1247,7 +1297,9 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           await client.request("pi/session/rename", { path, name });
         },
         deleteSession: async (path) => {
-          await client.request("pi/session/delete", { path });
+          // The delete confirmation left its answer about the child's worktree
+          // here; absent, the host keeps it (M13-T42).
+          await client.request("pi/session/delete", { path, worktree: takeWorktreeDisposition(path) });
         },
         loadSession: (path) => openSession(path),
         refreshSessions,
@@ -1600,7 +1652,7 @@ export function LaserThreadScope({ path, onPathChange, filter, createIn, unavail
           await client.request("pi/session/rename", { path: target, name });
         },
         deleteSession: async (target) => {
-          await client.request("pi/session/delete", { path: target });
+          await client.request("pi/session/delete", { path: target, worktree: takeWorktreeDisposition(target) });
         },
         loadSession: (target) =>
           openSession(target, { select: false }).catch((error: unknown) => {

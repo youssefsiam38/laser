@@ -77,6 +77,25 @@ describe("AttentionTracker", () => {
     expect(a.attentionOf(PATH)).toBe<SessionAttention>("idle");
   });
 
+  it("never marks a session nobody has prompted as unread (M13-T47)", () => {
+    // An empty chat's row changes only because it was created. Stamping it
+    // finished_unread made the launcher refuse to reuse it and start another
+    // on every press of +. A session with a message keeps the ordinary rule.
+    const a = tracker();
+    a.observeUpdate(PATH, CWD, "agent_start", 1);
+    clock += 1000;
+    a.markSeen(PATH, CWD, 1);
+    clock += 1000;
+    // Finished, and changed after it was last seen: the ordinary unread shape.
+    a.observeUpdate(PATH, CWD, "agent_end", 2);
+    const later = iso(clock);
+    const row = { path: PATH, id: "a", cwd: CWD, createdAt: later, modifiedAt: later };
+    const [empty] = a.decorate([{ ...row, messageCount: 0 }]);
+    const [written] = a.decorate([{ ...row, messageCount: 1, firstMessage: "hi" }]);
+    expect(empty?.attention).toBe<SessionAttention>("idle");
+    expect(written?.attention).toBe<SessionAttention>("finished_unread");
+  });
+
   it("uses the session file's mtime, so a session driven from a terminal turns up unread", () => {
     const a = tracker();
     a.markSeen(PATH, CWD);

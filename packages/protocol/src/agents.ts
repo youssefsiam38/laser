@@ -25,6 +25,15 @@ export const AGENT_TASK_MAX = 64 * 1024;
 export const AGENT_MESSAGE_MAX = 64 * 1024;
 /** A subagent's stored task excerpt on the run record. */
 export const AGENT_TASK_EXCERPT = 500;
+/**
+ * `inspect_agent`'s window on a child's own words: how many of its last
+ * assistant messages come back by default, at most, and how long each may be.
+ * A parent that pulls a child's whole conversation into its context defeats
+ * the point of delegating, so the cap is small and each message is excerpted.
+ */
+export const AGENT_INSPECT_MESSAGES_DEFAULT = 1;
+export const AGENT_INSPECT_MESSAGES_MAX = 10;
+export const AGENT_INSPECT_MESSAGE_EXCERPT = 1000;
 /** Namer's session-name ceiling (original request: 25–30 characters). */
 export const SESSION_NAME_MAX = 30;
 export const SESSION_NAME_MIN = 25;
@@ -59,8 +68,9 @@ export const HARNESS_TOOL_NAMES = [
   "start_agent",
   "send_agent_message",
   "list_agents",
-  "wait_for_agents",
+  "inspect_agent",
   "stop_agent",
+  "remove_agent_worktree",
   "complete_agent_run",
 ] as const;
 export type HarnessToolName = (typeof HARNESS_TOOL_NAMES)[number];
@@ -203,12 +213,50 @@ export interface AgentSkillsListing {
  * A run's state. Nothing ends a run for taking too long (D-144): an agent may
  * work for minutes or for months, and only the model, a person, a parent or a
  * failure ends it. There is no timed-out state, and nothing reads one back.
+ *
+ * Three of these are live and two of them look alike from a distance, so the
+ * distinction is written down here:
+ *
+ * - `running` — the child is working.
+ * - `needs_input` — the child is **stuck**: something it did raised a question
+ *   through the portable UI surface (`select`, `confirm`, `input`, `editor`,
+ *   and any tool that asks before it acts) and its loop is paused until
+ *   someone answers. The question is on `AgentRun.question`. It is live —
+ *   nothing has ended — and it is the one state a parent most needs to tell
+ *   apart from `running`, because only an answer moves it on. Its parent may
+ *   answer through `send_agent_message`; the person may answer in the child's
+ *   own chat; whichever comes first settles it.
+ * - `blocked` — the child **ended** by saying it could not finish
+ *   (`complete_agent_run { status: "blocked" }`); its question, if it asked
+ *   one, is its final message. Terminal, though it reads as "needs you".
  */
-export type AgentRunStatus = "queued" | "running" | "completed" | "blocked" | "failed" | "cancelled";
-export const AGENT_RUN_STATUSES: readonly AgentRunStatus[] = ["queued", "running", "completed", "blocked", "failed", "cancelled"];
-export const AGENT_RUN_TERMINAL: readonly AgentRunStatus[] = ["completed", "blocked", "failed", "cancelled"];
-export function isTerminalRunStatus(status: AgentRunStatus): boolean {
-  return AGENT_RUN_TERMINAL.includes(status);
+export type AgentRunStatus = "queued" | "running" | "needs_input" | "completed" | "blocked" | "failed" | "cancelled";
+export type AgentRunTerminalStatus = "completed" | "blocked" | "failed" | "cancelled";
+export const AGENT_RUN_STATUSES: readonly AgentRunStatus[] = ["queued", "running", "needs_input", "completed", "blocked", "failed", "cancelled"];
+export const AGENT_RUN_TERMINAL: readonly AgentRunTerminalStatus[] = ["completed", "blocked", "failed", "cancelled"];
+export function isTerminalRunStatus(status: AgentRunStatus): status is AgentRunTerminalStatus {
+  return (AGENT_RUN_TERMINAL as readonly AgentRunStatus[]).includes(status);
+}
+
+/**
+ * What a run in `needs_input` is waiting on: one unanswered question raised
+ * through the portable UI surface. The same four kinds as `UiDialogRequest`,
+ * said in run vocabulary and stripped of what only a client needs. `id` is the
+ * dialog's own id, so an answer settles exactly this question and never a
+ * later one that happened to be asked in between.
+ */
+export interface AgentRunQuestion {
+  id: string;
+  kind: "select" | "confirm" | "input" | "editor";
+  title: string;
+  /** `confirm`'s message, `input`'s placeholder, `editor`'s prefill — whichever the kind carries. */
+  detail?: string;
+  /** `select`'s choices; an answer must be one of them. */
+  options?: string[];
+  /** The tool call that raised it, when exactly one was running. */
+  toolCallId?: string;
+  toolName?: string;
+  askedAt: string;
 }
 
 /** The four identities, exactly as the architecture reference names them. */
@@ -233,8 +281,13 @@ export interface AgentRun extends AgentRunIdentity {
   /**
    * The child's own checkout, or `null` when its parent chose not to isolate
    * it (`start_agent { worktree: false }`) and it works in the parent's.
+   *
+   * `removedAt` is set once the directory has been taken away — by its parent
+   * through `remove_agent_worktree`, or by a person — so no reader offers a
+   * branch or a path that is no longer there (M13-T42). The names stay: what
+   * the run worked on is history, and history is not deleted.
    */
-  worktree: { path: string; branch: string; baseCommit: string } | null;
+  worktree: { path: string; branch: string; baseCommit: string; removedAt?: string } | null;
   /**
    * The directory this run actually works in: its worktree when it has one,
    * otherwise the checkout its parent is working in. Absent only on a run
@@ -251,6 +304,8 @@ export interface AgentRun extends AgentRunIdentity {
   goal?: { id: string; objective: string };
   model?: ModelRef | null;
   activity?: { turns: number; tools: number; currentTool?: string; label?: string; lastAt: string };
+  /** Present exactly while `status` is `needs_input`: the question nobody has answered yet. */
+  question?: AgentRunQuestion;
   startedAt: string;
   updatedAt: string;
   endedAt?: string;
@@ -260,6 +315,8 @@ export type AgentEventKind =
   | "started"
   | "message_sent"
   | "message_received"
+  /** The child raised a question and is paused on it. */
+  | "needs_input"
   | "completed"
   | "blocked"
   | "failed"
@@ -277,6 +334,42 @@ export interface AgentEvent {
   counterpart?: { sessionPath: string; label: string };
   summary: string;
 }
+
+// ---------- worktree lifecycle (M13-T42) ----------
+
+/**
+ * What a child's worktree holds that removing it would destroy, and whether
+ * it is still on disk. The same facts serve the parent's tool refusal and the
+ * person's confirmation; neither should have to ask git itself.
+ *
+ * The two counts are `null` when git could not answer (a repository that has
+ * moved, a branch already gone). `null` is not "nothing": a caller that cannot
+ * tell says so rather than promising the work is safe.
+ */
+export interface AgentWorktreeStatus {
+  path: string;
+  branch: string;
+  /** False when the directory is already gone; removing it is then bookkeeping. */
+  exists: boolean;
+  /** Commits on the branch the project's checkout does not have. */
+  unmergedCommits: number | null;
+  /** Files added, changed or deleted inside the worktree and not committed. */
+  uncommittedFiles: number | null;
+  /** Why the counts are unknown, or why a removal could not finish. */
+  detail?: string;
+}
+
+/** True when this worktree holds work that removing it would destroy. */
+export function worktreeHoldsWork(status: AgentWorktreeStatus): boolean {
+  if (!status.exists) return false;
+  return status.unmergedCommits === null || status.unmergedCommits > 0 || status.uncommittedFiles === null || status.uncommittedFiles > 0;
+}
+
+/**
+ * What `pi/session/delete` does with the deleted child's worktree. Omitting it
+ * means `keep`: a request that forgot the field never destroys work.
+ */
+export type SessionWorktreeDisposition = "keep" | "delete";
 
 export type SessionAgentKind = "root" | "child" | "beam" | "chat";
 
@@ -304,7 +397,7 @@ export interface SessionAgentRecord {
   rootPath?: string;
   runId?: string;
   /** Absent when the parent started this child without a worktree of its own. */
-  worktree?: { path: string; branch: string; baseCommit: string };
+  worktree?: { path: string; branch: string; baseCommit: string; removedAt?: string };
 }
 
 /** The custom entry type the worker writes `SessionAgentRecord` under. */
@@ -334,6 +427,22 @@ declare module "./messages.js" {
     "agents/runs/list": { params: { path?: string }; result: { runs: AgentRun[] } };
     /** A person ends a run. Recorded as user-initiated; the parent is told, with the reason when given. */
     "agents/runs/stop": { params: { runId: string; reason?: string }; result: { run: AgentRun } };
+    /**
+     * What a child session's worktree holds, by the child's session path.
+     * `null` when that session never had one. Answered by the host from git
+     * alone, so a leftover worktree can still be seen after its worker is gone.
+     */
+    "agents/worktree/status": { params: { path: string }; result: { worktree: AgentWorktreeStatus | null } };
+    /**
+     * A person removes a leftover worktree without deleting the session
+     * (M13-T42). Refused, with what it holds, when it still has unmerged
+     * commits or uncommitted files, unless `force` says the work is to be
+     * thrown away.
+     */
+    "agents/worktree/remove": {
+      params: { path: string; force?: boolean };
+      result: { removed: boolean; worktree: AgentWorktreeStatus | null };
+    };
     /**
      * A person chooses a built-in agent's model. One method for all three:
      * Beam, Chat and Namer are the same choice made in the same control, and

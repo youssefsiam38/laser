@@ -64,7 +64,7 @@ function useEmptyRuntime() { return useExternalStoreRuntime({ messages: [], isRu
 const shell: ShellContextValue = {
   layout: "desktop", sessionsOpen: true, telemetryOpen: false, setSessionsOpen: () => {}, setTelemetryOpen: () => {}, toggleSessions: () => {}, toggleTelemetry: () => {},
   historyOpen: false, setHistoryOpen: () => {}, openHistory: () => {}, toolsOpen: false, setToolsOpen: () => {}, addProjectOpen: false, setAddProjectOpen: () => {},
-  newSession: async () => {}, canCreate: true,
+  newSession: async () => {}, canCreate: true, showChat: () => {}, returnToChat: () => {},
 };
 let endRequest: ReturnType<typeof useEndAgentRequest>;
 function EndProbe() { endRequest = useEndAgentRequest(); return null; }
@@ -175,8 +175,10 @@ describe("Beam and children in the Code tab", () => {
     // Beam's group starts a Beam chat, not a session in a project.
     expect(beam.querySelector('[aria-label^="New session in"]')).toBeNull();
     expect(beam.querySelector('[aria-label="New Beam chat"]')).not.toBeNull();
-    expect(beam.querySelector('[data-slot="beam-row-mark"]')).not.toBeNull();
-    expect(container.querySelector('[data-cwd="/one"] [data-slot="beam-row-mark"]')).toBeNull();
+    // The spark belongs to the group, never to its rows: a Beam chat is a
+    // session like any other once it exists (M13-T47).
+    expect(container.querySelector('[data-slot="beam-row-mark"]')).toBeNull();
+    expect(beam.querySelectorAll('[data-slot="beam-mark"]')).toHaveLength(1);
   });
 
   it("starts a Beam chat in the window from the group, without making the workspace the current project", async () => {
@@ -224,7 +226,9 @@ describe("Beam and children in the Code tab", () => {
     expect(grandchild.querySelector('[data-slot="run-state"]')).toBeNull();
     // The parent counts what is under it, running first.
     expect(parent.querySelector('[data-slot="session-children-chip"]')?.textContent).toBe("1 running");
-    expect(child.querySelector('[data-slot="session-children-chip"]')?.textContent).toBe("1 finished");
+    // Only finished work under it: no chip — the fold says "1 finished", and
+    // the row keeps its width for the name (M13-T48).
+    expect(child.querySelector('[data-slot="session-children-chip"]')).toBeNull();
     // A child whose parent is gone sits under Detached, in its project's group.
     const detached = container.querySelector('[data-cwd="/one"] [data-slot="detached-sessions"]')!;
     expect(detached.textContent).toContain("Detached");
@@ -248,7 +252,8 @@ describe("Beam and children in the Code tab", () => {
     // child moves into the parent's finished fold — one more action to open.
     await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[0]!, status: "completed", updatedAt: "2026-09-08T03:30:00Z", endedAt: "2026-09-08T03:30:00Z" } }));
     const branch = rowTitled("Ship the release")!.closest('[data-slot="session-branch"]')!;
-    expect(branch.querySelector('[data-slot="session-children-chip"]')?.textContent).toBe("2 finished");
+    expect(branch.querySelector('[data-slot="session-children-chip"]')).toBeNull();
+    expect(branch.querySelector('[data-slot="finished-fold"]')?.textContent).toContain("2 finished");
     expect(rowTitled("Counting files")).toBeUndefined();
     await act(async () => branch.querySelector<HTMLButtonElement>('[data-slot="finished-fold"]')!.click());
     expect(rowTitled("Counting files")?.querySelector('[data-slot="run-state"]')).toBeNull();

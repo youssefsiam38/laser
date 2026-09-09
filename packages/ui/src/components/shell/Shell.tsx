@@ -16,11 +16,13 @@ import { closeFleetSheet, setFleetSheetOpen, useFleetReconcile, useFleetSheetOpe
 // Agents leap (Lane U2): the one "End agent?" confirmation, asked from row
 // menus, run tabs and the live map through `requestEndAgent`.
 import { EndAgentDialog } from "@/components/agents/EndAgentDialog";
+import { RemoveWorktreeDialog } from "@/components/agents/RemoveWorktreeDialog";
 // Beam: the bubble and its model choice, mounted once (docs/agents.md "Beam").
 import { BeamBubble, BeamModelDialog } from "@/components/beam";
 import { mergeSessions, sessionTitle, useLaserStable, useLaserState, useLaserView } from "@/runtime";
 
 import { AddProjectDialog } from "./AddProjectDialog.js";
+import { useChatNavigation } from "./chat-navigation.js";
 import { HostConnectionState, HostVersionNotice } from "@/components/assistant-ui/elements/connection-state";
 import { StartupRestorationGate } from "@/components/assistant-ui/elements/loading-state";
 import { CommandPaletteDialog } from "./CommandPalette.js";
@@ -88,7 +90,14 @@ export function Shell() {
   const versionMismatch = useLaserState((state) => state.versionMismatch);
   const { startupRestoring } = useLaserStable();
   const connection = useLaserState((state) => state.connection);
-  const content = <ShellFrame />;
+  // The workbench sits above the frame so the frame's own verbs can close it:
+  // the logo's "back to your chat" leaves Settings and Logs the same way it
+  // leaves the map (chat-navigation.tsx).
+  const content = (
+    <WorkbenchProvider>
+      <ShellFrame />
+    </WorkbenchProvider>
+  );
 
   return (
     <div className="flex h-dvh min-h-0 flex-col">
@@ -195,6 +204,14 @@ function ShellFrame() {
     setTelemetryOpen(true);
   }, [setTelemetryOpen]);
 
+  // The compact layouts' sheets, closed together when a chat is shown. The
+  // docked desktop columns are not sheets and stay where the person put them.
+  const closeSheets = useCallback(() => {
+    setSheets((s) => (s.sessions || s.telemetry ? { sessions: false, telemetry: false } : s));
+  }, []);
+  // M13-T50: the sidebar's selection and the logo, two ways back to the chat.
+  const { showChat, returnToChat } = useChatNavigation({ closeSheets });
+
   const canCreate = connection === "open" && (currentProject !== undefined || view !== undefined);
 
   const newSession = useCallback(async () => {
@@ -209,11 +226,12 @@ function ShellFrame() {
     }
     try {
       await actions.newSession(cwd);
-      setSheets((s) => ({ ...s, sessions: false }));
+      // A new session is a navigation to its chat: nothing keeps covering it.
+      showChat();
     } catch (error) {
       actions.toast("error", errorText(error));
     }
-  }, [actions, connection, currentProject, view?.state.cwd]);
+  }, [actions, connection, currentProject, showChat, view?.state.cwd]);
 
   // Keyboard: [ ] toggle rails, Cmd/Ctrl+N new session, Cmd/Ctrl+K the
   // palette. Esc is handled by the overlays themselves (Radix) and by the
@@ -309,6 +327,8 @@ function ShellFrame() {
       setAddProjectOpen,
       newSession,
       canCreate,
+      showChat,
+      returnToChat,
     }),
     [
       addProjectOpen,
@@ -318,10 +338,12 @@ function ShellFrame() {
       layout,
       newSession,
       openHistory,
+      returnToChat,
       sessionsOpen,
       setFleetOpen,
       setSessionsOpen,
       setTelemetryOpen,
+      showChat,
       telemetryOpen,
       toolsOpen,
       toggleFleet,
@@ -355,7 +377,6 @@ function ShellFrame() {
 
   return (
     <TooltipProvider>
-      <WorkbenchProvider>
       <ShellContext.Provider value={shell}>
         <div className="flex h-full w-full overflow-hidden bg-bg text-ink">
           {layout !== "mobile" && <Rail />}
@@ -409,6 +430,7 @@ function ShellFrame() {
         <TrustDialog />
         {!fleetIsColumn && <FleetSheet />}
         <EndAgentDialog />
+        <RemoveWorktreeDialog />
         <BeamBubble />
         <BeamModelDialog />
         <Toasts />
@@ -416,7 +438,6 @@ function ShellFrame() {
             phone's notices and install sheet only under 768px. */}
         <MobileSurfaces />
       </ShellContext.Provider>
-      </WorkbenchProvider>
     </TooltipProvider>
   );
 }

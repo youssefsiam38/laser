@@ -58,8 +58,10 @@ class FakeDriver implements SessionDriver {
   async setModel() { return this.st; }
   async setThinkingLevel(level: SessionState["thinkingLevel"]) { this.st = { ...this.st, thinkingLevel: level }; return this.st; }
   async rename() {} async compact() {}
-  async navigateTree() { return { cancelled: false }; }
-  async fork(entryId: string) { this.st = { ...this.st, path: `/tmp/fake/fork-${entryId}.jsonl` }; return { state: this.st, editorText: "redo" }; }
+  /** Every move, with the options the server handed over. */
+  moves: Array<{ op: "navigate" | "fork"; entryId: string; options: unknown }> = [];
+  async navigateTree(entryId: string, options?: unknown) { this.moves.push({ op: "navigate", entryId, options }); return { cancelled: false }; }
+  async fork(entryId: string, options?: unknown) { this.moves.push({ op: "fork", entryId, options }); this.st = { ...this.st, path: `/tmp/fake/fork-${entryId}.jsonl` }; return { state: this.st, editorText: "redo" }; }
   respondToUi(r: unknown) { this.answered.push(r); }
   deliverExtensionCommand(command: unknown) { this.extensionCommands.push(command); return true; }
   pendingUi() { return this.pending; }
@@ -311,6 +313,24 @@ describe("WorkerServer", () => {
     // The old path no longer routes; the new one does.
     expect((await h.call(3, "pi/model/list", { path: "/tmp/fake/s1.jsonl" })).error?.code).toBe(-32000);
     expect((await h.call(4, "pi/model/list", { path: "/tmp/fake/fork-e9.jsonl" })).result).toBeDefined();
+  });
+
+  it("hands stopFirst to the driver, whose stop-then-move it is, and never invents it", async () => {
+    const h = harness();
+    await h.call(1, "session/new", { cwd: "/tmp/fake" });
+    const driver = h.drivers[0]!;
+    // One request each: the worker does not stop with `session/cancel` and
+    // then move — a failure between the two would be the UI's to notice.
+    expect((await h.call(2, "pi/session/navigate", { path: "/tmp/fake/s1.jsonl", entryId: "e1", stopFirst: true })).result).toEqual({ cancelled: false });
+    expect((await h.call(3, "pi/session/navigate", { path: "/tmp/fake/s1.jsonl", entryId: "e2", label: "x" })).result).toEqual({ cancelled: false });
+    expect((await h.call(4, "pi/session/fork", { path: "/tmp/fake/s1.jsonl", entryId: "e3", stopFirst: true })).result).toMatchObject({ editorText: "redo" });
+    expect((await h.call(5, "pi/session/fork", { path: "/tmp/fake/fork-e3.jsonl", entryId: "e4" })).result).toMatchObject({ editorText: "redo" });
+    expect(driver.moves).toEqual([
+      { op: "navigate", entryId: "e1", options: { stopFirst: true } },
+      { op: "navigate", entryId: "e2", options: { label: "x" } },
+      { op: "fork", entryId: "e3", options: { stopFirst: true } },
+      { op: "fork", entryId: "e4", options: {} },
+    ]);
   });
 
   it("drops a session when its driver closes and disposes all on shutdown", async () => {

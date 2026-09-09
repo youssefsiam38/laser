@@ -48,6 +48,7 @@ import { useProjectFileSearch } from "./use-project-file-search.js";
  * through tooltips and Settings → Help and shortcuts owns the reference.
  */
 export function Composer() {
+  useHandedBackText();
   const mobile = useIsMobile();
   const slash = useSlashCommands();
   const mention = useHandleMentions();
@@ -145,6 +146,26 @@ function usePlaceholder(): string {
   // While the agent works, what Enter does is join the queue — say so, rather
   // than promise an interrupt the person has to ask for separately.
   return disabled ? "Reconnecting to the host…" : running ? "Queue a message…" : "Message the agent…";
+}
+
+/**
+ * A jump or a fork onto a prompt hands that prompt's text back
+ * (`setEditorText`, from the engine's own answer to "what was in that
+ * message"). The store parks it on the view; this is where it becomes the
+ * composer's text. Taken once, then cleared, so a reload or a re-render never
+ * applies it twice — and never over something the person has since typed.
+ */
+export function useHandedBackText(): void {
+  const aui = useAui();
+  const { actions } = useLaserStable();
+  const view = useLaserView();
+  const handedBack = view?.editorText;
+  const handedBackPath = view?.path;
+  useEffect(() => {
+    if (handedBack === undefined || handedBackPath === undefined) return;
+    if (handedBack !== "" && aui.composer.getState().text.trim() === "") aui.composer.setText(handedBack);
+    actions.takeEditorText(handedBackPath);
+  }, [handedBack, handedBackPath, aui, actions]);
 }
 
 function useComposerKeys(): (e: KeyboardEvent<HTMLTextAreaElement>) => void {

@@ -15,6 +15,7 @@
 import type {
   AgentEvent,
   AgentRun,
+  AgentRunQuestion,
   AgentRunStatus,
   SessionAgentKind,
 } from "@lasercode/protocol";
@@ -46,6 +47,11 @@ export interface HarnessSessionRole {
    * role block says so; nothing else changes — it keeps every tool (D-144).
    */
   isolated?: boolean;
+  /**
+   * The branch a child's own worktree is on. Present only with
+   * `isolated !== false`, so nothing ever names a branch that does not exist.
+   */
+  branch?: string;
 }
 
 export interface StartAgentInput {
@@ -82,8 +88,13 @@ export interface SendAgentMessageResult {
   sessionId: string;
   runId: string;
   status: AgentRunStatus;
-  /** "queued" when the child was busy and the message waits; "delivered" otherwise. */
-  delivery: "delivered" | "queued";
+  /**
+   * "queued" when the child was busy and the message waits; "answered" when
+   * the child was paused on a question and the message settled it (the
+   * question comes back as `answered`); "delivered" otherwise.
+   */
+  delivery: "delivered" | "queued" | "answered";
+  answered?: AgentRunQuestion;
 }
 
 /** What the model sees for one run: the identities plus outcome, never transcripts. */
@@ -98,22 +109,85 @@ export interface AgentRunSummary {
   result?: { status: "completed" | "blocked"; message: string };
   error?: string;
   endedBy?: { initiator: "parent" | "user" | "harness"; reason?: string };
+  /** Present while `status` is `needs_input`: what the child is waiting on. */
+  question?: AgentRunQuestion;
 }
 
-export interface WaitForAgentsInput {
-  runIds: string[];
-  timeoutSeconds?: number;
+/**
+ * `inspect_agent`: one child, addressed by `runId` or `sessionId` — the
+ * identities that already exist, never a fifth. `messages` is how many of the
+ * child's last assistant messages to include (default
+ * `AGENT_INSPECT_MESSAGES_DEFAULT`, at most `AGENT_INSPECT_MESSAGES_MAX`).
+ */
+export interface InspectAgentInput {
+  runId?: string;
+  sessionId?: string;
+  messages?: number;
 }
 
-export interface WaitForAgentsResult {
-  runs: AgentRunSummary[];
-  /** True when the wait ended before every run reached a terminal state. */
-  timedOut: boolean;
+/** One of the child's own assistant messages, excerpted. */
+export interface InspectedMessage {
+  at?: string;
+  text: string;
+}
+
+/**
+ * Everything `list_agents` says about a run, plus what a parent that is
+ * checking on one child actually needs: the whole task, where it works and
+ * whether that directory still exists, what it is doing right now, its last
+ * words, what it is waiting on, and its own children. Read-only: inspecting
+ * never wakes the child and never delivers anything to it.
+ */
+export interface InspectAgentResult extends AgentRunSummary {
+  /** Whole, not the excerpt the run record carries. */
+  task: string;
+  origin: AgentRun["origin"];
+  depth: number;
+  model?: string;
+  /** Where it works; the branch only when it has a worktree of its own. */
+  cwd?: string;
+  branch?: string;
+  /**
+   * `null` when it was started without one. `exists` is the directory on
+   * disk right now; the two counts are what git could say about the branch,
+   * `null` where it could not.
+   */
+  worktree: { path: string; branch: string; exists: boolean; unmergedCommits: number | null; uncommittedFiles: number | null; removedAt?: string } | null;
+  activity?: { turns: number; tools: number; currentTool?: string; lastAt: string };
+  updatedAt: string;
+  /** Newest last. Empty when the child has said nothing yet or its transcript could not be read. */
+  messages: InspectedMessage[];
+  /** Agents this child started, newest first — as `list_agents` would list them. */
+  agents: AgentRunSummary[];
 }
 
 export interface StopAgentInput {
   runId: string;
   reason?: string;
+}
+
+/**
+ * A parent removing a worktree it is finished with (M13-T42). Addressed by the
+ * identities that already exist — the child's `sessionId` or one of its
+ * `runId`s — never a fifth one.
+ */
+export interface RemoveAgentWorktreeInput {
+  sessionId?: string;
+  runId?: string;
+  /** Remove it even though the branch still holds work the parent has not merged. */
+  force?: boolean;
+}
+
+export interface RemoveAgentWorktreeResult {
+  agentName: string;
+  subagentName: string;
+  sessionId: string;
+  removed: true;
+  /** The directory that is gone, and the branch that went with it. */
+  path: string;
+  branch: string;
+  /** Set when the parent insisted over unmerged work; says what was thrown away. */
+  discarded?: { commits: number | null; uncommittedFiles: number | null };
 }
 
 export interface CompleteRunInput {
@@ -129,7 +203,7 @@ export type CompleteRunResult = { ok: true; runId: string } | { ok: false; error
  * architecture reference's `agent.completed` shape.
  */
 export interface AgentModelEvent {
-  type: "agent.completed" | "agent.blocked" | "agent.failed" | "agent.cancelled" | "agent.message";
+  type: "agent.completed" | "agent.blocked" | "agent.failed" | "agent.cancelled" | "agent.message" | "agent.needs_input";
   agentName: string;
   subagentName: string;
   sessionId: string;
@@ -152,8 +226,11 @@ export interface AgentHarnessBridge {
   sendAgentMessage(input: SendAgentMessageInput): Promise<SendAgentMessageResult>;
   /** Runs this session started, newest first. */
   listAgents(): Promise<AgentRunSummary[]>;
-  waitForAgents(input: WaitForAgentsInput, signal?: AbortSignal): Promise<WaitForAgentsResult>;
+  /** One child in depth. Read-only; never wakes it. */
+  inspectAgent(input: InspectAgentInput): Promise<InspectAgentResult>;
   stopAgent(input: StopAgentInput): Promise<AgentRunSummary>;
+  /** Parent side: remove a finished child's worktree. Refuses over unmerged work unless forced. */
+  removeAgentWorktree(input: RemoveAgentWorktreeInput): Promise<RemoveAgentWorktreeResult>;
   /** Child side: publish the final message for the active run. */
   completeRun(input: CompleteRunInput): Promise<CompleteRunResult>;
   /** Parent side: the harness pushes events here; the module delivers them to the model. */

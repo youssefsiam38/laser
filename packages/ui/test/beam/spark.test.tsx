@@ -39,6 +39,8 @@ const shell: ShellContextValue = {
   setAddProjectOpen: () => {},
   newSession: async () => {},
   canCreate: true,
+  showChat: () => {},
+  returnToChat: () => {},
 };
 
 let container: HTMLDivElement;

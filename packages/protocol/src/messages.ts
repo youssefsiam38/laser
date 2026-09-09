@@ -8,7 +8,7 @@
  * `seq`. Clients resume with `session/load { fromSeq }`.
  */
 
-import type { SessionAgentInfo } from "./agents.js";
+import type { AgentWorktreeStatus, SessionAgentInfo, SessionWorktreeDisposition } from "./agents.js";
 import { WIRE_NAMESPACE } from "./identity.js";
 import type { AccountUsageState, PiExtensionMessage, PiExtensionModuleName } from "./pi-extension.js";
 import type { FeatureScope, FeatureState, GoalAction, SessionGoal } from "./features.js";
@@ -230,6 +230,13 @@ export type SessionUpdate =
       errorMessage?: string;
       /** This turn's usage. Absent when the provider reported none. */
       usage?: Usage;
+      /**
+       * Where a user message landed in the session tree, known the moment the
+       * engine writes it — before the provider request goes out, not when the
+       * turn ends. `parentId` is the entry it continues (`null` at the root).
+       * Absent for other roles, and for a user message never persisted.
+       */
+      entry?: { id: string; parentId: string | null };
     }
   | { kind: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown }
   | { kind: "tool_execution_update"; toolCallId: string; partial: unknown }
@@ -581,8 +588,15 @@ export interface ModelCatalogEntry extends ModelRef {
   /** Startup level for this model from `modelThinkingLevels`, when set. */
   thinkingLevel?: ThinkingLevel;
   maxTokens?: number;
-  /** Selected by the `enabledModels` patterns (true for every model when unset). */
+  /**
+   * Offered by the pickers: selected by the `enabledModels` patterns (every
+   * model when unset) and not switched off in `disabledModels` (M13-T49).
+   */
   enabled: boolean;
+  /** The `enabledModels` allow-list leaves it out, whatever the switch says. Absent from older hosts. */
+  hiddenByList?: boolean;
+  /** Switched off by a person in Providers and models (`disabledModels`). Absent from older hosts. */
+  switchedOff?: boolean;
   /** Cost per million tokens, as Pi's catalogue reports it. */
   cost?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
 }
@@ -874,15 +888,32 @@ export interface ClientRequests {
   "pi/session/steer": { params: { path: string; content: ContentBlock[] }; result: {} };
   "pi/session/follow_up": { params: { path: string; content: ContentBlock[] }; result: {} };
   "pi/session/clear_queue": { params: { path: string }; result: { steering: string[]; followUp: string[] } };
-  /** Forks before `entryId` into a new session; `editorText` carries that entry's text back for editing and resending. */
-  "pi/session/fork": { params: { path: string; entryId: string }; result: { state: SessionState; editorText?: string } };
+  /**
+   * Forks before `entryId` into a new session; `editorText` carries that
+   * entry's text back for editing and resending. The engine will not move a
+   * leaf while a turn streams, so `stopFirst` asks the worker to stop the
+   * running turn first — the same stop the Stop button makes, recorded on the
+   * branch being left as `stopReason: "aborted"` — and only then fork. One
+   * request, so a fork that fails leaves the session stopped and untouched
+   * rather than half-moved (M13-T46). Idle sessions ignore it.
+   */
+  "pi/session/fork": { params: { path: string; entryId: string; stopFirst?: boolean }; result: { state: SessionState; editorText?: string } };
+  /** `stopFirst` as on `pi/session/fork`: stop the running turn, then move. */
   "pi/session/navigate": {
-    params: { path: string; entryId: string; summarize?: boolean; label?: string };
+    params: { path: string; entryId: string; summarize?: boolean; label?: string; stopFirst?: boolean };
     result: { editorText?: string; cancelled: boolean };
   };
   "pi/session/rename": { params: { path: string; name: string }; result: {} };
-  /** Permanently remove a closed persisted transcript. */
-  "pi/session/delete": { params: { path: string }; result: {} };
+  /**
+   * Permanently remove a closed persisted transcript.
+   *
+   * `worktree` says what happens to a child agent's checkout when the session
+   * being deleted has one. **Omitting it keeps the worktree** (M13-T42): the
+   * caller has to ask for a directory of work to be destroyed, because losing
+   * a child's commits to a missing field is the one failure this whole
+   * lifecycle exists to prevent. A session with no worktree ignores it.
+   */
+  "pi/session/delete": { params: { path: string; worktree?: SessionWorktreeDisposition }; result: { worktree?: AgentWorktreeStatus } };
   /**
    * Persisted Pi session entries (opaque; see Pi's session-format.md) for
    * transcript hydration. The file is an append-only *tree*, so `entries` is
@@ -999,6 +1030,12 @@ export interface ClientRequests {
       models: ModelCatalogEntry[];
       /** `enabledModels` patterns, or null when unset (every model is enabled). */
       enabledPatterns: string[] | null;
+      /**
+       * Canonical `provider/id` references a person switched off in Providers
+       * and models — the product's own `disabledModels` list, applied after the
+       * allow-list. Empty when nothing is switched off; absent from older hosts.
+       */
+      disabledModels?: string[];
       defaultProvider?: string;
       defaultModel?: string;
       defaultThinkingLevel?: ThinkingLevel;

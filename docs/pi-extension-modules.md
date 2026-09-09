@@ -14,7 +14,8 @@ ceremony, and it is deliberate: a second extension would mean a second
 
 Three modules are not package glue at all. `subagents` registers the agent
 harness tools (`start_agent`, `send_agent_message`, `list_agents`,
-`wait_for_agents`, `stop_agent`; `complete_agent_run` in a child), appends the
+`inspect_agent`, `stop_agent`, `remove_agent_worktree`; `complete_agent_run`
+in a child — there is no waiting tool), appends the
 child's role to its system prompt and delivers agent events to the parent
 model — every call goes to the worker-supplied `AgentHarnessBridge`
 (`src/agents-bridge.ts`). `background-work` owns long commands.

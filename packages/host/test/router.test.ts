@@ -11,6 +11,7 @@
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -321,6 +322,20 @@ describe("Router · agents (docs/agents-leap)", () => {
     }
   });
 
+  it("lists an unwritten session with the agent the worker already knows it runs (M13-T47)", async () => {
+    // Pi writes the file on the first message; until then the catalog cannot
+    // read a record, so the row the router synthesises must carry the agent
+    // from the worker's state — or an empty Beam chat lists as "no agent" and
+    // the launcher never recognises it as Beam's.
+    const h = harness({ agents: true });
+    const beamPath = "/sessions/beam-empty.jsonl";
+    h.open[WORKSPACES.beam] = [beamPath];
+    h.note({ ...state(beamPath, WORKSPACES.beam), agent: { agentName: "beam", kind: "beam" } });
+    const row = h.router.sessions().find((s) => s.path === beamPath);
+    expect(row?.agent).toEqual({ agentName: "beam", kind: "beam" });
+    expect(row?.messageCount).toBe(0);
+  });
+
   it("session/new: a project starts the default agent, a workspace its own, and never Namer", async () => {
     const h = harness({ agents: true });
     try {
@@ -403,5 +418,100 @@ describe("Router · agents (docs/agents-leap)", () => {
       h.cleanup();
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // M13-T42: the worktree is the parent's to merge and remove, and a person's
+  // to clear when the parent never did. Neither is allowed to happen silently.
+  describe("a child's worktree", () => {
+    /** A real repository with a real child worktree, plus a router that knows the run. */
+    function world(): { h: ReturnType<typeof harness>; child: string; project: string; worktree: string; branch: string; dir: string } {
+      const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-worktree-`));
+      const project = join(dir, "project");
+      const author = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"];
+      execFileSync("git", ["init", "-q", "-b", "main", project]);
+      writeFileSync(join(project, "a.txt"), "one\n");
+      execFileSync("git", ["-C", project, ...author, "add", "-A"]);
+      execFileSync("git", ["-C", project, ...author, "commit", "-q", "-m", "one"]);
+      const worktree = join(project, ".worktrees", "explorer-1");
+      const branch = "agents/explorer-1";
+      execFileSync("git", ["-C", project, "worktree", "add", "-q", worktree, "-b", branch, "HEAD"]);
+
+      const child = join(dir, "child.jsonl");
+      writeFileSync(child, "");
+      const row: SessionSummary = { path: child, id: "c", cwd: project, createdAt: "2026-01-01T00:00:00Z", modifiedAt: "2026-01-01T00:00:00Z", messageCount: 0 };
+      const h = harness({ agents: true, catalogRows: [row], open: {} });
+      h.runs!.upsert(run("w1", { sessionPath: child, projectCwd: project, worktree: { path: worktree, branch, baseCommit: "x" } }));
+      return { h, child, project, worktree, branch, dir };
+    }
+
+    const commitIn = (cwd: string, name: string) => {
+      const author = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"];
+      writeFileSync(join(cwd, name), "work\n");
+      execFileSync("git", ["-C", cwd, ...author, "add", "-A"]);
+      execFileSync("git", ["-C", cwd, ...author, "commit", "-q", "-m", name]);
+    };
+
+    it("answers what it holds, and says null for a session that never had one", async () => {
+      const w = world();
+      try {
+        commitIn(w.worktree, "b.txt");
+        const answered = (await rpc(w.h.router, "agents/worktree/status", { path: w.child })) as { result: { worktree: { unmergedCommits: number; branch: string } | null } };
+        expect(answered.result.worktree).toMatchObject({ branch: w.branch, exists: true, unmergedCommits: 1 });
+
+        const none = (await rpc(w.h.router, "agents/worktree/status", { path: "/sessions/nothing.jsonl" })) as { result: { worktree: null } };
+        expect(none.result.worktree).toBeNull();
+      } finally {
+        w.h.cleanup();
+        rmSync(w.dir, { recursive: true, force: true });
+      }
+    });
+
+    it("lets a person clear a leftover worktree without deleting the session, and refuses one holding work", async () => {
+      const w = world();
+      try {
+        commitIn(w.worktree, "b.txt");
+        const refused = (await rpc(w.h.router, "agents/worktree/remove", { path: w.child })) as { result: { removed: boolean; worktree: { unmergedCommits: number } } };
+        expect(refused.result.removed).toBe(false);
+        expect(refused.result.worktree.unmergedCommits).toBe(1);
+        expect(existsSync(w.worktree)).toBe(true);
+
+        const forced = (await rpc(w.h.router, "agents/worktree/remove", { path: w.child, force: true })) as { result: { removed: boolean } };
+        expect(forced.result.removed).toBe(true);
+        expect(existsSync(w.worktree)).toBe(false);
+        // The session is untouched: this is not a delete.
+        expect(existsSync(w.child)).toBe(true);
+        // The run knows: the fleet must not offer to remove it again, nor
+        // keep showing a path that is gone.
+        expect(w.h.runs!.get("w1")?.worktree?.removedAt).toBeDefined();
+      } finally {
+        w.h.cleanup();
+        rmSync(w.dir, { recursive: true, force: true });
+      }
+    });
+
+    it("keeps the worktree when a delete omits the instruction, and removes it only when asked", async () => {
+      const kept = world();
+      try {
+        expect(await rpc(kept.h.router, "pi/session/delete", { path: kept.child })).toMatchObject({ result: {} });
+        expect(existsSync(kept.child)).toBe(false);
+        expect(existsSync(kept.worktree)).toBe(true);
+      } finally {
+        kept.h.cleanup();
+        rmSync(kept.dir, { recursive: true, force: true });
+      }
+
+      const gone = world();
+      try {
+        commitIn(gone.worktree, "b.txt");
+        const answer = (await rpc(gone.h.router, "pi/session/delete", { path: gone.child, worktree: "delete" })) as { result: { worktree?: { path: string } } };
+        expect(answer.result.worktree?.path).toBe(gone.worktree);
+        // A person who was shown what it held and chose "delete" is obeyed.
+        expect(existsSync(gone.worktree)).toBe(false);
+        expect(gone.h.runs!.get("w1")?.worktree?.removedAt).toBeDefined();
+      } finally {
+        gone.h.cleanup();
+        rmSync(gone.dir, { recursive: true, force: true });
+      }
+    });
   });
 });

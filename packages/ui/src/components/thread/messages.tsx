@@ -52,6 +52,8 @@ interface LaserMeta {
   images?: number;
   optimistic?: boolean;
   userOrdinal?: number;
+  /** Pi's entry for a persisted prompt; see `Block.entryId`. */
+  entryId?: string;
   goalSetter?: boolean;
   /** Set when a parent agent, not the person, sent this prompt into a child session. */
   sentBy?: { parentPath: string; runId?: string };
@@ -139,6 +141,7 @@ export function UserMessage() {
   const { copied, copy } = useCopy();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(text);
+  const [sending, setSending] = useState(false);
   const [requestOpen, setRequestOpen] = useState(false);
   const requestAt = useAuiState(s => s.message.createdAt?.toISOString());
   const nextRequestAt = useAuiState(s => s.thread.messages.slice(s.message.index + 1).find(m => m.role === "user")?.createdAt?.toISOString());
@@ -153,7 +156,13 @@ export function UserMessage() {
     return n;
   });
   const laterMessages = useAuiState(s => s.thread.messages.slice(s.message.index + 1).filter(m => m.role === "user").length);
-  const entryId = useMemo(() => (optimistic ? undefined : userEntryAt(entries, ordinal, leafId)), [entries, leafId, ordinal, optimistic]);
+  // The entry the prompt was written to, known the moment the engine wrote
+  // it; the ordinal lookup is for a prompt reported without one.
+  const persistedEntryId = useAuiState((s) => laserMeta(s.message).entryId);
+  const entryId = useMemo(
+    () => (optimistic ? undefined : persistedEntryId ?? userEntryAt(entries, ordinal, leafId)),
+    [entries, leafId, ordinal, optimistic, persistedEntryId],
+  );
   // Every version of this prompt, oldest first: editing it in place, and
   // running its reply again, both leave the previous one here.
   const versions = useMemo(() => (entryId ? versionsOf(entries, entryId) : []), [entries, entryId]);
@@ -164,8 +173,14 @@ export function UserMessage() {
     [images],
   );
 
-  const fork = entryId ? () => void actions.fork(entryId) : undefined;
-  const jump = entryId ? () => void actions.jump(entryId) : undefined;
+  // The engine will not move the leaf while a turn streams, so during one
+  // each of these asks the worker to stop the reply first and then move —
+  // the Stop button's own stop, recorded on the branch being left (M13-T46).
+  // One request: the worker owns the sequence, and a move that fails leaves
+  // the session stopped and where it was.
+  const move = { stopFirst: busy };
+  const fork = entryId ? () => void actions.fork(entryId, move) : undefined;
+  const jump = entryId ? () => void actions.jump(entryId, move) : undefined;
   const copyPath = path ? () => void copy(path) : undefined;
   const startEdit = entryId
     ? () => {
@@ -181,23 +196,30 @@ export function UserMessage() {
    * edit into a fork, and leaves this session untouched.
    */
   const sendEdit = async (where: "here" | "fork") => {
-    if (!entryId) return;
-    if (where === "here") {
-      // Stay in the editor when it did not happen: the person's words are
-      // still in the box, and the reason is already on screen.
-      if (!(await actions.navigate(entryId))) return;
+    if (!entryId || sending) return;
+    setSending(true);
+    try {
+      if (where === "here") {
+        // Stay in the editor when it did not happen: the person's words are
+        // still in the box, and the reason is already on screen. Mid-turn the
+        // worker has stopped the reply by then, so the send below goes out,
+        // it does not wait in the tray (D-149).
+        if (!(await actions.navigate(entryId, move))) return;
+        setEditing(false);
+        await actions.send([{ type: "text", text: draft }], "prompt");
+        return;
+      }
       setEditing(false);
+      await actions.fork(entryId, move);
       await actions.send([{ type: "text", text: draft }], "prompt");
-      return;
+      clearHandedBackPrompt(aui, text);
+    } finally {
+      setSending(false);
     }
-    setEditing(false);
-    await actions.fork(entryId);
-    await actions.send([{ type: "text", text: draft }], "prompt");
-    clearHandedBackPrompt(aui, text);
   };
 
   return (
-    <MessagePrimitive.Root data-role="user" data-search-selected={searchReveal || undefined} className={cn("group/message flex flex-col items-end gap-1", MESSAGE_ROOT)}>
+    <MessagePrimitive.Root data-role="user" data-optimistic={optimistic || undefined} data-search-selected={searchReveal || undefined} className={cn("group/message flex flex-col items-end gap-1", MESSAGE_ROOT)}>
       <div className={cn("flex min-w-0 flex-col items-end gap-1", editing ? "w-full" : "max-w-[85%]")}>
         {editing ? (
           <EditMessage
@@ -207,11 +229,11 @@ export function UserMessage() {
             onSendInNewSession={() => void sendEdit("fork")}
             onCancel={() => setEditing(false)}
             laterMessages={laterMessages}
-            busy={busy}
+            stopsReply={busy}
+            busy={sending}
           />
         ) : (
           <UserBubble
-            data-optimistic={optimistic || undefined}
             data-sent-by={parentPath ? "parent" : undefined}
             className={cn(
               optimistic && "opacity-70",

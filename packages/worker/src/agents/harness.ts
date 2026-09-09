@@ -13,10 +13,16 @@
  * drivers. Nothing here imports the engine.
  *
  * Rules, in the reference's words:
- *   - `start_agent` never waits; it returns the four identities immediately.
+ *   - `start_agent` never waits; it returns the four identities immediately,
+ *     and nothing waits afterwards either: a child's ending is delivered to
+ *     its parent, and `inspect_agent` reads one child in depth meanwhile.
  *   - a successful run ends only through `complete_agent_run`; crashes,
  *     cancellations and timeouts are recorded by the harness, never chosen by
  *     the model;
+ *   - a child that raises a question and is paused on it is `needs_input`,
+ *     never `running`: the parent can tell "working" from "stuck waiting on
+ *     me" from the status alone, reads the question, and may answer it
+ *     through `send_agent_message`.
  *   - a child gets its own worktree unless its parent said otherwise
  *     (`start_agent { worktree: false }`, for a child that only reads), in
  *     which case it works in the parent's checkout and is told so; nesting
@@ -25,6 +31,8 @@
  */
 import { randomBytes } from "node:crypto";
 import {
+  AGENT_INSPECT_MESSAGES_DEFAULT,
+  AGENT_INSPECT_MESSAGES_MAX,
   AGENT_MESSAGE_MAX,
   AGENT_TASK_EXCERPT,
   AGENT_TASK_MAX,
@@ -36,11 +44,15 @@ import {
   type AgentModelChoice,
   type AgentRun,
   type AgentRunInitiator,
+  type AgentRunQuestion,
   type AgentRunStatus,
+  type AgentRunTerminalStatus,
   type HostNotifications,
   type SessionAgentInfo,
   type SessionAgentRecord,
   type SessionState,
+  type UiDialogRequest,
+  type UiDialogResponse,
 } from "@lasercode/protocol";
 import type { DriverAgentOptions, DriverEvent, SessionDriver } from "../driver.js";
 import type {
@@ -52,31 +64,38 @@ import type {
   CompleteRunInput,
   CompleteRunResult,
   HarnessSessionRole,
+  InspectAgentInput,
+  InspectAgentResult,
+  InspectedMessage,
   SendAgentMessageInput,
   SendAgentMessageResult,
+  RemoveAgentWorktreeInput,
+  RemoveAgentWorktreeResult,
   StartAgentInput,
   StartAgentResult,
   StopAgentInput,
-  WaitForAgentsInput,
-  WaitForAgentsResult,
 } from "./bridge.js";
 import { DefinitionsCache, isStartable } from "./definitions.js";
 import { HarnessError } from "./errors.js";
-import type { CreateWorktreeInput, Worktree } from "./worktrees.js";
+import { assistantMessagesOf, readSessionEntries } from "./inspect.js";
+import type { CreateWorktreeInput, Worktree, WorktreeFacts } from "./worktrees.js";
 
 /** What the harness needs from `WorktreeManager`; an interface so lifecycle tests run without git. */
 export interface WorktreeProvider {
   create(input: CreateWorktreeInput): Promise<Worktree>;
   remove(root: string, path: string, branch?: string): Promise<void>;
   ownedBy(runId: string): Worktree | undefined;
+  /** The git toplevel of a project, for a worktree this process did not create. */
+  rootOf(projectCwd: string): Promise<string | undefined>;
+  /** What the worktree still holds, measured against the parent's checkout. */
+  facts(input: { path: string; branch: string; compareCwd: string }): Promise<WorktreeFacts>;
 }
 
 /** What a child is told when it stops without its final tool. */
 export const NUDGE_TEXT = "You stopped without calling complete_agent_run. Call complete_agent_run now with status completed or blocked and your final message.";
 const ENDED_WITHOUT_TOOL = "Ended without complete_agent_run";
-const WAIT_DEFAULT_SECONDS = 600;
-const WAIT_MAX_SECONDS = 3600;
 const RESULT_EXCERPT = 2000;
+const QUESTION_SUMMARY_EXCERPT = 80;
 const ROLE_TASK_EXCERPT = 2000;
 const PENDING_EVENTS_MAX = 50;
 
@@ -139,13 +158,15 @@ interface Entry {
 
 interface RunState {
   run: AgentRun;
+  /** The whole task; the run record carries only its excerpt. */
+  task: string;
   nudged: boolean;
   /** `complete_agent_run` was called for this run. */
   completedByTool: boolean;
   lastAssistant: { text?: string; error?: string } | undefined;
 }
 
-const MODEL_EVENT_TYPE: Record<Exclude<AgentRunStatus, "queued" | "running">, AgentModelEvent["type"]> = {
+const MODEL_EVENT_TYPE: Record<AgentRunTerminalStatus, AgentModelEvent["type"]> = {
   completed: "agent.completed",
   blocked: "agent.blocked",
   failed: "agent.failed",
@@ -176,7 +197,6 @@ export class AgentHarness {
   private readonly runStates = new Map<string, RunState>();
   /** Run ids in creation order, so "newest first" is deterministic. */
   private readonly runOrder: string[] = [];
-  private readonly waiters = new Set<() => void>();
 
   constructor(options: AgentHarnessOptions) {
     this.host = options.host;
@@ -343,8 +363,23 @@ export class AgentHarness {
       this.detachSession(sessionPath);
       return;
     }
-    if (event.type !== "update") return;
     const active = this.activeRunState(sessionPath);
+    // A question through the portable UI surface pauses the child's loop
+    // until someone answers, so the run is `needs_input` for exactly as long
+    // as the question is open — the answer may come from the parent (through
+    // `send_agent_message`), from the person (in the child's own chat, which
+    // this harness never sees), from a timeout or from an abort, so the open
+    // questions are re-read from the driver rather than tracked by hand.
+    if (event.type === "ui_request") {
+      if (active) this.ask(active, event.request);
+      return;
+    }
+    if (event.type === "ui_event") {
+      if (active && event.event.method === "dialogResolved") this.reconcileQuestion(active, event.event.id);
+      return;
+    }
+    if (event.type !== "update") return;
+    if (active?.run.status === "needs_input") this.reconcileQuestion(active);
     const update = event.update;
     switch (update.kind) {
       case "turn_start": {
@@ -403,8 +438,9 @@ export class AgentHarness {
       startAgent: (input, signal) => this.startAgent(entry, input, signal),
       sendAgentMessage: (input) => this.sendAgentMessage(entry, input),
       listAgents: async () => this.listAgents(entry),
-      waitForAgents: (input, signal) => this.waitForAgents(entry, input, signal),
+      inspectAgent: (input) => this.inspectAgent(entry, input),
       stopAgent: (input) => this.stopAgent(entry, input),
+      removeAgentWorktree: (input) => this.removeAgentWorktree(entry, input),
       completeRun: async (input) => this.completeRun(entry, input),
       onEvent: (deliver) => {
         entry.eventListeners.add(deliver);
@@ -501,6 +537,9 @@ export class AgentHarness {
       subagentName,
       depth: parent.role.depth + 1,
       isolated,
+      // Only when there is one: a child with no worktree must never read a
+      // branch name in its own role block (D-156).
+      ...(worktree ? { branch: worktree.branch } : {}),
       parent: {
         sessionPath: parent.path,
         sessionId: parent.sessionId,
@@ -581,6 +620,18 @@ export class AgentHarness {
     const driver = this.host.driver(child.path);
     if (!driver) throw new HarnessError(`The agent session "${sessionId}" is no longer open.`);
     const active = this.activeRunState(child.path);
+    if (active?.run.status === "needs_input" && active.run.question) {
+      // The child is paused on a question: a message to it is an answer to
+      // that question, and nothing else could reach the child anyway — its
+      // loop is inside the tool that asked. Anything that does not fit the
+      // question is refused with the question restated, never misrouted.
+      const question = active.run.question;
+      driver.respondToUi(answerFor(question, message));
+      this.reconcileQuestion(active, question.id);
+      this.event({ kind: "message_sent", sessionPath: parent.path, runId: active.run.runId, counterpart: { sessionPath: child.path, label: labelOf(child.role) }, summary: `Answered ${labelOf(child.role)}'s question` });
+      this.event({ kind: "message_received", sessionPath: child.path, runId: active.run.runId, counterpart: { sessionPath: parent.path, label: labelOf(parent.role) }, summary: `Answer from ${labelOf(parent.role)}` });
+      return { sessionId, runId: active.run.runId, status: active.run.status, delivery: "answered", answered: question };
+    }
     const content = [{ type: "text" as const, text: message }];
     let runId: string;
     let delivery: SendAgentMessageResult["delivery"];
@@ -616,32 +667,49 @@ export class AgentHarness {
       .map(summarize);
   }
 
-  private async waitForAgents(parent: Entry, input: WaitForAgentsInput, signal?: AbortSignal): Promise<WaitForAgentsResult> {
-    const ids = [...new Set((input.runIds ?? []).map((id) => String(id).trim()).filter((id) => id !== ""))];
-    const known = ids.filter((id) => this.runStates.get(id)?.run.parent?.sessionPath === parent.path);
-    if (known.length === 0) throw new HarnessError(ids.length === 0 ? "runIds is required: the runs to wait for." : `None of ${ids.join(", ")} is a run this session started.`);
-    const seconds = Math.min(WAIT_MAX_SECONDS, Math.max(1, Math.floor(input.timeoutSeconds ?? WAIT_DEFAULT_SECONDS)));
-    const allDone = () => known.every((id) => isTerminalRunStatus(this.runStates.get(id)!.run.status));
-    if (!allDone() && !signal?.aborted) {
-      await new Promise<void>((resolve) => {
-        let done = false;
-        const finish = () => {
-          if (done) return;
-          done = true;
-          clearTimeout(timer);
-          this.waiters.delete(check);
-          signal?.removeEventListener("abort", finish);
-          resolve();
-        };
-        const check = () => {
-          if (allDone()) finish();
-        };
-        const timer = setTimeout(finish, seconds * 1000);
-        this.waiters.add(check);
-        signal?.addEventListener("abort", finish, { once: true });
-      });
-    }
-    return { runs: known.map((id) => summarize(this.runStates.get(id)!.run)), timedOut: !allDone() };
+  /**
+   * One child in depth (M13-T45). Read-only: nothing here prompts, steers or
+   * answers the child, so inspecting is always safe while it works. A live
+   * child's words come from its driver; an ended child whose driver is gone
+   * is read from its session file.
+   */
+  private async inspectAgent(parent: Entry, input: InspectAgentInput): Promise<InspectAgentResult> {
+    if (!parent.path) throw new HarnessError("This session is not ready yet.");
+    const target = this.childOf(parent, input);
+    const state = this.runStates.get(target.runId)!;
+    const run = state.run;
+    const count = messageCount(input.messages);
+    const driver = this.host.driver(run.sessionPath);
+    const source = driver ? await driver.entries().catch(() => ({ entries: [] as unknown[], leafId: null })) : await readSessionEntries(run.sessionPath);
+    const messages: InspectedMessage[] = assistantMessagesOf(source.entries, source.leafId, count);
+    const agents = this.runs()
+      .filter((candidate) => candidate.parent?.sessionPath === run.sessionPath)
+      .reverse()
+      .map(summarize);
+    return {
+      ...summarize(run),
+      task: state.task,
+      origin: run.origin,
+      depth: run.depth,
+      ...(run.model ? { model: `${run.model.provider}/${run.model.id}` } : {}),
+      ...(run.cwd !== undefined ? { cwd: run.cwd } : {}),
+      ...(run.worktree && !run.worktree.removedAt ? { branch: run.worktree.branch } : {}),
+      worktree: await this.worktreeStatus(parent, run),
+      ...(run.activity ? { activity: run.activity } : {}),
+      updatedAt: run.updatedAt,
+      messages,
+      agents,
+    };
+  }
+
+  /** The worktree as it is now: gone, still there, and what git says it holds. */
+  private async worktreeStatus(parent: Entry, run: AgentRun): Promise<InspectAgentResult["worktree"]> {
+    const worktree = run.worktree;
+    if (!worktree) return null;
+    if (worktree.removedAt) return { path: worktree.path, branch: worktree.branch, exists: false, unmergedCommits: null, uncommittedFiles: null, removedAt: worktree.removedAt };
+    const compareCwd = (parent.path ? this.host.driver(parent.path)?.state().cwd : undefined) ?? parent.projectCwd;
+    const facts = await this.worktrees.facts({ path: worktree.path, branch: worktree.branch, compareCwd });
+    return { path: worktree.path, branch: worktree.branch, exists: facts.exists, unmergedCommits: facts.unmergedCommits, uncommittedFiles: facts.uncommittedFiles };
   }
 
   private async stopAgent(parent: Entry, input: StopAgentInput): Promise<AgentRunSummary> {
@@ -651,6 +719,99 @@ export class AgentHarness {
     const reason = input.reason?.trim();
     await this.stopRun(runId, { initiator: "parent", ...(reason ? { reason } : {}) });
     return summarize(state.run);
+  }
+
+  /**
+   * The parent removes a child's worktree (M13-T42, D-157). Merging is the
+   * parent's own `git merge` in its own checkout — a tool would have to invent
+   * conflict semantics, and conflicts are where a person's judgement belongs —
+   * so this verb is only the removal, and it refuses while there is anything
+   * left to merge unless the parent says the work is to be thrown away.
+   */
+  private async removeAgentWorktree(parent: Entry, input: RemoveAgentWorktreeInput): Promise<RemoveAgentWorktreeResult> {
+    if (!parent.path) throw new HarnessError("This session is not ready yet.");
+    const target = this.childOf(parent, input);
+    const active = this.activeRunState(target.sessionPath);
+    if (active) {
+      throw new HarnessError(
+        `${target.subagentName} is still working (run ${active.run.runId}). Its ending will be delivered to you; remove the worktree then, or end the run now with stop_agent if its work is no longer needed.`,
+      );
+    }
+    const worktree = target.worktree;
+    if (!worktree) {
+      throw new HarnessError(
+        `${target.subagentName} ran in your own checkout, not a worktree of its own, so there is nothing to merge and nothing to remove. Anything it changed is already in your files.`,
+      );
+    }
+    if (worktree.removedAt) throw new HarnessError(`${target.subagentName}'s worktree has already been removed.`);
+
+    const root = this.worktrees.ownedBy(target.runId)?.root ?? (await this.worktrees.rootOf(parent.projectCwd));
+    if (!root) throw new HarnessError(`Could not find the git repository ${worktree.path} belongs to, so it was left alone. Remove it yourself if you are sure.`);
+    const compareCwd = this.host.driver(parent.path)?.state().cwd ?? parent.projectCwd;
+    const facts = await this.worktrees.facts({ path: worktree.path, branch: worktree.branch, compareCwd });
+    const force = input.force === true;
+    if (!force && holdsWork(facts)) {
+      throw new HarnessError(
+        `${target.subagentName}'s worktree still holds ${describeWork(facts)}, and removing it would destroy that. ` +
+          `Merge it into your checkout first — \`git merge ${worktree.branch}\` from ${compareCwd}, after reviewing it in ${worktree.path} — ` +
+          "then call remove_agent_worktree again. If the work is genuinely to be thrown away, call it with force true.",
+      );
+    }
+    await this.worktrees.remove(root, worktree.path, worktree.branch);
+
+    // The registry must never hold a path that no longer exists: every run of
+    // that session, and the session's own record, learn it is gone.
+    const removedAt = this.iso();
+    const entry = this.byPath.get(target.sessionPath);
+    if (entry?.record.worktree) entry.record = { ...entry.record, worktree: { ...entry.record.worktree, removedAt } };
+    for (const runId of this.runOrder) {
+      const state = this.runStates.get(runId)!;
+      if (state.run.sessionPath !== target.sessionPath || !state.run.worktree || state.run.worktree.removedAt) continue;
+      this.touch(state, (run) => ({ ...run, worktree: { ...run.worktree!, removedAt } }));
+    }
+    return {
+      agentName: target.agentName,
+      subagentName: target.subagentName,
+      sessionId: target.sessionId,
+      removed: true,
+      path: worktree.path,
+      branch: worktree.branch,
+      ...(force && holdsWork(facts) ? { discarded: { commits: facts.unmergedCommits, uncommittedFiles: facts.uncommittedFiles } } : {}),
+    };
+  }
+
+  /**
+   * The child a parent means, by `sessionId` or `runId` — the identities that
+   * already exist. Never a fifth one, and never a child another session started.
+   */
+  private childOf(
+    parent: Entry,
+    input: Pick<RemoveAgentWorktreeInput, "sessionId" | "runId">,
+  ): { sessionPath: string; sessionId: string; runId: string; agentName: string; subagentName: string; worktree: AgentRun["worktree"] } {
+    const runId = (input.runId ?? "").trim();
+    const sessionId = (input.sessionId ?? "").trim();
+    if (runId === "" && sessionId === "") throw new HarnessError("Name the agent by its sessionId or one of its runIds, as start_agent returned them.");
+    const own = (run: AgentRun): boolean => run.parent?.sessionPath === parent.path;
+
+    let run: AgentRun | undefined;
+    if (runId !== "") {
+      const state = this.runStates.get(runId);
+      if (!state || !own(state.run)) throw new HarnessError(`No run called "${runId}" was started by this session.`);
+      run = state.run;
+    } else {
+      const mine = this.runs().filter((candidate) => candidate.sessionId === sessionId && own(candidate));
+      if (mine.length === 0) throw new HarnessError(`No agent session is called "${sessionId}" among the agents this session started. Use the sessionId that start_agent returned.`);
+      run = mine[mine.length - 1];
+    }
+    const sibling = this.runs().find((candidate) => candidate.sessionPath === run!.sessionPath && candidate.worktree);
+    return {
+      sessionPath: run!.sessionPath,
+      sessionId: run!.sessionId,
+      runId: run!.runId,
+      agentName: run!.agentName,
+      subagentName: run!.subagentName,
+      worktree: sibling?.worktree ?? run!.worktree,
+    };
   }
 
   private completeRun(child: Entry, input: CompleteRunInput): CompleteRunResult {
@@ -705,7 +866,7 @@ export class AgentHarness {
       startedAt,
       updatedAt: startedAt,
     };
-    const state: RunState = { run, nudged: false, completedByTool: false, lastAssistant: undefined };
+    const state: RunState = { run, task: init.task, nudged: false, completedByTool: false, lastAssistant: undefined };
     this.runStates.set(runId, state);
     this.runOrder.push(runId);
     entry.role = { ...entry.role, runId, ...(init.goal ? { goal: init.goal } : {}) };
@@ -763,13 +924,17 @@ export class AgentHarness {
 
   private endRun(
     state: RunState,
-    status: Exclude<AgentRunStatus, "queued" | "running">,
+    status: AgentRunTerminalStatus,
     outcome: { result?: { status: "completed" | "blocked"; message: string }; error?: string; endedBy?: { initiator: AgentRunInitiator; reason?: string }; context?: string },
   ): void {
     if (isTerminalRunStatus(state.run.status)) return;
     const endedAt = this.iso();
+    // A question dies with the run: nothing may keep offering an answer to a
+    // child that is no longer listening.
+    const { question: _open, ...ended } = state.run;
+    void _open;
     state.run = {
-      ...state.run,
+      ...ended,
       status,
       updatedAt: endedAt,
       endedAt,
@@ -795,14 +960,95 @@ export class AgentHarness {
       summary: eventSummary(status, run),
     });
     this.notifyParent(run, outcome.context);
-    for (const waiter of [...this.waiters]) waiter();
+  }
+
+  // ------------------------------------------------------------- questions
+
+  /**
+   * The child raised a question. The run is `needs_input` until it is
+   * answered, and the parent is told once per question — the one event that
+   * asks the parent to do something rather than telling it something ended.
+   */
+  private ask(state: RunState, request: UiDialogRequest): void {
+    // One question at a time, the oldest first: a second dialog raised while
+    // the first is still open waits its turn (`reconcileQuestion` moves on to
+    // it once the first is settled).
+    if (isTerminalRunStatus(state.run.status) || state.run.question) return;
+    this.raise(state, request);
+  }
+
+  /** Set the run's question to this one and tell the parent. */
+  private raise(state: RunState, request: UiDialogRequest): void {
+    const question = questionOf(request, request.toolCallId !== undefined ? state.run.activity?.currentTool : undefined, this.iso());
+    this.touch(state, (run) => ({ ...run, status: "needs_input", question }));
+    const run = state.run;
+    const entry = this.byPath.get(run.sessionPath);
+    this.event({
+      kind: "needs_input",
+      sessionPath: run.sessionPath,
+      runId: run.runId,
+      ...(run.parent ? { counterpart: { sessionPath: run.parent.sessionPath, label: entry?.role.parent ? labelOf(entry.role.parent) : "parent" } } : {}),
+      summary: `Asked: ${excerpt(question.title, QUESTION_SUMMARY_EXCERPT)}`,
+    });
+    if (!run.parent) return;
+    this.event({
+      kind: "message_received",
+      sessionPath: run.parent.sessionPath,
+      runId: run.runId,
+      counterpart: { sessionPath: run.sessionPath, label: run.subagentName },
+      summary: `${run.subagentName} asked a question`,
+    });
+    this.deliverToParent(run, {
+      type: "agent.needs_input",
+      agentName: run.agentName,
+      subagentName: run.subagentName,
+      sessionId: run.sessionId,
+      runId: run.runId,
+      message: questionMessage(run, question),
+      run,
+    });
+  }
+
+  /**
+   * Re-read what the child's driver still holds open. `resolvedId` is the
+   * question the driver just said is gone, for a driver that cannot list its
+   * pending dialogs. The oldest open question is the one the run shows.
+   */
+  private reconcileQuestion(state: RunState, resolvedId?: string): void {
+    if (isTerminalRunStatus(state.run.status)) return;
+    const driver = this.host.driver(state.run.sessionPath);
+    const current = state.run.question;
+    let open: UiDialogRequest | undefined;
+    const pending = pendingUiOf(driver);
+    if (pending) {
+      open = pending[0];
+    } else if (current && current.id !== resolvedId) {
+      // A driver that cannot list its dialogs: the question stands until the
+      // driver says that exact one is gone.
+      return;
+    }
+    if (open) {
+      if (current?.id !== open.id) this.raise(state, open);
+      return;
+    }
+    if (state.run.status !== "needs_input") return;
+    const { question: _answered, ...rest } = state.run;
+    void _answered;
+    state.run = rest;
+    this.touch(state, (run) => ({ ...run, status: "running" }));
   }
 
   private notifyParent(run: AgentRun, context: string | undefined): void {
-    if (!run.parent || run.status === "queued" || run.status === "running") return;
-    const parent = this.byPath.get(run.parent.sessionPath);
+    if (!run.parent || !isTerminalRunStatus(run.status)) return;
     const message = modelMessage(run, context);
-    const event: AgentModelEvent = {
+    this.event({
+      kind: "message_received",
+      sessionPath: run.parent.sessionPath,
+      runId: run.runId,
+      counterpart: { sessionPath: run.sessionPath, label: run.subagentName },
+      summary: `${run.subagentName} ${statusWord(run.status)}`,
+    });
+    this.deliverToParent(run, {
       type: MODEL_EVENT_TYPE[run.status],
       agentName: run.agentName,
       subagentName: run.subagentName,
@@ -811,14 +1057,13 @@ export class AgentHarness {
       message,
       ...(run.endedBy ? { endedBy: run.endedBy } : {}),
       run,
-    };
-    this.event({
-      kind: "message_received",
-      sessionPath: run.parent.sessionPath,
-      runId: run.runId,
-      counterpart: { sessionPath: run.sessionPath, label: run.subagentName },
-      summary: `${run.subagentName} ${statusWord(run.status)}`,
     });
+  }
+
+  /** Hand one event to the parent's module, or hold it until the module listens. */
+  private deliverToParent(run: AgentRun, event: AgentModelEvent): void {
+    if (!run.parent) return;
+    const parent = this.byPath.get(run.parent.sessionPath);
     if (!parent) return;
     if (parent.eventListeners.size === 0) {
       parent.pendingEvents.push(event);
@@ -927,6 +1172,22 @@ export function worktreeChoice(value: unknown): boolean {
   return value;
 }
 
+/** True when removing this worktree would destroy something, or we cannot tell. */
+function holdsWork(facts: WorktreeFacts): boolean {
+  if (!facts.exists) return false;
+  return facts.unmergedCommits === null || facts.unmergedCommits > 0 || facts.uncommittedFiles === null || facts.uncommittedFiles > 0;
+}
+
+/** What it holds, in the parent model's own terms. Unknown is said as unknown. */
+export function describeWork(facts: WorktreeFacts): string {
+  const parts: string[] = [];
+  if (facts.unmergedCommits === null) parts.push("commits this app could not count");
+  else if (facts.unmergedCommits > 0) parts.push(`${facts.unmergedCommits} commit${facts.unmergedCommits === 1 ? "" : "s"} your checkout does not have`);
+  if (facts.uncommittedFiles === null) parts.push("changes this app could not read");
+  else if (facts.uncommittedFiles > 0) parts.push(`${facts.uncommittedFiles} uncommitted file${facts.uncommittedFiles === 1 ? "" : "s"}`);
+  return parts.length === 2 ? `${parts[0]} and ${parts[1]}` : (parts[0] ?? "work");
+}
+
 async function readGoal(driver: SessionDriver | undefined): Promise<{ id: string; objective: string } | null> {
   if (!driver?.goalState) return null;
   try {
@@ -953,10 +1214,11 @@ export function summarize(run: AgentRun): AgentRunSummary {
     ...(run.result ? { result: { status: run.result.status, message: excerpt(run.result.message, RESULT_EXCERPT) } } : {}),
     ...(run.error !== undefined ? { error: run.error } : {}),
     ...(run.endedBy ? { endedBy: run.endedBy } : {}),
+    ...(run.question ? { question: run.question } : {}),
   };
 }
 
-function statusWord(status: AgentRunStatus): string {
+function statusWord(status: AgentRunTerminalStatus): string {
   switch (status) {
     case "completed":
       return "finished";
@@ -966,13 +1228,10 @@ function statusWord(status: AgentRunStatus): string {
       return "failed";
     case "cancelled":
       return "was ended";
-      return "timed out";
-    default:
-      return status;
   }
 }
 
-function eventSummary(status: AgentRunStatus, run: AgentRun): string {
+function eventSummary(status: AgentRunTerminalStatus, run: AgentRun): string {
   switch (status) {
     case "completed":
       return "Finished and reported to the parent";
@@ -982,9 +1241,90 @@ function eventSummary(status: AgentRunStatus, run: AgentRun): string {
       return run.error ?? "Failed";
     case "cancelled":
       return run.endedBy?.initiator === "user" ? "Ended by the person" : run.endedBy?.initiator === "parent" ? "Ended by the parent" : "Ended";
-      return "Timed out";
-    default:
-      return status;
+  }
+}
+
+/** How many of a child's last messages `inspect_agent` returns: the default, clamped to the cap. */
+export function messageCount(value: unknown): number {
+  if (value === undefined) return AGENT_INSPECT_MESSAGES_DEFAULT;
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new HarnessError(`messages must be a number from 0 to ${AGENT_INSPECT_MESSAGES_MAX}.`);
+  return Math.min(AGENT_INSPECT_MESSAGES_MAX, Math.max(0, Math.floor(value)));
+}
+
+/** A dialog the child raised, in the run's vocabulary. */
+export function questionOf(request: UiDialogRequest, toolName: string | undefined, askedAt: string): AgentRunQuestion {
+  const base: AgentRunQuestion = {
+    id: request.id,
+    kind: request.method,
+    title: request.title,
+    askedAt,
+    ...(request.toolCallId !== undefined ? { toolCallId: request.toolCallId } : {}),
+    ...(toolName !== undefined ? { toolName } : {}),
+  };
+  switch (request.method) {
+    case "select":
+      return { ...base, options: [...request.options] };
+    case "confirm":
+      return { ...base, ...(request.message ? { detail: request.message } : {}) };
+    case "input":
+      return { ...base, ...(request.placeholder ? { detail: request.placeholder } : {}) };
+    case "editor":
+      return { ...base, ...(request.prefill ? { detail: request.prefill } : {}) };
+  }
+}
+
+const YES = /^(y|yes|ok|okay|confirm|confirmed|approve|approved|allow|accept|true)[.!]?$/i;
+const NO = /^(n|no|cancel|deny|denied|decline|reject|refuse|disallow|false)[.!]?$/i;
+
+/**
+ * The parent's message as an answer to the open question. A `select` takes
+ * one of its options (or its 1-based number), a `confirm` takes a plain yes or
+ * no, and `input` / `editor` take the text as it is. Anything else is refused
+ * with the question restated, so a message meant as an instruction can never
+ * silently pick an option.
+ */
+export function answerFor(question: AgentRunQuestion, message: string): UiDialogResponse {
+  const text = message.trim();
+  switch (question.kind) {
+    case "select": {
+      const options = question.options ?? [];
+      const exact = options.find((option) => option === text) ?? options.find((option) => option.trim().toLowerCase() === text.toLowerCase());
+      if (exact !== undefined) return { id: question.id, value: exact };
+      const index = /^\d+$/.test(text) ? Number(text) : Number.NaN;
+      if (Number.isInteger(index) && index >= 1 && index <= options.length) return { id: question.id, value: options[index - 1]! };
+      throw new HarnessError(`That is not one of the choices. The question is "${question.title}"; answer with exactly one of: ${options.map((option) => JSON.stringify(option)).join(", ")}.`);
+    }
+    case "confirm":
+      if (YES.test(text)) return { id: question.id, confirmed: true };
+      if (NO.test(text)) return { id: question.id, confirmed: false };
+      throw new HarnessError(`The question is "${question.title}"${question.detail ? ` — ${question.detail}` : ""}. Answer it with yes or no.`);
+    case "input":
+    case "editor":
+      return { id: question.id, value: message };
+  }
+}
+
+/** What the parent model reads when a child is paused on a question. */
+export function questionMessage(run: AgentRun, question: AgentRunQuestion): string {
+  const lines = [`${run.subagentName} is paused on a question and cannot continue until it is answered${question.toolName ? ` (raised by its ${question.toolName} tool)` : ""}.`, "", `Question (${question.kind}): ${question.title}`];
+  if (question.detail) lines.push(question.detail);
+  if (question.options) lines.push(`Choices: ${question.options.map((option) => JSON.stringify(option)).join(", ")}`);
+  lines.push("", `${answerHint(question)} Or leave it: the person can answer it in ${run.subagentName}'s own chat. inspect_agent with runId ${run.runId} shows whether it is still open.`);
+  return lines.join("\n");
+}
+
+/** How to answer this kind of question, in one sentence. */
+export function answerHint(question: AgentRunQuestion): string {
+  const call = "send_agent_message with its sessionId";
+  switch (question.kind) {
+    case "select":
+      return `Answer it with ${call} and one of the choices, exactly, as the message.`;
+    case "confirm":
+      return `Answer it with ${call} and "yes" or "no" as the message.`;
+    case "input":
+      return `Answer it with ${call}; the message is the answer, verbatim.`;
+    case "editor":
+      return `Answer it with ${call}; the message replaces the text, verbatim.`;
   }
 }
 
@@ -1001,8 +1341,6 @@ export function modelMessage(run: AgentRun, context: string | undefined): string
       body = run.endedBy?.reason ? `${who} Reason: ${run.endedBy.reason}` : who;
       break;
     }
-      body = run.error ?? "The run exceeded its time limit and was ended.";
-      break;
     case "failed":
       body = run.error ?? "The run failed.";
       if (context) body += `\n\nThe agent's last message before it stopped:\n${context}`;
@@ -1012,6 +1350,17 @@ export function modelMessage(run: AgentRun, context: string | undefined): string
   }
   if (run.origin === "user") body = `${body}\n\n(This run was started by the person from the agent's own chat, not by you.)`;
   return body;
+}
+
+/**
+ * The dialogs a driver still holds open, oldest first, or `undefined` for a
+ * driver that cannot say. `StableSdkDriver.pendingUi()` is the one that can;
+ * the seam interface does not carry it (the stub raises no dialogs), so this
+ * reads it the same way the server does, by shape.
+ */
+function pendingUiOf(driver: SessionDriver | undefined): UiDialogRequest[] | undefined {
+  const method = (driver as { pendingUi?: () => UiDialogRequest[] } | undefined)?.pendingUi;
+  return typeof method === "function" ? method.call(driver) : undefined;
 }
 
 function textOfMessage(message: unknown): string | undefined {

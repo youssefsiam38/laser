@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SettingDescriptor, SettingsScope } from "@lasercode/protocol";
 import {
+  LASER_SETTINGS_KEYS,
   PI_SETTINGS_TOP_LEVEL_KEYS,
   SETTINGS_CLASSIFICATIONS,
   SETTINGS_FIELDS,
@@ -83,9 +84,11 @@ describe("settings catalogue", () => {
     const missing = PI_SETTINGS_TOP_LEVEL_KEYS.filter((key) => !covered.has(key));
     expect(missing).toEqual([]);
 
-    const known = new Set(PI_SETTINGS_TOP_LEVEL_KEYS);
+    // The product's own keys are the only ones allowed beside the engine's.
+    const known = new Set([...PI_SETTINGS_TOP_LEVEL_KEYS, ...LASER_SETTINGS_KEYS]);
     const stray = [...covered].filter((key) => !known.has(key));
     expect(stray).toEqual([]);
+    expect(LASER_SETTINGS_KEYS.every((key) => covered.has(key) && !PI_SETTINGS_TOP_LEVEL_KEYS.includes(key))).toBe(true);
   });
 
   it("exposes only product settings and classifies every engine key", () => {
@@ -97,6 +100,7 @@ describe("settings catalogue", () => {
     for (const classification of SETTINGS_CLASSIFICATIONS) {
       expect(exposed.has(classification.key)).toBe(classification.disposition === "general" || classification.disposition === "advanced");
     }
+    for (const key of LASER_SETTINGS_KEYS) expect(exposed.has(key), key).toBe(true);
     expect(catalog.sections.map(({ id }) => id)).toEqual(["model", "delivery", "context", "images", "retry", "network", "shell", "warnings"]);
   });
 

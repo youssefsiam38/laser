@@ -1,6 +1,6 @@
 import { PRODUCT_NAME } from "@lasercode/protocol";
 import type * as React from "react";
-import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { FileClock, FolderPlus, MessageSquarePlus, Moon, Plus, Search, Settings, Sun, X } from "lucide-react";
 
 // Agents page (M13-T5): the phone's way in, from the sessions sheet footer.
@@ -92,6 +92,20 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
   const searching = query.trim() !== "";
   const chat = tab === "chat";
 
+  /**
+   * A row chosen in the list is a navigation to that chat (M13-T50): whatever
+   * covers the chat — the agent map, the workbench, a sheet — leaves with the
+   * click, and the sheet this list is in closes behind it. Stable on purpose:
+   * the list caches its row component per callback presence, so the row keeps
+   * the first closure it saw and reads the latest verbs through the ref.
+   */
+  const openRef = useRef(() => {});
+  openRef.current = () => {
+    shell.showChat();
+    if (variant === "sheet") shell.setSessionsOpen(false);
+  };
+  const onOpen = useCallback(() => openRef.current(), []);
+
   const newSessionIn = useCallback(
     async (cwd: string) => {
       // Beam's group is a built-in feature, not a project: it starts its own
@@ -105,12 +119,12 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
       try {
         if (isBeam) await startBeamSession(actions, snapshot);
         else await actions.newSession(cwd);
-        if (variant === "sheet") shell.setSessionsOpen(false);
+        onOpen();
       } catch (error) {
         actions.toast("error", errorText(error));
       }
     },
-    [actions, beamCwd, connection, setCurrentProject, shell, snapshot, variant],
+    [actions, beamCwd, connection, onOpen, setCurrentProject, snapshot],
   );
 
   // A chat is a conversation that is not about a project: it runs the
@@ -127,11 +141,11 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
     }
     try {
       await actions.newSession(chatCwd, { agentName: "chat" });
-      if (variant === "sheet") shell.setSessionsOpen(false);
+      onOpen();
     } catch (error) {
       actions.toast("error", errorText(error));
     }
-  }, [actions, chatCwd, connection, shell, variant]);
+  }, [actions, chatCwd, connection, onOpen]);
 
   // Search rows: every session of the tab (the rail's filter still applies),
   // with the project as the group and the list row's subtitle as the preview.
@@ -168,13 +182,13 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
       if (cwd) {
         if (!chat) setCurrentProject(cwd);
         void actions.openSession(id).then(() => {
-          if (variant === "sheet") shell.setSessionsOpen(false);
+          onOpen();
           requestAnimationFrame(() => requestAnimationFrame(() => openConversationFind(query, searchable.find(row => row.id === id)?.matchSource)));
         }).catch(error => actions.toast("error", errorText(error)));
       }
       setQuery("");
     },
-    [cwdOf, chat, actions, setCurrentProject, variant, shell, query, searchable],
+    [cwdOf, chat, actions, setCurrentProject, onOpen, query, searchable],
   );
 
   const newLabel = chat ? "New chat" : `New session${currentProject ? ` in ${shortCwd(currentProject)}` : ""}`;
@@ -266,7 +280,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
               }
             />
           ) : (
-            <ThreadList projects={projects} tab="chat" onOpen={variant === "sheet" ? () => shell.setSessionsOpen(false) : undefined} />
+            <ThreadList projects={projects} tab="chat" onOpen={onOpen} />
           )
         ) : (
           <>
@@ -287,7 +301,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
                 tab="code"
                 canCreate={connection === "open"}
                 onNewSession={(cwd) => void newSessionIn(cwd)}
-                onOpen={variant === "sheet" ? () => shell.setSessionsOpen(false) : undefined}
+                onOpen={onOpen}
               />
             )}
           </>

@@ -7,7 +7,7 @@
  * run of its own speaks the tree's own `working` / `idle`.
  */
 import type { AgentEventKind, AgentRun } from "@lasercode/protocol";
-import { ArrowDownLeft, ArrowUpRight, Ban, CircleAlert, CircleCheck, Hand, OctagonX, Play, type LucideIcon } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Ban, CircleAlert, CircleCheck, CircleHelp, Hand, OctagonX, Play, type LucideIcon } from "lucide-react";
 
 import { agentDisplayName, runStatusLabel, type AgentStatusTone, type AgentTreeNode, type AgentTreeStatus } from "@/agents";
 import type { Status } from "@/components/status";
@@ -64,7 +64,12 @@ export function nodeAgentLabel(node: AgentTreeNode): string {
 }
 
 export function nodeIsActive(node: AgentTreeNode): boolean {
-  return node.status === "running" || node.status === "queued" || node.status === "working";
+  return node.status === "running" || node.status === "queued" || node.status === "working" || node.status === "needs_input";
+}
+
+/** Live but paused on a question: active, yet not working (M13-T45). */
+export function nodeIsAsking(node: AgentTreeNode): boolean {
+  return node.status === "needs_input";
 }
 
 /** Milliseconds a node's newest run has been going, or took; `undefined` without a run. */
@@ -92,6 +97,9 @@ export function elapsedWords(ms: number): string {
 export function nodeAction(node: AgentTreeNode): string | undefined {
   const run = node.run;
   if (!run || !nodeIsActive(node)) return undefined;
+  // Paused on a question: the question is what it is "doing", and the one
+  // thing the person can act on.
+  if (run.status === "needs_input" && run.question) return run.question.title;
   const activity = run.activity;
   if (!activity) return undefined;
   return activity.label ?? activity.currentTool;
@@ -125,6 +133,8 @@ export function eventLook(kind: AgentEventKind): EventLook {
       return { icon: ArrowDownLeft, tone: "live" };
     case "completed":
       return { icon: CircleCheck, tone: "ok" };
+    case "needs_input":
+      return { icon: CircleHelp, tone: "attention" };
     case "blocked":
       return { icon: Hand, tone: "attention" };
     case "failed":
@@ -148,8 +158,8 @@ export function aggregateTone(nodes: readonly AgentTreeNode[]): AgentStatusTone 
 export function treeSummary(nodes: readonly AgentTreeNode[]): string {
   const agents = nodes.length - 1;
   if (agents <= 0) return "No agents yet";
-  const working = nodes.filter((node) => node.depth > 0 && nodeIsActive(node)).length;
-  const needYou = nodes.filter((node) => node.depth > 0 && node.status === "blocked").length;
+  const working = nodes.filter((node) => node.depth > 0 && nodeIsActive(node) && !nodeIsAsking(node)).length;
+  const needYou = nodes.filter((node) => node.depth > 0 && (node.status === "blocked" || nodeIsAsking(node))).length;
   const parts = [`${agents} agent${agents === 1 ? "" : "s"}`];
   if (working > 0) parts.push(`${working} working`);
   if (needYou > 0) parts.push(`${needYou} need${needYou === 1 ? "s" : ""} you`);

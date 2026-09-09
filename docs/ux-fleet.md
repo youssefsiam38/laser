@@ -1,8 +1,9 @@
 # The fleet — how work renders in laser
 
-Status: **decided 2026-09-08 (M13-T26).** Binding on every surface, as
-`packages/ui/DESIGN.md` is. Supersedes `docs/ux-panels.md`, which described
-the panel system this replaced.
+Status: **decided 2026-09-08 (M13-T26); scoped to one session 2026-09-09
+(M13-T51).** Binding on every surface, as `packages/ui/DESIGN.md` is.
+Supersedes `docs/ux-panels.md`, which described the panel system this
+replaced.
 
 ## Why this document exists at all
 
@@ -18,7 +19,9 @@ all of it — *what is going on, and does it need me?* — was spread across six
 surfaces, none of which answered it completely.
 
 The fleet answers it in one place. It is not a generalisation; it is a domain
-model. Two kinds of work, one column.
+model. Two kinds of work, one column — and since M13-T51, one session: the
+column is the tree of the session being read, not a roll-up of the project
+(see "One session's tree").
 
 ## The two kinds of work
 
@@ -73,7 +76,10 @@ that cannot fit is not a column.
 
 The fleet's toggle lives beside the monitor's in the top bar, and it carries a
 count of what needs a person — which wins over a count of what is merely
-going, because "3 need you" is the sentence you act on.
+going, because "3 need you" is the sentence you act on. The count is the open
+session's (below); the toggle mentions work from a deleted session only when
+the open session has nothing louder, and it names it as such, so a number on
+the toggle never reads as this session's when it is not.
 
 ## What a row says
 
@@ -93,25 +99,95 @@ One row is one piece of work. Collapsed:
 - **elapsed** — live while the work is, frozen once it ends
 
 Expanded, in place: the task excerpt, the model, the worktree branch — or, for a child its parent did not isolate, the checkout it shares — the
-reason it ended, the result message — and for a background command, the tail
-of its output with ANSI interpreted, plus its exit code. Two controls: **Open
-chat**, which navigates to the session the work lives in, and **Stop**, which
-is `agents/runs/stop` (through the one End-agent confirmation) or `tasks/stop`.
+reason it ended, the result message, and, while a child is paused on a
+question (`needs_input`, D-158), **Asking** with the question itself — and for
+a background command, the tail of its output with ANSI interpreted, plus its
+exit code. The controls: for an agent, **Open chat**, which navigates to its
+session; for a background command, **Open its session**, which goes to the
+session whose agent ran it (a command has no chat of its own, M13-T30);
+**Stop**, which is `agents/runs/stop` (through the one End-agent confirmation)
+or `tasks/stop`; and, for a finished agent whose worktree is still on disk,
+**Remove worktree** — the person's escape hatch for a parent that never got to
+its own cleanup (D-157). It clears the directory and its branch without
+deleting the session, says how many commits are unmerged before asking, and
+the safe verb owns the first Enter.
+
+## One session's tree
+
+**The fleet is the open session's.** It shows the tree of the top-level
+session being read: the agents that session started, their agents, and the
+background commands any of them left running — the root's own included.
+Nothing from any other top-level session is in it. Another session's work is
+that session's fleet, and the person navigates there to see it: the sidebar
+already shows every session's state in one status vocabulary (R3), so the
+column does not need to repeat the project to be honest about it.
+
+This supersedes the "everything at once" half of D-147, which had the column
+show every session's work with the current one sorted first. It was the right
+answer to "is anything, anywhere, spending money?" and the wrong answer to the
+question a person actually asks while reading a conversation — *what is going
+on around this?* — because a column of other sessions' children is a second
+session list, and the sidebar is already the session list.
+
+Two decisions follow, and both are decisions rather than shortcuts:
+
+**A child as the open session shows its root's tree, with the child marked.**
+A child is part of its root's tree, not a tree of its own. When a person opens
+a child's chat, the things they need next are exactly the things around it —
+the parent that asked for it, the siblings running beside it, the commands
+those left running — and a fleet that collapsed to the child's own subtree
+would throw that context away at the moment it is most useful. So the tree
+does not change when the person moves within it; what changes is the mark.
+The row for the chat being read carries a filled ground and the word
+*reading*, the treatment the sessions column gives the open session, and its
+detail offers no "Open chat" — a control that goes where you already are does
+nothing, so the reason stands where the control would (R4). A command whose
+session is the one being read says the same. The mark is `agent:<path>` on
+the list, and it is never on the header, because the root is the header.
+
+**Work whose session was deleted is carried, named, at the bottom of every
+fleet.** Deleting a top-level session cancels only that session's own runs;
+its children keep running in their own sessions with a root that no longer
+exists, and its background commands keep going in the register. That work
+belongs to no tree — a deleted session cannot be navigated to — and it is
+still spending, so it must not be dropped (R7) and it must stay stoppable.
+It is not filed under the session being read: that would attribute work to a
+session that never started it (R5), make the header's counts a lie, and put
+someone else's leftovers at the top of every fleet. It is one line at the
+bottom — *"2 pieces of work from a deleted session"*, with whether it is still
+costing — in every session's fleet and in the no-session state alike, closed
+by default, opening into the same rows with the same Stop and the same
+"Open chat" for a child whose own transcript still exists. It leaves when the
+work ends and is cleared, or is stopped from there. "Deleted" means gone from
+the catalog once the catalog has loaded; an empty catalog is one that has not
+arrived, never proof of a deletion. If the child of a deleted root is itself
+the chat being read, its tree is the tree, headed *session deleted*, and the
+line is empty.
+
+**No session open** — a fresh window, only Beam's bubble — is a designed
+state of its own: the column says whose tree it would show and how to get one
+open. It does not say "nothing is running", which would be a claim about the
+project that this column no longer makes.
+
+**Clear (D-154) is one mark per viewer, applied to what is shown.** Pressing
+it in a session's tree puts that tree's finished work away; the mark itself is
+global, so finished work from a deleted session is put away by the same press,
+and the deleted-session line offers its own Clear when the tree has nothing
+finished to attach one to.
 
 ## Structure, and the two rules that shape it
 
-**Groups are top-level sessions.** Inside a group, agent work nests exactly as
-it nests in reality — a child of a child is drawn inside its parent — and a
-session's background commands hang off the item for the session that started
-them. A command a child agent started is that child's.
+**The tree is the open session's.** Agent work nests exactly as it nests in
+reality — a child of a child is drawn inside its parent — and a session's
+background commands hang off the item for the session that started them. A
+command a child agent started is that child's. The root session is the
+header, never a row.
 
 **R1 · Ordering is creation order; attention rolls up.** A list that
 reshuffles is a list you cannot learn, so nothing is sorted by urgency inside
-a group. Attention still reaches you, because an item wears the loudest state
+the tree. Attention still reaches you, because an item wears the loudest state
 anywhere beneath it: a question three levels down lights the row you can
-actually see, the group header, the session row and the toggle. Groups
-themselves are ordered: the session you are in, then what needs you, then what
-is going, then alphabetically.
+actually see, the header, the session row and the toggle.
 
 **R2 · Lifecycle partitioning moves whole branches.** "In progress" and
 "Finished" are the only two sections. A branch is in progress while anything
@@ -149,7 +225,9 @@ worker says "the worker stopped". A row is never replaced by an empty space.
 
 **R8 · One item, one identity.** `agent:<sessionPath>` and `task:<taskId>`.
 An update replaces in place; arriving twice is normal, not an error, and the
-store keeps its identity when nothing a row draws has changed.
+store keeps its identity when nothing a row draws has changed. Scope does not
+change identity: the same run is the same row whether it is read from its
+root, from a sibling, or from the deleted-session line.
 
 **R9 · Reads are bounded, always.** A command can print gigabytes.
 `tasks/output` serves at most 256 KiB per call, from the byte offset the
@@ -228,13 +306,13 @@ end it.
 
 | Concern | File |
 | --- | --- |
-| the work model, pure | `packages/ui/src/fleet/model.ts` |
-| the store selector and the clock | `packages/ui/src/fleet/hooks.ts` |
+| the work model, pure (`buildFleet` is every group; `scopeFleet` is the cut) | `packages/ui/src/fleet/model.ts` |
+| the store selector, the scope, and the clock | `packages/ui/src/fleet/hooks.ts` |
 | the sheet's open state and reveals | `packages/ui/src/fleet/fleet-state.ts` |
 | following a task's output | `packages/ui/src/fleet/output.ts` |
 | `tasks/*` actions | `packages/ui/src/fleet/actions.ts` |
 | the column and its sheet | `packages/ui/src/components/fleet/` |
-| the list itself | `components/assistant-ui/elements/subagent-list.tsx` |
+| the list itself, and the deleted-session line | `components/assistant-ui/elements/subagent-list.tsx` |
 | questions: the form model | `packages/ui/src/dialogs/model.ts` |
 | questions: the one renderer | `packages/ui/src/dialogs/DialogBody.tsx` |
 | questions: where they land | `packages/ui/src/dialogs/InlineDialogs.tsx` |

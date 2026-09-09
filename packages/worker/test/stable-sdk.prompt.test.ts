@@ -189,6 +189,16 @@ describe("StableSdkDriver.prompt", () => {
     const lines = readFileSync(join(base, "sessions", files[0]!), "utf8").trim().split("\n").map((l) => JSON.parse(l));
     const roles = lines.filter((l) => l.type === "message").map((l) => l.message.role);
     expect(roles).toEqual(expect.arrayContaining(["user", "assistant"]));
+    // The user message_end says where the prompt landed — the entry Pi wrote
+    // for it, id and parent — and says so before the reply starts streaming,
+    // not when the turn ends (M13-T44). The tree on disk is the witness.
+    const userEnd = updates.find((u): u is Extract<SessionUpdate, { kind: "message_end" }> => u.kind === "message_end" && u.role === "user");
+    const userEntry = lines.find((l) => l.type === "message" && l.message.role === "user");
+    expect(userEnd?.entry).toEqual({ id: userEntry.id, parentId: userEntry.parentId });
+    expect(updates.indexOf(userEnd!)).toBeLessThan(firstDelta);
+    expect(updates.indexOf(userEnd!)).toBeGreaterThan(first("message_start"));
+    // Assistant messages carry no entry: the field is about prompts.
+    expect(updates.find((u) => u.kind === "message_end" && u.role === "assistant")).not.toHaveProperty("entry");
     // Note: Pi emits `entry_appended` only for extension custom entries
     // (pi.appendEntry), never for message persistence. Transcript state must be
     // built from message_*/tool_execution_* events, not from entry_appended.

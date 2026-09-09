@@ -102,7 +102,8 @@ export function TopBar() {
   // One rule for what a session is called, everywhere (runtime/threadList.ts).
   const title = view ? (summary ? sessionTitle(summary, view) : (view.state.name ?? view.title ?? firstUserLine(view) ?? "New session")) : "New session";
   const untitled = view ? title === "New session" : false;
-  // The fleet's own count, so the toggle says what it is hiding.
+  // The fleet's own count — the open session's tree (M13-T51), plus work
+  // whose session was deleted, which the fleet carries because nothing else can.
   const fleet = useFleet();
   const busy = meta.running || meta.compacting;
 
@@ -266,12 +267,12 @@ export function TopBar() {
           className="relative"
         >
           <Radio />
-          {!shell.fleetOpen && (fleet.needsYou > 0 || fleet.running > 0) && (
+          {!shell.fleetOpen && (fleet.needsYou > 0 || fleet.running > 0 || fleet.elsewhereNeedsYou > 0 || fleet.elsewhereRunning > 0) && (
             <span
               aria-hidden="true"
               className={cn(
                 "absolute end-1 top-1 size-1.5 rounded-full border border-bg",
-                fleet.needsYou > 0 ? "bg-attention motion-safe:animate-attention" : "bg-live",
+                fleet.needsYou > 0 || fleet.elsewhereNeedsYou > 0 ? "bg-attention motion-safe:animate-attention" : "bg-live",
               )}
             />
           )}
@@ -443,9 +444,16 @@ function CompactDialog({ open, onOpenChange }: { open: boolean; onOpenChange(ope
   );
 }
 
-/** What the fleet's toggle says when it is closed: the loudest true thing. */
+/**
+ * What the fleet's toggle says when it is closed: the loudest true thing about
+ * the open session, and only then about work from a deleted session — named as
+ * such, so a count never reads as this session's.
+ */
 function fleetTooltip(fleet: FleetView): string {
-  if (fleet.needsYou > 0) return `Show the fleet — ${fleet.needsYou} ${fleet.needsYou === 1 ? "needs" : "need"} you`;
+  const needs = (n: number) => `${n} ${n === 1 ? "needs" : "need"} you`;
+  if (fleet.needsYou > 0) return `Show the fleet — ${needs(fleet.needsYou)}`;
   if (fleet.running > 0) return `Show the fleet — ${fleet.running} going`;
+  if (fleet.elsewhereNeedsYou > 0) return `Show the fleet — ${needs(fleet.elsewhereNeedsYou)}, from a deleted session`;
+  if (fleet.elsewhereRunning > 0) return `Show the fleet — ${fleet.elsewhereRunning} going, from a deleted session`;
   return "Show the fleet";
 }

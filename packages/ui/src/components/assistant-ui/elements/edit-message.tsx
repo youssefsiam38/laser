@@ -10,6 +10,11 @@
  * exactly as it is. It sits beside Cancel, not in the primary position: the
  * default is that the person's own history changes.
  *
+ * While a reply is being written the card still sends (M13-T46): the edit
+ * stops that reply first — the same stop the Stop button makes, kept on the
+ * old version — and the copy says so instead of asking. `busy` is only the
+ * card's own send in flight, so one click is one send.
+ *
  * Divergences from the registry copy: only the editing card survives (the
  * at-rest bubble is `UserBubble` in `message-pair`), the copy says which
  * session is about to change, the field is our `Textarea`, and the buttons
@@ -33,16 +38,27 @@ export interface EditMessageProps extends Omit<ComponentProps<"div">, "children"
   onCancel: () => void;
   /** Messages after this one; they stay on the version being replaced. */
   laterMessages: number;
+  /** A reply is being written now: sending stops it first. */
+  stopsReply?: boolean;
+  /** This card's own send is in flight. */
   busy?: boolean;
 }
 
-export function EditMessage({ value, onValueChange, onSend, onSendInNewSession, onCancel, laterMessages, busy = false, className, ...props }: EditMessageProps) {
+export function EditMessage({ value, onValueChange, onSend, onSendInNewSession, onCancel, laterMessages, stopsReply = false, busy = false, className, ...props }: EditMessageProps) {
   const canSend = value.trim().length > 0 && !busy;
+  const later =
+    laterMessages > 0 ? (
+      <>
+        <span className="tnum">{laterMessages}</span> later {laterMessages === 1 ? "message stays" : "messages stay"} on the old version.
+      </>
+    ) : (
+      "The old version is kept."
+    );
   return (
     <div data-slot="edit-message" className={cn(paper, "flex w-full flex-col gap-3 rounded-2xl p-3", className)} {...props}>
       <div className="flex items-baseline justify-between gap-3">
         <span className="text-sm font-medium text-ink">Edit message</span>
-        <span className={cn(mono, "text-ink-3")}>{busy ? "waiting for the reply" : "the old version is kept"}</span>
+        <span className={cn(mono, "text-ink-3")}>{busy ? "sending" : stopsReply ? "stops the reply" : "the old version is kept"}</span>
       </div>
       <Textarea
         value={value}
@@ -63,16 +79,7 @@ export function EditMessage({ value, onValueChange, onSend, onSendInNewSession, 
       />
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-ink-3">
-          {busy ? (
-            "Finish or stop the current reply first."
-          ) : laterMessages > 0 ? (
-            <>
-              Replaces this message here.{" "}
-              <span className="tnum">{laterMessages}</span> later {laterMessages === 1 ? "message stays" : "messages stay"} on the old version.
-            </>
-          ) : (
-            "Replaces this message here. The old version is kept."
-          )}
+          {stopsReply ? <>Stops the reply being written, then replaces this message here. {later}</> : <>Replaces this message here. {later}</>}
         </p>
         <span className="flex items-center gap-2">
           <Button variant="ghost" size="sm" onClick={onCancel}>

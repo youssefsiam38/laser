@@ -216,7 +216,7 @@ list_agents()
 ```
 
 ```js
-wait_for_agents({ runIds: ["run_7"] })
+inspect_agent({ runId: "run_7" })
 ```
 
 ```js
@@ -224,9 +224,13 @@ stop_agent({ runId: "run_7" })
 ```
 
 `send_agent_message` uses `sessionId` because it addresses the persistent
-conversation. Waiting and stopping use `runId` because they target one
+conversation. Inspecting and stopping use `runId` because they target one
 execution. Sending a message to an idle session creates a new run and returns
-its new `runId`.
+its new `runId`. There is no waiting call (M13-T45, `docs/agents.md`): a
+child's ending is delivered to its parent as a message that wakes it, and
+`inspect_agent` reads one child in depth meanwhile — including a question it
+is paused on (`needs_input`), which the parent answers through
+`send_agent_message`.
 
 ## The reusable agent definition
 

@@ -519,7 +519,9 @@ blockers, not advice.
 
 - One `start_agent` tool and four identities only (`agent_name`,
   `subagent_name`, `sessionId`, `runId`). Never a tool per agent, never a
-  separate agent id, type or profile name.
+  separate agent id, type or profile name. The parent's verbs are
+  `send_agent_message`, `list_agents`, `inspect_agent`, `stop_agent` and
+  `remove_agent_worktree`; the child's is `complete_agent_run`.
 - Children never block: `start_agent` returns the identities before the child
   has done anything; there is no foreground mode.
 - The parent chooses isolation per child: `start_agent`'s `worktree` defaults
@@ -531,6 +533,19 @@ blockers, not advice.
   in its role block that it is not isolated (D-156). A project with no git
   accepts only `false`. The result always says where the child is working, and
   carries a branch only when there is one.
+- A child's worktree belongs to its parent (D-157): reviewing, merging and
+  removing it are the parent's, both agents are told so in their prompts, and
+  nothing removes one silently. `remove_agent_worktree` refuses to destroy
+  unmerged commits or uncommitted files unless told `force`, and then reports
+  what it discarded. Deleting a child's session asks what to do with its
+  worktree; `pi/session/delete` defaults to **keep** when the field is absent.
+  A person can clear a leftover from the fleet without deleting the session.
+- No waiting tool (D-158): a child's ending is delivered to its parent as a
+  message that wakes its turn, and `start_agent`'s result says so. `inspect_agent`
+  reads one child, is read-only, never wakes it, and returns at most ten
+  excerpted messages. `needs_input` is a live, attention-toned run status —
+  the child is paused on a question — never terminal and never folded into
+  finished work; every surface that reads a run status has a test for it.
 - Completion only through `complete_agent_run`; its message is stored once,
   as the child's final assistant message. Arbitrary last text is not
   completion; a child that settles without the call is not `completed`.
@@ -560,6 +575,11 @@ blockers, not advice.
   never annotated but is still recorded, or the agent's own write makes its own
   next edit speak. The module holds file metadata only, never the file's
   contents, says nothing when it has no record, and never throws.
+- Edit, Fork and Jump work mid-turn by stopping the turn first, and the
+  driver owns that sequence (`stopFirst` on navigate and fork, D-159): a
+  failure after the stop leaves the session stopped, unmoved and served, and
+  the abandoned turn keeps its stop row. Never let the UI issue the stop and
+  the move as two requests.
 - The live map never re-layouts on output or status updates; only a change in
   the tree's structure recomputes positions. Test with a streaming child.
 - Beam has two ways in and no more (D-143): the spark beside Settings, which is

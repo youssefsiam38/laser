@@ -11,6 +11,12 @@
  * in the menu. Nothing is lost either way: the previous version stays in the
  * file and the version picker under the prompt goes back to it.
  *
+ * While a turn runs, Edit, Fork and Jump stay live (M13-T46): each stops the
+ * reply being written and then does its thing, the same stop the Stop button
+ * makes, and the row says so beside the action rather than asking again. Only
+ * "Try again" waits, because re-running the same prompt over its own reply is
+ * the one thing Stop-then-do cannot mean.
+ *
  * Divergences from the registry copy: the thumbs are gone (Pi has no
  * feedback channel; a faked one would violate R3), "regenerate" is a slot so
  * the model-and-thinking menu can sit in the same row, and "more" is a real
@@ -25,6 +31,7 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
@@ -50,9 +57,15 @@ export interface MessageActionsProps extends Omit<ComponentProps<"div">, "childr
   onViewRequest?: (() => void) | undefined;
   /** A `RegenerateMenu`, when the message can be re-run. */
   regenerate?: ReactNode;
-  /** Disables the session-tree actions while a turn runs. */
+  /**
+   * A turn is running: "Try again" waits for it, and Edit, Fork and Jump say
+   * that they will stop it first.
+   */
   busy?: boolean;
 }
+
+/** What the tree actions mean while a turn runs, said once. */
+const STOPS_REPLY = "stops the reply";
 
 export function MessageActions({ copied, onCopy, onEdit, onRegenerate, onRegenerateFork, onFork, onJump, onCopyPath, onViewRequest, regenerate, busy = false, className, ...props }: MessageActionsProps) {
   const hasMenu =
@@ -64,7 +77,7 @@ export function MessageActions({ copied, onCopy, onEdit, onRegenerate, onRegener
         <Check className={cn(iconSwap, "size-3.5", copied ? iconSwapIn : iconSwapOut)} />
       </TooltipIconButton>
       {onEdit ? (
-        <TooltipIconButton tooltip="Edit" size="icon-xs" className="text-ink-3" disabled={busy} onClick={onEdit}>
+        <TooltipIconButton tooltip={busy ? `Edit · ${STOPS_REPLY}` : "Edit"} size="icon-xs" className="text-ink-3" onClick={onEdit}>
           <PencilLine />
         </TooltipIconButton>
       ) : null}
@@ -91,15 +104,17 @@ export function MessageActions({ copied, onCopy, onEdit, onRegenerate, onRegener
             ) : null}
             {onFork || onJump ? <DropdownMenuLabel>Session tree</DropdownMenuLabel> : null}
             {onFork ? (
-              <DropdownMenuItem disabled={busy} onSelect={onFork}>
+              <DropdownMenuItem onSelect={onFork}>
                 <GitFork />
                 Fork from here
+                {busy ? <DropdownMenuShortcut>{STOPS_REPLY}</DropdownMenuShortcut> : null}
               </DropdownMenuItem>
             ) : null}
             {onJump ? (
-              <DropdownMenuItem disabled={busy} onSelect={onJump}>
+              <DropdownMenuItem onSelect={onJump}>
                 <Milestone />
                 Jump to this entry
+                {busy ? <DropdownMenuShortcut>{STOPS_REPLY}</DropdownMenuShortcut> : null}
               </DropdownMenuItem>
             ) : null}
             {(onFork || onJump) && onCopyPath ? <DropdownMenuSeparator /> : null}

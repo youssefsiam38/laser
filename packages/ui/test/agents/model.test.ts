@@ -29,6 +29,8 @@ describe("run status vocabulary", () => {
     expect(labels).toEqual({
       queued: "Waiting",
       running: "Working",
+      // Live and paused on a question (M13-T45): one word for a row.
+      needs_input: "Asking",
       completed: "Done",
       blocked: "Needs you",
       failed: "Failed",
@@ -38,6 +40,8 @@ describe("run status vocabulary", () => {
     expect(tones).toEqual({
       queued: "muted",
       running: "live",
+      // Stuck on someone: the warm hue, never the live one.
+      needs_input: "attention",
       // Green means happening now, so a finished run is muted (D-154).
       completed: "muted",
       blocked: "attention",
@@ -46,6 +50,8 @@ describe("run status vocabulary", () => {
     });
     expect(isActiveRun({ status: "queued" })).toBe(true);
     expect(isActiveRun({ status: "running" })).toBe(true);
+    // Paused is not ended: a child asking a question is still going.
+    expect(isActiveRun({ status: "needs_input" })).toBe(true);
     for (const status of ["completed", "blocked", "failed", "cancelled"] as const) expect(isActiveRun({ status })).toBe(false);
   });
 
@@ -54,7 +60,7 @@ describe("run status vocabulary", () => {
     // vocabulary for genuinely positive confirmations elsewhere, but no run
     // status may reach for it, in the sidebar, the fleet or the live map.
     expect(Object.values(RUN_STATUS_TONE)).not.toContain("ok");
-    const kinds = ["agent.completed", "agent.blocked", "agent.failed", "agent.cancelled", "agent.message"] as const;
+    const kinds = ["agent.completed", "agent.blocked", "agent.failed", "agent.cancelled", "agent.message", "agent.needs_input"] as const;
     expect(kinds.map(agentEventTone)).not.toContain("ok");
   });
 });

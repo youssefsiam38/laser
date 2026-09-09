@@ -36,7 +36,7 @@ import type {
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { SettingsAdapter } from "./settings.js";
+import { disabledModelRefs, modelSwitchedOff, type SettingsAdapter } from "./settings.js";
 
 export class PackagesError extends Error {
   override readonly name = "PackagesError";
@@ -302,6 +302,8 @@ export interface ModelsAdapterOptions {
 export interface ModelCatalogResult {
   models: ModelCatalogEntry[];
   enabledPatterns: string[] | null;
+  /** Exact `provider/id` references a person switched off; empty when none. */
+  disabledModels: string[];
   defaultProvider?: string;
   defaultModel?: string;
   defaultThinkingLevel?: ThinkingLevel;
@@ -492,6 +494,13 @@ export class ModelsAdapter {
       ? (effective["enabledModels"] as unknown[]).filter((p): p is string => typeof p === "string")
       : null;
     const perModelThinking = (effective["modelThinkingLevels"] ?? {}) as Record<string, unknown>;
+    // The product's own switches (M13-T49): exact references, applied after
+    // the allow-list so a picker reads one `enabled` and the tab still knows
+    // which of the two hid a row.
+    const disabledList = Array.isArray(effective["disabledModels"])
+      ? (effective["disabledModels"] as unknown[]).filter((p): p is string => typeof p === "string")
+      : [];
+    const disabled = disabledModelRefs(disabledList);
 
     // `enabled` uses Pi's own scope resolver, so the set here is the set Pi
     // would cycle through — including its "no model matched" warnings.
@@ -515,7 +524,9 @@ export class ModelsAdapter {
         maxTokens: model.maxTokens,
         thinkingLevels: supportedThinkingLevels(model.reasoning, model.thinkingLevelMap),
         ...(isThinkingLevel(saved) ? { thinkingLevel: saved } : {}),
-        enabled: enabled ? enabled.has(ref) : true,
+        enabled: (enabled ? enabled.has(ref) : true) && !modelSwitchedOff(model, disabled),
+        hiddenByList: enabled ? !enabled.has(ref) : false,
+        switchedOff: modelSwitchedOff(model, disabled),
         cost: {
           input: model.cost.input,
           output: model.cost.output,
@@ -530,6 +541,7 @@ export class ModelsAdapter {
     return {
       models,
       enabledPatterns: patterns,
+      disabledModels: disabledList,
       ...(typeof effective["defaultProvider"] === "string" ? { defaultProvider: effective["defaultProvider"] } : {}),
       ...(typeof effective["defaultModel"] === "string" ? { defaultModel: effective["defaultModel"] } : {}),
       ...(isThinkingLevel(defaultThinking) ? { defaultThinkingLevel: defaultThinking } : {}),

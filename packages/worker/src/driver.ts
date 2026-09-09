@@ -116,9 +116,10 @@ export interface SessionDriver {
   setThinkingLevel(level: ThinkingLevel): Promise<SessionState>;
   rename(name: string): Promise<void>;
   compact(instructions?: string): Promise<void>;
-  navigateTree(entryId: string, options?: { summarize?: boolean; label?: string }): Promise<{ editorText?: string; cancelled: boolean }>;
-  /** Fork before an entry into a new session file. The driver now serves the new session; `state().path` changes. */
-  fork(entryId: string): Promise<{ state: SessionState; editorText?: string }>;
+  /** Move the leaf. `stopFirst` aborts a streaming turn first (recorded as `aborted`), because the engine refuses to move one mid-turn. */
+  navigateTree(entryId: string, options?: { summarize?: boolean; label?: string; stopFirst?: boolean }): Promise<{ editorText?: string; cancelled: boolean }>;
+  /** Fork before an entry into a new session file. The driver now serves the new session; `state().path` changes. `stopFirst` aborts a streaming turn before anything else. */
+  fork(entryId: string, options?: { stopFirst?: boolean }): Promise<{ state: SessionState; editorText?: string }>;
 
   /** Answer a pending extension dialog raised via a `ui_request` event. */
   respondToUi(response: UiDialogResponse): void;

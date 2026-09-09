@@ -144,9 +144,10 @@ function TrustGuardrail() {
 }
 
 /**
- * The message actions read Pi's persisted entries (fork here, branches). The
- * store refreshes them when the session settles, so a prompt that just
- * landed gets its entry id without a manual refresh.
+ * The message actions read Pi's persisted entries (versions, the leaf a
+ * version ends at). The store re-reads the whole tree when the session
+ * settles; a prompt's own entry arrives on its `message_end` while the turn
+ * runs, so the newest message never waits for this read.
  */
 function EntriesRefresh() {
   const { actions } = useLaserStable();

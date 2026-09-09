@@ -83,8 +83,10 @@ describe("buildAgentTree", () => {
 
   it("derives the root's status from attention and the live view", () => {
     const { runs, sessions } = family();
+    // A session waiting on a person is live and paused: `needs_input`, never
+    // `blocked`, which is a run that ended.
     const waiting = buildAgentTree({ rootPath: ROOT, sessions: [{ ...sessions[0]!, attention: "waiting_for_input" }, ...sessions.slice(1)], runs });
-    expect(waiting.root).toMatchObject({ status: "blocked", tone: "attention", ended: false });
+    expect(waiting.root).toMatchObject({ status: "needs_input", tone: "attention", ended: false });
     const errored = buildAgentTree({ rootPath: ROOT, sessions: [{ ...sessions[0]!, attention: "error" }, ...sessions.slice(1)], runs });
     expect(errored.root).toMatchObject({ status: "failed", tone: "danger", ended: false });
     const idle = buildAgentTree({ rootPath: ROOT, sessions: [{ ...sessions[0]!, attention: "idle" }, ...sessions.slice(1)], runs });
@@ -96,7 +98,25 @@ describe("buildAgentTree", () => {
       runs,
       views: { [ROOT]: view({ path: ROOT, dialogs: [{ id: "d1", method: "confirm", title: "Allow?", message: "" } as never] }) },
     });
-    expect(live.root.status).toBe("blocked");
+    expect(live.root.status).toBe("needs_input");
+  });
+
+  it("keeps a child paused on a question among the living, in the attention tone, with the question on its run", () => {
+    const { runs, sessions } = family();
+    const asking = run({
+      runId: "r-a",
+      sessionPath: "/p/a.jsonl",
+      subagentName: "reviewer-1",
+      startedAt: "2026-09-08T10:00:00.000Z",
+      status: "needs_input",
+      question: { id: "ui-1", kind: "select", title: "Which token store?", options: ["cookie", "header"], askedAt: "2026-09-08T10:04:00.000Z" },
+    });
+    const tree = buildAgentTree({ rootPath: ROOT, sessions, runs: [asking, ...runs.slice(1)] });
+    const a = tree.byPath.get("/p/a.jsonl")!;
+    expect(a).toMatchObject({ status: "needs_input", tone: "attention", ended: false });
+    expect(a.run?.question?.title).toBe("Which token store?");
+    // Still counted as going: nothing has ended.
+    expect(tree.active).toBe(3);
   });
 
   it("keeps a catalog-attributed child whose run the registry lost, and folds it when idle", () => {

@@ -259,7 +259,10 @@ export class WorkerServer {
         return { messages: this.tray(req.params.path).clear() } satisfies Result<"session/pending/clear">;
       case "pi/session/fork": {
         const live = this.live(req.params.path);
-        const forked = await live.driver.fork(req.params.entryId);
+        // `stopFirst` is the driver's sequence, not two requests: the stop is
+        // recorded on the original before the runtime is replaced, and a fork
+        // that fails leaves the session stopped and served here unchanged.
+        const forked = await live.driver.fork(req.params.entryId, { ...(req.params.stopFirst !== undefined ? { stopFirst: req.params.stopFirst } : {}) });
         const { state } = forked;
         if (state.path !== live.path) {
           // The driver now serves the forked session file; re-key it so later
@@ -278,6 +281,7 @@ export class WorkerServer {
         return driver.navigateTree(req.params.entryId, {
           ...(req.params.summarize !== undefined ? { summarize: req.params.summarize } : {}),
           ...(req.params.label !== undefined ? { label: req.params.label } : {}),
+          ...(req.params.stopFirst !== undefined ? { stopFirst: req.params.stopFirst } : {}),
         });
       }
       case "pi/session/rename":
@@ -894,6 +898,15 @@ export class WorkerServer {
    * the pending tray delivering what was written while the agent worked. Both
    * start a user run and both can name an unnamed session, because from the
    * person's side they are the same act — they wrote it and it went in.
+   *
+   * Naming starts before the driver is asked, not after it answers: the
+   * driver's `prompt()` resolves when the whole turn is over (the engine
+   * awaits its agent loop), and the words are all Namer needs. Acceptance is
+   * judged the way the driver judges it — idle, or queued behind a running
+   * turn when the caller asked for that — so a first turn that runs for
+   * minutes is named while the person is looking at the sidebar, not after
+   * (M13-T43). `nameSession` re-checks the name before renaming, so a person
+   * who names the session mid-turn still wins.
    */
   private async promptLive(
     live: Live,
@@ -901,13 +914,12 @@ export class WorkerServer {
     streamingBehavior?: "steer" | "followUp",
   ): Promise<{ accepted: boolean; queued: boolean }> {
     const text = textOf(content);
+    const idle = !live.driver.state().isStreaming;
     // A person prompting a child that has no active run starts one of
     // their own, so the run map and the parent's summary keep working.
-    if (!streamingBehavior && !live.driver.state().isStreaming) this.harness.startUserRun(live.path, text);
-    const unnamed = !live.driver.state().name;
-    const result = await live.driver.prompt(content, { ...(streamingBehavior ? { streamingBehavior } : {}) });
-    if (result.accepted && unnamed && text.trim() !== "") void this.nameSession(live, text);
-    return result;
+    if (!streamingBehavior && idle) this.harness.startUserRun(live.path, text);
+    if ((idle || streamingBehavior) && !live.driver.state().name && text.trim() !== "") void this.nameSession(live, text);
+    return live.driver.prompt(content, { ...(streamingBehavior ? { streamingBehavior } : {}) });
   }
 
   /**

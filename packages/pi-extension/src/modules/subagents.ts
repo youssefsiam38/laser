@@ -7,10 +7,13 @@
  *
  *   1. **Register the tools the model sees.** A parent-capable session gets
  *      exactly `start_agent`, `send_agent_message`, `list_agents`,
- *      `wait_for_agents` and `stop_agent`; a child gets `complete_agent_run`,
- *      the only successful ending of a run. `start_agent` is one generic tool
- *      over a compact catalog — never one tool per agent
- *      (docs/agents-leap/references/agent-harness-architecture.md).
+ *      `inspect_agent`, `stop_agent` and `remove_agent_worktree`; a child
+ *      gets `complete_agent_run`, the only successful ending of a run.
+ *      `start_agent` is one generic tool over a compact catalog — never one
+ *      tool per agent (docs/agents-leap/references/agent-harness-architecture.md).
+ *      There is no waiting tool: a child's ending is delivered to its parent
+ *      as a message that wakes it, so nothing is lost by not waiting, and
+ *      `inspect_agent` reads one child in depth meanwhile (M13-T45).
  *   2. **Tell a child who it is.** Its role — instance name, definition,
  *      task, the person's goal for the parent, and the checkout it works in
  *      (its own worktree, or its parent's, said plainly) — is appended to the
@@ -27,11 +30,14 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   AGENT_EVENT_MESSAGE_TYPE,
+  AGENT_INSPECT_MESSAGES_DEFAULT,
+  AGENT_INSPECT_MESSAGES_MAX,
   AGENT_MESSAGE_MAX,
   AGENT_NAME_MAX,
   AGENT_TASK_EXCERPT,
   AGENT_TASK_MAX,
   SUBAGENT_NAME_MAX,
+  type AgentRunQuestion,
 } from "@lasercode/protocol";
 import { Type } from "typebox";
 import type {
@@ -40,6 +46,7 @@ import type {
   AgentModelEvent,
   AgentRunSummary,
   HarnessSessionRole,
+  InspectAgentResult,
   StartAgentResult,
 } from "../agents-bridge.js";
 import type { LaserModule, ModuleContext } from "./index.js";
@@ -59,7 +66,11 @@ const states = new WeakMap<ModuleContext, State>();
 /** The reference's description with the compact catalog appended: `name — description; …`. */
 export function startAgentDescription(catalog: AgentCatalogEntry[]): string {
   const entries = catalog.map((entry) => `${entry.agentName} — ${entry.description}`).join("; ");
-  return `Start another agent for an independent piece of work. Available agents: ${entries || "none are allowed for this session"}.`;
+  return (
+    `Start another agent for an independent piece of work. Available agents: ${entries || "none are allowed for this session"}. ` +
+    "It runs in the background: do not wait for it — its result is delivered to you as a message when it ends, and inspect_agent shows how it is doing meanwhile. " +
+    "Unless you pass worktree false, the agent gets a git worktree and a branch of its own; reviewing that branch, merging it, and removing the worktree with remove_agent_worktree are yours, not the agent's."
+  );
 }
 
 /**
@@ -106,18 +117,18 @@ export function roleBlock(role: HarnessSessionRole, canDelegate: boolean, cwd: s
     }
     parts.push(
       'End your work by calling complete_agent_run with status "completed" or "blocked" and a self-contained final message: what you did, the evidence, and any important next step. It is the only way this run ends; do not write a closing reply instead of it. Do not ask the parent questions you can answer yourself by reading the code.',
+      'If you genuinely cannot go on without an answer from your parent, end with status "blocked" and put the question, and what you have done so far, in that final message: your parent reads it and can send you the answer, which starts a new run in this same session with your history intact.',
     );
-    // The one sentence a child that shares its parent's checkout is owed: it
-    // keeps every tool, so it can only judge what to touch if it is told.
-    parts.push(
-      role.isolated === false
-        ? `You are working in ${cwd}, your parent's own checkout, not a worktree of your own: you are not isolated from it. Your parent and any other agent in that checkout see every change you make there at once, so change only what your task actually asks for, and say in your final message anything you left behind.`
-        : `Work only inside your own worktree: ${cwd}.`,
-    );
+    // Whose job the worktree is (M13-T42). A child that is not told this will
+    // helpfully merge its own work away, and a parent that is not told will
+    // leave the directory for ever; both sentences are written for the shape
+    // this child is actually in, and neither names a branch that does not exist.
+    parts.push(childWorktreeRule(role, cwd));
   }
   if (canDelegate) {
     parts.push(
-      "You can start other agents with start_agent; they run in the background, by default each in its own isolated worktree, and their results arrive here as messages. Use wait_for_agents when you need a result before continuing, and stop_agent for work that is no longer needed.",
+      "You can start other agents with start_agent; they run in the background, by default each in its own isolated worktree, and their results arrive here as messages that wake you. Never wait for one: carry on with your own work, and use inspect_agent to check on a single agent — it also shows a question the agent is paused on, which you can answer with send_agent_message. Use stop_agent for work that is no longer needed.",
+      "A child with its own worktree leaves its work on a branch of its own when it finishes. Reviewing that branch, merging it into your checkout with git, and removing the worktree with remove_agent_worktree are yours: nothing does any of it for you, and the directory stays until you ask for it to go. A child started with worktree false has neither a branch nor a worktree, because its changes are already in your files.",
     );
   }
   return parts.length > 0 ? parts.join("\n") : undefined;
@@ -129,10 +140,39 @@ function excerpt(text: string, max: number): string {
 }
 
 /**
+ * Where a child works and what it must not do there. Two shapes and only two
+ * (D-156): a git worktree of its own, or its parent's checkout. Each sentence
+ * is true in the shape it is written for, and a branch is named only when one
+ * exists.
+ */
+export function childWorktreeRule(role: HarnessSessionRole, cwd: string): string {
+  if (role.isolated === false) {
+    return (
+      `You are working in ${cwd}, your parent's own checkout, not a worktree of your own: you are not isolated from it. ` +
+      "Your parent and any other agent in that checkout see every change you make there at once, so change only what your task actually asks for. " +
+      "You have no branch and no worktree of your own, so there is nothing for you to merge and nothing to remove: leave your parent's git state alone — no branch, no merge, no commit it did not ask for — and say in your final message anything you left behind."
+    );
+  }
+  const on = role.branch ? `, on the branch ${role.branch}` : "";
+  return (
+    `Work only inside your own worktree: ${cwd}${on}. ` +
+    "Never write into your parent's checkout or another agent's. Do not merge your work anywhere and do not delete the worktree when you are done: your parent reviews the branch, merges what it wants and removes the worktree itself. " +
+    "Say in your final message what you changed and where it is, so it can."
+  );
+}
+
+/**
  * What `start_agent` answers: the four identities, the run's status, and the
  * fact the parent needs afterwards — where the child is working, and the
  * branch when it has one of its own. No branch means it is not isolated; the
  * absence is the signal, so no placeholder is invented.
+ *
+ * `guidance` is read at the one moment it matters — the parent has just
+ * started something and is deciding what to do next — and says the thing the
+ * old waiting tool used to imply the opposite of: do not wait (M13-T45).
+ * `your_responsibility` is the other half of M13-T42: the parent is told, at
+ * the moment it starts a child, that the branch and the directory are its own
+ * to merge and to remove. A parent that is not told leaves worktrees for ever.
  */
 export function startedView(result: StartAgentResult): Record<string, unknown> {
   return {
@@ -143,13 +183,71 @@ export function startedView(result: StartAgentResult): Record<string, unknown> {
     status: result.status,
     working_directory: result.cwd,
     ...(result.branch !== undefined ? { branch: result.branch } : {}),
+    guidance: startedGuidance(result),
+    your_responsibility: startedResponsibility(result),
   };
+}
+
+/** The sentence a parent reads the moment a child starts: carry on; the ending comes to you. */
+export function startedGuidance(result: Pick<StartAgentResult, "subagentName" | "runId">): string {
+  return (
+    `Do not wait for ${result.subagentName}. Carry on with your own work; when it ends, its result will be sent to you as a message. ` +
+    `Use inspect_agent with runId ${result.runId} to check on it meanwhile — a status of needs_input means it is paused on a question you can answer with send_agent_message.`
+  );
+}
+
+/** True in both shapes, and it names a branch only when there is one. */
+export function startedResponsibility(result: Pick<StartAgentResult, "cwd" | "branch" | "subagentName">): string {
+  if (result.branch === undefined) {
+    return `${result.subagentName} is working in your own checkout (${result.cwd}), so its changes land in your files as it makes them. There is no branch and no worktree to merge or remove.`;
+  }
+  return (
+    `When ${result.subagentName} finishes, its work is on the branch ${result.branch} in ${result.cwd}. ` +
+    `Reviewing it, merging it into your own checkout with git, and then removing the worktree with remove_agent_worktree are yours to do — nothing removes it for you.`
+  );
 }
 
 /** The reference's vocabulary for the model: `agent_name` / `subagent_name`, never camel case. */
 function modelView(summary: AgentRunSummary | (Omit<AgentRunSummary, "startedAt"> & { startedAt?: string })): Record<string, unknown> {
   const { agentName, subagentName, ...rest } = summary;
   return { agent_name: agentName, subagent_name: subagentName, ...rest };
+}
+
+/**
+ * `inspect_agent`'s answer, with one sentence the parent can act on when the
+ * child is waiting on someone: an open question while it is `needs_input`, or
+ * the final message it ended `blocked` with.
+ */
+export function inspectedView(result: InspectAgentResult): Record<string, unknown> {
+  const { agents, ...rest } = result;
+  const needs = whatItNeeds(result);
+  return { ...modelView(rest), ...(needs !== undefined ? { what_it_needs: needs } : {}), agents: agents.map(modelView) };
+}
+
+/** What a stalled child needs from its parent, or nothing for a child that is working or done. */
+export function whatItNeeds(result: Pick<InspectAgentResult, "status" | "subagentName" | "question" | "result">): string | undefined {
+  if (result.status === "needs_input" && result.question) {
+    return `${result.subagentName} is paused on a question and cannot continue until it is answered. ${answerHint(result.question)} The person can also answer it in ${result.subagentName}'s own chat.`;
+  }
+  if (result.status === "blocked") {
+    return `${result.subagentName} ended without finishing; its final message says what it could not do or is asking you. Answer with send_agent_message: that starts a new run in the same session, with its history intact.`;
+  }
+  return undefined;
+}
+
+/** How to answer a question of this kind, said once here and once in the harness's event (they must agree). */
+function answerHint(question: AgentRunQuestion): string {
+  const call = "send_agent_message with its sessionId";
+  switch (question.kind) {
+    case "select":
+      return `Answer it with ${call} and one of the choices, exactly, as the message.`;
+    case "confirm":
+      return `Answer it with ${call} and "yes" or "no" as the message.`;
+    case "input":
+      return `Answer it with ${call}; the message is the answer, verbatim.`;
+    case "editor":
+      return `Answer it with ${call}; the message replaces the text, verbatim.`;
+  }
 }
 
 function asResult(view: unknown, details: unknown) {
@@ -167,9 +265,10 @@ function registerStartAgent(pi: ExtensionAPI, bridge: AgentHarnessBridge, catalo
     description: startAgentDescription(catalog),
     promptSnippet: "Start another agent in the background for an independent piece of work",
     promptGuidelines: [
-      "Use start_agent for independent work another agent can do in parallel; it returns immediately with sessionId and runId, so continue working or call wait_for_agents rather than polling with list_agents.",
+      "Use start_agent for independent work another agent can do in parallel; it returns immediately with sessionId and runId. Do not wait for it and do not poll: its result is delivered to you as a message when it ends, and inspect_agent shows one agent in depth meanwhile.",
       "Give start_agent a self-contained task: the new agent sees none of this conversation.",
       "Leave start_agent's worktree alone for work that changes files, and pass worktree false only for a task that just reads, such as a review or a search.",
+      "A worktree start_agent created is yours afterwards: review the branch, merge it yourself with git, then call remove_agent_worktree. The child never merges or removes its own work.",
     ],
     parameters: Type.Object({
       agent_name: Type.String({ minLength: 1, maxLength: AGENT_NAME_MAX, description: "The unique name of the reusable agent to start." }),
@@ -202,10 +301,12 @@ function registerParentTools(pi: ExtensionAPI, bridge: AgentHarnessBridge): void
     name: "send_agent_message",
     label: "Message an agent",
     description:
-      "Send a message to an agent you started, addressed by its sessionId. A running agent receives it as its next instruction; an idle agent starts a new run and the result carries the new runId.",
-    promptSnippet: "Continue a conversation with an agent you started, by sessionId",
+      "Send a message to an agent you started, addressed by its sessionId. A running agent receives it as its next instruction; an idle agent starts a new run and the result carries the new runId. " +
+      "An agent whose status is needs_input is paused on a question, and your message answers it: one of the choices for a select, yes or no for a confirm, the text itself for an input or editor — anything else is refused with the question restated.",
+    promptSnippet: "Continue a conversation with an agent you started, or answer its question, by sessionId",
     promptGuidelines: [
       "Use send_agent_message with sessionId to continue a conversation with an agent; set interrupt true only when it must change course now.",
+      "When an agent is needs_input, send_agent_message answers its open question; inspect_agent shows the question and the kind of answer it takes.",
     ],
     parameters: Type.Object({
       sessionId: Type.String({ minLength: 1, description: "The sessionId returned by start_agent." }),
@@ -223,9 +324,11 @@ function registerParentTools(pi: ExtensionAPI, bridge: AgentHarnessBridge): void
   pi.registerTool({
     name: "list_agents",
     label: "List agents",
-    description: "List the agents this session started, newest first, with each one's status and result when it has ended.",
+    description:
+      "List the agents this session started, newest first, with each one's status and result when it has ended. " +
+      "Statuses: running (working), needs_input (paused on a question until someone answers — the question is included), completed, blocked (ended without finishing; its final message says what it needs), failed, cancelled.",
     promptSnippet: "List the agents this session started and their status",
-    promptGuidelines: ["Use list_agents to see what is running or has ended; use wait_for_agents, not repeated list_agents calls, to wait for a result."],
+    promptGuidelines: ["Use list_agents to see what is running, waiting on an answer, or ended; do not call it repeatedly to wait for a result, which is delivered to you when the agent ends."],
     parameters: Type.Object({}),
     async execute() {
       const runs = await bridge.listAgents();
@@ -233,23 +336,38 @@ function registerParentTools(pi: ExtensionAPI, bridge: AgentHarnessBridge): void
     },
   });
 
+  // M13-T45: the one way to look closely at a child without reading its
+  // whole conversation into this context. Read-only, so it is always safe.
   pi.registerTool({
-    name: "wait_for_agents",
-    label: "Wait for agents",
+    name: "inspect_agent",
+    label: "Inspect an agent",
     description:
-      "Block until the given runs have ended or the timeout passes. Returns each run's status and final message; timedOut is true when some were still running.",
-    promptSnippet: "Wait for runs you started to end, by runId",
-    promptGuidelines: ["Use wait_for_agents with the runIds you need before continuing; it returns each run's final message, so you do not need to read child sessions."],
+      "Everything list_agents says about one agent you started, plus its whole task, where it works and whether that directory still exists, its activity (turns, tool calls, the tool running now, when it was last active), " +
+      "its last assistant messages (excerpted; 1 by default, at most " + String(AGENT_INSPECT_MESSAGES_MAX) + "), the question it is paused on when its status is needs_input, and any agents it started itself. " +
+      "Address it by the sessionId or a runId start_agent returned. Read-only: it never wakes the agent or sends it anything.",
+    promptSnippet: "Look closely at one agent you started: task, activity, last words, open question",
+    promptGuidelines: [
+      "Use inspect_agent, by runId or sessionId, to check on one agent — never to wait for it: its ending is delivered to you as a message.",
+      "Keep inspect_agent's messages small; pulling an agent's whole conversation into your context defeats delegating.",
+    ],
     parameters: Type.Object({
-      runIds: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 100, description: "The runIds to wait for." }),
-      timeoutSeconds: Type.Optional(Type.Number({ minimum: 1, description: "Return with timedOut true after this many seconds; omit for the harness default." })),
+      runId: Type.Optional(Type.String({ minLength: 1, description: "A runId start_agent returned." })),
+      sessionId: Type.Optional(Type.String({ minLength: 1, description: "The sessionId start_agent returned, if you have that rather than a runId." })),
+      messages: Type.Optional(
+        Type.Integer({
+          minimum: 0,
+          maximum: AGENT_INSPECT_MESSAGES_MAX,
+          description: `How many of the agent's last assistant messages to include, excerpted. Default ${AGENT_INSPECT_MESSAGES_DEFAULT}; at most ${AGENT_INSPECT_MESSAGES_MAX}.`,
+        }),
+      ),
     }),
-    async execute(_toolCallId, params, signal) {
-      const result = await bridge.waitForAgents(
-        { runIds: params.runIds, ...(params.timeoutSeconds !== undefined ? { timeoutSeconds: params.timeoutSeconds } : {}) },
-        signal,
-      );
-      return asResult({ runs: result.runs.map(modelView), timedOut: result.timedOut }, result);
+    async execute(_toolCallId, params) {
+      const result = await bridge.inspectAgent({
+        ...(params.runId !== undefined ? { runId: params.runId } : {}),
+        ...(params.sessionId !== undefined ? { sessionId: params.sessionId } : {}),
+        ...(params.messages !== undefined ? { messages: params.messages } : {}),
+      });
+      return asResult(inspectedView(result), result);
     },
   });
 
@@ -266,6 +384,41 @@ function registerParentTools(pi: ExtensionAPI, bridge: AgentHarnessBridge): void
     async execute(_toolCallId, params) {
       const result = await bridge.stopAgent({ runId: params.runId, ...(params.reason !== undefined ? { reason: params.reason } : {}) });
       return asResult(modelView(result), result);
+    },
+  });
+
+  // M13-T42: the parent owns a child's worktree, so it needs a verb for the
+  // end of that ownership. There is deliberately no merge tool — merging is
+  // `git merge` in the parent's own checkout, and a tool would have to invent
+  // conflict semantics, which is exactly where a person's judgement belongs.
+  pi.registerTool({
+    name: "remove_agent_worktree",
+    label: "Remove an agent's worktree",
+    description:
+      "Remove the worktree and branch of an agent you started, once you have merged its work or decided against it. Address it by the sessionId or a runId start_agent returned. " +
+      "Refused while that agent is still working, refused for an agent started with worktree false (it has none), and refused when the branch still holds commits or changes your checkout does not have — merge those first, or pass force true to throw them away.",
+    promptSnippet: "Remove a finished agent's worktree, once its work is merged or rejected",
+    promptGuidelines: [
+      "When an agent you started has finished and you have merged or rejected its branch, call remove_agent_worktree so its directory does not stay under .worktrees for ever; nothing removes it for you.",
+      "If remove_agent_worktree says the branch still holds unmerged work, merge it with git first and call it again; use force only when that work is genuinely to be thrown away.",
+    ],
+    parameters: Type.Object({
+      sessionId: Type.Optional(Type.String({ minLength: 1, description: "The sessionId start_agent returned for that agent." })),
+      runId: Type.Optional(Type.String({ minLength: 1, description: "A runId of that agent, if you have it rather than the sessionId." })),
+      force: Type.Optional(
+        Type.Boolean({
+          description: "Remove it even though the branch still holds work your checkout does not have. Default false. Only for work you are deliberately throwing away.",
+        }),
+      ),
+    }),
+    async execute(_toolCallId, params) {
+      const result = await bridge.removeAgentWorktree({
+        ...(params.sessionId !== undefined ? { sessionId: params.sessionId } : {}),
+        ...(params.runId !== undefined ? { runId: params.runId } : {}),
+        ...(params.force !== undefined ? { force: params.force } : {}),
+      });
+      const { agentName, subagentName, ...rest } = result;
+      return asResult({ agent_name: agentName, subagent_name: subagentName, ...rest }, result);
     },
   });
 }

@@ -28,7 +28,8 @@ export interface TimelineEvent {
   time: string;
   title: string;
   detail?: string | undefined;
-  tone?: "danger" | "muted" | undefined;
+  /** `attention` is a "now" that is stuck — paused on someone — and pulses warm instead of live. */
+  tone?: "danger" | "muted" | "attention" | undefined;
 }
 
 export function Timeline({ events, className, ...props }: Omit<ComponentProps<"ol">, "children"> & { events: readonly TimelineEvent[] }) {
@@ -45,7 +46,7 @@ export function Timeline({ events, className, ...props }: Omit<ComponentProps<"o
               <span
                 className={cn(
                   "mt-1 size-2 shrink-0 rounded-full",
-                  event.when === "now" && "bg-live ring-4 ring-live/15 motion-safe:animate-attention",
+                  event.when === "now" && (event.tone === "attention" ? "bg-attention ring-4 ring-attention/15 motion-safe:animate-attention" : "bg-live ring-4 ring-live/15 motion-safe:animate-attention"),
                   event.when === "past" && (event.tone === "danger" ? "bg-danger" : "bg-ink-3"),
                   event.when === "future" && "border border-line bg-transparent",
                 )}
@@ -60,6 +61,7 @@ export function Timeline({ events, className, ...props }: Omit<ComponentProps<"o
                   event.when === "future" ? "text-ink-3" : "text-ink",
                   event.when === "now" && "font-medium",
                   event.tone === "danger" && "text-danger",
+                  event.tone === "attention" && "text-attention",
                 )}
                 title={event.title}
               >

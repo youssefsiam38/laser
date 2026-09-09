@@ -34,6 +34,22 @@ export interface Worktree {
   root: string;
 }
 
+/**
+ * What a worktree still holds. `null` means git could not answer — never
+ * "nothing": removing on an unknown is exactly the loss this guards against.
+ */
+export interface WorktreeFacts {
+  exists: boolean;
+  unmergedCommits: number | null;
+  uncommittedFiles: number | null;
+  detail?: string;
+}
+
+function readCount(text: string): number | null {
+  const value = Number.parseInt(text.trim(), 10);
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
 const SLUG_MAX = 60;
 
 /** `<sanitized subagentName>-<runId without run_>`: lower case, `[a-z0-9-]`, ≤ 60. */
@@ -47,6 +63,15 @@ export function worktreeSlug(subagentName: string, runId: string): string {
     .slice(0, budget)
     .replace(/-+$/g, "");
   return `${name || "agent"}-${suffix}`;
+}
+
+/** git without throwing, for the questions whose answer may legitimately be "cannot tell". */
+function gitQuiet(cwd: string, args: string[]): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+  return new Promise((done) => {
+    execFile("git", args, { cwd, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" }, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
+      done({ ok: !error, stdout: stdout.toString(), stderr: stderr.toString() });
+    });
+  });
 }
 
 function git(cwd: string, args: string[]): Promise<string> {
@@ -127,6 +152,32 @@ export class WorktreeManager {
   /** The worktree a run owns, when this process created it. */
   ownedBy(runId: string): Worktree | undefined {
     return this.owned.get(runId);
+  }
+
+  /** The git toplevel a project belongs to; `undefined` when it is not a repository. */
+  async rootOf(projectCwd: string): Promise<string | undefined> {
+    const found = await gitQuiet(projectCwd, ["rev-parse", "--show-toplevel"]);
+    return found.ok ? found.stdout.trim() || undefined : undefined;
+  }
+
+  /**
+   * What the worktree still holds, measured against the checkout the parent is
+   * working in. Nothing here throws: "cannot tell" is `null`, and a caller that
+   * cannot tell must refuse rather than promise the work is safe (M13-T42).
+   */
+  async facts(input: { path: string; branch: string; compareCwd: string }): Promise<WorktreeFacts> {
+    if (!existsSync(input.path)) return { exists: false, unmergedCommits: 0, uncommittedFiles: 0 };
+    const ahead = await gitQuiet(input.compareCwd, ["rev-list", "--count", `HEAD..${input.branch}`]);
+    const changed = await gitQuiet(input.path, ["status", "--porcelain", "--untracked-files=all"]);
+    const unmergedCommits = ahead.ok ? readCount(ahead.stdout) : null;
+    const uncommittedFiles = changed.ok ? changed.stdout.split("\n").filter((line) => line.trim() !== "").length : null;
+    const detail =
+      unmergedCommits === null
+        ? ahead.stderr.trim() || "git could not compare that branch with this checkout."
+        : uncommittedFiles === null
+          ? changed.stderr.trim() || "git could not read that worktree's changes."
+          : undefined;
+    return { exists: true, unmergedCommits, uncommittedFiles, ...(detail ? { detail } : {}) };
   }
 
   /** Best effort: `worktree remove --force`, delete the branch, prune. Only for paths this process owns or that pass the safety check. */

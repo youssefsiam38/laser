@@ -10,10 +10,12 @@ export {
   flattenFleet,
   fleetSummary,
   partitionItems,
+  scopeFleet,
   type FleetGroup,
   type FleetInput,
   type FleetItem,
   type FleetItemKind,
+  type FleetScope,
   type FleetState,
 } from "./model.js";
 export { useFleet, useFleetReconcile, type FleetView } from "./hooks.js";

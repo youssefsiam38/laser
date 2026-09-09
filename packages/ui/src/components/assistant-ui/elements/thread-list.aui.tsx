@@ -87,6 +87,7 @@ import {
 import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type FC } from "react";
 
 import { latestRunForSession, runStatusLabel, runStatusTone, type AgentStatusTone } from "@/agents/model";
+import { describeWorktreeContents, forgetWorktreeDisposition, setWorktreeDisposition, useWorktreeStatus } from "@/agents/worktree";
 import { requestEndAgent } from "@/components/agents/end-agent";
 import { collapsePanel } from "@/components/assistant-ui/elements/surfaces";
 import { foldKey, sessionFolds, useFoldOpen } from "@/components/assistant-ui/elements/session-folds";
@@ -199,7 +200,7 @@ interface ItemMeta {
   startedAt: number;
 }
 
-const ACTIVE_RUN: ReadonlySet<AgentRunStatus> = new Set<AgentRunStatus>(["running", "queued"]);
+const ACTIVE_RUN: ReadonlySet<AgentRunStatus> = new Set<AgentRunStatus>(["running", "queued", "needs_input"]);
 
 /**
  * What the finished fold may swallow. The protocol calls `blocked` terminal
@@ -414,7 +415,8 @@ function branchInfoOf(groups: readonly ThreadListGroup[], runs: Readonly<Record<
       total += 1;
       const status = statusOf(child);
       if (status === "running") running += 1;
-      else if (status === "blocked") blocked += 1;
+      // Both need someone: one ended saying so, one is live and paused on a question.
+      else if (status === "blocked" || status === "needs_input") blocked += 1;
       else if (status === "queued" || status === undefined) waiting += 1;
       child.children.forEach(tally);
     };
@@ -445,12 +447,16 @@ function branchInfoOf(groups: readonly ThreadListGroup[], runs: Readonly<Record<
  * depth. Order follows DESIGN.md "Status language": needs you, then failed,
  * then working, then waiting, then done.
  */
-export function branchChip(info: BranchInfo): { text: string; tone: AgentStatusTone } {
+export function branchChip(info: BranchInfo): { text: string; tone: AgentStatusTone } | undefined {
   if (info.blocked > 0) return { text: `${info.blocked} needs you`, tone: "attention" };
   if (info.finishedFailed > 0 && info.running === 0 && info.waiting === 0) return { text: `${info.finishedFailed} failed`, tone: "danger" };
   if (info.running > 0) return { text: `${info.running} running`, tone: "live" };
   if (info.waiting > 0) return { text: `${info.waiting} waiting`, tone: "muted" };
-  return { text: `${info.total} finished`, tone: "muted" };
+  // Nothing live under the row: no chip. A finished count on the row repeats
+  // the fold beneath it ("N finished") and costs the session its name in a
+  // narrow column (M13-T48). What is still going, or waiting on a person, is
+  // information nothing else shows, so those stay.
+  return undefined;
 }
 
 /** The whole picture, for the chip's tooltip: every count, in one sentence. */
@@ -1137,7 +1143,6 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
           )}
         >
           {row.child && row.runStatus !== undefined && stateTone ? <RunDot status={row.runStatus} tone={stateTone} /> : null}
-          {beam ? <Sparkles aria-hidden="true" data-slot="beam-row-mark" className="size-3 shrink-0 text-live" /> : null}
           <span
             data-slot="aui_thread-list-item-title"
             // The row's own title, so a name the column cuts is still readable
@@ -1206,8 +1211,9 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
 
 /**
  * A child row's dot: its run's status in the tone `runStatusTone` names, with
- * the shared sweep while it works and the attention pulse while it is blocked.
- * Reduced motion keeps the colour and the accessible name.
+ * the shared sweep while it works and the attention pulse while it needs
+ * someone — blocked, or live and asking. Reduced motion keeps the colour and
+ * the accessible name.
  */
 function RunDot({ status, tone }: { status: AgentRunStatus; tone: AgentStatusTone }) {
   const color = TONE_COLOR[tone === "muted" ? "neutral" : tone];
@@ -1217,7 +1223,7 @@ function RunDot({ status, tone }: { status: AgentRunStatus; tone: AgentStatusTon
       aria-label={runStatusLabel(status)}
       data-slot="run-dot"
       data-run-status={status}
-      className={cn("relative inline-block size-2 shrink-0 rounded-full bg-(--dot)", status === "blocked" && "motion-safe:animate-attention")}
+      className={cn("relative inline-block size-2 shrink-0 rounded-full bg-(--dot)", (status === "blocked" || status === "needs_input") && "motion-safe:animate-attention")}
       style={{ "--dot": color } as React.CSSProperties}
     >
       {status === "running" && (
@@ -1362,32 +1368,128 @@ function ThreadListItemMore({
           )}
         </ThreadListItemMorePrimitive.Content>
       </ThreadListItemMorePrimitive.Root>
-      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Delete “{title}”?</DialogTitle>
-            <DialogDescription>This permanently removes the saved transcript from disk. It cannot be recovered here.</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setDeleteOpen(false)}>Cancel</Button>
-            <Button
-              variant="destructive"
-              disabled={!path}
-              onClick={() => {
-                try {
-                  aui.threadListItem.delete();
-                  setDeleteOpen(false);
-                } catch (error) {
-                  actions.toast("error", error instanceof Error ? error.message : String(error));
-                }
-              }}
-            >
-              Delete transcript
-            </Button>
-          </DialogFooter>
-        </DialogContent>
+      <Dialog
+        open={deleteOpen}
+        onOpenChange={(open) => {
+          setDeleteOpen(open);
+          if (!open && path) forgetWorktreeDisposition(path);
+        }}
+      >
+        {deleteOpen && <DeleteSessionBody path={path} title={title} onDone={() => setDeleteOpen(false)} />}
       </Dialog>
     </div>
+  );
+}
+
+/**
+ * "Delete “{title}”?" — and, when that session is a child agent with a
+ * worktree, what is in that worktree and whether it goes too (M13-T42).
+ *
+ * The shape is `EndAgentDialog`'s, this repo's settled destructive confirm: a
+ * title that names the thing, one honest sentence about what happens, and a
+ * footer where the safe verb owns the first Enter. Keeping the worktree is the
+ * safe answer and therefore the one selected; a session with no worktree gets
+ * exactly the dialog it always had, with no empty row and no "no worktree"
+ * line to read past.
+ */
+function DeleteSessionBody({ path, title, onDone }: { path: string | undefined; title: string; onDone(): void }) {
+  const aui = useAui();
+  const { actions } = useLaserStable();
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const [alsoDelete, setAlsoDelete] = useState(false);
+  const { loading, status, error } = useWorktreeStatus(path, true, actions.agents.worktreeStatus);
+  // A worktree that has already been taken away is not a decision to make.
+  const worktree = status && status.exists ? status : undefined;
+
+  const confirm = () => {
+    if (!path) return;
+    setWorktreeDisposition(path, worktree && alsoDelete ? "delete" : "keep");
+    try {
+      aui.threadListItem.delete();
+      onDone();
+    } catch (failure) {
+      forgetWorktreeDisposition(path);
+      actions.toast("error", failure instanceof Error ? failure.message : String(failure));
+    }
+  };
+
+  return (
+    <DialogContent
+      className="sm:max-w-md"
+      data-slot="delete-session-dialog"
+      data-worktree={worktree ? "present" : undefined}
+      // Radix would land on the first tabbable control, which is a choice chip;
+      // Enter must not be able to delete anything.
+      onOpenAutoFocus={(event) => {
+        event.preventDefault();
+        cancelRef.current?.focus();
+      }}
+    >
+      <DialogHeader>
+        <DialogTitle>Delete “{title}”?</DialogTitle>
+        <DialogDescription>This permanently removes the saved transcript from disk. It cannot be recovered here.</DialogDescription>
+      </DialogHeader>
+
+      {loading && (
+        <p className="text-sm leading-sm text-ink-3" data-slot="delete-session-worktree-loading">
+          Checking whether this agent left a worktree…
+        </p>
+      )}
+      {error && (
+        <p role="alert" className="border-s-2 border-attention ps-3 text-sm leading-sm text-ink">
+          <span className="font-medium">Could not check for a worktree.</span> {error} Its directory is kept either way.
+        </p>
+      )}
+      {worktree && (
+        <div className="flex flex-col gap-2" data-slot="delete-session-worktree">
+          <span id={`delete-worktree-${title}`} className="eyebrow">
+            Its worktree
+          </span>
+          <p className="text-sm leading-sm text-ink-2">
+            <span className="typed break-all text-ink">{worktree.branch}</span>
+            <span className="mt-0.5 block break-all text-ink-3">{worktree.path}</span>
+          </p>
+          <p className="text-sm leading-sm text-ink-2">{describeWorktreeContents(worktree)}</p>
+          <div className="flex flex-wrap gap-1.5" role="group" aria-labelledby={`delete-worktree-${title}`}>
+            {[
+              { key: "keep", label: "Keep the worktree" },
+              { key: "delete", label: "Delete it too" },
+            ].map((choice) => {
+              const chosen = (choice.key === "delete") === alsoDelete;
+              return (
+                <button
+                  key={choice.key}
+                  type="button"
+                  data-slot="delete-session-worktree-choice"
+                  data-choice={choice.key}
+                  aria-pressed={chosen}
+                  onClick={() => setAlsoDelete(choice.key === "delete")}
+                  className={cn(
+                    "h-7 rounded-full border px-2.5 text-xs font-medium outline-none pointer-coarse:min-h-11",
+                    "transition-colors duration-(--motion-instant) active:translate-y-px motion-reduce:transition-none",
+                    "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live",
+                    chosen
+                      ? "border-transparent bg-[color-mix(in_oklab,var(--live)_12%,transparent)] text-live"
+                      : "border-line bg-surface text-ink-2 hover:bg-surface-2 hover:text-ink",
+                  )}
+                >
+                  {choice.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <DialogFooter>
+        <Button ref={cancelRef} variant="ghost" autoFocus onClick={onDone} className="pointer-coarse:min-h-11">
+          Cancel
+        </Button>
+        <Button variant="destructive" disabled={!path} onClick={confirm} className="pointer-coarse:min-h-11">
+          {worktree && alsoDelete ? "Delete transcript and worktree" : "Delete transcript"}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
   );
 }
 

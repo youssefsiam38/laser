@@ -72,7 +72,12 @@ export function createSessionLauncher(deps: SessionLauncherDeps): SessionLaunche
           && !deps.archived(session.path)
           && resolve(agentNameOf(session)) === wanted
           && session.messageCount === 0 && !session.firstMessage
-          && (!session.attention || session.attention === "idle"))
+          // An attention mark is not a reason to skip a session that has never
+          // been prompted: an unwritten row can carry a stale "unread" stamp
+          // (M13-T47), and the hydrated `isUnstartedSession` check below is
+          // the proof of emptiness, not the catalog's mood. Only a session that
+          // genuinely wants a person — an error or a question — is left alone.
+          && !(session.attention === "error" || session.attention === "waiting_for_input"))
         .sort((a, b) => Number(b.path === state.current) - Number(a.path === state.current)
           || b.modifiedAt.localeCompare(a.modifiedAt));
       for (const candidate of candidates) {

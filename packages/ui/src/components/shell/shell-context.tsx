@@ -33,6 +33,18 @@ export interface ShellContextValue {
   newSession(): Promise<void>;
   /** A project is selected and the host is reachable. */
   canCreate: boolean;
+  /**
+   * A session was chosen: leave everything that covers the chat — the agent
+   * map, the fullscreen map, the workbench, the fleet sheet and the compact
+   * layouts' sheets — so the chosen session's chat shows (M13-T50).
+   */
+  showChat(): void;
+  /**
+   * The logo: `showChat`, then the last opened session — the current one,
+   * else the one remembered for the current project, else the project's
+   * new-session state. Creates nothing.
+   */
+  returnToChat(): void;
 }
 
 export const ShellContext = createContext<ShellContextValue | null>(null);

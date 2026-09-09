@@ -205,18 +205,29 @@ function SortableProjectButton(props: ProjectButtonProps) {
   );
 }
 
+/**
+ * The logo means "back to my chat", from anywhere (M13-T50): the map, the
+ * fullscreen map, Settings, Logs, the Agents page, a sheet. One click, one
+ * keyboard activation, and the last opened session's chat is on screen.
+ * The verb lives with the shell (chat-navigation.tsx); this is its button.
+ */
 function Brand() {
-  const workbench = useWorkbench();
+  const { returnToChat } = useShell();
   return (
-    <button
-      type="button"
-      aria-label="Return to chat"
-      title="Return to chat"
-      onClick={workbench.close}
-      className="flex size-10 cursor-pointer items-center justify-center rounded-lg outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live"
-    >
-      <LaserLogo className="size-8 rounded-lg shadow-float-sm" />
-    </button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label="Back to your chat"
+          data-slot="back-to-chat"
+          onClick={returnToChat}
+          className="flex size-10 cursor-pointer items-center justify-center rounded-lg outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live"
+        >
+          <LaserLogo className="size-8 rounded-lg shadow-float-sm" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="right">Back to your chat</TooltipContent>
+    </Tooltip>
   );
 }
 

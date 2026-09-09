@@ -4,6 +4,8 @@
  * hand-edited JSON document back into the change list the protocol accepts.
  */
 import type {
+  ModelCatalogEntry,
+  ProviderAuthInfo,
   SettingChange,
   SettingDescriptor,
   SettingsCatalog,
@@ -194,4 +196,107 @@ function differingKeys(a: unknown, b: unknown, prefix = ""): string[] {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// ---- Which models a person can actually pick (M13-T49) -------------------
+//
+// Every picker narrows the catalogue three times: the `enabledModels`
+// allow-list (evaluated by the engine over the models it can authenticate),
+// the product's own `disabledModels` switches, and then a connected provider.
+// A row in Settings → Providers and models must say which of the three hides
+// it, because the fixes differ: a switch, a pattern in the list, or a sign-in.
+// When the list is set, a model whose provider is not connected is
+// `enabled: false` too, so the provider check comes before the list or the
+// row would blame the list for a missing key. A switch the person set wins
+// over both: it is their own choice, and the row says so first.
+
+export type ModelOfferState = "offered" | "provider-not-connected" | "hidden-by-list" | "switched-off";
+
+/** The three views of the catalogue: everything, what the pickers offer, what they do not. */
+export type ModelView = "all" | "enabled" | "hidden";
+
+type OfferInput = Pick<ModelCatalogEntry, "provider" | "enabled"> & Partial<Pick<ModelCatalogEntry, "hiddenByList" | "switchedOff">>;
+
+/** Provider ids with a credential, or undefined when the providers could not be read. */
+export function connectedProviderIds(providers: readonly ProviderAuthInfo[] | undefined): Set<string> | undefined {
+  if (!providers || providers.length === 0) return undefined;
+  return new Set(providers.filter((provider) => provider.configured).map((provider) => provider.id));
+}
+
+/**
+ * Why a catalogue row is absent from the pickers, if it is. Unknown providers
+ * (the list failed to load) cannot hide anything, so only the switch and the
+ * list can. An older host sends no `hiddenByList`; `enabled` then stands in.
+ */
+export function modelOfferState(model: OfferInput, connected: ReadonlySet<string> | undefined): ModelOfferState {
+  if (model.switchedOff) return "switched-off";
+  if (connected && !connected.has(model.provider)) return "provider-not-connected";
+  return (model.hiddenByList ?? !model.enabled) ? "hidden-by-list" : "offered";
+}
+
+/** Whether a row belongs in a view. Hidden is every reason at once; the row itself says which. */
+export function matchesModelView(state: ModelOfferState, view: ModelView): boolean {
+  if (view === "all") return true;
+  return view === "enabled" ? state === "offered" : state !== "offered";
+}
+
+/** How many rows are in each state, for the view menu and the section headers. */
+export function offerStateCounts(models: readonly OfferInput[], connected: ReadonlySet<string> | undefined): Record<ModelOfferState, number> {
+  const counts: Record<ModelOfferState, number> = { offered: 0, "provider-not-connected": 0, "hidden-by-list": 0, "switched-off": 0 };
+  for (const model of models) counts[modelOfferState(model, connected)] += 1;
+  return counts;
+}
+
+/** Rows the allow-list hides that a sign-in or a switch would not: the stale-list count shown beside the editor. */
+export function hiddenByListCount(models: readonly OfferInput[], connected: ReadonlySet<string> | undefined): number {
+  return offerStateCounts(models, connected)["hidden-by-list"];
+}
+
+/** The one pattern the engine resolves to exactly this model and no other: its canonical `provider/id`. */
+export function patternForModel(model: Pick<ModelCatalogEntry, "provider" | "id">): string {
+  return `${model.provider}/${model.id}`;
+}
+
+const sameRef = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+/**
+ * The list with this model let back in. The existing patterns stay as they
+ * are: a narrow list was probably narrow on purpose, and one more line is the
+ * smallest true change.
+ */
+export function withModelOffered(patterns: readonly string[] | null, model: Pick<ModelCatalogEntry, "provider" | "id">): string[] {
+  const pattern = patternForModel(model);
+  const current = patterns ?? [];
+  return current.some((entry) => sameRef(entry, pattern)) ? [...current] : [...current, pattern];
+}
+
+/**
+ * The disable list with these models switched off. Exact references only: the
+ * engine's allow-list has no negation (the worker proves it against the real
+ * matcher), and an enumerated allow-list would hide every model added later.
+ * A model this list does not name stays on, whenever it arrived.
+ */
+export function withModelsSwitchedOff(list: readonly string[], models: readonly Pick<ModelCatalogEntry, "provider" | "id">[]): string[] {
+  const next = [...list];
+  for (const model of models) {
+    const ref = patternForModel(model);
+    if (!next.some((entry) => sameRef(entry, ref))) next.push(ref);
+  }
+  return next;
+}
+
+/** The disable list with these models switched back on. */
+export function withModelsSwitchedOn(list: readonly string[], models: readonly Pick<ModelCatalogEntry, "provider" | "id">[]): string[] {
+  const refs = models.map(patternForModel);
+  return list.filter((entry) => !refs.some((ref) => sameRef(entry, ref)));
+}
+
+/** Where a list setting currently lives: the project file when it sets one, else global. */
+export function settingsListScope(snapshot: SettingsSnapshot | undefined, path: "enabledModels" | "disabledModels"): SettingsScope {
+  return snapshot && getAtPath(snapshot.project.values, path) !== undefined ? "project" : "global";
+}
+
+/** Where `enabledModels` currently lives. */
+export function enabledModelsScope(snapshot: SettingsSnapshot | undefined): SettingsScope {
+  return settingsListScope(snapshot, "enabledModels");
 }

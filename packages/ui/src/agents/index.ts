@@ -49,6 +49,19 @@ export {
 export { createAgentsActions, type AgentsActions, type AgentsActionsDeps } from "./actions.js";
 
 export {
+  clearRemoveWorktreeRequest,
+  describeWorktreeContents,
+  forgetWorktreeDisposition,
+  requestRemoveWorktree,
+  setWorktreeDisposition,
+  takeWorktreeDisposition,
+  useRemoveWorktreeRequest,
+  useWorktreeStatus,
+  type RemoveWorktreeRequest,
+  type WorktreeStatusState,
+} from "./worktree.js";
+
+export {
   useAgentEvents,
   useAgentRuns,
   useAgentTree,

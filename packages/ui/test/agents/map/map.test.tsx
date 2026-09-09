@@ -128,6 +128,37 @@ describe("the live map", () => {
     expect(container.querySelector(".agent-map-edge-active")).toBeNull();
   });
 
+  it("says Asking on a node paused on a question, shows the question as its action, and counts it as needing you", async () => {
+    const { runs, sessions } = family();
+    mounted = await mountMap({ store: seededStore({ runs, sessions }), size: PANEL });
+    const { container, store } = mounted;
+    const question = { id: "ui-1", kind: "select" as const, title: "Which token store?", options: ["cookie", "header"], askedAt: "2026-09-08T10:04:00.000Z" };
+    await dispatch(store, { type: "notification", method: "agents/run", params: { run: run({ runId: "r-a", sessionPath: "/p/a.jsonl", subagentName: "reviewer-1", status: "needs_input", question, updatedAt: "2026-09-08T10:04:00.000Z", startedAt: "2026-09-08T10:00:00.000Z" }) } });
+    const a = nodeAt(container, "/p/a.jsonl")!;
+    expect(a.querySelector('[data-slot="agent-map-status"]')?.textContent).toContain("Asking");
+    expect(a.querySelector('[data-slot="status-dot"]')?.getAttribute("data-status")).toBe("waiting_for_input");
+    expect(a.getAttribute("aria-label")).toContain("Asking");
+    // Live: its clock keeps going, and the header counts it as needing you rather than working.
+    expect(a.querySelector('[data-slot="agent-map-elapsed"]')).not.toBeNull();
+    expect(container.querySelector('[data-slot="agent-map-summary"]')?.textContent).toContain("3 agents · 1 working · 1 needs you");
+    // The inspector says what it is waiting on, with the choices, on a "now" that is stuck.
+    await act(async () => a.click());
+    const card = container.querySelector('[data-slot="agent-map-inspector-card"]')!;
+    expect(card.querySelector('[data-slot="agent-map-inspector-status"]')?.textContent).toBe("Asking");
+    expect(card.querySelector('[data-slot="agent-map-inspector-timeline"]')?.textContent).toContain("Asking · Which token store?");
+    const asked = card.querySelector('[data-slot="agent-map-inspector-question"]')!;
+    expect(asked.textContent).toContain("Waiting on an answer");
+    expect(asked.textContent).toContain("Which token store?");
+    expect([...asked.querySelectorAll("li")].map((li) => li.textContent)).toEqual(["cookie", "header"]);
+    // Still a live agent: it can be ended from here.
+    expect(card.querySelector('[data-slot="agent-map-end"]')).not.toBeNull();
+    // Answered: working again, with the tool as its action.
+    await dispatch(store, { type: "notification", method: "agents/run", params: { run: run({ runId: "r-a", sessionPath: "/p/a.jsonl", subagentName: "reviewer-1", status: "running", activity: { turns: 1, tools: 1, currentTool: "bash", lastAt: "2026-09-08T10:05:00.000Z" }, updatedAt: "2026-09-08T10:05:00.000Z", startedAt: "2026-09-08T10:00:00.000Z" }) } });
+    expect(nodeAt(container, "/p/a.jsonl")?.querySelector('[data-slot="agent-map-status"]')?.textContent).toContain("Working");
+    expect(container.querySelector('[data-slot="agent-map-inspector-question"]')).toBeNull();
+    expect(container.querySelector('[data-slot="agent-map-inspector-timeline"]')?.textContent).toContain("Working · bash");
+  });
+
   it("keeps every node where it was when only a status changes, and moves the layout when a node arrives", async () => {
     // The arrival marker lives for one morph plus a settle, and the assertions
     // below sit inside that window: with a real clock a loaded machine can

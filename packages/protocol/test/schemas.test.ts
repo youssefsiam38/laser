@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  AGENT_RUN_STATUSES,
+  AGENT_RUN_TERMINAL,
   ErrorCodes,
+  HARNESS_TOOL_NAMES,
   ProtocolError,
+  agentRunStatusSchema,
   backgroundTaskUpdateSchema,
+  isTerminalRunStatus,
   clientMethods,
   clientParamsSchemas,
   parseClientRequest,
@@ -49,10 +54,10 @@ const samples: Record<ClientMethod, unknown> = {
   "session/pending/remove": { path: "/s.jsonl", id: "p-9f2c1a04" },
   "session/pending/steer": { path: "/s.jsonl", id: "p-9f2c1a04" },
   "session/pending/clear": { path: "/s.jsonl" },
-  "pi/session/fork": { path: "/s.jsonl", entryId: "abc" },
-  "pi/session/navigate": { path: "/s.jsonl", entryId: "abc", summarize: true, label: "x" },
+  "pi/session/fork": { path: "/s.jsonl", entryId: "abc", stopFirst: true },
+  "pi/session/navigate": { path: "/s.jsonl", entryId: "abc", summarize: true, label: "x", stopFirst: true },
   "pi/session/rename": { path: "/s.jsonl", name: "feature" },
-  "pi/session/delete": { path: "/s.jsonl" },
+  "pi/session/delete": { path: "/s.jsonl", worktree: "delete" },
   "pi/session/entries": { path: "/s.jsonl" },
   "pi/session/detach": { path: "/s.jsonl" },
   "pi/session/compact": { path: "/s.jsonl" },
@@ -148,6 +153,8 @@ const samples: Record<ClientMethod, unknown> = {
   "agents/engine-instructions": { cwd: "/p" },
   "agents/runs/list": { path: "/s.jsonl" },
   "agents/runs/stop": { runId: "run_7", reason: "Wrong direction" },
+  "agents/worktree/status": { path: "/s.jsonl" },
+  "agents/worktree/remove": { path: "/s.jsonl", force: true },
   "agents/builtin/set-model": { name: "chat", model: { provider: "openai", id: "gpt-5.6-luna" } },
   "agents/namer/qualify": { cwd: "/p" },
   "agents/sync": { snapshot: { revision: 3, agents: [], defaultAgent: "default" } },
@@ -190,6 +197,22 @@ describe("client request schemas", () => {
     expect(clientParamsSchemas["agents/set-policy"].safeParse({ policy: { maxDepth: 0 } }).success).toBe(false);
     expect(clientParamsSchemas["agents/set-policy"].safeParse({ policy: { budget: 3 } }).success).toBe(false);
     expect(clientParamsSchemas["session/new"].safeParse({ cwd: "/p", agentName: "beam" }).success).toBe(true);
+  });
+
+  it("lets a delete omit the worktree instruction, and refuses anything but keep or delete", () => {
+    const del = clientParamsSchemas["pi/session/delete"];
+    expect(del.safeParse({ path: "/s.jsonl" }).success).toBe(true);
+    expect(del.safeParse({ path: "/s.jsonl", worktree: "keep" }).success).toBe(true);
+    expect(del.safeParse({ path: "/s.jsonl", worktree: "delete" }).success).toBe(true);
+    expect(del.safeParse({ path: "/s.jsonl", worktree: true }).success).toBe(false);
+    expect(del.safeParse({ path: "/s.jsonl", worktree: "remove" }).success).toBe(false);
+  });
+
+  it("addresses a worktree by its child session's path, never by a fifth identity", () => {
+    expect(clientParamsSchemas["agents/worktree/status"].safeParse({ path: "/s.jsonl" }).success).toBe(true);
+    expect(clientParamsSchemas["agents/worktree/status"].safeParse({ runId: "run_7" }).success).toBe(false);
+    expect(clientParamsSchemas["agents/worktree/remove"].safeParse({ path: "/s.jsonl" }).success).toBe(true);
+    expect(clientParamsSchemas["agents/worktree/remove"].safeParse({ path: "/s.jsonl", force: "yes" }).success).toBe(false);
   });
 
   it("names one pending message by the id the worker minted, never by index or text", () => {
@@ -357,5 +380,22 @@ describe("client request schemas", () => {
   it("treats missing params as an empty object for methods that allow it", () => {
     const req = parseClientRequest({ jsonrpc: "2.0", id: "a", method: "pi/session/list" });
     expect(req.params).toEqual({});
+  });
+});
+
+describe("run status vocabulary", () => {
+  it("carries needs_input as a live status, distinct from blocked, and no waiting tool", () => {
+    // M13-T45: a child paused on a question is `needs_input` — live, not
+    // ended — and `blocked` stays the ended shape. The wire schema follows the
+    // list, so a status the list does not know is refused.
+    expect([...AGENT_RUN_STATUSES]).toEqual(["queued", "running", "needs_input", "completed", "blocked", "failed", "cancelled"]);
+    expect([...AGENT_RUN_TERMINAL]).toEqual(["completed", "blocked", "failed", "cancelled"]);
+    expect(isTerminalRunStatus("needs_input")).toBe(false);
+    expect(isTerminalRunStatus("blocked")).toBe(true);
+    for (const status of AGENT_RUN_STATUSES) expect(agentRunStatusSchema.safeParse(status).success).toBe(true);
+    expect(agentRunStatusSchema.safeParse("waiting").success).toBe(false);
+    expect(agentRunStatusSchema.safeParse("timed_out").success).toBe(false);
+    expect([...HARNESS_TOOL_NAMES]).toContain("inspect_agent");
+    expect([...HARNESS_TOOL_NAMES]).not.toContain("wait_for_agents");
   });
 });

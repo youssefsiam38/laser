@@ -39,7 +39,7 @@ export function FleetSheet() {
     <Sheet open={open} onOpenChange={(next) => !next && closeFleetSheet()}>
       <SheetContent side={mobile ? "bottom" : "right"} className={cn("flex flex-col gap-0 p-0", mobile ? "h-[85dvh]" : "w-[min(92vw,360px)]")}>
         <SheetTitle className="sr-only">Fleet</SheetTitle>
-        <SheetDescription className="sr-only">Every agent and background command, in every project.</SheetDescription>
+        <SheetDescription className="sr-only">The agents and background commands of the session you are reading.</SheetDescription>
         <FleetPanel variant="sheet" />
       </SheetContent>
     </Sheet>

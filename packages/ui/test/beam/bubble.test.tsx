@@ -42,6 +42,8 @@ const shell = (layout: ShellContextValue["layout"]): ShellContextValue => ({
   setAddProjectOpen: () => {},
   newSession: async () => {},
   canCreate: true,
+  showChat: () => {},
+  returnToChat: () => {},
 });
 
 /** The main view's session, read outside the bubble: it must never move because of Beam. */

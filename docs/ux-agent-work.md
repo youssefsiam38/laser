@@ -61,12 +61,18 @@ any origin. They differ by attributes, not by being different objects:
 Since D-140 the harness's own run record is `AgentRun`
 (`packages/protocol/src/agents.ts`): `origin` is `agent` or `user`, `depth`
 counts from 1 for a child of a top-level session, and the state vocabulary is
-`AgentRunStatus` — `queued`, `running`, `completed`, `blocked`, `failed`,
-`cancelled`, `timed_out`. The child model may only choose `completed` or
+`AgentRunStatus` — `queued`, `running`, `needs_input`, `completed`, `blocked`,
+`failed`, `cancelled`. The child model may only choose `completed` or
 `blocked`, through `complete_agent_run`; the harness sets the rest, and
-`endedBy` says whether the parent, the person or the harness ended it. The UI
-maps these onto the five-word status language of `DESIGN.md` in one place
-(`packages/ui/src/agents/model.ts`).
+`endedBy` says whether the parent, the person or the harness ended it.
+`needs_input` (M13-T45) is the live state where nothing happens until someone
+acts: the child raised a question through the portable UI surface and its
+loop is paused on it, the question is on the run, and the parent or the person
+answers it ([`agents.md`](agents.md) "Questions"). The UI maps these onto the
+five-word status language of `DESIGN.md` in one place
+(`packages/ui/src/agents/model.ts`): `running` is "Working" in the live tone,
+`needs_input` is "Asking" and `blocked` is "Needs you", both in the attention
+tone, and both count as needing you wherever work is counted.
 
 **A PLAN** is the intended shape of multi-run work: workflow phases and lanes,
 mission objectives, acceptance criteria. A plan is either *declared*, when
@@ -110,10 +116,10 @@ tabs under the top bar went with the panels (M13-T26), because a strip that
 shows one level of one session answers a narrower question than the fleet does
 and cost a permanent band of vertical space to do it.
 
-- **The fleet column** — *what is going on anywhere?* Every run and every
-  background command, across sessions, nested as it really nests, with the
-  loudest state rolled up to the row you can see
-  ([`ux-fleet.md`](ux-fleet.md)).
+- **The fleet column** — *what is going on around this?* Every run and every
+  background command of the session being read, nested as it really nests,
+  with the loudest state rolled up to the row you can see; a child shows its
+  root's tree with itself marked ([`ux-fleet.md`](ux-fleet.md), M13-T51).
 - **The sidebar** — *where is this conversation?* Since D-140 a child is a
   sub-session listed under its parent (`SessionSummary.agent`), opened as the
   normal chat.
@@ -125,7 +131,7 @@ map is a read-only React Flow view of the tree with status, transient event
 bubbles and a go-to-chat action per node, laid out by the measured size of its
 surface ([`agents.md`](agents.md) §4–5).
 
-The fleet renders each session's work as chronological root-first subtrees with
+The fleet renders the open session's work as chronological root-first subtrees with
 a continuous lineage rail. A child is structurally inside its parent, never a
 globally sorted flat row that merely looks indented; attention rolls up to the
 ancestor's status without moving the branch.

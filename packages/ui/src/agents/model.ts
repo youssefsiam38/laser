@@ -86,6 +86,10 @@ export function isBuiltinAgent(agent: Pick<AgentDefinition, "name" | "kind">): b
 export const RUN_STATUS_LABEL: Readonly<Record<AgentRunStatus, string>> = {
   queued: "Waiting",
   running: "Working",
+  // Live and stuck: the child raised a question and its loop is paused on it
+  // (M13-T45). One word, so a row can carry it; the question itself is on
+  // `AgentRun.question` for the surfaces with room.
+  needs_input: "Asking",
   completed: "Done",
   blocked: "Needs you",
   failed: "Failed",
@@ -97,6 +101,10 @@ export type AgentStatusTone = "live" | "attention" | "danger" | "ok" | "muted";
 export const RUN_STATUS_TONE: Readonly<Record<AgentRunStatus, AgentStatusTone>> = {
   queued: "muted",
   running: "live",
+  // Attention, not live: the one live state where nothing is happening
+  // until someone acts. The same warm hue as `blocked`, because to a person
+  // both mean "needs someone"; the word says which.
+  needs_input: "attention",
   // Not `ok`. Green in this app means *happening now* — the live dot, the
   // running badge — so green on something finished reads as "look at me" for
   // the one thing that needs no looking at (D-154). Finished work is history:

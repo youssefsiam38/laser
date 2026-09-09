@@ -24,11 +24,11 @@
  *   pi/ui/response       every live worker (the worker that owns the dialog id
  *                        answers; the others ignore it)
  */
-import { ErrorCodes, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, ProtocolError, decisionPushPayload, isTerminalRunStatus, parseClientRequest, type AgentRun, type JsonRpcError, type JsonRpcResponse, type NamerState, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
+import { ErrorCodes, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, ProtocolError, decisionPushPayload, isTerminalRunStatus, parseClientRequest, type AgentRun, type AgentWorktreeStatus, type JsonRpcError, type JsonRpcResponse, type NamerState, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
 import { unlinkSync } from "node:fs";
 import { PRODUCT_VERSION } from "@lasercode/protocol";
 import type { AgentRunRegistry } from "./agents/runs.js";
-import { removeRunWorktree } from "./agents/worktrees.js";
+import { removeRunWorktree, worktreeStatus } from "./agents/worktrees.js";
 import type { AgentStore } from "./agents/store.js";
 import type { AttentionTracker } from "./attention.js";
 import type { SessionCatalog } from "./catalog.js";
@@ -218,6 +218,12 @@ export class Router {
       createdAt: now,
       modifiedAt: now,
       messageCount: state.messageCount,
+      // The worker already knows which agent this session runs; the catalog
+      // will only learn it once Pi writes the file, which happens on the first
+      // message. Without it here, an empty Beam chat lists as "no agent", the
+      // launcher resolves that to the default agent, never matches it, and
+      // every press of Beam's + made another empty session (M13-T47).
+      ...(state.agent !== undefined ? { agent: state.agent } : {}),
     });
   }
 
@@ -270,21 +276,33 @@ export class Router {
         if (this.pool.openSessions(entry.cwd).includes(path)) {
           throw new ProtocolError(ErrorCodes.SessionBusy, "Close this session before deleting its transcript.");
         }
+        // The worktree decision is read before the transcript is unlinked, so
+        // the answer describes what was actually there.
+        const wanted = req.params.worktree ?? "keep";
+        const before = await this.sessionWorktree(path);
         unlinkSync(path);
         this.catalog.invalidate(path);
         this.deps.views.invalidate(path);
         this.unwritten.delete(path);
-        // A child's runs cannot go on without their session, and a deleted
-        // child's worktree has no owner left: remove it here, best effort.
+        // A child's runs cannot go on without their session. Its worktree is a
+        // separate thing on disk, and it is kept unless this request asked for
+        // it to go (M13-T42): a caller that omits the field never destroys work.
         const runs = this.deps.runs;
-        if (runs) {
-          const owned = runs.byChildPath(path);
-          runs.forgetSession(path);
-          const worktrees = new Map<string, AgentRun>();
-          for (const run of owned) if (run.worktree) worktrees.set(run.worktree.path, run);
-          await Promise.all([...worktrees.values()].map((run) => removeRunWorktree(run).catch(() => undefined)));
-        }
-        return {};
+        if (!runs) return {};
+        const owned = runs.byChildPath(path);
+        runs.forgetSession(path);
+        if (wanted !== "delete") return before ? { worktree: before.status } : {};
+        const worktrees = new Map<string, AgentRun>();
+        for (const run of owned) if (run.worktree) worktrees.set(run.worktree.path, run);
+        // Deleting is the person's explicit instruction, so it is not refused
+        // for holding work — they were shown what it held before they chose.
+        const removals = await Promise.all([...worktrees.entries()].map(async ([worktreePath, run]) => {
+          const removal = await removeRunWorktree(run, { force: true }).catch(() => undefined);
+          if (removal?.removed === true) runs.worktreeRemoved(worktreePath);
+          return removal;
+        }));
+        const removed = removals.find((removal) => removal?.worktree);
+        return removed?.worktree ? { worktree: removed.worktree } : before ? { worktree: before.status } : {};
       }
 
       case "pi/session/entries": {
@@ -548,6 +566,21 @@ export class Router {
         const result = await worker.request<{ run: AgentRun }>(req.method, req.params);
         return { run: registry.upsert(result.run) };
       }
+      case "agents/worktree/status": {
+        const found = await this.sessionWorktree(req.params.path);
+        return { worktree: found?.status ?? null };
+      }
+      case "agents/worktree/remove": {
+        // The person's escape hatch for a worktree its parent never cleaned up
+        // (M13-T42). The session stays; only the directory and its branch go,
+        // and only when nothing unmerged is left in it — or when `force` says
+        // the work is deliberately being thrown away.
+        const found = await this.sessionWorktree(req.params.path);
+        if (!found) return { removed: false, worktree: null };
+        const removal = await removeRunWorktree(found.run, { force: req.params.force === true });
+        if (removal?.removed === true && found.run.worktree) this.deps.runs?.worktreeRemoved(found.run.worktree.path);
+        return { removed: removal?.removed === true, worktree: removal?.worktree ?? found.status };
+      }
       case "agents/sync":
         throw new ProtocolError(ErrorCodes.Unsupported, "The app sends this to its own workers.");
 
@@ -555,6 +588,21 @@ export class Router {
         break;
     }
     return this.forwardToWorker(req);
+  }
+
+  /**
+   * The worktree a child session owns, read from git, with the run that owns
+   * it. `undefined` when the app knows no run for that session or the child
+   * was started with `worktree: false` — in which case there is no branch, no
+   * directory, and nothing to say about either.
+   */
+  private async sessionWorktree(path: string): Promise<{ run: AgentRun; status: AgentWorktreeStatus } | undefined> {
+    const registry = this.deps.runs;
+    if (!registry) return undefined;
+    const run = registry.byChildPath(path).find((candidate) => candidate.worktree);
+    if (!run) return undefined;
+    const status = await worktreeStatus(run).catch(() => undefined);
+    return status ? { run, status } : undefined;
   }
 
   /**

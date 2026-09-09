@@ -1,33 +1,41 @@
 "use client";
 /**
- * The fleet (docs/ux-fleet.md): every piece of agent work, in a permanent
- * column beside the monitor.
+ * The fleet (docs/ux-fleet.md): the open session's tree of work, in a
+ * permanent column beside the monitor.
  *
  * One component, two frames. `panel` is the desktop column, a real column like
  * sessions and the monitor — not an overlay, not something that steals the
  * conversation. `sheet` is the sub-desktop fallback, exactly as the monitor
  * falls back, so nothing is only reachable on a wide screen.
  *
+ * What it shows is one session's tree (M13-T51): the agents the open session
+ * started, their agents, and the background commands any of them left running
+ * — including the root's own. A child session as the open session shows its
+ * root's tree with the child marked, because a child is part of its root's
+ * tree, not a tree of its own. Work under another top-level session is not
+ * here at all: that session has its own fleet, and the person navigates to it.
+ *
  * Two things live here that live nowhere else:
  *
- *   - **Orphaned work.** A child agent whose parent session you closed is
- *     still working, and a background command outlives the turn that started
- *     it. Neither is in the session list, so without this column they would be
- *     invisible while spending money.
- *   - **Everything at once.** The transcript shows the work of the turn you
- *     are reading; this shows the work of every session at once, which is a
- *     different question and deserves a different place to ask it.
+ *   - **A child whose parent you closed.** It is still working, and a
+ *     background command outlives the turn that started it. Neither is in the
+ *     transcript, so without this column they would be invisible while
+ *     spending money.
+ *   - **Work whose session was deleted.** Its root is gone, so no session can
+ *     show it and nothing can navigate to it. It is one line at the bottom of
+ *     every fleet, named and counted, until it ends or is stopped from there.
  */
-import { Radio, PanelRightClose, Square, MessageSquare, MessagesSquare, RotateCw } from "lucide-react";
+import { Radio, PanelRightClose, Square, FolderX, MessageSquare, MessagesSquare, RotateCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AnsiText } from "@/components/assistant-ui/elements/ansi-text";
-import { SubagentList } from "@/components/assistant-ui/elements/subagent-list";
+import { SubagentList, SubagentStrays } from "@/components/assistant-ui/elements/subagent-list";
+import { requestRemoveWorktree } from "@/agents/worktree";
 import { requestEndAgent } from "@/components/agents/end-agent";
 import { Button } from "@/components/ui/button";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { clearFinishedFleet, clearFleetReveal, useFleetClearedBefore, useFleetReveal } from "@/fleet/fleet-state";
-import { useFleet } from "@/fleet/hooks";
+import { useFleet, type FleetView } from "@/fleet/hooks";
 import { useTaskOutput } from "@/fleet/output";
 import { branchIsActive, type FleetGroup, type FleetItem } from "@/fleet/model";
 import { formatBytes, formatElapsed } from "@/format";
@@ -60,24 +68,35 @@ export function FleetPanel({ variant, onClose }: FleetPanelProps) {
   // tasks are the host's records and their sessions are still in the sidebar —
   // so this hides only branches that were already finished when Clear was
   // pressed. Anything still going, and anything that finishes later, stays.
+  // The mark is one per viewer (D-154), so it applies to the tree being shown
+  // and to work from deleted sessions alike; Clear here clears what is here.
   const clearedBefore = useFleetClearedBefore();
-  const groups = useMemo<readonly FleetGroup[]>(() => {
-    if (clearedBefore === undefined) return fleet.groups;
-    // Keep a branch when anything in it is still going, or when anything in it
-    // ended after the mark — a parent that finished before Clear can still have
-    // a child that finished after it, and hiding the parent would hide that.
-    // An item with no `endedAt` is kept: not knowing when something ended is
-    // not a reason to put it away.
-    const keep = (item: FleetItem): boolean =>
-      branchIsActive(item) || item.endedAt === undefined || item.endedAt > clearedBefore || item.children.some(keep);
-    const out: FleetGroup[] = [];
-    for (const group of fleet.groups) {
-      const items = group.items.filter(keep);
-      if (items.length > 0) out.push({ ...group, items });
-    }
-    return out;
-  }, [fleet.groups, clearedBefore]);
-  const hasFinished = useMemo(() => groups.some((group) => group.items.some((item) => !branchIsActive(item))), [groups]);
+  const putAway = useCallback(
+    (groups: readonly FleetGroup[]): FleetGroup[] => {
+      if (clearedBefore === undefined) return [...groups];
+      // Keep a branch when anything in it is still going, or when anything in it
+      // ended after the mark — a parent that finished before Clear can still have
+      // a child that finished after it, and hiding the parent would hide that.
+      // An item with no `endedAt` is kept: not knowing when something ended is
+      // not a reason to put it away.
+      const keep = (item: FleetItem): boolean =>
+        branchIsActive(item) || item.endedAt === undefined || item.endedAt > clearedBefore || item.children.some(keep);
+      const out: FleetGroup[] = [];
+      for (const group of groups) {
+        const items = group.items.filter(keep);
+        if (items.length > 0) out.push({ ...group, items });
+      }
+      return out;
+    },
+    [clearedBefore],
+  );
+  const tree = useMemo<FleetGroup | undefined>(() => (fleet.tree ? putAway([fleet.tree])[0] : undefined), [fleet.tree, putAway]);
+  const elsewhere = useMemo<FleetGroup[]>(() => putAway(fleet.elsewhere), [fleet.elsewhere, putAway]);
+  const anyFinished = (groups: readonly FleetGroup[]): boolean => groups.some((group) => group.items.some((item) => !branchIsActive(item)));
+  const hasFinished = useMemo(() => (tree ? anyFinished([tree]) : false), [tree]);
+  const hasFinishedElsewhere = useMemo(() => anyFinished(elsewhere), [elsewhere]);
+  // Only what this panel shows lights its dot: the tree, and the strays under it.
+  const going = fleet.running > 0 || elsewhere.some((group) => group.running > 0);
 
   return (
     <aside
@@ -88,7 +107,7 @@ export function FleetPanel({ variant, onClose }: FleetPanelProps) {
       <header className={cn("flex h-12 shrink-0 items-center gap-2 px-4 hairline-b", variant === "sheet" && "pe-12")}>
         <span className="relative flex size-7 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-live">
           <Radio className="size-4" aria-hidden="true" />
-          {fleet.running > 0 ? (
+          {going ? (
             <span
               aria-label="Work is in progress"
               className="absolute -end-0.5 -top-0.5 size-2 rounded-full border border-surface bg-live motion-safe:animate-attention"
@@ -96,7 +115,9 @@ export function FleetPanel({ variant, onClose }: FleetPanelProps) {
           ) : null}
         </span>
         <h2 className="eyebrow">Fleet</h2>
-        <span className="min-w-0 truncate text-xs leading-xs text-ink-3">{summaryLine(fleet)}</span>
+        <span data-slot="fleet-summary" className="min-w-0 truncate text-xs leading-xs text-ink-3">
+          {summaryLine(fleet)}
+        </span>
         {variant === "panel" && onClose && (
           <TooltipIconButton tooltip="Hide the fleet" shortcut="\" className="ms-auto" onClick={onClose}>
             <PanelRightClose />
@@ -104,16 +125,30 @@ export function FleetPanel({ variant, onClose }: FleetPanelProps) {
         )}
       </header>
 
-      <div className="@container min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[env(safe-area-inset-bottom)]">
-        {fleet.empty || groups.length === 0 ? (
-          <FleetEmpty />
-        ) : (
-          <SubagentList
-            groups={groups}
+      <div className="@container flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain pb-[env(safe-area-inset-bottom)]">
+        <div className="min-h-0 flex-1">
+          {fleet.current === undefined ? (
+            <FleetNoSession />
+          ) : tree ? (
+            <SubagentList
+              groups={[tree]}
+              expandedKey={expanded}
+              currentKey={`agent:${fleet.current}`}
+              onToggle={toggle}
+              renderDetail={renderDetail}
+              onClearFinished={hasFinished ? () => clearFinishedFleet() : undefined}
+            />
+          ) : (
+            <FleetEmpty />
+          )}
+        </div>
+        {elsewhere.length > 0 && (
+          <SubagentStrays
+            groups={elsewhere}
             expandedKey={expanded}
             onToggle={toggle}
             renderDetail={renderDetail}
-            onClearFinished={hasFinished ? () => clearFinishedFleet() : undefined}
+            onClearFinished={hasFinishedElsewhere ? () => clearFinishedFleet() : undefined}
           />
         )}
       </div>
@@ -121,8 +156,10 @@ export function FleetPanel({ variant, onClose }: FleetPanelProps) {
   );
 }
 
-function summaryLine(fleet: { running: number; needsYou: number; empty: boolean }): string {
-  if (fleet.empty) return "nothing yet";
+/** The header's one line: the open session's counts, and only those (M13-T51). */
+function summaryLine(fleet: FleetView): string {
+  if (fleet.current === undefined) return "no session open";
+  if (fleet.tree === undefined) return "nothing here yet";
   const parts: string[] = [];
   if (fleet.running > 0) parts.push(`${fleet.running} going`);
   if (fleet.needsYou > 0) parts.push(`${fleet.needsYou} ${fleet.needsYou === 1 ? "needs" : "need"} you`);
@@ -130,18 +167,38 @@ function summaryLine(fleet: { running: number; needsYou: number; empty: boolean 
 }
 
 /**
- * The empty state, drawn on purpose. It says what would fill it and how, so a
- * person who has never started an agent knows this column is not broken.
+ * The empty state of an open session with no work, drawn on purpose. It says
+ * what would fill it and that other sessions keep their own, so a person who
+ * started an agent somewhere else knows this column is not broken.
  */
 function FleetEmpty() {
   return (
-    <div className="flex h-full min-h-48 flex-col items-center justify-center gap-3 px-6 text-center">
+    <div data-slot="fleet-empty" className="flex h-full min-h-48 flex-col items-center justify-center gap-3 px-6 text-center">
       <span className="flex size-10 items-center justify-center rounded-xl bg-surface-2 text-ink-3">
         <Radio className="size-5" aria-hidden="true" />
       </span>
-      <p className="text-sm leading-sm font-medium text-ink">Nothing is running</p>
+      <p className="text-sm leading-sm font-medium text-ink">Nothing is running here</p>
       <p className="max-w-56 text-xs leading-xs text-ink-2">
-        Agents you start, and commands they leave running in the background, appear here — from every project, whether or not their session is open.
+        Agents this session starts, their agents, and commands any of them leave running appear here. Another session’s work is in that session’s fleet.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * No session is open: a fresh window, or only Beam’s bubble. The fleet has
+ * nothing to be the tree of, and saying "nothing is running" would be a claim
+ * about the whole project that this column no longer makes.
+ */
+function FleetNoSession() {
+  return (
+    <div data-slot="fleet-no-session" className="flex h-full min-h-48 flex-col items-center justify-center gap-3 px-6 text-center">
+      <span className="flex size-10 items-center justify-center rounded-xl bg-surface-2 text-ink-3">
+        <MessageSquare className="size-5" aria-hidden="true" />
+      </span>
+      <p className="text-sm leading-sm font-medium text-ink">No session is open</p>
+      <p className="max-w-56 text-xs leading-xs text-ink-2">
+        The fleet is the open session’s: the agents it starts and the commands they leave running. Open a session from the sidebar to see its work.
       </p>
     </div>
   );
@@ -169,14 +226,34 @@ function FleetDetail({ item }: { item: FleetItem }) {
  * inherited from the panels it replaced (M13-T25). An empty catalog is not
  * evidence of absence — it is a catalog that has not arrived — so the check
  * only hides the control once there is a catalog to be missing from.
+ *
+ * The row for the chat being read offers no "Open chat" either: a control
+ * that goes where you already are is a control that does nothing, and R4
+ * puts the reason where the control would have been.
  */
-function DetailActions({ item, onStop, stopping }: { item: FleetItem; onStop?: (() => void) | undefined; stopping?: boolean }) {
+function DetailActions({
+  item,
+  onStop,
+  stopping,
+  onRemoveWorktree,
+}: {
+  item: FleetItem;
+  onStop?: (() => void) | undefined;
+  stopping?: boolean;
+  /** Present only for a finished agent whose worktree is still on disk. */
+  onRemoveWorktree?: (() => void) | undefined;
+}) {
   const { actions } = useLaserStable();
   const reachable = useLaserState((s) => s.sessions.length === 0 || s.sessions.some((session) => session.path === item.sessionPath));
+  const here = useLaserState((s) => s.current === item.sessionPath);
   const task = item.kind === "task";
   return (
     <div className="mt-3 flex flex-wrap items-center gap-2">
-      {reachable && (
+      {here ? (
+        <span data-slot="fleet-here" className="text-xs leading-xs text-ink-3">
+          {task ? "Its session is the chat you are reading." : "This is the chat you are reading."}
+        </span>
+      ) : reachable && (
         <Button
           size="xs"
           variant="outline"
@@ -192,6 +269,18 @@ function DetailActions({ item, onStop, stopping }: { item: FleetItem; onStop?: (
         <Button size="xs" variant="outline" disabled={stopping} onClick={onStop}>
           <Square />
           {task ? "Stop" : "End agent…"}
+        </Button>
+      )}
+      {onRemoveWorktree && (
+        <Button
+          size="xs"
+          variant="outline"
+          data-slot="fleet-remove-worktree"
+          title="Its parent owns this worktree; remove it yourself if the parent never did"
+          onClick={onRemoveWorktree}
+        >
+          <FolderX />
+          Remove worktree…
         </Button>
       )}
     </div>
@@ -221,6 +310,13 @@ function AgentDetail({ item }: { item: FleetItem }) {
   // this asks it rather than inventing a second way to stop a run.
   const target = item.stop?.kind === "agent" ? item.stop.runId : undefined;
   const stop = target === undefined ? undefined : () => requestEndAgent(target);
+  // The parent owns merging and removing this worktree (D-157). A parent that
+  // never got to it leaves the directory for ever, so a person can clear it
+  // from here — but only once the run is over, and never while it is the
+  // agent's own working directory.
+  const label = run?.subagentName ?? item.title;
+  const removable = run?.worktree && !run.worktree.removedAt && target === undefined ? run : undefined;
+  const removeWorktree = removable ? () => requestRemoveWorktree(removable.sessionPath, label) : undefined;
   return (
     <div className="min-w-0">
       <dl className="flex flex-col gap-2">
@@ -233,6 +329,13 @@ function AgentDetail({ item }: { item: FleetItem }) {
         {run?.worktree ? (
           <Field label="Worktree">
             <span className="typed break-all">{run.worktree.branch}</span>
+            {run.worktree.removedAt ? (
+              // Its parent, or a person, has taken it away: the branch is
+              // history, and offering a path that is gone would be a lie.
+              <span className="mt-0.5 block text-ink-3">Removed. Its conversation is still here.</span>
+            ) : (
+              <span className="mt-0.5 block break-all text-ink-3">{run.worktree.path}</span>
+            )}
           </Field>
         ) : run?.cwd ? (
           // Started without a worktree: the parent judged this agent read-only,
@@ -243,6 +346,17 @@ function AgentDetail({ item }: { item: FleetItem }) {
           </Field>
         ) : null}
         {item.elapsedMs !== undefined && <Field label="Elapsed">{formatElapsed(item.elapsedMs)}</Field>}
+        {run?.status === "needs_input" && run.question && (
+          // Live, paused on a question (M13-T45): the question is the one
+          // thing the person can act on, so it is here in full, with its
+          // choices, and the chat is where it is answered.
+          <Field label="Asking">
+            <span data-slot="fleet-question" className="whitespace-pre-wrap break-words text-ink">{run.question.title}</span>
+            {run.question.detail && <span className="mt-0.5 block whitespace-pre-wrap break-words text-ink-2">{run.question.detail}</span>}
+            {run.question.options && <span className="mt-0.5 block text-ink-3">Choices: {run.question.options.join(" · ")}</span>}
+            <span className="mt-0.5 block text-ink-3">Answer it in its chat, or its parent can.</span>
+          </Field>
+        )}
         {item.terminalReason && <Field label="Ended">{item.terminalReason}</Field>}
         {run?.result?.message && (
           <Field label="Result">
@@ -250,7 +364,7 @@ function AgentDetail({ item }: { item: FleetItem }) {
           </Field>
         )}
       </dl>
-      <DetailActions item={item} onStop={stop} />
+      <DetailActions item={item} onStop={stop} onRemoveWorktree={removeWorktree} />
     </div>
   );
 }

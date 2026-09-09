@@ -84,23 +84,28 @@ The only identities are the four the reference names:
 | --- | --- | --- |
 | `agent_name` | the reusable definition (also its id) | choosing what to start |
 | `subagent_name` | this running instance | the map node, the sidebar row, the worktree slug |
-| `sessionId` | the persistent conversation | `send_agent_message` |
-| `runId` | one execution inside that session | `wait_for_agents`, `stop_agent`, correlation |
+| `sessionId` | the persistent conversation | `send_agent_message`, `inspect_agent`, `remove_agent_worktree` |
+| `runId` | one execution inside that session | `inspect_agent`, `stop_agent`, `remove_agent_worktree`, correlation |
 
 Model-facing tools, registered by the companion extension's `subagents`
 module from the worker-supplied `AgentHarnessBridge`:
 
 | Tool | Who gets it | Does |
 | --- | --- | --- |
-| `start_agent { agent_name, subagent_name, task, worktree? }` | a session whose definition permits delegation and whose depth allows another level | validates the name against the allowed list and depth, loads the child's full configuration, creates the child session and (unless `worktree: false`) its worktree, starts the child loop in the background, returns `{ agent_name, subagent_name, sessionId, runId, status: "running", working_directory, branch? }` immediately |
-| `send_agent_message { sessionId, message, interrupt? }` | same | a running child receives it as its next instruction (`delivery: "queued"` while busy); an idle child starts a new run and the result carries the new `runId` |
-| `list_agents` | same | runs this session started, newest first: identities, status, result — never transcripts |
-| `wait_for_agents { runIds, timeoutSeconds? }` | same | blocks until those runs end or the timeout passes; `timedOut: true` when some were still running |
+| `start_agent { agent_name, subagent_name, task, worktree? }` | a session whose definition permits delegation and whose depth allows another level | validates the name against the allowed list and depth, loads the child's full configuration, creates the child session and (unless `worktree: false`) its worktree, starts the child loop in the background, returns `{ agent_name, subagent_name, sessionId, runId, status: "running", working_directory, branch?, guidance, your_responsibility }` immediately. `guidance` is the sentence the parent reads at the moment it matters: *Do not wait for `<name>`. Carry on with your own work; when it ends, its result will be sent to you as a message. Use `inspect_agent` with runId `<runId>` to check on it meanwhile — a status of `needs_input` means it is paused on a question you can answer with `send_agent_message`.* |
+| `send_agent_message { sessionId, message, interrupt? }` | same | a running child receives it as its next instruction (`delivery: "queued"` while busy); an idle child starts a new run and the result carries the new `runId`; a child that is `needs_input` has its open question **answered** by the message (`delivery: "answered"`, the question returned as `answered`) — see "Questions" below |
+| `list_agents` | same | runs this session started, newest first: identities, status, result, and the open `question` of a `needs_input` run — never transcripts |
+| `inspect_agent { runId? \| sessionId?, messages? }` | same | one child in depth: everything `list_agents` says plus the **whole** task, `origin`, `depth`, `model`, `cwd` and `branch` (only with a worktree), the worktree as it is now (`exists`, `unmergedCommits`, `uncommittedFiles`, `removedAt?`), `activity` (turns, tool calls, the tool running now, when it was last active), its last assistant messages excerpted (`messages`: default `AGENT_INSPECT_MESSAGES_DEFAULT` = 1, at most `AGENT_INSPECT_MESSAGES_MAX` = 10, each cut at `AGENT_INSPECT_MESSAGE_EXCERPT` = 1000 characters), the question it is paused on, a `what_it_needs` sentence when it is stalled, and its own children as `list_agents` would list them. Read-only: it never wakes the child or delivers anything to it. A live child is read through its driver; an ended child whose driver is gone, from its session file |
 | `stop_agent { runId, reason? }` | same | ends one run now with `endedBy: { initiator: "parent", reason }`; the session stays addressable |
+| `remove_agent_worktree { sessionId? \| runId?, force? }` | same | removes a finished child's worktree and branch (M13-T42, §3 below) |
 | `complete_agent_run { status: "completed" \| "blocked", message }` | every child | the only successful ending; the tool result terminates the child turn |
 
-Children never block: `start_agent` returns before the child has done
-anything, and there is no foreground mode.
+Children never block, and **parents never wait**: `start_agent` returns
+before the child has done anything, there is no foreground mode, and there
+is no waiting tool (M13-T45). A child's ending is delivered to its parent as
+a message that wakes it (below), so nothing is lost by not waiting; a parent
+that wants to know how a child is doing meanwhile calls `inspect_agent`. The
+parent's guidelines and role block say so in the same words.
 
 ### Completion
 
@@ -114,16 +119,15 @@ once ("You stopped without calling complete_agent_run…", `NUDGE_TEXT` in
 the run is `failed` with "Ended without complete_agent_run" and the last
 assistant text kept as context — never `completed`.
 
-`wait_for_agents` waits 600 s by default and at most 3600 s. Every run the
-harness knows is published exactly once, as `agents/run` (M13-T26): that
-notification and `agents/runs/list` are the single truth, and the fleet, the
-sidebar and the live map all read it. There is no second publication of the
-same facts.
+Every run the harness knows is published exactly once, as `agents/run`
+(M13-T26): that notification and `agents/runs/list` are the single truth, and
+the fleet, the sidebar and the live map all read it. There is no second
+publication of the same facts.
 
 ### Events at a safe boundary
 
 The harness pushes `AgentModelEvent`s (`agent.completed`, `agent.blocked`,
-`agent.failed`, `agent.cancelled`, `agent.message`) to the
+`agent.failed`, `agent.cancelled`, `agent.message`, `agent.needs_input`) to the
 parent through the bridge. The `subagents` module delivers each one as a
 custom message of type `lasercode/agent-event` (`AGENT_EVENT_MESSAGE_TYPE`)
 with `deliverAs: "steer"` and `triggerTurn: true`: a running parent sees it
@@ -135,12 +139,29 @@ UI renders the same entry as the parent-side card (Handoff row in
 
 ### States, and who sets them
 
-`AgentRunStatus`: `queued`, `running`, `completed`, `blocked`, `failed`,
-`cancelled`. Terminal states are the last four. There is no timed-out state:
-nothing ends a run for taking long (D-144).
+`AgentRunStatus`: `queued`, `running`, `needs_input`, `completed`, `blocked`,
+`failed`, `cancelled` (`AGENT_RUN_STATUSES`). Terminal states are the last
+four (`AGENT_RUN_TERMINAL`, `AgentRunTerminalStatus`). There is no timed-out
+state: nothing ends a run for taking long (D-144).
+
+Three of these are live, and the one a parent most needs to tell apart from
+`running` is `needs_input` (M13-T45):
+
+| State | Live? | Means |
+| --- | --- | --- |
+| `running` | yes | the child is working |
+| `needs_input` | yes, **stuck** | something the child did raised a question through the portable UI surface (`select`, `confirm`, `input`, `editor` — including any tool that asks before it acts) and its loop is paused until someone answers. The question is on `AgentRun.question` (`AgentRunQuestion`: `id`, `kind`, `title`, `detail?`, `options?`, `toolCallId?`, `toolName?`, `askedAt`). Nothing has ended |
+| `blocked` | no | the child **ended** by saying it could not finish (`complete_agent_run { status: "blocked" }`); the question it asked its parent, if any, is its final `result.message` |
+
+The parent can tell "working" from "stuck waiting on me" from the status
+alone, in `list_agents`, `inspect_agent` and the `start_agent` guidance; in
+the UI the two live shapes are "Working" (live tone) and "Asking" (attention
+tone, the same warm hue as "Needs you"), and both `needs_input` and `blocked`
+count as needing someone in the sidebar chip, the fleet and the map summary.
 
 | State | Set by |
 | --- | --- |
+| `needs_input` | the harness, when the child's driver raises a `ui_request` while a run is active; back to `running` when the driver no longer holds that question — answered by the parent, answered by the person, timed out or aborted |
 | `completed`, `blocked` | the child model, only through `complete_agent_run` |
 | `cancelled` | `stop_agent` (initiator `parent`), `agents/runs/stop` (initiator `user`), or the host when the child's session is deleted (initiator `user`, reason "The session was deleted.") |
 | `failed` | the harness on an engine error, on a child that settles twice without `complete_agent_run`, on a child session that closes or refuses the task while busy; the host when a project's worker dies or when it loads `agent-runs.json` after a restart (nothing non-terminal survives, reason "The project's worker stopped before this run ended.") |
@@ -148,6 +169,47 @@ nothing ends a run for taking long (D-144).
 `endedBy: { initiator: "parent" | "user" | "harness", reason? }` records who
 ended a run. A person ending a run from the UI carries `initiator: "user"` and
 the reason verbatim to the parent's event.
+
+### Questions: what a stalled child needs, and who answers (M13-T45)
+
+A child can stall on someone in exactly two ways, and each has its own
+status:
+
+1. **It raised a question and is paused on it** — `needs_input`. The question
+   travels as a `ui_request` from the child's driver; the harness records it on
+   the run (`question`), publishes the run, and sends the parent one
+   `agent.needs_input` event (delivered like an ending: `steer`,
+   `triggerTurn`, so an idle parent wakes). The event's text names the child,
+   the tool that asked when one was running, the question, its choices, how to
+   answer it, that the person may answer it instead in the child's own chat,
+   and the `inspect_agent` call that shows whether it is still open. The
+   oldest open question is the one the run shows; when it is settled and
+   another is waiting, the run stays `needs_input` with that one and the parent
+   is told again. A question dies with its run: ending a `needs_input` run
+   drops it.
+
+   Whoever answers first settles it. The person answers inline in the child's
+   transcript, as before (`docs/ux-fleet.md` "Questions"). The parent answers
+   through `send_agent_message { sessionId, message }`: while the child is
+   `needs_input`, the message **is** the answer — one of the choices (by name,
+   case-insensitively, or by 1-based number) for a `select`; a plain yes or no
+   for a `confirm`; the text verbatim for an `input` or `editor`. Anything that
+   does not fit is refused with the question restated, so an instruction can
+   never silently pick an option. The result is
+   `{ delivery: "answered", answered: <the question>, status }`, and the
+   harness sees the question gone the same way it sees a person's answer: by
+   re-reading the driver's open dialogs on the next event.
+
+2. **It asked its parent something in its final message and ended** —
+   `blocked`, unchanged. The parent reads the question without opening the
+   session: it is the `result.message` in the `agent.blocked` event, in
+   `list_agents` and in `inspect_agent` (whose `what_it_needs` says so and
+   says how to reply: `send_agent_message` starts a new run in the same
+   session with the child's history intact). The child's role block tells it
+   this is the way to ask when it genuinely cannot go on.
+
+Inspecting is read-only in both cases: nothing is prompted, steered or
+answered by looking.
 
 ### Follow-up messages and user-origin runs
 
@@ -158,6 +220,41 @@ Either creates a new run on the same session when it is idle; a run the person
 started has `origin: "user"`, one the parent started has `origin: "agent"`.
 The child's role block is re-read every turn, so a new task reaches its
 system prompt.
+
+### Removing a child's worktree (M13-T42, D-157)
+
+Merging is never a tool: it is the parent's own `git merge` in its own
+checkout, because a merge tool would have to invent conflict semantics, and
+conflicts are where a person's judgement belongs. What the parent gets is the
+verb for the end of its ownership, `remove_agent_worktree`:
+
+- Addressed by the identities that exist — the child's `sessionId` or one of
+  its `runId`s — never a fifth one. Refused for a child another session
+  started.
+- Refused while the child is still working (its ending will be delivered;
+  `stop_agent` ends it now), refused for a child started with `worktree:
+  false` (it has none, and nothing in the parent's checkout is touched),
+  refused when the worktree has already been removed.
+- Refused, with what it holds and how to merge it, when the branch still has
+  commits the parent's checkout does not have or uncommitted files
+  (`WorktreeFacts` from `worktrees.facts()`; a count git could not produce is
+  `null` and is refused too, never read as zero). `force: true` removes it
+  anyway and the result says what was `discarded`.
+- On success every run of that session, and the session's record, carry
+  `worktree.removedAt`, so no reader offers a path that is gone; the names
+  stay, because history is not deleted. The result carries the identities,
+  `path`, `branch` and `removed: true`.
+
+The person has the same lever from the fleet: an ended agent's expanded row
+offers "Remove worktree…" (`RemoveWorktreeDialog`), which reads
+`agents/worktree/status` on open, calls `agents/worktree/remove`, and is
+refused by the host over unmerged work unless the person insists ("Remove
+anyway"). Deleting a child session asks the same question up front:
+`pi/session/delete { path, worktree?: "keep" | "delete" }` — **omitting it
+means `keep`**, so a request that forgot the field never destroys work; with
+`delete` the host removes the worktree with `force` after the transcript is
+unlinked, because the person was shown what it held before choosing. Either
+way the reply carries the worktree's status as it was.
 
 ### Nesting, model access, worktree ownership
 
@@ -249,9 +346,11 @@ newest run's task excerpt and activity, and a "go to chat" action; a toggle
 shows or folds ended agents. Edges are ancestry, from `AgentRun.parent`.
 
 Transient events (`agents/event`: `started`, `message_sent`,
-`message_received`, `completed`, `blocked`, `failed`, `cancelled`,
-`stop_requested`) appear as a gentle bubble inside the node that
-owns them for a short while, then disappear.
+`message_received`, `needs_input`, `completed`, `blocked`, `failed`,
+`cancelled`, `stop_requested`) appear as a gentle bubble inside the node that
+owns them for a short while, then disappear. A node paused on a question says
+"Asking", shows the question as its action, and the inspector lists the
+choices; the header counts it as needing you, not as working.
 
 Layout is chosen by the measured size of the surface — a constrained panel, the
 full sidebar, fullscreen, a wide desktop and a phone each get a purpose-built
@@ -347,7 +446,7 @@ session-naming prompt, keeps the fastest valid answer and records
 | `<stateDir>/agents.json` | custom agents (the seeded `default` among them), `defaultAgent`, policy, Namer and Beam model choices, `revision`. Built-ins are rebuilt from `packages/host/src/agents/builtins.ts` on every load |
 | `<stateDir>/agent-runs.json` | every `AgentRun` the host has heard of, fed by `agents/run` notifications; terminal runs kept 30 days and at most 500 per project; non-terminal runs are failed on host load and on worker loss |
 | session custom entry `lasercode/agent` (`SESSION_AGENT_ENTRY_TYPE`) | the first custom entry of every agent-started or agent-defined session: `SessionAgentRecord { agentName, kind, subagentName, parentPath, parentSessionId, rootPath, runId, worktree? }` — `worktree` is absent for a child started with `worktree: false`, and that absence is what a reloaded session reads back — so a catalog that only reads files can attribute it |
-| session custom entry `lasercode/agent-run` (`SESSION_RUN_ENTRY_TYPE`) | run lifecycle moments in the child session (started, completed, blocked, failed, cancelled, timed out) |
+| session custom entry `lasercode/agent-run` (`SESSION_RUN_ENTRY_TYPE`) | run lifecycle moments in the child session (started, completed, blocked, failed, cancelled); a question is transient and is not written |
 | parent custom message `lasercode/agent-event` (`AGENT_EVENT_MESSAGE_TYPE`) | one message per event the parent received, stored once |
 | `<project>/.worktrees/<slug>` | the child's checkout; `<gitdir>/info/exclude` hides it |
 
@@ -397,7 +496,11 @@ Every method has a schema, a round-trip sample and a router owner
   header of `scripts/sandbox.mjs`.
 - The worker's harness test (`packages/worker/test/agents/`): a stub-provider
   child completes through `complete_agent_run` and its parent receives exactly
-  one structured event.
+  one structured event — without waiting, because there is nothing to wait
+  with; and (`golden.test.ts`, M13-T45) a child that raises a `select` through
+  its real driver's UI bridge inside a running tool goes `needs_input`, its
+  parent is woken, reads it through `inspect_agent` and answers it through
+  `send_agent_message`, and the child's dialog resolves with that answer.
 - The packaged gate: `check-packaged-session` reports the active modules and
   the Beam skill path; `packages/desktop/scripts/clean-machine.mjs` asserts
   `subagents` and `background-work` are active and that the skill file exists.
@@ -407,7 +510,13 @@ Every method has a schema, a round-trip sample and a router owner
 The binding list lives in `AGENTS.md` ("Agents harness regression checks"):
 
 - One `start_agent` tool and four identities only.
-- Children never block.
+- Children never block, and parents never wait: there is no waiting tool, and
+  the `start_agent` result says not to.
+- A child paused on a question is `needs_input`, never `running`; a child that
+  ended asking is `blocked`. Every reader of `AgentRunStatus` — the sidebar
+  chip and folds, the fleet, the live map, `agents/model.ts`, the CLI — has a
+  test for the live-and-stuck value, in the attention tone, never folded away.
+- `inspect_agent` is read-only and bounded (at most 10 excerpted messages).
 - Every child gets a worktree or a person-facing refusal, unless its parent
   passed `worktree: false`; then it runs in the parent's checkout, is told so,
   and nothing there is removed when the run ends.

@@ -55,7 +55,23 @@ export interface SentByParent {
  * `applyUpdate` outside the reducer has none.
  */
 export type Block =
-  | { kind: "user"; id: string; at?: string; text: string; images: number; optimistic?: boolean; sentBy?: SentByParent }
+  | {
+      kind: "user";
+      id: string;
+      at?: string;
+      text: string;
+      images: number;
+      optimistic?: boolean;
+      sentBy?: SentByParent;
+      /**
+       * Pi's entry for this prompt, stamped when it was persisted (its own
+       * `message_end`, or the entry it was rebuilt from). Absent only for a
+       * prompt the engine has not written yet, and for one an older worker
+       * reported without it — the ordinal lookup in `thread/entries.ts` covers
+       * that case.
+       */
+      entryId?: string;
+    }
   | {
       kind: "assistant";
       id: string;
@@ -267,6 +283,8 @@ export type Action =
   /** A prompt never reached the worker: drop the block that stood in for it. */
   | { type: "optimisticFailed"; path: string; id: string }
   | { type: "dialogAnswered"; id: string; path?: string }
+  /** The composer took `view.editorText`; it must not be applied twice. */
+  | { type: "editorTextTaken"; path: string }
   | { type: "toast"; level: "info" | "warning" | "error"; text: string }
   | { type: "notification"; method: HostNotificationMethod; params: HostNotifications[HostNotificationMethod] }
   | { type: "dismissToast"; id: number }
@@ -367,6 +385,12 @@ export function reduce(state: AppState, action: Action): AppState {
       return updateView(state, action.path, (v) => ({ ...v, entries: action.entries, leafId: action.leafId }));
     case "goal":
       return updateView(state, action.path, (v) => ({ ...v, goal: action.goal }));
+    case "editorTextTaken":
+      return updateView(state, action.path, (v) => {
+        if (v.editorText === undefined) return v;
+        const { editorText: _taken, ...rest } = v;
+        return rest as typeof v;
+      });
     case "resync":
       return updateView(state, action.path, (v) =>
         v.lastSeq <= action.lastSeq ? v : { ...v, lastSeq: action.lastSeq, hydrated: false },
@@ -804,7 +828,15 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
         const index = optimistic !== -1 ? optimistic : v.blocks.at(-1)?.kind === "user" ? v.blocks.length - 1 : -1;
         if (index === -1) return v;
         const block = v.blocks[index] as Extract<Block, { kind: "user" }>;
-        return { ...v, blocks: replaceAt(v.blocks, index, { ...block, text: text || block.text, optimistic: false }) };
+        const blocks = replaceAt(v.blocks, index, { ...block, text: text || block.text, optimistic: false, ...(u.entry ? { entryId: u.entry.id } : {}) });
+        // The prompt's place in the tree arrives with it, so its actions (fork,
+        // jump, edit, versions, the request it produced) work while the turn
+        // runs. The tree holds a copy until the next full read: the entry is
+        // real, only the read of the file has not happened yet. The leaf stays
+        // where the last read put it — the entries between are not here, and
+        // a path that cannot be walked would strip every older prompt of its id.
+        if (!u.entry || v.entries.some((raw) => (raw as { id?: string } | null)?.id === u.entry!.id)) return { ...v, blocks };
+        return { ...v, blocks, entries: [...v.entries, { type: "message", id: u.entry.id, parentId: u.entry.parentId, message: msg }] };
       }
       // A custom message the transcript renders (an agent event, a task exit)
       // becomes its own block. It carries no speaker, so nothing above claims it.
@@ -915,6 +947,7 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null): B
     if (branch && !branch.has((raw as { id?: string } | null)?.id ?? "")) continue;
     const e = raw as {
       type?: string;
+      id?: unknown;
       timestamp?: unknown;
       message?: {
         role?: string;
@@ -955,6 +988,7 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null): B
         text: textOf(m.content),
         images: countImages(m.content),
         ...(sentBy ? { sentBy } : {}),
+        ...(typeof e.id === "string" ? { entryId: e.id } : {}),
       });
     } else if (m.role === "assistant") {
       const parts = Array.isArray(m.content) ? (m.content as Array<{ type?: string; text?: string; thinking?: string; id?: string; name?: string; arguments?: unknown }>) : [];

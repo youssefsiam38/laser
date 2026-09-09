@@ -45,6 +45,8 @@ const edgeTypes = { agent: AgentEdge };
 const FIT = { padding: 0.18, maxZoom: 1, interpolate: "linear" } as const;
 const LEGEND: ReadonlyArray<{ tone: AgentStatusTone; word: string }> = [
   { tone: "live", word: "Working" },
+  // One attention row for both shapes of "needs someone": a run that ended
+  // saying so, and a live one paused on a question. The node's word says which.
   { tone: "attention", word: "Needs you" },
   { tone: "danger", word: "Failed" },
   // One muted row, because finished and ended now share a colour (D-154).

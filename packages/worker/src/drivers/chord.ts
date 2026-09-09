@@ -51,8 +51,8 @@ export class ChordDriver implements SessionDriver {
   async setThinkingLevel(level: ThinkingLevel): Promise<SessionState> { void level; throw new DriverUnavailableError(this.kind, NOT_YET); }
   async rename(name: string): Promise<void> { void name; throw new DriverUnavailableError(this.kind, NOT_YET); }
   async compact(instructions?: string): Promise<void> { void instructions; throw new DriverUnavailableError(this.kind, NOT_YET); }
-  async navigateTree(entryId: string, options?: { summarize?: boolean; label?: string }): Promise<{ editorText?: string; cancelled: boolean }> { void entryId; void options; throw new DriverUnavailableError(this.kind, NOT_YET); }
-  async fork(entryId: string): Promise<{ state: SessionState; editorText?: string }> { void entryId; throw new DriverUnavailableError(this.kind, NOT_YET); }
+  async navigateTree(entryId: string, options?: { summarize?: boolean; label?: string; stopFirst?: boolean }): Promise<{ editorText?: string; cancelled: boolean }> { void entryId; void options; throw new DriverUnavailableError(this.kind, NOT_YET); }
+  async fork(entryId: string, options?: { stopFirst?: boolean }): Promise<{ state: SessionState; editorText?: string }> { void entryId; void options; throw new DriverUnavailableError(this.kind, NOT_YET); }
   respondToUi(response: UiDialogResponse): void { void response; }
   async commands(): Promise<CommandInfo[]> { throw new DriverUnavailableError(this.kind, NOT_YET); }
   async prompts(): Promise<PromptInfo[]> { throw new DriverUnavailableError(this.kind, NOT_YET); }

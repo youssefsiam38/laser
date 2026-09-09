@@ -98,7 +98,7 @@ function useEmptyRuntime() { return useExternalStoreRuntime({ messages: [], isRu
 const shell: ShellContextValue = {
   layout: "desktop", sessionsOpen: true, telemetryOpen: false, setSessionsOpen: () => {}, setTelemetryOpen: () => {}, toggleSessions: () => {}, toggleTelemetry: () => {},
   historyOpen: false, setHistoryOpen: () => {}, openHistory: () => {}, toolsOpen: false, setToolsOpen: () => {}, addProjectOpen: false, setAddProjectOpen: () => {},
-  newSession: async () => {}, canCreate: true,
+  newSession: async () => {}, canCreate: true, showChat: () => {}, returnToChat: () => {},
 };
 
 /** Selects a session the way the app does, by the path the row carries. */
@@ -209,6 +209,31 @@ describe("sub-sessions fold", () => {
     expect(rowNamed("charlie")?.getAttribute("data-dimmed")).toBe("true");
     expect(rowNamed("delta")?.getAttribute("data-run-status")).toBe("failed");
     expect(rowNamed("delta")?.getAttribute("data-dimmed")).toBeNull();
+  });
+
+  // M13-T45: a child paused on a question is live and asking — it stays with
+  // the living, its word says so, its dot pulses, and it counts as needing you.
+  it("keeps a child that is asking a question among the living, says Asking, and counts it as needing you", async () => {
+    await mount();
+    const question = { id: "ui-1", kind: "select" as const, title: "Which token store?", options: ["cookie", "header"], askedAt: at(7) };
+    await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[0]!, status: "needs_input", question, updatedAt: at(7) } }));
+    const alpha = rowNamed("alpha")!;
+    expect(alpha.getAttribute("data-run-status")).toBe("needs_input");
+    expect(alpha.querySelector('[data-slot="run-state"]')?.textContent).toBe("Asking");
+    expect(alpha.querySelector('[data-slot="run-state"]')?.className).toContain("text-attention");
+    const dot = alpha.querySelector('[data-slot="run-dot"]')!;
+    expect(dot.getAttribute("aria-label")).toBe("Asking");
+    expect(dot.className).toContain("animate-attention");
+    expect(alpha.getAttribute("data-dimmed")).toBeNull();
+    // Not folded away: the finished fold still holds only the two settled ones.
+    expect(finishedFoldOf("Ship the release")?.textContent).toContain("2 finished");
+    // The chip counts it with bravo, which ended needing you.
+    expect(chipOf("Ship the release")?.textContent).toBe("2 needs you");
+    expect(chipOf("Ship the release")?.getAttribute("title")).toBe("6 agents under this session: 1 working, 2 needs you, 3 finished, 1 of them failed");
+    // Answered: back to working, and the chip follows.
+    await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[0]!, status: "running", updatedAt: at(8) } }));
+    expect(rowNamed("alpha")?.querySelector('[data-slot="run-state"]')?.textContent).toBe("Working");
+    expect(chipOf("Ship the release")?.textContent).toBe("1 needs you");
   });
 
   it("gives a childless row no disclosure and no chip at all", async () => {

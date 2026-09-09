@@ -85,6 +85,69 @@ describe("New session", () => {
     expect(Object.keys(f.state.open)).toHaveLength(3);
   });
 
+  it("reuses an empty Beam chat the catalog lists without attribution (M13-T47)", async () => {
+    // Pi writes a session file on the first message, so an empty Beam chat is
+    // an *unwritten* row: the catalog has no file to read an agent record from
+    // and lists it with no `agent`. The open view knows better. Before the fix,
+    // the launcher resolved the missing attribution to the default agent, never
+    // matched Beam, and every press of Beam's + made another empty session.
+    const beam = "/state/workspaces/beam";
+    const f = fixture();
+    let state: AppState = { ...initialState, open: {}, sessions: [] };
+    const empty: SessionState = { ...session("/beam-1", beam), agent: { agentName: "beam", kind: "beam" } };
+    state = reduce(state, { type: "opened", state: empty });
+    state = reduce(state, { type: "hydrate", path: "/beam-1", entries: [] });
+    state = reduce(state, { type: "sessions", sessions: [summary("/beam-1", { cwd: beam })] }); // no `agent`
+    const create = vi.fn(async () => "/beam-2");
+    const launch = createSessionLauncher({
+      state: () => state,
+      archived: () => false,
+      refresh: async () => {},
+      open: async () => {},
+      select: (path) => { state = reduce(state, { type: "select", path }); },
+      create,
+      resolveAgent: (name) => name ?? "default",
+    });
+    await expect(launch(beam, { agentName: "beam" })).resolves.toBe("/beam-1");
+    await expect(launch(beam, { agentName: "beam" })).resolves.toBe("/beam-1");
+    await expect(launch(beam, { agentName: "beam" })).resolves.toBe("/beam-1");
+    expect(create).not.toHaveBeenCalled();
+    // A project's + wants the default agent, which is what a missing attribution
+    // resolves to — the old behaviour was correct there by accident, and stays.
+    void f;
+  });
+
+  it("reuses an empty project chat the catalog stamps unread, with the default agent (M13-T47)", async () => {
+    // The chat's own + is the same launcher. An empty session the host had
+    // decorated `finished_unread` (a stale attention stamp on a row that was
+    // never prompted) used to be skipped, so every press of + in the sessions
+    // sidebar made another empty chat. The stamp is not a reason; a hydrated
+    // empty transcript is.
+    const f = fixture();
+    let state: AppState = { ...initialState, open: {}, sessions: [] };
+    state = reduce(state, { type: "opened", state: session("/chat-1") });
+    state = reduce(state, { type: "hydrate", path: "/chat-1", entries: [] });
+    state = reduce(state, { type: "sessions", sessions: [summary("/chat-1", { attention: "finished_unread" })] });
+    const create = vi.fn(async () => "/chat-2");
+    const launch = createSessionLauncher({
+      state: () => state,
+      archived: () => false,
+      refresh: async () => {},
+      open: async () => {},
+      select: (path) => { state = reduce(state, { type: "select", path }); },
+      create,
+      resolveAgent: (name) => name ?? "default",
+    });
+    await expect(launch("/one")).resolves.toBe("/chat-1");
+    await expect(launch("/one")).resolves.toBe("/chat-1");
+    await expect(launch("/one")).resolves.toBe("/chat-1");
+    expect(create).not.toHaveBeenCalled();
+    // A session that genuinely wants a person is still left alone.
+    state = reduce(state, { type: "sessions", sessions: [summary("/chat-1", { attention: "waiting_for_input" })] });
+    await expect(launch("/one")).resolves.toBe("/chat-2");
+    void f;
+  });
+
   it("hydrates a catalog candidate before trusting its message count", async () => {
     const f = fixture(); f.state.sessions = [summary("/unloaded")];
     f.open.mockImplementationOnce(async (path) => { f.add(path).state.messageCount = 1; });

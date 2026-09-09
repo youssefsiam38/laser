@@ -139,6 +139,30 @@ export class AgentRunRegistry {
     return changed;
   }
 
+  /**
+   * A worktree was taken away by a person, from the fleet or with a session
+   * delete (M13-T42). Every run that owned that directory is stamped, so no
+   * surface offers to remove it twice and none keeps showing a path that is
+   * gone. The parent's own `remove_agent_worktree` stamps in the worker and
+   * arrives here as an ordinary report.
+   */
+  worktreeRemoved(worktreePath: string): AgentRun[] {
+    const key = canonical(worktreePath);
+    const at = this.now().toISOString();
+    const changed: AgentRun[] = [];
+    for (const run of this.runs.values()) {
+      if (!run.worktree || run.worktree.removedAt || canonical(run.worktree.path) !== key) continue;
+      run.worktree = { ...run.worktree, removedAt: at };
+      run.updatedAt = at;
+      changed.push(structuredClone(run));
+    }
+    if (changed.length > 0) {
+      this.schedulePersist();
+      for (const run of changed) this.options.onRun?.(run);
+    }
+    return changed;
+  }
+
   /** A session was deleted: its runs cannot go on. History stays until retention takes it. */
   forgetSession(sessionPath: string): AgentRun[] {
     const at = this.now().toISOString();

@@ -134,9 +134,10 @@ Desktop (≥1024px), four columns left to right:
 3. **Thread** (flex): the assistant-ui thread. Max width 84ch (`--measure-thread`) centered, sticky
    top bar (session title, model, thinking, context ring, more menu), floating
    composer at the bottom with queue chips above it.
-4. **Fleet** (320px, collapsible with `\`): every piece of agent work in every
-   project — child agents and the background commands they left running —
-   grouped by session, nested as it really nests, opening in place
+4. **Fleet** (320px, collapsible with `\`): the open session's tree of agent
+   work — its child agents, theirs, and the background commands any of them
+   left running — nested as it really nests, opening in place, with work from
+   a deleted session carried on one line at the bottom
    ([`docs/ux-fleet.md`](../../docs/ux-fleet.md)). Hidden by default under 1280px.
 5. **Monitor** (320px, collapsible with `]`): context ring with tokens;
    billing-aware usage (API cost/tokens or account allowance/resets/credits,

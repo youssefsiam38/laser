@@ -109,6 +109,7 @@ export {
   type TrustPrompts,
   type TrustRequest,
   type LaserActions,
+  type MoveOptions,
   type LaserContextValue,
   type LaserStable,
   type LaserProviderProps,

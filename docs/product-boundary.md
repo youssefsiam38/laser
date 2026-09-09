@@ -45,6 +45,41 @@ Advanced is a permanent destination for specialist product controls. “Full
 configuration” only expands secondary fields inside General or Advanced; it
 does not reveal internally managed or unsupported engine settings.
 
+`enabledModels` is a glob allow-list, and a list written before a model
+existed hides every newer one from every picker. Settings → Providers and
+models therefore names why a catalogue row is in no picker, on the row, and
+the reasons never share a label: **Switched off** (the person's own choice,
+made here), **Hidden by Enabled models** (the allow-list leaves it out) and
+**Provider not signed in** (the fix is the sign-in above). A model of an
+unconnected provider is never blamed on the list, even though the engine marks
+it disabled too.
+
+The primary control is a **switch on every row**, with **Enable all** and
+**Disable all** per provider and a view menu (All · Enabled · Hidden) beside
+the free-text search. The engine's allow-list has no negation — a `!pattern`
+without glob characters is an exact reference that matches nothing, and a
+negated glob is OR'd with the bare-id test, so it adds every model back
+(`packages/worker/test/model-offer.test.ts` proves this against the real
+matcher). "Everything except this one" therefore cannot be a pattern without
+enumerating every other model, which would hide every model added later — the
+very bug above. So the off side is Laser's own setting, `disabledModels`
+(`LASER_SETTINGS_KEYS` in `packages/worker/src/settings.ts`): exact
+`provider/id` references, global or in `<project>/.laser/settings.json`, read
+and written only by the product and never passed to the engine as an
+override. The worker applies it after the allow-list wherever models are
+offered (`pi/models/catalog`'s `enabled`, plus per-row `hiddenByList` and
+`switchedOff` and the result's `disabledModels`; and a session's
+`pi/model/list`), so every picker reads one answer. A switch off appends
+exactly that model; a switch on removes it, and lets a pattern-hidden model
+back in by appending its canonical reference to `enabledModels` at the scope
+the list lives in (project when the project file sets one, else global),
+never unsetting the rest of it. Each list is written where it lives. A model
+the provider ships later is on neither list and starts switched on. Beside the
+pattern editor — folded under *Advanced*, no longer the primary control — a
+count says how many models from connected providers the list currently hides,
+so a stale list is visible where it is edited. The session picker forgets its
+list on close, so a switch shows on the next open without a reload.
+
 ## Features
 
 - A feature manifest has a stable id, product name, description, default,

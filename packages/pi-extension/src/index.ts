@@ -53,13 +53,16 @@ export type {
   CompleteRunInput,
   CompleteRunResult,
   HarnessSessionRole,
+  InspectAgentInput,
+  InspectAgentResult,
+  InspectedMessage,
+  RemoveAgentWorktreeInput,
+  RemoveAgentWorktreeResult,
   SendAgentMessageInput,
   SendAgentMessageResult,
   StartAgentInput,
   StartAgentResult,
   StopAgentInput,
-  WaitForAgentsInput,
-  WaitForAgentsResult,
 } from "./agents-bridge.js";
 
 export interface LaserExtensionOptions {

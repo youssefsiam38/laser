@@ -126,7 +126,16 @@ export function mergeSessions(
   const merged = new Map<string, SessionSummary>();
   for (const summary of sessions) merged.set(summary.path, summary);
   for (const view of Object.values(open)) {
-    if (!view || merged.has(view.path)) continue;
+    if (!view) continue;
+    const listed = merged.get(view.path);
+    if (listed) {
+      // The catalog row wins, except for what only the open session can know
+      // yet: an unwritten session has no file to read an agent record from,
+      // and a row with no attribution makes the launcher treat a Beam chat as
+      // the default agent's (M13-T47). The view's state carries the truth.
+      if (listed.agent === undefined && view.state.agent !== undefined) merged.set(view.path, { ...listed, agent: view.state.agent });
+      continue;
+    }
     // `openedAt`, never `Date.now()`: a synthesized row must be byte-identical
     // across calls or every derived list (and `threadListSignature`) churns.
     const at = view.openedAt;

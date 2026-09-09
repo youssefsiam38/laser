@@ -109,6 +109,7 @@ describe("projection", () => {
     expect(agentEventSentence("explorer", "agent.cancelled", "user")).toBe("explorer was ended by you");
     expect(agentEventSentence("explorer", "agent.cancelled", "parent")).toBe("explorer was ended by its parent");
     expect(agentEventSentence("explorer", "agent.blocked", undefined)).toBe("explorer was blocked");
+    expect(agentEventSentence("explorer", "agent.needs_input", undefined)).toBe("explorer is asking a question");
     expect(taskOutcome({ status: "completed", exitCode: 0 })).toEqual({ text: "exited with code 0", failed: false });
     expect(taskOutcome({ status: "failed", exitCode: 2 })).toEqual({ text: "exited with code 2", failed: true });
     expect(taskOutcome({ status: "stopped", exitCode: null })).toEqual({ text: "was stopped", failed: false });

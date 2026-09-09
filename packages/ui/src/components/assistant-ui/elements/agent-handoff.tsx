@@ -91,7 +91,7 @@ export function AgentHandoff({
 // transcript renderer stays the one Markdown renderer there is.
 // ---------------------------------------------------------------------------
 
-export type AgentEventKind = "agent.completed" | "agent.blocked" | "agent.failed" | "agent.cancelled" | "agent.message";
+export type AgentEventKind = "agent.completed" | "agent.blocked" | "agent.failed" | "agent.cancelled" | "agent.message" | "agent.needs_input";
 export type AgentEventInitiator = "parent" | "user" | "harness";
 
 /** The tone the event's dot and its sentence take. */
@@ -102,6 +102,8 @@ export function agentEventTone(kind: AgentEventKind): "ok" | "attention" | "dang
       // has finished is the one thing that needs no attention (D-154).
       return "muted";
     case "agent.blocked":
+    // Live and paused on a question: the warm hue, because it needs someone.
+    case "agent.needs_input":
       return "attention";
     case "agent.failed":
       return "danger";
@@ -123,6 +125,8 @@ export function agentEventSentence(name: string, kind: AgentEventKind, initiator
       return `${name} failed`;
     case "agent.message":
       return `${name} sent a message`;
+    case "agent.needs_input":
+      return `${name} is asking a question`;
     case "agent.cancelled":
       return initiator === "user" ? `${name} was ended by you` : initiator === "parent" ? `${name} was ended by its parent` : `${name} was ended`;
   }
@@ -169,7 +173,8 @@ export function AgentEventCard({
   ...props
 }: AgentEventCardProps) {
   const tone = agentEventTone(kind);
-  const settled = kind !== "agent.message";
+  // The run is still going for a message and for a question; only an ending settles.
+  const settled = kind !== "agent.message" && kind !== "agent.needs_input";
   const sentence = agentEventSentence(subagentName, kind, initiator);
   return (
     <div

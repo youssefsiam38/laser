@@ -1070,9 +1070,11 @@ function useProjectDefaultModel(cwd: string | undefined, enabled: boolean): { mo
 
 /**
  * Model picker bound to the open session. The list arrives from
- * `pi/model/list` the first time the popover opens (Pi's catalogue can run to
- * a thousand rows, so it is not fetched on every render), grouped by
- * provider; a pick calls `pi/model/set`.
+ * `pi/model/list` each time the popover opens (Pi's catalogue can run to a
+ * thousand rows, so it is not fetched on every render, and it is forgotten on
+ * close so a switch flipped in Settings → Providers and models shows on the
+ * next open without a reload, M13-T49), grouped by provider; a pick calls
+ * `pi/model/set`.
  *
  * With no session open it edits the default that the new session will inherit.
  * That is the point at which choosing a model is most useful; disabling the
@@ -1098,6 +1100,12 @@ export function SessionModelSelector({ className }: { className?: string | undef
     setError(null);
     setNewSessionModel(null);
   }, [cwd, sessionPath]);
+
+  // Forget the list on close: the worker answers from memory, and what is
+  // offered can change between two opens (a switch in Settings, a sign-in).
+  useEffect(() => {
+    if (!open) setModels(null);
+  }, [open]);
 
   useEffect(() => {
     if (!open || models !== null || !cwd) return;

@@ -232,9 +232,16 @@ export class AttentionTracker {
   decorate<T extends SessionSummary>(sessions: readonly T[]): T[] {
     return sessions.map((summary) => {
       const seenAt = this.seenAt(summary.path);
+      let attention = this.attentionOf(summary.path, summary.modifiedAt);
+      // A session nobody has prompted has nothing that finished and nothing
+      // to read: its file (or its unwritten row) changed only because it was
+      // created. Stamping it unread made the launcher refuse to reuse an
+      // empty chat and start another on every press of + (M13-T47). Live
+      // states — a dialog, an error, a running turn — are left as they are.
+      if (attention === "finished_unread" && summary.messageCount === 0 && !summary.firstMessage) attention = "idle";
       return {
         ...summary,
-        attention: this.attentionOf(summary.path, summary.modifiedAt),
+        attention,
         ...(seenAt ? { seenAt } : {}),
       };
     });

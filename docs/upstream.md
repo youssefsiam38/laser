@@ -553,7 +553,7 @@ origin. The turn completes and the app keeps working; the error reaches the cons
 
 A fix belongs upstream — notifying `runningSubscribers` outside the render phase (a
 microtask or a layout effect) rather than inline in `_setRunning`. Not filed yet; tracked as
-M13-T37.
+M13-T56 (first recorded as M13-T37, which the patch comment still cites).
 
 **Carried locally as a pinned patch** (`patches/@assistant-ui__core@0.3.17.patch`, registered
 in `pnpm-workspace.yaml` beside the other two). `_setRunning` keeps assigning the flag

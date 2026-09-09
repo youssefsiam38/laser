@@ -22,6 +22,7 @@ import type {
   AgentPolicy,
   AgentRun,
   AgentSkillsListing,
+  AgentWorktreeStatus,
   BuiltinAgentName,
   NamerState,
 } from "@lasercode/protocol";
@@ -49,6 +50,19 @@ export interface AgentsActions {
   runs(path?: string): Promise<void>;
   /** `agents/runs/stop`; the returned run is also folded into the store. Rejects on failure. */
   stopRun(runId: string, reason?: string): Promise<AgentRun>;
+  /**
+   * `agents/worktree/status` for a child session: what its worktree holds, or
+   * `null` when it never had one. Rejects on failure — the two surfaces that
+   * ask (the delete confirmation and the fleet's removal) both need to say so
+   * where the person is looking, not in a toast somewhere else.
+   */
+  worktreeStatus(path: string): Promise<AgentWorktreeStatus | null>;
+  /**
+   * `agents/worktree/remove`: the person clears a leftover worktree without
+   * deleting the session. Resolves with `removed: false` and what it holds
+   * when it still carries unmerged work and `force` was not given.
+   */
+  removeWorktree(path: string, force?: boolean): Promise<{ removed: boolean; worktree: AgentWorktreeStatus | null }>;
   /**
    * `agents/builtin/set-model` for Beam, Chat or Namer; `null` returns that
    * agent to the default model. Choosing Beam's also clears its pending
@@ -124,6 +138,11 @@ export function createAgentsActions({ client, dispatch, guard }: AgentsActionsDe
       dispatch({ type: "agents/run", run });
       return run;
     },
+    worktreeStatus: async (path) => {
+      const { worktree } = await client.request("agents/worktree/status", { path });
+      return worktree;
+    },
+    removeWorktree: async (path, force) => client.request("agents/worktree/remove", { path, ...(force !== undefined ? { force } : {}) }),
     setBuiltinModel: (name, model) =>
       settle(async () => {
         const { snapshot } = await client.request("agents/builtin/set-model", { name, model });

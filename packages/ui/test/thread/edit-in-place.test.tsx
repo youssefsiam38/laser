@@ -177,7 +177,7 @@ describe("editing a message you sent", () => {
 
     // Before it: the session moves to this prompt's place in the tree, then the
     // new wording is sent there.
-    expect(stable.actions.navigate).toHaveBeenCalledWith("u2b");
+    expect(stable.actions.navigate).toHaveBeenCalledWith("u2b", { stopFirst: false });
     expect(stable.actions.fork).not.toHaveBeenCalled();
     expect(stable.actions.send).toHaveBeenCalledWith([{ type: "text", text: "list the tests and the scripts" }], "prompt");
     expect(container.querySelector('[data-slot="edit-message"]')).toBeNull();
@@ -191,7 +191,7 @@ describe("editing a message you sent", () => {
     expect(secondary).toBeDefined();
     await click(secondary);
 
-    expect(stable.actions.fork).toHaveBeenCalledWith("u2b");
+    expect(stable.actions.fork).toHaveBeenCalledWith("u2b", { stopFirst: false });
     expect(stable.actions.navigate).not.toHaveBeenCalled();
     expect(stable.actions.send).toHaveBeenCalledWith([{ type: "text", text: "list the tests" }], "prompt");
   });

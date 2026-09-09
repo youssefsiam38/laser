@@ -1,8 +1,10 @@
 /**
  * M13-T3 · the harness lifecycle with a fake host: start → running →
  * complete through the bridge; blocked; stops by a person and by the parent;
- * no limit on a run's length; failure on close; settle-without-completion; waiting; follow-up
- * messages; nesting and allow-list refusals; run notifications.
+ * no limit on a run's length; failure on close; settle-without-completion; follow-up
+ * messages; nesting and allow-list refusals; run notifications; a child paused
+ * on a question (`needs_input`), the parent answering it, and `inspect_agent`
+ * (M13-T45). There is no waiting tool: nothing here waits for anything.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DriverAgentOptions, DriverEvent, DriverListener, PromptOptions, SessionDriver } from "../../src/driver.js";
@@ -11,8 +13,8 @@ import { DefinitionsCache, fallbackDefaultAgent, fallbackSnapshot } from "../../
 import { AgentHarness, NUDGE_TEXT, type SessionHost, type WorktreeProvider } from "../../src/agents/harness.js";
 import { HarnessError } from "../../src/agents/errors.js";
 import { rootRecord, rootRole } from "../../src/agents/session-config.js";
-import type { CreateWorktreeInput, Worktree } from "../../src/agents/worktrees.js";
-import { SESSION_RUN_ENTRY_TYPE, type AgentDefinition, type AgentRun, type AgentsSnapshot, type ContentBlock, type SessionState, type UiDialogResponse } from "@lasercode/protocol";
+import type { CreateWorktreeInput, Worktree, WorktreeFacts } from "../../src/agents/worktrees.js";
+import { SESSION_RUN_ENTRY_TYPE, type AgentDefinition, type AgentRun, type AgentsSnapshot, type ContentBlock, type SessionState, type UiDialogRequest, type UiDialogResponse } from "@lasercode/protocol";
 
 class FakeDriver implements SessionDriver {
   readonly kind = "stable-sdk" as const;
@@ -25,6 +27,11 @@ class FakeDriver implements SessionDriver {
   goal: { id: string; objective: string } | null = null;
   lastText: string | undefined;
   acceptPrompts = true;
+  /** Dialogs raised and not yet answered, as `StableSdkDriver.pendingUi()` lists them. */
+  pending: UiDialogRequest[] = [];
+  responses: UiDialogResponse[] = [];
+  /** The session file's lines, for `entries()`; the last one is the leaf. */
+  lines: Array<Record<string, unknown>> = [];
   private readonly listeners = new Set<DriverListener>();
   constructor(private st: SessionState) {}
   async open() { return this.st; }
@@ -48,10 +55,15 @@ class FakeDriver implements SessionDriver {
   async compact() {}
   async navigateTree() { return { cancelled: false }; }
   async fork() { return { state: this.st }; }
-  respondToUi(_r: UiDialogResponse) {}
+  respondToUi(r: UiDialogResponse) { this.responses.push(r); this.pending = this.pending.filter((p) => p.id !== r.id); }
+  pendingUi(): UiDialogRequest[] { return [...this.pending]; }
+  /** Raise a dialog the way the real bridge does: listed as pending first, then announced. */
+  ask(request: UiDialogRequest) { this.pending.push(request); this.emit({ type: "ui_request", request }); }
+  /** The dialog settled without a client answer (timeout, abort): gone from the list, then announced. */
+  resolveDialog(id: string) { this.pending = this.pending.filter((p) => p.id !== id); this.emit({ type: "ui_event", event: { method: "dialogResolved", id } }); }
   async commands() { return []; }
   async prompts() { return []; }
-  async entries() { return []; }
+  async entries() { return { entries: [...this.lines], leafId: (this.lines.at(-1)?.["id"] as string | undefined) ?? null }; }
   async goalState() { return this.goal ? { id: this.goal.id, objective: this.goal.objective, status: "active" as const, startedAt: 0, updatedAt: 0, iteration: 0, automaticTurns: 0 } : null; }
   async appendEntry(type: string, data: unknown) { this.custom.push({ type, data }); return `e${this.custom.length}`; }
   lastAssistantText() { return this.lastText; }
@@ -80,9 +92,12 @@ function makeWorld() {
   let unavailable = false;
   let failOpen = false;
   let refuseWorktrees: string | undefined;
-  const worktrees: WorktreeProvider & { created: CreateWorktreeInput[]; removed: string[] } = {
+  let facts: WorktreeFacts = { exists: true, unmergedCommits: 0, uncommittedFiles: 0 };
+  let root: string | undefined = "/repo";
+  const worktrees: WorktreeProvider & { created: CreateWorktreeInput[]; removed: string[]; removedWith: Array<{ root: string; path: string; branch?: string }> } = {
     created: [],
     removed: [],
+    removedWith: [],
     async create(input) {
       if (refuseWorktrees !== undefined) throw new HarnessError(refuseWorktrees);
       this.created.push(input);
@@ -90,8 +105,10 @@ function makeWorld() {
       const worktree: Worktree = { path, branch: `agents/${input.subagentName}`, baseCommit: "abc123", cwd: path, root: "/repo" };
       return worktree;
     },
-    async remove(_root, path) { this.removed.push(path); },
+    async remove(root_, path, branch) { this.removed.push(path); this.removedWith.push({ root: root_, path, ...(branch !== undefined ? { branch } : {}) }); },
     ownedBy: () => undefined,
+    async rootOf() { return root; },
+    async facts() { return facts; },
   };
   const host: SessionHost = {
     async openChild(open) {
@@ -101,6 +118,8 @@ function makeWorld() {
       const driver = new FakeDriver(stateFor(path, `child-${childCount}`, open.cwd));
       drivers.set(path, driver);
       opened.push(open);
+      // The server forwards every driver event to the harness; so does this host.
+      driver.subscribe((event) => harness.onDriverEvent(path, event));
       return driver.state();
     },
     driver: (path) => drivers.get(path),
@@ -126,6 +145,9 @@ function makeWorld() {
     setFailOpen: (value: boolean) => { failOpen = value; },
     /** Stand in for a project git cannot give a worktree: not a repository, no commit, a path another agent owns. */
     setRefuseWorktrees: (message: string | undefined) => { refuseWorktrees = message; },
+    /** What the child's branch and directory hold, when the parent asks to remove them. */
+    setWorktreeFacts: (next: WorktreeFacts) => { facts = next; },
+    setWorktreeRoot: (next: string | undefined) => { root = next; },
   };
 }
 
@@ -358,24 +380,239 @@ describe("AgentHarness", () => {
     expect(world.harness.run(runId)).toMatchObject({ status: "failed", error: "429 rate limited" });
   });
 
-  it("waits for runs, resolves on completion and reports a timeout", async () => {
-    vi.useFakeTimers();
-    world = makeWorld();
-    world.definitions.sync(snapshotWith([PARENT, WORKER, REVIEWER]));
-    const root = world.openRoot("lead");
-    const a = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "a", task: "t" });
-    const b = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "b", task: "t" });
-    const waiting = root.handle.bridge.waitForAgents({ runIds: [a.runId, b.runId], timeoutSeconds: 30 });
-    await world.harness.bridgeOf("/sessions/child-1.jsonl")!.completeRun({ status: "completed", message: "a done" });
-    await vi.advanceTimersByTimeAsync(30_000);
-    const timedOut = await waiting;
-    expect(timedOut.timedOut).toBe(true);
-    expect(timedOut.runs.map((r) => r.status)).toEqual(["completed", "running"]);
-    const second = root.handle.bridge.waitForAgents({ runIds: [b.runId] });
-    await world.harness.bridgeOf("/sessions/child-2.jsonl")!.completeRun({ status: "completed", message: "b done" });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(await second).toEqual({ timedOut: false, runs: [expect.objectContaining({ runId: b.runId, status: "completed" })] });
-    await expect(root.handle.bridge.waitForAgents({ runIds: ["run_nope"] })).rejects.toThrow(/None of run_nope/);
+  // ---------------------------------------------------------- questions
+  // M13-T45: a child paused on a question is `needs_input`, never `running`.
+  // The parent can tell the two apart from the status alone, is told once
+  // per question, and may answer through `send_agent_message`.
+  describe("a child paused on a question", () => {
+    const select: UiDialogRequest = { method: "select", id: "ui-1", title: "Which database?", options: ["staging", "production"], toolCallId: "call-1" };
+
+    it("is needs_input while the question is open, tells the parent once, and is running again once someone answers", async () => {
+      const root = world.openRoot("lead");
+      const received: AgentModelEvent[] = [];
+      root.handle.bridge.onEvent((event) => received.push(event));
+      const { runId, sessionId } = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "migrate", task: "Migrate the schema." });
+      const path = "/sessions/child-1.jsonl";
+      const child = world.drivers.get(path)!;
+      child.emit({ type: "update", update: { kind: "tool_execution_start", toolCallId: "call-1", toolName: "ask_person", args: {} } });
+      child.ask(select);
+
+      const paused = world.harness.run(runId)!;
+      expect(paused.status).toBe("needs_input");
+      expect(paused.question).toEqual({ id: "ui-1", kind: "select", title: "Which database?", options: ["staging", "production"], toolCallId: "call-1", toolName: "ask_person", askedAt: expect.any(String) });
+      expect(world.runsNotified().at(-1)).toMatchObject({ runId, status: "needs_input", question: { id: "ui-1" } });
+      expect(world.harness.sessionInfo(path)).toMatchObject({ runStatus: "needs_input" });
+      // The parent's list says so too, with the question, so it can answer without inspecting.
+      expect(await root.handle.bridge.listAgents()).toEqual([expect.objectContaining({ runId, status: "needs_input", question: expect.objectContaining({ kind: "select", title: "Which database?" }) })]);
+      // Told once, with the question and how to answer it — and that the person may answer instead.
+      expect(received).toHaveLength(1);
+      expect(received[0]).toMatchObject({ type: "agent.needs_input", agentName: "worker", subagentName: "migrate", sessionId, runId, run: { status: "needs_input" } });
+      expect(received[0]!.message).toContain("migrate is paused on a question");
+      expect(received[0]!.message).toContain("raised by its ask_person tool");
+      expect(received[0]!.message).toContain("Question (select): Which database?");
+      expect(received[0]!.message).toContain('Choices: "staging", "production"');
+      expect(received[0]!.message).toContain("send_agent_message with its sessionId and one of the choices");
+      expect(received[0]!.message).toContain("the person can answer it in migrate's own chat");
+      expect(received[0]!.message).toContain(`inspect_agent with runId ${runId}`);
+      expect(world.events().map((e) => `${e.kind}@${e.sessionPath}`)).toEqual(["started@/sessions/child-1.jsonl", "message_sent@/sessions/root.jsonl", "needs_input@/sessions/child-1.jsonl", "message_received@/sessions/root.jsonl"]);
+      expect(world.events().at(-2)!.summary).toBe("Asked: Which database?");
+      // The same question announced again changes nothing.
+      child.emit({ type: "ui_request", request: select });
+      expect(received).toHaveLength(1);
+
+      // The person answers in the child's chat: the harness never sees the
+      // answer, only that the driver no longer holds the question — which it
+      // notices on the child's next move.
+      child.respondToUi({ id: "ui-1", value: "staging" });
+      expect(world.harness.run(runId)!.status).toBe("needs_input");
+      child.emit({ type: "update", update: { kind: "tool_execution_end", toolCallId: "call-1", toolName: "ask_person", result: "staging", isError: false } });
+      const resumed = world.harness.run(runId)!;
+      expect(resumed.status).toBe("running");
+      expect(resumed).not.toHaveProperty("question");
+      expect(world.runsNotified().map((r) => r.status).slice(-3)).toEqual(["running", "needs_input", "running"]);
+      expect(received).toHaveLength(1);
+      // Nothing about the ending changes: it still completes through the tool.
+      expect(await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "Migrated staging." })).toEqual({ ok: true, runId });
+      expect(received.at(-1)).toMatchObject({ type: "agent.completed" });
+    });
+
+    it("lets the parent answer through send_agent_message, refusing an answer that does not fit the question", async () => {
+      const root = world.openRoot("lead");
+      const { runId, sessionId } = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "migrate", task: "t" });
+      const path = "/sessions/child-1.jsonl";
+      const child = world.drivers.get(path)!;
+      child.ask(select);
+      // Not one of the choices: refused with the choices, and the question still stands.
+      await expect(root.handle.bridge.sendAgentMessage({ sessionId, message: "use the dev one", interrupt: false })).rejects.toThrow(/not one of the choices.*"staging", "production"/s);
+      expect(child.responses).toEqual([]);
+      expect(world.harness.run(runId)!.status).toBe("needs_input");
+      // A choice, by name (case-insensitively) or by number: the dialog is answered, and nothing is prompted or queued.
+      const answered = await root.handle.bridge.sendAgentMessage({ sessionId, message: "Staging", interrupt: false });
+      expect(answered).toEqual({ sessionId, runId, status: "running", delivery: "answered", answered: expect.objectContaining({ id: "ui-1", kind: "select" }) });
+      expect(child.responses).toEqual([{ id: "ui-1", value: "staging" }]);
+      expect(child.prompted.map((p) => p.text)).toEqual(["t"]);
+      expect(child.followUps).toEqual([]);
+      expect(world.harness.run(runId)).toMatchObject({ status: "running" });
+      expect(world.harness.run(runId)).not.toHaveProperty("question");
+      expect(world.events().slice(-2).map((e) => `${e.kind}:${e.summary}`)).toEqual(["message_sent:Answered migrate's question", "message_received:Answer from lead"]);
+
+      child.ask({ method: "select", id: "ui-2", title: "Which one?", options: ["a", "b", "c"] });
+      expect((await root.handle.bridge.sendAgentMessage({ sessionId, message: "2", interrupt: false })).delivery).toBe("answered");
+      expect(child.responses.at(-1)).toEqual({ id: "ui-2", value: "b" });
+
+      // A confirm takes a plain yes or no, nothing else.
+      child.ask({ method: "confirm", id: "ui-3", title: "Drop the table?", message: "This cannot be undone." });
+      await expect(root.handle.bridge.sendAgentMessage({ sessionId, message: "only if it is empty", interrupt: false })).rejects.toThrow(/Drop the table\?.*This cannot be undone.*yes or no/s);
+      expect((await root.handle.bridge.sendAgentMessage({ sessionId, message: "No.", interrupt: false })).answered).toMatchObject({ kind: "confirm" });
+      expect(child.responses.at(-1)).toEqual({ id: "ui-3", confirmed: false });
+      child.ask({ method: "confirm", id: "ui-4", title: "Continue?" });
+      await root.handle.bridge.sendAgentMessage({ sessionId, message: "yes", interrupt: false });
+      expect(child.responses.at(-1)).toEqual({ id: "ui-4", confirmed: true });
+
+      // Input and editor take the message as it is.
+      child.ask({ method: "input", id: "ui-5", title: "Table name?", placeholder: "users" });
+      expect(world.harness.run(runId)!.question).toMatchObject({ kind: "input", detail: "users" });
+      await root.handle.bridge.sendAgentMessage({ sessionId, message: "accounts_v2", interrupt: false });
+      expect(child.responses.at(-1)).toEqual({ id: "ui-5", value: "accounts_v2" });
+      child.ask({ method: "editor", id: "ui-6", title: "Edit the migration", prefill: "-- sql" });
+      await root.handle.bridge.sendAgentMessage({ sessionId, message: "-- sql\nALTER TABLE accounts ADD COLUMN v2 int;", interrupt: false });
+      expect(child.responses.at(-1)).toEqual({ id: "ui-6", value: "-- sql\nALTER TABLE accounts ADD COLUMN v2 int;" });
+      expect(world.harness.run(runId)!.status).toBe("running");
+    });
+
+    it("shows the oldest open question, moves to the next when it is settled, and drops one that times out", async () => {
+      const root = world.openRoot("lead");
+      const received: AgentModelEvent[] = [];
+      root.handle.bridge.onEvent((event) => received.push(event));
+      const { runId } = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "t" });
+      const child = world.drivers.get("/sessions/child-1.jsonl")!;
+      child.ask({ method: "confirm", id: "ui-1", title: "First?" });
+      child.ask({ method: "confirm", id: "ui-2", title: "Second?" });
+      expect(world.harness.run(runId)!.question?.id).toBe("ui-1");
+      expect(received.map((e) => e.type)).toEqual(["agent.needs_input"]);
+      // The first times out: the second is now the question, and the parent hears about it.
+      child.resolveDialog("ui-1");
+      expect(world.harness.run(runId)).toMatchObject({ status: "needs_input", question: { id: "ui-2", title: "Second?" } });
+      expect(received.map((e) => e.type)).toEqual(["agent.needs_input", "agent.needs_input"]);
+      child.resolveDialog("ui-2");
+      expect(world.harness.run(runId)).toMatchObject({ status: "running" });
+      expect(received).toHaveLength(2);
+    });
+
+    it("keeps the question, for a driver that cannot list its dialogs, until that exact dialog is resolved", async () => {
+      const root = world.openRoot("lead");
+      const { runId } = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "t" });
+      const child = world.drivers.get("/sessions/child-1.jsonl")!;
+      Object.defineProperty(child, "pendingUi", { value: undefined });
+      child.emit({ type: "ui_request", request: { method: "input", id: "ui-1", title: "Name?" } });
+      expect(world.harness.run(runId)!.status).toBe("needs_input");
+      child.emit({ type: "update", update: { kind: "turn_start" } });
+      child.emit({ type: "ui_event", event: { method: "dialogResolved", id: "ui-other" } });
+      expect(world.harness.run(runId)!.status).toBe("needs_input");
+      child.emit({ type: "ui_event", event: { method: "dialogResolved", id: "ui-1" } });
+      expect(world.harness.run(runId)!.status).toBe("running");
+    });
+
+    it("lets a question die with its run, and ignores one raised in a session with no run", async () => {
+      const root = world.openRoot("lead");
+      const received: AgentModelEvent[] = [];
+      root.handle.bridge.onEvent((event) => received.push(event));
+      const { runId } = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "t" });
+      const path = "/sessions/child-1.jsonl";
+      const child = world.drivers.get(path)!;
+      child.ask(select);
+      const run = await world.harness.stopRun(runId, { initiator: "user", reason: "never mind" });
+      expect(run.status).toBe("cancelled");
+      expect(run).not.toHaveProperty("question");
+      expect(received.map((e) => e.type)).toEqual(["agent.needs_input", "agent.cancelled"]);
+      // The session is idle now: a dialog there is the person's business, not a run's.
+      child.ask({ method: "confirm", id: "ui-9", title: "Still there?" });
+      expect(world.harness.run(runId)!.status).toBe("cancelled");
+      expect(world.harness.activeRun(path)).toBeUndefined();
+      expect(received).toHaveLength(2);
+      // A message to the idle child is a new run, not an answer.
+      expect((await root.handle.bridge.sendAgentMessage({ sessionId: "child-1", message: "carry on", interrupt: false })).delivery).toBe("delivered");
+    });
+  });
+
+  // ------------------------------------------------------------ inspect
+  describe("inspect_agent", () => {
+    it("answers for a live child: the whole task, where it works, activity, its last words, its question and its children", async () => {
+      world.definitions.sync(snapshotWith([PARENT, WORKER, REVIEWER], 3));
+      const root = world.openRoot("lead");
+      const task = `Fix the login form. ${"Details. ".repeat(80)}`.trim();
+      const { runId, sessionId } = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "fix-login", task });
+      const path = "/sessions/child-1.jsonl";
+      const child = world.drivers.get(path)!;
+      world.setWorktreeFacts({ exists: true, unmergedCommits: 1, uncommittedFiles: 2 });
+      child.emit({ type: "update", update: { kind: "turn_start" } });
+      child.emit({ type: "update", update: { kind: "tool_execution_start", toolCallId: "c1", toolName: "bash", args: {} } });
+      child.lines = [
+        { type: "session", id: "s" },
+        { type: "message", id: "m1", parentId: null, timestamp: "2026-09-09T10:00:00.000Z", message: { role: "user", content: [{ type: "text", text: task }] } },
+        { type: "message", id: "m2", parentId: "m1", timestamp: "2026-09-09T10:00:05.000Z", message: { role: "assistant", content: [{ type: "text", text: "Reading the form." }] } },
+        { type: "message", id: "m3", parentId: "m2", timestamp: "2026-09-09T10:00:09.000Z", message: { role: "assistant", content: [{ type: "text", text: "Found the bug in validate()." }, { type: "toolCall", name: "bash" }] } },
+      ];
+      child.ask({ method: "confirm", id: "ui-1", title: "Run the migration?", toolCallId: "c1" });
+      const grand = await world.harness.bridgeOf(path)!.startAgent({ agentName: "worker", subagentName: "check-tests", task: "Run the tests." });
+
+      const seen = await root.handle.bridge.inspectAgent({ runId });
+      expect(seen).toMatchObject({
+        agentName: "worker",
+        subagentName: "fix-login",
+        sessionId,
+        runId,
+        status: "needs_input",
+        origin: "agent",
+        depth: 1,
+        model: "stub/stub-1",
+        task,
+        cwd: expect.stringMatching(/^\/repo\/\.worktrees\/fix-login-/),
+        branch: "agents/fix-login",
+        worktree: { path: expect.stringMatching(/fix-login/), branch: "agents/fix-login", exists: true, unmergedCommits: 1, uncommittedFiles: 2 },
+        activity: { turns: 1, tools: 1, currentTool: "bash", lastAt: expect.any(String) },
+        question: { id: "ui-1", kind: "confirm", title: "Run the migration?", toolCallId: "c1", toolName: "bash" },
+        messages: [{ at: "2026-09-09T10:00:09.000Z", text: "Found the bug in validate()." }],
+        agents: [expect.objectContaining({ runId: grand.runId, subagentName: "check-tests", status: "running" })],
+      });
+      // The run record still carries only the excerpt; the whole task is inspect's alone.
+      expect(world.harness.run(runId)!.task.length).toBeLessThan(task.length);
+      // More messages, oldest first; the count is clamped to the cap; zero is allowed.
+      expect((await root.handle.bridge.inspectAgent({ runId, messages: 2 })).messages.map((m) => m.text)).toEqual(["Reading the form.", "Found the bug in validate()."]);
+      expect((await root.handle.bridge.inspectAgent({ runId, messages: 100 })).messages).toHaveLength(2);
+      expect((await root.handle.bridge.inspectAgent({ runId, messages: 0 })).messages).toEqual([]);
+      await expect(root.handle.bridge.inspectAgent({ runId, messages: "all" as unknown as number })).rejects.toThrow(/messages must be a number/);
+      // By sessionId too — the same child, and nothing was prompted, steered or answered by looking.
+      expect((await root.handle.bridge.inspectAgent({ sessionId })).runId).toBe(runId);
+      expect(child.prompted.map((p) => p.text)).toEqual([task]);
+      expect(child.responses).toEqual([]);
+      expect(world.harness.run(runId)!.status).toBe("needs_input");
+    });
+
+    it("answers for an ended child whose driver is gone, without a worktree, and refuses a stranger", async () => {
+      const root = world.openRoot("lead");
+      const { runId, sessionId } = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "read", task: "Read it.", worktree: false });
+      const path = "/sessions/child-1.jsonl";
+      await world.harness.bridgeOf(path)!.completeRun({ status: "blocked", message: "Which of the two configs is canonical?" });
+      world.drivers.delete(path);
+      const seen = await root.handle.bridge.inspectAgent({ sessionId });
+      expect(seen).toMatchObject({ runId, status: "blocked", task: "Read it.", cwd: "/repo", worktree: null, result: { status: "blocked", message: "Which of the two configs is canonical?" }, messages: [], agents: [] });
+      expect(seen).not.toHaveProperty("branch");
+      expect(seen).not.toHaveProperty("question");
+      const stranger = world.openRoot("lead", "/sessions/other.jsonl", "other-1");
+      await expect(stranger.handle.bridge.inspectAgent({ runId })).rejects.toThrow(/was started by this session/);
+      await expect(root.handle.bridge.inspectAgent({})).rejects.toThrow(/sessionId or one of its runIds/);
+    });
+
+    it("says a removed worktree is gone rather than asking git about it", async () => {
+      const root = world.openRoot("lead");
+      const { runId } = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "iso", task: "t" });
+      await world.harness.bridgeOf("/sessions/child-1.jsonl")!.completeRun({ status: "completed", message: "done" });
+      await root.handle.bridge.removeAgentWorktree({ runId });
+      const seen = await root.handle.bridge.inspectAgent({ runId });
+      expect(seen.worktree).toEqual({ path: expect.stringMatching(/iso/), branch: "agents/iso", exists: false, unmergedCommits: null, uncommittedFiles: null, removedAt: expect.any(String) });
+      expect(seen).not.toHaveProperty("branch");
+    });
   });
 
   it("sends messages: queued while busy, prompted while idle, a new run once ended", async () => {
@@ -538,5 +775,87 @@ describe("AgentHarness", () => {
     await world.harness.removeWorktreeFor("/sessions/child-1.jsonl");
     expect(world.worktrees.removed).toEqual([]);
     expect(world.harness.run(started.runId)!.status).toBe("completed");
+  });
+
+  // M13-T42 / D-157: merging and removing a child's worktree belong to the
+  // parent, so the parent gets a verb for the removal — and only for it.
+  describe("the parent removes a child's worktree", () => {
+    async function finishedChild() {
+      const parent = world.openRoot("lead");
+      const started = await parent.handle.bridge.startAgent({ agentName: "worker", subagentName: "iso", task: "t" });
+      const child = world.harness.bridgeOf("/sessions/child-1.jsonl")!;
+      await child.completeRun({ status: "completed", message: "done" });
+      return { parent, started, child };
+    }
+
+    it("removes a finished child's worktree, by sessionId or runId, and leaves the registry honest", async () => {
+      const { parent, started } = await finishedChild();
+      const result = await parent.handle.bridge.removeAgentWorktree({ sessionId: started.sessionId });
+      // The bridge speaks the harness's camel case; the module renames it for the model.
+      expect(result).toMatchObject({ removed: true, branch: "agents/iso", agentName: "worker", subagentName: "iso", sessionId: started.sessionId });
+      expect(world.worktrees.removedWith).toEqual([{ root: "/repo", path: result.path, branch: "agents/iso" }]);
+      // Nothing may keep offering a path that is no longer on disk.
+      expect(world.harness.run(started.runId)!.worktree).toMatchObject({ branch: "agents/iso", removedAt: expect.any(String) });
+      expect(world.runsNotified().at(-1)!.worktree?.removedAt).toBeTruthy();
+      // Twice is a refusal, not a second `git worktree remove`.
+      await expect(parent.handle.bridge.removeAgentWorktree({ runId: started.runId })).rejects.toThrow(/already been removed/);
+      expect(world.worktrees.removed).toHaveLength(1);
+    });
+
+    it("refuses while the child is still working, and says how to end it", async () => {
+      const parent = world.openRoot("lead");
+      const started = await parent.handle.bridge.startAgent({ agentName: "worker", subagentName: "iso", task: "t" });
+      await expect(parent.handle.bridge.removeAgentWorktree({ runId: started.runId })).rejects.toThrow(/still working.*stop_agent/s);
+      expect(world.worktrees.removed).toEqual([]);
+    });
+
+    it("refuses a child that has no worktree, without naming a branch it never had", async () => {
+      const parent = world.openRoot("lead");
+      const started = await parent.handle.bridge.startAgent({ agentName: "worker", subagentName: "read", task: "t", worktree: false });
+      await world.harness.bridgeOf("/sessions/child-1.jsonl")!.completeRun({ status: "completed", message: "read it" });
+      const refusal = await parent.handle.bridge.removeAgentWorktree({ runId: started.runId }).catch((error: Error) => error.message);
+      expect(refusal).toContain("ran in your own checkout");
+      expect(refusal).toContain("nothing to merge and nothing to remove");
+      expect(refusal).not.toContain("agents/");
+      expect(world.worktrees.removed).toEqual([]);
+    });
+
+    it("refuses unmerged work, says what it is and how to merge it, and obeys force", async () => {
+      const { parent, started } = await finishedChild();
+      world.setWorktreeFacts({ exists: true, unmergedCommits: 3, uncommittedFiles: 2 });
+      const refusal = await parent.handle.bridge.removeAgentWorktree({ runId: started.runId }).catch((error: Error) => error.message);
+      expect(refusal).toContain("3 commits your checkout does not have and 2 uncommitted files");
+      expect(refusal).toContain("git merge agents/iso");
+      expect(refusal).toContain("force true");
+      expect(world.worktrees.removed).toEqual([]);
+      expect(world.harness.run(started.runId)!.worktree?.removedAt).toBeUndefined();
+
+      const forced = await parent.handle.bridge.removeAgentWorktree({ runId: started.runId, force: true });
+      expect(forced.discarded).toEqual({ commits: 3, uncommittedFiles: 2 });
+      expect(world.worktrees.removed).toHaveLength(1);
+    });
+
+    it("refuses when git cannot say what the branch holds, rather than guessing it is empty", async () => {
+      const { parent, started } = await finishedChild();
+      world.setWorktreeFacts({ exists: true, unmergedCommits: null, uncommittedFiles: null, detail: "not a git repository" });
+      await expect(parent.handle.bridge.removeAgentWorktree({ runId: started.runId })).rejects.toThrow(/could not count/);
+      expect(world.worktrees.removed).toEqual([]);
+    });
+
+    it("refuses a run another session started, and a call that names no agent at all", async () => {
+      const { started } = await finishedChild();
+      const stranger = world.openRoot("lead", "/sessions/other.jsonl", "other-1");
+      await expect(stranger.handle.bridge.removeAgentWorktree({ runId: started.runId })).rejects.toThrow(/was started by this session/);
+      await expect(stranger.handle.bridge.removeAgentWorktree({ sessionId: "session-nobody" })).rejects.toThrow(/among the agents this session started/);
+      await expect(stranger.handle.bridge.removeAgentWorktree({})).rejects.toThrow(/sessionId or one of its runIds/);
+      expect(world.worktrees.removed).toEqual([]);
+    });
+
+    it("leaves the worktree alone when git cannot find the repository it belongs to", async () => {
+      const { parent, started } = await finishedChild();
+      world.setWorktreeRoot(undefined);
+      await expect(parent.handle.bridge.removeAgentWorktree({ runId: started.runId })).rejects.toThrow(/Could not find the git repository/);
+      expect(world.worktrees.removed).toEqual([]);
+    });
   });
 });

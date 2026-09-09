@@ -14,6 +14,14 @@
  *   - `entry_appended` fires only for extension custom entries, never for
  *     message persistence — build transcript state from the message and tool
  *     execution events and hydrate from `entries()`;
+ *   - a user message is persisted right after its `message_end` listeners
+ *     return (`AgentSession._handleAgentEvent`: emit, then
+ *     `sessionManager.appendMessage`, synchronously), and the agent loop
+ *     awaits that handler before the next event. So the entry id exists one
+ *     microtask after the event and nothing can arrive in between; the
+ *     driver holds the user `message_end` for exactly that long and sends it
+ *     with `entry` — the transcript learns where a prompt landed before the
+ *     provider request goes out, not when the turn ends (M13-T44);
  *   - `isStreaming` flips after `prompt()` yields, so "busy" is detected by
  *     catching Pi's error, not only by the pre-check.
  */
@@ -23,6 +31,7 @@ import {
   createAgentSessionRuntime,
   createAgentSessionServices,
   getAgentDir,
+  resolveModelScopeWithDiagnostics,
   SessionManager,
   SettingsManager,
   type AgentSession,
@@ -58,7 +67,7 @@ import type {
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readLaserProjectSettings } from "../settings.js";
+import { disabledModelRefs, engineSettingsOnly, modelSwitchedOff, readEffectiveProductSettings, readLaserProjectSettings } from "../settings.js";
 import { applyDurableOverrides } from "../settings-overrides.js";
 import { WebSearchService } from "../web-search.js";
 import {
@@ -91,6 +100,14 @@ export class StableSdkDriver implements SessionDriver {
   private runtime: AgentSessionRuntime | undefined;
   private unsubscribe: (() => void) | undefined;
   private cwd = "";
+  private projectTrusted: boolean | undefined;
+  private agentDir = "";
+  /**
+   * A user `message_end` waiting one microtask for Pi to persist its message
+   * (see the header). It leaves first if anything else arrives, so the order
+   * of updates a client sees never changes.
+   */
+  private heldUserEnd: { update: Extract<SessionUpdate, { kind: "message_end" }>; message: unknown } | undefined;
 
   constructor() {
     this.ui = createUiBridge(
@@ -108,8 +125,10 @@ export class StableSdkDriver implements SessionDriver {
   async open(options: DriverOpenOptions): Promise<SessionState> {
     if (this.runtime) throw new DriverUnavailableError(this.kind, "session already open");
     this.cwd = options.cwd;
+    this.projectTrusted = options.projectTrusted;
 
     const agentDir = options.agentDir ?? getAgentDir();
+    this.agentDir = agentDir;
     const enabled = new Set<FeatureId>(options.features ?? ["subagents", "goals"]);
     const agent = options.agent;
     // Web search is an extension tool: offered whenever its feature is on.
@@ -156,7 +175,7 @@ export class StableSdkDriver implements SessionDriver {
       // session exists. A plain override would be gone by then, taking this
       // project's `.laser` values and the discovery switches with it (M13-T12).
       applyDurableOverrides(settingsManager, {
-        ...(options.projectTrusted === false ? {} : readLaserProjectSettings(cwd)),
+        ...(options.projectTrusted === false ? {} : engineSettingsOnly(readLaserProjectSettings(cwd))),
         // Packages and loose resources are an engine implementation detail.
         // Features below are the only reviewed extensions in the runtime.
         packages: [],
@@ -263,6 +282,7 @@ export class StableSdkDriver implements SessionDriver {
   /** Bind extensions and subscribe to the current `runtime.session`. */
   private async applySession(): Promise<void> {
     const session = this.session();
+    this.flushHeldUserEnd();
     this.unsubscribe?.();
     // A replaced runtime carries none of the old session's in-flight tool calls.
     this.toolCalls.clear();
@@ -277,6 +297,7 @@ export class StableSdkDriver implements SessionDriver {
   }
 
   async dispose(): Promise<void> {
+    this.flushHeldUserEnd();
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.toolCalls.clear();
@@ -409,14 +430,41 @@ export class StableSdkDriver implements SessionDriver {
    * picker.
    */
   async listModels(): Promise<ModelRef[]> {
-    const runtime = this.session().modelRuntime;
+    const session = this.session();
+    const runtime = session.modelRuntime;
     try {
       const available = await runtime.getAvailable();
-      if (available.length > 0) return available.map(toModelRef);
+      if (available.length > 0) return (await this.offeredModels(available)).map(toModelRef);
     } catch {
       // Fall through: a picker with every model beats a picker with none.
     }
     return runtime.getModels().map(toModelRef);
+  }
+
+  /**
+   * The same narrowing the catalogue applies (M13-T49): the `enabledModels`
+   * allow-list when it matches anything, then the product's own
+   * `disabledModels` switches. Without it a session's picker would keep
+   * offering what Settings → Providers and models says is hidden. Both lists
+   * are read from the files, not the session: a Settings write does not
+   * reload a live session's settings manager, and the picker must show a
+   * switch on its next open.
+   */
+  private async offeredModels(available: readonly PiModel[]): Promise<PiModel[]> {
+    const effective = readEffectiveProductSettings(this.cwd, this.agentDir, this.projectTrusted);
+    const patterns = Array.isArray(effective["enabledModels"])
+      ? (effective["enabledModels"] as unknown[]).filter((p): p is string => typeof p === "string")
+      : [];
+    let offered: PiModel[] = [...available];
+    if (patterns.length > 0) {
+      const scope = await resolveModelScopeWithDiagnostics(patterns, this.session().modelRuntime);
+      const allowed = new Set(scope.scopedModels.map((s) => `${s.model.provider}/${s.model.id}`));
+      // The engine itself falls back to every model when the list matches
+      // nothing, warning rather than offering an empty picker.
+      if (allowed.size > 0) offered = offered.filter((model) => allowed.has(`${model.provider}/${model.id}`));
+    }
+    const disabled = disabledModelRefs(effective["disabledModels"]);
+    return disabled.size === 0 ? offered : offered.filter((model) => !modelSwitchedOff(model, disabled));
   }
 
   async setModel(model: ModelRef): Promise<SessionState> {
@@ -444,10 +492,20 @@ export class StableSdkDriver implements SessionDriver {
     await this.session().compact(instructions);
   }
 
+  /**
+   * Move the leaf. The engine refuses this outright while a turn streams
+   * (`navigateTree` throws "Wait for the current response to finish"), so a
+   * person who edits or jumps mid-turn has asked for the turn to stop first:
+   * `stopFirst` does the same `abort()` the Stop button does — the partial
+   * reply settles with `stopReason: "aborted"`, on the branch being left —
+   * and only then moves. The stop is not undone when the move fails: the
+   * session is then idle, unmoved, and honest about why (M13-T46).
+   */
   async navigateTree(
     entryId: string,
-    options?: { summarize?: boolean; label?: string },
+    options?: { summarize?: boolean; label?: string; stopFirst?: boolean },
   ): Promise<{ editorText?: string; cancelled: boolean }> {
+    if (options?.stopFirst) await this.abort();
     const result = await this.session().navigateTree(entryId, {
       ...(options?.summarize !== undefined ? { summarize: options.summarize } : {}),
       ...(options?.label !== undefined ? { label: options.label } : {}),
@@ -458,8 +516,20 @@ export class StableSdkDriver implements SessionDriver {
     };
   }
 
-  async fork(entryId: string): Promise<{ state: SessionState; editorText?: string }> {
+  /**
+   * Fork before `entryId` into a new session file. The engine's own `fork`
+   * tears the current session down, and its teardown aborts a streaming turn
+   * itself, so the original never keeps streaming into a runtime nothing is
+   * attached to — but that abort comes *after* its validation, and a session
+   * whose first reply is still streaming has no file yet, so such a fork is
+   * refused ("not been saved yet") while the turn runs on. `stopFirst` stops
+   * before anything else: the aborted reply is written (which is what creates
+   * the file), the transcript records the stop, and a fork that then fails
+   * leaves the original stopped and untouched (M13-T46).
+   */
+  async fork(entryId: string, options?: { stopFirst?: boolean }): Promise<{ state: SessionState; editorText?: string }> {
     if (!this.runtime) throw new DriverUnavailableError(this.kind, "no open session");
+    if (options?.stopFirst) await this.abort();
     const { cancelled, selectedText } = await this.runtime.fork(entryId);
     if (cancelled) throw new DriverUnavailableError(this.kind, "fork was cancelled by an extension");
     // Runtime replacement swapped `runtime.session`; re-bind and re-subscribe.
@@ -582,7 +652,16 @@ export class StableSdkDriver implements SessionDriver {
 
   private onSessionEvent(event: AgentSessionEvent): void {
     this.toolCalls.note(event);
+    this.flushHeldUserEnd();
     const update = mapEvent(event);
+    if (update?.kind === "message_end" && update.role === "user" && event.type === "message_end") {
+      // Pi writes the entry right after this listener returns; the id is
+      // readable one microtask from now (header). Nothing else is pushed for
+      // a user message_end, so holding it changes no order.
+      this.heldUserEnd = { update, message: event.message };
+      queueMicrotask(() => this.flushHeldUserEnd());
+      return;
+    }
     if (update) this.push(update);
     // These change visible session state, so follow them with a state snapshot.
     if (
@@ -593,6 +672,37 @@ export class StableSdkDriver implements SessionDriver {
       event.type === "compaction_end"
     ) {
       this.push({ kind: "state", state: this.state() });
+    }
+  }
+
+  /** Send the held user `message_end`, with its entry when Pi has written it. */
+  private flushHeldUserEnd(): void {
+    const held = this.heldUserEnd;
+    if (!held) return;
+    this.heldUserEnd = undefined;
+    const entry = this.persistedEntryOf(held.message);
+    this.push(entry ? { ...held.update, entry } : held.update);
+  }
+
+  /**
+   * The entry holding exactly this message object — `appendMessage` stores
+   * the reference — or undefined when Pi did not persist it. The leaf first,
+   * because that is where a fresh append lands; the branch only when
+   * something else was written after it.
+   */
+  private persistedEntryOf(message: unknown): { id: string; parentId: string | null } | undefined {
+    try {
+      const manager = this.session().sessionManager;
+      const leaf = manager.getLeafEntry();
+      if (leaf?.type === "message" && leaf.message === message) return { id: leaf.id, parentId: leaf.parentId };
+      const branch = manager.getBranch();
+      for (let i = branch.length - 1; i >= 0; i--) {
+        const entry = branch[i]!;
+        if (entry.type === "message" && entry.message === message) return { id: entry.id, parentId: entry.parentId };
+      }
+      return undefined;
+    } catch {
+      return undefined;
     }
   }
 }

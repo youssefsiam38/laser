@@ -82,8 +82,10 @@ function statusOfAttention(attention: SessionAttention): AgentTreeStatus {
   switch (attention) {
     case "working":
       return "working";
+    // Live, paused on a question: the run vocabulary's own word for it.
+    // Not `blocked`, which is an ended run.
     case "waiting_for_input":
-      return "blocked";
+      return "needs_input";
     case "error":
       return "failed";
     case "finished_unread":

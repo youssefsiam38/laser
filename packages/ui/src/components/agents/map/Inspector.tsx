@@ -23,7 +23,7 @@ import { cn } from "@/lib/utils";
 
 import { useMapHost } from "./map-context.js";
 import { AgentMarkBadge, ChatButton, Elapsed } from "./NodeParts.js";
-import { clockTime, endedByLabel, nodeAction, nodeAgentLabel, nodeIsActive, nodeName, nodeStatusLabel, runModelLabel, treeSummary } from "./node-model.js";
+import { clockTime, endedByLabel, nodeAction, nodeAgentLabel, nodeIsActive, nodeIsAsking, nodeName, nodeStatusLabel, runModelLabel, treeSummary } from "./node-model.js";
 
 const BADGE_VARIANT = { live: "live", attention: "attention", danger: "danger", ok: "ok", muted: "outline" } as const;
 
@@ -48,8 +48,9 @@ export function timelineOf(node: AgentTreeNode): TimelineEvent[] {
       id: "now",
       when: "now",
       time: "",
-      title: run.status === "queued" ? "Waiting to start" : action ? `Working · ${action}` : "Working",
+      title: run.status === "queued" ? "Waiting to start" : nodeIsAsking(node) ? (action ? `Asking · ${action}` : "Asking") : action ? `Working · ${action}` : "Working",
       detail: counts || undefined,
+      ...(nodeIsAsking(node) ? { tone: "attention" as const } : {}),
     });
   } else {
     const failed = run.status === "failed";
@@ -104,6 +105,26 @@ export function InspectorBody({ node, header = true, className }: { node: AgentT
         <section className="flex min-w-0 flex-col gap-1.5">
           <h4 className="eyebrow">Task</h4>
           <p className="nowheel max-h-40 overflow-y-auto rounded-md bg-surface-2 px-2.5 py-2 text-sm leading-sm whitespace-pre-wrap text-ink-2">{task}</p>
+        </section>
+      )}
+
+      {run?.status === "needs_input" && run.question && (
+        <section data-slot="agent-map-inspector-question" className="flex min-w-0 flex-col gap-1.5">
+          <h4 className="eyebrow text-attention">Waiting on an answer</h4>
+          <p className="text-sm leading-sm whitespace-pre-wrap text-ink">{run.question.title}</p>
+          {run.question.detail && <p className="text-sm leading-sm whitespace-pre-wrap text-ink-2">{run.question.detail}</p>}
+          {run.question.options && (
+            <ul className="flex min-w-0 flex-wrap gap-1.5" aria-label="Choices">
+              {run.question.options.map((option) => (
+                <li key={option}>
+                  <Badge variant="outline" className="max-w-56 truncate" title={option}>
+                    {option}
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="text-xs leading-xs text-ink-3">Answer it in its chat, or its parent can.</p>
         </section>
       )}
 

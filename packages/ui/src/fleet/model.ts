@@ -16,6 +16,10 @@
  * learn. Attention still reaches you, because it rolls *up*: an item wears the
  * loudest state anywhere beneath it, so a question three levels down lights the
  * group you can actually see.
+ *
+ * `buildFleet` builds every group there is; `scopeFleet` cuts it down to the
+ * one the person is shown — the open session's tree — plus work whose root
+ * session was deleted, which no session can show (M13-T51).
  */
 import { highestAttention, isTerminalRunStatus, type AgentRun, type Attention, type BackgroundTask, type SessionSummary } from "@lasercode/protocol";
 import { buildAgentTree, createAncestryIndex, type AgentTreeNode } from "../agents/run-tree.js";
@@ -29,6 +33,8 @@ export type FleetItemKind = "agent" | "task";
 export type FleetState =
   | "queued"
   | "running"
+  /** Live, paused on a question until someone answers (M13-T45). */
+  | "needs_input"
   | "blocked"
   | "completed"
   | "failed"
@@ -37,6 +43,7 @@ export type FleetState =
 export const FLEET_STATE_LABEL: Readonly<Record<FleetState, string>> = {
   queued: "Waiting",
   running: "Working",
+  needs_input: "Asking",
   blocked: "Needs you",
   completed: "Done",
   failed: "Failed",
@@ -46,6 +53,7 @@ export const FLEET_STATE_LABEL: Readonly<Record<FleetState, string>> = {
 const STATE_ATTENTION: Readonly<Record<FleetState, Attention>> = {
   queued: "working",
   running: "working",
+  needs_input: "waiting_for_input",
   blocked: "waiting_for_input",
   completed: "finished_unread",
   failed: "error",
@@ -106,6 +114,12 @@ export interface FleetGroup {
   title: string;
   /** Not open in this client: its work kept going without it. */
   orphaned: boolean;
+  /**
+   * Its root session is gone from the catalog, so this work has no session to
+   * be seen in. Only ever true once a catalog has arrived: an empty catalog is
+   * one that has not loaded, not proof that a session was deleted.
+   */
+  deleted: boolean;
   items: FleetItem[];
   /** Items still going, anywhere in the group. */
   running: number;
@@ -121,6 +135,12 @@ export interface FleetInput {
   views: Readonly<Record<string, SessionView | undefined>>;
   /** The session the person is looking at, so "orphaned" means what it says. */
   currentPath?: string | undefined;
+  /**
+   * Whether `sessions` is the catalog or merely its absence. Without it a
+   * root missing from an empty list is read as "not loaded yet", never as
+   * "deleted".
+   */
+  sessionsLoaded?: boolean | undefined;
   now: number;
 }
 
@@ -194,7 +214,8 @@ function agentItem(node: AgentTreeNode, tasksOf: (path: string) => BackgroundTas
     tone: node.status === "idle" ? "muted" : node.status === "working" ? "live" : runStatusTone(node.status),
     own,
     attention: own,
-    activity: node.ended ? undefined : (run?.activity?.label ?? (run?.activity?.currentTool ? `Running ${run.activity.currentTool}` : undefined)),
+    // A question is what a paused run is "doing", and what the person can act on.
+    activity: node.ended ? undefined : run?.status === "needs_input" && run.question ? run.question.title : (run?.activity?.label ?? (run?.activity?.currentTool ? `Running ${run.activity.currentTool}` : undefined)),
     terminalReason: reasonOfRun(run),
     startedAt: run?.startedAt,
     endedAt: run?.endedAt,
@@ -285,11 +306,20 @@ export function buildFleet(input: FleetInput): FleetGroup[] {
     const attention = settle(items, counts);
     const summary = summaries.get(rootPath);
     const view = views[rootPath];
+    // A root the catalog does not list, once there is a catalog to list it,
+    // was deleted underneath its work. An open view of it is not a
+    // counter-proof: the view is the client's memory, not the disk.
+    const deleted = summary === undefined && (input.sessionsLoaded ?? sessions.length > 0);
     groups.push({
       path: rootPath,
-      cwd: summary?.cwd ?? view?.state.cwd ?? "",
-      title: summary ? sessionTitle(summary, view) : (view?.state.name ?? rootPath.split("/").at(-1) ?? rootPath),
+      cwd: summary?.cwd ?? view?.state.cwd ?? runList.find((run) => run.rootSessionPath === rootPath)?.projectCwd ?? "",
+      // A root the catalog cannot name is named the way the top bar names an
+      // unscanned session — its name, else its first line — and a deleted one
+      // with neither is "Unnamed session", not a file name: the header beside it
+      // already says it was deleted, so the title says the other true thing.
+      title: summary ? sessionTitle(summary, view) : (view?.state.name ?? firstUserLine(view) ?? (deleted ? "Unnamed session" : (rootPath.split("/").at(-1) ?? rootPath))),
       orphaned: view === undefined && rootPath !== input.currentPath,
+      deleted,
       items,
       running: counts.running,
       needsYou: counts.needsYou,
@@ -306,6 +336,15 @@ export function buildFleet(input: FleetInput): FleetGroup[] {
       b.running - a.running ||
       a.title.localeCompare(b.title),
   );
+}
+
+/** The transcript's first user line, for a root the catalog has no row for (mirrors the top bar). */
+function firstUserLine(view: SessionView | undefined): string | undefined {
+  if (!view) return undefined;
+  for (const block of view.blocks) {
+    if (block.kind === "user" && block.text?.trim()) return block.text.replace(/\s+/g, " ").trim().slice(0, 60);
+  }
+  return undefined;
 }
 
 /** Every item of a group, flattened depth-first — summaries, counts and tests. */
@@ -335,6 +374,40 @@ export function partitionItems(items: readonly FleetItem[]): { active: FleetItem
   const finished: FleetItem[] = [];
   for (const item of items) (branchIsActive(item) ? active : finished).push(item);
   return { active, finished };
+}
+
+/**
+ * The fleet the person is shown (docs/ux-fleet.md, "One session's tree").
+ *
+ * `buildFleet` knows every piece of work; this is the cut that makes it the
+ * open session's. The tree is the group whose root is the session being read
+ * — a child is read inside its root's tree, so opening a child changes what
+ * is marked, not what is shown. Work under any other root is simply not here:
+ * that session has its own fleet, and the person navigates to it.
+ *
+ * The one exception is work whose root session was deleted. It is nobody's
+ * tree — navigating to a session that no longer exists is not a way to reach
+ * it — and it is still running and still spending, so it is carried in
+ * `elsewhere`, in every session's fleet and in the no-session state alike,
+ * until it ends and is cleared, or is stopped from there.
+ */
+export interface FleetScope {
+  /** The open session's tree: one group, or none when that session has no work. */
+  tree: FleetGroup | undefined;
+  /** Work whose root session is gone, with nowhere else to be seen. */
+  elsewhere: FleetGroup[];
+}
+
+export function scopeFleet(groups: readonly FleetGroup[], root: string | undefined): FleetScope {
+  let tree: FleetGroup | undefined;
+  const elsewhere: FleetGroup[] = [];
+  for (const group of groups) {
+    // The person is inside this tree; "closed here" is the wrong word for
+    // the session they are reading a child of.
+    if (group.path === root) tree = { ...group, orphaned: false };
+    else if (group.deleted) elsewhere.push(group);
+  }
+  return { tree, elsewhere };
 }
 
 /** What the fleet's toggle says: everything going, and everything waiting on a person. */

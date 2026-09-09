@@ -37,6 +37,11 @@ interface LiveSession {
   leafId: string | null;
   /** Set to make the next navigate answer `cancelled` — an extension vetoing it. */
   navigateCancelled?: boolean;
+  /**
+   * A turn is streaming (`startTurn`): the engine refuses to move the leaf
+   * until it is stopped, and `stopFirst` is what stops it (M13-T46).
+   */
+  streaming?: { prompt: string; partial: string };
   seq: number;
   buffer: SessionUpdateParams[];
 }
@@ -133,6 +138,46 @@ export function runTurn(world: World, path: string, prompt: string, answer: stri
 }
 
 /**
+ * A turn that has started and not finished: the prompt is persisted (its
+ * entry rides on the user `message_end`, as the real worker sends it) and the
+ * reply is one word in. Nothing ends it but `stopTurn`, `session/cancel` or a
+ * move with `stopFirst`.
+ */
+export function startTurn(world: World, path: string, prompt: string, partial: string): TreeEntry {
+  const live = world.live[path];
+  if (!live) throw new Error(`No session at ${path}.`);
+  const entry = appendEntry(world, path, { type: "message", message: { role: "user", content: [{ type: "text", text: prompt }] } });
+  emit(world, path, { kind: "agent_start" });
+  emit(world, path, { kind: "message_start", role: "user" });
+  emit(world, path, { kind: "message_end", message: { role: "user", content: [{ type: "text", text: prompt }] }, entry: { id: entry.id, parentId: entry.parentId } });
+  emit(world, path, { kind: "message_start", role: "assistant" });
+  emit(world, path, { kind: "text_delta", delta: partial, contentIndex: 0 });
+  live.state = { ...live.state, isStreaming: true };
+  live.streaming = { prompt, partial };
+  return entry;
+}
+
+/**
+ * `AgentSession.abort()` as the real driver reports it: the partial reply
+ * settles with `stopReason: "aborted"` and is persisted under the prompt, then
+ * `agent_end` and `agent_settled`. Idle sessions have nothing to stop.
+ */
+export function stopTurn(world: World, path: string): void {
+  const live = world.live[path];
+  if (!live) throw new Error(`No session at ${path}.`);
+  const turn = live.streaming;
+  if (!turn) return;
+  live.streaming = undefined;
+  const message = { role: "assistant", content: [{ type: "text", text: turn.partial }], stopReason: "aborted" as const };
+  emit(world, path, { kind: "message_end", message, stopReason: "aborted" });
+  appendEntry(world, path, { type: "message", message });
+  live.state = { ...live.state, isStreaming: false, messageCount: live.entries.length };
+  emit(world, path, { kind: "agent_end", willRetry: false });
+  emit(world, path, { kind: "state", state: live.state });
+  emit(world, path, { kind: "agent_settled" });
+}
+
+/**
  * The worker restarted: the session file survives, the `seq` counter does not.
  * A client still holding the old epoch's watermark has to notice and resync.
  */
@@ -200,7 +245,15 @@ export class FakeWorkerClient {
   async request(method: string, params: unknown): Promise<unknown> {
     const world = FakeWorkerClient.world;
     world.calls.push({ method, params });
-    return handle(world, this, method, (params ?? {}) as Record<string, unknown>);
+    const p = (params ?? {}) as Record<string, unknown>;
+    // A move that stops a turn first is two steps inside one request, with
+    // time between them — enough for whatever the settle triggers to arrive.
+    if ((method === "pi/session/navigate" || method === "pi/session/fork") && p.stopFirst) {
+      stopTurn(world, p.path as string);
+      await settle(5);
+      return handle(world, this, method, { ...p, stopFirst: false });
+    }
+    return handle(world, this, method, p);
   }
 }
 
@@ -239,6 +292,10 @@ function handle(world: World, client: FakeWorkerClient, method: string, params: 
     case "pi/session/navigate": {
       const live = world.live[params.path as string];
       if (!live) throw new Error(`There is no session at ${params.path as string}.`);
+      // The worker's stop-then-move: the stop happens first and stays done
+      // whatever the move then does; without it the engine refuses mid-turn.
+      if (params.stopFirst) stopTurn(world, params.path as string);
+      if (live.streaming) throw new Error("Wait for the current response to finish before navigating the session tree.");
       if (live.navigateCancelled) return { cancelled: true };
       const target = live.entries.find((entry) => entry.id === params.entryId);
       if (!target) throw new Error(`Entry ${params.entryId as string} is not in this session any more.`);
@@ -282,6 +339,10 @@ function handle(world: World, client: FakeWorkerClient, method: string, params: 
       const from = params.path as string;
       const live = world.live[from];
       if (!live) throw new Error(`There is no session at ${from}.`);
+      // As in the real driver: the stop is recorded on the original before
+      // anything is forked, and the original stays served when the fork fails.
+      if (params.stopFirst) stopTurn(world, from);
+      if (live.streaming) throw new Error("This session has not been saved yet. Wait for the first assistant response before cloning or forking it.");
       const at = live.entries.findIndex((entry) => entry.id === params.entryId);
       if (at < 0) throw new Error(`Entry ${params.entryId as string} is not in this session any more.`);
       const path = `${from.replace(/\.jsonl$/, "")}-fork${++forkCounter}.jsonl`;
@@ -301,6 +362,8 @@ function handle(world: World, client: FakeWorkerClient, method: string, params: 
     case "session/pending/list":
       return { messages: [] };
     case "session/cancel":
+      stopTurn(world, params.path as string);
+      return {};
     case "pi/session/detach":
     case "pi/session/seen":
       return {};

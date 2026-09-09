@@ -110,6 +110,47 @@ describe.skipIf(!haveGit)("WorktreeManager against a repository", () => {
     expect(existsSync(join(second.path, "c.txt"))).toBe(true);
   });
 
+  // M13-T42: the parent is refused a removal that would destroy work, so the
+  // counting has to be right against a real repository.
+  it("counts what a child's worktree still holds, and finds the repository a project belongs to", async () => {
+    const repo = repoWithCommit();
+    const manager = new WorktreeManager();
+    const worktree = await manager.create({ projectCwd: repo, baseCwd: repo, subagentName: "iso", runId: "run_0a1b2c3d" });
+
+    expect(await manager.rootOf(repo)).toBe(git(repo, "rev-parse", "--show-toplevel"));
+    const plain = join(base, "not-a-repo");
+    mkdirSync(plain);
+    expect(await manager.rootOf(plain)).toBeUndefined();
+
+    const clean = await manager.facts({ path: worktree.path, branch: worktree.branch, compareCwd: repo });
+    expect(clean).toEqual({ exists: true, unmergedCommits: 0, uncommittedFiles: 0 });
+
+    writeFileSync(join(worktree.path, "b.txt"), "two\n");
+    git(worktree.path, "add", "b.txt");
+    git(worktree.path, "commit", "-q", "-m", "child work");
+    writeFileSync(join(worktree.path, "c.txt"), "draft\n");
+    const dirty = await manager.facts({ path: worktree.path, branch: worktree.branch, compareCwd: repo });
+    expect(dirty).toEqual({ exists: true, unmergedCommits: 1, uncommittedFiles: 1 });
+
+    // Once the parent merges it, there is nothing left to lose.
+    git(repo, "merge", "-q", "--no-edit", worktree.branch);
+    expect((await manager.facts({ path: worktree.path, branch: worktree.branch, compareCwd: repo })).unmergedCommits).toBe(0);
+
+    // A directory that is already gone holds nothing, and never throws.
+    await manager.remove(worktree.root, worktree.path, worktree.branch);
+    expect(await manager.facts({ path: worktree.path, branch: worktree.branch, compareCwd: repo })).toEqual({ exists: false, unmergedCommits: 0, uncommittedFiles: 0 });
+  });
+
+  it("says it cannot tell rather than reporting nothing when git refuses the question", async () => {
+    const repo = repoWithCommit();
+    const manager = new WorktreeManager();
+    const worktree = await manager.create({ projectCwd: repo, baseCwd: repo, subagentName: "iso", runId: "run_0a1b2c3d" });
+    const unknown = await manager.facts({ path: worktree.path, branch: "agents/never-existed", compareCwd: repo });
+    expect(unknown.exists).toBe(true);
+    expect(unknown.unmergedCommits).toBeNull();
+    expect(unknown.detail).toBeTruthy();
+  });
+
   it("refuses a project that is not a repository, one without commits, and a duplicate", async () => {
     const manager = new WorktreeManager();
     const plain = join(base, "plain");

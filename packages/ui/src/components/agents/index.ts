@@ -8,3 +8,8 @@
 // a run tab or a map node asks through `requestEndAgent(runId)`.
 export { EndAgentDialog, END_AGENT_REASONS } from "./EndAgentDialog.js";
 export { clearEndAgentRequest, requestEndAgent, useEndAgentRequest, type EndAgentRequest } from "./end-agent.js";
+
+// Clearing a leftover worktree (M13-T42): the shell mounts
+// `RemoveWorktreeDialog` once; the fleet's detail row asks through
+// `requestRemoveWorktree(path, label)` in `@/agents/worktree`.
+export { RemoveWorktreeDialog } from "./RemoveWorktreeDialog.js";

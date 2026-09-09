@@ -97,6 +97,22 @@ describe("AgentRunRegistry", () => {
     expect(registry.get("kept")?.status).toBe("running");
   });
 
+  it("stamps every run that owned a worktree a person removed, once, and tells the server", () => {
+    const notified: AgentRun[] = [];
+    const registry = new AgentRunRegistry({ now: NOW, onRun: (r) => notified.push(r) });
+    const worktree = { path: "/p/.worktrees/explorer-1", branch: "agents/explorer-1", baseCommit: "x" };
+    registry.upsert(run("owner", { status: "completed", worktree }));
+    registry.upsert(run("other", { worktree: { ...worktree, path: "/p/.worktrees/other" } }));
+    registry.upsert(run("none"));
+    expect(registry.worktreeRemoved("/p/.worktrees/explorer-1").map((r) => r.runId)).toEqual(["owner"]);
+    expect(registry.get("owner")?.worktree?.removedAt).toBe(NOW().toISOString());
+    expect(registry.get("other")?.worktree?.removedAt).toBeUndefined();
+    expect(notified.map((r) => r.runId)).toEqual(["owner"]);
+    // Already stamped: nothing changes and nothing is announced again.
+    expect(registry.worktreeRemoved("/p/.worktrees/explorer-1")).toEqual([]);
+    expect(notified).toHaveLength(1);
+  });
+
   it("persists, fails what was still running on reload, and prunes old and excess terminal runs", () => {
     const file = join(dir, "agent-runs.json");
     const first = new AgentRunRegistry({ storePath: file, retentionPerProject: 2, now: () => new Date("2026-06-10T00:00:00.000Z") });

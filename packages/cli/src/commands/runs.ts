@@ -89,7 +89,8 @@ export async function readFleet(rpc: HostRpc, sessions: readonly SessionSummary[
       state: run.status,
       live: !isTerminalRunStatus(run.status),
       model: run.model ? `${run.model.provider}/${run.model.id}` : null,
-      activity: run.activity?.label ?? (run.activity?.currentTool ? `Running ${run.activity.currentTool}` : null),
+      // A run paused on a question is "doing" the question (M13-T45).
+      activity: run.status === "needs_input" && run.question ? `Asking: ${run.question.title}` : (run.activity?.label ?? (run.activity?.currentTool ? `Running ${run.activity.currentTool}` : null)),
       terminalReason: reasonOfRun(run),
       startedAt: run.startedAt,
       endedAt: run.endedAt ?? null,
@@ -161,6 +162,7 @@ export function elapsedOf(row: FleetRow, now = Date.now()): number | undefined {
 const STATE_WORD: Readonly<Record<FleetState, string>> = {
   queued: "queued",
   running: "running",
+  needs_input: "asking",
   blocked: "blocked",
   completed: "done",
   failed: "failed",
@@ -178,6 +180,7 @@ export function paintState(state: FleetState, paint: CommandContext["term"]["out
     case "failed":
       return paint.red(word);
     case "blocked":
+    case "needs_input":
       return paint.yellow(word);
     default:
       return paint.dim(word);

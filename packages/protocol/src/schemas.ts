@@ -380,12 +380,14 @@ export const clientParamsSchemas = {
   "session/pending/remove": z.object({ path: sessionPath, id: pendingId }).strict(),
   "session/pending/steer": z.object({ path: sessionPath, id: pendingId }).strict(),
   "session/pending/clear": z.object({ path: sessionPath }).strict(),
-  "pi/session/fork": z.object({ path: sessionPath, entryId: z.string().min(1) }).strict(),
+  "pi/session/fork": z.object({ path: sessionPath, entryId: z.string().min(1), stopFirst: z.boolean().optional() }).strict(),
   "pi/session/navigate": z
-    .object({ path: sessionPath, entryId: z.string().min(1), summarize: z.boolean().optional(), label: z.string().optional() })
+    .object({ path: sessionPath, entryId: z.string().min(1), summarize: z.boolean().optional(), label: z.string().optional(), stopFirst: z.boolean().optional() })
     .strict(),
   "pi/session/rename": z.object({ path: sessionPath, name: z.string() }).strict(),
-  "pi/session/delete": z.object({ path: sessionPath }).strict(),
+  // `worktree` is optional and defaults to keeping it: a caller that omits the
+  // field never destroys a child agent's checkout (M13-T42).
+  "pi/session/delete": z.object({ path: sessionPath, worktree: z.enum(["keep", "delete"]).optional() }).strict(),
   "pi/session/entries": z.object({ path: sessionPath }).strict(),
   "pi/session/compact": z.object({ path: sessionPath, instructions: z.string().optional() }).strict(),
   "pi/model/list": z.object({ path: sessionPath }).strict(),
@@ -529,6 +531,8 @@ export const clientParamsSchemas = {
   "agents/engine-instructions": z.object({ cwd }).strict(),
   "agents/runs/list": z.object({ path: sessionPath.optional() }).strict(),
   "agents/runs/stop": z.object({ runId, reason: z.string().max(2000).optional() }).strict(),
+  "agents/worktree/status": z.object({ path: sessionPath }).strict(),
+  "agents/worktree/remove": z.object({ path: sessionPath, force: z.boolean().optional() }).strict(),
   "agents/builtin/set-model": z.object({ name: builtinAgentNameSchema, model: agentModelChoiceSchema.nullable() }).strict(),
   "agents/namer/qualify": z.object({ cwd }).strict(),
   "agents/sync": z.object({ snapshot: agentsSnapshotSchema }).strict(),

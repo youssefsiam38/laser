@@ -71,7 +71,7 @@ export interface AgentCompletionData {
 
 /** The `AgentModelEvent` a parent received, as the `subagents` module attaches it in `details`. */
 export interface AgentEventData {
-  readonly type: "agent.completed" | "agent.blocked" | "agent.failed" | "agent.cancelled" | "agent.message";
+  readonly type: "agent.completed" | "agent.blocked" | "agent.failed" | "agent.cancelled" | "agent.message" | "agent.needs_input";
   readonly agentName: string;
   readonly subagentName: string;
   readonly sessionId: string;
@@ -361,6 +361,7 @@ const userMessage = (block: Extract<Block, { kind: "user" }>, ordinal: number, g
           images: block.images,
           optimistic: block.optimistic === true,
           userOrdinal: ordinal,
+          ...(block.entryId !== undefined ? { entryId: block.entryId } : {}),
           ...(goal ? { goalSetter: true } : {}),
           // Who asked, when it was not the person: the task a parent agent
           // sent into this child. The text itself is untouched, so it stays
