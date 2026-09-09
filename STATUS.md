@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-09T11:40:00+03:00 · claude-2026-09-09-agents · HEAD: 4f5081b
+**Last updated:** 2026-09-09T12:30:00+03:00 · claude-2026-09-09-agents · HEAD: bc242aa
 
-**Current focus:** M13 Agents Leap is in and every requested change since has landed: a Chat session moves to a project (D-164), the agent reads the fleet the person sees through one `inspect_fleet` (D-163), a background command's exit wakes the model (D-162), Namer labels every top-level call and no child's (D-165), the elements inventory is true again, and the empty Logs section has a writer. Two follow-ups from the audit remain: the fleet's command output should be the `terminal-block` element, and seven unmounted element files should go.
+**Current focus:** M13 Agents Leap is in, and every change the user asked for since has landed, the last three being a fork listed as its own session rather than under its origin (D-166), the fleet's command output drawn through the terminal element, and the seven unmounted element files removed. No M13 row is open.
 
 ## Milestones
 
@@ -24,7 +24,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
 | M12 Product experience | done | 0.2.13 dispatched |
-| M13 Agents Leap | in-progress | T1–T64 done except T60 and T61 (audit follow-ups, todo) |
+| M13 Agents Leap | done | T1–T65 done or dropped; the leap is in |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
@@ -33,14 +33,14 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Next up
 
-1. M13-T60: the fleet's command output body becomes the `terminal-block` element with `follow` and `truncatedHead`.
-2. M13-T61: delete the seven element files nothing mounts and mark their inventory rows.
-3. M10-T10: prove the in-app updater installation seam.
+1. M10-T10: prove the in-app updater installation seam.
+2. M2/M5/M7: the broader platform proofs those milestones still owe.
+3. M11-T5: the cold-start network trace for font loading.
 
 ## Recently done
 
-- M13-T64: Namer labels every tool call of a top-level session at once and none of a child's (D-165; worker 313).
-- M13-T62: one `inspect_fleet` returns the fleet column's tree in its own words, pinned against the UI's builder (D-163; worker 313, pi-extension 108).
-- M13-T58: "Move to a project…" on a Chat row, with the host-only `pi/session/close` before the atomic rewrite (D-164; host 203, ui 909, browser both widths and themes).
-- M13-T37/T38/T59/T63: the elements audit and a true inventory, the dead message retired, the Agents log section, focus after Restore.
-- M13-T57: `task_wait` is gone; every background command's exit wakes the model (D-162).
+- M13-T65: a fork is a top-level session beside its origin; `forkedFrom` is lineage, `parentPath` is agents only (D-166; host 203, ui 924).
+- M13-T60: the fleet's task detail is the `terminal-block` element with `follow`, `truncatedHead` and `ansi` (ui 924, browser both widths and themes).
+- M13-T61: seven unmounted element files deleted after proof; inventory rows marked.
+- M13-T64: Namer labels every top-level call at once and no child's (D-165).
+- M13-T62: one `inspect_fleet` returns the fleet column's tree in its own words (D-163).
