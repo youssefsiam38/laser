@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-09T10:20:00+03:00 · claude-2026-09-09-agents · HEAD: 646cddf
+**Last updated:** 2026-09-09T11:40:00+03:00 · claude-2026-09-09-agents · HEAD: 4f5081b
 
-**Current focus:** M13 Agents Leap is in. This session's round of the user's UX changes landed: the fleet is one session's tree and a deleted session's work is a named line, never a ghost (D-160); the logo and every sidebar row return to the chat from anywhere; a model has a switch, a provider has Enable all / Disable all, and "off" is a Laser-owned disable list because the engine's allow-list has no negation (D-161); a jump hands its prompt's text to the composer; a person's worktree removal stamps the run so the fleet stops offering it twice. The three findings from that pass are fixed too: the black screen after a session arrives from outside (a second hunk in the pinned assistant-ui patch), the CLI's app URL, and Settings writes reaching live sessions. A background command is now followed like a child agent: no waiting tool, its exit wakes the model, `notify: false` is the one way to decline (D-162). Remaining M13 rows are a dead protocol message and a research sweep.
+**Current focus:** M13 Agents Leap is in and every requested change since has landed: a Chat session moves to a project (D-164), the agent reads the fleet the person sees through one `inspect_fleet` (D-163), a background command's exit wakes the model (D-162), Namer labels every top-level call and no child's (D-165), the elements inventory is true again, and the empty Logs section has a writer. Two follow-ups from the audit remain: the fleet's command output should be the `terminal-block` element, and seven unmounted element files should go.
 
 ## Milestones
 
@@ -24,7 +24,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
 | M12 Product experience | done | 0.2.13 dispatched |
-| M13 Agents Leap | in-progress | T1–T57 done except T38 (todo) and T37 (research sweep, in progress) |
+| M13 Agents Leap | in-progress | T1–T64 done except T60 and T61 (audit follow-ups, todo) |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
@@ -33,14 +33,14 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Next up
 
-1. M13-T38: retire the dead `lasercode/subagents/event` message (protocol inventory is a release gate).
-2. M13-T37: the tool-use elements research sweep (read-only).
+1. M13-T60: the fleet's command output body becomes the `terminal-block` element with `follow` and `truncatedHead`.
+2. M13-T61: delete the seven element files nothing mounts and mark their inventory rows.
 3. M10-T10: prove the in-app updater installation seam.
 
 ## Recently done
 
-- M13-T57: `task_wait` is gone; every background command's exit wakes the model with status, exit code and output, `notify: false` declines (D-162; background-work 13 tests, browser).
-- M13-T55: a Settings write reloads every open session's engine settings through the durable-override seam; a reload owed mid-turn lands at the next settle (real-engine tests, 7 + 4).
-- M13-T54: the CLI prints and opens the running host's address, not the configured default (11 tests).
-- M13-T53: no more black screen when a session created outside the app is reused on the first send; adapter fix plus a second hunk in the pinned assistant-ui patch (7 sequences pinned).
-- M13-T52: text handed back by a jump reaches the composer (3 tests).
+- M13-T64: Namer labels every tool call of a top-level session at once and none of a child's (D-165; worker 313).
+- M13-T62: one `inspect_fleet` returns the fleet column's tree in its own words, pinned against the UI's builder (D-163; worker 313, pi-extension 108).
+- M13-T58: "Move to a project…" on a Chat row, with the host-only `pi/session/close` before the atomic rewrite (D-164; host 203, ui 909, browser both widths and themes).
+- M13-T37/T38/T59/T63: the elements audit and a true inventory, the dead message retired, the Agents log section, focus after Restore.
+- M13-T57: `task_wait` is gone; every background command's exit wakes the model (D-162).
