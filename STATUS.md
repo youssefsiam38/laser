@@ -2,7 +2,7 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-09T04:15:00+03:00 · claude-2026-09-09-agents · HEAD: pending
+**Last updated:** 2026-09-09T04:15:00+03:00 · claude-2026-09-09-agents · HEAD: 99fe699
 
 **Current focus:** M13 Agents Leap. The panel system is gone and the fleet is a permanent column beside the monitor (D-147); a failed action no longer paints the block red (D-148); a queued message waits by default and steering is a verb you press (D-149); the opening screen is one screen (D-150); an `edit` aimed at a file that moved is explained rather than refused (D-151, D-152); editing history moves the leaf instead of forking (D-153); finished work is dimmed, never green (D-154). Remaining M13 rows are the retired pi-subagents file layer, the `.laser` override reload finding, and an upstream React #520.
 
