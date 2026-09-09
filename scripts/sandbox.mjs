@@ -34,7 +34,11 @@
  *                       with one commit so a child gets a real worktree. A
  *                       prompt containing both "delegate" and "review" starts
  *                       the child with `worktree: false` instead, so the
- *                       shared-checkout path is demonstrable too.
+ *                       shared-checkout path is demonstrable too. A prompt
+ *                       containing the word "fleet" answers with one
+ *                       `inspect_fleet` call (D-163), so the tool result in the
+ *                       transcript can be read beside the fleet column: both
+ *                       should say the same thing.
  */
 import { identity as product } from "./identity/identity.mjs";
 import { execFileSync } from "node:child_process";
@@ -160,6 +164,10 @@ const provider = createServer((req, res) => {
           : callTool("start_agent", { agent_name: "default", subagent_name: "explorer", task: "List the files here and report the count." });
       }
       if (lastRole === "tool" && previousTool === "start_agent") return sayShort("Started **explorer** in the background. I will report when it finishes.");
+      // "fleet" reads the tree the person sees (D-163): one `inspect_fleet`
+      // call, then a sentence pointing at its result.
+      if (lastRole === "user" && /\bfleet\b/i.test(prompt)) return callTool("inspect_fleet", {});
+      if (lastRole === "tool" && previousTool === "inspect_fleet") return sayShort("Read the fleet: the rows above are what the fleet column shows — same names, same words.");
       // "background" takes the D-162 path: a command started with
       // `background: true`, no waiting tool, and the exit arriving as a message
       // that wakes this model — which then reads the outcome.
@@ -170,7 +178,7 @@ const provider = createServer((req, res) => {
       if (lastRole === "tool" && previousTool === "bash") return sayShort("Started the command in the background. Carrying on with other work.");
       if (lastRole === "tool") return sayShort("Noted the result.");
       if (/explorer|counted/i.test(prompt)) return sayShort("The explorer finished: it counted the files.");
-      return sayShort("Noted. Say **delegate** to start a subagent, or **background** to start a command that reports back.");
+      return sayShort("Noted. Say **delegate** to start a subagent, **background** to start a command that reports back, or **fleet** to read the tree of work under this session.");
     }
     // Goal regression specimen: the real engine terminates on this tool with
     // no assistant text. Its durable summary must remain readable in chat.

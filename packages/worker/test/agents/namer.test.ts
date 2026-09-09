@@ -101,36 +101,36 @@ describe("NamerService", () => {
     expect(await missing.nameSession("x")).toBeNull();
   });
 
-  it("labels a burst of calls up to the cap, per session, and frees the slots again", async () => {
+  it("labels every call in a burst at once, per session, with no cap", async () => {
     const pending: Array<(value: string) => void> = [];
     const runtime = fakeRuntime(() => new Promise<string>((resolve) => pending.push(resolve)));
     const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
     const namer = new NamerService({ models: async () => runtime, model: () => ({ provider: "stub", id: "stub-1" }) });
-    // A turn that fires four calls in one tick: three are labelled, the fourth
-    // is dropped rather than queued behind them.
+    // A turn that fires four calls in one tick: all four are asked about, at
+    // once — the person is looking at exactly the row that would otherwise go
+    // unlabelled. Another session's burst is independent.
     const burst = [
       namer.labelTool("/s1", "t1", "grep", { pattern: "auth" }),
       namer.labelTool("/s1", "t2", "read", { path: "x" }),
       namer.labelTool("/s1", "t3", "bash", { command: "ls" }),
       namer.labelTool("/s1", "t4", "read", { path: "z" }),
     ];
-    const other = namer.labelTool("/s2", "t5", "read", { path: "y" }); // another session has its own cap
+    const other = namer.labelTool("/s2", "t5", "read", { path: "y" });
     await settle();
-    expect(pending).toHaveLength(4);
-    expect(await burst[3]).toBeNull();
+    expect(pending).toHaveLength(5);
     pending[0]!("searching auth handlers.");
     pending[1]!("reading x");
     pending[2]!("listing files");
-    pending[3]!("reading y");
-    expect(await burst[0]).toBe("Searching auth handlers");
-    expect(await burst[1]).toBe("Reading x");
-    expect(await burst[2]).toBe("Listing files");
+    pending[3]!("reading z");
+    pending[4]!("reading y");
+    expect(await Promise.all(burst)).toEqual(["Searching auth handlers", "Reading x", "Listing files", "Reading z"]);
     expect(await other).toBe("Reading y");
-    expect(runtime.calls).toBe(4);
-    // The slots free afterwards, and a fresh call id is labelled again.
+    expect(runtime.calls).toBe(5);
+    // The same call id is never asked about twice; a fresh one is.
+    expect(await namer.labelTool("/s1", "t1", "grep", { pattern: "auth" })).toBeNull();
     const later = namer.labelTool("/s1", "t6", "bash", { command: "pwd" });
     await settle();
-    pending[4]!("printing the directory");
+    pending[5]!("printing the directory");
     expect(await later).toBe("Printing the directory");
   });
 

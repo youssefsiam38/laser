@@ -17,6 +17,7 @@ import type {
   AgentRun,
   AgentRunQuestion,
   AgentRunStatus,
+  BackgroundTask,
   SessionAgentKind,
 } from "@lasercode/protocol";
 
@@ -113,10 +114,98 @@ export interface AgentRunSummary {
   question?: AgentRunQuestion;
 }
 
+// ---------- the fleet, as the agent reads it (D-163) ----------
+
 /**
- * `inspect_agent`: one child, addressed by `runId` or `sessionId` — the
- * identities that already exist, never a fifth. `messages` is how many of the
- * child's last assistant messages to include (default
+ * A row's state: the same seven words the person's fleet column draws
+ * (`packages/ui/src/fleet/model.ts`, `FleetState`). A run's status maps onto
+ * it one to one; a command's `stopped` is `cancelled`, because "ended" is what
+ * both mean. The two lists must agree, and a worker test pins that they do.
+ */
+export type FleetRowState = "queued" | "running" | "needs_input" | "blocked" | "completed" | "failed" | "cancelled";
+
+/** What every row says, whichever kind of work it is. */
+export interface FleetRowBase {
+  /** `agent` for a run in a child session; `command` for a background command — the word the row wears in the fleet. */
+  kind: "agent" | "command";
+  /** What you would address it by: the agent's instance name, or the command's first line. */
+  title: string;
+  state: FleetRowState;
+  /** The state's word as the person reads it: Working, Asking, Needs you, Done, Failed, Ended, Waiting. */
+  status: string;
+  /** Live while the work is going, frozen once it ends; `4m 12s`. Absent when the start is unknown. */
+  elapsed?: string;
+  /**
+   * One line: what it is doing in its own words while it goes (the question it
+   * is paused on, the tool it is running, the last line it printed), else how
+   * it ended (its final message, the error, the exit code, who ended it), else
+   * what it was asked to do. Never all three.
+   */
+  line?: string;
+  startedAt?: string;
+  endedAt?: string;
+  /** 0 for a row directly under the caller. */
+  depth: number;
+  children: FleetRow[];
+}
+
+/** One agent the caller started, or one an agent under it started: its newest run stands for it. */
+export interface FleetAgentRow extends FleetRowBase {
+  kind: "agent";
+  agentName: string;
+  subagentName: string;
+  sessionId: string;
+  /** The newest run in that session; `inspect_agent { runId }` reads it. */
+  runId: string;
+}
+
+/** One background command, under the row for the session whose agent ran it. */
+export interface FleetCommandRow extends FleetRowBase {
+  kind: "command";
+  /** `task_output { taskId }` reads its output. */
+  taskId: string;
+  /** Present once it ended; `null` when the process left no code. */
+  exitCode?: number | null;
+}
+
+export type FleetRow = FleetAgentRow | FleetCommandRow;
+
+/**
+ * `inspect_fleet`: the tree of work under the caller's session — the agents it
+ * started, theirs, and the background commands any of them (the caller
+ * included) left running or finished. Read-only. The counts are over the whole
+ * tree; `rows` is cut to `AGENT_FLEET_ROWS_MAX`, deepest rows first, and
+ * `omitted` says how many were left out.
+ */
+export interface InspectFleetResult {
+  rows: FleetRow[];
+  /** Rows still going, anywhere in the tree. */
+  working: number;
+  /** Rows waiting on someone — a question open, or a child that ended asking. */
+  needsYou: number;
+  /** Rows that reached an end state. */
+  finished: number;
+  /** Every row there was, before the cut. */
+  total: number;
+  omitted: number;
+}
+
+/**
+ * `task_output` on a command of another session in the caller's tree: the
+ * command as it stands, whose it is, and the tail of its log. `text` is
+ * absent when the command kept no log file.
+ */
+export interface ReadTaskOutputResult {
+  task: Omit<BackgroundTask, "sessionPath">;
+  owner: { agentName: string; subagentName: string; sessionId: string };
+  text?: string;
+}
+
+/**
+ * `inspect_agent`: one agent under this session — a child, or a child's
+ * child, any row `inspect_fleet` shows — addressed by `runId` or `sessionId`,
+ * the identities that already exist, never a fifth. `messages` is how many of
+ * the agent's last assistant messages to include (default
  * `AGENT_INSPECT_MESSAGES_DEFAULT`, at most `AGENT_INSPECT_MESSAGES_MAX`).
  */
 export interface InspectAgentInput {
@@ -132,11 +221,11 @@ export interface InspectedMessage {
 }
 
 /**
- * Everything `list_agents` says about a run, plus what a parent that is
- * checking on one child actually needs: the whole task, where it works and
- * whether that directory still exists, what it is doing right now, its last
- * words, what it is waiting on, and its own children. Read-only: inspecting
- * never wakes the child and never delivers anything to it.
+ * Everything the run summary says, plus what a parent that is checking on one
+ * child actually needs: the whole task, where it works and whether that
+ * directory still exists, what it is doing right now, its last words, what it
+ * is waiting on, and its own children. Read-only: inspecting never wakes the
+ * child and never delivers anything to it.
  */
 export interface InspectAgentResult extends AgentRunSummary {
   /** Whole, not the excerpt the run record carries. */
@@ -157,7 +246,7 @@ export interface InspectAgentResult extends AgentRunSummary {
   updatedAt: string;
   /** Newest last. Empty when the child has said nothing yet or its transcript could not be read. */
   messages: InspectedMessage[];
-  /** Agents this child started, newest first — as `list_agents` would list them. */
+  /** Agents this child started, newest first, as run summaries. */
   agents: AgentRunSummary[];
 }
 
@@ -224,9 +313,9 @@ export interface AgentHarnessBridge {
   catalog(): AgentCatalogEntry[];
   startAgent(input: StartAgentInput, signal?: AbortSignal): Promise<StartAgentResult>;
   sendAgentMessage(input: SendAgentMessageInput): Promise<SendAgentMessageResult>;
-  /** Runs this session started, newest first. */
-  listAgents(): Promise<AgentRunSummary[]>;
-  /** One child in depth. Read-only; never wakes it. */
+  /** The tree of work under this session, as the person's fleet shows it (D-163). Read-only. */
+  inspectFleet(): Promise<InspectFleetResult>;
+  /** One agent in the tree under this session, in depth. Read-only; never wakes it. */
   inspectAgent(input: InspectAgentInput): Promise<InspectAgentResult>;
   stopAgent(input: StopAgentInput): Promise<AgentRunSummary>;
   /** Parent side: remove a finished child's worktree. Refuses over unmerged work unless forced. */
@@ -248,4 +337,11 @@ export interface BackgroundWorkOptions {
   foregroundCommandSeconds: number;
   shellPath?: string;
   commandPrefix?: string;
+  /**
+   * `task_output` for a command this session did not start but can read: one
+   * of an agent under it (D-163). The worker answers from its task index and
+   * the command's log file; a command outside this session's tree is refused
+   * with a sentence for the model. Absent when the worker keeps no index.
+   */
+  readTask?: (taskId: string, tailLines: number) => Promise<ReadTaskOutputResult>;
 }

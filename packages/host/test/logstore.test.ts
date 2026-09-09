@@ -99,6 +99,21 @@ describe("filters", () => {
     expect(payload.input).toHaveLength(3000);
     expect(store.query({promptEntryId:"other"}).entries).toHaveLength(0);
   });
+  it("files a run's status change under its parent's session, with who and why (M13-T59)", () => {
+    const run = {
+      runId: "r1", agentName: "default", subagentName: "explorer", sessionId: "c1", sessionPath: "/child", projectCwd: "/p",
+      parent: { sessionPath: "/parent", sessionId: "p1" }, status: "failed", error: "The worker stopped.",
+      startedAt: "2026-09-09T00:00:00.000Z", updatedAt: "2026-09-09T00:00:01.000Z", depth: 1, task: "look",
+    } as unknown as import("@lasercode/protocol").AgentRun;
+    store.observeAgentRun(run);
+    const page = store.query({ sections: ["subagents"] });
+    expect(page.entries).toHaveLength(1);
+    expect(page.entries[0]).toMatchObject({ section: "subagents", kind: "run:failed", level: "error", sessionPath: "/parent", cwd: "/p" });
+    expect(page.entries[0]?.summary).toBe("explorer (default) failed · The worker stopped.");
+    store.observeAgentRun({ ...run, runId: "r2", parent: null, subagentName: "default", status: "needs_input", error: undefined } as typeof run);
+    const root = store.query({ sections: ["subagents"], sessionPath: "/child" });
+    expect(root.entries.map((e) => e.summary)).toEqual(["default needs input"]);
+  });
   it("bounds legacy timestamps inclusively at the start and exclusively at the next prompt", () => {
     for(const at of ["2026-09-06T10:00:00.000Z","2026-09-06T10:01:00.000Z","2026-09-06T10:02:00.000Z"])
       store.record({section:"provider",kind:"provider_request",summary:at,at});

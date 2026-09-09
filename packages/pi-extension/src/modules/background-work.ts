@@ -10,7 +10,12 @@
  *   - `background: true` — start the command, return a task id at once;
  *   - promotion — after `foregroundCommandSeconds` a still-running foreground
  *     command keeps running as a task and the tool returns the output so far;
- *   - `task_list`, `task_output`, `task_stop` to follow tasks;
+ *   - `task_output` and `task_stop` to follow tasks — there is no list: the
+ *     harness's `inspect_fleet` shows every command in the session's tree
+ *     beside the agents that ran them (D-163), and `task_output` reads a
+ *     command of an agent under this session through the worker
+ *     (`BackgroundWorkOptions.readTask`), because modules never see each
+ *     other's tasks;
  *   - a `lasercode/task/update` for every task the person can see, carrying the
  *     log file it streams into so the host can serve `tasks/output`.
  *
@@ -439,7 +444,7 @@ export const backgroundWorkModule: LaserModule = {
 
     const requireTask = (taskId: string): TaskRecord => {
       const task = state.tasks.get(taskId);
-      if (!task) throw new Error(`No task ${taskId} in this session. task_list shows the tasks there are.`);
+      if (!task) throw new Error(`No task ${taskId} was started by this session. inspect_fleet shows every command in your tree with its taskId; task_stop ends only your own.`);
       return task;
     };
 
@@ -517,35 +522,37 @@ export const backgroundWorkModule: LaserModule = {
     });
 
     pi.registerTool({
-      name: "task_list",
-      label: "List background tasks",
-      description: "List this session's background tasks: id, command, status, exit code, timing and output size.",
-      promptSnippet: "List background tasks and their status",
-      promptGuidelines: ["Use task_list to recall task ids and see which tasks are still running; a task's exit is sent to you as a message, so there is no need to call task_list again for it."],
-      parameters: Type.Object({}),
-      async execute() {
-        const tasks = [...state.tasks.values()].map(summary);
-        return { content: text(JSON.stringify({ tasks }, null, 2)), details: { tasks } };
-      },
-    });
-
-    pi.registerTool({
       name: "task_output",
       label: "Read task output",
-      description: `Return the last lines of a background task's output (default ${DEFAULT_TAIL_LINES}), with its status.`,
-      promptSnippet: "Read the latest output of a background task",
-      promptGuidelines: ["Use task_output with a task id to read what a background task has printed so far, before its exit reaches you; pass tail for more lines."],
+      description:
+        `Return the last lines of a background task's output (default ${DEFAULT_TAIL_LINES}), with its status. ` +
+        "Takes any command in your tree: one you started, or one an agent under you started — inspect_fleet lists them with their taskId. Read-only.",
+      promptSnippet: "Read the latest output of a background task, yours or an agent's under you",
+      promptGuidelines: ["Use task_output with a task id to read what a background task has printed so far, before its exit reaches you; pass tail for more lines. inspect_fleet shows every task id in your tree."],
       parameters: Type.Object({
-        taskId: Type.String({ minLength: 1, description: "The task id." }),
+        taskId: Type.String({ minLength: 1, description: "The task id, from bash's result or from inspect_fleet." }),
         tail: Type.Optional(Type.Integer({ minimum: 1, maximum: 5000, description: `Lines from the end to return (default ${DEFAULT_TAIL_LINES}).` })),
       }),
-      async execute(_toolCallId, { taskId, tail }) {
-        const task = requireTask(taskId);
-        const lines = lastLines(task.tail.text(), tail ?? DEFAULT_TAIL_LINES);
-        const header = `task ${task.id} ${task.status}${typeof task.exitCode === "number" ? ` (exit code ${task.exitCode})` : ""} · ${task.bytes} bytes of output`;
+      async execute(_toolCallId, { taskId, tail }): Promise<AgentToolResult<Record<string, unknown>>> {
+        const own = state.tasks.get(taskId);
+        if (own) {
+          const lines = lastLines(own.tail.text(), tail ?? DEFAULT_TAIL_LINES);
+          const header = `task ${own.id} ${own.status}${typeof own.exitCode === "number" ? ` (exit code ${own.exitCode})` : ""} · ${own.bytes} bytes of output`;
+          return {
+            content: text(`${header}\n${lines || "(no output)"}`),
+            details: { ...summary(own), lines: lines ? lines.split("\n").length : 0 },
+          };
+        }
+        // Not this session's: a command of an agent under it, read through
+        // the worker (D-163), which refuses anything outside the tree.
+        if (!options.readTask) throw new Error(`No task ${taskId} was started by this session.`);
+        const read = await options.readTask(taskId, tail ?? DEFAULT_TAIL_LINES);
+        const { task, owner } = read;
+        const header = `task ${task.id} ${task.status}${typeof task.exitCode === "number" ? ` (exit code ${task.exitCode})` : ""} · ${task.outputBytes} bytes of output · started by ${owner.subagentName} (sessionId ${owner.sessionId})`;
+        const body = read.text === undefined ? `(no log file kept; its last line was: ${task.activity ?? "nothing yet"})` : read.text || "(no output)";
         return {
-          content: text(`${header}\n${lines || "(no output)"}`),
-          details: { ...summary(task), lines: lines ? lines.split("\n").length : 0 },
+          content: text(`${header}\n${body}`),
+          details: { taskId: task.id, command: task.command, status: task.status, exitCode: task.exitCode ?? null, startedAt: task.startedAt, ...(task.endedAt !== undefined ? { endedAt: task.endedAt } : {}), outputBytes: task.outputBytes, owner, lines: read.text ? read.text.split("\n").length : 0 },
         };
       },
     });

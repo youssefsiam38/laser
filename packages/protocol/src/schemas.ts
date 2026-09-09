@@ -368,6 +368,10 @@ export const clientParamsSchemas = {
     .strict(),
   "pi/session/seen": z.object({ path: sessionPath, seq: z.number().int().nonnegative().optional() }).strict(),
   "pi/session/detach": z.object({ path: sessionPath }).strict(),
+  // A move names the session and the project it goes to, nothing else: the
+  // destination file is the host's to choose (M13-T58).
+  "pi/session/move": z.object({ path: sessionPath, cwd }).strict(),
+  "pi/session/close": z.object({ path: sessionPath }).strict(),
   "pi/session/steer": z.object({ path: sessionPath, content }).strict(),
   "pi/session/follow_up": z.object({ path: sessionPath, content }).strict(),
   "pi/session/clear_queue": z.object({ path: sessionPath }).strict(),

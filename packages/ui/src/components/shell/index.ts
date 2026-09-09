@@ -5,6 +5,8 @@ export { TrustDialog } from "./TrustDialog.js";
 export { TopBar } from "./TopBar.js";
 export { TelemetryPanel, type TelemetryPanelProps } from "./TelemetryPanel.js";
 export { AddProjectDialog } from "./AddProjectDialog.js";
+export { MoveSessionDialog } from "./MoveSessionDialog.js";
+export { requestMoveSession, clearMoveSessionRequest, useMoveSessionRequest, orderProjectsForMove } from "./move-session.js";
 export { HostConnectionState as ConnectionBanner } from "@/components/assistant-ui/elements/connection-state";
 export { CommandPaletteDialog } from "./CommandPalette.js";
 export { Toasts } from "./Toasts.js";

@@ -153,10 +153,30 @@ export function useComposerDraft(path: string | undefined): {
   };
 }
 
-/** The offer above the composer, when the open session has an unsent draft. */
+/**
+ * The offer above the composer, when the open session has an unsent draft.
+ *
+ * Restoring puts the text back *and* puts the person in the field, caret at
+ * the end: the next thing they do is finish the sentence, and a restore that
+ * left the focus on a button that has just disappeared made them click again.
+ * The field is found from this offer's own composer root, never the first
+ * textarea in the document — more than one composer can be on screen.
+ */
 export function ComposerDraftRestore({ className }: { className?: string | undefined }) {
   const view = useLaserView();
   const { saved, restore, discard } = useComposerDraft(view?.path);
+  const offer = useRef<HTMLDivElement>(null);
   if (!saved) return null;
-  return <DraftRestore draft={saved.text} savedAt={saved.at} onRestore={restore} onDiscard={discard} className={className} />;
+  const restoreAndFocus = () => {
+    const field = offer.current?.closest('[data-slot="composer"]')?.querySelector("textarea") ?? null;
+    restore();
+    // After React has committed the restored text, so the caret lands at its end.
+    requestAnimationFrame(() => {
+      if (!field || !field.isConnected) return;
+      field.focus();
+      const end = field.value.length;
+      field.setSelectionRange(end, end);
+    });
+  };
+  return <DraftRestore ref={offer} draft={saved.text} savedAt={saved.at} onRestore={restoreAndFocus} onDiscard={discard} className={className} />;
 }

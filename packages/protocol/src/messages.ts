@@ -875,6 +875,25 @@ export interface ClientRequests {
    */
   "pi/session/detach": { params: { path: string }; result: {} };
   /**
+   * Move a saved session into a project (M13-T58). The host does it while no
+   * worker holds the file: the transcript keeps its history, its name and its
+   * id; only where it lives changes. Its header names `cwd`, its agent record
+   * becomes the default agent's, and the file moves into that project's
+   * session directory. `path` in the result is where it lives now — the old
+   * path is gone and is not served. Refused, with a reason a person can act
+   * on, while a turn is streaming or an agent run of the session is live, for
+   * a child session (its parent's tree is one thing), and when `cwd` is not a
+   * directory or is one of the built-in workspaces.
+   */
+  "pi/session/move": { params: { path: string; cwd: string }; result: { path: string } };
+  /**
+   * Host → worker only: let go of one session so its file has no writer. The
+   * host sends it before moving the session's file; a client cannot, because
+   * closing a session under another viewer is not anyone's to do. `closed` is
+   * false when the worker did not hold it. Refused while a turn is streaming.
+   */
+  "pi/session/close": { params: { path: string }; result: { closed: boolean } };
+  /**
    * `steer` and `follow_up` are **not** `session/prompt` under another name,
    * and neither should be folded into the other:
    *   `session/prompt`  starts a turn, and answers whether it was accepted or

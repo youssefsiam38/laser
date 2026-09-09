@@ -22,6 +22,7 @@ import { BeamBubble, BeamModelDialog } from "@/components/beam";
 import { mergeSessions, sessionTitle, useLaserStable, useLaserState, useLaserView } from "@/runtime";
 
 import { AddProjectDialog } from "./AddProjectDialog.js";
+import { MoveSessionDialog } from "./MoveSessionDialog.js";
 import { useChatNavigation } from "./chat-navigation.js";
 import { HostConnectionState, HostVersionNotice } from "@/components/assistant-ui/elements/connection-state";
 import { StartupRestorationGate } from "@/components/assistant-ui/elements/loading-state";
@@ -425,6 +426,7 @@ function ShellFrame() {
         )}
 
         <AddProjectDialog />
+        <MoveSessionDialog />
         <CommandPaletteDialog open={paletteOpen} onOpenChange={setPaletteOpen} />
         <GlobalSearch />
         <TrustDialog />

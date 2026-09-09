@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { AGENT_EVENT_MESSAGE_TYPE, type AgentRun } from "@lasercode/protocol";
-import type { AgentCatalogEntry, AgentHarnessBridge, AgentModelEvent, AgentRunSummary, HarnessSessionRole, InspectAgentResult } from "../src/agents-bridge.js";
+import type { AgentCatalogEntry, AgentHarnessBridge, AgentModelEvent, AgentRunSummary, HarnessSessionRole, InspectAgentResult, InspectFleetResult } from "../src/agents-bridge.js";
 import { createLaserExtension } from "../src/index.js";
 import type { ModuleContext } from "../src/modules/index.js";
-import { formatEvent, roleBlock, startAgentDescription, startedGuidance, subagentsModule, whatItNeeds } from "../src/modules/subagents.js";
+import { fleetSummary, fleetView, formatEvent, roleBlock, startAgentDescription, startedGuidance, subagentsModule, whatItNeeds } from "../src/modules/subagents.js";
 
 interface FakeTool {
   name: string;
@@ -14,7 +14,9 @@ interface FakeTool {
   execute: (...args: unknown[]) => Promise<{ content: Array<{ type: string; text: string }>; details: unknown; terminate?: boolean }>;
 }
 
-const PARENT_TOOLS = ["start_agent", "send_agent_message", "list_agents", "inspect_agent", "stop_agent", "remove_agent_worktree"];
+const PARENT_TOOLS = ["start_agent", "send_agent_message", "inspect_fleet", "inspect_agent", "stop_agent", "remove_agent_worktree"];
+/** Two tools D-163 removed; nothing the model reads may still name them. */
+const REMOVED_TOOLS = ["list_agents", "task_list"];
 
 function fakePi() {
   const handlers = new Map<string, Array<(...args: any[]) => unknown>>();
@@ -79,6 +81,36 @@ const inspected: InspectAgentResult = {
   agents: [{ ...summary, runId: "run_9", subagentName: "grandchild", status: "running" }],
 };
 
+/** The tree the fleet column would draw for this parent: a child, its command, a grandchild, the parent's own command. */
+const fleet: InspectFleetResult = {
+  rows: [
+    {
+      kind: "agent",
+      agentName: "reviewer",
+      subagentName: "review-auth-refresh",
+      sessionId: "session_42",
+      runId: "run_7",
+      title: "review-auth-refresh",
+      state: "needs_input",
+      status: "Asking",
+      elapsed: "4m 12s",
+      line: "Which token store?",
+      startedAt: "2026-09-08T10:00:00.000Z",
+      depth: 0,
+      children: [
+        { kind: "agent", agentName: "worker", subagentName: "grandchild", sessionId: "session_43", runId: "run_9", title: "grandchild", state: "running", status: "Working", elapsed: "12s", line: "Running bash", startedAt: "2026-09-08T10:04:00.000Z", depth: 1, children: [] },
+        { kind: "command", taskId: "t-child", title: "pnpm test", state: "completed", status: "Done", elapsed: "40s", line: "exit code 0", startedAt: "2026-09-08T10:01:00.000Z", endedAt: "2026-09-08T10:01:40.000Z", exitCode: 0, depth: 1, children: [] },
+      ],
+    },
+    { kind: "command", taskId: "t-own", title: "pnpm vite dev", state: "running", status: "Working", elapsed: "9m 00s", line: "ready in 412 ms", startedAt: "2026-09-08T09:55:12.000Z", depth: 0, children: [] },
+  ],
+  working: 3,
+  needsYou: 1,
+  finished: 1,
+  total: 4,
+  omitted: 0,
+};
+
 const catalog: AgentCatalogEntry[] = [
   { agentName: "explorer", description: "codebase research" },
   { agentName: "worker", description: "implementation" },
@@ -119,7 +151,7 @@ function fakeBridge(role: HarnessSessionRole, canDelegate: boolean, entries: Age
           },
     ),
     sendAgentMessage: vi.fn(async (input) => ({ sessionId: input.sessionId, runId: "run_8", status: "running" as const, delivery: "delivered" as const })),
-    listAgents: vi.fn(async () => [summary]),
+    inspectFleet: vi.fn(async () => fleet),
     inspectAgent: vi.fn(async () => inspected),
     stopAgent: vi.fn(async () => ({ ...summary, status: "cancelled" as const, endedBy: { initiator: "parent" as const, reason: "no longer needed" } })),
     removeAgentWorktree: vi.fn(async (input) => ({
@@ -193,7 +225,7 @@ describe("subagents module: tool registration", () => {
       branch: "agents/find-auth",
       guidance:
         "Do not wait for find-auth. Carry on with your own work; when it ends, its result will be sent to you as a message. " +
-        "Use inspect_agent with runId run_7 to check on it meanwhile — a status of needs_input means it is paused on a question you can answer with send_agent_message.",
+        "Use inspect_agent with runId run_7 to check on it meanwhile — a status of needs_input means it is paused on a question you can answer with send_agent_message — or inspect_fleet to see everything running under you at once.",
       your_responsibility:
         "When find-auth finishes, its work is on the branch agents/find-auth in /project/.worktrees/find-auth. " +
         "Reviewing it, merging it into your own checkout with git, and then removing the worktree with remove_agent_worktree are yours to do — nothing removes it for you.",
@@ -226,9 +258,7 @@ describe("subagents module: tool registration", () => {
     const message = await h.tools.get("send_agent_message")!.execute("c", { sessionId: "session_42", message: "Also check rotation." });
     expect(h.bridge.sendAgentMessage).toHaveBeenCalledWith({ sessionId: "session_42", message: "Also check rotation.", interrupt: false });
     expect(JSON.parse(message.content[0]!.text)).toMatchObject({ runId: "run_8", delivery: "delivered" });
-    const list = await h.tools.get("list_agents")!.execute("c", {});
-    expect(JSON.parse(list.content[0]!.text).agents[0]).toMatchObject({ agent_name: "reviewer", subagent_name: "review-auth-refresh", runId: "run_7" });
-    expect(h.tools.get("list_agents")!.description).toContain("needs_input (paused on a question");
+    expect(h.tools.get("inspect_agent")!.description).toContain("needs_input (paused on a question");
     const stopped = await h.tools.get("stop_agent")!.execute("c", { runId: "run_7", reason: "no longer needed" });
     expect(h.bridge.stopAgent).toHaveBeenCalledWith({ runId: "run_7", reason: "no longer needed" });
     expect(JSON.parse(stopped.content[0]!.text)).toMatchObject({ status: "cancelled", endedBy: { initiator: "parent", reason: "no longer needed" } });
@@ -250,11 +280,68 @@ describe("subagents module: tool registration", () => {
     expect(h.tools.get("start_agent")!.promptGuidelines![0]).toContain("Do not wait for it and do not poll");
     expect(startedGuidance({ subagentName: "find-auth", runId: "run_7" })).toBe(
       "Do not wait for find-auth. Carry on with your own work; when it ends, its result will be sent to you as a message. " +
-        "Use inspect_agent with runId run_7 to check on it meanwhile — a status of needs_input means it is paused on a question you can answer with send_agent_message.",
+        "Use inspect_agent with runId run_7 to check on it meanwhile — a status of needs_input means it is paused on a question you can answer with send_agent_message — or inspect_fleet to see everything running under you at once.",
     );
     // The guidance is in the result, where the model reads it when it matters — in both worktree shapes.
     const shared = await h.tools.get("start_agent")!.execute("call", { agent_name: "explorer", subagent_name: "review", task: "Read it.", worktree: false });
     expect(JSON.parse(shared.content[0]!.text).guidance).toContain("Do not wait for review.");
+  });
+
+  // D-163: the agent reads running work through one tool, `inspect_fleet`,
+  // and it returns the tree the person's fleet column draws — both kinds of
+  // work, the same status words, ids on every row.
+  it("gives the parent inspect_fleet: the tree the person sees, both kinds of work, ids on every row", async () => {
+    const h = moduleHarness(root, true);
+    const tool = h.tools.get("inspect_fleet")!;
+    expect(Object.keys(tool.parameters.properties)).toEqual([]);
+    expect(tool.description).toContain("same tree, in the same words, that the person sees in the fleet column");
+    expect(tool.description).toContain("Working, Asking, Needs you, Done, Failed, Ended, Waiting");
+    expect(tool.description).toContain("At most 50 rows");
+    expect(tool.description).toContain("Read-only");
+    const result = await tool.execute("call", {});
+    expect(h.bridge.inspectFleet).toHaveBeenCalledTimes(1);
+    expect(result.details).toBe(fleet);
+    const view = JSON.parse(result.content[0]!.text) as { summary: string; rows: Array<Record<string, unknown>>; guidance: string; omitted?: number; note?: string };
+    expect(view.summary).toBe("3 working, 1 needs you, 1 finished");
+    expect(view.guidance).toContain("do not call inspect_fleet to wait");
+    expect(view.guidance).toContain("task_output with a taskId");
+    expect(view).not.toHaveProperty("omitted");
+    expect(view).not.toHaveProperty("note");
+    // The reference's spelling for the identities; the row's own vocabulary for the rest.
+    expect(view.rows[0]).toMatchObject({ kind: "agent", agent_name: "reviewer", subagent_name: "review-auth-refresh", sessionId: "session_42", runId: "run_7", title: "review-auth-refresh", status: "Asking", elapsed: "4m 12s", line: "Which token store?", depth: 0 });
+    expect(view.rows[0]).not.toHaveProperty("agentName");
+    const children = view.rows[0]!["children"] as Array<Record<string, unknown>>;
+    expect(children[0]).toMatchObject({ kind: "agent", subagent_name: "grandchild", runId: "run_9", status: "Working", depth: 1 });
+    expect(children[0]).not.toHaveProperty("children");
+    expect(children[1]).toMatchObject({ kind: "command", taskId: "t-child", title: "pnpm test", status: "Done", line: "exit code 0", exitCode: 0, depth: 1 });
+    expect(view.rows[1]).toMatchObject({ kind: "command", taskId: "t-own", status: "Working", line: "ready in 412 ms" });
+  });
+
+  it("says how many rows were cut, and describes an empty tree without inventing work", () => {
+    const cut = fleetView({ ...fleet, total: 60, omitted: 10 }) as { omitted: number; note: string };
+    expect(cut.omitted).toBe(10);
+    expect(cut.note).toBe("10 more rows were left out, the deepest first; inspect_agent on an agent row lists the agents it started.");
+    expect((fleetView({ ...fleet, total: 51, omitted: 1 }) as { note: string }).note).toContain("1 more row was left out");
+    expect(fleetSummary({ working: 0, needsYou: 0, finished: 0, total: 0 })).toBe("Nothing is running under this session, and nothing has finished: no agents started, no background commands.");
+    expect(fleetSummary({ working: 1, needsYou: 1, finished: 0, total: 2 })).toBe("1 working, 1 needs you, 0 finished");
+    expect(fleetSummary({ working: 0, needsYou: 2, finished: 5, total: 7 })).toBe("0 working, 2 need you, 5 finished");
+    const empty = fleetView({ rows: [], working: 0, needsYou: 0, finished: 0, total: 0, omitted: 0 }) as { rows: unknown[]; summary: string };
+    expect(empty.rows).toEqual([]);
+    expect(empty.summary).toContain("Nothing is running");
+  });
+
+  it("names neither list_agents nor task_list anywhere the model reads (D-163)", async () => {
+    const h = moduleHarness(child, true);
+    for (const name of REMOVED_TOOLS) expect(h.tools.has(name)).toBe(false);
+    for (const tool of h.tools.values()) {
+      const words = [tool.description, ...(tool.promptGuidelines ?? []), ...Object.values(tool.parameters.properties).map((p) => (p as { description?: string }).description ?? "")].join("\n");
+      for (const name of REMOVED_TOOLS) expect(words).not.toContain(name);
+    }
+    for (const block of [roleBlock(child, true, "/w")!, roleBlock(root, true, "/p")!, startedGuidance({ subagentName: "x", runId: "run_1" })]) {
+      for (const name of REMOVED_TOOLS) expect(block).not.toContain(name);
+    }
+    expect(roleBlock(root, true, "/p")).toContain("inspect_fleet shows everything going on under you");
+    expect(JSON.stringify(fleetView(fleet))).not.toMatch(/list_agents|task_list/);
   });
 
   it("gives the parent inspect_agent: one child by runId or sessionId, with a bounded window on its words", async () => {

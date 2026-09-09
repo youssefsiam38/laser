@@ -6,6 +6,9 @@
  * on a question (`needs_input`), the parent answering it, and `inspect_agent`
  * (M13-T45). There is no waiting tool: nothing here waits for anything.
  */
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DriverAgentOptions, DriverEvent, DriverListener, PromptOptions, SessionDriver } from "../../src/driver.js";
 import type { AgentModelEvent, HarnessSessionRole } from "../../src/agents/bridge.js";
@@ -14,6 +17,7 @@ import { AgentHarness, NUDGE_TEXT, type SessionHost, type WorktreeProvider } fro
 import { HarnessError } from "../../src/agents/errors.js";
 import { rootRecord, rootRole } from "../../src/agents/session-config.js";
 import type { CreateWorktreeInput, Worktree, WorktreeFacts } from "../../src/agents/worktrees.js";
+import type { IndexedTask } from "../../src/agents/tasks.js";
 import { SESSION_RUN_ENTRY_TYPE, type AgentDefinition, type AgentRun, type AgentsSnapshot, type ContentBlock, type SessionState, type UiDialogRequest, type UiDialogResponse } from "@lasercode/protocol";
 
 class FakeDriver implements SessionDriver {
@@ -94,6 +98,8 @@ function makeWorld() {
   let refuseWorktrees: string | undefined;
   let facts: WorktreeFacts = { exists: true, unmergedCommits: 0, uncommittedFiles: 0 };
   let root: string | undefined = "/repo";
+  /** The worker's task index, as the harness reads it: commands by the session that ran them. */
+  const tasks = new Map<string, IndexedTask[]>();
   const worktrees: WorktreeProvider & { created: CreateWorktreeInput[]; removed: string[]; removedWith: Array<{ root: string; path: string; branch?: string }> } = {
     created: [],
     removed: [],
@@ -125,6 +131,7 @@ function makeWorld() {
     driver: (path) => drivers.get(path),
     notify: (method, params) => notifications.push({ method, params }),
     modelAvailable: async () => !unavailable,
+    tasks: (path) => tasks.get(path) ?? [],
   };
   const definitions = new DefinitionsCache();
   const harness = new AgentHarness({ host, definitions, worktrees, backgroundWork: (cwd) => ({ cwd, foregroundCommandSeconds: 120 }), now: () => Date.now() });
@@ -140,7 +147,7 @@ function makeWorld() {
   const events = () => notifications.filter((n) => n.method === "agents/event").map((n) => n.params as { kind: string; sessionPath: string; runId?: string; summary: string });
   const extensionMessages = () => notifications.filter((n) => n.method === "pi/extension/message").map((n) => n.params as { path: string; message: { type: string } });
   return {
-    harness, definitions, drivers, notifications, opened, worktrees, openRoot, runsNotified, events, extensionMessages,
+    harness, definitions, drivers, notifications, opened, worktrees, openRoot, runsNotified, events, extensionMessages, tasks,
     setUnavailable: (value: boolean) => { unavailable = value; },
     setFailOpen: (value: boolean) => { failOpen = value; },
     /** Stand in for a project git cannot give a worktree: not a repository, no commit, a path another agent owns. */
@@ -217,7 +224,9 @@ describe("AgentHarness", () => {
     expect(open.agent.record).toMatchObject({ agentName: "worker", kind: "child", subagentName: "fix-login", parentPath: root.path, parentSessionId: "root-1", rootPath: root.path, runId: result.runId, worktree: { branch: "agents/fix-login", baseCommit: "abc123" } });
     const role: HarnessSessionRole = open.agent.role;
     expect(role).toMatchObject({ agentName: "worker", kind: "child", subagentName: "fix-login", depth: 1, isolated: true, parent: { sessionPath: root.path, sessionId: "root-1", agentName: "lead" }, runId: result.runId, goal: { id: "g1", objective: "Ship the login fix" }, task: "Fix the login form." });
-    expect(open.agent.backgroundWork).toEqual({ cwd: open.cwd, foregroundCommandSeconds: 120 });
+    expect(open.agent.backgroundWork).toMatchObject({ cwd: open.cwd, foregroundCommandSeconds: 120 });
+    // Bound to the child, so its `task_output` can read a command of an agent under it (D-163).
+    expect(typeof open.agent.backgroundWork?.readTask).toBe("function");
 
     // The task was prompted verbatim, without waiting, and the child was named.
     const child = world.drivers.get("/sessions/child-1.jsonl")!;
@@ -253,8 +262,10 @@ describe("AgentHarness", () => {
     world.harness.onDriverEvent("/sessions/child-1.jsonl", { type: "update", update: { kind: "turn_start" } });
     expect(child.aborts).toBe(1);
 
-    // Summaries for the parent, newest first.
-    expect(await root.handle.bridge.listAgents()).toEqual([expect.objectContaining({ runId: result.runId, status: "completed", result: { status: "completed", message: "done: touched nothing" } })]);
+    // The fleet the parent reads: one row, ended, carrying its final message.
+    const fleet = await root.handle.bridge.inspectFleet();
+    expect(fleet).toMatchObject({ working: 0, needsYou: 0, finished: 1, total: 1, omitted: 0 });
+    expect(fleet.rows).toEqual([expect.objectContaining({ kind: "agent", subagentName: "fix-login", runId: result.runId, state: "completed", status: "Done", line: "done: touched nothing", depth: 0, children: [] })]);
   });
 
   it("reports blocked the same way, with the child's message", async () => {
@@ -402,8 +413,8 @@ describe("AgentHarness", () => {
       expect(paused.question).toEqual({ id: "ui-1", kind: "select", title: "Which database?", options: ["staging", "production"], toolCallId: "call-1", toolName: "ask_person", askedAt: expect.any(String) });
       expect(world.runsNotified().at(-1)).toMatchObject({ runId, status: "needs_input", question: { id: "ui-1" } });
       expect(world.harness.sessionInfo(path)).toMatchObject({ runStatus: "needs_input" });
-      // The parent's list says so too, with the question, so it can answer without inspecting.
-      expect(await root.handle.bridge.listAgents()).toEqual([expect.objectContaining({ runId, status: "needs_input", question: expect.objectContaining({ kind: "select", title: "Which database?" }) })]);
+      // The parent's fleet says so too — Asking, with the question as the row's line — so it can tell stuck from working at a glance.
+      expect((await root.handle.bridge.inspectFleet()).rows[0]).toMatchObject({ runId, state: "needs_input", status: "Asking", line: "Which database?" });
       // Told once, with the question and how to answer it — and that the person may answer instead.
       expect(received).toHaveLength(1);
       expect(received[0]).toMatchObject({ type: "agent.needs_input", agentName: "worker", subagentName: "migrate", sessionId, runId, run: { status: "needs_input" } });
@@ -600,8 +611,33 @@ describe("AgentHarness", () => {
       expect(seen).not.toHaveProperty("branch");
       expect(seen).not.toHaveProperty("question");
       const stranger = world.openRoot("lead", "/sessions/other.jsonl", "other-1");
-      await expect(stranger.handle.bridge.inspectAgent({ runId })).rejects.toThrow(/was started by this session/);
+      await expect(stranger.handle.bridge.inspectAgent({ runId })).rejects.toThrow(/is not in the tree under this session.*inspect_fleet/s);
       await expect(root.handle.bridge.inspectAgent({})).rejects.toThrow(/sessionId or one of its runIds/);
+    });
+
+    // D-163: any row of the caller's tree may be read — a child's child too,
+    // as the person may open any chat in the tree — but only read. The verbs
+    // that act on an agent still take a direct child alone.
+    it("reads a grandchild, refuses a row outside the tree, and keeps the acting verbs to direct children", async () => {
+      const root = world.openRoot("lead");
+      const child = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w1", task: "t" });
+      const childBridge = world.harness.bridgeOf("/sessions/child-1.jsonl")!;
+      const grand = await childBridge.startAgent({ agentName: "worker", subagentName: "w2", task: "t2" });
+      world.setWorktreeFacts({ exists: true, unmergedCommits: 2, uncommittedFiles: 0 });
+      const seen = await root.handle.bridge.inspectAgent({ runId: grand.runId });
+      expect(seen).toMatchObject({ runId: grand.runId, subagentName: "w2", depth: 2, status: "running", worktree: { exists: true, unmergedCommits: 2 } });
+      expect((await root.handle.bridge.inspectAgent({ sessionId: grand.sessionId })).runId).toBe(grand.runId);
+      // The child reads its own child; the grandchild reads nobody above or beside it.
+      expect((await childBridge.inspectAgent({ runId: grand.runId })).runId).toBe(grand.runId);
+      const grandBridge = world.harness.bridgeOf("/sessions/child-2.jsonl")!;
+      await expect(grandBridge.inspectAgent({ runId: child.runId })).rejects.toThrow(/is not in the tree under this session/);
+      const other = world.openRoot("lead", "/sessions/other.jsonl", "other-1");
+      await expect(other.handle.bridge.inspectAgent({ sessionId: grand.sessionId })).rejects.toThrow(/is not in the tree under this session/);
+      // Acting on a grandchild is refused the old way: it was not started by this session.
+      await expect(root.handle.bridge.stopAgent({ runId: grand.runId })).rejects.toThrow(/was started by this session/);
+      await expect(root.handle.bridge.removeAgentWorktree({ runId: grand.runId })).rejects.toThrow(/was started by this session/);
+      await expect(root.handle.bridge.sendAgentMessage({ sessionId: grand.sessionId, message: "hi", interrupt: false })).rejects.toThrow(/among the agents this session started/);
+      expect(world.harness.run(grand.runId)!.status).toBe("running");
     });
 
     it("says a removed worktree is gone rather than asking git about it", async () => {
@@ -612,6 +648,137 @@ describe("AgentHarness", () => {
       const seen = await root.handle.bridge.inspectAgent({ runId });
       expect(seen.worktree).toEqual({ path: expect.stringMatching(/iso/), branch: "agents/iso", exists: false, unmergedCommits: null, uncommittedFiles: null, removedAt: expect.any(String) });
       expect(seen).not.toHaveProperty("branch");
+    });
+  });
+
+  // ------------------------------------------------------------- fleet
+  // D-163: one tool, `inspect_fleet`, returns the tree the person's fleet
+  // column shows, scoped to the caller: its agents, theirs, and the
+  // background commands any of them ran — the caller's own included.
+  describe("inspect_fleet", () => {
+    const task = (id: string, sessionPath: string, status: IndexedTask["status"], extra: Partial<IndexedTask> = {}): IndexedTask => ({
+      id,
+      sessionPath,
+      command: `run ${id}`,
+      title: `run ${id}`,
+      status,
+      origin: "background",
+      startedAt: "2026-09-09T10:00:00.000Z",
+      outputBytes: 0,
+      ...extra,
+    });
+
+    it("nests agents as the tree nests, hangs commands off the session that ran them, and scopes to the caller", async () => {
+      const root = world.openRoot("lead");
+      const child = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w1", task: "Fix the login form." });
+      const childPath = "/sessions/child-1.jsonl";
+      const childBridge = world.harness.bridgeOf(childPath)!;
+      const grand = await childBridge.startAgent({ agentName: "worker", subagentName: "w2", task: "t2" });
+      const sibling = await root.handle.bridge.startAgent({ agentName: "reviewer", subagentName: "r", task: "Review." });
+      world.tasks.set(root.path, [task("t-root", root.path, "running", { activity: "ready in 412 ms" })]);
+      world.tasks.set(childPath, [task("t-child", childPath, "failed", { exitCode: 1, terminalReason: "exit code 1", endedAt: "2026-09-09T10:01:00.000Z" })]);
+      world.drivers.get("/sessions/child-2.jsonl")!.emit({ type: "update", update: { kind: "tool_execution_start", toolCallId: "c", toolName: "bash", args: {} } });
+
+      const fleet = await root.handle.bridge.inspectFleet();
+      expect(fleet).toMatchObject({ working: 4, needsYou: 0, finished: 1, total: 5, omitted: 0 });
+      // Creation order, never attention order; the root's own command last.
+      expect(fleet.rows.map((r) => r.title)).toEqual(["w1", "r", "run t-root"]);
+      const [w1, r, own] = fleet.rows;
+      expect(w1).toMatchObject({ kind: "agent", agentName: "worker", subagentName: "w1", sessionId: child.sessionId, runId: child.runId, state: "running", status: "Working", line: "Fix the login form.", depth: 0 });
+      expect(w1!.elapsed).toMatch(/^\d+s$/);
+      // The child's own child, then the child's command.
+      expect(w1!.children.map((c) => c.title)).toEqual(["w2", "run t-child"]);
+      expect(w1!.children[0]).toMatchObject({ kind: "agent", runId: grand.runId, sessionId: grand.sessionId, status: "Working", line: "Running bash", depth: 1, children: [] });
+      expect(w1!.children[1]).toMatchObject({ kind: "command", taskId: "t-child", state: "failed", status: "Failed", line: "exit code 1", exitCode: 1, depth: 1 });
+      expect(r).toMatchObject({ kind: "agent", runId: sibling.runId, status: "Working", children: [] });
+      expect(own).toMatchObject({ kind: "command", taskId: "t-root", state: "running", status: "Working", line: "ready in 412 ms", depth: 0 });
+      expect(own).not.toHaveProperty("exitCode");
+
+      // The child sees its own subtree only: its child, its command; never its sibling or the root's command.
+      const childFleet = await childBridge.inspectFleet();
+      expect(childFleet.rows.map((r) => r.title)).toEqual(["w2", "run t-child"]);
+      expect(childFleet.rows[0]).toMatchObject({ runId: grand.runId, depth: 0 });
+      expect(childFleet).toMatchObject({ working: 1, finished: 1, total: 2 });
+      // The grandchild sees nothing: it started nothing and ran nothing.
+      expect(await world.harness.bridgeOf("/sessions/child-2.jsonl")!.inspectFleet()).toEqual({ rows: [], working: 0, needsYou: 0, finished: 0, total: 0, omitted: 0 });
+      // Another root sees none of it.
+      expect((await world.openRoot("lead", "/sessions/other.jsonl", "other-1").handle.bridge.inspectFleet()).rows).toEqual([]);
+      // Reading changed nothing.
+      expect(world.drivers.get(childPath)!.prompted.map((p) => p.text)).toEqual(["Fix the login form."]);
+    });
+
+    it("says the endings in the fleet's words: Asking with the question, Needs you with the message, Ended with who ended it", async () => {
+      const root = world.openRoot("lead");
+      const asking = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "asking", task: "t" });
+      world.drivers.get("/sessions/child-1.jsonl")!.ask({ method: "confirm", id: "ui-1", title: "Drop the table?" });
+      const blocked = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "blocked", task: "t" });
+      await world.harness.bridgeOf("/sessions/child-2.jsonl")!.completeRun({ status: "blocked", message: "Which config is canonical?\nI found two." });
+      const ended = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "ended", task: "t" });
+      await world.harness.stopRun(ended.runId, { initiator: "user" });
+      const reasoned = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "reasoned", task: "t" });
+      await root.handle.bridge.stopAgent({ runId: reasoned.runId, reason: "no longer needed" });
+      const failed = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "failed", task: "t" });
+      world.harness.onDriverEvent("/sessions/child-5.jsonl", { type: "closed", reason: "crash" });
+      world.tasks.set(root.path, [task("t-stopped", root.path, "stopped", { exitCode: null, terminalReason: "you stopped it", endedAt: "2026-09-09T10:01:00.000Z" }), task("t-done", root.path, "completed", { exitCode: 0, endedAt: "2026-09-09T10:01:00.000Z" })]);
+
+      const fleet = await root.handle.bridge.inspectFleet();
+      expect(fleet).toMatchObject({ working: 1, needsYou: 2, finished: 6, total: 7 });
+      const byTitle = new Map(fleet.rows.map((row) => [row.title, row]));
+      expect(byTitle.get("asking")).toMatchObject({ runId: asking.runId, state: "needs_input", status: "Asking", line: "Drop the table?" });
+      expect(byTitle.get("blocked")).toMatchObject({ runId: blocked.runId, state: "blocked", status: "Needs you", line: "Which config is canonical?" });
+      expect(byTitle.get("ended")).toMatchObject({ state: "cancelled", status: "Ended", line: "the person ended it" });
+      expect(byTitle.get("reasoned")).toMatchObject({ state: "cancelled", status: "Ended", line: "no longer needed" });
+      expect(byTitle.get("failed")).toMatchObject({ runId: failed.runId, state: "failed", status: "Failed", line: "The agent's session closed before it finished." });
+      // A command's ending is the person's word with the pronoun turned round, or its exit code.
+      expect(byTitle.get("run t-stopped")).toMatchObject({ kind: "command", state: "cancelled", status: "Ended", line: "the person stopped it", exitCode: null });
+      expect(byTitle.get("run t-done")).toMatchObject({ kind: "command", state: "completed", status: "Done", line: "exit code 0", exitCode: 0 });
+      for (const row of fleet.rows) if (row.kind === "agent" && row.state !== "needs_input") expect(row.elapsed).toBeDefined();
+    });
+
+    it("cuts a large tree deepest-first and says how many rows were left out", async () => {
+      world.definitions.sync(snapshotWith([PARENT, WORKER, REVIEWER], 4));
+      const root = world.openRoot("lead");
+      // Three children, each with a child of its own; the root runs 46 commands. 52 rows in all.
+      for (let i = 0; i < 3; i++) {
+        await root.handle.bridge.startAgent({ agentName: "worker", subagentName: `c${i}`, task: "t" });
+        await world.harness.bridgeOf(`/sessions/child-${i * 2 + 1}.jsonl`)!.startAgent({ agentName: "worker", subagentName: `g${i}`, task: "t" });
+      }
+      world.tasks.set(root.path, Array.from({ length: 46 }, (_, i) => task(`t-${String(i).padStart(2, "0")}`, root.path, "running")));
+      const fleet = await root.handle.bridge.inspectFleet();
+      expect(fleet).toMatchObject({ total: 52, omitted: 2, working: 52 });
+      const kept = fleet.rows.flatMap((row) => [row, ...row.children]);
+      expect(kept).toHaveLength(50);
+      // The deepest rows go first, newest first among them: g2 and g1 are gone, g0 stays.
+      expect(fleet.rows.slice(0, 3).map((row) => row.children.map((c) => c.title))).toEqual([["g0"], [], []]);
+      expect(fleet.rows.filter((row) => row.kind === "command")).toHaveLength(46);
+    });
+
+    it("reads a command of an agent under this session from its log, and refuses one outside the tree", async () => {
+      const root = world.openRoot("lead");
+      const child = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w1", task: "t" });
+      const childPath = "/sessions/child-1.jsonl";
+      const grand = await world.harness.bridgeOf(childPath)!.startAgent({ agentName: "worker", subagentName: "w2", task: "t2" });
+      const log = join(mkdtempSync(join(tmpdir(), "fleet-log-")), "t-grand.log");
+      writeFileSync(log, "one\ntwo\nthree\n");
+      world.tasks.set("/sessions/child-2.jsonl", [task("t-grand", "/sessions/child-2.jsonl", "completed", { exitCode: 0, outputBytes: 14, logPath: log }), task("t-quiet", "/sessions/child-2.jsonl", "running", { activity: "still going" })]);
+      world.tasks.set("/sessions/other.jsonl", [task("t-other", "/sessions/other.jsonl", "running", { logPath: log })]);
+      const readTask = world.opened[0]!.agent.backgroundWork!.readTask!;
+      // The child's options read its own child's command; the root's read the grandchild's too.
+      const read = await readTask("t-grand", 2);
+      expect(read).toEqual({ task: expect.objectContaining({ id: "t-grand", status: "completed", exitCode: 0 }), owner: { agentName: "worker", subagentName: "w2", sessionId: grand.sessionId }, text: "two\nthree" });
+      expect(read.task).not.toHaveProperty("logPath");
+      expect(read.task).not.toHaveProperty("sessionPath");
+      const rootRead = await root.handle.backgroundWork("/repo")!.readTask!("t-grand", 10);
+      expect(rootRead.text).toBe("one\ntwo\nthree");
+      // No log file: the record comes back and the text is absent, never an empty pane pretending to be output.
+      expect(await readTask("t-quiet", 5)).toEqual({ task: expect.objectContaining({ id: "t-quiet", activity: "still going" }), owner: expect.objectContaining({ subagentName: "w2" }) });
+      // Outside the tree, or nowhere: refused with the sentence that names the way in.
+      await expect(readTask("t-other", 5)).rejects.toThrow(/"t-other" is not in the tree under this session.*inspect_fleet/s);
+      await expect(readTask("t-nope", 5)).rejects.toThrow(/is not in the tree under this session/);
+      // A grandchild reads nothing of its parent's.
+      world.tasks.set(childPath, [task("t-child", childPath, "running", { logPath: log })]);
+      await expect(world.opened[1]!.agent.backgroundWork!.readTask!("t-child", 5)).rejects.toThrow(/is not in the tree under this session/);
+      void child;
     });
   });
 
@@ -636,7 +803,8 @@ describe("AgentHarness", () => {
     expect(world.harness.bridgeOf(path)!.role().runId).toBe(followUp.runId);
     expect(child.prompted.at(-1)?.text).toBe("one more thing");
     await expect(root.handle.bridge.sendAgentMessage({ sessionId: "nope", message: "x", interrupt: false })).rejects.toThrow(/No agent session is called "nope"/);
-    expect((await root.handle.bridge.listAgents()).map((r) => r.runId)).toEqual([followUp.runId, runId]);
+    // One session, one row, standing on its newest run.
+    expect((await root.handle.bridge.inspectFleet()).rows.map((r) => (r.kind === "agent" ? r.runId : r.taskId))).toEqual([followUp.runId]);
   });
 
   it("gives a person's prompt on an idle child a run of its own and marks it so for the parent", async () => {
@@ -677,7 +845,7 @@ describe("AgentHarness", () => {
     await expect(root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "t" })).rejects.toThrow(/Could not start worker: engine refused/);
     expect(world.worktrees.removed).toHaveLength(1);
     expect(world.runsNotified()).toHaveLength(0);
-    expect(await root.handle.bridge.listAgents()).toEqual([]);
+    expect((await root.handle.bridge.inspectFleet()).rows).toEqual([]);
   });
 
   it("says a run exactly once, as `agents/run`, and never a second time as something else", async () => {
@@ -730,7 +898,7 @@ describe("AgentHarness", () => {
     expect(world.worktrees.created).toHaveLength(0);
     const open = world.opened[0]!;
     expect(open.cwd).toBe("/repo");
-    expect(open.agent.backgroundWork).toEqual({ cwd: "/repo", foregroundCommandSeconds: 120 });
+    expect(open.agent.backgroundWork).toMatchObject({ cwd: "/repo", foregroundCommandSeconds: 120 });
     expect(open.agent.record).not.toHaveProperty("worktree");
     expect(open.agent.role).toMatchObject({ isolated: false });
     const run = world.harness.run(result.runId)!;

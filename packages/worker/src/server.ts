@@ -29,6 +29,7 @@ import { AgentHarness, type SessionHandle, type SessionHost } from "./agents/har
 import { NamerService, type NamerModelRuntime } from "./agents/namer.js";
 import { readSessionAgentRecord, rootRecord, rootRole } from "./agents/session-config.js";
 import { listAgentSkills } from "./agents/skills.js";
+import { TaskIndex } from "./agents/tasks.js";
 import { WorktreeManager } from "./agents/worktrees.js";
 
 export interface WorkerServerOptions {
@@ -109,6 +110,13 @@ export class WorkerServer {
   private readonly harness: AgentHarness;
   private readonly namer: NamerService;
   /**
+   * Every background command a session of this worker published, kept beside
+   * the runs so the harness can hand an agent the same tree the fleet shows
+   * (`inspect_fleet`, D-163). Fed from the `lasercode/task/update` messages
+   * forwarded to the host below; the host keeps its own copy for clients.
+   */
+  private readonly tasks = new TaskIndex();
+  /**
    * First prompts still waiting for a Namer model, by session path. A prompt
    * that arrives before the host's `agents/sync` (or before qualification
    * finishes) would otherwise be the one prompt that never names its session.
@@ -136,6 +144,7 @@ export class WorkerServer {
       driver: (path) => this.sessions.get(path)?.driver,
       notify: (method, params) => this.notify(method, params),
       modelAvailable: (model) => this.modelAvailable(model),
+      tasks: (path) => this.tasks.tasksOf(path),
     };
     this.harness = new AgentHarness({
       host,
@@ -237,6 +246,19 @@ export class WorkerServer {
         return {};
       case "pi/session/clear_queue":
         return this.live(req.params.path).driver.clearQueue();
+      case "pi/session/close": {
+        // The host is about to move the file (M13-T58): it must have no writer
+        // while that happens (AGENTS.md invariant 8). Disposing the driver
+        // emits `closed`, which drops the session from every table here.
+        const live = this.sessions.get(req.params.path);
+        if (!live) return { closed: false } satisfies Result<"pi/session/close">;
+        if (live.driver.state().isStreaming) {
+          throw new ProtocolError(ErrorCodes.SessionBusy, "This chat is still answering. Wait for it to finish, or stop it, then move it.");
+        }
+        await live.driver.dispose();
+        this.sessions.delete(live.path);
+        return { closed: true } satisfies Result<"pi/session/close">;
+      }
 
       // --- the pending tray (pending.ts) ---
       case "session/pending/list":
@@ -703,7 +725,9 @@ export class WorkerServer {
       record: handle.record,
       bridge: handle.bridge,
       policy: this.definitions.policy(),
-      backgroundWork: { cwd: this.options.cwd, foregroundCommandSeconds: this.definitions.policy().foregroundCommandSeconds },
+      // Bound to the session, so `task_output` can read a command of an agent
+      // under it (D-163); the harness builds the same options for a child.
+      backgroundWork: handle.backgroundWork(this.options.cwd) ?? { cwd: this.options.cwd, foregroundCommandSeconds: this.definitions.policy().foregroundCommandSeconds },
       beamSkillName: BEAM_SKILL_NAME,
     };
   }
@@ -1007,11 +1031,15 @@ export class WorkerServer {
         // The capability report is what gates the microphone and everything
         // else that is only offered where its package is (M8-T1).
         if (event.message.type === "lasercode/capabilities") this.activeModules = new Set(event.message.active);
+        // A background command going past is indexed here, so the harness
+        // can show it in an agent's fleet (D-163); the host indexes it too.
+        this.tasks.observe(live.path, event.message);
         this.notify("pi/extension/message", { path: live.path, message: event.message });
         return;
       case "closed":
         live.unsubscribe();
         this.sessions.delete(live.path);
+        this.tasks.sessionClosed(live.path);
         this.gitService?.forget(live.path);
         this.runningTools.delete(live.path);
         this.unnamed.delete(live.path);
@@ -1032,12 +1060,16 @@ export class WorkerServer {
 
   /**
    * Namer labels a tool call the moment it starts, so the aggregate row says
-   * what is happening without being opened. A few labels per session run at
-   * once (a turn fires calls in bursts) and one that ends before its label
-   * arrives is dropped rather than shown late.
+   * what is happening without being opened. Every call in a burst is labelled
+   * at once; one that ends before its label arrives is dropped rather than
+   * shown late. Only a top-level session's calls are labelled: a child agent's
+   * rows are read by its parent and, rarely, by a person who opened its chat,
+   * and a label per call across a fleet of children is spend nobody is
+   * looking at.
    */
   private async labelTool(live: Live, toolCallId: string, toolName: string, args: unknown): Promise<void> {
     if (!this.namer.enabled()) return;
+    if (this.harness.sessionInfo(live.path)?.kind === "child") return;
     const label = await this.namer.labelTool(live.path, toolCallId, toolName, args, {
       stillRunning: () => this.runningTools.get(live.path)?.has(toolCallId) === true,
     });

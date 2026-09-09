@@ -18,7 +18,7 @@ export const LOG_SECTIONS: Array<{ id: LogSection | "all"; label: string; hint: 
   { id: "provider", label: "Provider", hint: "One row per request and one per response, with the full request payload" },
   { id: "tools", label: "Tools", hint: "Tool executions with arguments, results and duration" },
   { id: "session", label: "Session", hint: "Agent lifecycle, compaction, retries, extension errors" },
-  { id: "subagents", label: "Subagents", hint: "Delegated work and coordination events" },
+  { id: "subagents", label: "Agents", hint: "Agent runs: started, finished, failed, stopped, or waiting on a question" },
   { id: "host", label: "Host", hint: "Worker lifecycle and worker stderr" },
 ];
 

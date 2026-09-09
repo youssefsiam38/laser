@@ -66,7 +66,9 @@ import type {
   HarnessSessionRole,
   InspectAgentInput,
   InspectAgentResult,
+  InspectFleetResult,
   InspectedMessage,
+  ReadTaskOutputResult,
   SendAgentMessageInput,
   SendAgentMessageResult,
   RemoveAgentWorktreeInput,
@@ -77,7 +79,9 @@ import type {
 } from "./bridge.js";
 import { DefinitionsCache, isStartable } from "./definitions.js";
 import { HarnessError } from "./errors.js";
+import { buildFleetTree } from "./fleet.js";
 import { assistantMessagesOf, readSessionEntries } from "./inspect.js";
+import { readLogTail, type IndexedTask } from "./tasks.js";
 import type { CreateWorktreeInput, Worktree, WorktreeFacts } from "./worktrees.js";
 
 /** What the harness needs from `WorktreeManager`; an interface so lifecycle tests run without git. */
@@ -108,6 +112,12 @@ export interface SessionHost {
   notify<M extends keyof HostNotifications>(method: M, params: HostNotifications[M]): void;
   /** True when the model exists and its provider has credentials. */
   modelAvailable(model: AgentModelChoice): Promise<boolean>;
+  /**
+   * The background commands one session published, oldest first, from the
+   * worker's task index (D-163). Absent when the worker keeps none: the fleet
+   * then shows agents alone, and a child's command cannot be read.
+   */
+  tasks?(sessionPath: string): IndexedTask[];
 }
 
 export interface AgentHarnessOptions {
@@ -130,6 +140,13 @@ export interface SessionHandle {
   attach(sessionPath: string, sessionId: string): void;
   /** Called when the open failed and the session never existed. */
   discard(): void;
+  /**
+   * The `background-work` options for this session running in `cwd`: the
+   * worker's shell settings plus the read of a command elsewhere in this
+   * session's tree (`task_output` on a child's command, D-163). `undefined`
+   * when the harness was built without background work.
+   */
+  backgroundWork(cwd: string): BackgroundWorkOptions | undefined;
 }
 
 export interface PrepareSessionInput {
@@ -249,7 +266,14 @@ export class AgentHarness {
         entry.eventListeners.clear();
         entry.roleListeners.clear();
       },
+      backgroundWork: (cwd) => this.backgroundWorkFor(entry, cwd),
     };
+  }
+
+  /** The shell options plus, bound to this session, the read of a command in its tree. */
+  private backgroundWorkFor(entry: Entry, cwd: string): BackgroundWorkOptions | undefined {
+    if (!this.backgroundWork) return undefined;
+    return { ...this.backgroundWork(cwd), readTask: (taskId, tailLines) => this.readTask(entry, taskId, tailLines) };
   }
 
   /** The bridge for an attached session, for tests and for the server's own use. */
@@ -437,7 +461,7 @@ export class AgentHarness {
       catalog: () => this.catalogFor(entry),
       startAgent: (input, signal) => this.startAgent(entry, input, signal),
       sendAgentMessage: (input) => this.sendAgentMessage(entry, input),
-      listAgents: async () => this.listAgents(entry),
+      inspectFleet: async () => this.inspectFleet(entry),
       inspectAgent: (input) => this.inspectAgent(entry, input),
       stopAgent: (input) => this.stopAgent(entry, input),
       removeAgentWorktree: (input) => this.removeAgentWorktree(entry, input),
@@ -553,6 +577,7 @@ export class AgentHarness {
     const handle = this.prepareSession({ role, definition, record, projectCwd: parent.projectCwd });
     let state: SessionState;
     try {
+      const backgroundWork = handle.backgroundWork(childCwd);
       state = await this.host.openChild({
         cwd: childCwd,
         parentSessionPath: parent.path,
@@ -562,7 +587,7 @@ export class AgentHarness {
           record,
           bridge: handle.bridge,
           policy,
-          ...(this.backgroundWork ? { backgroundWork: this.backgroundWork(childCwd) } : {}),
+          ...(backgroundWork ? { backgroundWork } : {}),
           ...(this.beamSkillName !== undefined ? { beamSkillName: this.beamSkillName } : {}),
         },
       });
@@ -658,24 +683,78 @@ export class AgentHarness {
     return { sessionId, runId, status: "running", delivery };
   }
 
-  private listAgents(parent: Entry): AgentRunSummary[] {
-    if (!parent.path) return [];
-    const parentPath = parent.path;
-    return this.runs()
-      .filter((run) => run.parent?.sessionPath === parentPath)
-      .reverse()
-      .map(summarize);
+  /**
+   * The tree of work under this session (D-163): the runs of the sessions
+   * beneath it and the commands those sessions — this one included — ran, in
+   * the fleet column's own rows and words. Read-only; scoped to the caller,
+   * so a child sees its own subtree and never a sibling's.
+   */
+  private inspectFleet(caller: Entry): InspectFleetResult {
+    if (!caller.path) throw new HarnessError("This session is not ready yet.");
+    return buildFleetTree({
+      callerPath: caller.path,
+      runs: this.runs(),
+      tasksOf: (sessionPath) => this.host.tasks?.(sessionPath) ?? [],
+      now: this.now(),
+    });
   }
 
   /**
-   * One child in depth (M13-T45). Read-only: nothing here prompts, steers or
-   * answers the child, so inspecting is always safe while it works. A live
-   * child's words come from its driver; an ended child whose driver is gone
-   * is read from its session file.
+   * `task_output` on a command of another session in the caller's tree
+   * (D-163): read-only, from the worker's index and the command's log file.
+   * A command outside the tree is refused, as a stranger's run is.
+   */
+  private async readTask(caller: Entry, taskId: string, tailLines: number): Promise<ReadTaskOutputResult> {
+    if (!caller.path) throw new HarnessError("This session is not ready yet.");
+    const id = (taskId ?? "").trim();
+    const found = this.findTask(caller.path, id);
+    if (!found) {
+      throw new HarnessError(`The command "${id}" is not in the tree under this session. inspect_fleet lists every command you can read, with its taskId.`);
+    }
+    const { task, owner } = found;
+    const { logPath, sessionPath: _path, ...rest } = task;
+    void _path;
+    const text = await readLogTail(logPath, tailLines);
+    return {
+      task: rest,
+      owner,
+      ...(text !== undefined ? { text } : {}),
+    };
+  }
+
+  /** A command by id, anywhere strictly under `callerPath`, with the agent whose session ran it. */
+  private findTask(callerPath: string, id: string): { task: IndexedTask; owner: ReadTaskOutputResult["owner"] } | undefined {
+    if (id === "" || !this.host.tasks) return undefined;
+    for (const run of this.runs()) {
+      if (!this.descends(callerPath, run.sessionPath)) continue;
+      const task = this.host.tasks(run.sessionPath).find((candidate) => candidate.id === id);
+      if (task) return { task, owner: { agentName: run.agentName, subagentName: run.subagentName, sessionId: run.sessionId } };
+    }
+    return undefined;
+  }
+
+  /** True when `sessionPath` is strictly under `callerPath` in the run tree: a child, a child's child, and so on. */
+  private descends(callerPath: string, sessionPath: string): boolean {
+    const seen = new Set<string>();
+    let cursor: string | undefined = sessionPath;
+    while (cursor !== undefined && cursor !== callerPath && !seen.has(cursor)) {
+      seen.add(cursor);
+      cursor = this.latestRun(cursor)?.run.parent?.sessionPath;
+    }
+    return cursor === callerPath && sessionPath !== callerPath;
+  }
+
+  /**
+   * One agent in depth (M13-T45). Read-only: nothing here prompts, steers or
+   * answers the agent, so inspecting is always safe while it works. A live
+   * agent's words come from its driver; an ended one whose driver is gone is
+   * read from its session file. Any row of the caller's tree may be read — a
+   * child, or a child's child — as the person may open any chat in it
+   * (D-163).
    */
   private async inspectAgent(parent: Entry, input: InspectAgentInput): Promise<InspectAgentResult> {
     if (!parent.path) throw new HarnessError("This session is not ready yet.");
-    const target = this.childOf(parent, input);
+    const target = this.childOf(parent, input, "tree");
     const state = this.runStates.get(target.runId)!;
     const run = state.run;
     const count = messageCount(input.messages);
@@ -702,12 +781,17 @@ export class AgentHarness {
     };
   }
 
-  /** The worktree as it is now: gone, still there, and what git says it holds. */
-  private async worktreeStatus(parent: Entry, run: AgentRun): Promise<InspectAgentResult["worktree"]> {
+  /**
+   * The worktree as it is now: gone, still there, and what git says it holds
+   * — measured against the checkout of the session that started the run,
+   * which is the caller's for a child and a child's for a grandchild.
+   */
+  private async worktreeStatus(caller: Entry, run: AgentRun): Promise<InspectAgentResult["worktree"]> {
     const worktree = run.worktree;
     if (!worktree) return null;
     if (worktree.removedAt) return { path: worktree.path, branch: worktree.branch, exists: false, unmergedCommits: null, uncommittedFiles: null, removedAt: worktree.removedAt };
-    const compareCwd = (parent.path ? this.host.driver(parent.path)?.state().cwd : undefined) ?? parent.projectCwd;
+    const comparePath = run.parent?.sessionPath ?? caller.path;
+    const compareCwd = (comparePath ? this.host.driver(comparePath)?.state().cwd : undefined) ?? (caller.path ? this.host.driver(caller.path)?.state().cwd : undefined) ?? caller.projectCwd;
     const facts = await this.worktrees.facts({ path: worktree.path, branch: worktree.branch, compareCwd });
     return { path: worktree.path, branch: worktree.branch, exists: facts.exists, unmergedCommits: facts.unmergedCommits, uncommittedFiles: facts.uncommittedFiles };
   }
@@ -781,26 +865,35 @@ export class AgentHarness {
   }
 
   /**
-   * The child a parent means, by `sessionId` or `runId` — the identities that
-   * already exist. Never a fifth one, and never a child another session started.
+   * The agent a caller means, by `sessionId` or `runId` — the identities that
+   * already exist, never a fifth one. `scope` is who may be named: a `child`
+   * this session started (the verbs that act on one — stop, message, remove
+   * its worktree), or any row of the `tree` under it (the read-only
+   * `inspect_agent`, D-163). Never another session's work.
    */
   private childOf(
     parent: Entry,
     input: Pick<RemoveAgentWorktreeInput, "sessionId" | "runId">,
+    scope: "child" | "tree" = "child",
   ): { sessionPath: string; sessionId: string; runId: string; agentName: string; subagentName: string; worktree: AgentRun["worktree"] } {
     const runId = (input.runId ?? "").trim();
     const sessionId = (input.sessionId ?? "").trim();
     if (runId === "" && sessionId === "") throw new HarnessError("Name the agent by its sessionId or one of its runIds, as start_agent returned them.");
     const own = (run: AgentRun): boolean => run.parent?.sessionPath === parent.path;
+    const within = (run: AgentRun): boolean => (scope === "tree" ? parent.path !== undefined && this.descends(parent.path, run.sessionPath) : own(run));
+    const refusal = (named: string): HarnessError =>
+      scope === "tree"
+        ? new HarnessError(`${named} is not in the tree under this session. inspect_fleet lists every agent you can read, with its runId and sessionId.`)
+        : new HarnessError(named.startsWith("No run") ? `${named} was started by this session.` : `${named} among the agents this session started. Use the sessionId that start_agent returned.`);
 
     let run: AgentRun | undefined;
     if (runId !== "") {
       const state = this.runStates.get(runId);
-      if (!state || !own(state.run)) throw new HarnessError(`No run called "${runId}" was started by this session.`);
+      if (!state || !within(state.run)) throw refusal(`No run called "${runId}"`);
       run = state.run;
     } else {
-      const mine = this.runs().filter((candidate) => candidate.sessionId === sessionId && own(candidate));
-      if (mine.length === 0) throw new HarnessError(`No agent session is called "${sessionId}" among the agents this session started. Use the sessionId that start_agent returned.`);
+      const mine = this.runs().filter((candidate) => candidate.sessionId === sessionId && within(candidate));
+      if (mine.length === 0) throw refusal(`No agent session is called "${sessionId}"`);
       run = mine[mine.length - 1];
     }
     const sibling = this.runs().find((candidate) => candidate.sessionPath === run!.sessionPath && candidate.worktree);

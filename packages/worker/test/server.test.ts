@@ -49,6 +49,8 @@ class FakeDriver implements SessionDriver {
   state() { return this.st; }
   /** Where this session runs, for the settings fan-out's project-scope check. */
   setCwd(cwd: string) { this.st = { ...this.st, cwd }; }
+  /** A turn in flight, as the driver reports it (`pi/session/close` refuses then). */
+  setStreaming(streaming: boolean) { this.st = { ...this.st, isStreaming: streaming }; }
   /** Settings reloads asked of this driver (M13-T55). Optional on the interface, so tests can take it away. */
   reloads = 0;
   reloadSettings?: () => Promise<{ deferred: boolean }> = async () => { this.reloads += 1; return { deferred: false }; };
@@ -351,6 +353,35 @@ describe("WorkerServer", () => {
     expect(h.server.openSessions()).toEqual(["/tmp/other.jsonl"]);
     await h.server.dispose();
     expect(h.server.openSessions()).toEqual([]);
+  });
+
+  // M13-T58: the host moves a session's file only once no worker holds it.
+  it("lets go of one session on pi/session/close, refuses mid-turn, and says when it held nothing", async () => {
+    const h = harness();
+    await h.call(1, "session/new", { cwd: "/tmp/fake" });
+    await h.call(2, "session/load", { path: "/tmp/other.jsonl" });
+    const driver = h.drivers[0]!;
+
+    driver.setStreaming(true);
+    const busy = await h.call(3, "pi/session/close", { path: "/tmp/fake/s1.jsonl" });
+    expect(busy.error?.code).toBe(-32001);
+    expect(driver.disposed).toBe(false);
+    expect(h.server.openSessions().sort()).toEqual(["/tmp/fake/s1.jsonl", "/tmp/other.jsonl"]);
+
+    driver.setStreaming(false);
+    const closed = await h.call(4, "pi/session/close", { path: "/tmp/fake/s1.jsonl" });
+    expect(closed.result).toEqual({ closed: true });
+    expect(driver.disposed).toBe(true);
+    // Only that session: the other one is untouched, and the closed one is
+    // not served any more.
+    expect(h.server.openSessions()).toEqual(["/tmp/other.jsonl"]);
+    expect(h.drivers[1]?.disposed).toBe(false);
+    const gone = await h.call(5, "pi/model/list", { path: "/tmp/fake/s1.jsonl" });
+    expect(gone.error?.code).toBe(-32000);
+
+    const again = await h.call(6, "pi/session/close", { path: "/tmp/fake/s1.jsonl" });
+    expect(again.result).toEqual({ closed: false });
+    await h.server.dispose();
   });
 });
 

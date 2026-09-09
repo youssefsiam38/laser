@@ -63,20 +63,36 @@ export function isBuiltinAgentName(name: string): name is BuiltinAgentName {
  * `web_search` is still gated by the Web search feature, for everyone at once.
  */
 
-/** The harness tools the engine sees; listed so the UI can name them and search can project them. */
+/**
+ * The harness tools the engine sees; listed so the UI can name them and search
+ * can project them. `inspect_fleet` (D-163) is the one way an agent reads the
+ * work going on under it — the same tree the person's fleet column shows,
+ * scoped to the caller's session — so there is no `list_agents` and no
+ * `task_list`: one tree, both kinds of work, one vocabulary.
+ */
 export const HARNESS_TOOL_NAMES = [
   "start_agent",
   "send_agent_message",
-  "list_agents",
+  "inspect_fleet",
   "inspect_agent",
   "stop_agent",
   "remove_agent_worktree",
   "complete_agent_run",
 ] as const;
 export type HarnessToolName = (typeof HARNESS_TOOL_NAMES)[number];
-/** The background-work tools; there is no waiting tool (D-162), a task's exit comes to the model as a message. */
-export const BACKGROUND_TOOL_NAMES = ["task_list", "task_output", "task_stop"] as const;
+/**
+ * The background-work tools; there is no waiting tool (D-162), a task's exit
+ * comes to the model as a message, and there is no list: `inspect_fleet`
+ * shows every command in the caller's tree beside the agents that ran them.
+ */
+export const BACKGROUND_TOOL_NAMES = ["task_output", "task_stop"] as const;
 export type BackgroundToolName = (typeof BACKGROUND_TOOL_NAMES)[number];
+/**
+ * Rows `inspect_fleet` returns at most. A tree larger than this is cut
+ * deepest-first and the result says how many rows were left out; every row
+ * carries the id to follow it with, so nothing is unreachable.
+ */
+export const AGENT_FLEET_ROWS_MAX = 50;
 
 // ---------- definitions ----------
 

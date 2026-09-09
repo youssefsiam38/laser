@@ -94,8 +94,8 @@ module from the worker-supplied `AgentHarnessBridge`:
 | --- | --- | --- |
 | `start_agent { agent_name, subagent_name, task, worktree? }` | a session whose definition permits delegation and whose depth allows another level | validates the name against the allowed list and depth, loads the child's full configuration, creates the child session and (unless `worktree: false`) its worktree, starts the child loop in the background, returns `{ agent_name, subagent_name, sessionId, runId, status: "running", working_directory, branch?, guidance, your_responsibility }` immediately. `guidance` is the sentence the parent reads at the moment it matters: *Do not wait for `<name>`. Carry on with your own work; when it ends, its result will be sent to you as a message. Use `inspect_agent` with runId `<runId>` to check on it meanwhile — a status of `needs_input` means it is paused on a question you can answer with `send_agent_message`.* |
 | `send_agent_message { sessionId, message, interrupt? }` | same | a running child receives it as its next instruction (`delivery: "queued"` while busy); an idle child starts a new run and the result carries the new `runId`; a child that is `needs_input` has its open question **answered** by the message (`delivery: "answered"`, the question returned as `answered`) — see "Questions" below |
-| `list_agents` | same | runs this session started, newest first: identities, status, result, and the open `question` of a `needs_input` run — never transcripts |
-| `inspect_agent { runId? \| sessionId?, messages? }` | same | one child in depth: everything `list_agents` says plus the **whole** task, `origin`, `depth`, `model`, `cwd` and `branch` (only with a worktree), the worktree as it is now (`exists`, `unmergedCommits`, `uncommittedFiles`, `removedAt?`), `activity` (turns, tool calls, the tool running now, when it was last active), its last assistant messages excerpted (`messages`: default `AGENT_INSPECT_MESSAGES_DEFAULT` = 1, at most `AGENT_INSPECT_MESSAGES_MAX` = 10, each cut at `AGENT_INSPECT_MESSAGE_EXCERPT` = 1000 characters), the question it is paused on, a `what_it_needs` sentence when it is stalled, and its own children as `list_agents` would list them. Read-only: it never wakes the child or delivers anything to it. A live child is read through its driver; an ended child whose driver is gone, from its session file |
+| `inspect_fleet` | same | the tree of work under this session, as the person's fleet column draws it (D-163, below): the agents it started, theirs, and the background commands any of them — the caller included — left running or finished. One row per session, standing on its newest run, and one per command; every row carries its kind (`agent` or `command`), title, the fleet's status word, elapsed time, one line (what it is doing, or how it ended) and the id to follow it with (`runId`, `taskId`). At most `AGENT_FLEET_ROWS_MAX` = 50 rows, cut deepest-first with `omitted` saying how many. Read-only; never transcripts |
+| `inspect_agent { runId? \| sessionId?, messages? }` | same | one agent in depth — any agent row of the caller's tree, a child or a child's child (D-163): the run summary (identities, status, result, `endedBy`, the open `question`) plus the **whole** task, `origin`, `depth`, `model`, `cwd` and `branch` (only with a worktree), the worktree as it is now (`exists`, `unmergedCommits`, `uncommittedFiles`, `removedAt?`), `activity` (turns, tool calls, the tool running now, when it was last active), its last assistant messages excerpted (`messages`: default `AGENT_INSPECT_MESSAGES_DEFAULT` = 1, at most `AGENT_INSPECT_MESSAGES_MAX` = 10, each cut at `AGENT_INSPECT_MESSAGE_EXCERPT` = 1000 characters), the question it is paused on, a `what_it_needs` sentence when it is stalled, and its own children as run summaries. Read-only: it never wakes the child or delivers anything to it. A live child is read through its driver; an ended child whose driver is gone, from its session file |
 | `stop_agent { runId, reason? }` | same | ends one run now with `endedBy: { initiator: "parent", reason }`; the session stays addressable |
 | `remove_agent_worktree { sessionId? \| runId?, force? }` | same | removes a finished child's worktree and branch (M13-T42, §3 below) |
 | `complete_agent_run { status: "completed" \| "blocked", message }` | every child | the only successful ending; the tool result terminates the child turn |
@@ -104,8 +104,52 @@ Children never block, and **parents never wait**: `start_agent` returns
 before the child has done anything, there is no foreground mode, and there
 is no waiting tool (M13-T45). A child's ending is delivered to its parent as
 a message that wakes it (below), so nothing is lost by not waiting; a parent
-that wants to know how a child is doing meanwhile calls `inspect_agent`. The
-parent's guidelines and role block say so in the same words.
+that wants to know how things stand meanwhile calls `inspect_fleet` for the
+whole tree or `inspect_agent` for one agent. The parent's guidelines and role
+block say so in the same words.
+
+### The fleet, as the agent reads it (M13-T62, D-163)
+
+The agent reads running work through one tool, `inspect_fleet`, and what it
+gets is **the same tree the person sees** in the fleet column
+(`docs/ux-fleet.md`), scoped to the caller: the agent runs and background
+commands under its session, its children's, and theirs. A child sees its own
+subtree; the root sees everything under it; nobody sees another root's work.
+`list_agents` and `task_list` are gone — they were two half-views of one
+thing, in two vocabularies.
+
+The rows are the fleet's rows. `packages/worker/src/agents/fleet.ts` builds
+them and mirrors `packages/ui/src/fleet/model.ts` without importing it:
+agent rows nest as the tree nests, a session's commands hang off the row for
+the session that ran them (after its child agents), ordering is creation
+order, the title is the instance name or the command's first line, the status
+word is the column's (`FLEET_STATUS_WORD` = `FLEET_STATE_LABEL`: Waiting,
+Working, Asking, Needs you, Done, Failed, Ended), elapsed is formatted the
+same way, and the line is what the row says — the question a paused child is
+stuck on, the tool it is running, the last line a command printed; else the
+final message, the error, the exit code, or who ended it (the column's "you
+ended it" becomes "the person ended it" for the agent: only the pronoun
+changes). `packages/worker/test/agents/fleet.test.ts` feeds one fixture to
+both builders and compares row for row; a change on one side fails it.
+
+Both kinds of work meet in the worker, which is the one process that sees the
+whole tree (invariant 5): `WorkerServer` keeps a `TaskIndex`
+(`packages/worker/src/agents/tasks.ts`) fed from the `lasercode/task/update`
+messages it already forwards to the host, and the harness joins it with its
+runs. The companion's modules never see each other's tasks (§6a), so the
+`background-work` module's `task_output` reads a command of another session
+in the caller's tree through the worker (`BackgroundWorkOptions.readTask`),
+from the command's log file, bounded as `tasks/output` is; a command outside
+the tree is refused with a sentence that names `inspect_fleet`. `task_stop`
+stays the caller's own.
+
+`inspect_agent` and `task_output` are the per-row detail, and both accept any
+row in the caller's subtree — a parent may read a grandchild, read-only, as
+the person may open any chat in the tree. The verbs that act on an agent
+(`send_agent_message`, `stop_agent`, `remove_agent_worktree`) still take a
+direct child only. Endings still arrive as messages that wake the turn
+(D-158, D-162); `inspect_fleet` is for reading on demand, and its result says
+so.
 
 ### Completion
 
@@ -154,7 +198,8 @@ Three of these are live, and the one a parent most needs to tell apart from
 | `blocked` | no | the child **ended** by saying it could not finish (`complete_agent_run { status: "blocked" }`); the question it asked its parent, if any, is its final `result.message` |
 
 The parent can tell "working" from "stuck waiting on me" from the status
-alone, in `list_agents`, `inspect_agent` and the `start_agent` guidance; in
+alone, in `inspect_fleet` (the row says *Asking*, with the question as its
+line), `inspect_agent` and the `start_agent` guidance; in
 the UI the two live shapes are "Working" (live tone) and "Asking" (attention
 tone, the same warm hue as "Needs you"), and both `needs_input` and `blocked`
 count as needing someone in the sidebar chip, the fleet and the map summary.
@@ -203,7 +248,8 @@ status:
 2. **It asked its parent something in its final message and ended** —
    `blocked`, unchanged. The parent reads the question without opening the
    session: it is the `result.message` in the `agent.blocked` event, in
-   `list_agents` and in `inspect_agent` (whose `what_it_needs` says so and
+   `inspect_fleet` (*Needs you*, with the message as the row's line) and in
+   `inspect_agent` (whose `what_it_needs` says so and
    says how to reply: `send_agent_message` starts a new run in the same
    session with the child's history intact). The child's role block tells it
    this is the way to ask when it genuinely cannot go on.
@@ -371,10 +417,12 @@ process-tree kill, output truncation stay the engine's) and adds:
   returns the output so far and the task id, and the task keeps every byte in
   its log file plus the last 256 KiB in memory, with its exit code when it
   ends;
-- `task_list`, `task_output` and `task_stop` (`BACKGROUND_TOOL_NAMES`) to
-  follow tasks — read output before the exit, or end one; there is no waiting
-  tool (D-162, the rule D-158 set for child agents). A task is `running`,
-  `completed`, `failed` or `stopped`;
+- `task_output` and `task_stop` (`BACKGROUND_TOOL_NAMES`) to follow tasks —
+  read output before the exit, or end one; there is no waiting tool (D-162,
+  the rule D-158 set for child agents) and no list: `inspect_fleet` shows
+  every command in the session's tree beside the agents that ran them
+  (D-163), and `task_output` takes any of them, reading another session's
+  through the worker. A task is `running`, `completed`, `failed` or `stopped`;
 - one `lasercode/task/update` per task carrying a `BackgroundTaskUpdate`
   (`packages/protocol/src/tasks.ts`), including the log file it streams into,
   so the host can serve `tasks/output` and the fleet can follow it; re-emits
@@ -417,6 +465,28 @@ idle, so its worker is never retired underneath it.
 | `chat` | `<state>/workspaces/chat` (`workspaces.chat`) | every tool, in its own scratch workspace | the Chat tab, first in the sidebar before Code; projectless chats |
 | `namer` | the project's own worker | not a session agent | names things from a small context |
 
+**A Chat session can move into a project** (M13-T58). The row's menu in the
+Chat tab offers "Move to a project…", which opens a dialog listing the Code
+tab's projects — current first, then most recently used — with "New project…"
+last; that runs the same folder choice as the rail's Add project (the
+operating system's picker in the desktop app, a typed path in a browser) and
+the folder becomes a project. Nothing is converted or copied: the session
+keeps its history, its name and its id, and only where it lives changes. The
+host does the move (`pi/session/move { path, cwd } → { path }`) while no
+worker holds the file: it closes the session in the Chat worker when one has
+it open (`pi/session/close`, host → worker only), rewrites the file into the
+project's session directory with the header's `cwd` set to the project and
+the `lasercode/agent` record replaced in place by the default agent's plain
+top-level record (never appended — the first record wins), renames it into
+place atomically, removes the old file, invalidates the catalog and view
+caches for both paths, carries the seen mark across so the move does not
+light the row up as unread, and registers the project as Add project would.
+Refused, with the reason a person can act on: a streaming turn (the worker's
+refusal), a live agent run of the session, a child session (its parent's tree
+is one thing), a target that is missing, a file, a built-in workspace or a
+worktree. After the move the Code tab shows the session selected under its
+project, and the transcript is the same transcript.
+
 **Beam's skill** (`packages/worker/src/agents/beam-skill.ts`) is written by the
 worker on start, idempotently, at `<agentDir>/skills/<product>-beam/SKILL.md`
 from the real paths of this installation: where sessions, agents, runs,
@@ -433,12 +503,14 @@ silently; `BeamState.needsChoice` stays true until the person picks or
 dismisses.
 
 **Namer** (`packages/worker/src/agents/namer.ts`) is a service, never a
-session: one small completion per request with an 8 s ceiling, never two at
-once for one session, and it never throws — a name that does not arrive is
+session: one small completion per request with an 8 s ceiling, as many at
+once as a burst of tool calls needs (D-165), and it never throws — a name that does not arrive is
 simply not shown. It names a session from its first prompt (25–30 characters,
 `SESSION_NAME_MIN`/`SESSION_NAME_MAX`, quotes and trailing punctuation
-stripped, cut at a word boundary), a tool call the moment it starts (a
-present-progressive label of at most 40 characters, sent as
+stripped, cut at a word boundary), a tool call the moment it starts in a
+top-level session — never in a child agent's, whose rows its parent reads
+through `inspect_fleet` (D-165) — (a present-progressive label of at most 40
+characters, sent as
 `lasercode/namer/label { toolCallId, label }` before the tool ends) and an
 in-progress aggregate in the chat view. Its model is qualified rather than
 picked: `agents/namer/qualify` nominates cheap, connected models (never a name
@@ -483,6 +555,8 @@ Requests (client → host unless noted):
 | `agents/namer/qualify` | `{ cwd }` → `NamerState` (routed to the built-in workspace worker) |
 | `agents/sync` | host → worker only; refused from clients |
 | `session/new` | gains `agentName?` (omitted = the default agent) |
+| `pi/session/move` | `{ path, cwd }` → `{ path }` (a Chat session becomes `cwd`'s; the result is where it lives now, M13-T58) |
+| `pi/session/close` | host → worker only; refused from clients (the host lets a worker go of a session before moving its file) |
 
 Notifications (host → client): `agents/updated` (`AgentsSnapshot`),
 `agents/run` (`{ run }`), `agents/event` (`AgentEvent`),
@@ -526,6 +600,13 @@ The binding list lives in `AGENTS.md` ("Agents harness regression checks"):
   chip and folds, the fleet, the live map, `agents/model.ts`, the CLI — has a
   test for the live-and-stuck value, in the attention tone, never folded away.
 - `inspect_agent` is read-only and bounded (at most 10 excerpted messages).
+- One `inspect_fleet` and no list of either kind (D-163): the tree it returns
+  is the fleet column's, scoped to the caller — a child never sees a sibling
+  — with the column's status words and titles, pinned by the agreement test
+  in `packages/worker/test/agents/fleet.test.ts`; at most 50 rows, cut
+  deepest-first and counted; `inspect_agent` and `task_output` accept any row
+  in the caller's subtree and refuse one outside it in a sentence; nothing the
+  model reads names `list_agents` or `task_list`.
 - Every child gets a worktree or a person-facing refusal, unless its parent
   passed `worktree: false`; then it runs in the parent's checkout, is told so,
   and nothing there is removed when the run ends.

@@ -13,9 +13,10 @@ ceremony, and it is deliberate: a second extension would mean a second
 `session_start`, a second failure domain, and a second thing to install.
 
 Three modules are not package glue at all. `subagents` registers the agent
-harness tools (`start_agent`, `send_agent_message`, `list_agents`,
+harness tools (`start_agent`, `send_agent_message`, `inspect_fleet`,
 `inspect_agent`, `stop_agent`, `remove_agent_worktree`; `complete_agent_run`
-in a child — there is no waiting tool), appends the
+in a child — there is no waiting tool and no list: `inspect_fleet` is the
+fleet column's tree, D-163), appends the
 child's role to its system prompt and delivers agent events to the parent
 model — every call goes to the worker-supplied `AgentHarnessBridge`
 (`src/agents-bridge.ts`). `background-work` owns long commands.
@@ -336,8 +337,9 @@ Rules for a bridge:
 | `web-access` | pi-web-access | retired by D-61 | the module is a stub; the transcript tool disclosure is the single presentation |
 
 Historical: before D-140 `subagents` probed pi-subagents' `globalThis`
-registries and its `subagents:rpc:v1` bus and emitted `laser/subagents/event`.
-That module is gone with the package.
+registries and its `subagents:rpc:v1` bus and emitted a `laser/subagents/event`
+message. That module is gone with the package, and the message is gone from
+the protocol (M13-T38); the harness reports through `laser/agent-event` only.
 
 ---
 

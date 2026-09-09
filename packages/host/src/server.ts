@@ -311,7 +311,10 @@ export class HostServer {
     });
     this.runs = new AgentRunRegistry({
       storePath: join(stateDir, "agent-runs.json"),
-      onRun: (run) => this.notify("agents/run", { run }),
+      onRun: (run) => {
+        this.notify("agents/run", { run });
+        this.logs?.observeAgentRun(run);
+      },
     });
     this.skillsCheck = new SkillsCheck({
       agents: () => this.agents.snapshot().agents,
@@ -584,7 +587,9 @@ export class HostServer {
         // The worker owns the run while it lives; the host keeps the record so
         // it outlives the worker. `agents/event` is transient and only broadcast.
         const { run } = notification.params as HostNotifications["agents/run"];
-        this.runs.upsert(run);
+        const before = this.runs.get(run.runId);
+        const stored = this.runs.upsert(run);
+        if (before?.status !== stored.status) this.logs?.observeAgentRun(stored);
         return;
       }
       case "pi/providers/login/event": {

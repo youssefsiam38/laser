@@ -520,8 +520,15 @@ blockers, not advice.
 - One `start_agent` tool and four identities only (`agent_name`,
   `subagent_name`, `sessionId`, `runId`). Never a tool per agent, never a
   separate agent id, type or profile name. The parent's verbs are
-  `send_agent_message`, `list_agents`, `inspect_agent`, `stop_agent` and
+  `send_agent_message`, `inspect_fleet`, `inspect_agent`, `stop_agent` and
   `remove_agent_worktree`; the child's is `complete_agent_run`.
+- One `inspect_fleet` and no list of either kind (D-163): it returns the
+  fleet column's tree scoped to the caller — a child never sees a sibling —
+  in the column's status words and titles, pinned by
+  `packages/worker/test/agents/fleet.test.ts`; at most 50 rows, cut
+  deepest-first and counted. `inspect_agent` and `task_output` accept any
+  row in the caller's subtree and refuse one outside it in a sentence;
+  nothing the model reads names `list_agents` or `task_list`.
 - Children never block: `start_agent` returns the identities before the child
   has done anything; there is no foreground mode.
 - The parent chooses isolation per child: `start_agent`'s `worktree` defaults

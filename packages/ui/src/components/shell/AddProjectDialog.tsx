@@ -15,9 +15,19 @@ import { useLaserStable } from "@/runtime";
 
 import { useShell } from "./shell-context.js";
 
-type DesktopFolderPicker = {
+export type DesktopFolderPicker = {
   chooseDirectory(): Promise<string | null>;
 };
+
+/**
+ * The desktop shell's native folder chooser, when this page runs inside it.
+ * The one way a folder is picked anywhere in the app: Add project here, and
+ * "New project…" in the move-session dialog (M13-T58) reuse it rather than
+ * growing a second picker.
+ */
+export function desktopFolderPicker(): DesktopFolderPicker | undefined {
+  return (globalThis as typeof globalThis & { desktop?: DesktopFolderPicker }).desktop;
+}
 
 /**
  * Add Project is one native action, not a path-entry form. In Electron, opening
@@ -29,7 +39,7 @@ export function AddProjectDialog() {
   const { addProjectOpen, setAddProjectOpen } = useShell();
   const { actions, setCurrentProject } = useLaserStable();
   const opening = useRef(false);
-  const desktop = (globalThis as typeof globalThis & { desktop?: DesktopFolderPicker }).desktop;
+  const desktop = desktopFolderPicker();
 
   useEffect(() => {
     if (!addProjectOpen || !desktop || opening.current) return;

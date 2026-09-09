@@ -1,9 +1,10 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { BACKGROUND_TOOL_NAMES, TASK_EVENT_MESSAGE_TYPE, WIRE_NAMESPACE, backgroundTaskUpdateSchema, type BackgroundTaskUpdate } from "@lasercode/protocol";
+import type { ReadTaskOutputResult } from "../src/agents-bridge.js";
 import { createLaserExtension } from "../src/index.js";
 import { createCommandBus, type ModuleContext } from "../src/modules/index.js";
 import { backgroundWorkModule, lastLines, TailBuffer } from "../src/modules/background-work.js";
@@ -24,6 +25,19 @@ interface FakeTool {
 }
 
 const SESSION_ID = "session-under-test";
+/** The task ids with a log file right now, so a test can find the id of a foreground command whose result carried none. */
+const logIds = (): Set<string> => {
+  try {
+    return new Set(readdirSync(join(tmpdir(), `${WIRE_NAMESPACE}-tasks`, SESSION_ID)).map((f) => f.replace(/\.log$/, "")));
+  } catch {
+    return new Set();
+  }
+};
+const newLogId = (before: Set<string>): string => {
+  const fresh = [...logIds()].filter((id) => !before.has(id));
+  if (fresh.length !== 1) throw new Error(`expected exactly one new log file, found ${fresh.length}`);
+  return fresh[0]!;
+};
 const open: Array<() => void> = [];
 const dirs: string[] = [];
 
@@ -32,13 +46,13 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-/** Nothing the model can call waits (D-162); the test watches `task_list` itself. */
+/** Nothing the model can call waits (D-162); the test watches `task_output`'s status itself. */
 async function settled(h: Harness, taskId: string, timeoutMs = 5000): Promise<{ status: string; exitCode: number | null }> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const { details } = await h.call("task_list", {});
-    const task = (details.tasks as Array<{ taskId: string; status: string; exitCode: number | null }>).find((t) => t.taskId === taskId);
-    if (task && task.status !== "running") return { status: task.status, exitCode: task.exitCode };
+    const { details } = await h.call("task_output", { taskId, tail: 1 });
+    const task = details as { status: string; exitCode: number | null };
+    if (task.status !== "running") return { status: task.status, exitCode: task.exitCode };
     if (Date.now() > deadline) throw new Error(`task ${taskId} still running after ${timeoutMs} ms`);
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
@@ -46,7 +60,7 @@ async function settled(h: Harness, taskId: string, timeoutMs = 5000): Promise<{ 
 
 type Harness = ReturnType<typeof harness>;
 
-function harness(foregroundCommandSeconds = 0.3) {
+function harness(foregroundCommandSeconds = 0.3, readTask?: (taskId: string, tailLines: number) => Promise<ReadTaskOutputResult>) {
   const tools = new Map<string, FakeTool>();
   const sendMessage = vi.fn();
   const pi = {
@@ -59,7 +73,7 @@ function harness(foregroundCommandSeconds = 0.3) {
   const send = vi.fn();
   const cwd = mkdtempSync(join(tmpdir(), "background-work-"));
   dirs.push(cwd);
-  const ctx: ModuleContext = { pi, send, commands, backgroundWork: { cwd, foregroundCommandSeconds } };
+  const ctx: ModuleContext = { pi, send, commands, backgroundWork: { cwd, foregroundCommandSeconds, ...(readTask ? { readTask } : {}) } };
   backgroundWorkModule.register!(ctx);
   const dispose = backgroundWorkModule.activate(ctx) as (() => void) | undefined;
   if (dispose) open.push(dispose);
@@ -86,10 +100,16 @@ function modelText(tool: FakeTool): string {
 }
 
 describe("background-work: the bash override", () => {
-  it("registers bash plus the three task tools and never tells the model to wait or poll", () => {
+  it("registers bash plus the two task tools and never tells the model to wait, poll or list", () => {
     const h = harness(120);
+    expect([...h.tools.keys()]).toEqual(["bash", "task_output", "task_stop"]);
     expect([...h.tools.keys()]).toEqual(["bash", ...BACKGROUND_TOOL_NAMES]);
     expect(h.tools.has("task_wait")).toBe(false);
+    // D-163: no list of commands — `inspect_fleet` shows them in the tree —
+    // and nothing the model reads still names the one that was removed.
+    expect(h.tools.has("task_list")).toBe(false);
+    for (const tool of h.tools.values()) expect(modelText(tool)).not.toContain("task_list");
+    expect(modelText(h.tools.get("task_output")!)).toContain("inspect_fleet");
     const bash = h.tools.get("bash")!;
     expect(bash.description).toContain("Execute a bash command");
     expect(bash.description).toContain("still running after 120 seconds keeps running as a background task");
@@ -115,16 +135,19 @@ describe("background-work: the bash override", () => {
   it("returns the engine's own result for a command that finishes before the limit", async () => {
     const h = harness(0.5);
     const updates: unknown[] = [];
+    let before = logIds();
     const result = await h.call("bash", { command: "echo hi" }, undefined, (u) => updates.push(u));
     expect(result.content[0]!.text.trim()).toBe("hi");
     expect(result.details?.taskId).toBeUndefined();
     expect(updates.length).toBeGreaterThan(0);
     expect(h.sendMessage).not.toHaveBeenCalled();
-    const list = await h.call("task_list", {});
-    expect(list.details.tasks).toEqual([expect.objectContaining({ command: "echo hi", status: "completed", exitCode: 0, background: false, promoted: false, notify: false })]);
+    // A quick foreground command is still readable afterwards by its id; the
+    // engine's own result carried no id, so it is found through the log dir.
+    const quick = newLogId(before);
+    expect((await h.call("task_output", { taskId: quick })).details).toMatchObject({ command: "echo hi", status: "completed", exitCode: 0, background: false, promoted: false, notify: false });
+    before = logIds();
     await expect(h.call("bash", { command: "echo oops >&2; exit 3" })).rejects.toThrow(/exited with code 3/);
-    const after = await h.call("task_list", {});
-    expect(after.details.tasks[1]).toMatchObject({ status: "failed", exitCode: 3 });
+    expect((await h.call("task_output", { taskId: newLogId(before) })).details).toMatchObject({ status: "failed", exitCode: 3 });
     // Foreground commands that finish within the limit are not fleet work:
     // their tool row carries the result, so no task is published.
     expect(h.published()).toEqual([]);
@@ -213,7 +236,7 @@ describe("background-work: the bash override", () => {
     expect(text).toContain(`You asked not to be told when task ${taskId} exits: its ending is recorded and shown to you with your next turn, and never starts one.`);
     expect(text).toContain(`Use task_output ${taskId} to read its output, or task_stop ${taskId} to end it.`);
     expect(text).not.toContain("Do not wait");
-    expect((await h.call("task_list", {})).details.tasks[0]).toMatchObject({ taskId, background: true, notify: false });
+    expect((await h.call("task_output", { taskId })).details).toMatchObject({ taskId, background: true, notify: false });
 
     expect(await settled(h, taskId)).toEqual({ status: "completed", exitCode: 0 });
     // The exit still reaches the model — with its next turn, not by starting one.
@@ -268,19 +291,55 @@ describe("background-work: the bash override", () => {
     expect(h.sendMessage.mock.calls[0]![0].content).toContain("was stopped (you stopped it)");
   });
 
-  it("rejects unknown tasks", async () => {
+  it("rejects unknown tasks with a sentence that points at inspect_fleet, and never names task_list", async () => {
     const h = harness(5);
-    await expect(h.call("task_output", { taskId: "t-missing" })).rejects.toThrow(/No task t-missing/);
-    await expect(h.call("task_stop", { taskId: "t-missing" })).rejects.toThrow(/No task t-missing/);
+    await expect(h.call("task_output", { taskId: "t-missing" })).rejects.toThrow(/No task t-missing was started by this session/);
+    const refusal = await h.call("task_stop", { taskId: "t-missing" }).catch((error: Error) => error.message);
+    expect(refusal).toContain("No task t-missing was started by this session");
+    expect(refusal).toContain("inspect_fleet");
+    expect(refusal).not.toContain("task_list");
+  });
+
+  // D-163: `task_output` takes any command in the caller's tree. A command
+  // this session did not start is read through the worker, which knows the
+  // tree and refuses anything outside it; `task_stop` stays this session's.
+  it("reads a command of an agent under this session through the worker, and refuses one outside the tree in the worker's words", async () => {
+    const readTask = vi.fn(async (taskId: string, tailLines: number): Promise<ReadTaskOutputResult> => {
+      if (taskId !== "t-child") throw new Error(`The command "${taskId}" is not in the tree under this session. inspect_fleet lists every command you can read, with its taskId.`);
+      return {
+        task: { id: "t-child", command: "pnpm test --run", title: "pnpm test --run", status: "failed", origin: "promoted", startedAt: "2026-09-09T10:00:00.000Z", endedAt: "2026-09-09T10:01:00.000Z", exitCode: 1, outputBytes: 4096, activity: "1 failed | 660 passed", terminalReason: "exit code 1" },
+        owner: { agentName: "worker", subagentName: "fix-login", sessionId: "child-1" },
+        text: Array.from({ length: tailLines }, (_, i) => `line ${i + 1}`).join("\n"),
+      };
+    });
+    const h = harness(5, readTask);
+    const result = await h.call("task_output", { taskId: "t-child", tail: 3 });
+    expect(readTask).toHaveBeenCalledWith("t-child", 3);
+    expect(result.content[0]!.text).toBe("task t-child failed (exit code 1) · 4096 bytes of output · started by fix-login (sessionId child-1)\nline 1\nline 2\nline 3");
+    expect(result.details).toMatchObject({ taskId: "t-child", status: "failed", exitCode: 1, owner: { subagentName: "fix-login", sessionId: "child-1" }, lines: 3 });
+    // The default tail reaches the worker too.
+    await h.call("task_output", { taskId: "t-child" });
+    expect(readTask).toHaveBeenLastCalledWith("t-child", 100);
+    // Outside the tree: the worker's refusal reaches the model as the tool error.
+    await expect(h.call("task_output", { taskId: "t-stranger" })).rejects.toThrow(/not in the tree under this session.*inspect_fleet/s);
+    // A command that kept no log file says so, and says its last line.
+    readTask.mockResolvedValueOnce({ task: { id: "t-quiet", command: "sleep 1", title: "sleep 1", status: "running", origin: "background", startedAt: "2026-09-09T10:00:00.000Z", outputBytes: 0 }, owner: { agentName: "worker", subagentName: "w", sessionId: "child-2" } });
+    expect((await h.call("task_output", { taskId: "t-quiet" })).content[0]!.text).toBe("task t-quiet running · 0 bytes of output · started by w (sessionId child-2)\n(no log file kept; its last line was: nothing yet)");
+    // Stopping is still this session's own verb: another session's command is not ours to end.
+    await expect(h.call("task_stop", { taskId: "t-child" })).rejects.toThrow(/was started by this session/);
+    // Without a worker behind it, an unknown id is simply unknown.
+    const bare = harness(5);
+    await expect(bare.call("task_output", { taskId: "t-child" })).rejects.toThrow(/No task t-child was started by this session/);
   });
 
   it("lets the turn's cancel kill a foreground command, but not a promoted one", async () => {
     const h = harness(0.2);
     const turn = new AbortController();
+    const before = logIds();
     const foreground = h.call("bash", { command: "sleep 30" }, turn.signal);
     setTimeout(() => turn.abort(), 50);
     await expect(foreground).rejects.toThrow(/aborted/);
-    expect((await h.call("task_list", {})).details.tasks[0]).toMatchObject({ status: "stopped" });
+    expect((await h.call("task_output", { taskId: newLogId(before) })).details).toMatchObject({ status: "stopped" });
     expect(h.sendMessage).not.toHaveBeenCalled();
 
     const later = new AbortController();
@@ -322,7 +381,7 @@ describe("background-work: helpers and wiring", () => {
     createLaserExtension({ send, only: ["background-work"], backgroundWork: { cwd: tmpdir(), foregroundCommandSeconds: 120 } }).factory(pi);
     await handlers.get("session_start")!({}, {});
     expect(send).toHaveBeenCalledWith({ type: "lasercode/capabilities", active: ["background-work"], failed: [] });
-    expect(registered).toEqual(["bash", "task_list", "task_output", "task_stop"]);
+    expect(registered).toEqual(["bash", "task_output", "task_stop"]);
     await handlers.get("session_shutdown")!({}, {});
 
     const bare: string[] = [];

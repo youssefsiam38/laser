@@ -25,8 +25,9 @@
  *                        answers; the others ignore it)
  */
 import { ErrorCodes, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, ProtocolError, decisionPushPayload, isTerminalRunStatus, parseClientRequest, type AgentRun, type AgentWorktreeStatus, type JsonRpcError, type JsonRpcResponse, type NamerState, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
-import { unlinkSync } from "node:fs";
+import { existsSync, statSync, unlinkSync } from "node:fs";
 import { PRODUCT_VERSION } from "@lasercode/protocol";
+import { destinationFor, rewriteSessionFile } from "./session-move.js";
 import type { AgentRunRegistry } from "./agents/runs.js";
 import { removeRunWorktree, worktreeStatus } from "./agents/worktrees.js";
 import type { AgentStore } from "./agents/store.js";
@@ -304,6 +305,14 @@ export class Router {
         const removed = removals.find((removal) => removal?.worktree);
         return removed?.worktree ? { worktree: removed.worktree } : before ? { worktree: before.status } : {};
       }
+
+      case "pi/session/move":
+        return this.moveSession(req.params.path, req.params.cwd);
+
+      case "pi/session/close":
+        // Host → worker only (`moveSession` sends it): a client closing a
+        // session another view may be reading is nobody's to do.
+        throw new ProtocolError(ErrorCodes.Unsupported, "The app closes a session itself when it moves one.");
 
       case "pi/session/entries": {
         const { path } = req.params;
@@ -588,6 +597,68 @@ export class Router {
         break;
     }
     return this.forwardToWorker(req);
+  }
+
+  /**
+   * Move a saved session into a project (M13-T58): a Chat session becomes
+   * that project's, with its history, its name and its id. The host does the
+   * file work itself, while no worker holds the file — the session is closed
+   * in its worker first when one has it open — and then keeps every cache in
+   * step and registers the project when it is new. Refusals are for a
+   * person: what stops the move, and what to do about it.
+   */
+  private async moveSession(path: string, cwd: string): Promise<{ path: string }> {
+    const target = canonical(cwd);
+    const entry = this.catalog.get(path);
+    if (!entry) throw new ProtocolError(ErrorCodes.SessionNotFound, "That session is no longer on disk.");
+    if (entry.agent?.kind === "child" || entry.parentPath !== undefined) {
+      throw new ProtocolError(ErrorCodes.InvalidParams, "An agent started this session under another one, so it moves with that session's tree, not on its own.");
+    }
+    if (this.isWorkspace(target)) {
+      throw new ProtocolError(ErrorCodes.InvalidParams, `${labelOf(this.workspaceAgentOf(target)!)}'s workspace is not a project. Choose a project folder.`);
+    }
+    if (projectRootOf(target) !== target) {
+      throw new ProtocolError(ErrorCodes.InvalidParams, "That folder is an agent's worktree. Choose the project it belongs to instead.");
+    }
+    if (canonical(entry.cwd) === target) throw new ProtocolError(ErrorCodes.InvalidParams, "This session is already in that project.");
+    let stat: ReturnType<typeof statSync>;
+    try {
+      stat = statSync(target);
+    } catch {
+      throw new ProtocolError(ErrorCodes.InvalidParams, `There is no folder at ${cwd}. Choose one that exists on the computer running ${PRODUCT_DISPLAY_NAME}.`);
+    }
+    if (!stat.isDirectory()) throw new ProtocolError(ErrorCodes.InvalidParams, `${cwd} is a file, not a folder. Choose a folder.`);
+    // The default agent's plain record replaces the workspace kind, so a
+    // host without definitions has nothing to write there.
+    const agentName = this.agents().defaultAgentName;
+    const live = this.deps.runs?.list(path).some((run) => !isTerminalRunStatus(run.status)) ?? false;
+    if (live) throw new ProtocolError(ErrorCodes.SessionBusy, "An agent this session started is still working. Wait for it to finish, or end it, then move the session.");
+    // One writer per file: the worker lets go before the host touches it. A
+    // streaming turn is refused by the worker with its own reason.
+    if (this.pool.openSessions(entry.cwd).includes(path)) {
+      const worker = await this.pool.get(entry.cwd);
+      await worker.request("pi/session/close", { path });
+      this.pool.forgetSession(path);
+    }
+    const dest = destinationFor(this.catalog.sessionDir, path, target);
+    if (dest !== path && existsSync(dest)) {
+      throw new ProtocolError(ErrorCodes.Internal, `That project already has a session file named ${dest.split(/[\\/]/).pop() ?? dest}. Nothing was moved.`);
+    }
+    rewriteSessionFile(path, dest, { cwd: target, agentName });
+    this.catalog.invalidate(path);
+    this.catalog.invalidate(dest);
+    this.deps.views.invalidate(path);
+    this.unwritten.delete(path);
+    // Read where it was read: a session someone had caught up on must not
+    // come back as unread for having moved.
+    const seenAt = this.deps.attention.seenAt(path);
+    this.deps.attention.forget(path);
+    if (seenAt !== undefined) this.deps.attention.markSeen(dest, target);
+    // The project the person chose is a project from now on, exactly as the
+    // rail's Add project makes one: pinned, so it outlives its sessions.
+    this.deps.projects.add(target);
+    this.deps.projects.touch(target);
+    return { path: dest };
   }
 
   /**

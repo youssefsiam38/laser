@@ -73,6 +73,7 @@ import {
   Ellipsis,
   EyeOff,
   Folder,
+  FolderInput,
   FolderOpen,
   Info,
   MessageSquare,
@@ -89,6 +90,7 @@ import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRe
 import { latestRunForSession, runStatusLabel, runStatusTone, type AgentStatusTone } from "@/agents/model";
 import { describeWorktreeContents, forgetWorktreeDisposition, setWorktreeDisposition, useWorktreeStatus } from "@/agents/worktree";
 import { requestEndAgent } from "@/components/agents/end-agent";
+import { requestMoveSession } from "@/components/shell/move-session";
 import { collapsePanel } from "@/components/assistant-ui/elements/surfaces";
 import { foldKey, sessionFolds, useFoldOpen } from "@/components/assistant-ui/elements/session-folds";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -1089,7 +1091,11 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
   const isPinned = !archived && !row.child && pinned.has(path ?? "");
   const isEditing = editing === id;
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const beam = workspaceKindOf(row.cwd, workspaces) === "beam";
+  const workspaceKind = workspaceKindOf(row.cwd, workspaces);
+  const beam = workspaceKind === "beam";
+  // A Chat conversation of its own (not one an agent started under it) can
+  // move into a project (M13-T58); the same rule that put it in the Chat tab.
+  const movable = workspaceKind === "chat" && !row.child && !archived;
 
   const shownTitle = title ?? (path ? path.split("/").pop()?.slice(0, 8) : "New session") ?? "New session";
   // A child leads with the instance name its parent gave it; the session's
@@ -1201,6 +1207,7 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
           archived={archived}
           child={row.child}
           endable={activeRun ? row.runId : undefined}
+          movable={movable}
           onRename={() => onEdit(id)}
           onOpen={onOpen}
         />
@@ -1273,6 +1280,7 @@ function ThreadListItemMore({
   archived,
   child,
   endable,
+  movable = false,
   onRename,
   onOpen,
 }: {
@@ -1283,6 +1291,8 @@ function ThreadListItemMore({
   child: boolean;
   /** The run id to end, present only while the child's run is queued or running. */
   endable: string | undefined;
+  /** A Chat conversation: it can move into a project (M13-T58). */
+  movable?: boolean | undefined;
   onRename(): void;
   onOpen?: (() => void) | undefined;
 }) {
@@ -1333,6 +1343,17 @@ function ThreadListItemMore({
             <ThreadListItemMorePrimitive.Item className={menuItemClass} onSelect={onRename}>
               <Pencil />
               Rename
+            </ThreadListItemMorePrimitive.Item>
+          )}
+          {movable && (
+            <ThreadListItemMorePrimitive.Item
+              data-slot="move-session-item"
+              className={menuItemClass}
+              disabled={!path}
+              onSelect={() => path && requestMoveSession({ path, title })}
+            >
+              <FolderInput />
+              Move to a project…
             </ThreadListItemMorePrimitive.Item>
           )}
           {endable !== undefined && !archived && (

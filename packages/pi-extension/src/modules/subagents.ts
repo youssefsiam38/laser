@@ -6,14 +6,16 @@
  * module can do, because it runs inside the engine session:
  *
  *   1. **Register the tools the model sees.** A parent-capable session gets
- *      exactly `start_agent`, `send_agent_message`, `list_agents`,
+ *      exactly `start_agent`, `send_agent_message`, `inspect_fleet`,
  *      `inspect_agent`, `stop_agent` and `remove_agent_worktree`; a child
  *      gets `complete_agent_run`, the only successful ending of a run.
  *      `start_agent` is one generic tool over a compact catalog — never one
  *      tool per agent (docs/agents-leap/references/agent-harness-architecture.md).
  *      There is no waiting tool: a child's ending is delivered to its parent
- *      as a message that wakes it, so nothing is lost by not waiting, and
- *      `inspect_agent` reads one child in depth meanwhile (M13-T45).
+ *      as a message that wakes it, so nothing is lost by not waiting;
+ *      `inspect_fleet` shows the whole tree of work under the session — the
+ *      agents and the background commands, in the fleet column's own rows
+ *      (D-163) — and `inspect_agent` reads one agent in depth (M13-T45).
  *   2. **Tell a child who it is.** Its role — instance name, definition,
  *      task, the person's goal for the parent, and the checkout it works in
  *      (its own worktree, or its parent's, said plainly) — is appended to the
@@ -30,6 +32,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   AGENT_EVENT_MESSAGE_TYPE,
+  AGENT_FLEET_ROWS_MAX,
   AGENT_INSPECT_MESSAGES_DEFAULT,
   AGENT_INSPECT_MESSAGES_MAX,
   AGENT_MESSAGE_MAX,
@@ -45,8 +48,10 @@ import type {
   AgentHarnessBridge,
   AgentModelEvent,
   AgentRunSummary,
+  FleetRow,
   HarnessSessionRole,
   InspectAgentResult,
+  InspectFleetResult,
   StartAgentResult,
 } from "../agents-bridge.js";
 import type { LaserModule, ModuleContext } from "./index.js";
@@ -127,7 +132,7 @@ export function roleBlock(role: HarnessSessionRole, canDelegate: boolean, cwd: s
   }
   if (canDelegate) {
     parts.push(
-      "You can start other agents with start_agent; they run in the background, by default each in its own isolated worktree, and their results arrive here as messages that wake you. Never wait for one: carry on with your own work, and use inspect_agent to check on a single agent — it also shows a question the agent is paused on, which you can answer with send_agent_message. Use stop_agent for work that is no longer needed.",
+      "You can start other agents with start_agent; they run in the background, by default each in its own isolated worktree, and their results arrive here as messages that wake you. Never wait for one: carry on with your own work. inspect_fleet shows everything going on under you — the agents you started, theirs, and every background command — as the one tree the person sees; use inspect_agent to check on a single agent — it also shows a question the agent is paused on, which you can answer with send_agent_message. Use stop_agent for work that is no longer needed.",
       "A child with its own worktree leaves its work on a branch of its own when it finishes. Reviewing that branch, merging it into your checkout with git, and removing the worktree with remove_agent_worktree are yours: nothing does any of it for you, and the directory stays until you ask for it to go. A child started with worktree false has neither a branch nor a worktree, because its changes are already in your files.",
     );
   }
@@ -192,8 +197,52 @@ export function startedView(result: StartAgentResult): Record<string, unknown> {
 export function startedGuidance(result: Pick<StartAgentResult, "subagentName" | "runId">): string {
   return (
     `Do not wait for ${result.subagentName}. Carry on with your own work; when it ends, its result will be sent to you as a message. ` +
-    `Use inspect_agent with runId ${result.runId} to check on it meanwhile — a status of needs_input means it is paused on a question you can answer with send_agent_message.`
+    `Use inspect_agent with runId ${result.runId} to check on it meanwhile — a status of needs_input means it is paused on a question you can answer with send_agent_message — or inspect_fleet to see everything running under you at once.`
   );
+}
+
+/**
+ * `inspect_fleet`'s answer for the model: the tree in the fleet column's
+ * rows, with the identities spelled the reference's way (`agent_name`,
+ * `subagent_name`), a one-line summary, and the sentence that keeps the
+ * parent from polling — endings come to it as messages.
+ */
+export function fleetView(result: InspectFleetResult): Record<string, unknown> {
+  const rows = result.rows.map(fleetRowView);
+  const summary = fleetSummary(result);
+  return {
+    summary,
+    rows,
+    ...(result.omitted > 0
+      ? {
+          omitted: result.omitted,
+          note: `${result.omitted} more row${result.omitted === 1 ? "" : "s"} ${result.omitted === 1 ? "was" : "were"} left out, the deepest first; inspect_agent on an agent row lists the agents it started.`,
+        }
+      : {}),
+    guidance:
+      "Endings are sent to you as messages, so do not call inspect_fleet to wait. inspect_agent with a runId reads one agent in depth; task_output with a taskId reads one command's output; send_agent_message answers an agent that is Asking.",
+  };
+}
+
+/** "2 working, 1 needs you, 3 finished" — what the fleet's header says, in words. */
+export function fleetSummary(result: Pick<InspectFleetResult, "working" | "needsYou" | "finished" | "total">): string {
+  if (result.total === 0) return "Nothing is running under this session, and nothing has finished: no agents started, no background commands.";
+  const parts = [`${result.working} working`, `${result.needsYou} need${result.needsYou === 1 ? "s" : ""} you`, `${result.finished} finished`];
+  return parts.join(", ");
+}
+
+function fleetRowView(row: FleetRow): Record<string, unknown> {
+  let base: Record<string, unknown>;
+  if (row.kind === "agent") {
+    const { children: _children, agentName, subagentName, kind, ...others } = row;
+    void _children;
+    base = { kind, agent_name: agentName, subagent_name: subagentName, ...others };
+  } else {
+    const { children: _children, ...others } = row;
+    void _children;
+    base = { ...others };
+  }
+  return row.children.length > 0 ? { ...base, children: row.children.map(fleetRowView) } : base;
 }
 
 /** True in both shapes, and it names a branch only when there is one. */
@@ -321,38 +370,46 @@ function registerParentTools(pi: ExtensionAPI, bridge: AgentHarnessBridge): void
     },
   });
 
+  // D-163: the agent reads running work the way the person does — one tree,
+  // both kinds of work, the same words — scoped to what is under it.
   pi.registerTool({
-    name: "list_agents",
-    label: "List agents",
+    name: "inspect_fleet",
+    label: "Inspect the fleet",
     description:
-      "List the agents this session started, newest first, with each one's status and result when it has ended. " +
-      "Statuses: running (working), needs_input (paused on a question until someone answers — the question is included), completed, blocked (ended without finishing; its final message says what it needs), failed, cancelled.",
-    promptSnippet: "List the agents this session started and their status",
-    promptGuidelines: ["Use list_agents to see what is running, waiting on an answer, or ended; do not call it repeatedly to wait for a result, which is delivered to you when the agent ends."],
+      "The work going on under this session, as one tree: the agents you started, the agents they started, and the background commands any of them — you included — left running or finished. " +
+      "It is the same tree, in the same words, that the person sees in the fleet column. Each row says its kind (agent or command), its name, its status word (Working, Asking, Needs you, Done, Failed, Ended, Waiting), " +
+      "how long it has run, and one line — what it is doing, or how it ended — plus the id to follow it with: an agent row's runId for inspect_agent, a command row's taskId for task_output. " +
+      "Asking means an agent is paused on a question you can answer with send_agent_message; Needs you means it ended asking you something. " +
+      `At most ${String(AGENT_FLEET_ROWS_MAX)} rows, the deepest cut first; the result says how many were left out. Read-only: it wakes nothing and sends nothing.`,
+    promptSnippet: "See everything running under you — agents and background commands — as the tree the person sees",
+    promptGuidelines: [
+      "Use inspect_fleet to see what is running, asking, or ended under you, agents and background commands alike; do not call inspect_fleet repeatedly to wait for a result, which is delivered to you as a message when the work ends.",
+    ],
     parameters: Type.Object({}),
     async execute() {
-      const runs = await bridge.listAgents();
-      return asResult({ agents: runs.map(modelView) }, { runs });
+      const result = await bridge.inspectFleet();
+      return asResult(fleetView(result), result);
     },
   });
 
-  // M13-T45: the one way to look closely at a child without reading its
+  // M13-T45: the one way to look closely at an agent without reading its
   // whole conversation into this context. Read-only, so it is always safe.
   pi.registerTool({
     name: "inspect_agent",
     label: "Inspect an agent",
     description:
-      "Everything list_agents says about one agent you started, plus its whole task, where it works and whether that directory still exists, its activity (turns, tool calls, the tool running now, when it was last active), " +
-      "its last assistant messages (excerpted; 1 by default, at most " + String(AGENT_INSPECT_MESSAGES_MAX) + "), the question it is paused on when its status is needs_input, and any agents it started itself. " +
-      "Address it by the sessionId or a runId start_agent returned. Read-only: it never wakes the agent or sends it anything.",
-    promptSnippet: "Look closely at one agent you started: task, activity, last words, open question",
+      "One agent in depth — any agent row inspect_fleet shows: one you started, or one an agent of yours started. Its identities and status, its result when it has ended, its whole task, where it works and whether that directory still exists, its activity (turns, tool calls, the tool running now, when it was last active), " +
+      "its last assistant messages (excerpted; 1 by default, at most " + String(AGENT_INSPECT_MESSAGES_MAX) + "), the question it is paused on when its status is needs_input (paused on a question until someone answers), and any agents it started itself. " +
+      "Statuses: running, needs_input, completed, blocked (ended without finishing; its final message says what it needs), failed, cancelled. " +
+      "Address it by a sessionId or runId from start_agent or inspect_fleet. Read-only: it never wakes the agent or sends it anything.",
+    promptSnippet: "Look closely at one agent under you: task, activity, last words, open question",
     promptGuidelines: [
       "Use inspect_agent, by runId or sessionId, to check on one agent — never to wait for it: its ending is delivered to you as a message.",
       "Keep inspect_agent's messages small; pulling an agent's whole conversation into your context defeats delegating.",
     ],
     parameters: Type.Object({
-      runId: Type.Optional(Type.String({ minLength: 1, description: "A runId start_agent returned." })),
-      sessionId: Type.Optional(Type.String({ minLength: 1, description: "The sessionId start_agent returned, if you have that rather than a runId." })),
+      runId: Type.Optional(Type.String({ minLength: 1, description: "A runId from start_agent or inspect_fleet." })),
+      sessionId: Type.Optional(Type.String({ minLength: 1, description: "The agent's sessionId, if you have that rather than a runId." })),
       messages: Type.Optional(
         Type.Integer({
           minimum: 0,

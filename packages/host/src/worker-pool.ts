@@ -226,6 +226,19 @@ export class WorkerPool {
     return [...(this.entries.get(canonical(cwd))?.open ?? [])];
   }
 
+  /**
+   * The worker let go of a session (`pi/session/close`) and its file is about
+   * to move: nothing here may reopen it after a restart or route to it again.
+   */
+  forgetSession(path: string): void {
+    const cwd = this.sessionCwd.get(path);
+    this.sessionCwd.delete(path);
+    const entry = cwd !== undefined ? this.entries.get(cwd) : undefined;
+    if (!entry) return;
+    entry.open.delete(path);
+    entry.running.delete(path);
+  }
+
   /** Note that something happened for this worker, so it is not idle. */
   noteActivity(cwd: string): void {
     const entry = this.entries.get(canonical(cwd));

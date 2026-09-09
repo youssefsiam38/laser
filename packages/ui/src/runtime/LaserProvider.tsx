@@ -170,6 +170,14 @@ export interface LaserActions {
   /** Persist project priority shared by the rail and grouped sessions list. */
   reorderProjects(cwds: string[]): Promise<void>;
   removeProject(cwd: string): Promise<void>;
+  /**
+   * `pi/session/move` (M13-T58): a Chat session becomes `cwd`'s, with its
+   * history and name; resolves with the path it lives at now. The old path
+   * is let go of here — its view and its subscription — because nothing
+   * serves it any more. Throws with the host's reason rather than toasting:
+   * the move dialog shows it where the person is looking.
+   */
+  moveSession(path: string, cwd: string): Promise<string>;
   refreshProjects(): Promise<void>;
   /** Answer a `pi/project/trust_request`. The held-back worker starts (or does not). */
   answerTrust(cwd: string, trusted: boolean, remember: boolean): Promise<void>;
@@ -1075,6 +1083,17 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         const result = await guard(() => client.request("pi/project/reorder", { cwds }));
         if (result) setProjectList(result.projects);
         else await refreshProjects();
+      },
+      moveSession: async (path, cwd) => {
+        const { path: moved } = await client.request("pi/session/move", { path, cwd });
+        // The host has closed and moved it: the old path has no worker and no
+        // file. Drop this side's view and stop following it before the lists
+        // are re-read, so nothing here reopens a path that is gone.
+        client.untrack(path);
+        dispatch({ type: "closeView", path });
+        await refreshProjects();
+        await refreshSessions();
+        return moved;
       },
       removeProject: (cwd) =>
         guard(async () => {

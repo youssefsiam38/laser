@@ -40,7 +40,7 @@
  * so the file is created 0600, and `providerPayloads: "summary"` drops the
  * bodies entirely for anyone who wants that trade.
  */
-import { PRODUCT_NAME } from "@lasercode/protocol";
+import { PRODUCT_NAME, type AgentRun } from "@lasercode/protocol";
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -661,17 +661,6 @@ export class LogStore {
         });
         return;
       }
-      case "lasercode/subagents/event": {
-        this.record({
-          section: "subagents",
-          kind: "subagent_event",
-          cwd,
-          sessionPath,
-          summary: describeSubagentEvent(message.event),
-          detail: message.event,
-        });
-        return;
-      }
     }
   }
 
@@ -764,6 +753,26 @@ export class LogStore {
         // Deltas and state snapshots are the transcript's job, not the log's.
         return;
     }
+  }
+
+  /**
+   * A run's status moved (M13-T59). The row is filed under the parent's
+   * session when there is one, so the log of the session that delegated shows
+   * what became of its children; a root run is filed under its own session.
+   */
+  observeAgentRun(run: AgentRun): void {
+    const who = run.subagentName && run.subagentName !== run.agentName ? `${run.subagentName} (${run.agentName})` : run.agentName;
+    const why = run.error ?? run.endedBy?.reason ?? run.result?.message;
+    const level = run.status === "failed" ? "error" : run.status === "needs_input" || run.status === "blocked" ? "warn" : "info";
+    this.record({
+      section: "subagents",
+      kind: `run:${run.status}`,
+      cwd: run.projectCwd,
+      sessionPath: run.parent?.sessionPath ?? run.sessionPath,
+      level,
+      summary: `${who} ${run.status.replace("_", " ")}${why ? ` · ${why}` : ""}`,
+      detail: run,
+    });
   }
 
   observeWorkerStatus(info: WorkerInfo): void {
@@ -863,15 +872,6 @@ export function describeProviderRequest(payload: unknown): string {
   if (thinking !== undefined && thinking !== null) parts.push("thinking");
   parts.push(formatBytes(size));
   return parts.join(" · ");
-}
-
-function describeSubagentEvent(event: unknown): string {
-  const body = event as Record<string, unknown> | null;
-  if (!body || typeof body !== "object") return "subagent event";
-  const type = typeof body["type"] === "string" ? body["type"] : "event";
-  const run = typeof body["runId"] === "string" ? ` · ${body["runId"]}` : "";
-  const agent = typeof body["agent"] === "string" ? ` · ${body["agent"]}` : "";
-  return `${type}${agent}${run}`;
 }
 
 export function formatBytes(bytes: number): string {

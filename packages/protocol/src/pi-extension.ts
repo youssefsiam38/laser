@@ -97,7 +97,6 @@ export type PiExtensionMessage =
   | ({ type: "lasercode/provider/request" } & ProviderRequestRecord)
   | ({ type: "lasercode/provider/response" } & ProviderResponseRecord)
   | { type: "lasercode/account-usage/state"; state: AccountUsageState }
-  | { type: "lasercode/subagents/event"; event: unknown }
   /** Namer's early label for a tool call still running (`lasercode/namer/label`). */
   | { type: "lasercode/namer/label"; toolCallId: string; label: string }
   | { type: "lasercode/goal/state"; goal: SessionGoal | null }

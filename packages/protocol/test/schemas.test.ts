@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AGENT_FLEET_ROWS_MAX,
   AGENT_RUN_STATUSES,
   AGENT_RUN_TERMINAL,
   BACKGROUND_TOOL_NAMES,
@@ -61,6 +62,8 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/session/delete": { path: "/s.jsonl", worktree: "delete" },
   "pi/session/entries": { path: "/s.jsonl" },
   "pi/session/detach": { path: "/s.jsonl" },
+  "pi/session/move": { path: "/s.jsonl", cwd: "/p" },
+  "pi/session/close": { path: "/s.jsonl" },
   "pi/session/compact": { path: "/s.jsonl" },
   "pi/model/list": { path: "/s.jsonl" },
   "pi/model/set": { path: "/s.jsonl", model: { provider: "stub", id: "stub-1" } },
@@ -207,6 +210,16 @@ describe("client request schemas", () => {
     expect(del.safeParse({ path: "/s.jsonl", worktree: "delete" }).success).toBe(true);
     expect(del.safeParse({ path: "/s.jsonl", worktree: true }).success).toBe(false);
     expect(del.safeParse({ path: "/s.jsonl", worktree: "remove" }).success).toBe(false);
+  });
+
+  it("moves a session by its path and a project directory, and nothing else", () => {
+    const move = clientParamsSchemas["pi/session/move"];
+    expect(move.safeParse({ path: "/s.jsonl", cwd: "/p" }).success).toBe(true);
+    expect(move.safeParse({ path: "/s.jsonl" }).success).toBe(false);
+    expect(move.safeParse({ path: "/s.jsonl", cwd: "" }).success).toBe(false);
+    // The destination file is the host's decision: a caller cannot name one.
+    expect(move.safeParse({ path: "/s.jsonl", cwd: "/p", to: "/p/x.jsonl" }).success).toBe(false);
+    expect(clientParamsSchemas["pi/session/close"].safeParse({ path: "/s.jsonl", force: true }).success).toBe(false);
   });
 
   it("addresses a worktree by its child session's path, never by a fifth identity", () => {
@@ -400,6 +413,17 @@ describe("run status vocabulary", () => {
     expect([...HARNESS_TOOL_NAMES]).not.toContain("wait_for_agents");
     // D-162: the same rule for background commands — no `task_wait`; every
     // exit reaches the model as a message.
-    expect([...BACKGROUND_TOOL_NAMES]).toEqual(["task_list", "task_output", "task_stop"]);
+    expect([...BACKGROUND_TOOL_NAMES]).not.toContain("task_wait");
+  });
+
+  it("names one fleet tool and no list of either kind (D-163)", () => {
+    // The agent reads running work the way the person does: one tree, both
+    // kinds of work, scoped to its session. `list_agents` and `task_list`
+    // were two half-views of the same thing and are gone.
+    expect([...HARNESS_TOOL_NAMES]).toEqual(["start_agent", "send_agent_message", "inspect_fleet", "inspect_agent", "stop_agent", "remove_agent_worktree", "complete_agent_run"]);
+    expect([...HARNESS_TOOL_NAMES]).not.toContain("list_agents");
+    expect([...BACKGROUND_TOOL_NAMES]).toEqual(["task_output", "task_stop"]);
+    expect([...BACKGROUND_TOOL_NAMES]).not.toContain("task_list");
+    expect(AGENT_FLEET_ROWS_MAX).toBe(50);
   });
 });

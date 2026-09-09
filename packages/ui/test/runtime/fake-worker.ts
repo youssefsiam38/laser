@@ -364,6 +364,24 @@ function handle(world: World, client: FakeWorkerClient, method: string, params: 
     case "session/cancel":
       stopTurn(world, params.path as string);
       return {};
+    /**
+     * `pi/session/move` as the host does it (M13-T58): the file changes home,
+     * its header names the project, and the old path is served by nobody.
+     * Refused mid-turn, as the worker's `pi/session/close` refuses.
+     */
+    case "pi/session/move": {
+      const from = params.path as string;
+      const cwd = params.cwd as string;
+      const live = world.live[from];
+      const listed = world.sessions.findIndex((s) => s.path === from);
+      if (!live || listed < 0) throw new Error("That session is no longer on disk.");
+      if (live.streaming) throw new Error("This chat is still answering. Wait for it to finish, or stop it, then move it.");
+      const moved = `${cwd}/sessions/${from.split("/").pop() ?? "moved.jsonl"}`;
+      world.sessions[listed] = summary({ ...world.sessions[listed]!, path: moved, cwd, agent: { agentName: "default", kind: "root" } });
+      delete world.live[from];
+      world.live[moved] = { ...live, state: { ...live.state, path: moved, cwd, agent: { agentName: "default", kind: "root" } } };
+      return { path: moved };
+    }
     case "pi/session/detach":
     case "pi/session/seen":
       return {};

@@ -112,7 +112,9 @@ describe("WorkerServer agents", () => {
     const opened = h.drivers[0]!.opened;
     expect(opened.agent).toMatchObject({ definition: { name: "default", engineInstructions: true }, role: { agentName: "default", kind: "root", depth: 0 }, record: { agentName: "default", kind: "root" }, policy: { maxDepth: 3 } });
     expect(opened.agent?.bridge).toBeDefined();
-    expect(opened.agent?.backgroundWork).toEqual({ cwd: join(base, "project"), foregroundCommandSeconds: 120 });
+    expect(opened.agent?.backgroundWork).toMatchObject({ cwd: join(base, "project"), foregroundCommandSeconds: 120 });
+    // Bound to the session: `task_output` on a command of an agent under it goes through the worker (D-163).
+    expect(typeof opened.agent?.backgroundWork?.readTask).toBe("function");
     // The Beam skill was written on construction.
     expect(existsSync(join(base, "agent", "skills", `${PRODUCT_NAME}-beam`, "SKILL.md"))).toBe(true);
   });
@@ -261,6 +263,27 @@ describe("WorkerServer agents", () => {
     expect(pending).toHaveLength(3);
   });
 
+  it("labels a top-level session's calls only: a child agent's tool calls are never labelled", async () => {
+    const runtime = fakeNamerRuntime(() => "listing files");
+    const h = harness({ namerModels: async () => runtime });
+    await h.call(1, "agents/sync", { snapshot: namedSnapshot() });
+    const parentPath = join(base, "sessions", "parent.jsonl");
+    const childPath = join(base, "sessions", "child.jsonl");
+    writeFileSync(parentPath, `${JSON.stringify({ type: "session", id: "p" })}\n${JSON.stringify({ type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, data: { agentName: "default", kind: "root" } })}\n`);
+    writeFileSync(childPath, `${JSON.stringify({ type: "session", id: "c" })}\n${JSON.stringify({ type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, data: { agentName: "default", kind: "child", subagentName: "fixer", parentPath, parentSessionId: "p", rootPath: parentPath, runId: "run_old" } })}\n`);
+    await h.call(2, "session/load", { path: childPath });
+    h.drivers[0]!.emit({ type: "update", update: { kind: "tool_execution_start", toolCallId: "c1", toolName: "bash", args: { command: "ls" } } });
+    await tick();
+    expect(runtime.calls).toBe(0);
+    // The parent, a top-level session, is labelled as before.
+    await h.call(3, "session/load", { path: parentPath });
+    h.drivers[1]!.emit({ type: "update", update: { kind: "tool_execution_start", toolCallId: "p1", toolName: "bash", args: { command: "ls" } } });
+    await tick();
+    expect(runtime.calls).toBe(1);
+    const labels = h.notifications("pi/extension/message").map((n) => n.params as { path: string; message: { type: string } }).filter((n) => n.message.type === "lasercode/namer/label");
+    expect(labels.map((l) => l.path)).toEqual([parentPath]);
+  });
+
   it("labels nothing while Namer has no model", async () => {
     const runtime = fakeNamerRuntime(() => "listing files");
     const h = harness({ namerModels: async () => runtime });
@@ -269,6 +292,39 @@ describe("WorkerServer agents", () => {
     await tick();
     expect(runtime.calls).toBe(0);
     expect(h.notifications("pi/extension/message").filter((n) => (n.params as { message: { type: string } }).message.type === "lasercode/namer/label")).toHaveLength(0);
+  });
+
+  // D-163: a background command going past the worker is indexed there, so
+  // the harness can put it beside the runs in the fleet an agent reads, and
+  // a closed session's running commands are recorded as stopped.
+  it("indexes background commands as they go past and shows them in the session's fleet", async () => {
+    const h = harness();
+    const created = await h.call(1, "session/new", { cwd: join(base, "project") });
+    const path = (created.result as { state: SessionState }).state.path;
+    const bridge = h.server.agents().bridgeOf(path)!;
+    expect(await bridge.inspectFleet()).toEqual({ rows: [], working: 0, needsYou: 0, finished: 0, total: 0, omitted: 0 });
+    const driver = h.drivers[0]!;
+    const update = { id: "t-dev", command: "pnpm vite dev", title: "pnpm vite dev", status: "running" as const, origin: "background" as const, startedAt: new Date(Date.now() - 5_000).toISOString(), outputBytes: 240, activity: "ready in 412 ms", logPath: join(base, "t-dev.log") };
+    driver.emit({ type: "extension", message: { type: "lasercode/task/update", task: update } });
+    // Still forwarded to the host, unchanged.
+    expect(h.notifications("pi/extension/message").at(-1)!.params).toMatchObject({ path, message: { type: "lasercode/task/update", task: { id: "t-dev", logPath: join(base, "t-dev.log") } } });
+    const fleet = await bridge.inspectFleet();
+    expect(fleet).toMatchObject({ working: 1, finished: 0, total: 1 });
+    expect(fleet.rows[0]).toMatchObject({ kind: "command", taskId: "t-dev", title: "pnpm vite dev", status: "Working", line: "ready in 412 ms", depth: 0 });
+    // An update replaces in place.
+    driver.emit({ type: "extension", message: { type: "lasercode/task/update", task: { ...update, status: "completed", exitCode: 0, endedAt: new Date().toISOString() } } });
+    expect((await bridge.inspectFleet()).rows).toEqual([expect.objectContaining({ taskId: "t-dev", state: "completed", status: "Done", line: "exit code 0" })]);
+    // A session that closes under a running command leaves it stopped, not spinning.
+    driver.emit({ type: "extension", message: { type: "lasercode/task/update", task: { ...update, id: "t-live" } } });
+    await driver.dispose();
+    expect(h.server.openSessions()).toEqual([]);
+    const reopened = await h.call(2, "session/load", { path });
+    expect(reopened.error).toBeUndefined();
+    const again = h.server.agents().bridgeOf(path)!;
+    expect((await again.inspectFleet()).rows.map((row) => [row.title, row.status, row.line])).toEqual([
+      ["pnpm vite dev", "Done", "exit code 0"],
+      ["pnpm vite dev", "Ended", "the session ended"],
+    ]);
   });
 
   it("follows a fork to the new path", async () => {

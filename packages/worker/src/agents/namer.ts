@@ -17,18 +17,15 @@ import { SESSION_NAME_MAX, SESSION_NAME_MIN, type AgentModelChoice, type ModelCa
 
 export const TOOL_LABEL_MAX = 40;
 export const NAMER_TIMEOUT_MS = 8_000;
-/**
- * Label requests allowed in flight at once **for one session**.
- *
- * One was wrong: a turn that fires several tool calls in the same tick had
- * every call after the first silently unlabelled, which is exactly the row the
- * person is looking at. Unbounded is wrong too — a runaway turn would pay for
- * a completion per call. Three matches the fan-out a model actually produces
- * in one batch (the aggregate row only ever renders the running call's label,
- * so a deeper queue buys nothing) and caps the spend at three small
- * completions per session at any instant.
+/*
+ * Tool labels have no in-flight cap. There was one (three per session), and
+ * it was the wrong trade: the person is looking at exactly the row that went
+ * unlabelled. Every call that starts is asked about, at once; the only things
+ * that stop a request are a call already asked about and a call that has
+ * already ended — a label for a row that is gone is spend with nothing to show
+ * for it. Spend is bounded by the naming model being the cheapest allowed and
+ * by the label being labelled once per call id.
  */
-export const TOOL_LABEL_MAX_IN_FLIGHT = 3;
 /** Call ids one session remembers, so the same call is never labelled twice. */
 const LABELLED_MEMORY = 64;
 export const NAMER_MAX_CANDIDATES = 6;
@@ -65,8 +62,6 @@ export interface NamerServiceOptions {
   catalog?: () => Promise<{ models: ModelCatalogEntry[]; configuredProviders: ReadonlySet<string> }>;
   timeoutMs?: number;
   now?: () => number;
-  /** Label requests in flight at once per session; defaults to `TOOL_LABEL_MAX_IN_FLIGHT`. */
-  maxLabelsInFlight?: number;
 }
 
 /** What `labelTool` needs to know about the call it was asked to label. */
@@ -178,7 +173,6 @@ function textOf(completion: NamerCompletion): string {
 
 /** Per-session label bookkeeping: what is in flight, and what has been asked for already. */
 interface SessionLabels {
-  inFlight: number;
   /** Call ids already asked about, newest last; trimmed to `LABELLED_MEMORY`. */
   order: string[];
   ids: Set<string>;
@@ -187,14 +181,12 @@ interface SessionLabels {
 export class NamerService {
   private readonly timeoutMs: number;
   private readonly now: () => number;
-  private readonly maxLabelsInFlight: number;
   /** Label bookkeeping per session; dropped by `forget()` when the session closes. */
   private readonly labels = new Map<string, SessionLabels>();
 
   constructor(private readonly options: NamerServiceOptions) {
     this.timeoutMs = options.timeoutMs ?? NAMER_TIMEOUT_MS;
     this.now = options.now ?? Date.now;
-    this.maxLabelsInFlight = options.maxLabelsInFlight ?? TOOL_LABEL_MAX_IN_FLIGHT;
   }
 
   /** Whether naming can happen at all right now. */
@@ -215,31 +207,25 @@ export class NamerService {
   /**
    * A present-progressive label for a tool call that just started.
    *
-   * A burst of calls is the normal case, so up to `TOOL_LABEL_MAX_IN_FLIGHT`
-   * requests per session run at once; beyond that, and for a call already
-   * labelled or already finished, this returns null immediately rather than
-   * queueing work whose answer nobody would see. Never throws.
+   * A burst of calls is the normal case and every one of them is asked about
+   * at once; for a call already labelled or already finished this returns
+   * null immediately rather than doing work whose answer nobody would see.
+   * Never throws.
    */
   async labelTool(sessionKey: string, toolCallId: string, toolName: string, args: unknown, options: LabelToolOptions = {}): Promise<string | null> {
     const choice = this.options.model();
     if (!choice) return null;
     const session = this.sessionLabels(sessionKey);
     if (session.ids.has(toolCallId)) return null;
-    if (session.inFlight >= this.maxLabelsInFlight) return null;
     // Already over by the time the event was handled: a label for it is spend
     // with nothing to show for it.
     if (options.stillRunning?.() === false) return null;
     this.remember(session, toolCallId);
-    session.inFlight += 1;
-    try {
-      const raw = await this.complete(choice, toolLabelPrompt(toolName, args), 20);
-      if (raw === null) return null;
-      if (options.stillRunning?.() === false) return null;
-      const label = cleanToolLabel(raw);
-      return label === "" ? null : label;
-    } finally {
-      session.inFlight -= 1;
-    }
+    const raw = await this.complete(choice, toolLabelPrompt(toolName, args), 20);
+    if (raw === null) return null;
+    if (options.stillRunning?.() === false) return null;
+    const label = cleanToolLabel(raw);
+    return label === "" ? null : label;
   }
 
   /** A session closed: its label bookkeeping goes with it. */
@@ -250,7 +236,7 @@ export class NamerService {
   private sessionLabels(sessionKey: string): SessionLabels {
     let session = this.labels.get(sessionKey);
     if (!session) {
-      session = { inFlight: 0, order: [], ids: new Set() };
+      session = { order: [], ids: new Set() };
       this.labels.set(sessionKey, session);
     }
     return session;
