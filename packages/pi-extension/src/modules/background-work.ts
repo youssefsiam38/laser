@@ -10,7 +10,7 @@
  *   - `background: true` — start the command, return a task id at once;
  *   - promotion — after `foregroundCommandSeconds` a still-running foreground
  *     command keeps running as a task and the tool returns the output so far;
- *   - `task_list`, `task_output`, `task_wait`, `task_stop` to follow tasks;
+ *   - `task_list`, `task_output`, `task_stop` to follow tasks;
  *   - a `lasercode/task/update` for every task the person can see, carrying the
  *     log file it streams into so the host can serve `tasks/output`.
  *
@@ -20,11 +20,16 @@
  * keeps an exact byte count and the last 256 KiB without depending on the
  * engine's snapshot cadence.
  *
- * Exit notifications: a promoted task ends with `triggerTurn: true`, because
- * the model was told "keep working, you will hear back" and an idle model
- * must wake up to use the result. An explicit background task ends with
- * `triggerTurn: false`: the model asked for fire-and-forget, so the exit is
- * recorded and delivered with the next turn rather than starting one.
+ * Nothing waits (D-162, the rule D-158 set for child agents): there is no
+ * waiting tool, and a background task's exit — explicit or promoted alike —
+ * reaches the model as a `lasercode/task-event` message with `triggerTurn:
+ * true`, carrying status, exit code and the tail of the output, so an idle
+ * model wakes to use it and a running one sees it before its next call. The
+ * start result says so. The one exception is the model's own choice, in
+ * words: `bash` with `background: true, notify: false` (a dev server, a
+ * watcher, anything it said it does not need to hear from) ends with
+ * `triggerTurn: false` — recorded and shown with the next turn, never waking
+ * one. `notify` without `background` is ignored.
  */
 import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
 import { randomBytes } from "node:crypto";
@@ -55,8 +60,6 @@ const TAIL_BYTES = 256 * 1024;
 const DEFAULT_TAIL_LINES = 100;
 const PROMOTED_TAIL_LINES = 40;
 const TITLE_MAX = 80;
-const WAIT_DEFAULT_SECONDS = 300;
-const WAIT_MAX_SECONDS = 3600;
 /** Minimum spacing between two task re-emits for output growth alone. */
 const PUBLISH_THROTTLE_MS = 500;
 /** How long `task_stop` waits for the killed process to be reaped. */
@@ -76,6 +79,8 @@ interface TaskRecord {
   command: string;
   status: TaskStatus;
   mode: TaskMode;
+  /** Whether the exit wakes the model's turn; false only for an explicit `notify: false`. */
+  notify: boolean;
   exitCode: number | null | undefined;
   startedAt: string;
   endedAt?: string;
@@ -204,6 +209,8 @@ interface StartInput {
   command: string;
   timeout: number | undefined;
   mode: TaskMode;
+  /** False only for an explicit background task the model does not want to hear from. */
+  notify: boolean;
   toolCallId: string;
   toolCtx: ExtensionContext;
   /** Forwarded while the tool call is still foreground; dropped after promotion. */
@@ -238,6 +245,7 @@ function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOpti
     command: input.command,
     status: "running",
     mode: input.mode,
+    notify: input.notify,
     exitCode: undefined,
     startedAt: new Date().toISOString(),
     bytes: 0,
@@ -326,8 +334,9 @@ function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOpti
     task.stream?.end();
     task.stream = undefined;
     publish(task);
-    // The rule: promoted → wake the model; explicit background → record only;
-    // foreground → the tool call itself carried the result.
+    // The rule (D-162): a foreground call carried its own result; every other
+    // exit is a message to the model, and `task.notify` says whether it
+    // wakes a turn (always, unless the model asked `notify: false`).
     if (task.mode !== "foreground") state.notify?.(task);
     settle();
   })();
@@ -353,6 +362,8 @@ function summary(task: TaskRecord) {
     outputBytes: task.bytes,
     background: task.mode === "background",
     promoted: task.mode === "promoted",
+    // Which endings wake a turn; false is the model's own `notify: false`.
+    notify: task.mode !== "foreground" && task.notify,
   };
 }
 
@@ -378,8 +389,24 @@ function promotedText(task: TaskRecord, seconds: number): string {
   return [
     `Still running after ${formatSeconds(seconds)} s; it continues as background task ${task.id}. Output so far (last lines):`,
     tail || "(no output yet)",
-    `Use task_output ${task.id} for more, task_wait to block until it exits, or task_stop to end it.`,
+    followGuidance(task.id),
   ].join("\n");
+}
+
+/** The sentence the model reads the moment a task goes to the background: carry on; the exit comes to you. */
+function followGuidance(taskId: string): string {
+  return (
+    `Do not wait for task ${taskId}. Carry on with your own work; when it exits, its status, exit code and the last lines of its output will be sent to you as a message. ` +
+    `Use task_output ${taskId} to read its output meanwhile, or task_stop ${taskId} to end it.`
+  );
+}
+
+/** The same moment for a task the model asked not to hear from. */
+function quietGuidance(taskId: string): string {
+  return (
+    `You asked not to be told when task ${taskId} exits: its ending is recorded and shown to you with your next turn, and never starts one. ` +
+    `Use task_output ${taskId} to read its output, or task_stop ${taskId} to end it.`
+  );
 }
 
 function text(value: string): AgentToolResult<Record<string, unknown>>["content"] {
@@ -427,32 +454,41 @@ export const backgroundWorkModule: LaserModule = {
     pi.registerTool({
       name: "bash",
       label: base.label,
-      description: `${base.description} A foreground command still running after ${formatSeconds(seconds)} seconds keeps running as a background task; the tool then returns the output so far and a task id to follow it with.`,
+      description: `${base.description} A foreground command still running after ${formatSeconds(seconds)} seconds keeps running as a background task; the tool then returns the output so far and a task id, and the task's exit is sent to you as a message.`,
       promptSnippet: `${base.promptSnippet ?? "Execute bash commands"}; long commands continue as background tasks`,
       promptGuidelines: [
         ...(base.promptGuidelines ?? []),
-        "Use bash with background true for servers, watchers and anything you do not need to wait for; follow it with task_output, task_wait or task_stop.",
-        `A bash command still running after ${formatSeconds(seconds)} s becomes a background task by itself; when the result says so, keep working and call task_wait with its task id when you need the outcome.`,
+        "Use bash with background true for servers, watchers and anything whose outcome you do not need before your next step; it returns a task id at once, and the task's exit is sent to you as a message. Add notify false for a command you do not need to hear back from at all.",
+        `A bash command still running after ${formatSeconds(seconds)} s becomes a background task by itself; when the result says so, carry on with your own work — its exit will be sent to you. Read output before then with task_output, or end it with task_stop.`,
       ],
       parameters: Type.Object({
         command: Type.String({ description: "The command to run." }),
         timeout: Type.Optional(Type.Number({ description: "Kill the command after this many seconds (optional, no default)." })),
         background: Type.Optional(
-          Type.Boolean({ description: "Run in the background and return a task id immediately; use task_output, task_wait and task_stop to follow it." }),
+          Type.Boolean({
+            description: "Run in the background and return a task id immediately. You will be told when it exits; carry on meanwhile. Use task_output to read its output before then, or task_stop to end it.",
+          }),
+        ),
+        notify: Type.Optional(
+          Type.Boolean({
+            description:
+              "Only with background true (default true). false means the exit is recorded and shown in your next turn and never wakes one: for a dev server, a watcher, anything you do not need to hear back from. Ignored without background.",
+          }),
         ),
       }),
-      async execute(toolCallId, { command, timeout, background }, signal, onUpdate, toolCtx): Promise<AgentToolResult<BashOverrideDetails>> {
+      async execute(toolCallId, { command, timeout, background, notify }, signal, onUpdate, toolCtx): Promise<AgentToolResult<BashOverrideDetails>> {
         if (background === true) {
-          const task = startTask(ctx, state, options, { command, timeout, mode: "background", toolCallId, toolCtx, onUpdate: undefined }, publish);
+          const quiet = notify === false;
+          const task = startTask(ctx, state, options, { command, timeout, mode: "background", notify: !quiet, toolCallId, toolCtx, onUpdate: undefined }, publish);
           return {
-            content: text(
-              `Started background task ${task.id}: ${firstLine(command)}. Use task_output ${task.id} to read its output, task_wait to block until it exits, or task_stop to end it. Its exit is reported as a message.`,
-            ),
+            content: text(`Started background task ${task.id}: ${firstLine(command)}.\n${quiet ? quietGuidance(task.id) : followGuidance(task.id)}`),
             details: { taskId: task.id, background: true },
           };
         }
 
-        const task = startTask(ctx, state, options, { command, timeout, mode: "foreground", toolCallId, toolCtx, onUpdate }, publish);
+        // `notify` is meaningful only with `background`; a foreground command
+        // that outruns the limit is promoted and wakes the model regardless.
+        const task = startTask(ctx, state, options, { command, timeout, mode: "foreground", notify: true, toolCallId, toolCtx, onUpdate }, publish);
         // The turn's cancel reaches the process only while the call is foreground.
         const onTurnAbort = (): void => stopTask(task, "turn");
         if (signal?.aborted) onTurnAbort();
@@ -485,7 +521,7 @@ export const backgroundWorkModule: LaserModule = {
       label: "List background tasks",
       description: "List this session's background tasks: id, command, status, exit code, timing and output size.",
       promptSnippet: "List background tasks and their status",
-      promptGuidelines: ["Use task_list to recall task ids; use task_wait rather than polling task_list."],
+      promptGuidelines: ["Use task_list to recall task ids and see which tasks are still running; a task's exit is sent to you as a message, so there is no need to call task_list again for it."],
       parameters: Type.Object({}),
       async execute() {
         const tasks = [...state.tasks.values()].map(summary);
@@ -498,7 +534,7 @@ export const backgroundWorkModule: LaserModule = {
       label: "Read task output",
       description: `Return the last lines of a background task's output (default ${DEFAULT_TAIL_LINES}), with its status.`,
       promptSnippet: "Read the latest output of a background task",
-      promptGuidelines: ["Use task_output with a task id to read what a background task printed; pass tail for more lines."],
+      promptGuidelines: ["Use task_output with a task id to read what a background task has printed so far, before its exit reaches you; pass tail for more lines."],
       parameters: Type.Object({
         taskId: Type.String({ minLength: 1, description: "The task id." }),
         tail: Type.Optional(Type.Integer({ minimum: 1, maximum: 5000, description: `Lines from the end to return (default ${DEFAULT_TAIL_LINES}).` })),
@@ -511,42 +547,6 @@ export const backgroundWorkModule: LaserModule = {
           content: text(`${header}\n${lines || "(no output)"}`),
           details: { ...summary(task), lines: lines ? lines.split("\n").length : 0 },
         };
-      },
-    });
-
-    pi.registerTool({
-      name: "task_wait",
-      label: "Wait for tasks",
-      description: `Block until the given background tasks (or all running ones) exit, or the timeout passes (default ${WAIT_DEFAULT_SECONDS} s, at most ${WAIT_MAX_SECONDS}). Returns each task's status and whether the wait timed out.`,
-      promptSnippet: "Wait for background tasks to exit",
-      promptGuidelines: ["Use task_wait when you need a background task's outcome before continuing; it returns each task's status and exit code."],
-      parameters: Type.Object({
-        taskIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { maxItems: 100, description: "Task ids to wait for; omit for every running task." })),
-        timeoutSeconds: Type.Optional(
-          Type.Number({ minimum: 1, maximum: WAIT_MAX_SECONDS, description: `Seconds before returning with timedOut true (default ${WAIT_DEFAULT_SECONDS}).` }),
-        ),
-      }),
-      async execute(_toolCallId, { taskIds, timeoutSeconds }, signal) {
-        const tasks = taskIds ? taskIds.map(requireTask) : [...state.tasks.values()].filter((t) => t.status === "running");
-        const limit = Math.min(WAIT_MAX_SECONDS, Math.max(0, timeoutSeconds ?? WAIT_DEFAULT_SECONDS)) * 1000;
-        let timer: NodeJS.Timeout | undefined;
-        let onAbort: (() => void) | undefined;
-        const outcome = await Promise.race([
-          Promise.all(tasks.map((t) => t.done)).then(() => "done" as const),
-          new Promise<"timeout">((resolve) => {
-            timer = setTimeout(() => resolve("timeout"), limit);
-          }),
-          new Promise<"aborted">((resolve) => {
-            onAbort = () => resolve("aborted");
-            if (signal?.aborted) onAbort();
-            else signal?.addEventListener("abort", onAbort, { once: true });
-          }),
-        ]);
-        if (timer) clearTimeout(timer);
-        if (onAbort) signal?.removeEventListener("abort", onAbort);
-        if (outcome === "aborted") throw new Error("task_wait was cancelled; the tasks keep running.");
-        const result = { tasks: tasks.map((t) => ({ taskId: t.id, status: t.status, exitCode: t.exitCode ?? null })), timedOut: outcome === "timeout" };
-        return { content: text(JSON.stringify(result, null, 2)), details: result };
       },
     });
 
@@ -589,10 +589,10 @@ export const backgroundWorkModule: LaserModule = {
       try {
         pi.sendMessage(
           { customType: TASK_EVENT_MESSAGE_TYPE, content: exitText(task), display: true, details: summary(task) },
-          // Promoted: the model was told to carry on and will hear back, so an
-          // idle model is woken. Explicit background: fire-and-forget by the
-          // model's own choice; the exit waits for the next turn.
-          { deliverAs: "steer", triggerTurn: task.mode === "promoted" },
+          // The model was told it would hear back, so an idle model is woken
+          // (D-162) — unless it asked `notify: false`, in which case the exit
+          // is recorded and shown with the next turn without starting one.
+          { deliverAs: "steer", triggerTurn: task.notify },
         );
       } catch (error) {
         ctx.send({ type: "lasercode/module/log", module: "background-work", level: "warn", message: `could not report task ${task.id}: ${describe(error)}` });

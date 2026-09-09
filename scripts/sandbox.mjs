@@ -112,6 +112,7 @@ const provider = createServer((req, res) => {
     const msgs = request.messages ?? [];
     const last = msgs.at(-1)?.content;
     const prompt = textOf(last);
+    if (process.env.SANDBOX_TRACE === "1") console.error(`provider: ${msgs.at(-1)?.role ?? "?"} «${prompt.replace(/\s+/g, " ").slice(0, 100)}»`);
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
     const base = { id: "c", object: "chat.completion.chunk", created: 1, model: "stub-1" };
     const send = (o) => res.write(`data: ${JSON.stringify(o)}\n\n`);
@@ -159,9 +160,17 @@ const provider = createServer((req, res) => {
           : callTool("start_agent", { agent_name: "default", subagent_name: "explorer", task: "List the files here and report the count." });
       }
       if (lastRole === "tool" && previousTool === "start_agent") return sayShort("Started **explorer** in the background. I will report when it finishes.");
+      // "background" takes the D-162 path: a command started with
+      // `background: true`, no waiting tool, and the exit arriving as a message
+      // that wakes this model — which then reads the outcome.
+      // The exit message itself says "Background task …", so it is recognised
+      // before the person's own "background" request is.
+      if (lastRole === "user" && /exit code|exited/i.test(prompt)) return sayShort("The background command exited; I read its output: **finished**.");
+      if (lastRole === "user" && /\bbackground\b/i.test(prompt)) return callTool("bash", { command: "sleep 3; echo finished", background: true });
+      if (lastRole === "tool" && previousTool === "bash") return sayShort("Started the command in the background. Carrying on with other work.");
       if (lastRole === "tool") return sayShort("Noted the result.");
       if (/explorer|counted/i.test(prompt)) return sayShort("The explorer finished: it counted the files.");
-      return sayShort("Noted. Say **delegate** to start a subagent.");
+      return sayShort("Noted. Say **delegate** to start a subagent, or **background** to start a command that reports back.");
     }
     // Goal regression specimen: the real engine terminates on this tool with
     // no assistant text. Its durable summary must remain readable in chat.

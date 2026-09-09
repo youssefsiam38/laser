@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AGENT_RUN_STATUSES,
   AGENT_RUN_TERMINAL,
+  BACKGROUND_TOOL_NAMES,
   ErrorCodes,
   HARNESS_TOOL_NAMES,
   ProtocolError,
@@ -397,5 +398,8 @@ describe("run status vocabulary", () => {
     expect(agentRunStatusSchema.safeParse("timed_out").success).toBe(false);
     expect([...HARNESS_TOOL_NAMES]).toContain("inspect_agent");
     expect([...HARNESS_TOOL_NAMES]).not.toContain("wait_for_agents");
+    // D-162: the same rule for background commands — no `task_wait`; every
+    // exit reaches the model as a message.
+    expect([...BACKGROUND_TOOL_NAMES]).toEqual(["task_list", "task_output", "task_stop"]);
   });
 });

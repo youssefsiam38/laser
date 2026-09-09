@@ -74,7 +74,8 @@ export const HARNESS_TOOL_NAMES = [
   "complete_agent_run",
 ] as const;
 export type HarnessToolName = (typeof HARNESS_TOOL_NAMES)[number];
-export const BACKGROUND_TOOL_NAMES = ["task_list", "task_output", "task_wait", "task_stop"] as const;
+/** The background-work tools; there is no waiting tool (D-162), a task's exit comes to the model as a message. */
+export const BACKGROUND_TOOL_NAMES = ["task_list", "task_output", "task_stop"] as const;
 export type BackgroundToolName = (typeof BACKGROUND_TOOL_NAMES)[number];
 
 // ---------- definitions ----------

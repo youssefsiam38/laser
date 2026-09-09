@@ -540,8 +540,12 @@ blockers, not advice.
   what it discarded. Deleting a child's session asks what to do with its
   worktree; `pi/session/delete` defaults to **keep** when the field is absent.
   A person can clear a leftover from the fleet without deleting the session.
-- No waiting tool (D-158): a child's ending is delivered to its parent as a
-  message that wakes its turn, and `start_agent`'s result says so. `inspect_agent`
+- No waiting tool (D-158, D-162): a child's ending is delivered to its parent
+  as a message that wakes its turn, and `start_agent`'s result says so. The
+  same holds for a background command: `task_wait` does not exist, every exit
+  — explicit or promoted — wakes the model with status, exit code and the
+  tail of output, and only `bash` with `background: true, notify: false`
+  declines that wake (recorded, shown in the next turn). `inspect_agent`
   reads one child, is read-only, never wakes it, and returns at most ten
   excerpted messages. `needs_input` is a live, attention-toned run status —
   the child is paused on a question — never terminal and never folded into

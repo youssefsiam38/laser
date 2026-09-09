@@ -371,17 +371,26 @@ process-tree kill, output truncation stay the engine's) and adds:
   returns the output so far and the task id, and the task keeps every byte in
   its log file plus the last 256 KiB in memory, with its exit code when it
   ends;
-- `task_list`, `task_output`, `task_wait` (300 s default, 3600 s at most) and
-  `task_stop` (`BACKGROUND_TOOL_NAMES`) to follow tasks; a task is `running`,
+- `task_list`, `task_output` and `task_stop` (`BACKGROUND_TOOL_NAMES`) to
+  follow tasks — read output before the exit, or end one; there is no waiting
+  tool (D-162, the rule D-158 set for child agents). A task is `running`,
   `completed`, `failed` or `stopped`;
 - one `lasercode/task/update` per task carrying a `BackgroundTaskUpdate`
   (`packages/protocol/src/tasks.ts`), including the log file it streams into,
   so the host can serve `tasks/output` and the fleet can follow it; re-emits
   for output growth are throttled (M13-T26);
 - exit notifications as a `lasercode/task-event` custom message
-  (`TASK_EVENT_MESSAGE_TYPE`): a promoted task wakes an idle model
-  (`triggerTurn: true`, it was told it would hear back); an explicitly
-  backgrounded task is recorded and delivered with the next turn.
+  (`TASK_EVENT_MESSAGE_TYPE`) carrying status, exit code, the tail of the
+  output and the task id, delivered with `deliverAs: "steer"` and
+  `triggerTurn: true` for every background exit, explicit or promoted alike:
+  a running model sees it before its next call, an idle one wakes. The start
+  result tells the model so (*Do not wait for task `<id>`. Carry on with your
+  own work; when it exits, its status, exit code and the last lines of its
+  output will be sent to you as a message.*). The one exception is the
+  model's own choice, in words: `bash` with `background: true, notify: false`
+  — a dev server, a watcher, anything it said it does not need to hear from —
+  is recorded and shown with the next turn, never waking one. `notify`
+  without `background` is ignored.
 
 Background tasks and child agents share the fleet's run vocabulary.
 
