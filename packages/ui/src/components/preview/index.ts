@@ -7,7 +7,6 @@
  * terminal-only (docs/research/findings.md).
  */
 export { MarkdownPreview, type MarkdownPreviewProps } from "./MarkdownPreview.js";
-export { DiffPreview, type DiffPreviewProps } from "./DiffPreview.js";
 export { ImagePreview, type ImagePreviewProps } from "./ImagePreview.js";
 export { TextPreview, type TextPreviewProps } from "./TextPreview.js";
 export { OpenExternally, type OpenExternallyProps } from "./OpenExternally.js";

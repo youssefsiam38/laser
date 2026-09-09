@@ -194,7 +194,9 @@ function parseHeader(path: string, size: number, mtimeMs: number): Header | null
         messageCount: 0,
         size,
         ...(header.name ? { name: header.name } : {}),
-        ...(header.parentSession ? { parentPath: header.parentSession } : {}),
+        // A fork's origin is lineage, not a parent: a fork is its own top-level
+        // session. Only an agent record nests a session (M13-T65).
+        ...(header.parentSession ? { forkedFrom: header.parentSession } : {}),
       },
     };
   } catch {

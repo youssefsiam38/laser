@@ -62,7 +62,9 @@ describe("SessionCatalog", () => {
     const catalog = new SessionCatalog(dir);
     const all = catalog.list();
     expect(all.map((s) => s.id)).toEqual(["b", "a"]);
-    expect(all[0]).toMatchObject({ path: b, cwd: "/home/b", parentPath: a });
+    // A fork records where it came from and is not nested under it.
+    expect(all[0]).toMatchObject({ path: b, cwd: "/home/b", forkedFrom: a });
+    expect(all[0]!.parentPath).toBeUndefined();
     expect(catalog.list("/home/a").map((s) => s.id)).toEqual(["a"]);
     expect(catalog.cwdOf(b)).toBe("/home/b");
     expect(catalog.cwdOf(join(dir, "nope.jsonl"))).toBeUndefined();

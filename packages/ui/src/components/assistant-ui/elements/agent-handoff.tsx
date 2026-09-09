@@ -1,20 +1,23 @@
 "use client";
 /**
  * Handoff — "control passing between agents, with the reason and what came
- * along" (docs/ux-elements.md "Agents": a parent spawning a child, inline in
- * the transcript). Installed from `elements-agent-handoff`; a `run` panel that
- * names a `parent` feeds it, so the same strip appears in the run's inline
- * card and in its island.
+ * along" (docs/ux-elements.md "Handoff"). Installed from
+ * `elements-agent-handoff`; what is mounted is `AgentEventCard`, the
+ * parent-side card a `lasercode/agent-event` custom message draws through
+ * `thread/AgentEventMessage.tsx` (D-140, M13-T6).
+ *
+ * The registry's parent → child strip (`AgentHandoff`) was removed in
+ * M13-T61: it had no caller since the run island went (D-147), and the
+ * map's edges (`agents/map/`) say the same thing structurally.
  *
  * Divergences from the registry copy:
- *   - `reason` is optional: the payload carries the relation ("spawned by",
- *     "step of") and the child's own `activity`; nothing is invented.
- *   - `carried` is what the parent asked for — the requested model and
- *     thinking level — because that is the only thing the payload says came
- *     along (R12a).
+ *   - the child is the pill, followed by what happened, the reason when a
+ *     person gave one, the child's message, and the way to its chat.
+ *   - the message body is the caller's, so the transcript renderer stays
+ *     the one Markdown renderer there is.
  *   - Colours are the live token and the inks; the fixed `max-w-sm` is gone.
  */
-import { ArrowRight, Bot, MessageSquare } from "lucide-react";
+import { Bot, MessageSquare } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 
 import { useSearchReveal } from "@/components/thread/search-state";
@@ -22,74 +25,6 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 import { field, mono } from "./surfaces.js";
-
-export function AgentHandoff({
-  from,
-  to,
-  relation,
-  reason,
-  carried = [],
-  settled,
-  className,
-  ...props
-}: Omit<ComponentProps<"div">, "children"> & {
-  from: string;
-  to: string;
-  /** "spawned by" · "step of" — the payload's word for the edge. */
-  relation: string;
-  reason?: string | undefined;
-  carried?: readonly string[];
-  /** The child has finished: the edge is history, not a live handoff. */
-  settled: boolean;
-}) {
-  return (
-    <div data-slot="agent-handoff" className={cn("flex min-w-0 flex-col gap-1.5", className)} aria-label={`${to} ${relation} ${from}`} {...props}>
-      <div className="flex min-w-0 items-center gap-1.5">
-        <span
-          className={cn(field, "flex min-w-0 max-w-[45%] items-center gap-1.5 rounded-full px-2 py-0.5 text-xs leading-xs text-ink-2", settled && "opacity-70")}
-          title={from}
-        >
-          <Bot className="size-3 shrink-0" aria-hidden="true" />
-          <span className="truncate">{from}</span>
-        </span>
-        <span className="flex shrink-0 flex-col items-center" aria-hidden="true">
-          <ArrowRight className={cn("size-3.5", settled ? "text-ink-3" : "text-live")} />
-        </span>
-        <span
-          className={cn(
-            "flex min-w-0 max-w-[45%] items-center gap-1.5 rounded-full px-2 py-0.5 text-xs leading-xs",
-            settled ? cn(field, "text-ink") : "bg-[color-mix(in_oklab,var(--live)_12%,transparent)] text-live",
-          )}
-          title={to}
-        >
-          <Bot className="size-3 shrink-0" aria-hidden="true" />
-          <span className="truncate">{to}</span>
-        </span>
-        <span className="eyebrow ms-auto shrink-0">{relation}</span>
-      </div>
-      {reason && <p className="line-clamp-2 text-xs leading-xs text-ink-2">{reason}</p>}
-      {carried.length > 0 && (
-        <div className="flex flex-col gap-0.5">
-          <span className={cn(mono, "text-ink-3")}>asked for</span>
-          {carried.map((item) => (
-            <span key={item} className="truncate border-s border-line ps-2.5 text-xs leading-xs text-ink-2" title={item}>
-              {item}
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// The parent-side card for an agent event (docs/ux-elements.md "Handoff":
-// since D-140 the element is also the card a `lasercode/agent-event` custom
-// message draws). Same grammar as the strip above — the child as the pill —
-// followed by what happened, the reason when a person gave one, the child's
-// message, and the way to its chat. The message body is the caller's, so the
-// transcript renderer stays the one Markdown renderer there is.
-// ---------------------------------------------------------------------------
 
 export type AgentEventKind = "agent.completed" | "agent.blocked" | "agent.failed" | "agent.cancelled" | "agent.message" | "agent.needs_input";
 export type AgentEventInitiator = "parent" | "user" | "harness";

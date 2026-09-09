@@ -26,10 +26,10 @@
  *     every fleet, named and counted, until it ends or is stopped from there.
  */
 import { Radio, PanelRightClose, Square, FolderX, MessageSquare, MessagesSquare, RotateCw } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { AnsiText } from "@/components/assistant-ui/elements/ansi-text";
 import { SubagentList, SubagentStrays } from "@/components/assistant-ui/elements/subagent-list";
+import { TerminalBlock } from "@/components/assistant-ui/elements/terminal-block";
 import { requestRemoveWorktree } from "@/agents/worktree";
 import { requestEndAgent } from "@/components/agents/end-agent";
 import { Button } from "@/components/ui/button";
@@ -385,15 +385,20 @@ function TaskDetail({ item }: { item: FleetItem }) {
       .finally(() => setStopping(false));
   }, [actions, item.stop]);
 
+  // The command and how it ended are the terminal block's own header — it is
+  // the same element the transcript's `bash` row draws, so a command reads the
+  // same in both places (M13-T60). The block follows a live command's output
+  // and says when it is showing a tail; `failed` without an exit code is a
+  // command that could not run or was killed, which is the block's loud state.
+  const task = item.task;
+  const exitCode = typeof task?.exitCode === "number" ? task.exitCode : undefined;
+  const broken = task?.status === "failed" && exitCode === undefined;
+
   return (
     <div className="min-w-0">
       <dl className="flex flex-col gap-2">
-        <Field label="Command">
-          <span className="typed line-clamp-4 whitespace-pre-wrap break-words">{item.task?.command ?? item.title}</span>
-        </Field>
         {item.elapsedMs !== undefined && <Field label="Elapsed">{formatElapsed(item.elapsedMs)}</Field>}
         {item.terminalReason && <Field label="Ended">{item.terminalReason}</Field>}
-        {typeof item.task?.exitCode === "number" && <Field label="Exit code">{item.task.exitCode}</Field>}
         {item.outputBytes !== undefined && <Field label="Output">{formatBytes(item.outputBytes)}</Field>}
       </dl>
 
@@ -408,38 +413,21 @@ function TaskDetail({ item }: { item: FleetItem }) {
           </div>
         ) : output.loading && output.text === "" ? (
           <p className="text-xs leading-xs text-ink-3">Reading the output…</p>
-        ) : output.text === "" ? (
-          <p className="text-xs leading-xs text-ink-3">{item.terminal ? "It printed nothing." : "Nothing printed yet."}</p>
         ) : (
-          <TaskOutputBody text={output.text} truncated={output.fromByte > 0} follow={!item.terminal} />
+          <TerminalBlock
+            command={task?.command ?? item.title}
+            output={output.text}
+            exitCode={exitCode}
+            running={!item.terminal}
+            isError={broken}
+            follow
+            truncatedHead={output.fromByte > 0}
+            ansi
+          />
         )}
       </div>
 
       <DetailActions item={item} onStop={item.stop?.kind === "task" ? stop : undefined} stopping={stopping} />
-    </div>
-  );
-}
-
-/**
- * The tail of a task's output. Its own scroller, so a long log never widens
- * the column and never scrolls the page; a live task sticks to the bottom, and
- * a finished one stays where the reader left it.
- */
-function TaskOutputBody({ text, truncated, follow }: { text: string; truncated: boolean; follow: boolean }) {
-  const ref = useRef<HTMLPreElement>(null);
-  useEffect(() => {
-    if (follow && ref.current) ref.current.scrollTop = ref.current.scrollHeight;
-  }, [follow, text]);
-  return (
-    <div className="min-w-0 overflow-hidden rounded-lg border border-line bg-terminal">
-      {truncated && <p className="px-2.5 pt-2 text-xs leading-xs text-ink-3">Showing the end of the output.</p>}
-      <pre
-        ref={ref}
-        data-slot="task-output"
-        className="max-h-56 overflow-auto overscroll-contain whitespace-pre-wrap break-words p-2.5 font-mono text-xs leading-relaxed text-terminal-ink"
-      >
-        <AnsiText text={text} />
-      </pre>
     </div>
   );
 }

@@ -97,6 +97,7 @@ const render = async (): Promise<void> => {
 };
 const rows = (): HTMLElement[] => [...container.querySelectorAll<HTMLElement>('[data-slot="fleet-row"]')];
 const rowFor = (title: string): HTMLElement => rows().find((row) => row.textContent?.includes(title))!;
+const terminalBlock = (title: string): HTMLElement => rowFor(title).querySelector<HTMLElement>('[data-slot="terminal-block"]')!;
 /** Work that has ended is folded away; open the fold to read it. */
 const openFinished = async (): Promise<void> => {
   await act(async () => [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.includes("Finished"))!.click());
@@ -357,8 +358,12 @@ describe("the fleet column", () => {
     expect(fixture.actions.tasks.stop).toHaveBeenCalledWith(ROOT, "t1");
     // Its output arrives through the ranged read, never a panel ref.
     expect(fixture.actions.tasks.output).toHaveBeenCalledWith(ROOT, "t1", 0);
-    expect(rowFor("pnpm vite dev").querySelector('[data-slot="task-output"]')?.textContent).toContain("ready in 412 ms");
-
+    // The output is the terminal block — the same element the transcript's
+    // `bash` row draws (M13-T60) — following a live command's tail.
+    const block = terminalBlock("pnpm vite dev");
+    expect(block.querySelector("pre")?.textContent).toContain("ready in 412 ms");
+    expect(block.querySelector("pre")?.getAttribute("data-follow")).toBe("true");
+    expect(block.querySelector('[data-slot="terminal-truncated-head"]')).toBeNull();
   });
 
   it("folds finished work away, and offers no Stop once a command has ended", async () => {
@@ -369,7 +374,59 @@ describe("the fleet column", () => {
     await act(async () => [...container.querySelectorAll<HTMLElement>("button")].find((b) => b.textContent?.includes("Finished"))!.click());
     await act(async () => rowFor("pnpm vite dev").querySelector("button")!.click());
     expect([...rowFor("pnpm vite dev").querySelectorAll("button")].some((b) => b.textContent?.includes("Stop"))).toBe(false);
-    expect(rowFor("pnpm vite dev").textContent).toContain("Exit code");
+    // The exit code is the block's header, and a finished block does not follow.
+    const block = terminalBlock("pnpm vite dev");
+    expect(block.getAttribute("data-exit")).toBe("0");
+    expect(block.textContent).toContain("exit 0");
+    expect(block.querySelector("pre")?.getAttribute("data-follow")).toBeNull();
+  });
+
+  // M13-T60: the command and its exit code are said once, by the terminal
+  // block's header, so the detail's own list no longer repeats them.
+  it("lets the terminal block say the command and the exit code, and keeps no field for either", async () => {
+    fixture.state.tasks.tasks = { t1: task({ id: "t1", sessionPath: ROOT, status: "failed", exitCode: 1, endedAt: "2026-09-08T10:01:00.000Z", terminalReason: "exit code 1" }) };
+    await render();
+    await openFinished();
+    await act(async () => rowFor("pnpm vite dev").querySelector("button")!.click());
+    const row = rowFor("pnpm vite dev");
+    const labels = [...row.querySelectorAll("dt")].map((dt) => dt.textContent);
+    expect(labels).not.toContain("Command");
+    expect(labels).not.toContain("Exit code");
+    expect(labels).toContain("Ended");
+    expect(labels).toContain("Output");
+    const block = terminalBlock("pnpm vite dev");
+    expect(block.textContent).toContain("pnpm vite dev --host");
+    expect(block.textContent).toContain("exit 1");
+    expect(block.getAttribute("data-exit")).toBe("1");
+  });
+
+  it("says when the block is the tail of a longer output, and reads colour escapes as colour", async () => {
+    fixture.state.tasks.tasks = { t1: task({ id: "t1", sessionPath: ROOT, outputBytes: 400_000 }) };
+    fixture.actions.tasks.output.mockImplementationOnce(async (_path: string, _id: string, from: number) => ({
+      id: "t1",
+      from,
+      bytes: 400_000,
+      chunk: "\u001b[32m→\u001b[0m  Local: http://localhost:5173/",
+      eof: true,
+    }));
+    await render();
+    await act(async () => rowFor("pnpm vite dev").querySelector("button")!.click());
+    const block = terminalBlock("pnpm vite dev");
+    expect(block.querySelector('[data-slot="terminal-truncated-head"]')?.textContent).toBe("Showing the end of the output.");
+    expect(block.querySelector("pre")?.textContent).not.toContain("\u001b");
+    expect(block.querySelector("pre")?.textContent).toContain("Local: http://localhost:5173/");
+  });
+
+  it("draws a finished command that printed nothing as the block with no output", async () => {
+    fixture.state.tasks.tasks = { t1: task({ id: "t1", sessionPath: ROOT, status: "completed", exitCode: 0, outputBytes: 0, endedAt: "2026-09-08T10:01:00.000Z" }) };
+    fixture.actions.tasks.output.mockImplementationOnce(async () => ({ id: "t1", from: 0, bytes: 0, chunk: "", eof: true }));
+    await render();
+    await openFinished();
+    await act(async () => rowFor("pnpm vite dev").querySelector("button")!.click());
+    const block = terminalBlock("pnpm vite dev");
+    expect(block.textContent).toContain("pnpm vite dev --host");
+    expect(block.textContent).toContain("exit 0");
+    expect(block.textContent).toContain("no output");
   });
 
   it("opens the row something else asked for, including one inside the finished fold", async () => {

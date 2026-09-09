@@ -2,7 +2,8 @@
 /**
  * `elements-tool-timeline` (assistant-ui registry), de-demoed and restyled:
  * a whole run's tool calls as verbs, targets and file stats — the sequence
- * inside an expanded `run` island (docs/ux-elements.md "Tool timeline").
+ * in the monitor's Tools section, `shell/TelemetryPanel.tsx` (docs/ux-elements.md
+ * "Tool timeline").
  *
  * The registry copy takes `visibleSteps` (a demo's typewriter) and a
  * per-step `icon`. Here the steps are built from real tool-call parts by

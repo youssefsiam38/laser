@@ -155,7 +155,17 @@ export interface SessionSummary {
   id: string;
   cwd: string;
   name?: string;
+  /**
+   * The session of the agent that started this one, from the agent record —
+   * the one thing that nests a session under another. Never a fork's origin.
+   */
   parentPath?: string;
+  /**
+   * The session this one was forked from (the engine's `parentSession`
+   * header). Lineage only: a fork is a top-level session of its own, listed
+   * beside its origin, never under it (M13-T65).
+   */
+  forkedFrom?: string;
   createdAt: string;
   modifiedAt: string;
   messageCount: number;
