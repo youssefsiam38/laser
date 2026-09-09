@@ -2,7 +2,7 @@
  * Help output. Generated from the command table, never hand-maintained, so a
  * command that exists is a command that is documented.
  */
-import { DATA_DIR_NAME, ENV, ENV_PREFIX, PRODUCT_NAME } from "@lasercode/protocol";
+import { DATA_DIR_NAME, ENV, PRODUCT_NAME } from "@lasercode/protocol";
 import type { FlagSpec, FlagSpecs } from "./args.js";
 import type { Command } from "./command.js";
 import { GLOBAL_FLAGS } from "./flags.js";
@@ -243,12 +243,6 @@ ${envRow(ENV.sessionDir, "session directory (same as --session-dir)")}
 ${envRow(ENV.port, "host port (same as --port)")}
 ${envRow(ENV.stateDir, `${PRODUCT_NAME}'s own state directory (same as --state-dir)`)}
 ${envRow("NO_COLOR / FORCE_COLOR", "colour, per no-color.org")}
-${envRow("PI_CODING_AGENT_DIR", `used when ${ENV.agentDir} is unset`)}
-${envRow("PI_CODING_AGENT_SESSION_DIR", `used when ${ENV.sessionDir} is unset`)}
-
-Set internally by ${PRODUCT_NAME} for its bundled engine:
-
-  PI_CODING_AGENT_DIR, PI_CODING_AGENT_SESSION_DIR, ${ENV_PREFIX}=1
 `,
   },
   {

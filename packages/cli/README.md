@@ -152,8 +152,8 @@ Resolution order, used identically by every command:
 
 | Thing | Order |
 | --- | --- |
-| agent dir | `--agent-dir` → `LASER_AGENT_DIR` → `PI_CODING_AGENT_DIR` → `<data>/agent` |
-| session dir | `--session-dir` → `LASER_SESSION_DIR` → `PI_CODING_AGENT_SESSION_DIR` → `<agent>/sessions` |
+| agent dir | `--agent-dir` → `LASER_AGENT_DIR` → `<data>/agent` |
+| session dir | `--session-dir` → `LASER_SESSION_DIR` → `<agent>/sessions` |
 | state dir | `--state-dir` → `LASER_STATE_DIR` → `<data>/state`, or `<agent>/laser` when the agent dir was overridden |
 | port | `--port` → `LASER_PORT` → `41441` |
 

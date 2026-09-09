@@ -124,9 +124,9 @@ laser tail --follow            # watch it work
 laser pi --help                # Pi's own help, from the copy laser pins
 ```
 
-`laser pi` runs the **pinned** Pi — the same copy the app runs — with
-laser's `PI_CODING_AGENT_DIR` and `PI_CODING_AGENT_SESSION_DIR`, so a session
-started from a terminal shows up in the app. Every command takes `--json`; data
+`laser pi` runs the **pinned** engine — the same copy the app runs — pointed at
+laser's own agent and session directories, so a session started from a terminal
+shows up in the app. Every command takes `--json`; data
 goes to stdout and everything else to stderr.
 
 Full command table, examples and the environment it reads:

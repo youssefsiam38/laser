@@ -1201,6 +1201,7 @@ lane T's own if both were written.
 | M13-T35 | Editing history changes this session, not a copy | done | claude-2026-09-08-agents | `ui/test/thread/edit-in-place.test.tsx`; `ui/test/runtime/edit-in-place.test.tsx`; browser | see notes; D-153 |
 | M13-T37 | React #520 on the first prompt of a session (upstream) | done | claude-2026-09-09-agents | `patches/@assistant-ui__core@0.3.17.patch`; browser: plain chat, agents scene, 30 s turn | pinned patch; see notes |
 | M13-T38 | Retire the dead `lasercode/subagents/event` message | todo | — | — | found by M13-T11; protocol inventory is a release gate |
+| M13-T39 | The engine's variable names leave the person-facing surface | done | claude-2026-09-09-agents | `cli/test/help-vocabulary.test.ts`; `laser help env` | requested by the user |
 | M13-T36 | The match is the proof, not the clock | done | claude-2026-09-08-agents | `pi-extension/test/file-freshness.test.ts` (33 of 89) | see notes; D-152 |
 | M13-T37 | Sweep the tool-use elements for what we hand-rolled | in-progress | claude-2026-09-08-agents | — | research only; see notes |
 
@@ -1445,6 +1446,12 @@ lane T's own if both were written.
 
 #### M13-T38 notes
 - 2026-09-09 found while removing the pi-subagents plumbing: nothing emits `lasercode/subagents/event` any more, but the type still exists in `packages/protocol/src/pi-extension.ts`, the host's log store still handles it, and the logs UI still offers a `subagents` section for it. Removing a protocol message means the schema sample and the method inventory, which are release gates, so it is its own task rather than a quiet deletion inside another one.
+
+#### M13-T39 notes
+- 2026-09-09 the user's rule: a person configuring this product should never meet another product's name. Their question was whether the engine's `PI_CODING_AGENT_DIR` / `PI_CODING_AGENT_SESSION_DIR` were in the resolution order.
+- 2026-09-09 **they were not, and I had said they were.** `resolvePaths` reads the flags and this product's own `LASERCODE_*` names only; `config.ts` already documented that they are deliberately not read. What existed was a false claim in `--help` — two rows advertising them as fallbacks "used when `LASERCODE_AGENT_DIR` is unset" — and the same invented step in `packages/cli/README.md`'s resolution table. So the defect was documentation promising behaviour the code does not have, which is worse than the behaviour itself would have been.
+- 2026-09-09 done: both help rows and the "set internally" block are gone from `--help`, the README tables now match the code, and the root README describes `laser pi` without naming the engine's variables. `piEnv()` still *writes* them when spawning the engine — that is the engine's own input contract and removing it would break the guarantee that a terminal session shows up in the app.
+- 2026-09-09 a test now walks every help topic and fails if either name appears, and asserts that paths resolve away from them however they are set in the environment — so neither the claim nor a real fallback can be introduced later. `laser help env` now lists four `LASERCODE_*` names and `NO_COLOR` and nothing else.
 
 ## MX · Cross-cutting
 

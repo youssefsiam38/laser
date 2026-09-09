@@ -17,11 +17,13 @@
  * keeps their `~/.pi/agent` untouched, and the desktop app and this command
  * resolve to the same place so they can never show different sessions.
  *
- * `PI_CODING_AGENT_DIR` and `PI_CODING_AGENT_SESSION_DIR` are Pi 0.85's own
+ * `PI_CODING_AGENT_DIR` and `PI_CODING_AGENT_SESSION_DIR` are the engine's own
  * variable names (`config.js`: `ENV_AGENT_DIR`, `ENV_SESSION_DIR`). They are
- * *written* by `piEnv()` below, so a Pi we spawn lands in exactly the
+ * *written* by `piEnv()` below, so an engine we spawn lands in exactly the
  * directories the host is watching — and they are deliberately **not read**
- * here. In a desktop session those variables mean "the agent I use in my
+ * here, and not named in `--help`: a person configuring this product should
+ * never have to learn another product's variable to do it. `resolvePaths`
+ * reads the flags and this product's own names, nothing else. In a desktop session those variables mean "the agent I use in my
  * shell", which is the one installation laser must never adopt: the app
  * strips them (`packages/desktop/src/agent-home.ts`), so a CLI that honoured
  * them would show a different agent directory, different settings and
