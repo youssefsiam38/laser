@@ -121,6 +121,34 @@ describe("the fleet column", () => {
     expect(rowFor("explorer").textContent).toContain("Read the router");
   });
 
+  it("names the branch of an agent that has a worktree", async () => {
+    fixture.state.agents.runs = {
+      r1: run({ runId: "r1", sessionPath: CHILD, subagentName: "explorer", task: "Read the router", worktree: { path: "/p/.worktrees/explorer-1", branch: "agents/explorer-1", baseCommit: "abc" }, cwd: "/p/.worktrees/explorer-1" }),
+    };
+    await render();
+    await act(async () => rowFor("explorer").querySelector("button")!.click());
+    expect(rowFor("explorer").textContent).toContain("Worktree");
+    expect(rowFor("explorer").textContent).toContain("agents/explorer-1");
+  });
+
+  it("names the directory of an agent that has none, instead of an empty branch row", async () => {
+    fixture.state.agents.runs = { r1: run({ runId: "r1", sessionPath: CHILD, subagentName: "explorer", task: "Read the router", cwd: "/p" }) };
+    await render();
+    await act(async () => rowFor("explorer").querySelector("button")!.click());
+    expect(rowFor("explorer").textContent).not.toContain("Worktree");
+    expect(rowFor("explorer").textContent).toContain("Working in");
+    expect(rowFor("explorer").textContent).toContain("Shares its parent’s checkout");
+  });
+
+  it("says nothing at all for a run recorded before runs carried a directory", async () => {
+    fixture.state.agents.runs = { r1: child };
+    await render();
+    await act(async () => rowFor("explorer").querySelector("button")!.click());
+    expect(rowFor("explorer").querySelector("dl")).not.toBeNull();
+    expect(rowFor("explorer").textContent).not.toContain("Worktree");
+    expect(rowFor("explorer").textContent).not.toContain("Working in");
+  });
+
   it("navigates to a run's chat and asks the one End agent question", async () => {
     fixture.state.agents.runs = { r1: child };
     await render();

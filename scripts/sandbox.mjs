@@ -31,7 +31,10 @@
  *                       result is back, `complete_agent_run` with
  *                       "Counted the files.". Everything else in this scene is
  *                       one short text. The sandbox project is a git repository
- *                       with one commit so every child gets a real worktree.
+ *                       with one commit so a child gets a real worktree. A
+ *                       prompt containing both "delegate" and "review" starts
+ *                       the child with `worktree: false` instead, so the
+ *                       shared-checkout path is demonstrable too.
  */
 import { identity as product } from "./identity/identity.mjs";
 import { execFileSync } from "node:child_process";
@@ -148,7 +151,12 @@ const provider = createServer((req, res) => {
         return callTool("bash", { command: "ls" });
       }
       if (lastRole === "user" && /\bdelegate\b/i.test(prompt)) {
-        return callTool("start_agent", { agent_name: "default", subagent_name: "explorer", task: "List the files here and report the count." });
+        // "delegate a review" takes the other path: a child the parent judged
+        // read-only, started with `worktree: false`, which runs in the
+        // parent's own checkout and has no branch of its own.
+        return /\breview\b/i.test(prompt)
+          ? callTool("start_agent", { agent_name: "default", subagent_name: "reviewer", task: "Read the notes and report what is in them.", worktree: false })
+          : callTool("start_agent", { agent_name: "default", subagent_name: "explorer", task: "List the files here and report the count." });
       }
       if (lastRole === "tool" && previousTool === "start_agent") return sayShort("Started **explorer** in the background. I will report when it finishes.");
       if (lastRole === "tool") return sayShort("Noted the result.");

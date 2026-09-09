@@ -46,7 +46,7 @@ export const FEATURE_MANIFESTS: readonly FeatureManifest[] = [
   {
     id: "subagents",
     name: "Subagents",
-    description: "Let agents start other agents as persistent sub-sessions, each in its own isolated worktree, and run long commands as background tasks.",
+    description: "Let agents start other agents as persistent sub-sessions, isolated in their own worktree unless the parent says otherwise, and run long commands as background tasks.",
     defaultEnabled: true,
     scopes: ["global", "project"],
     dependencies: [],

@@ -42,8 +42,11 @@ const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd,
 
 let base: string;
 let stub: StubProvider;
+/** What the parent's model asks for; a test sets it before prompting. */
+let startArgs: Record<string, unknown>;
 
 beforeEach(async () => {
+  startArgs = { agent_name: "worker", subagent_name: "touch-nothing", task: "Look around and finish without changing anything." };
   base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-golden-`));
   const project = join(base, "project");
   mkdirSync(project, { recursive: true });
@@ -60,7 +63,7 @@ beforeEach(async () => {
       return sawToolResult ? { text: "done" } : { toolCall: { name: "complete_agent_run", args: { status: "completed", message: "done: touched nothing" } } };
     }
     if (!sawToolResult && tools.includes("start_agent")) {
-      return { toolCall: { name: "start_agent", args: { agent_name: "worker", subagent_name: "touch-nothing", task: "Look around and finish without changing anything." } } };
+      return { toolCall: { name: "start_agent", args: startArgs } };
     }
     return { text: "ok" };
   });
@@ -130,6 +133,70 @@ describe.skipIf(!harnessModulePresent || !haveGit)("golden path: start_agent →
       const events = parentLines.filter((line) => line.customType === AGENT_EVENT_MESSAGE_TYPE || line.message?.customType === AGENT_EVENT_MESSAGE_TYPE);
       expect(events).toHaveLength(1);
       expect(JSON.stringify(events[0])).toContain("done: touched nothing");
+    } finally {
+      await server.dispose();
+    }
+  }, 90_000);
+
+  /**
+   * The other way round: the parent judged this child read-only and passed
+   * `worktree: false`. Nothing under `.worktrees/` is made, the child runs in
+   * the project itself, and the result still says where it is working.
+   */
+  it("runs a child with worktree false in the parent's own checkout and says so in the result", async () => {
+    startArgs = { agent_name: "worker", subagent_name: "read-only-look", task: "Read the README and finish.", worktree: false };
+    const project = join(base, "project");
+    const out: JsonRpcMessage[] = [];
+    const server = new WorkerServer({
+      cwd: project,
+      agentDir: join(base, "agent"),
+      sessionDir: join(base, "sessions"),
+      stateDir: join(base, "state"),
+      createDriver: () => new StableSdkDriver(),
+      send: (m) => out.push(m),
+      features: ["subagents", "goals"],
+      projectTrusted: true,
+    });
+    try {
+      const call = async (id: number, method: string, params?: unknown) => {
+        await server.handle({ jsonrpc: "2.0", id, method, params });
+        return out.find((m) => "id" in m && m.id === id) as { result?: unknown; error?: { message: string } };
+      };
+      const snapshot = fallbackSnapshot();
+      const model = { provider: "stub", id: "stub-1" };
+      const lead = { ...snapshot.agents[0]!, name: "lead", engineInstructions: false, instructions: "You lead. Delegate to worker.", model, supportsSubagents: true, allowedAgents: ["worker"] };
+      const worker = { ...snapshot.agents[0]!, name: "worker", engineInstructions: false, instructions: "You work. Call complete_agent_run when done.", model, supportsSubagents: false, allowedAgents: [] };
+      await call(1, "agents/sync", { snapshot: { ...snapshot, revision: 1, agents: [lead, worker, ...snapshot.agents.slice(1)], defaultAgent: "lead" } });
+      const created = await call(2, "session/new", { cwd: project, agentName: "lead" });
+      const parentPath = (created.result as { state: { path: string } }).state.path;
+      await call(3, "session/prompt", { path: parentPath, content: [{ type: "text", text: "Have the worker read the README." }] });
+
+      const runs = () => out.filter((m) => "method" in m && m.method === "agents/run").map((m) => (m as { params: { run: AgentRun } }).params.run);
+      const deadline = Date.now() + 45_000;
+      while (Date.now() < deadline && !runs().some((run) => run.status === "completed")) await new Promise((r) => setTimeout(r, 100));
+      const completed = runs().find((run) => run.status === "completed");
+      expect(completed, JSON.stringify(runs().map((r) => [r.runId, r.status, r.error]))).toBeDefined();
+      expect(completed!.subagentName).toBe("read-only-look");
+      expect(completed!.worktree).toBeNull();
+      expect(completed!.cwd).toBe(project);
+      // Nothing was created under `.worktrees/`, and nothing in the project was touched.
+      expect(existsSync(join(project, WORKTREES_DIR_NAME))).toBe(false);
+      expect(git(project, "status", "--porcelain")).toBe("");
+
+      const wait = async (predicate: () => boolean) => { const until = Date.now() + 15_000; while (Date.now() < until && !predicate()) await new Promise((r) => setTimeout(r, 100)); };
+      await wait(() => existsSync(completed!.sessionPath));
+      const childLines = readFileSync(completed!.sessionPath, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { customType?: string; cwd?: string; data?: Record<string, unknown> });
+      expect(childLines[0]?.cwd).toBe(project);
+      const record = childLines.find((line) => line.customType === SESSION_AGENT_ENTRY_TYPE)?.data;
+      expect(record).toMatchObject({ kind: "child", subagentName: "read-only-look", parentPath });
+      expect(record).not.toHaveProperty("worktree");
+
+      // The parent's transcript carries where the child works, with no branch.
+      await wait(() => existsSync(parentPath) && readFileSync(parentPath, "utf8").includes("working_directory"));
+      const parentText = readFileSync(parentPath, "utf8");
+      expect(parentText).toContain(`working_directory`);
+      expect(parentText).toContain(project);
+      expect(parentText).not.toContain("agents/read-only-look");
     } finally {
       await server.dispose();
     }

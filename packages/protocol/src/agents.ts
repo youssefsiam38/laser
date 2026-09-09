@@ -34,7 +34,7 @@ export const AGENT_MAX_DEPTH_LIMIT = 6;
 export const FOREGROUND_COMMAND_SECONDS_DEFAULT = 120;
 export const FOREGROUND_COMMAND_SECONDS_MIN = 10;
 export const FOREGROUND_COMMAND_SECONDS_MAX = 3600;
-/** The directory, under the project root, every child worktree lives in. */
+/** The directory, under the project root, a child worktree lives in. */
 export const WORKTREES_DIR_NAME = ".worktrees";
 
 export const DEFAULT_AGENT_NAME = "default";
@@ -230,7 +230,17 @@ export interface AgentRun extends AgentRunIdentity {
   /** 1 for a child of a top-level session. */
   depth: number;
   parent: { sessionPath: string; sessionId: string; runId?: string } | null;
+  /**
+   * The child's own checkout, or `null` when its parent chose not to isolate
+   * it (`start_agent { worktree: false }`) and it works in the parent's.
+   */
   worktree: { path: string; branch: string; baseCommit: string } | null;
+  /**
+   * The directory this run actually works in: its worktree when it has one,
+   * otherwise the checkout its parent is working in. Absent only on a run
+   * recorded before runs carried it — never guessed from the project.
+   */
+  cwd?: string;
   origin: AgentRunOrigin;
   status: AgentRunStatus;
   /** First `AGENT_TASK_EXCERPT` characters of the task. */
@@ -293,6 +303,7 @@ export interface SessionAgentRecord {
   parentSessionId?: string;
   rootPath?: string;
   runId?: string;
+  /** Absent when the parent started this child without a worktree of its own. */
   worktree?: { path: string; branch: string; baseCommit: string };
 }
 

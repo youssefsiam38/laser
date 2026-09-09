@@ -1,7 +1,7 @@
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { useAuiState } from "@assistant-ui/react";
 import type { UiDialogRequest } from "@lasercode/protocol";
-import { Bot, MessageSquare } from "lucide-react";
+import { Bot, FolderOpen, GitBranch, MessageSquare } from "lucide-react";
 import { lazy, memo, Suspense, useCallback, useMemo, useState } from "react";
 
 import { useNamerLabel } from "@/agents/hooks";
@@ -224,17 +224,32 @@ const START_AGENT_TOOL = "start_agent";
 interface StartAgentResultInfo {
   sessionId?: string;
   runId?: string;
+  /** Where the child is working: its worktree, or the checkout it shares with this session. */
+  cwd?: string;
+  /** Its worktree's branch; absent exactly when it has no worktree of its own. */
+  branch?: string;
 }
 
 /**
  * What `start_agent` answered: live results carry the harness's own
- * `details`, hydrated ones only the model's JSON view. Both name the run.
+ * `details` (`cwd`), hydrated ones only the model's JSON view
+ * (`working_directory`). Both name the run and where it works.
  */
 function startAgentInfo(result: unknown, details: Record<string, unknown> | undefined, text: string): StartAgentResultInfo {
-  const pick = (source: Record<string, unknown> | undefined): StartAgentResultInfo => ({
-    ...(typeof source?.["sessionId"] === "string" ? { sessionId: source["sessionId"] as string } : {}),
-    ...(typeof source?.["runId"] === "string" ? { runId: source["runId"] as string } : {}),
-  });
+  const str = (source: Record<string, unknown> | undefined, ...keys: string[]): string | undefined => {
+    for (const key of keys) if (typeof source?.[key] === "string" && source[key] !== "") return source[key] as string;
+    return undefined;
+  };
+  const pick = (source: Record<string, unknown> | undefined): StartAgentResultInfo => {
+    const cwd = str(source, "cwd", "working_directory");
+    const branch = str(source, "branch");
+    return {
+      ...(typeof source?.["sessionId"] === "string" ? { sessionId: source["sessionId"] as string } : {}),
+      ...(typeof source?.["runId"] === "string" ? { runId: source["runId"] as string } : {}),
+      ...(cwd !== undefined ? { cwd } : {}),
+      ...(branch !== undefined ? { branch } : {}),
+    };
+  };
   const fromDetails = pick(details);
   if (fromDetails.runId || fromDetails.sessionId) return fromDetails;
   if (result === undefined || result === null) return {};
@@ -305,6 +320,15 @@ function StartAgentRow({
       peek={failed && text ? <ToolError message={text} compact /> : undefined}
       footer={
         <>
+          {info.cwd ? (
+            // Where the child went, without opening it: its branch when it has
+            // a worktree, otherwise the checkout it shares with this session.
+            <div data-slot="start-agent-where" className="mb-1 ms-6 flex min-w-0 items-center gap-1.5 text-xs leading-sm text-ink-3" title={info.cwd}>
+              {info.branch ? <GitBranch aria-hidden="true" className="size-3.5 shrink-0" /> : <FolderOpen aria-hidden="true" className="size-3.5 shrink-0" />}
+              <span className="typed truncate">{info.branch ?? info.cwd}</span>
+              {info.branch ? null : <span className="shrink-0">· this session’s checkout</span>}
+            </div>
+          ) : null}
           {childPath ? (
             <div data-slot="start-agent-open" className="mb-1 ms-6 flex items-center">
               <Button size="xs" variant="ghost" className="-ms-1.5 text-ink-2" onClick={() => void actions.openSession(childPath)}>

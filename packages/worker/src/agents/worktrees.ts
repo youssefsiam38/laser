@@ -85,13 +85,17 @@ export class WorktreeManager {
     try {
       root = (await git(input.projectCwd, ["rev-parse", "--show-toplevel"])).trim();
     } catch {
-      throw new HarnessError("This project is not a git repository, so agents cannot get an isolated worktree. Initialise git in the project first.");
+      throw new HarnessError(
+        "This project is not a git repository, so agents cannot get an isolated worktree. Either initialise git in the project, or start this agent with worktree false so it works in this checkout.",
+      );
     }
     let baseCommit: string;
     try {
       baseCommit = (await git(input.baseCwd, ["rev-parse", "--verify", "HEAD"])).trim();
     } catch {
-      throw new HarnessError("This project has no commits yet, so agents cannot get an isolated worktree. Make a first commit, then start the agent again.");
+      throw new HarnessError(
+        "This project has no commits yet, so agents cannot get an isolated worktree. Either make a first commit, or start this agent with worktree false so it works in this checkout.",
+      );
     }
     const slug = worktreeSlug(input.subagentName, input.runId);
     const path = join(root, WORKTREES_DIR_NAME, slug);

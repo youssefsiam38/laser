@@ -540,6 +540,7 @@ function sameRun(a: AgentRun, b: AgentRun): boolean {
     a.activity?.turns === b.activity?.turns &&
     a.activity?.tools === b.activity?.tools &&
     a.worktree?.path === b.worktree?.path &&
+    a.cwd === b.cwd &&
     a.model?.id === b.model?.id &&
     a.model?.provider === b.model?.provider
   );

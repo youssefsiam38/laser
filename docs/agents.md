@@ -2,10 +2,11 @@
 
 Status: **binding for M13 (D-140).** Agents are first-class in Laser: a
 person defines reusable agents on an Agents page, any session can start other
-agents through one `start_agent` tool, every child is an isolated-worktree
-sub-session the person can chat with, a live map shows each top-level
-session's agent tree, long commands run as background tasks, and Beam, Chat
-and Namer are built-in agents with their own product integrations.
+agents through one `start_agent` tool, every child is a sub-session the person
+can chat with — in a worktree of its own unless its parent said otherwise — a
+live map shows each top-level session's agent tree, long commands run as
+background tasks, and Beam, Chat and Namer are built-in agents with their own
+product integrations.
 
 The binding references are
 [`agents-leap/references/original-request.md`](agents-leap/references/original-request.md)
@@ -91,7 +92,7 @@ module from the worker-supplied `AgentHarnessBridge`:
 
 | Tool | Who gets it | Does |
 | --- | --- | --- |
-| `start_agent { agent_name, subagent_name, task }` | a session whose definition permits delegation and whose depth allows another level | validates the name against the allowed list and depth, loads the child's full configuration, creates the child session and its worktree, starts the child loop in the background, returns `{ agent_name, subagent_name, sessionId, runId, status: "running" }` immediately |
+| `start_agent { agent_name, subagent_name, task, worktree? }` | a session whose definition permits delegation and whose depth allows another level | validates the name against the allowed list and depth, loads the child's full configuration, creates the child session and (unless `worktree: false`) its worktree, starts the child loop in the background, returns `{ agent_name, subagent_name, sessionId, runId, status: "running", working_directory, branch? }` immediately |
 | `send_agent_message { sessionId, message, interrupt? }` | same | a running child receives it as its next instruction (`delivery: "queued"` while busy); an idle child starts a new run and the result carries the new `runId` |
 | `list_agents` | same | runs this session started, newest first: identities, status, result — never transcripts |
 | `wait_for_agents { runIds, timeoutSeconds? }` | same | blocks until those runs end or the timeout passes; `timedOut: true` when some were still running |
@@ -171,7 +172,37 @@ result, for the parent model.
 
 ## 3. Worktrees
 
-Worktrees are not optional (`packages/worker/src/agents/worktrees.ts`):
+### The parent chooses (D-156)
+
+`start_agent` takes `worktree?: boolean`. **Absent means true**, so an agent
+that says nothing gets exactly what it always got. `worktree: false` is the
+parent's judgement that this child only reads — a review, a search, an
+explanation — and there is nothing to isolate:
+
+- No worktree is created and no branch is made. The child's cwd is the
+  parent's own cwd, and `AgentRun.worktree` is `null`.
+- **Nothing is taken away.** The child keeps every tool (D-144 is unchanged),
+  no write is refused, and no read-only mode exists. The judgement is the
+  parent's; the harness does not second-guess it.
+- **The child is told.** Its role block says, only in this case, that it is
+  working in its parent's checkout and is not isolated from it — the one thing
+  it needs in order to make the judgement this design assumes it will make.
+- None of the worktree refusals below apply, so a project that is not a git
+  repository, or has no commit yet, can still start a child this way. That is
+  most of the point.
+- Teardown removes nothing: a run with no worktree leaves nothing behind, and
+  nothing in the parent's checkout is ever removed or cleaned.
+
+Either way the result says where the child is working: `working_directory` is
+always present, and `branch` is present only when the child has a worktree —
+the absence is the signal, and no placeholder is invented. Both reach the UI:
+the `start_agent` row in the transcript, the fleet's detail rows, the live
+map's inspector, and `laser runs --json` (`cwd`).
+
+### When a child does get one
+
+Everything below is the isolated case, unchanged
+(`packages/worker/src/agents/worktrees.ts`):
 
 - Path: `<git toplevel>/.worktrees/<slug>` where `slug` is the sanitised
   `subagent_name` plus the run id suffix (`[a-z0-9-]`, ≤ 60 chars).
@@ -259,7 +290,7 @@ Background tasks and child agents share the fleet's run vocabulary.
 
 Every agent has every tool (D-144). A definition says what an agent is for in
 its instructions, and what it may reach beyond its own work through its
-allowed agents and its worktree; a per-agent tool list was a second, weaker
+allowed agents and the checkout it was given; a per-agent tool list was a second, weaker
 answer to the same question and one more thing to keep in step with the
 engine's own set. `web_search` follows the Web search feature, for everyone at
 once.
@@ -315,7 +346,7 @@ session-naming prompt, keeps the fastest valid answer and records
 | --- | --- |
 | `<stateDir>/agents.json` | custom agents (the seeded `default` among them), `defaultAgent`, policy, Namer and Beam model choices, `revision`. Built-ins are rebuilt from `packages/host/src/agents/builtins.ts` on every load |
 | `<stateDir>/agent-runs.json` | every `AgentRun` the host has heard of, fed by `agents/run` notifications; terminal runs kept 30 days and at most 500 per project; non-terminal runs are failed on host load and on worker loss |
-| session custom entry `lasercode/agent` (`SESSION_AGENT_ENTRY_TYPE`) | the first custom entry of every agent-started or agent-defined session: `SessionAgentRecord { agentName, kind, subagentName, parentPath, parentSessionId, rootPath, runId, worktree }` — so a catalog that only reads files can attribute it |
+| session custom entry `lasercode/agent` (`SESSION_AGENT_ENTRY_TYPE`) | the first custom entry of every agent-started or agent-defined session: `SessionAgentRecord { agentName, kind, subagentName, parentPath, parentSessionId, rootPath, runId, worktree? }` — `worktree` is absent for a child started with `worktree: false`, and that absence is what a reloaded session reads back — so a catalog that only reads files can attribute it |
 | session custom entry `lasercode/agent-run` (`SESSION_RUN_ENTRY_TYPE`) | run lifecycle moments in the child session (started, completed, blocked, failed, cancelled, timed out) |
 | parent custom message `lasercode/agent-event` (`AGENT_EVENT_MESSAGE_TYPE`) | one message per event the parent received, stored once |
 | `<project>/.worktrees/<slug>` | the child's checkout; `<gitdir>/info/exclude` hides it |
@@ -360,8 +391,10 @@ Every method has a schema, a round-trip sample and a router owner
   a child request (its tool list carries `complete_agent_run`, or its system
   prompt names the subagent role without `start_agent`) answers `bash ls` and
   then `complete_agent_run` with "Counted the files."; everything else is one
-  short text. The sandbox project is a git repository with one commit so every
-  child gets a worktree. See the header of `scripts/sandbox.mjs`.
+  short text. The sandbox project is a git repository with one commit so a
+  child gets a worktree; a prompt with both "delegate" and "review" starts the
+  child with `worktree: false` instead, in the parent's own checkout. See the
+  header of `scripts/sandbox.mjs`.
 - The worker's harness test (`packages/worker/test/agents/`): a stub-provider
   child completes through `complete_agent_run` and its parent receives exactly
   one structured event.
@@ -375,7 +408,9 @@ The binding list lives in `AGENTS.md` ("Agents harness regression checks"):
 
 - One `start_agent` tool and four identities only.
 - Children never block.
-- Every child gets a worktree or a person-facing refusal.
+- Every child gets a worktree or a person-facing refusal, unless its parent
+  passed `worktree: false`; then it runs in the parent's checkout, is told so,
+  and nothing there is removed when the run ends.
 - Completion only through `complete_agent_run`, stored once.
 - User termination carries `initiator: "user"` and the verbatim reason to the
   parent.

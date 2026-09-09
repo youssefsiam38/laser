@@ -407,7 +407,7 @@ pins both verbatim.
   and an evicted record simply means nothing to say.
 - **Per session, not per process.** Records live in a `WeakMap` keyed by the
   module context, like `background-work`'s task state, and are dropped by the
-  disposer at `session_shutdown`. A child agent in its own worktree must never
+  disposer at `session_shutdown`. A child agent working in its own worktree must never
   see its parent's records.
 - A file changed by a `bash` command needs no special case: its mtime moved,
   so the ordinary rule catches it.

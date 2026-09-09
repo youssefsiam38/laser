@@ -79,10 +79,12 @@ function makeWorld() {
   let childCount = 0;
   let unavailable = false;
   let failOpen = false;
+  let refuseWorktrees: string | undefined;
   const worktrees: WorktreeProvider & { created: CreateWorktreeInput[]; removed: string[] } = {
     created: [],
     removed: [],
     async create(input) {
+      if (refuseWorktrees !== undefined) throw new HarnessError(refuseWorktrees);
       this.created.push(input);
       const path = `/repo/.worktrees/${input.subagentName}-${input.runId.slice(4)}`;
       const worktree: Worktree = { path, branch: `agents/${input.subagentName}`, baseCommit: "abc123", cwd: path, root: "/repo" };
@@ -122,6 +124,8 @@ function makeWorld() {
     harness, definitions, drivers, notifications, opened, worktrees, openRoot, runsNotified, events, extensionMessages,
     setUnavailable: (value: boolean) => { unavailable = value; },
     setFailOpen: (value: boolean) => { failOpen = value; },
+    /** Stand in for a project git cannot give a worktree: not a repository, no commit, a path another agent owns. */
+    setRefuseWorktrees: (message: string | undefined) => { refuseWorktrees = message; },
   };
 }
 
@@ -172,7 +176,15 @@ describe("AgentHarness", () => {
     root.handle.bridge.onEvent((event) => received.push(event));
 
     const result = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "fix-login", task: "Fix the login form." });
-    expect(result).toEqual({ agentName: "worker", subagentName: "fix-login", sessionId: "child-1", runId: expect.stringMatching(/^run_[0-9a-f]{8}$/), status: "running" });
+    expect(result).toEqual({
+      agentName: "worker",
+      subagentName: "fix-login",
+      sessionId: "child-1",
+      runId: expect.stringMatching(/^run_[0-9a-f]{8}$/),
+      status: "running",
+      cwd: expect.stringMatching(/^\/repo\/\.worktrees\/fix-login-/),
+      branch: "agents/fix-login",
+    });
 
     // The child session opened in the worktree with the child's definition and role.
     expect(world.worktrees.created[0]).toMatchObject({ projectCwd: "/repo", baseCwd: "/repo", subagentName: "fix-login", runId: result.runId });
@@ -182,7 +194,7 @@ describe("AgentHarness", () => {
     expect(open.agent.definition.name).toBe("worker");
     expect(open.agent.record).toMatchObject({ agentName: "worker", kind: "child", subagentName: "fix-login", parentPath: root.path, parentSessionId: "root-1", rootPath: root.path, runId: result.runId, worktree: { branch: "agents/fix-login", baseCommit: "abc123" } });
     const role: HarnessSessionRole = open.agent.role;
-    expect(role).toMatchObject({ agentName: "worker", kind: "child", subagentName: "fix-login", depth: 1, parent: { sessionPath: root.path, sessionId: "root-1", agentName: "lead" }, runId: result.runId, goal: { id: "g1", objective: "Ship the login fix" }, task: "Fix the login form." });
+    expect(role).toMatchObject({ agentName: "worker", kind: "child", subagentName: "fix-login", depth: 1, isolated: true, parent: { sessionPath: root.path, sessionId: "root-1", agentName: "lead" }, runId: result.runId, goal: { id: "g1", objective: "Ship the login fix" }, task: "Fix the login form." });
     expect(open.agent.backgroundWork).toEqual({ cwd: open.cwd, foregroundCommandSeconds: 120 });
 
     // The task was prompted verbatim, without waiting, and the child was named.
@@ -193,7 +205,7 @@ describe("AgentHarness", () => {
 
     // Notifications: the run, and the two started/message_sent moments.
     const running = world.runsNotified().at(-1)!;
-    expect(running).toMatchObject({ agentName: "worker", subagentName: "fix-login", sessionId: "child-1", runId: result.runId, sessionPath: "/sessions/child-1.jsonl", status: "running", origin: "agent", depth: 1, parent: { sessionPath: root.path, sessionId: "root-1" }, goal: { id: "g1" }, projectCwd: "/repo", rootSessionPath: root.path });
+    expect(running).toMatchObject({ agentName: "worker", subagentName: "fix-login", sessionId: "child-1", runId: result.runId, sessionPath: "/sessions/child-1.jsonl", status: "running", origin: "agent", depth: 1, parent: { sessionPath: root.path, sessionId: "root-1" }, goal: { id: "g1" }, projectCwd: "/repo", rootSessionPath: root.path, cwd: open.cwd });
     // No deadline: nothing ends a run for taking long (D-144).
     expect(running).not.toHaveProperty("timeoutAt");
     expect(world.events().map((e) => `${e.kind}@${e.sessionPath}`)).toEqual(["started@/sessions/child-1.jsonl", "message_sent@/sessions/root.jsonl"]);
@@ -467,5 +479,64 @@ describe("AgentHarness", () => {
 
   it("refuses to stop an unknown run with a sentence", async () => {
     await expect(world.harness.stopRun("run_zzz", { initiator: "user" })).rejects.toBeInstanceOf(HarnessError);
+  });
+
+  // ---------------------------------------------------------------- worktree
+  // The parent chooses: `worktree: false` is its judgement that this child
+  // only reads. The child keeps every tool (D-144) and is told where it is.
+
+  it("runs a child started with worktree false in the parent's own checkout, with no worktree and no branch", async () => {
+    const root = world.openRoot("lead");
+    const result = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "review", task: "Review the auth changes.", worktree: false });
+    expect(result).toMatchObject({ subagentName: "review", sessionId: "child-1", status: "running", cwd: "/repo" });
+    expect(result).not.toHaveProperty("branch");
+    expect(world.worktrees.created).toHaveLength(0);
+    const open = world.opened[0]!;
+    expect(open.cwd).toBe("/repo");
+    expect(open.agent.backgroundWork).toEqual({ cwd: "/repo", foregroundCommandSeconds: 120 });
+    expect(open.agent.record).not.toHaveProperty("worktree");
+    expect(open.agent.role).toMatchObject({ isolated: false });
+    const run = world.harness.run(result.runId)!;
+    expect(run.worktree).toBeNull();
+    expect(run.cwd).toBe("/repo");
+    // Nothing else about the harness changes: it still completes only through the tool.
+    const child = world.harness.bridgeOf("/sessions/child-1.jsonl")!;
+    expect(await child.completeRun({ status: "completed", message: "Reviewed; two notes." })).toEqual({ ok: true, runId: result.runId });
+  });
+
+  it("still gives a worktree when the flag is absent or true, and refuses anything that is not a boolean", async () => {
+    const root = world.openRoot("lead");
+    const absent = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "a", task: "t" });
+    expect(absent.branch).toBe("agents/a");
+    expect(world.harness.run(absent.runId)!.worktree).toMatchObject({ branch: "agents/a" });
+    const asked = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "b", task: "t", worktree: true });
+    expect(asked.branch).toBe("agents/b");
+    expect(world.worktrees.created).toHaveLength(2);
+    await expect(root.handle.bridge.startAgent({ agentName: "worker", subagentName: "c", task: "t", worktree: "false" as unknown as boolean })).rejects.toThrow(/worktree must be true or false/);
+    expect(world.worktrees.created).toHaveLength(2);
+  });
+
+  it("starts an uninsulated child in a project that cannot give a worktree at all", async () => {
+    const root = world.openRoot("lead");
+    world.setRefuseWorktrees("This project is not a git repository, so agents cannot get an isolated worktree. Initialise git in the project first.");
+    await expect(root.handle.bridge.startAgent({ agentName: "worker", subagentName: "iso", task: "t" })).rejects.toThrow(/not a git repository/);
+    const shared = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "read", task: "t", worktree: false });
+    expect(shared).toMatchObject({ status: "running", cwd: "/repo" });
+    expect(world.harness.run(shared.runId)!.worktree).toBeNull();
+  });
+
+  it("removes nothing when a child with no worktree fails to open, ends, or has its session deleted", async () => {
+    const root = world.openRoot("lead");
+    world.setFailOpen(true);
+    await expect(root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "t", worktree: false })).rejects.toThrow(/Could not start worker/);
+    expect(world.worktrees.removed).toEqual([]);
+
+    world.setFailOpen(false);
+    const started = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "read", task: "t", worktree: false });
+    await world.harness.bridgeOf("/sessions/child-1.jsonl")!.completeRun({ status: "completed", message: "done" });
+    expect(world.worktrees.removed).toEqual([]);
+    await world.harness.removeWorktreeFor("/sessions/child-1.jsonl");
+    expect(world.worktrees.removed).toEqual([]);
+    expect(world.harness.run(started.runId)!.status).toBe("completed");
   });
 });

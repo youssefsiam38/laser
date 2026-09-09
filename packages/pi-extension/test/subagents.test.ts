@@ -88,7 +88,19 @@ function fakeBridge(role: HarnessSessionRole, canDelegate: boolean, entries: Age
     role: () => currentRole,
     canDelegate: () => canDelegate,
     catalog: () => currentCatalog,
-    startAgent: vi.fn(async (input) => ({ agentName: input.agentName, subagentName: input.subagentName, sessionId: "session_42", runId: "run_7", status: "running" as const })),
+    startAgent: vi.fn(async (input) =>
+      input.worktree === false
+        ? { agentName: input.agentName, subagentName: input.subagentName, sessionId: "session_42", runId: "run_7", status: "running" as const, cwd: "/project" }
+        : {
+            agentName: input.agentName,
+            subagentName: input.subagentName,
+            sessionId: "session_42",
+            runId: "run_7",
+            status: "running" as const,
+            cwd: `/project/.worktrees/${input.subagentName}`,
+            branch: `agents/${input.subagentName}`,
+          },
+    ),
     sendAgentMessage: vi.fn(async (input) => ({ sessionId: input.sessionId, runId: "run_8", status: "running" as const, delivery: "delivered" as const })),
     listAgents: vi.fn(async () => [summary]),
     waitForAgents: vi.fn(async () => ({ runs: [summary], timedOut: false })),
@@ -136,15 +148,43 @@ describe("subagents module: tool registration", () => {
       "Start another agent for an independent piece of work. Available agents: explorer — codebase research; worker — implementation.",
     );
     expect(start.parameters.required).toEqual(["agent_name", "subagent_name", "task"]);
-    expect(Object.keys(start.parameters.properties)).toEqual(["agent_name", "subagent_name", "task"]);
+    expect(Object.keys(start.parameters.properties)).toEqual(["agent_name", "subagent_name", "task", "worktree"]);
     for (const tool of h.tools.values()) {
       for (const guideline of tool.promptGuidelines ?? []) expect(guideline).toContain(tool.name);
     }
     const signal = new AbortController().signal;
     const result = await start.execute("call", { agent_name: "explorer", subagent_name: "find-auth", task: "Find the auth code." }, signal);
     expect(h.bridge.startAgent).toHaveBeenCalledWith({ agentName: "explorer", subagentName: "find-auth", task: "Find the auth code." }, signal);
-    expect(JSON.parse(result.content[0]!.text)).toEqual({ agent_name: "explorer", subagent_name: "find-auth", sessionId: "session_42", runId: "run_7", status: "running" });
+    expect(JSON.parse(result.content[0]!.text)).toEqual({
+      agent_name: "explorer",
+      subagent_name: "find-auth",
+      sessionId: "session_42",
+      runId: "run_7",
+      status: "running",
+      working_directory: "/project/.worktrees/find-auth",
+      branch: "agents/find-auth",
+    });
     expect(result.details).toMatchObject({ agentName: "explorer", runId: "run_7" });
+  });
+
+  it("passes the worktree choice through and says where the child works, with no branch when it is not isolated", async () => {
+    const h = moduleHarness(root, true);
+    const start = h.tools.get("start_agent")!;
+    const worktree = start.parameters.properties["worktree"] as { type: string; description: string };
+    expect(worktree.type).toBe("boolean");
+    expect(worktree.description).toContain("Default true");
+    expect(worktree.description).toContain("only reads");
+    // Absent is not sent as `false`: the bridge must see nothing at all.
+    await start.execute("call", { agent_name: "explorer", subagent_name: "find-auth", task: "Find it." });
+    expect(vi.mocked(h.bridge.startAgent).mock.calls[0]![0]).not.toHaveProperty("worktree");
+    const shared = await start.execute("call", { agent_name: "explorer", subagent_name: "review", task: "Review it.", worktree: false });
+    expect(h.bridge.startAgent).toHaveBeenLastCalledWith({ agentName: "explorer", subagentName: "review", task: "Review it.", worktree: false }, undefined);
+    const view = JSON.parse(shared.content[0]!.text);
+    expect(view).toMatchObject({ runId: "run_7", status: "running", working_directory: "/project" });
+    expect(view).not.toHaveProperty("branch");
+    const isolated = await start.execute("call", { agent_name: "explorer", subagent_name: "fix", task: "Fix it.", worktree: true });
+    expect(h.bridge.startAgent).toHaveBeenLastCalledWith({ agentName: "explorer", subagentName: "fix", task: "Fix it.", worktree: true }, undefined);
+    expect(JSON.parse(isolated.content[0]!.text)).toMatchObject({ working_directory: "/project/.worktrees/fix", branch: "agents/fix" });
   });
 
   it("delegates the other parent tools to the bridge and rethrows its errors", async () => {
@@ -263,6 +303,23 @@ describe("subagents module: events and the child's role", () => {
     expect(both).toContain("# Your role");
     expect(both).toContain("start_agent");
     expect(roleBlock(root, false, "/project")).toBeUndefined();
+  });
+
+  it("tells a child that shares its parent's checkout, and only that child", () => {
+    const isolated = roleBlock({ ...child, isolated: true }, false, "/project/.worktrees/review-auth-refresh")!;
+    expect(isolated).toContain("Work only inside your own worktree: /project/.worktrees/review-auth-refresh.");
+    expect(isolated).not.toContain("not isolated");
+    // Absent means isolated: nothing said before this flag existed changes.
+    expect(roleBlock(child, false, "/w")).toContain("Work only inside your own worktree: /w.");
+    const shared = roleBlock({ ...child, isolated: false }, false, "/project")!;
+    expect(shared).toContain("/project, your parent's own checkout");
+    expect(shared).toContain("you are not isolated from it");
+    expect(shared).not.toContain("Work only inside your own worktree");
+    // Everything else about the child's role is unchanged.
+    expect(shared).toContain('You are "review-auth-refresh", an instance of the agent "reviewer"');
+    expect(shared).toContain("complete_agent_run");
+    // A root session is never told about a checkout it was not given.
+    expect(roleBlock({ ...root, isolated: false }, false, "/project")).toBeUndefined();
   });
 
   it("re-reads the role per turn so a follow-up run carries its new task", async () => {

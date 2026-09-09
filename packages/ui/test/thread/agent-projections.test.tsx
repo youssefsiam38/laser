@@ -205,6 +205,42 @@ describe("rendering", () => {
     expect(container.querySelector('[data-slot="task-event-output"]')).toBeNull();
   });
 
+  it("says where a started agent is working: its branch, or this session's own checkout", async () => {
+    const call = (result: Record<string, unknown>, args: Record<string, unknown> = { agent_name: "reviewer", subagent_name: "explorer" }) => ({
+      toolCallId: "start-1",
+      toolName: "start_agent",
+      args,
+      argsText: JSON.stringify(args),
+      status: { type: "complete" as const, reason: "stop" as const },
+      result: JSON.stringify(result, null, 2),
+      addResult: vi.fn(),
+      resume: vi.fn(),
+      respondToApproval: vi.fn(async () => {}),
+    });
+    const where = () => container.querySelector<HTMLElement>('[data-slot="start-agent-where"]');
+
+    // A hydrated row has only the model's JSON view: `working_directory`.
+    await mount(<ToolRow {...call({ working_directory: "/p/.worktrees/explorer-1", branch: "agents/explorer-1" })} type="tool-call" />);
+    expect(where()?.textContent).toContain("agents/explorer-1");
+    expect(where()?.getAttribute("title")).toBe("/p/.worktrees/explorer-1");
+    expect(where()?.textContent).not.toContain("checkout");
+
+    // A live row has the harness's own details, which say `cwd`.
+    const live = { ...call({}), result: { content: [{ type: "text", text: "{}" }], details: { sessionId: "child", runId: "r9", cwd: "/p/.worktrees/explorer-1", branch: "agents/explorer-1" } } };
+    await mount(<ToolRow {...live} type="tool-call" />);
+    expect(where()?.textContent).toContain("agents/explorer-1");
+    expect(where()?.getAttribute("title")).toBe("/p/.worktrees/explorer-1");
+
+    // No branch is the signal that the child is not isolated.
+    await mount(<ToolRow {...call({ working_directory: "/p" })} type="tool-call" />);
+    expect(where()?.textContent).toContain("/p");
+    expect(where()?.textContent).toContain("this session’s checkout");
+
+    // A row from before the result carried it shows no line at all.
+    await mount(<ToolRow {...call({ sessionId: "child", runId: "r9" })} type="tool-call" />);
+    expect(where()).toBeNull();
+  });
+
   it("names a running call with Namer's label in its row and in the aggregate, then falls back to the summary", async () => {
     const running = { toolCallId: "bash-1", toolName: "bash", args: { command: "pnpm test" }, argsText: '{"command":"pnpm test"}', status: { type: "running" as const }, addResult: vi.fn(), resume: vi.fn(), respondToApproval: vi.fn(async () => {}) };
     await act(async () => store.dispatch({ type: "notification", method: "pi/extension/message", params: { path: PATH, message: { type: "lasercode/namer/label", toolCallId: "bash-1", label: "Checking the test suite" } } as never }));

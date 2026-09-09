@@ -230,11 +230,18 @@ function AgentDetail({ item }: { item: FleetItem }) {
           </Field>
         )}
         {item.model && <Field label="Model">{item.model}</Field>}
-        {run?.worktree && (
+        {run?.worktree ? (
           <Field label="Worktree">
             <span className="typed break-all">{run.worktree.branch}</span>
           </Field>
-        )}
+        ) : run?.cwd ? (
+          // Started without a worktree: the parent judged this agent read-only,
+          // so the directory is the fact, and there is no branch to invent.
+          <Field label="Working in">
+            <span className="typed break-all">{run.cwd}</span>
+            <span className="mt-0.5 block text-ink-3">Shares its parent’s checkout.</span>
+          </Field>
+        ) : null}
         {item.elapsedMs !== undefined && <Field label="Elapsed">{formatElapsed(item.elapsedMs)}</Field>}
         {item.terminalReason && <Field label="Ended">{item.terminalReason}</Field>}
         {run?.result?.message && (

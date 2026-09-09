@@ -702,6 +702,10 @@ export class WorkerServer {
       kind: "child",
       ...(record.subagentName !== undefined ? { subagentName: record.subagentName } : {}),
       depth,
+      // The record is the only evidence after a restart: no worktree recorded
+      // means the child was started to work in its parent's checkout, and its
+      // role block must keep saying so.
+      isolated: record.worktree !== undefined,
       parent: {
         sessionPath: record.parentPath,
         sessionId: record.parentSessionId ?? "",
@@ -712,7 +716,7 @@ export class WorkerServer {
     return { definition, role, record };
   }
 
-  /** The harness opens a child session here: same worker, the worktree as cwd. */
+  /** The harness opens a child session here: same worker, the child's own directory as cwd. */
   private async openChild(open: { cwd: string; parentSessionPath: string; agent: DriverAgentOptions }): Promise<SessionState> {
     const live = await this.openAndAttach({ cwd: open.cwd, parentSessionPath: open.parentSessionPath, ...this.commonOpen(), agent: open.agent });
     return live.driver.state();

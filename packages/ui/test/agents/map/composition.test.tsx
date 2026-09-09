@@ -73,6 +73,28 @@ describe("composition by measured size", () => {
     expect(host.openFullscreen).toHaveBeenCalled();
   });
 
+  it("inspects where an agent works: its branch, or the checkout it shares with its parent", async () => {
+    const { runs, sessions } = family();
+    const isolated = { ...runs[0]!, worktree: { path: "/p/.worktrees/reviewer-1", branch: "agents/reviewer-1", baseCommit: "abc" }, cwd: "/p/.worktrees/reviewer-1" };
+    const shared = { ...runs[2]!, worktree: null, cwd: "/p" };
+    mounted = await mountMap({ store: seededStore({ runs: [isolated, runs[1]!, shared], sessions }), size: { width: 400, height: 600 } });
+    const { container } = mounted;
+    const inspect = async (path: string): Promise<HTMLElement> => {
+      const card = container.querySelector<HTMLElement>(`[data-slot="agent-map-card"][data-path="${path}"]`)!;
+      await act(async () => card.querySelector<HTMLButtonElement>("button[aria-expanded]")!.click());
+      return card.querySelector<HTMLElement>('[data-slot="agent-map-inspector"]')!;
+    };
+    const withWorktree = await inspect("/p/a.jsonl");
+    expect(withWorktree.textContent).toContain("Worktree");
+    expect(withWorktree.textContent).toContain("agents/reviewer-1");
+    expect(withWorktree.textContent).not.toContain("Working in");
+
+    const withoutWorktree = await inspect("/p/c.jsonl");
+    expect(withoutWorktree.textContent).toContain("Working in");
+    expect(withoutWorktree.textContent).toContain("Shares its parent’s checkout");
+    expect(withoutWorktree.textContent).not.toContain("Worktree");
+  });
+
   it("keeps the canvas on a narrow fullscreen, with touch-sized controls and a sheet for details", async () => {
     const { runs, sessions } = family();
     mounted = await mountMap({ store: seededStore({ runs, sessions }), host: { frame: "fullscreen" }, size: { width: 390, height: 780 } });

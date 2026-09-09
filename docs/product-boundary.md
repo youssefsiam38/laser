@@ -14,7 +14,7 @@ package installation.
 | Pi and Pi-native packages | agent loop, models, tools, session persistence and feature logic |
 | `packages/pi-goal` | exact upstream goal pin, loader entrypoint and stable state reader |
 | `packages/pi-extension` | in-process translation from supported engine capabilities to the Laser protocol; the model-facing agent harness tools (`start_agent` and siblings, `complete_agent_run`), the child's role block and parent event delivery, from the worker's bridge; long commands as background tasks |
-| Worker | the only Pi imports; feature-to-engine loading and `SessionDriver` mapping; agent execution — per-agent session configuration, child sessions, `.worktrees/` isolation, timeouts, parent events, the Beam skill, Namer qualification |
+| Worker | the only Pi imports; feature-to-engine loading and `SessionDriver` mapping; agent execution — per-agent session configuration, child sessions, `.worktrees/` isolation when the parent asks for it, parent events, the Beam skill, Namer qualification |
 | Protocol, host and UI | engine-neutral settings, feature policy, session state and presentation; agent definitions and policy (`agents.json`), the Agents page, the run registry (`agent-runs.json`), sub-sessions in the sidebar, the live map, and the built-in agents' product integrations (Beam's spark and bubble, the Chat tab, Namer's names and labels) |
 
 New backend behavior starts as a reusable Pi-native package, whether local or
@@ -22,8 +22,9 @@ exact-pinned upstream. It must work without the Laser UI. Laser then adds a
 companion adapter and owns what people see. Presentation logic never moves into
 the engine package, and engine types never move above the worker. The agent
 harness is the deliberate exception (D-140, [`agents.md`](agents.md)): its
-semantics — one `start_agent` tool over a compact catalog, mandatory worktree
-isolation, background-only children that are persistent sub-sessions — are
+semantics — one `start_agent` tool over a compact catalog, worktree isolation
+by default with the parent able to waive it (D-156), background-only children
+that are persistent sub-sessions — are
 Laser's own, implemented in the worker and the companion extension against
 documented engine APIs; the definitions, runs and every surface are owned
 above the worker.
@@ -51,7 +52,8 @@ does not reveal internally managed or unsupported engine settings.
 - Feature choices live in Laser preferences at global or project scope.
 - A project override can be cleared to follow the global choice again.
 - Goals is bundled and exact-pinned. Subagents is Laser's own harness
-  (D-140): the worker runs child agents as isolated-worktree sub-sessions and
+  (D-140, D-156): the worker runs child agents as sub-sessions, in their own
+  worktree unless the parent asked otherwise, and
   the companion extension registers the tools. The user never installs a
   package to obtain either.
 - The worker disables automatic extension, skill, prompt, theme and package

@@ -40,12 +40,24 @@ export interface HarnessSessionRole {
   goal?: { id: string; objective: string };
   /** The child's task (first lines), for its role context. */
   task?: string;
+  /**
+   * Present on a child: `false` when its parent started it without a worktree,
+   * so it works in the parent's own checkout and is not isolated from it. Its
+   * role block says so; nothing else changes — it keeps every tool (D-144).
+   */
+  isolated?: boolean;
 }
 
 export interface StartAgentInput {
   agentName: string;
   subagentName: string;
   task: string;
+  /**
+   * Give the child its own worktree. Absent means true: the default is an
+   * isolated checkout. `false` runs it in this session's own checkout, for
+   * work that only reads.
+   */
+  worktree?: boolean;
 }
 
 export interface StartAgentResult {
@@ -54,6 +66,10 @@ export interface StartAgentResult {
   sessionId: string;
   runId: string;
   status: "running";
+  /** The directory the child works in, whichever way it was started. */
+  cwd: string;
+  /** The branch its worktree is on; absent when it shares its parent's checkout. */
+  branch?: string;
 }
 
 export interface SendAgentMessageInput {

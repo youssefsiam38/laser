@@ -522,9 +522,15 @@ blockers, not advice.
   separate agent id, type or profile name.
 - Children never block: `start_agent` returns the identities before the child
   has done anything; there is no foreground mode.
-- Every child gets a worktree under `<project>/.worktrees/` on
-  `agents/<slug>`, or a person-facing refusal (not a repository, no commit,
-  a path another agent owns). Never a child in the parent's checkout.
+- The parent chooses isolation per child: `start_agent`'s `worktree` defaults
+  to true, and true means a worktree under `<project>/.worktrees/` on
+  `agents/<slug>` or a person-facing refusal (not a repository, no commit, a
+  path another agent owns) — and a refusal names both ways forward, git or
+  `worktree: false`. `false` runs the child in the parent's checkout with every
+  tool and nothing refused: the judgement is the parent's, and the child is told
+  in its role block that it is not isolated (D-156). A project with no git
+  accepts only `false`. The result always says where the child is working, and
+  carries a branch only when there is one.
 - Completion only through `complete_agent_run`; its message is stored once,
   as the child's final assistant message. Arbitrary last text is not
   completion; a child that settles without the call is not `completed`.
@@ -539,7 +545,8 @@ blockers, not advice.
   its worker is never retired underneath it.
 - Test nesting depth (a child at `maxDepth` gets no `start_agent`), model
   access (a definition naming a model without a credential is refused), worktree
-  ownership (a run touches only the worktree it created), a run that outlives
+  ownership (an isolated run touches only the worktree it created; an
+   uninsulated one shares its parent's checkout by design), a run that outlives
   any clock, settle-without-completion (not `completed`) and reload attribution
   (`lasercode/agent` puts a child under its parent after a host restart).
 - Background promotion keeps the output already produced and the exit state;

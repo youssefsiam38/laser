@@ -247,6 +247,9 @@ this is exactly what the app shows.`,
           exitCode: row.task?.exitCode ?? null,
           parent: row.run?.parent ?? null,
           worktree: row.run?.worktree ?? null,
+          // Where the work happens, either way: an agent started without a
+          // worktree works in its parent's checkout and has no branch.
+          cwd: row.run?.cwd ?? null,
           session: { path: row.session.path, cwd: row.session.cwd, id: row.session.id },
         })),
       });

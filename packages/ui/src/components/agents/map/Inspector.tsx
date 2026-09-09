@@ -2,14 +2,15 @@
 /**
  * A selected node's details (docs/agents.md §5): title, the run's timeline
  * (Timeline element: started · what it is doing now · how it ended, with the
- * reason), the task, the worktree branch, and the two things a person can do
- * from here — open the chat, or end a running agent.
+ * reason), the task, where the agent is working — its worktree's branch, or
+ * the checkout it shares with its parent — and the two things a person can do
+ * from here: open the chat, or end a running agent.
  *
  * One body, three hosts: a column beside the canvas when there is room, a
  * row under the canvas in the panel composition, a bottom sheet on a phone.
  * Every host draws {@link InspectorBody}; none of them invents a fourth.
  */
-import { GitBranch, OctagonX, X } from "lucide-react";
+import { FolderOpen, GitBranch, OctagonX, X } from "lucide-react";
 import { useEffect, useRef } from "react";
 
 import type { AgentTreeNode } from "@/agents";
@@ -120,7 +121,7 @@ export function InspectorBody({ node, header = true, className }: { node: AgentT
         </section>
       )}
 
-      {run?.worktree && (
+      {run?.worktree ? (
         <section className="flex min-w-0 flex-col gap-1.5">
           <h4 className="eyebrow">Worktree</h4>
           <span className="flex min-w-0 items-center gap-1.5 text-ink-2" title={run.worktree.path}>
@@ -128,7 +129,18 @@ export function InspectorBody({ node, header = true, className }: { node: AgentT
             <span className="typed truncate">{run.worktree.branch}</span>
           </span>
         </section>
-      )}
+      ) : run?.cwd ? (
+        // No worktree: this agent was started to work in its parent's own
+        // checkout, so the directory is the fact and there is no branch.
+        <section className="flex min-w-0 flex-col gap-1.5">
+          <h4 className="eyebrow">Working in</h4>
+          <span className="flex min-w-0 items-center gap-1.5 text-ink-2" title={run.cwd}>
+            <FolderOpen aria-hidden="true" className="size-3.5 shrink-0 text-ink-3" />
+            <span className="typed truncate">{run.cwd}</span>
+          </span>
+          <p className="text-sm leading-sm text-ink-3">Shares its parent’s checkout; it has no worktree of its own.</p>
+        </section>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-2">
         <ChatButton path={node.id} variant="button" label={root ? "Back to chat" : "Open chat"} className="h-8 px-3 text-sm" />

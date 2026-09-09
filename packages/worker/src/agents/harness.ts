@@ -17,8 +17,11 @@
  *   - a successful run ends only through `complete_agent_run`; crashes,
  *     cancellations and timeouts are recorded by the harness, never chosen by
  *     the model;
- *   - every child gets its own worktree; nesting limits, model access and
- *     worktree ownership are enforced here, not by prompt.
+ *   - a child gets its own worktree unless its parent said otherwise
+ *     (`start_agent { worktree: false }`, for a child that only reads), in
+ *     which case it works in the parent's checkout and is told so; nesting
+ *     limits, model access and worktree ownership are enforced here, not by
+ *     prompt.
  */
 import { randomBytes } from "node:crypto";
 import {
@@ -316,7 +319,11 @@ export class AgentHarness {
     return state.run;
   }
 
-  /** Best effort: remove a deleted child session's worktree. */
+  /**
+   * Best effort: remove a deleted child session's worktree. A child that ran
+   * in its parent's checkout has none, and nothing there is ever removed or
+   * cleaned — the early return is the whole guard.
+   */
   async removeWorktreeFor(sessionPath: string): Promise<void> {
     const entry = this.byPath.get(sessionPath);
     const record = entry?.record ?? this.runs().find((run) => run.sessionPath === sessionPath);
@@ -447,6 +454,11 @@ export class AgentHarness {
     if (subagentName.length > SUBAGENT_NAME_MAX) throw new HarnessError(`subagent_name must be at most ${SUBAGENT_NAME_MAX} characters.`);
     if (task === "") throw new HarnessError("task is required: the complete task and all context the new agent needs.");
     if (task.length > AGENT_TASK_MAX) throw new HarnessError(`task must be at most ${AGENT_TASK_MAX} characters.`);
+    // Absent means true: an agent that says nothing gets an isolated worktree,
+    // exactly as before. `false` is the parent's judgement that this child only
+    // reads, so it runs in the parent's own checkout with every tool it would
+    // have had (D-144) — nothing is stripped and no write is refused.
+    const isolated = worktreeChoice(input.worktree);
 
     const catalog = this.catalogFor(parent);
     const definition = this.definitions.definition(agentName);
@@ -468,7 +480,9 @@ export class AgentHarness {
     signal?.throwIfAborted();
 
     const runId = newRunId();
-    const worktree = await this.worktrees.create({ projectCwd: parent.projectCwd, baseCwd: parentDriver.state().cwd, subagentName, runId });
+    const baseCwd = parentDriver.state().cwd;
+    const worktree = isolated ? await this.worktrees.create({ projectCwd: parent.projectCwd, baseCwd, subagentName, runId }) : undefined;
+    const childCwd = worktree ? worktree.cwd : baseCwd;
     const goal = await readGoal(parentDriver);
     const rootPath = parent.record.rootPath ?? parent.path;
     const record: SessionAgentRecord = {
@@ -479,13 +493,14 @@ export class AgentHarness {
       parentSessionId: parent.sessionId,
       rootPath,
       runId,
-      worktree: { path: worktree.path, branch: worktree.branch, baseCommit: worktree.baseCommit },
+      ...(worktree ? { worktree: { path: worktree.path, branch: worktree.branch, baseCommit: worktree.baseCommit } } : {}),
     };
     const role: HarnessSessionRole = {
       agentName,
       kind: "child",
       subagentName,
       depth: parent.role.depth + 1,
+      isolated,
       parent: {
         sessionPath: parent.path,
         sessionId: parent.sessionId,
@@ -500,7 +515,7 @@ export class AgentHarness {
     let state: SessionState;
     try {
       state = await this.host.openChild({
-        cwd: worktree.cwd,
+        cwd: childCwd,
         parentSessionPath: parent.path,
         agent: {
           definition,
@@ -508,13 +523,15 @@ export class AgentHarness {
           record,
           bridge: handle.bridge,
           policy,
-          ...(this.backgroundWork ? { backgroundWork: this.backgroundWork(worktree.cwd) } : {}),
+          ...(this.backgroundWork ? { backgroundWork: this.backgroundWork(childCwd) } : {}),
           ...(this.beamSkillName !== undefined ? { beamSkillName: this.beamSkillName } : {}),
         },
       });
     } catch (error) {
       handle.discard();
-      await this.worktrees.remove(worktree.root, worktree.path, worktree.branch).catch(() => undefined);
+      // Only ever a worktree this start created: a child that shares its
+      // parent's checkout leaves nothing behind, and nothing there is touched.
+      if (worktree) await this.worktrees.remove(worktree.root, worktree.path, worktree.branch).catch(() => undefined);
       const message = error instanceof Error ? error.message : String(error);
       throw error instanceof HarnessError ? error : new HarnessError(`Could not start ${agentName}: ${message}`);
     }
@@ -540,7 +557,15 @@ export class AgentHarness {
       summary: `Sent the task to ${subagentName}`,
     });
     void this.kick(runState, task);
-    return { agentName, subagentName, sessionId: state.id, runId, status: "running" };
+    return {
+      agentName,
+      subagentName,
+      sessionId: state.id,
+      runId,
+      status: "running",
+      cwd: childCwd,
+      ...(worktree ? { branch: worktree.branch } : {}),
+    };
   }
 
   private async sendAgentMessage(parent: Entry, input: SendAgentMessageInput): Promise<SendAgentMessageResult> {
@@ -654,6 +679,7 @@ export class AgentHarness {
     const startedAt = this.iso();
     const driver = this.host.driver(path);
     const parentPath = entry.record.parentPath;
+    const runCwd = driver?.state().cwd ?? entry.record.worktree?.path;
     const run: AgentRun = {
       agentName: entry.role.agentName,
       subagentName: entry.role.subagentName ?? entry.role.agentName,
@@ -667,6 +693,9 @@ export class AgentHarness {
         ? { sessionPath: parentPath, sessionId: entry.record.parentSessionId ?? "", ...(init.parentRunId !== undefined ? { runId: init.parentRunId } : {}) }
         : null,
       worktree: entry.record.worktree ?? null,
+      // Where this run actually works, said once so no reader has to infer it
+      // from the presence of a worktree.
+      ...(runCwd !== undefined ? { cwd: runCwd } : {}),
       origin: init.origin,
       status: "running",
       task: excerpt(init.task, AGENT_TASK_EXCERPT),
@@ -885,6 +914,17 @@ export class AgentHarness {
 
 export function newRunId(): string {
   return `run_${randomBytes(4).toString("hex")}`;
+}
+
+/**
+ * `worktree` on `start_agent`: absent means true, so nothing that exists today
+ * changes. Anything that is not a boolean is a mistake worth naming rather
+ * than a silent default — the bridge crosses a package boundary.
+ */
+export function worktreeChoice(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (typeof value !== "boolean") throw new HarnessError("worktree must be true or false: true (the default) gives the agent its own worktree, false runs it in this session's checkout.");
+  return value;
 }
 
 async function readGoal(driver: SessionDriver | undefined): Promise<{ id: string; objective: string } | null> {

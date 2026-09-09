@@ -92,7 +92,7 @@ One row is one piece of work. Collapsed:
   what it was asked to do. Never all three: this is a row, not a record.
 - **elapsed** — live while the work is, frozen once it ends
 
-Expanded, in place: the task excerpt, the model, the worktree branch, the
+Expanded, in place: the task excerpt, the model, the worktree branch — or, for a child its parent did not isolate, the checkout it shares — the
 reason it ended, the result message — and for a background command, the tail
 of its output with ANSI interpreted, plus its exit code. Two controls: **Open
 chat**, which navigates to the session the work lives in, and **Stop**, which

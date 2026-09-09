@@ -12,9 +12,9 @@
  *      over a compact catalog — never one tool per agent
  *      (docs/agents-leap/references/agent-harness-architecture.md).
  *   2. **Tell a child who it is.** Its role — instance name, definition,
- *      task, the person's goal for the parent and the worktree it owns — is
- *      appended to the system prompt each turn; nothing is written into the
- *      transcript.
+ *      task, the person's goal for the parent, and the checkout it works in
+ *      (its own worktree, or its parent's, said plainly) — is appended to the
+ *      system prompt each turn; nothing is written into the transcript.
  *   3. **Deliver agent events to the parent model** at a safe boundary, as
  *      one custom message per event (`AGENT_EVENT_MESSAGE_TYPE`), so the
  *      transcript stores each event once and the UI can render it.
@@ -40,6 +40,7 @@ import type {
   AgentModelEvent,
   AgentRunSummary,
   HarnessSessionRole,
+  StartAgentResult,
 } from "../agents-bridge.js";
 import type { LaserModule, ModuleContext } from "./index.js";
 
@@ -104,14 +105,19 @@ export function roleBlock(role: HarnessSessionRole, canDelegate: boolean, cwd: s
       );
     }
     parts.push(
-      'End your work by calling complete_agent_run with status "completed" or "blocked" and a self-contained final message: what you did, the evidence, and any important next step. It is the only way this run ends; do not write a closing reply instead of it. Do not ask the parent questions you can answer yourself by reading the code. Work only inside your own worktree: ' +
-        cwd +
-        ".",
+      'End your work by calling complete_agent_run with status "completed" or "blocked" and a self-contained final message: what you did, the evidence, and any important next step. It is the only way this run ends; do not write a closing reply instead of it. Do not ask the parent questions you can answer yourself by reading the code.',
+    );
+    // The one sentence a child that shares its parent's checkout is owed: it
+    // keeps every tool, so it can only judge what to touch if it is told.
+    parts.push(
+      role.isolated === false
+        ? `You are working in ${cwd}, your parent's own checkout, not a worktree of your own: you are not isolated from it. Your parent and any other agent in that checkout see every change you make there at once, so change only what your task actually asks for, and say in your final message anything you left behind.`
+        : `Work only inside your own worktree: ${cwd}.`,
     );
   }
   if (canDelegate) {
     parts.push(
-      "You can start other agents with start_agent; they run in the background in isolated worktrees and their results arrive here as messages. Use wait_for_agents when you need a result before continuing, and stop_agent for work that is no longer needed.",
+      "You can start other agents with start_agent; they run in the background, by default each in its own isolated worktree, and their results arrive here as messages. Use wait_for_agents when you need a result before continuing, and stop_agent for work that is no longer needed.",
     );
   }
   return parts.length > 0 ? parts.join("\n") : undefined;
@@ -120,6 +126,24 @@ export function roleBlock(role: HarnessSessionRole, canDelegate: boolean, cwd: s
 function excerpt(text: string, max: number): string {
   const trimmed = text.trim();
   return trimmed.length > max ? `${trimmed.slice(0, max)}…` : trimmed;
+}
+
+/**
+ * What `start_agent` answers: the four identities, the run's status, and the
+ * fact the parent needs afterwards — where the child is working, and the
+ * branch when it has one of its own. No branch means it is not isolated; the
+ * absence is the signal, so no placeholder is invented.
+ */
+export function startedView(result: StartAgentResult): Record<string, unknown> {
+  return {
+    agent_name: result.agentName,
+    subagent_name: result.subagentName,
+    sessionId: result.sessionId,
+    runId: result.runId,
+    status: result.status,
+    working_directory: result.cwd,
+    ...(result.branch !== undefined ? { branch: result.branch } : {}),
+  };
 }
 
 /** The reference's vocabulary for the model: `agent_name` / `subagent_name`, never camel case. */
@@ -145,18 +169,30 @@ function registerStartAgent(pi: ExtensionAPI, bridge: AgentHarnessBridge, catalo
     promptGuidelines: [
       "Use start_agent for independent work another agent can do in parallel; it returns immediately with sessionId and runId, so continue working or call wait_for_agents rather than polling with list_agents.",
       "Give start_agent a self-contained task: the new agent sees none of this conversation.",
+      "Leave start_agent's worktree alone for work that changes files, and pass worktree false only for a task that just reads, such as a review or a search.",
     ],
     parameters: Type.Object({
       agent_name: Type.String({ minLength: 1, maxLength: AGENT_NAME_MAX, description: "The unique name of the reusable agent to start." }),
       subagent_name: Type.String({ minLength: 1, maxLength: SUBAGENT_NAME_MAX, description: "A short name for this running instance and its task." }),
       task: Type.String({ minLength: 1, maxLength: AGENT_TASK_MAX, description: "The complete task and all context the new agent needs." }),
+      worktree: Type.Optional(
+        Type.Boolean({
+          description:
+            "Give the new agent its own git worktree, isolated from your files. Default true. Pass false for a task that only reads — a review, a search, an explanation: the agent then works in the same checkout and the same files as you, keeps every tool, and anything it writes lands in your working copy. false is also the only way to start an agent in a project that is not a git repository or has no commit yet.",
+        }),
+      ),
     }),
     async execute(_toolCallId, params, signal) {
       const result = await bridge.startAgent(
-        { agentName: params.agent_name, subagentName: params.subagent_name, task: params.task },
+        {
+          agentName: params.agent_name,
+          subagentName: params.subagent_name,
+          task: params.task,
+          ...(params.worktree !== undefined ? { worktree: params.worktree } : {}),
+        },
         signal,
       );
-      return asResult(modelView(result), result);
+      return asResult(startedView(result), result);
     },
   });
 }
