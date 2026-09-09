@@ -1,0 +1,28 @@
+diff --git a/dist/react/runtimes/RemoteThreadListHookInstanceManager.js b/dist/react/runtimes/RemoteThreadListHookInstanceManager.js
+index 2949e5059ae1e289cb7f12ceb7352268f72ee60a..dfd3db4ffc5ff99502bbb4b898626b6a5ef56d0e 100644
+--- a/dist/react/runtimes/RemoteThreadListHookInstanceManager.js
++++ b/dist/react/runtimes/RemoteThreadListHookInstanceManager.js
+@@ -155,7 +155,22 @@ var RemoteThreadListHookInstanceManager = class extends BaseSubscribable {
+ 	_setRunning(instance, isRunning) {
+ 		if (instance.isRunning === isRunning) return;
+ 		instance.isRunning = isRunning;
+-		for (const callback of this.runningSubscribers) callback();
++		// Vendor patch (M13-T37): notify outside the render phase.
++		// `_publishThreadRuntime` runs as the `publish` callback of a
++		// `useResources` resource, so it executes during render; it calls
++		// `_trackRunning`, which lands here, and a subscriber updates a React
++		// store. React 19 refuses that with "Cannot update a resource while
++		// rendering a different resource" (#520) on the first prompt of any
++		// session. The flag is still assigned synchronously, so
++		// `__internal_isThreadRunning` reads back immediately; only the
++		// notification is deferred, and repeated flips inside one task collapse
++		// into a single notification because subscribers read current state.
++		if (instance.__laserRunningNotifyQueued) return;
++		instance.__laserRunningNotifyQueued = true;
++		queueMicrotask(() => {
++			instance.__laserRunningNotifyQueued = false;
++			for (const callback of this.runningSubscribers) callback();
++		});
+ 	}
+ 	stopThreadRuntime(threadId) {
+ 		const instance = this.instances.get(threadId);

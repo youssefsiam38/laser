@@ -2,7 +2,7 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-09T04:15:00+03:00 · claude-2026-09-09-agents · HEAD: 99fe699
+**Last updated:** 2026-09-09T04:15:00+03:00 · claude-2026-09-09-agents · HEAD: pending
 
 **Current focus:** M13 Agents Leap. The panel system is gone and the fleet is a permanent column beside the monitor (D-147); a failed action no longer paints the block red (D-148); a queued message waits by default and steering is a verb you press (D-149); the opening screen is one screen (D-150); an `edit` aimed at a file that moved is explained rather than refused (D-151, D-152); editing history moves the leaf instead of forking (D-153); finished work is dimmed, never green (D-154). Remaining M13 rows are the retired pi-subagents file layer, the `.laser` override reload finding, and an upstream React #520.
 
@@ -24,12 +24,12 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
 | M12 Product experience | done | 0.2.13 dispatched |
-| M13 Agents Leap | in-progress | T1–T10, T13–T33 and T34–T36 done; T11, T12 and T37 remain |
+| M13 Agents Leap | in-progress | T1–T10 and T13–T37 done; T11 and T12 remain |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
 
-- M13-T37: an uncaught React #520 on the first prompt of a session, inside `@assistant-ui/core` 0.3.17. Reproduced on a plain chat with no agent work; blocked on an upstream fix or a pinned patch (`docs/upstream.md`).
+- None.
 
 ## Next up
 
@@ -39,6 +39,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Recently done
 
+- M13-T37: the React #520 on a session's first prompt is gone, through a pinned patch that notifies outside the render phase; verified on a plain chat, the agents scene and a 30 s turn.
 - M13-T31: finished work is dimmed in all four places it was green, both folds lost the tick, the fleet gained Clear; 1,510 tests.
 - M13-T36: the match is the freshness proof, so an `edit` is explained and never blocked (D-152).
 - M13-T35: editing a message or running a reply again changes this session; forking is the second choice (D-153).
