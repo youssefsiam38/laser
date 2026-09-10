@@ -4,6 +4,7 @@ import { X } from "lucide-react";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 
 import { ComposerVoice, ComposerVoiceButton } from "@/components/assistant-ui/elements/composer";
+import { MobileComposerButtonClass } from "@/components/assistant-ui/elements/mobile-composer";
 import { cn } from "@/lib/utils";
 import {
   PhraseDictationAdapter,
@@ -43,17 +44,24 @@ import type { TranscribeScope } from "@/pwa/dictation";
  * Needs `adapters.dictation` on the runtime (`getMobileDictationAdapter`);
  * `ComposerPrimitive.Dictate` disables itself without one.
  */
-export function DictateButton({ className, size }: { className?: string | undefined; size?: "icon-sm" | "icon-lg" | undefined }) {
+interface DictateButtonProps {
+  className?: string | undefined;
+  size?: "icon-sm" | "icon-lg" | undefined;
+  /** Gives every microphone action the phone's 44px touch target. */
+  touchSized?: boolean | undefined;
+}
+
+export function DictateButton({ className, size, touchSized = false }: DictateButtonProps) {
   const env = useEnvironment();
   const view = useLaserView();
   const available = view?.capabilities.includes("transcribe") ?? false;
 
   if (!available || !view) return null;
   if (!env.microphone || !PhraseDictationAdapter.isSupported()) return null;
-  return <DictateControls className={className} size={size} cwd={view.state.cwd} path={view.path} />;
+  return <DictateControls className={className} size={size} touchSized={touchSized} cwd={view.state.cwd} path={view.path} />;
 }
 
-function DictateControls({ className, size, cwd, path }: { className?: string | undefined; size?: "icon-sm" | "icon-lg" | undefined } & TranscribeScope) {
+function DictateControls({ className, size, touchSized, cwd, path }: DictateButtonProps & TranscribeScope) {
   const aui = useAui();
   const { actions } = useLaserStable();
   const phase = useDictationPhase();
@@ -133,12 +141,12 @@ function DictateControls({ className, size, cwd, path }: { className?: string | 
   const voicePhase = phase === "transcribing" ? "transcribing" : phase === "starting" ? "starting" : "listening";
 
   return (
-    <span ref={root} data-slot="dictate" data-phase={active ? phase : "idle"} className={cn("flex min-w-0 items-center gap-1", active && "order-first basis-full", className)}>
+    <span ref={root} data-slot="dictate" data-phase={active ? phase : "idle"} className={cn("flex min-w-0 items-center gap-1", active && "basis-full", className)}>
       <AuiIf condition={(s) => s.composer.dictation == null}>
         <ComposerPrimitive.Dictate asChild>
           {/* The claim runs before the primitive begins: composed handlers run
               the child's first, and the transport reads the scope at `begin`. */}
-          <ComposerVoiceButton active={false} aria-label="Dictate a message" disabled={phase !== "idle"} tooltip={phase !== "idle" ? "Recording in another composer" : "Dictate"} onClick={claimScope} {...(size ? { size } : {})} />
+          <ComposerVoiceButton active={false} aria-label="Dictate a message" disabled={phase !== "idle"} tooltip={phase !== "idle" ? "Recording in another composer" : "Dictate"} onClick={claimScope} className={touchSized ? MobileComposerButtonClass(false) : undefined} {...(size ? { size } : {})} />
         </ComposerPrimitive.Dictate>
       </AuiIf>
       <AuiIf condition={(s) => s.composer.dictation != null}>
@@ -149,7 +157,7 @@ function DictateControls({ className, size, cwd, path }: { className?: string | 
             tooltip={phase === "transcribing" ? "Transcribing…" : "Stop and transcribe"}
             aria-label={phase === "transcribing" ? "Transcribing" : "Stop dictation and transcribe"}
             disabled={phase === "transcribing"}
-            className="disabled:opacity-100"
+            className={cn("disabled:opacity-100", touchSized && MobileComposerButtonClass(true))}
             {...(size ? { size } : {})}
           />
         </ComposerPrimitive.StopDictation>
@@ -158,7 +166,7 @@ function DictateControls({ className, size, cwd, path }: { className?: string | 
           aria-label="Discard recording"
           variant="ghost"
           size={size ?? "icon-sm"}
-          className="shrink-0 text-ink-3 hover:text-ink"
+          className={cn("shrink-0 text-ink-3 hover:text-ink", touchSized && MobileComposerButtonClass(false))}
           onClick={() => cancelActiveDictation()}
         >
           <X />

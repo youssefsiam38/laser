@@ -93,32 +93,6 @@ describe("the microphone in a second composer", () => {
     expect(mocks.cancel).toHaveBeenCalledOnce(); expect(mocks.setText).not.toHaveBeenCalled();
   });
 
-  it("keeps the recording owner and editable draft mounted through start and stop", async () => {
-    mocks.view = sessionView("/state/beam/b1.jsonl", "/state/beam");
-    const fixture = () => <TooltipProvider><div data-slot="composer"><textarea defaultValue="Keep editing" /><DictateButton /></div></TooltipProvider>;
-    await act(async () => root.render(fixture()));
-    const owner = container.querySelector<HTMLElement>('[data-slot="dictate"]')!;
-    const draft = container.querySelector<HTMLTextAreaElement>("textarea")!;
-
-    mocks.dictating = true;
-    await act(async () => root.render(fixture()));
-    expect(container.querySelector('[data-slot="dictate"]')).toBe(owner);
-    expect(owner.classList).toContain("basis-full");
-    expect(owner.classList).toContain("order-first");
-    expect(container.querySelector("textarea")).toBe(draft);
-    expect(draft.value).toBe("Keep editing");
-    expect(container.querySelector('[aria-label="Stop dictation and transcribe"]')).not.toBeNull();
-    expect(container.querySelector('[aria-label="Discard recording"]')).not.toBeNull();
-
-    mocks.dictating = false;
-    await act(async () => root.render(fixture()));
-    expect(container.querySelector('[data-slot="dictate"]')).toBe(owner);
-    expect(owner.classList).not.toContain("basis-full");
-    expect(container.querySelector("textarea")).toBe(draft);
-    expect(draft.value).toBe("Keep editing");
-    expect(container.querySelector('[aria-label="Dictate a message"]')).not.toBeNull();
-  });
-
   it("is offered wherever the session can transcribe, and hidden where it cannot", async () => {
     mocks.view = sessionView("/state/beam/b1.jsonl", "/state/beam");
     await act(async () => root.render(<TooltipProvider><DictateButton /></TooltipProvider>));

@@ -81,7 +81,7 @@ function ComposerBody() {
                 <span className="flex-1" />
               ) : (
                 <>
-                  <DictateButton size="icon-lg" className="[&_button]:size-11" />
+                  <DictateButton size="icon-lg" touchSized />
                   {!dictating && <>
                     <SessionAgentSelector allowProjectLanding={allowProjectLanding} />
                     <SessionModelSelector />
