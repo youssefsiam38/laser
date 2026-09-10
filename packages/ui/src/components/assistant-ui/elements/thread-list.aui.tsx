@@ -164,8 +164,10 @@ export interface BranchInfo {
   finished: readonly ThreadListNode[];
   /** How many rows the finished fold holds, at every depth. */
   finishedRows: number;
-  /** How many of those failed. Named on the fold, never hidden inside it. */
+  /** How many finished-fold rows failed. Named on that fold. */
   finishedFailed: number;
+  /** Every failed run below this row, including a live branch's parent. */
+  failed: number;
   /** Every row beneath this one, at every depth. */
   total: number;
   running: number;
@@ -385,7 +387,7 @@ export function useThreadListGroups(
 }
 
 /**
- * What sits under each parent: the two folds and the tally its chip shows.
+ * What sits under each parent: the two folds and the state its gutter mark shows.
  * One walk per (tree, run registry) pair — a row never recomputes this, and a
  * status change never moves a row that did not change fold.
  *
@@ -418,6 +420,7 @@ function branchInfoOf(groups: readonly ThreadListGroup[], runs: Readonly<Record<
     let running = 0;
     let blocked = 0;
     let waiting = 0;
+    let failed = 0;
     const tally = (child: ThreadListNode): void => {
       total += 1;
       const status = statusOf(child);
@@ -425,6 +428,7 @@ function branchInfoOf(groups: readonly ThreadListGroup[], runs: Readonly<Record<
       // Both need someone: one ended saying so, one is live and paused on a question.
       else if (status === "blocked" || status === "needs_input") blocked += 1;
       else if (status === "queued" || status === undefined) waiting += 1;
+      else if (status === "failed") failed += 1;
       child.children.forEach(tally);
     };
     node.children.forEach(tally);
@@ -433,6 +437,7 @@ function branchInfoOf(groups: readonly ThreadListGroup[], runs: Readonly<Record<
       finished,
       finishedRows: finished.reduce((n, child) => n + rows(child), 0),
       finishedFailed: finished.reduce((n, child) => n + failures(child), 0),
+      failed,
       total,
       running,
       blocked,
@@ -448,33 +453,62 @@ function branchInfoOf(groups: readonly ThreadListGroup[], runs: Readonly<Record<
 }
 
 /**
- * The one line a parent row shows about its agents, and the tone it shows it
- * in. It has to agree with what the two folds hold without opening either, so
- * it names the most attention-worthy thing under the row and counts every
- * depth. Order follows DESIGN.md "Status language": needs you, then failed,
- * then working, then waiting, then done.
+ * The state a parent disclosure inherits from its agents. It has to agree
+ * with what the two folds hold without opening either, so it takes the most
+ * attention-worthy thing at every depth. Order follows the protocol attention
+ * rank: needs you, then failed, then working, then waiting, then done.
  */
-export function branchChip(info: BranchInfo): { text: string; tone: AgentStatusTone } | undefined {
-  if (info.blocked > 0) return { text: `${info.blocked} needs you`, tone: "attention" };
-  if (info.finishedFailed > 0 && info.running === 0 && info.waiting === 0) return { text: `${info.finishedFailed} failed`, tone: "danger" };
-  if (info.running > 0) return { text: `${info.running} running`, tone: "live" };
-  if (info.waiting > 0) return { text: `${info.waiting} waiting`, tone: "muted" };
-  // Nothing live under the row: no chip. A finished count on the row repeats
-  // the fold beneath it ("N finished") and costs the session its name in a
-  // narrow column (M13-T48). What is still going, or waiting on a person, is
-  // information nothing else shows, so those stay.
+export function branchTone(info: BranchInfo): AgentStatusTone | undefined {
+  if (info.blocked > 0) return "attention";
+  if (info.failed > 0) return "danger";
+  if (info.running > 0) return "live";
+  if (info.waiting > 0) return "muted";
+  // Nothing live under the row: no mark. The finished fold below owns the
+  // terminal count; repeating it beside the title would cost name width.
   return undefined;
 }
 
-/** The whole picture, for the chip's tooltip: every count, in one sentence. */
+/** The whole picture, for the disclosure and row tooltips: every count. */
 export function branchSummary(info: BranchInfo): string {
   const parts: string[] = [];
   if (info.running > 0) parts.push(`${info.running} working`);
   if (info.blocked > 0) parts.push(`${info.blocked} needs you`);
   if (info.waiting > 0) parts.push(`${info.waiting} waiting`);
   const done = info.total - info.running - info.blocked - info.waiting;
-  if (done > 0) parts.push(info.finishedFailed > 0 ? `${done} finished, ${info.finishedFailed} of them failed` : `${done} finished`);
+  if (done > 0) parts.push(info.failed > 0 ? `${done} finished, ${info.failed} of them failed` : `${done} finished`);
   return `${info.total} agent${info.total === 1 ? "" : "s"} under this session${parts.length > 0 ? `: ${parts.join(", ")}` : ""}`;
+}
+
+/**
+ * The folded branch's state without a width-taking tag. The disclosure's
+ * accessible name carries the complete words and counts; this mark keeps the
+ * same semantic tone and motion in the gutter when the child rows are hidden.
+ */
+function BranchStatusMark({ tone }: { tone: AgentStatusTone }) {
+  const color = TONE_COLOR[tone === "muted" ? "neutral" : tone];
+  return (
+    <span
+      aria-hidden="true"
+      data-slot="session-fold-status"
+      data-tone={tone}
+      className={cn(
+        "absolute end-0 top-1 inline-block size-2 rounded-full bg-(--dot)",
+        tone === "attention" && "motion-safe:animate-attention",
+      )}
+      style={{ "--dot": color } as React.CSSProperties}
+    >
+      {tone === "live" ? (
+        <span
+          className={cn(
+            "absolute -inset-0.75 rounded-full motion-safe:animate-sweep",
+            "bg-[conic-gradient(from_0deg,transparent_0deg,transparent_250deg,color-mix(in_oklab,var(--dot)_55%,transparent)_360deg)]",
+            "[mask:radial-gradient(farthest-side,transparent_calc(100%-2px),#000_calc(100%-2px))]",
+            "motion-reduce:hidden",
+          )}
+        />
+      ) : null}
+    </span>
+  );
 }
 
 /** The rows between a group and one path, outermost first; empty when it is not here. */
@@ -817,6 +851,7 @@ function SessionBranch({ node, editing, onEdit, onOpen }: BranchProps) {
     [layout.flat, layout.dimmed, node.children],
   );
   const count = info?.total ?? 0;
+  const branchStatusTone = info ? branchTone(info) : undefined;
   return (
     <div
       data-slot="session-branch"
@@ -830,7 +865,8 @@ function SessionBranch({ node, editing, onEdit, onOpen }: BranchProps) {
             data-slot="session-fold"
             aria-expanded={open}
             aria-controls={contentId}
-            aria-label={`${open ? "Hide" : "Show"} the ${count === 1 ? "agent" : `${count} agents`} under ${node.label}`}
+            aria-label={`${open ? "Hide" : "Show"} the ${count === 1 ? "agent" : `${count} agents`} under ${node.label}. ${branchSummary(info)}`}
+            title={branchSummary(info)}
             onClick={() => sessionFolds.set(childrenKey, !open)}
             className={cn(
               // Full row height, and on a coarse pointer the full width of the
@@ -843,6 +879,7 @@ function SessionBranch({ node, editing, onEdit, onOpen }: BranchProps) {
             )}
           >
             <ChevronRight aria-hidden="true" className={cn("size-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none", open && "rotate-90")} />
+            {branchStatusTone ? <BranchStatusMark tone={branchStatusTone} /> : null}
           </button>
         )}
         <ThreadListPrimitive.ItemByIndex key={threadIds[node.index]} index={node.index} components={{ ThreadListItem: itemComponent(editing, onEdit, onOpen) }} />
@@ -1112,12 +1149,10 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
   const childLabel = row.child ? (row.subagentName ?? shownTitle) : undefined;
   const childTitle = row.child && row.subagentName !== undefined && shownTitle !== row.subagentName ? shownTitle : undefined;
   const activeRun = row.runStatus !== undefined && ACTIVE_RUN.has(row.runStatus);
-  const stateWord = row.child && row.runStatus !== undefined && (activeRun || row.runStatus === "blocked") ? runStatusLabel(row.runStatus) : undefined;
   const stateTone: AgentStatusTone | undefined = row.runStatus !== undefined ? runStatusTone(row.runStatus) : undefined;
   // Inside the finished fold the row quiets down — but a failure keeps its ink
   // and its dot, and so does the session you are reading right now.
   const dimmed = layout.dimmed && row.runStatus !== "failed" && !active;
-  const chip = info && !archived ? branchChip(info) : undefined;
 
   return (
     <ThreadListItemPrimitive.Root
@@ -1140,7 +1175,7 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
           ref={triggerRef}
           data-slot="aui_thread-list-item-trigger"
           aria-current={active ? "page" : undefined}
-          title={[childLabel ? `${childLabel} · ${shownTitle}` : shownTitle, row.cwd, row.runStatus && row.child ? runStatusLabel(row.runStatus) : "", row.sub.text, row.modifiedAt ? dateTime(row.modifiedAt) : ""].filter(Boolean).join("\n")}
+          title={[childLabel ? `${childLabel} · ${shownTitle}` : shownTitle, row.cwd, row.runStatus && row.child ? runStatusLabel(row.runStatus) : "", info?.total ? branchSummary(info) : "", row.sub.text, row.modifiedAt ? dateTime(row.modifiedAt) : ""].filter(Boolean).join("\n")}
           onClick={onOpen}
           onDoubleClick={(e) => {
             e.preventDefault();
@@ -1178,35 +1213,12 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
             )}
           </span>
           {isPinned && row.cwd && <span data-slot="pinned-session-project" {...(workspaceKind ? {} : { title: row.cwd })} aria-label={workspaceKind ? `Workspace: ${workspaceLabel}` : `Project: ${row.cwd}`} className="max-w-16 shrink-0 truncate rounded-sm bg-surface-2 px-1 text-xs leading-4 text-ink-3">{workspaceLabel}</span>}
-          {chip && info && (
-            // The count agrees with the folds without opening either of them:
-            // it names the most attention-worthy thing under the row and
-            // counts every depth, and the tooltip spells the rest out.
-            <span
-              data-slot="session-children-chip"
-              data-tone={chip.tone}
-              className={cn(
-                "shrink-0 rounded-sm px-1 text-xs leading-4 tnum",
-                chip.tone === "live"
-                  ? "bg-[color-mix(in_oklab,var(--live)_12%,transparent)] text-live"
-                  : chip.tone === "attention"
-                    ? "bg-[color-mix(in_oklab,var(--attention)_14%,transparent)] text-attention"
-                    : chip.tone === "danger"
-                      ? "bg-[color-mix(in_oklab,var(--danger)_12%,transparent)] text-danger"
-                      : "bg-surface-2 text-ink-3",
-              )}
-              title={branchSummary(info)}
-            >
-              {chip.text}
-            </span>
-          )}
-          {stateWord ? (
-            <span data-slot="run-state" className={cn("shrink-0 text-xs leading-4", stateTone === "live" ? "text-live" : stateTone === "attention" ? "text-attention" : "text-ink-3")}>
-              {stateWord}
-            </span>
-          ) : (
-            <SessionActivity status={archived ? "idle" : row.status} />
-          )}
+          {/* Active child runs already lead with their complete state mark.
+              Once the run settles, keep the session's own trailing activity:
+              it can independently be unread or in error. */}
+          {row.child && row.runStatus !== undefined && (ACTIVE_RUN.has(row.runStatus) || row.runStatus === "blocked")
+            ? null
+            : <SessionActivity status={archived ? "idle" : row.status} />}
         </ThreadListItemPrimitive.Trigger>
       )}
       {!isEditing && (

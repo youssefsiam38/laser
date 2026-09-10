@@ -14,12 +14,15 @@
  *     is a fake (docs/ux-fleet.md R5, provenance honesty).
  *   - `ThinkingEffort` is the runtime-bound wrapper behind one compact
  *     popover at every width, so the composer never becomes a settings bar.
- *   - Only the levels the *open session's model* accepts are offered
- *     (`ModelCatalogEntry.thinkingLevels`; Pi maps the rest to null). A
- *     control appears only if it actually works here — and when a model does
- *     not reason at all the control is gone, with the reason in a tooltip
- *     where it would have been (docs/ux-fleet.md R4, capability honesty).
+ *   - Only the levels the effective model accepts are offered
+ *     (`ModelCatalogEntry.thinkingLevels`; Pi maps the rest to null). Before a
+ *     session exists, that is the configured default agent/model; choosing a
+ *     level first creates or reuses its empty session. A control appears only
+ *     if it actually works here — and when a model does not reason at all the
+ *     control is gone, with the reason in a tooltip where it would have been
+ *     (docs/ux-fleet.md R4, capability honesty).
  */
+import { useAui } from "@assistant-ui/react";
 import type { ModelCatalogEntry, ThinkingLevel } from "@lasercode/protocol";
 import { Brain } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ComponentProps, type KeyboardEvent } from "react";
@@ -28,8 +31,10 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { useLaserStable, useSessionMeta } from "@/runtime";
+import { useLaserStable, useLaserState, useLaserView, useSessionMeta } from "@/runtime";
+import { useSessionPreparation } from "@/components/thread/session-preparation";
 
+import { readDraft, writeDraft } from "./draft-restore.js";
 import { field } from "./surfaces.js";
 
 export interface EffortLevel {
@@ -127,7 +132,7 @@ export function ReasoningEffort({
 }
 
 // ---------------------------------------------------------------------------
-// Pi's seven levels, bound to the open session
+// Pi's seven levels, bound to the effective session/default model
 // ---------------------------------------------------------------------------
 
 export const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -136,18 +141,53 @@ export const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low
  * The project's model catalogue, fetched once per directory. Shared across
  * every mount so the composer and the regenerate menu ask the host once.
  */
-const catalogCache = new Map<string, Promise<readonly ModelCatalogEntry[]>>();
+interface ThinkingCatalog {
+  models: readonly ModelCatalogEntry[];
+  defaultProvider?: string | undefined;
+  defaultModel?: string | undefined;
+  defaultThinkingLevel?: ThinkingLevel | undefined;
+}
+
+const catalogCache = new Map<string, Promise<ThinkingCatalog>>();
+const catalogListeners = new Map<string, Set<() => void>>();
+
+/** Keep the pre-turn thinking control in step with the adjacent model picker. */
+export function invalidateThinkingCatalog(cwd: string): void {
+  catalogCache.delete(cwd);
+  catalogListeners.get(cwd)?.forEach((listener) => listener());
+}
 
 /**
- * The levels the open session's model accepts, or `undefined` while that is
+ * The levels the effective session/default model accepts, or `undefined` while that is
  * not known yet. Unknown means "offer everything": guessing a model has no
  * reasoning because a fetch is in flight would hide a working control.
  */
-export function useSupportedThinkingLevels(): readonly ThinkingLevel[] | undefined {
-  const { client } = useLaserStable();
-  const { session, model } = useSessionMeta();
-  const cwd = session?.cwd;
-  const [catalog, setCatalog] = useState<readonly ModelCatalogEntry[]>();
+function useThinkingDefaults(): {
+  supported: readonly ThinkingLevel[] | undefined;
+  defaultLevel: ThinkingLevel | undefined;
+  model: ModelCatalogEntry | undefined;
+} {
+  const { client, currentProject } = useLaserStable();
+  const { session, model: sessionModel } = useSessionMeta();
+  const snapshot = useLaserState((s) => s.agents.snapshot);
+  const cwd = session?.cwd ?? currentProject;
+  const [catalog, setCatalog] = useState<{ cwd: string; value: ThinkingCatalog }>();
+  const [revision, setRevision] = useState(0);
+
+  useEffect(() => {
+    if (!cwd) return;
+    const listeners = catalogListeners.get(cwd) ?? new Set<() => void>();
+    const refresh = () => {
+      setCatalog(undefined);
+      setRevision((current) => current + 1);
+    };
+    listeners.add(refresh);
+    catalogListeners.set(cwd, listeners);
+    return () => {
+      listeners.delete(refresh);
+      if (listeners.size === 0) catalogListeners.delete(cwd);
+    };
+  }, [cwd]);
 
   useEffect(() => {
     if (!cwd) {
@@ -157,25 +197,42 @@ export function useSupportedThinkingLevels(): readonly ThinkingLevel[] | undefin
     let live = true;
     let pending = catalogCache.get(cwd);
     if (!pending) {
-      pending = client.request("pi/models/catalog", { cwd }).then((r) => r.models);
+      pending = client.request("pi/models/catalog", { cwd });
       // A failed fetch must not poison the cache: the next mount retries.
       void pending.catch(() => catalogCache.delete(cwd));
       catalogCache.set(cwd, pending);
     }
     void pending.then(
-      (models) => live && setCatalog(models),
+      (next) => live && setCatalog({ cwd, value: next }),
       () => live && setCatalog(undefined),
     );
     return () => {
       live = false;
     };
-  }, [client, cwd]);
+  }, [client, cwd, revision]);
 
   return useMemo(() => {
-    if (!catalog || !model) return undefined;
-    const entry = catalog.find((m) => m.provider === model.provider && m.id === model.id);
-    return entry?.thinkingLevels;
-  }, [catalog, model]);
+    if (!cwd || catalog?.cwd !== cwd) return { supported: undefined, defaultLevel: undefined, model: undefined };
+    const value = catalog.value;
+    const defaultAgent = snapshot?.agents.find((agent) => agent.name === snapshot.defaultAgent);
+    const modelRef = sessionModel ?? defaultAgent?.model ?? (
+      value.defaultProvider && value.defaultModel
+        ? { provider: value.defaultProvider, id: value.defaultModel }
+        : undefined
+    );
+    const model = modelRef
+      ? value.models.find((entry) => entry.provider === modelRef.provider && entry.id === modelRef.id)
+      : undefined;
+    return {
+      supported: model?.thinkingLevels,
+      defaultLevel: session ? undefined : (defaultAgent?.thinkingLevel ?? model?.thinkingLevel ?? value.defaultThinkingLevel),
+      model,
+    };
+  }, [catalog, cwd, session, sessionModel, snapshot]);
+}
+
+export function useSupportedThinkingLevels(): readonly ThinkingLevel[] | undefined {
+  return useThinkingDefaults().supported;
 }
 
 const THINKING_EFFORTS: readonly EffortLevel[] = [
@@ -191,12 +248,106 @@ const THINKING_EFFORTS: readonly EffortLevel[] = [
 /**
  * The composer's thinking control: icon and current level open the full radiogroup.
  */
-export function ThinkingEffort({ className }: { className?: string | undefined }) {
-  const { actions } = useLaserStable();
-  const { thinkingLevel, session, model } = useSessionMeta();
-  const supported = useSupportedThinkingLevels();
-  const disabled = !session;
-  const select = (key: string) => void actions.setThinking(key as ThinkingLevel);
+export function ThinkingEffort({ className, allowProjectLanding = true }: { className?: string | undefined; allowProjectLanding?: boolean | undefined }) {
+  const { actions, client, dispatch, currentProject } = useLaserStable();
+  const view = useLaserView();
+  const aui = useAui();
+  const { begin, pending: preparingSession } = useSessionPreparation();
+  const pendingFinish = useRef<(() => void) | undefined>(undefined);
+  const { thinkingLevel: sessionThinkingLevel, session, model: sessionModel } = useSessionMeta();
+  const defaults = useThinkingDefaults();
+  const supported = defaults.supported;
+  const thinkingLevel = sessionThinkingLevel ?? defaults.defaultLevel;
+  const model = sessionModel ?? defaults.model;
+  const disabled = preparingSession || (!session && (!currentProject || !allowProjectLanding));
+  const [saving, setSaving] = useState(false);
+  const [draftTransfer, setDraftTransfer] = useState<{
+    from: string | undefined;
+    target: string;
+    text: string;
+    clearSource(): void;
+    finishPreparation(): void;
+  }>();
+
+  useEffect(() => () => pendingFinish.current?.(), []);
+  const beginPreparation = () => {
+    const release = begin();
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      release();
+      if (pendingFinish.current === finish) pendingFinish.current = undefined;
+    };
+    pendingFinish.current = finish;
+    return finish;
+  };
+
+  useEffect(() => {
+    if (!draftTransfer) return;
+    if (view?.path !== draftTransfer.target || !session) {
+      // Navigation is allowed while the host applies the override. Never hold
+      // the newly opened conversation inert, or paste this draft into it.
+      // Keep a recoverable copy on the intended target when the source was
+      // the anonymous landing composer (there is no sidebar row to return to).
+      if (!draftTransfer.from) {
+        const saved = readDraft(draftTransfer.target)?.text;
+        writeDraft(draftTransfer.target, saved && saved !== draftTransfer.text ? `${draftTransfer.text}\n\n${saved}` : draftTransfer.text);
+      }
+      draftTransfer.finishPreparation();
+      setDraftTransfer(undefined);
+      return;
+    }
+    const current = aui.composer.getState().text;
+    if (!current) aui.composer.setText(draftTransfer.text);
+    else if (current !== draftTransfer.text) aui.composer.setText(`${draftTransfer.text}\n\n${current}`);
+    draftTransfer.clearSource();
+    if (draftTransfer.from) writeDraft(draftTransfer.from, undefined);
+    draftTransfer.finishPreparation();
+    setDraftTransfer(undefined);
+  }, [aui, draftTransfer, session, view]);
+
+  const select = (key: string) => {
+    const level = key as ThinkingLevel;
+    if (disabled || saving) return;
+    if (session) {
+      const finishPreparation = beginPreparation();
+      setSaving(true);
+      void actions.setThinking(level).finally(() => { setSaving(false); finishPreparation(); });
+      return;
+    }
+    if (!currentProject || !allowProjectLanding) return;
+    const composer = aui.composer.getState();
+    if (composer.attachments.length > 0) {
+      actions.toast("warning", "Remove attachments before changing thinking. Your draft is unchanged.");
+      return;
+    }
+    const finishPreparation = beginPreparation();
+    const runtime = aui.threads.__internal_getAssistantRuntime?.();
+    if (!runtime) { finishPreparation(); return; }
+    const source = runtime.threads.getById(runtime.threads.getState().mainThreadId).composer;
+    const from = view?.path;
+    setSaving(true);
+    void actions.newSession(currentProject)
+      .then(async (target) => {
+        const { state } = await client.request("pi/thinking/set", { path: target, level });
+        dispatch({ type: "opened", state, select: false });
+        if (composer.text) {
+          setDraftTransfer({
+            from, target, text: composer.text, finishPreparation,
+            clearSource: () => {
+              if (source.getState().text === composer.text) source.setText("");
+            },
+          });
+        } else finishPreparation();
+      })
+      .catch((error: unknown) => {
+        setDraftTransfer(undefined);
+        finishPreparation();
+        actions.toast("error", error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => setSaving(false));
+  };
   const efforts = useMemo(
     () => (supported ? THINKING_EFFORTS.filter((e) => supported.includes(e.key as ThinkingLevel)) : THINKING_EFFORTS),
     [supported],
@@ -204,6 +355,8 @@ export function ThinkingEffort({ className }: { className?: string | undefined }
 
   // The model does not reason: there is no level to pick, so there is no
   // control — only the reason, where the control would have been.
+  if (!session && !allowProjectLanding) return null;
+
   if (supported && efforts.every((effort) => effort.key === "off")) {
     return (
       <Tooltip>
@@ -235,7 +388,7 @@ export function ThinkingEffort({ className }: { className?: string | undefined }
           <Button
             variant="ghost"
             size="sm"
-            disabled={disabled}
+            disabled={disabled || saving}
             aria-label={`Thinking: ${thinkingLevel ?? "unset"}`}
             title={`Thinking: ${thinkingLevel ?? "unset"}`}
             className="h-8 shrink-0 gap-1 px-1.5 text-xs text-ink-2 hover:text-ink"
@@ -249,7 +402,7 @@ export function ThinkingEffort({ className }: { className?: string | undefined }
             <span className="eyebrow">Thinking</span>
             <span className="typed text-ink-3">{thinkingLevel ?? "unset"}</span>
           </div>
-          <ReasoningEffort levels={efforts} selectedKey={thinkingLevel} onSelect={select} disabled={disabled} className="max-w-full" />
+          <ReasoningEffort levels={efforts} selectedKey={thinkingLevel} onSelect={select} disabled={disabled || saving} className="max-w-full" />
         </PopoverContent>
       </Popover>
     </span>

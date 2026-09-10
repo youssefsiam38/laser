@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-10T09:28:33Z · beam-release-033 · HEAD: 5e7e267
+**Last updated:** 2026-09-10T11:06:39Z · beam-session-agent-picker · HEAD: 6fb295e
 
-**Current focus:** M13 — stable 0.3.3 published and verified; broader platform and distribution proof remains. Installed app unchanged.
+**Current focus:** M13 — pre-turn agent/thinking choices and compact sidebar state verified; broader platform and distribution proof remains. Installed app unchanged.
 
 ## Milestones
 
@@ -24,12 +24,12 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M10 Distribution | in-progress | in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
 | M12 Product experience | done | 0.2.13 dispatched |
-| M13 Agents Leap | in-progress | stable 0.3.3 published; M13-T85 done |
+| M13 Agents Leap | in-progress | M13-T86/T87 verified; stable release remains 0.3.3 |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
 
-- No blocked task. Unrelated scratch/study files remain uncommitted and untouched; the isolated release tree passed the full gate.
+- No blocked task. Unrelated scratch/study files remain untouched; isolated intended source passed identity and full verification.
 
 ## Next up
 
@@ -39,8 +39,8 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Recently done
 
-- M13-T85: 0.3.3 Latest; source CI 34459385794 and release 34459703018 passed; 12 assets, offline provenance and live signed x64/ARM64 feeds verified (D-184).
-- M13-T84: eager Beam/sidebar reuse, recording lifecycle and readable disclosures; 957 UI + 215 host tests and dark/light desktop/phone browser review (D-183).
+- M13-T87: compact sidebar state; 17 fold/tab interaction tests, unread/descendant-error coverage and Chromium review (D-186).
+- M13-T86: searchable custom agents and session thinking before the first prompt; draft-safe, send-locked transitions; 968 UI tests and desktop/phone review (D-185).
+- M13-T85: 0.3.3 Latest; source CI 34459385794 and release 34459703018 passed; assets/provenance/signed feeds verified (D-184).
+- M13-T84: eager Beam/sidebar reuse, recording lifecycle and readable disclosures; 957 UI + 215 host tests and browser review (D-183).
 - M13-T83: worker cwd, strict saved-session loading and internal-project boundaries; 1,464 tests, typechecks and affected builds (D-182).
-- M13-T82: stable 0.3.2 with verified x64/ARM64 assets and native feeds (D-181).
-- M13-T81: automatic provider retries are silent; only final failure warns (D-180).

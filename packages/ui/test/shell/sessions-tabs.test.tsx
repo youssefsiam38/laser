@@ -226,7 +226,8 @@ describe("Beam and children in the Code tab", () => {
     expect(child.querySelector('[data-slot="subagent-name"]')?.textContent).toBe("explorer");
     expect(child.textContent).toContain("Counting files");
     expect(child.querySelector('[data-slot="run-dot"]')?.getAttribute("data-run-status")).toBe("running");
-    expect(child.querySelector('[data-slot="run-state"]')?.textContent).toBe("Working");
+    expect(child.querySelector('[data-slot="run-dot"]')?.getAttribute("aria-label")).toBe("Working");
+    expect(child.querySelector('[data-slot="run-state"]')).toBeNull();
     // One step per depth: the grandchild sits inside the child's own rail —
     // and, having finished, behind the child's second fold (M13-T24).
     const childBranch = child.closest('[data-slot="session-branch"]')!;
@@ -242,10 +243,11 @@ describe("Beam and children in the Code tab", () => {
     const grandchild = innerRail.querySelector('[data-slot="aui_thread-list-item"][data-child]')!;
     expect(grandchild.querySelector('[data-slot="subagent-name"]')?.textContent).toBe("digger");
     expect(grandchild.querySelector('[data-slot="run-state"]')).toBeNull();
-    // The parent counts what is under it, running first.
-    expect(parent.querySelector('[data-slot="session-children-chip"]')?.textContent).toBe("1 running");
-    // Only finished work under it: no chip — the fold says "1 finished", and
-    // the row keeps its width for the name (M13-T48).
+    // Descendant state lives in the fold gutter rather than a width-taking tag.
+    expect(parent.querySelector('[data-slot="session-children-chip"]')).toBeNull();
+    expect(branch.querySelector('[data-slot="session-fold-status"]')?.getAttribute("data-tone")).toBe("live");
+    // Only finished work under the child: the fold says "1 finished", and the
+    // row keeps its width for the name.
     expect(child.querySelector('[data-slot="session-children-chip"]')).toBeNull();
     // A child whose parent is gone sits under Detached, in its project's group.
     const detached = container.querySelector('[data-cwd="/one"] [data-slot="detached-sessions"]')!;
@@ -266,8 +268,8 @@ describe("Beam and children in the Code tab", () => {
     expect(endRequest?.runId).toBe("r1");
     await act(async () => document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
 
-    // The run ends: the item goes, the chip and the state word settle, and the
-    // child moves into the parent's finished fold — one more action to open.
+    // The run ends: its visual state settles and the child moves into the
+    // parent's finished fold — one more action to open.
     await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[0]!, status: "completed", updatedAt: "2026-09-08T03:30:00Z", endedAt: "2026-09-08T03:30:00Z" } }));
     const branch = rowTitled("Ship the release")!.closest('[data-slot="session-branch"]')!;
     expect(branch.querySelector('[data-slot="session-children-chip"]')).toBeNull();

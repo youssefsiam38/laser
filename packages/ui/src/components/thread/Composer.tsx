@@ -3,6 +3,7 @@ import type { CommandInfo } from "@lasercode/protocol";
 import { AtSign, Bot, FileText, FolderOpen, GitFork, History, ListX, Pencil, Plus, Shrink, SlashSquare, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 
+import { SessionAgentSelector } from "@/components/assistant-ui/elements/agent-selector";
 import {
   ComposerAttachButton,
   ComposerAttachmentTile,
@@ -21,12 +22,14 @@ import { SessionModelSelector } from "@/components/assistant-ui/elements/model-s
 import { ThinkingEffort } from "@/components/assistant-ui/elements/reasoning-effort";
 import { useRunsForRoot } from "@/agents";
 import { DictateButton } from "@/components/mobile";
+import { useSessionsList } from "@/components/shell/session-groups";
 import { useShell } from "@/components/shell/shell-context";
 import { useIsMobile, useIsTouch } from "@/hooks/use-mobile";
 import { finishActiveDictation } from "@/pwa";
 import { composerSendPlan, useLaserStable, useLaserView, useSessionMeta } from "@/runtime";
 import { completeLeadingSlash, matchLeadingSlash, rankSlashCommandMatches } from "./slash-completion.js";
 import { StatusLine } from "./StatusLine.js";
+import { SessionPreparationProvider, useSessionPreparation } from "./session-preparation.js";
 import { useProjectFileSearch } from "./use-project-file-search.js";
 
 /**
@@ -48,6 +51,10 @@ import { useProjectFileSearch } from "./use-project-file-search.js";
  * through tooltips and Settings → Help and shortcuts owns the reference.
  */
 export function Composer() {
+  return <SessionPreparationProvider><ComposerBody /></SessionPreparationProvider>;
+}
+
+function ComposerBody() {
   useHandedBackText();
   const mobile = useIsMobile();
   const dictating = useAuiState((s) => s.composer.dictation != null);
@@ -55,11 +62,14 @@ export function Composer() {
   const mention = useHandleMentions();
   const onInputKeyDown = useComposerKeys();
   const blocked = useNothingToSendTo();
-  const disabled = useAuiState((s) => s.thread.isDisabled) || blocked !== undefined;
+  const { pending: preparingSession } = useSessionPreparation();
+  const { tab } = useSessionsList();
+  const allowProjectLanding = tab === "code";
+  const disabled = useAuiState((s) => s.thread.isDisabled) || blocked !== undefined || preparingSession;
   const placeholder = usePlaceholder();
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
-      <ComposerPrimitive.Root data-slot="composer" className="relative flex flex-col gap-2">
+      <ComposerPrimitive.Root data-slot="composer" inert={preparingSession} aria-busy={preparingSession || undefined} className="relative flex flex-col gap-2">
         <ComposerDraftRestore />
         <ComposerQueue />
         <StatusLine />
@@ -72,9 +82,10 @@ export function Composer() {
                 <>
                   <DictateButton size="icon-lg" />
                   {!dictating && <>
+                    <SessionAgentSelector allowProjectLanding={allowProjectLanding} />
                     <SessionModelSelector />
                     <span className="flex-1" />
-                    <ThinkingEffort />
+                    <ThinkingEffort allowProjectLanding={allowProjectLanding} />
                     <ContextRingButton />
                   </>}
                 </>
@@ -95,13 +106,14 @@ export function Composer() {
               {/* Quoted transcript text rides above the input until it is sent (the `quote` element). */}
               <ComposerQuotePreview />
               <ComposerInput />
-              <ComposerToolbar className={dictating ? "grid grid-cols-[auto_minmax(0,1fr)_auto_auto_auto]" : "grid grid-cols-[auto_auto_minmax(0,1fr)_auto_auto_auto]"}>
+              <ComposerToolbar>
                 <ComposerAttachButton />
                 <DictateButton />
-                {/* A model chip reading "No model" and a live thinking dial are
-                    both claims about a session that does not exist yet. */}
-                {blocked ? <span /> : <SessionModelSelector />}
-                {blocked ? <span /> : <ThinkingEffort />}
+                {/* Agent and thinking choices can prepare an empty session;
+                    the model choice retains its separate project-default path. */}
+                {blocked ? <span /> : <SessionAgentSelector allowProjectLanding={allowProjectLanding} className="flex-1" />}
+                {blocked ? <span /> : <SessionModelSelector className="flex-1" />}
+                {blocked ? <span /> : <ThinkingEffort allowProjectLanding={allowProjectLanding} />}
                 {blocked ? <span /> : <ContextRingButton />}
                 <SendOrStop />
               </ComposerToolbar>
@@ -216,7 +228,8 @@ function ComposerInput() {
   // short circuit is a hook that sometimes does not run.
   const threadDisabled = useAuiState((s) => s.thread.isDisabled);
   const blocked = useNothingToSendTo();
-  const disabled = threadDisabled || blocked !== undefined;
+  const { pending: preparingSession } = useSessionPreparation();
+  const disabled = threadDisabled || blocked !== undefined || preparingSession;
   const placeholder = usePlaceholder();
   return (
     <ComposerPrimitive.Input
@@ -240,6 +253,7 @@ function SendOrStop({ mobile = false }: { mobile?: boolean }) {
   const running = useAuiState((s) => s.thread.isRunning);
   const empty = useAuiState((s) => s.composer.isEmpty);
   const dictating = useAuiState((s) => s.composer.dictation != null);
+  const { pending: preparingSession } = useSessionPreparation();
   const stop = running && empty;
   const size = mobile ? "icon-lg" : "icon-sm";
   const className = mobile ? MobileComposerButtonClass(true) : undefined;
@@ -257,6 +271,7 @@ function SendOrStop({ mobile = false }: { mobile?: boolean }) {
         tooltip={running ? "Queue for when this turn ends" : "Send"}
         shortcut="⏎"
         size={size}
+        disabled={preparingSession}
         className={className}
         onClick={(event) => {
           const prepare = () => {

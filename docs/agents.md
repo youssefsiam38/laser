@@ -44,6 +44,12 @@ characters. There is no separate agent id, type or profile name.
 | Scoped skills | `scopedSkills`, `skills` | Off by default: every discovered skill is offered. On: only the listed `AgentSkillRef`s (`name`, `path`, `scope`), chosen from what Laser discovers at definition time (`agents/skills`, listing `<agentDir>/skills` and `~/.agents/skills` as `global`, `<project>/.laser/skills` and `<project>/.agents/skills` as `project` when the project is trusted) |
 | Default | snapshot `defaultAgent` | "Default" only means the agent a new session opens with (the `i` mark beside the toggle says so). The current default cannot be deleted; pick another default first |
 
+The ordinary new-session composer exposes custom definitions as a searchable
+selector immediately before the model, preselects `defaultAgent`, and removes
+the control after the first prompt. Switching chooses or creates another
+agent-bound empty session rather than mutating the current identity. Built-ins
+stay reserved for their dedicated product channels and never enter this list.
+
 Policy (`AgentPolicy`, `agents/set-policy`): `maxDepth` (default 3, at most 6)
 and `foregroundCommandSeconds` (default 120, 10–3600).
 

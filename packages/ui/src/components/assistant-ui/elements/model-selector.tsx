@@ -54,10 +54,12 @@ import {
 } from "@/components/ui/command";
 import { tokens } from "@/format";
 import { useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
+import { useSessionPreparation } from "@/components/thread/session-preparation";
 
 import { ErrorState } from "./error-state.js";
 import { GenerationLoader } from "./loading-state.js";
 import { ProviderLogo, providerDisplayName } from "./logos.js";
+import { invalidateThinkingCatalog } from "./reasoning-effort.js";
 
 export type ModelOption = {
   id: string;
@@ -1082,6 +1084,7 @@ function useProjectDefaultModel(cwd: string | undefined, enabled: boolean): { mo
  */
 export function SessionModelSelector({ className }: { className?: string | undefined }) {
   const { actions, client, currentProject } = useLaserStable();
+  const { pending: preparingSession } = useSessionPreparation();
   const { model: sessionModel, session } = useSessionMeta();
   const sessionPath = session?.path;
   const cwd = session?.cwd ?? currentProject;
@@ -1156,6 +1159,7 @@ export function SessionModelSelector({ className }: { className?: string | undef
     }).then(
       () => {
         defaultModelCache.set(cwd, Promise.resolve(next));
+        invalidateThinkingCatalog(cwd);
         setNewSessionModel(next);
       },
       (saveError: unknown) => actions.toast("error", saveError instanceof Error ? saveError.message : String(saveError)),
@@ -1167,7 +1171,7 @@ export function SessionModelSelector({ className }: { className?: string | undef
       <ModelSelectorTrigger
         variant="ghost"
         size="sm"
-        disabled={!cwd || saving}
+        disabled={!cwd || saving || preparingSession}
         aria-label={
           sessionPath
             ? `Model: ${model ? (model.name ?? model.id) : "none"}`

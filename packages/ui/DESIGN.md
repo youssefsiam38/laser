@@ -172,7 +172,11 @@ One vocabulary everywhere (sidebar dot, rail ring, top bar, tab title):
 | idle | `--ink-3` | none |
 
 `prefers-reduced-motion: reduce` disables sweep and pulse; state stays legible
-by color and an `aria-label`.
+by color and an `aria-label`. Session-sidebar rows reserve their width for names:
+root sessions use this activity mark, child sessions use the equivalent run-state
+dot, and a parent's fold disclosure inherits the highest-attention descendant
+state. Visible status words and descendant-state chips belong in the fleet, not
+beside session titles; sidebar disclosure names and tooltips retain the full text.
 
 ## Transcript
 
@@ -220,9 +224,16 @@ reference lives in Settings → Help and shortcuts. The reclaimed row belongs to
 the transcript on every desktop session.
 
 Floating card, `--radius-xl`, `--surface` on `--bg`, one soft shadow. Textarea
-autosizes to 8 lines. Left: attach image (paste also works). Right: model
-selector (popover with search), thinking level (the levels this model accepts,
-of Pi's seven incl. `max`; hidden when the model does not reason), send/stop.
+autosizes to 8 lines. Left: attach image (paste also works). Right: before an
+ordinary project's first prompt, a searchable agent selector immediately left
+of the model selector; then model, thinking and send/stop. The agent starts on
+the configured default, excludes built-in and empty Chat channels, moves draft
+text when switched, refuses to strand attachments, and disappears after the
+first prompt. Thinking shows only levels the effective model accepts (of Pi's
+seven, including `max`); a pre-turn change creates or reuses the empty session
+and is session-only. Input and Send lock until either preparation finishes, so
+the first prompt cannot race the chosen identity or level. Persistent
+model/thinking defaults remain in Settings.
 
 Three keys, and only three: **Enter** = prompt when idle, join the queue when
 running; **Shift+Enter** = newline; **Cmd/Ctrl+Enter** = steer when running. On
