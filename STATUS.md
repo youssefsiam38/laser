@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-10T09:08:00Z · beam-release-033 · HEAD: 299f8e1
+**Last updated:** 2026-09-10T09:28:33Z · beam-release-033 · HEAD: 5e7e267
 
-**Current focus:** M13-T85 — preparing stable 0.3.3 with the saved-session/internal-project and composer fixes; publication pending verification.
+**Current focus:** M13 — stable 0.3.3 published and verified; broader platform and distribution proof remains. Installed app unchanged.
 
 ## Milestones
 
@@ -24,23 +24,23 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M10 Distribution | in-progress | in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
 | M12 Product experience | done | 0.2.13 dispatched |
-| M13 Agents Leap | in-progress | M13-T85 release; latest published version is 0.3.2 |
+| M13 Agents Leap | in-progress | stable 0.3.3 published; M13-T85 done |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
 
-- No blocked task. Unrelated scratch files remain outside the release; the exact release tree will be checked in an isolated checkout.
+- No blocked task. Unrelated scratch/study files remain uncommitted and untouched; the isolated release tree passed the full gate.
 
 ## Next up
 
-1. M13-T85: verify 0.3.3, push source, wait for CI, then publish through the release workflow.
-2. M10-T10: prove the in-app updater installation seam.
-3. M7-T7: complete QR entry and paired browser transport.
+1. M10-T10: prove the in-app updater installation seam.
+2. M7-T7: complete QR entry and paired browser transport.
+3. MX-T5: accessibility pass.
 
 ## Recently done
 
-- M13-T84: eager Beam/sidebar reuse, recording lifecycle and readable composer/disclosures; 957 UI and 215 host tests, workspace typechecks, builds and dark/light mouse/touch browser review passed.
-- M13-T83: worker cwd, strict saved-session loading and internal-project boundaries; 1,464 host/worker/UI tests, workspace typechecks and affected builds passed.
-- M13-T82: stable 0.3.2 published with verified x64/ARM64 assets and native feeds (D-181).
-- M13-T81: automatic provider retries are silent; only final failure warns.
-- M13-T80: Chat and Code restore their own last viewed conversation.
+- M13-T85: 0.3.3 Latest; source CI 34459385794 and release 34459703018 passed; 12 assets, offline provenance and live signed x64/ARM64 feeds verified (D-184).
+- M13-T84: eager Beam/sidebar reuse, recording lifecycle and readable disclosures; 957 UI + 215 host tests and dark/light desktop/phone browser review (D-183).
+- M13-T83: worker cwd, strict saved-session loading and internal-project boundaries; 1,464 tests, typechecks and affected builds (D-182).
+- M13-T82: stable 0.3.2 with verified x64/ARM64 assets and native feeds (D-181).
+- M13-T81: automatic provider retries are silent; only final failure warns (D-180).
