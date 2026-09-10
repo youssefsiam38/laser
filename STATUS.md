@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-10T20:38:10Z · stabilization-ci · HEAD: 120bf303
+**Last updated:** 2026-09-10T20:38:10Z · stabilization-ci · HEAD: 6485593
 
-**Current focus:** M13 — reviewed CI repair `7a05c79` passed source CI; v0.3.5 tagged, release builds running (not published). Separate development continuation preserves `aba12f7b`; HLC-010 has one new owner investigating its admission plan before code.
+**Current focus:** M13 — reviewed CI repair `7a05c79` passed source CI; v0.3.5 tagged, release builds running (not published). Separate development continuation preserves `aba12f7b`; HLC-010 has one owner refining admission/continuation ordering before code.
 
 ## Milestones
 
@@ -29,7 +29,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Blockers
 
-- M13-T93: HLC-010 still blocks development integration; Q-8 scope authorized, hlc010-admission-owner preparing its plan.
+- M13-T93: HLC-010 still blocks development integration; Q-8 scope authorized, hlc010-admission-owner refining its plan; exact-version patch scope approved.
 - M13-T97: source CI passed; release 34527657277 awaits native builds and verified publication.
 - M13-T94: its original complete-fix dependencies and full acceptance gates remain incomplete; T97 does not replace them.
 
