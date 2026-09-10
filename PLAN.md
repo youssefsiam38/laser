@@ -583,6 +583,8 @@ Depends on: M12.
 | M13-T96 | Blocked terminal runs are neutral finished work | terminal blocked runs use neutral finished styling and words, appear in the finished fold, and historic failures never outrank a newer active run across fleet, sidebar and inspect output; live `needs_input` remains warm Asking and live descendants remain visible |
 | M13-T97 | Release the approved subset as stable 0.3.5 | the approved pending-delivery, composer, activity-disclosure, header-agent and neutral-finished-run commits pass an isolated staged `pnpm verify`; clean source CI succeeds for the exact candidate SHA; the immutable tag then triggers both architecture builds and verified publication checks before the release is reported published |
 
+Stabilization order (D-193): repair the failed approved-subset source gate under M13-T97 first; then continue the preserved M13-T89/T92/T93 batch through the dedicated HLC-010 admission seam and independent review. M13-T94 retains every original complete-fix criterion; optional work remains outside this sequence.
+
 ## MX · Cross-cutting (runs alongside every milestone)
 
 | ID | Task | Done when |
