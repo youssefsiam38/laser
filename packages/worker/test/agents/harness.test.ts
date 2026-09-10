@@ -23,7 +23,7 @@ import { SESSION_RUN_ENTRY_TYPE, type AgentDefinition, type AgentRun, type Agent
 
 class FakeDriver implements SessionDriver {
   readonly kind = "stable-sdk" as const;
-  prompted: Array<{ text: string; options?: PromptOptions }> = [];
+  prompted: Array<{ text: string; content: ContentBlock[]; options?: PromptOptions }> = [];
   steers: string[] = [];
   followUps: string[] = [];
   custom: Array<{ type: string; data: unknown }> = [];
@@ -34,6 +34,10 @@ class FakeDriver implements SessionDriver {
   acceptPrompts = true;
   autoResolvePrompts = true;
   private promptResolvers: Array<(result: { accepted: boolean; queued: boolean }) => void> = [];
+  private abortResolvers: Array<() => void> = [];
+  abortAwaitsPrompt = false;
+  abortRejects = false;
+  clearQueueRejects = false;
   private engineSteers: string[] = [];
   /** Dialogs raised and not yet answered, as `StableSdkDriver.pendingUi()` lists them. */
   pending: UiDialogRequest[] = [];
@@ -52,7 +56,7 @@ class FakeDriver implements SessionDriver {
   }
   async prompt(content: ContentBlock[], options?: PromptOptions) {
     const text = content.map((b) => (b.type === "text" ? b.text : "")).join("");
-    this.prompted.push({ text, ...(options ? { options } : {}) });
+    this.prompted.push({ text, content, ...(options ? { options } : {}) });
     if (this.autoResolvePrompts) return { accepted: this.acceptPrompts, queued: false };
     this.setStreaming(true);
     return new Promise<{ accepted: boolean; queued: boolean }>((resolve) => this.promptResolvers.push(resolve));
@@ -62,6 +66,7 @@ class FakeDriver implements SessionDriver {
     if (!resolve) throw new Error("No prompt is waiting.");
     this.setStreaming(false);
     resolve({ accepted, queued: false });
+    for (const finish of this.abortResolvers.splice(0)) finish();
   }
   async steer(content: ContentBlock[]) {
     const text = content.map((b) => (b.type === "text" ? b.text : "")).join("");
@@ -70,11 +75,16 @@ class FakeDriver implements SessionDriver {
   }
   async followUp(content: ContentBlock[]) { this.followUps.push(content.map((b) => (b.type === "text" ? b.text : "")).join("")); }
   async clearQueue() {
+    if (this.clearQueueRejects) throw new Error("queue unavailable");
     const steering = [...this.engineSteers];
     this.engineSteers = [];
     return { steering, followUp: [] };
   }
-  async abort() { this.aborts += 1; }
+  async abort() {
+    this.aborts += 1;
+    if (this.abortRejects) throw new Error("abort unavailable");
+    if (this.abortAwaitsPrompt && this.st.isStreaming) await new Promise<void>((resolve) => this.abortResolvers.push(resolve));
+  }
   async listModels() { return []; }
   async setModel() { return this.st; }
   async setThinkingLevel() { return this.st; }
@@ -260,7 +270,7 @@ describe("AgentHarness", () => {
 
     // The task was prompted verbatim, without waiting, and the child was named.
     const child = world.drivers.get("/sessions/child-1.jsonl")!;
-    expect(child.prompted).toEqual([{ text: "Fix the login form.", options: { expandPromptTemplates: false } }]);
+    expect(child.prompted).toEqual([{ text: "Fix the login form.", content: [{ type: "text", text: "Fix the login form." }], options: { expandPromptTemplates: false } }]);
     expect(child.names).toEqual(["fix-login"]);
     expect(child.custom[0]).toMatchObject({ type: SESSION_RUN_ENTRY_TYPE, data: { runId: result.runId, moment: "started", task: "Fix the login form." } });
 
@@ -349,6 +359,64 @@ describe("AgentHarness", () => {
     const summary = await root.handle.bridge.stopAgent({ runId, reason: "no longer needed" });
     expect(summary).toMatchObject({ runId, status: "cancelled", endedBy: { initiator: "parent", reason: "no longer needed" } });
     expect(received[0]!.message).toBe("The parent ended this run. Reason: no longer needed");
+  });
+
+  it("releases the lifecycle lock before abort and resolves stop only after cancellation", async () => {
+    world.setAutoResolveChildPrompts(false);
+    const root = world.openRoot("lead");
+    const received: AgentModelEvent[] = [];
+    root.handle.bridge.onEvent((event) => received.push(event));
+    const { runId } = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "t" });
+    const child = world.drivers.get("/sessions/child-1.jsonl")!;
+    child.abortAwaitsPrompt = true;
+
+    const stopping = world.harness.stopRun(runId, { initiator: "user", reason: "stop now" });
+    await flushLifecycle();
+    expect(child.aborts).toBe(1);
+    expect(world.harness.run(runId)?.status).toBe("running");
+    child.emit({ type: "update", update: { kind: "agent_settled" } });
+    child.resolvePrompt();
+    await expect(stopping).resolves.toMatchObject({ status: "cancelled", endedBy: { initiator: "user", reason: "stop now" } });
+    expect(received.filter((event) => event.type === "agent.cancelled")).toHaveLength(1);
+  });
+
+  it("keeps an accepted completion when a user stop races its unwind", async () => {
+    world.setAutoResolveChildPrompts(false);
+    const root = world.openRoot("lead");
+    const received: AgentModelEvent[] = [];
+    root.handle.bridge.onEvent((event) => received.push(event));
+    const { runId } = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "t" });
+    const path = "/sessions/child-1.jsonl";
+    const child = world.drivers.get(path)!;
+    child.abortAwaitsPrompt = true;
+
+    expect(await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "canonical result" })).toEqual({ ok: true, runId });
+    const stopping = world.harness.stopRun(runId, { initiator: "user", reason: "too late" });
+    await flushLifecycle();
+    expect(child.aborts).toBe(0);
+    child.emit({ type: "update", update: { kind: "agent_settled" } });
+    child.resolvePrompt();
+    await expect(stopping).resolves.toMatchObject({ status: "completed", result: { message: "canonical result" } });
+    expect(received.map((event) => event.type)).toEqual(["agent.completed"]);
+  });
+
+  it("keeps an accepted parent stop when complete_agent_run races it", async () => {
+    world.setAutoResolveChildPrompts(false);
+    const root = world.openRoot("lead");
+    const received: AgentModelEvent[] = [];
+    root.handle.bridge.onEvent((event) => received.push(event));
+    const { runId } = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "t" });
+    const path = "/sessions/child-1.jsonl";
+    const child = world.drivers.get(path)!;
+    child.abortAwaitsPrompt = true;
+
+    const stopping = root.handle.bridge.stopAgent({ runId, reason: "parent chose stop" });
+    await flushLifecycle();
+    expect(await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "too late" })).toEqual({ ok: false, error: "This run already ended." });
+    child.emit({ type: "update", update: { kind: "agent_settled" } });
+    child.resolvePrompt();
+    await expect(stopping).resolves.toMatchObject({ status: "cancelled", endedBy: { initiator: "parent", reason: "parent chose stop" } });
+    expect(received.map((event) => event.type)).toEqual(["agent.cancelled"]);
   });
 
   it("lets a run go on with no limit of any kind: no clock ends it", async () => {
@@ -898,6 +966,64 @@ describe("AgentHarness", () => {
     expect(received.map((event) => event.type)).toEqual(["agent.blocked", "agent.completed"]);
   });
 
+  it("binds exact user/tray prompts before events and resumes both parent message modes canonically", async () => {
+    const root = world.openRoot("lead");
+    const initial = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "initial" });
+    const path = "/sessions/child-1.jsonl";
+    const child = world.drivers.get(path)!;
+    await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "initial done" });
+    child.autoResolvePrompts = false;
+
+    const content: ContentBlock[] = [
+      { type: "text", text: "inspect this image" },
+      { type: "image", mimeType: "image/png", data: "AAAA" },
+    ];
+    const options: PromptOptions = { streamingBehavior: "followUp", expandPromptTemplates: false };
+    const userPrompt = world.harness.promptUser(path, content, options);
+    await flushLifecycle();
+    const userRun = world.harness.activeRun(path)!;
+    expect(userRun.origin).toBe("user");
+    expect(userRun.runId).not.toBe(initial.runId);
+    expect(child.prompted.at(-1)).toEqual({ text: "inspect this image", content, options });
+    expect(child.prompted.at(-1)?.content).toBe(content);
+    expect(child.prompted.at(-1)?.options).toBe(options);
+    child.emit({ type: "update", update: { kind: "turn_start" } });
+
+    expect(await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "user work done" })).toEqual({ ok: true, runId: userRun.runId });
+    const local = await root.handle.bridge.sendAgentMessage({ sessionId: initial.sessionId, message: "resume local", interrupt: false });
+    const interrupt = await root.handle.bridge.sendAgentMessage({ sessionId: initial.sessionId, message: "resume interrupt", interrupt: true });
+    expect(interrupt.runId).toBe(local.runId);
+    expect(child.steers).toEqual([]);
+
+    child.emit({ type: "update", update: { kind: "agent_settled" } });
+    child.resolvePrompt();
+    expect(await userPrompt).toEqual({ accepted: true, queued: false });
+    await flushLifecycle();
+    expect(world.harness.run(userRun.runId)?.status).toBe("completed");
+    expect(world.harness.activeRun(path)?.runId).toBe(local.runId);
+    expect(child.prompted.at(-1)?.text).toBe("resume local");
+
+    child.emit({ type: "update", update: { kind: "agent_settled" } });
+    child.resolvePrompt();
+    await flushLifecycle();
+    expect(child.prompted.at(-1)?.text).toBe("resume interrupt");
+    expect(await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "resumed done" })).toEqual({ ok: true, runId: local.runId });
+    child.emit({ type: "update", update: { kind: "agent_settled" } });
+    child.resolvePrompt();
+    await flushLifecycle();
+    expect(world.harness.run(local.runId)).toMatchObject({ status: "completed", result: { message: "resumed done" } });
+    expect(world.harness.runs().some((run) => run.status === "failed")).toBe(false);
+  });
+
+  it("keeps root prompt routing direct and out of the child run registry", async () => {
+    const root = world.openRoot("lead");
+    const content: ContentBlock[] = [{ type: "text", text: "root prompt" }];
+    const options: PromptOptions = { streamingBehavior: "steer" };
+    await expect(world.harness.promptUser(root.path, content, options)).resolves.toEqual({ accepted: true, queued: false });
+    expect(root.driver.prompted[0]).toEqual({ text: "root prompt", content, options });
+    expect(world.harness.runs()).toEqual([]);
+  });
+
   it("clears engine steering at completion and replays it only under a tracked successor", async () => {
     world.setAutoResolveChildPrompts(false);
     const root = world.openRoot("lead");
@@ -920,6 +1046,41 @@ describe("AgentHarness", () => {
     expect(world.harness.run(first.runId)?.status).toBe("completed");
     expect(world.harness.activeRun(path)?.runId).toBe(queued?.runId);
     expect(child.prompted.map((item) => item.text)).toEqual(["initial", "late steering"]);
+  });
+
+  it("never awaits or leaks a failing abort when completion cannot clear the engine queue", async () => {
+    world.setAutoResolveChildPrompts(false);
+    const root = world.openRoot("lead");
+    const received: AgentModelEvent[] = [];
+    root.handle.bridge.onEvent((event) => received.push(event));
+
+    const first = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "awaiting-abort", task: "t" });
+    const firstPath = "/sessions/child-1.jsonl";
+    const firstDriver = world.drivers.get(firstPath)!;
+    firstDriver.clearQueueRejects = true;
+    firstDriver.abortAwaitsPrompt = true;
+    await expect(world.harness.bridgeOf(firstPath)!.completeRun({ status: "completed", message: "done" })).resolves.toEqual({ ok: true, runId: first.runId });
+    await flushLifecycle();
+    expect(firstDriver.aborts).toBe(1);
+    expect(world.harness.run(first.runId)?.status).toBe("running");
+    firstDriver.emit({ type: "update", update: { kind: "agent_settled" } });
+    firstDriver.resolvePrompt();
+    await flushLifecycle();
+    expect(world.harness.run(first.runId)?.status).toBe("completed");
+
+    const second = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "rejecting-abort", task: "t" });
+    const secondPath = "/sessions/child-2.jsonl";
+    const secondDriver = world.drivers.get(secondPath)!;
+    secondDriver.clearQueueRejects = true;
+    secondDriver.abortRejects = true;
+    await expect(world.harness.bridgeOf(secondPath)!.completeRun({ status: "completed", message: "also done" })).resolves.toEqual({ ok: true, runId: second.runId });
+    await flushLifecycle();
+    expect(secondDriver.aborts).toBe(1);
+    secondDriver.emit({ type: "update", update: { kind: "agent_settled" } });
+    secondDriver.resolvePrompt();
+    await flushLifecycle();
+    expect(world.harness.run(second.runId)?.status).toBe("completed");
+    expect(received.map((event) => event.type)).toEqual(["agent.completed", "agent.completed"]);
   });
 
   it("gives a person's prompt on an idle child a run of its own and marks it so for the parent", async () => {
