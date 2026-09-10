@@ -112,6 +112,12 @@ export class StableSdkDriver implements SessionDriver {
    * of updates a client sees never changes.
    */
   private heldUserEnd: { update: Extract<SessionUpdate, { kind: "message_end" }>; message: unknown } | undefined;
+  /**
+   * The current engine preflight. Every invocation reserves this slot; queued
+   * waiters re-check it after each await and claim it one at a time, so an idle
+   * gap can never admit two prompts before `isStreaming` flips.
+   */
+  private promptPreflight: Promise<void> | undefined;
 
   constructor() {
     this.ui = createUiBridge(
@@ -408,22 +414,55 @@ export class StableSdkDriver implements SessionDriver {
     const { text, images } = split(content);
     // A goal command needs the goal tools before it dispatches (see below).
     if (isGoalCommand(text)) activateGoalTools(session);
-    const streaming = session.isStreaming;
-    if (streaming && !options?.streamingBehavior) {
-      return { accepted: false, queued: false };
+    // A bare concurrent prompt is refused immediately. Explicit queue waiters
+    // pass every preceding preflight fence in admission order; after each await
+    // they re-check because another waiter may have claimed the newly idle slot.
+    while (this.promptPreflight) {
+      if (!options?.streamingBehavior) return { accepted: false, queued: false };
+      await this.promptPreflight;
     }
+
+    let release = () => {};
+    const reservation = new Promise<void>((resolve) => { release = resolve; });
+    this.promptPreflight = reservation;
+    const finishPreflight = () => {
+      if (this.promptPreflight !== reservation) return;
+      this.promptPreflight = undefined;
+      release();
+    };
+    const streaming = session.isStreaming;
+    let accepted = false;
     try {
+      if (streaming && !options?.streamingBehavior) {
+        return { accepted: false, queued: false };
+      }
       await session.prompt(text, {
         ...(images.length > 0 ? { images } : {}),
         ...(options?.streamingBehavior ? { streamingBehavior: options.streamingBehavior } : {}),
         ...(options?.expandPromptTemplates !== undefined ? { expandPromptTemplates: options.expandPromptTemplates } : {}),
+        // Pi's per-invocation preflight is the exact boundary between a prompt
+        // we still own and a user message the engine owns. `session.prompt()`
+        // itself resolves only after the whole turn, including retries.
+        preflightResult: (preflightAccepted: boolean) => {
+          if (preflightAccepted) accepted = true;
+          finishPreflight();
+          if (!preflightAccepted || !options?.onAccepted) return;
+          try {
+            // Observing acceptance must never prevent the accepted engine run.
+            options.onAccepted();
+          } catch (error) {
+            console.error(`${PRODUCT_NAME} worker: could not publish an accepted prompt:`, error instanceof Error ? error.message : error);
+          }
+        },
       });
     } catch (error) {
-      // `isStreaming` flips only after the agent loop starts, so a prompt sent in
-      // the same tick as another can pass the pre-check and still be refused by
-      // Pi. "Busy" is a normal outcome for the protocol, not an exception.
-      if (isBusyError(error)) return { accepted: false, queued: false };
+      // Pi can throw the same busy-shaped error after reporting true. Acceptance
+      // is monotonic: only a busy error from before acknowledgement is refusal.
+      if (!accepted && isBusyError(error)) return { accepted: false, queued: false };
       throw error;
+    } finally {
+      // Defensive for an engine failure that bypassed its documented callback.
+      finishPreflight();
     }
     return { accepted: true, queued: streaming };
   }

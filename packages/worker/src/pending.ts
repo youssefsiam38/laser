@@ -17,8 +17,11 @@ import { ErrorCodes, PENDING_MAX, PENDING_TEXT_MAX, ProtocolError, type ContentB
 export interface PendingTrayDeps {
   /** Hand one message to the engine's steering queue. */
   steer(content: ContentBlock[]): Promise<void>;
-  /** Start a turn with one message; mirrors `session/prompt`'s answer. */
-  prompt(content: ContentBlock[]): Promise<{ accepted: boolean }>;
+  /**
+   * Start a turn with one message. `onAccepted` is the engine's canonical,
+   * per-invocation preflight acknowledgement; it fires before the turn runs.
+   */
+  prompt(content: ContentBlock[], onAccepted: () => void): Promise<{ accepted: boolean }>;
   /** Whether the agent is working right now. */
   streaming(): boolean;
   /** The tray changed. Called with the list as clients should see it. */
@@ -135,8 +138,8 @@ export class PendingTray {
   /**
    * Deliver the head, if the agent is idle and something is waiting. Each
    * message is its own turn, in the order it was written, so the next settle
-   * takes the next one. A delivery that fails keeps its message and its reason
-   * and stops the pass; the next settle tries again.
+   * takes the next one. A failure before acceptance keeps its message and its
+   * reason; a later turn failure cannot put an accepted prompt back in the tray.
    */
   async drain(): Promise<void> {
     if (this.draining) return;
@@ -145,25 +148,46 @@ export class PendingTray {
       while (this.messages.length > 0 && !this.deps.streaming()) {
         const head = this.messages[0]!;
         this.patch(head.id, "delivering");
-        let delivered = false;
+        let accepted = false;
+        const acknowledge = () => {
+          if (accepted) return;
+          accepted = true;
+          // The id, not the content, ties this acknowledgement to the exact
+          // invocation. Equal messages behind it stay waiting.
+          this.accept(head.id);
+        };
         try {
-          const { accepted } = await this.deps.prompt(head.content);
-          // An extension is holding the prompt (a blocking dialog, a command).
-          // Steering it in is what `sendToSession` does for the same refusal.
-          if (!accepted) await this.deps.steer(head.content);
-          delivered = true;
+          const result = await this.deps.prompt(head.content, acknowledge);
+          // An extension is holding a prompt that was never accepted. Steering
+          // it in is what `sendToSession` does for the same refusal. Acceptance
+          // is monotonic: a mismatched late `{ accepted: false }` cannot hand an
+          // already acknowledged message to the engine a second time.
+          if (!result.accepted && !accepted) await this.deps.steer(head.content);
+          // The driver contract calls `acknowledge` during accepted preflight.
+          // This also covers a successful refused-prompt fallback steer and a
+          // future driver that can only report acceptance with its result.
+          acknowledge();
         } catch (error) {
+          if (accepted) {
+            // The message entered the engine before its turn failed. It must
+            // never reappear for automatic resubmission; move on after settle.
+            continue;
+          }
           this.patch(head.id, "failed", reasonOf(error));
           return;
-        }
-        if (delivered) {
-          this.messages = this.messages.filter((message) => message.id !== head.id);
-          this.publish();
         }
       }
     } finally {
       this.draining = false;
     }
+  }
+
+  /** Remove exactly the message whose prompt invocation was accepted. */
+  private accept(id: string): void {
+    const next = this.messages.filter((message) => message.id !== id);
+    if (next.length === this.messages.length) return;
+    this.messages = next;
+    this.publish();
   }
 
   private require(id: string): PendingMessage {
