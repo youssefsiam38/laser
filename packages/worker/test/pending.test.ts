@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { ContentBlock, JsonRpcMessage, PendingMessage, SessionState } from "@lasercode/protocol";
-import type { DriverEvent, DriverListener, SessionDriver } from "../src/driver.js";
+import type { DriverEvent, DriverListener, PromptOptions, SessionDriver } from "../src/driver.js";
 import { PendingTray } from "../src/pending.js";
 import { WorkerServer } from "../src/server.js";
 
@@ -25,9 +25,10 @@ function harness(options: { streaming?: boolean } = {}) {
   let ids = 0;
 
   const tray = new PendingTray({
-    prompt: async (content) => {
+    prompt: async (content, onAccepted) => {
       prompted.push(textOf(content));
       if (promptResult instanceof Error) throw promptResult;
+      if (promptResult.accepted) onAccepted();
       return promptResult;
     },
     steer: async (content) => {
@@ -86,6 +87,66 @@ describe("PendingTray · leaving it alone is the default", () => {
     await h.tray.drain();
     expect(h.prompted).toEqual([]);
     expect(h.tray.list()).toHaveLength(1);
+  });
+
+  it("acknowledges the exact message at accepted preflight, while its turn is still running", async () => {
+    let release = () => {};
+    const completion = new Promise<void>((resolve) => (release = resolve));
+    const content: ContentBlock[] = [
+      { type: "text", text: "keep the image" },
+      { type: "image", mimeType: "image/png", data: "AAAA" },
+    ];
+    let promptSettled = false;
+    const published: PendingMessage[][] = [];
+    const tray = new PendingTray({
+      prompt: async (received, onAccepted) => {
+        expect(received).toEqual(content);
+        onAccepted();
+        await completion;
+        promptSettled = true;
+        return { accepted: true };
+      },
+      steer: async () => {},
+      streaming: () => false,
+      publish: (messages) => published.push(messages),
+      newId: () => "p-accepted",
+    });
+    tray.add(content);
+
+    const draining = tray.drain();
+    expect(promptSettled).toBe(false);
+    expect(tray.list()).toEqual([]);
+    expect(published.at(-1)).toEqual([]);
+
+    release();
+    await draining;
+  });
+
+  it("uses the pending id, so duplicate acknowledgements cannot consume an equal message behind it", async () => {
+    let running = false;
+    let acknowledgeFirst = () => {};
+    const tray = new PendingTray({
+      prompt: async (_content, onAccepted) => {
+        acknowledgeFirst = onAccepted;
+        onAccepted();
+        running = true;
+        return { accepted: true };
+      },
+      steer: async () => {},
+      streaming: () => running,
+      publish: () => {},
+      newId: (() => {
+        let id = 0;
+        return () => `p-same-${++id}`;
+      })(),
+    });
+    tray.add(text("same words"));
+    const second = tray.add(text("same words"));
+
+    await tray.drain();
+    expect(tray.list().map((message) => message.id)).toEqual([second.id]);
+    acknowledgeFirst();
+    expect(tray.list().map((message) => message.id)).toEqual([second.id]);
   });
 
   it("publishes the whole list on every change, so a second client sees the same rows", () => {
@@ -175,6 +236,27 @@ describe("PendingTray · the three acts on one message", () => {
 });
 
 describe("PendingTray · delivery that does not land", () => {
+  it("never retries a message whose accepted turn fails later", async () => {
+    let prompts = 0;
+    const tray = new PendingTray({
+      prompt: async (_content, onAccepted) => {
+        prompts += 1;
+        onAccepted();
+        throw new Error("The accepted turn failed later.");
+      },
+      steer: async () => {},
+      streaming: () => false,
+      publish: () => {},
+      newId: () => "p-later-failure",
+    });
+    tray.add(text("already entered the transcript"));
+
+    await tray.drain();
+    await tray.drain();
+    expect(prompts).toBe(1);
+    expect(tray.list()).toEqual([]);
+  });
+
   it("keeps the message and the reason, and tries again on the next settle", async () => {
     const h = harness();
     h.tray.add(text("run the tests"));
@@ -229,8 +311,9 @@ describe("PendingTray · delivery that does not land", () => {
     let release = () => {};
     const gate = new Promise<void>((resolve) => (release = resolve));
     const slow = new PendingTray({
-      prompt: async () => {
+      prompt: async (_content, onAccepted) => {
         await gate;
+        onAccepted();
         return { accepted: true };
       },
       steer: async () => {},
@@ -290,8 +373,24 @@ class TrayDriver implements Partial<SessionDriver> {
   emit(event: DriverEvent) {
     for (const listener of this.listeners) listener(event);
   }
-  async prompt(content: ContentBlock[]) {
+  completion: Promise<void> | undefined;
+  failBeforeAcceptance: Error | undefined;
+  failAfterAcceptance: Error | undefined;
+  acceptPrompts = true;
+  async prompt(content: ContentBlock[], options?: PromptOptions) {
     this.prompted.push(textOf(content));
+    if (this.failBeforeAcceptance) throw this.failBeforeAcceptance;
+    if (!this.acceptPrompts) return { accepted: false, queued: false };
+    options?.onAccepted?.();
+    this.streaming = true;
+    this.emit({ type: "update", update: { kind: "message_start", role: "user" } });
+    this.emit({
+      type: "update",
+      update: { kind: "message_end", role: "user", message: { role: "user", content, timestamp: Date.now() } },
+    });
+    if (this.completion) await this.completion;
+    this.streaming = false;
+    if (this.failAfterAcceptance) throw this.failAfterAcceptance;
     return { accepted: true, queued: false };
   }
   async steer(content: ContentBlock[]) {
@@ -327,10 +426,78 @@ async function server() {
   const notifications = (method: string) =>
     out.filter((message) => "method" in message && !("id" in message) && message.method === method) as Array<{ params: unknown }>;
   await call(1, "session/load", { path: PATH });
-  return { worker, call, notifications, get driver() { return driver; } };
+  return { worker, call, notifications, out, get driver() { return driver; } };
 }
 
 describe("WorkerServer · the tray on the wire", () => {
+  it("removes an accepted row while its reply is still running, even when nobody was viewing the session", async () => {
+    const { call, driver, notifications, out } = await server();
+    driver.streaming = true;
+    await call(2, "session/pending/add", { path: PATH, content: text("delivered off screen") });
+
+    // No UI is holding this session now. Delivery remains worker-owned.
+    out.length = 0;
+    let release = () => {};
+    driver.completion = new Promise<void>((resolve) => (release = resolve));
+    driver.streaming = false;
+    driver.emit({ type: "update", update: { kind: "agent_settled" } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(driver.streaming).toBe(true);
+    expect(driver.prompted).toEqual(["delivered off screen"]);
+    const userEnd = notifications("session/update").find((notification) => {
+      const update = (notification.params as { update: { kind: string; role?: string } }).update;
+      return update.kind === "message_end" && update.role === "user";
+    });
+    expect(userEnd).toBeDefined();
+    // Reopening, then reconciling after a reconnect, both read the worker's
+    // canonical empty tray before the assistant turn has settled.
+    expect((await call(3, "session/pending/list", { path: PATH }))?.result).toEqual({ messages: [] });
+    expect((await call(4, "session/pending/list", { path: PATH }))?.result).toEqual({ messages: [] });
+
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  it("keeps only pre-acceptance failures and never resends an accepted prompt after a later failure", async () => {
+    const { call, driver } = await server();
+    driver.streaming = true;
+    await call(2, "session/pending/add", { path: PATH, content: text("one attempt only") });
+
+    driver.failBeforeAcceptance = new Error("The provider is not configured.");
+    driver.streaming = false;
+    driver.emit({ type: "update", update: { kind: "agent_settled" } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect((await call(3, "session/pending/list", { path: PATH }))?.result).toEqual({
+      messages: [expect.objectContaining({ text: "one attempt only", state: "failed", error: "The provider is not configured." })],
+    });
+
+    driver.failBeforeAcceptance = undefined;
+    driver.failAfterAcceptance = new Error("The accepted turn failed.");
+    driver.emit({ type: "update", update: { kind: "agent_settled" } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect((await call(4, "session/pending/list", { path: PATH }))?.result).toEqual({ messages: [] });
+    expect(driver.prompted).toEqual(["one attempt only", "one attempt only"]);
+
+    driver.emit({ type: "update", update: { kind: "agent_settled" } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(driver.prompted).toHaveLength(2);
+  });
+
+  it("falls back to one steer when idle prompt preflight refuses the delivery", async () => {
+    const { call, driver } = await server();
+    driver.streaming = true;
+    await call(2, "session/pending/add", { path: PATH, content: text("extension-held") });
+    driver.acceptPrompts = false;
+    driver.streaming = false;
+    driver.emit({ type: "update", update: { kind: "agent_settled" } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(driver.prompted).toEqual(["extension-held"]);
+    expect(driver.steered).toEqual(["extension-held"]);
+    expect((await call(3, "session/pending/list", { path: PATH }))?.result).toEqual({ messages: [] });
+  });
+
   it("adds, publishes, steers and delivers on settle, and never draws a stop", async () => {
     const { call, notifications, driver } = await server();
 

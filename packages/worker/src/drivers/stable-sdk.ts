@@ -112,6 +112,12 @@ export class StableSdkDriver implements SessionDriver {
    * of updates a client sees never changes.
    */
   private heldUserEnd: { update: Extract<SessionUpdate, { kind: "message_end" }>; message: unknown } | undefined;
+  /**
+   * Pi's `isStreaming` flips only after asynchronous prompt preflight. Reserve
+   * that gap so two same-tick invocations cannot both report accepted before
+   * agent-core refuses the second as busy.
+   */
+  private promptPreflight: Promise<void> | undefined;
 
   constructor() {
     this.ui = createUiBridge(
@@ -408,15 +414,41 @@ export class StableSdkDriver implements SessionDriver {
     const { text, images } = split(content);
     // A goal command needs the goal tools before it dispatches (see below).
     if (isGoalCommand(text)) activateGoalTools(session);
+    // An explicitly queued send waits for an idle prompt's preflight reservation
+    // to resolve, then sees the engine as streaming and enters the requested
+    // queue. A bare concurrent prompt is refused immediately.
+    if (this.promptPreflight) {
+      if (!options?.streamingBehavior) return { accepted: false, queued: false };
+      await this.promptPreflight;
+    }
     const streaming = session.isStreaming;
     if (streaming && !options?.streamingBehavior) {
       return { accepted: false, queued: false };
+    }
+
+    let finishPreflight = () => {};
+    if (!streaming) {
+      let release = () => {};
+      const reservation = new Promise<void>((resolve) => { release = resolve; });
+      this.promptPreflight = reservation;
+      finishPreflight = () => {
+        if (this.promptPreflight !== reservation) return;
+        this.promptPreflight = undefined;
+        release();
+      };
     }
     try {
       await session.prompt(text, {
         ...(images.length > 0 ? { images } : {}),
         ...(options?.streamingBehavior ? { streamingBehavior: options.streamingBehavior } : {}),
         ...(options?.expandPromptTemplates !== undefined ? { expandPromptTemplates: options.expandPromptTemplates } : {}),
+        // Pi's per-invocation preflight is the exact boundary between a prompt
+        // we still own and a user message the engine owns. `session.prompt()`
+        // itself resolves only after the whole turn, including retries.
+        preflightResult: (accepted: boolean) => {
+          finishPreflight();
+          if (accepted) options?.onAccepted?.();
+        },
       });
     } catch (error) {
       // `isStreaming` flips only after the agent loop starts, so a prompt sent in
@@ -424,6 +456,9 @@ export class StableSdkDriver implements SessionDriver {
       // Pi. "Busy" is a normal outcome for the protocol, not an exception.
       if (isBusyError(error)) return { accepted: false, queued: false };
       throw error;
+    } finally {
+      // Defensive for an engine failure that bypassed its documented callback.
+      finishPreflight();
     }
     return { accepted: true, queued: streaming };
   }

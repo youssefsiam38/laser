@@ -920,7 +920,7 @@ export class WorkerServer {
     if (!live.pending) {
       live.pending = new PendingTray({
         steer: (content) => live.driver.steer(content),
-        prompt: (content) => this.promptLive(live, content),
+        prompt: (content, onAccepted) => this.promptLive(live, content, undefined, onAccepted),
         streaming: () => live.driver.state().isStreaming,
         publish: (pending) => this.onDriverEvent(live, { type: "update", update: { kind: "pending_update", pending } }),
       });
@@ -947,6 +947,7 @@ export class WorkerServer {
     live: Live,
     content: ContentBlock[],
     streamingBehavior?: "steer" | "followUp",
+    onAccepted?: () => void,
   ): Promise<{ accepted: boolean; queued: boolean }> {
     const text = textOf(content);
     const idle = !live.driver.state().isStreaming;
@@ -954,7 +955,10 @@ export class WorkerServer {
     // their own, so the run map and the parent's summary keep working.
     if (!streamingBehavior && idle) this.harness.startUserRun(live.path, text);
     if ((idle || streamingBehavior) && !live.driver.state().name && text.trim() !== "") void this.nameSession(live, text);
-    return live.driver.prompt(content, { ...(streamingBehavior ? { streamingBehavior } : {}) });
+    return live.driver.prompt(content, {
+      ...(streamingBehavior ? { streamingBehavior } : {}),
+      ...(onAccepted ? { onAccepted } : {}),
+    });
   }
 
   /**
