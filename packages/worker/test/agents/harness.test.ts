@@ -15,7 +15,6 @@ import type { AgentModelEvent, HarnessSessionRole } from "../../src/agents/bridg
 import { DefinitionsCache, fallbackDefaultAgent, fallbackSnapshot } from "../../src/agents/definitions.js";
 import { AgentHarness, NUDGE_TEXT, type SessionHost, type WorktreeProvider } from "../../src/agents/harness.js";
 import { HarnessError } from "../../src/agents/errors.js";
-import { FLEET_STATUS_WORD } from "../../src/agents/fleet.js";
 import { rootRecord, rootRole } from "../../src/agents/session-config.js";
 import type { CreateWorktreeInput, Worktree, WorktreeFacts } from "../../src/agents/worktrees.js";
 import type { IndexedTask } from "../../src/agents/tasks.js";
@@ -818,7 +817,7 @@ describe("AgentHarness", () => {
       expect(world.drivers.get(childPath)!.prompted.map((p) => p.text)).toEqual(["Fix the login form."]);
     });
 
-    it("says the fleet's canonical words for questions, blocked work, and endings", async () => {
+    it("says the endings in the fleet's words: live Asking with the question, terminal Blocked with the message, Ended with who ended it", async () => {
       const root = world.openRoot("lead");
       const asking = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "asking", task: "t" });
       world.drivers.get("/sessions/child-1.jsonl")!.ask({ method: "confirm", id: "ui-1", title: "Drop the table?" });
@@ -836,7 +835,7 @@ describe("AgentHarness", () => {
       expect(fleet).toMatchObject({ working: 1, needsYou: 1, finished: 6, total: 7 });
       const byTitle = new Map(fleet.rows.map((row) => [row.title, row]));
       expect(byTitle.get("asking")).toMatchObject({ runId: asking.runId, state: "needs_input", status: "Asking", line: "Drop the table?" });
-      expect(byTitle.get("blocked")).toMatchObject({ runId: blocked.runId, state: "blocked", status: FLEET_STATUS_WORD.blocked, line: "Which config is canonical?" });
+      expect(byTitle.get("blocked")).toMatchObject({ runId: blocked.runId, state: "blocked", status: "Blocked", line: "Which config is canonical?" });
       expect(byTitle.get("ended")).toMatchObject({ state: "cancelled", status: "Ended", line: "the person ended it" });
       expect(byTitle.get("reasoned")).toMatchObject({ state: "cancelled", status: "Ended", line: "no longer needed" });
       expect(byTitle.get("failed")).toMatchObject({ runId: failed.runId, state: "failed", status: "Failed", line: "The agent's session closed before it finished." });

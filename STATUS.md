@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-10T13:41:04Z · stabilization-ledger · HEAD: f4b7ab6
+**Last updated:** 2026-09-10T20:30:22Z · stabilization-ci · HEAD: aba12f7 (development merge in preparation)
 
-**Current focus:** M13 — harness-lifecycle now solely owns the coupled T89/T92/T93 integration from frozen `a0264674` + `d79c2869`; repair local reproducibility and prove every real caller/browser path. Independent owners retain composer/header/activity/fleet. Version stays 0.3.4; no release action is authorized.
+**Current focus:** M13 — reviewed CI repair `7a05c79` pushed and guarded release retry active. Separate development continuation preserves `aba12f7b`; HLC-010 plan and sole-owner handoff next.
 
 ## Milestones
 
@@ -24,12 +24,14 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M10 Distribution | in-progress | in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
 | M12 Product experience | done | 0.2.13 dispatched |
-| M13 Agents Leap | in-progress | D-191 transfer complete; prep `6b69f5e` unchanged/preliminary; coupled integration and T91/T96 reviews remain |
+| M13 Agents Leap | in-progress | T97 repair reviewed/verified; HLC-010 remains open |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
 
-- No blocked task. Coupled source ownership is serialized under D-191; T94 waits for all dependencies, final combined gates and explicit permission.
+- M13-T93: HLC-010 still blocks development integration; Q-8 scope authorized, new sole owner pending.
+- M13-T97: guarded retry awaits repaired-SHA source CI, native builds and verified publication.
+- M13-T94: its original complete-fix dependencies and full acceptance gates remain incomplete; T97 does not replace them.
 
 ## Next up
 
