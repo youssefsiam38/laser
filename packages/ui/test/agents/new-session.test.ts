@@ -40,7 +40,7 @@ describe("New session with an agent", () => {
     await expect(f.launch("/p", { agentName: "default" })).resolves.toBe("/empty-default");
     // A different agent must not take over that session.
     await expect(f.launch("/p", { agentName: "reviewer" })).resolves.toBe("/new-1");
-    expect(f.create).toHaveBeenCalledWith("/p", { agentName: "reviewer" });
+    expect(f.create).toHaveBeenCalledWith("/p", { agentName: "reviewer", select: false });
     // And now the empty reviewer session is reused for reviewer, not for the default.
     await expect(f.launch("/p", { agentName: "reviewer" })).resolves.toBe("/new-1");
     await expect(f.launch("/p")).resolves.toBe("/empty-default");
@@ -52,7 +52,7 @@ describe("New session with an agent", () => {
     f.add("/beam-empty", "/state/beam", "beam");
     await expect(f.launch("/state/beam", { agentName: "beam" })).resolves.toBe("/beam-empty");
     await expect(f.launch("/state/beam")).resolves.toBe("/new-1");
-    expect(f.create).toHaveBeenLastCalledWith("/state/beam", {});
+    expect(f.create).toHaveBeenLastCalledWith("/state/beam", { select: false });
   });
 
   it("never reuses a child session, and coalesces per agent", async () => {

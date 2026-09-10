@@ -567,6 +567,9 @@ Depends on: M12.
 | M13-T80 | Restore the last conversation when switching Chat and Code | selecting either sessions tab opens that tab's most recently viewed surviving session, or its honest empty state when none exists, in both pointer and keyboard paths |
 | M13-T81 | Keep recoverable provider retries quiet | provider errors that the engine is retrying never render as failed turns or retry notices; successful recovery leaves no trace in the conversation, while an exhausted or non-retryable request ends in one gentle actionable warning |
 | M13-T82 | Release stable 0.3.2 | the instruction-template, Namer, private-workspace, session-navigation and quiet-retry refinements pass the exact versioned gate; source and matching tag are pushed only after clean CI; the release pipeline publishes verified x64/ARM64 assets, provenance and updater feeds |
+| M13-T83 | Refuse phantom resumes and internal-storage projects | worker process cwd matches its assigned directory, missing or empty transcripts cannot turn into replacement conversations on restart, internal directories cannot be projects, and regression tests cover recovery without modifying user history |
+| M13-T84 | Make composer recording and compact disclosures usable | Beam prepares an empty session on open, shared with sidebar +, and records before its first message; recording has explicit discard and no duration cutoff; reasoning level is visible; verbose skill results and mixed activity remain readable at narrow widths, with regression tests and browser review |
+| M13-T85 | Release stable 0.3.3 | the internal-project, saved-session, eager Beam, recording and compact-disclosure fixes pass the isolated versioned workspace gate; source CI is green before the immutable tag; both Linux architectures, installer, checksums, provenance and native feeds are verified before reporting publication |
 
 ## MX · Cross-cutting (runs alongside every milestone)
 

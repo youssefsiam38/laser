@@ -15,7 +15,7 @@ export const BEAM_SESSION_STORAGE_KEY = storageKey("beam-session");
 
 export interface BeamSnapshot {
   open: boolean;
-  /** The session the bubble shows; `undefined` until the first message creates one. */
+  /** The session the bubble shows; `undefined` while opening prepares one. */
   path: string | undefined;
 }
 
@@ -62,12 +62,12 @@ function createBeamStore() {
     close(): void {
       publish({ ...snapshot, open: false });
     },
-    /** Adopt a session (the first message created one) or let go of one that is gone. */
+    /** Adopt a prepared session or let go of one that is gone. */
     setPath(path: string | undefined): void {
       writePath(path);
       publish({ ...snapshot, path });
     },
-    /** Detach the bubble; the next message starts a fresh Beam session. */
+    /** Detach the bubble; its panel immediately prepares an unstarted Beam session. */
     newChat(): void {
       this.setPath(undefined);
     },

@@ -117,6 +117,76 @@ afterEach(async () => {
 });
 
 describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
+  it("never resurrects an unwritten conversation when its real worker restarts", async () => {
+    const { url } = await host.listen();
+    const client = new Client();
+    await client.connect(url);
+    const cwd = join(base, "project");
+    try {
+      const { state: unsaved } = await client.request<{ state: SessionState }>("session/new", { cwd });
+      expect(existsSync(unsaved.path)).toBe(false);
+      const firstPid = host.pool.workerInfo(cwd)?.pid;
+      await host.pool.restart(cwd);
+      expect(host.pool.workerInfo(cwd)?.pid).not.toBe(firstPid);
+      expect(host.pool.openSessions(cwd)).not.toContain(unsaved.path);
+      expect(existsSync(unsaved.path)).toBe(false);
+      await expect(client.request("session/load", { path: unsaved.path })).rejects.toThrow(/no saved transcript|no project known/);
+      // Direct recovery bypasses the router: the worker itself must refuse it.
+      await expect((await host.pool.get(cwd)).request("session/load", { path: unsaved.path })).rejects.toThrow(/no saved transcript/);
+      const { state: fresh } = await client.request<{ state: SessionState }>("session/new", { cwd });
+      expect(fresh.cwd).toBe(cwd);
+      expect(fresh.id).not.toBe(unsaved.id);
+      expect(fresh.path).not.toBe(unsaved.path);
+      const { sessions } = await client.request<{ sessions: SessionState[] }>("pi/session/list", {});
+      expect(sessions.map(s => s.path)).toEqual([fresh.path]);
+      expect(existsSync(unsaved.path)).toBe(false);
+    } finally { client.close(); }
+  }, 60_000);
+
+  it("does not expose internal storage as projects or sessions, while genuine workspace sessions remain listed", async () => {
+    const stateDir = join(base, "state");
+    const agentDir = join(base, "agent");
+    const beamCwd = join(stateDir, "workspaces", "beam", "session-private");
+    const chatCwd = join(stateDir, "workspaces", "chat", "session-private");
+    mkdirSync(join(base, "sessions"), { recursive: true });
+    const paths = [stateDir, agentDir, beamCwd, chatCwd].map((cwd, i) => {
+      const path = join(base, "sessions", `${i}.jsonl`);
+      writeFileSync(path, `${JSON.stringify({ type: "session", version: 3, id: `s-${i}`, cwd })}\n`);
+      return path;
+    });
+    const before = paths.map(path => readFileSync(path, "utf8"));
+    const { url } = await host.listen();
+    const client = new Client();
+    await client.connect(url);
+    try {
+      expect(await client.request("pi/project/list", {})).toEqual({ projects: [] });
+      const { sessions } = await client.request<{ sessions: Array<{ path: string }> }>("pi/session/list", {});
+      expect(sessions.map(s => s.path).sort()).toEqual(paths.slice(2).sort());
+      for (const cwd of [stateDir, agentDir, beamCwd, chatCwd]) {
+        await expect(client.request("pi/project/add", { cwd })).rejects.toThrow(/internal app storage/);
+      }
+      await expect(client.request("session/new", { cwd: stateDir })).rejects.toThrow(/internal app storage/);
+      await expect(client.request("session/load", { path: paths[0] })).rejects.toThrow(/internal app storage/);
+      expect(host.pool.cwds()).toEqual([]);
+      expect(paths.map(path => readFileSync(path, "utf8"))).toEqual(before);
+    } finally { client.close(); }
+  });
+
+  it("keeps projectless Settings working without allowing its internal folder to become a project", async () => {
+    const { url } = await host.listen();
+    const client = new Client();
+    await client.connect(url);
+    try {
+      const { cwd } = await client.request<{ cwd: string }>("pi/setup/state", {});
+      expect(cwd).toBe(join(base, "state", "global"));
+      await expect(client.request("pi/models/catalog", { cwd })).resolves.toBeDefined();
+      await expect(client.request("session/new", { cwd })).rejects.toThrow(/internal app storage/);
+      await expect(client.request("pi/project/add", { cwd })).rejects.toThrow(/internal app storage/);
+      expect(await client.request("pi/project/list", {})).toEqual({ projects: [] });
+      expect(await client.request("pi/session/list", {})).toEqual({ sessions: [] });
+    } finally { client.close(); }
+  }, 60_000);
+
   it("routes search settings through a real worker independently of enablement", async () => {
     const { url } = await host.listen();
     const client = new Client();

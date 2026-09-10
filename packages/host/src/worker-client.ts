@@ -74,6 +74,9 @@ export class WorkerClient {
     if (options.projectTrusted !== undefined) args.push("--project-trusted", options.projectTrusted ? "yes" : "no");
 
     this.child = spawn(options.nodeBinary ?? process.execPath, args, {
+      // --cwd configures the driver; it does not change the process directory.
+      // Engine defaults and subprocesses must never inherit the host's state cwd.
+      cwd: options.cwd,
       stdio: ["ignore", "pipe", "pipe", "pipe"],
       env: { ...process.env, ...options.env, [ENV.workerFd]: "3" },
     });

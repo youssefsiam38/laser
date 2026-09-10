@@ -44,7 +44,8 @@ import { SessionCatalog, defaultSessionDir } from "./catalog.js";
 import { LogStore } from "./logstore.js";
 import { PackageService, SetupService } from "./packages.js";
 import { TaskRegister } from "./tasks/register.js";
-import { defaultAgentDir, defaultStateDir, ensureWorkspace, workspacesDir } from "./paths.js";
+import { defaultAgentDir, defaultStateDir, ensureWorkspace, workspaceAgentFor, workspacesDir } from "./paths.js";
+import { canonical } from "./trust.js";
 import { ProjectRegistry } from "./projects.js";
 import { PushService } from "./push.js";
 import { RelayClient, type RelayClientState, type RelayClientStats } from "./relay-client.js";
@@ -270,7 +271,9 @@ export class HostServer {
       catalog: this.catalog,
       agentDir,
       storePath: join(stateDir, "projects.json"),
-      exclude: [workspaces.beam, workspaces.chat],
+      // Internal storage is not a project, even if a broken resume once
+      // recorded it in a transcript header. Include relocated workspaces.
+      exclude: [stateDir, agentDir, workspaces.beam, workspaces.chat],
       ...(options.trustTimeoutMs !== undefined ? { trustTimeoutMs: options.trustTimeoutMs } : {}),
       onChange: (projects) => this.notify("pi/project/updated", { projects }),
       onTrustRequest: (request) => {
@@ -373,7 +376,18 @@ export class HostServer {
         }
         this.logs?.observeWorkerStatus(info);
       },
-      resolveTrust: (cwd) => this.projects.ensureTrusted(cwd),
+      resolveTrust: (cwd) => {
+        // All spawn routes (including recovery and settings) pass here. The
+        // projectless Settings worker is intentional too, but its folder must
+        // still be refused by every project/session creation entry point.
+        if (workspaceAgentFor(cwd, workspaces) || canonical(cwd) === canonical(this.setup.cwd)) {
+          const problem = ensureWorkspace(cwd);
+          if (problem) throw new Error(`The conversation's workspace could not be created: ${problem}. Check the folder's permissions and try again.`);
+        } else {
+          this.projects.assertProject(cwd);
+        }
+        return this.projects.ensureTrusted(cwd);
+      },
       isAttached: (cwd) => this.isAttached(cwd),
       hasLiveRun: (cwd) => this.runs.hasLiveRun(cwd),
     };

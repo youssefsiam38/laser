@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { SessionState, SessionSummary } from "@lasercode/protocol";
 import { initialState, reduce, type AppState, type SessionView } from "../../src/store.js";
 import { createSessionLauncher, isUnstartedSession } from "../../src/runtime/new-session.js";
+import { snapshot } from "../agents/fixtures.js";
 
 const session = (path: string, cwd = "/one"): SessionState => ({
   path, id: path, cwd, model: { provider: "stub", id: "stub-1" }, thinkingLevel: "medium",
@@ -58,6 +59,16 @@ describe("New session", () => {
     expect(f.create).toHaveBeenCalledTimes(1);
     await expect(f.launch("/one")).resolves.toBe(paths[0]);
     expect(f.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares allocation between a quiet bubble open and a simultaneous sidebar +", async () => {
+    const f = fixture();
+    const quiet = f.launch("/one", { select: false });
+    const selected = f.launch("/one");
+    const [one, two] = await Promise.all([quiet, selected]);
+    expect(one).toBe(two); expect(f.create).toHaveBeenCalledOnce();
+    expect(f.create).toHaveBeenCalledWith("/one", { select: false });
+    expect(f.select).toHaveBeenCalledWith(one);
   });
 
   it("keeps projects independent, even for concurrent requests", async () => {
@@ -117,6 +128,19 @@ describe("New session", () => {
     void f;
   });
 
+  it.each(["beam", "chat"] as const)("reuses an attributed private %s workspace from its sidebar root", async (kind) => {
+    const f = fixture(); f.state.agents.snapshot = snapshot();
+    const view = f.add("/private-session", `/state/${kind}/private-session`);
+    view.state.agent = { kind, agentName: kind };
+    f.add("/other-project");
+    await expect(f.launch(`/state/${kind}`, { agentName: kind, select: false })).resolves.toBe("/private-session");
+    expect(f.state.current).toBe("/other-project");
+    await expect(f.launch(`/state/${kind}`, { agentName: kind })).resolves.toBe("/private-session");
+    expect(f.state.current).toBe("/private-session"); expect(f.create).not.toHaveBeenCalled();
+    view.state.messageCount = 1;
+    await expect(f.launch(`/state/${kind}`, { agentName: kind })).resolves.not.toBe("/private-session");
+  });
+
   it("reuses an empty project chat the catalog stamps unread, with the default agent (M13-T47)", async () => {
     // The chat's own + is the same launcher. An empty session the host had
     // decorated `finished_unread` (a stale attention stamp on a row that was
@@ -152,7 +176,7 @@ describe("New session", () => {
     const f = fixture(); f.state.sessions = [summary("/unloaded")];
     f.open.mockImplementationOnce(async (path) => { f.add(path).state.messageCount = 1; });
     await expect(f.launch("/one")).resolves.toBe("/new-1");
-    expect(f.open).toHaveBeenCalledWith("/unloaded");
+    expect(f.open).toHaveBeenCalledWith("/unloaded", { select: false });
   });
 
   it("finds an empty session from a fresh catalog, including after reload", async () => {

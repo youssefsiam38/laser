@@ -164,5 +164,13 @@ in-memory engine overrides.
   directory the host creates and owns, so a sandboxed or relocated state
   directory keeps its workspaces with it, and a Beam or Chat session whose
   folder is gone has it recreated instead of becoming unopenable.
+- Internal agent/state storage is never a project. Project add, session create,
+  session move and worker startup enforce this; only designated Beam/Chat
+  workspaces and the projectless Settings service may start internal workers.
+  Invalid storage-root transcripts are omitted from normal session/search
+  navigation and refused on load, without rewriting or reclassifying history.
+- Worker processes start in their assigned cwd. A persisted-session load requires
+  a nonempty transcript and builds its runtime directly; the engine's permissive
+  missing-file create behavior is not a resume feature, including after recovery.
 - Keychain: root identity key, relay credentials.
 - `<project>/.laser/settings.json`: project-scoped product settings.

@@ -276,7 +276,11 @@ export function visibleProjectCwds(
   archive: ArchiveStore,
   options: { /** Directories that are never projects: the Beam and Chat workspaces. */ exclude?: readonly string[] } = {},
 ): string[] {
-  const excluded = new Set(options.exclude ?? []);
+  const excluded = (options.exclude ?? []).map((cwd) => cwd.replace(/\\/g, "/").replace(/\/+$/, ""));
+  const isExcluded = (cwd: string): boolean => {
+    const path = cwd.replace(/\\/g, "/").replace(/\/+$/, "");
+    return excluded.some((root) => path === root || path.startsWith(`${root}/`));
+  };
   const archivedByCwd = new Map<string, number>();
   for (const session of sessions) {
     if (!archive.has(session.path)) continue;
@@ -286,7 +290,7 @@ export function visibleProjectCwds(
   const seen = new Set<string>();
   const append = (raw: string) => {
     const cwd = projectRootOfCwd(raw);
-    if (seen.has(cwd) || excluded.has(cwd)) return;
+    if (seen.has(cwd) || isExcluded(cwd)) return;
     seen.add(cwd);
     visible.push(cwd);
   };

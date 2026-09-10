@@ -63,23 +63,32 @@ function useBeamPath(): string | undefined {
 /** The second thread, scoped to Beam's sessions, with the header above it. */
 function BeamPanel({ onClose }: { onClose: () => void }) {
   const path = useBeamPath();
+  const { path: requestedPath } = useBeam();
+  const [startError, setStartError] = useState<string>();
+  const [retry, setRetry] = useState(0);
   const { actions } = useLaserStable();
   const snapshot = useAgentsSnapshot();
   const filter = useCallback((session: ScopedSessionShape, state: AppState) => isBeamSession(session, state.agents.snapshot), []);
   const createIn = useCallback((state: AppState) => beamWorkspace(state.agents.snapshot), []);
   const ready = snapshot !== null;
 
-  /**
-   * Move Beam into the window. With a chat on screen that is the chat; with an
-   * empty bubble it is a new one, because "open this in full view" and "start
-   * one in full view" are the same wish, and refusing on an empty bubble left
-   * the control dead exactly when a person had nothing to lose by pressing it.
-   */
+  useEffect(() => {
+    if (!ready || requestedPath !== undefined) return;
+    let live = true;
+    setStartError(undefined);
+    void startBeamSession(actions, snapshot, { select: false }).then(
+      (created) => { if (live) beamStore.setPath(created); },
+      (error: unknown) => { if (live) setStartError(error instanceof Error ? error.message : String(error)); },
+    );
+    return () => { live = false; };
+  }, [actions, ready, requestedPath, retry, snapshot]);
+
+  /** Maximize the very same prepared session, whether or not it has messages. */
   const openInFullView = async (): Promise<void> => {
+    if (!path) return;
     try {
       sessionsList.setTab("code");
-      if (path) await actions.openSession(path);
-      else await startBeamSession(actions, snapshot);
+      await actions.openSession(path);
       onClose();
     } catch (error) {
       // The bubble stays open: the chat is still here to try again from.
@@ -96,7 +105,7 @@ function BeamPanel({ onClose }: { onClose: () => void }) {
         <TooltipIconButton tooltip="New chat" side="bottom" disabled={!path} onClick={() => beamStore.newChat()} data-slot="beam-new-chat">
           <SquarePen />
         </TooltipIconButton>
-        <TooltipIconButton tooltip={path ? "Open in full view" : "Start a chat in full view"} side="bottom" disabled={!ready} onClick={() => void openInFullView()} data-slot="beam-open-full">
+        <TooltipIconButton tooltip="Open in full view" side="bottom" disabled={!path} onClick={() => void openInFullView()} data-slot="beam-open-full">
           <Maximize2 />
         </TooltipIconButton>
         <TooltipIconButton tooltip="Close" shortcut="Esc" side="bottom" onClick={onClose} data-slot="beam-close">
@@ -104,14 +113,18 @@ function BeamPanel({ onClose }: { onClose: () => void }) {
         </TooltipIconButton>
       </header>
       <div className="relative flex min-h-0 flex-1 flex-col">
-        <LaserThreadScope path={path} onPathChange={beamStore.setPath} filter={filter} createIn={createIn} unavailable={BEAM_UNAVAILABLE}>
-          <BeamRefusal />
-          <Thread emptyState={<BeamEmptyState />} followUps={BEAM_FOLLOW_UPS} />
-        </LaserThreadScope>
-        {!ready && (
-          <p role="status" className="absolute inset-x-0 bottom-0 z-10 px-4 py-2 text-center text-xs leading-xs text-ink-3 bg-bg hairline-t">
-            {BEAM_UNAVAILABLE}
-          </p>
+        {path ? (
+          <LaserThreadScope path={path} onPathChange={beamStore.setPath} filter={filter} createIn={createIn} unavailable={BEAM_UNAVAILABLE}>
+            <BeamRefusal />
+            <Thread emptyState={<BeamEmptyState />} followUps={BEAM_FOLLOW_UPS} />
+          </LaserThreadScope>
+        ) : startError ? (
+          <div role="alert" className="px-4 py-3 text-sm text-ink-2">
+            <p>Beam couldn’t start this chat. {startError}</p>
+            <button type="button" onClick={() => setRetry((n) => n + 1)} className="mt-2 rounded-md px-2 py-1 text-sm text-ink underline underline-offset-2 hover:bg-surface-2 focus-visible:outline focus-visible:outline-live">Try again</button>
+          </div>
+        ) : (
+          <p role="status" className="px-4 py-3 text-sm text-ink-3">{ready ? "Starting Beam…" : BEAM_UNAVAILABLE}</p>
         )}
       </div>
     </div>

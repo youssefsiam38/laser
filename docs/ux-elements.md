@@ -197,6 +197,27 @@ it, not to start from an empty file. Record the divergence in the row.
 | Composer trigger popover | The slash-command and mention popovers — **adopted**: `packages/ui/src/components/assistant-ui/elements/composer-trigger-popover.aui.tsx`; mounted twice under one `Unstable_TriggerPopoverRoot` (`/` action, `@` directive). M12-T62 adds scoped selected-row scrolling, PageUp/PageDown, outside/focus/Escape dismissal, composition-safe input ownership, viewport-aware layout and explicit result states. `@` queries the project index per debounced query, not a locally filtered first page; stale replies are discarded. Hover/keyboard selection exposes skill/prompt source details, with a separate OS-associated Markdown open action (Alt+O) or browser/phone copy-path fallback. No second keyboard/search widget or new dependency. |
 | Directive text | System and directive messages, and extension notices — **adopted**: `elements/directive-text.aui.tsx` + `elements/directive-text.tsx`; `@file` / `@handle` directives render as `Badge` chips, never HTML. Wired for prompt text and notice text (`thread/messages.tsx`, `DirectiveString`) |
 
+### Composer and compact-disclosure refinements (D-183)
+
+- Opening Beam prepares a real empty session immediately; the microphone uses
+  that session's capability and path. Sidebar `+` reuses it in the main view.
+- The thinking trigger shows its current short label beside the brain at every
+  width; a model with no reasoning shows a noninteractive `off` explanation.
+- Recording owns a full control row while active. Stop flushes pending phrases;
+  the adjacent neutral × discards untranscribed audio, aborts pending requests,
+  and prevents any waiting send from continuing. Already inserted/typed text
+  remains editable. Recording has no duration cutoff; 20-second phrase cutting
+  bounds individual uploads, not the lifetime of microphone capture. Device or
+  audio-context interruption is visible with a next action.
+- Skill rows use a single clamped description preview. Results get the available
+  height inside their clipping surface (including Beam), while **Read full
+  description** opens a separately scrollable view. Escape returns to results;
+  opening/reading details never selects or runs the skill.
+- Settled mixed-activity rows reserve a complete status line, then two readable
+  family labels and `+N types` on a wrapping secondary line. Expanding reveals
+  all individual actions; the accessible name retains every family. No series
+  of mutually squeezed ellipses, duplicate per-family details, or smaller type.
+
 ### Activity-row interaction contract (D-96)
 
 Tool group, Tool fallback and individual reasoning share `activityRow` and

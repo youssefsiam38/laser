@@ -72,8 +72,18 @@ export function getMobileDictationAdapter(client: RawRequestClient): PhraseDicta
 }
 
 /** Finish every captured phrase before the composer submits its text. */
-export async function finishActiveDictation(): Promise<void> {
-  await instance?.adapter.finishActive();
+export async function finishActiveDictation(): Promise<boolean> {
+  return instance ? instance.adapter.finishActive() : true;
+}
+
+/** Discard audio and pending results, without flushing or sending the draft. */
+export function cancelActiveDictation(): void {
+  instance?.adapter.cancelActive();
+}
+
+/** Cleanup belongs to the recording that was active when the composer mounted. */
+export function activeDictationCancellation(): (() => void) | undefined {
+  return instance?.adapter.activeCancellation();
 }
 
 /** The composer button registers where every finished phrase should go. */

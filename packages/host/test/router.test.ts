@@ -9,7 +9,7 @@
  * session in the list forever, which is exactly the kind of bug a test is the
  * cheapest way to rule out.
  */
-import { PRODUCT_NAME } from "@lasercode/protocol";
+import { ErrorCodes, PRODUCT_NAME } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -73,7 +73,7 @@ const WORKSPACE_ROOT = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-worksp
 const WORKSPACES = { beam: join(WORKSPACE_ROOT, "beam"), chat: join(WORKSPACE_ROOT, "chat") };
 
 /** A Router with fakes for everything but the piece under test. */
-function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string, string[]>; agents?: boolean; workspaces?: { beam: string; chat: string } } = {}) {
+function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string, string[]>; agents?: boolean; workspaces?: { beam: string; chat: string }; exclude?: string[]; workerRequest?: (method: string, params: unknown) => Promise<unknown> } = {}) {
   const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-`));
   const catalogRows = options.catalogRows ?? [];
   const open = options.open ?? { [CWD_A]: [PATH_A] };
@@ -96,6 +96,7 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
     get: async (cwd: string) => ({
       request: async (method: string, params: unknown) => {
         workerRequests.push({ cwd, method, params });
+        if (options.workerRequest) return options.workerRequest(method, params);
         if (method === "session/new") return { state: state(`/sessions/new-${workerRequests.length}.jsonl`, cwd) };
         if (method === "agents/runs/stop") {
           const { runId, reason } = params as { runId: string; reason?: string };
@@ -108,7 +109,8 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
   } as unknown as WorkerPool;
 
   const attention = new AttentionTracker({});
-  const projects = new ProjectRegistry({ catalog, agentDir: dir, exclude: [WORKSPACES.beam, WORKSPACES.chat] });
+  const workspaces = options.workspaces ?? WORKSPACES;
+  const projects = new ProjectRegistry({ catalog, agentDir: dir, exclude: [...(options.exclude ?? []), workspaces.beam, workspaces.chat] });
   const agents = options.agents ? new AgentStore({ agentDir: join(dir, "agent"), workspaces: options.workspaces ?? WORKSPACES }) : undefined;
   // Fixtures date from June; a fixed clock keeps retention from pruning them.
   const runs = options.agents ? new AgentRunRegistry({ now: () => new Date("2026-06-02T00:00:00.000Z") }) : undefined;
@@ -135,6 +137,55 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
     },
   };
 }
+
+describe("Router · dictation cancellation", () => {
+  it("routes discard while end is still transcribing, then releases the upload route", async () => {
+    let finish!: (value: unknown) => void;
+    let began!: () => void;
+    const pending = new Promise((resolve) => { finish = resolve; });
+    const entered = new Promise<void>((resolve) => { began = resolve; });
+    const h = harness({ workerRequest: async (method) => {
+      if (method === "pi/transcribe/begin") return { id: "recording" };
+      if (method === "pi/transcribe/end") { began(); return pending; }
+      return {};
+    } });
+    try {
+      await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/transcribe/begin", params: { cwd: CWD_A, mimeType: "audio/wav" } });
+      const ending = h.router.handle({ jsonrpc: "2.0", id: 2, method: "pi/transcribe/end", params: { id: "recording" } });
+      await entered;
+      const discarded = await h.router.handle({ jsonrpc: "2.0", id: 3, method: "pi/transcribe/cancel", params: { id: "recording" } });
+      expect(discarded).toMatchObject({ result: {} });
+      expect(h.workerRequests.at(-1)).toEqual({ cwd: CWD_A, method: "pi/transcribe/cancel", params: { id: "recording" } });
+      finish({ text: "" }); await ending;
+      const gone = await h.router.handle({ jsonrpc: "2.0", id: 4, method: "pi/transcribe/chunk", params: { id: "recording", data: "AA==" } });
+      expect(gone).toHaveProperty("error");
+    } finally { finish({ text: "" }); h.cleanup(); }
+  });
+});
+
+describe("Router · internal storage is never a project", () => {
+  it("omits invalid internal sessions without relabelling them as Chat, and refuses load/create/add", async () => {
+    const internal = WORKSPACE_ROOT;
+    const summary = (cwd: string, path: string): SessionSummary => ({ cwd, path, id: path, createdAt: "2026-09-10T00:00:00.000Z", modifiedAt: "2026-09-10T00:00:00.000Z", messageCount: 1 });
+    const invalid = summary(internal, "/sessions/invalid.jsonl");
+    const beam = summary(join(WORKSPACES.beam, "session-private"), "/sessions/beam.jsonl");
+    const chat = summary(join(WORKSPACES.chat, "session-private"), "/sessions/chat.jsonl");
+    const project = summary(CWD_A, PATH_A);
+    const h = harness({ agents: true, exclude: [internal], catalogRows: [invalid, beam, chat, project] });
+    try {
+      expect(h.router.sessions().map(s => s.path)).toEqual([beam.path, chat.path, project.path]);
+      for (const [method, params] of [
+        ["pi/project/add", { cwd: internal }],
+        ["session/new", { cwd: internal }],
+        ["session/load", { path: invalid.path }],
+      ] as const) {
+        const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method, params });
+        expect(response).toMatchObject({ error: { code: ErrorCodes.InvalidParams, message: expect.stringContaining("internal app storage") } });
+      }
+      expect(h.workerRequests).toEqual([]);
+    } finally { h.cleanup(); }
+  });
+});
 
 describe("Router · sessions not yet on disk", () => {
   it("searches only the selected project and date range without opening workers", async () => {

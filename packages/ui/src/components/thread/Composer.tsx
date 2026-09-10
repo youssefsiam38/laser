@@ -50,6 +50,7 @@ import { useProjectFileSearch } from "./use-project-file-search.js";
 export function Composer() {
   useHandedBackText();
   const mobile = useIsMobile();
+  const dictating = useAuiState((s) => s.composer.dictation != null);
   const slash = useSlashCommands();
   const mention = useHandleMentions();
   const onInputKeyDown = useComposerKeys();
@@ -69,15 +70,17 @@ export function Composer() {
                 <span className="flex-1" />
               ) : (
                 <>
-                  <SessionModelSelector />
-                  <span className="flex-1" />
-                  <ThinkingEffort />
-                  <ContextRingButton />
+                  <DictateButton size="icon-lg" />
+                  {!dictating && <>
+                    <SessionModelSelector />
+                    <span className="flex-1" />
+                    <ThinkingEffort />
+                    <ContextRingButton />
+                  </>}
                 </>
               )
             }
             leading={<ComposerAttachButton size="icon-lg" className={MobileComposerButtonClass()} />}
-            inline={<DictateButton size="icon-lg" />}
             trailing={<SendOrStop mobile />}
             onInputKeyDown={onInputKeyDown}
             disabled={disabled}
@@ -92,19 +95,14 @@ export function Composer() {
               {/* Quoted transcript text rides above the input until it is sent (the `quote` element). */}
               <ComposerQuotePreview />
               <ComposerInput />
-              <ComposerToolbar>
+              <ComposerToolbar className={dictating ? "grid grid-cols-[auto_minmax(0,1fr)_auto_auto_auto]" : "grid grid-cols-[auto_auto_minmax(0,1fr)_auto_auto_auto]"}>
                 <ComposerAttachButton />
                 <DictateButton />
                 {/* A model chip reading "No model" and a live thinking dial are
                     both claims about a session that does not exist yet. */}
-                {!blocked && <SessionModelSelector />}
-                <span className="flex-1" />
-                {!blocked && (
-                  <>
-                    <ThinkingEffort />
-                    <ContextRingButton />
-                  </>
-                )}
+                {blocked ? <span /> : <SessionModelSelector />}
+                {blocked ? <span /> : <ThinkingEffort />}
+                {blocked ? <span /> : <ContextRingButton />}
                 <SendOrStop />
               </ComposerToolbar>
             </ComposerBar>
@@ -193,7 +191,7 @@ function useComposerKeys(): (e: KeyboardEvent<HTMLTextAreaElement>) => void {
       aui.composer.setRunConfig(plan.runConfig);
       aui.composer.send(plan.sendOptions);
     };
-    if (dictating) void finishActiveDictation().then(send);
+    if (dictating) void finishActiveDictation().then((finished) => { if (finished) send(); });
     else send();
   };
 }
@@ -270,7 +268,8 @@ function SendOrStop({ mobile = false }: { mobile?: boolean }) {
             return;
           }
           event.preventDefault();
-          void finishActiveDictation().then(() => {
+          void finishActiveDictation().then((finished) => {
+            if (!finished) return;
             prepare();
             aui.composer.send();
           });

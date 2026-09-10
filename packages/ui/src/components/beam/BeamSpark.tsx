@@ -48,7 +48,7 @@ export function BeamSpark({ side, size = "icon-sm", onOpen }: BeamSparkProps) {
       onClick={() => {
         // The spark is “ask Beam now”, never “return to the last chat”. The
         // old session stays in Beam's sidebar group and keeps running; this
-        // bubble detaches from it and creates the fresh session on first send.
+        // bubble prepares an empty session immediately (reusing an unstarted one).
         beamStore.newChat();
         beamStore.open(ref.current);
         onOpen?.();

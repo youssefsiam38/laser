@@ -85,7 +85,6 @@ export {
 
 export {
   CHUNK_BYTES,
-  DEFAULT_MAX_SECONDS,
   MediaRecorderDictationAdapter,
   RECORDER_MIME_CANDIDATES,
   chunkBase64,
@@ -116,6 +115,8 @@ export {
 
 export {
   clearDictationError,
+  cancelActiveDictation,
+  activeDictationCancellation,
   finishActiveDictation,
   getMobileDictationAdapter,
   setDictationPhraseSink,

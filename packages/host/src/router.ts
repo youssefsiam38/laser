@@ -37,7 +37,7 @@ import { searchSessions } from "./session-search.js";
 import type { LogStore } from "./logstore.js";
 import { browseDirectories, type PackageService, type SetupService } from "./packages.js";
 import type { TaskRegister } from "./tasks/register.js";
-import { createPrivateSessionWorkspace, ensureWorkspace, projectRootOf } from "./paths.js";
+import { createPrivateSessionWorkspace, ensureWorkspace, isWithinDirectory, projectRootOf, workspaceAgentFor } from "./paths.js";
 import type { PrefsStore } from "./prefs.js";
 import type { FeatureService } from "./features.js";
 import type { ProjectRegistry } from "./projects.js";
@@ -181,7 +181,7 @@ export class Router {
    * run's id and status from the registry.
    */
   sessions(cwd?: string): SessionSummary[] {
-    const rows = this.catalog.list(cwd).map(({ size: _size, ...summary }) => summary);
+    const rows = this.catalog.list(cwd).filter((session) => this.isSessionDirectory(session.cwd)).map(({ size: _size, ...summary }) => summary);
     const known = new Set(rows.map((row) => row.path));
     for (const [path, summary] of this.unwritten) {
       // The catalog has it, or the worker let it go: the stub has done its job.
@@ -189,7 +189,7 @@ export class Router {
         this.unwritten.delete(path);
         continue;
       }
-      if (known.has(path)) continue;
+      if (known.has(path) || !this.isSessionDirectory(summary.cwd)) continue;
       if (cwd !== undefined && summary.cwd !== cwd) continue;
       rows.unshift(summary);
     }
@@ -248,7 +248,7 @@ export class Router {
 
       case "session/search": {
         const { query, cwd, after, before, cursor } = req.params;
-        const sessions = this.catalog.list(cwd).filter(s => (!after || s.modifiedAt >= after) && (!before || s.modifiedAt < before));
+        const sessions = this.catalog.list(cwd).filter(s => this.isSessionDirectory(s.cwd) && (!after || s.modifiedAt >= after) && (!before || s.modifiedAt < before));
         return searchSessions(sessions, query, cursor);
       }
 
@@ -331,6 +331,7 @@ export class Router {
         const requestedCwd = req.params.cwd;
         // Validate the requested agent against the public workspace root
         // before allocating anything, so a refused request leaves no orphan.
+        if (!this.isWorkspace(requestedCwd)) this.deps.projects.assertProject(requestedCwd);
         const agentName = this.resolveStartAgent(requestedCwd, req.params.agentName);
         // Beam and Chat workspaces are containers, not shared checkouts.
         // Starting at a root allocates one persistent, opaque directory for
@@ -339,9 +340,11 @@ export class Router {
         let cwd = requestedCwd;
         const requestedWorkspace = this.workspaceAgentOf(requestedCwd);
         const root = requestedWorkspace ? this.agents().workspaces[requestedWorkspace] : undefined;
-        if (requestedWorkspace && root && canonical(requestedCwd) === canonical(root)) {
+        // Forward containment is already known. Reverse containment means
+        // this is the root itself, including a filesystem alias of that root.
+        if (requestedWorkspace && root && isWithinDirectory(root, requestedCwd)) {
           try {
-            cwd = createPrivateSessionWorkspace(requestedCwd);
+            cwd = createPrivateSessionWorkspace(root);
           } catch (error) {
             throw new ProtocolError(
               ErrorCodes.Internal,
@@ -642,6 +645,7 @@ export class Router {
     if (this.isWorkspace(target)) {
       throw new ProtocolError(ErrorCodes.InvalidParams, `${labelOf(this.workspaceAgentOf(target)!)}'s workspace is not a project. Choose a project folder.`);
     }
+    this.deps.projects.assertProject(target);
     if (projectRootOf(target) !== target) {
       throw new ProtocolError(ErrorCodes.InvalidParams, "That folder is an agent's worktree. Choose the project it belongs to instead.");
     }
@@ -737,18 +741,16 @@ export class Router {
   private workspaceAgentOf(cwd: string): "beam" | "chat" | undefined {
     const store = this.deps.agents;
     if (!store) return undefined;
-    const key = canonical(cwd);
-    const { beam, chat } = store.workspaces;
-    const beamRoot = canonical(beam);
-    const separator = beamRoot.includes("\\") ? "\\" : "/";
-    if (key === beamRoot || key.startsWith(`${beamRoot}${separator}`)) return "beam";
-    const chatRoot = canonical(chat);
-    if (key === chatRoot || key.startsWith(`${chatRoot}${separator}`)) return "chat";
-    return undefined;
+    return workspaceAgentFor(cwd, store.workspaces);
   }
 
   private isWorkspace(cwd: string): boolean {
     return this.workspaceAgentOf(cwd) !== undefined;
+  }
+
+  /** Only real projects and explicitly designated built-in workspaces are session directories. */
+  private isSessionDirectory(cwd: string): boolean {
+    return !this.deps.projects.isExcluded(cwd) || this.isWorkspace(cwd);
   }
 
   /**
@@ -803,8 +805,13 @@ export class Router {
               "that recording is no longer open — start dictating again",
             );
           }
-          if (req.method !== "pi/transcribe/chunk") this.uploads.delete(id);
-          return (await this.pool.get(cwd)).request(req.method, req.params);
+          // Keep the route while transcription is in flight: Discard must
+          // still be able to reach the worker and abort the provider request.
+          try {
+            return await (await this.pool.get(cwd)).request(req.method, req.params);
+          } finally {
+            if (req.method !== "pi/transcribe/chunk") this.uploads.delete(id);
+          }
         }
 
         const path = (req.params as { path: string }).path;
@@ -928,6 +935,7 @@ export class Router {
   private async workerFor(path: string, ensureOpen = true) {
     const cwd = this.cwdOf(path);
     if (!cwd) throw new ProtocolError(ErrorCodes.SessionNotFound, `no project known for session ${path}`);
+    if (!this.isWorkspace(cwd)) this.deps.projects.assertProject(cwd);
     const open = this.pool.openSessions(cwd).includes(path);
     if (!open && !this.catalog.get(path) && !existsSync(path)) {
       throw new ProtocolError(

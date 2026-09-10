@@ -468,7 +468,7 @@ idle, so its worker is never retired underneath it.
 
 | Agent | Runs in | Tools | Integration |
 | --- | --- | --- | --- |
-| `beam` | one opaque, persistent directory per session under `<state>/workspaces/beam` | every tool and every user- or project-discovered skill, like any unscoped agent | two ways in (D-143, D-173): every press of the spark at the bottom left beside Settings starts a fresh bubble chat, while earlier Beam sessions remain in Beam's sidebar group; the `+` on that group starts a fresh chat in the window. The first message lazily creates the session. The bubble's maximize control moves its current chat into the window and selects Code. No other Beam entry point exists |
+| `beam` | one opaque, persistent directory per session under `<state>/workspaces/beam` | every tool and every user- or project-discovered skill, like any unscoped agent | two ways in (D-143, D-173): every press of the spark at the bottom left beside Settings starts a fresh bubble chat, while earlier Beam sessions remain in Beam's sidebar group; the `+` on that group starts a fresh chat in the window. Opening the bubble immediately creates or reuses an unstarted Beam session without moving the main view (D-183). The sidebar `+` uses the same launcher, reusing that empty session even in its private subdirectory; simultaneous requests allocate once. The bubble's maximize control moves its current chat into the window and selects Code. No other Beam entry point exists |
 | `chat` | one opaque, persistent directory per session under `<state>/workspaces/chat` | every tool, isolated from unrelated Chat sessions | the Chat tab, first in the sidebar before Code; projectless chats |
 | `namer` | the project's own worker | not a session agent | names things from a small context |
 
@@ -653,8 +653,9 @@ The binding list lives in `AGENTS.md` ("Agents harness regression checks"):
   settle-without-completion and reload attribution.
 - Background promotion keeps output and exit state.
 - The live map never re-layouts on output updates.
-- Beam has two ways in, and no more: every spark press opens a fresh bubble
-  chat without deleting earlier sessions, while the `+` on its sidebar group
-  opens a fresh chat in the window.
+- Beam has two ways in, and no more: every spark press prepares an unstarted
+  bubble chat immediately without deleting earlier sessions. The sidebar `+`
+  reuses and selects that same empty session, including private workspaces and
+  simultaneous quiet/selecting requests; a started session is never reused.
 - Dictation belongs to the composer that started it: with the bubble open,
   two composers are mounted, and a phrase must land where it was spoken.

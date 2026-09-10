@@ -301,7 +301,7 @@ export function ComposerVoice({ level, phase, pending = 0, startedAt, className,
       role="status"
       data-slot="composer-voice"
       data-phase={phase}
-      className={cn("flex h-8 items-center gap-2 rounded-full bg-surface-2 ps-2.5 pe-3 text-xs text-ink-2", className)}
+      className={cn("flex min-h-8 min-w-0 flex-wrap items-center gap-2 rounded-full bg-surface-2 ps-2.5 pe-3 text-xs text-ink-2", className)}
       {...props}
     >
       {phase === "listening" ? (
@@ -328,7 +328,7 @@ export function ComposerVoice({ level, phase, pending = 0, startedAt, className,
           {pending} {pending === 1 ? "phrase" : "phrases"}
         </span>
       )}
-      {phase !== "transcribing" && <span className="typed text-ink-3">{duration(Math.max(0, now - startedAt)).replace(/\.\ds$/, "s")}</span>}
+      {phase !== "transcribing" && <span className="typed text-ink-3">{now - startedAt < 1000 ? "0s" : duration(now - startedAt).replace(/\.\ds$/, "s")}</span>}
     </span>
   );
 }

@@ -7,7 +7,7 @@
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { JsonRpcNotification, WorkerInfo } from "@lasercode/protocol";
@@ -33,7 +33,8 @@ socket.on("data", (chunk) => {
     if (!line) continue;
     const req = JSON.parse(line);
     if (req.method === "pi/test/crash") process.exit(9);
-    if (req.method === "pi/test/argv") { send({ jsonrpc: "2.0", id: req.id, result: { argv: process.argv.slice(2) } }); continue; }
+    if (req.method === "pi/test/argv") { send({ jsonrpc: "2.0", id: req.id, result: { argv: process.argv.slice(2), processCwd: process.cwd() } }); continue; }
+    if (req.method === "session/load" && req.params.path === "/sessions/unwritten.jsonl") { send({ jsonrpc: "2.0", id: req.id, error: { code: -32001, message: "No saved transcript. Start a new session." } }); continue; }
     send({ jsonrpc: "2.0", id: req.id, result: { ok: true, method: req.method } });
   }
 });
@@ -84,6 +85,7 @@ const runTimers = () => {
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-pool-`));
   project = join(dir, "project");
+  mkdirSync(project);
   workerMain = join(dir, "fake-worker.mjs");
   writeFileSync(workerMain, FAKE_WORKER);
   notifications = [];
@@ -132,6 +134,21 @@ describe("WorkerPool", () => {
     // The count stays: it resets only after the worker has been healthy for a
     // while, so a crash loop still reaches the cap.
     expect(pool.workerInfo(project)?.restarts).toBe(1);
+  });
+
+  it("recovers saved sessions but drops an unwritten session the restarted worker refuses", async () => {
+    pool = makePool();
+    const client = await pool.get(project);
+    pool.bindSession("/sessions/unwritten.jsonl", project);
+    pool.bindSession("/sessions/saved.jsonl", project);
+    client.request("pi/test/crash", {}).catch(() => {});
+    await waitFor(() => statusesOf(project).includes("crashed"));
+    runTimers();
+    await waitFor(() => pool.openSessions(project).includes("/sessions/saved.jsonl"));
+    expect(pool.openSessions(project)).toEqual(["/sessions/saved.jsonl"]);
+    const recovered = await pool.get(project);
+    const result = await recovered.request<{ processCwd: string }>("pi/test/argv", {});
+    expect(result.processCwd).toBe(project);
   });
 
   it("gives up after the restart cap and comes back on an explicit retry", async () => {
@@ -261,10 +278,13 @@ describe("WorkerPool", () => {
     });
     const client = await pool.get(project);
     expect(primed).toEqual([`${project}:agents/sync`]); // before anyone else could ask
-    const { argv } = await client.request<{ argv: string[] }>("pi/test/argv", {});
+    const { argv, processCwd } = await client.request<{ argv: string[]; processCwd: string }>("pi/test/argv", {});
     expect(argv[argv.indexOf("--state-dir") + 1]).toBe(join(dir, "state"));
+    expect(processCwd).toBe(project);
+    expect(processCwd).not.toBe(process.cwd());
 
     const other = join(dir, "other");
+    mkdirSync(other);
     const refusing = makePool({
       onStderr: (_cwd, text) => stderr.push(text),
       prime: async () => {

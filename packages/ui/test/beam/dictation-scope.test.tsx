@@ -11,7 +11,11 @@ import { view as makeView } from "../agents/fixtures.js";
  * the second one speak for the first: the scope the transcription is filed
  * under, and the textarea a finished phrase is typed into.
  */
-const mocks = vi.hoisted(() => ({ view: undefined as SessionView | undefined, dictating: false }));
+const mocks = vi.hoisted(() => ({ view: undefined as SessionView | undefined, dictating: false, currentProject: undefined as string | undefined,
+  cancel: vi.fn(), sink: vi.fn(), text: "", setText: vi.fn(), toast: vi.fn() }));
+const composer = { getState: () => ({ text: mocks.text }), setText: mocks.setText };
+const aui = { composer };
+const actions = { toast: mocks.toast };
 // A browser with a microphone and a supported capture path; what this file is
 // about is which composer a recording belongs to, not the hardware.
 vi.mock("@/pwa", async (importActual) => {
@@ -19,19 +23,21 @@ vi.mock("@/pwa", async (importActual) => {
   return {
     ...actual,
     useEnvironment: () => ({ ...actual.useEnvironment(), microphone: true }),
+    cancelActiveDictation: mocks.cancel,
+    setDictationPhraseSink: mocks.sink,
     PhraseDictationAdapter: Object.assign(actual.PhraseDictationAdapter, { isSupported: () => true }),
   };
 });
 vi.mock("../../src/runtime/index.js", async (importActual) => ({
   ...(await importActual<typeof import("../../src/runtime/index.js")>()),
   useLaserView: () => mocks.view,
-  useLaserStable: () => ({ actions: { toast: vi.fn() } }),
+  useLaserStable: () => ({ actions, currentProject: mocks.currentProject }),
 }));
 vi.mock("@assistant-ui/react", async (importActual) => {
   const actual = await importActual<typeof import("@assistant-ui/react")>();
   return {
     ...actual,
-    useAui: () => ({ composer: { getState: () => ({ text: "" }), setText: vi.fn() } }),
+    useAui: () => aui,
     useAuiState: () => mocks.dictating,
     AuiIf: ({ condition, children }: { condition: (s: unknown) => boolean; children: unknown }) =>
       condition({ composer: { dictation: mocks.dictating ? {} : null } }) ? children : null,
@@ -44,13 +50,16 @@ vi.mock("@assistant-ui/react", async (importActual) => {
 });
 
 import { DictateButton } from "../../src/components/mobile/DictateButton.js";
-import { readDictationScope } from "../../src/pwa/mobile-dictation.js";
+import { readDictationScope, setDictationScope } from "../../src/pwa/mobile-dictation.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 
 let root: Root, container: HTMLDivElement;
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   mocks.dictating = false;
+  mocks.currentProject = undefined;
+  mocks.text = ""; mocks.setText.mockReset(); mocks.sink.mockReset(); mocks.cancel.mockReset();
+  setDictationScope(undefined);
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -66,6 +75,24 @@ const sessionView = (path: string, cwd: string, capabilities: string[] = ["trans
 };
 
 describe("the microphone in a second composer", () => {
+  it("waits for an open session instead of recording into an unassigned workspace", async () => {
+    mocks.view = undefined; mocks.currentProject = "/state/beam";
+    await act(async () => root.render(<TooltipProvider><DictateButton /></TooltipProvider>));
+    expect(container.querySelector('[data-slot="dictate"]')).toBeNull();
+    expect(readDictationScope()).toBeUndefined();
+  });
+
+  it("discards through a neutral, named button beside stop without modifying text", async () => {
+    mocks.view = sessionView("/state/beam/b1.jsonl", "/state/beam"); mocks.dictating = true;
+    mocks.text = "Keep my typed draft";
+    await act(async () => root.render(<TooltipProvider><DictateButton /></TooltipProvider>));
+    const discard = container.querySelector<HTMLButtonElement>('[aria-label="Discard recording"]')!;
+    expect(discard).not.toBeNull(); expect(discard.className).toContain("text-ink-3");
+    expect(discard.previousElementSibling?.getAttribute("aria-label")).toBe("Stop dictation and transcribe");
+    await act(async () => discard.click());
+    expect(mocks.cancel).toHaveBeenCalledOnce(); expect(mocks.setText).not.toHaveBeenCalled();
+  });
+
   it("is offered wherever the session can transcribe, and hidden where it cannot", async () => {
     mocks.view = sessionView("/state/beam/b1.jsonl", "/state/beam");
     await act(async () => root.render(<TooltipProvider><DictateButton /></TooltipProvider>));
@@ -109,6 +136,11 @@ describe("the microphone in a second composer", () => {
       expect(document.querySelector<HTMLTextAreaElement>('[data-slot="composer"] textarea')!.id).toBe("main");
       const owned = container.querySelector('[data-slot="dictate"]')!.closest('[data-slot="composer"]')!.querySelector("textarea")!;
       expect(owned.id).toBe("bubble");
+      owned.setSelectionRange(0, 0);
+      mocks.text = "typed words spoken"; // the runtime's just-appended phrase
+      const sink = mocks.sink.mock.calls.at(-1)?.[0] as (phrase: string) => void;
+      await act(async () => sink("spoken"));
+      expect(mocks.setText).toHaveBeenCalledWith("spoken typed words");
       // Recording claims the scope for the session this composer shows.
       expect(readDictationScope()).toEqual({ cwd: "/state/beam", path: "/state/beam/b1.jsonl" });
     } finally {

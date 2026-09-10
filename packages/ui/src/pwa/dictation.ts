@@ -16,7 +16,6 @@ import { extendedRequest, type RawRequestClient } from "./host-rpc.js";
 
 /** Decoded bytes per chunk. 32 KiB → ~43 KiB of base64 + envelope, under 64 KiB. */
 export const CHUNK_BYTES = 32 * 1024;
-export const DEFAULT_MAX_SECONDS = 90;
 
 /** MediaRecorder container/codec preference. iOS Safari records mp4; everyone else webm/opus. */
 export const RECORDER_MIME_CANDIDATES: readonly string[] = [
@@ -96,7 +95,7 @@ export function describeMicrophoneError(error: unknown): { title: string; body: 
     case "AbortError":
       return { title: "The microphone is busy", body: "Another app is using it. Close that app and try again." };
     default:
-      return { title: "Could not start dictation", body: error instanceof Error && error.message ? error.message : "The microphone did not start." };
+      return { title: "Dictation needs attention", body: error instanceof Error && error.message ? error.message : "Check your microphone and connection, then try again." };
   }
 }
 
@@ -155,7 +154,6 @@ export interface MediaRecorderDictationOptions {
   /** The final phrase, after the runtime has already received it via `onSpeech`. */
   onPhrase?: (phrase: string) => void;
   onError?: (error: unknown) => void;
-  maxSeconds?: number;
   /** Test seams. */
   getMedia?: () => Promise<MediaStream>;
   createRecorder?: (stream: MediaStream, mimeType: string | undefined) => MediaRecorder;
@@ -213,7 +211,6 @@ export class MediaRecorderDictationAdapter implements DictationAdapter {
     let cancelled = false;
     let stopped = false;
     let meter: (() => void) | undefined;
-    let limit: ReturnType<typeof setTimeout> | undefined;
     let recorded: Promise<void> | undefined;
 
     const phase = (p: DictationPhase) => o.onPhase?.(p);
@@ -223,7 +220,6 @@ export class MediaRecorderDictationAdapter implements DictationAdapter {
       phase("idle");
     };
     const teardown = () => {
-      if (limit !== undefined) clearTimeout(limit);
       meter?.();
       meter = undefined;
       for (const track of stream?.getTracks() ?? []) track.stop();
@@ -262,7 +258,6 @@ export class MediaRecorderDictationAdapter implements DictationAdapter {
         });
         recorder.start(1000);
         meter = o.onLevel ? startMeter(stream, o.onLevel) : undefined;
-        limit = setTimeout(() => void session.stop(), (o.maxSeconds ?? DEFAULT_MAX_SECONDS) * 1000);
       } catch (error) {
         fail(error);
       }
@@ -271,7 +266,6 @@ export class MediaRecorderDictationAdapter implements DictationAdapter {
     session.stop = async () => {
       if (stopped || cancelled) return;
       stopped = true;
-      if (limit !== undefined) clearTimeout(limit);
       meter?.();
       meter = undefined;
       try {

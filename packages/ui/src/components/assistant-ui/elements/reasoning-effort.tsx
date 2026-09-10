@@ -189,7 +189,7 @@ const THINKING_EFFORTS: readonly EffortLevel[] = [
 ];
 
 /**
- * The composer's thinking control: a compact icon opens the full radiogroup.
+ * The composer's thinking control: icon and current level open the full radiogroup.
  */
 export function ThinkingEffort({ className }: { className?: string | undefined }) {
   const { actions } = useLaserStable();
@@ -204,7 +204,7 @@ export function ThinkingEffort({ className }: { className?: string | undefined }
 
   // The model does not reason: there is no level to pick, so there is no
   // control — only the reason, where the control would have been.
-  if (supported && efforts.length <= 1) {
+  if (supported && efforts.every((effort) => effort.key === "off")) {
     return (
       <Tooltip>
         <TooltipTrigger asChild>
@@ -214,12 +214,13 @@ export function ThinkingEffort({ className }: { className?: string | undefined }
             role="note"
             aria-label={`${model?.name ?? model?.id ?? "This model"} does not reason, so there is no thinking level`}
             className={cn(
-              "flex items-center rounded-md p-1 text-ink-3 outline-none",
+              "flex shrink-0 items-center gap-1 rounded-md p-1 text-xs text-ink-3 outline-none",
               "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live",
               className,
             )}
           >
             <Brain aria-hidden="true" className="size-3.5" />
+            <span data-slot="thinking-effort-level">off</span>
           </span>
         </TooltipTrigger>
         <TooltipContent side="top">{model?.name ?? model?.id ?? "This model"} does not reason — no thinking level to set.</TooltipContent>
@@ -233,13 +234,14 @@ export function ThinkingEffort({ className }: { className?: string | undefined }
         <PopoverTrigger asChild>
           <Button
             variant="ghost"
-            size="icon-sm"
+            size="sm"
             disabled={disabled}
             aria-label={`Thinking: ${thinkingLevel ?? "unset"}`}
             title={`Thinking: ${thinkingLevel ?? "unset"}`}
-            className="text-ink-2 hover:text-ink"
+            className="h-8 shrink-0 gap-1 px-1.5 text-xs text-ink-2 hover:text-ink"
           >
             <Brain aria-hidden="true" className="size-3.5 text-ink-3" />
+            <span data-slot="thinking-effort-level">{THINKING_EFFORTS.find((effort) => effort.key === thinkingLevel)?.label ?? "unset"}</span>
           </Button>
         </PopoverTrigger>
         <PopoverContent align="end" side="top" className="w-auto max-w-[calc(100vw-2rem)]">

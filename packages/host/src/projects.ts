@@ -18,6 +18,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { ErrorCodes, PRODUCT_NAME, ProtocolError, type ProjectInfo, type ProjectTrust } from "@lasercode/protocol";
 import type { SessionCatalog } from "./catalog.js";
+import { isWithinDirectory } from "./paths.js";
 import { canonical, trustReasons } from "./trust.js";
 
 interface StoredProject {
@@ -51,9 +52,9 @@ export interface ProjectRegistryOptions {
   /** How long a trust prompt stays open before it declines for this run. */
   trustTimeoutMs?: number;
   /**
-   * Directories that are never projects: the Beam and Chat workspaces. Their
-   * sessions are listed and grouped by the UI as what they are; they are
-   * neither listed here nor remembered by `touch`.
+   * Internal storage and built-in workspace roots, including descendants.
+   * Never listed or accepted as projects. Built-in sessions are routed
+   * separately; arbitrary sessions in internal storage are invalid.
    */
   exclude?: readonly string[];
   now?: () => Date;
@@ -85,12 +86,14 @@ export class ProjectRegistry {
 
   /** True for a directory that is deliberately not a project (a built-in workspace or one of its private sessions). */
   isExcluded(cwd: string): boolean {
-    const key = canonical(cwd);
-    return (this.options.exclude ?? []).some((excluded) => {
-      const root = canonical(excluded);
-      const separator = root.includes("\\") ? "\\" : "/";
-      return key === root || key.startsWith(`${root}${separator}`);
-    });
+    return (this.options.exclude ?? []).some((root) => isWithinDirectory(cwd, root));
+  }
+
+  /** Refuse every project-entry path, including API calls that bypass the picker. */
+  assertProject(cwd: string): void {
+    if (this.isExcluded(cwd)) {
+      throw new ProtocolError(ErrorCodes.InvalidParams, "This folder is internal app storage, not a project. Choose a project folder outside it.");
+    }
   }
 
   /** Pinned projects ∪ directories the catalog has seen, by saved priority then name. */
@@ -142,6 +145,7 @@ export class ProjectRegistry {
   }
 
   add(cwd: string): ProjectInfo {
+    this.assertProject(cwd);
     const key = canonical(cwd);
     const existing = this.stored.get(key);
     this.stored.set(key, { ...(existing ?? { addedAt: this.now().toISOString() }), pinned: true });

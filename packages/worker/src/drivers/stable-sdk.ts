@@ -44,7 +44,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { goalExtensionPath, goalStateFromEntries } from "@lasercode/pi-goal";
 import { createCommandBus, createLaserExtension, createPromptProvenanceObserver, toSessionGoal, type LaserExtensionOptions } from "@lasercode/pi-extension";
-import { PRODUCT_NAME, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE } from "@lasercode/protocol";
+import { ErrorCodes, ProtocolError, PRODUCT_NAME, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE } from "@lasercode/protocol";
 import type {
   CommandInfo,
   ContentBlock,
@@ -64,7 +64,7 @@ import type {
   UiDialogResponse,
   Usage,
 } from "@lasercode/protocol";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { disabledModelRefs, engineSettingsOnly, modelSwitchedOff, readEffectiveProductSettings, readLaserProjectSettings } from "../settings.js";
@@ -262,17 +262,36 @@ export class StableSdkDriver implements SessionDriver {
     // built — rather than costing the person every chat in it.
     if (agent) await ensureWorkspaceSessionCwd(agent.role.kind, options.cwd, options.sessionPath);
 
+    // A load is not a create. Pi's open() deliberately accepts a missing or
+    // empty file and invents a new session using process.cwd(). After a worker
+    // restart that used to replace an unwritten conversation with an unrelated
+    // one under the host's state directory. Validate before the engine gets it,
+    // and build the saved runtime directly instead of creating then switching.
+    if (options.sessionPath) {
+      let saved = false;
+      try {
+        const file = statSync(options.sessionPath);
+        saved = file.isFile() && file.size > 0;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+      }
+      if (!saved) {
+        throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation has no saved transcript to reopen. Start a new session.");
+      }
+    }
+    const sessionManager = options.sessionPath
+      ? SessionManager.open(options.sessionPath)
+      : SessionManager.create(options.cwd, options.sessionDir);
     const runtime = await createAgentSessionRuntime(createRuntime, {
-      cwd: options.cwd,
+      cwd: sessionManager.getCwd(),
       agentDir,
-      sessionManager: SessionManager.create(options.cwd, options.sessionDir),
+      sessionManager,
+      ...(options.sessionPath ? { sessionStartEvent: { type: "session_start" as const, reason: "resume" as const } } : {}),
     });
     this.runtime = runtime;
 
-    if (options.sessionPath) {
-      const { cancelled } = await runtime.switchSession(options.sessionPath);
-      if (cancelled) throw new DriverUnavailableError(this.kind, `switch to ${options.sessionPath} was cancelled`);
-    } else if (options.parentSessionPath) {
+    if (!options.sessionPath && options.parentSessionPath) {
       await runtime.newSession({ parentSession: options.parentSessionPath });
     }
 

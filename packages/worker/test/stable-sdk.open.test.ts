@@ -3,9 +3,9 @@
  * Everything is sandboxed in a temp dir (agentDir, sessionDir, cwd) so the
  * user's real ~/.pi/agent is never read or written.
  */
-import { PRODUCT_NAME, PROJECT_DIR_NAME } from "@lasercode/protocol";
+import { ErrorCodes, PRODUCT_NAME, PROJECT_DIR_NAME } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StableSdkDriver } from "../src/drivers/stable-sdk.js";
@@ -27,6 +27,37 @@ afterEach(async () => {
 });
 
 describe("StableSdkDriver.open", () => {
+  it.each(["missing", "empty"])("refuses a %s transcript without creating a replacement identity or touching the file", async (kind) => {
+    const sessionDir = join(base, "sessions");
+    mkdirSync(sessionDir);
+    const path = join(sessionDir, "old-session.jsonl");
+    if (kind === "empty") writeFileSync(path, "");
+    const before = readdirSync(sessionDir);
+    await expect(driver.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir, sessionPath: path }))
+      .rejects.toMatchObject({ code: ErrorCodes.SessionNotFound, message: expect.stringContaining("Start a new session") });
+    expect(readdirSync(sessionDir)).toEqual(before);
+    expect(existsSync(path)).toBe(kind === "empty");
+    if (kind === "empty") expect(readFileSync(path, "utf8")).toBe("");
+  });
+
+  it("loads the saved identity and cwd directly, without a throwaway new-session runtime", async () => {
+    const sessionDir = join(base, "sessions");
+    mkdirSync(sessionDir);
+    const path = join(sessionDir, "saved.jsonl");
+    const savedCwd = join(base, "project", "checkout");
+    mkdirSync(savedCwd);
+    const id = "00000000-0000-4000-8000-000000000123";
+    const transcript = `${JSON.stringify({ type: "session", version: 3, id, cwd: savedCwd, timestamp: "2026-09-10T00:00:00.000Z" })}\n`;
+    writeFileSync(path, transcript);
+    const events: DriverEvent[] = [];
+    driver.subscribe((event) => events.push(event));
+    const state = await driver.open({ cwd: savedCwd, agentDir: join(base, "agent"), sessionDir, sessionPath: path });
+    expect(state).toMatchObject({ id, path, cwd: savedCwd });
+    expect(readdirSync(sessionDir)).toEqual(["saved.jsonl"]);
+    expect(readFileSync(path, "utf8").split("\n")[0]).toBe(transcript.trim());
+    expect(events.filter((e) => e.type === "extension" && e.message.type === "lasercode/capabilities")).toHaveLength(1);
+  }, 60_000);
+
   it("opens a session in a sandboxed agent dir and reports state", async () => {
     const events: DriverEvent[] = [];
     driver.subscribe((e) => events.push(e));

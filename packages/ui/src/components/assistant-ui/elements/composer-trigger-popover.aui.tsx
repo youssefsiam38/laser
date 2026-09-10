@@ -80,7 +80,7 @@ function MatchLabel({ label, query }: { label: string; query: string }) {
   })}</>;
 }
 
-function SourceFileDetails({ item }: { item: Unstable_TriggerItem }) {
+function SourceFileDetails({ item, onDetails }: { item: Unstable_TriggerItem; onDetails?: (() => void) | undefined }) {
   const path = String(item.metadata?.filePath ?? "");
   const desktop = (globalThis as typeof globalThis & { desktop?: { openSourceFile?: (path: string) => Promise<{ opened: boolean; reason?: string }> } }).desktop;
   const [message, setMessage] = useState("");
@@ -100,8 +100,8 @@ function SourceFileDetails({ item }: { item: Unstable_TriggerItem }) {
     finally { setPending(false); }
   };
   return <div data-slot="composer-picker-source" className="shrink-0 px-3 py-2 hairline-t">
-    {item.description && <p className="line-clamp-3 text-xs leading-xs text-ink-2 group-data-[compact=true]/picker:hidden" title={item.description}>{item.description}</p>}
-    <div className="mt-2 flex items-center gap-2">
+    {item.description && onDetails && <button type="button" data-picker-details onClick={onDetails} className="mb-1 rounded-md text-xs text-ink underline underline-offset-2 focus-visible:outline focus-visible:outline-live pointer-coarse:min-h-11">Read full description</button>}
+    <div className="flex items-center gap-2">
       <span className="min-w-0 flex-1 truncate text-xs text-ink-3 select-text" title={path}>{path}</span>
       <button data-picker-open-source type="button" disabled={pending} onClick={() => void open()} title={desktop?.openSourceFile ? 'Uses your system’s default application for Markdown. Alt+O' : 'Copy this source path. Alt+O'} className="flex min-h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs text-ink hover:bg-surface-2 focus-visible:outline focus-visible:outline-live disabled:opacity-50 pointer-coarse:min-h-11">
         {desktop?.openSourceFile ? <ExternalLinkIcon aria-hidden className="size-3.5" /> : <CopyIcon aria-hidden className="size-3.5" />}
@@ -117,6 +117,10 @@ function PickerSurface({ title, notice, onQueryChange, onOpenChange, children }:
 }) {
   const scope = unstable_useTriggerPopoverScopeContext();
   const listRef = useRef<HTMLDivElement>(null);
+  const [details, setDetails] = useState(false);
+  const detailsRef = useRef(details);
+  detailsRef.current = details;
+  useEffect(() => setDetails(false), [scope.open, scope.query, scope.highlightedItemId]);
   const latest = useRef(scope);
   useLayoutEffect(() => { latest.current = scope; });
   useEffect(() => { if (scope.open) onQueryChange?.(scope.query); }, [scope.open, scope.query, onQueryChange]);
@@ -125,9 +129,10 @@ function PickerSurface({ title, notice, onQueryChange, onOpenChange, children }:
   useLayoutEffect(() => {
     const list = listRef.current;
     if (!scope.open || !list) return;
+    if (details) { list.scrollTop = 0; return; }
     const option = scope.highlightedItemId ? document.getElementById(scope.highlightedItemId) : null;
     if (option) revealPickerOption(list, option);
-  }, [scope.open, scope.highlightedItemId, scope.query, scope.items, scope.categories]);
+  }, [details, scope.open, scope.highlightedItemId, scope.query, scope.items, scope.categories]);
 
   useEffect(() => {
     const list = listRef.current;
@@ -144,6 +149,16 @@ function PickerSurface({ title, notice, onQueryChange, onOpenChange, children }:
       const state = latest.current;
       // IME owns its Enter/arrows, including WebKit's legacy composition code.
       if (event.isComposing || event.keyCode === 229) { event.stopPropagation(); return; }
+      if (detailsRef.current) {
+        // Reading details must not execute the hidden selected result. Tab
+        // follows normal focus traversal; paging scrolls the description.
+        if (event.key === 'Tab') { event.stopPropagation(); return; }
+        if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); return; }
+        if (event.key === 'PageDown' || event.key === 'PageUp') {
+          list!.scrollTop += (event.key === 'PageDown' ? 1 : -1) * list!.clientHeight;
+          event.preventDefault(); event.stopPropagation(); return;
+        }
+      }
       if (event.altKey && !event.ctrlKey && !event.metaKey && event.key.toLowerCase() === 'o') {
         const action = popup.querySelector<HTMLButtonElement>('[data-picker-open-source]');
         if (action) { event.preventDefault(); event.stopPropagation(); action.click(); }
@@ -162,10 +177,23 @@ function PickerSurface({ title, notice, onQueryChange, onOpenChange, children }:
       }
       if (state.handleKeyDown(event)) event.stopPropagation();
     };
+    // The primitive handles Escape on document capture. The description is
+    // a nested view, so take its Back key first, without closing the picker.
+    const backFromDetails = (event: globalThis.KeyboardEvent) => {
+      if (!detailsRef.current || event.key !== 'Escape' || event.isComposing) return;
+      if (event.target !== input && !(event.target instanceof Node && popup.contains(event.target))) return;
+      event.preventDefault(); event.stopPropagation(); setDetails(false); input.focus();
+    };
     const resize = () => {
       const viewport = window.visualViewport;
       const margin = parseFloat(getComputedStyle(popup).marginBottom) || 0;
-      const available = Math.max(0, popup.getBoundingClientRect().bottom - (viewport?.offsetTop ?? 0) - margin);
+      let top = viewport?.offsetTop ?? 0;
+      // Beam and sheets clip their children. Available space is inside that
+      // surface, not all the way to the top of the browser window.
+      for (let parent = popup.parentElement; parent; parent = parent.parentElement) {
+        if (/(hidden|clip|auto|scroll)/.test(getComputedStyle(parent).overflowY)) top = Math.max(top, parent.getBoundingClientRect().top);
+      }
+      const available = Math.max(0, popup.getBoundingClientRect().bottom - top - margin);
       popup.style.setProperty('--composer-picker-height', `${available}px`);
       popup.dataset.compact = String(available < margin * 40);
       const active = latest.current.highlightedItemId ? doc.getElementById(latest.current.highlightedItemId) : null;
@@ -178,6 +206,7 @@ function PickerSurface({ title, notice, onQueryChange, onOpenChange, children }:
     doc.addEventListener('pointerdown', outside, true);
     doc.addEventListener('focusin', outside, true);
     input.addEventListener('keydown', key, true);
+    window.addEventListener('keydown', backFromDetails, true);
     window.addEventListener('blur', blur);
     window.addEventListener('resize', resize);
     window.visualViewport?.addEventListener('resize', resize);
@@ -187,6 +216,7 @@ function PickerSurface({ title, notice, onQueryChange, onOpenChange, children }:
       doc.removeEventListener('pointerdown', outside, true);
       doc.removeEventListener('focusin', outside, true);
       input.removeEventListener('keydown', key, true);
+      window.removeEventListener('keydown', backFromDetails, true);
       window.removeEventListener('blur', blur);
       window.removeEventListener('resize', resize);
       window.visualViewport?.removeEventListener('resize', resize);
@@ -198,15 +228,17 @@ function PickerSurface({ title, notice, onQueryChange, onOpenChange, children }:
   const selected = scope.items[scope.highlightedIndex];
   return <>
     <div className="flex shrink-0 items-center gap-2 px-3 py-2 hairline-b">
-      <SearchIcon aria-hidden className="size-4 text-ink-3" />
-      <span className="flex-1 text-sm font-medium">{title}</span>
+      {details ? <button type="button" aria-label="Back to results" onClick={() => setDetails(false)} className="flex size-8 shrink-0 items-center justify-center rounded-md text-ink-3 hover:bg-surface-2 pointer-coarse:size-11"><ChevronLeftIcon className="size-4" /></button> : <SearchIcon aria-hidden className="size-4 shrink-0 text-ink-3" />}
+      <span className="min-w-0 flex-1 truncate text-sm font-medium">{details ? selected?.label : title}</span>
       <span role="status" aria-live="polite" className="text-xs tabular-nums text-ink-3">{scope.isLoading ? 'Searching…' : `${count} ${count === 1 ? 'result' : 'results'}`}</span>
       <button type="button" tabIndex={-1} aria-label="Close suggestions" onClick={() => scope.close()} className="flex size-8 shrink-0 items-center justify-center rounded-md text-ink-3 hover:bg-surface-2 hover:text-ink pointer-coarse:size-11"><XIcon aria-hidden className="size-4" /></button>
     </div>
-    <div ref={listRef} data-slot="composer-picker-results" className="min-h-0 overflow-x-hidden overflow-y-auto overscroll-contain p-1 [overflow-anchor:none]" aria-busy={scope.isLoading}>{children}</div>
-    {selected && typeof selected.metadata?.filePath === 'string' && <SourceFileDetails key={selected.id} item={selected} />}
+    <div ref={listRef} data-slot="composer-picker-results" className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain p-1 [overflow-anchor:none]" aria-busy={scope.isLoading}>
+      {details ? <p data-slot="composer-picker-description" className="whitespace-pre-wrap break-words px-3 py-2 text-sm leading-sm text-ink-2">{selected?.description}</p> : children}
+    </div>
+    {selected && typeof selected.metadata?.filePath === 'string' && <SourceFileDetails key={selected.id} item={selected} onDetails={details ? undefined : () => setDetails(true)} />}
     {notice && <div className="shrink-0 px-3 py-2 text-xs text-ink-2 hairline-t">{notice}</div>}
-    <div aria-hidden className="flex shrink-0 items-center gap-3 px-3 py-2 text-xs text-ink-3 hairline-t pointer-coarse:hidden group-data-[compact=true]/picker:hidden"><span>↑ ↓ navigate</span><span>Tab / ↵ select</span><span className="ms-auto">Esc close</span></div>
+    <div aria-hidden className="flex shrink-0 items-center gap-3 px-3 py-2 text-xs text-ink-3 hairline-t pointer-coarse:hidden group-data-[compact=true]/picker:hidden">{details ? <span>Esc back to results</span> : <><span>↑ ↓ navigate</span><span>Tab / ↵ select</span><span className="ms-auto">Esc close</span></>}</div>
   </>;
 }
 
@@ -328,11 +360,9 @@ const Items: FC<ItemsProps> = ({
                   </span>
                   {item.type === 'file' && <span className="mt-0.5 block truncate text-xs text-ink-3" title={item.label}><MatchLabel label={item.label} query={query} /></span>}
                   {item.description && (
-                    // Two lines and no more: a skill's own description can run
-                    // to a paragraph, and one row must never push the rest of
-                    // the list off the screen. The full text is one keystroke
-                    // away — this is a picker, not a reference.
-                    <span className="mt-0.5 block line-clamp-2 text-xs leading-xs text-ink-2" title={item.description}>
+                    // One preview line; the full description has its own
+                    // scrollable view instead of competing with the results.
+                    <span data-slot="composer-picker-preview" className="mt-0.5 line-clamp-1 break-words text-xs leading-xs text-ink-2" title={item.description}>
                       {item.description}
                     </span>
                   )}
@@ -393,7 +423,7 @@ const ComposerTriggerPopoverImpl: FC<ComposerTriggerPopoverProps> = ({
         className,
       )}
       aria-label={title}
-      style={{ maxHeight: 'min(calc(var(--spacing) * 96), var(--composer-picker-height, 50dvh))' }}
+      style={{ height: 'min(calc(var(--spacing) * 112), var(--composer-picker-height, 60dvh))' }}
       onMouseDown={(event) => event.preventDefault()}
       {...props}
     >

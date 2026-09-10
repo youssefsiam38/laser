@@ -1,11 +1,15 @@
 import { AuiIf, ComposerPrimitive, useAui, useAuiState } from "@assistant-ui/react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { X } from "lucide-react";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 
 import { ComposerVoice, ComposerVoiceButton } from "@/components/assistant-ui/elements/composer";
 import { cn } from "@/lib/utils";
 import {
   PhraseDictationAdapter,
   clearDictationError,
+  cancelActiveDictation,
+  activeDictationCancellation,
   describeMicrophoneError,
   placePhraseAtCaret,
   removeRuntimeAppend,
@@ -18,7 +22,7 @@ import {
   useEnvironment,
 } from "@/pwa";
 import { useLaserStable, useLaserView } from "@/runtime";
-import type { SessionView } from "@/store";
+import type { TranscribeScope } from "@/pwa/dictation";
 
 /**
  * The composer's microphone, drawn by the `composer` element's voice pieces
@@ -31,6 +35,7 @@ import type { SessionView } from "@/store";
  * Hidden entirely where dictation cannot work (R2 — hide the control, never
  * show a dead one): a browser with no microphone or Web Audio capture, an
  * insecure origin (the insecure-origin notice says why), or no open session.
+ * Opening Beam prepares its empty session before showing this composer.
  * The reusable transcription backend ships with Laser. Before the microphone
  * opens, the adapter checks its provider requirement and reports a missing or
  * OAuth-only OpenAI credential in product language.
@@ -45,10 +50,10 @@ export function DictateButton({ className, size }: { className?: string | undefi
 
   if (!available || !view) return null;
   if (!env.microphone || !PhraseDictationAdapter.isSupported()) return null;
-  return <DictateControls className={className} size={size} view={view} />;
+  return <DictateControls className={className} size={size} cwd={view.state.cwd} path={view.path} />;
 }
 
-function DictateControls({ className, size, view }: { className?: string | undefined; size?: "icon-sm" | "icon-lg" | undefined; view: SessionView }) {
+function DictateControls({ className, size, cwd, path }: { className?: string | undefined; size?: "icon-sm" | "icon-lg" | undefined } & TranscribeScope) {
   const aui = useAui();
   const { actions } = useLaserStable();
   const phase = useDictationPhase();
@@ -76,11 +81,16 @@ function DictateControls({ className, size, view }: { className?: string | undef
    * `begin`, so the claim is made on the way into dictation — not on mount,
    * which would let the last composer to appear speak for every other one.
    */
-  const claimScope = useCallback(() => setDictationScope({ cwd: view.state.cwd, path: view.path }), [view.path, view.state.cwd]);
+  const ownsRecording = useRef(false);
+  const claimScope = useCallback(() => {
+    ownsRecording.current = true;
+    setDictationScope({ cwd, path });
+  }, [path, cwd]);
 
   useEffect(() => {
     if (!active) return;
     claimScope();
+    const cancelOwnedRecording = activeDictationCancellation();
     setStartedAt(Date.now());
     setDictationPhraseSink((phrase) => {
       const textarea = composerTextarea();
@@ -102,6 +112,7 @@ function DictateControls({ className, size, view }: { className?: string | undef
       });
     });
     return () => {
+      cancelOwnedRecording?.();
       setDictationPhraseSink(undefined);
       setDictationScope(undefined);
       if (insertTimer.current !== undefined) clearTimeout(insertTimer.current);
@@ -109,7 +120,11 @@ function DictateControls({ className, size, view }: { className?: string | undef
   }, [active, aui, claimScope, composerTextarea]);
 
   useEffect(() => {
-    if (error === undefined) return;
+    if (phase !== "idle" && !active) ownsRecording.current = false;
+  }, [phase, active]);
+
+  useEffect(() => {
+    if (error === undefined || !ownsRecording.current) return;
     const { title, body } = describeMicrophoneError(error);
     actions.toast("error", `${title}. ${body}`);
     clearDictationError();
@@ -118,16 +133,16 @@ function DictateControls({ className, size, view }: { className?: string | undef
   const voicePhase = phase === "transcribing" ? "transcribing" : phase === "starting" ? "starting" : "listening";
 
   return (
-    <span ref={root} data-slot="dictate" data-phase={phase} className={cn("flex items-center gap-1", className)}>
+    <span ref={root} data-slot="dictate" data-phase={active ? phase : "idle"} className={cn("flex min-w-0 items-center gap-1", active && "order-first col-span-full w-full", className)}>
       <AuiIf condition={(s) => s.composer.dictation == null}>
         <ComposerPrimitive.Dictate asChild>
           {/* The claim runs before the primitive begins: composed handlers run
               the child's first, and the transport reads the scope at `begin`. */}
-          <ComposerVoiceButton active={false} aria-label="Dictate a message" onClick={claimScope} {...(size ? { size } : {})} />
+          <ComposerVoiceButton active={false} aria-label="Dictate a message" disabled={phase !== "idle"} tooltip={phase !== "idle" ? "Recording in another composer" : "Dictate"} onClick={claimScope} {...(size ? { size } : {})} />
         </ComposerPrimitive.Dictate>
       </AuiIf>
       <AuiIf condition={(s) => s.composer.dictation != null}>
-        <ComposerVoice level={level} phase={voicePhase} pending={pending} startedAt={startedAt} />
+        <ComposerVoice level={level} phase={voicePhase} pending={pending} startedAt={startedAt} className="flex-1" />
         <ComposerPrimitive.StopDictation asChild>
           <ComposerVoiceButton
             active
@@ -138,6 +153,16 @@ function DictateControls({ className, size, view }: { className?: string | undef
             {...(size ? { size } : {})}
           />
         </ComposerPrimitive.StopDictation>
+        <TooltipIconButton
+          tooltip="Discard untranscribed audio"
+          aria-label="Discard recording"
+          variant="ghost"
+          size={size ?? "icon-sm"}
+          className="shrink-0 text-ink-3 hover:text-ink"
+          onClick={() => cancelActiveDictation()}
+        >
+          <X />
+        </TooltipIconButton>
       </AuiIf>
     </span>
   );

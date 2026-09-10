@@ -1,6 +1,7 @@
 import type { SessionSummary } from "@lasercode/protocol";
 import type { AppState, SessionView } from "../store.js";
 import { mergeSessions } from "./threadList.js";
+import { isWorkspaceCwd } from "../agents/model.js";
 
 /** Draft text and model choices are deliberately not work: reuse keeps them. */
 export function isUnstartedSession(view: SessionView): boolean {
@@ -56,19 +57,27 @@ const agentNameOf = (summary: SessionSummary): string | undefined => summary.age
  * This is navigation policy, not a change to explicit host creation/fork APIs.
  */
 export function createSessionLauncher(deps: SessionLauncherDeps): SessionLauncher {
-  const pending = new Map<string, Promise<string>>();
+  const pending = new Map<string, { work: Promise<string>; selected?: Promise<string> }>();
   const resolve = deps.resolveAgent ?? ((name) => name);
   return (cwd, options = {}) => {
     const wanted = resolve(options.agentName);
     const quiet = options.select === false;
-    const key = `${cwd} ${wanted ?? ""}${quiet ? " quiet" : ""}`;
+    const key = `${cwd} ${wanted ?? ""}`;
+    const resultFor = (entry: { work: Promise<string>; selected?: Promise<string> }) => {
+      if (quiet) return entry.work;
+      // Allocation is shared, navigation is the caller's choice. A sidebar +
+      // racing the bubble must select the same session, never allocate two.
+      return entry.selected ??= entry.work.then((path) => { deps.select(path); return path; });
+    };
     const existing = pending.get(key);
-    if (existing) return existing;
+    if (existing) return resultFor(existing);
     const work = (async () => {
       await deps.refresh();
       const state = deps.state();
+      const workspace = isWorkspaceCwd(cwd, state.agents.snapshot);
       const candidates = mergeSessions(state.sessions, state.open)
-        .filter((session) => session.cwd === cwd && !session.parentPath && session.agent?.kind !== "child"
+        .filter((session) => (session.cwd === cwd || (workspace !== null && session.agent?.kind === workspace))
+          && !session.parentPath && session.agent?.kind !== "child"
           && !deps.archived(session.path)
           && resolve(agentNameOf(session)) === wanted
           && session.messageCount === 0 && !session.firstMessage
@@ -84,22 +93,20 @@ export function createSessionLauncher(deps: SessionLauncherDeps): SessionLaunche
         let view = deps.state().open[candidate.path];
         if (!view?.hydrated) {
           // Catalog counts alone cannot prove emptiness (goals, live work, stale scans).
-          if (quiet) await deps.open(candidate.path, { select: false });
-          else await deps.open(candidate.path);
+          await deps.open(candidate.path, { select: false });
           view = deps.state().open[candidate.path];
         }
         if (view && isUnstartedSession(view) && !deps.archived(candidate.path)) {
-          if (!quiet) deps.select(candidate.path);
           return candidate.path;
         }
       }
       return deps.create(cwd, {
         ...(options.agentName !== undefined ? { agentName: options.agentName } : {}),
-        ...(quiet ? { select: false } : {}),
+        select: false,
       });
     })();
-    const tracked = work.finally(() => pending.delete(key));
-    pending.set(key, tracked);
-    return tracked;
+    const entry = { work: work.finally(() => pending.delete(key)) };
+    pending.set(key, entry);
+    return resultFor(entry);
   };
 }

@@ -136,7 +136,7 @@ export interface PcmCapture {
   stop(): void;
 }
 
-export type PcmCaptureFactory = (stream: MediaStream, onChunk: (chunk: Int16Array) => void) => Promise<PcmCapture>;
+export type PcmCaptureFactory = (stream: MediaStream, onChunk: (chunk: Int16Array) => void, onInterrupted: () => void) => Promise<PcmCapture>;
 
 type AudioContextConstructor = new () => AudioContext;
 
@@ -171,7 +171,7 @@ class StreamingPcmResampler {
   }
 }
 
-export const createBrowserPcmCapture: PcmCaptureFactory = async (stream, onChunk) => {
+export const createBrowserPcmCapture: PcmCaptureFactory = async (stream, onChunk, onInterrupted) => {
   const Context = audioContextConstructor();
   if (!Context) throw new Error("Live audio capture is not available in this browser.");
   const context = new Context();
@@ -187,17 +187,29 @@ export const createBrowserPcmCapture: PcmCaptureFactory = async (stream, onChunk
   source.connect(processor);
   processor.connect(mute);
   mute.connect(context.destination);
-  await context.resume();
+  try {
+    await context.resume();
+  } catch (error) {
+    source.disconnect();
+    processor.disconnect();
+    mute.disconnect();
+    void context.close().catch(() => {});
+    throw error;
+  }
   let closed = false;
+  context.onstatechange = () => {
+    if (!closed && context.state !== "running") onInterrupted();
+  };
   return {
     stop() {
       if (closed) return;
       closed = true;
+      context.onstatechange = null;
       processor.onaudioprocess = null;
       source.disconnect();
       processor.disconnect();
       mute.disconnect();
-      void context.close();
+      void context.close().catch(() => {});
     },
   };
 };
@@ -209,7 +221,6 @@ export interface PhraseDictationOptions {
   onPhrase?(phrase: string): void;
   onPending?(pending: number): void;
   onError?(error: unknown): void;
-  maxSeconds?: number;
   getMedia?: () => Promise<MediaStream>;
   createCapture?: PcmCaptureFactory;
 }
@@ -230,11 +241,25 @@ export class PhraseDictationAdapter implements DictationAdapter {
     );
   }
 
-  async finishActive(): Promise<void> {
-    await this.activeSession?.stop();
+  async finishActive(): Promise<boolean> {
+    const session = this.activeSession;
+    if (!session) return true;
+    await session.stop();
+    return session.status.type === "ended" && session.status.reason === "stopped";
+  }
+
+  cancelActive(): void {
+    this.activeSession?.cancel();
+  }
+
+  /** Capture this owner for cleanup; never cancel a later recording. */
+  activeCancellation(): (() => void) | undefined {
+    return this.activeSession?.cancel;
   }
 
   listen(): DictationAdapter.Session {
+    // One microphone owner; a second composer cannot replace a live session.
+    if (this.activeSession) throw new Error("Dictation is already active in another composer. Stop it there first.");
     const o = this.options;
     const speech = new Set<(result: DictationAdapter.Result) => void>();
     const starts = new Set<() => void>();
@@ -245,8 +270,9 @@ export class PhraseDictationAdapter implements DictationAdapter {
     let cancelled = false;
     let stopped = false;
     let finished = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     let delivery = Promise.resolve();
+    let stopping: Promise<void> | undefined;
+    const trackCleanups: Array<() => void> = [];
     const active = new Set<string>();
     let pending = 0;
 
@@ -270,10 +296,10 @@ export class PhraseDictationAdapter implements DictationAdapter {
 
     const setPending = (next: number) => {
       pending = next;
-      o.onPending?.(next);
+      if (!finished) o.onPending?.(next);
     };
     const teardown = () => {
-      if (timer !== undefined) clearTimeout(timer);
+      for (const cleanup of trackCleanups.splice(0)) cleanup();
       capture?.stop();
       capture = undefined;
       for (const track of stream?.getTracks() ?? []) track.stop();
@@ -282,6 +308,7 @@ export class PhraseDictationAdapter implements DictationAdapter {
     };
     const finish = (reason: "stopped" | "cancelled" | "error") => {
       if (finished) return;
+      setPending(0);
       finished = true;
       session.status = { type: "ended", reason };
       if (this.activeSession === session) this.activeSession = undefined;
@@ -291,13 +318,19 @@ export class PhraseDictationAdapter implements DictationAdapter {
     const transcribe = async (samples: Int16Array): Promise<string> => {
       let id: string | undefined;
       try {
+        if (cancelled) return "";
         id = await o.transport.begin("audio/wav");
+        if (cancelled) {
+          await o.transport.cancel(id).catch(() => {});
+          return "";
+        }
         active.add(id);
         const encoded = bytesToBase64(encodePcmWav(samples));
         for (const chunk of chunkBase64(encoded)) {
           if (cancelled) throw new Error("cancelled");
           await o.transport.chunk(id, chunk);
         }
+        if (cancelled) return "";
         return (await o.transport.end(id)).trim();
       } catch (error) {
         if (id) await o.transport.cancel(id).catch(() => {});
@@ -308,6 +341,7 @@ export class PhraseDictationAdapter implements DictationAdapter {
       }
     };
     const enqueue = (samples: Int16Array) => {
+      if (cancelled || finished) return;
       setPending(pending + 1);
       const result = transcribe(samples);
       delivery = delivery.then(async () => {
@@ -324,43 +358,60 @@ export class PhraseDictationAdapter implements DictationAdapter {
         }
       });
     };
+    const interrupted = () => {
+      if (stopped || cancelled || finished) return;
+      o.onError?.(new Error("Recording was interrupted by the device or browser. Your inserted text is still here; start the microphone again to continue."));
+      session.cancel();
+    };
     const start = async () => {
       o.onPhase?.("starting");
       try {
         await o.transport.check?.();
+        if (cancelled || stopped) return;
         stream = await (o.getMedia ?? (() => navigator.mediaDevices.getUserMedia({ audio: true })))();
         if (cancelled || stopped) {
           teardown();
           finish(cancelled ? "cancelled" : "stopped");
           return;
         }
+        for (const track of stream.getTracks()) {
+          track.addEventListener?.("ended", interrupted);
+          trackCleanups.push(() => track.removeEventListener?.("ended", interrupted));
+        }
         segmenter = new PhraseSegmenter({
           ...(o.onLevel ? { onLevel: o.onLevel } : {}),
           onSegment: enqueue,
         });
-        capture = await (o.createCapture ?? createBrowserPcmCapture)(stream, (chunk) => segmenter?.push(chunk));
+        const opened = await (o.createCapture ?? createBrowserPcmCapture)(stream, (chunk) => {
+          if (!cancelled && !stopped) segmenter?.push(chunk);
+        }, interrupted);
+        if (cancelled || stopped) {
+          opened.stop();
+          return;
+        }
+        capture = opened;
         session.status = { type: "running" };
         o.onPhase?.("listening");
         for (const callback of starts) callback();
-        timer = setTimeout(() => void session.stop(), (o.maxSeconds ?? 90) * 1000);
       } catch (error) {
+        if (cancelled || stopped) return;
+        cancelled = true;
         teardown();
+        for (const id of active) void o.transport.cancel(id).catch(() => {});
         o.onError?.(error);
         finish("error");
       }
     };
 
-    session.stop = async () => {
-      if (stopped || cancelled) return;
+    session.stop = () => {
+      if (stopping) return stopping;
+      if (cancelled || finished) return Promise.resolve();
       stopped = true;
-      capture?.stop();
-      capture = undefined;
+      teardown();
       segmenter?.finish();
-      for (const track of stream?.getTracks() ?? []) track.stop();
-      stream = undefined;
       if (pending > 0) o.onPhase?.("transcribing");
-      await delivery;
-      finish("stopped");
+      stopping = delivery.then(() => finish("stopped"));
+      return stopping;
     };
     session.cancel = () => {
       if (cancelled || finished) return;

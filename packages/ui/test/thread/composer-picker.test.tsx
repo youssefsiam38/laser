@@ -13,7 +13,7 @@ let container: HTMLDivElement;
 let root: Root;
 function Fixture({ source = false }: { source?: boolean }) {
   const runtime = useExternalStoreRuntime({ messages: [], isRunning: false, onNew: sent });
-  const sourceAdapter = { ...adapter, search: () => [{ id: "skill", type: "skill", label: "/skill:review", metadata: { filePath: "/tmp/SKILL.md" } }] };
+  const sourceAdapter = { ...adapter, search: () => [{ id: "skill", type: "skill", label: "/skill:review", description: "A detailed skill description. ".repeat(100) + "Final instruction.", metadata: { filePath: "/tmp/SKILL.md" } }] };
   return <AssistantRuntimeProvider runtime={runtime}><ComposerPrimitive.Unstable_TriggerPopoverRoot><ComposerPrimitive.Root>
     <button type="button">Before input</button>
     <ComposerPrimitive.Input aria-label="Message" onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing && !event.shiftKey) { event.preventDefault(); sent(); } }} />
@@ -113,6 +113,23 @@ it('pointer selection keeps focus and inserts once; hovering updates the active 
   expect(selected()).toBe(option);
   await act(async () => { option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); option.click(); });
   expect(inserted).toHaveBeenCalledTimes(1); expect(document.activeElement).toBe(input());
+});
+it('keeps verbose skill previews compact and provides a scrollable full-description view', async () => {
+  await act(async () => root.render(<Fixture source />)); await type('@');
+  const preview = container.querySelector<HTMLElement>('[data-slot="composer-picker-preview"]')!;
+  expect(preview.classList.contains('line-clamp-1')).toBe(true);
+  expect(preview.classList.contains('block')).toBe(false);
+  await act(async () => container.querySelector<HTMLButtonElement>('[data-picker-details]')!.click());
+  expect(container.querySelector('[data-slot="composer-picker-description"]')?.textContent).toContain('Final instruction.');
+  expect(container.querySelectorAll('[role="option"]')).toHaveLength(0);
+  const list = container.querySelector<HTMLElement>('[data-slot="composer-picker-results"]')!;
+  Object.defineProperty(list, 'clientHeight', { value: 200 });
+  await key('PageDown'); expect(list.scrollTop).toBe(200);
+  await key('Enter'); expect(container.querySelector('[data-slot="composer-picker-description"]')).not.toBeNull();
+  expect(inserted).not.toHaveBeenCalled(); expect(sent).not.toHaveBeenCalled();
+  await key('Escape');
+  expect(popup()).not.toBeNull(); expect(container.querySelectorAll('[role="option"]')).toHaveLength(1);
+  await key('Enter'); expect(inserted).toHaveBeenCalledOnce(); expect(sent).not.toHaveBeenCalled();
 });
 it('opens a skill source with Alt+O without selecting or running it', async () => {
   const openSourceFile = vi.fn().mockResolvedValue({ opened: true }); vi.stubGlobal('desktop', { openSourceFile });

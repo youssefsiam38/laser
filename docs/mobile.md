@@ -117,11 +117,15 @@ exact question; on Android, **Allow** answers it if it is still pending and
 
 ### Dictation
 
-The microphone button records with `MediaRecorder` (webm/opus on Android and
-desktop, mp4 on iOS), shows a live level meter and the elapsed time, and on
-stop sends the audio to the host in relay-sized chunks over the same socket.
-The host's transcription backend answers with text, which lands at the caret.
-Recordings are capped at 90 s.
+The microphone captures mono PCM through Web Audio and shows a live level
+meter and elapsed time. Speech is cut into short WAV phrases (at most 20 seconds)
+and uploaded over the same socket in relay-sized chunks. Ordered transcription
+results land at the owning composer's caret while typing remains available.
+Recording has no duration cutoff: Stop flushes remaining speech, and the neutral
+× beside it discards untranscribed audio and pending results without sending or
+replacing the draft. A device or browser interruption is reported with a next
+action. Closing the owning composer releases its microphone. Opening Beam
+prepares an empty session immediately, so its bubble has the same microphone.
 
 ## Limitations, plainly
 

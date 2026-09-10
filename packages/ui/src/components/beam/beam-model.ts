@@ -70,7 +70,7 @@ export function bubbleOrigin(
 }
 
 /**
- * Start a Beam chat in the main view.
+ * Create or reuse an empty Beam chat; `select: false` prepares the bubble.
  *
  * The bubble is where Beam usually lives, but it is not the only way in: the
  * Beam group in the sessions sidebar starts one too, and a chat started there
@@ -79,10 +79,11 @@ export function bubbleOrigin(
  * own maximize control does the same thing for the chat it is showing.
  */
 export async function startBeamSession(
-  actions: { newSession: (cwd: string, options?: { agentName?: string }) => Promise<string> },
+  actions: { newSession: (cwd: string, options?: { agentName?: string; select?: boolean }) => Promise<string> },
   snapshot: AgentsSnapshot | null | undefined,
+  options: { select?: boolean } = {},
 ): Promise<string> {
   const workspace = beamWorkspace(snapshot);
   if (!workspace) throw new Error(BEAM_UNAVAILABLE);
-  return actions.newSession(workspace.cwd, { agentName: workspace.agentName });
+  return actions.newSession(workspace.cwd, { agentName: workspace.agentName, ...options });
 }

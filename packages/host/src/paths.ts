@@ -24,9 +24,26 @@
  * directory.
  */
 import { DATA_DIR_NAME, WORKTREES_DIR_NAME } from "@lasercode/protocol";
-import { mkdirSync, mkdtempSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, sep } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
+import { canonical } from "./trust.js";
+
+/** Directory containment, not a string prefix; existing aliases resolve to the same place. */
+export function isWithinDirectory(cwd: string, root: string): boolean {
+  const resolved = (path: string): string => {
+    const key = canonical(path);
+    try { return realpathSync(key); } catch { return key; }
+  };
+  const path = relative(resolved(root), resolved(cwd));
+  return path === "" || (!isAbsolute(path) && path !== ".." && !path.startsWith(`..${sep}`));
+}
+
+export function workspaceAgentFor(cwd: string, workspaces: { beam: string; chat: string }): "beam" | "chat" | undefined {
+  if (isWithinDirectory(cwd, workspaces.beam)) return "beam";
+  if (isWithinDirectory(cwd, workspaces.chat)) return "chat";
+  return undefined;
+}
 
 /** `$XDG_DATA_HOME/laser` and the platform equivalents. */
 export function laserDataDir(env: NodeJS.ProcessEnv = process.env): string {

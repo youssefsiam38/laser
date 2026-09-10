@@ -91,6 +91,24 @@ describe("activity disclosures", () => {
     expect(container.textContent).toContain("Allow");
     expect(container.textContent).toContain("Deny");
   });
+  it("keeps mixed summaries readable instead of squeezing every family into the status line", async () => {
+    const breakdown = [
+      { family: "reasoning", iconKind: "reasoning", label: "Reasoned" },
+      { family: "read", iconKind: "read", label: "Read 20 files" },
+      { family: "edit", iconKind: "edit", label: "Edited 8 files" },
+      { family: "bash", iconKind: "bash", label: "Ran 5 commands" },
+    ] as const;
+    await act(async () => root.render(<ToolGroupRoot><ToolGroupTrigger label="Completed 40 steps" breakdown={breakdown} /><ToolGroupContent>All 40 steps</ToolGroupContent></ToolGroupRoot>));
+    const trigger = container.querySelector('button')!;
+    expect(trigger.textContent).toContain('Completed 40 steps');
+    expect(container.querySelectorAll('[data-slot="tool-group-breakdown-item"]')).toHaveLength(2);
+    expect(container.querySelector('[data-slot="tool-group-breakdown-more"]')?.textContent).toBe('+2 types');
+    expect(trigger.getAttribute('aria-label')).toContain('Edited 8 files, Ran 5 commands');
+    expect(container.querySelector('[data-slot="tool-group-trigger-label"]')?.classList.contains('truncate')).toBe(false);
+    await act(async () => trigger.click()); expect(container.textContent).toContain('All 40 steps');
+    await act(async () => trigger.click()); expect(container.textContent).not.toContain('All 40 steps');
+  });
+
   it("opens and closes the aggregate through its actual button", async () => {
     await act(async () => root.render(
       <ToolGroupRoot>

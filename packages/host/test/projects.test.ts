@@ -3,7 +3,7 @@
  */
 import { PRODUCT_NAME, PROJECT_DIR_NAME } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ProjectInfo } from "@lasercode/protocol";
@@ -159,17 +159,44 @@ describe("ProjectRegistry", () => {
     await expect(reg.ensureTrusted(dir)).rejects.toThrow(/trust decision/);
   });
 
-  it("never lists or remembers an excluded workspace, even when it has sessions", () => {
-    const beam = join(base, "beam");
-    const privateBeam = join(beam, "session-private");
+  it("rejects internal roots, descendants and aliases, and does not rediscover them after removal or restart", () => {
+    const state = project("state");
+    const nested = project("state/nested");
+    const similar = project("state-project");
+    const alias = join(base, "alias");
+    symlinkSync(state, alias, "junction");
+    const path = join(sessionDir, "invalid.jsonl");
+    const transcript = `${JSON.stringify({ type: "session", version: 3, id: "invalid", cwd: state })}\n`;
+    writeFileSync(path, transcript);
+    const storePath = join(base, "projects.json");
+    const { reg: old } = registry({ storePath });
+    old.add(state); // Stored by an earlier version.
+    const options = { storePath, exclude: [state, agentDir] };
+    const { reg } = registry(options);
+    for (const cwd of [state, nested, alias, agentDir]) {
+      expect(() => reg.add(cwd)).toThrow(/internal app storage/);
+    }
+    reg.add(similar);
+    reg.remove(state);
+    expect(reg.list().map((p) => p.cwd)).toEqual([similar]);
+    const { reg: restarted } = registry(options);
+    expect(restarted.list().map((p) => p.cwd)).toEqual([similar]);
+    expect(readFileSync(path, "utf8")).toBe(transcript);
+  });
+
+  it("never lists or remembers the host-owned state tree, including invalid sessions", () => {
+    const state = join(base, "state");
+    const privateBeam = join(state, "workspaces", "beam", "session-private");
     mkdirSync(join(sessionDir, "--beam--"), { recursive: true });
+    writeFileSync(join(sessionDir, "legacy.jsonl"), `${JSON.stringify({ type: "session", version: 3, id: "legacy", cwd: state })}\n`);
     writeFileSync(join(sessionDir, "--beam--", "b.jsonl"), `${JSON.stringify({ type: "session", version: 3, id: "b", cwd: privateBeam })}\n`);
-    const { reg } = registry({ exclude: [beam] });
-    expect(catalog.list().map((s) => s.cwd)).toContain(privateBeam);
-    expect(reg.list().map((p) => p.cwd)).not.toContain(privateBeam);
+    const { reg } = registry({ exclude: [state] });
+    expect(catalog.list().map((s) => s.cwd)).toEqual(expect.arrayContaining([state, privateBeam]));
+    expect(reg.list().map((p) => p.cwd)).toEqual([]);
+    reg.touch(state);
     reg.touch(privateBeam);
-    expect(reg.list().map((p) => p.cwd)).not.toContain(privateBeam);
-    expect(reg.isExcluded(beam)).toBe(true);
+    expect(reg.list().map((p) => p.cwd)).toEqual([]);
+    expect(reg.isExcluded(state)).toBe(true);
     expect(reg.isExcluded(privateBeam)).toBe(true);
     expect(reg.isExcluded(join(base, "other"))).toBe(false);
   });

@@ -22,9 +22,16 @@ describe("Beam and Chat sessions from an older workspace layout", () => {
     expect(chat[0]?.rows.map((r) => r.path)).toEqual(["/s/chat-old.jsonl"]);
   });
 
-  it("never lists their directories as projects in the rail", () => {
+  it("never lists built-in workspace descendants as projects, even before attribution arrives", () => {
     const archive = createArchiveStore(null);
-    expect(visibleProjectCwds([project("/p")], [oldBeam, newBeam, oldChat, work], {}, archive, { exclude: [workspaces.beam, workspaces.chat] })).toEqual(["/p"]);
+    const privateBeam = summary({ path: "/s/beam-private.jsonl", cwd: `${workspaces.beam}/session-a1b2` });
+    expect(
+      visibleProjectCwds([project("/p"), project(privateBeam.cwd)], [oldBeam, newBeam, oldChat, privateBeam, work], {}, archive, {
+        exclude: [workspaces.beam, workspaces.chat],
+      }),
+    ).toEqual(["/p"]);
+    // A similarly named actual project is not a descendant of Chat.
+    expect(visibleProjectCwds([project(`${workspaces.chat}ty`)], [], {}, archive, { exclude: [workspaces.chat] })).toEqual([`${workspaces.chat}ty`]);
   });
 
   it("recognises every private per-session directory as part of its built-in workspace", () => {

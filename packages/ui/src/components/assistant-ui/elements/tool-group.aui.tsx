@@ -152,7 +152,7 @@ export type ToolGroupTriggerProps = Omit<React.ComponentProps<typeof Collapsible
   elapsedMs?: number | undefined;
   /** One line per call, for the tooltip and the accessible name. */
   lines?: readonly string[] | undefined;
-  /** Mixed activity: counted categories shown together on one line. */
+  /** Mixed activity: two complete category labels, then a count of other kinds. */
   breakdown?: readonly ToolGroupBreakdownItem[] | undefined;
   /** Exact currently running child action, rendered by the assistant-ui thinking indicator. */
   activeLabel?: string | undefined;
@@ -203,7 +203,7 @@ function ToolGroupTrigger({
           <LeadIcon className={cn("size-3.5", attention ? "text-attention" : "text-ink-3")} />
         )}
       </span>
-      <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+      <span className={cn("flex min-w-0 flex-1", !active && breakdown?.length ? "flex-col items-start gap-1 py-1.5" : "items-center gap-2 overflow-hidden")}>
         {active && activeLabel ? (
           <ThinkingIndicator
             label={activeLabel}
@@ -211,28 +211,24 @@ function ToolGroupTrigger({
             className="min-w-0 overflow-hidden [&_[data-slot=thinking-indicator-label]]:max-w-full [&_[data-slot=thinking-indicator-label]]:truncate"
           />
         ) : (
-          <span data-slot="tool-group-trigger-label" className="min-w-0 truncate text-sm font-medium text-ink-2">
+          <span data-slot="tool-group-trigger-label" className="min-w-0 break-words text-sm font-medium text-ink-2">
             {label}
           </span>
         )}
-        {!active && breakdown?.map((item, index) => {
-          const BreakdownIcon = TOOL_ICONS[item.iconKind];
-          return (
-            <span
-              key={item.family}
-              data-slot="tool-group-breakdown-item"
-              className={cn(
-                "hidden min-w-0 shrink items-center gap-1.5 text-xs text-ink-2 sm:flex",
-                index > 0 && "border-s border-line ps-2",
-              )}
-              aria-hidden="true"
-            >
-              <BreakdownIcon className="size-3 shrink-0 text-ink-3" />
-              <span className="truncate">{item.label}</span>
-              {item.detail ? <span className={cn(mono, "shrink-0 text-ink-3")}>· {item.detail}</span> : null}
-            </span>
-          );
-        })}
+        {!active && !!breakdown?.length && (
+          <span data-slot="tool-group-breakdown" aria-hidden="true" className="flex max-w-full flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-3">
+            {breakdown.slice(0, 2).map((item) => {
+              const BreakdownIcon = TOOL_ICONS[item.iconKind];
+              return (
+                <span key={item.family} data-slot="tool-group-breakdown-item" className="inline-flex max-w-full items-center gap-1.5">
+                  <BreakdownIcon className="size-3 shrink-0" />
+                  <span className="break-words">{item.label}</span>
+                </span>
+              );
+            })}
+            {breakdown.length > 2 && <span data-slot="tool-group-breakdown-more" className="whitespace-nowrap">+{breakdown.length - 2} types</span>}
+          </span>
+        )}
         {!active && !breakdown?.length && detail ? (
           <span className={cn(mono, "min-w-0 truncate", active || attention ? "text-ink-2" : "text-ink-3")}>{detail}</span>
         ) : null}

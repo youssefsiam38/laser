@@ -19,6 +19,8 @@ vi.mock("@/components/thread/Thread", async () => ({ Thread: (await import("./th
 
 import { BeamBubble } from "../../src/components/beam/BeamBubble.js";
 import { BeamSpark } from "../../src/components/beam/BeamSpark.js";
+import { startBeamSession } from "../../src/components/beam/beam-model.js";
+import { useLaserStable } from "../../src/runtime/LaserProvider.js";
 import { BEAM_SESSION_STORAGE_KEY, beamStore } from "../../src/components/beam/beam-store.js";
 import { ShellContext, type ShellContextValue } from "../../src/components/shell/shell-context.js";
 import { sessionsList } from "../../src/components/shell/session-groups.js";
@@ -49,10 +51,12 @@ const shell = (layout: ShellContextValue["layout"]): ShellContextValue => ({
 
 /** The main view's session, read outside the bubble: it must never move because of Beam. */
 function MainCurrent() {
+  const { actions } = useLaserStable();
   const current = useLaserState((s) => s.current);
   const toasts = useLaserState((s) => s.toasts.map((toast) => `${toast.level}:${toast.text}`).join("\n"));
   return (
     <>
+      <button data-slot="sidebar-beam-new" onClick={() => void startBeamSession(actions, FakeHostClient.world.snapshot)}>New Beam chat</button>
       <span data-slot="main-current">{current ?? ""}</span>
       <span data-slot="main-toasts">{toasts}</span>
     </>
@@ -136,7 +140,8 @@ describe("the Beam bubble", () => {
     expect(panel.querySelectorAll('[data-slot="beam-suggestion"]')).toHaveLength(3);
     expect(document.activeElement).toBe(textarea());
     expect(container.querySelector('[data-slot="main-current"]')?.textContent).toBe("");
-    expect(calls("session/new")).toHaveLength(0);
+    expect(calls("session/new")).toHaveLength(1);
+    expect(beamStore.getSnapshot().path).toBeTruthy();
   });
 
   it("fills the composer from a chip without sending", async () => {
@@ -145,11 +150,11 @@ describe("the Beam bubble", () => {
     const chip = bubble()!.querySelector<HTMLButtonElement>('[data-slot="beam-suggestion"]')!;
     await act(async () => chip.click());
     expect(textarea()!.value).toBe(chip.textContent);
-    expect(calls("session/new")).toHaveLength(0);
+    expect(calls("session/new")).toHaveLength(1);
     expect(calls("session/prompt")).toHaveLength(0);
   });
 
-  it("creates a Beam session in Beam's workspace on the first message, prompts it, and remembers it", async () => {
+  it("prompts the session prepared on open without creating another", async () => {
     addSession(world, `${PROJECT_CWD}/main.jsonl`, PROJECT_CWD);
     await mount();
     // The main view is on a project session; Beam must not replace it.
@@ -181,10 +186,10 @@ describe("the Beam bubble", () => {
     expect(bubble()).toBeNull();
     expect(spark().getAttribute("aria-expanded")).toBe("false");
     await openBubble();
-    expect(beamStore.getSnapshot().path).toBeUndefined();
-    expect(localStorage.getItem(BEAM_SESSION_STORAGE_KEY)).toBeNull();
+    expect(beamStore.getSnapshot().path).toBeTruthy();
+    expect(beamStore.getSnapshot().path).not.toBe(path);
     expect(bubble()!.querySelector('[data-slot="beam-empty-state"]')).not.toBeNull();
-    expect(bubble()!.querySelector<HTMLButtonElement>('[data-slot="beam-new-chat"]')!.disabled).toBe(true);
+    expect(bubble()!.querySelector<HTMLButtonElement>('[data-slot="beam-new-chat"]')!.disabled).toBe(false);
     expect(world.states[path]).toBeDefined();
     expect(calls("pi/session/delete")).toHaveLength(0);
 
@@ -192,7 +197,8 @@ describe("the Beam bubble", () => {
     expect(beamStore.getSnapshot().path).not.toBe(path);
     await act(async () => spark().click());
     await act(async () => settle(20));
-    expect(beamStore.getSnapshot()).toMatchObject({ open: true, path: undefined });
+    expect(beamStore.getSnapshot().open).toBe(true);
+    expect(beamStore.getSnapshot().path).toBeTruthy();
     expect(bubble()!.querySelector('[data-slot="beam-empty-state"]')).not.toBeNull();
   });
 
@@ -203,8 +209,8 @@ describe("the Beam bubble", () => {
     beamStore.reset();
     await mount();
     await openBubble();
-    expect(beamStore.getSnapshot().path).toBeUndefined();
-    expect(localStorage.getItem(BEAM_SESSION_STORAGE_KEY)).toBeNull();
+    expect(beamStore.getSnapshot().path).toBeTruthy();
+    expect(beamStore.getSnapshot().path).not.toBe(kept);
     expect(bubble()!.querySelector('[data-slot="beam-empty-state"]')).not.toBeNull();
     expect(calls("pi/session/delete")).toHaveLength(0);
     expect(world.states[kept]).toBeDefined();
@@ -239,15 +245,17 @@ describe("the Beam bubble", () => {
   it("starts a chat in the window when the bubble is empty and maximize is pressed", async () => {
     await mount();
     await openBubble();
-    // Nothing said yet: there is no session to move, so this makes one.
-    expect(beamStore.getSnapshot().path).toBeUndefined();
+    // Nothing said yet: opening already prepared the session.
+    const prepared = beamStore.getSnapshot().path;
+    expect(prepared).toBeTruthy();
     const maximize = bubble()!.querySelector<HTMLButtonElement>('[data-slot="beam-open-full"]')!;
     expect(maximize.disabled).toBe(false);
     expect(maximize.getAttribute("aria-label") ?? maximize.getAttribute("title")).toContain("full view");
     await act(async () => maximize.click());
     await closeAndSettle();
     const opened = container.querySelector('[data-slot="main-current"]')?.textContent;
-    expect(opened).toBeTruthy();
+    expect(opened).toBe(prepared);
+    expect(calls("session/new")).toHaveLength(1);
     // A Beam chat, in Beam's workspace, in the window rather than the bubble.
     expect(opened!.startsWith(`${BEAM_CWD}/`)).toBe(true);
     expect(world.states[opened!]?.agent?.kind).toBe("beam");
@@ -255,29 +263,38 @@ describe("the Beam bubble", () => {
     expect(bubble()).toBeNull();
   });
 
-  it("shows the host's refusal to the person when the first message cannot start a session", async () => {
+  it("shows an eager-start refusal inside the bubble and offers an explicit retry", async () => {
     const refusal = "The model acme/fast is not available: connect acme in Settings → Providers and models, or choose another model for beam.";
     world.overrides["session/new"] = () => {
       throw new Error(refusal);
     };
     await mount();
     await openBubble();
-    await typeAndSend("Hello");
     await act(async () => settle(50));
     expect(calls("session/new")).toHaveLength(1);
     expect(calls("session/prompt")).toHaveLength(0);
     expect(beamStore.getSnapshot().path).toBeUndefined();
-    // Said where the person is looking: inside the bubble, above the composer.
-    expect(bubble()!.querySelector('[data-slot="beam-refusal"]')?.textContent).toContain(refusal);
+    expect(bubble()!.querySelector('[role="alert"]')?.textContent).toContain(refusal);
+    expect(textarea()).toBeNull();
     // And not only as a corner toast: the refusal is the bubble's to explain.
     expect(container.querySelector('[data-slot="main-toasts"]')?.textContent).toBe("");
-    // The next message tries again: the notice goes when the person types.
-    const input = textarea()!;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "again");
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    expect(bubble()!.querySelector('[data-slot="beam-refusal"]')).toBeNull();
+    delete world.overrides["session/new"];
+    await act(async () => bubble()!.querySelector<HTMLButtonElement>('[role="alert"] button')!.click());
+    await act(async () => settle(40));
+    expect(bubble()!.querySelector('[role="alert"]')).toBeNull();
+    expect(textarea()).not.toBeNull();
+  });
+
+  it("reuses the bubble's empty session from sidebar + and across repeated opens", async () => {
+    await mount(); await openBubble();
+    const path = beamStore.getSnapshot().path;
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-slot="sidebar-beam-new"]')!.click());
+    await act(async () => settle(30));
+    expect(container.querySelector('[data-slot="main-current"]')?.textContent).toBe(path);
+    await act(async () => spark().click()); await act(async () => settle(40));
+    expect(beamStore.getSnapshot().path).toBe(path);
+    expect(calls("session/new")).toHaveLength(1);
+    expect(calls("session/prompt")).toHaveLength(0);
   });
 
   it("is a full-height sheet on a phone, with the same header", async () => {
