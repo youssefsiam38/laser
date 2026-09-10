@@ -45,6 +45,7 @@ class FakeDriver implements SessionDriver {
   /** The session file's lines, for `entries()`; the last one is the leaf. */
   lines: Array<Record<string, unknown>> = [];
   private readonly listeners = new Set<DriverListener>();
+  private invocationSerial = 0;
   constructor(private st: SessionState) {}
   async open() { return this.st; }
   state() { return this.st; }
@@ -63,6 +64,7 @@ class FakeDriver implements SessionDriver {
     if (!this.autoResolvePrompts && this.promptResolvers.length > 0 && this.st.isStreaming && options?.streamingBehavior === undefined) {
       return { accepted: false, queued: false };
     }
+    options?.onInvocation?.({ id: `fake-${++this.invocationSerial}`, ...(options.ownerRunId ? { runId: options.ownerRunId } : {}) });
     if (this.autoResolvePrompts) {
       if (this.acceptPrompts) options?.onAccepted?.();
       return { accepted: this.acceptPrompts, queued: false };
@@ -1351,6 +1353,72 @@ describe("AgentHarness", () => {
     await world.harness.removeWorktreeFor("/sessions/child-1.jsonl");
     expect(world.worktrees.removed).toEqual([]);
     expect(world.harness.run(started.runId)!.status).toBe("completed");
+  });
+
+  it("requires the exact parent invocation id even when the run id matches", async () => {
+    world.setAutoResolveChildPrompts(false);
+    const root = world.openRoot("lead");
+    const first = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "first" });
+    const path = "/sessions/child-1.jsonl";
+    const child = world.drivers.get(path)!;
+    const entry = (world.harness as unknown as { byPath: Map<string, { lifecycle: { bindInvocation(runId: string, invocation: { id: string; runId?: string }): boolean } }> }).byPath.get(path)!;
+    expect(entry.lifecycle.bindInvocation(first.runId, { id: "fake-1", runId: first.runId })).toBe(true);
+    let finish!: (value: { disposition: "started" }) => void;
+    const request: ExtensionModelWorkRequest = {
+      kind: "custom",
+      content: [{ type: "text", text: "forged" }],
+      task: "forged",
+      origin: "user",
+      parent: { id: "not-fake-1", runId: first.runId },
+      parentStarted: true,
+      start: () => { throw new Error("server start wrapper should be used"); },
+    };
+    const admitted = world.harness.admitExtensionModelWork(path, request, () => ({
+      admission: Promise.resolve(),
+      completion: new Promise<{ disposition: "started" }>((resolve) => { finish = resolve; }),
+    }));
+    expect(admitted.joinsParent).toBe(false);
+    await expect(admitted.admission).resolves.toBeUndefined();
+    finish({ disposition: "started" });
+    await expect(admitted.completion).resolves.toBeUndefined();
+    await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "real owner done" });
+    child.emit({ type: "update", invocation: { id: "fake-1", runId: first.runId }, update: { kind: "agent_settled" } });
+    child.resolvePrompt();
+    await flushLifecycle();
+    expect(world.harness.run(first.runId)).toMatchObject({ status: "completed" });
+  });
+
+  it("ignores every stale native update after a successor owns a newer invocation", async () => {
+    world.setAutoResolveChildPrompts(false);
+    const root = world.openRoot("lead");
+    const first = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "first" });
+    const path = "/sessions/child-1.jsonl";
+    const child = world.drivers.get(path)!;
+    await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "first done" });
+    await root.handle.bridge.sendAgentMessage({ sessionId: first.sessionId, message: "successor", interrupt: false });
+    child.emit({ type: "update", invocation: { id: "fake-1", runId: first.runId }, update: { kind: "agent_settled" } });
+    child.resolvePrompt();
+    await flushLifecycle();
+
+    const successor = world.harness.activeRun(path)!;
+    expect(successor.runId).not.toBe(first.runId);
+    const activityBeforeStale = world.harness.run(successor.runId)?.activity;
+    (child as unknown as { setExtensionModelWorkHandler(): void }).setExtensionModelWorkHandler = () => {};
+    child.emit({ type: "update", update: { kind: "extension_error", extension: "old-core", message: "unstamped old diagnostic" } });
+    const stale = { id: "fake-1", runId: first.runId };
+    child.emit({ type: "update", invocation: stale, update: { kind: "turn_start" } });
+    child.emit({ type: "update", invocation: stale, update: { kind: "tool_execution_start", toolCallId: "old-tool", toolName: "bash", args: {} } });
+    child.emit({ type: "update", invocation: stale, update: { kind: "message_end", role: "assistant", message: { role: "assistant", content: [{ type: "text", text: "old error" }] }, stopReason: "error", errorMessage: "old failure" } });
+    child.emit({ type: "update", invocation: stale, update: { kind: "extension_error", extension: "old", message: "old diagnostic" } });
+    child.emit({ type: "update", invocation: stale, update: { kind: "agent_settled" } });
+    expect(world.harness.run(successor.runId)).toMatchObject({ status: "running" });
+    expect(world.harness.run(successor.runId)?.activity).toEqual(activityBeforeStale);
+
+    await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "successor done" });
+    child.emit({ type: "update", invocation: { id: "fake-2", runId: successor.runId }, update: { kind: "agent_settled" } });
+    child.resolvePrompt();
+    await flushLifecycle();
+    expect(world.harness.run(successor.runId)).toMatchObject({ status: "completed", result: { message: "successor done" } });
   });
 
   it("ends an engine-consumed extension owner without a nudge or phantom model turn", async () => {

@@ -190,9 +190,14 @@ interface Deferred<T> {
 
 interface PendingExtensionWork {
   request: ExtensionModelWorkRequest;
-  start: (ownerRunId?: string) => ExtensionModelExecution | Promise<ExtensionModelExecution>;
+  start: (
+    ownerRunId?: string,
+    onInvocation?: Parameters<ExtensionModelWorkRequest["start"]>[1],
+  ) => ExtensionModelExecution | Promise<ExtensionModelExecution>;
   admission: Deferred<void>;
   completion: Deferred<void>;
+  /** Exact parent ownership; successors bind when they become standalone. */
+  bindToRun: boolean;
 }
 
 interface PendingMessage {
@@ -482,7 +487,10 @@ export class AgentHarness {
   admitExtensionModelWork(
     sessionPath: string,
     request: ExtensionModelWorkRequest,
-    start: (ownerRunId?: string) => ExtensionModelExecution | Promise<ExtensionModelExecution>,
+    start: (
+      ownerRunId?: string,
+      onInvocation?: Parameters<ExtensionModelWorkRequest["start"]>[1],
+    ) => ExtensionModelExecution | Promise<ExtensionModelExecution>,
   ): ExtensionModelAdmission {
     const admission = deferred<void>();
     const completion = deferred<void>();
@@ -491,12 +499,12 @@ export class AgentHarness {
     const entry = this.byPath.get(sessionPath);
     if (!entry || entry.role.kind !== "child" || !entry.path || !entry.sessionId) {
       this.executeRootExtension(start, request, admission, completion);
-      return { admission: admission.promise, completion: completion.promise };
+      return { admission: admission.promise, completion: completion.promise, joinsParent: request.parent !== undefined };
     }
 
     const owner = entry.lifecycle.owner();
     const executing = owner ? this.runStates.get(owner) : undefined;
-    const causal = request.parent?.runId !== undefined && request.parent.runId === owner;
+    const causal = request.parent !== undefined && entry.lifecycle.ownsInvocation(request.parent);
     const origin = request.parent?.runId !== undefined && !causal ? "agent" as const : request.origin;
     const effectiveRequest: ExtensionModelWorkRequest = {
       ...request,
@@ -508,7 +516,8 @@ export class AgentHarness {
       entry.lifecycle.successor()
       || (executing && (entry.lifecycle.end(executing.run.runId) || phase.kind === "terminal-pending" || (phase.kind === "invoking" && phase.settled))),
     );
-    const pending: PendingExtensionWork = { request: effectiveRequest, start, admission, completion };
+    const pending: PendingExtensionWork = { request: effectiveRequest, start, admission, completion, bindToRun: causal };
+    const joinsParent = causal && !mustSucceed;
     if (mustSucceed) {
       this.queueRunMessage(entry, {
         content: request.content,
@@ -516,7 +525,7 @@ export class AgentHarness {
         engine: false,
         extension: pending,
       }, executing ?? this.activeRunState(sessionPath));
-      return { admission: admission.promise, completion: completion.promise };
+      return { admission: admission.promise, completion: completion.promise, joinsParent: false };
     }
 
     const active = executing ?? this.activeRunState(sessionPath);
@@ -537,10 +546,10 @@ export class AgentHarness {
         engine: false,
         extension: pending,
       }, state);
-      return { admission: admission.promise, completion: completion.promise };
+      return { admission: admission.promise, completion: completion.promise, joinsParent: false };
     }
     this.executeExtension(entry, state, pending, standalone);
-    return { admission: admission.promise, completion: completion.promise };
+    return { admission: admission.promise, completion: completion.promise, joinsParent };
   }
 
   /** A person ends a run (`agents/runs/stop`, from the fleet or a row menu). */
@@ -605,8 +614,17 @@ export class AgentHarness {
       this.detachSession(sessionPath);
       return;
     }
-    // Events belong to the prompt invocation that was actually admitted to
-    // the engine, never whichever newer queued run happens to be visible.
+    // Stable events carry their exact native epoch. A late callback from an
+    // older invocation may share this session with a live successor, but it
+    // must never mutate that successor. Drivers without epochs retain the
+    // established run-scoped behavior.
+    if (event.type === "update" && event.invocation && !entry.lifecycle.ownsInvocation(event.invocation)) return;
+    if (
+      event.type === "update"
+      && event.update.kind === "extension_error"
+      && !event.invocation
+      && this.host.driver(sessionPath)?.setExtensionModelWorkHandler
+    ) return;
     const owner = entry.lifecycle.owner();
     const active = owner ? this.runStates.get(owner) : this.activeRunState(sessionPath);
     // A question through the portable UI surface pauses the child's loop
@@ -1255,7 +1273,10 @@ export class AgentHarness {
   }
 
   private executeRootExtension(
-    start: (ownerRunId?: string) => ExtensionModelExecution | Promise<ExtensionModelExecution>,
+    start: (
+      ownerRunId?: string,
+      onInvocation?: Parameters<ExtensionModelWorkRequest["start"]>[1],
+    ) => ExtensionModelExecution | Promise<ExtensionModelExecution>,
     request: ExtensionModelWorkRequest,
     admission: Deferred<void>,
     completion: Deferred<void>,
@@ -1278,7 +1299,17 @@ export class AgentHarness {
       let failure: unknown;
       let disposition: Awaited<ExtensionModelExecution["completion"]>["disposition"] | undefined;
       try {
-        const execution = await pending.start(state.run.runId);
+        const ownsNativeInvocation = pending.bindToRun || standalone;
+        const execution = await pending.start(
+          ownsNativeInvocation ? state.run.runId : undefined,
+          ownsNativeInvocation
+            ? (invocation) => {
+                if (!entry.lifecycle.bindInvocation(state.run.runId, invocation)) {
+                  throw new HarnessError("The extension invocation lost session ownership before it could start.");
+                }
+              }
+            : undefined,
+        );
         const admission = execution.admission.then(
           () => {
             accepted = true;
@@ -1373,6 +1404,12 @@ export class AgentHarness {
         ? {
             ...options,
             ownerRunId: state.run.runId,
+            onInvocation: (invocation) => {
+              if (!entry.lifecycle.bindInvocation(state.run.runId, invocation)) {
+                throw new HarnessError("The prompt invocation lost session ownership before it could start.");
+              }
+              options?.onInvocation?.(invocation);
+            },
             onAccepted: acceptedObserver,
           }
         : options);

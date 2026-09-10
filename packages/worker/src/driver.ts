@@ -115,12 +115,14 @@ export interface ExtensionModelWorkRequest {
   /** The exact outer lease; only a still-active causal call may borrow it. */
   admissionLease?: SessionAdmissionLease;
   /** Start after ownership exists. Calling this twice is an error. */
-  start(ownerRunId?: string): ExtensionModelExecution;
+  start(ownerRunId?: string, onInvocation?: (ref: DriverInvocationRef) => void): ExtensionModelExecution;
 }
 
 export interface ExtensionModelAdmission {
   admission: Promise<void>;
   completion: Promise<void>;
+  /** Only work still owned by the causal run joins its parent's completion drain. */
+  joinsParent: boolean;
 }
 
 export type ExtensionModelWorkHandler = (request: ExtensionModelWorkRequest) => ExtensionModelAdmission;
@@ -146,6 +148,8 @@ export interface PromptOptions {
   ownerRunId?: string;
   /** Server preflight lease, borrowed only by a causal nested extension send. */
   admissionLease?: SessionAdmissionLease;
+  /** Receives the exact driver epoch before native work or events begin. */
+  onInvocation?: (ref: DriverInvocationRef) => void;
   /** False sends the text verbatim: no slash-command dispatch, no template expansion. */
   expandPromptTemplates?: boolean;
   /**

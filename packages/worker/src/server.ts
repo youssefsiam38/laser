@@ -972,15 +972,18 @@ export class WorkerServer {
         path = "";
       }
     }
-    const start = (ownerRunId?: string): ExtensionModelExecution | Promise<ExtensionModelExecution> => {
+    const start = (
+      ownerRunId?: string,
+      onInvocation?: Parameters<ExtensionModelWorkRequest["start"]>[1],
+    ): ExtensionModelExecution | Promise<ExtensionModelExecution> => {
       const borrowed = request.admissionLease;
-      if (borrowed?.active) return request.start(ownerRunId);
-      if (!path) return request.start(ownerRunId);
+      if (borrowed?.active) return request.start(ownerRunId, onInvocation);
+      if (!path) return request.start(ownerRunId, onInvocation);
       return this.firstTurnLock.acquireLease(path, true).then((lease) => {
-        if (!lease) return request.start(ownerRunId);
+        if (!lease) return request.start(ownerRunId, onInvocation);
         let execution: ExtensionModelExecution;
         try {
-          execution = request.start(ownerRunId);
+          execution = request.start(ownerRunId, onInvocation);
         } catch (error) {
           lease.release();
           throw error;

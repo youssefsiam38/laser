@@ -65,7 +65,6 @@ import type {
   UiDialogResponse,
   Usage,
 } from "@lasercode/protocol";
-import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -78,10 +77,8 @@ import {
   type DriverEvent,
   type DriverListener,
   type DriverOpenOptions,
-  type ExtensionModelAdmission,
-  type ExtensionModelExecution,
+  type DriverInvocationRef,
   type ExtensionModelWorkHandler,
-  type ExtensionModelWorkRequest,
   type FirstTurnOptions,
   type PromptOptions,
   type SessionAdmissionLease,
@@ -94,29 +91,9 @@ import { ENGINE_BUILTIN_TOOLS, ensureWorkspaceSessionCwd, filterSkills } from ".
 import { defaultAgentInstructions } from "../agents/engine-instructions.js";
 import { createInstructionTemplateExtension } from "../agents/instruction-templates.js";
 import { modelUnavailableMessage } from "../agents/harness.js";
+import { StableExtensionAdmission } from "./stable-extension-admission.js";
 
 type PiModel = ReturnType<ModelRuntime["getModels"]>[number];
-type PiPromptOptions = NonNullable<Parameters<AgentSession["prompt"]>[1]>;
-type PiCustomMessage = Parameters<AgentSession["sendCustomMessage"]>[0];
-type PiCustomOptions = Parameters<AgentSession["sendCustomMessage"]>[1];
-
-interface NativeInvocation {
-  ref: { id: string; runId?: string };
-  generation: number;
-  origin: "agent" | "user";
-  task: string;
-  admissionLease?: SessionAdmissionLease;
-  started: boolean;
-  /** Async resources stop carrying authority when this invocation drains. */
-  active: boolean;
-  originClaimed: boolean;
-  accept(): void;
-  readonly children: Set<Promise<void>>;
-}
-
-class ExtensionAdmissionRefusedError extends Error {
-  override readonly name = "ExtensionAdmissionRefusedError";
-}
 
 async function disposeRuntime(runtime: AgentSessionRuntime | undefined): Promise<void> {
   if (runtime) await runtime.dispose().catch(() => {});
@@ -157,21 +134,20 @@ export class StableSdkDriver implements SessionDriver {
    * (see the header). It leaves first if anything else arrives, so the order
    * of updates a client sees never changes.
    */
-  private heldUserEnd: { update: Extract<SessionUpdate, { kind: "message_end" }>; message: unknown } | undefined;
+  private heldUserEnd: {
+    update: Extract<SessionUpdate, { kind: "message_end" }>;
+    message: unknown;
+    invocation?: DriverInvocationRef;
+  } | undefined;
   /**
    * The current engine preflight. Every invocation reserves this slot; queued
    * waiters re-check it after each await and claim it one at a time, so an idle
    * gap can never admit two prompts before `isStreaming` flips.
    */
   private promptPreflight: Promise<void> | undefined;
-  private runtimeGeneration = 0;
-  private invocationSerial = 0;
-  private readonly invocation = new AsyncLocalStorage<NativeInvocation>();
-  private extensionModelWorkHandler: ExtensionModelWorkHandler | undefined;
-  private nativePrompt: AgentSession["prompt"] | undefined;
-  private nativeCustomMessage: AgentSession["sendCustomMessage"] | undefined;
+  private readonly extensionAdmission = new StableExtensionAdmission();
 
-  constructor() {
+  constructor(private readonly extraExtensionFactories: InlineExtension[] = []) {
     this.ui = createUiBridge(
       {
         onRequest: (request) => this.emit({ type: "ui_request", request }),
@@ -275,7 +251,7 @@ export class StableSdkDriver implements SessionDriver {
           }),
         );
       }
-      extensionFactories.push(laser);
+      extensionFactories.push(...this.extraExtensionFactories, laser);
 
       const services = await createAgentSessionServices({
         cwd,
@@ -389,15 +365,21 @@ export class StableSdkDriver implements SessionDriver {
     this.unsubscribe?.();
     // A replaced runtime carries none of the old session's in-flight tool calls.
     this.toolCalls.clear();
-    this.installExtensionAdmission(session);
+    const generation = this.extensionAdmission.install(session);
     await session.bindExtensions({
       mode: "rpc",
       uiContext: this.ui.context,
       abortHandler: () => void session.abort(),
-      onError: (error: ExtensionError) =>
-        this.push({ kind: "extension_error", extension: error.extensionPath, message: error.error }),
+      onError: (error: ExtensionError) => {
+        const invocation = this.extensionAdmission.eventInvocation(generation)?.ref
+          ?? this.extensionAdmission.takeRejectedInvocation(error.error);
+        this.push(
+          { kind: "extension_error", extension: error.extensionPath, message: error.error },
+          invocation,
+        );
+      },
     });
-    this.unsubscribe = session.subscribe((event) => this.onSessionEvent(event));
+    this.unsubscribe = session.subscribe((event) => this.onSessionEvent(event, generation));
   }
 
   /** Rebuild this runtime around the same manager; never two live writers. */
@@ -431,7 +413,7 @@ export class StableSdkDriver implements SessionDriver {
     this.flushHeldUserEnd();
     this.unsubscribe?.();
     this.unsubscribe = undefined;
-    this.invalidateExtensionAdmission();
+    this.extensionAdmission.invalidate();
     await current.dispose();
     this.runtime = undefined;
     this.runtimeAgent = agent;
@@ -508,7 +490,7 @@ export class StableSdkDriver implements SessionDriver {
   async dispose(): Promise<void> {
     this.flushHeldUserEnd();
     this.unsubscribe?.();
-    this.invalidateExtensionAdmission();
+    this.extensionAdmission.invalidate();
     this.unsubscribe = undefined;
     this.toolCalls.clear();
     this.ui.dispose();
@@ -532,7 +514,7 @@ export class StableSdkDriver implements SessionDriver {
   }
 
   setExtensionModelWorkHandler(handler: ExtensionModelWorkHandler | undefined): void {
-    this.extensionModelWorkHandler = handler;
+    this.extensionAdmission.setHandler(handler);
   }
 
   // -------------------------------------------------------------------- state
@@ -583,10 +565,10 @@ export class StableSdkDriver implements SessionDriver {
 
   async goalAction(action: GoalAction, options?: { admissionLease?: SessionAdmissionLease; onAccepted?: () => void }): Promise<SessionGoal | null> {
     const session = this.session();
-    const nativePrompt = this.nativePrompt ?? session.prompt.bind(session);
+    const nativePrompt = this.extensionAdmission.nativePrompt(session);
     activateGoalTools(session);
     let accepted = false;
-    const context = this.createInvocation({
+    const context = this.extensionAdmission.createInvocation({
       origin: "user",
       task: goalActionTask(action),
       ...(options?.admissionLease ? { admissionLease: options.admissionLease } : {}),
@@ -596,7 +578,11 @@ export class StableSdkDriver implements SessionDriver {
         options?.onAccepted?.();
       },
     });
-    await this.runInvocation(context, () => nativePrompt(goalCommand(action), { preflightResult: () => context.accept() }), false);
+    await this.extensionAdmission.runInvocation(
+      context,
+      () => nativePrompt(goalCommand(action), { preflightResult: () => context.accept() }),
+      false,
+    );
     const goal = await this.goalState();
     this.emit({ type: "extension", message: { type: "lasercode/goal/state", goal } });
     return goal;
@@ -655,18 +641,19 @@ export class StableSdkDriver implements SessionDriver {
         console.error(`${PRODUCT_NAME} worker: could not publish an accepted prompt:`, error instanceof Error ? error.message : error);
       }
     };
-    const context = this.createInvocation({
+    const context = this.extensionAdmission.createInvocation({
       ...(options?.ownerRunId ? { ownerRunId: options.ownerRunId } : {}),
       origin: "user",
       task: text,
       ...(options?.admissionLease ? { admissionLease: options.admissionLease } : {}),
       accept,
     });
+    options?.onInvocation?.(context.ref);
     try {
       if (streaming && !options?.streamingBehavior) {
         return { accepted: false, queued: false };
       }
-      await this.runInvocation(context, () => session.prompt(text, {
+      await this.extensionAdmission.runInvocation(context, () => session.prompt(text, {
         ...(images.length > 0 ? { images } : {}),
         ...(options?.streamingBehavior ? { streamingBehavior: options.streamingBehavior } : {}),
         ...(options?.expandPromptTemplates !== undefined ? { expandPromptTemplates: options.expandPromptTemplates } : {}),
@@ -987,255 +974,6 @@ export class StableSdkDriver implements SessionDriver {
 
   // ------------------------------------------------------------------ internals
 
-  /** Install before bindExtensions so every ExtensionAPI action reaches this generation. */
-  private installExtensionAdmission(session: AgentSession): void {
-    const generation = ++this.runtimeGeneration;
-    const nativePrompt = session.prompt.bind(session) as AgentSession["prompt"];
-    const nativeCustom = session.sendCustomMessage.bind(session) as AgentSession["sendCustomMessage"];
-    this.nativePrompt = nativePrompt;
-    this.nativeCustomMessage = nativeCustom;
-    const mutable = session as AgentSession & {
-      prompt: AgentSession["prompt"];
-      sendCustomMessage: AgentSession["sendCustomMessage"];
-    };
-    mutable.prompt = ((text: string, options?: PiPromptOptions) => {
-      if (options?.source !== "extension") return nativePrompt(text, options);
-      if (generation !== this.runtimeGeneration) return staleExecutionError().admission;
-      return this.interceptExtensionUser(session, nativePrompt, generation, text, options);
-    }) as AgentSession["prompt"];
-    mutable.sendCustomMessage = ((message: PiCustomMessage, options?: PiCustomOptions) => {
-      if (!customMessageTriggersModel(session.isStreaming, options)) return nativeCustom(message, options);
-      if (generation !== this.runtimeGeneration) return staleExecutionError().admission;
-      return this.interceptExtensionCustom(session, nativeCustom, generation, message, options);
-    }) as AgentSession["sendCustomMessage"];
-  }
-
-  private invalidateExtensionAdmission(): void {
-    this.runtimeGeneration += 1;
-    this.nativePrompt = undefined;
-    this.nativeCustomMessage = undefined;
-  }
-
-  private interceptExtensionUser(
-    session: AgentSession,
-    nativePrompt: AgentSession["prompt"],
-    generation: number,
-    text: string,
-    options: PiPromptOptions,
-  ): Promise<void> {
-    const parent = this.currentInvocation(generation);
-    const content = extensionUserContent(text, options.images);
-    const origin = extensionOrigin(parent);
-    return this.handleExtensionWork({
-      kind: "user",
-      content,
-      task: parent && !parent.ref.runId ? parent.task : text,
-      origin,
-      ...(parent ? { parent: parent.ref, parentStarted: parent.started } : {}),
-      ...(parent?.admissionLease?.active ? { admissionLease: parent.admissionLease } : {}),
-      start: onceStart((ownerRunId) => this.startExtensionUser(session, nativePrompt, generation, parent, origin, ownerRunId, text, options)),
-    }, parent);
-  }
-
-  private startExtensionUser(
-    session: AgentSession,
-    nativePrompt: AgentSession["prompt"],
-    generation: number,
-    parent: NativeInvocation | undefined,
-    origin: "agent" | "user",
-    ownerRunId: string | undefined,
-    text: string,
-    options: PiPromptOptions,
-  ): ExtensionModelExecution {
-    if (generation !== this.runtimeGeneration) return staleExecutionError();
-    const admission = deferred<void>();
-    // Attach before exposing either promise: fire-and-forget callers are safe.
-    void admission.promise.catch(() => undefined);
-    let preflight: boolean | undefined;
-    const wasStreaming = session.isStreaming;
-    const context = this.createInvocation({
-      ...(ownerRunId ? { ownerRunId } : {}),
-      origin,
-      task: text,
-      accept: () => {},
-    });
-    const raw = this.runInvocation(context, () => nativePrompt(text, {
-      ...options,
-      preflightResult: (accepted: boolean) => {
-        if (preflight !== undefined) return;
-        preflight = accepted;
-        try {
-          options.preflightResult?.(accepted);
-        } catch {
-          // A native observer cannot revoke the engine decision.
-        }
-        if (accepted) {
-          parent?.accept();
-          admission.resolve();
-        } else {
-          admission.reject(new ExtensionAdmissionRefusedError("The extension message was refused before model ownership."));
-        }
-      },
-    }), true);
-    const completion = raw.then(
-      () => {
-        if (preflight === undefined) {
-          const error = new ExtensionAdmissionRefusedError("The engine resolved an extension prompt without reporting preflight acceptance.");
-          admission.reject(error);
-          throw error;
-        }
-        if (!preflight) throw new ExtensionAdmissionRefusedError("The extension message was refused before model ownership.");
-        return { disposition: wasStreaming ? "queued" as const : context.started ? "started" as const : "consumed" as const };
-      },
-      (error: unknown) => {
-        if (preflight !== true) admission.reject(error);
-        throw error;
-      },
-    );
-    void completion.catch(() => undefined);
-    return { admission: admission.promise, completion };
-  }
-
-  private interceptExtensionCustom(
-    session: AgentSession,
-    nativeCustom: AgentSession["sendCustomMessage"],
-    generation: number,
-    message: PiCustomMessage,
-    options: PiCustomOptions,
-  ): Promise<void> {
-    const parent = this.currentInvocation(generation);
-    const content = extensionCustomContent(message);
-    const origin = extensionOrigin(parent);
-    return this.handleExtensionWork({
-      kind: "custom",
-      content,
-      task: contentTask(content),
-      origin,
-      ...(parent ? { parent: parent.ref, parentStarted: parent.started } : {}),
-      ...(parent?.admissionLease?.active ? { admissionLease: parent.admissionLease } : {}),
-      start: onceStart((ownerRunId) => this.startExtensionCustom(session, nativeCustom, generation, parent, origin, ownerRunId, message, options)),
-    }, parent);
-  }
-
-  private startExtensionCustom(
-    session: AgentSession,
-    nativeCustom: AgentSession["sendCustomMessage"],
-    generation: number,
-    parent: NativeInvocation | undefined,
-    origin: "agent" | "user",
-    ownerRunId: string | undefined,
-    message: PiCustomMessage,
-    options: PiCustomOptions,
-  ): ExtensionModelExecution {
-    if (generation !== this.runtimeGeneration) return staleExecutionError();
-    const admission = deferred<void>();
-    void admission.promise.catch(() => undefined);
-    const wasStreaming = session.isStreaming;
-    const context = this.createInvocation({
-      ...(ownerRunId ? { ownerRunId } : {}),
-      origin,
-      task: contentTask(extensionCustomContent(message)),
-      accept: () => {},
-    });
-    const raw = this.runInvocation(context, () => nativeCustom(message, options), true);
-    if (!wasStreaming && session.isStreaming) {
-      context.started = true;
-      parent?.accept();
-      admission.resolve();
-    }
-    const completion = raw.then(
-      () => {
-        if (wasStreaming) {
-          parent?.accept();
-          admission.resolve();
-          return { disposition: "queued" as const };
-        }
-        if (context.started || session.isStreaming) {
-          parent?.accept();
-          admission.resolve();
-          return { disposition: "started" as const };
-        }
-        const error = new ExtensionAdmissionRefusedError("The engine did not start the triggering extension message.");
-        admission.reject(error);
-        throw error;
-      },
-      (error: unknown) => {
-        if (!wasStreaming && !context.started) admission.reject(error);
-        throw error;
-      },
-    );
-    void completion.catch(() => undefined);
-    return { admission: admission.promise, completion };
-  }
-
-  private handleExtensionWork(request: ExtensionModelWorkRequest, parent: NativeInvocation | undefined): Promise<void> {
-    let result: ExtensionModelAdmission;
-    try {
-      result = this.extensionModelWorkHandler
-        ? this.extensionModelWorkHandler(request)
-        : directExtensionAdmission(request);
-    } catch (error) {
-      return observedRejected(error);
-    }
-    void result.admission.catch(() => undefined);
-    const completion = result.completion.finally(() => {
-      parent?.children.delete(completion);
-    });
-    void completion.catch(() => undefined);
-    parent?.children.add(completion);
-    return result.admission;
-  }
-
-  private createInvocation(input: {
-    ownerRunId?: string;
-    origin: "agent" | "user";
-    task: string;
-    admissionLease?: SessionAdmissionLease;
-    accept: () => void;
-  }): NativeInvocation {
-    const id = `${this.runtimeGeneration}:${++this.invocationSerial}`;
-    return {
-      ref: { id, ...(input.ownerRunId ? { runId: input.ownerRunId } : {}) },
-      generation: this.runtimeGeneration,
-      origin: input.origin,
-      task: input.task,
-      ...(input.admissionLease ? { admissionLease: input.admissionLease } : {}),
-      started: false,
-      active: true,
-      originClaimed: false,
-      accept: once(input.accept),
-      children: new Set(),
-    };
-  }
-
-  private currentInvocation(generation: number): NativeInvocation | undefined {
-    const current = this.invocation.getStore();
-    return current?.active && current.generation === generation ? current : undefined;
-  }
-
-  private async runInvocation(context: NativeInvocation, operation: () => Promise<void>, drainChildren: boolean): Promise<void> {
-    return this.invocation.run(context, async () => {
-      let failure: unknown;
-      try {
-        try {
-          await operation();
-        } catch (error) {
-          failure = error;
-        }
-        if (drainChildren) {
-          try {
-            await drainInvocationChildren(context.children);
-          } catch (error) {
-            failure ??= error;
-          }
-        }
-        if (failure !== undefined) throw failure;
-      } finally {
-        context.active = false;
-      }
-    });
-  }
-
   private session(): AgentSession {
     if (!this.runtime) throw new DriverUnavailableError(this.kind, "no open session");
     return this.runtime.session;
@@ -1267,12 +1005,12 @@ export class StableSdkDriver implements SessionDriver {
     for (const listener of this.listeners) listener(event);
   }
 
-  private push(update: SessionUpdate): void {
-    this.emit({ type: "update", update });
+  private push(update: SessionUpdate, invocation?: DriverInvocationRef): void {
+    this.emit({ type: "update", update, ...(invocation ? { invocation } : {}) });
   }
 
-  private onSessionEvent(event: AgentSessionEvent): void {
-    const invocation = this.currentInvocation(this.runtimeGeneration);
+  private onSessionEvent(event: AgentSessionEvent, generation: number): void {
+    const invocation = this.extensionAdmission.eventInvocation(generation);
     if (event.type === "agent_start" && invocation) invocation.started = true;
     this.toolCalls.note(event);
     this.flushHeldUserEnd();
@@ -1281,7 +1019,11 @@ export class StableSdkDriver implements SessionDriver {
       // Pi writes the entry right after this listener returns; the id is
       // readable one microtask from now (header). Nothing else is pushed for
       // a user message_end, so holding it changes no order.
-      this.heldUserEnd = { update, message: event.message };
+      this.heldUserEnd = {
+        update,
+        message: event.message,
+        ...(invocation ? { invocation: invocation.ref } : {}),
+      };
       queueMicrotask(() => this.flushHeldUserEnd());
       return;
     }
@@ -1305,7 +1047,7 @@ export class StableSdkDriver implements SessionDriver {
     if (!held) return;
     this.heldUserEnd = undefined;
     const entry = this.persistedEntryOf(held.message);
-    this.push(entry ? { ...held.update, entry } : held.update);
+    this.push(entry ? { ...held.update, entry } : held.update, held.invocation);
   }
 
   /**
@@ -1470,106 +1212,6 @@ function asIdSet(value: unknown): ReadonlySet<string> | undefined {
   if (!candidate || typeof candidate.size !== "number") return undefined;
   if (typeof candidate[Symbol.iterator] !== "function") return undefined;
   return value as ReadonlySet<string>;
-}
-
-// ---------------------------------------------------------------- admission helpers
-
-function deferred<T>(): { promise: Promise<T>; resolve(value: T): void; reject(error: unknown): void } {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((yes, no) => {
-    resolve = yes;
-    reject = no;
-  });
-  return { promise, resolve, reject };
-}
-
-function once(operation: () => void): () => void {
-  let called = false;
-  return () => {
-    if (called) return;
-    called = true;
-    operation();
-  };
-}
-
-function onceStart(start: (ownerRunId?: string) => ExtensionModelExecution): (ownerRunId?: string) => ExtensionModelExecution {
-  let called = false;
-  return (ownerRunId) => {
-    if (called) return staleExecutionError("An extension admission transaction was started twice.");
-    called = true;
-    return start(ownerRunId);
-  };
-}
-
-function observedRejected(error: unknown): Promise<never> {
-  const rejected = Promise.reject(error);
-  void rejected.catch(() => undefined);
-  return rejected;
-}
-
-function staleExecutionError(message = "The session runtime changed before extension model work could start."): ExtensionModelExecution {
-  const admission = observedRejected(new DriverUnavailableError("stable-sdk", message));
-  const completion = admission.then(() => ({ disposition: "consumed" as const }));
-  void completion.catch(() => undefined);
-  return { admission, completion };
-}
-
-function directExtensionAdmission(request: ExtensionModelWorkRequest): ExtensionModelAdmission {
-  const execution = request.start(request.parent?.runId);
-  const completion = execution.completion.then(() => undefined);
-  void completion.catch(() => undefined);
-  return { admission: execution.admission, completion };
-}
-
-async function drainInvocationChildren(children: Set<Promise<void>>): Promise<void> {
-  let firstFailure: unknown;
-  while (children.size > 0) {
-    const settled = await Promise.allSettled([...children]);
-    const rejected = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
-    if (rejected && firstFailure === undefined) firstFailure = rejected.reason;
-  }
-  if (firstFailure !== undefined) throw firstFailure;
-}
-
-function extensionOrigin(parent: NativeInvocation | undefined): "agent" | "user" {
-  if (!parent) return "agent";
-  if (parent.ref.runId) return parent.origin;
-  if (parent.origin !== "user" || parent.originClaimed) return "agent";
-  parent.originClaimed = true;
-  return "user";
-}
-
-function customMessageTriggersModel(streaming: boolean, options: PiCustomOptions): boolean {
-  if (options?.deliverAs === "nextTurn") return false;
-  return streaming ? options?.triggerTurn !== false : options?.triggerTurn === true;
-}
-
-function extensionUserContent(text: string, images: PiPromptOptions["images"]): ContentBlock[] {
-  return [
-    { type: "text", text },
-    ...((images ?? []) as ContentBlock[]).filter((block) => block.type === "image"),
-  ];
-}
-
-function extensionCustomContent(message: PiCustomMessage): ContentBlock[] {
-  const value = (message as { content?: unknown }).content;
-  if (typeof value === "string") return [{ type: "text", text: value }];
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((block): ContentBlock[] => {
-    if (!block || typeof block !== "object") return [];
-    const candidate = block as { type?: unknown; text?: unknown; mimeType?: unknown; data?: unknown };
-    if (candidate.type === "text" && typeof candidate.text === "string") return [{ type: "text", text: candidate.text }];
-    if (candidate.type === "image" && typeof candidate.mimeType === "string" && typeof candidate.data === "string") {
-      return [{ type: "image", mimeType: candidate.mimeType, data: candidate.data }];
-    }
-    return [];
-  });
-}
-
-function contentTask(content: ContentBlock[]): string {
-  const text = content.filter((block): block is Extract<ContentBlock, { type: "text" }> => block.type === "text").map((block) => block.text).join("\n").trim();
-  return text || "Extension model work";
 }
 
 function goalActionTask(action: GoalAction): string {

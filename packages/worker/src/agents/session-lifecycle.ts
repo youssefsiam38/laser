@@ -16,6 +16,8 @@ export class SessionLifecycle<End, Message> {
   /** Native extension invocations registered before an older settled event is observed. */
   private readonly descendants = new Map<string, number>();
   private readonly descendantSettled = new Set<string>();
+  /** Exact native epoch for the current owner; absent only for legacy/fake drivers. */
+  private readonly invocations = new Map<string, Set<string>>();
 
   phase(): SessionPhase<End> {
     return this.phaseValue;
@@ -33,6 +35,7 @@ export class SessionLifecycle<End, Message> {
    */
   admitPrompt(runId: string, message: { local: Message; engine: Message }, input: { streaming: boolean; explicitQueue: boolean }): PromptAdmission {
     if (this.phaseValue.kind === "idle") {
+      this.invocations.delete(runId);
       this.phaseValue = { kind: "invoking", runId, settled: false };
       return "invoke";
     }
@@ -49,8 +52,26 @@ export class SessionLifecycle<End, Message> {
 
   begin(runId: string): boolean {
     if (this.phaseValue.kind !== "idle") return false;
+    this.invocations.delete(runId);
     this.phaseValue = { kind: "invoking", runId, settled: false };
     return true;
+  }
+
+  /** Bind before native work begins; one run may own nested native epochs. */
+  bindInvocation(runId: string, invocation: { id: string; runId?: string }): boolean {
+    if (this.owner() !== runId || (invocation.runId !== undefined && invocation.runId !== runId)) return false;
+    const owned = this.invocations.get(runId) ?? new Set<string>();
+    owned.add(invocation.id);
+    this.invocations.set(runId, owned);
+    return true;
+  }
+
+  /** Exact when the driver supplies epochs; run-scoped fallback keeps alternate drivers working. */
+  ownsInvocation(invocation: { id: string; runId?: string }): boolean {
+    const owner = this.owner();
+    if (!owner || invocation.runId !== owner) return false;
+    const current = this.invocations.get(owner);
+    return current === undefined || current.has(invocation.id);
   }
 
   markSettled(runId: string): void {
@@ -107,6 +128,7 @@ export class SessionLifecycle<End, Message> {
       ...(this.phaseValue.kind === "terminal-pending" ? { end: this.phaseValue.end } : { end: undefined }),
     };
     this.phaseValue = { kind: "idle" };
+    this.invocations.delete(runId);
     this.descendants.delete(runId);
     this.descendantSettled.delete(runId);
     return result;
@@ -193,6 +215,7 @@ export class SessionLifecycle<End, Message> {
     this.resolveTerminal.delete(runId);
     this.terminal.delete(runId);
     this.inboxes.delete(runId);
+    this.invocations.delete(runId);
     this.descendants.delete(runId);
     this.descendantSettled.delete(runId);
     if (this.successorRunId === runId) this.successorRunId = undefined;
