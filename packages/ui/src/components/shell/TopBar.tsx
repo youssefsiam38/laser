@@ -1,6 +1,8 @@
+import type { SessionAgentInfo } from "@lasercode/protocol";
 import { useMemo, useState } from "react";
 import {
   Activity,
+  Bot,
   ChevronLeft,
   ChevronRight,
   Copy,
@@ -22,6 +24,7 @@ import {
 // Agent map (M13-T7): the toggle that swaps the main column between the thread and the live map.
 import { mapUi, useMapUi } from "@/components/agents/map";
 import { useSessionAgent } from "@/agents/hooks";
+import { agentDisplayName } from "@/agents/model";
 import { ContextRingButton } from "@/components/assistant-ui/elements/context-display";
 // Beam: the quiet mark on one of its sessions (view styling, not an entry point).
 import { BeamSessionMark } from "@/components/beam/BeamSessionMark";
@@ -77,6 +80,14 @@ import { requestMoveSession } from "./move-session.js";
  * and the two panel toggles. Everything that changes the session lives in the
  * more menu; the composer owns model and thinking.
  */
+/** Canonical session attribution only; never today's default for old history. */
+export function persistedSessionAgent(
+  view: { state: { agent?: SessionAgentInfo } } | undefined,
+  summary: { agent?: SessionAgentInfo } | undefined,
+): SessionAgentInfo | undefined {
+  return view?.state.agent ?? summary?.agent;
+}
+
 /** The transcript's first user line, for a session the catalog has not scanned yet. */
 const firstUserLine = (view: { blocks: readonly { kind: string; text?: string }[] }): string | undefined => {
   for (const block of view.blocks) if (block.kind === "user" && block.text?.trim()) return block.text.replace(/\s+/g, " ").trim().slice(0, 60);
@@ -98,6 +109,10 @@ export function TopBar() {
   const sessionAgent = useSessionAgent(view?.path);
 
   const summary = useMemo(() => (view ? sessions.find((s) => s.path === view.path) : undefined), [sessions, view]);
+  // Only the attribution persisted with this session is identity. In
+  // particular, do not fill an older unattributed session from today's
+  // default agent (which `useSessionAgent` intentionally does for grouping).
+  const persistedAgent = persistedSessionAgent(view, summary);
   const status = sessionStatus(view, summary);
   const stateLabel = sessionStateLabel(view, meta.worker);
   const chip = workerChip(meta.worker);
@@ -133,7 +148,7 @@ export function TopBar() {
   return (
     <header
       className={cn(
-        "flex h-[calc(var(--spacing)*12+env(safe-area-inset-top))] shrink-0 items-center gap-1 bg-bg px-2 pt-[env(safe-area-inset-top)] hairline-b",
+        "@container/topbar flex h-[calc(var(--spacing)*12+env(safe-area-inset-top))] shrink-0 items-center gap-1 bg-bg px-2 pt-[env(safe-area-inset-top)] hairline-b",
       )}
     >
       {shell.layout === "mobile" ? (
@@ -233,14 +248,7 @@ export function TopBar() {
       </div>
 
       <div className="flex shrink-0 items-center gap-0.5">
-        {meta.model && (
-          <span
-            className="me-1.5 hidden max-w-40 truncate font-mono text-xs text-ink-3 xl:inline"
-            title={`${meta.model.provider}/${meta.model.id}`}
-          >
-            {meta.model.id}
-          </span>
-        )}
+        <SessionIdentity agentName={persistedAgent?.agentName} model={meta.model} />
 
         {/* The context ring (docs/ux-elements.md "Context display"); the
             composer carries the same element next to Send. */}
@@ -359,6 +367,46 @@ export function TopBar() {
 
       <CompactDialog open={compactOpen} onOpenChange={setCompactOpen} />
     </header>
+  );
+}
+
+/** The session's persisted agent definition beside its model; identity, never a control. */
+export function SessionIdentity({
+  agentName,
+  model,
+}: {
+  agentName: string | undefined;
+  model: { provider: string; id: string } | null;
+}) {
+  const label = agentName === undefined ? undefined : agentDisplayName(agentName);
+  if (label === undefined && model === null) return null;
+  return (
+    <div
+      data-slot="session-identity"
+      className={cn("me-1.5 flex min-w-0 items-center gap-1.5", label === undefined && "hidden @2xl/topbar:flex")}
+    >
+      {label !== undefined ? (
+        <span
+          data-slot="session-agent-identity"
+          aria-label={`Agent: ${label}`}
+          title={`Agent: ${label}`}
+          className="flex min-w-0 max-w-20 items-center gap-1 font-mono text-xs text-ink-2 @xl/topbar:max-w-40"
+        >
+          <Bot aria-hidden="true" className="size-3.5 shrink-0" />
+          <span className="truncate">{label}</span>
+        </span>
+      ) : null}
+      {label !== undefined && model !== null ? <span aria-hidden="true" className="hidden text-xs text-ink-3 @2xl/topbar:inline">·</span> : null}
+      {model !== null ? (
+        <span
+          data-slot="session-model-identity"
+          className="hidden max-w-40 truncate font-mono text-xs text-ink-3 @2xl/topbar:inline"
+          title={`${model.provider}/${model.id}`}
+        >
+          {model.id}
+        </span>
+      ) : null}
+    </div>
   );
 }
 
