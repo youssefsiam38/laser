@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-10T20:30:22Z · stabilization-ci · HEAD: aba12f7 (development merge in preparation)
+**Last updated:** 2026-09-10T20:38:10Z · stabilization-ci · HEAD: 120bf303
 
-**Current focus:** M13 — reviewed CI repair `7a05c79` pushed and guarded release retry active. Separate development continuation preserves `aba12f7b`; HLC-010 plan and sole-owner handoff next.
+**Current focus:** M13 — reviewed CI repair `7a05c79` pushed and guarded release retry active. Separate development continuation preserves `aba12f7b`; HLC-010 has one new owner investigating its admission plan before code.
 
 ## Milestones
 
@@ -29,7 +29,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Blockers
 
-- M13-T93: HLC-010 still blocks development integration; Q-8 scope authorized, new sole owner pending.
+- M13-T93: HLC-010 still blocks development integration; Q-8 scope authorized, hlc010-admission-owner preparing its plan.
 - M13-T97: guarded retry awaits repaired-SHA source CI, native builds and verified publication.
 - M13-T94: its original complete-fix dependencies and full acceptance gates remain incomplete; T97 does not replace them.
 
