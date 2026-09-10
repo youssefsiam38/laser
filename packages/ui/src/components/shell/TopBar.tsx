@@ -1,11 +1,10 @@
-import type { SessionAgentInfo } from "@lasercode/protocol";
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   Activity,
-  Bot,
   ChevronLeft,
   ChevronRight,
   Copy,
+  CornerUpLeft,
   Ellipsis,
   FolderInput,
   GitBranch,
@@ -13,7 +12,6 @@ import {
   Radio,
   PanelLeft,
   PanelLeftClose,
-  Pencil,
   RotateCw,
   Shrink,
   Search,
@@ -24,7 +22,6 @@ import {
 // Agent map (M13-T7): the toggle that swaps the main column between the thread and the live map.
 import { mapUi, useMapUi } from "@/components/agents/map";
 import { useSessionAgent } from "@/agents/hooks";
-import { agentDisplayName } from "@/agents/model";
 import { ContextRingButton } from "@/components/assistant-ui/elements/context-display";
 // Beam: the quiet mark on one of its sessions (view styling, not an entry point).
 import { BeamSessionMark } from "@/components/beam/BeamSessionMark";
@@ -74,25 +71,34 @@ import { InlineRename } from "./InlineRename.js";
 import { lastPromptEntryId, sessionStateLabel, sessionStatus, workerChip } from "./model.js";
 import { errorText, useShell } from "./shell-context.js";
 import { requestMoveSession } from "./move-session.js";
+import { SessionIdentity } from "./SessionIdentity.js";
 
 /**
  * Sticky row above the thread: what session this is, what state it is in,
  * and the two panel toggles. Everything that changes the session lives in the
  * more menu; the composer owns model and thinking.
  */
-/** Canonical session attribution only; never today's default for old history. */
-export function persistedSessionAgent(
-  view: { state: { agent?: SessionAgentInfo } } | undefined,
-  summary: { agent?: SessionAgentInfo } | undefined,
-): SessionAgentInfo | undefined {
-  return view?.state.agent ?? summary?.agent;
-}
 
 /** The transcript's first user line, for a session the catalog has not scanned yet. */
 const firstUserLine = (view: { blocks: readonly { kind: string; text?: string }[] }): string | undefined => {
   for (const block of view.blocks) if (block.kind === "user" && block.text?.trim()) return block.text.replace(/\s+/g, " ").trim().slice(0, 60);
   return undefined;
 };
+
+function useRoomyTopBar(): { roomy: boolean; markerRef: RefObject<HTMLSpanElement | null> } {
+  const markerRef = useRef<HTMLSpanElement>(null);
+  const [roomy, setRoomy] = useState(false);
+  useLayoutEffect(() => {
+    const marker = markerRef.current;
+    if (!marker || typeof ResizeObserver === "undefined") return;
+    const update = () => setRoomy(getComputedStyle(marker).display !== "none");
+    const observer = new ResizeObserver(update);
+    observer.observe(marker.parentElement ?? marker);
+    update();
+    return () => observer.disconnect();
+  }, []);
+  return { roomy, markerRef };
+}
 
 export function TopBar() {
   const { actions, client, currentProject } = useLaserStable();
@@ -103,6 +109,9 @@ export function TopBar() {
   const { copy } = useCopy();
   const [renaming, setRenaming] = useState(false);
   const [compactOpen, setCompactOpen] = useState(false);
+  // A CSS container sentinel makes responsive controls follow the thread
+  // column, not the viewport (a wide screen can still have a narrow thread).
+  const { roomy, markerRef } = useRoomyTopBar();
   const activityLevel = useActivityDetailLevel(view?.path);
   // Agent map (M13-T7): shown in place of the thread while `open`.
   const mapOpen = useMapUi().open;
@@ -112,7 +121,15 @@ export function TopBar() {
   // Only the attribution persisted with this session is identity. In
   // particular, do not fill an older unattributed session from today's
   // default agent (which `useSessionAgent` intentionally does for grouping).
-  const persistedAgent = persistedSessionAgent(view, summary);
+  const persistedAgent = view?.state.agent ?? summary?.agent;
+  const parentPath = persistedAgent?.kind === "child" ? persistedAgent.parentPath : undefined;
+  const parentTitle = useLaserState((s) => {
+    if (parentPath === undefined) return undefined;
+    const parentSummary = s.sessions.find((session) => session.path === parentPath);
+    const parentView = s.open[parentPath];
+    if (parentSummary) return sessionTitle(parentSummary, parentView);
+    return parentView?.state.name ?? parentView?.title ?? "Parent session";
+  });
   const status = sessionStatus(view, summary);
   const stateLabel = sessionStateLabel(view, meta.worker);
   const chip = workerChip(meta.worker);
@@ -148,9 +165,10 @@ export function TopBar() {
   return (
     <header
       className={cn(
-        "@container/topbar flex h-[calc(var(--spacing)*12+env(safe-area-inset-top))] shrink-0 items-center gap-1 bg-bg px-2 pt-[env(safe-area-inset-top)] hairline-b",
+        "@container/topbar relative flex h-[calc(var(--spacing)*12+env(safe-area-inset-top))] shrink-0 items-center gap-1 bg-bg px-2 pt-[env(safe-area-inset-top)] hairline-b",
       )}
     >
+      <span ref={markerRef} data-slot="topbar-room-marker" aria-hidden="true" className="absolute hidden @3xl/topbar:block" />
       {shell.layout === "mobile" ? (
         <TooltipIconButton tooltip="Sessions" size="icon" onClick={() => shell.setSessionsOpen(true)}>
           <ChevronLeft />
@@ -176,7 +194,7 @@ export function TopBar() {
 
         {/* Agents leap (Lane U2): a child session an agent started shows where
             it came from — its parent's title, one press away — before its own. */}
-        {view && !renaming ? <ParentCrumb path={view.path} /> : null}
+        {view && !renaming && roomy && parentPath && parentTitle ? <ParentCrumb path={parentPath} title={parentTitle} /> : null}
 
         {renaming && view ? (
           <InlineRename
@@ -199,17 +217,6 @@ export function TopBar() {
           >
             {title}
           </h1>
-        )}
-
-        {view && !renaming && (
-          <TooltipIconButton
-            tooltip="Rename session"
-            size="icon-xs"
-            className="text-ink-3 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100"
-            onClick={() => setRenaming(true)}
-          >
-            <Pencil />
-          </TooltipIconButton>
         )}
 
         {/* The session's state in words lives in the status line above the
@@ -252,63 +259,90 @@ export function TopBar() {
 
         {/* The context ring (docs/ux-elements.md "Context display"); the
             composer carries the same element next to Send. */}
-        <ContextRingButton side="bottom" className="me-1" />
-        <TooltipIconButton tooltip="Find in conversation" shortcut="Ctrl+F" onClick={() => openConversationFind()}><Search /></TooltipIconButton>
-        {view && sessionAgent?.kind === "chat" ? (
-          <TooltipIconButton tooltip="Move chat to a project" onClick={() => requestMoveSession({ path: view.path, title })}>
-            <FolderInput />
-          </TooltipIconButton>
-        ) : null}
-        {/* Agent map (M13-T7): the live map of this session's agents, in place of the thread. */}
-        <TooltipIconButton
-          tooltip={mapOpen ? "Show conversation" : "Show agent map"}
-          aria-pressed={mapOpen}
-          disabled={!view}
-          data-slot="agent-map-toggle"
-          onClick={() => mapUi.toggleOpen()}
-        >
-          <Waypoints />
-        </TooltipIconButton>
+        <ContextRingButton side="bottom" className="me-1 hidden @3xl/topbar:inline-flex" />
 
         {/* The fleet, immediately left of the monitor, with the same grammar
             as its toggle: a count of what needs a person wins over a count of
             what is merely going. */}
-        <TooltipIconButton
-          tooltip={shell.fleetOpen ? "Hide the fleet" : fleetTooltip(fleet)}
-          shortcut="\\"
-          aria-pressed={shell.fleetOpen}
-          data-slot="fleet-toggle"
-          onClick={shell.toggleFleet}
-          className="relative"
-        >
-          <Radio />
-          {!shell.fleetOpen && (fleet.needsYou > 0 || fleet.running > 0 || fleet.elsewhereNeedsYou > 0 || fleet.elsewhereRunning > 0) && (
-            <span
-              aria-hidden="true"
-              className={cn(
-                "absolute end-1 top-1 size-1.5 rounded-full border border-bg",
-                fleet.needsYou > 0 || fleet.elsewhereNeedsYou > 0 ? "bg-attention motion-safe:animate-attention" : "bg-live",
+        {roomy ? (
+          <>
+            <TooltipIconButton
+              tooltip={shell.fleetOpen ? "Hide the fleet" : fleetTooltip(fleet)}
+              shortcut="\\"
+              aria-pressed={shell.fleetOpen}
+              data-slot="fleet-toggle"
+              onClick={shell.toggleFleet}
+              className="relative"
+            >
+              <Radio />
+              {!shell.fleetOpen && (fleet.needsYou > 0 || fleet.running > 0 || fleet.elsewhereNeedsYou > 0 || fleet.elsewhereRunning > 0) && (
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "absolute end-1 top-1 size-1.5 rounded-full border border-bg",
+                    fleet.needsYou > 0 || fleet.elsewhereNeedsYou > 0 ? "bg-attention motion-safe:animate-attention" : "bg-live",
+                  )}
+                />
               )}
-            />
-          )}
-        </TooltipIconButton>
-
-        <TooltipIconButton
-          tooltip={shell.telemetryOpen ? "Hide telemetry" : "Show telemetry"}
-          shortcut="]"
-          aria-pressed={shell.telemetryOpen}
-          onClick={shell.toggleTelemetry}
-        >
-          <Activity />
-        </TooltipIconButton>
+            </TooltipIconButton>
+            <TooltipIconButton
+              tooltip={shell.telemetryOpen ? "Hide telemetry" : "Show telemetry"}
+              shortcut="]"
+              aria-pressed={shell.telemetryOpen}
+              onClick={shell.toggleTelemetry}
+            >
+              <Activity />
+            </TooltipIconButton>
+          </>
+        ) : null}
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <TooltipIconButton tooltip="More">
+            <TooltipIconButton tooltip="More" className="pointer-coarse:size-11">
               <Ellipsis />
             </TooltipIconButton>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="min-w-60">
+            {!roomy && parentPath && parentTitle ? (
+              <DropdownMenuItem onSelect={() => void actions.openSession(parentPath)} className="pointer-coarse:min-h-11">
+                <CornerUpLeft />
+                <span className="min-w-0 truncate">Open parent: {parentTitle}</span>
+              </DropdownMenuItem>
+            ) : null}
+            {!roomy ? (
+              <>
+                <DropdownMenuItem onSelect={shell.toggleFleet} className="pointer-coarse:min-h-11">
+                  <Radio />
+                  {shell.fleetOpen ? "Hide the fleet" : fleetTooltip(fleet)}
+                  <DropdownMenuShortcut>\\</DropdownMenuShortcut>
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={shell.toggleTelemetry} className="pointer-coarse:min-h-11">
+                  <Activity />
+                  {shell.telemetryOpen ? "Hide telemetry" : "Show telemetry"}
+                  <DropdownMenuShortcut>]</DropdownMenuShortcut>
+                </DropdownMenuItem>
+              </>
+            ) : null}
+            <DropdownMenuItem disabled={!view || renaming} onSelect={() => setRenaming(true)} className="pointer-coarse:min-h-11">
+              <SquarePen />
+              Rename session
+            </DropdownMenuItem>
+            <DropdownMenuItem disabled={!view} onSelect={() => openConversationFind()} className="pointer-coarse:min-h-11">
+              <Search />
+              Find in conversation
+              <DropdownMenuShortcut>Ctrl+F</DropdownMenuShortcut>
+            </DropdownMenuItem>
+            <DropdownMenuItem disabled={!view} onSelect={() => mapUi.toggleOpen()} className="pointer-coarse:min-h-11" data-slot="agent-map-toggle">
+              <Waypoints />
+              {mapOpen ? "Show conversation" : "Show agent map"}
+            </DropdownMenuItem>
+            {view && sessionAgent?.kind === "chat" ? (
+              <DropdownMenuItem onSelect={() => requestMoveSession({ path: view.path, title })} className="pointer-coarse:min-h-11">
+                <FolderInput />
+                Move chat to a project
+              </DropdownMenuItem>
+            ) : null}
+            <DropdownMenuSeparator />
             <DropdownMenuItem disabled={!view || busy} onSelect={() => void actions.compact()}>
               <Shrink />
               Compact context
@@ -370,75 +404,26 @@ export function TopBar() {
   );
 }
 
-/** The session's persisted agent definition beside its model; identity, never a control. */
-export function SessionIdentity({
-  agentName,
-  model,
-}: {
-  agentName: string | undefined;
-  model: { provider: string; id: string } | null;
-}) {
-  const label = agentName === undefined ? undefined : agentDisplayName(agentName);
-  if (label === undefined && model === null) return null;
-  return (
-    <div
-      data-slot="session-identity"
-      className={cn("me-1.5 flex min-w-0 items-center gap-1.5", label === undefined && "hidden @2xl/topbar:flex")}
-    >
-      {label !== undefined ? (
-        <span
-          data-slot="session-agent-identity"
-          aria-label={`Agent: ${label}`}
-          title={`Agent: ${label}`}
-          className="flex min-w-0 max-w-20 items-center gap-1 font-mono text-xs text-ink-2 @xl/topbar:max-w-40"
-        >
-          <Bot aria-hidden="true" className="size-3.5 shrink-0" />
-          <span className="truncate">{label}</span>
-        </span>
-      ) : null}
-      {label !== undefined && model !== null ? <span aria-hidden="true" className="hidden text-xs text-ink-3 @2xl/topbar:inline">·</span> : null}
-      {model !== null ? (
-        <span
-          data-slot="session-model-identity"
-          className="hidden max-w-40 truncate font-mono text-xs text-ink-3 @2xl/topbar:inline"
-          title={`${model.provider}/${model.id}`}
-        >
-          {model.id}
-        </span>
-      ) : null}
-    </div>
-  );
-}
-
-/** "{parent title} ›" before a child session's title; nothing for a top-level session. */
-function ParentCrumb({ path }: { path: string }) {
+/** "{parent title} ›" before a child session's title when the container has room. */
+function ParentCrumb({ path, title }: { path: string; title: string }) {
   const { actions } = useLaserStable();
-  const agent = useSessionAgent(path);
-  const parentPath = agent?.kind === "child" ? agent.parentPath : undefined;
-  const parentTitle = useLaserState((s) => {
-    if (parentPath === undefined) return undefined;
-    const summary = s.sessions.find((session) => session.path === parentPath);
-    const view = s.open[parentPath];
-    if (summary) return sessionTitle(summary, view);
-    return view?.state.name ?? view?.title ?? "Parent session";
-  });
-  if (parentPath === undefined || parentTitle === undefined) return null;
   return (
-    <span data-slot="parent-crumb" className="flex min-w-0 shrink items-center gap-1">
+    <span data-slot="parent-crumb" className="flex shrink-0 items-center gap-1">
       <button
         type="button"
-        onClick={() => void actions.openSession(parentPath)}
-        title={`Open ${parentTitle}
-${parentPath}`}
+        onClick={() => void actions.openSession(path)}
+        aria-label={`Open parent session: ${title}`}
+        title={`Open ${title}\n${path}`}
         className={cn(
-          "max-w-24 truncate rounded px-1 text-sm leading-5 text-ink-2 outline-none sm:max-w-40",
+          "flex size-6 items-center justify-center rounded text-sm leading-5 text-ink-2 outline-none @3xl/topbar:size-auto @3xl/topbar:max-w-40 @3xl/topbar:px-1",
           "transition-colors duration-(--motion-instant) hover:bg-surface-2 hover:text-ink active:bg-[color-mix(in_oklab,var(--surface-2)_80%,var(--ink))]",
-          "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live motion-reduce:transition-none",
+          "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live motion-reduce:transition-none pointer-coarse:min-h-11 pointer-coarse:min-w-11",
         )}
       >
-        {parentTitle}
+        <CornerUpLeft aria-hidden="true" className="size-3.5 @3xl/topbar:hidden" />
+        <span className="hidden min-w-0 truncate @3xl/topbar:inline">{title}</span>
       </button>
-      <ChevronRight className="size-3 shrink-0 text-ink-3" aria-hidden="true" />
+      <ChevronRight className="hidden size-3 shrink-0 text-ink-3 @3xl/topbar:block" aria-hidden="true" />
     </span>
   );
 }
