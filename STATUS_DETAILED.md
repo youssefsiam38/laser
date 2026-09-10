@@ -1225,7 +1225,7 @@ lane T's own if both were written.
 | M13-T85 | Release stable 0.3.3 | done | beam-release-033 | `ff880cd`, `5e7e267`, `v0.3.3`; CI 34459385794; release 34459703018; 12 assets and live signed feeds verified | D-184; see notes |
 | M13-T86 | Choose the top-level agent and thinking level before the first turn | done | beam-session-agent-picker | isolated `pnpm identity:check` + `pnpm verify`; 968 UI tests; Chromium draft round-trip | D-185; see notes |
 | M13-T87 | Replace session-sidebar status tags with compact visual state | done | beam-session-agent-picker | 17 sidebar interaction tests; isolated `pnpm verify`; Chromium fold/unread review | D-186; see notes |
-| M13-T88 | Release stable 0.3.4 | in-progress | beam-release-034 | — | D-187; see notes |
+| M13-T88 | Release stable 0.3.4 | done | beam-release-034 | `v0.3.4` at `62839fe`; source CI 34471150534 and release 34471617236 passed; 12 published assets | D-187; see notes |
 | M13-T65 | A fork is a top-level session, never nested under its origin | done | claude-2026-09-09-agents | `pnpm -F @lasercode/host test -- test/catalog.test.ts`; `pnpm -F @lasercode/ui test -- test/shell/session-groups-fork.test.ts` | requested by the user; D-166 |
 | M13-T64 | Namer labels every call of a top-level session, none of a child's | done | claude-2026-09-09-agents | `pnpm -F @lasercode/worker test` (`agents/namer.test.ts` "labels every call in a burst at once"; `agents/server-agents.test.ts` "a child agent's tool calls are never labelled") | requested by the user; D-165 |
 | M13-T63 | Restoring an unsent draft puts the person in the field | done | claude-2026-09-09-agents | `pnpm -F @lasercode/ui test -- test/thread/draft-restore-focus.test.tsx` | requested by the user; see notes |
@@ -1577,6 +1577,9 @@ lane T's own if both were written.
 - 2026-09-10 done: [release run 34459703018](https://github.com/youssefsiam38/laser/actions/runs/34459703018) passed native x64 and ARM64 builds/clean-machine gates, real-artifact installer verification, signed repository generation, provenance, verified publication and Pages deployment. [v0.3.3](https://github.com/youssefsiam38/laser/releases/tag/v0.3.3) became public Latest at 09:26:08Z. Its 12 uploaded nonempty assets include both architectures' four formats, installer, checksum manifest/signature and offline provenance. Independent audit matched every manifest digest to GitHub metadata, verified the downloaded manifest's offline provenance against the workflow/tag/exact source commit, and checked live signed APT/DNF metadata for both architectures against release package versions, sizes and digests. Supplemental audit assumptions about artifact and RPM name casing were corrected in `/tmp` only; no release source/assets were changed. Evidence: `/tmp/laser-release-033-{verify,installer,ci,publish,audit}.log`, `/tmp/laser-release-033-assets`, and the workflow links. Release notes describe the changes and synthetic-audio verification limit. Installed app, personal state, conversations, credentials and unrelated scratch/study work remain untouched.
 
 #### M13-T88 notes
+- 2026-09-10 done: source CI 34471150534 and release 34471617236 passed. `v0.3.4` at `62839fe` is public, stable and Latest: https://github.com/youssefsiam38/laser/releases/tag/v0.3.4. Both architecture builds and the verified publisher completed; all 12 assets are uploaded, nonempty and carry SHA-256 digests: eight Linux packages, installer, checksum manifest/signature and offline provenance. Native-feed publication ran in the successful release workflow. Installed app and unrelated working files remain untouched. H-4 is resolved.
+- 2026-09-10 checkpoint: immutable `v0.3.4` pushed at `62839fe`; draft notes created. Release workflow 34471617236 is building x64/ARM64 and owns publication after asset verification. Monitor `t-8dccdb96` observes only; cancelling that local monitor cannot stop the GitHub release now underway.
+- 2026-09-10 resumed: the person approved continuing H-4. Source CI 34471150534 passed for exact commit `62839fe3ab65c1e460f89a23507bd7b85927265b`; push its immutable `v0.3.4` tag and draft notes, then use the existing verified publisher.
 - 2026-09-10 checkpoint: source CI 34470754954 caught an unrelated worker-pool test waiting for process readiness rather than completed session recovery. Changed its wait predicate to confirmed open-session state, leaving production recovery unchanged. No tag was pushed on the failed run.
 - 2026-09-10 checkpoint: source commits `b11fd3d`, `15276ee` and same-millisecond regression fix `0c91969` pushed to main. Exact versioned isolated identity/build/typecheck/test gate passed (1,886 workspace tests; one intentional skip; 13 publication regressions), plus 76 installer checks. Source CI 34470754954 is the prerequisite to tagging; an automated release command waits for its success, pushes `v0.3.4`, creates only a draft with release notes, and observes the existing two-architecture publisher. Logs: `/tmp/laser-034-{verify,installer,ci,release}.log`.
 - 2026-09-10 checkpoint: versioned gate exposed a pre-existing same-millisecond run-selection failure in `test/agents/harness.test.ts:807`. Fix the comparator in worker and UI together: a live follow-up outranks its terminal predecessor when start times tie; retain update-time and ID tie-breaks. Add deterministic regression coverage before retrying the release gate.
@@ -1959,6 +1962,13 @@ lane T's own if both were written.
 ---
 
 ## Handoffs
+
+### H-4 · M13-T88 · 2026-09-10 · beam-release-034
+State of the work: source `62839fe` pushed; source CI 34471150534 still running. The person stopped local automation `t-c1cf502d` before tagging. No remote `v0.3.4` tag and no release workflow were started.
+Uncommitted: STATUS.md publication handoff and this ledger update; unrelated files remain untouched.
+What is broken: automatic publication is no longer queued; stopping the local command did not cancel GitHub CI.
+Next concrete step: after approval to resume and successful source CI, tag exactly `62839fe`, push the tag and let the existing publisher finish. Release notes are `/tmp/laser-034-release-notes.md`.
+Do not: restart the cancelled command without approval, tag a failed CI commit, publish while architecture builds run, or touch the installed app.
 
 ### H-1 · M2-T4 · 2026-09-05 · claude-2026-09-05-laneA
 State of the work: the host resolves project trust and passes it to the worker as
