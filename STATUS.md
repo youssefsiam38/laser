@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-10T20:56:20Z · stabilization-ci · HEAD: 018a6e6
+**Last updated:** 2026-09-10T21:40:30Z · stabilization-ci · HEAD: e1ddc2d
 
-**Current focus:** M13 — 0.3.5 published and verified. Separate development preserves `aba12f7b`; one HLC-010 owner is implementing the approved admission/continuation plan.
+**Current focus:** M13 — 0.3.5 published and verified. Local main reconciled at `5a8fe4f`; separate development preserves `aba12f7b`; HLC-010 checkpoint needs pre-review corrections; independent frontend/browser acceptance continues.
 
 ## Milestones
 
@@ -30,7 +30,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 ## Blockers
 
 - M13-T93: HLC-010 still blocks development integration; Q-8 scope authorized, hlc010-admission-owner implementing the approved exact-version seam; independent review pending.
-- M13-T94: its original complete-fix dependencies and full acceptance gates remain incomplete; T97 does not replace them.
+- M13-T94: publication now authorized after completion; original correctness/review/browser/package gates remain incomplete.
 
 ## Next up
 
