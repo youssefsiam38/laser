@@ -50,11 +50,17 @@ const agentLabel = () => container.querySelector<HTMLButtonElement>('[data-slot=
 const modelLabel = () => container.querySelector<HTMLElement>('[data-slot="session-model-identity"]');
 const detail = () => document.querySelector<HTMLElement>('[data-slot="session-agent-detail"]');
 
-const pointer = (element: Element, type: "pointerover" | "pointerout", pointerType: "mouse" | "touch") => {
-  const event = new PointerEvent(type, { bubbles: true });
+const pointer = (element: Element, type: "pointerover" | "pointerout" | "pointerdown" | "pointerup", pointerType: "mouse" | "touch") => {
+  const event = new PointerEvent(type, { bubbles: true, button: 0 });
   Object.defineProperty(event, "pointerType", { value: pointerType });
   element.dispatchEvent(event);
 };
+const touchTap = async (element: HTMLElement) => act(async () => {
+  pointer(element, "pointerdown", "touch");
+  element.focus();
+  pointer(element, "pointerup", "touch");
+  element.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0, detail: 1 }));
+});
 
 const shell: ShellContextValue = {
   layout: "mobile", sessionsOpen: false, fleetOpen: false, telemetryOpen: false,
@@ -110,18 +116,28 @@ describe("session identity renderer", () => {
     expect(agent.querySelector("span")?.className).toContain("truncate");
     expect(container.querySelector('[role="combobox"],[role="listbox"]')).toBeNull();
 
+    // A real touch activation focuses between pointerdown and click. The first
+    // sequence opens; the second deliberately toggles it closed.
+    await touchTap(agent);
+    expect(detail()?.textContent).toBe(`Agent: ${name}`);
+    await touchTap(agent);
+    expect(detail()).toBeNull();
+
+    await act(async () => { agent.blur(); agent.focus(); });
+    expect(detail()?.textContent).toBe(`Agent: ${name}`);
+    await act(async () => agent.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(detail()).toBeNull();
+    await act(async () => agent.blur());
+
     await act(async () => pointer(agent, "pointerover", "mouse"));
     expect(detail()?.textContent).toBe(`Agent: ${name}`);
     await act(async () => pointer(agent, "pointerout", "mouse"));
     expect(detail()).toBeNull();
 
-    await act(async () => agent.focus());
+    await touchTap(agent);
     expect(detail()?.textContent).toBe(`Agent: ${name}`);
     await act(async () => agent.blur());
     expect(detail()).toBeNull();
-
-    await act(async () => agent.click());
-    expect(detail()?.textContent).toBe(`Agent: ${name}`);
   });
 
   it("keeps built-in labels and places the canonical model after the agent", async () => {
