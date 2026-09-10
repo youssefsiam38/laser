@@ -19,7 +19,7 @@ import {
 } from "@lasercode/protocol";
 import { sessionAttention, sessionTitle } from "../runtime/threadList.js";
 import type { SessionView } from "../store.js";
-import { agentDisplayName, compareRunsOldestFirst, runList, runStatusTone, type AgentStatusTone, type RunSource } from "./model.js";
+import { agentDisplayName, compareRunsNewestFirst, compareRunsOldestFirst, runList, runStatusTone, type AgentStatusTone, type RunSource } from "./model.js";
 
 /** A run's status, or what a session without a run of its own is doing. */
 export type AgentTreeStatus = AgentRunStatus | "idle" | "working";
@@ -118,7 +118,10 @@ export function createAncestryIndex(runs: RunSource, sessions: readonly SessionS
   const runsBySession = new Map<string, AgentRun>();
   for (const run of runList(runs)) {
     const held = runsBySession.get(run.sessionPath);
-    if (!held || time(run.startedAt) >= time(held.startedAt)) runsBySession.set(run.sessionPath, run);
+    // Ancestry must stand on the same canonical run as the node, sidebar and
+    // fleet. In particular, a same-millisecond resumed live run supersedes a
+    // terminal predecessor regardless of insertion order or random run id.
+    if (!held || compareRunsNewestFirst(run, held) < 0) runsBySession.set(run.sessionPath, run);
   }
   const chains = new Map<string, string[]>();
   const ancestryOf = (path: string): string[] => {

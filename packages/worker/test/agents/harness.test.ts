@@ -707,7 +707,7 @@ describe("AgentHarness", () => {
       expect(world.drivers.get(childPath)!.prompted.map((p) => p.text)).toEqual(["Fix the login form."]);
     });
 
-    it("says the endings in the fleet's words: Asking with the question, Needs you with the message, Ended with who ended it", async () => {
+    it("says the endings in the fleet's words: live Asking with the question, terminal Blocked with the message, Ended with who ended it", async () => {
       const root = world.openRoot("lead");
       const asking = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "asking", task: "t" });
       world.drivers.get("/sessions/child-1.jsonl")!.ask({ method: "confirm", id: "ui-1", title: "Drop the table?" });
@@ -722,10 +722,10 @@ describe("AgentHarness", () => {
       world.tasks.set(root.path, [task("t-stopped", root.path, "stopped", { exitCode: null, terminalReason: "you stopped it", endedAt: "2026-09-09T10:01:00.000Z" }), task("t-done", root.path, "completed", { exitCode: 0, endedAt: "2026-09-09T10:01:00.000Z" })]);
 
       const fleet = await root.handle.bridge.inspectFleet();
-      expect(fleet).toMatchObject({ working: 1, needsYou: 2, finished: 6, total: 7 });
+      expect(fleet).toMatchObject({ working: 1, needsYou: 1, finished: 6, total: 7 });
       const byTitle = new Map(fleet.rows.map((row) => [row.title, row]));
       expect(byTitle.get("asking")).toMatchObject({ runId: asking.runId, state: "needs_input", status: "Asking", line: "Drop the table?" });
-      expect(byTitle.get("blocked")).toMatchObject({ runId: blocked.runId, state: "blocked", status: "Needs you", line: "Which config is canonical?" });
+      expect(byTitle.get("blocked")).toMatchObject({ runId: blocked.runId, state: "blocked", status: "Blocked", line: "Which config is canonical?" });
       expect(byTitle.get("ended")).toMatchObject({ state: "cancelled", status: "Ended", line: "the person ended it" });
       expect(byTitle.get("reasoned")).toMatchObject({ state: "cancelled", status: "Ended", line: "no longer needed" });
       expect(byTitle.get("failed")).toMatchObject({ runId: failed.runId, state: "failed", status: "Failed", line: "The agent's session closed before it finished." });

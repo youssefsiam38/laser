@@ -1234,6 +1234,7 @@ lane T's own if both were written.
 | M13-T94 | Release the next stable patch | todo | — | — | staging is not an RC; blocked gates and permission remain; D-188–D-191; see notes |
 | M13-T95 | Manual aggregate activity open/close persists | in-progress | activity-disclosure | — | approved `131332b` in accepted staging; full current gates incomplete; D-189; see notes |
 | M13-T96 | Blocked terminal runs are neutral finished work | in-progress | neutral-finished-runs | — | approved `d694b07` in accepted staging; full current gates incomplete; D-189; see notes |
+| M13-T97 | Release the approved subset as stable 0.3.5 | in-progress | stabilization-ci | — | user authorized the bounded approved subset; async release gates remain mandatory; D-192; see notes |
 | M13-T65 | A fork is a top-level session, never nested under its origin | done | claude-2026-09-09-agents | `pnpm -F @lasercode/host test -- test/catalog.test.ts`; `pnpm -F @lasercode/ui test -- test/shell/session-groups-fork.test.ts` | requested by the user; D-166 |
 | M13-T64 | Namer labels every call of a top-level session, none of a child's | done | claude-2026-09-09-agents | `pnpm -F @lasercode/worker test` (`agents/namer.test.ts` "labels every call in a burst at once"; `agents/server-agents.test.ts` "a child agent's tool calls are never labelled") | requested by the user; D-165 |
 | M13-T63 | Restoring an unsent draft puts the person in the field | done | claude-2026-09-09-agents | `pnpm -F @lasercode/ui test -- test/thread/draft-restore-focus.test.tsx` | requested by the user; see notes |
@@ -1657,6 +1658,11 @@ lane T's own if both were written.
 - 2026-09-10 review checkpoint: bounded approved commit `d694b07` awaits D-189 ledger context and the combined needs-you 2→1 harness test; it is not integrated. Its prior candidate held 17 uncommitted files including worker fleet changes while browser review ran.
 - 2026-09-10 claimed by neutral-finished-runs: render terminal `blocked` as neutral finished work, include it in finished folds, and make newer active work supersede historic failures across fleet, sidebar and inspect words. Preserve live warm `needs_input` as Asking and preserve live descendants.
 
+#### M13-T97 notes
+- 2026-09-10 claimed by stabilization-ci: repair the source-CI regression on isolated branch `stabilize/ci-035-repair`, based on `ebcdcb90ba41d4e628e0f0dc54525173564835e3`. CI 34525850169 passed build/typechecks but failed `test/agents/harness.test.ts:725`: old needsYou=2 and blocked="Needs you" expectations conflict with D-189. The approved launcher (actual SHA-256 `ee2ed894626006669bfb473fbb752f061dd696e67cfff82f09cc17f3b3101311`) stopped in local verify on the same failure; no launcher process, local/remote v0.3.5 tag or GitHub release exists. Preserve its checkout and log. Acceptance: change only stale test expectations/title, preserve live Asking and terminal outcomes, pass focused harness/fleet/seam and exact-candidate identity/verify, obtain independent review before integration. No lifecycle source belongs in this repair.
+- 2026-09-10 preparation checkpoint: all workspace manifests and generated product metadata are 0.3.5. Remote Latest remains `v0.3.4` and remote `v0.3.5` is absent. Staged identity/diff checks and 13 publication regressions pass. Frozen launcher `/tmp/laser-release-035-gated.sh` (`sha256:8677a79dbd9e21fdfaef7d84ef7daea961fc2e58bfd98d273049213cf0ec9bfa`) accepts only an isolated checkout plus exact candidate SHA; it runs staged `pnpm verify`, requires successful `ci.yml` for that SHA, rechecks clean HEAD and `origin/main`, and pushes only the immutable tag. It has not been run; no ref or release was created.
+- 2026-09-10 claimed by release-preparation: version the independently approved subset as 0.3.5 and prepare a fail-closed asynchronous gate launcher. Included source is pending `e1c24c7`, composer `e7a5b89`, disclosure `131332b`, header `a8715dd` and neutral finished runs `d694b07`; unapproved coupled first-turn/harness batch `aba12f7b` and HLC010 stay out. The person authorized release of this subset without waiting in the current turn, but staged verification, exact-SHA source CI, both architectures and verified publication remain mandatory before any published claim.
+
 #### M13-T86 notes
 - 2026-09-10 claimed: add a searchable custom-agent choice to every unstarted project session, bind the choice before the first prompt while keeping Beam/Chat/Namer in their own channels, and make thinking selectable as a per-session override before any session exists. Preserve empty-session reuse, drafts and unrelated untracked work.
 - 2026-09-10 checkpoint: the searchable pre-turn agent selector is immediately before model at both widths, defaults from the snapshot, filters all built-ins and disappears for started/built-in sessions. Switching agents moves plain draft text into the selected empty session; attached drafts are refused with explicit guidance rather than stranded. Pre-session thinking derives the default agent/model capabilities and creates/reuses the default-agent session before applying the existing session override. UI typecheck and focused agent/thinking tests pass.
@@ -2034,6 +2040,14 @@ lane T's own if both were written.
 ---
 
 ## Handoffs
+
+### Current stabilization ownership
+
+| Area | Owner | Milestone / permitted paths | Base | Prerequisites / status / next handoff |
+| --- | --- | --- | --- | --- |
+| CI repair and ledger | stabilization-ci (orchestrator) | D-189 harness expectation alignment; `packages/worker/test/agents/harness.test.ts`, PLAN/STATUS/STATUS_DETAILED only | `ebcdcb9` | claimed; isolated `ci-035-repair`; independent review then exact-candidate gates |
+| Coupled lifecycle | unassigned; previous owner frozen | HLC-010 admission seam, worker lifecycle/driver/server and related tests; no active writes | `aba12f7b` | Q-8 scope authorized; queued after urgent CI repair; one new implementation owner, written plan before code |
+
 
 ### H-6 · M13-T89/M13-T92/M13-T93/M13-T94 · 2026-09-10 · stabilization-ledger
 State of the work: main `ccd48bbe77d72c307f8df91bf700ec983f6f124a` contains approved pending `e1c24c7` plus ledger-only work. Accepted staging `stabilize/0.3.5` is clean at `adcbd66f68eab9cfcd131d3eed763d11517695d6` with the approved pending/composer/disclosure/header/neutral/ledger set, but is not a final RC. Coupled development is clean and frozen at `aba12f7b1912144d1d041f057aa643acf143aecd`; approval is withheld because HLC010 needs the person’s answer to Q-8. No further implementation is authorized.
@@ -2634,7 +2648,7 @@ Consequences: the buffer is bounded (2000 lines per section) and client-local; i
 | Q-5 | Agent-work model (6 questions in docs/ux-agent-work.md) | M3 | answered by D-19: all leans |
 | Q-6 | Must 0.1.0 wait for the missing mobile `/link` pairing flow, or ship as an explicitly local-desktop preview? | — | answered by D-59: ship local desktop; visible Soon flag on phone remote control |
 | Q-7 | Adopt the proposed transcript-only compact density for 0.2.4: 14px/21px prose, tighter block rhythm and 20px message gaps while preserving control sizes and the 12px data floor? | — | answered by D-95: yes |
-| Q-8 | Authorize dedicated HLC010 work on a reviewed awaitable extension-generated prompt-admission seam, or stop with the frozen checkpoint preserved? | M13-T89, M13-T92, M13-T93, M13-T94 | person |
+| Q-8 | Resolved for implementation scope: person authorized a dedicated reviewed extension-generated model-admission seam; preserve goals, Pi pin and policy, no later-release authorization (D-193). | M13-T89, M13-T92, M13-T93, M13-T94 | person; implementation owner queued |
 
 ---
 
@@ -3687,3 +3701,15 @@ Consequences: the worker, not the UI, owns stop-then-move, because two requests 
 **Why.** First binding, pending acceptance, real session settlement and caller adoption share one runtime boundary. Serializing their final integration prevents reviewed checkpoint drift and concurrent edits while allowing every prompt lane to be proven together.
 **Consequences.** The continuing owner preserves both unapproved source checkpoints into a coherent development batch, fences prompt/steer/follow-up/pending-tray callers across runtime preparation, integrates harness `promptUser`, and proves real SDK/server model and thinking selection, rollback, settled-gap, origin and acceptance. It must repair the reproducible local install and obtain real caller/browser evidence rather than treating isolated unit results as completion. Accepted preparation branch `6b69f5ee33b0f1b451af866a8d78298ff7a84f4b` remains unchanged and preliminary only. No unreviewed source enters main or that branch; no optional feature, version or release action is authorized.
 **Supersedes.** D-190 only where ownership transfer was proposed but not yet complete. D-188/D-189 behavior, historical ownership and release constraints remain unchanged.
+
+### D-192 · 2026-09-10 · Release the approved subset as stable 0.3.5
+**Decision.** Add M13-T97 and release only the independently approved pending `e1c24c7`, composer `e7a5b89`, disclosure `131332b`, header `a8715dd` and neutral-finished-run `d694b07` subset as 0.3.5. Version preparation is authorized now. After review and clean integration, an isolated asynchronous gate must run `pnpm verify`, require successful source CI for the exact candidate SHA, create the immutable tag only while `origin/main` still equals that SHA, and leave both architecture builds plus verified asset publication to the unchanged release workflow.
+**Why.** The person explicitly prioritized shipping the reviewed fixes without waiting in this turn for long local or GitHub gates, while withholding unapproved lifecycle work.
+**Consequences.** Unapproved coupled batch `aba12f7b`, first-turn binding, harness lifecycle and HLC010 remain outside 0.3.5. M13-T89/T92 stay in progress, M13-T93 stays blocked on Q-8, and M13-T90/T91/T95/T96 keep their original full acceptance criteria; release inclusion does not mark them done. M13-T94 remains unchanged as the future complete-fix patch. Authorization does not bypass gates or establish readiness: until the asynchronous launcher and release workflow succeed, report only preparation or “tag pushed; release building,” never publication.
+**Supersedes.** D-190/D-191 only where they prevented a bounded approved-subset release before the coupled lifecycle work; their source ownership, behavioral requirements and preserved checkpoint decisions remain unchanged. D-188/D-189 task acceptance criteria remain unchanged.
+
+### D-193 · 2026-09-10 · Resume stabilization from the failed source gate
+**Decision.** Diagnose and repair the failed 0.3.5 source gate first on a separate branch, without bypassing exact-candidate verification or publication safeguards. Q-8 is resolved for implementation: the person authorized one dedicated HLC-010 admission seam, with one new continuing lifecycle owner and independent review, preserving the frozen `aba12f7b` implementation and all resolved findings. Previous agents must not be resumed.
+**Why.** CI and the local launcher both found a stale harness expectation after D-189; neither is publication evidence. The larger extension-send ownership defect remains independently blocking.
+**Consequences.** The bounded repair excludes lifecycle source. After repair, carefully merge reviewed release changes into a separate development branch preserving `aba12f7b` history. No goal removal, Pi upgrade, product-policy change, HLC-005 rewrite or optional enhancement is authorized. M13-T94 retains all original criteria and needs separate later-publication permission. Original worktrees, user deletions and live state remain untouched.
+**Supersedes.** H-6/D-192 only where HLC-010 implementation awaited Q-8; no release or behavioral gate is waived.

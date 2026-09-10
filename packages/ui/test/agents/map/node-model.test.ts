@@ -36,10 +36,14 @@ describe("a node paused on a question", () => {
     expect(nodeAriaLabel(node, NOW)).toBe("reviewer, reviewer-1, Asking, 5 minutes");
   });
 
-  it("counts as needing you in the tree summary, not as working", () => {
+  it("counts only a live question as needing you", () => {
     expect(treeSummary(tree("needs_input").nodes)).toBe("2 agents · 1 working · 1 needs you");
     expect(treeSummary(tree("running").nodes)).toBe("2 agents · 2 working");
-    expect(treeSummary(tree("blocked").nodes)).toBe("2 agents · 1 working · 1 needs you");
+    expect(treeSummary(tree("blocked").nodes)).toBe("2 agents · 1 working");
+    const ended = tree("blocked").byPath.get("/p/a.jsonl")!;
+    expect(nodeStatusLabel(ended.status)).toBe("Blocked");
+    expect(ended.tone).toBe("muted");
+    expect(nodeIsActive(ended)).toBe(false);
   });
 
   it("keeps the tool as the action while it is only working", () => {
@@ -48,8 +52,9 @@ describe("a node paused on a question", () => {
     expect(nodeAction(node)).toBe("bash");
   });
 
-  it("gives the question event its own look, in the attention tone", () => {
+  it("gives only the live question event the attention tone", () => {
     expect(eventLook("needs_input").tone).toBe("attention");
+    expect(eventLook("blocked").tone).toBe("muted");
     expect(eventLook("needs_input").icon).not.toBe(eventLook("blocked").icon);
   });
 });

@@ -32,7 +32,7 @@ describe("run status vocabulary", () => {
       // Live and paused on a question (M13-T45): one word for a row.
       needs_input: "Asking",
       completed: "Done",
-      blocked: "Needs you",
+      blocked: "Blocked",
       failed: "Failed",
       cancelled: "Ended",
     });
@@ -44,7 +44,8 @@ describe("run status vocabulary", () => {
       needs_input: "attention",
       // Green means happening now, so a finished run is muted (D-154).
       completed: "muted",
-      blocked: "attention",
+      // Ended with a blocker: truthful history, not a live question.
+      blocked: "muted",
       failed: "danger",
       cancelled: "muted",
     });
@@ -131,6 +132,30 @@ describe("runs", () => {
     expect(runsForSession(runs, "/p/a.jsonl").map((r) => r.runId)).toEqual(["r1", "r2"]);
     expect(runsForRoot(runs, "/p/root.jsonl").map((r) => r.runId)).toEqual(["r1", "r2"]);
     expect(runsForRoot(runs, "/q/root.jsonl").map((r) => r.runId)).toEqual(["r3"]);
+  });
+
+  it("lets a canonical resumed run replace failed history, including timestamp ties", () => {
+    const failed = run({
+      runId: "run_z",
+      sessionPath: "/p/resumed.jsonl",
+      status: "failed",
+      startedAt: "2026-09-08T10:20:00.000Z",
+      updatedAt: "2026-09-08T10:21:00.000Z",
+    });
+    const working = run({
+      runId: "run_a",
+      sessionPath: failed.sessionPath,
+      status: "running",
+      startedAt: failed.startedAt,
+      // Active wins a start-time tie even before its first update lands.
+      updatedAt: "2026-09-08T10:20:00.000Z",
+    });
+    for (const candidates of [[failed, working], [working, failed]]) {
+      expect(latestRunForSession(candidates, failed.sessionPath)).toBe(working);
+    }
+
+    const completed = { ...working, runId: "run_0", status: "completed" as const, updatedAt: "2026-09-08T10:22:00.000Z" };
+    expect(latestRunForSession([failed, completed], failed.sessionPath)).toBe(completed);
   });
 });
 

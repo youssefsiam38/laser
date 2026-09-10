@@ -21,7 +21,6 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useLayoutEffect,
   useRef,
   useState,
   type ComponentProps,
@@ -32,6 +31,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { duration as formatDuration } from "@/format";
 import { cn } from "@/lib/utils";
 import { motionMs } from "@/motion";
+import { useActivityDisclosureOverride } from "@/runtime/sessionPreferences";
 
 import { ThinkingIndicator } from "./thinking-indicator.js";
 
@@ -46,13 +46,12 @@ export type ReasoningRootProps = Omit<ComponentProps<typeof Collapsible>, "open"
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   defaultOpen?: boolean;
-  /**
-   * While `true` the disclosure is held open with a bottom-pinned live
-   * preview; when streaming ends it returns to `defaultOpen`, and the first
-   * manual toggle takes over permanently.
-   */
+  /** While `true`, an already-open disclosure keeps its bottom-pinned live preview. */
   streaming?: boolean;
-  /** Called right before the disclosure animates, on toggle and on streaming transitions. */
+  /** Optional stable scope for remembering a manual choice across remounts. */
+  sessionPath?: string;
+  disclosureId?: string;
+  /** Called right before the disclosure animates on a manual toggle. */
   onAnimationStart?: () => void;
 };
 
@@ -62,33 +61,34 @@ function ReasoningRoot({
   onOpenChange: controlledOnOpenChange,
   defaultOpen = false,
   streaming,
+  sessionPath,
+  disclosureId,
   onAnimationStart,
   children,
   ...props
 }: ReasoningRootProps) {
   const initialOpenRef = useRef(defaultOpen);
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
-  if (userOpen === null) initialOpenRef.current = defaultOpen;
+  const [rememberedOpen, rememberOpen] = useActivityDisclosureOverride(sessionPath, disclosureId);
+  const hasDurableIdentity = Boolean(sessionPath && disclosureId);
+  const manualOpen = hasDurableIdentity ? rememberedOpen : userOpen;
+  if (manualOpen === null || manualOpen === undefined) initialOpenRef.current = defaultOpen;
 
   const isControlled = controlledOpen !== undefined;
   const reveal = useSearchReveal();
-  const isOpen = reveal || (isControlled ? controlledOpen : (userOpen ?? (streaming || initialOpenRef.current)));
+  const isOpen = reveal || (isControlled ? controlledOpen : (manualOpen ?? initialOpenRef.current));
   const isPreview = streaming === true && isOpen;
-
-  const prevStreamingRef = useRef(streaming);
-  useLayoutEffect(() => {
-    if (prevStreamingRef.current === streaming) return;
-    prevStreamingRef.current = streaming;
-    if (!isControlled && userOpen === null && !initialOpenRef.current) onAnimationStart?.();
-  }, [streaming, isControlled, userOpen, onAnimationStart]);
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
       onAnimationStart?.();
-      if (!isControlled) setUserOpen(open);
+      if (!isControlled) {
+        if (!hasDurableIdentity) setUserOpen(open);
+        rememberOpen(open);
+      }
       controlledOnOpenChange?.(open);
     },
-    [onAnimationStart, isControlled, controlledOnOpenChange],
+    [onAnimationStart, isControlled, hasDurableIdentity, rememberOpen, controlledOnOpenChange],
   );
 
   return (
