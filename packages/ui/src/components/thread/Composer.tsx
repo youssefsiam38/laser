@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { SessionAgentSelector } from "@/components/assistant-ui/elements/agent-selector";
 import {
   ComposerAttachButton,
+  ComposerActions,
   ComposerAttachmentTile,
   ComposerAttachments,
   ComposerBar,
@@ -80,7 +81,7 @@ function ComposerBody() {
                 <span className="flex-1" />
               ) : (
                 <>
-                  <DictateButton size="icon-lg" />
+                  <DictateButton size="icon-lg" touchSized />
                   {!dictating && <>
                     <SessionAgentSelector allowProjectLanding={allowProjectLanding} />
                     <SessionModelSelector />
@@ -108,14 +109,18 @@ function ComposerBody() {
               <ComposerInput />
               <ComposerToolbar>
                 <ComposerAttachButton />
+                {/* Keep this one mounted control in the same flex item while it
+                    grows into the recording row; remounting ends its owned capture. */}
                 <DictateButton />
-                {/* Agent and thinking choices can prepare an empty session;
-                    the model choice retains its separate project-default path. */}
-                {blocked ? <span /> : <SessionAgentSelector allowProjectLanding={allowProjectLanding} className="flex-1" />}
-                {blocked ? <span /> : <SessionModelSelector className="flex-1" />}
-                {blocked ? <span /> : <ThinkingEffort allowProjectLanding={allowProjectLanding} />}
-                {blocked ? <span /> : <ContextRingButton />}
-                <SendOrStop />
+                <ComposerActions>
+                  {/* Agent and thinking choices can prepare an empty session;
+                      the model choice retains its separate project-default path. */}
+                  {!blocked && <SessionAgentSelector allowProjectLanding={allowProjectLanding} />}
+                  {!blocked && <SessionModelSelector />}
+                  {!blocked && <ThinkingEffort allowProjectLanding={allowProjectLanding} />}
+                  {!blocked && <ContextRingButton />}
+                  <SendOrStop />
+                </ComposerActions>
               </ComposerToolbar>
             </ComposerBar>
           </ComposerPrimitive.AttachmentDropzone>
