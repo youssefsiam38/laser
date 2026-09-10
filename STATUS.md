@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-10T13:35:08Z · stabilization-ledger · HEAD: 1805a25
+**Last updated:** 2026-09-10T13:41:04Z · stabilization-ledger · HEAD: f4b7ab6
 
-**Current focus:** M13 — stabilize first-binding, pending hydration and corrected harness settlement around the approved composer/activity baseline; header and neutral-fleet re-reviews remain independent. Version stays 0.3.4; no release action is authorized.
+**Current focus:** M13 — harness-lifecycle now solely owns the coupled T89/T92/T93 integration from frozen `a0264674` + `d79c2869`; repair local reproducibility and prove every real caller/browser path. Independent owners retain composer/header/activity/fleet. Version stays 0.3.4; no release action is authorized.
 
 ## Milestones
 
@@ -24,12 +24,12 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M10 Distribution | in-progress | in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
 | M12 Product experience | done | 0.2.13 dispatched |
-| M13 Agents Leap | in-progress | prep `6b69f5e` verified, not final; T89/T92/T93 integration and T91/T96 reviews remain |
+| M13 Agents Leap | in-progress | D-191 transfer complete; prep `6b69f5e` unchanged/preliminary; coupled integration and T91/T96 reviews remain |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
 
-- No blocked task. Session-lifecycle source ownership remains serialized under D-190; T94 waits for all dependencies, final combined gates and explicit permission.
+- No blocked task. Coupled source ownership is serialized under D-191; T94 waits for all dependencies, final combined gates and explicit permission.
 
 ## Next up
 
