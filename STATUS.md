@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-10T06:56:40+03:00 · codex-2026-09-10-release · HEAD: c7a84a0
+**Last updated:** 2026-09-10T07:13:20+03:00 · codex-2026-09-10-release · HEAD: d382807
 
-**Current focus:** M13-T75 packages the completed agent refinements as stable 0.3.1, with clean source CI before the immutable tag and verified assets before publication.
+**Current focus:** M10-T10 proves the in-app updater installation seam now that stable 0.3.1 and its signed native feeds are published.
 
 ## Milestones
 
@@ -24,7 +24,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
 | M12 Product experience | done | 0.2.13 dispatched |
-| M13 Agents Leap | in-progress | T75: release stable 0.3.1 |
+| M13 Agents Leap | done | stable 0.3.1 published with verified x64/ARM64 assets |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
@@ -33,14 +33,14 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Next up
 
-1. M13-T75: stage, verify and publish stable 0.3.1.
-2. M10-T10: prove the in-app updater installation seam.
-3. M2/M5/M7: the broader platform proofs those milestones still owe.
+1. M10-T10: prove the in-app updater installation seam.
+2. M2/M5/M7: the broader platform proofs those milestones still owe.
+3. M11: complete the cold-start network trace.
 
 ## Recently done
 
+- M13-T75: stable 0.3.1 published with verified x64/ARM64 assets, signed checksums, provenance and native feeds (D-174).
 - M13-T74: every Beam spark press starts a fresh bubble chat and preserves prior sessions (D-173).
 - M13-T73: Laser writes or bundles no skills; it only discovers user and project skills (D-172).
 - M13-T72: the default system prompt is Laser-owned and engine-neutral (D-172).
 - M13-T71: custom-agent rename preserves defaults, delegation references and existing-session lookup; duplicate names are refused inline (D-171).
-- M13-T70: every custom agent can visibly start another instance of itself, bounded by the existing depth policy (D-170).
