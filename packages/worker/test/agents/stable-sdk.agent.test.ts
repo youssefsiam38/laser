@@ -4,14 +4,15 @@
  * the model refusal, and the agent record written
  * on a new session and recovered on load.
  */
-import { PRODUCT_DISPLAY_NAME, PRODUCT_NAME, SESSION_AGENT_ENTRY_TYPE, type AgentDefinition } from "@lasercode/protocol";
+import { PRODUCT_DISPLAY_NAME, PRODUCT_NAME, SESSION_AGENT_ENTRY_TYPE, type AgentDefinition, type JsonRpcMessage, type SessionState } from "@lasercode/protocol";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { fallbackBeamAgent, fallbackDefaultAgent, fallbackPolicy } from "../../src/agents/definitions.js";
+import { fallbackBeamAgent, fallbackDefaultAgent, fallbackPolicy, fallbackSnapshot } from "../../src/agents/definitions.js";
 import { ENGINE_BUILTIN_TOOLS, readSessionAgentRecord, rootRecord, rootRole } from "../../src/agents/session-config.js";
 import { StableSdkDriver } from "../../src/drivers/stable-sdk.js";
+import { WorkerServer } from "../../src/server.js";
 import type { DriverAgentOptions, DriverEvent } from "../../src/driver.js";
 import { startStubProvider, systemTextOf, toolNamesOf, writeStubModels, type StubProvider } from "./stub-provider.js";
 
@@ -216,6 +217,74 @@ describe("StableSdkDriver with an agent definition", () => {
     expect(await readSessionAgentRecord(before.path)).toEqual({ agentName: "reviewer", kind: "root" });
     const lines = readFileSync(before.path, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { type?: string; message?: { role?: string } });
     expect(lines.filter((line) => line.type === "message" && line.message?.role === "user")).toHaveLength(1);
+  }, 60_000);
+
+  it("binds the first turn through WorkerServer on the same StableSDK session and preserves explicit overrides", async () => {
+    writeSkill(join(base, "agent", "skills"), "selected-skill");
+    writeFileSync(join(base, "agent", "models.json"), JSON.stringify({
+      providers: {
+        stub: {
+          baseUrl: stub.url,
+          api: "openai-completions",
+          apiKey: "stub-key",
+          models: [
+            { id: "stub-1", name: "Stub One", contextWindow: 8000, maxTokens: 1000, reasoning: true },
+            { id: "stub-2", name: "Stub Two", contextWindow: 8000, maxTokens: 1000, reasoning: true },
+          ],
+        },
+      },
+    }));
+    const selected: AgentDefinition = {
+      ...fallbackDefaultAgent(),
+      name: "reviewer",
+      engineInstructions: true,
+      instructions: "SERVER SELECTED AGENT",
+      scopedSkills: true,
+      skills: [{ name: "selected-skill", path: join(base, "agent", "skills", "selected-skill", "SKILL.md"), scope: "global" }],
+      model: { provider: "stub", id: "stub-2" },
+    };
+    const messages: JsonRpcMessage[] = [];
+    const server = new WorkerServer({
+      cwd: join(base, "project"),
+      agentDir: join(base, "agent"),
+      sessionDir: join(base, "sessions"),
+      stateDir: join(base, "state"),
+      createDriver: () => {
+        const driver = new StableSdkDriver();
+        drivers.push(driver);
+        return driver;
+      },
+      send: (message) => messages.push(message),
+    });
+    let id = 0;
+    const call = async (method: string, params: unknown) => {
+      const requestId = ++id;
+      await server.handle({ jsonrpc: "2.0", id: requestId, method, params });
+      return messages.find((message) => "id" in message && message.id === requestId) as { result?: unknown; error?: unknown };
+    };
+    const snapshot = fallbackSnapshot();
+    await call("agents/sync", { snapshot: { ...snapshot, agents: [...snapshot.agents, selected] } });
+    const created = await call("session/new", { cwd: join(base, "project") });
+    const before = (created.result as { state: SessionState }).state;
+    await call("pi/model/set", { path: before.path, model: { provider: "stub", id: "stub-1" } });
+    const prompted = await call("session/prompt", {
+      path: before.path,
+      content: [{ type: "text", text: "one exact first message" }],
+      firstTurn: { agentName: "reviewer", thinkingLevel: "high" },
+    });
+
+    expect(prompted.result).toEqual({ accepted: true, queued: false });
+    const loaded = await call("session/load", { path: before.path });
+    const after = (loaded.result as { state: SessionState }).state;
+    expect(after).toMatchObject({ path: before.path, id: before.id, thinkingLevel: "high", model: { provider: "stub", id: "stub-1" }, agent: { agentName: "reviewer", kind: "root" } });
+    expect(server.openSessions()).toEqual([before.path]);
+    expect(stub.requests).toHaveLength(1);
+    expect(stub.requests[0]).toMatchObject({ model: "stub-1", reasoning_effort: "high" });
+    expect(systemTextOf(stub.requests[0]!)).toContain("selected-skill");
+    const lines = readFileSync(before.path, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { type?: string; message?: { role?: string; content?: unknown } });
+    expect(lines.filter((line) => line.type === "message" && line.message?.role === "user")).toHaveLength(1);
+    expect(JSON.stringify(lines.find((line) => line.type === "message" && line.message?.role === "user")?.message?.content)).toContain("one exact first message");
+    await server.dispose();
   }, 60_000);
 
   it("restores the prior runtime and record when first-turn preparation is rolled back", async () => {

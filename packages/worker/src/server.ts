@@ -195,7 +195,7 @@ export class WorkerServer {
     this.transcribeService = undefined;
     for (const live of this.sessions.values()) {
       live.unsubscribe();
-      await live.driver.dispose().catch(() => {});
+      await this.firstTurnLock.run(live.path, () => live.driver.dispose()).catch(() => {});
     }
     this.sessions.clear();
     this.runningTools.clear();
@@ -212,9 +212,11 @@ export class WorkerServer {
         return this.sessionLoad(req.params);
       case "session/prompt":
         return (await this.promptRequest(this.live(req.params.path), req.params)) satisfies Result<"session/prompt">;
-      case "session/cancel":
-        await this.live(req.params.path).driver.abort();
+      case "session/cancel": {
+        const live = this.live(req.params.path);
+        await this.firstTurnLock.run(live.path, () => live.driver.abort());
         return {};
+      }
       case "session/set_mode":
         throw new ProtocolError(ErrorCodes.Unsupported, "session/set_mode is not supported by this worker yet");
 
@@ -225,15 +227,21 @@ export class WorkerServer {
           ErrorCodes.Unsupported,
           "pi/session/detach is host bookkeeping; a worker has nothing to detach from",
         );
-      case "pi/session/steer":
+      case "pi/session/steer": {
         // steer/follow_up call the runtime directly and so bypass Pi's `input`
         // hook, where the companion extension folds in a phrase still being
         // transcribed. Doing it here keeps the three send paths identical.
-        await this.live(req.params.path).driver.steer(await this.withDictation(req.params.path, req.params.content));
+        const live = this.live(req.params.path);
+        const content = await this.withDictation(req.params.path, req.params.content);
+        await this.firstTurnLock.run(live.path, () => live.driver.steer(content));
         return {};
-      case "pi/session/follow_up":
-        await this.live(req.params.path).driver.followUp(await this.withDictation(req.params.path, req.params.content));
+      }
+      case "pi/session/follow_up": {
+        const live = this.live(req.params.path);
+        const content = await this.withDictation(req.params.path, req.params.content);
+        await this.firstTurnLock.run(live.path, () => live.driver.followUp(content));
         return {};
+      }
       case "pi/session/clear_queue":
         return this.live(req.params.path).driver.clearQueue();
       case "pi/session/close": {
@@ -242,12 +250,14 @@ export class WorkerServer {
         // emits `closed`, which drops the session from every table here.
         const live = this.sessions.get(req.params.path);
         if (!live) return { closed: false } satisfies Result<"pi/session/close">;
-        if (live.driver.state().isStreaming) {
-          throw new ProtocolError(ErrorCodes.SessionBusy, "This chat is still answering. Wait for it to finish, or stop it, then move it.");
-        }
-        await live.driver.dispose();
-        this.sessions.delete(live.path);
-        return { closed: true } satisfies Result<"pi/session/close">;
+        return this.firstTurnLock.run(live.path, async () => {
+          if (live.driver.state().isStreaming) {
+            throw new ProtocolError(ErrorCodes.SessionBusy, "This chat is still answering. Wait for it to finish, or stop it, then move it.");
+          }
+          await live.driver.dispose();
+          this.sessions.delete(live.path);
+          return { closed: true } satisfies Result<"pi/session/close">;
+        });
       }
 
       // --- the pending tray (pending.ts) ---
@@ -306,12 +316,14 @@ export class WorkerServer {
         return {};
       case "pi/model/list":
         return { models: await this.live(req.params.path).driver.listModels() } satisfies Result<"pi/model/list">;
-      case "pi/model/set":
-        return { state: await this.live(req.params.path).driver.setModel(req.params.model) } satisfies Result<"pi/model/set">;
-      case "pi/thinking/set":
-        return {
-          state: await this.live(req.params.path).driver.setThinkingLevel(req.params.level),
-        } satisfies Result<"pi/thinking/set">;
+      case "pi/model/set": {
+        const live = this.live(req.params.path);
+        return this.firstTurnLock.run(live.path, async () => ({ state: await live.driver.setModel(req.params.model) } satisfies Result<"pi/model/set">));
+      }
+      case "pi/thinking/set": {
+        const live = this.live(req.params.path);
+        return this.firstTurnLock.run(live.path, async () => ({ state: await live.driver.setThinkingLevel(req.params.level) } satisfies Result<"pi/thinking/set">));
+      }
       case "pi/account-usage/refresh": {
         const delivered = this.live(req.params.path).driver.deliverExtensionCommand?.({
           type: "lasercode/account-usage/refresh",
@@ -323,9 +335,9 @@ export class WorkerServer {
         return { goal: goal ?? null } satisfies Result<"session/goal/get">;
       }
       case "session/goal/action": {
-        const driver = this.live(req.params.path).driver;
-        if (!driver.goalAction) throw new ProtocolError(ErrorCodes.Unsupported, "Goals are not available in this session.");
-        return { goal: await driver.goalAction(req.params.action) } satisfies Result<"session/goal/action">;
+        const live = this.live(req.params.path);
+        if (!live.driver.goalAction) throw new ProtocolError(ErrorCodes.Unsupported, "Goals are not available in this session.");
+        return this.firstTurnLock.run(live.path, async () => ({ goal: await live.driver.goalAction!(req.params.action) } satisfies Result<"session/goal/action">));
       }
       case "pi/ui/response": {
         // Answer only the session that raised the dialog: ids are minted per
@@ -922,8 +934,8 @@ export class WorkerServer {
     const live = this.live(path);
     if (!live.pending) {
       live.pending = new PendingTray({
-        steer: (content) => live.driver.steer(content),
-        prompt: (content, onAccepted) => this.promptLive(live, content, undefined, onAccepted),
+        steer: (content) => this.firstTurnLock.run(live.path, () => live.driver.steer(content)),
+        prompt: (content, onAccepted) => this.promptWithFence(live, content, undefined, onAccepted, true),
         streaming: () => live.driver.state().isStreaming,
         publish: (pending) => this.onDriverEvent(live, { type: "update", update: { kind: "pending_update", pending } }),
       });
@@ -938,10 +950,9 @@ export class WorkerServer {
   ): Promise<Result<"session/prompt">> {
     const firstTurn = params.firstTurn;
     if (!firstTurn) {
-      // A bind is replacing the runtime. Refuse instead of entering either
-      // generation; otherwise ordinary prompt semantics stay unchanged.
-      if (this.firstTurnLock.busy(live.path)) return { accepted: false, queued: false };
-      return this.promptLive(live, params.content, params.streamingBehavior);
+      // A bare concurrent prompt keeps its refusal semantics. The lease closes
+      // the check/use race with a first-turn runtime replacement.
+      return this.promptWithFence(live, params.content, params.streamingBehavior, undefined, false);
     }
     const release = (await this.firstTurnLock.acquire(live.path, true))!;
 
@@ -1012,6 +1023,32 @@ export class WorkerServer {
     }
   }
 
+  /** Hold one prompt at a single runtime generation through engine preflight. */
+  private async promptWithFence(
+    live: Live,
+    content: ContentBlock[],
+    streamingBehavior: "steer" | "followUp" | undefined,
+    onAccepted: (() => void) | undefined,
+    wait: boolean,
+  ): Promise<{ accepted: boolean; queued: boolean }> {
+    const release = await this.firstTurnLock.acquire(live.path, wait);
+    if (!release) return { accepted: false, queued: false };
+    let released = false;
+    const finish = () => {
+      if (released) return;
+      released = true;
+      release();
+    };
+    try {
+      return await this.promptLive(live, content, streamingBehavior, () => {
+        finish();
+        onAccepted?.();
+      });
+    } finally {
+      finish();
+    }
+  }
+
   /**
    * One turn from one message, whoever asked: a client's `session/prompt`, or
    * the pending tray delivering what was written while the agent worked. Both
@@ -1035,11 +1072,8 @@ export class WorkerServer {
   ): Promise<{ accepted: boolean; queued: boolean }> {
     const text = textOf(content);
     const idle = !live.driver.state().isStreaming;
-    // A person prompting a child that has no active run starts one of
-    // their own, so the run map and the parent's summary keep working.
-    if (!streamingBehavior && idle) this.harness.startUserRun(live.path, text);
     if ((idle || streamingBehavior) && !live.driver.state().name && text.trim() !== "") void this.nameSession(live, text);
-    return live.driver.prompt(content, {
+    return this.harness.promptUser(live.path, content, {
       ...(streamingBehavior ? { streamingBehavior } : {}),
       ...(onAccepted ? { onAccepted } : {}),
     });

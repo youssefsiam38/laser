@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PRODUCT_NAME, PROJECT_DIR_NAME } from "@lasercode/protocol";
-import type { JsonRpcMessage, SessionState, UiDialogRequest } from "@lasercode/protocol";
+import type { ContentBlock, JsonRpcMessage, SessionState, UiDialogRequest } from "@lasercode/protocol";
 import { WorkerServer } from "../src/server.js";
 import type { DriverEvent, DriverListener, FirstTurnOptions, PromptOptions, SessionDriver } from "../src/driver.js";
 import { fallbackDefaultAgent, fallbackSnapshot } from "../src/agents/definitions.js";
@@ -23,6 +23,11 @@ class FakeDriver implements SessionDriver {
   disposed = false;
   prompted: unknown[][] = [];
   prepared: FirstTurnOptions[] = [];
+  prepareGate: Promise<void> | undefined;
+  prepareObserved: (() => void) | undefined;
+  prepareFailure: Error | undefined;
+  generation = "original";
+  routed: Array<{ route: string; generation: string; content?: unknown }> = [];
   rollbacks = 0;
   acceptPrompt = true;
   private st: SessionState = {
@@ -61,10 +66,17 @@ class FakeDriver implements SessionDriver {
   reloadSettings?: () => Promise<{ deferred: boolean }> = async () => { this.reloads += 1; return { deferred: false }; };
   subscribe(l: DriverListener) { this.listeners.add(l); return () => this.listeners.delete(l); }
   emit(e: DriverEvent) { for (const l of this.listeners) l(e); }
-  async prepareFirstTurn(options: FirstTurnOptions) { this.prepared.push(options); }
-  async rollbackFirstTurn() { this.rollbacks += 1; }
+  async prepareFirstTurn(options: FirstTurnOptions) {
+    this.prepared.push(options);
+    this.prepareObserved?.();
+    await this.prepareGate;
+    if (this.prepareFailure) throw this.prepareFailure;
+    this.generation = "selected";
+  }
+  async rollbackFirstTurn() { this.rollbacks += 1; this.generation = "original"; }
   async prompt(content: unknown[], options?: PromptOptions) {
     this.prompted.push(content);
+    this.routed.push({ route: "prompt", generation: this.generation, content });
     if (!this.acceptPrompt) return { accepted: false, queued: false };
     options?.onAccepted?.();
     this.st = { ...this.st, messageCount: this.st.messageCount + 1 };
@@ -73,12 +85,13 @@ class FakeDriver implements SessionDriver {
     this.emit({ type: "update", update: { kind: "agent_settled" } });
     return { accepted: true, queued: false };
   }
-  async steer() {} async followUp() {}
+  async steer(content: ContentBlock[]) { this.routed.push({ route: "steer", generation: this.generation, content }); }
+  async followUp(content: ContentBlock[]) { this.routed.push({ route: "followUp", generation: this.generation, content }); }
   async clearQueue() { return { steering: [], followUp: [] }; }
-  async abort() {}
+  async abort() { this.routed.push({ route: "abort", generation: this.generation }); }
   async listModels() { return [{ provider: "p", id: "m" }]; }
-  async setModel() { return this.st; }
-  async setThinkingLevel(level: SessionState["thinkingLevel"]) { this.st = { ...this.st, thinkingLevel: level }; return this.st; }
+  async setModel() { this.routed.push({ route: "model", generation: this.generation }); return this.st; }
+  async setThinkingLevel(level: SessionState["thinkingLevel"]) { this.routed.push({ route: "thinking", generation: this.generation }); this.st = { ...this.st, thinkingLevel: level }; return this.st; }
   async rename() {} async compact() {}
   /** Every move, with the options the server handed over. */
   moves: Array<{ op: "navigate" | "fork"; entryId: string; options: unknown }> = [];
@@ -92,6 +105,12 @@ class FakeDriver implements SessionDriver {
   async commands() { return [{ name: "skill:test", source: "skill" as const, description: "Test skill" }]; }
   async prompts() { return []; }
   async dispose() { this.disposed = true; this.emit({ type: "closed", reason: "disposed" }); }
+}
+
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
 }
 
 function harness() {
@@ -187,6 +206,77 @@ describe("WorkerServer", () => {
     expect(loaded.result).toMatchObject({ state: { path: "/tmp/fake/s1.jsonl", agent: { agentName: "reviewer", kind: "root" } } });
   });
 
+  it("holds every prompt-entry route at one runtime generation during first-turn replacement", async () => {
+    const h = harness();
+    const snapshot = fallbackSnapshot();
+    await h.call(1, "agents/sync", {
+      snapshot: {
+        ...snapshot,
+        agents: [...snapshot.agents, { ...fallbackDefaultAgent(), name: "reviewer" }],
+      },
+    });
+    await h.call(2, "session/new", { cwd: "/tmp/fake" });
+    const driver = h.drivers[0]!;
+    const prepare = deferred();
+    const entered = deferred();
+    driver.prepareGate = prepare.promise;
+    driver.prepareObserved = entered.resolve;
+
+    const binding = h.call(3, "session/prompt", {
+      path: "/tmp/fake/s1.jsonl",
+      content: [{ type: "text", text: "first" }],
+      firstTurn: { agentName: "reviewer" },
+    });
+    await entered.promise;
+
+    // Bare prompt remains a refusal rather than silently changing semantics.
+    await expect(h.call(4, "session/prompt", {
+      path: "/tmp/fake/s1.jsonl",
+      content: [{ type: "text", text: "bare" }],
+    })).resolves.toMatchObject({ result: { accepted: false, queued: false } });
+
+    // A queued tray item begins draining while replacement owns the fence.
+    await h.call(5, "session/pending/add", {
+      path: "/tmp/fake/s1.jsonl",
+      content: [{ type: "text", text: "queued tray" }],
+    });
+    driver.emit({ type: "update", update: { kind: "agent_settled" } });
+
+    const steer = h.call(6, "pi/session/steer", { path: "/tmp/fake/s1.jsonl", content: [{ type: "text", text: "steer" }] });
+    const follow = h.call(7, "pi/session/follow_up", { path: "/tmp/fake/s1.jsonl", content: [{ type: "text", text: "follow" }] });
+    const thinking = h.call(8, "pi/thinking/set", { path: "/tmp/fake/s1.jsonl", level: "high" });
+    const tray = await h.call(9, "session/pending/add", {
+      path: "/tmp/fake/s1.jsonl",
+      content: [{ type: "text", text: "tray steer" }],
+    });
+    driver.setStreaming(true);
+    const traySteer = h.call(10, "session/pending/steer", {
+      path: "/tmp/fake/s1.jsonl",
+      id: (tray.result as { message: { id: string } }).message.id,
+    });
+    const cancel = h.call(11, "session/cancel", { path: "/tmp/fake/s1.jsonl" });
+
+    expect(driver.routed).toEqual([]);
+    prepare.resolve();
+    await Promise.all([binding, steer, follow, thinking, traySteer, cancel]);
+
+    expect(driver.routed.map((call) => call.route).sort()).toEqual([
+      "abort",
+      "followUp",
+      "prompt",
+      "prompt",
+      "steer",
+      "steer",
+      "thinking",
+    ]);
+    expect(driver.routed.every((call) => call.generation === "selected")).toBe(true);
+    expect(driver.prompted).toEqual([
+      [{ type: "text", text: "first" }],
+      [{ type: "text", text: "queued tray" }],
+    ]);
+    expect((await h.call(12, "session/pending/list", { path: "/tmp/fake/s1.jsonl" })).result).toEqual({ messages: [] });
+  });
+
   it("rolls back a refused first-turn prompt for retry and rejects a stale bind", async () => {
     const h = harness();
     const snapshot = fallbackSnapshot();
@@ -198,22 +288,33 @@ describe("WorkerServer", () => {
     });
     await h.call(2, "session/new", { cwd: "/tmp/fake" });
     const driver = h.drivers[0]!;
+    driver.prepareFailure = new Error("replacement failed");
+    const failed = await h.call(3, "session/prompt", {
+      path: "/tmp/fake/s1.jsonl",
+      content: [{ type: "text", text: "failed replacement" }],
+      firstTurn: { agentName: "reviewer" },
+    });
+    expect(failed.error).toBeDefined();
+    expect(driver.rollbacks).toBe(1);
+    expect(driver.prompted).toEqual([]);
+
+    driver.prepareFailure = undefined;
     driver.acceptPrompt = false;
-    const refused = await h.call(3, "session/prompt", {
+    const refused = await h.call(4, "session/prompt", {
       path: "/tmp/fake/s1.jsonl",
       content: [{ type: "text", text: "first try" }],
       firstTurn: { agentName: "reviewer" },
     });
     expect(refused.result).toEqual({ accepted: false, queued: false });
-    expect(driver.rollbacks).toBe(1);
+    expect(driver.rollbacks).toBe(2);
 
     driver.acceptPrompt = true;
-    const accepted = await h.call(4, "session/prompt", {
+    const accepted = await h.call(5, "session/prompt", {
       path: "/tmp/fake/s1.jsonl",
       content: [{ type: "text", text: "retry" }],
       firstTurn: { agentName: "reviewer" },
     });
-    const stale = await h.call(5, "session/prompt", {
+    const stale = await h.call(6, "session/prompt", {
       path: "/tmp/fake/s1.jsonl",
       content: [{ type: "text", text: "duplicate" }],
       firstTurn: { agentName: "reviewer" },

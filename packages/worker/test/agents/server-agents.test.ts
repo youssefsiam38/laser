@@ -4,14 +4,14 @@
  * runs from `session/prompt`, `agents/sync`, `agents/runs/stop`, and the
  * ending a run on the person's behalf.
  */
-import { PRODUCT_NAME, SESSION_AGENT_ENTRY_TYPE, type AgentRun, type JsonRpcMessage, type SessionState, type UiDialogResponse } from "@lasercode/protocol";
+import { PRODUCT_NAME, SESSION_AGENT_ENTRY_TYPE, type AgentRun, type ContentBlock, type JsonRpcMessage, type SessionState, type UiDialogResponse } from "@lasercode/protocol";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { fallbackSnapshot } from "../../src/agents/definitions.js";
 import type { NamerModelRuntime } from "../../src/agents/namer.js";
-import type { DriverEvent, DriverListener, DriverOpenOptions, SessionDriver } from "../../src/driver.js";
+import type { DriverEvent, DriverListener, DriverOpenOptions, PromptOptions, SessionDriver } from "../../src/driver.js";
 import { WorkerServer } from "../../src/server.js";
 
 let base: string;
@@ -20,7 +20,8 @@ let counter = 0;
 class FakeDriver implements SessionDriver {
   readonly kind = "stable-sdk" as const;
   opened!: DriverOpenOptions;
-  prompted: string[] = [];
+  prompted: Array<{ content: ContentBlock[]; options: PromptOptions | undefined }> = [];
+  promptObserved: ((content: ContentBlock[]) => void) | undefined;
   aborts = 0;
   custom: Array<{ type: string; data: unknown }> = [];
   private readonly listeners = new Set<DriverListener>();
@@ -35,7 +36,12 @@ class FakeDriver implements SessionDriver {
   state() { return this.st; }
   subscribe(l: DriverListener) { this.listeners.add(l); return () => this.listeners.delete(l); }
   emit(e: DriverEvent) { for (const l of this.listeners) l(e); }
-  async prompt(content: Array<{ type: string; text?: string }>) { this.prompted.push(content.map((b) => b.text ?? "").join("")); return { accepted: true, queued: false }; }
+  async prompt(content: ContentBlock[], options?: PromptOptions) {
+    this.prompted.push({ content, options });
+    options?.onAccepted?.();
+    this.promptObserved?.(content);
+    return { accepted: true, queued: false };
+  }
   async steer() {} async followUp() {}
   async clearQueue() { return { steering: [], followUp: [] }; }
   async abort() { this.aborts += 1; }
@@ -162,8 +168,15 @@ describe("WorkerServer agents", () => {
     const state = (loaded.result as { state: SessionState }).state;
     expect(state.agent?.runId).toBeUndefined(); // idle: no live run after a reload
     expect(h.drivers[0]!.opened.agent?.role).toMatchObject({ kind: "child", depth: 1, subagentName: "fixer", parent: { sessionPath: parentPath, sessionId: "p", agentName: "default" } });
-    // A person's prompt on the idle child starts a user-origin run; the parent is told when it ends.
-    await h.call(2, "session/prompt", { path: childPath, content: [{ type: "text", text: "what changed?" }] });
+    // A person's prompt on the idle child starts a user-origin run through
+    // the harness, preserving the exact multimodal payload at the real server caller.
+    const content: ContentBlock[] = [
+      { type: "text", text: "what changed?" },
+      { type: "image", mimeType: "image/png", data: "AAAA" },
+    ];
+    await h.call(2, "session/prompt", { path: childPath, content });
+    expect(h.drivers[0]!.prompted[0]?.content).toEqual(content);
+    expect(h.drivers[0]!.prompted[0]?.options?.onAccepted).toBeTypeOf("function");
     const runs = h.notifications("agents/run").map((n) => (n.params as { run: AgentRun }).run);
     expect(runs.at(-1)).toMatchObject({ origin: "user", status: "running", sessionPath: childPath, parent: { sessionPath: parentPath, sessionId: "p" }, task: "what changed?" });
     // State updates carry the agent info, including the live run.
@@ -173,12 +186,26 @@ describe("WorkerServer agents", () => {
     // A second prompt while the run is active starts no second run.
     await h.call(3, "session/prompt", { path: childPath, content: [{ type: "text", text: "more" }] });
     expect(h.notifications("agents/run").filter((n) => (n.params as { run: AgentRun }).run.status === "running")).toHaveLength(1);
+
+    // The real tray drain caller also crosses the harness boundary. Its
+    // onAccepted acknowledgement removes the item at the engine boundary.
+    let trayAccepted!: () => void;
+    const trayAcceptedPromise = new Promise<void>((resolve) => { trayAccepted = resolve; });
+    h.drivers[0]!.promptObserved = (promptContent) => {
+      if (promptContent.some((block) => block.type === "text" && block.text === "from tray")) trayAccepted();
+    };
+    await h.call(4, "session/pending/add", { path: childPath, content: [{ type: "text", text: "from tray" }] });
+    h.drivers[0]!.emit({ type: "update", update: { kind: "agent_settled" } });
+    await trayAcceptedPromise;
+    expect(h.drivers[0]!.prompted.at(-1)?.content).toEqual([{ type: "text", text: "from tray" }]);
+    expect((await h.call(5, "session/pending/list", { path: childPath })).result).toEqual({ messages: [] });
+
     // A person ends the run.
     const runId = runs.at(-1)!.runId;
-    const stopped = await h.call(4, "agents/runs/stop", { runId, reason: "enough" });
+    const stopped = await h.call(6, "agents/runs/stop", { runId, reason: "enough" });
     expect(stopped.result).toMatchObject({ run: { runId, status: "cancelled", endedBy: { initiator: "user", reason: "enough" } } });
     expect(h.drivers[0]!.aborts).toBe(1);
-    expect((await h.call(5, "agents/runs/stop", { runId: "run_unknown" })).error?.message).toMatch(/No run is called run_unknown/);
+    expect((await h.call(7, "agents/runs/stop", { runId: "run_unknown" })).error?.message).toMatch(/No run is called run_unknown/);
     // The run is published once, as itself; nothing publishes it a second time.
     expect(h.notifications("agents/run").map((n) => (n.params as { run: AgentRun }).run).at(-1)).toMatchObject({ runId, status: "cancelled" });
     expect(h.notifications("pi/extension/message").some((n) => String((n.params as { message: { type: string } }).message.type).startsWith("lasercode/panel"))).toBe(false);
