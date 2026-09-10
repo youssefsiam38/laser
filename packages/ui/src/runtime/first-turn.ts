@@ -1,40 +1,39 @@
-import type { ClientRequests } from "@lasercode/protocol";
+import type { AppendMessage } from "@assistant-ui/react";
+import type { ClientRequests, ThinkingLevel } from "@lasercode/protocol";
 
-/** Configuration the composer may attach to one pristine session's first prompt. */
+/** Configuration one composer attaches to its own pristine session's first prompt. */
 export type TentativeFirstTurn = NonNullable<ClientRequests["session/prompt"]["params"]["firstTurn"]>;
 
-/**
- * Composer state lives outside the persisted app store: choosing an agent is
- * navigation-neutral and disappears when that composer scope disappears.
- * The adapter reads the same object before it creates an anonymous session, so
- * keyboard and pointer sends take the identical path through assistant-ui.
- */
-const tentativeByScope = new Map<string, TentativeFirstTurn>();
+const FIRST_TURN_KEY = "firstTurn";
+const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
-export function readTentativeFirstTurn(scope: string | undefined): TentativeFirstTurn | undefined {
-  return scope ? tentativeByScope.get(scope) : undefined;
+type RunConfig = AppendMessage["runConfig"];
+
+/** Read the first-turn choice captured on the message by the sending composer. */
+export function firstTurnFromRunConfig(runConfig: RunConfig): TentativeFirstTurn | undefined {
+  const candidate = runConfig?.custom?.[FIRST_TURN_KEY];
+  if (!candidate || typeof candidate !== "object") return undefined;
+  const { agentName, thinkingLevel } = candidate as { agentName?: unknown; thinkingLevel?: unknown };
+  if (typeof agentName !== "string" || agentName === "") return undefined;
+  if (thinkingLevel === undefined) return { agentName };
+  if (typeof thinkingLevel !== "string" || !THINKING_LEVELS.has(thinkingLevel as ThinkingLevel)) return undefined;
+  return { agentName, thinkingLevel: thinkingLevel as ThinkingLevel };
 }
 
-export function writeTentativeFirstTurn(scope: string, value: TentativeFirstTurn | undefined): void {
-  if (value) tentativeByScope.set(scope, value);
-  else tentativeByScope.delete(scope);
+/** Merge one custom field without dropping another send-time option. */
+export function mergeRunConfigCustom(
+  runConfig: RunConfig,
+  custom: Record<string, unknown>,
+): NonNullable<RunConfig> {
+  return {
+    ...runConfig,
+    custom: {
+      ...runConfig?.custom,
+      ...custom,
+    },
+  };
 }
 
-/** Follow an anonymous composer onto the one session its send just created. */
-export function moveTentativeFirstTurn(from: string | undefined, to: string, value: TentativeFirstTurn): void {
-  if (!from || from === to || tentativeByScope.get(from) !== value) return;
-  tentativeByScope.delete(from);
-  tentativeByScope.set(to, value);
-}
-
-/** Clear only the choice this send consumed; a newer choice must survive. */
-export function consumeTentativeFirstTurn(scope: string | undefined, value: TentativeFirstTurn): void {
-  if (scope && tentativeByScope.get(scope) === value) tentativeByScope.delete(scope);
-}
-
-/** Discard this composer's value even if anonymous initialization moved it. */
-export function discardTentativeFirstTurn(value: TentativeFirstTurn): void {
-  for (const [scope, candidate] of tentativeByScope) {
-    if (candidate === value) tentativeByScope.delete(scope);
-  }
+export function withFirstTurn(runConfig: RunConfig, firstTurn: TentativeFirstTurn): NonNullable<RunConfig> {
+  return mergeRunConfigCustom(runConfig, { [FIRST_TURN_KEY]: firstTurn });
 }

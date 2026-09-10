@@ -17,7 +17,7 @@ import {
   uiResponseForInterrupt,
   type RequestClient,
 } from "../../src/runtime/adapter.js";
-import { readTentativeFirstTurn, writeTentativeFirstTurn } from "../../src/runtime/first-turn.js";
+import { withFirstTurn } from "../../src/runtime/first-turn.js";
 
 // --- helpers ---------------------------------------------------------------
 
@@ -419,16 +419,13 @@ describe("createThreadAdapter", () => {
     expect(client.calls.map((c) => c.method)).toEqual(["session/prompt", "pi/session/steer"]);
   });
 
-  it("captures a landing choice before creating the one session, then consumes it", async () => {
-    const scope = "/project";
+  it("captures a landing choice from the sending message before creating the session", async () => {
     const firstTurn = { agentName: "reviewer", thinkingLevel: "high" as const };
-    writeTentativeFirstTurn(scope, firstTurn);
     let resolve!: (path: string) => void;
     const resolvePath = vi.fn(() => new Promise<string>((done) => { resolve = done; }));
-    const { adapter, client } = build({ path: undefined, view: undefined, resolvePath, firstTurnScope: scope });
+    const { adapter, client } = build({ path: undefined, view: undefined, resolvePath });
 
-    const sending = adapter.onNew(message());
-    writeTentativeFirstTurn(scope, firstTurn);
+    const sending = adapter.onNew(message({ runConfig: withFirstTurn(undefined, firstTurn) }));
     resolve("/created.jsonl");
     await sending;
 
@@ -436,22 +433,36 @@ describe("createThreadAdapter", () => {
       method: "session/prompt",
       params: { path: "/created.jsonl", content: [{ type: "text", text: "hello" }], firstTurn },
     });
-    expect(readTentativeFirstTurn(scope)).toBeUndefined();
-    expect(readTentativeFirstTurn("/created.jsonl")).toBeUndefined();
   });
 
-  it("moves a refused landing choice onto the created session for retry", async () => {
-    const scope = "/retry-project";
+  it("keeps a refused message's first-turn choice available for retry", async () => {
     const path = "/retry-created.jsonl";
     const firstTurn = { agentName: "reviewer", thinkingLevel: "high" as const };
-    writeTentativeFirstTurn(scope, firstTurn);
+    const configured = message({ runConfig: withFirstTurn(undefined, firstTurn) });
     const client = mockClient({ "session/prompt": { accepted: false, queued: false } });
-    const { adapter } = build({ client, path: undefined, view: undefined, resolvePath: async () => path, firstTurnScope: scope });
+    const { adapter } = build({ client, path: undefined, view: undefined, resolvePath: async () => path });
 
-    await expect(adapter.onNew(message())).rejects.toThrow("started before the agent choice");
-    expect(readTentativeFirstTurn(scope)).toBeUndefined();
-    expect(readTentativeFirstTurn(path)).toBe(firstTurn);
-    writeTentativeFirstTurn(path, undefined);
+    await expect(adapter.onNew(configured)).rejects.toThrow("started before the agent choice");
+    await expect(adapter.onNew(configured)).rejects.toThrow("started before the agent choice");
+    expect(client.calls).toEqual([
+      { method: "session/prompt", params: { path, content: [{ type: "text", text: "hello" }], firstTurn } },
+      { method: "session/prompt", params: { path, content: [{ type: "text", text: "hello" }], firstTurn } },
+    ]);
+  });
+
+  it("keeps two composers on one path bound to each sending message in either order", async () => {
+    const client = mockClient({ "session/prompt": { accepted: true, queued: false } });
+    const first = build({ client }).adapter;
+    const second = build({ client }).adapter;
+    const high = message({ content: [{ type: "text", text: "high" }], runConfig: withFirstTurn(undefined, { agentName: "reviewer", thinkingLevel: "high" }) });
+    const low = message({ content: [{ type: "text", text: "low" }], runConfig: withFirstTurn(undefined, { agentName: "reviewer", thinkingLevel: "low" }) });
+
+    await second.onNew(low);
+    await first.onNew(high);
+    expect(client.calls.map((call) => call.params)).toEqual([
+      { path: "/s.jsonl", content: [{ type: "text", text: "low" }], firstTurn: { agentName: "reviewer", thinkingLevel: "low" } },
+      { path: "/s.jsonl", content: [{ type: "text", text: "high" }], firstTurn: { agentName: "reviewer", thinkingLevel: "high" } },
+    ]);
   });
 
   it("creates the session first when the thread has no path yet", async () => {

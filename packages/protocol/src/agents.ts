@@ -426,6 +426,12 @@ export interface SessionAgentRecord {
 
 /** The custom entry type the worker writes `SessionAgentRecord` under. */
 export const SESSION_AGENT_ENTRY_TYPE = "lasercode/agent";
+/** Durable person-selected values on a still-pristine first turn. */
+export const SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE = "lasercode/first-turn-overrides";
+export interface SessionFirstTurnOverrides {
+  model?: ModelRef | undefined;
+  thinkingLevel?: ThinkingLevel | undefined;
+}
 /** The custom entry type run lifecycle moments are written under in the child session. */
 export const SESSION_RUN_ENTRY_TYPE = "lasercode/agent-run";
 /** The custom message type a parent receives agent events as. */

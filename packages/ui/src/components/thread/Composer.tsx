@@ -28,6 +28,7 @@ import { useShell } from "@/components/shell/shell-context";
 import { useIsMobile, useIsTouch } from "@/hooks/use-mobile";
 import { finishActiveDictation } from "@/pwa";
 import { composerSendPlan, useLaserStable, useLaserView, useSessionMeta } from "@/runtime";
+import { mergeRunConfigCustom } from "@/runtime/first-turn";
 import { completeLeadingSlash, matchLeadingSlash, rankSlashCommandMatches } from "./slash-completion.js";
 import { StatusLine } from "./StatusLine.js";
 import { SessionPreparationProvider, useSessionPreparation } from "./session-preparation.js";
@@ -183,6 +184,11 @@ export function useHandedBackText(): void {
   }, [handedBack, handedBackPath, aui, actions]);
 }
 
+function setComposerStreamingBehavior(aui: ReturnType<typeof useAui>, streamingBehavior: "prompt" | "pending" | "steer" | "followUp"): void {
+  const current = aui.composer.getState().runConfig;
+  aui.composer.setRunConfig(mergeRunConfigCustom(current, { streamingBehavior }));
+}
+
 function useComposerKeys(): (e: KeyboardEvent<HTMLTextAreaElement>) => void {
   const aui = useAui();
   const running = useAuiState((s) => s.thread.isRunning);
@@ -205,7 +211,7 @@ function useComposerKeys(): (e: KeyboardEvent<HTMLTextAreaElement>) => void {
     if (disabled || !aui.composer.getState().canSend) return;
     const send = () => {
       foldQuote(aui);
-      aui.composer.setRunConfig(plan.runConfig);
+      setComposerStreamingBehavior(aui, plan.runConfig.custom.streamingBehavior);
       aui.composer.send(plan.sendOptions);
     };
     if (dictating) void finishActiveDictation().then((finished) => { if (finished) send(); });
@@ -281,7 +287,7 @@ function SendOrStop({ mobile = false }: { mobile?: boolean }) {
         onClick={(event) => {
           const prepare = () => {
             foldQuote(aui);
-            aui.composer.setRunConfig({ custom: { streamingBehavior: running ? "pending" : "prompt" } });
+            setComposerStreamingBehavior(aui, running ? "pending" : "prompt");
           };
           if (!dictating) {
             prepare();

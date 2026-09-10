@@ -1,14 +1,15 @@
 "use client";
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useAui, useAuiState } from "@assistant-ui/react";
 import type { ThinkingLevel } from "@lasercode/protocol";
-import { useLaserStable, useLaserState, useLaserView } from "../../runtime/LaserProvider.js";
-import { consumeTentativeFirstTurn, discardTentativeFirstTurn, readTentativeFirstTurn, writeTentativeFirstTurn, type TentativeFirstTurn } from "../../runtime/first-turn.js";
+import { useLaserState, useLaserView } from "../../runtime/LaserProvider.js";
+import { firstTurnFromRunConfig, mergeRunConfigCustom, withFirstTurn, type TentativeFirstTurn } from "../../runtime/first-turn.js";
 
 interface SessionPreparationValue {
   pending: boolean;
   /** Returns the matching release function; callers must invoke it once. */
   begin(): () => void;
-  /** The navigation-neutral choice attached to this composer's first send. */
+  /** The choice owned by this assistant-ui composer runtime. */
   firstTurn: TentativeFirstTurn | undefined;
   chooseAgent(agentName: string): void;
   chooseThinking(thinkingLevel: ThinkingLevel): void;
@@ -25,15 +26,12 @@ const SessionPreparationContext = createContext<SessionPreparationValue>({
 /** Serializes persistent model preparation and owns tentative first-turn choices. */
 export function SessionPreparationProvider({ children }: { children: ReactNode }) {
   const [count, setCount] = useState(0);
-  const { currentProject } = useLaserStable();
+  const aui = useAui();
   const view = useLaserView();
   const defaultAgent = useLaserState((state) => state.agents.snapshot?.defaultAgent);
-  const scope = view?.path ?? currentProject;
+  const runConfig = useAuiState((state) => state.composer.runConfig);
+  const firstTurn = firstTurnFromRunConfig(runConfig);
   const persistedAgent = view?.state.agent?.agentName ?? defaultAgent;
-  const current = useRef<{ scope: string; value: TentativeFirstTurn } | undefined>(undefined);
-  const [, setRevision] = useState(0);
-  const owned = current.current;
-  const firstTurn = owned && owned.scope === scope ? owned.value : undefined;
 
   const begin = useCallback(() => {
     let released = false;
@@ -46,47 +44,32 @@ export function SessionPreparationProvider({ children }: { children: ReactNode }
   }, []);
 
   const commit = useCallback((value: TentativeFirstTurn) => {
-    if (!scope) return;
-    const previous = current.current;
-    if (previous && previous.scope !== scope) consumeTentativeFirstTurn(previous.scope, previous.value);
-    current.current = { scope, value };
-    writeTentativeFirstTurn(scope, value);
-    setRevision((value) => value + 1);
-  }, [scope]);
+    aui.composer.setRunConfig(withFirstTurn(aui.composer.getState().runConfig, value));
+  }, [aui]);
 
   const chooseAgent = useCallback((agentName: string) => {
-    const owned = current.current;
-    const previous = owned && owned.scope === scope ? owned.value : undefined;
-    commit({ agentName, ...(previous?.thinkingLevel ? { thinkingLevel: previous.thinkingLevel } : {}) });
-  }, [commit, scope]);
+    commit({ agentName, ...(firstTurn?.thinkingLevel ? { thinkingLevel: firstTurn.thinkingLevel } : {}) });
+  }, [commit, firstTurn]);
 
   const chooseThinking = useCallback((thinkingLevel: ThinkingLevel) => {
-    const owned = current.current;
-    const previous = owned && owned.scope === scope ? owned.value : undefined;
-    const agentName = previous?.agentName ?? persistedAgent;
+    const agentName = firstTurn?.agentName ?? persistedAgent;
     if (!agentName) return;
     commit({ agentName, thinkingLevel });
-  }, [commit, persistedAgent, scope]);
+  }, [commit, firstTurn, persistedAgent]);
 
   useEffect(() => {
-    const owned = current.current;
-    if (!owned || owned.scope === scope) return;
-    // Anonymous first send moves the tentative value onto its newly selected
-    // session before this effect runs. Ordinary navigation leaves it behind
-    // and therefore discards it.
-    if (scope && readTentativeFirstTurn(owned.scope) !== owned.value && readTentativeFirstTurn(scope) === owned.value) {
-      current.current = { scope, value: owned.value };
-    } else {
-      discardTentativeFirstTurn(owned.value);
-      current.current = undefined;
-    }
-    setRevision((value) => value + 1);
-  }, [scope]);
-
-  useEffect(() => () => {
-    const owned = current.current;
-    if (owned) discardTentativeFirstTurn(owned.value);
-  }, []);
+    if (!view || !firstTurn) return;
+    // Optimistic bubbles appear before the worker answers. Clear only from
+    // canonical persisted history so a refused first-turn send remains retryable.
+    const started = view.state.messageCount > 0 || view.entries.some((entry) => {
+      if (!entry || typeof entry !== "object") return false;
+      const item = entry as { type?: unknown };
+      return item.type === "message" || item.type === "custom_message";
+    });
+    if (!started) return;
+    const current = aui.composer.getState().runConfig;
+    aui.composer.setRunConfig(mergeRunConfigCustom(current, { firstTurn: undefined }));
+  }, [aui, firstTurn, view]);
 
   const value = useMemo(() => ({
     pending: count > 0,

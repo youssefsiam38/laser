@@ -352,8 +352,6 @@ interface RuntimeSnapshot {
   dispatch: (action: Action) => void;
   onError: (error: unknown) => void;
   openSession: (path: string) => Promise<void>;
-  /** Project cwd for an anonymous composer; its transient first-turn scope. */
-  firstTurnScope?: string | undefined;
 }
 
 interface SnapshotStore<T> {
@@ -1301,13 +1299,13 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   // --- runtime ------------------------------------------------------------
 
   const snapshotStore = useMemo(
-    () => createSnapshotStore<RuntimeSnapshot>({ store, client, dispatch, onError, openSession, firstTurnScope: currentProject }),
+    () => createSnapshotStore<RuntimeSnapshot>({ store, client, dispatch, onError, openSession }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- created once; kept in sync below
     [],
   );
 
   useEffect(() => {
-    snapshotStore.set({ store, client, dispatch, onError, openSession, firstTurnScope: currentProject });
+    snapshotStore.set({ store, client, dispatch, onError, openSession });
   }, [snapshotStore, store, client, dispatch, onError, openSession, currentProject]);
 
   /** Number of `initialize()` calls in flight; gates the thread-list reload and the controlled selection. */
@@ -1510,7 +1508,6 @@ function useThreadRuntime(store: SnapshotStore<RuntimeSnapshot>): AssistantRunti
         dispatch: snapshot.dispatch,
         onError: snapshot.onError,
         resolvePath,
-        firstTurnScope: path ?? snapshot.firstTurnScope,
         projection: { ...projection, messages: messages as ThreadMessageLike[] },
       }),
     [connection, messages, path, projection, resolvePath, snapshot, view],
@@ -1721,12 +1718,12 @@ export function LaserThreadScope({ path, onPathChange, filter, createIn, unavail
   );
 
   const snapshotStore = useMemo(
-    () => createSnapshotStore<RuntimeSnapshot>({ store, client, dispatch, onError: scopedOnError, openSession: (target) => openSession(target, { select: false }), firstTurnScope: path }),
+    () => createSnapshotStore<RuntimeSnapshot>({ store, client, dispatch, onError: scopedOnError, openSession: (target) => openSession(target, { select: false }) }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- created once; kept in sync below
     [],
   );
   useEffect(() => {
-    snapshotStore.set({ store, client, dispatch, onError: scopedOnError, openSession: (target) => openSession(target, { select: false }), firstTurnScope: path });
+    snapshotStore.set({ store, client, dispatch, onError: scopedOnError, openSession: (target) => openSession(target, { select: false }) });
   }, [snapshotStore, store, client, dispatch, scopedOnError, openSession, path]);
 
   const runtimeHook = useCallback(

@@ -44,7 +44,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { goalExtensionPath, goalStateFromEntries } from "@lasercode/pi-goal";
 import { createCommandBus, createLaserExtension, createPromptProvenanceObserver, toSessionGoal, type LaserExtensionOptions } from "@lasercode/pi-extension";
-import { ErrorCodes, ProtocolError, PRODUCT_NAME, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE } from "@lasercode/protocol";
+import { ErrorCodes, ProtocolError, PRODUCT_NAME, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE, SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE } from "@lasercode/protocol";
 import type {
   CommandInfo,
   ContentBlock,
@@ -55,6 +55,7 @@ import type {
   ModelRef,
   PiExtensionCommand,
   PromptInfo,
+  SessionFirstTurnOverrides,
   SessionGoal,
   SessionState,
   SessionUpdate,
@@ -109,6 +110,9 @@ export class StableSdkDriver implements SessionDriver {
   private runtimeAgent: DriverAgentOptions | undefined;
   private runtimeModelOverride: ModelRef | undefined;
   private runtimeThinkingOverride: ThinkingLevel | undefined;
+  /** Person-selected values, distinct from Pi's automatic initial entries. */
+  private explicitModelOverride: ModelRef | undefined;
+  private explicitThinkingOverride: ThinkingLevel | undefined;
   private firstTurnRollback: {
     agent: DriverAgentOptions | undefined;
     modelOverride: ModelRef | undefined;
@@ -317,6 +321,11 @@ export class StableSdkDriver implements SessionDriver {
     const sessionManager = options.sessionPath
       ? SessionManager.open(options.sessionPath)
       : SessionManager.create(options.cwd, options.sessionDir);
+    const openingEntries = sessionManager.getEntries() as Array<{ type?: unknown; customType?: unknown; data?: unknown }>;
+    const savedOverrides = openingEntries.findLast((entry) => entry.type === "custom" && entry.customType === SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE)?.data;
+    const overrides = savedOverrides && typeof savedOverrides === "object" ? savedOverrides as SessionFirstTurnOverrides : undefined;
+    this.explicitModelOverride = overrides?.model;
+    this.explicitThinkingOverride = overrides?.thinkingLevel;
     this.runtimeFactory = createRuntime;
     const runtime = await createAgentSessionRuntime(createRuntime, {
       cwd: sessionManager.getCwd(),
@@ -424,20 +433,15 @@ export class StableSdkDriver implements SessionDriver {
     if (this.firstTurnRollback || this.preparedAgentRecord) {
       throw new ProtocolError(ErrorCodes.InvalidParams, "A first-turn agent choice is already being prepared for this conversation.");
     }
-    const session = this.session();
-    const entries = session.sessionManager.getEntries() as Array<{ type?: unknown }>;
-    const state = this.state();
-    const preserveModel = entries.some((entry) => entry.type === "model_change");
-    const preserveThinking = entries.some((entry) => entry.type === "thinking_level_change");
     const previous = {
       agent: this.runtimeAgent,
-      modelOverride: this.runtimeModelOverride,
-      thinkingOverride: this.runtimeThinkingOverride,
+      modelOverride: this.explicitModelOverride ?? this.runtimeModelOverride,
+      thinkingOverride: this.explicitThinkingOverride ?? this.runtimeThinkingOverride,
     };
     await this.replaceRuntime(
       options.agent,
-      preserveModel ? state.model ?? undefined : undefined,
-      options.thinkingLevel ?? (preserveThinking ? state.thinkingLevel : undefined),
+      this.explicitModelOverride,
+      options.thinkingLevel ?? this.explicitThinkingOverride,
     );
     this.firstTurnRollback = previous;
     this.preparedAgentRecord = options.agent.record;
@@ -474,6 +478,8 @@ export class StableSdkDriver implements SessionDriver {
     this.runtimeAgent = undefined;
     this.runtimeModelOverride = undefined;
     this.runtimeThinkingOverride = undefined;
+    this.explicitModelOverride = undefined;
+    this.explicitThinkingOverride = undefined;
     this.firstTurnRollback = undefined;
     this.preparedAgentRecord = undefined;
     this.emit({ type: "closed", reason: "disposed" });
@@ -691,12 +697,24 @@ export class StableSdkDriver implements SessionDriver {
       .find((m) => m.provider === model.provider && m.id === model.id);
     if (!match) throw new DriverUnavailableError(this.kind, `unknown model ${model.provider}/${model.id}`);
     await session.setModel(match);
+    this.explicitModelOverride = { ...model };
+    this.persistExplicitOverrides();
     return this.state();
   }
 
   async setThinkingLevel(level: ThinkingLevel): Promise<SessionState> {
     this.session().setThinkingLevel(level);
+    this.explicitThinkingOverride = level;
+    this.persistExplicitOverrides();
     return this.state();
+  }
+
+  private persistExplicitOverrides(): void {
+    const data: SessionFirstTurnOverrides = {
+      ...(this.explicitModelOverride ? { model: this.explicitModelOverride } : {}),
+      ...(this.explicitThinkingOverride ? { thinkingLevel: this.explicitThinkingOverride } : {}),
+    };
+    this.session().sessionManager.appendCustomEntry(SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE, data);
   }
 
   // ------------------------------------------------------------------ session

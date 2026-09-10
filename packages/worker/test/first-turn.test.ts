@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { SESSION_AGENT_ENTRY_TYPE, type SessionState } from "@lasercode/protocol";
+import { SESSION_AGENT_ENTRY_TYPE, SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE, type SessionState } from "@lasercode/protocol";
 import { assertFirstTurnAdmission, FirstTurnLock, type FirstTurnAdmission } from "../src/first-turn.js";
 
 const state = (over: Partial<SessionState> = {}): SessionState => ({
@@ -35,6 +35,7 @@ describe("first-turn admission", () => {
     expect(() => assertFirstTurnAdmission(admission({ entries: [] }))).not.toThrow();
     expect(() => assertFirstTurnAdmission(admission({ entries: [
       { type: "custom", customType: SESSION_AGENT_ENTRY_TYPE },
+      { type: "custom", customType: SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE },
       { type: "model_change" },
       { type: "thinking_level_change" },
       { type: "session_info" },

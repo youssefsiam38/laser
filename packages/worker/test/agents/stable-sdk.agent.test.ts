@@ -242,6 +242,7 @@ describe("StableSdkDriver with an agent definition", () => {
       scopedSkills: true,
       skills: [{ name: "selected-skill", path: join(base, "agent", "skills", "selected-skill", "SKILL.md"), scope: "global" }],
       model: { provider: "stub", id: "stub-2" },
+      thinkingLevel: "high",
     };
     const messages: JsonRpcMessage[] = [];
     const server = new WorkerServer({
@@ -284,10 +285,36 @@ describe("StableSdkDriver with an agent definition", () => {
     const lines = readFileSync(before.path, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { type?: string; message?: { role?: string; content?: unknown } });
     expect(lines.filter((line) => line.type === "message" && line.message?.role === "user")).toHaveLength(1);
     expect(JSON.stringify(lines.find((line) => line.type === "message" && line.message?.role === "user")?.message?.content)).toContain("one exact first message");
+
+    // Pi writes automatic initial model/thinking entries. They are defaults,
+    // not person overrides: an untouched second session takes the selected
+    // agent's different defaults.
+    const untouched = (await call("session/new", { cwd: join(base, "project") }).then((reply) => reply.result as { state: SessionState })).state;
+    await call("session/prompt", {
+      path: untouched.path,
+      content: [{ type: "text", text: "selected defaults" }],
+      firstTurn: { agentName: "reviewer" },
+    });
+    expect(stub.requests[1]).toMatchObject({ model: "stub-2", reasoning_effort: "high" });
+    expect((await call("session/load", { path: untouched.path }).then((reply) => reply.result as { state: SessionState })).state)
+      .toMatchObject({ path: untouched.path, id: untouched.id, model: { provider: "stub", id: "stub-2" }, thinkingLevel: "high" });
     await server.dispose();
   }, 60_000);
 
-  it("restores the prior runtime and record when first-turn preparation is rolled back", async () => {
+  it("restores the prior runtime, record, and manual overrides when first-turn preparation is rolled back", async () => {
+    writeFileSync(join(base, "agent", "models.json"), JSON.stringify({
+      providers: {
+        stub: {
+          baseUrl: stub.url,
+          api: "openai-completions",
+          apiKey: "stub-key",
+          models: [
+            { id: "stub-1", name: "Stub One", contextWindow: 8000, maxTokens: 1000, reasoning: true },
+            { id: "stub-2", name: "Stub Two", contextWindow: 8000, maxTokens: 1000, reasoning: true },
+          ],
+        },
+      },
+    }));
     const original: AgentDefinition = {
       ...fallbackDefaultAgent(), name: "default", engineInstructions: false,
       instructions: "ORIGINAL AFTER ROLLBACK", model: { provider: "stub", id: "stub-1" },
@@ -299,11 +326,14 @@ describe("StableSdkDriver with an agent definition", () => {
     const driver = new StableSdkDriver();
     drivers.push(driver);
     const before = await driver.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), projectTrusted: true, agent: agentOptions(original) });
+    await driver.setModel({ provider: "stub", id: "stub-2" });
+    await driver.setThinkingLevel("high");
     await driver.prepareFirstTurn({ agent: agentOptions(selected), thinkingLevel: "off" });
     await driver.rollbackFirstTurn();
     await driver.prompt([{ type: "text", text: "continue" }]);
 
-    expect(driver.state()).toMatchObject({ path: before.path, id: before.id });
+    expect(driver.state()).toMatchObject({ path: before.path, id: before.id, model: { provider: "stub", id: "stub-2" }, thinkingLevel: "high" });
+    expect(stub.requests[0]).toMatchObject({ model: "stub-2", reasoning_effort: "high" });
     expect(systemTextOf(stub.requests[0]!)).toContain("ORIGINAL AFTER ROLLBACK");
     expect(systemTextOf(stub.requests[0]!)).not.toContain("SHOULD NOT RUN");
     expect(await readSessionAgentRecord(before.path)).toEqual({ agentName: "default", kind: "root" });
