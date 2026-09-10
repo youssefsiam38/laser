@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-10T14:47:27Z · stabilization-ledger · HEAD: b046478
+**Last updated:** 2026-09-10T20:06:25Z · release-preparation · HEAD: b94a8ec
 
-**Current focus:** M13 — essential stabilization is frozen, not release-ready. Coupled T89/T92 work remains unmerged at `aba12f7b`; T93 awaits the person’s HLC010 boundary decision. No further implementation, release action or omitted gate is authorized.
+**Current focus:** M13 — prepare the independently approved 0.3.5 subset for asynchronous verification, exact-SHA source CI, immutable tagging and verified publication. Unapproved first-turn/harness lifecycle work remains excluded.
 
 ## Milestones
 
@@ -24,13 +24,13 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M10 Distribution | in-progress | in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
 | M12 Product experience | done | 0.2.13 dispatched |
-| M13 Agents Leap | in-progress | accepted staging `adcbd66` is preliminary; T93 blocked on Q-8; full/browser/package gates skipped |
+| M13 Agents Leap | in-progress | T97 versions the approved subset; long local/CI/release gates remain pending |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
 
 - M13-T93: HLC010 needs person approval for a dedicated reviewed awaitable extension-generated prompt-admission seam (Q-8); do not disable child goals.
-- M13-T94 remains not ready: dependencies are incomplete, current full/browser/package gates were skipped, and release permission is absent.
+- M13-T94: its original complete-fix dependencies and full acceptance gates remain incomplete; T97 does not replace them.
 
 ## Next up
 

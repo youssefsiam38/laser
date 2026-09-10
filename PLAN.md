@@ -581,6 +581,7 @@ Depends on: M12.
 | M13-T94 | Release the next stable patch | M13-T89 through M13-T93 and M13-T95/T96 pass staged workspace and packaged checks; clean source CI and explicit user permission precede any version change, push, immutable patch tag or verified publication workflow |
 | M13-T95 | Manual aggregate activity open/close persists | a person’s manual aggregate disclosure choice remains authoritative; Answers-only mode never auto-opens errors or streaming activity, while reduced-motion, pointer and keyboard behavior remain complete |
 | M13-T96 | Blocked terminal runs are neutral finished work | terminal blocked runs use neutral finished styling and words, appear in the finished fold, and historic failures never outrank a newer active run across fleet, sidebar and inspect output; live `needs_input` remains warm Asking and live descendants remain visible |
+| M13-T97 | Release the approved subset as stable 0.3.5 | the approved pending-delivery, composer, activity-disclosure, header-agent and neutral-finished-run commits pass an isolated staged `pnpm verify`; clean source CI succeeds for the exact candidate SHA; the immutable tag then triggers both architecture builds and verified publication checks before the release is reported published |
 
 ## MX · Cross-cutting (runs alongside every milestone)
 
