@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-10T20:54:03Z · stabilization-ci · HEAD: f86338f
+**Last updated:** 2026-09-10T20:56:20Z · stabilization-ci · HEAD: 018a6e6
 
-**Current focus:** M13 — 0.3.5 published and verified. Separate development preserves `aba12f7b`; one HLC-010 owner is refining admission/continuation ordering before code.
+**Current focus:** M13 — 0.3.5 published and verified. Separate development preserves `aba12f7b`; one HLC-010 owner is implementing the approved admission/continuation plan.
 
 ## Milestones
 
@@ -29,7 +29,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Blockers
 
-- M13-T93: HLC-010 still blocks development integration; Q-8 scope authorized, hlc010-admission-owner refining its plan; exact-version patch scope approved.
+- M13-T93: HLC-010 still blocks development integration; Q-8 scope authorized, hlc010-admission-owner implementing the approved exact-version seam; independent review pending.
 - M13-T94: its original complete-fix dependencies and full acceptance gates remain incomplete; T97 does not replace them.
 
 ## Next up
