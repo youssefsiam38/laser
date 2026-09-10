@@ -22,10 +22,10 @@ export const agent = (over: Partial<AgentDefinition> & Pick<AgentDefinition, "na
 export const snapshot = (over: Partial<AgentsSnapshot> = {}): AgentsSnapshot => ({
   revision: 1,
   agents: [
-    agent({ name: "default", description: "The shipped agent", engineInstructions: true }),
-    agent({ name: "beam", kind: "builtin" }),
-    agent({ name: "chat", kind: "builtin" }),
-    agent({ name: "namer", kind: "builtin" }),
+    agent({ name: "default", description: "The shipped agent", engineInstructions: true, supportsSubagents: true, allowedAgents: ["default"] }),
+    agent({ name: "beam", kind: "builtin", instructions: "Read the app state before answering." }),
+    agent({ name: "chat", kind: "builtin", instructions: "Answer general questions directly." }),
+    agent({ name: "namer", kind: "builtin", instructions: "Name sessions and running actions clearly." }),
     agent({ name: "reviewer", description: "Reviews a diff" }),
   ],
   defaultAgent: "default",
@@ -34,6 +34,8 @@ export const snapshot = (over: Partial<AgentsSnapshot> = {}): AgentsSnapshot => 
   namer: { status: "unqualified", model: null, candidates: [] },
   beam: { model: null, suggested: null, needsChoice: false },
   chat: { model: null },
+  builtinInstructions: { beam: null, chat: null, namer: null },
+  renamedAgents: {},
   workspaces: { beam: "/state/beam", chat: "/state/chat" },
   ...over,
 });

@@ -255,10 +255,10 @@ describe("Router · agents (docs/agents-leap)", () => {
       const listed = (await rpc(h.router, "agents/list")) as { result: { agents: Array<{ name: string }>; defaultAgent: string } };
       expect(listed.result.agents.map((a) => a.name)).toEqual(["default", "beam", "chat", "namer"]);
       const input = { name: "reviewer", description: "", instructions: "Review.", engineInstructions: false, model: null, thinkingLevel: null, supportsSubagents: false, allowedAgents: [], scopedSkills: false, skills: [] };
-      expect(await rpc(h.router, "agents/validate", { agent: { ...input, scopedSkills: true } })).toMatchObject({ result: { issues: [{ field: "skills" }] } });
-      const saved = await rpc(h.router, "agents/save", { agent: input });
+      expect(await rpc(h.router, "agents/validate", { agent: { ...input, scopedSkills: true }, originalName: null })).toMatchObject({ result: { issues: [{ field: "skills" }] } });
+      const saved = await rpc(h.router, "agents/save", { agent: input, originalName: null });
       expect(saved).toMatchObject({ result: { agent: { name: "reviewer", kind: "custom" }, snapshot: { revision: 1 } } });
-      expect(await rpc(h.router, "agents/save", { agent: { ...input, name: "beam" } })).toMatchObject({ error: { data: { issues: [{ field: "name" }] } } });
+      expect(await rpc(h.router, "agents/save", { agent: { ...input, name: "beam" }, originalName: null })).toMatchObject({ error: { data: { issues: [{ field: "name" }] } } });
       expect(await rpc(h.router, "agents/set-default", { name: "reviewer" })).toMatchObject({ result: { snapshot: { defaultAgent: "reviewer" } } });
       expect(await rpc(h.router, "agents/delete", { name: "reviewer" })).toMatchObject({ error: { message: "This agent starts new sessions. Choose another default first." } });
       expect(await rpc(h.router, "agents/set-policy", { policy: { maxDepth: 2 } })).toMatchObject({ result: { snapshot: { policy: { maxDepth: 2 } } } });
@@ -273,6 +273,12 @@ describe("Router · agents (docs/agents-leap)", () => {
       expect(chatSet.result.snapshot.agents.find((a) => a.name === "chat")?.model).toEqual({ provider: "openai", id: "gpt-5-nano" });
       expect(await rpc(h.router, "agents/builtin/set-model", { name: "chat", model: null })).toMatchObject({ result: { snapshot: { chat: { model: null } } } });
       expect(await rpc(h.router, "agents/builtin/set-model", { name: "namer", model: null })).toMatchObject({ result: { snapshot: { namer: { status: "unqualified" } } } });
+      expect(await rpc(h.router, "agents/builtin/set-instructions", { name: "chat", instructions: "Answer as an editor." })).toMatchObject({
+        result: { snapshot: { builtinInstructions: { chat: "Answer as an editor." }, agents: expect.arrayContaining([expect.objectContaining({ name: "chat", instructions: "Answer as an editor." })]) } },
+      });
+      expect(await rpc(h.router, "agents/builtin/set-instructions", { name: "chat", instructions: null })).toMatchObject({
+        result: { snapshot: { builtinInstructions: { chat: null } } },
+      });
       expect(await rpc(h.router, "agents/runs/list", {})).toMatchObject({ result: { runs: [] } });
       expect(await rpc(h.router, "agents/sync", { snapshot: { revision: 1 } })).toMatchObject({ error: { message: "The app sends this to its own workers." } });
       expect(h.workerRequests).toEqual([]);

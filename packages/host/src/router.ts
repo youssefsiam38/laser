@@ -118,8 +118,8 @@ const CWD_ROUTED = new Set([
   // The git status of a project. The UI always sends a `path` as well, but the
   // CLI and any cwd-only caller must still reach the right worker.
   "pi/project/git",
-  // The engine discovers skills and owns its built-in instructions; the Namer
-  // benchmark needs a provider. All three name the cwd whose worker answers.
+  // The worker discovers user skills and supplies Laser's default instructions;
+  // the Namer benchmark needs a provider. All three name the answering cwd.
   "agents/skills",
   "agents/engine-instructions",
   "agents/namer/qualify",
@@ -536,10 +536,10 @@ export class Router {
       case "agents/list":
         return this.agents().snapshot();
       case "agents/validate":
-        return { issues: this.agents().validate(req.params.agent) };
+        return { issues: this.agents().validate(req.params.agent, req.params.originalName) };
       case "agents/save": {
         const store = this.agents();
-        const agent = store.save(req.params.agent);
+        const agent = store.save(req.params.agent, req.params.originalName);
         return { agent, snapshot: store.snapshot() };
       }
       case "agents/delete": {
@@ -560,6 +560,11 @@ export class Router {
       case "agents/builtin/set-model": {
         const store = this.agents();
         store.setBuiltinModel(req.params.name, req.params.model);
+        return { snapshot: store.snapshot() };
+      }
+      case "agents/builtin/set-instructions": {
+        const store = this.agents();
+        store.setBuiltinInstructions(req.params.name, req.params.instructions);
         return { snapshot: store.snapshot() };
       }
       case "agents/runs/list":

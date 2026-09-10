@@ -1,6 +1,6 @@
 /**
  * M13-T3 · per-agent session configuration, the pure half: tool filtering,
- * skill scoping (the Beam skill only for Beam), roles and record recovery.
+ * user-skill scoping, roles and record recovery.
  */
 import { PRODUCT_NAME, SESSION_AGENT_ENTRY_TYPE } from "@lasercode/protocol";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -21,19 +21,15 @@ describe("ENGINE_BUILTIN_TOOLS", () => {
 });
 
 describe("filterSkills", () => {
-  const beamSkillName = `${PRODUCT_NAME}-beam`;
-  const skills = [{ name: "alpha" }, { name: "beta" }, { name: beamSkillName }];
-  it("offers the Beam skill only to Beam", () => {
-    const beam = fallbackBeamAgent({ model: null, beamSkill: { name: beamSkillName, path: "/x", scope: "global" } });
-    expect(filterSkills(skills, { definition: fallbackDefaultAgent(), role: { kind: "root" }, beamSkillName }).map((s) => s.name)).toEqual(["alpha", "beta"]);
-    expect(filterSkills(skills, { definition: beam, role: { kind: "beam" }, beamSkillName }).map((s) => s.name)).toEqual([beamSkillName]);
-    // A misconfigured Beam definition still cannot leak the skill to a child.
-    expect(filterSkills(skills, { definition: { scopedSkills: false, skills: [] }, role: { kind: "child" }, beamSkillName })).toHaveLength(2);
+  const skills = [{ name: "alpha" }, { name: "beta" }];
+  it("offers every discovered skill to every unscoped agent", () => {
+    expect(filterSkills(skills, { definition: fallbackDefaultAgent(), role: { kind: "root" } }).map((s) => s.name)).toEqual(["alpha", "beta"]);
+    expect(filterSkills(skills, { definition: fallbackBeamAgent({ model: null }), role: { kind: "beam" } }).map((s) => s.name)).toEqual(["alpha", "beta"]);
   });
   it("keeps only the listed skills when scoped", () => {
     const scoped = { scopedSkills: true, skills: [{ name: "beta", path: "/b", scope: "project" as const }, { name: "missing", path: "/m", scope: "project" as const }] };
-    expect(filterSkills(skills, { definition: scoped, role: { kind: "root" }, beamSkillName }).map((s) => s.name)).toEqual(["beta"]);
-    expect(filterSkills(skills, { definition: { scopedSkills: false, skills: [] }, role: { kind: "root" } })).toHaveLength(3);
+    expect(filterSkills(skills, { definition: scoped, role: { kind: "root" } }).map((s) => s.name)).toEqual(["beta"]);
+    expect(filterSkills(skills, { definition: { scopedSkills: false, skills: [] }, role: { kind: "root" } })).toHaveLength(2);
   });
 });
 

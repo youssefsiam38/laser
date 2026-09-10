@@ -50,12 +50,14 @@ describe("agents actions", () => {
       "agents/validate": { issues: [{ field: "name", message: "Taken." }] },
       "agents/save": { agent: saved, snapshot: snapshot({ revision: 2, agents: [saved] }) },
     });
-    await expect(h.actions.validate({ ...saved })).resolves.toEqual([{ field: "name", message: "Taken." }]);
-    await expect(h.actions.save({ ...saved })).resolves.toEqual(saved);
+    await expect(h.actions.validate({ ...saved }, null)).resolves.toEqual([{ field: "name", message: "Taken." }]);
+    await expect(h.actions.save({ ...saved }, null)).resolves.toEqual(saved);
+    expect(h.request).toHaveBeenNthCalledWith(1, "agents/validate", { agent: saved, originalName: null });
+    expect(h.request).toHaveBeenNthCalledWith(2, "agents/save", { agent: saved, originalName: null });
     expect(h.state.agents.snapshot?.revision).toBe(2);
     const broken = harness({});
-    await expect(broken.actions.save({ ...saved })).rejects.toThrow("unknown method agents/save");
-    await expect(broken.actions.validate({ ...saved })).rejects.toThrow();
+    await expect(broken.actions.save({ ...saved }, null)).rejects.toThrow("unknown method agents/save");
+    await expect(broken.actions.validate({ ...saved }, null)).rejects.toThrow();
     expect(broken.toasts).toEqual([]);
   });
 
@@ -141,5 +143,26 @@ describe("agents actions", () => {
     expect(broken.state.agents.snapshot?.chat.model ?? null).toBeNull();
     broken.actions.dismissBeamChoice();
     expect(broken.state.agents.chooseBeamModel).toBeNull();
+  });
+
+  it("sets and restores a built-in's instructions, keeping failures with the editor", async () => {
+    const h = harness({
+      "agents/builtin/set-instructions": ({ name, instructions }: { name: "beam" | "chat" | "namer"; instructions: string | null }) => ({
+        snapshot: snapshot({
+          revision: 9,
+          builtinInstructions: { beam: null, chat: null, namer: null, [name]: instructions },
+          agents: snapshot().agents.map((agent) => (agent.name === name && instructions ? { ...agent, instructions } : agent)),
+        }),
+      }),
+    });
+    await h.actions.setBuiltinInstructions("chat", "Answer as a careful editor.");
+    expect(h.request).toHaveBeenLastCalledWith("agents/builtin/set-instructions", { name: "chat", instructions: "Answer as a careful editor." });
+    expect(h.state.agents.snapshot?.builtinInstructions.chat).toBe("Answer as a careful editor.");
+    await h.actions.setBuiltinInstructions("chat", null);
+    expect(h.state.agents.snapshot?.builtinInstructions.chat).toBeNull();
+
+    const broken = harness({});
+    await expect(broken.actions.setBuiltinInstructions("beam", "Be brief.")).rejects.toThrow("unknown method agents/builtin/set-instructions");
+    expect(broken.toasts).toEqual([]);
   });
 });

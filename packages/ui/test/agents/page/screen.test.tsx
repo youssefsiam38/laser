@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type AgentDefinition, type AgentDefinitionInput, type AgentIssue, type AgentsSnapshot, type NamerState } from "@lasercode/protocol";
+import { PRODUCT_DISPLAY_NAME, type AgentDefinition, type AgentDefinitionInput, type AgentIssue, type AgentsSnapshot, type NamerState } from "@lasercode/protocol";
 
 import { initialState, reduce, type AppState } from "../../../src/store.js";
 import { agent, snapshot } from "../fixtures.js";
@@ -19,11 +19,22 @@ const mocks = vi.hoisted(() => {
   const publish = (next: AgentsSnapshot) => state.store!.dispatch({ type: "agents/updated", snapshot: next });
   const agents = {
     refresh: vi.fn(async () => undefined),
-    validate: vi.fn(async (_input: AgentDefinitionInput) => state.issues),
-    save: vi.fn(async (input: AgentDefinitionInput): Promise<AgentDefinition> => {
+    validate: vi.fn(async (_input: AgentDefinitionInput, _originalName: string | null) => state.issues),
+    save: vi.fn(async (input: AgentDefinitionInput, originalName: string | null): Promise<AgentDefinition> => {
       const snap = current();
       const saved: AgentDefinition = { ...input, kind: "custom", createdAt: "2026-09-08T00:00:00.000Z", updatedAt: "2026-09-08T00:00:00.000Z" };
-      publish({ ...snap, revision: snap.revision + 1, agents: [...snap.agents.filter((a) => a.name !== input.name), saved] });
+      publish({
+        ...snap,
+        revision: snap.revision + 1,
+        defaultAgent: snap.defaultAgent === originalName ? saved.name : snap.defaultAgent,
+        renamedAgents: originalName && originalName !== saved.name ? { ...snap.renamedAgents, [originalName]: saved.name } : snap.renamedAgents,
+        agents: [
+          ...snap.agents
+            .filter((a) => a.name !== (originalName ?? input.name))
+            .map((a) => (originalName && originalName !== saved.name ? { ...a, allowedAgents: a.allowedAgents.map((name) => (name === originalName ? saved.name : name)) } : a)),
+          saved,
+        ],
+      });
       return saved;
     }),
     remove: vi.fn(async (name: string) => {
@@ -36,7 +47,7 @@ const mocks = vi.hoisted(() => {
     }),
     setPolicy: vi.fn(async () => undefined),
     skills: vi.fn(async () => ({ skills: [{ name: "review", path: "/p/skills/review/SKILL.md", scope: "project" as const }], roots: [{ path: "/p/skills", scope: "project" as const, exists: true }] })),
-    engineInstructions: vi.fn(async () => "You are the engine's default agent."),
+    engineInstructions: vi.fn(async () => "You are the product's default agent."),
     runs: vi.fn(async () => undefined),
     stopRun: vi.fn(),
     setBuiltinModel: vi.fn(async (name: "beam" | "chat" | "namer", model: { provider: string; id: string } | null) => {
@@ -48,6 +59,16 @@ const mocks = vi.hoisted(() => {
         ...(name === "beam" ? { beam: { ...snap.beam, model, needsChoice: false } } : {}),
         ...(name === "chat" ? { chat: { model } } : {}),
         ...(name === "namer" ? { namer: { ...snap.namer, model, status: model ? ("ready" as const) : ("unqualified" as const) } } : {}),
+      });
+    }),
+    setBuiltinInstructions: vi.fn(async (name: "beam" | "chat" | "namer", instructions: string | null) => {
+      const snap = current();
+      const shipped = snapshot().agents.find((agent) => agent.name === name)!.instructions;
+      publish({
+        ...snap,
+        revision: snap.revision + 1,
+        builtinInstructions: { ...snap.builtinInstructions, [name]: instructions },
+        agents: snap.agents.map((agent) => (agent.name === name ? { ...agent, instructions: instructions ?? shipped } : agent)),
       });
     }),
     qualifyNamer: vi.fn(async (): Promise<NamerState> => ({ status: "ready", model: { provider: "openai", id: "mini" }, candidates: [{ model: { provider: "openai", id: "mini" }, latencyMs: 300, valid: true }] })),
@@ -201,10 +222,10 @@ describe("Agents page", () => {
     await type(editor.querySelector<HTMLTextAreaElement>('textarea[name="instructions"]')!, "Do the thing.");
     await blur(editor.querySelector('textarea[name="instructions"]')!);
     await settle();
-    expect(mocks.agents.validate).toHaveBeenLastCalledWith(expect.objectContaining({ supportsSubagents: false, allowedAgents: [] }));
+    expect(mocks.agents.validate).toHaveBeenLastCalledWith(expect.objectContaining({ supportsSubagents: false, allowedAgents: [] }), null);
     await click(button("Create agent"));
     await settle();
-    expect(mocks.agents.save).toHaveBeenCalledWith(expect.objectContaining({ name: "solo", supportsSubagents: false, allowedAgents: [] }));
+    expect(mocks.agents.save).toHaveBeenCalledWith(expect.objectContaining({ name: "solo", supportsSubagents: false, allowedAgents: [] }), null);
   });
 
   it("fills the allowed agents when delegation is turned on and empties them when it is turned off", async () => {
@@ -219,13 +240,47 @@ describe("Agents page", () => {
     expect([...allowed.querySelectorAll<HTMLInputElement>("input")].filter((i) => i.checked).map((i) => i.name)).toEqual(["allowed:default", "allowed:reviewer"]);
     await blur(editor.querySelector('input[name="name"]')!);
     await settle();
-    expect(mocks.agents.validate).toHaveBeenLastCalledWith(expect.objectContaining({ supportsSubagents: true, allowedAgents: ["default", "reviewer"] }));
+    expect(mocks.agents.validate).toHaveBeenLastCalledWith(expect.objectContaining({ supportsSubagents: true, allowedAgents: ["default", "reviewer"] }), null);
     // Off: nothing listed, so the definition never contradicts itself.
     await click(toggle);
     expect(editor.querySelector('[data-slot="allowed-agents"]')).toBeNull();
     await blur(editor.querySelector('input[name="name"]')!);
     await settle();
-    expect(mocks.agents.validate).toHaveBeenLastCalledWith(expect.objectContaining({ supportsSubagents: false, allowedAgents: [] }));
+    expect(mocks.agents.validate).toHaveBeenLastCalledWith(expect.objectContaining({ supportsSubagents: false, allowedAgents: [] }), null);
+  });
+
+  it("shows self-delegation as a normal choice that can be removed and restored", async () => {
+    await mount();
+    await click(row("default"));
+    const editor = q<HTMLFormElement>('[data-slot="agent-editor"]');
+    const allowed = editor.querySelector('[data-slot="allowed-agents"]')!;
+    expect(allowed.querySelector('[data-slot="allowed-agent-missing"]')).toBeNull();
+    expect(allowed.textContent).toContain("Default agent · Same agent");
+    expect(allowed.textContent).toContain("Starts another instance with these same settings.");
+    const self = allowed.querySelector<HTMLInputElement>('input[name="allowed:default"]')!;
+    expect(self.checked).toBe(true);
+    await click(self);
+    expect(self.checked).toBe(false);
+    expect(allowed.querySelector<HTMLInputElement>('input[name="allowed:default"]')).not.toBeNull();
+    await click(self);
+    expect(self.checked).toBe(true);
+  });
+
+  it("renames an existing agent and sends its original name for atomic validation and save", async () => {
+    await mount();
+    await click(row("reviewer"));
+    const editor = q<HTMLFormElement>('[data-slot="agent-editor"]');
+    const name = editor.querySelector<HTMLInputElement>('input[name="name"]')!;
+    expect(name.value).toBe("reviewer");
+    await type(name, "implementer");
+    await blur(name);
+    await settle();
+    expect(mocks.agents.validate).toHaveBeenLastCalledWith(expect.objectContaining({ name: "implementer" }), "reviewer");
+    await click(button("Save"));
+    await settle();
+    expect(mocks.agents.save).toHaveBeenCalledWith(expect.objectContaining({ name: "implementer" }), "reviewer");
+    expect(q('[data-slot="agent-editor"]').getAttribute("data-agent")).toBe("implementer");
+    expect(row("implementer")).toBeTruthy();
   });
 
   it("creates an agent from the form and sends the definition to save", async () => {
@@ -406,18 +461,18 @@ describe("Agents page", () => {
     expect(q('[data-slot="agent-editor"]').dataset.agent).toBe("default");
   });
 
-  it("edits the default agent from the engine's instructions", async () => {
+  it("edits the default agent from the product's instructions", async () => {
     await mount();
     await click(row("default"));
     const editor = q<HTMLFormElement>('[data-slot="agent-editor"]');
     await settle();
-    expect(editor.querySelector('[data-slot="engine-instructions"]')?.textContent).toContain("You are the engine's default agent.");
+    expect(editor.querySelector('[data-slot="engine-instructions"]')?.textContent).toContain("You are the product's default agent.");
     expect(mocks.agents.engineInstructions).toHaveBeenCalledWith("/p");
     await click(button("Customize"));
     const instructions = editor.querySelector<HTMLTextAreaElement>('textarea[name="instructions"]')!;
-    expect(instructions.value).toBe("You are the engine's default agent.");
-    expect(button("Use the built-in instructions again")).toBeTruthy();
-    await click(button("Use the built-in instructions again"));
+    expect(instructions.value).toBe("You are the product's default agent.");
+    expect(button(`Use ${PRODUCT_DISPLAY_NAME}'s default instructions again`)).toBeTruthy();
+    await click(button(`Use ${PRODUCT_DISPLAY_NAME}'s default instructions again`));
     expect(editor.querySelector('[data-slot="engine-instructions"]')).not.toBeNull();
   });
 
@@ -572,6 +627,25 @@ describe("Agents page", () => {
     expect(named.textContent).toContain("openai/gpt-5");
     expect(named.textContent).toContain("Run qualification");
     expect(mocks.agents.qualifyNamer).not.toHaveBeenCalled();
+  });
+
+  it("edits and restores every built-in's system instructions", async () => {
+    await mount();
+    for (const name of ["beam", "chat", "namer"] as const) {
+      await click(row(name));
+      const input = q<HTMLTextAreaElement>(`textarea[aria-label="${name === "beam" ? "Beam" : name === "chat" ? "Chat" : "Namer"} system instructions"]`);
+      expect(input.value.length).toBeGreaterThan(0);
+      await type(input, `Custom ${name} instructions.`);
+      await click(button("Save instructions"));
+      await settle();
+      expect(mocks.agents.setBuiltinInstructions).toHaveBeenLastCalledWith(name, `Custom ${name} instructions.`);
+      expect(q<HTMLTextAreaElement>(`textarea[aria-label="${name === "beam" ? "Beam" : name === "chat" ? "Chat" : "Namer"} system instructions"]`).value).toBe(`Custom ${name} instructions.`);
+      expect(button("Restore built-in instructions")).toBeTruthy();
+      await click(button("Restore built-in instructions"));
+      await settle();
+      expect(mocks.agents.setBuiltinInstructions).toHaveBeenLastCalledWith(name, null);
+      expect(q<HTMLTextAreaElement>(`textarea[aria-label="${name === "beam" ? "Beam" : name === "chat" ? "Chat" : "Namer"} system instructions"]`).value).toBe(snapshot().agents.find((agent) => agent.name === name)!.instructions);
+    }
   });
 
   it("saves the harness limits when a field is committed, and refuses a value out of range", async () => {

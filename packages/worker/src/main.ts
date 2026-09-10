@@ -56,8 +56,8 @@ async function main(): Promise<void> {
   const cwd = arg("cwd") ?? process.cwd();
   const agentDir = arg("agent-dir");
   const sessionDir = arg("session-dir");
-  // The host's own state directory (agents, runs, prefs): the Beam skill is
-  // written from it. Optional; without it the worker assumes `<agentDir>/../state`.
+  // The host's own state directory (agents, runs, prefs), used by Beam's
+  // Laser-specific instructions. Optional for callers outside the host.
   const stateDir = arg("state-dir");
   const projectTrusted = arg("project-trusted");
   if (projectTrusted !== undefined && projectTrusted !== "yes" && projectTrusted !== "no") {

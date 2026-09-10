@@ -126,7 +126,6 @@ export interface AgentHarnessOptions {
   worktrees: WorktreeProvider;
   /** Background-work options for a session running in `cwd`; passed to every child. */
   backgroundWork?: (cwd: string) => BackgroundWorkOptions;
-  beamSkillName?: string;
   now?: () => number;
 }
 
@@ -208,7 +207,6 @@ export class AgentHarness {
   private readonly definitions: DefinitionsCache;
   private readonly worktrees: WorktreeProvider;
   private readonly backgroundWork: ((cwd: string) => BackgroundWorkOptions) | undefined;
-  private readonly beamSkillName: string | undefined;
   private readonly now: () => number;
   private readonly byPath = new Map<string, Entry>();
   private readonly runStates = new Map<string, RunState>();
@@ -220,7 +218,6 @@ export class AgentHarness {
     this.definitions = options.definitions;
     this.worktrees = options.worktrees;
     this.backgroundWork = options.backgroundWork;
-    this.beamSkillName = options.beamSkillName;
     this.now = options.now ?? Date.now;
     // A definitions change is announced to every live bridge as a role
     // change, so `start_agent` catalogs are re-read.
@@ -588,7 +585,6 @@ export class AgentHarness {
           bridge: handle.bridge,
           policy,
           ...(backgroundWork ? { backgroundWork } : {}),
-          ...(this.beamSkillName !== undefined ? { beamSkillName: this.beamSkillName } : {}),
         },
       });
     } catch (error) {
@@ -1467,4 +1463,3 @@ function textOfMessage(message: unknown): string | undefined {
     .trim();
   return text === "" ? undefined : text;
 }
-

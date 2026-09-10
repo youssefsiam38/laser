@@ -53,6 +53,9 @@ export function isBuiltinAgentName(name: string): name is BuiltinAgentName {
   return (BUILTIN_AGENT_NAMES as readonly string[]).includes(name);
 }
 
+/** A string replaces the shipped prompt; `null` follows the current shipped prompt. */
+export type BuiltinInstructionOverrides = Readonly<Record<BuiltinAgentName, string | null>>;
+
 /**
  * Tools are not part of an agent definition (D-144): every agent has every
  * tool. What an agent is for is said in its instructions, and what it may
@@ -101,7 +104,7 @@ export interface AgentModelChoice {
   id: string;
 }
 
-export type AgentSkillScope = "global" | "project" | "bundled";
+export type AgentSkillScope = "global" | "project";
 
 /** A scoped skill: identity plus the file the definition was validated against. */
 export interface AgentSkillRef {
@@ -209,6 +212,10 @@ export interface AgentsSnapshot {
   namer: NamerState;
   beam: BeamState;
   chat: ChatState;
+  /** The person's durable prompt choices; `null` restores that built-in's shipped instructions. */
+  builtinInstructions: BuiltinInstructionOverrides;
+  /** Historical custom names → the current definition name, so persisted sessions survive a rename. */
+  renamedAgents: Readonly<Record<string, string>>;
   /** Directories the built-in projectless agents run in. */
   workspaces: { beam: string; chat: string };
 }
@@ -431,14 +438,14 @@ export const TASK_EVENT_MESSAGE_TYPE = "lasercode/task-event";
 declare module "./messages.js" {
   interface ClientRequests {
     "agents/list": { params: {}; result: AgentsSnapshot };
-    "agents/validate": { params: { agent: AgentDefinitionInput }; result: { issues: AgentIssue[] } };
-    "agents/save": { params: { agent: AgentDefinitionInput }; result: { agent: AgentDefinition; snapshot: AgentsSnapshot } };
+    "agents/validate": { params: { agent: AgentDefinitionInput; originalName: string | null }; result: { issues: AgentIssue[] } };
+    "agents/save": { params: { agent: AgentDefinitionInput; originalName: string | null }; result: { agent: AgentDefinition; snapshot: AgentsSnapshot } };
     "agents/delete": { params: { name: string }; result: { snapshot: AgentsSnapshot } };
     "agents/set-default": { params: { name: string }; result: { snapshot: AgentsSnapshot } };
     "agents/set-policy": { params: { policy: Partial<AgentPolicy> }; result: { snapshot: AgentsSnapshot } };
     /** Skills the engine discovers for `cwd` (global and project sources). Routed by cwd. */
     "agents/skills": { params: { cwd: string }; result: AgentSkillsListing };
-    /** The engine's built-in instructions, for the editable `default` agent. Routed by cwd. */
+    /** Laser's default instructions, for the editable `default` agent. Routed by cwd. */
     "agents/engine-instructions": { params: { cwd: string }; result: { text: string } };
     /** Runs known to the host; `path` narrows to the tree containing that session. */
     "agents/runs/list": { params: { path?: string }; result: { runs: AgentRun[] } };
@@ -467,6 +474,8 @@ declare module "./messages.js" {
      * next qualification). Beam's pending choice is closed either way.
      */
     "agents/builtin/set-model": { params: { name: BuiltinAgentName; model: AgentModelChoice | null }; result: { snapshot: AgentsSnapshot } };
+    /** Replace one built-in's system instructions; `null` restores the shipped prompt. */
+    "agents/builtin/set-instructions": { params: { name: BuiltinAgentName; instructions: string | null }; result: { snapshot: AgentsSnapshot } };
     /** Benchmark nominated cheap models and pick Namer's. Routed to the built-in workspace worker. */
     "agents/namer/qualify": { params: { cwd: string }; result: NamerState };
     /** Host → worker only: the current definitions. Refused from clients. */

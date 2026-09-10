@@ -330,23 +330,6 @@ record(
   "The companion extension did not activate the harness. Check that the packaged worker builds the agents bridge for every session and that the extension's modules are bundled whole.",
 );
 
-// 7b ── Beam's skill is a real file the packaged worker can name ------------
-// The packaged worker writes the skill into the sandbox agent directory it
-// creates for the check and removes that sandbox on exit, so the proof is the
-// size it measured there; a path that still exists is measured again here.
-const beamSkillPath = typeof sessionReport?.beamSkillPath === "string" ? sessionReport.beamSkillPath : undefined;
-const beamSkillReported = typeof sessionReport?.beamSkillBytes === "number" && sessionReport.beamSkillBytes > 0;
-const beamSkillStillThere = Boolean(beamSkillPath) && existsSync(beamSkillPath) && lstatSync(beamSkillPath).isFile();
-const beamSkillBytes = beamSkillStillThere ? bytesOf(beamSkillPath) : sessionReport?.beamSkillBytes;
-record(
-  "Beam's skill file is written by the packaged worker",
-  Boolean(sessionReport?.ok) && (beamSkillReported || beamSkillStillThere),
-  beamSkillPath
-    ? `${beamSkillPath} (${beamSkillReported || beamSkillStillThere ? `${human(beamSkillBytes)}${beamSkillStillThere ? "" : ", measured inside the check's sandbox"}` : "missing or empty"})`
-    : "the session report named no Beam skill",
-  "The worker must write `<agentDir>/skills/<product>-beam/SKILL.md` on start and report its path and size from check-packaged-session.",
-);
-
 // 8 ── the machine's own agent is found and not used ------------------------
 record(
   "an agent directory on the machine is seen and not used",

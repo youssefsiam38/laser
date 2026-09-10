@@ -33,9 +33,9 @@ export interface AgentsActions {
   /** `agents/list` into `state.agents.snapshot`; failure lands in `state.agents.error`. */
   refresh(): Promise<void>;
   /** `agents/validate`. Rejects when the host cannot be asked. */
-  validate(agent: AgentDefinitionInput): Promise<AgentIssue[]>;
+  validate(agent: AgentDefinitionInput, originalName: string | null): Promise<AgentIssue[]>;
   /** `agents/save`; the snapshot in the result updates the store. Rejects on failure. */
-  save(agent: AgentDefinitionInput): Promise<AgentDefinition>;
+  save(agent: AgentDefinitionInput, originalName: string | null): Promise<AgentDefinition>;
   /** `agents/delete`. Toasts on failure. */
   remove(name: string): Promise<void>;
   /** `agents/set-default`. Toasts on failure. */
@@ -69,6 +69,8 @@ export interface AgentsActions {
    * choice. Toasts on failure.
    */
   setBuiltinModel(name: BuiltinAgentName, model: AgentModelChoice | null): Promise<void>;
+  /** Replace one built-in's system instructions; `null` restores the shipped prompt. Rejects so the editor can show the failure inline. */
+  setBuiltinInstructions(name: BuiltinAgentName, instructions: string | null): Promise<void>;
   /** `agents/namer/qualify` in `cwd`. Rejects on failure. */
   qualifyNamer(cwd: string): Promise<NamerState>;
   /** Close the Beam model choice without picking; the host keeps `beam.needsChoice`. */
@@ -96,12 +98,12 @@ export function createAgentsActions({ client, dispatch, guard }: AgentsActionsDe
         dispatch({ type: "agents/error", error: messageOf(error) });
       }
     },
-    validate: async (agent) => {
-      const { issues } = await client.request("agents/validate", { agent });
+    validate: async (agent, originalName) => {
+      const { issues } = await client.request("agents/validate", { agent, originalName });
       return issues;
     },
-    save: async (agent) => {
-      const { agent: saved, snapshot } = await client.request("agents/save", { agent });
+    save: async (agent, originalName) => {
+      const { agent: saved, snapshot } = await client.request("agents/save", { agent, originalName });
       dispatch({ type: "agents/updated", snapshot });
       return saved;
     },
@@ -149,6 +151,10 @@ export function createAgentsActions({ client, dispatch, guard }: AgentsActionsDe
         dispatch({ type: "agents/updated", snapshot });
         if (name === "beam") dispatch({ type: "agents/choose-beam-model/clear" });
       }),
+    setBuiltinInstructions: async (name, instructions) => {
+      const { snapshot } = await client.request("agents/builtin/set-instructions", { name, instructions });
+      dispatch({ type: "agents/updated", snapshot });
+    },
     qualifyNamer: (cwd) => client.request("agents/namer/qualify", { cwd }),
     dismissBeamChoice: () => dispatch({ type: "agents/choose-beam-model/clear" }),
   };

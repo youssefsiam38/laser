@@ -11,7 +11,7 @@
  */
 
 import { AGENT_MAX_DEPTH_LIMIT, ErrorCodes, PRODUCT_NAME, ProtocolError, parseClientRequest, type AgentDefinition, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type SettingsScope, type TypedClientRequest } from "@lasercode/protocol";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import type { DriverAgentOptions, DriverEvent, SessionDriver } from "./driver.js";
 import { ProjectFilesService } from "./files.js";
 import { PendingTray } from "./pending.js";
@@ -22,9 +22,8 @@ import { SettingsAdapter } from "./settings.js";
 import { WebSearchService } from "./web-search.js";
 import { TranscribeService } from "./transcribe.js";
 import type { HarnessSessionRole } from "./agents/bridge.js";
-import { BEAM_SKILL_NAME, beamSkillRef, ensureBeamSkill } from "./agents/beam-skill.js";
 import { DefinitionsCache } from "./agents/definitions.js";
-import { engineDefaultInstructions } from "./agents/engine-instructions.js";
+import { defaultAgentInstructions } from "./agents/engine-instructions.js";
 import { AgentHarness, type SessionHandle, type SessionHost } from "./agents/harness.js";
 import { NamerService, type NamerModelRuntime } from "./agents/namer.js";
 import { readSessionAgentRecord, rootRecord, rootRole } from "./agents/session-config.js";
@@ -47,8 +46,6 @@ export interface WorkerServerOptions {
   replayBuffer?: number;
   /** The package manager to run when settings name none (M10-T5): the one the host bundles. */
   npmCommand?: string[];
-  /** Skip writing the Beam skill on construction (tests that never open Beam). */
-  skipBeamSkill?: boolean;
   /** Test seam: the model runtime Namer completes through. Defaults to the engine's. */
   namerModels?: () => Promise<NamerModelRuntime>;
 }
@@ -128,17 +125,7 @@ export class WorkerServer {
 
   constructor(private readonly options: WorkerServerOptions) {
     this.replayBuffer = options.replayBuffer ?? 5000;
-    const agentDir = options.agentDir;
-    this.definitions = new DefinitionsCache({
-      ...(agentDir ? { beamSkill: beamSkillRef(agentDir) } : {}),
-    });
-    if (agentDir && !options.skipBeamSkill) {
-      try {
-        ensureBeamSkill({ agentDir, stateDir: options.stateDir ?? join(dirname(agentDir), "state") });
-      } catch (error) {
-        console.error(`${PRODUCT_NAME} worker: could not write the Beam skill:`, error instanceof Error ? error.message : error);
-      }
-    }
+    this.definitions = new DefinitionsCache();
     const host: SessionHost = {
       openChild: (open) => this.openChild(open),
       driver: (path) => this.sessions.get(path)?.driver,
@@ -151,11 +138,11 @@ export class WorkerServer {
       definitions: this.definitions,
       worktrees: new WorktreeManager(),
       backgroundWork: (cwd) => ({ cwd, foregroundCommandSeconds: this.definitions.policy().foregroundCommandSeconds }),
-      beamSkillName: BEAM_SKILL_NAME,
     });
     this.namer = new NamerService({
       models: options.namerModels ?? (() => this.modelCatalog().modelRuntime()),
       model: () => this.definitions.namerModel(),
+      instructions: () => this.definitions.namerInstructions(),
       catalog: async () => {
         const [catalog, providers] = await Promise.all([this.modelCatalog().catalog(false), this.modelCatalog().providers()]);
         return { models: catalog.models, configuredProviders: new Set(providers.providers.filter((p) => p.configured).map((p) => p.id)) };
@@ -501,11 +488,10 @@ export class WorkerServer {
           cwd: this.options.cwd,
           agentDir: this.settings().agentDir,
           ...(this.options.projectTrusted !== undefined ? { projectTrusted: this.options.projectTrusted } : {}),
-          exclude: [BEAM_SKILL_NAME],
         }) satisfies Result<"agents/skills">;
       case "agents/engine-instructions":
         this.assertCwd(req.params.cwd);
-        return { text: await engineDefaultInstructions(this.options.cwd) } satisfies Result<"agents/engine-instructions">;
+        return { text: defaultAgentInstructions(this.options.cwd) } satisfies Result<"agents/engine-instructions">;
       case "agents/namer/qualify":
         this.assertCwd(req.params.cwd);
         return (await this.namer.qualify()) satisfies Result<"agents/namer/qualify">;
@@ -522,6 +508,7 @@ export class WorkerServer {
       case "agents/set-policy":
       case "agents/runs/list":
       case "agents/builtin/set-model":
+      case "agents/builtin/set-instructions":
         throw new ProtocolError(ErrorCodes.Unsupported, `${req.method} is answered by the host's agent store, not a worker`);
 
       case "pi/logs/query":
@@ -728,7 +715,6 @@ export class WorkerServer {
       // Bound to the session, so `task_output` can read a command of an agent
       // under it (D-163); the harness builds the same options for a child.
       backgroundWork: handle.backgroundWork(this.options.cwd) ?? { cwd: this.options.cwd, foregroundCommandSeconds: this.definitions.policy().foregroundCommandSeconds },
-      beamSkillName: BEAM_SKILL_NAME,
     };
   }
 

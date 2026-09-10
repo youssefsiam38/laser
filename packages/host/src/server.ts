@@ -299,6 +299,7 @@ export class HostServer {
     this.agents = new AgentStore({
       storePath: join(stateDir, "agents.json"),
       agentDir,
+      stateDir,
       workspaces,
       onChange: (snapshot) => {
         this.notify("agents/updated", snapshot);

@@ -1,13 +1,12 @@
 /**
  * M13-T3 · `agents/skills` lists the driver's roots with their scope and
- * existence, dedupes by name in precedence order, and hides the Beam skill.
+ * existence and dedupes user-authored skills by name in precedence order.
  */
 import { PRODUCT_NAME, PROJECT_DIR_NAME } from "@lasercode/protocol";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { BEAM_SKILL_NAME, ensureBeamSkill } from "../../src/agents/beam-skill.js";
 import { listAgentSkills } from "../../src/agents/skills.js";
 
 let base: string;
@@ -24,7 +23,7 @@ function writeSkill(root: string, name: string): void {
 }
 
 describe("listAgentSkills", () => {
-  it("lists global and project skills with scopes, exists flags and no Beam skill", () => {
+  it("lists only the skills discovered from global and project folders", () => {
     const agentDir = join(base, "agent");
     const home = join(base, "home");
     const cwd = join(base, "project");
@@ -32,8 +31,7 @@ describe("listAgentSkills", () => {
     writeSkill(join(home, ".agents", "skills"), "shared-one");
     writeSkill(join(cwd, PROJECT_DIR_NAME, "skills"), "project-one");
     writeSkill(join(cwd, PROJECT_DIR_NAME, "skills"), "global-one"); // shadowed by the global one
-    ensureBeamSkill({ agentDir, stateDir: join(base, "state") });
-    const listing = listAgentSkills({ cwd, agentDir, home, exclude: [BEAM_SKILL_NAME] });
+    const listing = listAgentSkills({ cwd, agentDir, home });
     expect(listing.roots).toEqual([
       { path: join(agentDir, "skills"), scope: "global", exists: true },
       { path: join(home, ".agents", "skills"), scope: "global", exists: true },

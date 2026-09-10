@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => {
     runs: vi.fn(),
     stopRun: vi.fn(),
     setBuiltinModel: vi.fn(),
+    setBuiltinInstructions: vi.fn(),
     qualifyNamer: vi.fn(),
     dismissBeamChoice: vi.fn(),
   };

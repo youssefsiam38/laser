@@ -73,7 +73,7 @@ export function agentDisplayName(name: string): string {
   }
 }
 
-/** Built-ins cannot be edited or deleted; the shipped `default` can be edited but never deleted while default. */
+/** Built-ins keep their identity but expose instructions and model; the shipped `default` is a normal editable definition. */
 export function isBuiltinAgent(agent: Pick<AgentDefinition, "name" | "kind">): boolean {
   return agent.kind === "builtin" || isBuiltinAgentName(agent.name);
 }

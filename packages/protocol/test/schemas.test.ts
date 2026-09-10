@@ -148,8 +148,8 @@ const samples: Record<ClientMethod, unknown> = {
 
   // --- M13 agents ---
   "agents/list": {},
-  "agents/validate": { agent: agentSample },
-  "agents/save": { agent: agentSample },
+  "agents/validate": { agent: agentSample, originalName: null },
+  "agents/save": { agent: agentSample, originalName: null },
   "agents/delete": { name: "reviewer" },
   "agents/set-default": { name: "reviewer" },
   "agents/set-policy": { policy: { maxDepth: 2, foregroundCommandSeconds: 90 } },
@@ -160,6 +160,7 @@ const samples: Record<ClientMethod, unknown> = {
   "agents/worktree/status": { path: "/s.jsonl" },
   "agents/worktree/remove": { path: "/s.jsonl", force: true },
   "agents/builtin/set-model": { name: "chat", model: { provider: "openai", id: "gpt-5.6-luna" } },
+  "agents/builtin/set-instructions": { name: "chat", instructions: "Answer like an exacting editor." },
   "agents/namer/qualify": { cwd: "/p" },
   "agents/sync": { snapshot: { revision: 3, agents: [], defaultAgent: "default" } },
 };
@@ -184,6 +185,17 @@ describe("client request schemas", () => {
     expect(schema.safeParse({ name: "chat", model: { provider: "openai", id: "x" }, extra: 1 }).success).toBe(false);
   });
 
+  it("a built-in's instructions are set by name, or restored with null", () => {
+    const schema = clientParamsSchemas["agents/builtin/set-instructions"];
+    for (const name of ["beam", "chat", "namer"]) {
+      expect(schema.safeParse({ name, instructions: "Be exact." }).success).toBe(true);
+      expect(schema.safeParse({ name, instructions: null }).success).toBe(true);
+    }
+    expect(schema.safeParse({ name: "default", instructions: "x" }).success).toBe(false);
+    expect(schema.safeParse({ name: "chat" }).success).toBe(false);
+    expect(schema.safeParse({ name: "chat", instructions: "x", extra: true }).success).toBe(false);
+  });
+
   it("every method has a sample and every sample round-trips through JSON", () => {
     expect(Object.keys(samples).sort()).toEqual([...clientMethods].sort());
     for (const method of clientMethods) {
@@ -197,10 +209,17 @@ describe("client request schemas", () => {
   it("refuses agent names that are not lower-case identifiers and unknown policy keys", () => {
     expect(clientParamsSchemas["agents/delete"].safeParse({ name: "Reviewer" }).success).toBe(false);
     expect(clientParamsSchemas["agents/delete"].safeParse({ name: "-review" }).success).toBe(false);
-    expect(clientParamsSchemas["agents/save"].safeParse({ agent: { ...agentSample, name: "a".repeat(41) } }).success).toBe(false);
+    expect(clientParamsSchemas["agents/save"].safeParse({ agent: { ...agentSample, name: "a".repeat(41) }, originalName: null }).success).toBe(false);
     expect(clientParamsSchemas["agents/set-policy"].safeParse({ policy: { maxDepth: 0 } }).success).toBe(false);
     expect(clientParamsSchemas["agents/set-policy"].safeParse({ policy: { budget: 3 } }).success).toBe(false);
     expect(clientParamsSchemas["session/new"].safeParse({ cwd: "/p", agentName: "beam" }).success).toBe(true);
+  });
+
+  it("accepts only user and project skill scopes", () => {
+    const save = clientParamsSchemas["agents/save"];
+    expect(save.safeParse({ agent: { ...agentSample, scopedSkills: true, skills: [{ name: "review", path: "/skills/review/SKILL.md", scope: "global" }] }, originalName: null }).success).toBe(true);
+    expect(save.safeParse({ agent: { ...agentSample, scopedSkills: true, skills: [{ name: "review", path: "/skills/review/SKILL.md", scope: "project" }] }, originalName: null }).success).toBe(true);
+    expect(save.safeParse({ agent: { ...agentSample, scopedSkills: true, skills: [{ name: "review", path: "/skills/review/SKILL.md", scope: "bundled" }] }, originalName: null }).success).toBe(false);
   });
 
   it("lets a delete omit the worktree instruction, and refuses anything but keep or delete", () => {

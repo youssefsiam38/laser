@@ -10,6 +10,7 @@ import {
   AGENT_NAME_MAX,
   AGENT_NAME_PATTERN,
   DEFAULT_AGENT_NAME,
+  PRODUCT_DISPLAY_NAME,
   isBuiltinAgentName,
   type AgentDefinition,
   type AgentDefinitionInput,
@@ -19,6 +20,10 @@ import {
 export interface ValidationContext {
   /** Every agent the store knows, custom and built-in. */
   existing: readonly AgentDefinition[];
+  /** The definition being edited; null means this is a new definition. */
+  originalName: string | null;
+  /** Historical aliases remain reserved while old sessions refer to them. */
+  renamedAgents: Readonly<Record<string, string>>;
 }
 
 /** The agents another agent may start: custom ones, never Beam, Chat or Namer. */
@@ -40,6 +45,11 @@ export function validateAgentInput(input: AgentDefinitionInput, context: Validat
     );
   } else if (isBuiltinAgentName(input.name)) {
     push("name", `"${input.name}" is a built-in agent. Choose another name.`);
+  } else if (
+    context.existing.some((agent) => agent.name === input.name && agent.name !== context.originalName) ||
+    (input.name !== context.originalName && context.renamedAgents[input.name] !== undefined)
+  ) {
+    push("name", `An agent named "${input.name}" already exists.`);
   }
 
   // ---- description
@@ -51,7 +61,7 @@ export function validateAgentInput(input: AgentDefinitionInput, context: Validat
   if (input.instructions.length > AGENT_INSTRUCTIONS_MAX) {
     push("instructions", `Instructions are limited to ${Math.round(AGENT_INSTRUCTIONS_MAX / 1024)} KB.`);
   } else if (!input.engineInstructions && input.instructions.trim().length === 0) {
-    push("instructions", "Write instructions, or use the engine's built-in instructions.");
+    push("instructions", `Write instructions, or use ${PRODUCT_DISPLAY_NAME}'s default instructions.`);
   }
 
   // ---- allowedAgents

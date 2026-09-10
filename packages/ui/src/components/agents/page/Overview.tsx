@@ -5,7 +5,7 @@
  * that, a short account of the agents you have and anything that needs a
  * look, each line a way in.
  */
-import type { AgentsSnapshot, AgentWarning } from "@lasercode/protocol";
+import { PRODUCT_DISPLAY_NAME, type AgentsSnapshot, type AgentWarning } from "@lasercode/protocol";
 import { Bot, ChevronRight, Plus, TriangleAlert } from "lucide-react";
 import type { ComponentProps } from "react";
 
@@ -56,7 +56,7 @@ export function AgentsOverview({ snapshot, warnings, onNew, onOpen, compact = fa
             </li>
             <li className="flex gap-2">
               <span className="typed shrink-0 text-ink-3">2</span>
-              Write its instructions, or start from the built-in ones.
+              Write its instructions, or start from {PRODUCT_DISPLAY_NAME}'s default.
             </li>
             <li className="flex gap-2">
               <span className="typed shrink-0 text-ink-3">3</span>

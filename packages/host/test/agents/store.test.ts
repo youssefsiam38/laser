@@ -3,7 +3,7 @@
  * seeded, what may be saved, what may be deleted and why not, and that the
  * file survives a restart without the built-ins ever being frozen into it.
  */
-import { PRODUCT_NAME, type AgentDefinitionInput, type AgentsSnapshot } from "@lasercode/protocol";
+import { PRODUCT_DISPLAY_NAME, PRODUCT_NAME, type AgentDefinitionInput, type AgentsSnapshot } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -53,13 +53,16 @@ describe("AgentStore · seeding", () => {
     const def = snapshot.agents[0]!;
     expect(def).toMatchObject({ engineInstructions: true, instructions: "", supportsSubagents: true, allowedAgents: ["default"] });
     const beam = snapshot.agents.find((a) => a.name === "beam")!;
-    expect(beam.scopedSkills).toBe(true);
-    expect(beam.skills).toEqual([{ name: `${PRODUCT_NAME}-beam`, path: join(dir, "agent", "skills", `${PRODUCT_NAME}-beam`, "SKILL.md"), scope: "bundled" }]);
+    expect(beam.scopedSkills).toBe(false);
+    expect(beam.skills).toEqual([]);
+    expect(beam.instructions).toContain(join(dir, "agent", "sessions"));
+    expect(beam.instructions).not.toContain("skill");
     expect(snapshot.agents.find((a) => a.name === "chat")).toMatchObject({ supportsSubagents: false });
-    expect(snapshot.agents.find((a) => a.name === "namer")).toMatchObject({ instructions: "" });
+    expect(snapshot.agents.find((a) => a.name === "namer")?.instructions).toContain("name sessions");
     expect(snapshot.policy).toEqual({ maxDepth: 3, foregroundCommandSeconds: 120 });
     expect(snapshot.beam).toEqual({ model: null, suggested: null, needsChoice: true });
     expect(snapshot.namer).toEqual({ status: "unqualified", model: null, candidates: [] });
+    expect(snapshot.builtinInstructions).toEqual({ beam: null, chat: null, namer: null });
     expect(snapshot.workspaces).toEqual(WORKSPACES);
     expect(snapshot.warnings).toEqual([]);
   });
@@ -73,12 +76,32 @@ describe("AgentStore · save and validate", () => {
     const created = s.save(custom("reviewer"));
     expect(created).toMatchObject({ name: "reviewer", kind: "custom" });
     expect(s.currentRevision).toBe(1);
-    const updated = s.save(custom("reviewer", { description: "reviews harder" }));
+    const updated = s.save(custom("reviewer", { description: "reviews harder" }), "reviewer");
     expect(updated.createdAt).toBe(created.createdAt);
     expect(updated.updatedAt > created.updatedAt).toBe(true);
     expect(s.currentRevision).toBe(2);
     expect(changes).toHaveLength(2);
     expect(changes[1]!.agents.find((a) => a.name === "reviewer")?.description).toBe("reviews harder");
+  });
+
+  it("renames atomically, updates references, and reserves the historical name", () => {
+    const s = store();
+    s.save(custom("worker", { supportsSubagents: true, allowedAgents: ["worker"] }));
+    s.save(custom("lead", { supportsSubagents: true, allowedAgents: ["worker"] }));
+    s.setDefault("worker");
+    const renamed = s.save(custom("implementer", { supportsSubagents: true, allowedAgents: ["worker"] }), "worker");
+    expect(renamed).toMatchObject({ name: "implementer", allowedAgents: ["implementer"] });
+    expect(s.snapshot()).toMatchObject({
+      defaultAgent: "implementer",
+      renamedAgents: { worker: "implementer" },
+      agents: expect.arrayContaining([expect.objectContaining({ name: "lead", allowedAgents: ["implementer"] })]),
+    });
+    expect(issuesOf(() => s.save(custom("lead"), "implementer"))).toEqual([
+      { field: "name", message: 'An agent named "lead" already exists.' },
+    ]);
+    expect(issuesOf(() => s.save(custom("worker")))).toEqual([
+      { field: "name", message: 'An agent named "worker" already exists.' },
+    ]);
   });
 
   it("refuses the built-in names, on save and as another agent's child", () => {
@@ -99,7 +122,9 @@ describe("AgentStore · save and validate", () => {
     expect(s.validate(custom("a", { description: "x".repeat(301) }))).toEqual([
       { field: "description", message: "Keep the description to 300 characters; other agents read it to decide when to start this one." },
     ]);
-    expect(s.validate(custom("a", { instructions: "  " }))).toEqual([{ field: "instructions", message: "Write instructions, or use the engine's built-in instructions." }]);
+    expect(s.validate(custom("a", { instructions: "  " }))).toEqual([
+      { field: "instructions", message: `Write instructions, or use ${PRODUCT_DISPLAY_NAME}'s default instructions.` },
+    ]);
     expect(s.validate(custom("a", { instructions: "", engineInstructions: true }))).toEqual([]);
     expect(s.validate(custom("a", { allowedAgents: ["default"] }))).toEqual([
       { field: "allowedAgents", message: "This agent does not start other agents, so it cannot list any." },
@@ -118,7 +143,7 @@ describe("AgentStore · save and validate", () => {
 
   it("lets the seeded default be edited but never a second one be created", () => {
     const s = store();
-    const edited = s.save(custom("default", { engineInstructions: false, instructions: "Be terse.", supportsSubagents: true, allowedAgents: ["default"] }));
+    const edited = s.save(custom("default", { engineInstructions: false, instructions: "Be terse.", supportsSubagents: true, allowedAgents: ["default"] }), "default");
     expect(edited.instructions).toBe("Be terse.");
     expect(s.snapshot().agents.filter((a) => a.name === "default")).toHaveLength(1);
   });
@@ -184,6 +209,22 @@ describe("AgentStore · policy, Beam and Namer", () => {
     expect(s.snapshot().namer.candidates).toHaveLength(1);
   });
 
+  it("edits and restores each built-in's effective instructions", () => {
+    const s = store();
+    for (const name of ["beam", "chat", "namer"] as const) {
+      const shipped = s.get(name)!.instructions;
+      s.setBuiltinInstructions(name, `Custom instructions for ${name}.`);
+      expect(s.get(name)?.instructions).toBe(`Custom instructions for ${name}.`);
+      expect(s.snapshot().builtinInstructions[name]).toBe(`Custom instructions for ${name}.`);
+      s.setBuiltinInstructions(name, null);
+      expect(s.get(name)?.instructions).toBe(shipped);
+      expect(s.snapshot().builtinInstructions[name]).toBeNull();
+    }
+    expect(issuesOf(() => s.setBuiltinInstructions("beam", "   "))).toEqual([
+      { field: "instructions", message: "Write instructions, or restore the built-in instructions." },
+    ]);
+  });
+
   it("warnings count as a change only when they differ", () => {
     const s = store();
     const before = s.currentRevision;
@@ -208,6 +249,9 @@ describe("AgentStore · persistence", () => {
     first.setBuiltinModel("beam", { provider: "openai", id: "gpt-5-mini" });
     first.setBuiltinModel("chat", { provider: "anthropic", id: "claude-haiku" });
     first.setBuiltinModel("namer", { provider: "openai", id: "gpt-5-nano" });
+    first.setBuiltinInstructions("beam", "Read first, then answer.");
+    first.setBuiltinInstructions("chat", "Write with warmth.");
+    first.setBuiltinInstructions("namer", "Prefer concrete nouns.");
     first.close();
 
     const stored = JSON.parse(readFileSync(file, "utf8")) as { version: number; revision: number; agents: Array<{ name: string }>; defaultAgent: string };
@@ -225,10 +269,23 @@ describe("AgentStore · persistence", () => {
     expect(snapshot.beam).toEqual({ model: { provider: "openai", id: "gpt-5-mini" }, suggested: null, needsChoice: false });
     expect(snapshot.namer).toMatchObject({ status: "ready", model: { provider: "openai", id: "gpt-5-nano" } });
     expect(snapshot.chat).toEqual({ model: { provider: "anthropic", id: "claude-haiku" } });
+    expect(snapshot.builtinInstructions).toEqual({ beam: "Read first, then answer.", chat: "Write with warmth.", namer: "Prefer concrete nouns." });
     expect(second.get("beam")?.model).toEqual({ provider: "openai", id: "gpt-5-mini" });
     // The choice reaches the definition the worker runs, not only the snapshot's state block.
     expect(second.get("chat")?.model).toEqual({ provider: "anthropic", id: "claude-haiku" });
     expect(second.get("namer")?.model).toEqual({ provider: "openai", id: "gpt-5-nano" });
+    expect(second.get("beam")?.instructions).toBe("Read first, then answer.");
+    expect(second.get("chat")?.instructions).toBe("Write with warmth.");
+    expect(second.get("namer")?.instructions).toBe("Prefer concrete nouns.");
+  });
+
+  it("persists rename aliases for sessions written under the old name", () => {
+    const file = join(dir, "state", "agents.json");
+    const first = store({ storePath: file });
+    first.save(custom("worker"));
+    first.save(custom("implementer"), "worker");
+    first.close();
+    expect(store({ storePath: file }).snapshot().renamedAgents).toEqual({ worker: "implementer" });
   });
 
   it("does not re-seed a deleted default, and repairs a default that names nobody", () => {
@@ -254,6 +311,7 @@ describe("AgentStore · persistence", () => {
     writeFile(file, { version: 1, revision: 4, agents: [], defaultAgent: "default", beam: { model: null, suggested: null, needsChoice: false } });
     const old = store({ storePath: file });
     expect(old.snapshot().chat).toEqual({ model: null });
+    expect(old.snapshot().builtinInstructions).toEqual({ beam: null, chat: null, namer: null });
     expect(old.get("chat")?.model).toBeNull();
 
     // Hand-edited nonsense is dropped, never thrown on: the store must still boot.

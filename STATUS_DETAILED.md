@@ -1200,6 +1200,15 @@ lane T's own if both were written.
 | M13-T34 | The goal-tools test is flaky under load | done | claude-2026-09-08-agents | `goal-tools.test.ts`; 3 isolated + 2 full-suite runs green | see notes |
 | M13-T35 | Editing history changes this session, not a copy | done | claude-2026-09-08-agents | `ui/test/thread/edit-in-place.test.tsx`; `ui/test/runtime/edit-in-place.test.tsx`; browser | see notes; D-153 |
 | M13-T66 | Release stable 0.3.0 | done | claude-2026-09-09-agents | `7e068e3`; clean CI 34331351877; pushed `v0.3.0`; draft [release](https://github.com/youssefsiam38/laser/releases/tag/v0.3.0) with notes; publication pipeline 34331715953 dispatched | requested by the user; D-167; see notes |
+| M13-T67 | Built-in instructions and model are editable | done | codex-2026-09-10-builtins | protocol 30; host 204; worker 314 + 1 skipped; UI 926; typecheck/build; browser desktop/phone, dark/light | requested by the user; D-168; see notes |
+| M13-T68 | Telemetry has a recognizable toggle icon | done | codex-2026-09-10-transparency | UI 928; UI build; browser desktop/phone, dark/light | requested by the user; D-169; see notes |
+| M13-T69 | Default instructions identify as Laser | done | codex-2026-09-10-transparency | worker 315 + 1 skipped; real-engine prompt test; worker/pi-extension builds; browser | requested by the user; D-169; see notes |
+| M13-T70 | Same-definition child agents are explicit | done | codex-2026-09-10-transparency | host 206; worker 315 + 1 skipped; UI 928; browser interaction | requested by the user; D-170; see notes |
+| M13-T71 | Custom agents can be renamed safely | done | codex-2026-09-10-transparency | protocol 30; host 206; worker 315 + 1 skipped; UI 928; typecheck/build; browser interaction | requested by the user; D-171; see notes |
+| M13-T72 | Default prompt is Laser-owned and engine-neutral | done | codex-2026-09-10-independent | worker 311 + 1 skipped; live-request prompt test; UI build; browser | requested by the user; D-172; see notes |
+| M13-T73 | Skills are discovery-only | done | codex-2026-09-10-independent | protocol 31; host 206; worker 311 + 1 skipped; UI 928; builds | requested by the user; D-172; see notes |
+| M13-T74 | Beam spark always starts fresh | done | codex-2026-09-10-independent | UI 928; `beam/bubble.test.tsx`; desktop/phone, dark/light | requested by the user; D-173; see notes |
+| M13-T75 | Release stable 0.3.1 | in-progress | codex-2026-09-10-release | — | requested by the user; D-174; see notes |
 | M13-T65 | A fork is a top-level session, never nested under its origin | done | claude-2026-09-09-agents | `pnpm -F @lasercode/host test -- test/catalog.test.ts`; `pnpm -F @lasercode/ui test -- test/shell/session-groups-fork.test.ts` | requested by the user; D-166 |
 | M13-T64 | Namer labels every call of a top-level session, none of a child's | done | claude-2026-09-09-agents | `pnpm -F @lasercode/worker test` (`agents/namer.test.ts` "labels every call in a burst at once"; `agents/server-agents.test.ts` "a child agent's tool calls are never labelled") | requested by the user; D-165 |
 | M13-T63 | Restoring an unsent draft puts the person in the field | done | claude-2026-09-09-agents | `pnpm -F @lasercode/ui test -- test/thread/draft-restore-focus.test.tsx` | requested by the user; see notes |
@@ -1475,6 +1484,43 @@ lane T's own if both were written.
 - 2026-09-09 checkpoint: version set across the workspace; `pnpm verify` green (protocol 36, pi-goal 8, relay 17, crypto 42, pi-extension 108, ui 924, worker 313, host 203, cli 68, desktop 101, plus the publication checks); installer 76 passed, 0 failed.
 - 2026-09-09 done: `feat/agents` fast-forwarded onto `main` at `7e068e3` (37 commits); CI run 34331351877 succeeded on that commit before the immutable `v0.3.0` was pushed. A draft carrying the 0.3.0 notes was created with `--verify-tag --latest=false`; the tag triggered the x64/ARM64 asset-verified publication pipeline (run 34331715953). Nothing promoted by hand; download readiness is claimed only once the pipeline has published and the assets are checked, and until then the state is "tag pushed; release building".
 - 2026-09-09 published by the pipeline (run 34331715953, success): `v0.3.0` is public and Latest, published 09:04:43Z, twelve assets — both AppImages, both tarballs, both DEBs, both RPMs, `install.sh`, `SHA256SUMS`, `SHA256SUMS.sig`, `provenance.jsonl`. Download readiness checked against the actual asset list, not the tag.
+
+#### M13-T67 notes
+- 2026-09-10 claimed: persist per-built-in instruction overrides, expose edit/restore beside the existing model choice, and prove Beam/Chat sessions plus Namer calls consume the effective prompt.
+- 2026-09-10 checkpoint: `agents/builtin/set-instructions` persists an optional override for Beam, Chat and Namer; old stores follow the shipped prompt, restore writes null, and Namer layers the effective prompt above its fixed per-request output contract. New Beam and Chat sessions already consume the rebuilt definitions through the existing sync seam.
+- 2026-09-10 done: protocol 30, host 204, worker 314 + 1 skipped and UI 926 tests pass; protocol/host/worker/UI typechecks and production builds pass. Save, reload persistence and restore were exercised in the sandbox; the complete Agents detail was reviewed at desktop and 390px in dark and light with no horizontal overflow. The repo-wide identity gate remains blocked only by the user's unrelated untracked `.tmp-pi-command-demo.py`, which contains a literal product name and was left untouched.
+
+#### M13-T68 notes
+- 2026-09-10 claimed: replace the top-bar and command-palette panel glyph with Telemetry's own activity mark, preserving panel-edge close controls as collapse affordances.
+- 2026-09-10 done: the top bar and command palette use Telemetry's activity waveform; the panel header keeps its edge-collapse control. UI 928 tests and production build pass; desktop dark/light and a 390×844 phone viewport were reviewed with no clipping or horizontal overflow.
+
+#### M13-T69 notes
+- 2026-09-10 claimed: productize the pinned engine prompt at the display and request seams so the default agent says it operates inside Laser while retaining the engine's current tools, guidance, context and skills.
+- 2026-09-10 done: the exact pinned-engine identity prefix is rewritten to Laser after prompt construction, both for the readable default and each live request; drift leaves the upstream text untouched instead of corrupting it. The real-engine provider test proves the request says Laser and not Pi. Pi-extension 108 and worker 315 + 1 skipped tests pass; both builds pass; the sandbox displayed the Laser identity.
+
+#### M13-T70 notes
+- 2026-09-10 claimed: keep the current definition in the allowed-agent choices, label it as another instance of this agent, and prove deselect/reselect plus recursive execution instead of rendering it as a missing definition.
+- 2026-09-10 done: every saved custom definition remains in its own startable catalog and is labelled “Same agent”; removing and restoring the checked default was exercised by pointer in the sandbox. Existing host/worker recursion and depth-limit coverage remains green; host 206, worker 315 + 1 skipped and UI 928 tests pass.
+
+#### M13-T71 notes
+- 2026-09-10 claimed: make the name field editable for custom agents; carry the original name through validation/save; atomically move default and delegation references; retain a durable alias so sessions already attributed to the old name still resolve the renamed definition.
+- 2026-09-10 done: rename is one host-store commit that moves the definition, default pointer, self/peer delegation references and warning attribution; durable flattened aliases preserve old-session lookup and remain reserved until the renamed definition is deleted. Protocol 30, host 206, worker 315 + 1 skipped and UI 928 tests pass; protocol/host/worker/UI typechecks and production builds pass. The sandbox renamed the default to `worker`, retained its default/self-child state, selected the new row, and refused built-in name `beam` inline. The repo-wide identity gate remains blocked only by the user's unrelated untracked `.tmp-pi-command-demo.py`, left untouched.
+
+#### M13-T72 notes
+- 2026-09-10 claimed: replace the branded upstream default-prompt import/transform with a Laser-owned base prompt built from the tools the session actually exposes; keep project context, working directory and user-discovered skills on the runtime's normal append path.
+- 2026-09-10 done: the default prompt is authored by Laser, names Laser and the seven tools actually exposed, and contains no engine brand, documentation suggestion, package path or copied upstream prose. A real session request proves the product-owned section stays neutral before the runtime appends project context and user-authored skills. Worker 311 + 1 skipped tests and affected builds pass; the Agents page displayed the same prompt in the browser.
+
+#### M13-T73 notes
+- 2026-09-10 claimed: remove the worker-written Beam skill and every bundled-skill exception; preserve discovery of skills from user and project folders, and move Beam's essential product guidance into its built-in instructions.
+- 2026-09-10 done: the generated Beam skill and its packaged-build assertions are gone; skill scope is only global or project, Beam is unscoped, and its Laser navigation guidance is now part of its editable built-in instructions. Laser discovers user folders but writes, installs and bundles no skill. Protocol 31, host 206, worker 311 + 1 skipped and UI 928 tests pass; protocol/host/worker/UI typechecks and production builds pass.
+
+#### M13-T74 notes
+- 2026-09-10 claimed: make the spark a fresh-chat launcher rather than a remembered-session toggle; clear the bubble's current path on every press while leaving the previous session in the catalog and sidebar.
+- 2026-09-10 done: every spark press clears the bubble's active path and keeps it open; the next message lazily creates a new Beam session. The previous session remains in Beam's sidebar group and is neither stopped nor deleted. UI 928 tests pass, including repeated presses while open and after close/reopen; pointer behavior and layout were inspected at desktop and phone widths in dark and light themes.
+
+#### M13-T75 notes
+- 2026-09-10 claimed: stage only the tracked agent/Beam refinements, bump every workspace manifest to 0.3.1, run the release and identity gates against that exact index, push source, wait for clean CI, then tag and monitor the release workflow through verified publication.
+- 2026-09-10 checkpoint: the complete staged gate passed at 0.3.1 — product identity, workspace build/typecheck/tests, the real desktop bridge under Xvfb, 13 publication regressions, and 76 install/upgrade/uninstall checks. The two unrelated local `.tmp-pi-command-demo.*` files were excluded during identity inspection and restored afterward; no untracked user files are staged.
 
 #### M13-T65 notes
 - 2026-09-09 the user forked a session and saw the fork nested under its origin like an agent's child. Cause: the catalog turned the engine's `parentSession` header — a fork's lineage — into the summary's `parentPath`, the same field the agent record fills for a child, and every consumer of `parentPath` (the sidebar's fold, the agents map's attribution, the move's "a child moves with its tree" refusal) read it as "an agent started this one". Fixed at the source: the header becomes `forkedFrom` (lineage only, new on `SessionSummary`); `parentPath` now comes only from an agent record. A fork is listed beside its origin in the project group.
@@ -3331,3 +3377,38 @@ Consequences: the worker, not the UI, owns stop-then-move, because two requests 
 **Decision.** `feat/agents` is fast-forwarded onto `main` and released as stable 0.3.0 — a minor version, not a patch, because the product gained its own agent harness and everything around it (D-140 through D-166). The release follows the procedure M12-T78 set: version set across the workspace, verify and installer checks on the versioned tree, source on main with a clean CI run before the immutable tag, a draft with notes, publication by the pipeline.
 **Why.** Thirty-seven commits of agents work on one branch is one product change, and a person reading `laser --version` should be able to tell the world before the harness from the world after it. Fast-forward keeps every commit's evidence where the ledger points.
 **Consequences.** The tag is `v0.3.0`; the next patch is 0.3.1. Nothing is published by hand: if the pipeline stops, the release stays a draft and the ledger says "tag pushed; release building".
+
+### D-168 · 2026-09-10 · Built-in prompts belong to the person
+**Decision.** Add M13-T67. Beam, Chat and Namer keep their product-owned identity and capabilities, but their effective system instructions and model are durable user choices. A null instruction override restores the shipped prompt, so product updates can improve defaults without overwriting an explicit customization.
+**Why.** A built-in agent is still an agent; locking its prompt makes its most important behavior impossible to adapt while its model is already editable.
+**Consequences.** Built-ins remain undeletable and unavailable as child definitions. The Agents page edits only instructions and model. Namer keeps its per-operation output contract and layers the person's effective instructions into every naming request.
+
+### D-169 · 2026-09-10 · Product meaning wins over shell geometry and engine identity
+**Decision.** Add M13-T68 and M13-T69. Telemetry's global entry points use its activity mark; panel-edge glyphs mean collapse only. The engine-backed default prompt keeps the pinned engine's live content but rewrites its opening identity from the internal engine to Laser at both the readable-instructions and live-request seams.
+**Why.** A repeated panel glyph says where a surface sits, not what it contains, and made three different sidebar actions visually indistinguishable. The internal engine's product name in the default agent's first sentence contradicts Laser's product boundary.
+**Consequences.** Telemetry is recognizable before reading its tooltip. Engine updates still flow into the default prompt; the adapter changes only the exact identity sentence and fails safely if upstream wording changes.
+
+### D-170 · 2026-09-10 · An agent may start another instance of its own definition
+**Decision.** Add M13-T70. A custom agent may include its own definition in `allowedAgents`; the editor presents that choice as “Same agent” rather than hiding it. The existing depth limit, worktree choice and child lifecycle apply unchanged.
+**Why.** The host and harness already support recursive definitions, and the shipped default already selects itself. Hiding the current definition made that valid value look missing; removing it then left no visible way to put it back.
+**Consequences.** Self-delegation is a normal reusable-agent choice, not a default-agent exception. It creates a new child session, never recursion inside one running session, and remains bounded by `maxDepth`.
+
+### D-171 · 2026-09-10 · Agent names are editable identities with durable aliases
+**Decision.** Add M13-T71. `agents/validate` and `agents/save` carry the original name (null for creation). A rename moves the definition, default pointer and every `allowedAgents` reference in one store commit; the old name becomes a durable alias used by workers reopening existing sessions.
+**Why.** Names are model-facing identifiers and appear in persisted session records. Treating a rename as delete-plus-create would either overwrite a duplicate or make earlier sessions silently run the default definition.
+**Consequences.** Current custom names, built-in names and historical aliases are unavailable as rename targets. Session files remain immutable and keep their historical name; resolution follows the alias to the current definition. Deleting the renamed definition retires aliases that target it.
+
+### D-172 · 2026-09-10 · Laser owns its prompt and writes no skills
+**Decision.** Add M13-T72 and M13-T73. The default agent's base prompt is Laser-owned and engine-neutral. It names the actual tools available, then lets the runtime append the working directory, project instructions and skills discovered from user or project folders. Laser does not generate, install or bundle a skill; Beam's app-specific operating guidance is part of Beam's built-in instructions.
+**Why.** An implementation engine's documentation and branding have no place in an independent product prompt. A generated Beam skill also makes Laser a participant in the same skill namespace it claims only to discover for the person.
+**Consequences.** Engine changes no longer silently rewrite Laser's default behavior. Tool definitions remain runtime facts, not product branding. The Beam skill file, packaged probe and special filtering exception are removed; existing user-authored skills remain discoverable through the same roots and scoping controls.
+
+### D-173 · 2026-09-10 · The Beam spark is a fresh-chat launcher
+**Decision.** Add M13-T74. Every spark press clears the bubble's current session and opens the empty Beam composer. Pressing the spark while the bubble is already open also starts fresh; Close and Escape remain the ways to dismiss it.
+**Why.** The spark expresses “ask Beam now”, not “return to the last Beam conversation”. Returning to earlier conversations already has a clear home: the Beam group in the sessions sidebar.
+**Consequences.** A previous Beam session is detached from the bubble but never deleted or stopped, and remains in the catalog. The first message still creates the fresh session lazily, avoiding empty history rows for bubbles the person opened and dismissed.
+
+### D-174 · 2026-09-10 · Release the agent refinements as 0.3.1
+**Decision.** Add M13-T75 and publish the completed agent customization, identity, skill-discovery and Beam-launcher refinements as stable 0.3.1.
+**Why.** The changes form one user-visible refinement release and the person explicitly requested that version.
+**Consequences.** Every workspace manifest must agree on 0.3.1. Source CI must pass before the immutable tag is pushed, and the release remains unpublished until both architecture artifacts, checksums and provenance verify in the release pipeline.

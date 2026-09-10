@@ -7,7 +7,7 @@
  * The desktop clean-machine test runs this file with the packaged Node and an
  * otherwise empty environment.
  */
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,7 +15,6 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 
 import { PRODUCT_NAME, type PiExtensionModuleName } from "@lasercode/protocol";
-import { beamSkillPath, ensureBeamSkill } from "./agents/beam-skill.js";
 import { DefinitionsCache } from "./agents/definitions.js";
 import { AgentHarness } from "./agents/harness.js";
 import { rootRecord, rootRole } from "./agents/session-config.js";
@@ -25,7 +24,7 @@ import type { DriverEvent } from "./driver.js";
 import { WebSearchService } from "./web-search.js";
 
 export type PackagedSessionReport =
-  | { ok: true; sessionId: string; modelCount: number; modules: PiExtensionModuleName[]; beamSkillPath: string; beamSkillBytes: number }
+  | { ok: true; sessionId: string; modelCount: number; modules: PiExtensionModuleName[] }
   | { ok: false; error: string };
 
 /** The companion modules a packaged build must activate for a project session with every feature on. */
@@ -42,14 +41,6 @@ export async function checkPackagedSession(): Promise<PackagedSessionReport> {
     for (const name of ["project", "agent", "sessions", "state"]) {
       mkdirSync(join(root, name), { recursive: true });
     }
-    // The worker writes the Beam skill on start; the packaged build must be able to.
-    const beamSkill = ensureBeamSkill({ agentDir: join(root, "agent"), stateDir: join(root, "state") });
-    if (!existsSync(beamSkillPath(join(root, "agent")))) throw new Error("The Beam skill was not written under the agent directory.");
-    // Measured here, inside the sandbox this check removes on exit: the gate
-    // that reads the report cannot stat a directory that no longer exists.
-    const beamSkillBytes = statSync(beamSkill).size;
-    if (beamSkillBytes === 0) throw new Error("The Beam skill was written empty.");
-
     let active: PiExtensionModuleName[] = [];
     driver.subscribe((event: DriverEvent) => {
       if (event.type === "extension" && event.message.type === "lasercode/capabilities") active = event.message.active;
@@ -86,7 +77,7 @@ export async function checkPackagedSession(): Promise<PackagedSessionReport> {
     if (!driver.deliverExtensionCommand({ type: "lasercode/account-usage/refresh" })) {
       throw new Error("The bundled subscription allowance module did not accept refresh.");
     }
-    return { ok: true, sessionId: state.id, modelCount: models.length, modules: active, beamSkillPath: beamSkill, beamSkillBytes };
+    return { ok: true, sessionId: state.id, modelCount: models.length, modules: active };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   } finally {

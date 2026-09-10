@@ -15,9 +15,8 @@ export interface WorkerClientOptions {
   sessionDir?: string;
   /**
    * The host's own state directory (`agents.json`, `agent-runs.json`, the
-   * workspaces beside it). The worker needs it to write Beam's bundled skill
-   * and to describe the data layout; a worker that does not know the flag
-   * ignores it.
+   * workspaces beside it). The worker uses it to describe Laser's data layout;
+   * a worker that does not know the flag ignores it.
    */
   stateDir?: string;
   /**

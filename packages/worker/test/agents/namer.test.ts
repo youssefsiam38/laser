@@ -67,11 +67,11 @@ describe("nominateNamerCandidates", () => {
   });
 });
 
-function fakeRuntime(answer: (context: { messages: Array<{ content: string }> }) => string | Promise<string>, models = [{ provider: "stub", id: "stub-1" }]): NamerModelRuntime & { calls: number } {
+function fakeRuntime(answer: (context: { systemPrompt?: string; messages: Array<{ content: string }> }) => string | Promise<string>, models = [{ provider: "stub", id: "stub-1" }]): NamerModelRuntime & { calls: number } {
   const runtime = {
     calls: 0,
     getModel: (provider: string, id: string) => models.find((m) => m.provider === provider && m.id === id),
-    async completeSimple(_model: unknown, context: { messages: Array<{ content: string }> }, options?: { signal?: AbortSignal }) {
+    async completeSimple(_model: unknown, context: { systemPrompt?: string; messages: Array<{ content: string }> }, options?: { signal?: AbortSignal }) {
       runtime.calls += 1;
       const text = await answer(context);
       options?.signal?.throwIfAborted();
@@ -91,6 +91,26 @@ describe("NamerService", () => {
     model = { provider: "stub", id: "stub-1" };
     expect(await namer.nameSession("please fix the login form")).toBe("Fix login form submit");
     expect(runtime.calls).toBe(1);
+  });
+
+  it("layers the editable Namer instructions into session and activity requests", async () => {
+    const prompts: string[] = [];
+    const runtime = fakeRuntime((context) => {
+      prompts.push(context.systemPrompt ?? "");
+      return context.messages[0]!.content.includes("Tool:") ? "reading settings" : "Review auth redirects";
+    });
+    const namer = new NamerService({
+      models: async () => runtime,
+      model: () => ({ provider: "stub", id: "stub-1" }),
+      instructions: () => "Prefer concrete nouns from the person's request.",
+    });
+    await namer.nameSession("Review the auth redirects");
+    await namer.labelTool("/s", "t1", "read", { path: "settings.json" });
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).toContain("Prefer concrete nouns from the person's request.");
+    expect(prompts[0]).toContain("session title");
+    expect(prompts[1]).toContain("Prefer concrete nouns from the person's request.");
+    expect(prompts[1]).toContain("present-progressive label");
   });
 
   it("swallows failures and unknown models", async () => {

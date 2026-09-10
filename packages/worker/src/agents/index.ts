@@ -9,7 +9,6 @@ export {
   fallbackPolicy,
   fallbackSnapshot,
   isStartable,
-  type DefinitionsOptions,
 } from "./definitions.js";
 export {
   AgentHarness,
@@ -25,7 +24,6 @@ export {
   type WorktreeProvider,
 } from "./harness.js";
 export { WorktreeManager, assertSafeWorktreePath, worktreeSlug, type CreateWorktreeInput, type Worktree } from "./worktrees.js";
-export { BEAM_SKILL_NAME, beamSkillDir, beamSkillPath, beamSkillRef, ensureBeamSkill, renderBeamSkill, type BeamSkillPaths } from "./beam-skill.js";
 export {
   NAMER_COST_CEILING,
   NAMER_MAX_CANDIDATES,
@@ -46,7 +44,7 @@ export {
   type NamerModelRuntime,
   type NamerServiceOptions,
 } from "./namer.js";
-export { defaultToolSnippets, engineDefaultInstructions, stripWorkingDirectory } from "./engine-instructions.js";
+export { defaultAgentInstructions, defaultToolSnippets } from "./engine-instructions.js";
 export {
   ENGINE_BUILTIN_TOOLS,
   RECORD_SCAN_BYTES,

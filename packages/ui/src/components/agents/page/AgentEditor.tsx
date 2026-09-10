@@ -2,8 +2,8 @@
 /**
  * The agent editor: one definition, every field, validated by the host as
  * the person types and again on save. The `default` agent edits like any
- * other except for its Instructions section, which starts on the engine's
- * own text and can be customised or restored.
+ * other except for its Instructions section, which starts on the product's
+ * default text and can be customised or restored.
  *
  * Issues (`AgentIssue.field`) land at their field in danger; periodic
  * warnings (`AgentWarning.field`) land at theirs in attention, and a deep
@@ -12,6 +12,7 @@
 import {
   AGENT_DESCRIPTION_MAX,
   DEFAULT_AGENT_NAME,
+  PRODUCT_DISPLAY_NAME,
   type AgentDefinition,
   type AgentDefinitionInput,
   type AgentIssue,
@@ -142,7 +143,7 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
     async (input: AgentDefinitionInput): Promise<AgentIssue[] | undefined> => {
       const seq = ++validateSeq.current;
       try {
-        const result = await agents.validate(input);
+        const result = await agents.validate(input, agent?.name ?? null);
         if (seq === validateSeq.current) setIssues(result);
         return result;
       } catch {
@@ -150,7 +151,7 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
         return undefined;
       }
     },
-    [agents],
+    [agent?.name, agents],
   );
   useEffect(() => {
     if (!dirty) return undefined;
@@ -170,7 +171,7 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
     if (fresh && fresh.length > 0) return;
     setSaving(true);
     try {
-      const saved = await agents.save(draft);
+      const saved = await agents.save(draft, agent?.name ?? null);
       const next = agentDefinitionInputOf(saved);
       setBase(next);
       setDraft(next);
@@ -189,7 +190,7 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
     } finally {
       setSaving(false);
     }
-  }, [agents, draft, onSaved, saving, validate]);
+  }, [agent?.name, agents, draft, onSaved, saving, validate]);
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
@@ -226,7 +227,7 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
   const catalog = useModelCatalog(routeCwd);
   const models = catalog.data ?? [];
   const webSearch = useWebSearchFeature(routeCwd);
-  const startable = useMemo(() => startableAgents(snapshot, agent?.name), [snapshot, agent?.name]);
+  const startable = useMemo(() => startableAgents(snapshot), [snapshot]);
   const isDefault = agent !== undefined && snapshot.defaultAgent === agent.name;
   const deletable = agent ? deletability(agent, snapshot) : { ok: false, reason: "Save the agent first." };
   const sectionWarnings = (section: EditorSection) => warningsInSection(warnings, section);
@@ -297,25 +298,21 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
         <Section
           id="name"
           title="Name"
-          description={isNew ? "Lower-case letters, digits and hyphens. This is the agent's id; other agents start it by this name." : "The agent's id. Other agents start it by this name."}
+          description="Lower-case letters, digits and hyphens. Names must be unique; other agents start this one by its name."
           notices={<IssueNotice id={`${ids}-name-issue`} messages={byField.root.name ?? []} />}
         >
-          {isNew ? (
-            <Input
-              name="name"
-              value={draft.name}
-              placeholder="reviewer"
-              autoComplete="off"
-              spellCheck={false}
-              autoFocus
-              aria-invalid={byField.root.name ? true : undefined}
-              aria-describedby={byField.root.name ? `${ids}-name-issue` : undefined}
-              className="max-w-96 font-mono"
-              onChange={(event) => patch({ name: shapeAgentName(event.target.value) })}
-            />
-          ) : (
-            <p className="typed text-ink">{agent.name}</p>
-          )}
+          <Input
+            name="name"
+            value={draft.name}
+            placeholder="reviewer"
+            autoComplete="off"
+            spellCheck={false}
+            autoFocus={isNew}
+            aria-invalid={byField.root.name ? true : undefined}
+            aria-describedby={byField.root.name ? `${ids}-name-issue` : undefined}
+            className="max-w-96 font-mono"
+            onChange={(event) => patch({ name: shapeAgentName(event.target.value) })}
+          />
         </Section>
 
         {/* Description */}
@@ -362,7 +359,7 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
                 <div>
                   <Button type="button" variant="link" size="sm" className="gap-1" onClick={() => patch({ engineInstructions: true })}>
                     <Undo2 />
-                    Use the built-in instructions again
+                    Use {PRODUCT_DISPLAY_NAME}'s default instructions again
                   </Button>
                 </div>
               ) : null}
@@ -434,6 +431,7 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
             <AllowedAgentsField
               value={draft.allowedAgents}
               options={startable}
+              self={agent?.name}
               flagged={new Set(sectionWarnings("allowedAgents").map((warning) => warning.target).filter((target): target is string => target !== undefined))}
               onChange={(allowedAgents) => patch({ allowedAgents })}
             />
@@ -444,7 +442,7 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
         <Section
           id="skills"
           title="Skills"
-          description="Skills are instructions the engine discovers in the project and globally. Scope them to limit what this agent sees."
+          description={`${PRODUCT_DISPLAY_NAME} discovers skills in your global and project folders. Scope them to limit what this agent sees.`}
           notices={
             <>
               <WarningNotice warnings={sectionWarnings("skills")} />
@@ -583,7 +581,7 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
 }
 
 // ---------------------------------------------------------------------------
-// Instructions: the engine's text, read-only until customised
+// Product default instructions, read-only until customised
 // ---------------------------------------------------------------------------
 
 function EngineInstructions({ cwd, onCustomize }: { cwd: string | undefined; onCustomize(text: string): void }) {
@@ -591,15 +589,15 @@ function EngineInstructions({ cwd, onCustomize }: { cwd: string | undefined; onC
   return (
     <div data-slot="engine-instructions" className="flex flex-col gap-2">
       <div className="flex items-center gap-2">
-        <Badge variant="outline">Using the built-in instructions</Badge>
-        <Hint>The engine's own text. Customize to start from it.</Hint>
+        <Badge variant="outline">Using {PRODUCT_DISPLAY_NAME}'s default instructions</Badge>
+        <Hint>Customize to make this prompt your own.</Hint>
       </div>
       {cwd === undefined ? (
-        <Hint>Open a project to read the built-in instructions.</Hint>
+        <Hint>Open a project to read {PRODUCT_DISPLAY_NAME}'s default instructions.</Hint>
       ) : engine.error !== undefined ? (
-        <ErrorState title="Couldn’t read the built-in instructions" detail={engine.error} onRetry={engine.reload} />
+        <ErrorState title={`Couldn’t read ${PRODUCT_DISPLAY_NAME}'s default instructions`} detail={engine.error} onRetry={engine.reload} />
       ) : engine.data === undefined ? (
-        <GenerationLoader label="Loading the built-in instructions" layout="inline" />
+        <GenerationLoader label={`Loading ${PRODUCT_DISPLAY_NAME}'s default instructions`} layout="inline" />
       ) : (
         <pre className="max-h-80 overflow-auto rounded-lg border border-line bg-surface-2 p-3 font-mono text-xs leading-code whitespace-pre-wrap text-ink-2">{engine.data}</pre>
       )}
@@ -723,11 +721,13 @@ function ThinkingField({ value, levels, onChange }: { value: ThinkingLevel | nul
 function AllowedAgentsField({
   value,
   options,
+  self,
   flagged,
   onChange,
 }: {
   value: readonly string[];
   options: readonly AgentDefinition[];
+  self: string | undefined;
   flagged: ReadonlySet<string>;
   onChange(next: string[]): void;
 }) {
@@ -755,8 +755,8 @@ function AllowedAgentsField({
             name={`allowed:${option.name}`}
             checked={value.includes(option.name)}
             flagged={flagged.has(option.name)}
-            label={agentDisplayName(option.name)}
-            detail={option.description || option.name}
+            label={option.name === self ? `${agentDisplayName(option.name)} · Same agent` : agentDisplayName(option.name)}
+            detail={option.name === self ? "Starts another instance with these same settings." : option.description || option.name}
             onChange={(event) => toggle(option.name, event.target.checked)}
           />
         ))
@@ -854,4 +854,3 @@ function SkillsField({
 // ---------------------------------------------------------------------------
 // Timeout
 // ---------------------------------------------------------------------------
-

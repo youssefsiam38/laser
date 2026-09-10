@@ -144,7 +144,9 @@ Desktop (≥1024px), four columns left to right:
    with Account/API tabs only when both occur). A child agent contributes its
    model, never invented numbers; model and thinking, worker status,
    extension status pills, history/tree panel (fork, jump, labels). Hidden by
-   default under 1280px.
+   default under 1280px. Its top-bar and command-palette entry uses the same
+   activity mark as the Telemetry header; panel-edge glyphs are reserved for
+   collapsing an already open sidebar.
 
 The fleet sits immediately left of the monitor: from the right edge inward,
 monitor then fleet. Each collapses on its own.

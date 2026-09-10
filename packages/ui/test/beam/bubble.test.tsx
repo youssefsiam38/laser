@@ -5,7 +5,7 @@
  * peer (`fake-host.tsx`). What is under test: the spark opens and closes the
  * bubble; the empty state and its chips; the first message creating a Beam
  * session in Beam's workspace without moving the main view; the remembered
- * session; "New chat"; Escape and focus.
+ * session; a fresh chat on every spark press; Escape and focus.
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -169,7 +169,7 @@ describe("the Beam bubble", () => {
     expect(bubble()!.querySelector('[data-slot="beam-empty-state"]')).toBeNull();
   });
 
-  it("reopens on the same session, and New chat starts a fresh one", async () => {
+  it("starts fresh on every spark press while the previous session remains available", async () => {
     await mount();
     await openBubble();
     await typeAndSend("Hello");
@@ -179,39 +179,33 @@ describe("the Beam bubble", () => {
     expect(bubble()).toBeNull();
     expect(spark().getAttribute("aria-expanded")).toBe("false");
     await openBubble();
-    expect(bubble()!.querySelector('[data-slot="thread-path"]')?.textContent).toBe(path);
-    expect(bubble()!.querySelector('[data-slot="beam-empty-state"]')).toBeNull();
-    await act(async () => bubble()!.querySelector<HTMLButtonElement>('[data-slot="beam-new-chat"]')!.click());
-    await act(async () => settle(20));
     expect(beamStore.getSnapshot().path).toBeUndefined();
     expect(localStorage.getItem(BEAM_SESSION_STORAGE_KEY)).toBeNull();
     expect(bubble()!.querySelector('[data-slot="beam-empty-state"]')).not.toBeNull();
     expect(bubble()!.querySelector<HTMLButtonElement>('[data-slot="beam-new-chat"]')!.disabled).toBe(true);
+    expect(world.states[path]).toBeDefined();
+    expect(calls("pi/session/delete")).toHaveLength(0);
+
+    await typeAndSend("Another question");
+    expect(beamStore.getSnapshot().path).not.toBe(path);
+    await act(async () => spark().click());
+    await act(async () => settle(20));
+    expect(beamStore.getSnapshot()).toMatchObject({ open: true, path: undefined });
+    expect(bubble()!.querySelector('[data-slot="beam-empty-state"]')).not.toBeNull();
   });
 
-  it("remembers a session across a reload, and starts fresh when it is gone", async () => {
+  it("clears a session remembered by an older build when the spark opens", async () => {
     const kept = `${BEAM_CWD}/kept.jsonl`;
     addSession(world, kept, BEAM_CWD);
     localStorage.setItem(BEAM_SESSION_STORAGE_KEY, kept);
     beamStore.reset();
     await mount();
     await openBubble();
-    expect(calls("session/load").map((call) => (call.params as { path: string }).path)).toContain(kept);
-    expect(bubble()!.querySelector('[data-slot="thread-path"]')?.textContent).toBe(kept);
-    await act(async () => root.unmount());
-
-    localStorage.setItem(BEAM_SESSION_STORAGE_KEY, `${BEAM_CWD}/gone.jsonl`);
-    beamStore.reset();
-    world = createWorld();
-    FakeHostClient.reset(world);
-    container = document.createElement("div");
-    document.body.append(container);
-    root = createRoot(container);
-    await mount();
-    await openBubble();
     expect(beamStore.getSnapshot().path).toBeUndefined();
     expect(localStorage.getItem(BEAM_SESSION_STORAGE_KEY)).toBeNull();
     expect(bubble()!.querySelector('[data-slot="beam-empty-state"]')).not.toBeNull();
+    expect(calls("pi/session/delete")).toHaveLength(0);
+    expect(world.states[kept]).toBeDefined();
   });
 
   it("closes on Escape from inside and hands focus back to the spark; a taken Escape is left alone", async () => {

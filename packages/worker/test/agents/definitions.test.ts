@@ -8,12 +8,12 @@ import { DefinitionsCache, fallbackSnapshot, isStartable } from "../../src/agent
 
 describe("DefinitionsCache", () => {
   it("answers with built-in fallbacks until the host syncs", () => {
-    const cache = new DefinitionsCache({ beamSkill: { name: "x-beam", path: "/skills/x-beam/SKILL.md", scope: "global" }, webSearch: true });
+    const cache = new DefinitionsCache();
     expect(cache.isSynced).toBe(false);
     const fallback = cache.defaultAgent();
     expect(fallback).toMatchObject({ name: DEFAULT_AGENT_NAME, kind: "custom", engineInstructions: true, supportsSubagents: true, allowedAgents: [DEFAULT_AGENT_NAME] });
     const beam = cache.definition("beam")!;
-    expect(beam).toMatchObject({ kind: "builtin", scopedSkills: true, skills: [{ name: "x-beam" }] });
+    expect(beam).toMatchObject({ kind: "builtin", scopedSkills: false, skills: [] });
     // Tools are not part of a definition (D-144).
     expect(beam).not.toHaveProperty("tools");
     expect(beam.instructions).toContain(PRODUCT_DISPLAY_NAME);
@@ -44,9 +44,11 @@ describe("DefinitionsCache", () => {
     expect(cache.namerModel()).toEqual({ provider: "p", id: "n" });
     expect(cache.policy()).toEqual({ maxDepth: 2, foregroundCommandSeconds: 30 });
     expect(seen).toEqual([7]);
+    cache.sync({ ...base, revision: 8, agents: [custom], defaultAgent: "lead", renamedAgents: { worker: "lead" } });
+    expect(cache.definition("worker")?.name).toBe("lead");
     off();
-    cache.sync({ ...base, revision: 8 });
-    expect(seen).toEqual([7]);
+    cache.sync({ ...base, revision: 9 });
+    expect(seen).toEqual([7, 8]);
     // A host that has not seeded the Chat definition still serves the person's
     // choice: the re-seeded fallback takes the model from the snapshot's state.
     const seedless = new DefinitionsCache();
@@ -55,7 +57,7 @@ describe("DefinitionsCache", () => {
     expect(seedless.chatModel()).toEqual({ provider: "p", id: "c2" });
 
     // An unknown default falls back to the shipped default rather than nothing.
-    cache.sync({ ...base, revision: 9, defaultAgent: "gone" });
+    cache.sync({ ...base, revision: 10, defaultAgent: "gone" });
     expect(cache.defaultAgent().name).toBe(DEFAULT_AGENT_NAME);
   });
 });

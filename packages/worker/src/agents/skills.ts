@@ -30,8 +30,7 @@ export function skillRoots(input: SkillRootsInput): Array<{ path: string; scope:
   return roots;
 }
 
-export function listAgentSkills(input: SkillRootsInput & { exclude?: readonly string[] }): AgentSkillsListing {
-  const excluded = new Set(input.exclude ?? []);
+export function listAgentSkills(input: SkillRootsInput): AgentSkillsListing {
   const roots: AgentSkillsRoot[] = [];
   const skills: AgentSkillRef[] = [];
   const seen = new Set<string>();
@@ -41,7 +40,7 @@ export function listAgentSkills(input: SkillRootsInput & { exclude?: readonly st
     if (!exists) continue;
     const loaded = loadSkillsFromDir({ dir: root.path, source: root.scope === "global" ? "user" : "project" });
     for (const skill of loaded.skills) {
-      if (excluded.has(skill.name) || seen.has(skill.name)) continue;
+      if (seen.has(skill.name)) continue;
       seen.add(skill.name);
       skills.push({ name: skill.name, path: skill.filePath, scope: root.scope });
     }

@@ -22,7 +22,7 @@
 │  ui-bridge (ExtensionUIContext → pi/ui/*)                   │
 │  engine adapter + Laser-owned feature loader                 │
 │  agent harness: child sessions, .worktrees/, timeouts,     │
-│  parent events; Beam skill; Namer (docs/agents.md)         │
+│  parent events; Beam; Namer (docs/agents.md)               │
 │  loads packages/pi-extension into the session:             │
 │    one extension, modules/{provider-log,subagents,         │
 │    background-work,transcribe,goal,...} activated          │
@@ -140,8 +140,9 @@ ACP-inspired JSON-RPC:
   for a child its parent, run and worktree), `lasercode/agent-run` (run
   moments in the child) and the parent's `lasercode/agent-event` messages —
   written by the worker, read by the host's catalog to attribute sessions.
-- `<Laser data>/agent/skills/<product>-beam/SKILL.md` — the Beam skill, written
-  by the worker on start from this installation's real paths.
+- User skills are read from the documented global roots. Trusted project skills
+  are read from `<project>/.laser/skills` and `<project>/.agents/skills`.
+  Laser does not write, install or bundle skills.
 - `<project>/.worktrees/<slug>` — a child agent's checkout on branch
   `agents/<slug>`, hidden through `<gitdir>/info/exclude`.
 
@@ -153,8 +154,8 @@ in-memory engine overrides.
 
 - Host SQLite: provider round-trips, tool events, session index cache, attention
   state, device list, relay channel state.
-- `<Laser data>/state/agents.json`: agent definitions, the default agent, the
-  policy and the Beam/Namer model choices. `<Laser data>/state/agent-runs.json`:
+- `<Laser data>/state/agents.json`: agent definitions, the default agent,
+  durable rename aliases, the policy and each built-in agent's instruction/model choices. `<Laser data>/state/agent-runs.json`:
   every agent run the host has heard of, fed by worker `agents/run`
   notifications ([`agents.md`](agents.md) §8).
 - `<Laser data>/state/workspaces/beam` and `.../chat`: the working directories

@@ -24,19 +24,15 @@ export interface SkillLike {
 }
 
 /**
- * Which discovered skills this session is offered: the Beam skill only to the
- * Beam agent, and only the definition's own list when it is scoped.
+ * Which user-authored discovered skills this session is offered. An unscoped
+ * definition sees every discovered skill; a scoped one sees only its list.
  */
 export function filterSkills<T extends SkillLike>(
   skills: T[],
-  options: { definition: Pick<AgentDefinition, "scopedSkills" | "skills">; role: Pick<HarnessSessionRole, "kind">; beamSkillName?: string },
+  options: { definition: Pick<AgentDefinition, "scopedSkills" | "skills">; role: Pick<HarnessSessionRole, "kind"> },
 ): T[] {
   const scoped = options.definition.scopedSkills ? new Set(options.definition.skills.map((skill) => skill.name)) : undefined;
-  return skills.filter((skill) => {
-    if (options.beamSkillName !== undefined && skill.name === options.beamSkillName && options.role.kind !== "beam") return false;
-    if (scoped && !scoped.has(skill.name)) return false;
-    return true;
-  });
+  return scoped ? skills.filter((skill) => scoped.has(skill.name)) : skills;
 }
 
 /** The role a top-level session gets from its agent name. */

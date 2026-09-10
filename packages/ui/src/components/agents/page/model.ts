@@ -111,9 +111,9 @@ export function isFirstRun(snapshot: AgentsSnapshot | null | undefined): boolean
   return orderAgents(snapshot).custom.every((agent) => agent.name === DEFAULT_AGENT_NAME);
 }
 
-/** Definitions an agent may start: custom ones and the default, never a built-in, never itself. */
-export function startableAgents(snapshot: AgentsSnapshot | null | undefined, self: string | undefined): AgentDefinition[] {
-  return orderAgents(snapshot).custom.filter((agent) => agent.name !== self);
+/** Definitions an agent may start: every custom definition, including another instance of itself. */
+export function startableAgents(snapshot: AgentsSnapshot | null | undefined): AgentDefinition[] {
+  return orderAgents(snapshot).custom;
 }
 
 // ---------------------------------------------------------------------------
@@ -286,10 +286,9 @@ export function shapeAgentName(text: string): string {
 export const SKILL_SCOPE_LABEL: Readonly<Record<AgentSkillScope, string>> = {
   project: "This project",
   global: "Every project",
-  bundled: "Built in",
 };
 
-const SCOPE_ORDER: readonly AgentSkillScope[] = ["project", "global", "bundled"];
+const SCOPE_ORDER: readonly AgentSkillScope[] = ["project", "global"];
 
 export const skillKey = (skill: Pick<AgentSkillRef, "path">): string => skill.path;
 

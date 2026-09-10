@@ -85,7 +85,7 @@ describe("SkillsCheck", () => {
     const agents = [
       agent("lead", { supportsSubagents: true, allowedAgents: ["reviewer", "ghost"] }),
       agent("reviewer", { skills: [{ name: "nope", path: join(dir, "missing.md"), scope: "global" }] }),
-      agent("beam", { kind: "builtin", scopedSkills: true, skills: [{ name: "beam", path: join(dir, "missing-beam.md"), scope: "bundled" }] }),
+      agent("beam", { kind: "builtin", scopedSkills: false, skills: [] }),
     ];
     const reports: AgentWarning[][] = [];
     new SkillsCheck({ agents: () => agents, report: (warnings) => reports.push(warnings) }).run();

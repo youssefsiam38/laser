@@ -317,7 +317,6 @@ async function server() {
     cwd: "/tmp/tray",
     createDriver: () => (driver = new TrayDriver()) as unknown as SessionDriver,
     send: (message) => out.push(message),
-    skipBeamSkill: true,
   });
   const call = async (id: number, method: string, params?: unknown) => {
     await worker.handle({ jsonrpc: "2.0", id, method, params });

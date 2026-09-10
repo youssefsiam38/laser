@@ -2,15 +2,15 @@
  * The bubble's own state: whether it is open, which Beam session it shows,
  * and the spark it grew out of. A small external store rather than React
  * state because the spark (rail or sheet footer) and the bubble (the shell)
- * are far apart in the tree, and because the session path is remembered per
- * browser so reopening the bubble shows the same chat.
+ * are far apart in the tree. The spark clears the active path on every press;
+ * earlier chats live in the sessions sidebar.
  *
  * Pure of React apart from {@link useBeam}; tested through the bubble.
  */
 import { storageKey } from "@lasercode/protocol";
 import { useSyncExternalStore } from "react";
 
-/** The Beam session this browser was last talking to. */
+/** Compatibility key: opening the spark clears any path older builds remembered. */
 export const BEAM_SESSION_STORAGE_KEY = storageKey("beam-session");
 
 export interface BeamSnapshot {
@@ -62,16 +62,12 @@ function createBeamStore() {
     close(): void {
       publish({ ...snapshot, open: false });
     },
-    toggle(from?: HTMLElement | null): void {
-      if (snapshot.open) this.close();
-      else this.open(from);
-    },
     /** Adopt a session (the first message created one) or let go of one that is gone. */
     setPath(path: string | undefined): void {
       writePath(path);
       publish({ ...snapshot, path });
     },
-    /** "New chat": the next message starts a fresh Beam session. */
+    /** Detach the bubble; the next message starts a fresh Beam session. */
     newChat(): void {
       this.setPath(undefined);
     },

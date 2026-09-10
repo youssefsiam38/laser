@@ -303,7 +303,7 @@ export const agentNameSchema = z.string().regex(AGENT_NAME_PATTERN, {
 export const agentModelChoiceSchema = z.object({ provider: z.string().min(1).max(100), id: z.string().min(1).max(200) }).strict();
 export const builtinAgentNameSchema = z.enum(BUILTIN_AGENT_NAMES);
 export const agentSkillRefSchema = z
-  .object({ name: z.string().min(1).max(64), path: z.string().min(1).max(4096), scope: z.enum(["global", "project", "bundled"]) })
+  .object({ name: z.string().min(1).max(64), path: z.string().min(1).max(4096), scope: z.enum(["global", "project"]) })
   .strict();
 export const agentDefinitionInputSchema = z
   .object({
@@ -526,8 +526,8 @@ export const clientParamsSchemas = {
 
   // --- M13 agents (docs/agents-leap) ---
   "agents/list": z.object({}).strict(),
-  "agents/validate": z.object({ agent: agentDefinitionInputSchema }).strict(),
-  "agents/save": z.object({ agent: agentDefinitionInputSchema }).strict(),
+  "agents/validate": z.object({ agent: agentDefinitionInputSchema, originalName: agentNameSchema.nullable() }).strict(),
+  "agents/save": z.object({ agent: agentDefinitionInputSchema, originalName: agentNameSchema.nullable() }).strict(),
   "agents/delete": z.object({ name: agentNameSchema }).strict(),
   "agents/set-default": z.object({ name: agentNameSchema }).strict(),
   "agents/set-policy": z.object({ policy: agentPolicyPatchSchema }).strict(),
@@ -538,6 +538,7 @@ export const clientParamsSchemas = {
   "agents/worktree/status": z.object({ path: sessionPath }).strict(),
   "agents/worktree/remove": z.object({ path: sessionPath, force: z.boolean().optional() }).strict(),
   "agents/builtin/set-model": z.object({ name: builtinAgentNameSchema, model: agentModelChoiceSchema.nullable() }).strict(),
+  "agents/builtin/set-instructions": z.object({ name: builtinAgentNameSchema, instructions: z.string().max(AGENT_INSTRUCTIONS_MAX).nullable() }).strict(),
   "agents/namer/qualify": z.object({ cwd }).strict(),
   "agents/sync": z.object({ snapshot: agentsSnapshotSchema }).strict(),
 } satisfies Record<ClientMethod, z.ZodTypeAny>;

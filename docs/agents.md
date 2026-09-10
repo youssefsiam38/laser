@@ -34,14 +34,14 @@ characters. There is no separate agent id, type or profile name.
 
 | Agents page field | Protocol field | Notes |
 | --- | --- | --- |
-| Name | `name` | Unique; built-in names (`beam`, `chat`, `namer`) are refused |
+| Name | `name` | Editable and unique; built-in names (`beam`, `chat`, `namer`), current names and historical rename aliases are refused |
 | Description | `description` | ≤ 300 chars. Answers "when should another agent start this one?" — it is the compact catalog text |
-| Instructions | `instructions`, `engineInstructions` | Answers "how should this agent work?" The shipped `default` agent starts with `engineInstructions: true` (the engine's own prompt, readable through `agents/engine-instructions`) and a person may replace it with their own text |
+| Instructions | `instructions`, `engineInstructions` | Answers "how should this agent work?" The shipped `default` agent starts with `engineInstructions: true`: Laser's own neutral coding prompt, readable through `agents/engine-instructions`; a person may replace it with their own text |
 | Model | `model` | `{ provider, id }` or `null` to follow the configured default model |
 | Thinking | `thinkingLevel` | `null` follows the default |
 | Supports subagents | `supportsSubagents` | When on, the agent gets `start_agent` and its siblings |
-| Agents it can run | `allowedAgents` | Multi-select of custom agents; never a built-in. Meaningful only with `supportsSubagents` |
-| Scoped skills | `scopedSkills`, `skills` | Off by default: every discovered skill is offered. On: only the listed `AgentSkillRef`s (`name`, `path`, `scope`), chosen from what the engine discovers at definition time (`agents/skills`, listing `<agentDir>/skills` and `~/.agents/skills` as `global`, `<project>/.laser/skills` and `<project>/.agents/skills` as `project` when the project is trusted) |
+| Agents it can run | `allowedAgents` | Multi-select of custom agents, including another instance of the same definition; never a built-in. Meaningful only with `supportsSubagents` |
+| Scoped skills | `scopedSkills`, `skills` | Off by default: every discovered skill is offered. On: only the listed `AgentSkillRef`s (`name`, `path`, `scope`), chosen from what Laser discovers at definition time (`agents/skills`, listing `<agentDir>/skills` and `~/.agents/skills` as `global`, `<project>/.laser/skills` and `<project>/.agents/skills` as `project` when the project is trusted) |
 | Default | snapshot `defaultAgent` | "Default" only means the agent a new session opens with (the `i` mark beside the toggle says so). The current default cannot be deleted; pick another default first |
 
 Policy (`AgentPolicy`, `agents/set-policy`): `maxDepth` (default 3, at most 6)
@@ -50,6 +50,12 @@ and `foregroundCommandSeconds` (default 120, 10–3600).
 Validation (`agents/validate`, and the gate inside `agents/save`) returns
 `AgentIssue[]`, each naming its field (`skills[2]`, `allowedAgents`, `name`) so
 the form shows the message beside the control.
+
+Renaming carries `originalName` through validation and save. The host moves the
+definition, the default pointer and every `allowedAgents` reference in one
+commit. `AgentsSnapshot.renamedAgents` retains old-name → current-name aliases
+so a worker reopening a session whose immutable record names the old definition
+still loads the renamed one. Deleting that definition retires its aliases.
 
 Periodic validation (`packages/host/src/agents/skills-check.ts`) stats every
 scoped skill of every custom agent every 30 s and right after a save, and
@@ -60,13 +66,14 @@ exact field. `since` is when the problem was first seen and does not move
 between ticks.
 
 Kinds: `custom` (a person's, including the seeded `default`) and `builtin`
-(Beam, Chat, Namer — visible at the bottom of the Agents page, never editable,
-never deletable, never the default, never another agent's child; only their
-model choices persist). All three take their model from the person, through
-the same control on the Agents page and the same picker — connected providers
-only (D-145). `AgentsSnapshot` carries `beam`, `chat` and `namer` state; Chat's
-is the choice alone, because it has neither a suggestion nor a benchmark
-behind it.
+(Beam, Chat, Namer — visible at the bottom of the Agents page, never deletable,
+never the default and never another agent's child). A person may edit each
+built-in's system instructions and model; restoring instructions drops the
+override and follows the shipped prompt again. All three use the same
+connected-provider-only model picker (D-145). `AgentsSnapshot` carries
+`builtinInstructions` plus `beam`, `chat` and `namer` state; Chat's specialized
+state is the model choice alone, because it has neither a suggestion nor a
+benchmark behind it.
 
 ## 2. The harness
 
@@ -461,9 +468,15 @@ idle, so its worker is never retired underneath it.
 
 | Agent | Runs in | Tools | Integration |
 | --- | --- | --- | --- |
-| `beam` | `<state>/workspaces/beam` (`workspaces.beam`) | every tool, like every agent; scoped to the one Beam skill | two ways in (D-143): the spark at the bottom left beside Settings, present in chat, Settings and logs, which opens a bubble that grows out of the icon and holds the normal chat — before the first message the middle hints that Beam is the assistant for Laser, and the first message creates a Beam session in Beam's group — and the `+` on Beam's group in the sessions sidebar, which starts a chat in the window instead. The bubble's maximize control moves the chat it is showing into the window. No other Beam entry point exists |
+| `beam` | `<state>/workspaces/beam` (`workspaces.beam`) | every tool and every user- or project-discovered skill, like any unscoped agent | two ways in (D-143, D-173): every press of the spark at the bottom left beside Settings starts a fresh bubble chat, while earlier Beam sessions remain in Beam's sidebar group; the `+` on that group starts a fresh chat in the window. The first message lazily creates the session. The bubble's maximize control moves its current chat into the window. No other Beam entry point exists |
 | `chat` | `<state>/workspaces/chat` (`workspaces.chat`) | every tool, in its own scratch workspace | the Chat tab, first in the sidebar before Code; projectless chats |
 | `namer` | the project's own worker | not a session agent | names things from a small context |
+
+The Agents page exposes the effective system instructions for all three.
+Saving writes a durable override; restoring stores `null` so a later release's
+improved shipped prompt takes effect. Beam and Chat apply the effective prompt
+when a session opens. Namer layers it into session-title, activity-label and
+qualification requests while keeping the per-operation short-output contract.
 
 **A Chat session can move into a project** (M13-T58). The row's menu in the
 Chat tab offers "Move to a project…", which opens a dialog listing the Code
@@ -487,12 +500,12 @@ is one thing), a target that is missing, a file, a built-in workspace or a
 worktree. After the move the Code tab shows the session selected under its
 project, and the transcript is the same transcript.
 
-**Beam's skill** (`packages/worker/src/agents/beam-skill.ts`) is written by the
-worker on start, idempotently, at `<agentDir>/skills/<product>-beam/SKILL.md`
-from the real paths of this installation: where sessions, agents, runs,
-preferences, projects, logs and settings live and how a person moves around
-the app. It is filtered out of every other agent's skills. Beam needs no
-special tools because Laser writes its state to disk in real time.
+**Skills are discovered, not managed.** Laser ships and writes no skills. It
+discovers a person's global skills and trusted project skills from the roots
+listed in the definition table, then either offers all of them or the subset
+chosen for a scoped agent. Beam is unscoped. Its product-specific knowledge —
+where Laser stores sessions, agents, runs, preferences, projects and logs — is
+part of its editable built-in instructions, not a hidden skill.
 
 **Beam's model** is an average-but-fast one. When the first provider is
 connected and Beam has no model, the host sends `agents/beam/choose-model`
@@ -524,7 +537,7 @@ session-naming prompt, keeps the fastest valid answer and records
 
 | Where | What |
 | --- | --- |
-| `<stateDir>/agents.json` | custom agents (the seeded `default` among them), `defaultAgent`, policy, Namer and Beam model choices, `revision`. Built-ins are rebuilt from `packages/host/src/agents/builtins.ts` on every load |
+| `<stateDir>/agents.json` | custom agents (the seeded `default` among them), `defaultAgent`, policy, every built-in's instruction override and model choice, `revision`. Built-in identities and null-overridden prompts are rebuilt from `packages/host/src/agents/builtins.ts` on every load |
 | `<stateDir>/agent-runs.json` | every `AgentRun` the host has heard of, fed by `agents/run` notifications; terminal runs kept 30 days and at most 500 per project; non-terminal runs are failed on host load and on worker loss |
 | session custom entry `lasercode/agent` (`SESSION_AGENT_ENTRY_TYPE`) | the first custom entry of every agent-started or agent-defined session: `SessionAgentRecord { agentName, kind, subagentName, parentPath, parentSessionId, rootPath, runId, worktree? }` — `worktree` is absent for a child started with `worktree: false`, and that absence is what a reloaded session reads back — so a catalog that only reads files can attribute it |
 | session custom entry `lasercode/agent-run` (`SESSION_RUN_ENTRY_TYPE`) | run lifecycle moments in the child session (started, completed, blocked, failed, cancelled); a question is transient and is not written |
@@ -542,8 +555,8 @@ Requests (client → host unless noted):
 | Method | Params → result |
 | --- | --- |
 | `agents/list` | `{}` → `AgentsSnapshot` |
-| `agents/validate` | `{ agent }` → `{ issues }` |
-| `agents/save` | `{ agent }` → `{ agent, snapshot }` |
+| `agents/validate` | `{ agent, originalName }` → `{ issues }` (`originalName: null` means create) |
+| `agents/save` | `{ agent, originalName }` → `{ agent, snapshot }` (an edited name is an atomic rename) |
 | `agents/delete` | `{ name }` → `{ snapshot }` |
 | `agents/set-default` | `{ name }` → `{ snapshot }` |
 | `agents/set-policy` | `{ policy }` → `{ snapshot }` |
@@ -552,6 +565,7 @@ Requests (client → host unless noted):
 | `agents/runs/list` | `{ path? }` → `{ runs }` (`path` narrows to that session's tree) |
 | `agents/runs/stop` | `{ runId, reason? }` → `{ run }` (recorded as user-initiated; the parent is told) |
 | `agents/builtin/set-model` | `{ name, model }` → `{ snapshot }` (`name` is `beam`, `chat` or `namer`; `null` follows the default model, and for Namer returns it to the next qualification) |
+| `agents/builtin/set-instructions` | `{ name, instructions }` → `{ snapshot }` (`instructions` is the replacement system prompt; `null` restores the shipped prompt) |
 | `agents/namer/qualify` | `{ cwd }` → `NamerState` (routed to the built-in workspace worker) |
 | `agents/sync` | host → worker only; refused from clients |
 | `session/new` | gains `agentName?` (omitted = the default agent) |
@@ -584,9 +598,9 @@ Every method has a schema, a round-trip sample and a router owner
   its real driver's UI bridge inside a running tool goes `needs_input`, its
   parent is woken, reads it through `inspect_agent` and answers it through
   `send_agent_message`, and the child's dialog resolves with that answer.
-- The packaged gate: `check-packaged-session` reports the active modules and
-  the Beam skill path; `packages/desktop/scripts/clean-machine.mjs` asserts
-  `subagents` and `background-work` are active and that the skill file exists.
+- The packaged gate: `check-packaged-session` reports the active modules;
+  `packages/desktop/scripts/clean-machine.mjs` asserts `subagents` and
+  `background-work` are active.
 
 ## 11. Regression checks
 
@@ -618,7 +632,8 @@ The binding list lives in `AGENTS.md` ("Agents harness regression checks"):
   settle-without-completion and reload attribution.
 - Background promotion keeps output and exit state.
 - The live map never re-layouts on output updates.
-- Beam has two ways in, and no more: the spark (the only thing that opens the
-  bubble) and the `+` on its sidebar group (which opens a chat in the window).
+- Beam has two ways in, and no more: every spark press opens a fresh bubble
+  chat without deleting earlier sessions, while the `+` on its sidebar group
+  opens a fresh chat in the window.
 - Dictation belongs to the composer that started it: with the bubble open,
   two composers are mounted, and a phrase must land where it was spoken.

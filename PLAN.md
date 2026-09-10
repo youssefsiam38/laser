@@ -551,6 +551,15 @@ Depends on: M12.
 
 ---
 | M13-T66 | Release stable 0.3.0 | the Agents Leap — Laser's own harness, the fleet, Beam and Chat, the map, worktrees per child, one `inspect_fleet`, a Chat session that moves to a project — passes the staged workspace gate, the publication checks and the installer checks; source is on main, clean CI precedes the immutable tag; publication and Latest promotion are the pipeline's |
+| M13-T67 | Let people edit every built-in agent's system instructions and model | Beam, Chat and Namer expose durable instruction and model controls on the Agents page; restoring instructions returns to the shipped prompt; the effective instructions reach sessions and Namer requests |
+| M13-T68 | Give Telemetry its own recognizable toggle icon | the top bar and command palette use the same activity mark as the Telemetry surface, while panel-edge icons remain reserved for collapsing sidebars |
+| M13-T69 | Make the engine-backed default agent identify as Laser | the default instructions shown in Agents and used on every request identify the assistant as operating inside Laser, without copying or freezing the pinned engine's prompt |
+| M13-T70 | Make same-definition child agents explicit in the editor | every reusable agent can visibly allow another instance of itself; unchecking it leaves the option present; the existing recursive harness behavior remains covered |
+| M13-T71 | Let people rename custom agents without breaking references | an existing custom agent's name is editable; duplicate, built-in and historical-alias names are refused inline; default selection, delegation references and existing session lookup follow the rename atomically |
+| M13-T72 | Give the default agent a Laser-owned neutral system prompt | the displayed and live default instructions contain Laser's identity, actual tool descriptions and generic operating guidance, with no engine brand, documentation or bundled implementation paths |
+| M13-T73 | Make skills discovery-only | Laser writes and bundles no skill; user and project skill folders remain discoverable and selectable, while Beam's product guidance lives in its built-in agent instructions |
+| M13-T74 | Make the Beam spark start fresh every time | every press of the Beam spark opens the bubble on a new empty Beam conversation; any previous Beam session keeps running if needed and remains normally reachable in the Beam sidebar group |
+| M13-T75 | Release stable 0.3.1 | the agent customization, Laser-owned prompt, discovery-only skills and fresh Beam launcher pass the staged release gate; source and matching tag are pushed only after clean CI; the release pipeline publishes verified x64/ARM64 assets, provenance and updater feeds |
 
 ## MX · Cross-cutting (runs alongside every milestone)
 

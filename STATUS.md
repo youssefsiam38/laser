@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-09T12:00:00+03:00 · claude-2026-09-09-agents · HEAD: 7e068e3 (v0.3.0)
+**Last updated:** 2026-09-10T06:56:40+03:00 · codex-2026-09-10-release · HEAD: c7a84a0
 
-**Current focus:** 0.3.0, the Agents Leap, is tagged: `feat/agents` is on `main` at `7e068e3`, CI was clean before the tag, the draft carries the notes, and the publication pipeline (run 34331715953) published it: public, Latest, twelve assets for x64 and ARM64. No M13 row is open.
+**Current focus:** M13-T75 packages the completed agent refinements as stable 0.3.1, with clean source CI before the immutable tag and verified assets before publication.
 
 ## Milestones
 
@@ -24,7 +24,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
 | M12 Product experience | done | 0.2.13 dispatched |
-| M13 Agents Leap | done | T1–T66 done or dropped; shipped as v0.3.0 |
+| M13 Agents Leap | in-progress | T75: release stable 0.3.1 |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
@@ -33,14 +33,14 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Next up
 
-1. M10-T10: prove the in-app updater installation seam.
-2. M2/M5/M7: the broader platform proofs those milestones still owe.
-3. M11-T5: the cold-start network trace for font loading.
+1. M13-T75: stage, verify and publish stable 0.3.1.
+2. M10-T10: prove the in-app updater installation seam.
+3. M2/M5/M7: the broader platform proofs those milestones still owe.
 
 ## Recently done
 
-- M13-T66: 0.3.0 tagged at `7e068e3` after clean CI 34331351877 and published by pipeline 34331715953: public, Latest, twelve assets (D-167).
-- M13-T65: a fork is a top-level session beside its origin (D-166).
-- M13-T60/T61: the fleet's task detail is the `terminal-block` element; seven unmounted element files removed.
-- M13-T64: Namer labels every top-level call at once and no child's (D-165).
-- M13-T62: one `inspect_fleet` returns the fleet column's tree in its own words (D-163).
+- M13-T74: every Beam spark press starts a fresh bubble chat and preserves prior sessions (D-173).
+- M13-T73: Laser writes or bundles no skills; it only discovers user and project skills (D-172).
+- M13-T72: the default system prompt is Laser-owned and engine-neutral (D-172).
+- M13-T71: custom-agent rename preserves defaults, delegation references and existing-session lookup; duplicate names are refused inline (D-171).
+- M13-T70: every custom agent can visibly start another instance of itself, bounded by the existing depth policy (D-170).

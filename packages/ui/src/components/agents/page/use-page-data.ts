@@ -1,8 +1,8 @@
 "use client";
 /**
  * The Agents page's host reads that are not in the store: the model
- * catalog, the Web search feature's state, the skills the engine discovers
- * and the engine's own instructions. Each answers `{ loading, error, reload }`
+ * catalog, the Web search feature's state, the skills Laser discovers and its
+ * default instructions. Each answers `{ loading, error, reload }`
  * so a section can draw its wait and its failure the same way, and each
  * ignores an answer that lands after its inputs changed.
  */
@@ -104,13 +104,13 @@ export function useWebSearchFeature(cwd: string | undefined): WebSearchAvailabil
   return { known: true, enabled: result.data };
 }
 
-/** Every skill the engine discovers for `cwd`, asked only while the picker is open. */
+/** Every skill Laser discovers for `cwd`, asked only while the picker is open. */
 export function useSkillsListing(cwd: string | undefined, enabled: boolean): Loaded<AgentSkillsListing> {
   const agents = useAgentsActions();
   return useRequest(cwd, enabled, (key) => agents.skills(key));
 }
 
-/** The engine's built-in instructions, for the editable default agent. */
+/** Laser's default instructions, for the editable default agent. */
 export function useEngineInstructions(cwd: string | undefined, enabled: boolean): Loaded<string> {
   const agents = useAgentsActions();
   return useRequest(cwd, enabled, (key) => agents.engineInstructions(key));

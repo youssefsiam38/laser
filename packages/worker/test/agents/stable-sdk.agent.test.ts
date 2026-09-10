@@ -1,15 +1,14 @@
 /**
  * M13-T3 · per-agent session configuration against the real engine: custom
- * versus engine instructions, built-in tool filtering, skill scoping (the
- * Beam skill only for Beam), the model refusal, and the agent record written
+ * versus Laser instructions, built-in tool filtering, user skill scoping,
+ * the model refusal, and the agent record written
  * on a new session and recovered on load.
  */
-import { PRODUCT_NAME, SESSION_AGENT_ENTRY_TYPE, type AgentDefinition } from "@lasercode/protocol";
+import { PRODUCT_DISPLAY_NAME, PRODUCT_NAME, SESSION_AGENT_ENTRY_TYPE, type AgentDefinition } from "@lasercode/protocol";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { BEAM_SKILL_NAME, ensureBeamSkill } from "../../src/agents/beam-skill.js";
 import { fallbackBeamAgent, fallbackDefaultAgent, fallbackPolicy } from "../../src/agents/definitions.js";
 import { ENGINE_BUILTIN_TOOLS, readSessionAgentRecord, rootRecord, rootRole } from "../../src/agents/session-config.js";
 import { StableSdkDriver } from "../../src/drivers/stable-sdk.js";
@@ -39,7 +38,7 @@ function writeSkill(root: string, name: string): void {
 }
 
 function agentOptions(definition: AgentDefinition, name = definition.name): DriverAgentOptions {
-  return { definition, role: rootRole(name), record: rootRecord(name), policy: fallbackPolicy(), beamSkillName: BEAM_SKILL_NAME };
+  return { definition, role: rootRole(name), record: rootRecord(name), policy: fallbackPolicy() };
 }
 
 async function openAndPrompt(definition: AgentDefinition, text = "hello"): Promise<{ driver: StableSdkDriver; path: string }> {
@@ -64,11 +63,15 @@ describe("StableSdkDriver with an agent definition", () => {
     expect(toolNamesOf(request)).toEqual(expect.arrayContaining([...ENGINE_BUILTIN_TOOLS]));
   }, 60_000);
 
-  it("keeps the engine's built-in instructions and every tool for the shipped default agent", async () => {
+  it("uses the product's default instructions and every tool for the shipped default agent", async () => {
     const definition: AgentDefinition = { ...fallbackDefaultAgent(), model: { provider: "stub", id: "stub-1" } };
     await openAndPrompt(definition);
     const request = stub.requests[0]!;
-    expect(systemTextOf(request)).toContain("expert coding assistant");
+    const productOwnedPrompt = systemTextOf(request).split("\n\nThe following skills")[0]!;
+    expect(productOwnedPrompt).toContain(`expert coding assistant operating inside ${PRODUCT_DISPLAY_NAME}`);
+    expect(productOwnedPrompt).not.toMatch(/\bpi\b/i);
+    expect(productOwnedPrompt).not.toContain("documentation");
+    expect(productOwnedPrompt).not.toContain("node_modules");
     expect(toolNamesOf(request)).toEqual(expect.arrayContaining([...ENGINE_BUILTIN_TOOLS]));
     // Web search is an extension tool and follows its feature, which this session does not enable.
     expect(toolNamesOf(request)).not.toContain("web_search");
@@ -89,8 +92,7 @@ describe("StableSdkDriver with an agent definition", () => {
     expect(models.length).toBeLessThan(200);
   }, 60_000);
 
-  it("offers the Beam skill only to Beam and honours scoped skills", async () => {
-    ensureBeamSkill({ agentDir: join(base, "agent"), stateDir: join(base, "state") });
+  it("discovers user skills for every unscoped agent and honours scoped skills", async () => {
     writeSkill(join(base, "agent", "skills"), "alpha-skill");
     writeSkill(join(base, "agent", "skills"), "beta-skill");
     const model = { provider: "stub", id: "stub-1" };
@@ -99,16 +101,14 @@ describe("StableSdkDriver with an agent definition", () => {
     let system = systemTextOf(stub.requests[0]!);
     expect(system).toContain("alpha-skill");
     expect(system).toContain("beta-skill");
-    expect(system).not.toContain(BEAM_SKILL_NAME);
 
     const scoped: AgentDefinition = { ...fallbackDefaultAgent(), name: "narrow", model, scopedSkills: true, skills: [{ name: "beta-skill", path: join(base, "agent", "skills", "beta-skill", "SKILL.md"), scope: "global" }] };
     await openAndPrompt(scoped);
     system = systemTextOf(stub.requests[1]!);
     expect(system).toContain("beta-skill");
     expect(system).not.toContain("alpha-skill");
-    expect(system).not.toContain(BEAM_SKILL_NAME);
 
-    const beam = { ...fallbackBeamAgent({ model, beamSkill: { name: BEAM_SKILL_NAME, path: join(base, "agent", "skills", BEAM_SKILL_NAME, "SKILL.md"), scope: "global" } }) };
+    const beam = fallbackBeamAgent({ model });
     const driver = new StableSdkDriver();
     drivers.push(driver);
     const settled = new Promise<void>((resolve) => driver.subscribe((e: DriverEvent) => { if (e.type === "update" && e.update.kind === "agent_settled") resolve(); }));
@@ -116,8 +116,8 @@ describe("StableSdkDriver with an agent definition", () => {
     await driver.prompt([{ type: "text", text: "where are my sessions?" }]);
     await settled;
     system = systemTextOf(stub.requests[2]!);
-    expect(system).toContain(BEAM_SKILL_NAME);
-    expect(system).not.toContain("alpha-skill");
+    expect(system).toContain("alpha-skill");
+    expect(system).toContain("beta-skill");
     expect(system.startsWith("You are Beam")).toBe(true);
   }, 90_000);
 
@@ -129,8 +129,7 @@ describe("StableSdkDriver with an agent definition", () => {
   }, 60_000);
 
   it("reopens a Beam session whose workspace folder vanished by recreating the folder", async () => {
-    ensureBeamSkill({ agentDir: join(base, "agent"), stateDir: join(base, "state") });
-    const beam = fallbackBeamAgent({ model: null, beamSkill: { name: BEAM_SKILL_NAME, path: join(base, "agent", "skills", BEAM_SKILL_NAME, "SKILL.md"), scope: "bundled" } });
+    const beam = fallbackBeamAgent({ model: null });
     const workspace = join(base, "state", "workspaces", "beam");
     mkdirSync(workspace, { recursive: true });
     const driver = new StableSdkDriver();

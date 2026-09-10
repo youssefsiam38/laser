@@ -14,7 +14,7 @@ package installation.
 | Pi and Pi-native packages | agent loop, models, tools, session persistence and feature logic |
 | `packages/pi-goal` | exact upstream goal pin, loader entrypoint and stable state reader |
 | `packages/pi-extension` | in-process translation from supported engine capabilities to the Laser protocol; the model-facing agent harness tools (`start_agent` and siblings, `complete_agent_run`), the child's role block and parent event delivery, from the worker's bridge; long commands as background tasks |
-| Worker | the only Pi imports; feature-to-engine loading and `SessionDriver` mapping; agent execution — per-agent session configuration, child sessions, `.worktrees/` isolation when the parent asks for it, parent events, the Beam skill, Namer qualification |
+| Worker | the only Pi imports; feature-to-engine loading and `SessionDriver` mapping; agent execution — per-agent session configuration, child sessions, `.worktrees/` isolation when the parent asks for it, parent events, user-skill discovery, Namer qualification |
 | Protocol, host and UI | engine-neutral settings, feature policy, session state and presentation; agent definitions and policy (`agents.json`), the Agents page, the run registry (`agent-runs.json`), sub-sessions in the sidebar, the live map, and the built-in agents' product integrations (Beam's spark and bubble, the Chat tab, Namer's names and labels) |
 
 New backend behavior starts as a reusable Pi-native package, whether local or

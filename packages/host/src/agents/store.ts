@@ -4,9 +4,9 @@
  * Same discipline as PrefsStore: load on construct, memory-only without a
  * path, debounced atomic writes, `close()` flushes. Only what a person owns is
  * persisted — their custom agents (the seeded `default` among them), which one
- * starts new sessions, the policy, and the model choice of each built-in.
- * The three built-ins are rebuilt from `builtins.ts` on every load so a copy
- * change ships with the next release instead of being frozen in a file.
+ * starts new sessions, the policy, and each built-in's model and optional
+ * instruction override. The three built-ins are rebuilt from `builtins.ts` on
+ * every load; a null override follows the shipped prompt as it evolves.
  *
  * Every accepted change bumps `revision` and hands the whole snapshot to
  * `onChange`; the server broadcasts it to clients (`agents/updated`) and to
@@ -18,6 +18,8 @@ import { dirname, join } from "node:path";
 import {
   AGENT_MAX_DEPTH_DEFAULT,
   AGENT_MAX_DEPTH_LIMIT,
+  AGENT_INSTRUCTIONS_MAX,
+  AGENT_NAME_PATTERN,
   DEFAULT_AGENT_NAME,
   ErrorCodes,
   FOREGROUND_COMMAND_SECONDS_DEFAULT,
@@ -34,6 +36,7 @@ import {
   type AgentsSnapshot,
   type BeamState,
   type BuiltinAgentName,
+  type BuiltinInstructionOverrides,
   type ChatState,
   type NamerState,
 } from "@lasercode/protocol";
@@ -43,8 +46,10 @@ import { validateAgentInput } from "./validate.js";
 export interface AgentStoreOptions {
   /** File the definitions are persisted to. Absent = memory only (tests). */
   storePath?: string;
-  /** Where the engine keeps skills; Beam's bundled skill path is derived from it. */
+  /** Where sessions and user-authored global skills are discovered. */
   agentDir: string;
+  /** Host-owned state directory. Derived from `storePath` when omitted. */
+  stateDir?: string;
   /** The directories Beam and Chat sessions run in. Reported on the snapshot. */
   workspaces: { beam: string; chat: string };
   /** Notified after every accepted change with the new snapshot. */
@@ -62,6 +67,8 @@ interface Stored {
   namer: NamerState;
   beam: BeamState;
   chat: ChatState;
+  builtinInstructions: BuiltinInstructionOverrides;
+  renamedAgents: Readonly<Record<string, string>>;
 }
 
 const DELETE_DEFAULT_MESSAGE = "This agent starts new sessions. Choose another default first.";
@@ -74,6 +81,8 @@ export class AgentStore {
   private namer: NamerState = { status: "unqualified", model: null, candidates: [] };
   private beam: BeamState = { model: null, suggested: null, needsChoice: true };
   private chat: ChatState = { model: null };
+  private builtinInstructions: BuiltinInstructionOverrides = { beam: null, chat: null, namer: null };
+  private renamedAgents: Readonly<Record<string, string>> = {};
   private warningList: AgentWarning[] = [];
   private revision = 0;
   private writeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -101,6 +110,8 @@ export class AgentStore {
       namer: this.namer,
       beam: this.beam,
       chat: this.chat,
+      builtinInstructions: this.builtinInstructions,
+      renamedAgents: this.renamedAgents,
       workspaces: this.options.workspaces,
     });
   }
@@ -127,27 +138,57 @@ export class AgentStore {
   }
 
   /** Pure: the issues a save would refuse on. */
-  validate(input: AgentDefinitionInput): AgentIssue[] {
-    return validateAgentInput(input, { existing: [...this.custom.values(), ...this.builtins()] });
+  validate(input: AgentDefinitionInput, originalName: string | null = null): AgentIssue[] {
+    return validateAgentInput(input, {
+      existing: [...this.custom.values(), ...this.builtins()],
+      originalName,
+      renamedAgents: this.renamedAgents,
+    });
   }
 
   // ----------------------------------------------------------------- writes
 
-  /** Create or update a custom agent. Built-ins are refused; issues are thrown with their fields. */
-  save(input: AgentDefinitionInput): AgentDefinition {
+  /** Create, update or atomically rename a custom agent. */
+  save(input: AgentDefinitionInput, originalName: string | null = null): AgentDefinition {
+    if (originalName !== null && isBuiltinAgentName(originalName)) {
+      throw invalid([{ field: "name", message: `"${originalName}" is a built-in agent and cannot be changed.` }]);
+    }
+    const existing = originalName === null ? undefined : this.custom.get(originalName);
+    if (originalName !== null && !existing) {
+      throw invalid([{ field: "name", message: `There is no agent named "${originalName}".` }]);
+    }
     if (isBuiltinAgentName(input.name)) {
       throw invalid([{ field: "name", message: `"${input.name}" is a built-in agent and cannot be changed.` }]);
     }
-    const issues = this.validate(input);
+    const renaming = originalName !== null && originalName !== input.name;
+    const normalized: AgentDefinitionInput = renaming
+      ? { ...structuredClone(input), allowedAgents: input.allowedAgents.map((name) => (name === originalName ? input.name : name)) }
+      : structuredClone(input);
+    const issues = this.validate(normalized, originalName);
     if (issues.length > 0) throw invalid(issues);
     const at = this.now().toISOString();
-    const existing = this.custom.get(input.name);
     const agent: AgentDefinition = {
-      ...structuredClone(input),
+      ...normalized,
       kind: "custom",
       createdAt: existing?.createdAt ?? at,
       updatedAt: at,
     };
+    if (renaming) {
+      this.custom.delete(originalName);
+      if (this.defaultAgent === originalName) this.defaultAgent = agent.name;
+      for (const other of this.custom.values()) {
+        if (!other.allowedAgents.includes(originalName)) continue;
+        other.allowedAgents = other.allowedAgents.map((name) => (name === originalName ? agent.name : name));
+        other.updatedAt = at;
+      }
+      this.warningList = this.warningList
+        .filter((warning) => !(warning.field === "allowedAgents" && warning.target === originalName))
+        .map((warning) => (warning.agentName === originalName ? { ...warning, agentName: agent.name } : warning));
+      const aliases: Record<string, string> = {};
+      for (const [from, to] of Object.entries(this.renamedAgents)) aliases[from] = to === originalName ? agent.name : to;
+      aliases[originalName] = agent.name;
+      this.renamedAgents = aliases;
+    }
     this.custom.set(agent.name, agent);
     this.commit();
     return structuredClone(agent);
@@ -167,6 +208,7 @@ export class AgentStore {
     }
     if (name === this.defaultAgent) throw new ProtocolError(ErrorCodes.InvalidParams, DELETE_DEFAULT_MESSAGE);
     this.custom.delete(name);
+    this.renamedAgents = Object.fromEntries(Object.entries(this.renamedAgents).filter(([, target]) => target !== name));
     const at = this.now().toISOString();
     for (const agent of this.custom.values()) {
       if (!agent.allowedAgents.includes(name)) continue;
@@ -228,6 +270,21 @@ export class AgentStore {
     else this.setNamerModel(model);
   }
 
+  /** A string replaces the shipped prompt; `null` follows it again. */
+  setBuiltinInstructions(name: BuiltinAgentName, instructions: string | null): void {
+    if (instructions !== null) {
+      if (instructions.length > AGENT_INSTRUCTIONS_MAX) {
+        throw invalid([{ field: "instructions", message: `Instructions are limited to ${Math.round(AGENT_INSTRUCTIONS_MAX / 1024)} KB.` }]);
+      }
+      if (instructions.trim().length === 0) {
+        throw invalid([{ field: "instructions", message: "Write instructions, or restore the built-in instructions." }]);
+      }
+    }
+    if (this.builtinInstructions[name] === instructions) return;
+    this.builtinInstructions = { ...this.builtinInstructions, [name]: instructions };
+    this.commit();
+  }
+
   /** A person chose (or dismissed with `null`): either way the dialog is done. */
   setBeamModel(model: AgentModelChoice | null): void {
     this.beam = { ...this.beam, model: model ? { ...model } : null, needsChoice: false };
@@ -285,9 +342,11 @@ export class AgentStore {
   private builtins(): AgentDefinition[] {
     return builtinAgents({
       agentDir: this.options.agentDir,
+      stateDir: this.options.stateDir ?? (this.options.storePath ? dirname(this.options.storePath) : dirname(this.options.workspaces.beam)),
       beamModel: this.beam.model,
       chatModel: this.chat.model,
       namerModel: this.namer.model,
+      instructions: this.builtinInstructions,
       at: BUILTIN_STAMP,
     });
   }
@@ -333,6 +392,8 @@ export class AgentStore {
     // Written before Chat had a model of its own: missing is "follow the default".
     const chat = readChat(parsed?.chat);
     if (chat) this.chat = chat;
+    this.builtinInstructions = readBuiltinInstructions(parsed?.builtinInstructions);
+    this.renamedAgents = readRenamedAgents(parsed?.renamedAgents, this.custom);
 
     // A store with nothing in it (first run) is seeded; one whose person
     // deleted `default` after choosing another default is left alone. The
@@ -371,6 +432,8 @@ export class AgentStore {
       namer: this.namer,
       beam: this.beam,
       chat: this.chat,
+      builtinInstructions: this.builtinInstructions,
+      renamedAgents: this.renamedAgents,
     };
     try {
       mkdirSync(dirname(file), { recursive: true });
@@ -398,6 +461,26 @@ function readModel(value: unknown): AgentModelChoice | null {
   return model && isString(model.provider) && isString(model.id) && model.provider && model.id ? { provider: model.provider, id: model.id } : null;
 }
 
+function readBuiltinInstructions(value: unknown): BuiltinInstructionOverrides {
+  const record = value && typeof value === "object" ? (value as Partial<Record<BuiltinAgentName, unknown>>) : {};
+  const read = (name: BuiltinAgentName): string | null => {
+    const instructions = record[name];
+    return typeof instructions === "string" && instructions.trim().length > 0 && instructions.length <= AGENT_INSTRUCTIONS_MAX ? instructions : null;
+  };
+  return { beam: read("beam"), chat: read("chat"), namer: read("namer") };
+}
+
+function readRenamedAgents(value: unknown, custom: ReadonlyMap<string, AgentDefinition>): Readonly<Record<string, string>> {
+  if (!value || typeof value !== "object") return {};
+  const aliases: Record<string, string> = {};
+  for (const [from, target] of Object.entries(value)) {
+    if (!AGENT_NAME_PATTERN.test(from) || isBuiltinAgentName(from) || custom.has(from)) continue;
+    if (typeof target !== "string" || !custom.has(target) || from === target) continue;
+    aliases[from] = target;
+  }
+  return aliases;
+}
+
 /** A stale or hand-edited file is untrusted input: keep only what the writer could have written. */
 function readAgent(raw: unknown): AgentDefinition | undefined {
   const value = raw as Partial<AgentDefinition> | null;
@@ -407,7 +490,7 @@ function readAgent(raw: unknown): AgentDefinition | undefined {
     ? value.skills
         .filter((skill): skill is AgentDefinition["skills"][number] => {
           const s = skill as Partial<AgentDefinition["skills"][number]> | null;
-          return !!s && isString(s.name) && isString(s.path) && (s.scope === "global" || s.scope === "project" || s.scope === "bundled");
+          return !!s && isString(s.name) && isString(s.path) && (s.scope === "global" || s.scope === "project");
         })
         .map((skill) => ({ name: skill.name, path: skill.path, scope: skill.scope }))
     : [];

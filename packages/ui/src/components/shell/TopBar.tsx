@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import {
+  Activity,
   ChevronLeft,
   ChevronRight,
   Copy,
@@ -9,8 +10,6 @@ import {
   Radio,
   PanelLeft,
   PanelLeftClose,
-  PanelRight,
-  PanelRightClose,
   Pencil,
   RotateCw,
   Shrink,
@@ -284,7 +283,7 @@ export function TopBar() {
           aria-pressed={shell.telemetryOpen}
           onClick={shell.toggleTelemetry}
         >
-          {shell.telemetryOpen ? <PanelRightClose /> : <PanelRight />}
+          <Activity />
         </TooltipIconButton>
 
         <DropdownMenu>

@@ -1,13 +1,11 @@
 "use client";
 /**
- * The three shipped agents, read-only apart from the one thing that is
- * theirs: the model. Beam, Chat and Namer each show the model they run on and
- * open the same picker to change it; Namer's card also shows the state of its
- * qualification and the candidates it tried, beside — never instead of — the
- * choice a person can make by hand.
+ * The three shipped agents. Their identity and product integrations stay
+ * built in; their system instructions and model belong to the person. Namer's
+ * card also shows the state of its qualification and the candidates it tried.
  */
-import type { AgentModelChoice, AgentsSnapshot, BuiltinAgentName, NamerCandidate, NamerState } from "@lasercode/protocol";
-import { Check, RotateCw, X, Zap } from "lucide-react";
+import { AGENT_INSTRUCTIONS_MAX, type AgentModelChoice, type AgentsSnapshot, type BuiltinAgentName, type NamerCandidate, type NamerState } from "@lasercode/protocol";
+import { Check, RotateCw, Save, Undo2, X, Zap } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { agentDisplayName, useAgentsActions } from "@/agents";
@@ -17,10 +15,11 @@ import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { ProviderLogo } from "@/components/assistant-ui/elements/logos";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 
 import { AgentMarkIcon } from "./AgentList.js";
 import { BuiltinModelDialog } from "./dialogs.js";
-import { Hint } from "./fields.js";
+import { Hint, IssueNotice, Section } from "./fields.js";
 import { builtinBlurb, formatLatency, modelChoiceId, namerSummary } from "./model.js";
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -33,6 +32,7 @@ export interface BuiltinPanelProps {
 }
 
 export function BuiltinPanel({ name, snapshot, routeCwd }: BuiltinPanelProps) {
+  const definition = snapshot.agents.find((agent) => agent.name === name);
   return (
     <div className="mx-auto flex w-full max-w-180 flex-col gap-4 px-4 py-5 md:px-6">
       {name === "beam" ? (
@@ -42,8 +42,95 @@ export function BuiltinPanel({ name, snapshot, routeCwd }: BuiltinPanelProps) {
       ) : (
         <ChatCard snapshot={snapshot} routeCwd={routeCwd} />
       )}
-      <Hint>Built-in agents cannot be edited or deleted; each is part of the app. Their model is yours to choose.</Hint>
+      {definition ? (
+        <BuiltinInstructionsEditor
+          name={name}
+          current={definition.instructions}
+          customized={snapshot.builtinInstructions[name] !== null}
+        />
+      ) : null}
+      <Hint>Built-in agents cannot be deleted; their system instructions and model are yours to choose.</Hint>
     </div>
+  );
+}
+
+function BuiltinInstructionsEditor({ name, current, customized }: { name: BuiltinAgentName; current: string; customized: boolean }) {
+  const agents = useAgentsActions();
+  const [draft, setDraft] = useState(current);
+  const [busy, setBusy] = useState<"save" | "restore">();
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    setDraft(current);
+    setError(undefined);
+  }, [current, name]);
+  const dirty = draft !== current;
+  const invalid = draft.trim().length === 0;
+
+  const save = async () => {
+    setBusy("save");
+    setError(undefined);
+    try {
+      await agents.setBuiltinInstructions(name, draft);
+    } catch (failure) {
+      setError(messageOf(failure));
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  const restore = async () => {
+    setBusy("restore");
+    setError(undefined);
+    try {
+      await agents.setBuiltinInstructions(name, null);
+    } catch (failure) {
+      setError(messageOf(failure));
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  return (
+    <Section
+      id="instructions"
+      title="System instructions"
+      description={
+        name === "namer"
+          ? "How Namer approaches titles and activity labels. The short output format stays enforced for each request."
+          : `How ${agentDisplayName(name)} answers and works. New conversations use the saved instructions.`
+      }
+      notices={<IssueNotice messages={error ? [error] : invalid ? ["Write instructions, or restore the built-in instructions."] : []} />}
+    >
+      <Textarea
+        name="instructions"
+        aria-label={`${agentDisplayName(name)} system instructions`}
+        aria-invalid={invalid || error ? true : undefined}
+        value={draft}
+        maxLength={AGENT_INSTRUCTIONS_MAX}
+        className="min-h-40 max-h-120 font-mono text-sm leading-code"
+        onChange={(event) => {
+          setDraft(event.target.value);
+          setError(undefined);
+        }}
+      />
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Hint className="typed tnum">
+          {draft.length}/{AGENT_INSTRUCTIONS_MAX}
+        </Hint>
+        <div className="flex flex-wrap justify-end gap-2">
+          {customized ? (
+            <Button type="button" variant="ghost" size="sm" disabled={busy !== undefined} onClick={() => void restore()}>
+              {busy === "restore" ? <RotateCw className="motion-safe:animate-busy" /> : <Undo2 />}
+              {busy === "restore" ? "Restoring…" : "Restore built-in instructions"}
+            </Button>
+          ) : null}
+          <Button type="button" size="sm" disabled={!dirty || invalid || busy !== undefined} aria-busy={busy === "save" || undefined} onClick={() => void save()}>
+            {busy === "save" ? <RotateCw className="motion-safe:animate-busy" /> : <Save />}
+            {busy === "save" ? "Saving…" : "Save instructions"}
+          </Button>
+        </div>
+      </div>
+    </Section>
   );
 }
 

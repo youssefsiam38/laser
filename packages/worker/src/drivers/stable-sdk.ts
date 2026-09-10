@@ -83,6 +83,7 @@ import { createUiBridge, type UiBridge } from "../ui-bridge.js";
 import { GOAL_TOOL_NAMES } from "@lasercode/pi-goal";
 import { isGoalCommand } from "@lasercode/pi-extension";
 import { ENGINE_BUILTIN_TOOLS, ensureWorkspaceSessionCwd, filterSkills } from "../agents/session-config.js";
+import { defaultAgentInstructions } from "../agents/engine-instructions.js";
 import { modelUnavailableMessage } from "../agents/harness.js";
 
 type PiModel = ReturnType<ModelRuntime["getModels"]>[number];
@@ -217,7 +218,7 @@ export class StableSdkDriver implements SessionDriver {
           ...(additionalExtensionPaths.length > 0 ? { additionalExtensionPaths } : {}),
           ...(additionalSkillPaths.length > 0 ? { additionalSkillPaths } : {}),
           ...(additionalPromptTemplatePaths.length > 0 ? { additionalPromptTemplatePaths } : {}),
-          ...(agent ? agentResourceOptions(agent) : {}),
+          ...(agent ? agentResourceOptions(agent, cwd) : {}),
         },
       });
       requestProvenance.setResourceLoader(services.resourceLoader);
@@ -785,18 +786,16 @@ function existingResourceRoots(paths: string[]): string[] {
 
 /**
  * What an agent definition changes in the resource loader: its own
- * instructions in place of the engine's (unless it keeps the built-in ones),
- * and which discovered skills it is offered.
+ * instructions (or Laser's default), and which discovered skills it is offered.
  */
-function agentResourceOptions(agent: DriverAgentOptions): {
+function agentResourceOptions(agent: DriverAgentOptions, cwd: string): {
   systemPromptOverride?: () => string | undefined;
   skillsOverride: <T extends { skills: Array<{ name: string }>; diagnostics: unknown[] }>(base: T) => T;
 } {
   const { definition, role } = agent;
-  const filter = { definition, role, ...(agent.beamSkillName !== undefined ? { beamSkillName: agent.beamSkillName } : {}) };
   return {
-    ...(definition.engineInstructions ? {} : { systemPromptOverride: () => definition.instructions }),
-    skillsOverride: (base) => ({ ...base, skills: filterSkills(base.skills, filter) }),
+    systemPromptOverride: () => (definition.engineInstructions ? defaultAgentInstructions(cwd) : definition.instructions),
+    skillsOverride: (base) => ({ ...base, skills: filterSkills(base.skills, { definition, role }) }),
   };
 }
 

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 /**
  * The spark in the rail: exactly one, drawn in the accent, `aria-expanded`
- * following the bubble, keyboard-operable.
+ * following the bubble, keyboard-operable, and always starting fresh.
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -89,8 +89,9 @@ describe("the spark in the rail", () => {
     expect(spark.getAttribute("aria-expanded")).toBe("true");
     expect(beamStore.getSnapshot().open).toBe(true);
     expect(beamStore.anchor()).toBe(spark);
+    await act(async () => beamStore.setPath("/beam/previous.jsonl"));
     await act(async () => spark.click());
-    expect(spark.getAttribute("aria-expanded")).toBe("false");
-    expect(beamStore.getSnapshot().open).toBe(false);
+    expect(spark.getAttribute("aria-expanded")).toBe("true");
+    expect(beamStore.getSnapshot()).toMatchObject({ open: true, path: undefined });
   });
 });

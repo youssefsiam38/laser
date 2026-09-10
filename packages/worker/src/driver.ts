@@ -54,8 +54,6 @@ export interface DriverAgentOptions {
   bridge?: AgentHarnessBridge;
   backgroundWork?: BackgroundWorkOptions;
   policy: AgentPolicy;
-  /** The one skill only the Beam agent is offered; filtered out for everyone else. */
-  beamSkillName?: string;
 }
 
 export interface DriverOpenOptions {

@@ -19,15 +19,11 @@ import {
   type AgentModelChoice,
   type AgentPolicy,
   type AgentsSnapshot,
-  type AgentSkillRef,
 } from "@lasercode/protocol";
 
-export interface DefinitionsOptions {
-  /** The Beam skill reference for this installation (the fallback Beam definition scopes to it). */
-  beamSkill?: AgentSkillRef;
-}
-
 const EPOCH = "1970-01-01T00:00:00.000Z";
+export const FALLBACK_NAMER_INSTRUCTIONS =
+  "You name sessions from what the person wants done and label running actions by what they are doing. Keep every name concrete, brief and easy to scan.";
 
 function base(name: string, kind: AgentDefinition["kind"], partial: Partial<AgentDefinition>): AgentDefinition {
   return {
@@ -48,29 +44,30 @@ function base(name: string, kind: AgentDefinition["kind"], partial: Partial<Agen
   };
 }
 
-/** The shipped `default` agent: the engine's own instructions, every default tool, may start itself. */
+/** The shipped `default` agent: Laser's instructions, every default tool, may start itself. */
 export function fallbackDefaultAgent(): AgentDefinition {
+  const app = PRODUCT_DISPLAY_NAME;
   return base(DEFAULT_AGENT_NAME, "custom", {
-    description: "General coding agent with the engine's built-in instructions.",
+    description: `${app}'s standard coding agent with its default instructions.`,
     engineInstructions: true,
     supportsSubagents: true,
     allowedAgents: [DEFAULT_AGENT_NAME],
   });
 }
 
-export function fallbackBeamAgent(options: { model: AgentModelChoice | null; beamSkill?: AgentSkillRef }): AgentDefinition {
+export function fallbackBeamAgent(options: { model: AgentModelChoice | null }): AgentDefinition {
   const app = PRODUCT_DISPLAY_NAME;
   return base("beam", "builtin", {
     description: `${app}'s assistant for the app itself.`,
     instructions: [
       `You are Beam, the person's assistant for ${app}.`,
-      `You answer questions about their sessions, logs, agents and settings by reading ${app}'s data directory; the ${app} skill explains where everything is and how the app is laid out. Read before you answer.`,
+      `You answer questions about their sessions, logs, agents and settings by inspecting the ${app} data available in your workspace. Read before you answer.`,
       "You explain how to navigate the app, propose concrete next actions in the app's own words, and ask before changing any file or setting.",
       "Be brief and specific. Quote the paths you read so the person can check.",
     ].join("\n"),
     model: options.model,
-    scopedSkills: true,
-    skills: options.beamSkill ? [options.beamSkill] : [],
+    scopedSkills: false,
+    skills: [],
   });
 }
 
@@ -89,7 +86,7 @@ export function fallbackChatAgent(model: AgentModelChoice | null = null): AgentD
 export function fallbackNamerAgent(model: AgentModelChoice | null): AgentDefinition {
   return base("namer", "builtin", {
     description: "Names sessions and labels running tool calls. Not a session agent.",
-    instructions: "Answer with the shortest accurate title.",
+    instructions: FALLBACK_NAMER_INSTRUCTIONS,
     model,
   });
 }
@@ -98,12 +95,12 @@ export function fallbackPolicy(): AgentPolicy {
   return { maxDepth: AGENT_MAX_DEPTH_DEFAULT, foregroundCommandSeconds: FOREGROUND_COMMAND_SECONDS_DEFAULT };
 }
 
-export function fallbackSnapshot(options: DefinitionsOptions = {}): AgentsSnapshot {
+export function fallbackSnapshot(): AgentsSnapshot {
   return {
     revision: 0,
     agents: [
       fallbackDefaultAgent(),
-      fallbackBeamAgent({ model: null, ...(options.beamSkill ? { beamSkill: options.beamSkill } : {}) }),
+      fallbackBeamAgent({ model: null }),
       fallbackChatAgent(),
       fallbackNamerAgent(null),
     ],
@@ -113,6 +110,8 @@ export function fallbackSnapshot(options: DefinitionsOptions = {}): AgentsSnapsh
     namer: { status: "unqualified", model: null, candidates: [] },
     beam: { model: null, suggested: null, needsChoice: false },
     chat: { model: null },
+    builtinInstructions: { beam: null, chat: null, namer: null },
+    renamedAgents: {},
     workspaces: { beam: "", chat: "" },
   };
 }
@@ -127,8 +126,8 @@ export class DefinitionsCache {
   private synced = false;
   private readonly listeners = new Set<(snapshot: AgentsSnapshot) => void>();
 
-  constructor(private readonly options: DefinitionsOptions = {}) {
-    this.current = fallbackSnapshot(options);
+  constructor() {
+    this.current = fallbackSnapshot();
   }
 
   /** Whether a host snapshot has arrived yet. */
@@ -147,7 +146,7 @@ export class DefinitionsCache {
     const agents = [...snapshot.agents];
     for (const name of BUILTIN_AGENT_NAMES) {
       if (names.has(name)) continue;
-      if (name === "beam") agents.push(fallbackBeamAgent({ model: snapshot.beam.model, ...(this.options.beamSkill ? { beamSkill: this.options.beamSkill } : {}) }));
+      if (name === "beam") agents.push(fallbackBeamAgent({ model: snapshot.beam.model }));
       else if (name === "chat") agents.push(fallbackChatAgent(snapshot.chat?.model ?? null));
       else agents.push(fallbackNamerAgent(snapshot.namer.model));
     }
@@ -163,7 +162,19 @@ export class DefinitionsCache {
   }
 
   definition(name: string): AgentDefinition | undefined {
-    return this.current.agents.find((agent) => agent.name === name);
+    const direct = this.current.agents.find((agent) => agent.name === name);
+    if (direct) return direct;
+    const seen = new Set<string>();
+    let resolved = name;
+    while (!seen.has(resolved)) {
+      seen.add(resolved);
+      const next = this.current.renamedAgents?.[resolved];
+      if (!next) return undefined;
+      const renamed = this.current.agents.find((agent) => agent.name === next);
+      if (renamed) return renamed;
+      resolved = next;
+    }
+    return undefined;
   }
 
   defaultAgent(): AgentDefinition {
@@ -177,6 +188,12 @@ export class DefinitionsCache {
   /** Namer's model once a person or the qualifier chose one; null means "do not name". */
   namerModel(): AgentModelChoice | null {
     return this.current.namer.model;
+  }
+
+  /** Namer is a service rather than a session, so it reads its prompt here. */
+  namerInstructions(): string {
+    const instructions = this.definition("namer")?.instructions.trim();
+    return instructions || FALLBACK_NAMER_INSTRUCTIONS;
   }
 
   beamModel(): AgentModelChoice | null {

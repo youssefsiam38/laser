@@ -2,9 +2,9 @@
  * Pure helpers and copy for Beam's surfaces. No React, no DOM.
  *
  * Beam is the app's own assistant (docs/agents.md "Beam"): one entry point,
- * the spark beside Settings; a bubble that holds the ordinary chat for a
- * session in Beam's workspace; a model chosen once, when the first provider
- * connects.
+ * the spark beside Settings; a fresh bubble chat on every spark press, with
+ * earlier sessions kept in Beam's sidebar group; a model chosen once, when
+ * the first provider connects.
  */
 import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
 import type { AgentsSnapshot, SessionAgentInfo } from "@lasercode/protocol";

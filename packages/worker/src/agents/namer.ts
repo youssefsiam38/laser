@@ -58,6 +58,8 @@ export interface NamerServiceOptions {
   models: () => Promise<NamerModelRuntime>;
   /** The model to name with; null means naming is off. */
   model: () => AgentModelChoice | null;
+  /** The effective prompt from the editable built-in definition. */
+  instructions?: () => string;
   /** The catalogue and the providers with credentials, for `qualify()`. */
   catalog?: () => Promise<{ models: ModelCatalogEntry[]; configuredProviders: ReadonlySet<string> }>;
   timeoutMs?: number;
@@ -95,15 +97,23 @@ export function cleanToolLabel(raw: string, max = TOOL_LABEL_MAX): string {
   return cleaned.length > 0 ? cleaned[0]!.toUpperCase() + cleaned.slice(1) : "";
 }
 
-export function sessionNamePrompt(text: string): NamerContext {
+function systemPrompt(instructions: string | undefined, contract: string): string {
+  const base = instructions?.trim();
+  return base ? `${base}\n\nFor this request: ${contract}` : contract;
+}
+
+export function sessionNamePrompt(text: string, instructions?: string): NamerContext {
   const excerpt = text.replace(/\s+/g, " ").trim().slice(0, 1500);
   return {
-    systemPrompt: `You name chat sessions. Reply with only a title of ${SESSION_NAME_MIN} to ${SESSION_NAME_MAX} characters that says what the person wants done. No quotes, no trailing period, no explanation.`,
+    systemPrompt: systemPrompt(
+      instructions,
+      `Reply with only a session title of ${SESSION_NAME_MIN} to ${SESSION_NAME_MAX} characters that says what the person wants done. No quotes, no trailing period, no explanation.`,
+    ),
     messages: [{ role: "user", content: `First message of the session:\n\n${excerpt}\n\nTitle:`, timestamp: Date.now() }],
   };
 }
 
-export function toolLabelPrompt(toolName: string, args: unknown): NamerContext {
+export function toolLabelPrompt(toolName: string, args: unknown, instructions?: string): NamerContext {
   let serialized: string;
   try {
     serialized = JSON.stringify(args ?? {}) ?? "{}";
@@ -111,7 +121,10 @@ export function toolLabelPrompt(toolName: string, args: unknown): NamerContext {
     serialized = "{}";
   }
   return {
-    systemPrompt: `You label a running tool call for a progress row. Reply with only a present-progressive phrase of at most ${TOOL_LABEL_MAX} characters, like "Searching auth handlers" or "Reading the build config". No quotes, no trailing period.`,
+    systemPrompt: systemPrompt(
+      instructions,
+      `Reply with only a present-progressive label of at most ${TOOL_LABEL_MAX} characters for this running action, like "Searching auth handlers" or "Reading the build config". No quotes, no trailing period.`,
+    ),
     messages: [{ role: "user", content: `Tool: ${toolName}\nArguments: ${serialized.slice(0, 1200)}\n\nLabel:`, timestamp: Date.now() }],
   };
 }
@@ -198,7 +211,7 @@ export class NamerService {
   async nameSession(text: string): Promise<string | null> {
     const choice = this.options.model();
     if (!choice || text.trim() === "") return null;
-    const raw = await this.complete(choice, sessionNamePrompt(text), 24);
+    const raw = await this.complete(choice, sessionNamePrompt(text, this.options.instructions?.()), 24);
     if (raw === null) return null;
     const name = cleanSessionName(raw);
     return name === "" ? null : name;
@@ -221,7 +234,7 @@ export class NamerService {
     // with nothing to show for it.
     if (options.stillRunning?.() === false) return null;
     this.remember(session, toolCallId);
-    const raw = await this.complete(choice, toolLabelPrompt(toolName, args), 20);
+    const raw = await this.complete(choice, toolLabelPrompt(toolName, args, this.options.instructions?.()), 20);
     if (raw === null) return null;
     if (options.stillRunning?.() === false) return null;
     const label = cleanToolLabel(raw);
@@ -272,7 +285,7 @@ export class NamerService {
       const started = this.now();
       let candidate: NamerCandidate;
       try {
-        const raw = await this.complete(choice, sessionNamePrompt(QUALIFY_SAMPLE), 24, true);
+        const raw = await this.complete(choice, sessionNamePrompt(QUALIFY_SAMPLE, this.options.instructions?.()), 24, true);
         const latencyMs = this.now() - started;
         // Judge the answer as given (quotes and whitespace aside), not the cut
         // version: a model that rambles past the ceiling is not a valid namer.

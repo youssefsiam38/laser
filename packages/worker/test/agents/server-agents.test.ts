@@ -5,7 +5,7 @@
  * ending a run on the person's behalf.
  */
 import { PRODUCT_NAME, SESSION_AGENT_ENTRY_TYPE, type AgentRun, type JsonRpcMessage, type SessionState, type UiDialogResponse } from "@lasercode/protocol";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -115,15 +115,13 @@ describe("WorkerServer agents", () => {
     expect(opened.agent?.backgroundWork).toMatchObject({ cwd: join(base, "project"), foregroundCommandSeconds: 120 });
     // Bound to the session: `task_output` on a command of an agent under it goes through the worker (D-163).
     expect(typeof opened.agent?.backgroundWork?.readTask).toBe("function");
-    // The Beam skill was written on construction.
-    expect(existsSync(join(base, "agent", "skills", `${PRODUCT_NAME}-beam`, "SKILL.md"))).toBe(true);
   });
 
   it("opens Beam and Chat with their built-in roles, refuses Namer and unknown names", async () => {
     const h = harness();
     const beam = await h.call(1, "session/new", { cwd: join(base, "project"), agentName: "beam" });
     expect(beam.result).toMatchObject({ state: { agent: { agentName: "beam", kind: "beam" } } });
-    expect(h.drivers[0]!.opened.agent?.definition.scopedSkills).toBe(true);
+    expect(h.drivers[0]!.opened.agent?.definition).toMatchObject({ scopedSkills: false, skills: [] });
     const chat = await h.call(2, "session/new", { cwd: join(base, "project"), agentName: "chat" });
     expect(chat.result).toMatchObject({ state: { agent: { agentName: "chat", kind: "chat" } } });
     expect((await h.call(3, "session/new", { cwd: join(base, "project"), agentName: "namer" })).error?.message).toMatch(/Namer names things/);
@@ -138,6 +136,19 @@ describe("WorkerServer agents", () => {
     const created = await h.call(2, "session/new", { cwd: join(base, "project") });
     expect(created.result).toMatchObject({ state: { agent: { agentName: "lead", kind: "root" } } });
     expect(h.drivers[0]!.opened.agent?.definition.instructions).toBe("Lead.");
+
+    const customChat = snapshot.agents.find((agent) => agent.name === "chat")!;
+    const changed = { ...customChat, instructions: "Answer every question as a patient teacher." };
+    await h.call(3, "agents/sync", {
+      snapshot: {
+        ...snapshot,
+        revision: 4,
+        agents: snapshot.agents.map((agent) => (agent.name === "chat" ? changed : agent)),
+        builtinInstructions: { ...snapshot.builtinInstructions, chat: changed.instructions },
+      },
+    });
+    await h.call(4, "session/new", { cwd: join(base, "project"), agentName: "chat" });
+    expect(h.drivers.at(-1)!.opened.agent?.definition.instructions).toBe("Answer every question as a patient teacher.");
   });
 
   it("recovers a stored child session's agent from its record and decorates state updates", async () => {
@@ -186,8 +197,7 @@ describe("WorkerServer agents", () => {
     const h = harness();
     const skills = (await h.call(1, "agents/skills", { cwd: join(base, "project") })).result as { skills: unknown[]; roots: Array<{ scope: string }> };
     expect(skills.roots.map((r) => r.scope)).toEqual(["global", "global", "project", "project"]);
-    // The Beam skill is written but never listed; whatever else this machine has is scoped.
-    expect(skills.skills.map((s) => (s as { name: string }).name)).not.toContain(`${PRODUCT_NAME}-beam`);
+    // The listing contains only user- and project-discovered skills; the product adds none.
     for (const skill of skills.skills as Array<{ scope: string }>) expect(["global", "project"]).toContain(skill.scope);
     const instructions = (await h.call(2, "agents/engine-instructions", { cwd: join(base, "project") })).result as { text: string };
     expect(instructions.text).toContain("Available tools:");

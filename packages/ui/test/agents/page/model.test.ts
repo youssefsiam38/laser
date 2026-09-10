@@ -29,9 +29,8 @@ describe("agents page model", () => {
     expect(isFirstRun(snap)).toBe(false);
   });
 
-  it("offers custom agents and the default as startable, never a built-in or the agent itself", () => {
-    expect(startableAgents(snapshot(), "reviewer").map((a) => a.name)).toEqual(["default"]);
-    expect(startableAgents(snapshot(), undefined).map((a) => a.name)).toEqual(["default", "reviewer"]);
+  it("offers every custom definition, including the agent itself, and never a built-in", () => {
+    expect(startableAgents(snapshot()).map((a) => a.name)).toEqual(["default", "reviewer"]);
   });
 
   it("routes issue and warning fields to their editor section", () => {
