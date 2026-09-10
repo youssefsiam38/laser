@@ -19,6 +19,7 @@ import {
   AGENT_MAX_DEPTH_DEFAULT,
   AGENT_MAX_DEPTH_LIMIT,
   AGENT_INSTRUCTIONS_MAX,
+  instructionTemplateIssue,
   AGENT_NAME_PATTERN,
   DEFAULT_AGENT_NAME,
   ErrorCodes,
@@ -279,6 +280,8 @@ export class AgentStore {
       if (instructions.trim().length === 0) {
         throw invalid([{ field: "instructions", message: "Write instructions, or restore the built-in instructions." }]);
       }
+      const templateIssue = instructionTemplateIssue(instructions, name);
+      if (templateIssue) throw invalid([{ field: "instructions", message: templateIssue }]);
     }
     if (this.builtinInstructions[name] === instructions) return;
     this.builtinInstructions = { ...this.builtinInstructions, [name]: instructions };

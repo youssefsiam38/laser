@@ -11,6 +11,7 @@ import {
   AGENT_NAME_PATTERN,
   DEFAULT_AGENT_NAME,
   PRODUCT_DISPLAY_NAME,
+  instructionTemplateIssue,
   isBuiltinAgentName,
   type AgentDefinition,
   type AgentDefinitionInput,
@@ -62,6 +63,9 @@ export function validateAgentInput(input: AgentDefinitionInput, context: Validat
     push("instructions", `Instructions are limited to ${Math.round(AGENT_INSTRUCTIONS_MAX / 1024)} KB.`);
   } else if (!input.engineInstructions && input.instructions.trim().length === 0) {
     push("instructions", `Write instructions, or use ${PRODUCT_DISPLAY_NAME}'s default instructions.`);
+  } else if (!input.engineInstructions) {
+    const templateIssue = instructionTemplateIssue(input.instructions, "agent");
+    if (templateIssue) push("instructions", templateIssue);
   }
 
   // ---- allowedAgents

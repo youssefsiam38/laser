@@ -9,11 +9,20 @@
  * simply not shown — and it never labels one tool call twice.
  *
  * `qualify()` is the benchmark the host asks for as soon as a worker can run
- * it against a configured provider: nominate cheap models, time each on the
- * session-naming prompt, keep the fastest one that answers validly. It is not
- * waited on by anything a person is looking at.
+ * it against a configured provider: rank connected candidates, test both
+ * naming jobs, and keep the best quality/latency/price result. It is not waited
+ * on by anything a person is looking at.
  */
-import { SESSION_NAME_MAX, SESSION_NAME_MIN, type AgentModelChoice, type ModelCatalogEntry, type NamerCandidate, type NamerState } from "@lasercode/protocol";
+import {
+  PRODUCT_DISPLAY_NAME,
+  SESSION_NAME_MAX,
+  SESSION_NAME_MIN,
+  renderInstructionTemplate,
+  type AgentModelChoice,
+  type ModelCatalogEntry,
+  type NamerCandidate,
+  type NamerState,
+} from "@lasercode/protocol";
 
 export const TOOL_LABEL_MAX = 40;
 export const NAMER_TIMEOUT_MS = 8_000;
@@ -29,7 +38,7 @@ export const NAMER_TIMEOUT_MS = 8_000;
 /** Call ids one session remembers, so the same call is never labelled twice. */
 const LABELLED_MEMORY = 64;
 export const NAMER_MAX_CANDIDATES = 6;
-/** Models whose input + output list price exceeds this (per million tokens) are never nominated. */
+/** Above this price a model is a fallback, not excluded when it is the only usable choice. */
 export const NAMER_COST_CEILING = 3;
 const EXPENSIVE = /opus|pro|ultra|max/i;
 const CHEAP = /mini|nano|flash|haiku|lite|luna|small/i;
@@ -114,18 +123,13 @@ export function sessionNamePrompt(text: string, instructions?: string): NamerCon
 }
 
 export function toolLabelPrompt(toolName: string, args: unknown, instructions?: string): NamerContext {
-  let serialized: string;
-  try {
-    serialized = JSON.stringify(args ?? {}) ?? "{}";
-  } catch {
-    serialized = "{}";
-  }
+  const serialized = serializedArgs(args);
   return {
     systemPrompt: systemPrompt(
       instructions,
       `Reply with only a present-progressive label of at most ${TOOL_LABEL_MAX} characters for this running action, like "Searching auth handlers" or "Reading the build config". No quotes, no trailing period.`,
     ),
-    messages: [{ role: "user", content: `Tool: ${toolName}\nArguments: ${serialized.slice(0, 1200)}\n\nLabel:`, timestamp: Date.now() }],
+    messages: [{ role: "user", content: `Tool: ${toolName}\nArguments: ${serialized}\n\nLabel:`, timestamp: Date.now() }],
   };
 }
 
@@ -137,25 +141,30 @@ export function listCost(model: Pick<ModelCatalogEntry, "cost">): number | undef
 }
 
 /**
- * Cheap, connected, enabled candidates for Namer: no expensive names, no list
- * price over the ceiling, the recognisably small ones first, then by cost and
- * name, at most `limit`. Pure, so the nomination is testable without a provider.
+ * Connected, enabled candidates for Namer: recognisably small and affordable
+ * models first, then increasingly expensive fallbacks, at most `limit`. Pure,
+ * so candidate selection is testable without a provider.
  */
-export function nominateNamerCandidates(
+export function selectNamerCandidates(
   models: readonly ModelCatalogEntry[],
   configuredProviders: ReadonlySet<string>,
   limit = NAMER_MAX_CANDIDATES,
+  preferred?: AgentModelChoice | null,
 ): ModelCatalogEntry[] {
   const eligible = models.filter((model) => {
     if (!configuredProviders.has(model.provider)) return false;
     // A model the person switched off is off everywhere, naming included.
     if (model.enabled === false) return false;
-    if (EXPENSIVE.test(model.id)) return false;
-    const cost = listCost(model);
-    if (cost !== undefined && cost > NAMER_COST_CEILING) return false;
     return true;
   });
-  const rank = (model: ModelCatalogEntry) => (CHEAP.test(model.id) ? 0 : 1);
+  const rank = (model: ModelCatalogEntry) => {
+    if (preferred?.provider === model.provider && preferred.id === model.id) return -1;
+    const affordable = (listCost(model) ?? Number.POSITIVE_INFINITY) <= NAMER_COST_CEILING;
+    if (CHEAP.test(model.id) && affordable && !EXPENSIVE.test(model.id)) return 0;
+    if (affordable && !EXPENSIVE.test(model.id)) return 1;
+    if (CHEAP.test(model.id)) return 2;
+    return 3;
+  };
   eligible.sort((a, b) => {
     const byPreference = rank(a) - rank(b);
     if (byPreference !== 0) return byPreference;
@@ -168,10 +177,68 @@ export function nominateNamerCandidates(
 
 /** The fixed prompt every candidate is timed on. */
 export const QUALIFY_SAMPLE = "Fix the login form so pressing Enter submits it, and make the error banner disappear after a successful sign-in.";
+export const QUALIFY_TOOL = { name: "grep", args: { pattern: "auth", path: "src" } } as const;
 
 /** True for a title the benchmark accepts. */
 export function validSessionName(name: string): boolean {
   return name.length > 0 && name.length <= SESSION_NAME_MAX;
+}
+
+interface NormalizedName {
+  value: string;
+  /** 3 = contract-perfect, 2 = harmless wrapper removed, 1 = safely shortened. */
+  fidelity: number;
+}
+
+function namedValue(raw: string, keys: readonly string[]): { text: string; wrapped: boolean } {
+  let text = raw.trim();
+  let wrapped = false;
+  const fenced = text.match(/^```(?:json|text)?\s*([\s\S]*?)\s*```$/i);
+  if (fenced) {
+    text = fenced[1] ?? "";
+    wrapped = true;
+  }
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (typeof parsed === "string") return { text: parsed, wrapped: true };
+    if (parsed && typeof parsed === "object") {
+      for (const key of keys) {
+        const value = (parsed as Record<string, unknown>)[key];
+        if (typeof value === "string") return { text: value, wrapped: true };
+      }
+    }
+  } catch {
+    // Normal prose is the expected response.
+  }
+  if (/^(?:title|name|label)\s*:/i.test(text) || /^['"“”‘’`*_]/.test(text)) wrapped = true;
+  return { text, wrapped };
+}
+
+export function normalizeSessionName(raw: string): NormalizedName {
+  const extracted = namedValue(raw, ["title", "name", "sessionTitle"]);
+  const uncut = cleanSessionName(extracted.text, Number.POSITIVE_INFINITY);
+  const value = cleanSessionName(extracted.text);
+  return { value, fidelity: uncut.length > SESSION_NAME_MAX ? 1 : extracted.wrapped || /\r?\n/.test(extracted.text.trim()) ? 2 : 3 };
+}
+
+export function normalizeToolLabel(raw: string): NormalizedName {
+  const extracted = namedValue(raw, ["label", "name", "activity"]);
+  const uncut = cleanToolLabel(extracted.text, Number.POSITIVE_INFINITY);
+  const value = cleanToolLabel(extracted.text);
+  return { value, fidelity: uncut.length > TOOL_LABEL_MAX ? 1 : extracted.wrapped || /\r?\n/.test(extracted.text.trim()) ? 2 : 3 };
+}
+
+function validToolLabel(label: string): boolean {
+  const first = label.split(/\s+/, 1)[0] ?? "";
+  return label.length > 0 && label.length <= TOOL_LABEL_MAX && /ing$/i.test(first);
+}
+
+function serializedArgs(args: unknown): string {
+  try {
+    return (JSON.stringify(args ?? {}) ?? "{}").slice(0, 1200);
+  } catch {
+    return "{}";
+  }
 }
 
 function textOf(completion: NamerCompletion): string {
@@ -211,10 +278,10 @@ export class NamerService {
   async nameSession(text: string): Promise<string | null> {
     const choice = this.options.model();
     if (!choice || text.trim() === "") return null;
-    const raw = await this.complete(choice, sessionNamePrompt(text, this.options.instructions?.()), 24);
+    const raw = await this.complete(choice, sessionNamePrompt(text, this.renderInstructions(choice, { namingTask: "session title", sourceText: text })), 48);
     if (raw === null) return null;
-    const name = cleanSessionName(raw);
-    return name === "" ? null : name;
+    const name = normalizeSessionName(raw).value;
+    return validSessionName(name) ? name : null;
   }
 
   /**
@@ -234,11 +301,24 @@ export class NamerService {
     // with nothing to show for it.
     if (options.stillRunning?.() === false) return null;
     this.remember(session, toolCallId);
-    const raw = await this.complete(choice, toolLabelPrompt(toolName, args, this.options.instructions?.()), 20);
+    const raw = await this.complete(
+      choice,
+      toolLabelPrompt(
+        toolName,
+        args,
+        this.renderInstructions(choice, {
+          namingTask: "activity label",
+          sourceText: `Tool: ${toolName}\nArguments: ${serializedArgs(args)}`,
+          toolName,
+          toolArguments: serializedArgs(args),
+        }),
+      ),
+      48,
+    );
     if (raw === null) return null;
     if (options.stillRunning?.() === false) return null;
-    const label = cleanToolLabel(raw);
-    return label === "" ? null : label;
+    const label = normalizeToolLabel(raw).value;
+    return validToolLabel(label) ? label : null;
   }
 
   /** A session closed: its label bookkeeping goes with it. */
@@ -264,53 +344,128 @@ export class NamerService {
     }
   }
 
-  /** Benchmark nominated cheap models on the session-naming prompt and pick the fastest valid one. */
+  /** Benchmark connected candidates on both naming jobs, concurrently. */
   async qualify(): Promise<NamerState> {
     const qualifiedAt = new Date(this.now()).toISOString();
     if (!this.options.catalog) return { status: "unavailable", model: null, candidates: [], qualifiedAt, reason: "No model catalogue is available in this worker." };
-    let nominated: ModelCatalogEntry[];
+    let selected: ModelCatalogEntry[];
     try {
       const { models, configuredProviders } = await this.options.catalog();
-      nominated = nominateNamerCandidates(models, configuredProviders);
+      selected = selectNamerCandidates(models, configuredProviders, NAMER_MAX_CANDIDATES, this.options.model());
     } catch (error) {
       return { status: "unavailable", model: null, candidates: [], qualifiedAt, reason: error instanceof Error ? error.message : String(error) };
     }
-    if (nominated.length === 0) {
-      return { status: "unavailable", model: null, candidates: [], qualifiedAt, reason: "No connected provider offers an inexpensive model. Connect a provider with a small model in Settings → Providers and models." };
+    if (selected.length === 0) {
+      return { status: "unavailable", model: null, candidates: [], qualifiedAt, reason: "No connected provider offers a model Namer can try. Connect a provider in Settings → Providers and models." };
     }
-    const candidates: NamerCandidate[] = [];
-    for (const entry of nominated) {
+    let runtime: NamerModelRuntime;
+    try {
+      runtime = await this.options.models();
+    } catch (error) {
+      const current = this.options.model();
+      const detail = error instanceof Error ? error.message : String(error);
+      return current
+        ? { status: "ready", model: current, candidates: [], qualifiedAt, reason: `The new check could not run, so Namer kept its current model. ${detail}` }
+        : { status: "unqualified", model: null, candidates: [], qualifiedAt, reason: `The model check could not run and will remain retryable. ${detail}` };
+    }
+    const trials = await Promise.all(selected.map(async (entry) => {
       const choice = { provider: entry.provider, id: entry.id };
       const cost = listCost(entry);
       const started = this.now();
       let candidate: NamerCandidate;
+      let quality = 0;
       try {
-        const raw = await this.complete(choice, sessionNamePrompt(QUALIFY_SAMPLE, this.options.instructions?.()), 24, true);
+        const sessionInstructions = this.renderInstructions(choice, { namingTask: "session title", sourceText: QUALIFY_SAMPLE });
+        const raw = await this.completeWithRuntime(runtime, choice, sessionNamePrompt(QUALIFY_SAMPLE, sessionInstructions), 48, true);
+        const title = raw === null ? { value: "", fidelity: 0 } : normalizeSessionName(raw);
+        const toolSource = `Tool: ${QUALIFY_TOOL.name}\nArguments: ${serializedArgs(QUALIFY_TOOL.args)}`;
+        const toolInstructions = this.renderInstructions(choice, {
+          namingTask: "activity label",
+          sourceText: toolSource,
+          toolName: QUALIFY_TOOL.name,
+          toolArguments: serializedArgs(QUALIFY_TOOL.args),
+        });
+        const toolRaw = await this.completeWithRuntime(runtime, choice, toolLabelPrompt(QUALIFY_TOOL.name, QUALIFY_TOOL.args, toolInstructions), 48, true);
         const latencyMs = this.now() - started;
-        // Judge the answer as given (quotes and whitespace aside), not the cut
-        // version: a model that rambles past the ceiling is not a valid namer.
-        const sample = raw === null ? "" : cleanSessionName(raw, Number.POSITIVE_INFINITY);
-        const valid = raw !== null && validSessionName(sample);
-        candidate = { model: choice, latencyMs, valid, ...(sample ? { sample } : {}), ...(raw === null ? { error: "No answer within the time limit." } : {}) };
+        const label = toolRaw === null ? { value: "", fidelity: 0 } : normalizeToolLabel(toolRaw);
+        const titleValid = validSessionName(title.value);
+        const labelValid = validToolLabel(label.value);
+        quality = title.fidelity + label.fidelity;
+        candidate = {
+          model: choice,
+          latencyMs,
+          valid: titleValid && labelValid,
+          ...(title.value ? { sample: title.value } : {}),
+          ...(!titleValid ? { error: "Its session title could not be made usable." } : !labelValid ? { error: "Its activity label did not describe an action in progress." } : {}),
+        };
       } catch (error) {
         candidate = { model: choice, latencyMs: null, valid: false, error: error instanceof Error ? error.message : String(error) };
       }
       if (cost !== undefined) candidate.costPerMillion = cost;
-      candidates.push(candidate);
-    }
-    const winner = candidates
-      .filter((candidate) => candidate.valid && candidate.latencyMs !== null)
-      .sort((a, b) => (a.latencyMs ?? 0) - (b.latencyMs ?? 0))[0];
+      return { candidate, quality };
+    }));
+    const candidates = trials.map(({ candidate }) => candidate);
+    const winner = trials
+      .filter(({ candidate }) => candidate.valid && candidate.latencyMs !== null)
+      .sort((a, b) => {
+        if (a.quality !== b.quality) return b.quality - a.quality;
+        const burden = ({ candidate }: (typeof trials)[number]) =>
+          (candidate.latencyMs ?? Number.POSITIVE_INFINITY) + (candidate.costPerMillion ?? NAMER_COST_CEILING * 2) * 200;
+        return burden(a) - burden(b);
+      })[0]?.candidate;
     if (!winner) {
-      return { status: "unavailable", model: null, candidates, qualifiedAt, reason: "None of the nominated models answered the naming prompt validly. Choose a model by hand in the Agents page." };
+      const current = this.options.model();
+      if (current) {
+        return {
+          status: "ready",
+          model: current,
+          candidates,
+          qualifiedAt,
+          reason: "The new check did not find a better usable model, so Namer kept the model that was already working.",
+        };
+      }
+      return {
+        status: "unqualified",
+        model: null,
+        candidates,
+        qualifiedAt,
+        reason: "No candidate completed both naming checks. Namer will try again automatically; you can also run the check again now.",
+      };
     }
     return { status: "ready", model: winner.model, candidates, qualifiedAt };
+  }
+
+  private renderInstructions(
+    choice: AgentModelChoice,
+    request: { namingTask: string; sourceText: string; toolName?: string; toolArguments?: string },
+  ): string | undefined {
+    const template = this.options.instructions?.()?.trim();
+    if (!template) return undefined;
+    return renderInstructionTemplate(template, "namer", {
+      productName: PRODUCT_DISPLAY_NAME,
+      agentName: "Namer",
+      agentDescription: "Names sessions and running actions with a fast, inexpensive model.",
+      model: `${choice.provider}/${choice.id}`,
+      namingTask: request.namingTask,
+      sourceText: request.sourceText,
+      toolName: request.toolName ?? "",
+      toolArguments: request.toolArguments ?? "",
+    });
   }
 
   /** One bounded completion; null when the model is missing, times out or fails (unless `rethrow`). */
   private async complete(choice: AgentModelChoice, context: NamerContext, maxTokens: number, rethrow = false): Promise<string | null> {
     try {
       const runtime = await this.options.models();
+      return await this.completeWithRuntime(runtime, choice, context, maxTokens, rethrow);
+    } catch (error) {
+      if (rethrow) throw error;
+      return null;
+    }
+  }
+
+  private async completeWithRuntime(runtime: NamerModelRuntime, choice: AgentModelChoice, context: NamerContext, maxTokens: number, rethrow = false): Promise<string | null> {
+    try {
       const model = runtime.getModel(choice.provider, choice.id);
       if (!model) {
         if (rethrow) throw new Error(`${choice.provider}/${choice.id} is not in the model catalogue.`);

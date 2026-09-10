@@ -877,6 +877,7 @@ export class WorkerServer {
     return {
       ...(this.options.agentDir ? { agentDir: this.options.agentDir } : {}),
       ...(this.options.sessionDir ? { sessionDir: this.options.sessionDir } : {}),
+      ...(this.options.stateDir ? { stateDir: this.options.stateDir } : {}),
       ...(this.options.projectTrusted !== undefined ? { projectTrusted: this.options.projectTrusted } : {}),
       ...(this.options.features ? { features: this.options.features } : {}),
     };

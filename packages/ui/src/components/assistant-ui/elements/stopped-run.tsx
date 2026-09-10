@@ -37,7 +37,7 @@ export interface StoppedRunProps extends Omit<ComponentProps<"div">, "children" 
   /** The one control that acts on the advice — "Open Providers and models". */
   action?: { label: string; icon?: ReactNode; onClick: () => void } | undefined;
   onContinue?: (() => void) | undefined;
-  tone?: "muted" | "danger";
+  tone?: "muted" | "danger" | "warning";
 }
 
 export function StoppedRun({ reason, detail, advice, raw, action, onContinue, tone = "muted", className, ...props }: StoppedRunProps) {
@@ -47,7 +47,7 @@ export function StoppedRun({ reason, detail, advice, raw, action, onContinue, to
   return (
     <div data-slot="stopped-run" role="status" className={cn("mt-2 flex min-w-0 flex-col gap-1.5", className)} {...props}>
       <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <span className={cn(field, mono, "inline-flex h-6 items-center gap-1.5 rounded-full px-2.5", tone === "danger" ? "text-danger" : "text-ink-2")}>
+        <span className={cn(field, mono, "inline-flex h-6 items-center gap-1.5 rounded-full px-2.5", tone === "danger" ? "text-danger" : tone === "warning" ? "text-attention" : "text-ink-2")}>
           <Square aria-hidden="true" className="size-2.5 fill-current" />
           {reason}
         </span>

@@ -5,11 +5,12 @@ import { ThreadSearch, matchesThread, rankSearchThreads, threadSearchKeys, type 
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useWorkbench } from "@/components/workbench";
 import { openConversationFind } from "@/components/thread/search-state";
-import { useLaserStable, useLaserState, sessionTitle } from "@/runtime";
+import { sessionKindTab, sessionTitle, useLaserStable, useLaserState } from "@/runtime";
 import { shortCwd } from "@/format";
 import { sessionStatus } from "./model.js";
 import { SessionSearchProgress } from "./SessionSearchProgress.js";
 import { useSessionSearch } from "./use-session-search.js";
+import { groupNameOf, sessionsList, workspaceKindOf, workspacesOf } from "./session-groups.js";
 
 export function openGlobalSearch() { window.dispatchEvent(new Event("global-session-search")); }
 
@@ -37,12 +38,16 @@ function GlobalSearchBody({ close }: { close: () => void }) {
   const { actions, setCurrentProject } = useLaserStable();
   const sessions = useLaserState(s => s.sessions);
   const views = useLaserState(s => s.open);
+  const workspaces = useLaserState(workspacesOf);
   const workbench = useWorkbench();
   const search = useSessionSearch(query);
   const rows = useMemo<SearchableThread[]>(() => {
     const hits = new Map(search.hits.map(h => [h.path, h]));
-    return sessions.filter(s => !search.after || s.modifiedAt >= search.after).map(s => ({ id: s.path, title: sessionTitle(s, views[s.path]), group: shortCwd(s.cwd), preview: s.firstMessage ?? "", modifiedAt: s.modifiedAt, status: sessionStatus(views[s.path], s), matchCount: hits.get(s.path)?.count, excerpt: hits.get(s.path)?.excerpt, matchSource: hits.get(s.path)?.source })).filter(s => matchesThread(s, query)).sort(rankSearchThreads);
-  }, [sessions, views, search.hits, search.after, query]);
+    return sessions.filter(s => !search.after || s.modifiedAt >= search.after).map(s => {
+      const kind = s.agent?.kind === "beam" || s.agent?.kind === "chat" ? s.agent.kind : workspaceKindOf(s.cwd, workspaces);
+      return { id: s.path, title: sessionTitle(s, views[s.path]), group: kind ? groupNameOf(s.cwd, kind) : shortCwd(s.cwd), preview: s.firstMessage ?? "", modifiedAt: s.modifiedAt, status: sessionStatus(views[s.path], s), matchCount: hits.get(s.path)?.count, excerpt: hits.get(s.path)?.excerpt, matchSource: hits.get(s.path)?.source };
+    }).filter(s => matchesThread(s, query)).sort(rankSearchThreads);
+  }, [sessions, views, search.hits, search.after, query, workspaces]);
   useEffect(() => { if (!rows.some(r => r.id === activeId)) setActiveId(rows[0]?.id); }, [rows, activeId]);
   const select = async (id: string) => {
     if (opening) return;
@@ -50,7 +55,9 @@ function GlobalSearchBody({ close }: { close: () => void }) {
     if (!session) return;
     setOpening(true);
     try {
-      setCurrentProject(session.cwd);
+      const tab = sessionKindTab(session, workspaces);
+      sessionsList.setTab(tab);
+      if (tab === "code" && session.agent?.kind !== "beam") setCurrentProject(session.cwd);
       await actions.openSession(id);
       workbench.close();
       close();

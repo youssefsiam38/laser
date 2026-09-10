@@ -341,7 +341,7 @@ const groupBy = (part: { type: string; toolName?: string }): GroupKey[] => {
 };
 
 /** Why a turn stopped short, in a person's words (R3). */
-function stopReason(reason: string, detail: string | undefined): { reason: string; detail?: string; tone: "muted" | "danger" } {
+function stopReason(reason: string, detail: string | undefined): { reason: string; detail?: string; tone: "muted" | "danger" | "warning" } {
   switch (reason) {
     case "cancelled":
       return { reason: "You stopped it", tone: "muted" };
@@ -352,7 +352,7 @@ function stopReason(reason: string, detail: string | undefined): { reason: strin
     case "tool-calls":
       return { reason: "Stopped before its tool calls ran", tone: "muted" };
     case "error":
-      return { reason: "The provider returned an error", tone: "danger", ...(detail ? { detail } : {}) };
+      return { reason: "Provider request needs attention", tone: "warning", ...(detail ? { detail } : {}) };
     default:
       return { reason: "Stopped", tone: "muted", ...(detail ? { detail } : {}) };
   }
@@ -481,7 +481,7 @@ function AssistantStopped({ reason, detail, tone }: ReturnType<typeof stopReason
   // happened, what to do, and — when the fix is in this app — the button that
   // goes there. "Continue" is withheld when resending would only fail again in
   // the same way, which is what a rejected key or an exhausted context does.
-  const failure = useMemo(() => (tone === "danger" ? readProviderFailure(detail) : undefined), [tone, detail]);
+  const failure = useMemo(() => (tone === "warning" ? readProviderFailure(detail) : undefined), [tone, detail]);
   const canContinue = isLast && !running && !disabled && (failure?.retryable ?? true);
   const onContinue = canContinue ? () => void actions.send([{ type: "text", text: "Continue" }], "prompt") : undefined;
   const action =

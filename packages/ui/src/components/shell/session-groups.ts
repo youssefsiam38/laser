@@ -41,11 +41,17 @@ export type SessionGroupKind = "project" | "beam" | "chat";
 
 export const workspacesOf = (state: Pick<AppState, "agents">): Workspaces => state.agents.snapshot?.workspaces ?? {};
 
-/** Which built-in workspace a directory is, or `undefined` for a project. */
+/** Which built-in workspace contains a directory, or `undefined` for a project. */
 export function workspaceKindOf(cwd: string | undefined, workspaces: Workspaces): "beam" | "chat" | undefined {
   if (!cwd) return undefined;
-  if (workspaces.beam !== undefined && cwd === workspaces.beam) return "beam";
-  if (workspaces.chat !== undefined && cwd === workspaces.chat) return "chat";
+  const path = cwd.replace(/\\/g, "/").replace(/\/+$/, "");
+  const within = (root: string | undefined): boolean => {
+    if (root === undefined) return false;
+    const normalizedRoot = root.replace(/\\/g, "/").replace(/\/+$/, "");
+    return path === normalizedRoot || path.startsWith(`${normalizedRoot}/`);
+  };
+  if (within(workspaces.beam)) return "beam";
+  if (within(workspaces.chat)) return "chat";
   return undefined;
 }
 
@@ -157,8 +163,9 @@ export function sessionGroups(
     // when its header names an older workspace directory (the workspaces
     // moved under the state directory); the directory never becomes a group.
     const recorded = s.agent?.kind === "beam" || s.agent?.kind === "chat" ? s.agent.kind : undefined;
-    const cwd = recorded && workspaces[recorded] !== undefined ? workspaces[recorded]! : groupCwdOf(s, byPath, options.runs ?? {});
-    const kind = recorded ?? workspaceKindOf(cwd, workspaces);
+    const rawCwd = groupCwdOf(s, byPath, options.runs ?? {});
+    const kind = recorded ?? workspaceKindOf(rawCwd, workspaces);
+    const cwd = kind && workspaces[kind] !== undefined ? workspaces[kind]! : rawCwd;
     // Each tab shows its own kind of conversation and nothing of the other's.
     if ((tab === "chat") !== (kind === "chat")) continue;
     const list = byCwd.get(cwd);

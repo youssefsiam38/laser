@@ -476,6 +476,29 @@ describe("Agents page", () => {
     expect(editor.querySelector('[data-slot="engine-instructions"]')).not.toBeNull();
   });
 
+  it("inserts a live instruction field at the caret without exposing names to remember", async () => {
+    await mount();
+    await click(row("default"));
+    await settle();
+    await click(button("Customize"));
+    const instructions = q<HTMLTextAreaElement>('textarea[name="instructions"]');
+    const caret = instructions.value.indexOf("default agent");
+    instructions.focus();
+    instructions.setSelectionRange(caret, caret);
+    await click(button("Insert field"));
+    const picker = q('[role="list"][aria-label="Instruction fields"]');
+    expect(picker.textContent).toContain("Available tools");
+    expect(picker.textContent).not.toContain("availableTools");
+    await click([...picker.querySelectorAll("button")].find((candidate) => candidate.textContent?.includes("Available tools"))!);
+    await settle();
+    expect(instructions.value.slice(caret)).toMatch(/^\n\n\{\{availableTools\}\}/);
+    expect(document.activeElement).toBe(instructions);
+
+    await type(instructions, "{{madeUp}}");
+    expect(q('#agent-field-instructions [data-slot="agent-field-issue"]').textContent).toContain("not available here");
+    expect(button("Save").disabled).toBe(true);
+  });
+
   it("starts a chat with an agent in the open project and closes the workbench", async () => {
     await mount();
     await act(async () => workbench!.open("agents"));

@@ -200,7 +200,7 @@ describe("WorkerServer agents", () => {
     // The listing contains only user- and project-discovered skills; the product adds none.
     for (const skill of skills.skills as Array<{ scope: string }>) expect(["global", "project"]).toContain(skill.scope);
     const instructions = (await h.call(2, "agents/engine-instructions", { cwd: join(base, "project") })).result as { text: string };
-    expect(instructions.text).toContain("Available tools:");
+    expect(instructions.text).toContain("{{availableTools}}");
     expect((await h.call(3, "agents/list", {})).error?.message).toMatch(/answered by the host/);
   });
 

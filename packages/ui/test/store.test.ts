@@ -189,6 +189,28 @@ describe("blocksFromEntries", () => {
     expect(blocks[1]).toMatchObject({ text: "", stopReason: "error", errorMessage: "401 invalid key" });
   });
 
+  it("hides provider attempts that a later attempt recovered, including all but the final failure", () => {
+    const entry = (text: string, stopReason: string, errorMessage?: string) => ({
+      type: "message",
+      message: { role: "assistant", content: text ? [{ type: "text", text }] : [], stopReason, ...(errorMessage ? { errorMessage } : {}) },
+    });
+    const recovered = blocksFromEntries([
+      { type: "message", message: { role: "user", content: [{ type: "text", text: "hello" }] } },
+      entry("", "error", "socket closed"),
+      entry("done", "stop"),
+    ]);
+    expect(recovered.filter((block) => block.kind === "assistant")).toEqual([expect.objectContaining({ text: "done" })]);
+
+    const exhausted = blocksFromEntries([
+      { type: "message", message: { role: "user", content: [{ type: "text", text: "hello" }] } },
+      entry("", "error", "first socket close"),
+      entry("", "error", "still unavailable"),
+    ]);
+    expect(exhausted.filter((block) => block.kind === "assistant")).toEqual([
+      expect.objectContaining({ stopReason: "error", errorMessage: "still unavailable" }),
+    ]);
+  });
+
   it("draws no stopped row for the ordinary endings", () => {
     for (const stopReason of ["stop", "toolUse", "pending"]) {
       expect(blocksFromEntries([{ type: "message", message: { role: "assistant", content: [], stopReason } }])).toEqual([]);

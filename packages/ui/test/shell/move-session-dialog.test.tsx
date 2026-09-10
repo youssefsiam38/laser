@@ -36,6 +36,7 @@ const stable = vi.hoisted(() => ({
     "/one": { lastUsedAt: "2026-09-08T00:00:00Z" },
     "/three": { lastUsedAt: "2026-09-09T00:00:00Z" },
   },
+  dispatch: vi.fn(),
   setCurrentProject: vi.fn(),
   actions: {
     toast: vi.fn(),
@@ -199,6 +200,9 @@ describe("the move dialog", () => {
   it("keeps a refusal in the dialog with its reason, and offers to try again", async () => {
     stable.actions.moveSession.mockRejectedValueOnce(new Error("This chat is still answering. Wait for it to finish, or stop it, then move it."));
     await openDialog();
+    // Opening Chat is tab navigation; the failed move itself must not navigate.
+    stable.actions.openSession.mockClear();
+    stable.setCurrentProject.mockClear();
     await act(async () => projectRows()[0]!.click());
     await act(async () => confirmButton().click());
     await tick();

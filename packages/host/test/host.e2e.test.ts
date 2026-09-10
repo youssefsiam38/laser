@@ -30,11 +30,13 @@ function stubProvider(): Promise<{ server: Server; url: string; requests: Record
     let body = "";
     req.on("data", (c: Buffer) => (body += c.toString()));
     req.on("end", () => {
-      requests.push(JSON.parse(body) as Record<string, unknown>);
+      const request = JSON.parse(body) as Record<string, unknown>;
+      requests.push(request);
+      const reply = body.includes("present-progressive") ? ["Searching ", "auth ", "handlers"] : REPLY;
       res.writeHead(200, { "content-type": "text/event-stream" });
       const base = { id: "c", object: "chat.completion.chunk", created: 1, model: "stub-1" };
       res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] })}\n\n`);
-      for (const p of REPLY) res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { content: p }, finish_reason: null }] })}\n\n`);
+      for (const p of reply) res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { content: p }, finish_reason: null }] })}\n\n`);
       res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 3, total_tokens: 4 } })}\n\n`);
       res.write("data: [DONE]\n\n");
       res.end();

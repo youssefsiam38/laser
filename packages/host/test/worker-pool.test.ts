@@ -116,6 +116,7 @@ describe("WorkerPool", () => {
 
     client.request("pi/test/crash", {}).catch(() => {});
     await waitFor(() => statusesOf(project).includes("crashed"));
+    expect(pool.openSessions(project)).toEqual([]); // desired reopen paths are not live sessions
     const crashed = statuses.findLast((s) => s.status === "crashed")!;
     expect(crashed.message).toMatch(/Restarting in/);
     expect(crashed.restarts).toBe(1);
@@ -127,6 +128,7 @@ describe("WorkerPool", () => {
     const ready = statuses.findLast((s) => s.status === "ready")!;
     expect(ready.reopened).toEqual(["/sessions/a.jsonl"]);
     expect(ready.pid).not.toBe(firstPid);
+    expect(pool.openSessions(project)).toEqual(["/sessions/a.jsonl"]);
     // The count stays: it resets only after the worker has been healthy for a
     // while, so a crash loop still reaches the cap.
     expect(pool.workerInfo(project)?.restarts).toBe(1);
@@ -170,9 +172,10 @@ describe("WorkerPool", () => {
     pool["sweep"]();
     await waitFor(() => statusesOf(project).at(-1) === "retired");
     expect(pool.cwds()).toEqual([]);
+    expect(pool.openSessions(project)).toEqual([]);
     expect(pool.workerInfo(project)?.canRestart).toBe(true);
 
-    // Retiring is not forgetting: the next request starts it again.
+    // Retiring is not forgetting the route: the next request starts it again.
     await pool.get(project);
     expect(statusesOf(project).at(-1)).toBe("ready");
   });

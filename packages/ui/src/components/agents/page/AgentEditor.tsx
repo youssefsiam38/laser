@@ -11,6 +11,7 @@
  */
 import {
   AGENT_DESCRIPTION_MAX,
+  AGENT_INSTRUCTIONS_MAX,
   DEFAULT_AGENT_NAME,
   PRODUCT_DISPLAY_NAME,
   type AgentDefinition,
@@ -21,6 +22,7 @@ import {
   type AgentsSnapshot,
   type ModelCatalogEntry,
   type ThinkingLevel,
+  instructionTemplateIssue,
 } from "@lasercode/protocol";
 import { Bot, Info, MessageSquarePlus, RotateCw, Save, Trash2, Undo2 } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
@@ -43,6 +45,7 @@ import { prefersReducedMotion } from "@/motion";
 
 import { DeleteAgentDialog } from "./dialogs.js";
 import { CheckRow, Hint, IssueNotice, Section, WarningNotice } from "./fields.js";
+import { InstructionTemplateEditor } from "./InstructionTemplateEditor.js";
 import {
   THINKING_LABEL,
   checkRange,
@@ -132,6 +135,7 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
 
   const byField = useMemo(() => agentIssuesByField(issues), [issues]);
+  const localTemplateIssue = !draft.engineInstructions ? instructionTemplateIssue(draft.instructions, "agent") : null;
   const patch = useCallback((changes: Partial<AgentDefinitionInput>) => {
     setServerError(undefined);
     setDraft((current) => ({ ...current, ...changes }));
@@ -163,7 +167,7 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
   }, [dirty, draft, validate]);
 
   // --- save -----------------------------------------------------------------
-  const canSave = dirty && !byField.any && !saving;
+  const canSave = dirty && !byField.any && !localTemplateIssue && !saving;
   const save = useCallback(async () => {
     if (saving) return;
     setServerError(undefined);
@@ -341,19 +345,19 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
           id="instructions"
           title="Instructions"
           description="How should this agent perform its work? Loaded only for this agent."
-          notices={<IssueNotice messages={[...(byField.root.instructions ?? []), ...(byField.root.engineInstructions ?? [])]} />}
+          notices={<IssueNotice messages={[...(localTemplateIssue ? [localTemplateIssue] : []), ...(byField.root.instructions ?? []), ...(byField.root.engineInstructions ?? [])]} />}
         >
           {draft.engineInstructions ? (
             <EngineInstructions cwd={routeCwd} onCustomize={(text) => patch({ engineInstructions: false, instructions: text })} />
           ) : (
             <>
-              <Textarea
-                name="instructions"
+              <InstructionTemplateEditor
+                target="agent"
                 value={draft.instructions}
                 placeholder="You review diffs. Read every changed file before you judge it…"
-                aria-invalid={byField.root.instructions ? true : undefined}
-                className="min-h-40 max-h-120 font-mono text-sm leading-code"
-                onChange={(event) => patch({ instructions: event.target.value })}
+                maxLength={AGENT_INSTRUCTIONS_MAX}
+                invalid={Boolean(localTemplateIssue || byField.root.instructions)}
+                onChange={(instructions) => patch({ instructions })}
               />
               {isDefaultAgent ? (
                 <div>

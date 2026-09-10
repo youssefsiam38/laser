@@ -769,6 +769,10 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
     case "agent_start":
       return { ...v, running: true };
     case "agent_end":
+      // A retryable provider failure ends one engine attempt, not the run the
+      // person started. Keep the session working through its quiet backoff.
+      if (u.willRetry) return { ...v, running: true };
+      return { ...v, running: false, blocks: closeStreaming(v.blocks) };
     case "agent_settled":
       return { ...v, running: false, blocks: closeStreaming(v.blocks) };
     case "state":
@@ -881,7 +885,10 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
     case "compaction_end":
       return notice(v, u.ok ? "info" : "warning", u.ok ? "Context compacted." : "Compaction did not complete.");
     case "auto_retry_start":
-      return notice(v, "warning", `Retrying (${u.attempt}/${u.maxAttempts})…`);
+      // The engine has accepted this failure for automatic recovery. It stays
+      // in low-level logs and engine history, but it is not an answer and must
+      // never look like a red stopped turn beside a still-working session.
+      return { ...v, running: true, blocks: dropRetryingProviderError(v.blocks) };
     case "extension_error":
       return notice(v, "error", `${u.extension}: ${u.message}`);
     default:
@@ -903,6 +910,18 @@ function closeStreaming(blocks: Block[]): Block[] {
 
 function notice(v: SessionView, level: "info" | "warning" | "error", text: string): SessionView {
   return { ...v, blocks: [...v.blocks, { kind: "notice", id: nextBlockId(), level, text }] };
+}
+
+/** Remove the failed provider message that immediately triggered a retry. */
+function dropRetryingProviderError(blocks: Block[]): Block[] {
+  for (let index = blocks.length - 1; index >= 0; index--) {
+    const block = blocks[index]!;
+    if (block.kind === "assistant" && block.stopReason === "error") {
+      return [...blocks.slice(0, index), ...blocks.slice(index + 1)];
+    }
+    if (block.kind === "user") break;
+  }
+  return blocks;
 }
 
 export function textOf(content: unknown): string {
@@ -1031,7 +1050,36 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null): B
       }
     }
   }
-  return blocks;
+  return hideRecoveredProviderErrors(blocks);
+}
+
+/**
+ * Engine history retains every failed provider attempt. Within one user turn,
+ * every error except the last was followed by another assistant attempt and
+ * therefore recovered (or was superseded by the final failure). Keep only the
+ * outcome a person can act on.
+ */
+function hideRecoveredProviderErrors(blocks: Block[]): Block[] {
+  const hidden = new Set<number>();
+  let pendingError: number | undefined;
+  for (let index = 0; index < blocks.length; index++) {
+    const block = blocks[index]!;
+    if (block.kind === "user") {
+      pendingError = undefined;
+      continue;
+    }
+    if (block.kind !== "assistant") continue;
+    if (block.stopReason === "error") {
+      if (pendingError !== undefined) hidden.add(pendingError);
+      pendingError = index;
+      continue;
+    }
+    if (pendingError !== undefined) {
+      hidden.add(pendingError);
+      pendingError = undefined;
+    }
+  }
+  return hidden.size === 0 ? blocks : blocks.filter((_, index) => !hidden.has(index));
 }
 
 /**

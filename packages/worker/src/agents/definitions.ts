@@ -14,6 +14,7 @@ import {
   DEFAULT_AGENT_NAME,
   FOREGROUND_COMMAND_SECONDS_DEFAULT,
   PRODUCT_DISPLAY_NAME,
+  instructionTemplateToken,
   isBuiltinAgentName,
   type AgentDefinition,
   type AgentModelChoice,
@@ -64,6 +65,9 @@ export function fallbackBeamAgent(options: { model: AgentModelChoice | null }): 
       `You answer questions about their sessions, logs, agents and settings by inspecting the ${app} data available in your workspace. Read before you answer.`,
       "You explain how to navigate the app, propose concrete next actions in the app's own words, and ask before changing any file or setting.",
       "Be brief and specific. Quote the paths you read so the person can check.",
+      instructionTemplateToken("availableTools"),
+      instructionTemplateToken("toolGuidelines"),
+      instructionTemplateToken("availableSkills"),
     ].join("\n"),
     model: options.model,
     scopedSkills: false,
@@ -77,6 +81,9 @@ export function fallbackChatAgent(model: AgentModelChoice | null = null): AgentD
     instructions: [
       "You are a general assistant. This conversation is not tied to any project or code base.",
       "Answer directly and concisely. You work in a scratch folder of your own, not in the person's project: if they want work done in one, tell them to open a session there.",
+      instructionTemplateToken("availableTools"),
+      instructionTemplateToken("toolGuidelines"),
+      instructionTemplateToken("availableSkills"),
     ].join("\n"),
     model,
   });

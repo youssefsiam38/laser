@@ -64,6 +64,7 @@ import { HostClient } from "../client.js";
 import { initialState, reduce, type Action, type AppState, type SessionView } from "../store.js";
 import { createThreadAdapter, sendToSession, type SendBehavior } from "./adapter.js";
 import { createSessionLauncher, type NewSessionOptions } from "./new-session.js";
+import { rememberSessionForTab, sessionKindTab } from "./session-tab-memory.js";
 import { useThemeSync } from "./prefs.js";
 import { projectSessionView, shareProjectedMessages, splitDialogs } from "./projection.js";
 import {
@@ -1206,12 +1207,18 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   useEffect(() => {
     const path = state.current;
     if (!path) return;
-    const cwd = state.open[path]?.state.cwd;
+    const session = state.open[path]?.state;
+    const cwd = session?.cwd;
     if (!cwd) return;
     const remembered = readStringMap(SESSION_STORAGE_KEY);
-    if (remembered[cwd] === path) return;
-    writeString(SESSION_STORAGE_KEY, JSON.stringify({ ...remembered, [cwd]: path }));
-  }, [state.current, state.open]);
+    if (remembered[cwd] !== path) writeString(SESSION_STORAGE_KEY, JSON.stringify({ ...remembered, [cwd]: path }));
+    const summary = state.sessions.find((entry) => entry.path === path);
+    const agent = session.agent ?? summary?.agent;
+    rememberSessionForTab(
+      sessionKindTab({ cwd, ...(agent ? { agent } : {}) }, state.agents.snapshot?.workspaces ?? {}),
+      path,
+    );
+  }, [state.current, state.open, state.sessions, state.agents.snapshot?.workspaces]);
 
   /**
    * Reopen it once, on the first connection, unless a deep link is asking for

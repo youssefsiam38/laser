@@ -161,14 +161,16 @@ describe("ProjectRegistry", () => {
 
   it("never lists or remembers an excluded workspace, even when it has sessions", () => {
     const beam = join(base, "beam");
+    const privateBeam = join(beam, "session-private");
     mkdirSync(join(sessionDir, "--beam--"), { recursive: true });
-    writeFileSync(join(sessionDir, "--beam--", "b.jsonl"), `${JSON.stringify({ type: "session", version: 3, id: "b", cwd: beam })}\n`);
+    writeFileSync(join(sessionDir, "--beam--", "b.jsonl"), `${JSON.stringify({ type: "session", version: 3, id: "b", cwd: privateBeam })}\n`);
     const { reg } = registry({ exclude: [beam] });
-    expect(catalog.list().map((s) => s.cwd)).toContain(beam);
-    expect(reg.list().map((p) => p.cwd)).not.toContain(beam);
-    reg.touch(beam);
-    expect(reg.list().map((p) => p.cwd)).not.toContain(beam);
+    expect(catalog.list().map((s) => s.cwd)).toContain(privateBeam);
+    expect(reg.list().map((p) => p.cwd)).not.toContain(privateBeam);
+    reg.touch(privateBeam);
+    expect(reg.list().map((p) => p.cwd)).not.toContain(privateBeam);
     expect(reg.isExcluded(beam)).toBe(true);
+    expect(reg.isExcluded(privateBeam)).toBe(true);
     expect(reg.isExcluded(join(base, "other"))).toBe(false);
   });
 });

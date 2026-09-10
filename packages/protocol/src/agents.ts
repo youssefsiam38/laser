@@ -476,7 +476,7 @@ declare module "./messages.js" {
     "agents/builtin/set-model": { params: { name: BuiltinAgentName; model: AgentModelChoice | null }; result: { snapshot: AgentsSnapshot } };
     /** Replace one built-in's system instructions; `null` restores the shipped prompt. */
     "agents/builtin/set-instructions": { params: { name: BuiltinAgentName; instructions: string | null }; result: { snapshot: AgentsSnapshot } };
-    /** Benchmark nominated cheap models and pick Namer's. Routed to the built-in workspace worker. */
+    /** Benchmark connected naming candidates and pick Namer's. Routed to the built-in workspace worker. */
     "agents/namer/qualify": { params: { cwd: string }; result: NamerState };
     /** Host → worker only: the current definitions. Refused from clients. */
     "agents/sync": { params: { snapshot: AgentsSnapshot }; result: {} };

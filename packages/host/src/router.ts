@@ -37,7 +37,7 @@ import { searchSessions } from "./session-search.js";
 import type { LogStore } from "./logstore.js";
 import { browseDirectories, type PackageService, type SetupService } from "./packages.js";
 import type { TaskRegister } from "./tasks/register.js";
-import { ensureWorkspace, projectRootOf } from "./paths.js";
+import { createPrivateSessionWorkspace, ensureWorkspace, projectRootOf } from "./paths.js";
 import type { PrefsStore } from "./prefs.js";
 import type { FeatureService } from "./features.js";
 import type { ProjectRegistry } from "./projects.js";
@@ -328,8 +328,27 @@ export class Router {
       }
 
       case "session/new": {
-        const { cwd } = req.params;
-        const agentName = this.resolveStartAgent(cwd, req.params.agentName);
+        const requestedCwd = req.params.cwd;
+        // Validate the requested agent against the public workspace root
+        // before allocating anything, so a refused request leaves no orphan.
+        const agentName = this.resolveStartAgent(requestedCwd, req.params.agentName);
+        // Beam and Chat workspaces are containers, not shared checkouts.
+        // Starting at a root allocates one persistent, opaque directory for
+        // this conversation; reopening it routes to that same directory from
+        // the stored session header.
+        let cwd = requestedCwd;
+        const requestedWorkspace = this.workspaceAgentOf(requestedCwd);
+        const root = requestedWorkspace ? this.agents().workspaces[requestedWorkspace] : undefined;
+        if (requestedWorkspace && root && canonical(requestedCwd) === canonical(root)) {
+          try {
+            cwd = createPrivateSessionWorkspace(requestedCwd);
+          } catch (error) {
+            throw new ProtocolError(
+              ErrorCodes.Internal,
+              `${labelOf(requestedWorkspace)} could not create a private workspace: ${error instanceof Error ? error.message : String(error)}. Give ${PRODUCT_DISPLAY_NAME} a writable state directory, then try again.`,
+            );
+          }
+        }
         // A workspace must exist before a worker is started in it. The engine
         // records the directory in the session header and refuses to open a
         // session whose directory is gone, so a missing folder is refused
@@ -345,7 +364,8 @@ export class Router {
           }
         }
         const worker = await this.pool.get(cwd);
-        const result = await worker.request<{ state: SessionState }>(req.method, agentName ? { ...req.params, agentName } : req.params);
+        const params = { ...req.params, cwd, ...(agentName ? { agentName } : {}) };
+        const result = await worker.request<{ state: SessionState }>(req.method, params);
         this.pool.bindSession(result.state.path, cwd);
         // A workspace is not a project: Beam and Chat sessions never put one
         // in the project list.
@@ -719,8 +739,11 @@ export class Router {
     if (!store) return undefined;
     const key = canonical(cwd);
     const { beam, chat } = store.workspaces;
-    if (key === canonical(beam)) return "beam";
-    if (key === canonical(chat)) return "chat";
+    const beamRoot = canonical(beam);
+    const separator = beamRoot.includes("\\") ? "\\" : "/";
+    if (key === beamRoot || key.startsWith(`${beamRoot}${separator}`)) return "beam";
+    const chatRoot = canonical(chat);
+    if (key === chatRoot || key.startsWith(`${chatRoot}${separator}`)) return "chat";
     return undefined;
   }
 
@@ -785,10 +808,12 @@ export class Router {
         }
 
         const path = (req.params as { path: string }).path;
-        const worker = await this.workerFor(path);
+        const loading = req.method === "session/load";
+        const worker = await this.workerFor(path, !loading);
         const result = await worker.request(req.method, req.params);
-        const cwd = this.pool.cwdOfSession(path);
-        if (req.method === "session/load" && cwd && !this.isWorkspace(cwd) && !this.isWorkspaceSession(path)) this.deps.projects.touch(cwd);
+        const cwd = this.pool.cwdOfSession(path) ?? this.cwdOf(path);
+        if (loading && cwd) this.pool.bindSession(path, cwd);
+        if (loading && cwd && !this.isWorkspace(cwd) && !this.isWorkspaceSession(path)) this.deps.projects.touch(cwd);
         // A fork answers with a new session path served by the same worker; a
         // navigate rewrites the leaf, so the cached transcript is stale.
         const state = (result as { state?: SessionState } | null)?.state;
@@ -892,12 +917,29 @@ export class Router {
     return header === undefined ? undefined : projectRootOf(header);
   }
 
-  /** The worker that owns a session path, started if needed. */
-  private async workerFor(path: string) {
+  /**
+   * The worker that owns a session path, started if needed. Path-routed actions
+   * may arrive before a reconnecting client has sent `session/load`, so a saved
+   * transcript is opened here before the action reaches the worker. An empty
+   * session that disappeared with an idle worker has no transcript to recover;
+   * refuse it before the engine can create a different session under its stale
+   * filename.
+   */
+  private async workerFor(path: string, ensureOpen = true) {
     const cwd = this.cwdOf(path);
     if (!cwd) throw new ProtocolError(ErrorCodes.SessionNotFound, `no project known for session ${path}`);
+    const open = this.pool.openSessions(cwd).includes(path);
+    if (!open && !this.catalog.get(path) && !existsSync(path)) {
+      throw new ProtocolError(
+        ErrorCodes.SessionNotFound,
+        "This session is no longer open and has no saved transcript. Start a new session.",
+      );
+    }
     const worker = await this.pool.get(cwd);
-    this.pool.bindSession(path, cwd);
+    if (ensureOpen && !open) {
+      await worker.request("session/load", { path });
+      this.pool.bindSession(path, cwd);
+    }
     return worker;
   }
 }

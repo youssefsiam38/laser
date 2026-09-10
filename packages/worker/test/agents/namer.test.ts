@@ -1,11 +1,11 @@
 /**
- * M13-T3 · Namer: title post-processing, cheap-candidate nomination (pure),
+ * M13-T3 · Namer: title post-processing, connected-candidate selection (pure),
  * the per-session label throttle, and the qualification benchmark against a
  * fake runtime.
  */
 import { SESSION_NAME_MAX, type ModelCatalogEntry } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
-import { NamerService, QUALIFY_SAMPLE, cleanSessionName, cleanToolLabel, nominateNamerCandidates, type NamerModelRuntime } from "../../src/agents/namer.js";
+import { NamerService, QUALIFY_SAMPLE, cleanSessionName, cleanToolLabel, normalizeSessionName, normalizeToolLabel, selectNamerCandidates, type NamerModelRuntime } from "../../src/agents/namer.js";
 
 function entry(provider: string, id: string, cost?: { input?: number; output?: number }): ModelCatalogEntry {
   return { provider, id, name: id, contextWindow: 1, reasoning: false, vision: false, thinkingLevels: ["off"], enabled: true, ...(cost ? { cost } : {}) };
@@ -33,7 +33,15 @@ describe("cleanToolLabel", () => {
   });
 });
 
-describe("nominateNamerCandidates", () => {
+describe("tolerant naming output", () => {
+  it("accepts common wrappers and safely shortens prose", () => {
+    expect(normalizeSessionName('```json\n{"title":"Fix login submit"}\n```').value).toBe("Fix login submit");
+    expect(normalizeSessionName("Title: Fix the login form and remove the successful sign-in error banner completely").value.length).toBeLessThanOrEqual(40);
+    expect(normalizeToolLabel('{"label":"searching auth handlers"}').value).toBe("Searching auth handlers");
+  });
+});
+
+describe("selectNamerCandidates", () => {
   it("keeps cheap connected models, prefers small names, sorts by cost then name, caps at six", () => {
     const models = [
       entry("openai", "gpt-5-pro", { input: 10, output: 30 }),
@@ -51,7 +59,7 @@ describe("nominateNamerCandidates", () => {
       entry("local", "big-thing", { input: 0, output: 0 }),
     ];
     const configured = new Set(["openai", "anthropic", "google", "mistral", "xai", "local"]);
-    const picked = nominateNamerCandidates(models, configured).map((m) => `${m.provider}/${m.id}`);
+    const picked = selectNamerCandidates(models, configured).map((m) => `${m.provider}/${m.id}`);
     expect(picked).toHaveLength(6);
     expect(picked).not.toContain("openai/gpt-5-pro");
     expect(picked).not.toContain("anthropic/claude-opus");
@@ -60,10 +68,10 @@ describe("nominateNamerCandidates", () => {
     // haiku costs 4.8 > ceiling, so it is out; small names come first, cheapest first.
     expect(picked.slice(0, 4)).toEqual(["mistral/ministral", "openai/gpt-5-nano", "google/gemini-flash", "mistral/mistral-small"]);
     expect(picked).not.toContain("anthropic/claude-haiku");
-    expect(nominateNamerCandidates(models, new Set())).toEqual([]);
+    expect(selectNamerCandidates(models, new Set())).toEqual([]);
     // A model the person switched off is not a candidate.
     const off = models.map((model) => (model.id === "ministral" ? { ...model, enabled: false } : model));
-    expect(nominateNamerCandidates(off, configured)[0]).toMatchObject({ id: "gpt-5-nano" });
+    expect(selectNamerCandidates(off, configured)[0]).toMatchObject({ id: "gpt-5-nano" });
   });
 });
 
@@ -188,15 +196,17 @@ describe("NamerService", () => {
     expect(await namer.labelTool("/s1", "t3", "read", { path: "x" }, { stillRunning: () => running })).toBe("Reading x");
   });
 
-  it("qualifies the fastest valid cheap model and reports every candidate", async () => {
-    let now = 0;
-    const latency: Record<string, number> = { "fast-mini": 100, "slow-nano": 400, "bad-lite": 50 };
+  it("qualifies a fast, valid cheap model on both naming jobs and reports every candidate", async () => {
+    const latency: Record<string, number> = { "fast-mini": 2, "slow-nano": 20, "bad-lite": 1, "gpt-pro": 30 };
     const runtime: NamerModelRuntime = {
       getModel: (provider, id) => ({ provider, id }),
       async completeSimple(model, context) {
-        expect(context.messages[0]!.content).toContain(QUALIFY_SAMPLE);
         const m = model as { id: string };
-        now += latency[m.id] ?? 0;
+        await new Promise((resolve) => setTimeout(resolve, latency[m.id] ?? 0));
+        if (context.messages[0]!.content.includes("Tool:")) {
+          return { content: [{ type: "text", text: m.id === "bad-lite" ? "Auth handlers" : '{"label":"searching auth handlers"}' }] };
+        }
+        expect(context.messages[0]!.content).toContain(QUALIFY_SAMPLE);
         if (m.id === "bad-lite") return { content: [{ type: "text", text: "This title is far too long to be a valid session name at all" }] };
         return { content: [{ type: "text", text: `Fix login form via ${m.id}` }] };
       },
@@ -204,7 +214,6 @@ describe("NamerService", () => {
     const namer = new NamerService({
       models: async () => runtime,
       model: () => null,
-      now: () => now,
       catalog: async () => ({
         models: [entry("p", "fast-mini", { input: 0.1, output: 0.1 }), entry("p", "slow-nano", { input: 0.1, output: 0.1 }), entry("p", "bad-lite", { input: 0.1, output: 0.1 }), entry("p", "gpt-pro", { input: 1, output: 1 })],
         configuredProviders: new Set(["p"]),
@@ -213,13 +222,23 @@ describe("NamerService", () => {
     const state = await namer.qualify();
     expect(state.status).toBe("ready");
     expect(state.model).toEqual({ provider: "p", id: "fast-mini" });
-    expect(state.candidates.map((c) => `${c.model.id}:${c.valid}:${c.latencyMs}`)).toEqual(["bad-lite:false:50", "fast-mini:true:100", "slow-nano:true:400"]);
+    expect(state.candidates.map((c) => `${c.model.id}:${c.valid}`)).toEqual(["bad-lite:false", "fast-mini:true", "slow-nano:true", "gpt-pro:true"]);
     expect(state.candidates[1]?.costPerMillion).toBeCloseTo(0.2);
     expect(state.qualifiedAt).toBeDefined();
   });
 
-  it("is unavailable with a reason when nothing can be nominated", async () => {
+  it("keeps a failed connected set retryable instead of declaring Namer unavailable", async () => {
     const namer = new NamerService({ models: async () => fakeRuntime(() => "x"), model: () => null, catalog: async () => ({ models: [entry("p", "gpt-pro")], configuredProviders: new Set(["p"]) }) });
-    expect(await namer.qualify()).toMatchObject({ status: "unavailable", model: null, candidates: [], reason: expect.stringMatching(/Connect a provider/) });
+    expect(await namer.qualify()).toMatchObject({ status: "unqualified", model: null, candidates: [{ valid: false }], reason: expect.stringMatching(/try again automatically/) });
+  });
+
+  it("keeps the current usable model when a requalification cannot improve it", async () => {
+    const current = { provider: "p", id: "mini" };
+    const namer = new NamerService({
+      models: async () => fakeRuntime(() => { throw new Error("provider offline"); }, [current]),
+      model: () => current,
+      catalog: async () => ({ models: [entry("p", "mini", { input: 0.1, output: 0.1 })], configuredProviders: new Set(["p"]) }),
+    });
+    expect(await namer.qualify()).toMatchObject({ status: "ready", model: current, reason: expect.stringMatching(/kept/) });
   });
 });

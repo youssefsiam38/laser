@@ -11,9 +11,10 @@ import {
   EmptyStateSuggestions,
 } from "@/components/assistant-ui/elements/empty-state";
 import { useShellOptional } from "@/components/shell/shell-context";
+import { groupNameOf, workspaceKindOf } from "@/components/shell/session-groups";
 import { Button } from "@/components/ui/button";
 import { shortCwd } from "@/format";
-import { useLaserStable, useSessionMeta } from "@/runtime";
+import { useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
 
 const SUGGESTIONS: ReadonlyArray<{ title: string; prompt: string }> = [
   {
@@ -46,8 +47,13 @@ export function EmptyState() {
   const { session } = useSessionMeta();
   const shell = useShellOptional();
   const disabled = useAuiState((s) => s.thread.isDisabled);
+  const workspaces = useLaserState((s) => s.agents.snapshot?.workspaces);
   const cwd = session?.cwd ?? currentProject;
-  const name = cwd ? shortCwd(cwd) : PRODUCT_DISPLAY_NAME;
+  const workspaceKind =
+    session?.agent?.kind === "beam" || session?.agent?.kind === "chat"
+      ? session.agent.kind
+      : workspaceKindOf(cwd, workspaces ?? {});
+  const name = workspaceKind && cwd ? groupNameOf(cwd, workspaceKind) : cwd ? shortCwd(cwd) : PRODUCT_DISPLAY_NAME;
 
   if (!cwd) {
     return (
@@ -73,7 +79,7 @@ export function EmptyState() {
   return (
     <EmptyStateRoot>
       <div className="flex flex-col gap-2">
-        <EmptyStateEyebrow title={cwd}>{cwd}</EmptyStateEyebrow>
+        <EmptyStateEyebrow {...(workspaceKind ? {} : { title: cwd })}>{workspaceKind ? "Private workspace" : cwd}</EmptyStateEyebrow>
         <EmptyStateGreeting>{name}</EmptyStateGreeting>
         <EmptyStateDescription>
           {session ? "New session. What should the agent work on?" : "No session open. Send a message to start one."}

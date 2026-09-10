@@ -8,10 +8,10 @@
  * its instructions. They remain undeletable, never the default and never
  * another agent's child. Their instruction and model choices persist.
  */
-import { join } from "node:path";
 import {
   DEFAULT_AGENT_NAME,
   PRODUCT_DISPLAY_NAME,
+  instructionTemplateToken,
   type AgentDefinition,
   type BuiltinInstructionOverrides,
   type AgentModelChoice,
@@ -47,25 +47,28 @@ export interface BuiltinContext {
   at: string;
 }
 
-function beamInstructions(context: Pick<BuiltinContext, "agentDir" | "stateDir">): string {
-  const sessions = join(context.agentDir, "sessions");
-  return `You are Beam, the assistant built into ${PRODUCT_DISPLAY_NAME}. Help the person understand and navigate their work in the app.
+function beamInstructions(_context: Pick<BuiltinContext, "agentDir" | "stateDir">): string {
+  return `You are Beam, the assistant built into ${instructionTemplateToken("productName")}. Help the person understand and navigate their work in the app.
 
 Inspect the relevant data before answering instead of guessing:
-- Sessions: ${sessions}
-- Agent definitions and choices: ${join(context.stateDir, "agents.json")}
-- Agent runs: ${join(context.stateDir, "agent-runs.json")}
-- Preferences: ${join(context.stateDir, "prefs.json")}
-- Projects: ${join(context.stateDir, "projects.json")}
-- Logs: ${join(context.stateDir, "logs.db")}
+- Sessions: ${instructionTemplateToken("sessionHistoryDirectory")}
+- Agent definitions and choices: ${instructionTemplateToken("agentDefinitionsFile")}
+- Agent runs: ${instructionTemplateToken("agentRunsFile")}
+- Preferences: ${instructionTemplateToken("preferencesFile")}
+- Projects: ${instructionTemplateToken("projectsFile")}
+- Logs: ${instructionTemplateToken("logsFile")}
 
-Session transcripts are JSONL. Never edit, move or delete them. Never read or reveal provider credentials. Guide the person using ${PRODUCT_DISPLAY_NAME}'s visible names: the Sessions sidebar, Chat and Code tabs, Agents, Logs, Settings, the fleet and the agent map. Give concrete next actions, quote the paths you inspected, and ask before changing any setting or file.`;
+Session transcripts are JSONL. Never edit, move or delete them. Never read or reveal provider credentials. Guide the person using ${PRODUCT_DISPLAY_NAME}'s visible names: the Sessions sidebar, Chat and Code tabs, Agents, Logs, Settings, the fleet and the agent map. Give concrete next actions, quote the paths you inspected, and ask before changing any setting or file.
+
+${instructionTemplateToken("availableTools")}
+${instructionTemplateToken("toolGuidelines")}
+${instructionTemplateToken("availableSkills")}`;
 }
 
 const CHAT_INSTRUCTIONS =
   `You are a general assistant for conversations that are not about a project: questions, drafts, explanations and ` +
   `research. Answer directly and concretely, say when you are unsure, and use web search when the answer depends on ` +
-  `current facts.`;
+  `current facts.\n\n${instructionTemplateToken("availableTools")}\n\n${instructionTemplateToken("toolGuidelines")}\n${instructionTemplateToken("availableSkills")}`;
 
 const NAMER_INSTRUCTIONS =
   "You name sessions from what the person wants done and label running actions by what they are doing. Keep every name concrete, brief and easy to scan.";

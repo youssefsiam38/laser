@@ -19,7 +19,7 @@ import { useWorkbench } from "@/components/workbench";
 import { shortCwd, shortcutLabel } from "@/format";
 import { useTheme } from "@/hooks";
 import { cn } from "@/lib/utils";
-import { useLaserStable, useLaserState } from "@/runtime";
+import { mergeSessions, rememberedSessionForTab, useLaserStable, useLaserState } from "@/runtime";
 import type { AppState } from "@/store";
 
 import { SESSIONS_TABS, groupsFor, sameGroups, sessionsList, useSessionsList, workspacesOf, type SessionsTab } from "./session-groups.js";
@@ -69,7 +69,7 @@ export function SessionsPanel({ variant }: SessionsPanelProps) {
 const TAB_LABEL: Record<SessionsTab, string> = { chat: "Chat", code: "Code" };
 
 function SessionsPanelBody({ variant }: SessionsPanelProps) {
-  const { projects, currentProject, setCurrentProject, actions } = useLaserStable();
+  const { projects, currentProject, setCurrentProject, actions, dispatch } = useLaserStable();
   const shell = useShell();
   const list = useSessionsList();
   const tab = list.tab;
@@ -80,12 +80,14 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
     sameGroups,
   );
   const connection = useLaserState((s) => s.connection);
+  const sessions = useLaserState((s) => s.sessions);
+  const openViews = useLaserState((s) => s.open);
   const chatCwd = useLaserState((s) => workspacesOf(s).chat);
   const beamCwd = useLaserState((s) => workspacesOf(s).beam);
   const snapshot = useAgentsSnapshot();
   const [query, setQuery] = useState("");
   const [activeId, setActiveId] = useState<string | undefined>(undefined);
-  const search = useSessionSearch(query, tab === "code" ? list.filter : chatCwd);
+  const search = useSessionSearch(query, tab === "code" ? list.filter : undefined);
 
   const total = groups.reduce((n, g) => n + g.rows.length, 0);
   const filteredName = tab === "code" && list.filter ? shortCwd(list.filter) : undefined;
@@ -195,6 +197,37 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
   const onNew = chat ? () => void newChat() : () => void shell.newSession();
   const canNew = chat ? canChat : shell.canCreate;
 
+  const changeTab = useCallback((next: SessionsTab) => {
+    if (next === tab) return;
+    sessionsList.setTab(next);
+    setQuery("");
+    const merged = mergeSessions(sessions, openViews);
+    const eligible = merged.filter((session) => {
+      const kind = session.agent?.kind;
+      const cwd = session.cwd.replace(/\\/g, "/");
+      const root = chatCwd?.replace(/\\/g, "/").replace(/\/+$/, "");
+      const isChat = kind === "chat" || (root !== undefined && (cwd === root || cwd.startsWith(`${root}/`)));
+      return (next === "chat") === isChat;
+    });
+    const remembered = rememberedSessionForTab(next);
+    const destination = eligible.find((session) => session.path === remembered)
+      ?? [...eligible].sort((a, b) => Date.parse(b.modifiedAt) - Date.parse(a.modifiedAt))[0];
+    // Do not leave the old tab's conversation under the newly selected tab
+    // while a persisted session is loading, or when the new tab is empty.
+    dispatch({ type: "select", path: undefined });
+    if (!destination) {
+      onOpen();
+      return;
+    }
+    if (next === "code" && destination.agent?.kind !== "beam") {
+      const root = destination.agent?.kind === "child" && destination.agent.rootPath
+        ? merged.find((session) => session.path === destination.agent?.rootPath)
+        : undefined;
+      setCurrentProject(root?.cwd ?? destination.cwd);
+    }
+    void actions.openSession(destination.path).then(onOpen).catch((error) => actions.toast("error", errorText(error)));
+  }, [actions, chatCwd, dispatch, onOpen, openViews, sessions, setCurrentProject, tab]);
+
   return (
     <section
       aria-label="Sessions"
@@ -221,7 +254,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
         )}
       </header>
 
-      <SessionsTabs tab={tab} onChange={(next) => { sessionsList.setTab(next); setQuery(""); }} />
+      <SessionsTabs tab={tab} onChange={changeTab} />
 
       {variant === "sheet" && (
         <div className="flex shrink-0 items-center px-3 py-2 hairline-b">

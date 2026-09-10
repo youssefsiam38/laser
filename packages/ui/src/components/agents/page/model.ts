@@ -126,7 +126,7 @@ export function builtinBlurb(name: BuiltinAgentName): string {
     case "beam":
       return `${PRODUCT_DISPLAY_NAME}'s fast helper. Beam answers questions about your sessions, agents, settings and logs, and runs on a quick model so it never keeps you waiting. It opens from the spark beside Settings.`;
     case "chat":
-      return "Plain conversations that belong to no project. Chat sessions sit under the Chat tab of the sessions list and start from a prompt alone, with no working directory.";
+      return "Plain conversations that belong to no project. Each Chat session gets its own private working directory and stays under the Chat tab until you move it into a project.";
     case "namer":
       return "Names things while they happen: a session from its first prompt, a running tool call, a stretch of activity. It runs often on a small task, so it uses the fastest inexpensive model that passes a short check.";
   }
@@ -215,20 +215,20 @@ export interface NamerSummary {
 export function namerSummary(state: NamerState): NamerSummary {
   switch (state.status) {
     case "unqualified":
-      return { status: state.status, title: "Not qualified yet", detail: "Run the check once a provider is connected; it takes a few seconds." };
+      return { status: state.status, title: "Not qualified yet", detail: state.reason ?? "Run the check once a provider is connected; it takes a few seconds." };
     case "qualifying":
-      return { status: state.status, title: "Qualifying…", detail: "Trying the nominated models on a small naming task." };
+      return { status: state.status, title: "Qualifying…", detail: "Testing connected models on session titles and activity labels." };
     case "ready": {
       const chosen = state.candidates.find((candidate) => state.model && candidate.model.provider === state.model.provider && candidate.model.id === state.model.id);
       const latency = chosen?.latencyMs;
       return {
         status: state.status,
         title: state.model ? modelChoiceId(state.model) : "Ready",
-        detail: latency === null || latency === undefined ? undefined : `${formatLatency(latency)} on the check`,
+        detail: state.reason ?? (latency === null || latency === undefined ? undefined : `${formatLatency(latency)} on the check`),
       };
     }
     case "unavailable":
-      return { status: state.status, title: "Unavailable", detail: state.reason ?? "No inexpensive model passed the check." };
+      return { status: state.status, title: "Unavailable", detail: state.reason ?? "No connected model could be checked." };
   }
 }
 

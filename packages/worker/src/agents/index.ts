@@ -34,7 +34,7 @@ export {
   cleanSessionName,
   cleanToolLabel,
   listCost,
-  nominateNamerCandidates,
+  selectNamerCandidates,
   sessionNamePrompt,
   toolLabelPrompt,
   validSessionName,

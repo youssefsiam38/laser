@@ -560,6 +560,12 @@ Depends on: M12.
 | M13-T73 | Make skills discovery-only | Laser writes and bundles no skill; user and project skill folders remain discoverable and selectable, while Beam's product guidance lives in its built-in agent instructions |
 | M13-T74 | Make the Beam spark start fresh every time | every press of the Beam spark opens the bubble on a new empty Beam conversation; any previous Beam session keeps running if needed and remains normally reachable in the Beam sidebar group |
 | M13-T75 | Release stable 0.3.1 | the agent customization, Laser-owned prompt, discovery-only skills and fresh Beam launcher pass the staged release gate; source and matching tag are pushed only after clean CI; the release pipeline publishes verified x64/ARM64 assets, provenance and updater feeds |
+| M13-T76 | Make every dynamic instruction value a click-insert template field | the built-in and custom instruction editors offer human-labelled fields for every runtime value Laser can safely expose, insert the chosen field at the caret without typing syntax, render through a standard template engine, and preserve a clear error state for invalid templates |
+| M13-T77 | Make Namer qualification reliably choose a usable fast, inexpensive model | qualification derives valid candidates from connected naming-capable models, evaluates real naming output with tolerant normalization and bounded fallback, and always leaves Namer on the strongest usable result instead of failing the whole run because nominations were malformed |
+| M13-T78 | Make Beam maximize land in Code | maximizing either an existing or empty Beam bubble selects the Code sessions tab before showing the Beam session in the main conversation |
+| M13-T79 | Give every Beam and Chat session its own private persistent directory | a new built-in conversation runs in an opaque per-session workspace, remains reopenable without exposing that path, and a Chat still moves cleanly into a chosen project |
+| M13-T80 | Restore the last conversation when switching Chat and Code | selecting either sessions tab opens that tab's most recently viewed surviving session, or its honest empty state when none exists, in both pointer and keyboard paths |
+| M13-T81 | Keep recoverable provider retries quiet | provider errors that the engine is retrying never render as failed turns or retry notices; successful recovery leaves no trace in the conversation, while an exhausted or non-retryable request ends in one gentle actionable warning |
 
 ## MX · Cross-cutting (runs alongside every milestone)
 

@@ -84,6 +84,7 @@ import { GOAL_TOOL_NAMES } from "@lasercode/pi-goal";
 import { isGoalCommand } from "@lasercode/pi-extension";
 import { ENGINE_BUILTIN_TOOLS, ensureWorkspaceSessionCwd, filterSkills } from "../agents/session-config.js";
 import { defaultAgentInstructions } from "../agents/engine-instructions.js";
+import { createInstructionTemplateExtension } from "../agents/instruction-templates.js";
 import { modelUnavailableMessage } from "../agents/harness.js";
 
 type PiModel = ReturnType<ModelRuntime["getModels"]>[number];
@@ -167,6 +168,7 @@ export class StableSdkDriver implements SessionDriver {
     const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
       const requestProvenance = createPromptProvenanceObserver();
       const laser = createCompanion(requestProvenance);
+      let liveSession: AgentSession | undefined;
       const settingsManager = SettingsManager.create(cwd, agentDir, {
         // Laser never asks the engine to discover `<cwd>/.pi`. Project
         // settings arrive from `.laser` as curated in-memory overrides below.
@@ -198,6 +200,16 @@ export class StableSdkDriver implements SessionDriver {
       ]);
       if (enabled.has("goals")) {
         additionalExtensionPaths.push(goalExtensionPath());
+      }
+      if (agent) {
+        extensionFactories.push(
+          createInstructionTemplateExtension({
+            agent,
+            agentDir,
+            ...(options.stateDir ? { stateDir: options.stateDir } : {}),
+            session: () => liveSession,
+          }),
+        );
       }
       extensionFactories.push(laser);
 
@@ -239,6 +251,7 @@ export class StableSdkDriver implements SessionDriver {
       // that setting names built-ins only, and D-144 gives every agent every
       // tool — the harness's, background work's, the goal's, web search's.
       if (agent) activateEveryTool(created.session);
+      liveSession = created.session;
       return { ...created, services, diagnostics: services.diagnostics };
     };
 

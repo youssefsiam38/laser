@@ -468,8 +468,8 @@ idle, so its worker is never retired underneath it.
 
 | Agent | Runs in | Tools | Integration |
 | --- | --- | --- | --- |
-| `beam` | `<state>/workspaces/beam` (`workspaces.beam`) | every tool and every user- or project-discovered skill, like any unscoped agent | two ways in (D-143, D-173): every press of the spark at the bottom left beside Settings starts a fresh bubble chat, while earlier Beam sessions remain in Beam's sidebar group; the `+` on that group starts a fresh chat in the window. The first message lazily creates the session. The bubble's maximize control moves its current chat into the window. No other Beam entry point exists |
-| `chat` | `<state>/workspaces/chat` (`workspaces.chat`) | every tool, in its own scratch workspace | the Chat tab, first in the sidebar before Code; projectless chats |
+| `beam` | one opaque, persistent directory per session under `<state>/workspaces/beam` | every tool and every user- or project-discovered skill, like any unscoped agent | two ways in (D-143, D-173): every press of the spark at the bottom left beside Settings starts a fresh bubble chat, while earlier Beam sessions remain in Beam's sidebar group; the `+` on that group starts a fresh chat in the window. The first message lazily creates the session. The bubble's maximize control moves its current chat into the window and selects Code. No other Beam entry point exists |
+| `chat` | one opaque, persistent directory per session under `<state>/workspaces/chat` | every tool, isolated from unrelated Chat sessions | the Chat tab, first in the sidebar before Code; projectless chats |
 | `namer` | the project's own worker | not a session agent | names things from a small context |
 
 The Agents page exposes the effective system instructions for all three.
@@ -478,8 +478,21 @@ improved shipped prompt takes effect. Beam and Chat apply the effective prompt
 when a session opens. Namer layers it into session-title, activity-label and
 qualification requests while keeping the per-operation short-output contract.
 
-**A Chat session can move into a project** (M13-T58). The row's menu in the
-Chat tab offers "Move to a project…", which opens a dialog listing the Code
+Instructions are restricted Handlebars templates (D-175). The editor owns the
+syntax: **Insert field** shows searchable, human-labelled live values and puts
+the chosen field at the caret, so a person never has to type or remember a
+template name. The available fields are scoped to the agent. They cover the
+current product, agent, model, reasoning level and working directory; the live
+tool catalogue and its guidance; project instructions, discovered skills and
+additional instructions; the allowed child-agent catalogue; Beam's state
+locations; and Namer's current naming input. Unknown fields, helpers, blocks
+and malformed templates are refused before saving. At `before_agent_start`
+the worker renders the template from the real session resources, before the
+companion adds compulsory role and goal context. The saved template is exact:
+only fields the person inserted expand, with no legacy additions appended.
+
+**A Chat session can move into a project** (M13-T58). The open chat's top bar
+and the row's menu both offer "Move to a project…", which opens a dialog listing the Code
 tab's projects — current first, then most recently used — with "New project…"
 last; that runs the same folder choice as the rail's Add project (the
 operating system's picker in the desktop app, a typed path in a browser) and
@@ -518,7 +531,10 @@ dismisses.
 **Namer** (`packages/worker/src/agents/namer.ts`) is a service, never a
 session: one small completion per request with an 8 s ceiling, as many at
 once as a burst of tool calls needs (D-165), and it never throws — a name that does not arrive is
-simply not shown. It names a session from its first prompt (25–30 characters,
+simply not shown. It accepts a plain answer as well as harmless quotes,
+prefixes, Markdown fences and small JSON wrappers, then safely shortens the
+result instead of rejecting useful wording for its packaging. It names a
+session from its first prompt (25–30 characters,
 `SESSION_NAME_MIN`/`SESSION_NAME_MAX`, quotes and trailing punctuation
 stripped, cut at a word boundary), a tool call the moment it starts in a
 top-level session — never in a child agent's, whose rows its parent reads
@@ -526,10 +542,15 @@ through `inspect_fleet` (D-165) — (a present-progressive label of at most 40
 characters, sent as
 `lasercode/namer/label { toolCallId, label }` before the tool ends) and an
 in-progress aggregate in the chat view. Its model is qualified rather than
-picked: `agents/namer/qualify` nominates cheap, connected models (never a name
-matching opus/pro/ultra/max, never a list price over 3 per million tokens
-combined, recognisably small ones first, at most six), times each on the
-session-naming prompt, keeps the fastest valid answer and records
+picked: `agents/namer/qualify` deterministically ranks enabled models from
+connected providers — the current choice, small affordable models, other
+affordable models, then available fallbacks, at most six. It tests candidates
+in parallel on both real jobs: a session title and a present-progressive tool
+label. A usable answer outranks speed and price; among equally correct models,
+combined latency and list price choose the winner. Rechecking never discards a
+model that was already working. A failed check remains retryable instead of
+turning a temporary formatting or provider failure into a permanent verdict,
+and a later worker retries it automatically. The result records
 `NamerState { status, model, candidates, qualifiedAt, reason }`; `status` is
 `unqualified`, `qualifying`, `ready` or `unavailable`.
 

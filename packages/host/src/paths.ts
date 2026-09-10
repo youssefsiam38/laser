@@ -24,7 +24,7 @@
  * directory.
  */
 import { DATA_DIR_NAME, WORKTREES_DIR_NAME } from "@lasercode/protocol";
-import { mkdirSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
 
@@ -55,8 +55,8 @@ export function defaultStateDir(env: NodeJS.ProcessEnv = process.env): string {
  * host's own state directory (`<stateDir>/workspaces/beam`, `…/chat`): the
  * host creates and owns that directory in every layout, so a workspace is
  * never derived from a path some other layer chose. They are not projects
- * (the registry never lists them), just a working directory Beam and Chat
- * sessions can be created in.
+ * (the registry never lists them), just containers for the persistent private
+ * working directory allocated to each Beam and Chat session.
  */
 export function workspacesDir(stateDir: string): string {
   return join(stateDir, "workspaces");
@@ -68,6 +68,17 @@ export function beamWorkspaceDir(stateDir: string): string {
 
 export function chatWorkspaceDir(stateDir: string): string {
   return join(workspacesDir(stateDir), "chat");
+}
+
+/**
+ * Give one Beam or Chat conversation a durable private working directory. `mkdtemp`
+ * supplies collision-free naming, but the directory lives under the product
+ * state and is deliberately not temporary or cleaned up when the process ends.
+ */
+export function createPrivateSessionWorkspace(workspaceRoot: string): string {
+  const problem = ensureWorkspace(workspaceRoot);
+  if (problem) throw new Error(problem);
+  return mkdtempSync(join(workspaceRoot, "session-"));
 }
 
 /**

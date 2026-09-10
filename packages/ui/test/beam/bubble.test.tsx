@@ -21,6 +21,7 @@ import { BeamBubble } from "../../src/components/beam/BeamBubble.js";
 import { BeamSpark } from "../../src/components/beam/BeamSpark.js";
 import { BEAM_SESSION_STORAGE_KEY, beamStore } from "../../src/components/beam/beam-store.js";
 import { ShellContext, type ShellContextValue } from "../../src/components/shell/shell-context.js";
+import { sessionsList } from "../../src/components/shell/session-groups.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { LaserProvider, useLaserState } from "../../src/runtime/LaserProvider.js";
 import { addSession, BEAM_CWD, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "./fake-host.js";
@@ -82,6 +83,7 @@ beforeEach(() => {
   world = createWorld();
   FakeHostClient.reset(world);
   beamStore.reset();
+  sessionsList.reset();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -230,6 +232,7 @@ describe("the Beam bubble", () => {
     await act(async () => bubble()!.querySelector<HTMLButtonElement>('[data-slot="beam-open-full"]')!.click());
     await closeAndSettle();
     expect(container.querySelector('[data-slot="main-current"]')?.textContent).toBe(path);
+    expect(sessionsList.get().tab).toBe("code");
     expect(bubble()).toBeNull();
   });
 
@@ -248,6 +251,7 @@ describe("the Beam bubble", () => {
     // A Beam chat, in Beam's workspace, in the window rather than the bubble.
     expect(opened!.startsWith(`${BEAM_CWD}/`)).toBe(true);
     expect(world.states[opened!]?.agent?.kind).toBe("beam");
+    expect(sessionsList.get().tab).toBe("code");
     expect(bubble()).toBeNull();
   });
 

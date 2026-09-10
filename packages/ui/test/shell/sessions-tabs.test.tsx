@@ -14,6 +14,7 @@ import type { SessionSummary } from "@lasercode/protocol";
 import { SessionsPanel } from "../../src/components/shell/SessionsPanel.js";
 import { ShellContext, type ShellContextValue } from "../../src/components/shell/shell-context.js";
 import { SESSIONS_TAB_STORAGE_KEY, sessionsList } from "../../src/components/shell/session-groups.js";
+import { rememberSessionForTab } from "../../src/runtime/session-tab-memory.js";
 import { sessionFolds } from "../../src/components/assistant-ui/elements/session-folds.js";
 import { clearEndAgentRequest, useEndAgentRequest } from "../../src/components/agents/end-agent.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
@@ -26,6 +27,7 @@ const stable = vi.hoisted(() => ({
   projects: ["/one", "/two"],
   currentProject: "/one",
   setCurrentProject: vi.fn(),
+  dispatch: vi.fn(),
   actions: { toast: vi.fn(), removeProject: vi.fn(), newSession: vi.fn(async () => "/state/chat/new.jsonl"), openSession: vi.fn(async () => undefined) },
   archive: { add: vi.fn(), has: () => false },
   client: { request: vi.fn(async () => ({ hits: [], unreadable: 0 })) },
@@ -44,8 +46,8 @@ const sessions: SessionSummary[] = [
   summary({ path: DETACHED, cwd: "/one/.worktrees/orphan", name: "Orphan", modifiedAt: "2026-09-08T02:00:00Z", agent: { agentName: "default", kind: "child", subagentName: "orphan", parentPath: "/one/gone.jsonl", rootPath: "/one/gone.jsonl", runId: "r3" } }),
   summary({ path: "/two/plain.jsonl", cwd: "/two", name: "Plain session", modifiedAt: "2026-09-06T03:00:00Z" }),
   summary({ path: "/state/beam/b1.jsonl", cwd: "/state/beam", name: "Why is the dock empty", modifiedAt: "2026-09-08T01:00:00Z", agent: { agentName: "beam", kind: "beam" } }),
-  summary({ path: "/state/chat/c1.jsonl", cwd: "/state/chat", name: "Recipe ideas", modifiedAt: "2026-09-08T04:00:00Z", agent: { agentName: "chat", kind: "chat" } }),
-  summary({ path: "/state/chat/c2.jsonl", cwd: "/state/chat", name: "Older chat", modifiedAt: "2026-09-05T04:00:00Z", agent: { agentName: "chat", kind: "chat" } }),
+  summary({ path: "/state/chat/c1.jsonl", cwd: "/state/chat/session-one", name: "Recipe ideas", modifiedAt: "2026-09-08T04:00:00Z", agent: { agentName: "chat", kind: "chat" } }),
+  summary({ path: "/state/chat/c2.jsonl", cwd: "/state/chat/session-two", name: "Older chat", modifiedAt: "2026-09-05T04:00:00Z", agent: { agentName: "chat", kind: "chat" } }),
 ];
 const runs = [
   run({ runId: "r1", sessionPath: CHILD, subagentName: "explorer", agentName: "default", projectCwd: "/one", rootSessionPath: ROOT, parent: { sessionPath: ROOT, sessionId: "root" }, status: "running", startedAt: "2026-09-08T03:04:00Z", updatedAt: "2026-09-08T03:04:00Z" }),
@@ -98,6 +100,9 @@ beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   localStorage.clear();
   sessionsList.reset();
+  stable.actions.openSession.mockClear();
+  stable.setCurrentProject.mockClear();
+  stable.dispatch.mockClear();
   sessionFolds.reset();
   clearEndAgentRequest();
   store = createStateStore(seed());
@@ -140,6 +145,7 @@ describe("sessions panel tabs", () => {
     expect(container.querySelector('section[data-cwd] button[aria-controls$="-list"]')).toBeNull();
     expect(container.querySelector('[data-slot="new-chat"]')).not.toBeNull();
     expect(container.querySelector('input[type="search"]')?.getAttribute("placeholder")).toBe("Search chats");
+    expect(stable.actions.openSession).toHaveBeenLastCalledWith("/state/chat/c1.jsonl");
 
     // The choice survives a remount.
     await act(async () => root.unmount());
@@ -155,6 +161,18 @@ describe("sessions panel tabs", () => {
     expect(tab("code").getAttribute("aria-selected")).toBe("true");
     expect(document.activeElement).toBe(tab("code"));
     expect(rowTitled("Ship the release")).toBeDefined();
+    expect(stable.actions.openSession).toHaveBeenCalled();
+  });
+
+  it("restores the last viewed session for each tab before falling back to newest", async () => {
+    rememberSessionForTab("chat", "/state/chat/c2.jsonl");
+    rememberSessionForTab("code", "/two/plain.jsonl");
+    await mount();
+    await act(async () => tab("chat").click());
+    expect(stable.actions.openSession).toHaveBeenLastCalledWith("/state/chat/c2.jsonl");
+    await act(async () => tab("code").click());
+    expect(stable.actions.openSession).toHaveBeenLastCalledWith("/two/plain.jsonl");
+    expect(stable.setCurrentProject).toHaveBeenLastCalledWith("/two");
   });
 
   it("starts a new chat with the Chat agent in the Chat workspace", async () => {

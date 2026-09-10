@@ -5,6 +5,7 @@ import {
   ChevronRight,
   Copy,
   Ellipsis,
+  FolderInput,
   GitBranch,
   GitFork,
   Radio,
@@ -69,6 +70,7 @@ import {
 import { InlineRename } from "./InlineRename.js";
 import { lastPromptEntryId, sessionStateLabel, sessionStatus, workerChip } from "./model.js";
 import { errorText, useShell } from "./shell-context.js";
+import { requestMoveSession } from "./move-session.js";
 
 /**
  * Sticky row above the thread: what session this is, what state it is in,
@@ -93,6 +95,7 @@ export function TopBar() {
   const activityLevel = useActivityDetailLevel(view?.path);
   // Agent map (M13-T7): shown in place of the thread while `open`.
   const mapOpen = useMapUi().open;
+  const sessionAgent = useSessionAgent(view?.path);
 
   const summary = useMemo(() => (view ? sessions.find((s) => s.path === view.path) : undefined), [sessions, view]);
   const status = sessionStatus(view, summary);
@@ -243,6 +246,11 @@ export function TopBar() {
             composer carries the same element next to Send. */}
         <ContextRingButton side="bottom" className="me-1" />
         <TooltipIconButton tooltip="Find in conversation" shortcut="Ctrl+F" onClick={() => openConversationFind()}><Search /></TooltipIconButton>
+        {view && sessionAgent?.kind === "chat" ? (
+          <TooltipIconButton tooltip="Move chat to a project" onClick={() => requestMoveSession({ path: view.path, title })}>
+            <FolderInput />
+          </TooltipIconButton>
+        ) : null}
         {/* Agent map (M13-T7): the live map of this session's agents, in place of the thread. */}
         <TooltipIconButton
           tooltip={mapOpen ? "Show conversation" : "Show agent map"}

@@ -90,6 +90,24 @@ describe("stop reason", () => {
     });
   });
 
+  it("keeps automatic recovery silent and never projects the failed attempt", () => {
+    const recovered = run([
+      { kind: "agent_start" },
+      ...turn("", { stopReason: "error", errorMessage: "WebSocket error" }),
+      { kind: "agent_end", willRetry: true },
+      { kind: "auto_retry_start", attempt: 1, maxAttempts: 4 },
+      ...turn("recovered", { stopReason: "stop" }),
+      { kind: "auto_retry_end", ok: true },
+      { kind: "agent_end", willRetry: false },
+      { kind: "agent_settled" },
+    ]);
+    expect(recovered.blocks.some((block) => block.kind === "notice")).toBe(false);
+    expect(recovered.blocks.some((block) => block.kind === "assistant" && block.stopReason === "error")).toBe(false);
+    expect(projectSessionView(recovered).messages).toEqual([
+      expect.objectContaining({ content: [expect.objectContaining({ type: "text", text: "recovered" })] }),
+    ]);
+  });
+
   it("a steer leaves no stop notice, while a real stop still does (M13-T28)", () => {
     // Steering does not abort: the engine delivers the steering message at the
     // next turn boundary, so the turn it interrupted ends the ordinary way and

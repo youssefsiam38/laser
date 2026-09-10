@@ -197,6 +197,7 @@ interface ItemMeta {
   label: string;
   parentPath: string | undefined;
   child: boolean;
+  workspaceKind: "beam" | "chat" | undefined;
   modifiedAt: number;
   /** When the row was born: the run's start, else the catalog's `createdAt`. */
   startedAt: number;
@@ -269,6 +270,7 @@ export function useThreadListGroups(
         label: str(custom["subagentName"]) ?? (title !== "" ? title : (path.split("/").pop() ?? path)),
         parentPath,
         child: custom["agentKind"] === "child" || parentPath !== undefined,
+        workspaceKind: custom["agentKind"] === "beam" || custom["agentKind"] === "chat" ? custom["agentKind"] : undefined,
         modifiedAt: modified(item),
         startedAt: time(run?.startedAt) || time(custom["createdAt"]),
       };
@@ -287,7 +289,10 @@ export function useThreadListGroups(
         seen.add(parent.path);
         cursor = parent;
       }
-      if (cursor !== meta || !meta.child) return cursor.cwd;
+      if (cursor !== meta || !meta.child) {
+        const workspaceKind = cursor.workspaceKind ?? workspaceKindOf(cursor.cwd, workspaces);
+        return workspaceKind ? (workspaces[workspaceKind] ?? cursor.cwd) : cursor.cwd;
+      }
       return latest.get(meta.path)?.projectCwd ?? meta.cwd;
     };
 
@@ -1009,6 +1014,7 @@ interface RowModel {
   messageCount: number;
   /** An agent started this session under another one. */
   child: boolean;
+  workspaceKind: "beam" | "chat" | undefined;
   /** The instance name its parent gave it. */
   subagentName: string | undefined;
   /** The newest run in this session, when the registry knows one. */
@@ -1026,6 +1032,7 @@ const sameRow = (a: RowModel, b: RowModel): boolean =>
   a.modifiedAt === b.modifiedAt &&
   a.messageCount === b.messageCount &&
   a.child === b.child &&
+  a.workspaceKind === b.workspaceKind &&
   a.subagentName === b.subagentName &&
   a.runId === b.runId &&
   a.runStatus === b.runStatus;
@@ -1042,7 +1049,7 @@ function mergedByPath(s: AppState): ReadonlyMap<string, SessionSummary> {
   return byPath;
 }
 
-const NO_ROW: RowModel = { cwd: "", status: "idle", untitled: true, sub: { text: "No messages yet", mono: false, tone: "muted" }, modifiedAt: undefined, messageCount: 0, child: false, subagentName: undefined, runId: undefined, runStatus: undefined };
+const NO_ROW: RowModel = { cwd: "", status: "idle", untitled: true, sub: { text: "No messages yet", mono: false, tone: "muted" }, modifiedAt: undefined, messageCount: 0, child: false, workspaceKind: undefined, subagentName: undefined, runId: undefined, runStatus: undefined };
 
 /** What the runtime's item state lacks, from the laser store, for one path. */
 function useRowModel(path: string | undefined): RowModel {
@@ -1062,6 +1069,7 @@ function useRowModel(path: string | undefined): RowModel {
           modifiedAt: summary.modifiedAt,
           messageCount: summary.messageCount,
           child: info?.kind === "child" || summary.parentPath !== undefined,
+          workspaceKind: info?.kind === "beam" || info?.kind === "chat" ? info.kind : undefined,
           subagentName: info?.subagentName,
           runId: run?.runId ?? info?.runId,
           runStatus: run?.status ?? info?.runStatus,
@@ -1091,8 +1099,9 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
   const isPinned = !archived && !row.child && pinned.has(path ?? "");
   const isEditing = editing === id;
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const workspaceKind = workspaceKindOf(row.cwd, workspaces);
+  const workspaceKind = row.workspaceKind ?? workspaceKindOf(row.cwd, workspaces);
   const beam = workspaceKind === "beam";
+  const workspaceLabel = workspaceKind ? groupNameOf(row.cwd, workspaceKind) : shortCwd(row.cwd);
   // A Chat conversation of its own (not one an agent started under it) can
   // move into a project (M13-T58); the same rule that put it in the Chat tab.
   const movable = workspaceKind === "chat" && !row.child && !archived;
@@ -1168,7 +1177,7 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
               <span className="min-w-0 truncate"><ThreadListItemPrimitive.Title fallback={shownTitle} /></span>
             )}
           </span>
-          {isPinned && row.cwd && <span data-slot="pinned-session-project" title={row.cwd} aria-label={`Project: ${row.cwd}`} className="max-w-16 shrink-0 truncate rounded-sm bg-surface-2 px-1 text-xs leading-4 text-ink-3">{shortCwd(row.cwd)}</span>}
+          {isPinned && row.cwd && <span data-slot="pinned-session-project" {...(workspaceKind ? {} : { title: row.cwd })} aria-label={workspaceKind ? `Workspace: ${workspaceLabel}` : `Project: ${row.cwd}`} className="max-w-16 shrink-0 truncate rounded-sm bg-surface-2 px-1 text-xs leading-4 text-ink-3">{workspaceLabel}</span>}
           {chip && info && (
             // The count agrees with the folds without opening either of them:
             // it names the most attention-worthy thing under the row and

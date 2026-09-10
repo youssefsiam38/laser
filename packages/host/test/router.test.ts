@@ -121,6 +121,7 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
   return {
     router,
     note,
+    bind: (path: string, cwd: string) => bound.set(path, cwd),
     catalogRows,
     open,
     workerRequests,
@@ -229,6 +230,50 @@ describe("Router · sessions not yet on disk", () => {
 });
 
 const rpc = (router: Router, method: string, params: unknown = {}) => router.handle({ jsonrpc: "2.0", id: 1, method, params });
+
+describe("Router · session recovery", () => {
+  it("opens a saved session before forwarding an action after its worker retired", async () => {
+    const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-recover-`));
+    const path = join(dir, "saved.jsonl");
+    writeFileSync(path, `${JSON.stringify({ type: "session", id: "saved", cwd: CWD_A })}\n`);
+    const row: SessionSummary = {
+      path,
+      id: "saved",
+      cwd: CWD_A,
+      createdAt: "2026-01-01T00:00:00Z",
+      modifiedAt: "2026-01-01T00:00:00Z",
+      messageCount: 1,
+    };
+    const h = harness({ catalogRows: [row], open: { [CWD_A]: [] } });
+    try {
+      await rpc(h.router, "session/prompt", { path, content: [{ type: "text", text: "continue" }] });
+      expect(h.workerRequests).toEqual([
+        { cwd: CWD_A, method: "session/load", params: { path } },
+        { cwd: CWD_A, method: "session/prompt", params: { path, content: [{ type: "text", text: "continue" }] } },
+      ]);
+    } finally {
+      h.cleanup();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a retired unsaved session before a worker can recreate its stale path", async () => {
+    const h = harness({ open: { [CWD_A]: [] } });
+    h.bind(PATH_A, CWD_A);
+    try {
+      const response = await rpc(h.router, "session/load", { path: PATH_A });
+      expect(response).toMatchObject({
+        error: {
+          code: -32000,
+          message: "This session is no longer open and has no saved transcript. Start a new session.",
+        },
+      });
+      expect(h.workerRequests).toEqual([]);
+    } finally {
+      h.cleanup();
+    }
+  });
+});
 
 describe("Router · the pending tray", () => {
   it("routes every tray operation to the worker holding that session, and answers nothing itself", async () => {
@@ -350,9 +395,24 @@ describe("Router · agents (docs/agents-leap)", () => {
       expect(h.projects.list().map((p) => p.cwd)).toContain(CWD_A);
 
       await rpc(h.router, "session/new", { cwd: WORKSPACES.beam });
-      expect(h.workerRequests.at(-1)).toMatchObject({ cwd: WORKSPACES.beam, params: { agentName: "beam" } });
+      const beamRequest = h.workerRequests.at(-1)!;
+      expect(beamRequest.cwd.startsWith(`${WORKSPACES.beam}/session-`)).toBe(true);
+      expect(beamRequest).toMatchObject({ params: { agentName: "beam" } });
+      await rpc(h.router, "session/new", { cwd: WORKSPACES.beam });
+      const secondBeamRequest = h.workerRequests.at(-1)!;
+      expect(secondBeamRequest.cwd).not.toBe(beamRequest.cwd);
+      expect(secondBeamRequest.cwd.startsWith(`${WORKSPACES.beam}/session-`)).toBe(true);
       await rpc(h.router, "session/new", { cwd: WORKSPACES.chat, agentName: "chat" });
-      expect(h.workerRequests.at(-1)).toMatchObject({ cwd: WORKSPACES.chat, params: { agentName: "chat" } });
+      const chatRequest = h.workerRequests.at(-1)!;
+      expect(chatRequest).toMatchObject({ params: { agentName: "chat" } });
+      expect(chatRequest.cwd).not.toBe(WORKSPACES.chat);
+      expect(chatRequest.cwd.startsWith(`${WORKSPACES.chat}/session-`)).toBe(true);
+      expect((chatRequest.params as { cwd: string }).cwd).toBe(chatRequest.cwd);
+      expect(existsSync(chatRequest.cwd)).toBe(true);
+      await rpc(h.router, "session/new", { cwd: WORKSPACES.chat, agentName: "chat" });
+      const secondChatRequest = h.workerRequests.at(-1)!;
+      expect(secondChatRequest.cwd).not.toBe(chatRequest.cwd);
+      expect(secondChatRequest.cwd.startsWith(`${WORKSPACES.chat}/session-`)).toBe(true);
       expect(h.projects.list().map((p) => p.cwd)).not.toContain(WORKSPACES.beam);
       expect(h.projects.list().map((p) => p.cwd)).not.toContain(WORKSPACES.chat);
 
@@ -376,11 +436,12 @@ describe("Router · agents (docs/agents-leap)", () => {
       expect(existsSync(join(root, "chat"))).toBe(false);
       await rpc(h.router, "session/new", { cwd: join(root, "chat"), agentName: "chat" });
       expect(existsSync(join(root, "chat"))).toBe(true);
-      expect(h.workerRequests.at(-1)).toMatchObject({ cwd: join(root, "chat"), params: { agentName: "chat" } });
+      expect(h.workerRequests.at(-1)?.cwd.startsWith(`${join(root, "chat")}/session-`)).toBe(true);
+      expect(h.workerRequests.at(-1)).toMatchObject({ params: { agentName: "chat" } });
 
       const before = h.workerRequests.length;
       const refused = await rpc(h.router, "session/new", { cwd: join(root, "blocked", "beam") });
-      expect(refused).toMatchObject({ error: { message: expect.stringMatching(/Beam's workspace folder could not be created at .*blocked\/beam: a parent of that path is a file/) } });
+      expect(refused).toMatchObject({ error: { message: expect.stringMatching(/Beam could not create a private workspace: a parent of that path is a file/) } });
       // No worker was started for a directory that does not exist.
       expect(h.workerRequests).toHaveLength(before);
     } finally {

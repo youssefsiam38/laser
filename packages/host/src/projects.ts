@@ -83,10 +83,14 @@ export class ProjectRegistry {
 
   // ------------------------------------------------------------- the list
 
-  /** True for a directory that is deliberately not a project (a built-in workspace). */
+  /** True for a directory that is deliberately not a project (a built-in workspace or one of its private sessions). */
   isExcluded(cwd: string): boolean {
     const key = canonical(cwd);
-    return (this.options.exclude ?? []).some((excluded) => canonical(excluded) === key);
+    return (this.options.exclude ?? []).some((excluded) => {
+      const root = canonical(excluded);
+      const separator = root.includes("\\") ? "\\" : "/";
+      return key === root || key.startsWith(`${root}${separator}`);
+    });
   }
 
   /** Pinned projects ∪ directories the catalog has seen, by saved priority then name. */

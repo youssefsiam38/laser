@@ -53,12 +53,13 @@ async function openAndPrompt(definition: AgentDefinition, text = "hello"): Promi
 
 describe("StableSdkDriver with an agent definition", () => {
   it("applies custom instructions and sets the definition's model, and still hands over every tool", async () => {
-    const definition: AgentDefinition = { ...fallbackDefaultAgent(), name: "reader", engineInstructions: false, instructions: "You are a careful reader who only inspects.", model: { provider: "stub", id: "stub-1" } };
+    const definition: AgentDefinition = { ...fallbackDefaultAgent(), name: "reader", engineInstructions: false, instructions: "You are a careful reader who only inspects.\n\nCurrent working directory: {{workingDirectory}}", model: { provider: "stub", id: "stub-1" } };
     const { driver } = await openAndPrompt(definition);
     expect(driver.state().model).toMatchObject({ provider: "stub", id: "stub-1" });
     const request = stub.requests[0]!;
     expect(systemTextOf(request).startsWith("You are a careful reader who only inspects.")).toBe(true);
     expect(systemTextOf(request)).not.toContain("expert coding assistant");
+    expect(systemTextOf(request)).toContain(`Current working directory: ${join(base, "project")}`);
     // Every agent has every tool (D-144); what it is for is said in its instructions.
     expect(toolNamesOf(request)).toEqual(expect.arrayContaining([...ENGINE_BUILTIN_TOOLS]));
   }, 60_000);
@@ -72,6 +73,8 @@ describe("StableSdkDriver with an agent definition", () => {
     expect(productOwnedPrompt).not.toMatch(/\bpi\b/i);
     expect(productOwnedPrompt).not.toContain("documentation");
     expect(productOwnedPrompt).not.toContain("node_modules");
+    expect(productOwnedPrompt).not.toContain("{{");
+    for (const tool of ENGINE_BUILTIN_TOOLS) expect(productOwnedPrompt).toMatch(new RegExp(`^- ${tool}(?::|$)`, "m"));
     expect(toolNamesOf(request)).toEqual(expect.arrayContaining([...ENGINE_BUILTIN_TOOLS]));
     // Web search is an extension tool and follows its feature, which this session does not enable.
     expect(toolNamesOf(request)).not.toContain("web_search");

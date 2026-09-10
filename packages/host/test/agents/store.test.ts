@@ -3,7 +3,7 @@
  * seeded, what may be saved, what may be deleted and why not, and that the
  * file survives a restart without the built-ins ever being frozen into it.
  */
-import { PRODUCT_DISPLAY_NAME, PRODUCT_NAME, type AgentDefinitionInput, type AgentsSnapshot } from "@lasercode/protocol";
+import { PRODUCT_DISPLAY_NAME, PRODUCT_NAME, instructionTemplateToken, type AgentDefinitionInput, type AgentsSnapshot } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -55,8 +55,8 @@ describe("AgentStore · seeding", () => {
     const beam = snapshot.agents.find((a) => a.name === "beam")!;
     expect(beam.scopedSkills).toBe(false);
     expect(beam.skills).toEqual([]);
-    expect(beam.instructions).toContain(join(dir, "agent", "sessions"));
-    expect(beam.instructions).not.toContain("skill");
+    expect(beam.instructions).toContain(instructionTemplateToken("sessionHistoryDirectory"));
+    expect(beam.instructions).toContain(instructionTemplateToken("availableSkills"));
     expect(snapshot.agents.find((a) => a.name === "chat")).toMatchObject({ supportsSubagents: false });
     expect(snapshot.agents.find((a) => a.name === "namer")?.instructions).toContain("name sessions");
     expect(snapshot.policy).toEqual({ maxDepth: 3, foregroundCommandSeconds: 120 });
@@ -126,6 +126,10 @@ describe("AgentStore · save and validate", () => {
       { field: "instructions", message: `Write instructions, or use ${PRODUCT_DISPLAY_NAME}'s default instructions.` },
     ]);
     expect(s.validate(custom("a", { instructions: "", engineInstructions: true }))).toEqual([]);
+    expect(s.validate(custom("a", { instructions: "Use {{madeUp}}." }))).toEqual([
+      { field: "instructions", message: "“madeUp” is not available here. Remove it and choose a field from Insert field." },
+    ]);
+    expect(s.validate(custom("a", { instructions: "Use {{workingDirectory}}." }))).toEqual([]);
     expect(s.validate(custom("a", { allowedAgents: ["default"] }))).toEqual([
       { field: "allowedAgents", message: "This agent does not start other agents, so it cannot list any." },
     ]);
@@ -222,6 +226,9 @@ describe("AgentStore · policy, Beam and Namer", () => {
     }
     expect(issuesOf(() => s.setBuiltinInstructions("beam", "   "))).toEqual([
       { field: "instructions", message: "Write instructions, or restore the built-in instructions." },
+    ]);
+    expect(issuesOf(() => s.setBuiltinInstructions("namer", "Use {{workingDirectory}}"))).toEqual([
+      { field: "instructions", message: "“workingDirectory” is not available here. Remove it and choose a field from Insert field." },
     ]);
   });
 

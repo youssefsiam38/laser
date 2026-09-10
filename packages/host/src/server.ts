@@ -65,7 +65,7 @@ export interface HostServerOptions {
   /** Where laser keeps its own state (projects, attention). Default `~/.laser`. */
   stateDir?: string;
   /**
-   * Where the Beam and Chat workspaces live (`<workspacesDir>/beam`,
+   * Where the Beam and Chat workspace containers live (`<workspacesDir>/beam`,
    * `<workspacesDir>/chat`). Defaults to `<stateDir>/workspaces`: the host
    * creates and owns its state directory in every layout, whereas a parent
    * of it may belong to someone else (a review container sets the state
@@ -213,7 +213,7 @@ export class HostServer {
   private beamPrompted = false;
   /** Set by `close()`: background work started behind a request must not outlive the host. */
   private closing = false;
-  /** One Namer benchmark at a time for the whole host; it costs a completion per candidate. */
+  /** One Namer benchmark at a time for the whole host; it tests two small naming jobs per candidate. */
   private namerQualifying = false;
   /** Provider sets already benchmarked this run, so a failure is not retried on every worker. */
   private readonly namerQualified = new Set<string>();
@@ -645,7 +645,7 @@ export class HostServer {
   }
 
   /**
-   * Benchmark Namer against this worker's configured providers.
+   * Benchmark Namer against this worker's connected providers.
    *
    * Naming used to wait for a sign-in performed through the UI during this
    * host run, so an installation whose providers were already connected — the
@@ -676,11 +676,13 @@ export class HostServer {
       const snapshot = this.agents.snapshot();
       if (!this.namerNeedsQualifying()) return;
       if (this.closing || !worker.alive) return;
-      this.namerQualified.add(providerSet);
       this.agents.setNamerState({ ...snapshot.namer, status: "qualifying" });
       try {
         const state = await worker.request<NamerState>("agents/namer/qualify", { cwd });
         this.agents.setNamerState(state);
+        // Only a usable result spends this provider set. A transient model or
+        // formatting failure stays retryable when another worker starts.
+        if (state.status === "ready" && state.model) this.namerQualified.add(providerSet);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         this.agents.setNamerState({ ...snapshot.namer, status: "unqualified", reason });
@@ -694,10 +696,10 @@ export class HostServer {
   }
 
   /**
-   * Namer has no model of its own yet. `unavailable` counts: it is a verdict
-   * about the providers of the moment, and connecting one is exactly what
-   * makes it wrong. A model a person picked, or one a benchmark chose, is
-   * `ready` and is never benchmarked over.
+   * Namer has no model of its own yet. `unavailable` counts only when no
+   * connected candidate exists, and connecting one makes that verdict stale;
+   * a failed candidate check stays retryable too. A model a person picked, or
+   * one a benchmark chose, is `ready` and is never benchmarked over.
    */
   private namerNeedsQualifying(): boolean {
     const { status, model } = this.agents.snapshot().namer;

@@ -66,6 +66,8 @@ export interface DriverOpenOptions {
   agentDir?: string;
   /** Override of the session storage dir (default <agentDir>/sessions). */
   sessionDir?: string;
+  /** Host state used only by instruction fields that name Laser-owned data files. */
+  stateDir?: string;
   /**
    * Host-resolved Pi project trust (M2-T4). The SDK never runs Pi's own trust
    * flow and `SettingsManager` defaults to trusted, so without this a project

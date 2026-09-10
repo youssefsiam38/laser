@@ -90,8 +90,10 @@ interface Entry {
   retryAt: number | undefined;
   /** When the current (or last) process reached `ready`. */
   readyAt: number | undefined;
-  /** Session paths opened in this worker, for re-opening after a restart. */
+  /** Session paths kept for re-opening after a crash. */
   open: Set<string>;
+  /** Session paths confirmed open in the current worker process. */
+  active: Set<string>;
   /** True while `stop()`/retirement is driving the exit, so it is not a crash. */
   stopping: boolean;
   /**
@@ -213,6 +215,7 @@ export class WorkerPool {
     const entry = this.entries.get(key);
     if (entry) {
       entry.open.add(path);
+      entry.active.add(path);
       entry.lastActivity = this.now();
     }
   }
@@ -221,9 +224,11 @@ export class WorkerPool {
     return this.sessionCwd.get(path);
   }
 
-  /** Session paths currently open in a worker. */
+  /** Session paths currently open in a live, ready worker. */
   openSessions(cwd: string): string[] {
-    return [...(this.entries.get(canonical(cwd))?.open ?? [])];
+    const entry = this.entries.get(canonical(cwd));
+    if (!entry?.client?.alive || entry.status !== "ready") return [];
+    return [...entry.active];
   }
 
   /**
@@ -236,6 +241,7 @@ export class WorkerPool {
     const entry = cwd !== undefined ? this.entries.get(cwd) : undefined;
     if (!entry) return;
     entry.open.delete(path);
+    entry.active.delete(path);
     entry.running.delete(path);
   }
 
@@ -323,6 +329,7 @@ export class WorkerPool {
       retryAt: undefined,
       readyAt: undefined,
       open: new Set(),
+      active: new Set(),
       stopping: false,
       stopped: undefined,
       retireReason: undefined,
@@ -442,6 +449,7 @@ export class WorkerPool {
       const kind = params?.update?.kind;
       if (path) {
         entry.open.add(path);
+        entry.active.add(path);
         this.sessionCwd.set(path, entry.cwd);
         if (kind === "agent_start") entry.running.add(path);
         if (kind === "agent_end" || kind === "agent_settled") entry.running.delete(path);
@@ -454,6 +462,7 @@ export class WorkerPool {
     if (entry.client !== client) return; // a superseded process; ignore
     entry.client = undefined;
     entry.running.clear();
+    entry.active.clear();
     if (entry.stopping || this.closed) {
       if (entry.status !== "retired") this.setStatus(entry, "retired", entry.retireReason ?? "worker exited");
       return;
@@ -517,7 +526,10 @@ export class WorkerPool {
     for (const path of paths) {
       // The worker restarts its `seq` counter at 1; clients notice through
       // `session/load`'s `replayFrom` and resync (see the UI's `onResume`).
-      await client.request("session/load", { path }).catch(() => entry.open.delete(path));
+      await client.request("session/load", { path }).then(
+        () => this.bindSession(path, entry.cwd),
+        () => entry.open.delete(path),
+      );
     }
   }
 
@@ -537,6 +549,7 @@ export class WorkerPool {
     entry.retireReason = message;
     this.clearRetry(entry);
     entry.running.clear();
+    entry.active.clear();
     // A retired worker holds nothing open. `Router.sessions()` uses exactly this
     // to drop the stub for a session Pi never wrote.
     entry.open.clear();

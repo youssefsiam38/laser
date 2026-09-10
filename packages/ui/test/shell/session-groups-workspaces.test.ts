@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectInfo } from "@lasercode/protocol";
-import { sessionGroups } from "../../src/components/shell/session-groups.js";
+import { sessionGroups, workspaceKindOf } from "../../src/components/shell/session-groups.js";
 import { createArchiveStore, visibleProjectCwds } from "../../src/runtime/threadList.js";
 import { summary } from "../agents/fixtures.js";
 
@@ -25,5 +25,23 @@ describe("Beam and Chat sessions from an older workspace layout", () => {
   it("never lists their directories as projects in the rail", () => {
     const archive = createArchiveStore(null);
     expect(visibleProjectCwds([project("/p")], [oldBeam, newBeam, oldChat, work], {}, archive, { exclude: [workspaces.beam, workspaces.chat] })).toEqual(["/p"]);
+  });
+
+  it("recognises every private per-session directory as part of its built-in workspace", () => {
+    expect(workspaceKindOf(`${workspaces.beam}/session-a1b2`, workspaces)).toBe("beam");
+    expect(workspaceKindOf(`${workspaces.chat}/session-c3d4`, workspaces)).toBe("chat");
+    expect(workspaceKindOf("/state/workspaces/chatty/session-c3d4", workspaces)).toBeUndefined();
+  });
+
+  it("groups private descendants correctly before their agent metadata arrives", () => {
+    const privateBeam = summary({ path: "/s/beam-private.jsonl", cwd: `${workspaces.beam}/session-a1b2` });
+    const privateChat = summary({ path: "/s/chat-private.jsonl", cwd: `${workspaces.chat}/session-c3d4` });
+
+    expect(sessionGroups([], [privateBeam, privateChat], {}, {}, { tab: "code", workspaces })).toMatchObject([
+      { cwd: workspaces.beam, name: "Beam", kind: "beam", rows: [{ path: privateBeam.path }] },
+    ]);
+    expect(sessionGroups([], [privateBeam, privateChat], {}, {}, { tab: "chat", workspaces })).toMatchObject([
+      { cwd: workspaces.chat, name: "Chat", kind: "chat", rows: [{ path: privateChat.path }] },
+    ]);
   });
 });

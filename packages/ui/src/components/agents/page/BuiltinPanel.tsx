@@ -4,7 +4,7 @@
  * built in; their system instructions and model belong to the person. Namer's
  * card also shows the state of its qualification and the candidates it tried.
  */
-import { AGENT_INSTRUCTIONS_MAX, type AgentModelChoice, type AgentsSnapshot, type BuiltinAgentName, type NamerCandidate, type NamerState } from "@lasercode/protocol";
+import { AGENT_INSTRUCTIONS_MAX, instructionTemplateIssue, type AgentModelChoice, type AgentsSnapshot, type BuiltinAgentName, type NamerCandidate, type NamerState } from "@lasercode/protocol";
 import { Check, RotateCw, Save, Undo2, X, Zap } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
@@ -15,11 +15,11 @@ import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { ProviderLogo } from "@/components/assistant-ui/elements/logos";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 
 import { AgentMarkIcon } from "./AgentList.js";
 import { BuiltinModelDialog } from "./dialogs.js";
 import { Hint, IssueNotice, Section } from "./fields.js";
+import { InstructionTemplateEditor } from "./InstructionTemplateEditor.js";
 import { builtinBlurb, formatLatency, modelChoiceId, namerSummary } from "./model.js";
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -65,6 +65,7 @@ function BuiltinInstructionsEditor({ name, current, customized }: { name: Builti
   }, [current, name]);
   const dirty = draft !== current;
   const invalid = draft.trim().length === 0;
+  const templateIssue = instructionTemplateIssue(draft, name);
 
   const save = async () => {
     setBusy("save");
@@ -99,17 +100,16 @@ function BuiltinInstructionsEditor({ name, current, customized }: { name: Builti
           ? "How Namer approaches titles and activity labels. The short output format stays enforced for each request."
           : `How ${agentDisplayName(name)} answers and works. New conversations use the saved instructions.`
       }
-      notices={<IssueNotice messages={error ? [error] : invalid ? ["Write instructions, or restore the built-in instructions."] : []} />}
+      notices={<IssueNotice messages={error ? [error] : invalid ? ["Write instructions, or restore the built-in instructions."] : templateIssue ? [templateIssue] : []} />}
     >
-      <Textarea
-        name="instructions"
-        aria-label={`${agentDisplayName(name)} system instructions`}
-        aria-invalid={invalid || error ? true : undefined}
+      <InstructionTemplateEditor
+        target={name}
+        ariaLabel={`${agentDisplayName(name)} system instructions`}
+        invalid={Boolean(invalid || error || templateIssue)}
         value={draft}
         maxLength={AGENT_INSTRUCTIONS_MAX}
-        className="min-h-40 max-h-120 font-mono text-sm leading-code"
-        onChange={(event) => {
-          setDraft(event.target.value);
+        onChange={(instructions) => {
+          setDraft(instructions);
           setError(undefined);
         }}
       />
@@ -124,7 +124,7 @@ function BuiltinInstructionsEditor({ name, current, customized }: { name: Builti
               {busy === "restore" ? "Restoring…" : "Restore built-in instructions"}
             </Button>
           ) : null}
-          <Button type="button" size="sm" disabled={!dirty || invalid || busy !== undefined} aria-busy={busy === "save" || undefined} onClick={() => void save()}>
+          <Button type="button" size="sm" disabled={!dirty || invalid || Boolean(templateIssue) || busy !== undefined} aria-busy={busy === "save" || undefined} onClick={() => void save()}>
             {busy === "save" ? <RotateCw className="motion-safe:animate-busy" /> : <Save />}
             {busy === "save" ? "Saving…" : "Save instructions"}
           </Button>

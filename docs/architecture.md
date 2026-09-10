@@ -158,7 +158,8 @@ in-memory engine overrides.
   durable rename aliases, the policy and each built-in agent's instruction/model choices. `<Laser data>/state/agent-runs.json`:
   every agent run the host has heard of, fed by worker `agents/run`
   notifications ([`agents.md`](agents.md) §8).
-- `<Laser data>/state/workspaces/beam` and `.../chat`: the working directories
+- `<Laser data>/state/workspaces/beam` and `.../chat`: containers whose opaque,
+  persistent child directories give every Beam and Chat session its own workspace
   of the projectless built-in agents; not projects. They live under the state
   directory the host creates and owns, so a sandboxed or relocated state
   directory keeps its workspaces with it, and a Beam or Chat session whose

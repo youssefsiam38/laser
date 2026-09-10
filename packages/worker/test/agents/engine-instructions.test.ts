@@ -1,15 +1,18 @@
 /** M13-T72 · Laser owns the default prompt; the engine contributes no copy. */
-import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
+import { instructionTemplateToken } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
 import { defaultAgentInstructions, defaultToolSnippets } from "../../src/agents/engine-instructions.js";
 
 describe("defaultAgentInstructions", () => {
-  it("returns the product's neutral prompt for the actual default tools", () => {
+  it("returns the product's neutral template with every live prompt field placed", () => {
     const text = defaultAgentInstructions("/tmp/some-project");
-    expect(text).toContain("Available tools:");
-    for (const tool of ["read", "bash", "edit", "write", "grep", "find", "ls"]) expect(text).toMatch(new RegExp(`^- ${tool}: `, "m"));
+    expect(text).toContain(instructionTemplateToken("availableTools"));
+    expect(text).toContain(instructionTemplateToken("toolGuidelines"));
+    expect(text).toContain(instructionTemplateToken("projectInstructions"));
+    expect(text).toContain(instructionTemplateToken("availableSkills"));
+    expect(text).toContain(instructionTemplateToken("workingDirectory"));
     expect(text).toContain("Guidelines:");
-    expect(text).toContain(`operating inside ${PRODUCT_DISPLAY_NAME}`);
+    expect(text).toContain(`operating inside ${instructionTemplateToken("productName")}`);
     expect(text).not.toMatch(/\bpi\b/i);
     expect(text).not.toContain("documentation");
     expect(text).not.toContain("node_modules");

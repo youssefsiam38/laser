@@ -97,7 +97,7 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
-| M2-T1 | Worker pool | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | pool lifecycle: starting/ready/crashed/retired, backoff, idle retire gated on attachments + live pi-subagents runs; boot-id+start-time pid identity |
+| M2-T1 | Worker pool | done | codex-2026-09-10-stale-session | host router 22 + worker-pool 10; host typecheck/build | saved sessions reopen before actions; retired unsaved paths are refused without recreation |
 | M2-T2 | Attention model + inbox | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | host attention model, persisted seen watermark, inbox |
 | M2-T3 | Fast switching | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | hydrated-view cache in host; per-path selectors verified |
 | M2-T4 | Project management + trust | done | claude-2026-09-05-c | `pnpm -r build && pnpm -r typecheck && pnpm -r test` (385 tests) at `958bfb1` | server-side projects with Pi trust gate passed through as a dialog |
@@ -107,6 +107,10 @@ path. Dates in notes are history, not plans. Never delete rows or notes.
 #### M2-T1 notes
 - 2026-09-05 claimed: rewrite `worker-pool.ts` with lifecycle states (starting/ready/crashed/retired), backoff restart, idle retire gated on attached clients + live pi-subagents runs, duplicate-cwd refusal.
 - 2026-09-05 done. `pi/worker/status` now carries a `WorkerInfo` (pid, restarts, since, retryAt, canRestart, reopened); the pool emits `starting` itself (it never did) and re-emits the worker's own `ready`/`retired` enriched. Crash → exponential backoff (1s doubling, 30s cap, 5 attempts) and the sessions that were open are re-loaded, which the UI adopts through the existing seq-epoch resync. The crash counter resets only after 60s of healthy uptime, so a crash loop still reaches the cap instead of restarting forever. Retirement requires: idle 10 min, no attached client, no running agent, and no live pi-subagents run — the last read from each run's `status.json` + `process.kill(pid, 0)`, never `lastUpdate` (findings.md reaping hazard); an unreadable temp root counts as "work in flight".
+- 2026-09-10 claimed: reproduce the reported stale empty session after idle retirement; make host routing load saved transcripts before forwarding actions and refuse an unsaved retired path before the engine can recreate it under the wrong filename.
+- 2026-09-10 checkpoint: `openSessions` now reports only a live ready worker, path-routed actions recover a saved transcript before forwarding, and a retired path with no file gets a person-facing SessionNotFound before any worker starts; targeted router and pool regressions added.
+- 2026-09-10 done: `packages/host/test/router.test.ts` 22 and `worker-pool.test.ts` 10 pass; host typecheck and build pass. The full host suite's unrelated live-engine case is currently blocked by M13-T76's in-progress instruction template (`One inserted field is incomplete`), while every router and pool test passed in that run.
+- 2026-09-10 independent review: agree with the fix. Recovery intent and sessions actually open in the current worker are now separate states; the router restores a saved session before a path action and rejects a stale unsaved path without recreating it. After M13-T76 landed, the complete host suite passes all 208 tests, including the real worker end-to-end cases.
 
 #### M2-T2 notes
 - 2026-09-05 claimed: derive `SessionAttention` in the host from worker events; persist "seen" so `finished_unread` survives a reload; add `pi/session/attention` and an attention-sorted inbox query.
@@ -1209,6 +1213,12 @@ lane T's own if both were written.
 | M13-T73 | Skills are discovery-only | done | codex-2026-09-10-independent | protocol 31; host 206; worker 311 + 1 skipped; UI 928; builds | requested by the user; D-172; see notes |
 | M13-T74 | Beam spark always starts fresh | done | codex-2026-09-10-independent | UI 928; `beam/bubble.test.tsx`; desktop/phone, dark/light | requested by the user; D-173; see notes |
 | M13-T75 | Release stable 0.3.1 | done | codex-2026-09-10-release | `d382807`; CI `34435355237`; release `34435577548` | requested by the user; D-174; see notes |
+| M13-T76 | Click-insert variables for agent instructions | done | codex-2026-09-10-prompt-namer | `pnpm verify`; protocol 41 + UI 934 tests | D-175; see notes |
+| M13-T77 | Reliable Namer model qualification | done | codex-2026-09-10-prompt-namer | `pnpm verify`; worker 313 + host 208 tests | D-176; see notes |
+| M13-T78 | Beam maximize selects Code | done | codex-2026-09-10-prompt-namer | UI 934 tests + browser desktop/phone | D-177; see notes |
+| M13-T79 | Per-session Beam and Chat workspaces | done | codex-2026-09-10-prompt-namer | `pnpm verify`; browser desktop/phone | D-178; see notes |
+| M13-T80 | Tab switch restores its last session | done | codex-2026-09-10-prompt-namer | UI 934 tests + browser pointer navigation | D-177; see notes |
+| M13-T81 | Quiet provider retry recovery | done | codex-2026-09-10-prompt-namer | `store` + projection retry regressions; `pnpm verify` | D-180; see notes |
 | M13-T65 | A fork is a top-level session, never nested under its origin | done | claude-2026-09-09-agents | `pnpm -F @lasercode/host test -- test/catalog.test.ts`; `pnpm -F @lasercode/ui test -- test/shell/session-groups-fork.test.ts` | requested by the user; D-166 |
 | M13-T64 | Namer labels every call of a top-level session, none of a child's | done | claude-2026-09-09-agents | `pnpm -F @lasercode/worker test` (`agents/namer.test.ts` "labels every call in a burst at once"; `agents/server-agents.test.ts` "a child agent's tool calls are never labelled") | requested by the user; D-165 |
 | M13-T63 | Restoring an unsent draft puts the person in the field | done | claude-2026-09-09-agents | `pnpm -F @lasercode/ui test -- test/thread/draft-restore-focus.test.tsx` | requested by the user; see notes |
@@ -1522,6 +1532,31 @@ lane T's own if both were written.
 - 2026-09-10 claimed: stage only the tracked agent/Beam refinements, bump every workspace manifest to 0.3.1, run the release and identity gates against that exact index, push source, wait for clean CI, then tag and monitor the release workflow through verified publication.
 - 2026-09-10 checkpoint: the complete staged gate passed at 0.3.1 — product identity, workspace build/typecheck/tests, the real desktop bridge under Xvfb, 13 publication regressions, and 76 install/upgrade/uninstall checks. The two unrelated local `.tmp-pi-command-demo.*` files were excluded during identity inspection and restored afterward; no untracked user files are staged.
 - 2026-09-10 done: pushed source commit `d382807`, waited for clean CI run `34435355237`, then pushed annotated tag `v0.3.1`. Release workflow `34435577548` built and uploaded x64/ARM64 packages, installed the staged artifacts, attested the build, verified remote sizes and SHA-256 digests, published the stable [release](https://github.com/youssefsiam38/laser/releases/tag/v0.3.1), and deployed the signed APT/DNF repositories. Independent inspection found 12 uploaded assets: AppImage, DEB, RPM and tarball for both architectures, `install.sh`, `SHA256SUMS`, its signature, and offline provenance; the release is public, not a prerelease, and GitHub reports it as Latest.
+
+#### M13-T76 notes
+- 2026-09-10 claimed: inventory the runtime-built prompt inputs, choose a safe standard template renderer, and build a caret-aware field picker into every agent instruction editor.
+- 2026-09-10 done: Handlebars renders a restricted, validated field catalogue for custom, Default, Beam, Chat and Namer instructions. The searchable picker exposes only human labels and descriptions, inserts at the caret, restores editor focus, and browser review confirmed live insertion with no syntax error.
+
+#### M13-T77 notes
+- 2026-09-10 claimed: trace nomination, trial prompts and validation end to end, then replace all-or-nothing qualification with deterministic eligible candidates, tolerant validation and measured fallback.
+- 2026-09-10 done: Namer tests every connected candidate against both real naming jobs in parallel, normalizes harmless wrappers and truncation, ranks valid results by fidelity then speed and price, preserves a previous valid choice on a failed recheck, and retries qualification after a transient all-failed run. Browser qualification selected a valid nano model and showed each measured result.
+
+#### M13-T78 notes
+- 2026-09-10 claimed: make the bubble's full-view transition select Code at the same time it opens or creates the Beam session.
+- 2026-09-10 done: both empty and existing Beam maximize paths select Code before opening the main conversation; interaction tests and browser review confirm the selected tab and restored Beam row.
+
+#### M13-T79 notes
+- 2026-09-10 claimed: replace Beam and Chat's shared working directories with one durable opaque workspace per session and keep Chat's move-to-project working from those paths.
+- 2026-09-10 done: every Beam and Chat creation allocates a persistent private directory beneath its workspace container. Descendants are excluded from projects and normalized to friendly Beam/Chat grouping even before agent metadata arrives; the transcript says only “Private workspace”, and Chat exposes a direct Move to a project action. Browser review confirmed distinct friendly surfaces at desktop and phone widths.
+
+#### M13-T80 notes
+- 2026-09-10 claimed: connect the Chat/Code tab control to the existing per-directory session memory so each tab restores its own most recently viewed conversation.
+- 2026-09-10 done: each tab remembers its last surviving path, falls back to the newest session of that kind, and clears to an honest empty state when none exists. Pointer switching in the browser restored Chat and Beam independently; keyboard behavior shares the tested tab handler.
+
+#### M13-T81 notes
+- 2026-09-10 claimed: keep retryable provider attempts out of the transcript, preserve the run as working through backoff, and show one gentle actionable warning only when recovery is exhausted or impossible.
+- 2026-09-10 done: retryable `agent_end` events keep the run working, `auto_retry_start` removes the failed attempt without adding a notice, and history projection hides every superseded provider failure. A recovered turn has no visible error; an exhausted turn keeps only its last failure as one attention-toned actionable warning. The engine's existing bounded exponential backoff remains unchanged.
+- 2026-09-10 verification: staged `pnpm verify` passed build, typecheck, 1,840 package tests (one intentional worker skip) and all 13 release-publication regressions. Desktop and 390×844 browser review passed in dark and light themes.
 
 #### M13-T65 notes
 - 2026-09-09 the user forked a session and saw the fork nested under its origin like an agent's child. Cause: the catalog turned the engine's `parentSession` header — a fork's lineage — into the summary's `parentPath`, the same field the agent record fills for a child, and every consumer of `parentPath` (the sidebar's fold, the agents map's attribution, the move's "a child moves with its tree" refusal) read it as "an agent started this one". Fixed at the source: the header becomes `forkedFrom` (lineage only, new on `SessionSummary`); `parentPath` now comes only from an agent record. A fork is listed beside its origin in the project group.
@@ -3413,3 +3448,33 @@ Consequences: the worker, not the UI, owns stop-then-move, because two requests 
 **Decision.** Add M13-T75 and publish the completed agent customization, identity, skill-discovery and Beam-launcher refinements as stable 0.3.1.
 **Why.** The changes form one user-visible refinement release and the person explicitly requested that version.
 **Consequences.** Every workspace manifest must agree on 0.3.1. Source CI must pass before the immutable tag is pushed, and the release remains unpublished until both architecture artifacts, checksums and provenance verify in the release pipeline.
+
+### D-175 · 2026-09-10 · Dynamic instructions are visible template fields, never remembered syntax
+**Decision.** Add M13-T76. Agent instruction overrides use Mustache-compatible variables. Every supported runtime value appears in a labelled picker beside the editor and inserts at the current caret; the stored template remains portable text and the worker renders it for each request.
+**Why.** Editing the prompt should not freeze values that change with tools, project context, skills, session role or working directory, and a person should never need to learn or type a variable name.
+**Consequences.** Laser owns the field catalogue and its safe render context. Unknown or malformed fields are refused before save rather than silently disappearing. Product defaults use the same public fields, so the editor shows exactly how live dynamic content enters the prompt.
+
+### D-176 · 2026-09-10 · Namer qualification measures candidates and degrades to a usable choice
+**Decision.** Add M13-T77. Qualification builds its candidates deterministically from connected text models, asks shortlisted candidates to perform the real naming job, normalizes common valid response shapes, and ranks successful trials by correctness before latency and price. A malformed nomination can no longer make the run unavailable.
+**Why.** The nomination model was a second language-model dependency whose formatting failure could eliminate every otherwise usable candidate. Qualification exists to prove a model can name, so the proof itself should select the model.
+**Consequences.** External provider failure can still be reported per candidate, but the run keeps the strongest usable result and a previous valid Namer selection is never erased by a failed requalification.
+
+### D-177 · 2026-09-10 · Session-kind tabs navigate, and Beam belongs to Code
+**Decision.** Add M13-T78 and M13-T80. Chat and Code remember their own last viewed session and selecting a tab navigates to that session. Maximizing Beam selects Code before moving its conversation into the main view.
+**Why.** A selected tab that disagrees with the conversation in the main view makes the sidebar look like a filter over unrelated content. Beam is a coding agent and already lives with projects in Code.
+**Consequences.** Pointer and keyboard tab changes have the same navigation behavior. A missing or archived remembered session falls back to the newest surviving session in that tab, then to the tab's empty state without creating anything.
+
+### D-178 · 2026-09-10 · Every Beam and Chat conversation owns a private workspace
+**Decision.** Add M13-T79. The Beam and Chat workspaces become containers; each new built-in conversation gets an opaque durable child directory used as its working directory. A Chat keeps that directory until its conversation moves into a project.
+**Why.** Sharing one writable directory lets unrelated conversations see and inherit each other's generated files and dirty state. A conversation that becomes long-lived needs its own clean place without asking the person to manage another project.
+**Consequences.** Beam and Chat grouping follows the agent record rather than exact cwd equality. Private paths are not presented as projects. Move-to-project accepts any top-level Chat session; its private working files remain intact unless the person deliberately moves them.
+
+### D-179 · 2026-09-10 · Unreleased instruction templates need no legacy prompt emulation
+**Decision.** Supersede D-175's compatibility clause. Product-owned default and built-in prompts use the new live fields directly; the worker does not auto-append missing fields to older templates.
+**Why.** This editor has never shipped to a user, so preserving an unreleased intermediate prompt shape adds duplication and hides what the visible template actually controls.
+**Consequences.** Shipped defaults are replaced by the field-based versions. Explicit custom instructions render exactly as saved; live information enters only where the person inserts it.
+
+### D-180 · 2026-09-10 · Recoverable provider failures are invisible
+**Decision.** Add M13-T81. A provider attempt that the engine will retry is transient control state, not a conversation record: Laser keeps the run working, removes that failed attempt from presentation, and renders no retry counter. If recovery succeeds, nothing about the failure remains visible. Only an exhausted or non-retryable provider request becomes one attention-toned, actionable warning.
+**Why.** Short-lived rate limits, overloads and dropped sockets are normal transport noise. Showing a red stopped row beside an active retry contradicts the actual run state and makes successful self-recovery feel broken.
+**Consequences.** Raw provider failures remain in low-level logs and persisted engine history for diagnosis, while normal transcript hydration suppresses recovered attempts. The existing bounded exponential-backoff policy remains the source of retry timing and count.
