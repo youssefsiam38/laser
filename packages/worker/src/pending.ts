@@ -158,9 +158,11 @@ export class PendingTray {
         };
         try {
           const result = await this.deps.prompt(head.content, acknowledge);
-          // An extension is holding the prompt (a blocking dialog, a command).
-          // Steering it in is what `sendToSession` does for the same refusal.
-          if (!result.accepted) await this.deps.steer(head.content);
+          // An extension is holding a prompt that was never accepted. Steering
+          // it in is what `sendToSession` does for the same refusal. Acceptance
+          // is monotonic: a mismatched late `{ accepted: false }` cannot hand an
+          // already acknowledged message to the engine a second time.
+          if (!result.accepted && !accepted) await this.deps.steer(head.content);
           // The driver contract calls `acknowledge` during accepted preflight.
           // This also covers a successful refused-prompt fallback steer and a
           // future driver that can only report acceptance with its result.

@@ -99,7 +99,8 @@ export interface PromptOptions {
    * Called once the engine has accepted this exact prompt, before its turn runs.
    * Not called for a preflight refusal. A later run failure does not revoke
    * acceptance: the user message already belongs to the engine and must not be
-   * submitted again.
+   * submitted again. The driver isolates observer failures so they cannot stop
+   * the accepted engine run.
    */
   onAccepted?: () => void;
 }

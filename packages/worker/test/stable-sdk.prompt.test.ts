@@ -4,7 +4,7 @@
  * format; Pi is pointed at it through a sandboxed models.json.
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServer, type Server } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,6 +15,28 @@ import type { DriverEvent } from "../src/driver.js";
 import type { SessionUpdate } from "@lasercode/protocol";
 
 const REPLY = ["Hel", "lo ", "from ", "stub"];
+
+type Deferred = { promise: Promise<void>; release: () => void };
+function deferred(): Deferred {
+  let release = () => {};
+  const promise = new Promise<void>((resolve) => { release = resolve; });
+  return { promise, release };
+}
+
+interface FakePromptOptions {
+  streamingBehavior?: "steer" | "followUp";
+  preflightResult?: (accepted: boolean) => void;
+}
+
+function installPromptSession(
+  target: StableSdkDriver,
+  session: { isStreaming: boolean; prompt(text: string, options?: FakePromptOptions): Promise<void> },
+): void {
+  (target as unknown as { runtime: unknown }).runtime = {
+    session,
+    dispose: async () => {},
+  };
+}
 
 function sse(obj: unknown): string {
   return `data: ${JSON.stringify(obj)}\n\n`;
@@ -113,6 +135,81 @@ afterEach(async () => {
 });
 
 describe("StableSdkDriver.prompt", () => {
+  it("serializes queued waiters across a refused idle preflight", async () => {
+    const firstPreflight = deferred();
+    const secondPreflight = deferred();
+    const secondTurn = deferred();
+    const calls: Array<{ text: string; streaming: boolean; behavior?: string }> = [];
+    const acknowledgements: string[] = [];
+    const session = {
+      isStreaming: false,
+      async prompt(text: string, options?: FakePromptOptions): Promise<void> {
+        calls.push({ text, streaming: this.isStreaming, ...(options?.streamingBehavior ? { behavior: options.streamingBehavior } : {}) });
+        if (text === "first") {
+          await firstPreflight.promise;
+          options?.preflightResult?.(false);
+          throw new Error("The first prompt was refused.");
+        }
+        if (text === "second") {
+          await secondPreflight.promise;
+          options?.preflightResult?.(true);
+          this.isStreaming = true;
+          await secondTurn.promise;
+          this.isStreaming = false;
+          return;
+        }
+        options?.preflightResult?.(true);
+      },
+    };
+    installPromptSession(driver, session);
+
+    const first = driver.prompt([{ type: "text", text: "first" }]);
+    const second = driver.prompt([{ type: "text", text: "second" }], {
+      streamingBehavior: "steer",
+      onAccepted: () => acknowledgements.push("second"),
+    });
+    const third = driver.prompt([{ type: "text", text: "third" }], {
+      streamingBehavior: "followUp",
+      onAccepted: () => acknowledgements.push("third"),
+    });
+    await Promise.resolve();
+    expect(calls.map((call) => call.text)).toEqual(["first"]);
+
+    firstPreflight.release();
+    await expect(first).rejects.toThrow("refused");
+    await Promise.resolve();
+    expect(calls.map((call) => call.text)).toEqual(["first", "second"]);
+
+    secondPreflight.release();
+    expect(await third).toEqual({ accepted: true, queued: true });
+    expect(calls).toEqual([
+      { text: "first", streaming: false },
+      { text: "second", streaming: false, behavior: "steer" },
+      { text: "third", streaming: true, behavior: "followUp" },
+    ]);
+    expect(acknowledgements).toEqual(["second", "third"]);
+
+    secondTurn.release();
+    expect(await second).toEqual({ accepted: true, queued: false });
+  });
+
+  it("does not downgrade an acknowledged invocation when Pi throws a busy-shaped late error", async () => {
+    const session = {
+      isStreaming: false,
+      async prompt(_text: string, options?: FakePromptOptions): Promise<void> {
+        options?.preflightResult?.(true);
+        throw new Error("Agent is already processing a prompt.");
+      },
+    };
+    installPromptSession(driver, session);
+    let accepted = 0;
+
+    await expect(driver.prompt([{ type: "text", text: "accepted first" }], {
+      onAccepted: () => { accepted += 1; },
+    })).rejects.toThrow("already processing");
+    expect(accepted).toBe(1);
+  });
+
   it("captures instruction provenance from a real session and the actual sent payload", async () => {
     const path = join(base, "project", "AGENTS.md");
     writeFileSync(path, "Recorded project instruction.\n");
@@ -194,6 +291,29 @@ describe("StableSdkDriver.prompt", () => {
     release();
     expect(await running).toEqual({ accepted: true, queued: false });
     expect(acceptedCount).toBe(1);
+  }, 60_000);
+
+  it("keeps the accepted engine run alive when its observer throws", async () => {
+    await driver.open({
+      cwd: join(base, "project"),
+      agentDir: join(base, "agent"),
+      sessionDir: join(base, "sessions"),
+    });
+    await driver.setModel({ provider: "stub", id: "stub-1" });
+    const reported = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await driver.prompt([{ type: "text", text: "still run" }], {
+        onAccepted: () => { throw new Error("publication failed"); },
+      });
+      expect(result).toEqual({ accepted: true, queued: false });
+      expect(stub.requests).toHaveLength(1);
+      expect(reported).toHaveBeenCalledWith(
+        expect.stringContaining("could not publish an accepted prompt"),
+        "publication failed",
+      );
+    } finally {
+      reported.mockRestore();
+    }
   }, 60_000);
 
   it("streams a reply from a stub provider as ordered session updates", async () => {

@@ -236,6 +236,54 @@ describe("PendingTray · the three acts on one message", () => {
 });
 
 describe("PendingTray · delivery that does not land", () => {
+  it("never steers a prompt whose callback accepted it even if a driver later reports false", async () => {
+    let steers = 0;
+    const tray = new PendingTray({
+      prompt: async (_content, onAccepted) => {
+        onAccepted();
+        return { accepted: false };
+      },
+      steer: async () => { steers += 1; },
+      streaming: () => false,
+      publish: () => {},
+      newId: () => "p-mismatched-result",
+    });
+    tray.add(text("accepted once"));
+
+    await tray.drain();
+    expect(steers).toBe(0);
+    expect(tray.list()).toEqual([]);
+  });
+
+  it("keeps acceptance monotonic when publishing its removal throws", async () => {
+    let engineRan = false;
+    const reported: unknown[] = [];
+    const tray = new PendingTray({
+      prompt: async (_content, onAccepted) => {
+        try {
+          onAccepted();
+        } catch (error) {
+          // The real driver owns this no-throw observer boundary.
+          reported.push(error);
+        }
+        engineRan = true;
+        return { accepted: true };
+      },
+      steer: async () => {},
+      streaming: () => false,
+      publish: (messages) => {
+        if (messages.length === 0) throw new Error("socket closed during publication");
+      },
+      newId: () => "p-publication-error",
+    });
+    tray.add(text("still run this"));
+
+    await tray.drain();
+    expect(reported).toEqual([expect.objectContaining({ message: "socket closed during publication" })]);
+    expect(engineRan).toBe(true);
+    expect(tray.list()).toEqual([]);
+  });
+
   it("never retries a message whose accepted turn fails later", async () => {
     let prompts = 0;
     const tray = new PendingTray({
@@ -377,11 +425,17 @@ class TrayDriver implements Partial<SessionDriver> {
   failBeforeAcceptance: Error | undefined;
   failAfterAcceptance: Error | undefined;
   acceptPrompts = true;
+  readonly acceptedObserverErrors: unknown[] = [];
   async prompt(content: ContentBlock[], options?: PromptOptions) {
     this.prompted.push(textOf(content));
     if (this.failBeforeAcceptance) throw this.failBeforeAcceptance;
     if (!this.acceptPrompts) return { accepted: false, queued: false };
-    options?.onAccepted?.();
+    try {
+      options?.onAccepted?.();
+    } catch (error) {
+      // Matches StableSdkDriver's no-throw accepted-observer boundary.
+      this.acceptedObserverErrors.push(error);
+    }
     this.streaming = true;
     this.emit({ type: "update", update: { kind: "message_start", role: "user" } });
     this.emit({
@@ -409,13 +463,16 @@ class TrayDriver implements Partial<SessionDriver> {
   }
 }
 
-async function server() {
+async function server(options: { onSend?: (message: JsonRpcMessage) => void } = {}) {
   const out: JsonRpcMessage[] = [];
   let driver!: TrayDriver;
   const worker = new WorkerServer({
     cwd: "/tmp/tray",
     createDriver: () => (driver = new TrayDriver()) as unknown as SessionDriver,
-    send: (message) => out.push(message),
+    send: (message) => {
+      out.push(message);
+      options.onSend?.(message);
+    },
   });
   const call = async (id: number, method: string, params?: unknown) => {
     await worker.handle({ jsonrpc: "2.0", id, method, params });
@@ -457,6 +514,33 @@ describe("WorkerServer · the tray on the wire", () => {
 
     release();
     await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  it("runs an accepted prompt once even when publishing its tray removal throws", async () => {
+    let failAcceptedPublication = false;
+    const context = await server({
+      onSend: (message) => {
+        if (!failAcceptedPublication || !("method" in message) || message.method !== "session/update") return;
+        const update = (message.params as { update?: { kind?: string; pending?: unknown[] } }).update;
+        if (update?.kind === "pending_update" && update.pending?.length === 0) {
+          throw new Error("connection closed during pending publication");
+        }
+      },
+    });
+    const { call, driver } = context;
+    driver.streaming = true;
+    await call(2, "session/pending/add", { path: PATH, content: text("publish then run") });
+
+    failAcceptedPublication = true;
+    driver.streaming = false;
+    driver.emit({ type: "update", update: { kind: "agent_settled" } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(driver.acceptedObserverErrors).toEqual([
+      expect.objectContaining({ message: "connection closed during pending publication" }),
+    ]);
+    expect(driver.prompted).toEqual(["publish then run"]);
+    expect((await call(3, "session/pending/list", { path: PATH }))?.result).toEqual({ messages: [] });
   });
 
   it("keeps only pre-acceptance failures and never resends an accepted prompt after a later failure", async () => {
