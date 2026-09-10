@@ -126,7 +126,9 @@ describe("WorkerPool", () => {
     expect(timers[0]!.ms).toBe(10);
 
     runTimers();
-    await waitFor(() => statusesOf(project).at(-1) === "ready");
+    // Process readiness precedes session/load; wait for the recovery we assert,
+    // not the earlier worker notification (which races on a loaded CI runner).
+    await waitFor(() => pool.openSessions(project).includes("/sessions/a.jsonl"));
     const ready = statuses.findLast((s) => s.status === "ready")!;
     expect(ready.reopened).toEqual(["/sessions/a.jsonl"]);
     expect(ready.pid).not.toBe(firstPid);
