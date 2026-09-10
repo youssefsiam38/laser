@@ -309,9 +309,9 @@ function FleetBranch({
 const DOT_STATUS = {
   queued: "working",
   running: "working",
-  // Live and paused on a question: the same pulse as a run that ended needing someone.
+  // Live and paused on a question. Terminal blocking is neutral history.
   needs_input: "waiting_for_input",
-  blocked: "waiting_for_input",
+  blocked: "idle",
   completed: "finished_unread",
   failed: "error",
   cancelled: "idle",

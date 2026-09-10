@@ -28,7 +28,7 @@ export const FLEET_STATUS_WORD: Readonly<Record<FleetRowState, string>> = {
   queued: "Waiting",
   running: "Working",
   needs_input: "Asking",
-  blocked: "Needs you",
+  blocked: "Blocked",
   completed: "Done",
   failed: "Failed",
   cancelled: "Ended",
@@ -227,7 +227,7 @@ export function buildFleetTree(input: FleetTreeInput): InspectFleetResult {
   for (const row of all) {
     if (isTerminalRunStatus(row.state)) finished += 1;
     else working += 1;
-    if (row.state === "needs_input" || row.state === "blocked") needsYou += 1;
+    if (row.state === "needs_input") needsYou += 1;
   }
 
   const omitted = cutDeepestFirst(rows, all.length, maxRows);

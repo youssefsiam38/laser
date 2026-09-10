@@ -10,13 +10,12 @@
  * protocol's `complete_agent_run` projection; the badge and the clock are
  * chrome.
  */
-import { CheckCheck, CircleAlert } from "lucide-react";
+import { CheckCheck, CircleMinus } from "lucide-react";
 
 import { messageTimeDescription, messageTimeLabel } from "@/components/assistant-ui/elements/message-timestamp";
 import { ShimmerLabel } from "@/components/assistant-ui/elements/surfaces";
 import { MarkdownPreview } from "@/components/preview/MarkdownPreview";
 import { Badge } from "@/components/ui/badge";
-import { cn } from "@/lib/utils";
 import type { AgentCompletionData } from "@/runtime";
 
 export function AgentCompletion({ data }: { data: AgentCompletionData }) {
@@ -32,8 +31,8 @@ export function AgentCompletion({ data }: { data: AgentCompletionData }) {
       className="my-2 flex min-w-0 flex-col gap-2 first:mt-0 last:mb-0"
     >
       <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <Badge variant={blocked ? "attention" : "ok"} data-slot="agent-completion-status">
-          {blocked ? <CircleAlert aria-hidden="true" /> : <CheckCheck aria-hidden="true" />}
+        <Badge variant={blocked ? "default" : "ok"} data-slot="agent-completion-status">
+          {blocked ? <CircleMinus aria-hidden="true" /> : <CheckCheck aria-hidden="true" />}
           {blocked ? "Blocked" : "Completed"}
         </Badge>
         {!data.done ? <ShimmerLabel className="text-xs text-ink-3">Ending the run</ShimmerLabel> : null}
@@ -45,7 +44,7 @@ export function AgentCompletion({ data }: { data: AgentCompletionData }) {
       </div>
       <div
         data-search-content="message"
-        className={cn("min-w-0 rounded-xl border border-line px-3 py-2", blocked ? "border-[color-mix(in_oklab,var(--attention)_32%,var(--line))] bg-[color-mix(in_oklab,var(--attention)_5%,var(--surface))]" : "bg-surface")}
+        className="min-w-0 rounded-xl border border-line bg-surface px-3 py-2"
       >
         <MarkdownPreview text={data.message} prose className="p-0" />
       </div>

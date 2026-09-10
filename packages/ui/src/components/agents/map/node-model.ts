@@ -136,7 +136,7 @@ export function eventLook(kind: AgentEventKind): EventLook {
     case "needs_input":
       return { icon: CircleHelp, tone: "attention" };
     case "blocked":
-      return { icon: Hand, tone: "attention" };
+      return { icon: Hand, tone: "muted" };
     case "failed":
       return { icon: CircleAlert, tone: "danger" };
     case "cancelled":
@@ -159,7 +159,7 @@ export function treeSummary(nodes: readonly AgentTreeNode[]): string {
   const agents = nodes.length - 1;
   if (agents <= 0) return "No agents yet";
   const working = nodes.filter((node) => node.depth > 0 && nodeIsActive(node) && !nodeIsAsking(node)).length;
-  const needYou = nodes.filter((node) => node.depth > 0 && (node.status === "blocked" || nodeIsAsking(node))).length;
+  const needYou = nodes.filter((node) => node.depth > 0 && nodeIsAsking(node)).length;
   const parts = [`${agents} agent${agents === 1 ? "" : "s"}`];
   if (working > 0) parts.push(`${working} working`);
   if (needYou > 0) parts.push(`${needYou} need${needYou === 1 ? "s" : ""} you`);
