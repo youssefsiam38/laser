@@ -18,7 +18,7 @@ import { useSearchReveal } from "@/components/thread/search-state";
  *   - `ToolGroup` (default) takes the `group-tool` part from
  *     `MessagePrimitive.GroupedParts`, not the deprecated start/end indices.
  */
-import { useAuiState, useScrollLock, type MessagePrimitive } from "@assistant-ui/react";
+import { useAui, useAuiState, useScrollLock, type MessagePrimitive } from "@assistant-ui/react";
 import { ChevronRight, FilePen, FilePlus, FileText, FolderOpen, FolderSearch, ScanText, Search, SquareTerminal, Wrench } from "lucide-react";
 import {
   memo,
@@ -49,6 +49,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { duration } from "@/format";
 import { cn } from "@/lib/utils";
 import { activityGroupDefaultOpen, toolDisplayResult, useActivityDetailLevel, useLaserState, type ActivityDetailLevel } from "@/runtime";
+import { useActivityDisclosureOverride } from "@/runtime/sessionPreferences";
 
 import { ReasoningText } from "./reasoning.js";
 import { activityRow, activityTrigger, collapsePanel, mono } from "./surfaces.js";
@@ -373,10 +374,9 @@ export function ToolGroupSummaryRow({
   children: ReactNode;
 }) {
   const summary: ToolGroupSummary = useMemo(() => summarizeActivityGroup(members, reasoning), [members, reasoning]);
-  const [userOpen, setUserOpen] = useState<{ level: ActivityDetailLevel; open: boolean } | null>(null);
-  const open = userOpen?.level === activityLevel
-    ? userOpen.open
-    : activityGroupDefaultOpen(activityLevel, reasoning.count > 0, summary.hasError || summary.hasDecision);
+  const path = useLaserState((state) => state.current);
+  const [manualOpen, rememberOpen] = useActivityDisclosureOverride(path, `group:${timingKey}`);
+  const open = manualOpen ?? activityGroupDefaultOpen(activityLevel, reasoning.count > 0, summary.hasError || summary.hasDecision);
 
   // The rows inside are unmounted while collapsed, so the group keeps the
   // wall-clock marks their durations are read from (same keys as the rows).
@@ -397,15 +397,14 @@ export function ToolGroupSummaryRow({
   // A settled group that contains a failure is still a settled group. Nothing
   // about the block goes red — no rail, no icon, no count — because a failure
   // inside an agent's work is ordinary: a file it looked for and did not find,
-  // a command that came back non-zero. What went wrong is written, in red, on
-  // the row it happened to, and a group that broke still opens itself so that
-  // row is in front of the person rather than behind a fold.
+  // a command that came back non-zero. What went wrong remains available on
+  // the child row without forcing an Answers-only aggregate open.
   const failed = summary.hasError && isSettled(groupStatus);
 
   return (
     <ToolGroupRoot
       open={open}
-      onOpenChange={(next) => setUserOpen({ level: activityLevel, open: next })}
+      onOpenChange={rememberOpen}
       tone={summary.hasDecision ? "attention" : undefined}
       data-family={summary.family}
       data-count={summary.count}
@@ -429,19 +428,40 @@ export function ToolGroupSummaryRow({
 }
 
 /** Reasoning uses exactly the same reversible row as every other action. */
-function ActivityReasoning({ running = false, children }: { running?: boolean; children: ReactNode }) {
+interface ActivityReasoningProps {
+  running?: boolean;
+  children: ReactNode;
+  /** Stable identity supplied by non-runtime fixtures or alternate renderers. */
+  disclosureId?: string;
+}
+
+function ActivityReasoningRow({ running = false, children, disclosureId }: Required<Pick<ActivityReasoningProps, "disclosureId">> & Omit<ActivityReasoningProps, "disclosureId">) {
   const path = useLaserState((state) => state.current);
   const level = useActivityDetailLevel(path);
-  const [userOpen, setUserOpen] = useState<{ level: ActivityDetailLevel; open: boolean } | null>(null);
-  const open = userOpen?.level === level ? userOpen.open : level !== "answers";
+  const [manualOpen, rememberOpen] = useActivityDisclosureOverride(path, `reasoning:${disclosureId}`);
+  const open = manualOpen ?? level !== "answers";
   return (
-    <ToolGroupRoot data-slot="activity-reasoning" open={open} onOpenChange={(next) => setUserOpen({ level, open: next })}>
+    <ToolGroupRoot data-slot="activity-reasoning" open={open} onOpenChange={rememberOpen}>
       <ToolGroupTrigger label="Reasoning" icon={ScanText} active={running} activeLabel="Thinking" open={open} />
       <ToolGroupContent>
         <ReasoningText className="ms-0 max-h-none border-s-0 px-2 py-1">{children}</ReasoningText>
       </ToolGroupContent>
     </ToolGroupRoot>
   );
+}
+
+function RuntimeActivityReasoning(props: Omit<ActivityReasoningProps, "disclosureId">) {
+  const aui = useAui();
+  const messageId = useAuiState((state) => state.message.id);
+  const query = aui.part.query;
+  const partIdentity = query && "type" in query && query.type === "index" ? query.index : "unknown";
+  return <ActivityReasoningRow {...props} disclosureId={`${messageId}:${partIdentity}`} />;
+}
+
+function ActivityReasoning({ disclosureId, ...props }: ActivityReasoningProps) {
+  return disclosureId === undefined
+    ? <RuntimeActivityReasoning {...props} />
+    : <ActivityReasoningRow {...props} disclosureId={disclosureId} />;
 }
 
 const ToolGroup = memo(ToolGroupImpl) as unknown as FC<ToolGroupProps> & {

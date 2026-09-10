@@ -122,6 +122,7 @@ describe("what is rendered", () => {
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
     preferences.level = "answers";
+    localStorage.clear();
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -155,13 +156,13 @@ describe("what is rendered", () => {
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("puts a broken tool in front of the person without painting the block", async () => {
+  it("keeps a broken tool quiet in Answers only without painting the block", async () => {
     await act(async () => root.render(group([brokenMember(), call({ toolCallId: "b" })])));
     const rootEl = container.querySelector('[data-slot="tool-group-root"]')!;
     const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-group-trigger"]')!;
-    // Open, so the failure is on screen rather than behind a fold — but the
-    // block itself stays ordinary: no rail, no alert icon, no count.
-    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    // The failure remains in the accessible summary, but Answers only never
+    // forces an untouched aggregate open.
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
     expect(rootEl.getAttribute("data-tone")).toBeNull();
     expect(rootEl.className).not.toContain("bg-danger");
     expect(trigger.querySelector(".text-danger")).toBeNull();

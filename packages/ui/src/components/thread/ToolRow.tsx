@@ -2,7 +2,7 @@ import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { useAuiState } from "@assistant-ui/react";
 import type { UiDialogRequest } from "@lasercode/protocol";
 import { Bot, FolderOpen, GitBranch, MessageSquare } from "lucide-react";
-import { lazy, memo, Suspense, useCallback, useMemo, useState } from "react";
+import { lazy, memo, Suspense, useCallback, useMemo } from "react";
 
 import { useNamerLabel } from "@/agents/hooks";
 import { CodeDiff } from "@/components/assistant-ui/elements/code-diff";
@@ -21,7 +21,8 @@ import { TOOL_ICONS } from "@/components/assistant-ui/elements/tool-group.aui";
 import { Button } from "@/components/ui/button";
 import { useIsTouch } from "@/hooks/use-mobile";
 import { DialogBody, dialogFormOf, ToolRowDialog, uiResponseFor, useRegisterToolRow } from "@/dialogs";
-import { toolDetailsDefaultOpen, toolDisplayResult, useActivityDetailLevel, useLaserStable, useLaserState, type ActivityDetailLevel } from "@/runtime";
+import { toolDetailsDefaultOpen, toolDisplayResult, useActivityDetailLevel, useLaserStable, useLaserState } from "@/runtime";
+import { useActivityDisclosureOverride } from "@/runtime/sessionPreferences";
 import { activeToolLabel } from "./tool-groups.js";
 import { diffViewForTool } from "./diff.js";
 import { useElapsed } from "./timing.js";
@@ -74,7 +75,6 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
   const running = state === "running";
   const awaiting = state === "awaiting";
   const failed = state === "failed";
-  const isRequiresAction = status.type === "requires-action";
   const path = useLaserState((laser) => laser.current);
   const activityLevel = useActivityDetailLevel(path);
   // Namer's early name for this call, while it runs: "Checking the test
@@ -82,10 +82,10 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
   // summary is the truth again (docs/agents.md §7, Namer).
   const namerLabel = useNamerLabel(path, toolCallId);
 
-  // A decision starts open, but its always-visible footer does not prevent
-  // the reader from folding the args/result above it.
-  const [userOpen, setUserOpen] = useState<{ level: ActivityDetailLevel; open: boolean } | null>(null);
-  const open = userOpen?.level === activityLevel ? userOpen.open : isRequiresAction || toolDetailsDefaultOpen(activityLevel);
+  // The decision footer remains visible outside the fold. It never forces the
+  // body open, and a manual row choice supersedes later status/mode changes.
+  const [manualOpen, rememberOpen] = useActivityDisclosureOverride(path, `tool:${toolCallId}`);
+  const open = manualOpen ?? toolDetailsDefaultOpen(activityLevel);
 
   const localElapsed = useElapsed(toolCallId, running || awaiting ? "running" : "done");
   const elapsed = timing ? (timing.completedAt ?? Date.now()) - timing.startedAt : localElapsed;
@@ -114,7 +114,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
         state={state}
         elapsed={elapsed}
         open={open}
-        onOpenChange={(next) => setUserOpen({ level: activityLevel, open: next })}
+        onOpenChange={rememberOpen}
         activeLabel={running && namerLabel ? namerLabel : undefined}
         footer={footer}
       />
@@ -142,7 +142,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
         state={state}
         elapsedMs={elapsed}
         open={open}
-        onOpenChange={(next) => setUserOpen({ level: activityLevel, open: next })}
+        onOpenChange={rememberOpen}
         toolName={toolName}
         peek={failed && text ? <ToolError message={text} compact /> : undefined}
         footer={footer}
@@ -165,7 +165,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
       state={state}
       elapsedMs={elapsed}
       open={open}
-      onOpenChange={(next) => setUserOpen({ level: activityLevel, open: next })}
+      onOpenChange={rememberOpen}
       toolName={toolName}
       peek={failed && text ? <ToolError message={text} compact /> : undefined}
       footer={footer}

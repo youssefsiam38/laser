@@ -39,7 +39,8 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Textarea } from "@/components/ui/textarea";
 import { duration as formatDuration } from "@/format";
 import { cn } from "@/lib/utils";
-import { toolDetailsDefaultOpen, toolDisplayResult, useActivityDetailLevel, useLaserState, type ActivityDetailLevel } from "@/runtime";
+import { toolDetailsDefaultOpen, toolDisplayResult, useActivityDetailLevel, useLaserState } from "@/runtime";
+import { useActivityDisclosureOverride } from "@/runtime/sessionPreferences";
 import { JsonViewer, parseJsonText } from "./json-viewer.js";
 import { toolOutputText } from "@lasercode/protocol";
 
@@ -662,6 +663,7 @@ function ToolFallbackApproval({
 // ---------------------------------------------------------------------------
 
 const ToolFallbackImpl: ToolCallMessagePartComponent = ({
+  toolCallId,
   toolName,
   args,
   argsText,
@@ -681,8 +683,8 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
   const shouldRenderApproval = isRequiresAction && offersInterruptAction(status, approval, interrupt);
   const path = useLaserState((laser) => laser.current);
   const activityLevel = useActivityDetailLevel(path);
-  const [userOpen, setUserOpen] = useState<{ level: ActivityDetailLevel; open: boolean } | null>(null);
-  const open = userOpen?.level === activityLevel ? userOpen.open : isRequiresAction || toolDetailsDefaultOpen(activityLevel);
+  const [manualOpen, rememberOpen] = useActivityDisclosureOverride(path, `tool:${toolCallId}`);
+  const open = manualOpen ?? toolDetailsDefaultOpen(activityLevel);
 
   const hasBody = Boolean(argsText) || result !== undefined || status?.type === "incomplete";
   const tone = state === "failed" ? "danger" : state === "awaiting" ? "attention" : undefined;
@@ -690,7 +692,7 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
   return (
     <ToolFallbackRoot
       open={open}
-      onOpenChange={(next) => setUserOpen({ level: activityLevel, open: next })}
+      onOpenChange={rememberOpen}
       tone={tone}
       data-tool={toolName}
       data-status={status?.type}
