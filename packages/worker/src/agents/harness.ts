@@ -177,8 +177,11 @@ interface Entry {
 interface PendingMessage {
   content: ContentBlock[];
   options?: PromptOptions;
+  origin: "agent" | "user";
   /** Interrupts are also queued in the engine; local messages wait only here. */
   engine: boolean;
+  resolve?: (result: { accepted: boolean; queued: boolean }) => void;
+  reject?: (error: unknown) => void;
 }
 
 interface RunEnd {
@@ -381,38 +384,60 @@ export class AgentHarness {
     if (!driver) return { accepted: false, queued: false };
     if (!entry || entry.role.kind !== "child" || !entry.path || !entry.sessionId) return driver.prompt(content, options);
 
-    const message: PendingMessage = { content, ...(options ? { options } : {}), engine: true };
+    let resolveDeferred!: (result: { accepted: boolean; queued: boolean }) => void;
+    let rejectDeferred!: (error: unknown) => void;
+    const deferred = new Promise<{ accepted: boolean; queued: boolean }>((resolve, reject) => {
+      resolveDeferred = resolve;
+      rejectDeferred = reject;
+    });
+    const message: PendingMessage = {
+      content,
+      ...(options ? { options } : {}),
+      origin: "user",
+      engine: true,
+      resolve: resolveDeferred,
+      reject: rejectDeferred,
+    };
     const plan = await this.withEntry(entry, () => {
       const owner = entry.lifecycle.owner();
       const executing = owner ? this.runStates.get(owner) : undefined;
       if ((executing && entry.lifecycle.end(executing.run.runId)) || entry.lifecycle.successor()) {
         this.queueRunMessage(entry, { ...message, engine: false }, executing ?? this.activeRunState(sessionPath));
-        return { kind: "queued" as const };
+        return { kind: "deferred" as const };
       }
       const active = executing ?? this.activeRunState(sessionPath);
-      if (active && owner) {
-        entry.lifecycle.enqueue(active.run.runId, message);
-        return { kind: "engine-queue" as const, state: active };
-      }
       const state = active ?? this.createRun(entry, { origin: "user", task: contentTask(content) });
-      if (!entry.lifecycle.begin(state.run.runId)) {
-        entry.lifecycle.enqueue(state.run.runId, { ...message, engine: false });
-        return { kind: "queued" as const };
-      }
+      const admission = entry.lifecycle.admitPrompt(
+        state.run.runId,
+        { local: { ...message, engine: false }, engine: message },
+        { streaming: driver.state().isStreaming, explicitQueue: options?.streamingBehavior !== undefined },
+      );
       if (!active) this.event({ kind: "started", sessionPath, runId: state.run.runId, summary: "The person started a run from this chat" });
-      return { kind: "invoke" as const, state };
+      if (admission === "local-queue") return { kind: "deferred" as const };
+      return { kind: admission, state };
     });
-    if (plan.kind === "queued") return { accepted: true, queued: true };
+    if (plan.kind === "deferred") return deferred;
     if (plan.kind === "invoke") return this.invoke(entry, plan.state, driver, content, options);
+    if (plan.kind === "bare-concurrent") return driver.prompt(content, options);
 
     try {
       const result = await driver.prompt(content, options);
       if (!result.accepted) {
-        await this.withEntry(entry, () => entry.lifecycle.replaceInbox(plan.state.run.runId, entry.lifecycle.inbox(plan.state.run.runId).filter((pending) => pending !== message)));
+        await this.withEntry(entry, () => entry.lifecycle.remove(plan.state.run.runId, message));
+      } else {
+        // A cleared engine queue may replay this content under a successor,
+        // but acceptance of this exact submission is monotonic and fires once.
+        delete message.resolve;
+        delete message.reject;
+        if (message.options?.onAccepted) {
+          const { onAccepted: _accepted, ...remaining } = message.options;
+          void _accepted;
+          message.options = remaining;
+        }
       }
       return result;
     } catch (error) {
-      await this.withEntry(entry, () => entry.lifecycle.replaceInbox(plan.state.run.runId, entry.lifecycle.inbox(plan.state.run.runId).filter((pending) => pending !== message)));
+      await this.withEntry(entry, () => entry.lifecycle.remove(plan.state.run.runId, message));
       throw error;
     }
   }
@@ -432,8 +457,7 @@ export class AgentHarness {
     await this.withEntry(entry, () => {
       if (isTerminalRunStatus(state.run.status)) return;
       this.event({ kind: "stop_requested", sessionPath: state.run.sessionPath, runId, summary: endedBy.initiator === "user" ? "The person asked this run to stop" : "The parent asked this run to stop" });
-      if (entry.lifecycle.successor() === runId) {
-        entry.lifecycle.setSuccessor(undefined);
+      if (entry.lifecycle.cancelSuccessor(runId)) {
         this.endRun(state, "cancelled", { endedBy });
         return;
       }
@@ -770,13 +794,13 @@ export class AgentHarness {
       } else if (active) {
         state = active;
         if (driver.state().isStreaming || child.lifecycle.owner() !== undefined) {
-          const pending: PendingMessage = { content: [{ type: "text", text: message }], engine: input.interrupt === true };
+          const pending: PendingMessage = { content: [{ type: "text", text: message }], origin: "agent", engine: input.interrupt === true };
           child.lifecycle.enqueue(state.run.runId, pending);
           if (pending.engine) {
             try {
               await driver.steer([{ type: "text", text: message }]);
             } catch (error) {
-              child.lifecycle.replaceInbox(state.run.runId, child.lifecycle.inbox(state.run.runId).filter((candidate) => candidate !== pending));
+              child.lifecycle.remove(state.run.runId, pending);
               throw error;
             }
           }
@@ -1131,7 +1155,7 @@ export class AgentHarness {
 
   /** Start one prompt invocation. Its promise is the only engine-ready fence. */
   private kick(state: RunState, text: string): void {
-    this.kickMessage(state, { content: [{ type: "text", text }], options: { expandPromptTemplates: false }, engine: false });
+    this.kickMessage(state, { content: [{ type: "text", text }], options: { expandPromptTemplates: false }, origin: state.run.origin === "user" ? "user" : "agent", engine: false });
   }
 
   private kickMessage(state: RunState, message: PendingMessage): void {
@@ -1145,7 +1169,7 @@ export class AgentHarness {
       entry.lifecycle.enqueue(state.run.runId, message);
       return;
     }
-    void this.invoke(entry, state, driver, message.content, message.options);
+    void this.invoke(entry, state, driver, message.content, message.options).then(message.resolve, message.reject).catch(() => undefined);
   }
 
   private async invoke(
@@ -1157,13 +1181,16 @@ export class AgentHarness {
   ): Promise<{ accepted: boolean; queued: boolean }> {
     let result: { accepted: boolean; queued: boolean };
     let failure: string | undefined;
+    let thrown: unknown;
     try {
       result = await driver.prompt(content, options);
     } catch (error) {
       result = { accepted: false, queued: false };
+      thrown = error;
       failure = error instanceof Error ? error.message : String(error);
     }
     await this.withEntry(entry, () => this.afterInvocation(entry, state, result, failure));
+    if (thrown !== undefined) throw thrown;
     return result;
   }
 
@@ -1179,13 +1206,17 @@ export class AgentHarness {
       ? { status: "failed" as const, outcome: { error: failure ?? "The agent's session refused the task because it was busy." } }
       : undefined);
     if (end) {
+      // A locally admitted message survives an asynchronous/refused preflight
+      // as a canonical successor. Engine-owned queue entries do not replay.
+      for (const pending of entry.lifecycle.clearInbox(state.run.runId)) {
+        if (!pending.engine) this.queueRunMessage(entry, pending, state);
+      }
       this.finalizePendingEnd(entry, state, end);
       return;
     }
     // Engine-queued messages have either been consumed or the prompt could
     // not have settled. Harness-owned messages are admitted one at a time.
-    entry.lifecycle.replaceInbox(state.run.runId, entry.lifecycle.inbox(state.run.runId).filter((pending) => !pending.engine));
-    const next = entry.lifecycle.shift(state.run.runId);
+    const next = entry.lifecycle.nextLocalAfterFence(state.run.runId, (pending) => pending.engine);
     if (next) {
       this.kickMessage(state, next);
       return;
@@ -1211,32 +1242,28 @@ export class AgentHarness {
 
   /** Reserve or extend the one run waiting behind the current invocation. */
   private queueRun(entry: Entry, text: string, previous?: RunState, parent?: Entry): RunState {
-    return this.queueRunMessage(entry, { content: [{ type: "text", text }], options: { expandPromptTemplates: false }, engine: false }, previous, parent);
+    return this.queueRunMessage(entry, { content: [{ type: "text", text }], options: { expandPromptTemplates: false }, origin: "agent", engine: false }, previous, parent);
   }
 
   private queueRunMessage(entry: Entry, message: PendingMessage, previous?: RunState, parent?: Entry): RunState {
-    const queuedId = entry.lifecycle.successor();
-    const queued = queuedId ? this.runStates.get(queuedId) : undefined;
-    if (queued && !isTerminalRunStatus(queued.run.status)) {
-      entry.lifecycle.enqueue(queued.run.runId, message);
-      return queued;
-    }
-    const task = contentTask(message.content);
-    const state = this.createRun(
-      entry,
-      {
-        origin: "agent",
-        task,
-        ...(previous?.run.goal ? { goal: previous.run.goal } : {}),
-        ...((parent?.path ? this.activeRun(parent.path)?.runId : previous?.run.parent?.runId) !== undefined
-          ? { parentRunId: parent?.path ? this.activeRun(parent.path)?.runId : previous?.run.parent?.runId }
-          : {}),
-      },
-      true,
-    );
-    entry.lifecycle.setSuccessor(state.run.runId);
-    entry.lifecycle.enqueue(state.run.runId, message);
-    return state;
+    let created: RunState | undefined;
+    const reservation = entry.lifecycle.reserveSuccessor(message, () => {
+      const task = contentTask(message.content);
+      created = this.createRun(
+        entry,
+        {
+          origin: message.origin,
+          task,
+          ...(previous?.run.goal ? { goal: previous.run.goal } : {}),
+          ...((parent?.path ? this.activeRun(parent.path)?.runId : previous?.run.parent?.runId) !== undefined
+            ? { parentRunId: parent?.path ? this.activeRun(parent.path)?.runId : previous?.run.parent?.runId }
+            : {}),
+        },
+        true,
+      );
+      return created.run.runId;
+    });
+    return created ?? this.runStates.get(reservation.runId)!;
   }
 
   /** Keep local messages and only engine messages actually returned by clearQueue. */
@@ -1254,7 +1281,7 @@ export class AgentHarness {
         remaining.splice(index, 1);
       }
     }
-    return [...preserved, ...remaining.map((text) => ({ content: [{ type: "text" as const, text }], options: { expandPromptTemplates: false }, engine: false }))];
+    return [...preserved, ...remaining.map((text) => ({ content: [{ type: "text" as const, text }], options: { expandPromptTemplates: false }, origin: state.run.origin === "user" ? "user" as const : "agent" as const, engine: false }))];
   }
 
   private requestEnd(
@@ -1276,17 +1303,15 @@ export class AgentHarness {
 
   private finalizePendingEnd(entry: Entry, state: RunState, pending: RunEnd): void {
     if (isTerminalRunStatus(state.run.status)) return;
-    const queuedId = entry.lifecycle.successor();
-    const queued = queuedId ? this.runStates.get(queuedId) : undefined;
+    const successor = entry.lifecycle.takeSuccessor();
+    const queued = successor ? this.runStates.get(successor.runId) : undefined;
     // Publish the old terminal history first, but delay its parent wake until
     // the already-accepted resume has become the session's canonical live run.
     this.endRun(state, pending.status, pending.outcome, queued !== undefined);
     if (queued && !isTerminalRunStatus(queued.run.status)) {
-      entry.lifecycle.setSuccessor(undefined);
       this.touch(queued, (run) => ({ ...run, status: "running" }));
       this.activateRun(entry, queued);
-      const first = entry.lifecycle.shift(queued.run.runId);
-      if (first) this.kickMessage(queued, first);
+      if (successor?.first) this.kickMessage(queued, successor.first);
       else this.kick(queued, queued.task);
       if (state.run.parent) this.notifyParent(state.run, pending.outcome.context);
     }

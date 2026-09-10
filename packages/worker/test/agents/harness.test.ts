@@ -33,8 +33,9 @@ class FakeDriver implements SessionDriver {
   lastText: string | undefined;
   acceptPrompts = true;
   autoResolvePrompts = true;
-  private promptResolvers: Array<(result: { accepted: boolean; queued: boolean }) => void> = [];
+  private promptResolvers: Array<{ resolve: (result: { accepted: boolean; queued: boolean }) => void; options?: PromptOptions }> = [];
   private abortResolvers: Array<() => void> = [];
+  deferredStartsStreaming = true;
   abortAwaitsPrompt = false;
   abortRejects = false;
   clearQueueRejects = false;
@@ -51,21 +52,31 @@ class FakeDriver implements SessionDriver {
   setStreaming(value: boolean) { this.st = { ...this.st, isStreaming: value }; }
   subscribe(l: DriverListener) { this.listeners.add(l); return () => this.listeners.delete(l); }
   emit(e: DriverEvent) {
-    if (e.type === "update" && e.update.kind === "agent_settled") this.engineSteers = [];
+    if (e.type === "update" && e.update.kind === "agent_settled") {
+      this.engineSteers = [];
+      this.setStreaming(false);
+    }
     for (const l of this.listeners) l(e);
   }
   async prompt(content: ContentBlock[], options?: PromptOptions) {
     const text = content.map((b) => (b.type === "text" ? b.text : "")).join("");
     this.prompted.push({ text, content, ...(options ? { options } : {}) });
-    if (this.autoResolvePrompts) return { accepted: this.acceptPrompts, queued: false };
-    this.setStreaming(true);
-    return new Promise<{ accepted: boolean; queued: boolean }>((resolve) => this.promptResolvers.push(resolve));
+    if (!this.autoResolvePrompts && this.promptResolvers.length > 0 && this.st.isStreaming && options?.streamingBehavior === undefined) {
+      return { accepted: false, queued: false };
+    }
+    if (this.autoResolvePrompts) {
+      if (this.acceptPrompts) options?.onAccepted?.();
+      return { accepted: this.acceptPrompts, queued: false };
+    }
+    if (this.deferredStartsStreaming) this.setStreaming(true);
+    return new Promise<{ accepted: boolean; queued: boolean }>((resolve) => this.promptResolvers.push({ resolve, ...(options ? { options } : {}) }));
   }
   resolvePrompt(accepted = this.acceptPrompts) {
-    const resolve = this.promptResolvers.shift();
-    if (!resolve) throw new Error("No prompt is waiting.");
+    const pending = this.promptResolvers.shift();
+    if (!pending) throw new Error("No prompt is waiting.");
     this.setStreaming(false);
-    resolve({ accepted, queued: false });
+    if (accepted) pending.options?.onAccepted?.();
+    pending.resolve({ accepted, queued: false });
     for (const finish of this.abortResolvers.splice(0)) finish();
   }
   async steer(content: ContentBlock[]) {
@@ -1013,6 +1024,128 @@ describe("AgentHarness", () => {
     await flushLifecycle();
     expect(world.harness.run(local.runId)).toMatchObject({ status: "completed", result: { message: "resumed done" } });
     expect(world.harness.runs().some((run) => run.status === "failed")).toBe(false);
+  });
+
+  it("uses the first queued creator's origin for one mixed-message successor", async () => {
+    world.setAutoResolveChildPrompts(false);
+    const root = world.openRoot("lead");
+    const received: AgentModelEvent[] = [];
+    root.handle.bridge.onEvent((event) => received.push(event));
+    const initial = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "initial" });
+    const path = "/sessions/child-1.jsonl";
+    const child = world.drivers.get(path)!;
+    expect(await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "initial complete" })).toEqual({ ok: true, runId: initial.runId });
+
+    const accepted = vi.fn();
+    const tray = world.harness.promptUser(path, [{ type: "text", text: "person queued first" }], { streamingBehavior: "followUp", onAccepted: accepted });
+    await flushLifecycle();
+    const successor = world.harness.runs().find((run) => run.sessionPath === path && run.runId !== initial.runId)!;
+    expect(successor).toMatchObject({ status: "queued", origin: "user", task: "person queued first" });
+    const parentMessage = await root.handle.bridge.sendAgentMessage({ sessionId: initial.sessionId, message: "parent queued second", interrupt: false });
+    expect(parentMessage.runId).toBe(successor.runId);
+    expect(world.harness.runs().filter((run) => run.sessionPath === path)).toHaveLength(2);
+    expect(world.runsNotified().find((run) => run.runId === successor.runId)).toMatchObject({ origin: "user", status: "queued" });
+    expect(child.custom.find((entry) => entry.type === SESSION_RUN_ENTRY_TYPE && (entry.data as { runId?: string }).runId === successor.runId)).toMatchObject({ data: { origin: "user", moment: "started" } });
+
+    child.emit({ type: "update", update: { kind: "agent_settled" } });
+    child.resolvePrompt();
+    await flushLifecycle();
+    expect(world.harness.activeRun(path)).toMatchObject({ runId: successor.runId, origin: "user", status: "running" });
+    expect(child.prompted.at(-1)?.text).toBe("person queued first");
+    expect((await root.handle.bridge.inspectAgent({ sessionId: initial.sessionId })).origin).toBe("user");
+    expect(received[0]).toMatchObject({ type: "agent.completed", run: { runId: initial.runId, origin: "agent" } });
+
+    child.emit({ type: "update", update: { kind: "agent_settled" } });
+    child.resolvePrompt();
+    await expect(tray).resolves.toEqual({ accepted: true, queued: false });
+    await flushLifecycle();
+    expect(child.prompted.at(-1)?.text).toBe("parent queued second");
+    expect(world.harness.activeRun(path)?.runId).toBe(successor.runId);
+    expect(world.harness.activeRun(path)?.origin).toBe("user");
+    expect(accepted).toHaveBeenCalledTimes(1);
+
+    expect(await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "mixed done" })).toEqual({ ok: true, runId: successor.runId });
+    child.emit({ type: "update", update: { kind: "agent_settled" } });
+    child.resolvePrompt();
+    await flushLifecycle();
+    expect(received[1]).toMatchObject({ type: "agent.completed", run: { runId: successor.runId, origin: "user", result: { message: "mixed done" } } });
+  });
+
+  it("holds a tray prompt locally when agent_settled precedes the old prompt promise", async () => {
+    world.setAutoResolveChildPrompts(false);
+    const root = world.openRoot("lead");
+    const started = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "initial" });
+    const path = "/sessions/child-1.jsonl";
+    const child = world.drivers.get(path)!;
+    const accepted = vi.fn();
+
+    child.emit({ type: "update", update: { kind: "agent_settled" } });
+    expect(child.state().isStreaming).toBe(false);
+    const tray = world.harness.promptUser(path, [{ type: "text", text: "from tray" }], { streamingBehavior: "followUp", onAccepted: accepted });
+    await flushLifecycle();
+    expect(child.prompted.map((prompt) => prompt.text)).toEqual(["initial"]);
+    expect(world.harness.run(started.runId)).toMatchObject({ status: "running", activity: { turns: 0 } });
+    expect(accepted).not.toHaveBeenCalled();
+
+    child.resolvePrompt();
+    await flushLifecycle();
+    expect(child.prompted.map((prompt) => prompt.text)).toEqual(["initial", "from tray"]);
+    expect(child.prompted).not.toContainEqual(expect.objectContaining({ text: NUDGE_TEXT }));
+    expect(accepted).not.toHaveBeenCalled();
+    expect(await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "tray work done" })).toEqual({ ok: true, runId: started.runId });
+    child.emit({ type: "update", update: { kind: "agent_settled" } });
+    child.resolvePrompt();
+    await expect(tray).resolves.toEqual({ accepted: true, queued: false });
+    await flushLifecycle();
+    expect(accepted).toHaveBeenCalledTimes(1);
+    expect(world.harness.run(started.runId)?.status).toBe("completed");
+  });
+
+  it("admits behind asynchronous failed preflight without replaying or losing the tray prompt", async () => {
+    world.setAutoResolveChildPrompts(false);
+    const root = world.openRoot("lead");
+    const started = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "initial" });
+    const path = "/sessions/child-1.jsonl";
+    const child = world.drivers.get(path)!;
+    child.deferredStartsStreaming = false;
+    child.setStreaming(false); // the first prompt is still in asynchronous preflight
+    const accepted = vi.fn();
+
+    const tray = world.harness.promptUser(path, [{ type: "text", text: "survive preflight" }], { streamingBehavior: "followUp", onAccepted: accepted });
+    await flushLifecycle();
+    expect(child.prompted.map((prompt) => prompt.text)).toEqual(["initial"]);
+    child.resolvePrompt(false);
+    await flushLifecycle();
+    const successor = world.harness.activeRun(path)!;
+    expect(world.harness.run(started.runId)?.status).toBe("failed");
+    expect(successor).toMatchObject({ status: "running", origin: "user", task: "survive preflight" });
+    expect(child.prompted.map((prompt) => prompt.text)).toEqual(["initial", "survive preflight"]);
+    expect(accepted).not.toHaveBeenCalled();
+
+    expect(await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "accepted later" })).toEqual({ ok: true, runId: successor.runId });
+    child.emit({ type: "update", update: { kind: "agent_settled" } });
+    child.resolvePrompt();
+    await expect(tray).resolves.toEqual({ accepted: true, queued: false });
+    expect(accepted).toHaveBeenCalledTimes(1);
+    expect(world.harness.run(successor.runId)?.status).toBe("completed");
+  });
+
+  it("keeps a bare concurrent prompt refusal outside the lifecycle inbox", async () => {
+    world.setAutoResolveChildPrompts(false);
+    const root = world.openRoot("lead");
+    const started = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "initial" });
+    const path = "/sessions/child-1.jsonl";
+    const child = world.drivers.get(path)!;
+    child.acceptPrompts = false;
+    await expect(world.harness.promptUser(path, [{ type: "text", text: "bare concurrent" }])).resolves.toEqual({ accepted: false, queued: false });
+    expect(child.prompted.map((prompt) => prompt.text)).toEqual(["initial", "bare concurrent"]);
+    expect(world.harness.runs()).toHaveLength(1);
+    child.acceptPrompts = true;
+    expect(await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "initial done" })).toEqual({ ok: true, runId: started.runId });
+    child.emit({ type: "update", update: { kind: "agent_settled" } });
+    child.resolvePrompt();
+    await flushLifecycle();
+    expect(world.harness.run(started.runId)?.status).toBe("completed");
   });
 
   it("keeps root prompt routing direct and out of the child run registry", async () => {

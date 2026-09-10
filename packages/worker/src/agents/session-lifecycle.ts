@@ -4,6 +4,8 @@ export type SessionPhase<End> =
   | { kind: "invoking"; runId: string; settled: boolean }
   | { kind: "terminal-pending"; runId: string; settled: boolean; end: End };
 
+export type PromptAdmission = "invoke" | "engine-queue" | "local-queue" | "bare-concurrent";
+
 export class SessionLifecycle<End, Message> {
   private phaseValue: SessionPhase<End> = { kind: "idle" };
   private successorRunId: string | undefined;
@@ -18,6 +20,28 @@ export class SessionLifecycle<End, Message> {
 
   owner(): string | undefined {
     return this.phaseValue.kind === "idle" ? undefined : this.phaseValue.runId;
+  }
+
+  /**
+   * Cohesive prompt admission: settled unwind and asynchronous preflight stay
+   * local; only an explicitly queued prompt while demonstrably streaming may
+   * enter the engine queue. A bare concurrent prompt remains the driver's
+   * refusal to make.
+   */
+  admitPrompt(runId: string, message: { local: Message; engine: Message }, input: { streaming: boolean; explicitQueue: boolean }): PromptAdmission {
+    if (this.phaseValue.kind === "idle") {
+      this.phaseValue = { kind: "invoking", runId, settled: false };
+      return "invoke";
+    }
+    if (this.phaseValue.runId !== runId || this.phaseValue.kind === "terminal-pending" || this.phaseValue.settled || !input.streaming) {
+      this.enqueue(runId, message.local);
+      return "local-queue";
+    }
+    if (input.explicitQueue) {
+      this.enqueue(runId, message.engine);
+      return "engine-queue";
+    }
+    return "bare-concurrent";
   }
 
   begin(runId: string): boolean {
@@ -59,8 +83,30 @@ export class SessionLifecycle<End, Message> {
     return this.successorRunId;
   }
 
-  setSuccessor(runId: string | undefined): void {
+  /** Preserve first-creator identity and append every later message in order. */
+  reserveSuccessor(message: Message, create: () => string): { runId: string; created: boolean } {
+    if (this.successorRunId) {
+      this.enqueue(this.successorRunId, message);
+      return { runId: this.successorRunId, created: false };
+    }
+    const runId = create();
     this.successorRunId = runId;
+    this.enqueue(runId, message);
+    return { runId, created: true };
+  }
+
+  takeSuccessor(): { runId: string; first: Message | undefined } | undefined {
+    const runId = this.successorRunId;
+    if (!runId) return undefined;
+    this.successorRunId = undefined;
+    return { runId, first: this.shift(runId) };
+  }
+
+  cancelSuccessor(runId: string): boolean {
+    if (this.successorRunId !== runId) return false;
+    this.successorRunId = undefined;
+    this.inboxes.delete(runId);
+    return true;
   }
 
   enqueue(runId: string, message: Message): void {
@@ -76,6 +122,15 @@ export class SessionLifecycle<End, Message> {
   replaceInbox(runId: string, messages: Message[]): void {
     if (messages.length === 0) this.inboxes.delete(runId);
     else this.inboxes.set(runId, messages);
+  }
+
+  remove(runId: string, message: Message): void {
+    this.replaceInbox(runId, this.inbox(runId).filter((candidate) => candidate !== message));
+  }
+
+  nextLocalAfterFence(runId: string, isEngineOwned: (message: Message) => boolean): Message | undefined {
+    this.replaceInbox(runId, this.inbox(runId).filter((message) => !isEngineOwned(message)));
+    return this.shift(runId);
   }
 
   shift(runId: string): Message | undefined {
