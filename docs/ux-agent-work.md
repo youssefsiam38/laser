@@ -70,9 +70,9 @@ acts: the child raised a question through the portable UI surface and its
 loop is paused on it, the question is on the run, and the parent or the person
 answers it ([`agents.md`](agents.md) "Questions"). The UI maps these onto the
 five-word status language of `DESIGN.md` in one place
-(`packages/ui/src/agents/model.ts`): `running` is "Working" in the live tone,
-`needs_input` is "Asking" and `blocked` is "Needs you", both in the attention
-tone, and both count as needing you wherever work is counted.
+(`packages/ui/src/agents/model.ts`): `running` is "Working" in the live tone;
+`needs_input` is live "Asking" in the attention tone and counts as needing you.
+Terminal `blocked` is neutral "Blocked" under Finished, with no needs-you count or pulse.
 
 **A PLAN** is the intended shape of multi-run work: workflow phases and lanes,
 mission objectives, acceptance criteria. A plan is either *declared*, when
