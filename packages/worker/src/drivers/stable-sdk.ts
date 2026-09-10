@@ -376,10 +376,11 @@ export class StableSdkDriver implements SessionDriver {
     const factory = this.runtimeFactory;
     if (!current || !factory) throw new DriverUnavailableError(this.kind, "no session open");
     const manager = current.session.sessionManager;
+    const effective = this.state();
     const previous = {
       agent: this.runtimeAgent,
-      modelOverride: this.runtimeModelOverride,
-      thinkingOverride: this.runtimeThinkingOverride,
+      modelOverride: effective.model ?? undefined,
+      thinkingOverride: effective.thinkingLevel,
     };
     const previousSessionFile = manager.getSessionFile();
     const create = () => createAgentSessionRuntime(factory, {
@@ -433,10 +434,13 @@ export class StableSdkDriver implements SessionDriver {
     if (this.firstTurnRollback || this.preparedAgentRecord) {
       throw new ProtocolError(ErrorCodes.InvalidParams, "A first-turn agent choice is already being prepared for this conversation.");
     }
+    // Restoration is an exact effective-state snapshot, not another default
+    // resolution. Explicit provenance governs the selected agent only.
+    const effective = this.state();
     const previous = {
       agent: this.runtimeAgent,
-      modelOverride: this.explicitModelOverride ?? this.runtimeModelOverride,
-      thinkingOverride: this.explicitThinkingOverride ?? this.runtimeThinkingOverride,
+      modelOverride: effective.model ?? undefined,
+      thinkingOverride: effective.thinkingLevel,
     };
     await this.replaceRuntime(
       options.agent,

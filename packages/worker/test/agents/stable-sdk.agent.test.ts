@@ -301,7 +301,7 @@ describe("StableSdkDriver with an agent definition", () => {
     await server.dispose();
   }, 60_000);
 
-  it("restores the prior runtime, record, and manual overrides when first-turn preparation is rolled back", async () => {
+  it.each([false, true])("restores exact effective state after preparation failure/rollback (manual override: %s)", async (manual) => {
     writeFileSync(join(base, "agent", "models.json"), JSON.stringify({
       providers: {
         stub: {
@@ -317,7 +317,7 @@ describe("StableSdkDriver with an agent definition", () => {
     }));
     const original: AgentDefinition = {
       ...fallbackDefaultAgent(), name: "default", engineInstructions: false,
-      instructions: "ORIGINAL AFTER ROLLBACK", model: { provider: "stub", id: "stub-1" },
+      instructions: "ORIGINAL AFTER ROLLBACK", model: { provider: "stub", id: "stub-1" }, thinkingLevel: "low",
     };
     const selected: AgentDefinition = {
       ...fallbackDefaultAgent(), name: "reviewer", engineInstructions: false,
@@ -326,14 +326,24 @@ describe("StableSdkDriver with an agent definition", () => {
     const driver = new StableSdkDriver();
     drivers.push(driver);
     const before = await driver.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), projectTrusted: true, agent: agentOptions(original) });
-    await driver.setModel({ provider: "stub", id: "stub-2" });
-    await driver.setThinkingLevel("high");
+    if (manual) {
+      await driver.setModel({ provider: "stub", id: "stub-2" });
+      await driver.setThinkingLevel("high");
+    } else {
+      // Factory failure happens after the old runtime has been disposed, but
+      // must leave the original effective session served and retryable.
+      await expect(driver.prepareFirstTurn({ agent: agentOptions({ ...selected, model: { provider: "missing", id: "unavailable" } }) }))
+        .rejects.toThrow(/not available/);
+      expect(driver.state()).toMatchObject({ path: before.path, id: before.id, model: before.model, thinkingLevel: before.thinkingLevel });
+      expect(stub.requests).toHaveLength(0);
+    }
+    const effective = driver.state();
     await driver.prepareFirstTurn({ agent: agentOptions(selected), thinkingLevel: "off" });
     await driver.rollbackFirstTurn();
+    expect(driver.state()).toMatchObject({ path: effective.path, id: effective.id, model: effective.model, thinkingLevel: effective.thinkingLevel });
     await driver.prompt([{ type: "text", text: "continue" }]);
 
-    expect(driver.state()).toMatchObject({ path: before.path, id: before.id, model: { provider: "stub", id: "stub-2" }, thinkingLevel: "high" });
-    expect(stub.requests[0]).toMatchObject({ model: "stub-2", reasoning_effort: "high" });
+    expect(stub.requests[0]).toMatchObject({ model: manual ? "stub-2" : "stub-1", reasoning_effort: manual ? "high" : "low" });
     expect(systemTextOf(stub.requests[0]!)).toContain("ORIGINAL AFTER ROLLBACK");
     expect(systemTextOf(stub.requests[0]!)).not.toContain("SHOULD NOT RUN");
     expect(await readSessionAgentRecord(before.path)).toEqual({ agentName: "default", kind: "root" });
