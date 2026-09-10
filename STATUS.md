@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-10T11:42:30Z · beam-release-034 · HEAD: 62839fe
+**Last updated:** 2026-09-10T12:19:21Z · draft-agent-selection · HEAD: 05a40f0
 
-**Current focus:** M13 — 0.3.4 published as Latest with pre-turn agent/thinking controls and compact sidebar state. Source CI and both architecture builds passed. Installed app unchanged.
+**Current focus:** M13 — correct 0.3.4 regressions in tentative agent binding, composer/header state, pending delivery and harness lifecycle before the next patch.
 
 ## Milestones
 
@@ -24,18 +24,18 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M10 Distribution | in-progress | in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
 | M12 Product experience | done | 0.2.13 dispatched |
-| M13 Agents Leap | in-progress | M13-T88 done: 0.3.4 Latest |
+| M13 Agents Leap | in-progress | M13-T89 blocked; T90–T93 owned; T94 waits for all fixes |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
 
-- No blocked task. Unrelated working-tree changes remain outside this release.
+- M13-T89: needs serialized handoff after M13-T92 releases reserved worker driver/server files, then ownership expansion to bind a tentative agent to the same unstarted session inside its first prompt.
 
 ## Next up
 
-1. M10-T10: prove the in-app updater installation seam.
-2. M7-T7: complete QR entry and paired browser transport.
-3. MX-T5: accessibility pass.
+1. M13-T90: align composer controls and recording affordance.
+2. M13-T91: show only persisted agent attribution beside the model after start.
+3. M13-T92: clear stale Sending now after hidden-session queue delivery.
 
 ## Recently done
 

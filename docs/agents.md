@@ -46,9 +46,15 @@ characters. There is no separate agent id, type or profile name.
 
 The ordinary new-session composer exposes custom definitions as a searchable
 selector immediately before the model, preselects `defaultAgent`, and removes
-the control after the first prompt. Switching chooses or creates another
-agent-bound empty session rather than mutating the current identity. Built-ins
-stay reserved for their dedicated product channels and never enter this list.
+the control after the first prompt. Before that prompt, a different choice is
+tentative composer state only: it creates no session, writes no setting and
+does not change persisted identity. Leaving the composer discards it. The first
+prompt binds the choice to that same unstarted session before delivery, exactly
+once; a started session's identity never changes. After start, the top bar keeps
+the canonical persisted agent visible as a read-only label beside the model. It
+never offers switching and never substitutes tentative state or today's default
+when a historical session has no recorded attribution. Built-ins stay reserved
+for their dedicated product channels and never enter this list.
 
 Policy (`AgentPolicy`, `agents/set-policy`): `maxDepth` (default 3, at most 6)
 and `foregroundCommandSeconds` (default 120, 10–3600).
@@ -663,5 +669,10 @@ The binding list lives in `AGENTS.md` ("Agents harness regression checks"):
   bubble chat immediately without deleting earlier sessions. The sidebar `+`
   reuses and selects that same empty session, including private workspaces and
   simultaneous quiet/selecting requests; a started session is never reused.
+- A project composer's pre-turn custom-agent choice is tentative: choosing,
+  changing back or navigating away sends no session/settings request and keeps
+  text and attachments in place. Its first prompt binds one chosen identity to
+  the same unstarted session and is delivered once across concurrent activation
+  and retryable failure; no duplicate is deleted to make the count look right.
 - Dictation belongs to the composer that started it: with the bubble open,
   two composers are mounted, and a phrase must land where it was spoken.
