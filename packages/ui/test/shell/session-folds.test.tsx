@@ -42,9 +42,9 @@ const stable = vi.hoisted(() => ({
 }));
 vi.mock("@/runtime", async (importActual) => ({ ...(await importActual<typeof import("../../src/runtime/index.js")>()), useLaserStable: () => stable }));
 
-// One parent with every state under it at once: two working, one waiting on
-// the person, one done, one failed, and one that is itself done but still has
-// a working child — the branch that must not be filed away as finished.
+// One parent with every state under it at once: two working, one blocked, one
+// done, one failed, and one that is itself blocked but still has a working
+// child — the branch that must not be filed away as finished.
 const ROOT = "/one/root.jsonl";
 const QUIET = "/one/quiet.jsonl";
 const ALPHA = "/one/.worktrees/alpha/s.jsonl";
@@ -83,7 +83,7 @@ const runs: AgentRun[] = [
   childRun("bravo", BRAVO, "blocked", 2),
   childRun("charlie", CHARLIE, "completed", 3),
   childRun("delta", DELTA, "failed", 4),
-  childRun("echo", ECHO, "completed", 5),
+  childRun("echo", ECHO, "blocked", 5),
   childRun("foxtrot", FOXTROT, "running", 6, ECHO),
 ];
 
@@ -178,12 +178,12 @@ describe("sub-sessions fold", () => {
     // Live children, in start order, directly under the parent.
     const parent = foldOf("Ship the release");
     expect(parent.getAttribute("aria-expanded")).toBe("true");
-    expect(parent.getAttribute("aria-label")).toBe("Hide the 6 agents under Ship the release. 6 agents under this session: 2 working, 1 needs you, 3 finished, 1 of them failed");
+    expect(parent.getAttribute("aria-label")).toBe("Hide the 6 agents under Ship the release. 6 agents under this session: 2 working, 4 finished, 1 of them failed");
     expect(rowNamed("alpha")?.querySelector('[data-slot="run-dot"]')?.getAttribute("aria-label")).toBe("Working");
     expect(rowNamed("alpha")?.querySelector('[data-slot="run-state"]')).toBeNull();
-    expect(rowNamed("bravo")?.querySelector('[data-slot="run-dot"]')?.getAttribute("aria-label")).toBe("Needs you");
-    expect(rowNamed("bravo")?.querySelector('[data-slot="run-state"]')).toBeNull();
-    // Done, but with a working child: the whole branch stays with the living.
+    // Blocked is terminal, so it is hidden with the other finished rows.
+    expect(rowNamed("bravo")).toBeUndefined();
+    // Blocked, but with a working child: the whole branch stays with the living.
     expect(rowNamed("echo")).toBeDefined();
     expect(rowNamed("foxtrot")).toBeDefined();
 
@@ -191,24 +191,27 @@ describe("sub-sessions fold", () => {
     expect(rowNamed("charlie")).toBeUndefined();
     expect(rowNamed("delta")).toBeUndefined();
     const finished = finishedFoldOf("Ship the release")!;
-    expect(finished.textContent).toContain("2 finished");
+    expect(finished.textContent).toContain("3 finished");
     expect(finished.querySelector('[data-slot="finished-failed"]')?.textContent).toContain("1 failed");
     expect(finished.getAttribute("aria-expanded")).toBe("false");
-    // Several branches can read "2 finished" at once, so the name says whose,
+    // Several branches can read "3 finished" at once, so the name says whose,
     // and says the failure out loud rather than only in red.
-    expect(finished.getAttribute("aria-label")).toBe("Show the 2 finished agents under Ship the release, 1 failed");
+    expect(finished.getAttribute("aria-label")).toBe("Show the 3 finished agents under Ship the release, 1 failed");
 
     // No width-taking tag: the disclosure mark carries the most important
     // descendant state, and its own name/title spells out every count.
     expect(rowNamed("Ship the release")?.querySelector('[data-slot="session-children-chip"]')).toBeNull();
-    expect(foldStatusOf("Ship the release")?.getAttribute("data-tone")).toBe("attention");
-    expect(parent.getAttribute("title")).toBe("6 agents under this session: 2 working, 1 needs you, 3 finished, 1 of them failed");
-    expect(rowNamed("Ship the release")?.querySelector('[data-slot="aui_thread-list-item-trigger"]')?.getAttribute("title")).toContain("6 agents under this session: 2 working, 1 needs you, 3 finished, 1 of them failed");
+    expect(foldStatusOf("Ship the release")?.getAttribute("data-tone")).toBe("danger");
+    expect(parent.getAttribute("title")).toBe("6 agents under this session: 2 working, 4 finished, 1 of them failed");
+    expect(rowNamed("Ship the release")?.querySelector('[data-slot="aui_thread-list-item-trigger"]')?.getAttribute("title")).toContain("6 agents under this session: 2 working, 4 finished, 1 of them failed");
 
     // Open it: the settled rows arrive, dimmed — except the failed one.
     await act(async () => finished.click());
     expect(finished.getAttribute("aria-expanded")).toBe("true");
-    expect(finished.getAttribute("aria-label")).toBe("Hide the 2 finished agents under Ship the release, 1 failed");
+    expect(finished.getAttribute("aria-label")).toBe("Hide the 3 finished agents under Ship the release, 1 failed");
+    expect(rowNamed("bravo")?.getAttribute("data-dimmed")).toBe("true");
+    expect(rowNamed("bravo")?.querySelector('[data-slot="run-dot"]')?.getAttribute("aria-label")).toBe("Blocked");
+    expect(rowNamed("bravo")?.querySelector('[data-slot="run-dot"]')?.className).not.toContain("animate-attention");
     expect(rowNamed("charlie")?.getAttribute("data-dimmed")).toBe("true");
     expect(rowNamed("delta")?.getAttribute("data-run-status")).toBe("failed");
     expect(rowNamed("delta")?.querySelector('[data-slot="run-dot"]')?.getAttribute("aria-label")).toBe("Failed");
@@ -229,20 +232,45 @@ describe("sub-sessions fold", () => {
     expect(dot.getAttribute("aria-label")).toBe("Asking");
     expect(dot.className).toContain("animate-attention");
     expect(alpha.getAttribute("data-dimmed")).toBeNull();
-    // Not folded away: the finished fold still holds only the two settled ones.
-    expect(finishedFoldOf("Ship the release")?.textContent).toContain("2 finished");
+    // Not folded away: the finished fold still holds the three terminal siblings.
+    expect(finishedFoldOf("Ship the release")?.textContent).toContain("3 finished");
     expect(foldStatusOf("Ship the release")?.getAttribute("data-tone")).toBe("attention");
-    expect(foldOf("Ship the release").getAttribute("title")).toBe("6 agents under this session: 1 working, 2 needs you, 3 finished, 1 of them failed");
-    // Answered: the child dot returns to the working sweep; the parent's
-    // attention mark remains because bravo still needs the person.
+    expect(foldOf("Ship the release").getAttribute("title")).toBe("6 agents under this session: 1 working, 1 needs you, 4 finished, 1 of them failed");
+    // Answered: the child dot returns to the working sweep; the genuine failed
+    // history remains truthful on the folded branch.
     await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[0]!, status: "running", updatedAt: at(8) } }));
     expect(rowNamed("alpha")?.querySelector('[data-slot="run-dot"]')?.getAttribute("aria-label")).toBe("Working");
-    expect(foldStatusOf("Ship the release")?.getAttribute("data-tone")).toBe("attention");
+    expect(foldStatusOf("Ship the release")?.getAttribute("data-tone")).toBe("danger");
+  });
+
+  it("returns a resumed session to the live fold and does not brand it with an older failure", async () => {
+    await mount();
+    const failed = childRun("alpha-failed", ALPHA, "failed", 12);
+    failed.updatedAt = at(13);
+    failed.endedAt = at(13);
+    failed.error = "Provider disconnected.";
+    const resumed = childRun("alpha-resumed", ALPHA, "running", 12);
+
+    await act(async () => store.dispatch({ type: "agents/run", run: failed }));
+    await act(async () => store.dispatch({ type: "agents/run", run: resumed }));
+    const active = rowNamed("alpha")!;
+    expect(active.getAttribute("data-run-status")).toBe("running");
+    expect(active.querySelector('[data-slot="run-dot"]')?.getAttribute("aria-label")).toBe("Working");
+    expect(active.getAttribute("data-dimmed")).toBeNull();
+
+    // The same resumed run ends normally. Its older failure remains in the run
+    // registry, but the session now stands on this canonical newest outcome.
+    await act(async () => store.dispatch({ type: "agents/run", run: { ...resumed, status: "completed", updatedAt: at(14), endedAt: at(14), result: { status: "completed", message: "Recovered." } } }));
+    expect(rowNamed("alpha")).toBeUndefined();
+    const finished = finishedFoldOf("Ship the release")!;
+    await act(async () => finished.click());
+    expect(rowNamed("alpha")?.getAttribute("data-run-status")).toBe("completed");
+    expect(rowNamed("alpha")?.querySelector('[data-slot="run-dot"]')?.getAttribute("aria-label")).toBe("Done");
   });
 
   it("rolls descendant attention into one compact disclosure mark", async () => {
     await mount();
-    expect(foldStatusOf("Ship the release")?.getAttribute("data-tone")).toBe("attention");
+    expect(foldStatusOf("Ship the release")?.getAttribute("data-tone")).toBe("danger");
 
     // An error outranks simultaneous working children even when the failed run
     // is itself the parent of a still-running descendant (so its branch is live).
@@ -314,7 +342,7 @@ describe("sub-sessions fold", () => {
     expect(parent.getAttribute("aria-expanded")).toBe("false");
     expect(branchOf("Ship the release")!.querySelector('[data-slot="session-children"]')).toBeNull();
     expect(names()).toEqual(["Ship the release", "Quiet session"]);
-    expect(parent.getAttribute("aria-label")).toBe("Show the 6 agents under Ship the release. 6 agents under this session: 2 working, 1 needs you, 3 finished, 1 of them failed");
+    expect(parent.getAttribute("aria-label")).toBe("Show the 6 agents under Ship the release. 6 agents under this session: 2 working, 4 finished, 1 of them failed");
 
     // What it says it controls is really there, really empty, and really hidden.
     const controlled = document.getElementById(parent.getAttribute("aria-controls")!)!;
@@ -349,7 +377,7 @@ describe("sub-sessions fold", () => {
     // disclosure's summary and mark; it does not reopen the branch.
     await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[2]!, status: "running", updatedAt: at(9) } }));
     expect(foldOf("Ship the release").getAttribute("aria-expanded")).toBe("false");
-    expect(foldStatusOf("Ship the release")?.getAttribute("data-tone")).toBe("attention");
+    expect(foldStatusOf("Ship the release")?.getAttribute("data-tone")).toBe("danger");
 
     // And the reverse: a run ending never collapses the branch under the
     // person — the child moves into the finished fold, the branch stays.
@@ -357,7 +385,7 @@ describe("sub-sessions fold", () => {
     await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[0]!, status: "completed", updatedAt: at(9) } }));
     expect(foldOf("Ship the release").getAttribute("aria-expanded")).toBe("true");
     expect(rowNamed("alpha")).toBeUndefined();
-    expect(finishedFoldOf("Ship the release")!.textContent).toContain("2 finished");
+    expect(finishedFoldOf("Ship the release")!.textContent).toContain("3 finished");
   });
 
   it("reveals the branch that holds the session being opened, and folding it keeps the selection", async () => {

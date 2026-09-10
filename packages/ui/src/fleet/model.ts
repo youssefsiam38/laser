@@ -44,7 +44,7 @@ export const FLEET_STATE_LABEL: Readonly<Record<FleetState, string>> = {
   queued: "Waiting",
   running: "Working",
   needs_input: "Asking",
-  blocked: "Needs you",
+  blocked: "Blocked",
   completed: "Done",
   failed: "Failed",
   cancelled: "Ended",
@@ -54,7 +54,9 @@ const STATE_ATTENTION: Readonly<Record<FleetState, Attention>> = {
   queued: "working",
   running: "working",
   needs_input: "waiting_for_input",
-  blocked: "waiting_for_input",
+  // Terminal blocking is neutral history. The message still explains why the
+  // run ended; only a live `needs_input` question requires attention.
+  blocked: "idle",
   completed: "finished_unread",
   failed: "error",
   cancelled: "idle",
@@ -249,7 +251,7 @@ function settle(items: readonly FleetItem[], counts: { running: number; needsYou
     const below = settle(item.children, counts);
     item.attention = highestAttention([item.own, below]);
     if (!item.terminal) counts.running += 1;
-    if (item.own === "waiting_for_input") counts.needsYou += 1;
+    if (item.state === "needs_input") counts.needsYou += 1;
     seen.push(item.attention);
   }
   return highestAttention(seen);

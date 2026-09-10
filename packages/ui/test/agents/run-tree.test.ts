@@ -78,7 +78,7 @@ describe("buildAgentTree", () => {
     const a = tree.byPath.get("/p/a.jsonl")!;
     expect(a.runs.map((r) => r.runId)).toEqual(["r-a", "r-a2"]);
     expect(a.run?.runId).toBe("r-a2");
-    expect(a).toMatchObject({ status: "blocked", tone: "attention", ended: true });
+    expect(a).toMatchObject({ status: "blocked", tone: "muted", ended: true });
   });
 
   it("derives the root's status from attention and the live view", () => {
@@ -177,6 +177,32 @@ describe("ancestry", () => {
     // A run whose parent row is missing still knows its root.
     const cut = run({ runId: "r-cut", sessionPath: "/p/cut.jsonl", parent: null, rootSessionPath: ROOT });
     expect(ancestryOf([cut], [], "/p/cut.jsonl")).toEqual([ROOT, "/p/cut.jsonl"]);
+  });
+
+  it("uses the canonical newest run for ancestry when a resumed run ties failed history", () => {
+    const path = "/p/resumed.jsonl";
+    const failed = run({
+      runId: "run_z",
+      sessionPath: path,
+      rootSessionPath: "/p/old-root.jsonl",
+      parent: { sessionPath: "/p/old-parent.jsonl", sessionId: "old" },
+      status: "failed",
+      startedAt: "2026-09-08T10:00:00.000Z",
+      updatedAt: "2026-09-08T10:01:00.000Z",
+    });
+    const resumed = run({
+      runId: "run_a",
+      sessionPath: path,
+      rootSessionPath: ROOT,
+      parent: { sessionPath: ROOT, sessionId: "root" },
+      status: "running",
+      startedAt: failed.startedAt,
+      updatedAt: failed.startedAt,
+    });
+    for (const candidates of [[failed, resumed], [resumed, failed]]) {
+      expect(ancestryOf(candidates, [], path)).toEqual([ROOT, path]);
+      expect(rootOf(candidates, [], path)).toBe(ROOT);
+    }
   });
 
   it("never loops on a malformed parent cycle", () => {

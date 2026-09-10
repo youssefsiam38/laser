@@ -74,7 +74,7 @@ describe("buildFleet", () => {
     expect(group.items[0]!.children[0]!.stop).toEqual({ kind: "task", path: "/p/child.jsonl", id: "t-child" });
   });
 
-  it("rolls attention up so a blocked grandchild lights the parent it is under", () => {
+  it("keeps a blocked descendant as neutral ended history under its live parent", () => {
     const parent = run({ runId: "r1", sessionPath: "/p/child.jsonl", subagentName: "explorer" });
     const blocked = run({
       runId: "r2",
@@ -83,17 +83,19 @@ describe("buildFleet", () => {
       status: "blocked",
       parent: { sessionPath: "/p/child.jsonl", sessionId: "child", runId: "r1" },
       endedAt: "2026-09-08T10:02:00.000Z",
+      result: { status: "blocked", message: "The schema owner must choose." },
     });
     const groups = build({
       sessions: [summary({ path: ROOT }), summary({ path: "/p/child.jsonl" }), summary({ path: "/p/grandchild.jsonl" })],
       runs: byId([parent, blocked], "runId"),
     });
     const group = groups[0]!;
-    expect(group.items[0]!.own).toBe("working");
-    expect(group.items[0]!.attention).toBe("waiting_for_input");
-    expect(group.attention).toBe("waiting_for_input");
-    expect(group.needsYou).toBe(1);
-    expect(fleetSummary(groups)).toMatchObject({ needsYou: 1 });
+    const history = group.items[0]!.children[0]!;
+    expect(history).toMatchObject({ state: "blocked", tone: "muted", own: "idle", terminal: true, terminalReason: "The schema owner must choose." });
+    expect(group.items[0]!.attention).toBe("working");
+    expect(group.attention).toBe("working");
+    expect(group.needsYou).toBe(0);
+    expect(fleetSummary(groups)).toMatchObject({ needsYou: 0 });
   });
 
   it("shows a child paused on a question as live, needing you, with the question as what it is doing", () => {
@@ -192,6 +194,14 @@ describe("buildFleet", () => {
     expect(groups.map((group) => group.path)).toEqual([ROOT, OTHER]);
   });
 
+  it("puts every terminal outcome in Finished, including blocked", () => {
+    for (const status of ["completed", "blocked", "failed", "cancelled"] as const) {
+      const ended = run({ runId: status, sessionPath: `/p/${status}.jsonl`, status, endedAt: "2026-09-08T10:01:00.000Z" });
+      const items = build({ sessions: [summary({ path: ROOT })], runs: byId([ended], "runId") })[0]!.items;
+      expect(partitionItems(items)).toMatchObject({ active: [], finished: [{ state: status, terminal: true }] });
+    }
+  });
+
   it("moves whole branches between in-progress and finished, never half a branch", () => {
     const liveParent = run({ runId: "r1", sessionPath: "/p/child.jsonl" });
     const doneChild = run({
@@ -212,6 +222,16 @@ describe("buildFleet", () => {
     expect(parts.finished).toHaveLength(0);
     // The finished child stays inside the live branch rather than being moved.
     expect(parts.active[0]!.children.map((item) => item.state)).toEqual(["completed"]);
+  });
+
+  it("shows a resumed session from its newest run while retaining failed history", () => {
+    const failed = run({ runId: "old-failed", sessionPath: "/p/child.jsonl", subagentName: "explorer", status: "failed", startedAt: "2026-09-08T10:00:00.000Z", updatedAt: "2026-09-08T10:01:00.000Z", endedAt: "2026-09-08T10:01:00.000Z", error: "Provider disconnected." });
+    const resumed = run({ runId: "new-running", sessionPath: failed.sessionPath, subagentName: "explorer", status: "running", startedAt: "2026-09-08T10:02:00.000Z", updatedAt: "2026-09-08T10:02:00.000Z", task: "Try again." });
+    const groups = build({ sessions: [summary({ path: ROOT })], runs: byId([failed, resumed], "runId") });
+    const item = groups[0]!.items[0]!;
+    expect(item).toMatchObject({ state: "running", tone: "live", terminal: false, run: resumed });
+    expect(partitionItems(groups[0]!.items).active).toHaveLength(1);
+    expect(item.run).not.toBe(failed);
   });
 
   it("names a deleted root by what it has left — its name, its first line, or what it is — never its file name", () => {
