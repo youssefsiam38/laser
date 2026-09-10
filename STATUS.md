@@ -2,7 +2,7 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-10T09:11:00+03:00 · codex-2026-09-10-prompt-namer · HEAD: aa3c28e
+**Last updated:** 2026-09-10T09:35:00+03:00 · codex-2026-09-10-release-032 · HEAD: f2cf2b6
 
 **Current focus:** M13 agent refinements are complete; remaining work is platform and distribution proof.
 
@@ -24,7 +24,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M10 Distribution | in-progress | native feeds ship; in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
 | M12 Product experience | done | 0.2.13 dispatched |
-| M13 Agents Leap | done | instruction templates, Namer, private workspaces and session navigation verified |
+| M13 Agents Leap | done | stable 0.3.2 published with verified x64/ARM64 assets and native feeds |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
@@ -39,8 +39,8 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Recently done
 
+- M13-T82: stable 0.3.2 published with verified x64/ARM64 assets, signed checksums, provenance and native feeds (D-181).
 - M13-T81: automatic provider retries are silent; only the final blocked request warns.
 - M13-T80: Chat and Code restore their own last viewed conversation.
 - M13-T79: every Beam and Chat session owns a private persistent workspace.
 - M13-T78: maximizing Beam opens its conversation under Code.
-- M13-T77: Namer qualifies real candidates and keeps the strongest usable model.

@@ -566,6 +566,7 @@ Depends on: M12.
 | M13-T79 | Give every Beam and Chat session its own private persistent directory | a new built-in conversation runs in an opaque per-session workspace, remains reopenable without exposing that path, and a Chat still moves cleanly into a chosen project |
 | M13-T80 | Restore the last conversation when switching Chat and Code | selecting either sessions tab opens that tab's most recently viewed surviving session, or its honest empty state when none exists, in both pointer and keyboard paths |
 | M13-T81 | Keep recoverable provider retries quiet | provider errors that the engine is retrying never render as failed turns or retry notices; successful recovery leaves no trace in the conversation, while an exhausted or non-retryable request ends in one gentle actionable warning |
+| M13-T82 | Release stable 0.3.2 | the instruction-template, Namer, private-workspace, session-navigation and quiet-retry refinements pass the exact versioned gate; source and matching tag are pushed only after clean CI; the release pipeline publishes verified x64/ARM64 assets, provenance and updater feeds |
 
 ## MX · Cross-cutting (runs alongside every milestone)
 
