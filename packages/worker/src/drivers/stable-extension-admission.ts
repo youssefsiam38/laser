@@ -49,8 +49,8 @@ export class StableExtensionAdmission {
   private generation = 0;
   private serial = 0;
   private readonly invocation = new AsyncLocalStorage<StableInvocation>();
-  private readonly nativeBySession = new WeakMap<AgentSession, NativeMethods>();
   private handler: ExtensionModelWorkHandler | undefined;
+  private native: NativeMethods | undefined;
   /** Rejection observers in Pi core run outside our ALS scope; pair their diagnostic by message. */
   private readonly rejectedInvocations = new Map<string, DriverInvocationRef[]>();
 
@@ -58,40 +58,38 @@ export class StableExtensionAdmission {
     this.handler = handler;
   }
 
-  /** Install before bindExtensions; safe to repeat for the same Pi session. */
+  /** Install once for each replacement Pi session, before its extensions bind. */
   install(session: AgentSession): number {
     const generation = ++this.generation;
-    let native = this.nativeBySession.get(session);
-    if (!native) {
-      native = {
-        prompt: session.prompt.bind(session) as AgentSession["prompt"],
-        custom: session.sendCustomMessage.bind(session) as AgentSession["sendCustomMessage"],
-      };
-      this.nativeBySession.set(session, native);
-    }
+    const native: NativeMethods = {
+      prompt: session.prompt.bind(session) as AgentSession["prompt"],
+      custom: session.sendCustomMessage.bind(session) as AgentSession["sendCustomMessage"],
+    };
+    this.native = native;
     const mutable = session as AgentSession & {
       prompt: AgentSession["prompt"];
       sendCustomMessage: AgentSession["sendCustomMessage"];
     };
     mutable.prompt = ((text: string, options?: PiPromptOptions) => {
-      if (options?.source !== "extension") return native!.prompt(text, options);
+      if (options?.source !== "extension") return native.prompt(text, options);
       if (generation !== this.generation) return staleExecutionError().admission;
-      return this.interceptUser(session, native!.prompt, generation, text, options);
+      return this.interceptUser(session, native.prompt, generation, text, options);
     }) as AgentSession["prompt"];
     mutable.sendCustomMessage = ((message: PiCustomMessage, options?: PiCustomOptions) => {
-      if (!customMessageTriggersModel(session.isStreaming, options)) return native!.custom(message, options);
+      if (!customMessageTriggersModel(session.isStreaming, options)) return native.custom(message, options);
       if (generation !== this.generation) return staleExecutionError().admission;
-      return this.interceptCustom(session, native!.custom, generation, message, options);
+      return this.interceptCustom(session, native.custom, generation, message, options);
     }) as AgentSession["sendCustomMessage"];
     return generation;
   }
 
   invalidate(): void {
     this.generation += 1;
+    this.native = undefined;
   }
 
   nativePrompt(session: AgentSession): AgentSession["prompt"] {
-    return this.nativeBySession.get(session)?.prompt ?? session.prompt.bind(session);
+    return this.native?.prompt ?? session.prompt.bind(session);
   }
 
   takeRejectedInvocation(error: unknown): DriverInvocationRef | undefined {

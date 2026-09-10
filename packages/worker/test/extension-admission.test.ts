@@ -169,21 +169,6 @@ describe("StableSdkDriver extension admission", () => {
     successor.resolve();
   });
 
-  it("rebinds the same session against its original native methods", async () => {
-    const native = vi.fn(async (_text: string, options?: FakeOptions) => {
-      options?.preflightResult?.(true);
-    });
-    const admission = new StableExtensionAdmission();
-    const session: FakeSession = { isStreaming: false, prompt: native, async sendCustomMessage() {} };
-    install(admission, session);
-    const captured = capturingHandler(admission);
-    install(admission, session);
-
-    await expect(session.prompt("after navigation", { source: "extension" })).resolves.toBeUndefined();
-    expect(native).toHaveBeenCalledOnce();
-    expect(captured.requests).toHaveLength(1);
-  });
-
   it("bypasses non-triggering custom messages", async () => {
     const native = vi.fn(async () => undefined);
     const admission = new StableExtensionAdmission();

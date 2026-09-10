@@ -347,18 +347,24 @@ describe("extension-generated goal admission through the real server", () => {
     expect(provider.requests).toHaveLength(0);
   }, 30_000);
 
-  it("keeps extension sends live after real same-session navigation rebinding", async () => {
+  it("binds extension sends to the replacement session after a real fork", async () => {
     const entries = (await liveDriver.entries()).entries as Array<{ id?: string; type?: string }>;
     const message = entries.find((entry) => entry.type === "message" && entry.id);
     expect(message?.id).toBeDefined();
-    expect((await liveDriver.navigateTree(message!.id!)).cancelled).toBe(false);
-    provider.answer(0, { toolCall: { name: "complete_agent_run", args: { status: "completed", message: "rebound done" } } });
+    const originalPath = childPath;
+    const forked = await call("pi/session/fork", { path: originalPath, entryId: message!.id! });
+    expect(forked.error).toBeUndefined();
+    childPath = (forked.result as { state: { path: string } }).state.path;
+    expect(childPath).not.toBe(originalPath);
+    expect(server.agents().sessionInfo(originalPath)).toBeUndefined();
+    expect(server.agents().sessionInfo(childPath)).toBeDefined();
+    provider.answer(0, { toolCall: { name: "complete_agent_run", args: { status: "completed", message: "fork done" } } });
 
-    await expect(extensionActions.sendUserMessage("work after navigation")).resolves.toBeUndefined();
+    await expect(extensionActions.sendUserMessage("work after fork")).resolves.toBeUndefined();
     const run = server.agents().activeRun(childPath)!;
-    expect(run).toMatchObject({ origin: "agent", status: "running", task: "work after navigation" });
+    expect(run).toMatchObject({ origin: "agent", status: "running", task: "work after fork" });
     await waitForTerminal(run.runId);
-    expect(server.agents().run(run.runId)).toMatchObject({ status: "completed", result: { message: "rebound done" } });
+    expect(server.agents().run(run.runId)).toMatchObject({ status: "completed", result: { message: "fork done" } });
     expect(provider.requests).toHaveLength(1);
   }, 30_000);
 
