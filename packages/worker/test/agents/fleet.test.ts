@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentRun, BackgroundTask } from "@lasercode/protocol";
 import { buildFleetTree, FLEET_STATUS_WORD, flattenFleetRows, formatElapsed } from "../../src/agents/fleet.js";
 import { buildFleet, FLEET_STATE_LABEL, flattenFleet, scopeFleet } from "../../../ui/src/fleet/model.js";
+import { latestRunForSession } from "../../../ui/src/agents/model.js";
 
 const ROOT = "/sessions/root.jsonl";
 const NOW = Date.parse("2026-09-09T10:10:00.000Z");
@@ -100,6 +101,15 @@ describe("buildFleetTree", () => {
     // Its place in the order is still where its first run put it.
     expect(fleet.rows.map((candidate) => candidate.title)).toEqual(["migrate", "review", "ended", "done"]);
     expect(fleet.rows.filter((candidate) => candidate.title === "done")).toHaveLength(1);
+  });
+
+  it.each(["running", "needs_input"] as const)("keeps a same-millisecond %s follow-up ahead of its terminal predecessor", (status) => {
+    const first = run({ runId: "run_z", sessionPath: "/sessions/tie.jsonl", subagentName: "tie", startedAt: "2026-09-09T10:09:00.000Z", status: "completed" });
+    const next = { ...first, runId: "run_a", status };
+    for (const candidates of [[first, next], [next, first]]) {
+      expect(buildFleetTree({ callerPath: ROOT, runs: candidates, tasksOf: () => [], now: NOW }).rows[0]).toMatchObject({ runId: "run_a", state: status });
+      expect(latestRunForSession(candidates, first.sessionPath)?.runId).toBe("run_a");
+    }
   });
 
   it("cuts the deepest rows first, newest first among them, and counts what it cut", () => {

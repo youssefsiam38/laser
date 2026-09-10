@@ -186,7 +186,13 @@ export function buildFleetTree(input: FleetTreeInput): InspectFleetResult {
     if (list) list.push(run);
     else runsBySession.set(run.sessionPath, [run]);
   }
-  for (const list of runsBySession.values()) list.sort((a, b) => time(a.startedAt) - time(b.startedAt) || a.runId.localeCompare(b.runId));
+  // A same-millisecond follow-up must not lose to its terminal predecessor's
+  // random ID. Match the UI's newest-run comparator, in ascending order.
+  for (const list of runsBySession.values()) list.sort((a, b) =>
+    time(a.startedAt) - time(b.startedAt)
+    || Number(isTerminalRunStatus(b.status)) - Number(isTerminalRunStatus(a.status))
+    || time(a.updatedAt) - time(b.updatedAt)
+    || a.runId.localeCompare(b.runId));
 
   const childrenOf = new Map<string, string[]>();
   for (const [path, runs] of runsBySession) {

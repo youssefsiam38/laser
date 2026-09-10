@@ -133,9 +133,12 @@ const time = (value: string | undefined): number => {
   return Number.isNaN(parsed) ? 0 : parsed;
 };
 
-/** Newest start first; ties by last update, then by id so the order is total. */
+/** Newest start first; a live follow-up wins a same-millisecond tie. */
 export function compareRunsNewestFirst(a: AgentRun, b: AgentRun): number {
-  return time(b.startedAt) - time(a.startedAt) || time(b.updatedAt) - time(a.updatedAt) || b.runId.localeCompare(a.runId);
+  return time(b.startedAt) - time(a.startedAt)
+    || Number(isTerminalRunStatus(a.status)) - Number(isTerminalRunStatus(b.status))
+    || time(b.updatedAt) - time(a.updatedAt)
+    || b.runId.localeCompare(a.runId);
 }
 
 /** Creation order: the order children were started in, which a map must never reshuffle. */
