@@ -68,14 +68,14 @@ const tasksOf = (path: string): BackgroundTask[] => tasks.filter((candidate) => 
 describe("buildFleetTree", () => {
   it("nests as the tree nests, orders by creation, and says each row in the fleet's words", () => {
     const fleet = buildFleetTree({ callerPath: ROOT, runs, tasksOf, now: NOW });
-    expect(fleet).toMatchObject({ working: 3, needsYou: 2, finished: 5, total: 8, omitted: 0 });
+    expect(fleet).toMatchObject({ working: 3, needsYou: 1, finished: 5, total: 8, omitted: 0 });
     expect(fleet.rows.map((row) => row.title)).toEqual(["migrate", "review", "ended", "done", "pnpm vite dev", "pnpm -r build"]);
     const [migrate, review, ended, done, dev, build] = fleet.rows;
     expect(migrate).toMatchObject({ kind: "agent", agentName: "worker", subagentName: "migrate", sessionId: "id-/sessions/c1.jsonl", runId: "run_1", state: "needs_input", status: "Asking", line: "Which database?", elapsed: "10m 00s", depth: 0 });
     expect(migrate!.children.map((row) => row.title)).toEqual(["check-tests", "pnpm test"]);
     expect(migrate!.children[0]).toMatchObject({ kind: "agent", runId: "run_3", status: "Working", line: "Reading packages/ui/src/store.ts", elapsed: "8m 00s", depth: 1, children: [] });
     expect(migrate!.children[1]).toMatchObject({ kind: "command", taskId: "t-test", state: "failed", status: "Failed", line: "exit code 1", exitCode: 1, elapsed: "1m 00s", depth: 1 });
-    expect(review).toMatchObject({ kind: "agent", runId: "run_2", state: "blocked", status: "Needs you", line: "Which config is canonical?", elapsed: "3m 00s", endedAt: "2026-09-09T10:04:00.000Z" });
+    expect(review).toMatchObject({ kind: "agent", runId: "run_2", state: "blocked", status: "Blocked", line: "Which config is canonical?", elapsed: "3m 00s", endedAt: "2026-09-09T10:04:00.000Z" });
     expect(ended).toMatchObject({ state: "cancelled", status: "Ended", line: "the person ended it" });
     // A final message is one line, its first.
     expect(done).toMatchObject({ state: "completed", status: "Done", line: "Counted the files.", elapsed: "3m 00s" });
@@ -101,6 +101,17 @@ describe("buildFleetTree", () => {
     // Its place in the order is still where its first run put it.
     expect(fleet.rows.map((candidate) => candidate.title)).toEqual(["migrate", "review", "ended", "done"]);
     expect(fleet.rows.filter((candidate) => candidate.title === "done")).toHaveLength(1);
+  });
+
+  it("shows a resumed run as current while retaining its failed predecessor", () => {
+    const failed = run({ runId: "run_failed", sessionPath: "/sessions/resumed.jsonl", subagentName: "resumed", startedAt: "2026-09-09T10:08:00.000Z", updatedAt: "2026-09-09T10:08:30.000Z", status: "failed", endedAt: "2026-09-09T10:08:30.000Z", error: "Provider disconnected." });
+    const resumed = run({ runId: "run_resumed", sessionPath: failed.sessionPath, subagentName: "resumed", startedAt: "2026-09-09T10:09:00.000Z", status: "running", task: "Try again." });
+    const active = buildFleetTree({ callerPath: ROOT, runs: [failed, resumed], tasksOf: () => [], now: NOW }).rows[0]!;
+    expect(active).toMatchObject({ runId: resumed.runId, state: "running", status: "Working", line: "Try again." });
+
+    const completed = { ...resumed, status: "completed" as const, updatedAt: "2026-09-09T10:09:30.000Z", endedAt: "2026-09-09T10:09:30.000Z", result: { status: "completed" as const, message: "Recovered." } };
+    const ended = buildFleetTree({ callerPath: ROOT, runs: [failed, completed], tasksOf: () => [], now: NOW }).rows[0]!;
+    expect(ended).toMatchObject({ runId: resumed.runId, state: "completed", status: "Done", line: "Recovered." });
   });
 
   it.each(["running", "needs_input"] as const)("keeps a same-millisecond %s follow-up ahead of its terminal predecessor", (status) => {

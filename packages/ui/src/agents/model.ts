@@ -91,7 +91,7 @@ export const RUN_STATUS_LABEL: Readonly<Record<AgentRunStatus, string>> = {
   // `AgentRun.question` for the surfaces with room.
   needs_input: "Asking",
   completed: "Done",
-  blocked: "Needs you",
+  blocked: "Blocked",
   failed: "Failed",
   cancelled: "Ended",
 };
@@ -102,15 +102,16 @@ export const RUN_STATUS_TONE: Readonly<Record<AgentRunStatus, AgentStatusTone>> 
   queued: "muted",
   running: "live",
   // Attention, not live: the one live state where nothing is happening
-  // until someone acts. The same warm hue as `blocked`, because to a person
-  // both mean "needs someone"; the word says which.
+  // until someone acts.
   needs_input: "attention",
   // Not `ok`. Green in this app means *happening now* — the live dot, the
   // running badge — so green on something finished reads as "look at me" for
   // the one thing that needs no looking at (D-154). Finished work is history:
   // it is dimmed, and it is counted, and it is one click away.
   completed: "muted",
-  blocked: "attention",
+  // `blocked` is an ended run. Its final message remains in history, but only
+  // a live `needs_input` question asks the person to act (D-189).
+  blocked: "muted",
   failed: "danger",
   cancelled: "muted",
 };

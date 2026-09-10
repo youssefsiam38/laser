@@ -142,8 +142,14 @@ describe("rendering", () => {
     await mount(<AgentCompletion data={{ toolCallId: "t1", status: "blocked", message: "Need the API key.", at: "2026-09-08T10:00:00.000Z", done: true }} />);
     const block = container.querySelector<HTMLElement>('[data-slot="agent-completion"]')!;
     expect(block.hasAttribute("data-search-tool")).toBe(true);
-    expect(block.querySelector('[data-slot="agent-completion-status"]')?.textContent).toBe("Blocked");
-    expect(block.querySelector('[data-search-content="message"]')?.textContent).toBe("Need the API key.");
+    const blockedStatus = block.querySelector<HTMLElement>('[data-slot="agent-completion-status"]')!;
+    expect(blockedStatus.textContent).toBe("Blocked");
+    expect(blockedStatus.getAttribute("data-variant")).toBe("default");
+    expect(blockedStatus.className).not.toContain("attention");
+    const blockedMessage = block.querySelector<HTMLElement>('[data-search-content="message"]')!;
+    expect(blockedMessage.textContent).toBe("Need the API key.");
+    expect(blockedMessage.className).toContain("bg-surface");
+    expect(blockedMessage.className).not.toContain("--attention");
     expect(block.querySelector("time")).not.toBeNull();
     await mount(<AgentCompletion data={{ toolCallId: "t1", status: "completed", message: "All green.", done: false }} />);
     expect(container.querySelector('[data-slot="agent-completion-status"]')?.textContent).toBe("Completed");

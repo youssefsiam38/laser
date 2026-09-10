@@ -220,6 +220,29 @@ describe("the fleet column", () => {
     expect(rowFor("explorer").textContent).not.toContain("Working in");
   });
 
+  it("folds a blocked run into neutral Finished history with no attention count or pulse", async () => {
+    fixture.state.agents.runs = {
+      r1: {
+        ...child,
+        status: "blocked",
+        endedAt: "2026-09-08T10:04:00.000Z",
+        result: { status: "blocked", message: "The schema owner must choose." },
+      },
+    };
+    await render();
+    expect(rows()).toHaveLength(0);
+    expect(container.textContent).toContain("Nothing is in progress.");
+    expect(container.querySelector('[data-slot="fleet-summary"]')?.textContent).toBe("all finished");
+    expect(container.textContent).not.toContain("needs you");
+    await openFinished();
+    const row = rowFor("explorer");
+    expect(row.getAttribute("data-state")).toBe("blocked");
+    expect(row.textContent).toContain("Blocked");
+    expect(row.textContent).toContain("The schema owner must choose.");
+    expect(row.querySelector('[data-slot="status-dot"]')?.getAttribute("data-status")).toBe("idle");
+    expect(row.querySelector('[data-slot="status-dot"]')?.className).not.toContain("animate-attention");
+  });
+
   // M13-T45: a child paused on a question is live and asking — the row says
   // so, the question is its one line, and the detail carries it whole.
   it("shows an agent paused on a question as Asking, with the question and its choices, and still offers to end it", async () => {

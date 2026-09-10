@@ -46,12 +46,12 @@
  *     how many failed, and a failed child keeps its normal ink and its danger
  *     dot inside it: dimming must never be the reason you cannot find the one
  *     that went wrong.
- *   - A branch is "settled" only when its whole subtree is, so a completed
- *     child that still has a working grandchild stays with the live ones —
- *     the fleet sheet's rule (docs/ux-elements.md "Subagent list"), for the
- *     same reason: moving a finished parent away from live work is tidier and
- *     structurally false. "Needs you" is live here even though the protocol
- *     calls it terminal: a question for the person is the last thing to hide.
+ *   - A branch is "settled" only when its whole subtree is, so an ended child
+ *     that still has a working grandchild stays with the live ones — the fleet
+ *     sheet's rule (docs/ux-elements.md "Subagent list"), for the same reason:
+ *     moving a finished parent away from live work is tidier and structurally
+ *     false. Terminal `blocked` is neutral finished history; only the live
+ *     `needs_input` state is a question for the person.
  *   - A typed query flattens the tree (below), so **search is never folded
  *     away**: every match is a root of its group and renders unconditionally.
  */
@@ -171,7 +171,7 @@ export interface BranchInfo {
   /** Every row beneath this one, at every depth. */
   total: number;
   running: number;
-  /** Runs waiting on the person. Terminal to the protocol; live to a reader. */
+  /** Live runs paused on a question from the person. */
   blocked: number;
   /** Queued, or a child whose run the registry has not named yet. */
   waiting: number;
@@ -207,13 +207,8 @@ interface ItemMeta {
 
 const ACTIVE_RUN: ReadonlySet<AgentRunStatus> = new Set<AgentRunStatus>(["running", "queued", "needs_input"]);
 
-/**
- * What the finished fold may swallow. The protocol calls `blocked` terminal
- * (`AGENT_RUN_TERMINAL`) because the run's own loop has stopped, but to a
- * reader it is "Needs you" — the single most attention-worthy thing the panel
- * can show (DESIGN.md "Status language"). It stays with the live children.
- */
-const SETTLED_RUN: ReadonlySet<AgentRunStatus> = new Set<AgentRunStatus>(["completed", "failed", "cancelled"]);
+/** Every terminal outcome belongs to Finished; only live questions stay out. */
+const SETTLED_RUN: ReadonlySet<AgentRunStatus> = new Set<AgentRunStatus>(["completed", "blocked", "failed", "cancelled"]);
 
 // One `latestRunForSession` pass per run registry, not one per row per render:
 // the registry object only changes when a run does.
@@ -425,8 +420,7 @@ function branchInfoOf(groups: readonly ThreadListGroup[], runs: Readonly<Record<
       total += 1;
       const status = statusOf(child);
       if (status === "running") running += 1;
-      // Both need someone: one ended saying so, one is live and paused on a question.
-      else if (status === "blocked" || status === "needs_input") blocked += 1;
+      else if (status === "needs_input") blocked += 1;
       else if (status === "queued" || status === undefined) waiting += 1;
       else if (status === "failed") failed += 1;
       child.children.forEach(tally);
@@ -1216,7 +1210,7 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
           {/* Active child runs already lead with their complete state mark.
               Once the run settles, keep the session's own trailing activity:
               it can independently be unread or in error. */}
-          {row.child && row.runStatus !== undefined && (ACTIVE_RUN.has(row.runStatus) || row.runStatus === "blocked")
+          {row.child && row.runStatus !== undefined && ACTIVE_RUN.has(row.runStatus)
             ? null
             : <SessionActivity status={archived ? "idle" : row.status} />}
         </ThreadListItemPrimitive.Trigger>
@@ -1239,9 +1233,8 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
 
 /**
  * A child row's dot: its run's status in the tone `runStatusTone` names, with
- * the shared sweep while it works and the attention pulse while it needs
- * someone — blocked, or live and asking. Reduced motion keeps the colour and
- * the accessible name.
+ * the shared sweep while it works and the attention pulse only while it is
+ * live and asking. Reduced motion keeps the colour and accessible name.
  */
 function RunDot({ status, tone }: { status: AgentRunStatus; tone: AgentStatusTone }) {
   const color = TONE_COLOR[tone === "muted" ? "neutral" : tone];
@@ -1251,7 +1244,7 @@ function RunDot({ status, tone }: { status: AgentRunStatus; tone: AgentStatusTon
       aria-label={runStatusLabel(status)}
       data-slot="run-dot"
       data-run-status={status}
-      className={cn("relative inline-block size-2 shrink-0 rounded-full bg-(--dot)", (status === "blocked" || status === "needs_input") && "motion-safe:animate-attention")}
+      className={cn("relative inline-block size-2 shrink-0 rounded-full bg-(--dot)", status === "needs_input" && "motion-safe:animate-attention")}
       style={{ "--dot": color } as React.CSSProperties}
     >
       {status === "running" && (

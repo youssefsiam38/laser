@@ -175,7 +175,7 @@ describe("the live map", () => {
     const { container, store } = mounted;
     const before = Object.fromEntries(nodes(container).map((n) => [n.getAttribute("data-id"), n.style.transform]));
     await dispatch(store, { type: "notification", method: "agents/run", params: { run: run({ runId: "r-a", sessionPath: "/p/a.jsonl", subagentName: "reviewer-1", status: "blocked", updatedAt: "2026-09-08T10:09:00.000Z", startedAt: "2026-09-08T10:00:00.000Z" }) } });
-    expect(nodeAt(container, "/p/a.jsonl")?.querySelector('[data-slot="agent-map-status"]')?.textContent).toContain("Needs you");
+    expect(nodeAt(container, "/p/a.jsonl")?.querySelector('[data-slot="agent-map-status"]')?.textContent).toContain("Blocked");
     for (const n of nodes(container)) expect(n.style.transform).toBe(before[n.getAttribute("data-id")!]);
     await dispatch(store, { type: "notification", method: "agents/run", params: { run: run({ runId: "r-d", sessionPath: "/p/d.jsonl", subagentName: "docs-1", startedAt: "2026-09-08T10:03:00.000Z" }) } });
     expect(nodes(container).map((n) => n.getAttribute("data-id"))).toEqual([ROOT, "/p/a.jsonl", "/p/c.jsonl", "/p/d.jsonl"]);
