@@ -81,11 +81,11 @@ export function ComposerBar({ className, ...props }: ComponentProps<"div">) {
  * two-column dock is narrower than a phone.
  */
 export function ComposerToolbar({ className, ...props }: ComponentProps<"div">) {
-  return <div data-slot="composer-toolbar" className={cn("@container flex items-center gap-1 px-2 pt-1 pb-2", className)} {...props} />;
+  return <div data-slot="composer-toolbar" className={cn("@container flex flex-wrap items-center gap-1 px-2 pt-1 pb-2", className)} {...props} />;
 }
 
 export function ComposerActions({ className, ...props }: ComponentProps<"div">) {
-  return <div data-slot="composer-actions" className={cn("flex items-center gap-1", className)} {...props} />;
+  return <div data-slot="composer-actions" className={cn("flex min-w-0 flex-1 items-center justify-end gap-1", className)} {...props} />;
 }
 
 // ---------------------------------------------------------------------------

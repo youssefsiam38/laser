@@ -133,7 +133,7 @@ function DictateControls({ className, size, cwd, path }: { className?: string | 
   const voicePhase = phase === "transcribing" ? "transcribing" : phase === "starting" ? "starting" : "listening";
 
   return (
-    <span ref={root} data-slot="dictate" data-phase={active ? phase : "idle"} className={cn("flex min-w-0 items-center gap-1", active && "order-first col-span-full w-full", className)}>
+    <span ref={root} data-slot="dictate" data-phase={active ? phase : "idle"} className={cn("flex min-w-0 items-center gap-1", active && "order-first basis-full", className)}>
       <AuiIf condition={(s) => s.composer.dictation == null}>
         <ComposerPrimitive.Dictate asChild>
           {/* The claim runs before the primitive begins: composed handlers run
