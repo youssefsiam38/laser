@@ -12,7 +12,15 @@
 
 import { AGENT_MAX_DEPTH_LIMIT, ErrorCodes, PRODUCT_NAME, ProtocolError, parseClientRequest, type AgentDefinition, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type SettingsScope, type TypedClientRequest } from "@lasercode/protocol";
 import { join, resolve } from "node:path";
-import type { DriverAgentOptions, DriverEvent, SessionDriver } from "./driver.js";
+import type {
+  DriverAgentOptions,
+  DriverEvent,
+  ExtensionModelAdmission,
+  ExtensionModelExecution,
+  ExtensionModelWorkRequest,
+  SessionAdmissionLease,
+  SessionDriver,
+} from "./driver.js";
 import { ProjectFilesService } from "./files.js";
 import { assertFirstTurnAdmission, FirstTurnLock } from "./first-turn.js";
 import { PendingTray } from "./pending.js";
@@ -337,7 +345,17 @@ export class WorkerServer {
       case "session/goal/action": {
         const live = this.live(req.params.path);
         if (!live.driver.goalAction) throw new ProtocolError(ErrorCodes.Unsupported, "Goals are not available in this session.");
-        return this.firstTurnLock.run(live.path, async () => ({ goal: await live.driver.goalAction!(req.params.action) } satisfies Result<"session/goal/action">));
+        const lease = (await this.firstTurnLock.acquireLease(live.path, true))!;
+        try {
+          return {
+            goal: await live.driver.goalAction(req.params.action, {
+              admissionLease: lease,
+              onAccepted: () => lease.release(),
+            }),
+          } satisfies Result<"session/goal/action">;
+        } finally {
+          lease.release();
+        }
       }
       case "pi/ui/response": {
         // Answer only the session that raised the dialog: ids are minted per
@@ -854,6 +872,7 @@ export class WorkerServer {
   private async openAndAttach(openOptions: Parameters<SessionDriver["open"]>[0], handle?: SessionHandle): Promise<Live> {
     const driver = this.options.createDriver();
     const live: Live = { driver, seq: 0, buffer: [], unsubscribe: () => {}, path: "" };
+    driver.setExtensionModelWorkHandler?.((request) => this.admitExtensionModelWork(live, request));
     const queued: DriverEvent[] = [];
     let ready = false;
     live.unsubscribe = driver.subscribe((event) => (ready ? this.onDriverEvent(live, event) : queued.push(event)));
@@ -943,6 +962,39 @@ export class WorkerServer {
     return live.pending;
   }
 
+  /** One extension transaction: register ownership first, then take/borrow preflight admission. */
+  private admitExtensionModelWork(live: Live, request: ExtensionModelWorkRequest): ExtensionModelAdmission {
+    let path = live.path;
+    if (!path) {
+      try {
+        path = live.driver.state().path;
+      } catch {
+        path = "";
+      }
+    }
+    const start = (ownerRunId?: string): ExtensionModelExecution | Promise<ExtensionModelExecution> => {
+      const borrowed = request.admissionLease;
+      if (borrowed?.active) return request.start(ownerRunId);
+      if (!path) return request.start(ownerRunId);
+      return this.firstTurnLock.acquireLease(path, true).then((lease) => {
+        if (!lease) return request.start(ownerRunId);
+        let execution: ExtensionModelExecution;
+        try {
+          execution = request.start(ownerRunId);
+        } catch (error) {
+          lease.release();
+          throw error;
+        }
+        // Positive acceptance releases before the model turn. Refusal and any
+        // defensive no-callback path release without waiting for completion.
+        void execution.admission.then(() => lease.release(), () => lease.release());
+        void execution.completion.then(() => lease.release(), () => lease.release());
+        return execution;
+      });
+    };
+    return this.harness.admitExtensionModelWork(path, request, start);
+  }
+
   /** A public prompt's preflight lease and optional same-identity agent bind. */
   private async promptRequest(
     live: Live,
@@ -954,11 +1006,11 @@ export class WorkerServer {
       // the check/use race with a first-turn runtime replacement.
       return this.promptWithFence(live, params.content, params.streamingBehavior, undefined, false);
     }
-    const release = (await this.firstTurnLock.acquire(live.path, true))!;
+    const lease = (await this.firstTurnLock.acquireLease(live.path, true))!;
 
     const definition = this.definitions.definition(firstTurn.agentName);
     if (!definition || definition.kind !== "custom") {
-      release();
+      lease.release();
       throw new ProtocolError(ErrorCodes.InvalidParams, `No custom agent is called "${firstTurn.agentName}".`);
     }
     try {
@@ -979,13 +1031,13 @@ export class WorkerServer {
         runningToolCount: this.runningTools.get(live.path)?.size ?? 0,
       });
     } catch (error) {
-      release();
+      lease.release();
       throw error;
     }
 
     const previousHandle = live.handle;
     if (!previousHandle || !live.driver.prepareFirstTurn || !live.driver.rollbackFirstTurn) {
-      release();
+      lease.release();
       throw new ProtocolError(ErrorCodes.Unsupported, "This runtime cannot apply a first-turn agent choice safely.");
     }
     const nextHandle = this.harness.prepareSession({
@@ -1005,8 +1057,8 @@ export class WorkerServer {
         previousHandle.discard();
         nextHandle.attach(live.path, live.driver.state().id);
         live.handle = nextHandle;
-        release();
-      });
+        lease.release();
+      }, lease);
       if (!accepted) {
         await live.driver.rollbackFirstTurn();
         nextHandle.discard();
@@ -1019,7 +1071,7 @@ export class WorkerServer {
       }
       throw error;
     } finally {
-      release();
+      lease.release();
     }
   }
 
@@ -1031,19 +1083,17 @@ export class WorkerServer {
     onAccepted: (() => void) | undefined,
     wait: boolean,
   ): Promise<{ accepted: boolean; queued: boolean }> {
-    const release = await this.firstTurnLock.acquire(live.path, wait);
-    if (!release) return { accepted: false, queued: false };
-    let released = false;
-    const finish = () => {
-      if (released) return;
-      released = true;
-      release();
-    };
+    // Preserve the bare concurrent refusal before a fake/alternate driver can
+    // turn it into a never-settling call. Stable re-checks under its own slot.
+    if (!streamingBehavior && live.driver.state().isStreaming) return { accepted: false, queued: false };
+    const lease = await this.firstTurnLock.acquireLease(live.path, wait);
+    if (!lease) return { accepted: false, queued: false };
+    const finish = () => lease.release();
     try {
       return await this.promptLive(live, content, streamingBehavior, () => {
         finish();
         onAccepted?.();
-      });
+      }, lease);
     } finally {
       finish();
     }
@@ -1069,6 +1119,7 @@ export class WorkerServer {
     content: ContentBlock[],
     streamingBehavior?: "steer" | "followUp",
     onAccepted?: () => void,
+    admissionLease?: SessionAdmissionLease,
   ): Promise<{ accepted: boolean; queued: boolean }> {
     const text = textOf(content);
     const idle = !live.driver.state().isStreaming;
@@ -1076,6 +1127,7 @@ export class WorkerServer {
     return this.harness.promptUser(live.path, content, {
       ...(streamingBehavior ? { streamingBehavior } : {}),
       ...(onAccepted ? { onAccepted } : {}),
+      ...(admissionLease ? { admissionLease } : {}),
     });
   }
 

@@ -1,4 +1,5 @@
 import { ErrorCodes, ProtocolError, SESSION_AGENT_ENTRY_TYPE, SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE, type SessionState } from "@lasercode/protocol";
+import type { SessionAdmissionLease } from "./driver.js";
 
 export interface FirstTurnAdmission {
   state: SessionState;
@@ -55,9 +56,28 @@ export class FirstTurnLock {
   }
 
   async acquire(path: string, wait: boolean): Promise<(() => void) | undefined> {
+    const lease = await this.acquireLease(path, wait);
+    return lease ? () => lease.release() : undefined;
+  }
+
+  /** A tokenized lease lets one causal nested engine entry borrow its outer preflight. */
+  async acquireLease(path: string, wait: boolean): Promise<SessionAdmissionLease | undefined> {
     const previous = this.tails.get(path);
     if (previous && !wait) return undefined;
-    const lease = this.install(path, previous);
+    const unlock = this.install(path, previous);
+    const token = Symbol(`session-admission:${path}`);
+    let active = true;
+    const lease: SessionAdmissionLease = {
+      token,
+      get active() {
+        return active;
+      },
+      release() {
+        if (!active) return;
+        active = false;
+        unlock();
+      },
+    };
     if (previous) await previous;
     return lease;
   }

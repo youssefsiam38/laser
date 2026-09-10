@@ -55,7 +55,15 @@ import {
   type UiDialogRequest,
   type UiDialogResponse,
 } from "@lasercode/protocol";
-import type { DriverAgentOptions, DriverEvent, PromptOptions, SessionDriver } from "../driver.js";
+import type {
+  DriverAgentOptions,
+  DriverEvent,
+  ExtensionModelAdmission,
+  ExtensionModelExecution,
+  ExtensionModelWorkRequest,
+  PromptOptions,
+  SessionDriver,
+} from "../driver.js";
 import type {
   AgentCatalogEntry,
   AgentHarnessBridge,
@@ -174,6 +182,19 @@ interface Entry {
   lifecycle: SessionLifecycle<RunEnd, PendingMessage>;
 }
 
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve(value: T): void;
+  reject(error: unknown): void;
+}
+
+interface PendingExtensionWork {
+  request: ExtensionModelWorkRequest;
+  start: (ownerRunId?: string) => ExtensionModelExecution | Promise<ExtensionModelExecution>;
+  admission: Deferred<void>;
+  completion: Deferred<void>;
+}
+
 interface PendingMessage {
   content: ContentBlock[];
   options?: PromptOptions;
@@ -182,6 +203,7 @@ interface PendingMessage {
   engine: boolean;
   resolve?: (result: { accepted: boolean; queued: boolean }) => void;
   reject?: (error: unknown) => void;
+  extension?: PendingExtensionWork;
 }
 
 interface RunEnd {
@@ -205,6 +227,16 @@ const MODEL_EVENT_TYPE: Record<AgentRunTerminalStatus, AgentModelEvent["type"]> 
   failed: "agent.failed",
   cancelled: "agent.cancelled",
 };
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
 
 function excerpt(text: string, max: number): string {
   const trimmed = text.trim();
@@ -440,6 +472,75 @@ export class AgentHarness {
       await this.withEntry(entry, () => entry.lifecycle.remove(plan.state.run.runId, message));
       throw error;
     }
+  }
+
+  /**
+   * Own an extension-generated model entry before its native preflight. The
+   * returned admission promise is for the extension; completion stays with
+   * the current invocation/run.
+   */
+  admitExtensionModelWork(
+    sessionPath: string,
+    request: ExtensionModelWorkRequest,
+    start: (ownerRunId?: string) => ExtensionModelExecution | Promise<ExtensionModelExecution>,
+  ): ExtensionModelAdmission {
+    const admission = deferred<void>();
+    const completion = deferred<void>();
+    void admission.promise.catch(() => undefined);
+    void completion.promise.catch(() => undefined);
+    const entry = this.byPath.get(sessionPath);
+    if (!entry || entry.role.kind !== "child" || !entry.path || !entry.sessionId) {
+      this.executeRootExtension(start, request, admission, completion);
+      return { admission: admission.promise, completion: completion.promise };
+    }
+
+    const owner = entry.lifecycle.owner();
+    const executing = owner ? this.runStates.get(owner) : undefined;
+    const causal = request.parent?.runId !== undefined && request.parent.runId === owner;
+    const origin = request.parent?.runId !== undefined && !causal ? "agent" as const : request.origin;
+    const effectiveRequest: ExtensionModelWorkRequest = {
+      ...request,
+      origin,
+      parentStarted: causal && request.parentStarted === true,
+    };
+    const phase = entry.lifecycle.phase();
+    const mustSucceed = Boolean(
+      entry.lifecycle.successor()
+      || (executing && (entry.lifecycle.end(executing.run.runId) || phase.kind === "terminal-pending" || (phase.kind === "invoking" && phase.settled))),
+    );
+    const pending: PendingExtensionWork = { request: effectiveRequest, start, admission, completion };
+    if (mustSucceed) {
+      this.queueRunMessage(entry, {
+        content: request.content,
+        origin,
+        engine: false,
+        extension: pending,
+      }, executing ?? this.activeRunState(sessionPath));
+      return { admission: admission.promise, completion: completion.promise };
+    }
+
+    const active = executing ?? this.activeRunState(sessionPath);
+    const state = active ?? this.createRun(entry, { origin, task: request.task });
+    if (!active) {
+      this.event({
+        kind: "started",
+        sessionPath,
+        runId: state.run.runId,
+        summary: origin === "user" ? "The person started a run from this chat" : "Extension work started this run",
+      });
+    }
+    const standalone = entry.lifecycle.owner() === undefined;
+    if (standalone && !entry.lifecycle.begin(state.run.runId)) {
+      this.queueRunMessage(entry, {
+        content: request.content,
+        origin,
+        engine: false,
+        extension: pending,
+      }, state);
+      return { admission: admission.promise, completion: completion.promise };
+    }
+    this.executeExtension(entry, state, pending, standalone);
+    return { admission: admission.promise, completion: completion.promise };
   }
 
   /** A person ends a run (`agents/runs/stop`, from the fleet or a row menu). */
@@ -1153,6 +1254,82 @@ export class AgentHarness {
     this.announceRole(entry);
   }
 
+  private executeRootExtension(
+    start: (ownerRunId?: string) => ExtensionModelExecution | Promise<ExtensionModelExecution>,
+    request: ExtensionModelWorkRequest,
+    admission: Deferred<void>,
+    completion: Deferred<void>,
+  ): void {
+    const operation = (async () => {
+      const execution = await start(request.parent?.runId);
+      void execution.admission.then(admission.resolve, admission.reject);
+      await execution.completion;
+    })();
+    void operation.then(() => completion.resolve(), (error) => {
+      admission.reject(error);
+      completion.reject(error);
+    });
+  }
+
+  private executeExtension(entry: Entry, state: RunState, pending: PendingExtensionWork, standalone: boolean): void {
+    const releaseDescendant = entry.lifecycle.registerDescendant(state.run.runId);
+    const operation = (async () => {
+      let accepted = false;
+      let failure: unknown;
+      let disposition: Awaited<ExtensionModelExecution["completion"]>["disposition"] | undefined;
+      try {
+        const execution = await pending.start(state.run.runId);
+        const admission = execution.admission.then(
+          () => {
+            accepted = true;
+            pending.admission.resolve();
+          },
+          (error) => {
+            pending.admission.reject(error);
+            throw error;
+          },
+        );
+        try {
+          ({ disposition } = await execution.completion);
+          await admission;
+        } catch (error) {
+          failure = error;
+          await admission.catch(() => undefined);
+        }
+
+        await this.withEntry(entry, () => {
+          if (disposition === "consumed" && !pending.request.parentStarted && !entry.lifecycle.end(state.run.runId)) {
+            entry.lifecycle.declareEnd(state.run.runId, {
+              status: "failed",
+              outcome: { error: "The engine accepted the extension message without starting model work." },
+            });
+          } else if (accepted && failure !== undefined && !entry.lifecycle.end(state.run.runId)) {
+            entry.lifecycle.declareEnd(state.run.runId, {
+              status: "failed",
+              outcome: { error: failure instanceof Error ? failure.message : String(failure) },
+            });
+          }
+        });
+      } catch (error) {
+        failure = error;
+        pending.admission.reject(error);
+      } finally {
+        releaseDescendant();
+      }
+
+      if (standalone) {
+        await this.withEntry(entry, () => this.afterInvocation(
+          entry,
+          state,
+          { accepted, queued: disposition === "queued" },
+          failure instanceof Error ? failure.message : failure === undefined ? undefined : String(failure),
+        ));
+      }
+      if (accepted && failure !== undefined) throw failure;
+    })();
+    void operation.then(() => pending.completion.resolve(), (error) => pending.completion.reject(error));
+  }
+
   /** Start one prompt invocation. Its promise is the only engine-ready fence. */
   private kick(state: RunState, text: string): void {
     this.kickMessage(state, { content: [{ type: "text", text }], options: { expandPromptTemplates: false }, origin: state.run.origin === "user" ? "user" : "agent", engine: false });
@@ -1169,6 +1346,10 @@ export class AgentHarness {
       entry.lifecycle.enqueue(state.run.runId, message);
       return;
     }
+    if (message.extension) {
+      this.executeExtension(entry, state, message.extension, true);
+      return;
+    }
     void this.invoke(entry, state, driver, message.content, message.options).then(message.resolve, message.reject).catch(() => undefined);
   }
 
@@ -1182,10 +1363,21 @@ export class AgentHarness {
     let result: { accepted: boolean; queued: boolean };
     let failure: string | undefined;
     let thrown: unknown;
+    let accepted = false;
+    const acceptedObserver = () => {
+      accepted = true;
+      options?.onAccepted?.();
+    };
     try {
-      result = await driver.prompt(content, options);
+      result = await driver.prompt(content, driver.setExtensionModelWorkHandler
+        ? {
+            ...options,
+            ownerRunId: state.run.runId,
+            onAccepted: acceptedObserver,
+          }
+        : options);
     } catch (error) {
-      result = { accepted: false, queued: false };
+      result = { accepted, queued: false };
       thrown = error;
       failure = error instanceof Error ? error.message : String(error);
     }

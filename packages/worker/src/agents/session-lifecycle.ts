@@ -13,6 +13,9 @@ export class SessionLifecycle<End, Message> {
   private operation: Promise<void> = Promise.resolve();
   private readonly terminal = new Map<string, Promise<void>>();
   private readonly resolveTerminal = new Map<string, () => void>();
+  /** Native extension invocations registered before an older settled event is observed. */
+  private readonly descendants = new Map<string, number>();
+  private readonly descendantSettled = new Set<string>();
 
   phase(): SessionPhase<End> {
     return this.phaseValue;
@@ -51,6 +54,34 @@ export class SessionLifecycle<End, Message> {
   }
 
   markSettled(runId: string): void {
+    if ((this.descendants.get(runId) ?? 0) > 0) {
+      this.descendantSettled.add(runId);
+      return;
+    }
+    this.applySettled(runId);
+  }
+
+  /**
+   * Attach work synchronously, before it waits for server admission. The last
+   * descendant promotes the newest observed native-settled boundary to the run.
+   */
+  registerDescendant(runId: string): () => void {
+    this.descendants.set(runId, (this.descendants.get(runId) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const remaining = (this.descendants.get(runId) ?? 1) - 1;
+      if (remaining > 0) {
+        this.descendants.set(runId, remaining);
+        return;
+      }
+      this.descendants.delete(runId);
+      if (this.descendantSettled.delete(runId)) this.applySettled(runId);
+    };
+  }
+
+  private applySettled(runId: string): void {
     if (this.phaseValue.kind === "invoking" && this.phaseValue.runId === runId) {
       this.phaseValue = { ...this.phaseValue, settled: true };
     } else if (this.phaseValue.kind === "terminal-pending" && this.phaseValue.runId === runId) {
@@ -76,6 +107,8 @@ export class SessionLifecycle<End, Message> {
       ...(this.phaseValue.kind === "terminal-pending" ? { end: this.phaseValue.end } : { end: undefined }),
     };
     this.phaseValue = { kind: "idle" };
+    this.descendants.delete(runId);
+    this.descendantSettled.delete(runId);
     return result;
   }
 
@@ -160,6 +193,8 @@ export class SessionLifecycle<End, Message> {
     this.resolveTerminal.delete(runId);
     this.terminal.delete(runId);
     this.inboxes.delete(runId);
+    this.descendants.delete(runId);
+    this.descendantSettled.delete(runId);
     if (this.successorRunId === runId) this.successorRunId = undefined;
   }
 

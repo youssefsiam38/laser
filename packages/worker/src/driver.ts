@@ -81,8 +81,52 @@ export interface DriverOpenOptions {
   agent?: DriverAgentOptions;
 }
 
+export interface DriverInvocationRef {
+  /** Unique only inside this driver generation. */
+  id: string;
+  /** Present when the agent harness owns the native invocation. */
+  runId?: string;
+}
+
+/** Opaque server admission lease shared only across one causal invocation. */
+export interface SessionAdmissionLease {
+  readonly token: symbol;
+  readonly active: boolean;
+  release(): void;
+}
+
+export type ExtensionWorkDisposition = "started" | "queued" | "consumed";
+
+export interface ExtensionModelExecution {
+  /** Extension-visible acceptance: never the full model turn. */
+  admission: Promise<void>;
+  /** Worker-owned native lifetime. */
+  completion: Promise<{ disposition: ExtensionWorkDisposition }>;
+}
+
+export interface ExtensionModelWorkRequest {
+  kind: "user" | "custom";
+  content: ContentBlock[];
+  task: string;
+  origin: "agent" | "user";
+  parent?: DriverInvocationRef;
+  /** Whether the causal parent had already entered a model run. */
+  parentStarted?: boolean;
+  /** The exact outer lease; only a still-active causal call may borrow it. */
+  admissionLease?: SessionAdmissionLease;
+  /** Start after ownership exists. Calling this twice is an error. */
+  start(ownerRunId?: string): ExtensionModelExecution;
+}
+
+export interface ExtensionModelAdmission {
+  admission: Promise<void>;
+  completion: Promise<void>;
+}
+
+export type ExtensionModelWorkHandler = (request: ExtensionModelWorkRequest) => ExtensionModelAdmission;
+
 export type DriverEvent =
-  | { type: "update"; update: SessionUpdate }
+  | { type: "update"; update: SessionUpdate; invocation?: DriverInvocationRef }
   | { type: "ui_request"; request: UiDialogRequest }
   | { type: "ui_event"; event: UiFireAndForget }
   /** Emitted by the laser companion extension running inside the session. */
@@ -98,6 +142,10 @@ export interface FirstTurnOptions {
 
 export interface PromptOptions {
   streamingBehavior?: "steer" | "followUp";
+  /** Internal owner propagated to extension work; never crosses protocol. */
+  ownerRunId?: string;
+  /** Server preflight lease, borrowed only by a causal nested extension send. */
+  admissionLease?: SessionAdmissionLease;
   /** False sends the text verbatim: no slash-command dispatch, no template expansion. */
   expandPromptTemplates?: boolean;
   /**
@@ -168,7 +216,10 @@ export interface SessionDriver {
 
   /** Durable goal control. Optional for engines that do not implement Goals. */
   goalState?(): Promise<SessionGoal | null>;
-  goalAction?(action: GoalAction): Promise<SessionGoal | null>;
+  goalAction?(action: GoalAction, options?: { admissionLease?: SessionAdmissionLease; onAccepted?: () => void }): Promise<SessionGoal | null>;
+
+  /** Worker-owned admission for extension calls that can enter the model. */
+  setExtensionModelWorkHandler?(handler: ExtensionModelWorkHandler | undefined): void;
 
   /**
    * Persist a custom entry in this session's file (the harness writes run

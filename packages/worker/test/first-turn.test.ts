@@ -88,6 +88,18 @@ describe("FirstTurnLock", () => {
     next!();
   });
 
+  it("exposes one idempotent active token for causal nested admission", async () => {
+    const lock = new FirstTurnLock();
+    const lease = await lock.acquireLease("/a", true);
+    expect(lease?.active).toBe(true);
+    expect(typeof lease?.token).toBe("symbol");
+    expect(lock.busy("/a")).toBe(true);
+    lease?.release();
+    lease?.release();
+    expect(lease?.active).toBe(false);
+    expect(lock.busy("/a")).toBe(false);
+  });
+
   it("releases the next attempt after a failure", async () => {
     const lock = new FirstTurnLock();
     await expect(lock.run("/a", async () => { throw new Error("no"); })).rejects.toThrow("no");

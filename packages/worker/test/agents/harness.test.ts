@@ -10,7 +10,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DriverAgentOptions, DriverEvent, DriverListener, PromptOptions, SessionDriver } from "../../src/driver.js";
+import type { DriverAgentOptions, DriverEvent, DriverListener, ExtensionModelWorkRequest, PromptOptions, SessionDriver } from "../../src/driver.js";
 import type { AgentModelEvent, HarnessSessionRole } from "../../src/agents/bridge.js";
 import { DefinitionsCache, fallbackDefaultAgent, fallbackSnapshot } from "../../src/agents/definitions.js";
 import { AgentHarness, NUDGE_TEXT, type SessionHost, type WorktreeProvider } from "../../src/agents/harness.js";
@@ -1351,6 +1351,135 @@ describe("AgentHarness", () => {
     await world.harness.removeWorktreeFor("/sessions/child-1.jsonl");
     expect(world.worktrees.removed).toEqual([]);
     expect(world.harness.run(started.runId)!.status).toBe("completed");
+  });
+
+  it("ends an engine-consumed extension owner without a nudge or phantom model turn", async () => {
+    const root = world.openRoot("lead");
+    const initial = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "t" });
+    const path = "/sessions/child-1.jsonl";
+    await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "initial done" });
+    const child = world.drivers.get(path)!;
+    const request: ExtensionModelWorkRequest = {
+      kind: "user",
+      content: [{ type: "text", text: "goal-owned" }],
+      task: "goal-owned",
+      origin: "user",
+      start: () => { throw new Error("server start wrapper should be used"); },
+    };
+    const start = vi.fn(() => {
+      expect(world.harness.activeRun(path)).toMatchObject({ origin: "user", status: "running" });
+      return { admission: Promise.resolve(), completion: Promise.resolve({ disposition: "consumed" as const }) };
+    });
+
+    const admitted = world.harness.admitExtensionModelWork(path, request, start);
+    await expect(admitted.admission).resolves.toBeUndefined();
+    await expect(admitted.completion).resolves.toBeUndefined();
+    await flushLifecycle();
+
+    expect(start).toHaveBeenCalledOnce();
+    expect(child.prompted.map((prompt) => prompt.text)).toEqual(["t"]);
+    expect(world.harness.activeRun(path)).toBeUndefined();
+    const consumed = world.harness.runs().find((run) => run.runId !== initial.runId);
+    expect(consumed).toMatchObject({ origin: "user", status: "failed", error: expect.stringMatching(/without starting model work/) });
+  });
+
+  it("queues terminal-pending extension work to one successor that can complete", async () => {
+    world.setAutoResolveChildPrompts(false);
+    const root = world.openRoot("lead");
+    const first = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "initial" });
+    const path = "/sessions/child-1.jsonl";
+    const child = world.drivers.get(path)!;
+    await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "old done" });
+
+    let finish!: (value: { disposition: "started" }) => void;
+    const start = vi.fn(() => ({
+      admission: Promise.resolve(),
+      completion: new Promise<{ disposition: "started" }>((resolve) => { finish = resolve; }),
+    }));
+    const request: ExtensionModelWorkRequest = {
+      kind: "custom",
+      content: [{ type: "text", text: "late wake" }],
+      task: "late wake",
+      origin: "agent",
+      parent: { id: "stale", runId: first.runId },
+      start: () => { throw new Error("server start wrapper should be used"); },
+    };
+    const admitted = world.harness.admitExtensionModelWork(path, request, start);
+    expect(start).not.toHaveBeenCalled();
+    const successor = world.harness.runs().at(-1)!;
+    expect(successor).toMatchObject({ status: "queued", origin: "agent", task: "late wake" });
+
+    child.emit({ type: "update", update: { kind: "agent_settled" } });
+    child.resolvePrompt();
+    await flushLifecycle();
+    expect(world.harness.run(first.runId)?.status).toBe("completed");
+    expect(world.harness.activeRun(path)?.runId).toBe(successor.runId);
+    expect(start).toHaveBeenCalledOnce();
+    await expect(admitted.admission).resolves.toBeUndefined();
+
+    expect(await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "successor done" })).toEqual({ ok: true, runId: successor.runId });
+    child.emit({ type: "update", update: { kind: "agent_settled" } });
+    finish({ disposition: "started" });
+    await expect(admitted.completion).resolves.toBeUndefined();
+    expect(world.harness.run(successor.runId)).toMatchObject({ status: "completed", result: { message: "successor done" } });
+  });
+
+  it("does not inherit user origin or started state from a stale invocation capability", async () => {
+    const root = world.openRoot("lead");
+    const first = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "first" });
+    const path = "/sessions/child-1.jsonl";
+    await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "first done" });
+    await flushLifecycle();
+
+    const request: ExtensionModelWorkRequest = {
+      kind: "user",
+      content: [{ type: "text", text: "late callback" }],
+      task: "late callback",
+      origin: "user",
+      parent: { id: "expired", runId: first.runId },
+      parentStarted: true,
+      start: () => { throw new Error("server start wrapper should be used"); },
+    };
+    const admitted = world.harness.admitExtensionModelWork(path, request, () => ({
+      admission: Promise.resolve(),
+      completion: Promise.resolve({ disposition: "consumed" }),
+    }));
+    await expect(admitted.admission).resolves.toBeUndefined();
+    await expect(admitted.completion).resolves.toBeUndefined();
+    const late = world.harness.runs().at(-1)!;
+    expect(late).toMatchObject({ origin: "agent", status: "failed", task: "late callback" });
+    expect(late.error).toMatch(/without starting model work/);
+  });
+
+  it("separates preaccept extension refusal from accepted late failure", async () => {
+    const root = world.openRoot("lead");
+    await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "t" });
+    const path = "/sessions/child-1.jsonl";
+    await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "initial done" });
+    const request = (text: string): ExtensionModelWorkRequest => ({
+      kind: "user",
+      content: [{ type: "text", text }],
+      task: text,
+      origin: "user",
+      start: () => { throw new Error("server start wrapper should be used"); },
+    });
+
+    const refused = world.harness.admitExtensionModelWork(path, request("refused"), () => ({
+      admission: Promise.reject(new Error("preflight refused")),
+      completion: Promise.reject(new Error("preflight refused")),
+    }));
+    await expect(refused.admission).rejects.toThrow("preflight refused");
+    await expect(refused.completion).resolves.toBeUndefined();
+    expect(world.harness.activeRun(path)).toBeUndefined();
+
+    const late = world.harness.admitExtensionModelWork(path, request("accepted"), () => ({
+      admission: Promise.resolve(),
+      completion: Promise.reject(new Error("provider failed late")),
+    }));
+    await expect(late.admission).resolves.toBeUndefined();
+    await expect(late.completion).rejects.toThrow("provider failed late");
+    expect(world.harness.activeRun(path)).toBeUndefined();
+    expect(world.harness.runs().at(-1)).toMatchObject({ status: "failed", error: "provider failed late" });
   });
 
   // M13-T42 / D-157: merging and removing a child's worktree belong to the
