@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { SessionState, SessionUpdate } from "@lasercode/protocol";
+import type { PendingMessage, SessionState, SessionUpdate } from "@lasercode/protocol";
 import { applyUpdate, blocksFromEntries, initialState, reduce, type SessionView } from "../src/store.js";
 
 const state: SessionState = {
@@ -14,6 +14,55 @@ function view(): SessionView {
 function run(v: SessionView, updates: SessionUpdate[]): SessionView {
   return updates.reduce(applyUpdate, v);
 }
+
+const pending = (id: string): PendingMessage => ({
+  id,
+  content: [{ type: "text", text: id }],
+  text: id,
+  images: 0,
+  createdAt: "2026-09-10T00:00:00.000Z",
+  state: "waiting",
+});
+
+describe("pending snapshot hydration", () => {
+  it("does not resurrect a row when a newer empty update overtakes the list request", () => {
+    const captured = [pending("sending")];
+    const opened = { ...view(), pending: captured };
+    const app = { ...initialState, open: { [opened.path]: opened } };
+    const updated = reduce(app, {
+      type: "notification",
+      method: "session/update",
+      params: {
+        sessionPath: opened.path,
+        seq: 1,
+        at: "2026-09-10T00:00:00.000Z",
+        update: { kind: "pending_update", pending: [] },
+      },
+    });
+    const hydrated = reduce(updated, {
+      type: "pending",
+      path: opened.path,
+      messages: captured,
+      expectPending: captured,
+    });
+    expect(hydrated.open[opened.path]?.pending).toEqual([]);
+  });
+
+  it("still hydrates after an unrelated view update preserves the captured reference", () => {
+    const captured: PendingMessage[] = [];
+    const opened = { ...view(), pending: captured };
+    const app = { ...initialState, open: { [opened.path]: opened } };
+    const updated = reduce(app, { type: "goal", path: opened.path, goal: null });
+    expect(updated.open[opened.path]?.pending).toBe(captured);
+    const hydrated = reduce(updated, {
+      type: "pending",
+      path: opened.path,
+      messages: [pending("from-list")],
+      expectPending: captured,
+    });
+    expect(hydrated.open[opened.path]?.pending.map((message) => message.id)).toEqual(["from-list"]);
+  });
+});
 
 describe("applyUpdate", () => {
   it("keeps startup capabilities when opening the session view", () => {

@@ -76,6 +76,7 @@ import {
   type DriverEvent,
   type DriverListener,
   type DriverOpenOptions,
+  type FirstTurnOptions,
   type PromptOptions,
   type SessionDriver,
 } from "../driver.js";
@@ -89,6 +90,10 @@ import { modelUnavailableMessage } from "../agents/harness.js";
 
 type PiModel = ReturnType<ModelRuntime["getModels"]>[number];
 
+async function disposeRuntime(runtime: AgentSessionRuntime | undefined): Promise<void> {
+  if (runtime) await runtime.dispose().catch(() => {});
+}
+
 export class StableSdkDriver implements SessionDriver {
   readonly kind = "stable-sdk" as const;
 
@@ -100,6 +105,16 @@ export class StableSdkDriver implements SessionDriver {
   private readonly extensionBus = createCommandBus();
   private accountUsage: SessionState["accountUsage"];
   private runtime: AgentSessionRuntime | undefined;
+  private runtimeFactory: CreateAgentSessionRuntimeFactory | undefined;
+  private runtimeAgent: DriverAgentOptions | undefined;
+  private runtimeModelOverride: ModelRef | undefined;
+  private runtimeThinkingOverride: ThinkingLevel | undefined;
+  private firstTurnRollback: {
+    agent: DriverAgentOptions | undefined;
+    modelOverride: ModelRef | undefined;
+    thinkingOverride: ThinkingLevel | undefined;
+  } | undefined;
+  private preparedAgentRecord: DriverAgentOptions["record"] | undefined;
   private unsubscribe: (() => void) | undefined;
   private cwd = "";
   private projectTrusted: boolean | undefined;
@@ -140,12 +155,15 @@ export class StableSdkDriver implements SessionDriver {
     const agentDir = options.agentDir ?? getAgentDir();
     this.agentDir = agentDir;
     const enabled = new Set<FeatureId>(options.features ?? ["subagents", "goals"]);
-    const agent = options.agent;
+    this.runtimeAgent = options.agent;
     // Web search is an extension tool: offered whenever its feature is on.
     // Every agent has every tool (D-144), so no definition narrows this.
     const searchWanted = enabled.has("web-search");
     const search = searchWanted ? new WebSearchService(agentDir) : undefined;
-    const createCompanion = (requestProvenance: ReturnType<typeof createPromptProvenanceObserver>) => {
+    const createCompanion = (
+      requestProvenance: ReturnType<typeof createPromptProvenanceObserver>,
+      agent: DriverAgentOptions | undefined,
+    ) => {
       const companion: LaserExtensionOptions = {
         requestProvenance,
         ...(search ? { webSearch: search.search.bind(search) } : {}),
@@ -172,8 +190,11 @@ export class StableSdkDriver implements SessionDriver {
     };
 
     const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
+      const agent = this.runtimeAgent;
+      const modelOverride = this.runtimeModelOverride;
+      const thinkingOverride = this.runtimeThinkingOverride;
       const requestProvenance = createPromptProvenanceObserver();
-      const laser = createCompanion(requestProvenance);
+      const laser = createCompanion(requestProvenance, agent);
       let liveSession: AgentSession | undefined;
       const settingsManager = SettingsManager.create(cwd, agentDir, {
         // Laser never asks the engine to discover `<cwd>/.pi`. Project
@@ -240,7 +261,13 @@ export class StableSdkDriver implements SessionDriver {
         },
       });
       requestProvenance.setResourceLoader(services.resourceLoader);
-      const selected = agent ? await resolveAgentModel(services.modelRuntime, agent) : undefined;
+      const selected = modelOverride
+        ? services.modelRuntime.getModels().find((model) => model.provider === modelOverride.provider && model.id === modelOverride.id)
+        : agent ? await resolveAgentModel(services.modelRuntime, agent) : undefined;
+      if (modelOverride && !selected) {
+        throw new DriverUnavailableError(this.kind, `unknown model ${modelOverride.provider}/${modelOverride.id}`);
+      }
+      const selectedThinking = thinkingOverride ?? agent?.definition.thinkingLevel ?? undefined;
       const created = await createAgentSessionFromServices({
         services,
         sessionManager,
@@ -250,7 +277,7 @@ export class StableSdkDriver implements SessionDriver {
         // used: it is an allowlist that would also deny every extension tool
         // (the harness's, background work's, the goal's, web search's).
         ...(selected ? { model: selected } : {}),
-        ...(agent?.definition.thinkingLevel ? { thinkingLevel: agent.definition.thinkingLevel } : {}),
+        ...(selectedThinking ? { thinkingLevel: selectedThinking } : {}),
       });
       // The definition's built-ins beyond the engine's default four (grep,
       // find, ls) are switched on here, not through a `defaultTools` setting:
@@ -261,6 +288,7 @@ export class StableSdkDriver implements SessionDriver {
       return { ...created, services, diagnostics: services.diagnostics };
     };
 
+    const agent = this.runtimeAgent;
     // Beam and Chat run in the app's own workspace. The engine records the
     // directory in the session header and refuses to build a runtime whose
     // stored directory is gone, so a workspace that vanished (a moved state
@@ -289,6 +317,7 @@ export class StableSdkDriver implements SessionDriver {
     const sessionManager = options.sessionPath
       ? SessionManager.open(options.sessionPath)
       : SessionManager.create(options.cwd, options.sessionDir);
+    this.runtimeFactory = createRuntime;
     const runtime = await createAgentSessionRuntime(createRuntime, {
       cwd: sessionManager.getCwd(),
       agentDir,
@@ -328,6 +357,111 @@ export class StableSdkDriver implements SessionDriver {
     this.unsubscribe = session.subscribe((event) => this.onSessionEvent(event));
   }
 
+  /** Rebuild this runtime around the same manager; never two live writers. */
+  private async replaceRuntime(
+    agent: DriverAgentOptions | undefined,
+    modelOverride: ModelRef | undefined,
+    thinkingOverride: ThinkingLevel | undefined,
+  ): Promise<void> {
+    const current = this.runtime;
+    const factory = this.runtimeFactory;
+    if (!current || !factory) throw new DriverUnavailableError(this.kind, "no session open");
+    const manager = current.session.sessionManager;
+    const previous = {
+      agent: this.runtimeAgent,
+      modelOverride: this.runtimeModelOverride,
+      thinkingOverride: this.runtimeThinkingOverride,
+    };
+    const previousSessionFile = manager.getSessionFile();
+    const create = () => createAgentSessionRuntime(factory, {
+      cwd: manager.getCwd(),
+      agentDir: this.agentDir,
+      sessionManager: manager,
+      sessionStartEvent: {
+        type: "session_start" as const,
+        reason: "resume" as const,
+        ...(previousSessionFile ? { previousSessionFile } : {}),
+      },
+    });
+
+    this.flushHeldUserEnd();
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
+    await current.dispose();
+    this.runtime = undefined;
+    this.runtimeAgent = agent;
+    this.runtimeModelOverride = modelOverride;
+    this.runtimeThinkingOverride = thinkingOverride;
+    let replacement: AgentSessionRuntime | undefined;
+    try {
+      replacement = await create();
+      this.runtime = replacement;
+      await this.applySession();
+    } catch (error) {
+      const failedUnsubscribe = this.unsubscribe as (() => void) | undefined;
+      failedUnsubscribe?.();
+      this.unsubscribe = undefined;
+      await disposeRuntime(this.runtime);
+      this.runtime = undefined;
+      this.runtimeAgent = previous.agent;
+      this.runtimeModelOverride = previous.modelOverride;
+      this.runtimeThinkingOverride = previous.thinkingOverride;
+      try {
+        this.runtime = await create();
+        await this.applySession();
+      } catch (rollbackError) {
+        this.runtime = undefined;
+        throw new AggregateError([error, rollbackError], "Could not prepare the selected agent or restore this conversation.");
+      }
+      throw error;
+    }
+  }
+
+  async prepareFirstTurn(options: FirstTurnOptions): Promise<void> {
+    if (this.promptPreflight) {
+      throw new ProtocolError(ErrorCodes.InvalidParams, "This conversation is already accepting its first prompt.");
+    }
+    if (this.firstTurnRollback || this.preparedAgentRecord) {
+      throw new ProtocolError(ErrorCodes.InvalidParams, "A first-turn agent choice is already being prepared for this conversation.");
+    }
+    const session = this.session();
+    const entries = session.sessionManager.getEntries() as Array<{ type?: unknown }>;
+    const state = this.state();
+    const preserveModel = entries.some((entry) => entry.type === "model_change");
+    const preserveThinking = entries.some((entry) => entry.type === "thinking_level_change");
+    const previous = {
+      agent: this.runtimeAgent,
+      modelOverride: this.runtimeModelOverride,
+      thinkingOverride: this.runtimeThinkingOverride,
+    };
+    await this.replaceRuntime(
+      options.agent,
+      preserveModel ? state.model ?? undefined : undefined,
+      options.thinkingLevel ?? (preserveThinking ? state.thinkingLevel : undefined),
+    );
+    this.firstTurnRollback = previous;
+    this.preparedAgentRecord = options.agent.record;
+  }
+
+  async rollbackFirstTurn(): Promise<void> {
+    const previous = this.firstTurnRollback;
+    if (!previous) return;
+    await this.replaceRuntime(previous.agent, previous.modelOverride, previous.thinkingOverride);
+    this.firstTurnRollback = undefined;
+    this.preparedAgentRecord = undefined;
+  }
+
+  /** Persist the replacement identity at Pi's exact prompt-acceptance boundary. */
+  private commitPreparedFirstTurn(): void {
+    const record = this.preparedAgentRecord;
+    if (!record) return;
+    // Acceptance is monotonic even if persistence reports an I/O error: never
+    // leave a rollback armed for a prompt the engine already owns.
+    this.preparedAgentRecord = undefined;
+    this.firstTurnRollback = undefined;
+    this.session().sessionManager.appendCustomEntry(SESSION_AGENT_ENTRY_TYPE, record);
+  }
+
   async dispose(): Promise<void> {
     this.flushHeldUserEnd();
     this.unsubscribe?.();
@@ -336,6 +470,12 @@ export class StableSdkDriver implements SessionDriver {
     this.ui.dispose();
     await this.runtime?.dispose();
     this.runtime = undefined;
+    this.runtimeFactory = undefined;
+    this.runtimeAgent = undefined;
+    this.runtimeModelOverride = undefined;
+    this.runtimeThinkingOverride = undefined;
+    this.firstTurnRollback = undefined;
+    this.preparedAgentRecord = undefined;
     this.emit({ type: "closed", reason: "disposed" });
     this.listeners.clear();
   }
@@ -446,7 +586,16 @@ export class StableSdkDriver implements SessionDriver {
         preflightResult: (preflightAccepted: boolean) => {
           if (preflightAccepted) accepted = true;
           finishPreflight();
-          if (!preflightAccepted || !options?.onAccepted) return;
+          if (!preflightAccepted) return;
+          try {
+            // The replacement record must precede Pi's user-message append.
+            // Like every acceptance observer, a disk failure is reported but
+            // cannot revoke a prompt the engine already owns.
+            this.commitPreparedFirstTurn();
+          } catch (error) {
+            console.error(`${PRODUCT_NAME} worker: could not persist the accepted agent choice:`, error instanceof Error ? error.message : error);
+          }
+          if (!options?.onAccepted) return;
           try {
             // Observing acceptance must never prevent the accepted engine run.
             options.onAccepted();

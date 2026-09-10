@@ -28,6 +28,7 @@ import {
   DriverUnavailableError,
   type DriverListener,
   type DriverOpenOptions,
+  type FirstTurnOptions,
   type PromptOptions,
   type SessionDriver,
 } from "../driver.js";
@@ -41,6 +42,8 @@ export class ChordDriver implements SessionDriver {
   async open(options: DriverOpenOptions): Promise<SessionState> { void options; throw new DriverUnavailableError(this.kind, NOT_YET); }
   state(): SessionState { throw new DriverUnavailableError(this.kind, NOT_YET); }
   subscribe(listener: DriverListener): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
+  async prepareFirstTurn(options: FirstTurnOptions): Promise<void> { void options; throw new DriverUnavailableError(this.kind, NOT_YET); }
+  async rollbackFirstTurn(): Promise<void> { throw new DriverUnavailableError(this.kind, NOT_YET); }
   async prompt(content: ContentBlock[], options?: PromptOptions): Promise<{ accepted: boolean; queued: boolean }> { void content; void options; throw new DriverUnavailableError(this.kind, NOT_YET); }
   async steer(content: ContentBlock[]): Promise<void> { void content; throw new DriverUnavailableError(this.kind, NOT_YET); }
   async followUp(content: ContentBlock[]): Promise<void> { void content; throw new DriverUnavailableError(this.kind, NOT_YET); }

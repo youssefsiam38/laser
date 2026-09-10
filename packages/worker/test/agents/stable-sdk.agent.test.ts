@@ -167,6 +167,79 @@ describe("StableSdkDriver with an agent definition", () => {
     // Four real sessions against the engine; the default 5 s is not enough on a loaded machine.
   }, 60_000);
 
+  it("rebinds the same pristine identity and runs the selected agent on its one first prompt", async () => {
+    const original: AgentDefinition = {
+      ...fallbackDefaultAgent(),
+      name: "default",
+      engineInstructions: false,
+      instructions: "ORIGINAL FIRST TURN",
+      model: { provider: "stub", id: "stub-1" },
+    };
+    const selected: AgentDefinition = {
+      ...fallbackDefaultAgent(),
+      name: "reviewer",
+      engineInstructions: false,
+      instructions: "SELECTED FIRST TURN",
+      model: { provider: "stub", id: "stub-1" },
+    };
+    const creator = new StableSdkDriver();
+    drivers.push(creator);
+    const created = await creator.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), projectTrusted: true, agent: agentOptions(original) });
+    await creator.rename("Saved empty");
+    await creator.setThinkingLevel("off");
+    const saved = await creator.entries();
+    await creator.dispose();
+    // Pi normally flushes metadata with the first message. Model a catalogued
+    // saved-empty file explicitly: header + metadata, no message entry.
+    mkdirSync(join(base, "sessions"), { recursive: true });
+    writeFileSync(created.path, [
+      { type: "session", version: 3, id: created.id, timestamp: "2026-09-10T00:00:00.000Z", cwd: join(base, "project") },
+      ...saved.entries,
+    ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+
+    const driver = new StableSdkDriver();
+    drivers.push(driver);
+    const before = await driver.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), sessionPath: created.path, projectTrusted: true, agent: agentOptions(original) });
+    expect(await readSessionAgentRecord(before.path)).toEqual({ agentName: "default", kind: "root" });
+    await driver.prepareFirstTurn({ agent: agentOptions(selected), thinkingLevel: "off" });
+    expect(driver.state()).toMatchObject({ path: before.path, id: before.id, name: "Saved empty" });
+    // Runtime preparation is still tentative on disk.
+    expect(await readSessionAgentRecord(before.path)).toEqual({ agentName: "default", kind: "root" });
+
+    let accepted = 0;
+    await expect(driver.prompt([{ type: "text", text: "review it" }], { onAccepted: () => { accepted += 1; } }))
+      .resolves.toEqual({ accepted: true, queued: false });
+    expect(accepted).toBe(1);
+    expect(stub.requests).toHaveLength(1);
+    expect(systemTextOf(stub.requests[0]!)).toContain("SELECTED FIRST TURN");
+    expect(systemTextOf(stub.requests[0]!)).not.toContain("ORIGINAL FIRST TURN");
+    expect(await readSessionAgentRecord(before.path)).toEqual({ agentName: "reviewer", kind: "root" });
+    const lines = readFileSync(before.path, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { type?: string; message?: { role?: string } });
+    expect(lines.filter((line) => line.type === "message" && line.message?.role === "user")).toHaveLength(1);
+  }, 60_000);
+
+  it("restores the prior runtime and record when first-turn preparation is rolled back", async () => {
+    const original: AgentDefinition = {
+      ...fallbackDefaultAgent(), name: "default", engineInstructions: false,
+      instructions: "ORIGINAL AFTER ROLLBACK", model: { provider: "stub", id: "stub-1" },
+    };
+    const selected: AgentDefinition = {
+      ...fallbackDefaultAgent(), name: "reviewer", engineInstructions: false,
+      instructions: "SHOULD NOT RUN", model: { provider: "stub", id: "stub-1" },
+    };
+    const driver = new StableSdkDriver();
+    drivers.push(driver);
+    const before = await driver.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), projectTrusted: true, agent: agentOptions(original) });
+    await driver.prepareFirstTurn({ agent: agentOptions(selected), thinkingLevel: "off" });
+    await driver.rollbackFirstTurn();
+    await driver.prompt([{ type: "text", text: "continue" }]);
+
+    expect(driver.state()).toMatchObject({ path: before.path, id: before.id });
+    expect(systemTextOf(stub.requests[0]!)).toContain("ORIGINAL AFTER ROLLBACK");
+    expect(systemTextOf(stub.requests[0]!)).not.toContain("SHOULD NOT RUN");
+    expect(await readSessionAgentRecord(before.path)).toEqual({ agentName: "default", kind: "root" });
+  }, 60_000);
+
   it("writes the agent record as the first custom entry of a new session and recovers it on load", async () => {
     const definition: AgentDefinition = { ...fallbackDefaultAgent(), name: "recorder", model: { provider: "stub", id: "stub-1" } };
     // The engine flushes a new session's file on its first assistant message;

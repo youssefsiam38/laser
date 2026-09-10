@@ -91,6 +91,11 @@ export type DriverEvent =
 
 export type DriverListener = (event: DriverEvent) => void;
 
+export interface FirstTurnOptions {
+  agent: DriverAgentOptions;
+  thinkingLevel?: ThinkingLevel;
+}
+
 export interface PromptOptions {
   streamingBehavior?: "steer" | "followUp";
   /** False sends the text verbatim: no slash-command dispatch, no template expansion. */
@@ -113,6 +118,10 @@ export interface SessionDriver {
   state(): SessionState;
   subscribe(listener: DriverListener): () => void;
 
+  /** Replace only a pristine root runtime around its existing session manager. */
+  prepareFirstTurn?(options: FirstTurnOptions): Promise<void>;
+  /** Restore the prior runtime when prompt preflight did not accept ownership. */
+  rollbackFirstTurn?(): Promise<void>;
   prompt(content: ContentBlock[], options?: PromptOptions): Promise<{ accepted: boolean; queued: boolean }>;
   steer(content: ContentBlock[]): Promise<void>;
   followUp(content: ContentBlock[]): Promise<void>;

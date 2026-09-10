@@ -14,6 +14,7 @@ import { AGENT_MAX_DEPTH_LIMIT, ErrorCodes, PRODUCT_NAME, ProtocolError, parseCl
 import { join, resolve } from "node:path";
 import type { DriverAgentOptions, DriverEvent, SessionDriver } from "./driver.js";
 import { ProjectFilesService } from "./files.js";
+import { assertFirstTurnAdmission, FirstTurnLock } from "./first-turn.js";
 import { PendingTray } from "./pending.js";
 import { GitService } from "./git.js";
 import { KeybindingsAdapter } from "./keybindings.js";
@@ -24,7 +25,7 @@ import { TranscribeService } from "./transcribe.js";
 import type { HarnessSessionRole } from "./agents/bridge.js";
 import { DefinitionsCache } from "./agents/definitions.js";
 import { defaultAgentInstructions } from "./agents/engine-instructions.js";
-import { AgentHarness, type SessionHandle, type SessionHost } from "./agents/harness.js";
+import { AgentHarness, modelUnavailableMessage, type SessionHandle, type SessionHost } from "./agents/harness.js";
 import { NamerService, type NamerModelRuntime } from "./agents/namer.js";
 import { readSessionAgentRecord, rootRecord, rootRole } from "./agents/session-config.js";
 import { listAgentSkills } from "./agents/skills.js";
@@ -122,6 +123,8 @@ export class WorkerServer {
   private readonly unnamed = new Map<string, string>();
   /** Tool calls currently running, by session path: a label for a finished call is never shown. */
   private readonly runningTools = new Map<string, Set<string>>();
+  /** Held only through prompt preflight; prevents runtime replacement races. */
+  private readonly firstTurnLock = new FirstTurnLock();
 
   constructor(private readonly options: WorkerServerOptions) {
     this.replayBuffer = options.replayBuffer ?? 5000;
@@ -208,7 +211,7 @@ export class WorkerServer {
       case "session/load":
         return this.sessionLoad(req.params);
       case "session/prompt":
-        return (await this.promptLive(this.live(req.params.path), req.params.content, req.params.streamingBehavior)) satisfies Result<"session/prompt">;
+        return (await this.promptRequest(this.live(req.params.path), req.params)) satisfies Result<"session/prompt">;
       case "session/cancel":
         await this.live(req.params.path).driver.abort();
         return {};
@@ -926,6 +929,87 @@ export class WorkerServer {
       });
     }
     return live.pending;
+  }
+
+  /** A public prompt's preflight lease and optional same-identity agent bind. */
+  private async promptRequest(
+    live: Live,
+    params: ClientRequests["session/prompt"]["params"],
+  ): Promise<Result<"session/prompt">> {
+    const firstTurn = params.firstTurn;
+    if (!firstTurn) {
+      // A bind is replacing the runtime. Refuse instead of entering either
+      // generation; otherwise ordinary prompt semantics stay unchanged.
+      if (this.firstTurnLock.busy(live.path)) return { accepted: false, queued: false };
+      return this.promptLive(live, params.content, params.streamingBehavior);
+    }
+    const release = (await this.firstTurnLock.acquire(live.path, true))!;
+
+    const definition = this.definitions.definition(firstTurn.agentName);
+    if (!definition || definition.kind !== "custom") {
+      release();
+      throw new ProtocolError(ErrorCodes.InvalidParams, `No custom agent is called "${firstTurn.agentName}".`);
+    }
+    try {
+      if (definition.model && !(await this.modelAvailable(definition.model))) {
+        throw new ProtocolError(ErrorCodes.InvalidParams, modelUnavailableMessage(definition.model));
+      }
+      const pendingUi = (live.driver as { pendingUi?: () => unknown[] }).pendingUi?.call(live.driver) ?? [];
+      const { entries } = await live.driver.entries();
+      const goal = await live.driver.goalState?.() ?? null;
+      assertFirstTurnAdmission({
+        state: live.driver.state(),
+        entries,
+        roleKind: this.harness.roleOf(live.path)?.kind,
+        pendingTrayCount: live.pending?.list().length ?? 0,
+        dialogCount: pendingUi.length,
+        hasGoal: goal !== null,
+        hasLiveWork: this.harness.runs().some((run) => run.rootSessionPath === live.path || run.parent?.sessionPath === live.path),
+        runningToolCount: this.runningTools.get(live.path)?.size ?? 0,
+      });
+    } catch (error) {
+      release();
+      throw error;
+    }
+
+    const previousHandle = live.handle;
+    if (!previousHandle || !live.driver.prepareFirstTurn || !live.driver.rollbackFirstTurn) {
+      release();
+      throw new ProtocolError(ErrorCodes.Unsupported, "This runtime cannot apply a first-turn agent choice safely.");
+    }
+    const nextHandle = this.harness.prepareSession({
+      role: rootRole(definition.name),
+      definition,
+      record: rootRecord(definition.name),
+      projectCwd: this.options.cwd,
+    });
+    let accepted = false;
+    try {
+      await live.driver.prepareFirstTurn({
+        agent: this.agentOptions(definition, nextHandle),
+        ...(firstTurn.thinkingLevel ? { thinkingLevel: firstTurn.thinkingLevel } : {}),
+      });
+      const result = await this.promptLive(live, params.content, params.streamingBehavior, () => {
+        accepted = true;
+        previousHandle.discard();
+        nextHandle.attach(live.path, live.driver.state().id);
+        live.handle = nextHandle;
+        release();
+      });
+      if (!accepted) {
+        await live.driver.rollbackFirstTurn();
+        nextHandle.discard();
+      }
+      return result;
+    } catch (error) {
+      if (!accepted) {
+        await live.driver.rollbackFirstTurn().catch(() => {});
+        nextHandle.discard();
+      }
+      throw error;
+    } finally {
+      release();
+    }
   }
 
   /**

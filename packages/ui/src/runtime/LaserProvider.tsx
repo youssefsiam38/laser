@@ -352,6 +352,8 @@ interface RuntimeSnapshot {
   dispatch: (action: Action) => void;
   onError: (error: unknown) => void;
   openSession: (path: string) => Promise<void>;
+  /** Project cwd for an anonymous composer; its transient first-turn scope. */
+  firstTurnScope?: string | undefined;
 }
 
 interface SnapshotStore<T> {
@@ -674,13 +676,13 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         client.track(path, readState().open[path]?.lastSeq ?? loadedSeq);
         const { goal } = await client.request("session/goal/get", { path });
         dispatch({ type: "goal", path, goal });
-        // The pending tray, once, now that the view exists. Every later change
-        // arrives as a numbered `pending_update` on the session's own stream;
-        // this snapshot is what a reload (which has no watermark to replay
-        // from) starts it with, and the worker computes it after any update it
-        // has already sent, so it can never be the stale one.
+        // The pending tray, once, now that the view exists. A numbered update
+        // can overtake this request, including the empty update that acknowledges
+        // delivery. Capture the array itself as a watermark so a delayed list
+        // cannot resurrect an older row; unrelated view updates preserve it.
+        const expectPending = readState().open[path]?.pending;
         const { messages } = await client.request("session/pending/list", { path });
-        dispatch({ type: "pending", path, messages });
+        if (expectPending) dispatch({ type: "pending", path, messages, expectPending });
       })();
       const entry = {
         select,
@@ -1299,14 +1301,14 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   // --- runtime ------------------------------------------------------------
 
   const snapshotStore = useMemo(
-    () => createSnapshotStore<RuntimeSnapshot>({ store, client, dispatch, onError, openSession }),
+    () => createSnapshotStore<RuntimeSnapshot>({ store, client, dispatch, onError, openSession, firstTurnScope: currentProject }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- created once; kept in sync below
     [],
   );
 
   useEffect(() => {
-    snapshotStore.set({ store, client, dispatch, onError, openSession });
-  }, [snapshotStore, store, client, dispatch, onError, openSession]);
+    snapshotStore.set({ store, client, dispatch, onError, openSession, firstTurnScope: currentProject });
+  }, [snapshotStore, store, client, dispatch, onError, openSession, currentProject]);
 
   /** Number of `initialize()` calls in flight; gates the thread-list reload and the controlled selection. */
   const [initializing, setInitializing] = useState(0);
@@ -1508,6 +1510,7 @@ function useThreadRuntime(store: SnapshotStore<RuntimeSnapshot>): AssistantRunti
         dispatch: snapshot.dispatch,
         onError: snapshot.onError,
         resolvePath,
+        firstTurnScope: path ?? snapshot.firstTurnScope,
         projection: { ...projection, messages: messages as ThreadMessageLike[] },
       }),
     [connection, messages, path, projection, resolvePath, snapshot, view],
@@ -1718,13 +1721,13 @@ export function LaserThreadScope({ path, onPathChange, filter, createIn, unavail
   );
 
   const snapshotStore = useMemo(
-    () => createSnapshotStore<RuntimeSnapshot>({ store, client, dispatch, onError: scopedOnError, openSession: (target) => openSession(target, { select: false }) }),
+    () => createSnapshotStore<RuntimeSnapshot>({ store, client, dispatch, onError: scopedOnError, openSession: (target) => openSession(target, { select: false }), firstTurnScope: path }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- created once; kept in sync below
     [],
   );
   useEffect(() => {
-    snapshotStore.set({ store, client, dispatch, onError: scopedOnError, openSession: (target) => openSession(target, { select: false }) });
-  }, [snapshotStore, store, client, dispatch, scopedOnError, openSession]);
+    snapshotStore.set({ store, client, dispatch, onError: scopedOnError, openSession: (target) => openSession(target, { select: false }), firstTurnScope: path });
+  }, [snapshotStore, store, client, dispatch, scopedOnError, openSession, path]);
 
   const runtimeHook = useCallback(
     // oxlint-disable-next-line react-hooks/rules-of-hooks -- invoked by useRemoteThreadListRuntime at a stable hook position

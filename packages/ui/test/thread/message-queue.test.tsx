@@ -20,7 +20,9 @@ vi.mock("../../src/client.js", async (original) => ({
 
 import { ComposerPrimitive } from "@assistant-ui/react";
 import type { PendingMessage } from "@lasercode/protocol";
+import { SessionAgentSelector } from "../../src/components/assistant-ui/elements/agent-selector.js";
 import { ComposerQueue } from "../../src/components/assistant-ui/elements/message-queue.js";
+import { SessionPreparationProvider } from "../../src/components/thread/session-preparation.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { LaserProvider, useLaserStable } from "../../src/runtime/LaserProvider.js";
 import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../beam/fake-host.js";
@@ -46,11 +48,34 @@ function Open() {
   return null;
 }
 
+function Reopen() {
+  const { actions } = useLaserStable();
+  return <button data-slot="reopen-scoped" onClick={() => void actions.openSession(PATH, { select: false })} />;
+}
+
+function FirstTurnHarness() {
+  return (
+    <LaserProvider url="ws://test">
+      <TooltipProvider>
+        <Open />
+        <SessionPreparationProvider>
+          <ComposerPrimitive.Root>
+            <ComposerPrimitive.Input data-slot="first-turn-input" />
+            <SessionAgentSelector />
+            <ComposerPrimitive.Send asChild><button data-slot="first-turn-send">Send</button></ComposerPrimitive.Send>
+          </ComposerPrimitive.Root>
+        </SessionPreparationProvider>
+      </TooltipProvider>
+    </LaserProvider>
+  );
+}
+
 function Harness() {
   return (
     <LaserProvider url="ws://test">
       <TooltipProvider>
         <Open />
+        <Reopen />
         <ComposerPrimitive.Root>
           <ComposerPrimitive.Input data-slot="composer-input" />
           <ComposerQueue />
@@ -277,6 +302,109 @@ describe("the pending tray", () => {
     });
     await act(async () => settle(0));
     expect(rows().map((row) => row.dataset["lane"])).toEqual(["steer", "waiting"]);
+  });
+
+  it("does not resurrect a delivered row when an offscreen re-open snapshot resolves late", async () => {
+    await mount();
+    const stale = pending("p-stale", "already delivered", { state: "delivering" });
+    await publish([stale]);
+
+    let resolveList!: (value: { messages: PendingMessage[] }) => void;
+    world.overrides["session/pending/list"] = (() => new Promise((resolve) => { resolveList = resolve; })) as never;
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-slot="reopen-scoped"]')!.click());
+    while (calls("session/pending/list").length < 2) await act(async () => settle(0));
+
+    // The numbered acknowledgement overtakes a list computed while the row was
+    // still delivering. Returning to this session must not bring Sending back.
+    await publish([]);
+    await act(async () => {
+      resolveList({ messages: [stale] });
+      await settle(10);
+    });
+
+    expect(tray()).toBeNull();
+  });
+
+  it("binds a tentative agent on the same empty path only when the first message sends", async () => {
+    world.states[PATH] = {
+      ...world.states[PATH]!,
+      isStreaming: false,
+      messageCount: 0,
+      agent: { agentName: "default", kind: "root" },
+    };
+    world.sessions[0] = {
+      ...world.sessions[0]!,
+      messageCount: 0,
+      agent: { agentName: "default", kind: "root" },
+    };
+    await act(async () => root.render(<FirstTurnHarness />));
+    await act(async () => settle(20));
+
+    const picker = container.querySelector<HTMLButtonElement>('[data-slot="model-selector-trigger"]')!;
+    await act(async () => picker.click());
+    await act(async () => settle(0));
+    const reviewer = [...document.querySelectorAll<HTMLElement>('[data-slot="model-selector-item"]')]
+      .find((item) => item.textContent?.includes("reviewer"))!;
+    await act(async () => reviewer.click());
+    expect(calls("session/new")).toEqual([]);
+    expect(calls("session/prompt")).toEqual([]);
+
+    const input = container.querySelector<HTMLTextAreaElement>('[data-slot="first-turn-input"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "Review this change");
+      input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: "Review this change" }));
+    });
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-slot="first-turn-send"]')!.click());
+    await act(async () => settle(10));
+
+    expect(calls("session/new")).toEqual([]);
+    expect(calls("session/prompt")).toEqual([{
+      method: "session/prompt",
+      params: {
+        path: PATH,
+        content: [{ type: "text", text: "Review this change" }],
+        firstTurn: { agentName: "reviewer" },
+      },
+    }]);
+  });
+
+  it("discards a tentative agent when the composer is left", async () => {
+    world.states[PATH] = {
+      ...world.states[PATH]!,
+      isStreaming: false,
+      messageCount: 0,
+      agent: { agentName: "default", kind: "root" },
+    };
+    world.sessions[0] = {
+      ...world.sessions[0]!,
+      messageCount: 0,
+      agent: { agentName: "default", kind: "root" },
+    };
+    await act(async () => root.render(<FirstTurnHarness />));
+    await act(async () => settle(20));
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-slot="model-selector-trigger"]')!.click());
+    await act(async () => settle(0));
+    const reviewer = [...document.querySelectorAll<HTMLElement>('[data-slot="model-selector-item"]')]
+      .find((item) => item.textContent?.includes("reviewer"))!;
+    await act(async () => reviewer.click());
+    expect(calls("session/prompt")).toEqual([]);
+
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await act(async () => root.render(<FirstTurnHarness />));
+    await act(async () => settle(20));
+    const input = container.querySelector<HTMLTextAreaElement>('[data-slot="first-turn-input"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "Use the default");
+      input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: "Use the default" }));
+    });
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-slot="first-turn-send"]')!.click());
+    await act(async () => settle(10));
+
+    expect(calls("session/prompt").at(-1)).toEqual({
+      method: "session/prompt",
+      params: { path: PATH, content: [{ type: "text", text: "Use the default" }] },
+    });
   });
 
   it("comes back after a reload, because it lives in the worker and not in this browser", async () => {

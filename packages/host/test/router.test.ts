@@ -297,10 +297,15 @@ describe("Router · session recovery", () => {
     };
     const h = harness({ catalogRows: [row], open: { [CWD_A]: [] } });
     try {
-      await rpc(h.router, "session/prompt", { path, content: [{ type: "text", text: "continue" }] });
+      const params = {
+        path,
+        content: [{ type: "text", text: "continue" }],
+        firstTurn: { agentName: "reviewer", thinkingLevel: "high" },
+      };
+      await rpc(h.router, "session/prompt", params);
       expect(h.workerRequests).toEqual([
         { cwd: CWD_A, method: "session/load", params: { path } },
-        { cwd: CWD_A, method: "session/prompt", params: { path, content: [{ type: "text", text: "continue" }] } },
+        { cwd: CWD_A, method: "session/prompt", params },
       ]);
     } finally {
       h.cleanup();

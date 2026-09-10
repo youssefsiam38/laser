@@ -355,7 +355,12 @@ export const clientParamsSchemas = {
   "session/new": z.object({ cwd: z.string().min(1), parentPath: sessionPath.optional(), agentName: agentNameSchema.optional() }).strict(),
   "session/load": z.object({ path: sessionPath, fromSeq: z.number().int().nonnegative().optional() }).strict(),
   "session/prompt": z
-    .object({ path: sessionPath, content, streamingBehavior: z.enum(["steer", "followUp"]).optional() })
+    .object({
+      path: sessionPath,
+      content,
+      streamingBehavior: z.enum(["steer", "followUp"]).optional(),
+      firstTurn: z.object({ agentName: agentNameSchema, thinkingLevel: thinkingLevelSchema.optional() }).strict().optional(),
+    })
     .strict(),
   "session/cancel": z.object({ path: sessionPath }).strict(),
   "session/set_mode": z.object({ path: sessionPath, mode: z.string().min(1) }).strict(),

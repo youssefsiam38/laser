@@ -39,6 +39,7 @@ import type { ContentBlock, ImageContent, PendingMessage, UiDialogResponse } fro
 import type { HostClient } from "../client.js";
 import { asRawClient, getMobileDictationAdapter } from "../pwa/index.js";
 import { newBlockId, type Action, type SessionView } from "../store.js";
+import { consumeTentativeFirstTurn, moveTentativeFirstTurn, readTentativeFirstTurn, type TentativeFirstTurn } from "./first-turn.js";
 import { projectSessionView, type ProjectionResult } from "./projection.js";
 
 /** `pending` is the tray; the other three go straight to the engine. */
@@ -243,6 +244,7 @@ export async function sendToSession(
   content: ContentBlock[],
   behavior: SendBehavior,
   dispatch?: (action: Action) => void,
+  firstTurn?: TentativeFirstTurn,
 ): Promise<SendBehavior> {
   if (content.length === 0) return behavior;
   if (behavior === "steer") {
@@ -270,7 +272,7 @@ export async function sendToSession(
   });
   let result: { accepted: boolean };
   try {
-    result = await client.request("session/prompt", { path, content });
+    result = await client.request("session/prompt", { path, content, ...(firstTurn ? { firstTurn } : {}) });
   } catch (error) {
     // Nothing reached the worker: a permanent bubble for a message Pi never
     // saw would also corrupt the next real user message's reconciliation.
@@ -278,6 +280,12 @@ export async function sendToSession(
     throw error;
   }
   if (result.accepted) return "prompt";
+  // First-turn preparation and the prompt are one operation. Falling back to a
+  // steer would send the text without the chosen agent after a race or refusal.
+  if (firstTurn) {
+    dispatch?.({ type: "optimisticFailed", path, id: optimisticId });
+    throw new Error("This conversation started before the agent choice could be applied. Review it and send again.");
+  }
   // An extension is holding the prompt (a blocking dialog, a command): steer it
   // in. Steering lands mid-run, so the real user message will arrive after
   // assistant deltas — drop the stand-in rather than leave two user bubbles.
@@ -344,6 +352,8 @@ export interface ThreadAdapterDeps {
    * create the session first (`aui.threadListItem.initialize()`).
    */
   resolvePath?: (() => Promise<string>) | undefined;
+  /** Scope holding the transient first-turn choice (session path or project cwd). */
+  firstTurnScope?: string | undefined;
   /** Pre-projected messages; supplied by the hook so the projection is memoized. */
   projection?: ProjectionResult | undefined;
 }
@@ -367,10 +377,15 @@ export function createThreadAdapter(deps: ThreadAdapterDeps): ExternalStoreAdapt
   const send = async (message: AppendMessage, lane: SendLane): Promise<void> => {
     const content = contentBlocksFromAppendMessage(message);
     if (content.length === 0) return;
+    // Capture before initialize(): an anonymous project composer changes scope
+    // to the created path while that await is in flight.
+    const firstTurn = readTentativeFirstTurn(deps.firstTurnScope);
     const path = await resolvePath();
     const running = deps.path === path ? projection.isRunning : false;
     const behavior = resolveSendBehavior({ running, lane, message });
-    await sendToSession(deps.client, path, content, behavior, deps.dispatch);
+    if (behavior === "prompt" && firstTurn) moveTentativeFirstTurn(deps.firstTurnScope, path, firstTurn);
+    await sendToSession(deps.client, path, content, behavior, deps.dispatch, behavior === "prompt" ? firstTurn : undefined);
+    if (behavior === "prompt" && firstTurn) consumeTentativeFirstTurn(path, firstTurn);
   };
 
   const fireAndForget = (work: Promise<unknown>): void => {
