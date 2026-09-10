@@ -15,6 +15,7 @@ import type { AgentModelEvent, HarnessSessionRole } from "../../src/agents/bridg
 import { DefinitionsCache, fallbackDefaultAgent, fallbackSnapshot } from "../../src/agents/definitions.js";
 import { AgentHarness, NUDGE_TEXT, type SessionHost, type WorktreeProvider } from "../../src/agents/harness.js";
 import { HarnessError } from "../../src/agents/errors.js";
+import { FLEET_STATUS_WORD } from "../../src/agents/fleet.js";
 import { rootRecord, rootRole } from "../../src/agents/session-config.js";
 import type { CreateWorktreeInput, Worktree, WorktreeFacts } from "../../src/agents/worktrees.js";
 import type { IndexedTask } from "../../src/agents/tasks.js";
@@ -31,6 +32,9 @@ class FakeDriver implements SessionDriver {
   goal: { id: string; objective: string } | null = null;
   lastText: string | undefined;
   acceptPrompts = true;
+  autoResolvePrompts = true;
+  private promptResolvers: Array<(result: { accepted: boolean; queued: boolean }) => void> = [];
+  private engineSteers: string[] = [];
   /** Dialogs raised and not yet answered, as `StableSdkDriver.pendingUi()` lists them. */
   pending: UiDialogRequest[] = [];
   responses: UiDialogResponse[] = [];
@@ -42,15 +46,34 @@ class FakeDriver implements SessionDriver {
   state() { return this.st; }
   setStreaming(value: boolean) { this.st = { ...this.st, isStreaming: value }; }
   subscribe(l: DriverListener) { this.listeners.add(l); return () => this.listeners.delete(l); }
-  emit(e: DriverEvent) { for (const l of this.listeners) l(e); }
+  emit(e: DriverEvent) {
+    if (e.type === "update" && e.update.kind === "agent_settled") this.engineSteers = [];
+    for (const l of this.listeners) l(e);
+  }
   async prompt(content: ContentBlock[], options?: PromptOptions) {
     const text = content.map((b) => (b.type === "text" ? b.text : "")).join("");
     this.prompted.push({ text, ...(options ? { options } : {}) });
-    return { accepted: this.acceptPrompts, queued: false };
+    if (this.autoResolvePrompts) return { accepted: this.acceptPrompts, queued: false };
+    this.setStreaming(true);
+    return new Promise<{ accepted: boolean; queued: boolean }>((resolve) => this.promptResolvers.push(resolve));
   }
-  async steer(content: ContentBlock[]) { this.steers.push(content.map((b) => (b.type === "text" ? b.text : "")).join("")); }
+  resolvePrompt(accepted = this.acceptPrompts) {
+    const resolve = this.promptResolvers.shift();
+    if (!resolve) throw new Error("No prompt is waiting.");
+    this.setStreaming(false);
+    resolve({ accepted, queued: false });
+  }
+  async steer(content: ContentBlock[]) {
+    const text = content.map((b) => (b.type === "text" ? b.text : "")).join("");
+    this.steers.push(text);
+    this.engineSteers.push(text);
+  }
   async followUp(content: ContentBlock[]) { this.followUps.push(content.map((b) => (b.type === "text" ? b.text : "")).join("")); }
-  async clearQueue() { return { steering: [], followUp: [] }; }
+  async clearQueue() {
+    const steering = [...this.engineSteers];
+    this.engineSteers = [];
+    return { steering, followUp: [] };
+  }
   async abort() { this.aborts += 1; }
   async listModels() { return []; }
   async setModel() { return this.st; }
@@ -96,6 +119,7 @@ function makeWorld() {
   let unavailable = false;
   let failOpen = false;
   let refuseWorktrees: string | undefined;
+  let autoResolveChildPrompts = true;
   let facts: WorktreeFacts = { exists: true, unmergedCommits: 0, uncommittedFiles: 0 };
   let root: string | undefined = "/repo";
   /** The worker's task index, as the harness reads it: commands by the session that ran them. */
@@ -122,6 +146,7 @@ function makeWorld() {
       childCount += 1;
       const path = `/sessions/child-${childCount}.jsonl`;
       const driver = new FakeDriver(stateFor(path, `child-${childCount}`, open.cwd));
+      driver.autoResolvePrompts = autoResolveChildPrompts;
       drivers.set(path, driver);
       opened.push(open);
       // The server forwards every driver event to the harness; so does this host.
@@ -150,6 +175,7 @@ function makeWorld() {
     harness, definitions, drivers, notifications, opened, worktrees, openRoot, runsNotified, events, extensionMessages, tasks,
     setUnavailable: (value: boolean) => { unavailable = value; },
     setFailOpen: (value: boolean) => { failOpen = value; },
+    setAutoResolveChildPrompts: (value: boolean) => { autoResolveChildPrompts = value; },
     /** Stand in for a project git cannot give a worktree: not a repository, no commit, a path another agent owns. */
     setRefuseWorktrees: (message: string | undefined) => { refuseWorktrees = message; },
     /** What the child's branch and directory hold, when the parent asks to remove them. */
@@ -161,6 +187,10 @@ function makeWorld() {
 const PARENT = definition("lead", { supportsSubagents: true, allowedAgents: ["worker", "reviewer"] });
 const WORKER = definition("worker", { supportsSubagents: true, allowedAgents: ["worker"] });
 const REVIEWER = definition("reviewer", { model: { provider: "stub", id: "stub-1" }, runTimeoutMinutes: 5 });
+
+async function flushLifecycle(): Promise<void> {
+  for (let i = 0; i < 6; i += 1) await Promise.resolve();
+}
 
 describe("AgentHarness", () => {
   let world: ReturnType<typeof makeWorld>;
@@ -258,9 +288,9 @@ describe("AgentHarness", () => {
     expect(child.custom.at(-1)).toMatchObject({ type: SESSION_RUN_ENTRY_TYPE, data: { moment: "completed", result: { message: "done: touched nothing" } } });
     expect(world.events().map((e) => e.kind)).toEqual(["started", "message_sent", "completed", "message_received"]);
 
-    // A turn that starts after completion is aborted.
-    world.harness.onDriverEvent("/sessions/child-1.jsonl", { type: "update", update: { kind: "turn_start" } });
-    expect(child.aborts).toBe(1);
+    // Completion is already behind the engine-ready boundary; no later
+    // harness abort is needed and no new turn belongs to the ended run.
+    expect(child.aborts).toBe(0);
 
     // The fleet the parent reads: one row, ended, carrying its final message.
     const fleet = await root.handle.bridge.inspectFleet();
@@ -367,6 +397,7 @@ describe("AgentHarness", () => {
     expect(world.harness.run(runId)!.status).toBe("running");
     child.lastText = "I think I am done.";
     world.harness.onDriverEvent(path, { type: "update", update: { kind: "agent_settled" } });
+    await flushLifecycle();
     expect(world.harness.run(runId)).toMatchObject({ status: "failed", error: "Ended without complete_agent_run" });
     expect(received[0]).toMatchObject({ type: "agent.failed" });
     expect(received[0]!.message).toContain("Ended without complete_agent_run");
@@ -388,6 +419,7 @@ describe("AgentHarness", () => {
     const path = "/sessions/child-1.jsonl";
     world.harness.onDriverEvent(path, { type: "update", update: { kind: "message_end", role: "assistant", message: {}, stopReason: "error", errorMessage: "429 rate limited" } });
     world.harness.onDriverEvent(path, { type: "update", update: { kind: "agent_settled" } });
+    await flushLifecycle();
     expect(world.harness.run(runId)).toMatchObject({ status: "failed", error: "429 rate limited" });
   });
 
@@ -707,7 +739,7 @@ describe("AgentHarness", () => {
       expect(world.drivers.get(childPath)!.prompted.map((p) => p.text)).toEqual(["Fix the login form."]);
     });
 
-    it("says the endings in the fleet's words: Asking with the question, Needs you with the message, Ended with who ended it", async () => {
+    it("says the fleet's canonical words for questions, blocked work, and endings", async () => {
       const root = world.openRoot("lead");
       const asking = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "asking", task: "t" });
       world.drivers.get("/sessions/child-1.jsonl")!.ask({ method: "confirm", id: "ui-1", title: "Drop the table?" });
@@ -725,7 +757,7 @@ describe("AgentHarness", () => {
       expect(fleet).toMatchObject({ working: 1, needsYou: 2, finished: 6, total: 7 });
       const byTitle = new Map(fleet.rows.map((row) => [row.title, row]));
       expect(byTitle.get("asking")).toMatchObject({ runId: asking.runId, state: "needs_input", status: "Asking", line: "Drop the table?" });
-      expect(byTitle.get("blocked")).toMatchObject({ runId: blocked.runId, state: "blocked", status: "Needs you", line: "Which config is canonical?" });
+      expect(byTitle.get("blocked")).toMatchObject({ runId: blocked.runId, state: "blocked", status: FLEET_STATUS_WORD.blocked, line: "Which config is canonical?" });
       expect(byTitle.get("ended")).toMatchObject({ state: "cancelled", status: "Ended", line: "the person ended it" });
       expect(byTitle.get("reasoned")).toMatchObject({ state: "cancelled", status: "Ended", line: "no longer needed" });
       expect(byTitle.get("failed")).toMatchObject({ runId: failed.runId, state: "failed", status: "Failed", line: "The agent's session closed before it finished." });
@@ -782,19 +814,22 @@ describe("AgentHarness", () => {
     });
   });
 
-  it("sends messages: queued while busy, prompted while idle, a new run once ended", async () => {
+  it("sends messages: queued while busy, nonblocking at idle, a new run once ended", async () => {
     const root = world.openRoot("lead");
     const { sessionId, runId } = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "t" });
     const path = "/sessions/child-1.jsonl";
     const child = world.drivers.get(path)!;
     child.setStreaming(true);
     expect(await root.handle.bridge.sendAgentMessage({ sessionId, message: "also check refresh", interrupt: false })).toEqual({ sessionId, runId, status: "running", delivery: "queued" });
-    expect(child.followUps).toEqual(["also check refresh"]);
+    expect(child.followUps).toEqual([]); // the harness owns the queue
     expect(await root.handle.bridge.sendAgentMessage({ sessionId, message: "stop, wrong file", interrupt: true })).toEqual({ sessionId, runId, status: "running", delivery: "queued" });
     expect(child.steers).toEqual(["stop, wrong file"]);
     child.setStreaming(false);
+    child.emit({ type: "update", update: { kind: "agent_settled" } });
+    await flushLifecycle();
+    expect(child.prompted.map((p) => p.text)).toEqual(["t", "also check refresh"]);
     expect(await root.handle.bridge.sendAgentMessage({ sessionId, message: "carry on", interrupt: false })).toMatchObject({ runId, delivery: "delivered" });
-    expect(child.prompted.map((p) => p.text)).toEqual(["t", "carry on"]);
+    expect(child.prompted.at(-1)?.text).toBe("carry on");
     await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "done" });
     const followUp = await root.handle.bridge.sendAgentMessage({ sessionId, message: "one more thing", interrupt: false });
     expect(followUp.runId).not.toBe(runId);
@@ -805,6 +840,86 @@ describe("AgentHarness", () => {
     await expect(root.handle.bridge.sendAgentMessage({ sessionId: "nope", message: "x", interrupt: false })).rejects.toThrow(/No agent session is called "nope"/);
     // One session, one row, standing on its newest run.
     expect((await root.handle.bridge.inspectFleet()).rows.map((r) => (r.kind === "agent" ? r.runId : r.taskId))).toEqual([followUp.runId]);
+  });
+
+  it("serializes completion and immediate repeated resumes behind the engine boundary", async () => {
+    world.setAutoResolveChildPrompts(false);
+    const root = world.openRoot("lead");
+    const received: AgentEvent[] = [];
+    root.handle.bridge.onEvent((event) => received.push(event));
+    const first = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "initial" });
+    const path = "/sessions/child-1.jsonl";
+    const child = world.drivers.get(path)!;
+
+    child.emit({ type: "update", update: { kind: "turn_start" } });
+    child.lastText = "finished initial work";
+    expect(await world.harness.bridgeOf(path)!.completeRun({ status: "blocked", message: "need input once" })).toEqual({ ok: true, runId: first.runId });
+    expect(world.harness.run(first.runId)?.status).toBe("running");
+    expect(await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "duplicate" })).toEqual({ ok: false, error: "This run already ended." });
+
+    const resumed = await root.handle.bridge.sendAgentMessage({ sessionId: first.sessionId, message: "resume one", interrupt: false });
+    const repeated = await root.handle.bridge.sendAgentMessage({ sessionId: first.sessionId, message: "resume two", interrupt: true });
+    expect(repeated.runId).toBe(resumed.runId);
+    expect(world.harness.run(resumed.runId)).toMatchObject({ status: "queued", task: "resume one" });
+    expect(child.prompted.map((item) => item.text)).toEqual(["initial"]);
+    expect(child.steers).toEqual([]);
+    expect(received).toEqual([]);
+
+    child.emit({ type: "update", update: { kind: "agent_settled" } });
+    child.resolvePrompt();
+    await flushLifecycle();
+
+    expect(world.harness.run(first.runId)).toMatchObject({ status: "blocked", result: { status: "blocked", message: "need input once" } });
+    expect(world.harness.run(resumed.runId)?.status).toBe("running");
+    expect(Date.parse(world.harness.run(resumed.runId)!.startedAt)).toBeGreaterThan(Date.parse(world.harness.run(first.runId)!.startedAt));
+    expect(world.harness.activeRun(path)?.runId).toBe(resumed.runId);
+    expect(world.harness.bridgeOf(path)!.role().runId).toBe(resumed.runId);
+    expect(child.prompted.map((item) => item.text)).toEqual(["initial", "resume one"]);
+    expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject({ type: "agent.blocked", run: { runId: first.runId } });
+    expect((await root.handle.bridge.inspectFleet()).rows[0]).toMatchObject({ kind: "agent", runId: resumed.runId, state: "running", status: "Working" });
+
+    // The second message stays ordered behind the first successor invocation.
+    child.emit({ type: "update", update: { kind: "agent_settled" } });
+    child.resolvePrompt();
+    await flushLifecycle();
+    expect(child.prompted.map((item) => item.text)).toEqual(["initial", "resume one", "resume two"]);
+
+    // Work that really continued under the tracked successor still owns
+    // complete_agent_run. Its valid result cannot be rejected as belonging to
+    // an already-ended phantom busy run.
+    expect(await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "finished resumed work" })).toEqual({ ok: true, runId: resumed.runId });
+    child.emit({ type: "update", update: { kind: "agent_settled" } });
+    child.resolvePrompt();
+    await flushLifecycle();
+    expect(world.harness.run(resumed.runId)).toMatchObject({ status: "completed", result: { status: "completed", message: "finished resumed work" } });
+    expect(world.harness.activeRun(path)).toBeUndefined();
+    expect(world.harness.runs().some((run) => run.sessionPath === path && run.status === "failed")).toBe(false);
+    expect(received.map((event) => event.type)).toEqual(["agent.blocked", "agent.completed"]);
+  });
+
+  it("clears engine steering at completion and replays it only under a tracked successor", async () => {
+    world.setAutoResolveChildPrompts(false);
+    const root = world.openRoot("lead");
+    const first = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "initial" });
+    const path = "/sessions/child-1.jsonl";
+    const child = world.drivers.get(path)!;
+
+    expect(await root.handle.bridge.sendAgentMessage({ sessionId: first.sessionId, message: "late steering", interrupt: true })).toMatchObject({
+      runId: first.runId,
+      delivery: "queued",
+    });
+    expect(child.steers).toEqual(["late steering"]);
+    expect(await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "done" })).toEqual({ ok: true, runId: first.runId });
+    const queued = world.harness.runs().find((run) => run.sessionPath === path && run.runId !== first.runId);
+    expect(queued).toMatchObject({ status: "queued", task: "late steering" });
+
+    child.emit({ type: "update", update: { kind: "agent_settled" } });
+    child.resolvePrompt();
+    await flushLifecycle();
+    expect(world.harness.run(first.runId)?.status).toBe("completed");
+    expect(world.harness.activeRun(path)?.runId).toBe(queued?.runId);
+    expect(child.prompted.map((item) => item.text)).toEqual(["initial", "late steering"]);
   });
 
   it("gives a person's prompt on an idle child a run of its own and marks it so for the parent", async () => {

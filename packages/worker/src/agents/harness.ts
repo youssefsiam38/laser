@@ -168,8 +168,23 @@ interface Entry {
   roleListeners: Set<(role: HarnessSessionRole) => void>;
   /** Events for this session's model that arrived before its module registered a listener. */
   pendingEvents: AgentModelEvent[];
-  /** Set when a run ended through the tool: a further turn in the same loop is aborted. */
-  abortOnTurn: boolean;
+  /** The run whose driver.prompt invocation still owns engine events. */
+  engineRunId: string | undefined;
+  /** A follow-up run accepted while the preceding invocation is settling. */
+  queuedRun: RunState | undefined;
+  /** Serializes completion, queue capture and concurrent parent messages. */
+  operation: Promise<void>;
+}
+
+interface PendingMessage {
+  text: string;
+  /** Interrupts are also queued in the engine; local messages wait only here. */
+  engine: boolean;
+}
+
+interface RunEnd {
+  status: AgentRunTerminalStatus;
+  outcome: { result?: { status: "completed" | "blocked"; message: string }; error?: string; endedBy?: { initiator: AgentRunInitiator; reason?: string }; context?: string };
 }
 
 interface RunState {
@@ -179,6 +194,12 @@ interface RunState {
   nudged: boolean;
   /** `complete_agent_run` was called for this run. */
   completedByTool: boolean;
+  /** The invocation emitted agent_settled; driver.prompt has not necessarily returned yet. */
+  engineSettled: boolean;
+  /** Parent messages waiting for an engine-ready boundary, in arrival order. */
+  pendingMessages: PendingMessage[];
+  /** A terminal outcome declared while the invocation still owns the engine. */
+  pendingEnd: RunEnd | undefined;
   lastAssistant: { text?: string; error?: string } | undefined;
 }
 
@@ -245,7 +266,9 @@ export class AgentHarness {
       eventListeners: new Set(),
       roleListeners: new Set(),
       pendingEvents: [],
-      abortOnTurn: false,
+      engineRunId: undefined,
+      queuedRun: undefined,
+      operation: Promise.resolve(),
     };
     entry.bridge = this.bridgeFor(entry);
     return {
@@ -310,8 +333,11 @@ export class AgentHarness {
   detachSession(sessionPath: string): void {
     const entry = this.byPath.get(sessionPath);
     if (!entry) return;
-    const active = this.activeRunState(sessionPath);
-    if (active) this.endRun(active, "failed", { error: "The agent's session closed before it finished." });
+    for (const state of this.runStates.values()) {
+      if (state.run.sessionPath === sessionPath && !isTerminalRunStatus(state.run.status)) {
+        this.endRun(state, "failed", { error: "The agent's session closed before it finished." });
+      }
+    }
     this.byPath.delete(sessionPath);
     entry.eventListeners.clear();
     entry.roleListeners.clear();
@@ -353,10 +379,24 @@ export class AgentHarness {
     const state = this.runStates.get(runId);
     if (!state) throw new HarnessError(`No run is called ${runId}.`);
     if (isTerminalRunStatus(state.run.status)) return state.run;
-    this.event({ kind: "stop_requested", sessionPath: state.run.sessionPath, runId, summary: endedBy.initiator === "user" ? "The person asked this run to stop" : "The parent asked this run to stop" });
-    const driver = this.host.driver(state.run.sessionPath);
-    if (driver) await driver.abort().catch(() => undefined);
-    this.endRun(state, "cancelled", { endedBy });
+    const entry = this.byPath.get(state.run.sessionPath);
+    if (!entry) {
+      this.endRun(state, "cancelled", { endedBy });
+      return state.run;
+    }
+    await this.withEntry(entry, async () => {
+      if (isTerminalRunStatus(state.run.status)) return;
+      this.event({ kind: "stop_requested", sessionPath: state.run.sessionPath, runId, summary: endedBy.initiator === "user" ? "The person asked this run to stop" : "The parent asked this run to stop" });
+      state.pendingEnd = { status: "cancelled", outcome: { endedBy } };
+      if (entry.queuedRun === state) {
+        entry.queuedRun = undefined;
+        this.endRun(state, "cancelled", { endedBy });
+        return;
+      }
+      const driver = this.host.driver(state.run.sessionPath);
+      if (driver) await driver.abort().catch(() => undefined);
+      if (entry.engineRunId === undefined) this.finalizePendingEnd(entry, state);
+    });
     return state.run;
   }
 
@@ -384,7 +424,9 @@ export class AgentHarness {
       this.detachSession(sessionPath);
       return;
     }
-    const active = this.activeRunState(sessionPath);
+    // Events belong to the prompt invocation that was actually admitted to
+    // the engine, never whichever newer queued run happens to be visible.
+    const active = entry.engineRunId ? this.runStates.get(entry.engineRunId) : this.activeRunState(sessionPath);
     // A question through the portable UI surface pauses the child's loop
     // until someone answers, so the run is `needs_input` for exactly as long
     // as the question is open — the answer may come from the parent (through
@@ -404,12 +446,6 @@ export class AgentHarness {
     const update = event.update;
     switch (update.kind) {
       case "turn_start": {
-        if (entry.abortOnTurn) {
-          entry.abortOnTurn = false;
-          const driver = this.host.driver(sessionPath);
-          if (driver) void driver.abort().catch(() => undefined);
-          return;
-        }
         if (active) this.touch(active, (run) => ({ ...run, activity: { ...(run.activity ?? { turns: 0, tools: 0 }), turns: (run.activity?.turns ?? 0) + 1, lastAt: this.iso() } }));
         return;
       }
@@ -435,13 +471,16 @@ export class AgentHarness {
         return;
       }
       case "extension_error": {
-        if (active) this.endRun(active, "failed", { error: update.message });
+        if (active) this.requestEnd(entry, active, "failed", { error: update.message }, true);
         return;
       }
       case "agent_settled": {
-        entry.abortOnTurn = false;
-        if (!active || active.completedByTool) return;
-        this.settled(entry, active);
+        if (!active) return;
+        active.engineSettled = true;
+        // Pi emits agent_settled before AgentSession.prompt resolves and only
+        // becomes idle afterwards. The invocation completion owns finalizing
+        // this run and admitting the next prompt.
+        if (entry.engineRunId === undefined) void this.withEntry(entry, () => this.afterInvocation(entry, active, { accepted: true, queued: false }));
         return;
       }
       default:
@@ -638,45 +677,60 @@ export class AgentHarness {
     if (!child || !child.path) {
       throw new HarnessError(`No agent session is called "${sessionId}" among the agents this session started. Use the sessionId that start_agent returned.`);
     }
-    const driver = this.host.driver(child.path);
-    if (!driver) throw new HarnessError(`The agent session "${sessionId}" is no longer open.`);
-    const active = this.activeRunState(child.path);
-    if (active?.run.status === "needs_input" && active.run.question) {
-      // The child is paused on a question: a message to it is an answer to
-      // that question, and nothing else could reach the child anyway — its
-      // loop is inside the tool that asked. Anything that does not fit the
-      // question is refused with the question restated, never misrouted.
-      const question = active.run.question;
-      driver.respondToUi(answerFor(question, message));
-      this.reconcileQuestion(active, question.id);
-      this.event({ kind: "message_sent", sessionPath: parent.path, runId: active.run.runId, counterpart: { sessionPath: child.path, label: labelOf(child.role) }, summary: `Answered ${labelOf(child.role)}'s question` });
-      this.event({ kind: "message_received", sessionPath: child.path, runId: active.run.runId, counterpart: { sessionPath: parent.path, label: labelOf(parent.role) }, summary: `Answer from ${labelOf(parent.role)}` });
-      return { sessionId, runId: active.run.runId, status: active.run.status, delivery: "answered", answered: question };
-    }
-    const content = [{ type: "text" as const, text: message }];
-    let runId: string;
-    let delivery: SendAgentMessageResult["delivery"];
-    if (active) {
-      const busy = driver.state().isStreaming;
-      if (busy) {
-        if (input.interrupt) await driver.steer(content);
-        else await driver.followUp(content);
-        delivery = "queued";
-      } else {
-        // Idle with an open run: a queued message would wait for a prompt that never comes.
-        await driver.prompt(content, { expandPromptTemplates: false });
-        delivery = "delivered";
+    return this.withEntry(child, async () => {
+      const driver = this.host.driver(child.path!);
+      if (!driver) throw new HarnessError(`The agent session "${sessionId}" is no longer open.`);
+      const executing = child.engineRunId ? this.runStates.get(child.engineRunId) : undefined;
+      const active = executing ?? this.activeRunState(child.path!);
+      if (active?.run.status === "needs_input" && active.run.question) {
+        // The child is paused on a question: a message to it is an answer to
+        // that question, and nothing else could reach the child anyway — its
+        // loop is inside the tool that asked. Anything that does not fit the
+        // question is refused with the question restated, never misrouted.
+        const question = active.run.question;
+        driver.respondToUi(answerFor(question, message));
+        this.reconcileQuestion(active, question.id);
+        this.event({ kind: "message_sent", sessionPath: parent.path!, runId: active.run.runId, counterpart: { sessionPath: child.path!, label: labelOf(child.role) }, summary: `Answered ${labelOf(child.role)}'s question` });
+        this.event({ kind: "message_received", sessionPath: child.path!, runId: active.run.runId, counterpart: { sessionPath: parent.path!, label: labelOf(parent.role) }, summary: `Answer from ${labelOf(parent.role)}` });
+        return { sessionId, runId: active.run.runId, status: active.run.status, delivery: "answered", answered: question };
       }
-      runId = active.run.runId;
-    } else {
-      const state = this.createRun(child, { origin: "agent", task: message, goal: await readGoal(this.host.driver(parent.path)), parentRunId: this.activeRun(parent.path)?.runId });
-      runId = state.run.runId;
-      delivery = "delivered";
-      void this.kick(state, message);
-    }
-    this.event({ kind: "message_sent", sessionPath: parent.path, runId, counterpart: { sessionPath: child.path, label: labelOf(child.role) }, summary: `Sent a message to ${labelOf(child.role)}` });
-    this.event({ kind: "message_received", sessionPath: child.path, runId, counterpart: { sessionPath: parent.path, label: labelOf(parent.role) }, summary: `Message from ${labelOf(parent.role)}` });
-    return { sessionId, runId, status: "running", delivery };
+
+      let state: RunState;
+      let delivery: SendAgentMessageResult["delivery"];
+      if (executing?.pendingEnd || child.queuedRun) {
+        // Completion/stop has been declared but Pi still owns the old prompt.
+        // Reserve one visible queued run now so immediate and concurrent
+        // resumes share a real identity instead of spawning busy failures.
+        state = this.queueRun(child, message, executing ?? active, parent);
+        delivery = "queued";
+      } else if (active) {
+        state = active;
+        if (driver.state().isStreaming || child.engineRunId !== undefined) {
+          const pending: PendingMessage = { text: message, engine: input.interrupt === true };
+          state.pendingMessages.push(pending);
+          if (pending.engine) {
+            try {
+              await driver.steer([{ type: "text", text: message }]);
+            } catch (error) {
+              const index = state.pendingMessages.indexOf(pending);
+              if (index >= 0) state.pendingMessages.splice(index, 1);
+              throw error;
+            }
+          }
+          delivery = "queued";
+        } else {
+          delivery = "delivered";
+          this.kick(state, message);
+        }
+      } else {
+        state = this.createRun(child, { origin: "agent", task: message, goal: await readGoal(this.host.driver(parent.path!)), parentRunId: this.activeRun(parent.path!)?.runId });
+        delivery = "delivered";
+        this.kick(state, message);
+      }
+      this.event({ kind: "message_sent", sessionPath: parent.path!, runId: state.run.runId, counterpart: { sessionPath: child.path!, label: labelOf(child.role) }, summary: `Sent a message to ${labelOf(child.role)}` });
+      this.event({ kind: "message_received", sessionPath: child.path!, runId: state.run.runId, counterpart: { sessionPath: parent.path!, label: labelOf(parent.role) }, summary: `Message from ${labelOf(parent.role)}` });
+      return { sessionId, runId: state.run.runId, status: state.run.status, delivery };
+    });
   }
 
   /**
@@ -903,30 +957,65 @@ export class AgentHarness {
     };
   }
 
-  private completeRun(child: Entry, input: CompleteRunInput): CompleteRunResult {
+  private async completeRun(child: Entry, input: CompleteRunInput): Promise<CompleteRunResult> {
     if (!child.path) return { ok: false, error: "This session is not ready yet." };
-    const active = this.activeRunState(child.path);
-    if (!active) {
-      const latest = this.latestRun(child.path);
-      return { ok: false, error: latest ? "This run already ended." : "No run is active in this session." };
-    }
-    if (input.status !== "completed" && input.status !== "blocked") return { ok: false, error: 'status must be "completed" or "blocked".' };
-    const message = (input.message ?? "").trim();
-    if (message === "") return { ok: false, error: "message is required: the final result, evidence and any important next step." };
-    if (message.length > AGENT_MESSAGE_MAX) return { ok: false, error: `message must be at most ${AGENT_MESSAGE_MAX} characters.` };
-    active.completedByTool = true;
-    child.abortOnTurn = true;
-    this.endRun(active, input.status, { result: { status: input.status, message } });
-    return { ok: true, runId: active.run.runId };
+    return this.withEntry(child, async () => {
+      const active = child.engineRunId ? this.runStates.get(child.engineRunId) : this.activeRunState(child.path!);
+      if (!active || active.completedByTool || isTerminalRunStatus(active.run.status)) {
+        const latest = this.latestRun(child.path!);
+        return { ok: false, error: latest ? "This run already ended." : "No run is active in this session." };
+      }
+      if (input.status !== "completed" && input.status !== "blocked") return { ok: false, error: 'status must be "completed" or "blocked".' };
+      const message = (input.message ?? "").trim();
+      if (message === "") return { ok: false, error: "message is required: the final result, evidence and any important next step." };
+      if (message.length > AGENT_MESSAGE_MAX) return { ok: false, error: `message must be at most ${AGENT_MESSAGE_MAX} characters.` };
+
+      active.completedByTool = true;
+      active.pendingEnd = { status: input.status, outcome: { result: { status: input.status, message } } };
+      // A terminating tool stops further model calls, but Pi still polls its
+      // steering/follow-up queues after the tool batch. Empty them now and
+      // preserve every message as the next tracked run instead.
+      const driver = this.host.driver(child.path!);
+      let preserved: string[];
+      if (driver) {
+        try {
+          const cleared = await driver.clearQueue();
+          preserved = this.preservedMessages(active, [...cleared.steering, ...cleared.followUp]);
+        } catch {
+          // If the queue cannot be proven empty, abort the invocation rather
+          // than let it continue beneath terminal history. Replay all locally
+          // known messages after that same prompt-ready fence.
+          preserved = active.pendingMessages.map((pending) => pending.text);
+          active.pendingMessages = [];
+          await driver.abort().catch(() => undefined);
+        }
+      } else {
+        preserved = this.preservedMessages(active, []);
+      }
+      for (const text of preserved) this.queueRun(child, text, active);
+
+      // Fake/idle drivers may invoke the bridge outside a prompt. Real Pi is
+      // still streaming here; its prompt promise is the engine-ready fence.
+      if (child.engineRunId === undefined && !driver?.state().isStreaming) this.finalizePendingEnd(child, active);
+      return { ok: true, runId: active.run.runId };
+    });
   }
 
   // ------------------------------------------------------------ lifecycle
 
-  private createRun(entry: Entry, init: { origin: AgentRun["origin"]; task: string; goal?: { id: string; objective: string } | null; parentRunId?: string | undefined }): RunState {
+  private createRun(
+    entry: Entry,
+    init: { origin: AgentRun["origin"]; task: string; goal?: { id: string; objective: string } | null; parentRunId?: string | undefined },
+    queued = false,
+  ): RunState {
     const path = entry.path!;
     const sessionId = entry.sessionId!;
     const runId = init.origin === "agent" && entry.role.runId && !this.runStates.has(entry.role.runId) ? entry.role.runId : newRunId();
-    const startedAt = this.iso();
+    // Distinct start times make every existing projection choose the resumed
+    // live run over terminal history, even when both are created in one tick.
+    const previousStarted = this.latestRun(path)?.run.startedAt;
+    const startedMs = Math.max(this.now(), previousStarted ? Date.parse(previousStarted) + 1 : 0);
+    const startedAt = new Date(startedMs).toISOString();
     const driver = this.host.driver(path);
     const parentPath = entry.record.parentPath;
     const runCwd = driver?.state().cwd ?? entry.record.worktree?.path;
@@ -947,7 +1036,7 @@ export class AgentHarness {
       // from the presence of a worktree.
       ...(runCwd !== undefined ? { cwd: runCwd } : {}),
       origin: init.origin,
-      status: "running",
+      status: queued ? "queued" : "running",
       task: excerpt(init.task, AGENT_TASK_EXCERPT),
       ...(init.goal ? { goal: init.goal } : {}),
       model: driver?.state().model ?? null,
@@ -955,32 +1044,76 @@ export class AgentHarness {
       startedAt,
       updatedAt: startedAt,
     };
-    const state: RunState = { run, task: init.task, nudged: false, completedByTool: false, lastAssistant: undefined };
+    const state: RunState = {
+      run,
+      task: init.task,
+      nudged: false,
+      completedByTool: false,
+      engineSettled: false,
+      pendingMessages: [],
+      pendingEnd: undefined,
+      lastAssistant: undefined,
+    };
     this.runStates.set(runId, state);
     this.runOrder.push(runId);
-    entry.role = { ...entry.role, runId, ...(init.goal ? { goal: init.goal } : {}) };
-    entry.abortOnTurn = false;
-    this.announceRole(entry);
+    if (!queued) this.activateRun(entry, state);
     void this.persistMoment(run, "started");
     this.publish(state);
     return state;
   }
 
-  /** Start the child's model loop; a refusal or a throw is the run's failure, never the caller's. */
-  private async kick(state: RunState, text: string): Promise<void> {
+  private activateRun(entry: Entry, state: RunState): void {
+    entry.role = { ...entry.role, runId: state.run.runId, ...(state.run.goal ? { goal: state.run.goal } : {}) };
+    this.announceRole(entry);
+  }
+
+  /** Start one prompt invocation. Its promise is the only engine-ready fence. */
+  private kick(state: RunState, text: string): void {
+    const entry = this.byPath.get(state.run.sessionPath);
     const driver = this.host.driver(state.run.sessionPath);
-    if (!driver) {
+    if (!entry || !driver) {
       this.endRun(state, "failed", { error: "The agent's session is not open." });
       return;
     }
-    try {
-      const result = await driver.prompt([{ type: "text", text }], { expandPromptTemplates: false });
-      if (!result.accepted && !isTerminalRunStatus(state.run.status)) {
-        this.endRun(state, "failed", { error: "The agent's session refused the task because it was busy." });
-      }
-    } catch (error) {
-      if (!isTerminalRunStatus(state.run.status)) this.endRun(state, "failed", { error: error instanceof Error ? error.message : String(error) });
+    if (entry.engineRunId !== undefined) {
+      state.pendingMessages.push({ text, engine: false });
+      return;
     }
+    entry.engineRunId = state.run.runId;
+    state.engineSettled = false;
+    void this.invoke(entry, state, driver, text);
+  }
+
+  private async invoke(entry: Entry, state: RunState, driver: SessionDriver, text: string): Promise<void> {
+    let result: { accepted: boolean; queued: boolean };
+    try {
+      result = await driver.prompt([{ type: "text", text }], { expandPromptTemplates: false });
+    } catch (error) {
+      result = { accepted: false, queued: false };
+      if (!state.pendingEnd) state.pendingEnd = { status: "failed", outcome: { error: error instanceof Error ? error.message : String(error) } };
+    }
+    await this.withEntry(entry, () => this.afterInvocation(entry, state, result));
+  }
+
+  private afterInvocation(entry: Entry, state: RunState, result: { accepted: boolean; queued: boolean }): void {
+    if (entry.engineRunId === state.run.runId) entry.engineRunId = undefined;
+    if (isTerminalRunStatus(state.run.status)) return;
+    if (!result.accepted && !state.pendingEnd) {
+      state.pendingEnd = { status: "failed", outcome: { error: "The agent's session refused the task because it was busy." } };
+    }
+    if (state.pendingEnd) {
+      this.finalizePendingEnd(entry, state);
+      return;
+    }
+    // Engine-queued interrupts have either been consumed or the prompt could
+    // not have settled. Local messages are admitted one at a time, in order.
+    state.pendingMessages = state.pendingMessages.filter((pending) => !pending.engine);
+    const next = state.pendingMessages.shift();
+    if (next) {
+      this.kick(state, next.text);
+      return;
+    }
+    if (state.engineSettled) this.settled(entry, state);
   }
 
   /** The child stopped without `complete_agent_run`: nudge once, then record the failure. */
@@ -991,19 +1124,7 @@ export class AgentHarness {
     }
     if (!state.nudged) {
       state.nudged = true;
-      const driver = this.host.driver(entry.path!);
-      if (!driver) {
-        this.endRun(state, "failed", { error: "The agent's session is not open." });
-        return;
-      }
-      void driver
-        .prompt([{ type: "text", text: NUDGE_TEXT }], { expandPromptTemplates: false })
-        .then((result) => {
-          if (!result.accepted && !isTerminalRunStatus(state.run.status)) this.endRun(state, "failed", { error: ENDED_WITHOUT_TOOL });
-        })
-        .catch(() => {
-          if (!isTerminalRunStatus(state.run.status)) this.endRun(state, "failed", { error: ENDED_WITHOUT_TOOL });
-        });
+      this.kick(state, NUDGE_TEXT);
       return;
     }
     const driver = this.host.driver(entry.path!);
@@ -1011,10 +1132,105 @@ export class AgentHarness {
     this.endRun(state, "failed", { error: ENDED_WITHOUT_TOOL, ...(context ? { context: excerpt(context, RESULT_EXCERPT) } : {}) });
   }
 
+  /** Reserve or extend the one run waiting behind the current invocation. */
+  private queueRun(entry: Entry, text: string, previous?: RunState, parent?: Entry): RunState {
+    const queued = entry.queuedRun;
+    if (queued && !isTerminalRunStatus(queued.run.status)) {
+      queued.pendingMessages.push({ text, engine: false });
+      return queued;
+    }
+    const state = this.createRun(
+      entry,
+      {
+        origin: "agent",
+        task: text,
+        ...(previous?.run.goal ? { goal: previous.run.goal } : {}),
+        ...((parent?.path ? this.activeRun(parent.path)?.runId : previous?.run.parent?.runId) !== undefined
+          ? { parentRunId: parent?.path ? this.activeRun(parent.path)?.runId : previous?.run.parent?.runId }
+          : {}),
+      },
+      true,
+    );
+    entry.queuedRun = state;
+    return state;
+  }
+
+  /** Keep local messages and only engine messages actually returned by clearQueue. */
+  private preservedMessages(state: RunState, cleared: string[]): string[] {
+    const remaining = [...cleared];
+    const preserved: string[] = [];
+    for (const pending of state.pendingMessages) {
+      if (!pending.engine) {
+        preserved.push(pending.text);
+        continue;
+      }
+      const index = remaining.indexOf(pending.text);
+      if (index >= 0) {
+        preserved.push(pending.text);
+        remaining.splice(index, 1);
+      }
+    }
+    state.pendingMessages = [];
+    return [...preserved, ...remaining];
+  }
+
+  private requestEnd(
+    entry: Entry,
+    state: RunState,
+    status: AgentRunTerminalStatus,
+    outcome: RunEnd["outcome"],
+    abort: boolean,
+  ): void {
+    if (isTerminalRunStatus(state.run.status) || state.pendingEnd) return;
+    state.pendingEnd = { status, outcome };
+    const driver = this.host.driver(state.run.sessionPath);
+    if (abort && driver) {
+      void driver.abort().finally(() => {
+        void this.withEntry(entry, () => {
+          if (entry.engineRunId === undefined) this.finalizePendingEnd(entry, state);
+        });
+      });
+    } else if (entry.engineRunId === undefined) {
+      this.finalizePendingEnd(entry, state);
+    }
+  }
+
+  private finalizePendingEnd(entry: Entry, state: RunState): void {
+    const pending = state.pendingEnd;
+    if (!pending || isTerminalRunStatus(state.run.status)) return;
+    state.pendingEnd = undefined;
+    const queued = entry.queuedRun;
+    // Publish the old terminal history first, but delay its parent wake until
+    // the already-accepted resume has become the session's canonical live run.
+    this.endRun(state, pending.status, pending.outcome, queued !== undefined);
+    if (queued && !isTerminalRunStatus(queued.run.status)) {
+      entry.queuedRun = undefined;
+      this.touch(queued, (run) => ({ ...run, status: "running" }));
+      this.activateRun(entry, queued);
+      this.kick(queued, queued.task);
+      if (state.run.parent) this.notifyParent(state.run, pending.outcome.context);
+    }
+  }
+
+  private async withEntry<T>(entry: Entry, operation: () => T | Promise<T>): Promise<T> {
+    const before = entry.operation;
+    let release!: () => void;
+    entry.operation = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await before;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  }
+
   private endRun(
     state: RunState,
     status: AgentRunTerminalStatus,
     outcome: { result?: { status: "completed" | "blocked"; message: string }; error?: string; endedBy?: { initiator: AgentRunInitiator; reason?: string }; context?: string },
+    delayParent = false,
   ): void {
     if (isTerminalRunStatus(state.run.status)) return;
     const endedAt = this.iso();
@@ -1048,7 +1264,7 @@ export class AgentHarness {
       ...(run.parent ? { counterpart: { sessionPath: run.parent.sessionPath, label: entry?.role.parent ? labelOf(entry.role.parent) : "parent" } } : {}),
       summary: eventSummary(status, run),
     });
-    this.notifyParent(run, outcome.context);
+    if (!delayParent) this.notifyParent(run, outcome.context);
   }
 
   // ------------------------------------------------------------- questions
