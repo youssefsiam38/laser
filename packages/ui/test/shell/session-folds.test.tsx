@@ -245,11 +245,12 @@ describe("sub-sessions fold", () => {
 
   it("returns a resumed session to the live fold and does not brand it with an older failure", async () => {
     await mount();
-    const failed = childRun("alpha-failed", ALPHA, "failed", 12);
-    failed.updatedAt = at(13);
-    failed.endedAt = at(13);
-    failed.error = "Provider disconnected.";
-    const resumed = childRun("alpha-resumed", ALPHA, "running", 12);
+    // The session's own run fails; a resume is a new run in the same session.
+    // A session never holds two runs that can act at once (the harness ends
+    // one before it starts the next, and a successor waits as `queued`), so
+    // the older failure is the session's earlier run, ended, not a sibling.
+    const failed: AgentRun = { ...runs[0]!, status: "failed", updatedAt: at(12), endedAt: at(12), error: "Provider disconnected." };
+    const resumed = childRun("alpha-resumed", ALPHA, "running", 13);
 
     await act(async () => store.dispatch({ type: "agents/run", run: failed }));
     await act(async () => store.dispatch({ type: "agents/run", run: resumed }));
