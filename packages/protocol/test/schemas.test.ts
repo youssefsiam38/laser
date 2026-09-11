@@ -225,6 +225,10 @@ describe("client request schemas", () => {
     const save = clientParamsSchemas["mcp/save"];
     const stdio = { name: "pw", transport: { kind: "stdio", command: "npx" } };
     expect(save.safeParse({ cwd: "/p", scope: "project", server: stdio }).success).toBe(true);
+    // A transport-less entry is allowed only as the project "off" switch.
+    expect(save.safeParse({ cwd: "/p", scope: "project", server: { name: "pw", disabled: true } }).success).toBe(true);
+    expect(save.safeParse({ cwd: "/p", scope: "project", server: { name: "pw" } }).success).toBe(false);
+    expect(save.safeParse({ cwd: "/p", scope: "project", server: { name: "pw", disabled: false } }).success).toBe(false);
     // Sign-in belongs to HTTP servers only.
     expect(save.safeParse({ cwd: "/p", scope: "project", server: { ...stdio, auth: { kind: "oauth" } } }).success).toBe(false);
     expect(save.safeParse({ cwd: "/p", scope: "project", server: { ...stdio, auth: { kind: "none" } } }).success).toBe(true);
