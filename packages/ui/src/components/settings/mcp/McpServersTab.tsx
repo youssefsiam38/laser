@@ -9,7 +9,7 @@
  * the truth; `mcp/changed` says when to read it again.
  */
 import { PRODUCT_DISPLAY_NAME, type McpCatalogEntry, type McpImportSource, type McpScope, type McpServerConfig, type McpServerState } from "@lasercode/protocol";
-import { Plus, RefreshCw } from "lucide-react";
+import { FolderSearch, Plus, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
@@ -30,14 +30,14 @@ import { rowKey, serverTitle } from "./model.js";
 
 type ScopeFilter = McpScope | "all";
 
-export function McpServersTab({ cwd }: { cwd: string }) {
+export function McpServersTab({ cwd, projectOpen = true }: { cwd: string; projectOpen?: boolean }) {
   const { client, actions } = useLaserStable();
   const [servers, setServers] = useState<McpServerState[]>();
   const [sources, setSources] = useState<McpImportSource[]>([]);
+  const [detectFailed, setDetectFailed] = useState(false);
   const [error, setError] = useState<string>();
   const [scopeFilter, setScopeFilter] = useState<ScopeFilter>("all");
   const [selectedId, setSelectedId] = useState<string>();
-  const [reloadToken, setReloadToken] = useState(0);
   const [adding, setAdding] = useState<{ entry?: McpCatalogEntry; edit?: { scope: McpScope; config: McpServerConfig } }>();
   const [importing, setImporting] = useState(false);
   const [signIn, setSignIn] = useState<{ scope: McpScope; name: string; title: string }>();
@@ -51,11 +51,6 @@ export function McpServersTab({ cwd }: { cwd: string }) {
       const list = await client.request("mcp/list", { cwd });
       if (request !== generation.current) return;
       setServers(list.servers);
-      // Detection is a convenience; a host that cannot do it must not take
-      // the page down with it.
-      const detected = await client.request("mcp/import/detect", { cwd }).catch(() => ({ sources: [] as McpImportSource[] }));
-      if (request !== generation.current) return;
-      setSources(detected.sources);
     } catch (failure) {
       if (request === generation.current) {
         setError(failure instanceof Error ? failure.message : String(failure));
@@ -63,20 +58,41 @@ export function McpServersTab({ cwd }: { cwd: string }) {
     }
   }, [client, cwd]);
 
+  /**
+   * Looking for other tools' configurations reads nine places on disk, so it
+   * happens when the page opens and when the person asks again — never on
+   * every configuration write.
+   */
+  const detect = useCallback(async () => {
+    const request = generation.current;
+    try {
+      const detected = await client.request("mcp/import/detect", { cwd });
+      if (request !== generation.current) return;
+      setSources(detected.sources);
+      setDetectFailed(false);
+    } catch {
+      // A host that cannot look must not take the page down with it, but the
+      // person is told that the search did not run.
+      if (request === generation.current) setDetectFailed(true);
+    }
+  }, [client, cwd]);
+
   useEffect(() => {
     setServers(undefined);
     void load();
+    void detect();
     return () => {
       generation.current++;
     };
-  }, [load]);
+  }, [load, detect]);
 
   // The worker says when a configuration write or a status change happened.
+  // Only the list is re-read: the open inspector reconnects on a status
+  // change of its own row, and detection stays where the person put it.
   useEffect(() => {
     return client.subscribe((method, params) => {
       if (method !== "mcp/changed") return;
       if ((params as { cwd: string }).cwd !== cwd) return;
-      setReloadToken((token) => token + 1);
       void load();
     });
   }, [client, cwd, load]);
@@ -84,6 +100,16 @@ export function McpServersTab({ cwd }: { cwd: string }) {
   const selected = useMemo(
     () => (selectedId ? servers?.find((entry) => rowKey(entry) === selectedId) : undefined),
     [servers, selectedId],
+  );
+
+  // The every-project entry a switch-off row refers to, so the inspector can
+  // offer to edit the definition that actually runs.
+  const globalEntry = useMemo(
+    () =>
+      selected?.overridesGlobal
+        ? servers?.find((entry) => entry.scope === "global" && entry.config.name === selected.config.name)
+        : undefined,
+    [servers, selected],
   );
 
   const shown = useMemo(
@@ -108,7 +134,7 @@ export function McpServersTab({ cwd }: { cwd: string }) {
     );
   }
 
-  const defaultScope: McpScope = scopeFilter === "project" ? "project" : "global";
+  const defaultScope: McpScope = projectOpen && scopeFilter === "project" ? "project" : "global";
 
   return (
     <ScrollArea className="h-full">
@@ -129,6 +155,9 @@ export function McpServersTab({ cwd }: { cwd: string }) {
             <Button type="button" variant="ghost" size="sm" aria-label="Reload servers" onClick={() => void load()}>
               <RefreshCw aria-hidden="true" />
             </Button>
+            <Button type="button" variant="ghost" size="sm" onClick={() => void detect()}>
+              <FolderSearch aria-hidden="true" /> Look again
+            </Button>
           </div>
         </header>
 
@@ -138,22 +167,35 @@ export function McpServersTab({ cwd }: { cwd: string }) {
           </p>
         )}
 
+        {detectFailed && (
+          <p className="text-sm leading-6 text-ink-2">
+            Could not look for servers other tools configured on this machine. Try “Look again”.
+          </p>
+        )}
+
         <McpImportBanner sources={sources} onOpen={() => setImporting(true)} />
 
+        {!projectOpen && (
+          <p className="text-sm leading-6 text-ink-2">
+            No project is open, so this is the every-project list. Open a project to add a server just for it.
+          </p>
+        )}
+
         {servers.length > 0 && (
-          <div role="tablist" aria-label="Which servers to show" className="flex w-fit items-center gap-0.5 rounded-lg bg-surface-2 p-0.5">
+          // Buttons that press in, not tabs: they filter a list that is always
+          // on screen, and nothing here switches panels.
+          <div role="group" aria-label="Which servers to show" className="flex w-fit items-center gap-0.5 rounded-lg bg-surface-2 p-0.5">
             {(
               [
                 { id: "all" as const, label: "All" },
                 { id: "global" as const, label: "Every project" },
-                { id: "project" as const, label: "This project" },
+                ...(projectOpen ? [{ id: "project" as const, label: "This project" }] : []),
               ]
             ).map((option) => (
               <Button
                 key={option.id}
                 type="button"
-                role="tab"
-                aria-selected={scopeFilter === option.id}
+                aria-pressed={scopeFilter === option.id}
                 variant="ghost"
                 size="sm"
                 onClick={() => setScopeFilter(option.id)}
@@ -202,6 +244,7 @@ export function McpServersTab({ cwd }: { cwd: string }) {
         {...(adding?.entry ? { entry: adding.entry } : {})}
         {...(adding?.edit ? { edit: adding.edit } : {})}
         defaultScope={defaultScope}
+        allowProject={projectOpen}
         onSaved={(next, saved) => {
           setServers(next);
           setAdding(undefined);
@@ -221,6 +264,7 @@ export function McpServersTab({ cwd }: { cwd: string }) {
         onOpenChange={setImporting}
         sources={sources}
         defaultScope={defaultScope}
+        allowProject={projectOpen}
         onImported={(next, imported) => {
           setServers(next);
           setImporting(false);
@@ -232,14 +276,13 @@ export function McpServersTab({ cwd }: { cwd: string }) {
       <McpInspector
         cwd={cwd}
         state={selected}
-        reloadToken={reloadToken}
+        globalEntry={globalEntry}
         scopeFilter={scopeFilter}
         onOpenChange={(open) => !open && setSelectedId(undefined)}
         onServers={setServers}
         onError={(message) => actions.toast("error", message)}
-        onEdit={() => {
-          if (selected) setAdding({ edit: { scope: selected.scope, config: selected.config } });
-        }}
+        onNotice={(message) => actions.toast("info", message)}
+        onEdit={(target) => setAdding({ edit: target })}
         onSignIn={() => {
           if (selected) setSignIn({ scope: selected.scope, name: selected.config.name, title: serverTitle(selected.config) });
         }}

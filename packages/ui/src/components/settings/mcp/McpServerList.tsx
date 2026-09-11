@@ -10,17 +10,21 @@ import type { McpScope, McpServerState } from "@lasercode/protocol";
 
 import { McpServerPanel, type McpServerPanelRow } from "@/components/assistant-ui/elements/mcp-server-panel";
 
-import { rowKey, scopeLabel, scopeNote, statusWords, toolCountLabel, transportSummary } from "./model.js";
+import { failedAgoPhrase, rowKey, scopeLabel, scopeNote, statusWords, toolCountLabel, transportSummary } from "./model.js";
 
 export function toPanelRow(state: McpServerState): McpServerPanelRow {
   const status = statusWords(state.status);
+  // A project entry that only switches a global server off carries no
+  // definition of its own; the row then says so instead of a command line.
   const transport = transportSummary(state.config.transport);
+  const ago = state.status === "failed" ? failedAgoPhrase(state.failedAgoSeconds) : undefined;
+  const detail = state.detail && ago ? `${state.detail} (${ago})` : (state.detail ?? (ago ? `It failed ${ago}.` : undefined));
   return {
     id: rowKey(state),
     name: state.config.label?.trim() || state.config.name,
-    transport: transport.text,
-    transportKind: transport.kind,
-    transportFull: transport.full,
+    transport: transport?.text ?? "No definition of its own",
+    transportKind: transport?.kind ?? "Switched off here",
+    transportFull: transport?.full ?? "This entry only switches the every-project server off.",
     statusLabel: status.label,
     statusHelp: status.help,
     tone: status.tone,
@@ -28,7 +32,7 @@ export function toPanelRow(state: McpServerState): McpServerPanelRow {
     tools: toolCountLabel(state),
     scope: scopeLabel(state.scope),
     note: scopeNote(state),
-    detail: state.detail,
+    detail,
     needsAuth: state.status === "needs-auth",
     dimmed: state.shadowed || state.status === "off",
   };

@@ -106,7 +106,9 @@ export function McpServerPanel({ rows, selectedId, onSelect, onSignIn, heading, 
                 type="button"
                 onClick={() => onSelect?.(row.id)}
                 aria-current={selectedId === row.id ? "true" : undefined}
-                title={`${row.name} · ${row.transportFull} · ${row.statusLabel}. ${row.statusHelp}`}
+                // The title carries what the row had to truncate, not a copy
+                // of what is already on screen.
+                title={row.transportFull}
                 className={cn(
                   "flex min-w-0 flex-1 items-center gap-3 rounded-xl px-3 py-2.5 text-start outline-none",
                   "min-h-11 transition-colors duration-(--motion-fast) hover:bg-surface-2",

@@ -19,14 +19,8 @@ import { Input } from "@/components/ui/input";
 import { SettingsSwitch } from "@/components/assistant-ui/elements/settings-panel";
 import { cn } from "@/lib/utils";
 
-import { deriveName, formIssues, valueRow, type SecretField, type ServerForm, type ValueRow } from "./model.js";
-
-export const selectClass = [
-  "h-8 w-full min-w-0 rounded-lg border border-line bg-surface px-2.5 pe-7 text-sm text-ink",
-  "transition-[border-color] duration-(--motion-instant) outline-none",
-  "focus-visible:border-live focus-visible:ring-2 focus-visible:ring-live/25",
-  "disabled:cursor-not-allowed disabled:bg-surface-2 disabled:opacity-60",
-].join(" ");
+import { selectClass } from "../fields.js";
+import { deriveName, formIssues, keepsStoredSecret, valueRow, type SecretField, type ServerForm, type ValueRow } from "./model.js";
 
 export function Field({
   label,
@@ -54,6 +48,20 @@ export function Field({
           {error}
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * A labelled group of controls. `Field`'s `<label for=…>` needs one control to
+ * point at; a set of rows has none, so it gets a group with a name instead.
+ */
+export function FieldGroup({ label, hint, children, className }: { label: string; hint?: ReactNode; children: ReactNode; className?: string }) {
+  return (
+    <div role="group" aria-label={label} className={cn("flex min-w-0 flex-col gap-1", className)}>
+      <span className="text-sm font-medium text-ink">{label}</span>
+      {children}
+      {hint && <p className="text-xs leading-5 text-ink-3">{hint}</p>}
     </div>
   );
 }
@@ -139,15 +147,19 @@ export function ValueRows({
             className="w-40 flex-1"
             onChange={(event) => update(row.id, { key: event.target.value })}
           />
-          <Input
-            aria-label={`${row.key || keyLabel} value`}
-            type={row.secret ? "password" : "text"}
-            autoComplete={row.secret ? "new-password" : "off"}
-            value={row.value}
-            placeholder={row.secret && row.stored ? "Saved — type to replace it" : "Value"}
-            className="w-40 flex-1"
-            onChange={(event) => update(row.id, { value: event.target.value })}
-          />
+          <span className="flex w-40 min-w-0 flex-1 flex-col gap-0.5">
+            <Input
+              aria-label={`${row.key || keyLabel} value`}
+              type={row.secret ? "password" : "text"}
+              autoComplete={row.secret ? "new-password" : "off"}
+              value={row.value}
+              placeholder={row.stored ? "Saved — type to replace it" : "Value"}
+              onChange={(event) => update(row.id, { value: event.target.value })}
+            />
+            {/* Un-marking a secret is how you look, not how you delete: the
+                saved value stays until something is typed over it. */}
+            {keepsStoredSecret(row) && <span className="text-xs text-ink-3">Type a value to replace the saved one.</span>}
+          </span>
           <Button
             type="button"
             variant={row.secret ? "secondary" : "ghost"}
@@ -183,24 +195,26 @@ export function ScopeChoice({
   scope,
   onChange,
   disabled,
+  allowProject = true,
   label = "Save it for",
 }: {
   scope: McpScope;
   onChange: (scope: McpScope) => void;
   disabled?: boolean;
+  /** False with no project open: there is no project to save anything for. */
+  allowProject?: boolean;
   label?: string;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
       <span className="text-sm text-ink-2">{label}</span>
-      <div role="radiogroup" aria-label={label} className="flex items-center gap-0.5 rounded-lg bg-surface-2 p-0.5">
+      <div role="group" aria-label={label} className="flex items-center gap-0.5 rounded-lg bg-surface-2 p-0.5">
         {(["global", "project"] as const).map((option) => (
           <Button
             key={option}
             type="button"
-            role="radio"
-            aria-checked={scope === option}
-            disabled={disabled}
+            aria-pressed={scope === option}
+            disabled={disabled || (option === "project" && !allowProject)}
             variant="ghost"
             size="sm"
             onClick={() => onChange(option)}
@@ -216,7 +230,7 @@ export function ScopeChoice({
 
 const TRANSPORTS: Array<{ kind: McpTransportKind; label: string; hint: string }> = [
   { kind: "stdio", label: "Command", hint: "A program on this machine that the app starts." },
-  { kind: "http", label: "URL", hint: "A server reached over the network." },
+  { kind: "http", label: "URL", hint: "A server reached over the network, by HTTP." },
   { kind: "socket", label: "Socket", hint: "A socket file another program is already listening on." },
 ];
 
@@ -250,17 +264,15 @@ export function McpServerForm({
 
   return (
     <fieldset disabled={disabled} className="flex min-w-0 flex-col gap-4 disabled:opacity-60">
-      <div
-        role="radiogroup"
-        aria-label="How to reach the server"
-        className="flex flex-wrap items-center gap-1 rounded-lg bg-surface-2 p-0.5"
-      >
+      {/* Buttons that press in rather than a radio group: they are three
+          alternatives, but they behave like a row of buttons, and saying
+          "radio" without arrow keys is a promise the keyboard does not keep. */}
+      <div role="group" aria-label="How to reach the server" className="flex flex-wrap items-center gap-1 rounded-lg bg-surface-2 p-0.5">
         {TRANSPORTS.map((option) => (
           <Button
             key={option.kind}
             type="button"
-            role="radio"
-            aria-checked={form.kind === option.kind}
+            aria-pressed={form.kind === option.kind}
             variant="ghost"
             size="sm"
             title={option.hint}
@@ -319,9 +331,9 @@ export function McpServerForm({
               />
             )}
           </Field>
-          <Field label="Environment variables" hint="Anything the program needs. Mark a value secret to keep it out of the file.">
-            {() => <ValueRows rows={form.env} keyLabel="Variable" addLabel="Add a variable" ariaLabel="Environment variables" onChange={(env) => set({ env })} />}
-          </Field>
+          <FieldGroup label="Environment variables" hint="Anything the program needs. Mark a value secret to keep it out of the file.">
+            <ValueRows rows={form.env} keyLabel="Variable" addLabel="Add a variable" ariaLabel="Environment variables" onChange={(env) => set({ env })} />
+          </FieldGroup>
           <Field label="Run it in" hint="Leave empty to run it in the project folder.">
             {(id) => <Input id={id} value={form.cwd} placeholder="/path/to/a/folder" onChange={(event) => set({ cwd: event.target.value })} />}
           </Field>
@@ -349,9 +361,9 @@ export function McpServerForm({
               />
             )}
           </Field>
-          <Field label="Headers" hint="Sent with every request. Mark a value secret to keep it out of the file.">
-            {() => <ValueRows rows={form.headers} keyLabel="Header" addLabel="Add a header" ariaLabel="Headers" onChange={(headers) => set({ headers })} />}
-          </Field>
+          <FieldGroup label="Headers" hint="Sent with every request. Mark a value secret to keep it out of the file.">
+            <ValueRows rows={form.headers} keyLabel="Header" addLabel="Add a header" ariaLabel="Headers" onChange={(headers) => set({ headers })} />
+          </FieldGroup>
           <Field label="How it streams" hint="Leave on automatic unless the server only speaks one of them.">
             {(id) => (
               <select
@@ -388,7 +400,7 @@ export function McpServerForm({
               )}
             </Field>
             {form.authKind === "bearer" && (
-              <Field label="Token" hint="Kept in the app’s secret store, never in the configuration file.">
+              <Field label="Token" error={issues.token} hint="Kept in the app’s secret store, never in the configuration file.">
                 {(id) => <SecretInput id={id} field={form.token} onChange={(token) => set({ token })} />}
               </Field>
             )}

@@ -7,7 +7,7 @@
  */
 import type { McpAuthStart, McpScope } from "@lasercode/protocol";
 import { Check, Copy, ExternalLink, LogOut } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { useCopy } from "@/hooks/use-copy";
 import { useLaserStable } from "@/runtime";
+
+/** Long enough to read “Signed in.”, short enough not to be in the way. */
+const SIGNED_IN_LINGER_MS = 1200;
 
 export function McpSignInDialog({
   cwd,
@@ -36,6 +39,17 @@ export function McpSignInDialog({
   const [error, setError] = useState<string>();
   const [done, setDone] = useState(false);
   const copy = useCopy();
+  const closeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  const finish = useCallback(() => {
+    setDone(true);
+    onDone();
+    // Say it worked, then get out of the way: nobody should have to dismiss a
+    // sign-in that already finished.
+    closeTimer.current = setTimeout(() => onOpenChange(false), SIGNED_IN_LINGER_MS);
+  }, [onDone, onOpenChange]);
+
+  useEffect(() => () => clearTimeout(closeTimer.current), []);
 
   useEffect(() => {
     if (!target) return;
@@ -61,6 +75,28 @@ export function McpSignInDialog({
     };
   }, [client, cwd, target]);
 
+  /**
+   * The browser finishes on its own: the worker writes the credential and
+   * says `mcp/changed`. Without this the dialog sat on "Waiting for the
+   * browser" over a row that had already turned connected.
+   */
+  useEffect(() => {
+    if (!target || done) return;
+    return client.subscribe((method, params) => {
+      if (method !== "mcp/changed" || (params as { cwd: string }).cwd !== cwd) return;
+      void client
+        .request("mcp/list", { cwd })
+        .then(({ servers }) => {
+          const server = servers.find((entry) => entry.scope === target.scope && entry.config.name === target.name);
+          if (server && server.status !== "needs-auth") finish();
+        })
+        .catch(() => {
+          // The list is re-read by the page as well; a failure here is not
+          // the person's problem.
+        });
+    });
+  }, [client, cwd, target, done, finish]);
+
   const complete = async () => {
     if (!target || !pasted.trim()) return;
     setCompleting(true);
@@ -77,8 +113,7 @@ export function McpSignInDialog({
         setError(result.detail ?? "That did not complete the sign-in. Try the link again.");
         return;
       }
-      setDone(true);
-      onDone();
+      finish();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
     } finally {
@@ -96,7 +131,7 @@ export function McpSignInDialog({
 
         <div className="flex flex-col gap-3">
           {starting && <GenerationLoader label="Preparing the sign-in" layout="inline" />}
-          {start && (
+          {start && !done && (
             <>
               <div className="flex flex-wrap items-center gap-2">
                 <Button asChild size="sm">
@@ -134,7 +169,7 @@ export function McpSignInDialog({
             </>
           )}
           {done && (
-            <p role="status" className="text-sm text-live">
+            <p data-slot="mcp-signed-in" role="status" className="text-sm text-live">
               Signed in.
             </p>
           )}

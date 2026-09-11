@@ -24,6 +24,9 @@ connected (`Not seen yet`). Check:
 
 - a row whose command is very long truncates and keeps the full command in the
   title, and the page never scrolls sideways;
+- a project row that only switches an every-project server off: it says so, and
+  its inspector has one tab and two actions (Turn on for this project, Edit the
+  every-project entry);
 - `shadowed` and `overridesGlobal` rows carry their sentence;
 - the scope filter (All · Every project · This project);
 - keyboard: Tab reaches every row, Enter opens the inspector, focus ring is the
@@ -54,7 +57,12 @@ Open a row: a full-height sheet on a wide screen, the whole screen on a phone.
   Sign out for OAuth, Turn off / Turn on, Edit, Remove).
 - *Tools*: search, the per-tool On / Direct / Ask first switches, the bulk
   buttons, and the sentence a tool the model cannot see carries. Switch the
-  server to on-demand and check Direct is disabled with its reason.
+  server to on-demand and check Direct is disabled with its reason. Turn the
+  last **Direct** off and check the server moves to on demand and says so. A
+  server whose tool list is written with patterns (`exclude: ["browser_*"]`, or
+  an `include` list) shows the pattern note and read-only switches.
+- *Overview*: press **Ping** on a server that cannot answer — the line says
+  "Ping failed" with the server's own words and the pill follows.
 - *Run*: pick a tool, fill the generated form, run it. A screenshot tool proves
   the image path; check `structuredContent` in the JSON viewer and the duration.
 - *Resources* and *Prompts*: lists with descriptions and required markers.
@@ -74,6 +82,9 @@ selected.
 copy button, "Waiting for the browser to finish" when a callback is listening,
 and the paste field for the callback address or code when it is not. Completion
 arrives as `mcp/changed` and the row turns connected. *Sign out* asks first.
+
+Also worth one pass: with no project open (first run), the tab is the
+every-project list and says so, and the "This project" filter is gone.
 
 ## 7 · Everything, twice
 

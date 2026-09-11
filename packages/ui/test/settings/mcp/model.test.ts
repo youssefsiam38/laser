@@ -13,7 +13,8 @@ import {
   formIssues,
   formToConfig,
   initialArgValues,
-  isToolDirect,
+  keepsStoredSecret,
+  policyPatternLocks,
   nameIssue,
   parseCommandLine,
   schemaFields,
@@ -23,6 +24,7 @@ import {
   setToolDirect,
   setToolEnabled,
   statusWords,
+  toolState,
   toolCountLabel,
   toolVisibilityNote,
   transportSummary,
@@ -54,7 +56,7 @@ describe("the words a row says", () => {
     expect(toolCountLabel({ toolCount: 1, directToolCount: 0 })).toBe("1 tool · 0 direct");
     expect(toolCountLabel({})).toBeUndefined();
     expect(scopeNote({ scope: "global", config: { name: "a", transport: { kind: "socket", path: "/a" } }, status: "off", shadowed: true })).toContain(
-      "is used here instead",
+      "not what it uses here",
     );
     expect(
       scopeNote({ scope: "project", config: { name: "a", transport: { kind: "socket", path: "/a" } }, status: "off", overridesGlobal: true }),
@@ -68,6 +70,7 @@ describe("names and command lines", () => {
     expect(deriveName("  My Server!!  ")).toBe("my-server");
     expect(nameIssue("playwright_2")).toBeUndefined();
     expect(nameIssue("with space")).toContain("letters, digits");
+    expect(nameIssue("_leading")).toContain("Start with a letter or a digit");
     expect(nameIssue("")).toContain("Give the server a name");
     expect(nameIssue("x".repeat(65))).toContain("64");
   });
@@ -149,7 +152,6 @@ describe("tool policy arithmetic", () => {
 
     policy = setToolDirect({ exposure: "direct" }, "click", false, tools);
     expect(policy.only).toEqual(["navigate", "screenshot"]);
-    expect(isToolDirect(policy, "click")).toBe(false);
     policy = setToolDirect(policy, "click", true, tools);
     expect(policy.only).toBeUndefined();
 
@@ -163,11 +165,27 @@ describe("tool policy arithmetic", () => {
     expect(allToolsDirect({ exposure: "on-demand", only: ["click"] })).toEqual({ exposure: "direct" });
   });
 
-  it("says why a tool is not in the model's list", () => {
-    expect(toolVisibilityNote({ exposure: "direct" }, "click")).toBeUndefined();
-    expect(toolVisibilityNote({ exposure: "direct", exclude: ["click"] }, "click")).toContain("Switched off");
-    expect(toolVisibilityNote({ exposure: "on-demand" }, "click")).toContain("on demand");
-    expect(toolVisibilityNote({ exposure: "direct", only: ["navigate"] }, "click")).toContain("reached on demand");
+  it("takes each tool's state from the worker's effective answer, not from a second reading", () => {
+    expect(toolState({ visibility: "direct", approval: false })).toEqual({ enabled: true, direct: true, ask: false });
+    expect(toolState({ visibility: "on-demand", approval: true })).toEqual({ enabled: true, direct: false, ask: true });
+    expect(toolState({ visibility: "excluded", approval: false })).toEqual({ enabled: false, direct: false, ask: false });
+    expect(toolVisibilityNote({ visibility: "direct" })).toBeUndefined();
+    expect(toolVisibilityNote({ visibility: "excluded" })).toContain("Switched off");
+    expect(toolVisibilityNote({ visibility: "on-demand" })).toContain("on demand");
+  });
+
+  it("turning the last direct tool off means on demand, never everything direct", () => {
+    const policy = setToolDirect({ exposure: "direct", only: ["navigate"] }, "navigate", false, tools);
+    expect(policy).toEqual({ exposure: "on-demand" });
+    expect(toolState({ visibility: "on-demand", approval: false }).direct).toBe(false);
+  });
+
+  it("locks the switches a pattern owns", () => {
+    expect(policyPatternLocks({ exposure: "direct" })).toMatchObject({ enabled: false, direct: false, ask: false, any: false });
+    expect(policyPatternLocks({ exposure: "direct", exclude: ["browser_*"] })).toMatchObject({ enabled: true, any: true });
+    expect(policyPatternLocks({ exposure: "direct", include: ["navigate"] })).toMatchObject({ enabled: true, any: true });
+    expect(policyPatternLocks({ exposure: "direct", only: ["browser_*"] })).toMatchObject({ direct: true, any: true });
+    expect(policyPatternLocks({ exposure: "direct", approve: true })).toMatchObject({ ask: true });
   });
 });
 
@@ -202,6 +220,26 @@ describe("the form", () => {
     const replaced = formToConfig(form);
     expect(replaced.auth).toEqual({ kind: "bearer", token: { secret: true, value: "new-token" } });
     expect(replaced.transport).toMatchObject({ headers: { "X-Key": { secret: true, value: "typed" } } });
+  });
+
+  it("keeps a saved secret when the row is un-marked, and refuses an empty token", () => {
+    const saved: McpServerConfig = {
+      name: "docs",
+      transport: { kind: "http", url: "https://example.com/mcp", headers: { "X-Key": { secret: true, present: true } } },
+      auth: { kind: "bearer", token: { secret: true, present: true } },
+    };
+    // Un-marking is how you look at a field, not how you delete what is in it.
+    const form = configToForm(saved);
+    form.headers = form.headers.map((row) => ({ ...row, secret: false }));
+    expect(keepsStoredSecret(form.headers[0]!)).toBe(true);
+    expect(formToConfig(form).transport).toMatchObject({ headers: { "X-Key": { secret: true } } });
+    form.headers = form.headers.map((row) => ({ ...row, value: "plain" }));
+    expect(formToConfig(form).transport).toMatchObject({ headers: { "X-Key": "plain" } });
+
+    const empty = configToForm({ name: "docs", transport: { kind: "http", url: "https://example.com/mcp" } } as McpServerConfig);
+    empty.authKind = "bearer";
+    expect(formIssues(empty).token).toContain("Enter the token");
+    expect(formIssues(configToForm(saved)).token).toBeUndefined();
   });
 
   it("refuses an empty command, a bare host and a nameless server", () => {

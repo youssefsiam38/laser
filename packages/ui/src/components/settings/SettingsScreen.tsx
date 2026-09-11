@@ -57,7 +57,7 @@ const PROJECTLESS: readonly Tab[] = ["appearance", "keyboard", "trust", "device"
  * just installed laser and has no project yet — is the one person who
  * cannot reach them.
  */
-const GLOBAL_THROUGH_SETUP: readonly Tab[] = ["general", "advanced", "features", "models"];
+const GLOBAL_THROUGH_SETUP: readonly Tab[] = ["general", "advanced", "features", "mcp", "models"];
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "general", label: "General" },
@@ -215,7 +215,9 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
             )}
             {tab === "appearance" && <AppearanceTab />}
             {tab === "features" && <FeaturesScreen {...(cwd ? { cwd } : {})} onManageServers={() => setTab("mcp")} />}
-            {tab === "mcp" && cwd && <McpServersTab cwd={cwd} />}
+            {/* Without a project this is the every-project list; the project
+                filter simply has nothing to show. */}
+            {tab === "mcp" && cwd && <McpServersTab cwd={cwd} projectOpen={Boolean(project)} />}
             {tab === "models" && cwd && <ModelsTab cwd={cwd} snapshot={snapshot} onApply={apply} />}
             {tab === "usage" && <UsageTab />}
             {tab === "keyboard" && <KeyboardTab cwd={cwd} />}

@@ -168,10 +168,75 @@ it("rolls a failed change back and says what went wrong", async () => {
 
 it("cannot make a tool direct while the server answers on demand, and says why", async () => {
   servers = servers.map((entry) => ({ ...entry, config: { ...entry.config, tools: { exposure: "on-demand" as const } } }));
+  // The worker's effective answer for every tool, which is what the switches read.
+  inspectResult = inspection({ name: "playwright", tools: TOOLS.map((entry) => ({ ...entry, visibility: "on-demand" as const })) });
   await open();
   await click("Tools");
   expect((toolSwitch("Direct", "navigate") as HTMLButtonElement).disabled).toBe(true);
+  expect(toolSwitch("Direct", "navigate").getAttribute("aria-checked")).toBe("false");
   expect(toolRow("navigate").textContent).toContain("Reached on demand");
+});
+
+it("switching the last direct tool off moves the server to on demand, and says so", async () => {
+  servers = servers.map((entry) => ({ ...entry, config: { ...entry.config, tools: { exposure: "direct" as const, only: ["navigate"] } } }));
+  inspectResult = inspection({
+    name: "playwright",
+    tools: TOOLS.map((entry) => ({ ...entry, visibility: entry.originalName === "navigate" ? ("direct" as const) : ("on-demand" as const) })),
+  });
+  await open();
+  await click("Tools");
+  await clickElement(toolSwitch("Direct", "navigate"));
+  // Never `{ exposure: "direct" }` with no `only`, which would have made every
+  // tool direct — the opposite of what the switch says.
+  expect(saved.at(-1)!.server.tools).toEqual({ exposure: "on-demand" });
+  expect(mocks.toast).toHaveBeenCalledWith("info", expect.stringContaining("answers on demand"));
+});
+
+it("does not rewrite a tool list written with patterns", async () => {
+  servers = servers.map((entry) => ({
+    ...entry,
+    config: { ...entry.config, tools: { exposure: "direct" as const, exclude: ["browser_*"] } },
+  }));
+  inspectResult = inspection({
+    name: "playwright",
+    tools: [{ ...TOOLS[0]!, originalName: "browser_open", name: "playwright_browser_open", visibility: "excluded" as const }, TOOLS[1]!],
+  });
+  await open();
+  await click("Tools");
+  expect(document.querySelector('[data-slot="mcp-pattern-note"]')?.textContent).toContain("uses patterns");
+  expect(toolSwitch("On", "browser_open").getAttribute("aria-checked")).toBe("false");
+  expect((toolSwitch("On", "browser_open") as HTMLButtonElement).disabled).toBe(true);
+  expect((findButton("All off") as HTMLButtonElement).disabled).toBe(true);
+  expect(saved).toHaveLength(0);
+});
+
+it("an include list is the server's own tool list, and is not edited one tool at a time", async () => {
+  servers = servers.map((entry) => ({
+    ...entry,
+    config: { ...entry.config, tools: { exposure: "direct" as const, include: ["navigate"] } },
+  }));
+  inspectResult = inspection({ name: "playwright", tools: [TOOLS[0]!] });
+  await open();
+  await click("Tools");
+  expect(document.querySelector('[data-slot="mcp-pattern-note"]')).not.toBeNull();
+  expect((toolSwitch("On", "navigate") as HTMLButtonElement).disabled).toBe(true);
+});
+
+it("says what a ping answered, and a failed one changes the status line", async () => {
+  mocks.request.mockImplementation(async (method: string) => {
+    if (method === "mcp/list") return { servers };
+    if (method === "mcp/import/detect") return { sources: [] };
+    if (method === "mcp/inspect") return inspectResult;
+    if (method === "mcp/ping") return { status: "failed", detail: "The browser could not start." };
+    if (method === "mcp/disconnect") return {};
+    throw new Error(`unexpected ${method}`);
+  });
+  await open();
+  await click("Ping");
+  const line = document.querySelector<HTMLElement>('[data-slot="mcp-ping-result"]')!;
+  expect(line.textContent).toContain("Ping failed");
+  expect(line.textContent).toContain("The browser could not start.");
+  expect(document.querySelector('[data-slot="mcp-status-pill"]')?.textContent).toBe("Failed");
 });
 
 it("runs a tool with typed arguments and renders what came back", async () => {
@@ -247,14 +312,64 @@ it("keeps a stored secret untouched when an edit saves without retyping it", asy
   expect(saved.at(-1)!.server.transport).toMatchObject({ headers: { "X-Key": { secret: true } } });
 });
 
-it("turns a server off, and offers the project switch-off instead of removing a shared one", async () => {
+it("turns a server off, and switches a shared one off here without copying its definition", async () => {
   await open();
   await click("Turn off");
   expect(saved.at(-1)!.server.disabled).toBe(true);
   await click("Remove");
   expect(findButton("Switch it off for this project instead")).toBeDefined();
   await click("Switch it off for this project instead");
-  expect(saved.at(-1)).toMatchObject({ scope: "project", server: { name: "playwright", disabled: true } });
+  // The every-project definition stays the one definition (the protocol allows
+  // `{ name, disabled: true }` for exactly this).
+  expect(saved.at(-1)).toEqual({ cwd: "/project", scope: "project", server: { name: "playwright", disabled: true } });
+  expect(calls).toContain("mcp/disconnect");
+});
+
+it("stops the command server it started when the entry is removed", async () => {
+  await open();
+  await click("Remove");
+  await click("Remove it");
+  expect(mocks.request).toHaveBeenCalledWith("mcp/remove", { cwd: "/project", scope: "global", name: "playwright" });
+  expect(mocks.request).toHaveBeenCalledWith("mcp/disconnect", { cwd: "/project", scope: "global", name: "playwright" });
+});
+
+it("reads an entry that only switches an every-project server off, and turns it back on", async () => {
+  servers = [
+    serverState({
+      scope: "global",
+      status: "connected",
+      shadowed: true,
+      config: { name: "playwright", label: "Playwright", transport: { kind: "stdio", command: "npx" }, tools: { exposure: "direct" } },
+    }),
+    serverState({
+      scope: "project",
+      status: "off",
+      overridesGlobal: true,
+      config: { name: "playwright", label: "Playwright", transport: { kind: "stdio", command: "npx" }, disabled: true },
+    }),
+  ];
+  ({ root } = await render(
+    <TooltipProvider>
+      <McpServersTab cwd="/project" />
+    </TooltipProvider>,
+  ));
+  await clickElement(document.querySelector<HTMLButtonElement>('[data-slot="mcp-server-row"][data-server="project:playwright"] button')!);
+  // Nothing to connect to and nothing to edit here: it carries no definition.
+  expect(calls).not.toContain("mcp/inspect");
+  expect(findButton("Tools")).toBeUndefined();
+  expect(findButton("Edit the every-project entry")).toBeDefined();
+  await click("Turn on for this project");
+  expect(mocks.request).toHaveBeenCalledWith("mcp/remove", { cwd: "/project", scope: "project", name: "playwright" });
+});
+
+it("does not reconnect because of a write it made itself", async () => {
+  await open();
+  const inspects = () => calls.filter((method) => method === "mcp/inspect").length;
+  expect(inspects()).toBe(1);
+  await click("Tools");
+  await clickElement(toolSwitch("On", "click"));
+  expect(inspects()).toBe(1);
+  expect(calls.filter((method) => method === "mcp/import/detect").length).toBe(1);
 });
 
 it("closes the connection it opened when it leaves a command server", async () => {

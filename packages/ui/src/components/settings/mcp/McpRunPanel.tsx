@@ -20,7 +20,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { SettingsSwitch } from "@/components/assistant-ui/elements/settings-panel";
 import { useLaserStable } from "@/runtime";
 
-import { selectClass } from "./McpServerForm.js";
+import { selectClass } from "../fields.js";
 import { buildArgs, contentDataUri, initialArgValues, schemaFields, schemaToShape, type ArgValues } from "./model.js";
 
 export function McpRunPanel({

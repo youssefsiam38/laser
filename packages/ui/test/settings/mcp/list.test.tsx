@@ -79,10 +79,10 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-async function mount() {
+async function mount(props: { projectOpen?: boolean } = {}) {
   ({ root } = await render(
     <TooltipProvider>
-      <McpServersTab cwd="/project" />
+      <McpServersTab cwd="/project" {...props} />
     </TooltipProvider>,
   ));
 }
@@ -164,6 +164,25 @@ it("reloads when the worker says the configuration changed", async () => {
   expect(mocks.request.mock.calls.filter(([method]) => method === "mcp/list").length).toBe(2);
   const github = document.querySelector<HTMLElement>('[data-slot="mcp-server-row"][data-server="global:github"]')!;
   expect(github.dataset["status"]).toBe("Connected");
+});
+
+it("looks for other tools' configurations when it opens and when asked, never on every write", async () => {
+  await mount();
+  const detects = () => mocks.request.mock.calls.filter(([method]) => method === "mcp/import/detect").length;
+  expect(detects()).toBe(1);
+  await act(async () => {
+    for (const listener of mocks.listeners) listener("mcp/changed", { cwd: "/project" });
+  });
+  // Nine places on disk is not the price of flipping a switch.
+  expect(detects()).toBe(1);
+  await click("Look again");
+  expect(detects()).toBe(2);
+});
+
+it("is the every-project list when no project is open", async () => {
+  await mount({ projectOpen: false });
+  expect(text()).toContain("No project is open, so this is the every-project list");
+  expect([...document.querySelectorAll("button")].some((button) => button.textContent === "This project")).toBe(false);
 });
 
 it("ignores a change in another project", async () => {

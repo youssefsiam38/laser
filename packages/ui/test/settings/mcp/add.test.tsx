@@ -112,7 +112,7 @@ it("keeps a rejected name out of the host and only offers sign-in for a URL", as
   await typeInto("Short name", "my server");
   await click("Test");
   expect(inspected).toHaveLength(0);
-  expect(text()).toContain("Use letters, digits, hyphens and underscores only.");
+  expect(text()).toContain("Start with a letter or a digit, then letters, digits, hyphens and underscores only.");
 
   // A command has no sign-in; a URL does.
   expect(document.querySelector('[data-slot="mcp-sign-in-options"]')).toBeNull();
@@ -180,4 +180,20 @@ it("offers to add and sign in when the server asks for it", async () => {
   await click("Test");
   expect(text()).toContain("Needs sign-in");
   expect(findButton("Add and sign in")).toBeDefined();
+});
+
+it("refuses to save a token sign-in with nothing in it", async () => {
+  await mount();
+  await click("Add a server");
+  await typeInto("Name it", "Docs");
+  await click("URL");
+  await typeInto("Address", "https://example.com/mcp");
+  const signIn = field("Sign-in") as HTMLSelectElement;
+  await act(async () => {
+    signIn.value = "bearer";
+    signIn.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await click("Add");
+  expect(saved).toHaveLength(0);
+  expect(text()).toContain("Enter the token, or choose None.");
 });

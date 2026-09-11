@@ -54,6 +54,7 @@ export function McpImportDialog({
   onOpenChange,
   sources,
   defaultScope = "global",
+  allowProject = true,
   onImported,
 }: {
   cwd: string;
@@ -61,6 +62,7 @@ export function McpImportDialog({
   onOpenChange: (open: boolean) => void;
   sources: readonly McpImportSource[];
   defaultScope?: McpScope;
+  allowProject?: boolean;
   onImported: (servers: McpServerState[], imported: string[]) => void;
 }) {
   const { client } = useLaserStable();
@@ -116,106 +118,111 @@ export function McpImportDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent data-slot="mcp-import-dialog" className="sm:max-w-160">
-        <DialogHeader>
-          <DialogTitle>Import servers</DialogTitle>
-          <DialogDescription>
-            Copied into your own configuration. The files they came from are left exactly as they are.
-          </DialogDescription>
-        </DialogHeader>
+      {/* One bounded, scrolling body: the source picker, the list, the scope
+          and the replace switch all live inside it, so nothing is stranded
+          above the fold on a short screen. */}
+      <DialogContent data-slot="mcp-import-dialog" className="flex max-h-[90dvh] min-h-0 flex-col sm:max-w-160">
+        <ScrollArea className="min-h-0 flex-1">
+          <div className="flex min-w-0 flex-col gap-4 pe-3">
+            <DialogHeader>
+              <DialogTitle>Import servers</DialogTitle>
+              <DialogDescription>
+                Copied into your own configuration. The files they came from are left exactly as they are.
+              </DialogDescription>
+            </DialogHeader>
 
-        {available.length > 1 && (
-          <div role="tablist" aria-label="Where they came from" className="flex flex-wrap items-center gap-1 rounded-lg bg-surface-2 p-0.5">
-            {available.map((entry) => (
-              <Button
-                key={entry.id}
-                type="button"
-                role="tab"
-                aria-selected={entry.id === source?.id}
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setSourceId(entry.id);
-                  setChosen(new Set());
-                }}
-                className={entry.id === source?.id ? "bg-surface text-ink" : undefined}
-              >
-                {entry.label}
-              </Button>
-            ))}
-          </div>
-        )}
+            {available.length > 1 && (
+              <div role="group" aria-label="Where they came from" className="flex flex-wrap items-center gap-1 rounded-lg bg-surface-2 p-0.5">
+                {available.map((entry) => (
+                  <Button
+                    key={entry.id}
+                    type="button"
+                    aria-pressed={entry.id === source?.id}
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setSourceId(entry.id);
+                      setChosen(new Set());
+                    }}
+                    className={entry.id === source?.id ? "bg-surface text-ink" : undefined}
+                  >
+                    {entry.label}
+                  </Button>
+                ))}
+              </div>
+            )}
 
-        {source && (
-          <>
-            <p className="typed truncate text-ink-3" title={source.path}>
-              {source.path}
-            </p>
-            <ScrollArea className="max-h-[45dvh]">
-              <ul className="flex flex-col gap-2 pe-3">
-                {source.servers.map((server) => {
-                  const transport = transportSummary(server.config.transport);
-                  const disabled = Boolean(server.unsupported);
-                  return (
-                    <li
-                      key={server.name}
-                      data-slot="mcp-import-row"
-                      data-server={server.name}
-                      className="flex items-start gap-3 rounded-xl border border-line bg-surface p-3"
-                    >
-                      <span className="flex min-w-0 flex-1 flex-col gap-1">
-                        <span className="flex min-w-0 flex-wrap items-center gap-2">
-                          <span className="truncate text-sm font-medium text-ink">{server.name}</span>
-                          {server.conflicts.map((conflict) => (
-                            <Badge key={conflict} variant="attention">
-                              already in {scopeLabel(conflict)}
-                            </Badge>
-                          ))}
-                          {server.inlineSecrets.length > 0 && <Badge variant="outline">secret moved</Badge>}
-                        </span>
-                        <span className="typed truncate text-ink-2" title={transport.full}>
-                          {transport.text} · {transport.kind}
-                        </span>
-                        {server.inlineSecrets.length > 0 && (
-                          <span className="text-xs leading-5 text-ink-3">
-                            Its {server.inlineSecrets.join(", ")} will be kept in the app’s secret store, out of the configuration file.
+            {source && (
+              <>
+                <p className="typed truncate text-ink-3" title={source.path}>
+                  {source.path}
+                </p>
+                <ul className="flex flex-col gap-2">
+                    {source.servers.map((server) => {
+                      const transport = transportSummary(server.config.transport);
+                      const summary = transport ? `${transport.text} · ${transport.kind}` : "Switches the server off";
+                      const disabled = Boolean(server.unsupported);
+                      return (
+                        <li
+                          key={server.name}
+                          data-slot="mcp-import-row"
+                          data-server={server.name}
+                          className="flex items-start gap-3 rounded-xl border border-line bg-surface p-3"
+                        >
+                          <span className="flex min-w-0 flex-1 flex-col gap-1">
+                            <span className="flex min-w-0 flex-wrap items-center gap-2">
+                              <span className="truncate text-sm font-medium text-ink">{server.name}</span>
+                              {server.conflicts.map((conflict) => (
+                                <Badge key={conflict} variant="attention">
+                                  already in {scopeLabel(conflict)}
+                                </Badge>
+                              ))}
+                              {server.inlineSecrets.length > 0 && <Badge variant="outline">secret moved</Badge>}
+                            </span>
+                            <span className="typed truncate text-ink-2" title={transport?.full ?? summary}>
+                              {summary}
+                            </span>
+                            {server.inlineSecrets.length > 0 && (
+                              <span className="text-xs leading-5 text-ink-3">
+                                Its {server.inlineSecrets.join(", ")} will be kept in the app’s secret store, out of the configuration file.
+                              </span>
+                            )}
+                            {server.unsupported && <span className="text-xs leading-5 text-attention">Cannot be imported: {server.unsupported}</span>}
                           </span>
-                        )}
-                        {server.unsupported && <span className="text-xs leading-5 text-attention">Cannot be imported: {server.unsupported}</span>}
-                      </span>
-                      <input
-                        type="checkbox"
-                        aria-label={`Import ${server.name}`}
-                        disabled={disabled}
-                        checked={chosen.has(server.name)}
-                        onChange={(event) => toggle(server.name, event.currentTarget.checked)}
-                        className="mt-1 size-4 shrink-0 accent-(--live) outline-none disabled:opacity-45"
-                      />
-                    </li>
-                  );
-                })}
-              </ul>
-            </ScrollArea>
-          </>
-        )}
+                          <input
+                            type="checkbox"
+                            aria-label={`Import ${server.name}`}
+                            disabled={disabled}
+                            checked={chosen.has(server.name)}
+                            onChange={(event) => toggle(server.name, event.currentTarget.checked)}
+                            className="mt-1 size-4 shrink-0 accent-(--live) outline-none disabled:opacity-45"
+                          />
+                        </li>
+                      );
+                    })}
+                </ul>
+              </>
+            )}
 
-        <ScopeChoice scope={scope} onChange={setScope} label="Import into" />
+            <ScopeChoice scope={scope} onChange={setScope} allowProject={allowProject} label="Import into" />
 
-        {conflicting && (
-          <div className="flex items-start gap-3">
-            <span className="flex min-w-0 flex-1 flex-col">
-              <span className="text-sm text-ink">Replace the servers of the same name</span>
-              <span className="text-xs leading-5 text-ink-3">Off means those are skipped and the rest are imported.</span>
-            </span>
-            <SettingsSwitch checked={replace} aria-label="Replace the servers of the same name" onCheckedChange={setReplace} />
+            {conflicting && (
+              <div className="flex items-start gap-3">
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="text-sm text-ink">Replace the servers of the same name</span>
+                  <span className="text-xs leading-5 text-ink-3">Off means those are skipped and the rest are imported.</span>
+                </span>
+                <SettingsSwitch checked={replace} aria-label="Replace the servers of the same name" onCheckedChange={setReplace} />
+              </div>
+            )}
+
+            {error && (
+              <p role="alert" className="text-sm leading-6 text-danger">
+                {error}
+              </p>
+            )}
           </div>
-        )}
-
-        {error && (
-          <p role="alert" className="text-sm leading-6 text-danger">
-            {error}
-          </p>
-        )}
+        </ScrollArea>
 
         <DialogFooter>
           <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>

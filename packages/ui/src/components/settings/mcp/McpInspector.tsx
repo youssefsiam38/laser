@@ -9,9 +9,9 @@
  * Five tabs: what it is, what it can do, proof that it does it, and the
  * documents and prompts it offers besides tools.
  */
-import type { McpInspection, McpScope, McpServerState, McpToolPolicy } from "@lasercode/protocol";
+import type { McpInspection, McpScope, McpServerConfig, McpServerState, McpServerStatus, McpToolPolicy } from "@lasercode/protocol";
 import { KeyRound, LogOut, Pencil, Power, RefreshCw, Trash2, Waves } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
@@ -27,6 +27,8 @@ import { McpRunPanel } from "./McpRunPanel.js";
 import { McpToolsPanel } from "./McpToolsPanel.js";
 import {
   EXPOSURE_LABEL,
+  failedAgoPhrase,
+  LAST_DIRECT_TOOL_NOTE,
   policyOf,
   scopeLabel,
   serverTitle,
@@ -48,22 +50,23 @@ export interface McpInspectorProps {
   cwd: string;
   /** The selected row; `undefined` keeps the sheet closed. */
   state: McpServerState | undefined;
-  /** Bumped by `mcp/changed`, so the open inspector re-reads its status. */
-  reloadToken: number;
+  /** The every-project entry this project row switches off, when there is one. */
+  globalEntry?: McpServerState | undefined;
   onOpenChange: (open: boolean) => void;
   onServers: (servers: McpServerState[]) => void;
-  onEdit: () => void;
+  onEdit: (target: { scope: McpScope; config: McpServerConfig }) => void;
   onSignIn: () => void;
   onSignOut: () => void;
   /** The list's scope filter, so Remove can offer the project switch-off instead. */
   scopeFilter: McpScope | "all";
   onError: (message: string) => void;
+  onNotice: (message: string) => void;
 }
 
 export function McpInspector({
   cwd,
   state,
-  reloadToken,
+  globalEntry,
   onOpenChange,
   onServers,
   onEdit,
@@ -71,21 +74,31 @@ export function McpInspector({
   onSignOut,
   scopeFilter,
   onError,
+  onNotice,
 }: McpInspectorProps) {
   const { client } = useLaserStable();
   const [tab, setTab] = useState<InspectorTab>("overview");
   const [inspection, setInspection] = useState<McpInspection>();
   const [connecting, setConnecting] = useState(false);
   const [failure, setFailure] = useState<string>();
-  const [ping, setPing] = useState<{ latencyMs?: number; detail?: string }>();
+  const [ping, setPing] = useState<{ status: McpServerStatus; latencyMs?: number; detail?: string }>();
   const [busy, setBusy] = useState(false);
   const [policy, setPolicy] = useState<McpToolPolicy>();
   const [confirmRemove, setConfirmRemove] = useState(false);
   const generation = useRef(0);
+  // A write this page just made produces a `mcp/changed` of its own; it must
+  // not cost a reconnection.
+  const selfWrite = useRef(false);
 
   const scope = state?.scope;
   const name = state?.config.name;
-  const stdio = state?.config.transport.kind === "stdio";
+  const status = state?.status;
+  const statusRef = useRef(status);
+  statusRef.current = status;
+  const stdio = state?.config.transport?.kind === "stdio";
+  // An entry that only switches a global server off has no definition to
+  // inspect and nothing to connect to: it is read-only here.
+  const switchOffOnly = state?.overridesGlobal === true;
 
   const connect = useCallback(async () => {
     if (!scope || !name) return;
@@ -110,16 +123,24 @@ export function McpInspector({
     setInspection(undefined);
     setPing(undefined);
     setPolicy(undefined);
+    if (switchOffOnly) return;
+    seenStatus.current = statusRef.current;
     void connect();
-  }, [scope, name, connect]);
+  }, [scope, name, switchOffOnly, connect]);
 
-  // `mcp/changed` while the sheet is open: read the status again.
+  // A status change from the worker is worth a reconnection; a configuration
+  // write this page made is not (a 30 s inspect per switch is not free).
+  const seenStatus = useRef<McpServerStatus | undefined>(undefined);
   useEffect(() => {
-    if (!reloadToken || !scope || !name) return;
+    if (!scope || !name || switchOffOnly) return;
+    if (seenStatus.current === status) return;
+    seenStatus.current = status;
+    if (selfWrite.current) {
+      selfWrite.current = false;
+      return;
+    }
     void connect();
-    // The token is the trigger; `connect` is stable for one server.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reloadToken]);
+  }, [status, scope, name, switchOffOnly, connect]);
 
   const close = () => {
     generation.current++;
@@ -132,6 +153,7 @@ export function McpInspector({
   const save = async (patch: Partial<McpServerState["config"]>, optimistic?: () => void, rollback?: () => void) => {
     if (!state || !scope) return;
     optimistic?.();
+    selfWrite.current = true;
     setBusy(true);
     try {
       const { servers } = await client.request("mcp/save", { cwd, scope, server: { ...state.config, ...patch } });
@@ -146,6 +168,10 @@ export function McpInspector({
 
   const changePolicy = (next: McpToolPolicy) => {
     const previous = policy;
+    const before = state ? policyOf({ ...state.config, ...(policy ? { tools: policy } : {}) }) : undefined;
+    // Switching the last direct tool off leaves nothing in the model's list,
+    // which is what on demand means — so the server moves, and says so.
+    if (before?.exposure === "direct" && next.exposure === "on-demand") onNotice(LAST_DIRECT_TOOL_NOTE);
     void save({ tools: next }, () => setPolicy(next), () => setPolicy(previous));
   };
 
@@ -154,7 +180,11 @@ export function McpInspector({
     setBusy(true);
     try {
       const result = await client.request("mcp/ping", { cwd, scope, name });
-      setPing({ ...(result.latencyMs !== undefined ? { latencyMs: result.latencyMs } : {}), ...(result.detail ? { detail: result.detail } : {}) });
+      setPing({
+        status: result.status,
+        ...(result.latencyMs !== undefined ? { latencyMs: result.latencyMs } : {}),
+        ...(result.detail ? { detail: result.detail } : {}),
+      });
     } catch (error) {
       onError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -179,10 +209,12 @@ export function McpInspector({
     if (!scope || !name) return;
     setBusy(true);
     try {
+      selfWrite.current = true;
       const { servers } = await client.request("mcp/remove", { cwd, scope, name });
       onServers(servers);
       setConfirmRemove(false);
-      onOpenChange(false);
+      // One exit, so the process this panel started is always stopped.
+      close();
     } catch (error) {
       onError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -192,21 +224,38 @@ export function McpInspector({
 
   /**
    * "Switch it off here" for a server that lives in every project: the project
-   * gets its own entry of the same name, switched off, and the global one is
-   * left alone.
+   * gets an entry that carries nothing but the name and the switch, so the
+   * global definition stays the one definition (`{ name, disabled: true }`).
    */
   const disableHere = async () => {
     if (!state || state.scope !== "global") return;
     setBusy(true);
     try {
+      selfWrite.current = true;
       const { servers } = await client.request("mcp/save", {
         cwd,
         scope: "project",
-        server: { ...state.config, disabled: true },
+        server: { name: state.config.name, disabled: true },
       });
       onServers(servers);
       setConfirmRemove(false);
-      onOpenChange(false);
+      close();
+    } catch (error) {
+      onError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** Turning a switched-off global server back on here: drop the project entry. */
+  const turnOnHere = async () => {
+    if (!state || !switchOffOnly) return;
+    setBusy(true);
+    try {
+      selfWrite.current = true;
+      const { servers } = await client.request("mcp/remove", { cwd, scope: "project", name: state.config.name });
+      onServers(servers);
+      close();
     } catch (error) {
       onError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -215,8 +264,23 @@ export function McpInspector({
   };
 
   const config = state ? { ...state.config, ...(policy ? { tools: policy } : {}) } : undefined;
-  const status = statusWords(state?.status ?? "unknown");
-  const transport = state ? transportSummary(state.config.transport) : undefined;
+  // A ping is the freshest answer there is, so it owns the pill once it ran.
+  const words = statusWords(ping?.status ?? state?.status ?? "unknown");
+  const transport = transportSummary(state?.config.transport);
+  const tabs = switchOffOnly ? TABS.filter((entry) => entry.id === "overview") : TABS;
+
+  const moveTab = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const keys = { ArrowRight: 1, ArrowLeft: -1 } as const;
+    const step = keys[event.key as keyof typeof keys];
+    if (step === undefined && event.key !== "Home" && event.key !== "End") return;
+    event.preventDefault();
+    const index = tabs.findIndex((entry) => entry.id === tab);
+    const next =
+      event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + step + tabs.length) % tabs.length;
+    const id = tabs[next]!.id;
+    setTab(id);
+    event.currentTarget.querySelector<HTMLElement>(`#mcp-tab-${id}`)?.focus();
+  };
 
   return (
     <>
@@ -229,17 +293,30 @@ export function McpInspector({
           <SheetHeader>
             <SheetTitle>{state ? serverTitle(state.config) : "Server"}</SheetTitle>
             <SheetDescription>
-              {transport ? `${transport.text} · ${transport.kind} · ${scopeLabel(state!.scope)}` : ""}
+              {state
+                ? transport
+                  ? `${transport.text} · ${transport.kind} · ${scopeLabel(state.scope)}`
+                  : `Switched off for this project · ${scopeLabel(state.scope)}`
+                : ""}
             </SheetDescription>
           </SheetHeader>
 
-          <div role="tablist" aria-label="What to look at" className="flex shrink-0 items-center gap-1 overflow-x-auto px-4 pb-2">
-            {TABS.map((entry) => (
+          <div
+            role="tablist"
+            aria-label="What to look at"
+            onKeyDown={moveTab}
+            className="flex shrink-0 items-center gap-1 overflow-x-auto px-4 pb-2"
+          >
+            {tabs.map((entry) => (
               <Button
                 key={entry.id}
                 type="button"
                 role="tab"
+                id={`mcp-tab-${entry.id}`}
                 aria-selected={tab === entry.id}
+                aria-controls="mcp-inspector-panel"
+                // Roving focus: Tab reaches the strip once, arrows move inside it.
+                tabIndex={tab === entry.id ? 0 : -1}
                 variant="ghost"
                 size="sm"
                 onClick={() => setTab(entry.id)}
@@ -251,7 +328,13 @@ export function McpInspector({
           </div>
 
           <ScrollArea className="min-h-0 flex-1">
-            <div className="flex min-w-0 flex-col gap-4 px-4 pb-6">
+            <div
+              id="mcp-inspector-panel"
+              role="tabpanel"
+              aria-labelledby={`mcp-tab-${tab}`}
+              tabIndex={0}
+              className="flex min-w-0 flex-col gap-4 px-4 pb-6 outline-none"
+            >
               {connecting && !inspection && <GenerationLoader label="Connecting to the server" layout="block" />}
               {failure && !inspection && (
                 <ErrorState title="Could not reach this server" detail={failure} onRetry={() => void connect()} />
@@ -265,14 +348,23 @@ export function McpInspector({
                       inspection={inspection}
                       ping={ping}
                       busy={busy}
-                      statusLabel={status.label}
-                      statusHelp={status.help}
+                      statusLabel={words.label}
+                      statusHelp={words.help}
+                      switchOffOnly={switchOffOnly}
+                      hasGlobalEntry={Boolean(globalEntry)}
                       onPing={() => void runPing()}
                       onReconnect={() => void reconnect()}
                       onSignIn={onSignIn}
                       onSignOut={onSignOut}
                       onToggleDisabled={() => void save({ disabled: !state.config.disabled })}
-                      onEdit={onEdit}
+                      onTurnOnHere={() => void turnOnHere()}
+                      onEdit={() =>
+                        onEdit(
+                          switchOffOnly && globalEntry
+                            ? { scope: globalEntry.scope, config: globalEntry.config }
+                            : { scope: state.scope, config: state.config },
+                        )
+                      }
                       onRemove={() => setConfirmRemove(true)}
                     />
                   )}
@@ -342,25 +434,31 @@ function Overview({
   busy,
   statusLabel,
   statusHelp,
+  switchOffOnly,
+  hasGlobalEntry,
   onPing,
   onReconnect,
   onSignIn,
   onSignOut,
   onToggleDisabled,
+  onTurnOnHere,
   onEdit,
   onRemove,
 }: {
   state: McpServerState;
   inspection: McpInspection | undefined;
-  ping: { latencyMs?: number; detail?: string } | undefined;
+  ping: { status: McpServerStatus; latencyMs?: number; detail?: string } | undefined;
   busy: boolean;
   statusLabel: string;
   statusHelp: string;
+  switchOffOnly: boolean;
+  hasGlobalEntry: boolean;
   onPing: () => void;
   onReconnect: () => void;
   onSignIn: () => void;
   onSignOut: () => void;
   onToggleDisabled: () => void;
+  onTurnOnHere: () => void;
   onEdit: () => void;
   onRemove: () => void;
 }) {
@@ -368,10 +466,23 @@ function Overview({
   const oauth = state.config.auth?.kind === "oauth";
   const latency = ping?.latencyMs ?? state.latencyMs ?? inspection?.latencyMs;
   const policy = policyOf(state.config);
+  const pingFailed = ping !== undefined && ping.status !== "connected" && ping.status !== "ready";
+  const failedAgo = state.status === "failed" ? failedAgoPhrase(state.failedAgoSeconds) : undefined;
   return (
     <div className="flex min-w-0 flex-col gap-4">
       <section className="flex flex-wrap items-center gap-2">
-        <Badge variant={state.status === "failed" ? "danger" : state.status === "needs-auth" ? "attention" : "live"}>{statusLabel}</Badge>
+        <Badge
+          data-slot="mcp-status-pill"
+          variant={
+            (ping?.status ?? state.status) === "failed"
+              ? "danger"
+              : (ping?.status ?? state.status) === "needs-auth"
+                ? "attention"
+                : "live"
+          }
+        >
+          {statusLabel}
+        </Badge>
         {latency !== undefined && (
           <Badge variant="outline" className="tnum">
             {latency} ms
@@ -381,40 +492,69 @@ function Overview({
         {inspection?.protocolVersion && <Badge variant="outline">speaks {inspection.protocolVersion}</Badge>}
       </section>
       <p className="text-sm leading-6 text-ink-2">{statusHelp}</p>
+      {ping && (
+        <p data-slot="mcp-ping-result" className={pingFailed ? "text-sm leading-6 text-danger" : "text-sm leading-6 text-ink-2"}>
+          {pingFailed ? "Ping failed" : "Ping answered"}
+          {ping.latencyMs !== undefined ? ` in ${ping.latencyMs} ms` : ""}
+          {ping.detail ? ` · ${ping.detail}` : "."}
+        </p>
+      )}
+      {switchOffOnly && (
+        <p className="text-sm leading-6 text-ink-2">
+          This project switches the every-project server of this name off. There is nothing to change here: turn it back on, or edit the
+          every-project entry.
+        </p>
+      )}
+      {failedAgo && <p className="text-sm leading-6 text-ink-2">It failed {failedAgo}.</p>}
       {(state.detail || inspection?.detail) && <p className="text-sm leading-6 text-ink-2">{state.detail ?? inspection?.detail}</p>}
       {inspection?.stderr?.length ? (
         <pre className="typed max-h-40 overflow-auto rounded-lg bg-surface-2 p-2 whitespace-pre-wrap text-ink-2">{inspection.stderr.join("\n")}</pre>
       ) : null}
 
       <div className="flex flex-wrap gap-2">
-        <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onPing}>
-          <Waves aria-hidden="true" /> Ping
-        </Button>
-        <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onReconnect}>
-          <RefreshCw aria-hidden="true" /> Reconnect
-        </Button>
-        {oauth && (
+        {switchOffOnly ? (
           <>
-            <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onSignIn}>
-              <KeyRound aria-hidden="true" /> Sign in
+            <Button type="button" size="sm" disabled={busy} onClick={onTurnOnHere}>
+              <Power aria-hidden="true" /> Turn on for this project
             </Button>
-            <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={onSignOut}>
-              <LogOut aria-hidden="true" /> Sign out
+            {hasGlobalEntry && (
+              <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onEdit}>
+                <Pencil aria-hidden="true" /> Edit the every-project entry
+              </Button>
+            )}
+          </>
+        ) : (
+          <>
+            <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onPing}>
+              <Waves aria-hidden="true" /> Ping
+            </Button>
+            <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onReconnect}>
+              <RefreshCw aria-hidden="true" /> Reconnect
+            </Button>
+            {oauth && (
+              <>
+                <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onSignIn}>
+                  <KeyRound aria-hidden="true" /> Sign in
+                </Button>
+                <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={onSignOut}>
+                  <LogOut aria-hidden="true" /> Sign out
+                </Button>
+              </>
+            )}
+            <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onToggleDisabled}>
+              <Power aria-hidden="true" /> {state.config.disabled ? "Turn on" : "Turn off"}
+            </Button>
+            <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onEdit}>
+              <Pencil aria-hidden="true" /> Edit
+            </Button>
+            <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={onRemove}>
+              <Trash2 aria-hidden="true" /> Remove
             </Button>
           </>
         )}
-        <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onToggleDisabled}>
-          <Power aria-hidden="true" /> {state.config.disabled ? "Turn on" : "Turn off"}
-        </Button>
-        <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onEdit}>
-          <Pencil aria-hidden="true" /> Edit
-        </Button>
-        <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={onRemove}>
-          <Trash2 aria-hidden="true" /> Remove
-        </Button>
       </div>
 
-      {state.config.transport.kind === "stdio" && (
+      {state.config.transport?.kind === "stdio" && (
         <p
           data-slot="mcp-inspector-connection-note"
           className="text-xs leading-5 text-ink-3"
@@ -451,7 +591,13 @@ function Overview({
         <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-1 text-sm">
           <dt className="text-ink-3">Reached by</dt>
           <dd className="min-w-0 break-words text-ink-2">
-            {transport.kind} · <span className="typed">{transport.full}</span>
+            {transport ? (
+              <>
+                {transport.kind} · <span className="typed">{transport.full}</span>
+              </>
+            ) : (
+              "Nothing of its own — it only switches the every-project server off here."
+            )}
           </dd>
           <dt className="text-ink-3">Sign-in</dt>
           <dd className="text-ink-2">

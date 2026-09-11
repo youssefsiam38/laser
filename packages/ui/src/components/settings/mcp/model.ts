@@ -13,6 +13,7 @@
  */
 import {
   MCP_DIRECT_EXPOSURE_MAX_TOOLS,
+  MCP_SERVER_NAME_PATTERN,
   type McpAuthKind,
   type McpCatalogEntry,
   type McpProtocolVersion,
@@ -23,6 +24,7 @@ import {
   type McpServerStatus,
   type McpStartup,
   type McpToolExposure,
+  type McpToolInfo,
   type McpToolPolicy,
   type McpTransport,
   type McpTransportKind,
@@ -70,9 +72,21 @@ export function scopeLabel(scope: McpScope): string {
 
 /** What `shadowed` and `overridesGlobal` mean, in a sentence or nothing. */
 export function scopeNote(state: McpServerState): string | undefined {
-  if (state.overridesGlobal) return "This project switches the every-project server of this name off here.";
-  if (state.shadowed) return "A server of the same name in this project is used here instead of this one.";
+  if (state.overridesGlobal) return "This project switches the every-project server of this name off. Its definition is unchanged.";
+  if (state.shadowed) return "This project has its own entry for this name, so this is not what it uses here.";
   return undefined;
+}
+
+/** "a moment ago", "3 minutes ago", "2 hours ago" — when a failure happened. */
+export function failedAgoPhrase(seconds: number | undefined): string | undefined {
+  if (seconds === undefined || seconds < 0) return undefined;
+  if (seconds < 60) return "a moment ago";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} ${minutes === 1 ? "minute" : "minutes"} ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} ${hours === 1 ? "hour" : "hours"} ago`;
+  const days = Math.round(hours / 24);
+  return `${days} ${days === 1 ? "day" : "days"} ago`;
 }
 
 /** "24 tools · 24 direct", or "24 tools" when nothing is direct yet. */
@@ -108,7 +122,13 @@ export const TRANSPORT_LABEL: Record<McpTransportKind, string> = {
   socket: "Socket",
 };
 
-export function transportSummary(transport: McpTransport): TransportSummary {
+/**
+ * `undefined` when the entry carries no definition of its own — the one
+ * project entry that only switches a global server off (the protocol made
+ * `transport` optional for exactly that shape).
+ */
+export function transportSummary(transport: McpTransport | undefined): TransportSummary | undefined {
+  if (!transport) return undefined;
   if (transport.kind === "stdio") {
     const full = joinCommand(transport.command, transport.args ?? []);
     const target = (transport.args ?? []).find((arg) => !arg.startsWith("-"));
@@ -190,16 +210,14 @@ export function parseCommandLine(line: string): { command: string; args: string[
 // ---------------------------------------------------------------------------
 // Names
 
-/** The protocol's rule: letters, digits, `-` and `_`, at most 64 characters. */
-export const MCP_NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
-
-/** A label becomes a name: `Playwright browser` → `playwright-browser`. */
+/** A label becomes a name the protocol accepts: `Playwright browser` → `playwright-browser`. */
 export function deriveName(label: string): string {
   return label
     .normalize("NFKD")
     .replace(/[^A-Za-z0-9_-]+/g, "-")
     .replace(/-{2,}/g, "-")
-    .replace(/^-+|-+$/g, "")
+    // The protocol's pattern wants a letter or a digit first.
+    .replace(/^[^A-Za-z0-9]+|[-_]+$/g, "")
     .toLowerCase()
     .slice(0, 64);
 }
@@ -207,7 +225,9 @@ export function deriveName(label: string): string {
 export function nameIssue(name: string): string | undefined {
   if (!name.trim()) return "Give the server a name. It goes in front of every tool the model sees.";
   if (name.length > 64) return "Names are at most 64 characters.";
-  if (!MCP_NAME_PATTERN.test(name)) return "Use letters, digits, hyphens and underscores only.";
+  // One rule, the protocol's (`MCP_SERVER_NAME_PATTERN`): a letter or a digit
+  // first, then letters, digits, hyphens and underscores.
+  if (!MCP_SERVER_NAME_PATTERN.test(name)) return "Start with a letter or a digit, then letters, digits, hyphens and underscores only.";
   return undefined;
 }
 
@@ -398,20 +418,33 @@ function withList(policy: McpToolPolicy, key: "only" | "exclude", list: string[]
   return next;
 }
 
-export function isToolEnabled(policy: McpToolPolicy, tool: string): boolean {
-  return !(policy.exclude ?? []).includes(tool);
+/**
+ * What a tool's three switches show. This is the worker's own answer
+ * (`McpToolInfo.visibility` / `.approval`), not a second reading of the
+ * policy: a policy may hold globs, and the engine is the one that matched
+ * them.
+ */
+export function toolState(tool: Pick<McpToolInfo, "visibility" | "approval">): { enabled: boolean; direct: boolean; ask: boolean } {
+  return { enabled: tool.visibility !== "excluded", direct: tool.visibility === "direct", ask: tool.approval };
 }
 
-export function isToolDirect(policy: McpToolPolicy, tool: string): boolean {
-  if (policy.exposure !== "direct") return false;
-  if (!isToolEnabled(policy, tool)) return false;
-  return policy.only === undefined || policy.only.includes(tool);
+function isPattern(entry: string): boolean {
+  return /[*?[\]]/.test(entry);
 }
 
-export function isToolApproved(policy: McpToolPolicy, tool: string): boolean {
-  if (policy.approve === true) return true;
-  return Array.isArray(policy.approve) && policy.approve.includes(tool);
+/**
+ * Which switches must not be rewritten from here: a list of patterns (or an
+ * `include` list, which decides which tools exist at all) cannot be edited
+ * one tool at a time without quietly replacing it with literal names.
+ */
+export function policyPatternLocks(policy: McpToolPolicy): { enabled: boolean; direct: boolean; ask: boolean; any: boolean } {
+  const enabled = policy.include !== undefined || (policy.exclude ?? []).some(isPattern);
+  const direct = (policy.only ?? []).some(isPattern);
+  const ask = policy.approve === true || (Array.isArray(policy.approve) ? policy.approve.some(isPattern) : false);
+  return { enabled, direct, ask, any: enabled || direct || (Array.isArray(policy.approve) && policy.approve.some(isPattern)) };
 }
+
+export const PATTERN_POLICY_NOTE = "This server’s tool list uses patterns; edit it in the form.";
 
 export function setToolEnabled(policy: McpToolPolicy, tool: string, enabled: boolean): McpToolPolicy {
   const exclude = new Set(policy.exclude ?? []);
@@ -422,13 +455,22 @@ export function setToolEnabled(policy: McpToolPolicy, tool: string, enabled: boo
 
 export function setToolDirect(policy: McpToolPolicy, tool: string, direct: boolean, allTools: readonly string[]): McpToolPolicy {
   // `only` absent means "every tool is direct", so switching one off has to
-  // write the rest of the list out before removing it.
+  // write the rest of the list out before removing it — and an *empty* set is
+  // not "no restriction", it is "nothing is direct", which is what on demand
+  // means. Deleting the key there would have made every tool direct, the
+  // opposite of what the switch says.
   const only = new Set(policy.only ?? allTools);
   if (direct) only.add(tool);
   else only.delete(tool);
+  if (!only.size) return withList({ ...policy, exposure: "on-demand" }, "only", undefined);
   const covers = allTools.length > 0 && allTools.every((name) => only.has(name));
-  return withList(policy, "only", covers ? undefined : [...only]);
+  const next = withList(policy, "only", covers ? undefined : [...only]);
+  return direct && policy.exposure !== "direct" ? { ...next, exposure: "direct" } : next;
 }
+
+/** Said out loud when the last direct tool is switched off. */
+export const LAST_DIRECT_TOOL_NOTE =
+  "Nothing is in the model’s list any more, so this server now answers on demand: the model looks its tools up and calls them through one tool.";
 
 export function setToolApproved(policy: McpToolPolicy, tool: string, ask: boolean): McpToolPolicy {
   if (policy.approve === true) return policy;
@@ -454,10 +496,9 @@ export function allToolsDirect(policy: McpToolPolicy): McpToolPolicy {
 }
 
 /** Why the model cannot see this tool, or nothing when it can. */
-export function toolVisibilityNote(policy: McpToolPolicy, tool: string): string | undefined {
-  if (!isToolEnabled(policy, tool)) return "Switched off: the model never sees it.";
-  if (policy.exposure !== "direct") return "Reached on demand, through the server’s one search-and-call tool.";
-  if (policy.only && !policy.only.includes(tool)) return "Not in the model’s list; it is reached on demand.";
+export function toolVisibilityNote(tool: Pick<McpToolInfo, "visibility">): string | undefined {
+  if (tool.visibility === "excluded") return "Switched off: the model never sees it.";
+  if (tool.visibility === "on-demand") return "Reached on demand, through the server’s one search-and-call tool.";
   return undefined;
 }
 
@@ -570,7 +611,8 @@ export function configToForm(config: McpServerConfig): ServerForm {
   form.name = config.name;
   form.label = config.label ?? "";
   form.nameEdited = true;
-  form.kind = config.transport.kind;
+  const transport = config.transport;
+  form.kind = transport?.kind ?? "stdio";
   form.startup = config.startup ?? "on-demand";
   form.idleMinutes = config.idleMinutes === undefined ? "" : String(config.idleMinutes);
   form.requestTimeoutMs = config.requestTimeoutMs === undefined ? "" : String(config.requestTimeoutMs);
@@ -581,18 +623,20 @@ export function configToForm(config: McpServerConfig): ServerForm {
   form.tools = config.tools;
   form.catalogId = config.catalogId;
   form.disabled = config.disabled;
-  if (config.transport.kind === "stdio") {
-    form.commandLine = joinCommand(config.transport.command, config.transport.args ?? []);
-    form.env = rowsOf(config.transport.env);
-    form.cwd = config.transport.cwd ?? "";
-    form.inheritEnv = config.transport.inheritEnv !== false;
-  } else if (config.transport.kind === "http") {
-    form.url = config.transport.url;
-    form.headers = rowsOf(config.transport.headers);
-    form.stream = config.transport.stream ?? "auto";
-    form.caFile = config.transport.caFile ?? "";
-  } else {
-    form.socketPath = config.transport.path;
+  // A project entry that only switches a global server off carries no
+  // definition at all; the form then starts empty rather than guessing one.
+  if (transport?.kind === "stdio") {
+    form.commandLine = joinCommand(transport.command, transport.args ?? []);
+    form.env = rowsOf(transport.env);
+    form.cwd = transport.cwd ?? "";
+    form.inheritEnv = transport.inheritEnv !== false;
+  } else if (transport?.kind === "http") {
+    form.url = transport.url;
+    form.headers = rowsOf(transport.headers);
+    form.stream = transport.stream ?? "auto";
+    form.caFile = transport.caFile ?? "";
+  } else if (transport?.kind === "socket") {
+    form.socketPath = transport.path;
   }
   const auth = config.auth;
   form.authKind = auth?.kind ?? "none";
@@ -609,9 +653,17 @@ export function configToForm(config: McpServerConfig): ServerForm {
 }
 
 function valueInput(row: ValueRow): McpValueInput | undefined {
-  if (!row.secret) return row.value;
-  if (row.value) return { secret: true, value: row.value };
-  return row.stored ? { secret: true } : undefined;
+  if (row.value) return row.secret ? { secret: true, value: row.value } : row.value;
+  // A row that had a stored secret keeps it until a value is typed, even
+  // after the person un-marks it: un-marking is how you look, not how you
+  // delete, and an empty string here would overwrite the saved value.
+  if (row.stored) return { secret: true };
+  return row.secret ? undefined : row.value;
+}
+
+/** A row whose saved secret is still in place although it is no longer marked secret. */
+export function keepsStoredSecret(row: ValueRow): boolean {
+  return row.stored && !row.value;
 }
 
 function recordOf(rows: readonly ValueRow[]): Record<string, McpValueInput> | undefined {
@@ -705,6 +757,7 @@ export interface FormIssues {
   commandLine?: string;
   url?: string;
   socketPath?: string;
+  token?: string;
 }
 
 export function formIssues(form: ServerForm): FormIssues {
@@ -720,6 +773,11 @@ export function formIssues(form: ServerForm): FormIssues {
     else if (!/^https?:\/\//i.test(url)) issues.url = "The address has to start with http:// or https://.";
   }
   if (form.kind === "socket" && !form.socketPath.trim()) issues.socketPath = "Give the path of the socket file.";
+  // "Token" with nothing in it used to save a server with no sign-in at all,
+  // which then failed at the server with a message nobody could act on.
+  if (form.kind === "http" && form.authKind === "bearer" && !form.token.value && !form.token.stored) {
+    issues.token = "Enter the token, or choose None.";
+  }
   return issues;
 }
 
@@ -732,9 +790,9 @@ export function catalogForm(entry: McpCatalogEntry, chosen: ReadonlySet<string>)
   const form = configToForm({ ...entry.config, name: deriveName(entry.name), catalogId: entry.id } as McpServerConfig);
   form.label = entry.name;
   form.nameEdited = false;
-  if (entry.config.transport.kind === "stdio") {
+  const base = entry.config.transport;
+  if (base?.kind === "stdio") {
     const extra = (entry.options ?? []).filter((option) => chosen.has(option.id)).map((option) => option.arg);
-    const base = entry.config.transport;
     form.commandLine = joinCommand(base.command, [...(base.args ?? []), ...extra]);
   }
   form.catalogId = entry.id;

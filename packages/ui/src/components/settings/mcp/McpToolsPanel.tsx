@@ -26,14 +26,14 @@ import {
   allToolsDirect,
   allToolsOff,
   allToolsOn,
-  isToolApproved,
-  isToolDirect,
-  isToolEnabled,
+  PATTERN_POLICY_NOTE,
   policyOf,
+  policyPatternLocks,
   schemaToShape,
   setToolApproved,
   setToolDirect,
   setToolEnabled,
+  toolState,
   toolVisibilityNote,
 } from "./model.js";
 
@@ -57,6 +57,9 @@ export function McpToolsPanel({
     (tool) => !query || `${tool.originalName} ${tool.name} ${tool.description}`.toLowerCase().includes(query),
   );
   const onDemand = policy.exposure !== "direct";
+  // A policy written with patterns (or an `include` list) cannot be edited one
+  // tool at a time without quietly replacing it with literal names.
+  const locks = policyPatternLocks(policy);
 
   if (!inspection.tools.length) {
     return <p className="text-sm leading-6 text-ink-2">This server advertises no tools.</p>;
@@ -67,13 +70,13 @@ export function McpToolsPanel({
       <SearchInput value={filter} onChange={setFilter} placeholder="Find a tool…" />
 
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => onPolicy(allToolsOn(policy))}>
+        <Button type="button" size="sm" variant="secondary" disabled={busy || locks.enabled} onClick={() => onPolicy(allToolsOn(policy))}>
           All on
         </Button>
-        <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => onPolicy(allToolsOff(policy, names))}>
+        <Button type="button" size="sm" variant="secondary" disabled={busy || locks.enabled} onClick={() => onPolicy(allToolsOff(policy, names))}>
           All off
         </Button>
-        <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => onPolicy(allToolsDirect(policy))}>
+        <Button type="button" size="sm" variant="secondary" disabled={busy || locks.direct} onClick={() => onPolicy(allToolsDirect(policy))}>
           All direct
         </Button>
       </div>
@@ -82,11 +85,19 @@ export function McpToolsPanel({
         <p className="text-sm leading-6 text-attention">This server asks before every call, so each tool below is set to ask.</p>
       )}
 
+      {locks.any && (
+        <p data-slot="mcp-pattern-note" className="text-sm leading-6 text-attention">
+          {PATTERN_POLICY_NOTE}
+        </p>
+      )}
+
       <ul className="flex flex-col gap-2">
         {shown.map((tool) => {
           const shape = schemaToShape(tool.inputSchema);
-          const enabled = isToolEnabled(policy, tool.originalName);
-          const note = toolVisibilityNote(policy, tool.originalName);
+          // What the switches show is the worker's effective answer for this
+          // tool, never a second reading of the policy.
+          const state = toolState(tool);
+          const note = toolVisibilityNote(tool);
           return (
             <li
               key={tool.name}
@@ -112,25 +123,31 @@ export function McpToolsPanel({
               <div className="flex flex-wrap items-center gap-4">
                 <ToolSwitch
                   label="On"
-                  hint="The model can use it."
-                  checked={enabled}
-                  disabled={busy}
+                  hint={locks.enabled ? PATTERN_POLICY_NOTE : "The model can use it."}
+                  checked={state.enabled}
+                  disabled={busy || locks.enabled}
                   onChange={(next) => onPolicy(setToolEnabled(policy, tool.originalName, next))}
                   name={tool.originalName}
                 />
                 <ToolSwitch
                   label="Direct"
-                  hint={onDemand ? "This server is set to on demand, so nothing is in the model’s list." : "In the model’s own list."}
-                  checked={isToolDirect(policy, tool.originalName)}
-                  disabled={busy || onDemand || !enabled}
+                  hint={
+                    locks.direct
+                      ? PATTERN_POLICY_NOTE
+                      : onDemand
+                        ? "This server is set to on demand, so nothing is in the model’s list."
+                        : "In the model’s own list."
+                  }
+                  checked={state.direct}
+                  disabled={busy || locks.direct || onDemand || !state.enabled}
                   onChange={(next) => onPolicy(setToolDirect(policy, tool.originalName, next, names))}
                   name={tool.originalName}
                 />
                 <ToolSwitch
                   label="Ask first"
-                  hint={policy.approve === true ? "Every call asks" : "A call waits for you."}
-                  checked={isToolApproved(policy, tool.originalName)}
-                  disabled={busy || policy.approve === true}
+                  hint={policy.approve === true ? "Every call asks" : locks.ask ? PATTERN_POLICY_NOTE : "A call waits for you."}
+                  checked={state.ask}
+                  disabled={busy || locks.ask}
                   onChange={(next) => onPolicy(setToolApproved(policy, tool.originalName, next))}
                   name={tool.originalName}
                 />

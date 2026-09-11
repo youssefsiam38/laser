@@ -8,9 +8,18 @@ import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { McpAuthStart, McpImportSource, McpServerState } from "@lasercode/protocol";
 
-const mocks = vi.hoisted(() => ({ request: vi.fn(), toast: vi.fn() }));
+const mocks = vi.hoisted(() => ({ request: vi.fn(), toast: vi.fn(), listeners: new Set<(method: string, params: unknown) => void>() }));
 vi.mock("../../../src/runtime/index.js", () => {
-  const stable = { client: { request: mocks.request, subscribe: () => () => {} }, actions: { toast: mocks.toast } };
+  const stable = {
+    client: {
+      request: mocks.request,
+      subscribe: (handler: (method: string, params: unknown) => void) => {
+        mocks.listeners.add(handler);
+        return () => mocks.listeners.delete(handler);
+      },
+    },
+    actions: { toast: mocks.toast },
+  };
   return { useLaserStable: () => stable };
 });
 
@@ -26,6 +35,7 @@ let applied: Array<Record<string, unknown>>;
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  mocks.listeners.clear();
   applied = [];
   servers = [];
   sources = [
@@ -200,4 +210,25 @@ it("asks before signing out, and keeps the server configured", async () => {
   await click("Sign out", document.querySelector<HTMLElement>('[data-slot="mcp-sign-out-dialog"]')!);
   expect(applied).toEqual([{ method: "mcp/auth/logout", cwd: "/project", scope: "global", name: "linear" }]);
   expect(mocks.toast).toHaveBeenCalledWith("info", "Signed out. The server stays configured.");
+});
+
+it("notices that the browser finished, without the person pressing anything", async () => {
+  servers = [
+    serverState({
+      scope: "global",
+      status: "needs-auth",
+      config: { name: "linear", transport: { kind: "http", url: "https://mcp.linear.app/mcp" }, auth: { kind: "oauth" } },
+    }),
+  ];
+  await mount();
+  await click("Sign in");
+  expect(text()).toContain("Waiting for the browser to finish");
+  // The worker wrote the credential and said so; the dialog must not sit on
+  // "waiting" over a row that already turned connected.
+  servers = servers.map((entry) => ({ ...entry, status: "connected" as const }));
+  await act(async () => {
+    for (const listener of mocks.listeners) listener("mcp/changed", { cwd: "/project" });
+  });
+  expect(document.querySelector('[data-slot="mcp-signed-in"]')?.textContent).toContain("Signed in.");
+  expect(text()).not.toContain("Waiting for the browser to finish");
 });

@@ -58,10 +58,12 @@ export interface McpAddDialogProps {
   edit?: { scope: McpScope; config: McpServerConfig } | undefined;
   /** Which scope a new server lands in by default. */
   defaultScope?: McpScope;
+  /** False with no project open: only the every-project scope exists. */
+  allowProject?: boolean;
   onSaved: (servers: McpServerState[], saved: { scope: McpScope; name: string; needsAuth: boolean }) => void;
 }
 
-export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScope = "global", onSaved }: McpAddDialogProps) {
+export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScope = "global", allowProject = true, onSaved }: McpAddDialogProps) {
   const { client } = useLaserStable();
   const [form, setForm] = useState<ServerForm>(() => emptyForm());
   const [scope, setScope] = useState<McpScope>(defaultScope);
@@ -159,18 +161,20 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent data-slot="mcp-add-dialog" className="sm:max-w-160">
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>
-            {edit
-              ? "Changes apply to conversations started after you save."
-              : "Test it first: you will see what it can do before it is saved."}
-          </DialogDescription>
-        </DialogHeader>
-
-        <ScrollArea className="max-h-[60dvh]">
+      {/* The dialog itself is bounded and scrolls inside: on a short phone the
+          header must not be pushed off the top where nothing can reach it. */}
+      <DialogContent data-slot="mcp-add-dialog" className="flex max-h-[90dvh] min-h-0 flex-col sm:max-w-160">
+        <ScrollArea className="min-h-0 flex-1">
           <div className="flex min-w-0 flex-col gap-4 pe-3">
+            <DialogHeader>
+              <DialogTitle>{title}</DialogTitle>
+              <DialogDescription>
+                {edit
+                  ? "Changes apply to conversations started after you save."
+                  : "Test it first: you will see what it can do before it is saved."}
+              </DialogDescription>
+            </DialogHeader>
+
             {entry && !edit && (
               <section className="flex flex-col gap-3 rounded-xl border border-line bg-surface-2 p-3" aria-label={`${entry.name} options`}>
                 <p className="text-sm leading-6 text-ink-2">{entry.description}</p>
@@ -191,7 +195,7 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
               </section>
             )}
 
-            <ScopeChoice scope={scope} onChange={setScope} disabled={Boolean(edit)} />
+            <ScopeChoice scope={scope} onChange={setScope} disabled={Boolean(edit)} allowProject={allowProject} />
 
             {entry && !edit ? (
               <Collapsible className="min-w-0">
@@ -315,13 +319,12 @@ function ExposureChoice({
   return (
     <section data-slot="mcp-exposure" className="flex flex-col gap-2 rounded-xl border border-line bg-surface p-3">
       <p className="text-sm font-medium text-ink">How the model reaches these tools</p>
-      <div role="radiogroup" aria-label="How the model reaches these tools" className="flex flex-wrap gap-2">
+      <div role="group" aria-label="How the model reaches these tools" className="flex flex-wrap gap-2">
         {(["direct", "on-demand"] as const).map((option) => (
           <Button
             key={option}
             type="button"
-            role="radio"
-            aria-checked={exposure === option}
+            aria-pressed={exposure === option}
             variant="ghost"
             size="sm"
             onClick={() => onChange(option)}
