@@ -643,6 +643,24 @@ Dependencies: M8 (companion extension), M13-T3 (worker harness and stub-provider
 | M14-T5 | Packaged build carries the adapter | electron-builder keeps the adapter's executable TypeScript, bundle and helper, and the native bindings for both architectures; the clean-machine gate opens a session with a stdio server from the unpacked build with an empty PATH |
 | M14-T6 | Live end-to-end proof with Playwright | a real session drives Playwright over stdio and over HTTP from the installed app; sign-in proven against one OAuth server; findings recorded in `docs/mcp.md` |
 
+## M15 · After the MCP release: artifacts, dictation language, model fallback chains, two sidebar and composer fixes
+
+Goal: the batch the person queued behind M14. It starts only after M14 ships
+as its own release (D-222) and ships as one release of its own when complete.
+
+Done when: every task below is `done` with evidence and the release is public.
+
+Dependencies: M14 released.
+
+| ID | Task | Done when |
+| --- | --- | --- |
+| M15-T1 | Native file opener: a file card in the transcript and a format-aware viewer modal | a tool call that produces or names a file renders as a card with the file's name, a one-line description of what it is and a neutral (not primary) "Open" action; the modal shows code with syntax highlighting for every language Shiki covers, Markdown rendered as a preview by default with a top tab to switch to source, and a native image preview for attached images; keyboard, both widths, both themes, interaction tests |
+| M15-T2 | Dictation is always transcribed as English | the transcription request pins English through the provider's documented language parameter (research the current OpenAI transcription APIs and record the finding in `docs/`); a phrase spoken in another language is transcribed/translated to English rather than to that language; existing dictation tests plus one for the language pin |
+| M15-T3 | Model fallback chains: settings, runtime, persistence, verification | the complete specification the person gave (recorded verbatim in `docs/model-fallback-chains.md`): empty-by-default chains editable in Settings (add, reorder, edit, delete; one chain per starting model; no duplicates in a chain); a chain activates only when its first model is the session's selected model, never merged or entered recursively; existing retries finish before fallback; only model-access failures after retries trigger it (never cancellation, tool failures, task errors, refusals); bounded single return attempts to earlier eligible models on a later failure, with persisted cooldowns and known reset times and no background probing; task continuity without replayed tools or duplicated messages; filesystem persistence of the selected model, chain snapshot, traversal state and failure classifications across reload/restart; manual selection starts a fresh activation and fences stale failover work; concise switching status and an accurate model selector; the full verification list passes; browser review at both widths and themes |
+| M15-T4 | Sidebar activity indicators: one indicator, owned by the session itself | the trailing spinner on a running session row is removed and only the primary-colour pre-name indicator remains; a row's indicator runs only when that session itself is running, never because a descendant is; a child that has its own child shows one indicator, not two; interaction tests for parent/child/grandchild running combinations |
+| M15-T5 | Slash completion completes, never sends | pressing Tab on a partial command (`/compa` → `/compact`) only completes the text; nothing is sent; the same holds for every completion path (Tab, Enter on a highlighted popover row, click, touch) and for `@` file completion; regression tests for each path |
+| M15-T6 | Release M15 | T1–T5 pass the routine release orchestrator: exact-source CI, immutable tag with notes, both-architecture public assets |
+
 ## MX · Cross-cutting (runs alongside every milestone)
 
 | ID | Task | Done when |
