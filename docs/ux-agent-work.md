@@ -196,8 +196,11 @@ implies we know the graph; for scripted work we did not.
    read-only and file the upstream index patch — unless late-appearing cards
    feel broken to you, in which case that patch is a prerequisite for M3.*
 
-The fleet separates lifecycle without flattening lineage: a branch belongs to
-**In progress** while anything inside it is still going, then moves whole to
-the collapsible **Finished** section. Completed, failed and cancelled rows keep
-their own terminal labels. Since M13-T26 background commands *are* fleet work,
-listed beside agent runs under the session that started them.
+The fleet separates lifecycle without flattening lineage: each live item belongs
+to **In progress**, and each terminal item moves immediately to the collapsible
+**Finished** section. Required agent ancestors repeat as labelled, uncounted
+context; counts and attention include only actual work in that section. Clear
+cuts terminal descendants recursively while preserving live/later work and its
+ancestry. Completed, failed and cancelled rows keep their own terminal labels.
+Since M13-T26 background commands *are* fleet work, listed beside agent runs
+under the session that started them (D-205).

@@ -25,51 +25,69 @@
  * sheet) own the data and the host.
  */
 import { ChevronDown, FileX, RadioTower } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { StatusDot } from "@/components/status";
+import { STATUS_LABEL, StatusDot } from "@/components/status";
 import { formatElapsed, shortCwd } from "@/format";
 import { cn } from "@/lib/utils";
-import { FLEET_STATE_LABEL, partitionItems, type FleetGroup, type FleetItem } from "@/fleet/model";
+import { FLEET_STATE_LABEL, type FleetItem, type FleetProjectedGroup, type FleetProjectedItem, type FleetSections } from "@/fleet/model";
 
-export type { FleetGroup, FleetItem };
+export type { FleetItem, FleetSections };
+
+export type FleetSectionName = "active" | "finished";
+export type FleetSurfaceName = "tree" | "strays";
+
+/** A projected row's disclosure identity; canonical keys may exist in both sections and roles. */
+export interface FleetDisclosure {
+  surface: FleetSurfaceName;
+  groupPath: string;
+  section: FleetSectionName;
+  key: string;
+  role: "actual" | "context";
+}
 
 export interface SubagentListProps extends Omit<ComponentProps<"div">, "children" | "onToggle"> {
-  groups: readonly FleetGroup[];
-  /** The item key whose row is open, if any. */
-  expandedKey: string | undefined;
+  sections: FleetSections;
+  surface: FleetSurfaceName;
+  /** The section-scoped row whose body is open, if any. */
+  expanded: FleetDisclosure | undefined;
   /** The item key for the chat the person is reading, when it is in this tree. */
   currentKey?: string | undefined;
-  onToggle(key: string): void;
+  onToggle(target: FleetDisclosure): void;
   /** The body of the open row: the surface owns what a run and a task show. */
-  renderDetail(item: FleetItem): ReactNode;
+  renderDetail(item: FleetItem, contextOnly: boolean): ReactNode;
   /** Put the finished work away. Absent when there is nothing this view can clear. */
   onClearFinished?: (() => void) | undefined;
 }
 
-export function SubagentList({ groups, expandedKey, currentKey, onToggle, renderDetail, onClearFinished, className, ...props }: SubagentListProps) {
+export function SubagentList({ sections, surface, expanded, currentKey, onToggle, renderDetail, onClearFinished, className, ...props }: SubagentListProps) {
   const [finishedOpen, setFinishedOpen] = useState(false);
-  const partition = useMemo(() => partitionGroups(groups), [groups]);
 
   // Opening a finished row from elsewhere (a task-exit notice) must not land
-  // on a fold that hides it.
+  // on a fold that hides it. Ordinary rerenders never override a manual fold.
   useEffect(() => {
-    if (expandedKey && partition.finished.some((group) => group.items.some((item) => branchHas(item, expandedKey)))) {
-      setFinishedOpen(true);
-    }
-  }, [expandedKey, partition.finished]);
+    if (expanded?.surface === surface && expanded.section === "finished") setFinishedOpen(true);
+  }, [expanded, surface]);
 
   return (
     <div data-slot="subagent-list" className={cn("flex flex-col", className)} {...props}>
-      <FleetSectionHeader icon={RadioTower} label="In progress" count={partition.activeCount} />
-      {partition.active.length > 0 ? (
-        <FleetGroups groups={partition.active} expandedKey={expandedKey} currentKey={currentKey} onToggle={onToggle} renderDetail={renderDetail} />
+      <FleetSectionHeader icon={RadioTower} label="In progress" count={sections.active.count} />
+      {sections.active.groups.length > 0 ? (
+        <FleetGroups
+          groups={sections.active.groups}
+          surface={surface}
+          section="active"
+          expanded={expanded}
+          currentKey={currentKey}
+          onToggle={onToggle}
+          renderDetail={renderDetail}
+        />
       ) : (
         <p className="px-4 py-5 text-sm leading-sm text-ink-3">Nothing is in progress.</p>
       )}
 
-      {partition.finishedCount > 0 && (
+      {sections.finished.count > 0 && (
         <Collapsible open={finishedOpen} onOpenChange={setFinishedOpen} className="hairline-t">
           {/*
             Dimmed, and with no tick. A green double-check here said "done, well
@@ -80,7 +98,7 @@ export function SubagentList({ groups, expandedKey, currentKey, onToggle, render
           <div className="flex items-center">
             <CollapsibleTrigger className="group/finished flex min-h-11 min-w-0 flex-1 items-center gap-2 ps-4 pe-2 py-3 text-start text-ink-3 outline-none transition-colors duration-(--motion-instant) hover:text-ink-2 motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-inset">
               <span className="text-xs leading-xs font-medium">Finished</span>
-              <span className="tnum text-xs leading-xs">{partition.finishedCount}</span>
+              <span className="tnum text-xs leading-xs">{sections.finished.count}</span>
               <ChevronDown
                 aria-hidden="true"
                 className="ms-auto size-4 shrink-0 transition-transform duration-(--motion-fast) group-data-[state=open]/finished:rotate-180 motion-reduce:transition-none"
@@ -98,7 +116,15 @@ export function SubagentList({ groups, expandedKey, currentKey, onToggle, render
             )}
           </div>
           <CollapsibleContent>
-            <FleetGroups groups={partition.finished} expandedKey={expandedKey} currentKey={currentKey} onToggle={onToggle} renderDetail={renderDetail} />
+            <FleetGroups
+              groups={sections.finished.groups}
+              surface={surface}
+              section="finished"
+              expanded={expanded}
+              currentKey={currentKey}
+              onToggle={onToggle}
+              renderDetail={renderDetail}
+            />
           </CollapsibleContent>
         </Collapsible>
       )}
@@ -118,53 +144,68 @@ function FleetSectionHeader({ icon: Icon, label, count }: { icon: typeof RadioTo
 
 function FleetGroups({
   groups,
-  expandedKey,
+  surface,
+  section,
+  expanded,
   currentKey,
   onToggle,
   renderDetail,
 }: {
-  groups: readonly FleetGroup[];
-  expandedKey: string | undefined;
+  groups: readonly FleetProjectedGroup[];
+  surface: FleetSurfaceName;
+  section: FleetSectionName;
+  expanded: FleetDisclosure | undefined;
   currentKey?: string | undefined;
-  onToggle(key: string): void;
-  renderDetail(item: FleetItem): ReactNode;
+  onToggle(target: FleetDisclosure): void;
+  renderDetail(item: FleetItem, contextOnly: boolean): ReactNode;
 }) {
-  return groups.map((group) => (
-    <section key={group.path} aria-label={group.title} data-slot="fleet-group" data-deleted={group.deleted || undefined}>
-      {/* Opaque: DESIGN.md keeps glass out of the system, and a blurred
-          header over a scrolling list is exactly the decoration it names. */}
-      <header className="sticky top-0 z-10 flex items-baseline gap-2 bg-bg px-4 py-1.5 hairline-b">
-        <h4 className="min-w-0 truncate text-xs leading-xs font-medium text-ink" title={group.deleted ? group.path : undefined}>
-          {group.title}
-        </h4>
-        {group.cwd && <span className="eyebrow shrink-0">{shortCwd(group.cwd)}</span>}
-        {group.deleted ? (
-          // Deleted, not closed: there is no session to open, so the header
-          // says what the work lost rather than implying a way back to it.
-          <span className="shrink-0 text-xs leading-xs text-ink-3" title="This session was deleted; its work kept going.">
-            session deleted
-          </span>
-        ) : group.orphaned ? (
-          <span className="shrink-0 text-xs leading-xs text-ink-3" title="This session is closed here; its work kept going.">
-            session closed
-          </span>
-        ) : null}
-      </header>
-      <ul role="list" className="flex flex-col gap-1.5 px-2 py-2">
-        {group.items.map((item) => (
-          <FleetBranch key={item.key} item={item} expandedKey={expandedKey} currentKey={currentKey} onToggle={onToggle} renderDetail={renderDetail} />
-        ))}
-      </ul>
-    </section>
-  ));
+  return groups.map((projectedGroup) => {
+    const group = projectedGroup.group;
+    return (
+      <section key={group.path} aria-label={group.title} data-slot="fleet-group" data-section={section} data-deleted={group.deleted || undefined}>
+        {/* Opaque: DESIGN.md keeps glass out of the system, and a blurred
+            header over a scrolling list is exactly the decoration it names. */}
+        <header className="sticky top-0 z-10 flex items-baseline gap-2 bg-bg px-4 py-1.5 hairline-b">
+          <h4 className="min-w-0 truncate text-xs leading-xs font-medium text-ink" title={group.deleted ? group.path : undefined}>
+            {group.title}
+          </h4>
+          {group.cwd && <span className="eyebrow shrink-0">{shortCwd(group.cwd)}</span>}
+          {group.deleted ? (
+            // Deleted, not closed: there is no session to open, so the header
+            // says what the work lost rather than implying a way back to it.
+            <span className="shrink-0 text-xs leading-xs text-ink-3" title="This session was deleted; its work kept going.">
+              session deleted
+            </span>
+          ) : group.orphaned ? (
+            <span className="shrink-0 text-xs leading-xs text-ink-3" title="This session is closed here; its work kept going.">
+              session closed
+            </span>
+          ) : null}
+        </header>
+        <ul role="list" className="flex flex-col gap-1.5 px-2 py-2">
+          {projectedGroup.items.map((item) => (
+            <FleetBranch
+              key={`${section}:${item.item.key}`}
+              item={item}
+              target={{ surface, groupPath: group.path, section, key: item.item.key, role: item.contextOnly ? "context" : "actual" }}
+              expanded={expanded}
+              currentKey={currentKey}
+              onToggle={onToggle}
+              renderDetail={renderDetail}
+            />
+          ))}
+        </ul>
+      </section>
+    );
+  });
 }
 
 export interface SubagentStraysProps extends Omit<ComponentProps<"div">, "children" | "onToggle"> {
-  /** Groups whose root session was deleted (`FleetGroup.deleted`). */
-  groups: readonly FleetGroup[];
-  expandedKey: string | undefined;
-  onToggle(key: string): void;
-  renderDetail(item: FleetItem): ReactNode;
+  /** Projected groups whose root session was deleted. */
+  sections: FleetSections;
+  expanded: FleetDisclosure | undefined;
+  onToggle(target: FleetDisclosure): void;
+  renderDetail(item: FleetItem, contextOnly: boolean): ReactNode;
   /** Put its finished work away. Absent when nothing here has finished. */
   onClearFinished?: (() => void) | undefined;
 }
@@ -180,18 +221,19 @@ export interface SubagentStraysProps extends Omit<ComponentProps<"div">, "childr
  * and putting it first would make every fleet start with someone else's
  * leftovers. Closed by default; a reveal that lands inside it opens it.
  */
-export function SubagentStrays({ groups, expandedKey, onToggle, renderDetail, onClearFinished, className, ...props }: SubagentStraysProps) {
+export function SubagentStrays({ sections, expanded, onToggle, renderDetail, onClearFinished, className, ...props }: SubagentStraysProps) {
   const [open, setOpen] = useState(false);
-  const count = useMemo(() => groups.reduce((total, group) => total + group.items.reduce((sum, item) => sum + countWhere(item, () => true), 0), 0), [groups]);
-  const running = groups.reduce((total, group) => total + group.running, 0);
-  const needsYou = groups.reduce((total, group) => total + group.needsYou, 0);
+  const count = sections.active.count + sections.finished.count;
+  const running = sections.active.running;
+  const needsYou = sections.active.needsYou;
 
   useEffect(() => {
-    if (expandedKey && groups.some((group) => group.items.some((item) => branchHas(item, expandedKey)))) setOpen(true);
-  }, [expandedKey, groups]);
+    if (expanded?.surface === "strays") setOpen(true);
+  }, [expanded]);
 
   if (count === 0) return null;
-  const sessions = groups.length;
+  const roots = new Set([...sections.active.groups, ...sections.finished.groups].map((group) => group.group.path));
+  const sessions = roots.size;
   const what = `${count} ${count === 1 ? "piece" : "pieces"} of work from ${sessions === 1 ? "a deleted session" : `${sessions} deleted sessions`}`;
   // The second line is the one thing to know: whether it is still costing.
   const why =
@@ -235,57 +277,45 @@ export function SubagentStrays({ groups, expandedKey, onToggle, renderDetail, on
           )}
         </div>
         <CollapsibleContent>
-          <FleetGroups groups={groups} expandedKey={expandedKey} onToggle={onToggle} renderDetail={renderDetail} />
+          <SubagentList
+            sections={sections}
+            surface="strays"
+            expanded={expanded}
+            onToggle={onToggle}
+            renderDetail={renderDetail}
+          />
         </CollapsibleContent>
       </Collapsible>
     </div>
   );
 }
 
-function partitionGroups(groups: readonly FleetGroup[]): {
-  active: FleetGroup[];
-  finished: FleetGroup[];
-  activeCount: number;
-  finishedCount: number;
-} {
-  const active: FleetGroup[] = [];
-  const finished: FleetGroup[] = [];
-  let activeCount = 0;
-  let finishedCount = 0;
-  for (const group of groups) {
-    const parts = partitionItems(group.items);
-    if (parts.active.length > 0) active.push({ ...group, items: parts.active });
-    if (parts.finished.length > 0) finished.push({ ...group, items: parts.finished, running: 0 });
-    for (const item of parts.active) activeCount += countWhere(item, (candidate) => !candidate.terminal);
-    for (const item of parts.finished) finishedCount += countWhere(item, (candidate) => candidate.terminal);
-  }
-  return { active, finished, activeCount, finishedCount };
-}
-
-function countWhere(item: FleetItem, predicate: (item: FleetItem) => boolean): number {
-  return (predicate(item) ? 1 : 0) + item.children.reduce((total, child) => total + countWhere(child, predicate), 0);
-}
-
-function branchHas(item: FleetItem, key: string): boolean {
-  return item.key === key || item.children.some((child) => branchHas(child, key));
-}
+const sameDisclosure = (left: FleetDisclosure | undefined, right: FleetDisclosure): boolean =>
+  left?.surface === right.surface &&
+  left.groupPath === right.groupPath &&
+  left.section === right.section &&
+  left.key === right.key &&
+  left.role === right.role;
 
 /** One subtree. Nested lists keep lineage intact in both the DOM and the paint. */
 function FleetBranch({
   item,
+  target,
   nested = false,
-  expandedKey,
+  expanded,
   currentKey,
   onToggle,
   renderDetail,
 }: {
-  item: FleetItem;
+  item: FleetProjectedItem;
+  target: FleetDisclosure;
   nested?: boolean;
-  expandedKey: string | undefined;
+  expanded: FleetDisclosure | undefined;
   currentKey?: string | undefined;
-  onToggle(key: string): void;
-  renderDetail(item: FleetItem): ReactNode;
+  onToggle(target: FleetDisclosure): void;
+  renderDetail(item: FleetItem, contextOnly: boolean): ReactNode;
 }) {
+  const source = item.item;
   return (
     <li
       data-slot="fleet-branch"
@@ -294,28 +324,26 @@ function FleetBranch({
         nested && "before:absolute before:-start-3 before:top-5 before:h-px before:w-3 before:bg-line before:content-['']",
       )}
     >
-      <FleetRow item={item} expanded={expandedKey === item.key} current={currentKey === item.key} onToggle={() => onToggle(item.key)} renderDetail={renderDetail} />
+      <FleetRow item={item} expanded={sameDisclosure(expanded, target)} current={currentKey === source.key} onToggle={() => onToggle(target)} renderDetail={renderDetail} />
       {item.children.length > 0 && (
-        <ul role="list" aria-label={`Work ${item.title} started`} className="relative ms-4 mt-1.5 flex flex-col gap-1.5 border-s border-line ps-3">
+        <ul role="list" aria-label={`Work ${source.title} started`} className="relative ms-4 mt-1.5 flex flex-col gap-1.5 border-s border-line ps-3">
           {item.children.map((child) => (
-            <FleetBranch key={child.key} item={child} nested expandedKey={expandedKey} currentKey={currentKey} onToggle={onToggle} renderDetail={renderDetail} />
+            <FleetBranch
+              key={`${target.section}:${child.item.key}`}
+              item={child}
+              target={{ ...target, key: child.item.key, role: child.contextOnly ? "context" : "actual" }}
+              nested
+              expanded={expanded}
+              currentKey={currentKey}
+              onToggle={onToggle}
+              renderDetail={renderDetail}
+            />
           ))}
         </ul>
       )}
     </li>
   );
 }
-
-const DOT_STATUS = {
-  queued: "working",
-  running: "working",
-  // Live and paused on a question. Terminal blocking is neutral history.
-  needs_input: "waiting_for_input",
-  blocked: "idle",
-  completed: "finished_unread",
-  failed: "error",
-  cancelled: "idle",
-} as const;
 
 /**
  * One piece of work. The row grows its detail in place rather than replacing
@@ -333,33 +361,39 @@ function FleetRow({
   onToggle,
   renderDetail,
 }: {
-  item: FleetItem;
+  item: FleetProjectedItem;
   expanded: boolean;
   current?: boolean;
   onToggle(): void;
-  renderDetail(item: FleetItem): ReactNode;
+  renderDetail(item: FleetItem, contextOnly: boolean): ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (expanded) ref.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [expanded]);
 
-  const label = FLEET_STATE_LABEL[item.state];
-  // The one line under the name: what it is doing, else why it ended, else
-  // what it was asked to do. Never all three — this is a row, not a record.
-  const line = item.activity ?? item.terminalReason ?? item.subtitle;
+  const source = item.item;
+  const label = FLEET_STATE_LABEL[source.state];
+  const rolledUp = item.contextOnly || item.attention !== source.own;
+  const dotLabel = rolledUp ? `${STATUS_LABEL[item.attention]} below` : label;
+  // Context carries lineage, not membership. Its own activity, reason and live
+  // elapsed would make a Working parent look filed under Finished.
+  const line = item.contextOnly ? "Parent of work shown here." : (source.activity ?? source.terminalReason ?? source.subtitle);
 
   return (
     <div
       ref={ref}
       data-slot="fleet-row"
-      data-kind={item.kind}
-      data-state={item.state}
+      data-kind={source.kind}
+      data-state={source.state}
+      data-attention={item.attention}
+      data-context={item.contextOnly || undefined}
       data-expanded={expanded || undefined}
       data-current={current || undefined}
       className={cn(
         "flex min-w-0 flex-col rounded-xl border border-line bg-surface text-ink",
         "transition-[border-color,box-shadow] duration-(--motion-instant) motion-reduce:transition-none",
+        item.contextOnly && "bg-bg text-ink-2",
         current && "bg-surface-2",
         expanded && "border-live shadow-[0_0_0_1px_var(--live)]",
       )}
@@ -375,11 +409,12 @@ function FleetRow({
           "motion-reduce:transition-none",
         )}
       >
-        <StatusDot status={DOT_STATUS[item.state]} label={label} />
+        <StatusDot status={item.attention} label={dotLabel} />
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="flex min-w-0 items-baseline gap-2">
-            <span className="min-w-0 truncate text-sm leading-sm font-medium text-ink">{item.title}</span>
-            <span className="shrink-0 text-xs leading-xs text-ink-3">{item.kind === "task" ? "command" : label}</span>
+            <span className={cn("min-w-0 truncate text-sm leading-sm font-medium", item.contextOnly ? "text-ink-2" : "text-ink")}>{source.title}</span>
+            <span className="shrink-0 text-xs leading-xs text-ink-3">{source.kind === "task" ? "command" : label}</span>
+            {item.contextOnly && <span className="eyebrow shrink-0 text-ink-3">context</span>}
             {current && (
               <span className="eyebrow shrink-0 text-ink-2" title="The chat you are reading">
                 reading
@@ -387,18 +422,18 @@ function FleetRow({
             )}
           </span>
           {line && (
-            <span className={cn("min-w-0 truncate text-xs leading-xs", item.state === "failed" ? "text-danger" : "text-ink-2")} title={line}>
+            <span className={cn("min-w-0 truncate text-xs leading-xs", !item.contextOnly && source.state === "failed" ? "text-danger" : "text-ink-2")} title={line}>
               {line}
             </span>
           )}
         </span>
-        {item.elapsedMs !== undefined && <span className="typed shrink-0 tnum text-xs leading-xs text-ink-3">{formatElapsed(item.elapsedMs)}</span>}
+        {!item.contextOnly && source.elapsedMs !== undefined && <span className="typed shrink-0 tnum text-xs leading-xs text-ink-3">{formatElapsed(source.elapsedMs)}</span>}
         <ChevronDown
           aria-hidden="true"
           className={cn("size-4 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none", expanded && "rotate-180")}
         />
       </button>
-      {expanded && <div className="min-w-0 px-3 pb-3 hairline-t pt-3">{renderDetail(item)}</div>}
+      {expanded && <div className="min-w-0 px-3 pb-3 hairline-t pt-3">{renderDetail(source, item.contextOnly)}</div>}
     </div>
   );
 }
