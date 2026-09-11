@@ -316,7 +316,10 @@ record(
 // 7 ── a real session loads every bundled feature --------------------------
 const sessionProbe = join(modules, "@lasercode", "worker", "dist", "check-packaged-session.js");
 const mcpFixture = join(resources, "checks", "mcp-server.mjs");
-const sessionRun = runBare(nodeBinary, [sessionProbe, mcpFixture], bareEnv);
+const sessionRun = runBare(nodeBinary, [sessionProbe, mcpFixture], {
+  ...bareEnv,
+  [identity.env.npmCli]: join(resources, "runtime", "npm", "bin", "npm-cli.js"),
+});
 const sessionReport = lastJsonLine(sessionRun.stdout);
 record(
   "a real session opens with every bundled feature",
@@ -351,9 +354,9 @@ record(
   "MCP stdio tools reach the model and the inspector",
   Boolean(sessionReport?.ok) && activeModules.includes("mcp") &&
     sessionReport.mcp?.modelTool === "packaged_runtime" && sessionReport.mcp?.inspectedTool === "packaged_runtime" &&
-    sessionReport.mcp?.runtime === nodeBinary,
+    sessionReport.mcp?.runtime === nodeBinary && /^\d+\.\d+\.\d+/.test(sessionReport.mcp?.npxVersion ?? ""),
   sessionReport?.mcp
-    ? `model: ${sessionReport.mcp.modelTool}; inspect/call: ${sessionReport.mcp.inspectedTool}; child: ${sessionReport.mcp.runtime}`
+    ? `model: ${sessionReport.mcp.modelTool}; inspect/call: ${sessionReport.mcp.inspectedTool}; child: ${sessionReport.mcp.runtime}; npx: ${sessionReport.mcp.npxVersion}`
     : "the offline MCP probe did not complete",
   "Preserve the adapter's executable sources and dependencies; stdio must resolve node through the worker's bundled-runtime PATH additions.",
 );
