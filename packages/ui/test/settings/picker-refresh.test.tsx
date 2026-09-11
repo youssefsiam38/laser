@@ -16,7 +16,7 @@ const stable = vi.hoisted(() => ({
 }));
 vi.mock("@/runtime", () => ({
   useLaserStable: () => stable,
-  useLaserState: (selector: (s: unknown) => unknown) => selector({ workers: {}, connection: "connected" }),
+  useLaserState: (selector: (s: unknown) => unknown) => selector({ workers: {}, connection: "connected", agents: { snapshot: null } }),
   useSessionMeta: () => ({ model: { provider: "stub", id: "stub-1", name: "Stub One" }, session: { path: "/p/s.jsonl", cwd: "/p" } }),
 }));
 

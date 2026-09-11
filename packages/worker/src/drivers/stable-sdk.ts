@@ -68,6 +68,7 @@ import type {
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { supportedThinkingLevels } from "../packages.js";
 import { disabledModelRefs, engineSettingsOnly, modelSwitchedOff, readEffectiveProductSettings, readLaserProjectSettings } from "../settings.js";
 import { applyDurableOverrides, type EngineSettingsOverrides } from "../settings-overrides.js";
 import { WebSearchService } from "../web-search.js";
@@ -115,6 +116,8 @@ export class StableSdkDriver implements SessionDriver {
   private runtimeAgent: DriverAgentOptions | undefined;
   private runtimeModelOverride: ModelRef | undefined;
   private runtimeThinkingOverride: ThinkingLevel | undefined;
+  /** Only a newly selected first-turn tuple is normalized; rollback is exact. */
+  private runtimeNormalizeThinking = false;
   /** Person-selected values, distinct from Pi's automatic initial entries. */
   private explicitModelOverride: ModelRef | undefined;
   private explicitThinkingOverride: ThinkingLevel | undefined;
@@ -124,6 +127,8 @@ export class StableSdkDriver implements SessionDriver {
     thinkingOverride: ThinkingLevel | undefined;
   } | undefined;
   private preparedAgentRecord: DriverAgentOptions["record"] | undefined;
+  /** Undefined preserves prior override provenance; null clears it on acceptance. */
+  private preparedModelIntent: ModelRef | null | undefined;
   private unsubscribe: (() => void) | undefined;
   private cwd = "";
   private projectTrusted: boolean | undefined;
@@ -228,6 +233,7 @@ export class StableSdkDriver implements SessionDriver {
       const agent = this.runtimeAgent;
       const modelOverride = this.runtimeModelOverride;
       const thinkingOverride = this.runtimeThinkingOverride;
+      const normalizeThinking = this.runtimeNormalizeThinking;
       const requestProvenance = createPromptProvenanceObserver();
       const laser = createCompanion(requestProvenance, agent);
       let liveSession: AgentSession | undefined;
@@ -302,7 +308,24 @@ export class StableSdkDriver implements SessionDriver {
       if (modelOverride && !selected) {
         throw new DriverUnavailableError(this.kind, `unknown model ${modelOverride.provider}/${modelOverride.id}`);
       }
-      const selectedThinking = thinkingOverride ?? agent?.definition.thinkingLevel ?? undefined;
+      const requestedThinking = thinkingOverride ?? agent?.definition.thinkingLevel ?? undefined;
+      const defaultProvider = settingsManager.getDefaultProvider();
+      const defaultModel = settingsManager.getDefaultModel();
+      const effectiveModel = selected ?? (defaultProvider && defaultModel
+        ? services.modelRuntime.getModel(defaultProvider, defaultModel)
+        : undefined);
+      const supportedThinking = effectiveModel
+        ? supportedThinkingLevels(effectiveModel.reasoning, effectiveModel.thinkingLevelMap)
+        : undefined;
+      const selectedThinking = normalizeThinking && requestedThinking && supportedThinking && !supportedThinking.includes(requestedThinking)
+        ? [
+            agent?.definition.thinkingLevel,
+            effectiveModel ? settingsManager.getModelThinkingLevel(effectiveModel.provider, effectiveModel.id) : undefined,
+            settingsManager.getDefaultThinkingLevel(),
+            "off" as const,
+            supportedThinking[0],
+          ].find((level): level is ThinkingLevel => level !== null && level !== undefined && supportedThinking.includes(level))
+        : requestedThinking;
       const created = await createAgentSessionFromServices({
         services,
         sessionManager,
@@ -416,6 +439,7 @@ export class StableSdkDriver implements SessionDriver {
     agent: DriverAgentOptions | undefined,
     modelOverride: ModelRef | undefined,
     thinkingOverride: ThinkingLevel | undefined,
+    normalizeThinking = false,
   ): Promise<void> {
     const current = this.runtime;
     const factory = this.runtimeFactory;
@@ -426,6 +450,7 @@ export class StableSdkDriver implements SessionDriver {
       agent: this.runtimeAgent,
       modelOverride: effective.model ?? undefined,
       thinkingOverride: effective.thinkingLevel,
+      normalizeThinking: this.runtimeNormalizeThinking,
     };
     const previousSessionFile = manager.getSessionFile();
     const create = () => createAgentSessionRuntime(factory, {
@@ -448,6 +473,7 @@ export class StableSdkDriver implements SessionDriver {
     this.runtimeAgent = agent;
     this.runtimeModelOverride = modelOverride;
     this.runtimeThinkingOverride = thinkingOverride;
+    this.runtimeNormalizeThinking = normalizeThinking;
     let replacement: AgentSessionRuntime | undefined;
     try {
       replacement = await create();
@@ -462,6 +488,7 @@ export class StableSdkDriver implements SessionDriver {
       this.runtimeAgent = previous.agent;
       this.runtimeModelOverride = previous.modelOverride;
       this.runtimeThinkingOverride = previous.thinkingOverride;
+      this.runtimeNormalizeThinking = previous.normalizeThinking;
       try {
         this.runtime = await create();
         await this.applySession();
@@ -490,11 +517,13 @@ export class StableSdkDriver implements SessionDriver {
     };
     await this.replaceRuntime(
       options.agent,
-      this.explicitModelOverride,
+      options.model === undefined ? this.explicitModelOverride : (options.model ?? undefined),
       options.thinkingLevel ?? this.explicitThinkingOverride,
+      true,
     );
     this.firstTurnRollback = previous;
     this.preparedAgentRecord = options.agent.record;
+    this.preparedModelIntent = options.model;
   }
 
   async rollbackFirstTurn(): Promise<void> {
@@ -503,17 +532,24 @@ export class StableSdkDriver implements SessionDriver {
     await this.replaceRuntime(previous.agent, previous.modelOverride, previous.thinkingOverride);
     this.firstTurnRollback = undefined;
     this.preparedAgentRecord = undefined;
+    this.preparedModelIntent = undefined;
   }
 
-  /** Persist the replacement identity at Pi's exact prompt-acceptance boundary. */
+  /** Persist the replacement identity and accepted intent at Pi's exact prompt-acceptance boundary. */
   private commitPreparedFirstTurn(): void {
     const record = this.preparedAgentRecord;
     if (!record) return;
+    const modelIntent = this.preparedModelIntent;
     // Acceptance is monotonic even if persistence reports an I/O error: never
     // leave a rollback armed for a prompt the engine already owns.
     this.preparedAgentRecord = undefined;
+    this.preparedModelIntent = undefined;
     this.firstTurnRollback = undefined;
     this.session().sessionManager.appendCustomEntry(SESSION_AGENT_ENTRY_TYPE, record);
+    if (modelIntent !== undefined) {
+      this.explicitModelOverride = modelIntent ?? undefined;
+      this.persistExplicitOverrides();
+    }
   }
 
   async dispose(): Promise<void> {
@@ -529,10 +565,12 @@ export class StableSdkDriver implements SessionDriver {
     this.runtimeAgent = undefined;
     this.runtimeModelOverride = undefined;
     this.runtimeThinkingOverride = undefined;
+    this.runtimeNormalizeThinking = false;
     this.explicitModelOverride = undefined;
     this.explicitThinkingOverride = undefined;
     this.firstTurnRollback = undefined;
     this.preparedAgentRecord = undefined;
+    this.preparedModelIntent = undefined;
     this.emit({ type: "closed", reason: "disposed" });
     this.listeners.clear();
   }

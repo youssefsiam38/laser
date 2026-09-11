@@ -237,12 +237,12 @@ describe("WorkerServer", () => {
     const prompted = await h.call(3, "session/prompt", {
       path: "/tmp/fake/s1.jsonl",
       content: [{ type: "text", text: "check this" }],
-      firstTurn: { agentName: "reviewer", thinkingLevel: "high" },
+      firstTurn: { agentName: "reviewer", model: null, thinkingLevel: "high" },
     });
 
     expect(prompted.result).toEqual({ accepted: true, queued: false });
     expect(driver.prepared).toHaveLength(1);
-    expect(driver.prepared[0]).toMatchObject({ agent: { definition: { name: "reviewer" } }, thinkingLevel: "high" });
+    expect(driver.prepared[0]).toMatchObject({ agent: { definition: { name: "reviewer" } }, model: null, thinkingLevel: "high" });
     expect(driver.prompted).toEqual([[{ type: "text", text: "check this" }]]);
     expect(driver.rollbacks).toBe(0);
     expect(h.server.openSessions()).toEqual(["/tmp/fake/s1.jsonl"]);
@@ -336,7 +336,7 @@ describe("WorkerServer", () => {
     const failed = await h.call(3, "session/prompt", {
       path: "/tmp/fake/s1.jsonl",
       content: [{ type: "text", text: "failed replacement" }],
-      firstTurn: { agentName: "reviewer" },
+      firstTurn: { agentName: "reviewer", model: null },
     });
     expect(failed.error).toBeDefined();
     expect(driver.rollbacks).toBe(1);
@@ -347,21 +347,22 @@ describe("WorkerServer", () => {
     const refused = await h.call(4, "session/prompt", {
       path: "/tmp/fake/s1.jsonl",
       content: [{ type: "text", text: "first try" }],
-      firstTurn: { agentName: "reviewer" },
+      firstTurn: { agentName: "reviewer", model: null },
     });
     expect(refused.result).toEqual({ accepted: false, queued: false });
     expect(driver.rollbacks).toBe(2);
+    expect(driver.prepared.at(-1)?.model).toBeNull();
 
     driver.acceptPrompt = true;
     const accepted = await h.call(5, "session/prompt", {
       path: "/tmp/fake/s1.jsonl",
       content: [{ type: "text", text: "retry" }],
-      firstTurn: { agentName: "reviewer" },
+      firstTurn: { agentName: "reviewer", model: null },
     });
     const stale = await h.call(6, "session/prompt", {
       path: "/tmp/fake/s1.jsonl",
       content: [{ type: "text", text: "duplicate" }],
-      firstTurn: { agentName: "reviewer" },
+      firstTurn: { agentName: "reviewer", model: null },
     });
     expect(accepted.result).toEqual({ accepted: true, queued: false });
     expect(stale.error?.code).toBe(-32602);

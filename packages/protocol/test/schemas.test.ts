@@ -43,7 +43,7 @@ const samples: Record<ClientMethod, unknown> = {
     path: "/s.jsonl",
     content: [{ type: "text", text: "hi" }],
     streamingBehavior: "steer",
-    firstTurn: { agentName: "reviewer", thinkingLevel: "high" },
+    firstTurn: { agentName: "reviewer", model: null, thinkingLevel: "high" },
   },
   "session/cancel": { path: "/s.jsonl" },
   "session/set_mode": { path: "/s.jsonl", mode: "plan" },
@@ -209,6 +209,17 @@ describe("client request schemas", () => {
       expect(req.method).toBe(method);
       expect(req.params).toEqual(samples[method]);
     }
+  });
+
+  it("distinguishes absent, follow-agent, and explicit first-turn model intent", () => {
+    const schema = clientParamsSchemas["session/prompt"];
+    const base = { path: "/s.jsonl", content: [{ type: "text" as const, text: "hi" }] };
+    expect(schema.parse({ ...base, firstTurn: { agentName: "reviewer" } }).firstTurn).toEqual({ agentName: "reviewer" });
+    expect(schema.parse({ ...base, firstTurn: { agentName: "reviewer", model: null } }).firstTurn).toEqual({ agentName: "reviewer", model: null });
+    expect(schema.parse({ ...base, firstTurn: { agentName: "reviewer", model: { provider: "openai", id: "gpt-5" } } }).firstTurn)
+      .toEqual({ agentName: "reviewer", model: { provider: "openai", id: "gpt-5" } });
+    expect(schema.safeParse({ ...base, firstTurn: { agentName: "reviewer", model: {} } }).success).toBe(false);
+    expect(schema.safeParse({ ...base, firstTurn: { agentName: "reviewer", model: { provider: "openai" } } }).success).toBe(false);
   });
 
   it("refuses agent names that are not lower-case identifiers and unknown policy keys", () => {

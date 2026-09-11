@@ -1033,8 +1033,12 @@ export class WorkerServer {
       throw new ProtocolError(ErrorCodes.InvalidParams, `No custom agent is called "${firstTurn.agentName}".`);
     }
     try {
-      if (definition.model && !(await this.modelAvailable(definition.model))) {
-        throw new ProtocolError(ErrorCodes.InvalidParams, modelUnavailableMessage(definition.model));
+      // A later explicit composer choice is the model that must be usable. A
+      // null or absent intent still resolves through the selected definition;
+      // absent otherwise keeps the driver's established pristine override.
+      const requestedModel = firstTurn.model ?? definition.model;
+      if (requestedModel && !(await this.modelAvailable(requestedModel))) {
+        throw new ProtocolError(ErrorCodes.InvalidParams, modelUnavailableMessage(requestedModel));
       }
       const pendingUi = (live.driver as { pendingUi?: () => unknown[] }).pendingUi?.call(live.driver) ?? [];
       const { entries } = await live.driver.entries();
@@ -1069,6 +1073,7 @@ export class WorkerServer {
     try {
       await live.driver.prepareFirstTurn({
         agent: this.agentOptions(definition, nextHandle),
+        ...(Object.hasOwn(firstTurn, "model") ? { model: firstTurn.model } : {}),
         ...(firstTurn.thinkingLevel ? { thinkingLevel: firstTurn.thinkingLevel } : {}),
       });
       const result = await this.promptLive(live, params.content, params.streamingBehavior, () => {

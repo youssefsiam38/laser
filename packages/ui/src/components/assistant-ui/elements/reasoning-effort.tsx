@@ -32,6 +32,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils";
 import { isUnstartedSession, useLaserStable, useLaserState, useLaserView, useSessionMeta } from "@/runtime";
 import { useSessionPreparation } from "@/components/thread/session-preparation";
+import { effectiveFirstTurnModel } from "@/runtime/first-turn";
 
 import { field } from "./surfaces.js";
 
@@ -215,19 +216,22 @@ function useThinkingDefaults(): {
     const value = catalog.value;
     const agentName = firstTurn?.agentName ?? session?.agent?.agentName ?? snapshot?.defaultAgent;
     const selectedAgent = snapshot?.agents.find((agent) => agent.name === agentName);
-    const modelRef = (firstTurn?.agentName ? selectedAgent?.model : sessionModel) ?? selectedAgent?.model ?? (
-      value.defaultProvider && value.defaultModel
-        ? { provider: value.defaultProvider, id: value.defaultModel }
-        : undefined
-    );
+    const projectDefault = value.defaultProvider && value.defaultModel
+      ? { provider: value.defaultProvider, id: value.defaultModel }
+      : undefined;
+    const modelRef = effectiveFirstTurnModel(firstTurn, sessionModel, selectedAgent?.model, projectDefault);
     const model = modelRef
       ? value.models.find((entry) => entry.provider === modelRef.provider && entry.id === modelRef.id)
       : undefined;
+    const supported = model?.thinkingLevels;
+    const requested = firstTurn?.thinkingLevel;
+    const fallback = [selectedAgent?.thinkingLevel, model?.thinkingLevel, value.defaultThinkingLevel, supported?.[0]]
+      .find((level): level is ThinkingLevel => level !== null && level !== undefined && (!supported || supported.includes(level)));
     return {
-      supported: model?.thinkingLevels,
-      defaultLevel: firstTurn?.thinkingLevel ?? (firstTurn?.agentName
-        ? (selectedAgent?.thinkingLevel ?? model?.thinkingLevel ?? value.defaultThinkingLevel)
-        : session ? undefined : (selectedAgent?.thinkingLevel ?? model?.thinkingLevel ?? value.defaultThinkingLevel)),
+      supported,
+      defaultLevel: requested && (!supported || supported.includes(requested))
+        ? requested
+        : firstTurn?.agentName ? fallback : session ? undefined : fallback,
       model,
     };
   }, [catalog, cwd, firstTurn, session, sessionModel, snapshot]);
@@ -254,13 +258,20 @@ export function ThinkingEffort({ className, allowProjectLanding = true }: { clas
   const { actions, currentProject } = useLaserStable();
   const view = useLaserView();
   const { begin, firstTurn, chooseThinking, pending: preparingSession } = useSessionPreparation();
-  const { thinkingLevel: sessionThinkingLevel, session, model: sessionModel } = useSessionMeta();
+  const { thinkingLevel: sessionThinkingLevel, session } = useSessionMeta();
   const defaults = useThinkingDefaults();
   const supported = defaults.supported;
-  const thinkingLevel = firstTurn?.thinkingLevel
-    ?? (firstTurn?.agentName ? defaults.defaultLevel : sessionThinkingLevel ?? defaults.defaultLevel);
-  const model = sessionModel ?? defaults.model;
+  const thinkingLevel = firstTurn?.thinkingLevel && (!supported || supported.includes(firstTurn.thinkingLevel))
+    ? firstTurn.thinkingLevel
+    : firstTurn?.agentName ? defaults.defaultLevel : sessionThinkingLevel ?? defaults.defaultLevel;
+  const model = defaults.model;
   const disabled = preparingSession || (!session && (!currentProject || !allowProjectLanding));
+
+  useEffect(() => {
+    if (!firstTurn?.thinkingLevel || !supported || supported.includes(firstTurn.thinkingLevel)) return;
+    const fallback = defaults.defaultLevel ?? supported[0];
+    if (fallback) chooseThinking(fallback);
+  }, [chooseThinking, defaults.defaultLevel, firstTurn?.thinkingLevel, supported]);
   const [saving, setSaving] = useState(false);
   const select = (key: string) => {
     const level = key as ThinkingLevel;

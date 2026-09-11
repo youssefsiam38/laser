@@ -9,6 +9,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   discardFirstTurn,
+  effectiveFirstTurnModel,
   firstTurnFromRunConfig,
   useDiscardFirstTurnOnLeave,
   withFirstTurn,
@@ -30,6 +31,32 @@ function fakeComposer(runConfig: RunConfig): FirstTurnComposer & { runConfig: Ru
   };
   return composer;
 }
+
+describe("first-turn model intent", () => {
+  const sessionModel = { provider: "test", id: "session" };
+  const agentModel = { provider: "test", id: "agent" };
+  const projectDefault = { provider: "test", id: "default" };
+
+  it("preserves absent, follow-agent, and later explicit model intent", () => {
+    expect(firstTurnFromRunConfig(withFirstTurn(undefined, { agentName: "reviewer" })))
+      .toEqual({ agentName: "reviewer" });
+    expect(firstTurnFromRunConfig(withFirstTurn(undefined, { agentName: "reviewer", model: null })))
+      .toEqual({ agentName: "reviewer", model: null });
+    const explicit = { provider: "test", id: "manual", name: "Manual" };
+    expect(firstTurnFromRunConfig(withFirstTurn(undefined, { agentName: "reviewer", model: explicit })))
+      .toEqual({ agentName: "reviewer", model: explicit });
+    expect(firstTurnFromRunConfig({ custom: { firstTurn: { agentName: "reviewer", model: {} } } })).toBeUndefined();
+  });
+
+  it("resolves the visible model from the same intent contract", () => {
+    expect(effectiveFirstTurnModel({ agentName: "reviewer" }, sessionModel, agentModel, projectDefault)).toEqual(sessionModel);
+    expect(effectiveFirstTurnModel({ agentName: "reviewer" }, null, agentModel, projectDefault)).toEqual(agentModel);
+    expect(effectiveFirstTurnModel({ agentName: "reviewer", model: null }, sessionModel, agentModel, projectDefault)).toEqual(agentModel);
+    expect(effectiveFirstTurnModel({ agentName: "reviewer", model: null }, sessionModel, null, projectDefault)).toEqual(projectDefault);
+    expect(effectiveFirstTurnModel({ agentName: "reviewer", model: { provider: "test", id: "manual" } }, sessionModel, agentModel, projectDefault))
+      .toEqual({ provider: "test", id: "manual" });
+  });
+});
 
 describe("withoutFirstTurn", () => {
   it("removes only the choice and keeps every other field", () => {

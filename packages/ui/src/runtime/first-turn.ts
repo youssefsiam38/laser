@@ -1,5 +1,5 @@
 import type { AppendMessage, ThreadComposerRuntime } from "@assistant-ui/react";
-import type { ClientRequests, ThinkingLevel } from "@lasercode/protocol";
+import type { ClientRequests, ModelRef, ThinkingLevel } from "@lasercode/protocol";
 import { useEffect } from "react";
 
 /** Configuration one composer attaches to its own pristine session's first prompt. */
@@ -16,9 +16,48 @@ export function firstTurnFromRunConfig(runConfig: RunConfig): TentativeFirstTurn
   if (!candidate || typeof candidate !== "object") return undefined;
   const { agentName, thinkingLevel } = candidate as { agentName?: unknown; thinkingLevel?: unknown };
   if (typeof agentName !== "string" || agentName === "") return undefined;
-  if (thinkingLevel === undefined) return { agentName };
-  if (typeof thinkingLevel !== "string" || !THINKING_LEVELS.has(thinkingLevel as ThinkingLevel)) return undefined;
-  return { agentName, thinkingLevel: thinkingLevel as ThinkingLevel };
+  if (thinkingLevel !== undefined && (typeof thinkingLevel !== "string" || !THINKING_LEVELS.has(thinkingLevel as ThinkingLevel))) return undefined;
+
+  let modelIntent: Pick<TentativeFirstTurn, "model"> | undefined;
+  if (Object.hasOwn(candidate, "model")) {
+    const value = (candidate as { model?: unknown }).model;
+    if (value === null) {
+      modelIntent = { model: null };
+    } else {
+      if (!value || typeof value !== "object") return undefined;
+      const raw = value as Record<string, unknown>;
+      if (typeof raw["provider"] !== "string" || raw["provider"] === "" || typeof raw["id"] !== "string" || raw["id"] === "") return undefined;
+      const model: ModelRef = { provider: raw["provider"], id: raw["id"] };
+      if (typeof raw["name"] === "string") model.name = raw["name"];
+      if (typeof raw["contextWindow"] === "number") model.contextWindow = raw["contextWindow"];
+      if (typeof raw["reasoning"] === "boolean") model.reasoning = raw["reasoning"];
+      if (typeof raw["vision"] === "boolean") model.vision = raw["vision"];
+      modelIntent = { model };
+    }
+  }
+
+  return {
+    agentName,
+    ...modelIntent,
+    ...(thinkingLevel === undefined ? {} : { thinkingLevel: thinkingLevel as ThinkingLevel }),
+  };
+}
+
+/**
+ * The model the picker and thinking control must show for this composer.
+ * An absent intent deliberately keeps the existing session/landing value;
+ * only null follows the selected agent and then the project default.
+ */
+export function effectiveFirstTurnModel(
+  firstTurn: TentativeFirstTurn | undefined,
+  current: ModelRef | null | undefined,
+  selectedAgent: ModelRef | null | undefined,
+  projectDefault: ModelRef | null | undefined,
+): ModelRef | null {
+  if (firstTurn && Object.hasOwn(firstTurn, "model")) {
+    return firstTurn.model ?? selectedAgent ?? projectDefault ?? null;
+  }
+  return current ?? selectedAgent ?? projectDefault ?? null;
 }
 
 /** Merge one custom field without dropping another send-time option. */

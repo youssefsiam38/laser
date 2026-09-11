@@ -55,6 +55,7 @@ import {
 import { tokens } from "@/format";
 import { useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
 import { useSessionPreparation } from "@/components/thread/session-preparation";
+import { effectiveFirstTurnModel } from "@/runtime/first-turn";
 
 import { ErrorState } from "./error-state.js";
 import { GenerationLoader } from "./loading-state.js";
@@ -1084,15 +1085,21 @@ function useProjectDefaultModel(cwd: string | undefined, enabled: boolean): { mo
  */
 export function SessionModelSelector({ className }: { className?: string | undefined }) {
   const { actions, client, currentProject } = useLaserStable();
-  const { pending: preparingSession } = useSessionPreparation();
+  const { firstTurn, chooseModel, pending: preparingSession } = useSessionPreparation();
   const { model: sessionModel, session } = useSessionMeta();
+  const snapshot = useLaserState((state) => state.agents.snapshot);
   const sessionPath = session?.path;
   const cwd = session?.cwd ?? currentProject;
-  const { model: projectDefault, loading: defaultLoading } = useProjectDefaultModel(cwd, !sessionPath);
+  const selectedAgent = snapshot?.agents.find((agent) => agent.name === firstTurn?.agentName);
+  const hasModelIntent = firstTurn !== undefined && Object.hasOwn(firstTurn, "model");
+  const followsAgentDefault = hasModelIntent && firstTurn.model === null;
+  const needsProjectDefault = !sessionPath || (followsAgentDefault && !selectedAgent?.model);
+  const { model: projectDefault, loading: defaultLoading } = useProjectDefaultModel(cwd, needsProjectDefault);
   const [newSessionModel, setNewSessionModel] = useState<ModelRef | null>(null);
-  const model = sessionModel ?? (sessionPath ? null : (newSessionModel ?? projectDefault));
-  /** No session, and we do not know its default yet: claim nothing. */
-  const unknown = !sessionPath && !model && defaultLoading;
+  const currentModel = sessionModel ?? (sessionPath ? null : (newSessionModel ?? projectDefault));
+  const model = effectiveFirstTurnModel(firstTurn, currentModel, selectedAgent?.model, projectDefault);
+  /** The effective intent depends on a project default we do not know yet. */
+  const unknown = !model && defaultLoading && (!sessionPath || followsAgentDefault);
   const [open, setOpen] = useState(false);
   const [models, setModels] = useState<ModelRef[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1146,6 +1153,10 @@ export function SessionModelSelector({ className }: { className?: string | undef
   const pick = (id: string) => {
     const next = (models ?? []).find((m) => modelOptionId(m) === id);
     if (!next) return;
+    if (hasModelIntent) {
+      chooseModel(next);
+      return;
+    }
     if (sessionPath) {
       void actions.setModel(next);
       return;
@@ -1173,7 +1184,7 @@ export function SessionModelSelector({ className }: { className?: string | undef
         size="sm"
         disabled={!cwd || saving || preparingSession}
         aria-label={
-          sessionPath
+          sessionPath || hasModelIntent
             ? `Model: ${model ? (model.name ?? model.id) : "none"}`
             : unknown
               ? "Checking which model a new session starts with"
@@ -1181,7 +1192,9 @@ export function SessionModelSelector({ className }: { className?: string | undef
                 ? `New sessions start with ${model.name ?? model.id}`
                 : "No model chosen"
         }
-        title={sessionPath ? undefined : "Choose what new sessions in this project start with"}
+        title={hasModelIntent
+          ? "Choose the model for this agent’s first request"
+          : sessionPath ? undefined : "Choose what new sessions in this project start with"}
         className={cn("min-w-0 max-w-56 shrink gap-1.5 text-ink-2", className)}
       >
         {model ? (
