@@ -82,7 +82,17 @@ const EXEMPT_PATHS = new Set([
   "packages/cli/test/qr.test.ts",
 ]);
 
-const EXEMPT_DIRS = ["docs/", ".agents/", ".github/ISSUE_TEMPLATE/"];
+const EXEMPT_DIRS = [
+  "docs/",
+  ".agents/",
+  ".github/ISSUE_TEMPLATE/",
+  // The product's own project directory (`<project>/.<name>/`), which the app
+  // writes into any project it opens — this repository included. It is data
+  // the app derives from product.json, not source that spells the name; a
+  // rename moves it with the product (D-36), and a developer's own settings
+  // file must not fail their build.
+  `.${identity.name}/`,
+];
 
 /**
  * Every name this product has answered to, current first.
