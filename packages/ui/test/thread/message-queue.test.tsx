@@ -478,7 +478,9 @@ describe("the pending tray", () => {
     ]);
   });
 
-  it("discards a tentative agent when the composer is left", async () => {
+  // A reload: the whole tree goes and comes back. The single-page switch —
+  // the same tree, another session — is test/thread/first-turn-refusal.test.tsx.
+  it("discards a tentative agent when the page is reloaded", async () => {
     world.states[PATH] = {
       ...world.states[PATH]!,
       isStreaming: false,

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { isMessageNotSentError } from "@assistant-ui/react";
 import type { AppendMessage } from "@assistant-ui/react";
 import type { ClientMethod, ClientRequests, PendingMessage, SessionState } from "@lasercode/protocol";
 import type { Action, SessionView } from "../../src/store.js";
@@ -442,7 +443,8 @@ describe("createThreadAdapter", () => {
     const client = mockClient({ "session/prompt": { accepted: false, queued: false } });
     const { adapter } = build({ client, path: undefined, view: undefined, resolvePath: async () => path });
 
-    await expect(adapter.onNew(configured)).rejects.toThrow("started before the agent choice");
+    // Rethrown as the error assistant-ui hands a message back to the composer on.
+    await expect(adapter.onNew(configured)).rejects.toSatisfy((error: unknown) => isMessageNotSentError(error) && (error as Error).message.includes("started before the agent choice"));
     await expect(adapter.onNew(configured)).rejects.toThrow("started before the agent choice");
     expect(client.calls).toEqual([
       { method: "session/prompt", params: { path, content: [{ type: "text", text: "hello" }], firstTurn } },
