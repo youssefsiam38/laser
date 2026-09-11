@@ -22,6 +22,7 @@
  */
 
 import {
+  forwardRef,
   useCallback,
   useEffect,
   useMemo,
@@ -642,6 +643,21 @@ export function modelOption(model: ModelRef): ModelOption {
   };
 }
 
+/**
+ * A viewport-rooted portal host that remains inside DialogContent. Radix's
+ * modal then permits wheel/touch events, while Popper's fixed coordinates are
+ * not offset by the centered dialog's transform.
+ */
+export const ModelPickerDialogPortal = forwardRef<HTMLDivElement>(function ModelPickerDialogPortal(_props, ref) {
+  return (
+    <div
+      ref={ref}
+      data-slot="model-picker-portal"
+      className="pointer-events-none fixed start-[calc(50%-50dvw)] top-[calc(50%-50dvh)] z-50 h-dvh w-dvw transform-gpu"
+    />
+  );
+});
+
 export interface ProviderModelMenuProps {
   loading?: boolean | undefined;
   error?: string | null | undefined;
@@ -649,6 +665,8 @@ export interface ProviderModelMenuProps {
   side?: ModelSelectorContentProps["side"];
   align?: ModelSelectorContentProps["align"];
   beforeFilters?: ReactNode;
+  /** Keep both picker portals inside an owning modal's scroll-lock boundary. */
+  container?: HTMLElement | null | undefined;
 }
 
 export function providerFilterForModel(model: Pick<ModelOption, "provider"> | undefined): string {
@@ -656,7 +674,7 @@ export function providerFilterForModel(model: Pick<ModelOption, "provider"> | un
 }
 
 /** Shared provider/model menu with one explicit field for each filter. */
-export function ProviderModelMenu({ loading = false, error, onRetry, side = "bottom", align = "start", beforeFilters }: ProviderModelMenuProps) {
+export function ProviderModelMenu({ loading = false, error, onRetry, side = "bottom", align = "start", beforeFilters, container }: ProviderModelMenuProps) {
   const { models, selectedModel, open } = useModelSelectorContext();
   const [providerOverride, setProviderOverride] = useState<string | null>(null);
   const [modelFilter, setModelFilter] = useState("");
@@ -697,11 +715,11 @@ export function ProviderModelMenu({ loading = false, error, onRetry, side = "bot
   const visibleCount = visibleGroups.reduce((count, [, list]) => count + list.length, 0);
 
   return (
-    <ModelSelectorContent side={side} align={align} searchable={false} className="w-88">
+    <ModelSelectorContent side={side} align={align} searchable={false} className="w-88" container={container}>
       {beforeFilters}
       <div className="grid gap-2 border-b border-line p-2">
         <LabeledFilter label="Provider">
-          <ProviderFilterField providers={providers} value={providerFilter} onValueChange={setProviderOverride} />
+          <ProviderFilterField providers={providers} value={providerFilter} onValueChange={setProviderOverride} container={container} />
         </LabeledFilter>
         <LabeledFilter label="Model">
           <ModelSelectorSearch
@@ -747,10 +765,12 @@ export interface ProviderFilterFieldProps {
   value: string;
   onValueChange(value: string): void;
   className?: string;
+  /** Opt-in portal owner when the field lives inside a modal. */
+  container?: HTMLElement | null | undefined;
 }
 
 /** Searchable single-field provider filter shared by menus and catalogue tables. */
-export function ProviderFilterField({ providers, value, onValueChange, className }: ProviderFilterFieldProps) {
+export function ProviderFilterField({ providers, value, onValueChange, className, container }: ProviderFilterFieldProps) {
   const [open, setOpen] = useState(false);
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -770,7 +790,7 @@ export function ProviderFilterField({ providers, value, onValueChange, className
           <ChevronsUpDown aria-hidden="true" className="size-3.5 shrink-0 text-ink-3" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-72 max-w-[calc(100vw-2rem)] overflow-hidden p-0">
+      <PopoverContent container={container} align="start" className="w-72 max-w-[calc(100vw-2rem)] overflow-hidden p-0">
         <Command className="bg-transparent">
           <CommandInput aria-label="Search providers" placeholder="Search providers" />
           <CommandList>
@@ -819,6 +839,8 @@ export interface ProviderModelPickerProps {
   className?: string;
   side?: ProviderModelMenuProps["side"];
   align?: ProviderModelMenuProps["align"];
+  /** Opt-in portal owner for modal callers. */
+  container?: HTMLElement | null | undefined;
 }
 
 export interface ProviderPickerProps {
@@ -865,14 +887,14 @@ export function ProviderPicker({ models, value, onValueChange, disabled, loading
 }
 
 /** A complete single-value model control for settings and onboarding. */
-export function ProviderModelPicker({ models, value, onValueChange, disabled, loading, error, placeholder, className, side, align }: ProviderModelPickerProps) {
+export function ProviderModelPicker({ models, value, onValueChange, disabled, loading, error, placeholder, className, side, align, container }: ProviderModelPickerProps) {
   const options = useMemo(() => models.map(modelOption), [models]);
   return (
     <ModelSelectorRoot models={options} {...(value ? { value } : {})} onValueChange={onValueChange}>
       <ModelSelectorTrigger disabled={disabled} className={cn("w-full max-w-96", className)}>
         <ModelSelectorValue placeholder={placeholder ?? "Choose a model"} className="min-w-0" />
       </ModelSelectorTrigger>
-      <ProviderModelMenu loading={loading} error={error} {...(side ? { side } : {})} {...(align ? { align } : {})} />
+      <ProviderModelMenu loading={loading} error={error} container={container} {...(side ? { side } : {})} {...(align ? { align } : {})} />
     </ModelSelectorRoot>
   );
 }

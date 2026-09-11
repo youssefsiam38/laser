@@ -587,6 +587,8 @@ describe("Agents page", () => {
     await settle();
     await click(reopened.querySelector<HTMLElement>('[data-slot="model-selector-trigger"]')!);
     await settle();
+    const beamMenu = reopened.querySelector('[data-slot="model-selector-content"]')!;
+    expect(reopened.querySelector('[data-slot="model-picker-portal"]')?.contains(beamMenu)).toBe(true);
     await click([...document.body.querySelectorAll<HTMLElement>('[data-slot="model-selector-item"], [role="option"]')].find((n) => n.textContent?.includes("GPT-5"))!);
     await settle();
     expect(q('[data-slot="builtin-model-dialog"][data-agent="beam"]').querySelector('[data-slot="model-selector-trigger"]')?.textContent).toContain("GPT-5");
@@ -609,7 +611,22 @@ describe("Agents page", () => {
     // Only providers the person has connected are offered (D-145).
     await click(chatDialog.querySelector<HTMLElement>('[data-slot="model-selector-trigger"]')!);
     await settle();
-    const listed = [...document.body.querySelectorAll('[data-slot="model-selector-item"], [role="option"]')].map((n) => n.textContent ?? "").join(" ");
+    const modelMenu = chatDialog.querySelector<HTMLElement>('[data-slot="model-selector-content"]')!;
+    expect(chatDialog.querySelector('[data-slot="model-picker-portal"]')?.contains(modelMenu)).toBe(true);
+    const providerTrigger = modelMenu.querySelector<HTMLButtonElement>('[aria-label="Filter by provider"]')!;
+    await click(providerTrigger);
+    await settle();
+    const providerSearch = chatDialog.querySelector<HTMLInputElement>('input[aria-label="Search providers"]');
+    expect(providerSearch).not.toBeNull();
+    expect(document.activeElement).toBe(providerSearch);
+    const providerMenu = chatDialog.querySelector('[data-slot="popover-content"]')!;
+    expect(chatDialog.querySelector('[data-slot="model-picker-portal"]')?.contains(providerMenu)).toBe(true);
+    await act(async () => providerSearch!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await settle();
+    expect(chatDialog.querySelector('input[aria-label="Search providers"]')).toBeNull();
+    expect(chatDialog.querySelector('[data-slot="model-selector-content"]')).toBe(modelMenu);
+    expect(document.activeElement).toBe(providerTrigger);
+    const listed = [...chatDialog.querySelectorAll('[data-slot="model-selector-item"], [role="option"]')].map((n) => n.textContent ?? "").join(" ");
     expect(listed).toContain("GPT-5");
     expect(listed).not.toContain("Mistral");
     await click([...document.body.querySelectorAll<HTMLElement>('[data-slot="model-selector-item"], [role="option"]')].find((n) => n.textContent?.includes("GPT-5"))!);
@@ -640,6 +657,8 @@ describe("Agents page", () => {
     await settle();
     await click(namerDialog.querySelector<HTMLElement>('[data-slot="model-selector-trigger"]')!);
     await settle();
+    const namerMenu = namerDialog.querySelector('[data-slot="model-selector-content"]')!;
+    expect(namerDialog.querySelector('[data-slot="model-picker-portal"]')?.contains(namerMenu)).toBe(true);
     await click([...document.body.querySelectorAll<HTMLElement>('[data-slot="model-selector-item"], [role="option"]')].find((n) => n.textContent?.includes("GPT-5"))!);
     await settle();
     await click([...q('[data-slot="builtin-model-dialog"][data-agent="namer"]').querySelectorAll("button")].find((b) => b.textContent?.trim() === "Use this model")!);
