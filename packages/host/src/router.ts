@@ -26,6 +26,7 @@
  */
 import { ErrorCodes, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, ProtocolError, decisionPushPayload, isTerminalRunStatus, parseClientRequest, type AgentRun, type AgentWorktreeStatus, type JsonRpcError, type JsonRpcResponse, type NamerState, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
 import { existsSync, statSync, unlinkSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
 import { PRODUCT_VERSION } from "@lasercode/protocol";
 import { destinationFor, rewriteSessionFile } from "./session-move.js";
 import type { AgentRunRegistry } from "./agents/runs.js";
@@ -789,11 +790,26 @@ export class Router {
       return (await this.pool.get(cwd)).request(req.method, req.params);
     }
     // Settings, packages, providers and models are per project, not per
-    // session: they name a cwd and go to that project's worker.
+    // session: they name a cwd and go to that project's worker. A child's
+    // worktree is part of its project (invariant 5): a cwd under
+    // `.worktrees/<name>` reaches the project's worker as the project, never
+    // a second worker of its own, and a file it named keeps its place inside
+    // that worktree (still inside the project, so the worker's containment
+    // check holds).
     if (CWD_ROUTED.has(req.method)) {
-      const { cwd } = req.params as { cwd: string };
+      const params = req.params as { cwd: string; path?: string };
+      const cwd = projectRootOf(params.cwd);
+      const routed = cwd === params.cwd
+        ? req.params
+        : {
+            ...params,
+            cwd,
+            ...(req.method === "pi/project/read" && typeof params.path === "string" && !isAbsolute(params.path)
+              ? { path: resolve(params.cwd, params.path) }
+              : {}),
+          };
       const worker = await this.pool.get(cwd);
-      const result = await worker.request(req.method, req.params);
+      const result = await worker.request(req.method, routed);
       // Remember which worker opened this upload: the chunks that follow carry
       // an id and nothing else.
       if (req.method === "pi/transcribe/begin") {

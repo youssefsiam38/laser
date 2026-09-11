@@ -79,3 +79,24 @@ describe("Router · mcp/*", () => {
     }
   });
 });
+
+describe("a cwd under a child's worktree", () => {
+  it("reaches the project's worker as the project, and a relative file keeps its place in the worktree (invariant 5)", async () => {
+    const { router, requests, cleanup } = harness();
+    try {
+      const worktree = `${CWD}/.worktrees/fixer-1a2b3c4d`;
+      const read = { jsonrpc: "2.0" as const, id: 1, method: "pi/project/read", params: { cwd: worktree, path: "src/example.ts" } };
+      await router.handle(read as never);
+      expect(requests.at(-1)).toEqual({ cwd: CWD, method: "pi/project/read", params: { cwd: CWD, path: `${worktree}/src/example.ts` } });
+      const settings = { jsonrpc: "2.0" as const, id: 2, method: "mcp/list", params: { cwd: worktree } };
+      await router.handle(settings as never);
+      expect(requests.at(-1)).toEqual({ cwd: CWD, method: "mcp/list", params: { cwd: CWD } });
+      // An absolute path stays as it is; a project's own cwd is untouched.
+      const absolute = { jsonrpc: "2.0" as const, id: 3, method: "pi/project/read", params: { cwd: CWD, path: `${CWD}/README.md` } };
+      await router.handle(absolute as never);
+      expect(requests.at(-1)).toEqual({ cwd: CWD, method: "pi/project/read", params: { cwd: CWD, path: `${CWD}/README.md` } });
+    } finally {
+      cleanup();
+    }
+  });
+});
