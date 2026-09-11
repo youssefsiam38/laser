@@ -68,8 +68,6 @@ interface PreAcceptanceHydration {
   entries: unknown[];
   leafId: string | null;
   goal: Awaited<ReturnType<NonNullable<SessionDriver["goalState"]>>>;
-  seq: number;
-  buffer: SessionUpdateParams[];
 }
 
 interface Live {
@@ -351,7 +349,10 @@ export class WorkerServer {
         const live = this.live(req.params.path);
         const baseline = live.preAcceptance;
         if (baseline) return { entries: baseline.entries, leafId: baseline.leafId } satisfies Result<"pi/session/entries">;
-        return (await this.firstTurnLock.run(live.path, () => live.driver.entries())) satisfies Result<"pi/session/entries">;
+        // A normal prompt holds the admission lease through engine preflight but
+        // does not replace the runtime. Its live canonical reads must remain
+        // available so a no-signal question can be answered after reconnect.
+        return (await live.driver.entries()) satisfies Result<"pi/session/entries">;
       }
       case "pi/session/compact": {
         const live = this.live(req.params.path);
@@ -381,7 +382,7 @@ export class WorkerServer {
         const live = this.live(req.params.path);
         const goal = live.preAcceptance
           ? live.preAcceptance.goal
-          : await this.firstTurnLock.run(live.path, async () => live.driver.goalState ? live.driver.goalState() : null);
+          : await live.driver.goalState?.() ?? null;
         return { goal: goal ?? null } satisfies Result<"session/goal/get">;
       }
       case "session/goal/action": {
@@ -744,21 +745,18 @@ export class WorkerServer {
     if (existing) {
       // A no-signal extension question may be holding prompt preflight. Never
       // queue reconnect hydration behind the lease that only its answer can
-      // release. Serve one coherent genuine baseline, then replay live control.
-      const baseline = existing.preAcceptance;
-      if (baseline) {
-        this.replay(existing, params.fromSeq, baseline);
-        return {
-          state: this.decorate(existing, baseline.state),
-          replayFrom: this.replayFloorFrom(baseline.buffer, baseline.seq, params.fromSeq),
-          seq: baseline.seq,
-        };
-      }
-      return this.firstTurnLock.run(existing.path, async () => {
-        const state = existing.driver.state();
-        this.replay(existing, params.fromSeq);
-        return { state: this.decorate(existing, state), replayFrom: this.replayFloor(existing, params.fromSeq), seq: existing.seq };
-      });
+      // release. Only candidate replacement needs a state baseline; ordinary
+      // prompts keep exposing their live canonical runtime.
+      const state = existing.preAcceptance?.state ?? existing.driver.state();
+      // Numbered diagnostics are accepted live control even during candidate
+      // preparation. Replay through the current watermark so reconnect cannot
+      // omit one that arrived after the state baseline was captured.
+      this.replay(existing, params.fromSeq);
+      return {
+        state: this.decorate(existing, state),
+        replayFrom: this.replayFloor(existing, params.fromSeq),
+        seq: existing.seq,
+      };
     }
     const inFlight = this.opening.get(params.path);
     if (inFlight) {
@@ -1101,8 +1099,6 @@ export class WorkerServer {
         entries: [...entries],
         leafId,
         goal,
-        seq: live.seq,
-        buffer: live.buffer.filter((update) => update.seq <= live.seq),
       };
       live.preAcceptance = hydration;
     } catch (error) {
@@ -1369,11 +1365,9 @@ export class WorkerServer {
   }
 
   /** Re-send accepted updates after `fromSeq`, then any dialogs still waiting. */
-  private replay(live: Live, fromSeq: number | undefined, baseline?: PreAcceptanceHydration): void {
+  private replay(live: Live, fromSeq: number | undefined): void {
     if (fromSeq !== undefined) {
-      const buffer = baseline?.buffer ?? live.buffer;
-      const ceiling = baseline?.seq ?? live.seq;
-      for (const params of buffer) if (params.seq > fromSeq && params.seq <= ceiling) this.notify("session/update", params);
+      for (const params of live.buffer) if (params.seq > fromSeq && params.seq <= live.seq) this.notify("session/update", params);
     }
     // Pending dialogs are owned by the driver's UI bridge; the driver re-emits
     // them through `ui_request` events when asked. Drivers that expose

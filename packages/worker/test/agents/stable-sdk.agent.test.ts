@@ -534,10 +534,10 @@ describe("StableSdkDriver with an agent definition", () => {
     expect(entries.filter((entry) => entry.type === "message" && entry.message?.role === "user")).toHaveLength(1);
   }, 60_000);
 
-  it("keeps a no-signal candidate question answerable before acceptance and retires it on cancellation", async () => {
+  it("keeps no-signal candidate and ordinary questions hydratable before acceptance", async () => {
     const original = { ...fallbackDefaultAgent(), model: { provider: "stub", id: "stub-1" }, thinkingLevel: "low" as const } satisfies AgentDefinition;
     const selected = { ...original, name: "reviewer", thinkingLevel: "high" as const } satisfies AgentDefinition;
-    const entered = [deferred(), deferred()];
+    const entered = [deferred(), deferred(), deferred()];
     let promptOrdinal = 0;
     let diagnosticOrdinal = 0;
     const question: InlineExtension = (pi) => {
@@ -596,19 +596,23 @@ describe("StableSdkDriver with an agent definition", () => {
     expect(messages.some((message) => "id" in message && !("method" in message) && message.id === acceptedRequestId)).toBe(false);
 
     // The real UI's complete open sequence must not queue behind the preflight
-    // lease held by this very question, and every read must describe one
-    // genuine pre-candidate baseline while the live question is replayed.
-    const reloaded = await call("session/load", { path: accepted.path, fromSeq: 0 }).then((reply) => reply.result as { state: SessionState; seq: number });
+    // lease held by this very question, and candidate-mutable reads must
+    // describe one genuine pre-candidate baseline. Accepted numbered control
+    // keeps its live watermark even when emitted after that baseline capture.
+    const liveDiagnostic = notificationsSince(acceptedStart, "session/update")[0];
+    const diagnosticSeq = (liveDiagnostic!.params as { seq: number }).seq;
+    const reloaded = await call("session/load", { path: accepted.path, fromSeq: 0 }).then((reply) => reply.result as { state: SessionState; replayFrom: number; seq: number });
     const hydratedEntries = await call("pi/session/entries", { path: accepted.path }).then((reply) => reply.result as { entries: unknown[]; leafId: string | null });
     const hydratedGoal = await call("session/goal/get", { path: accepted.path }).then((reply) => reply.result);
     const hydratedPending = await call("session/pending/list", { path: accepted.path }).then((reply) => reply.result);
     expect(reloaded.state).toMatchObject({ id: accepted.id, path: accepted.path, model: accepted.model, thinkingLevel: accepted.thinkingLevel, agent: accepted.agent });
+    expect(reloaded).toMatchObject({ replayFrom: 0, seq: diagnosticSeq });
     expect(hydratedEntries).toEqual(acceptedBaselineEntries);
     expect(JSON.stringify(hydratedEntries)).not.toContain("candidate-projection");
     expect(hydratedGoal).toEqual({ goal: null });
     expect(hydratedPending).toEqual({ messages: [] });
     expect(notificationsSince(acceptedStart, "pi/ui/request").filter((message) => (message.params as { id: string }).id === acceptedQuestionId)).toHaveLength(2);
-    expect(notificationsSince(acceptedStart, "session/update").map((message) => (message.params as { update: { kind: string } }).update.kind)).toEqual(["extension_error"]);
+    expect(notificationsSince(acceptedStart, "session/update").map((message) => (message.params as { update: { kind: string } }).update.kind)).toEqual(["extension_error", "extension_error"]);
     expect(notificationsSince(acceptedStart, "pi/ui/event").map((message) => (message.params as { method: string }).method)).toEqual(["notify"]);
     const acceptedQuestionEvent = driverEvents.find((event) => event.type === "ui_request" && event.request.id === acceptedQuestionId);
     expect(acceptedQuestionEvent).toMatchObject({ type: "ui_request", invocation: { id: expect.any(String) } });
@@ -643,6 +647,32 @@ describe("StableSdkDriver with an agent definition", () => {
     expect((await call("pi/ui/response", { id: cancelledQuestionId, confirmed: true })).result).toEqual({ delivered: false });
     expect((await call("session/load", { path: cancelled.path }).then((reply) => reply.result as { state: SessionState })).state)
       .toMatchObject({ id: cancelled.id, path: cancelled.path, model: cancelled.model, thinkingLevel: cancelled.thinkingLevel, agent: cancelled.agent });
+
+    // An ordinary prompt holds the same preflight lease but installs no
+    // replacement snapshot. Its canonical runtime reads stay live so a fresh
+    // Chat/Beam/child view can hydrate and answer the no-signal question.
+    const ordinary = (await call("session/new", { cwd: join(base, "project"), agentName: original.name }).then((reply) => reply.result as { state: SessionState })).state;
+    const ordinaryStart = messages.length;
+    const prompting = call("session/prompt", {
+      path: ordinary.path,
+      content: [{ type: "text", text: "ordinary no-signal question" }],
+    });
+    await entered[2]!.promise;
+    const ordinaryQuestion = notificationsSince(ordinaryStart, "pi/ui/request")[0];
+    const ordinaryQuestionId = (ordinaryQuestion!.params as { id: string }).id;
+    expect(ordinaryQuestion?.params).toMatchObject({ path: ordinary.path, method: "confirm", title: "Candidate question" });
+    const ordinaryLoad = await call("session/load", { path: ordinary.path, fromSeq: 0 }).then((reply) => reply.result as { state: SessionState; seq: number });
+    const ordinaryEntries = await call("pi/session/entries", { path: ordinary.path }).then((reply) => reply.result as { entries: unknown[]; leafId: string | null });
+    const ordinaryGoal = await call("session/goal/get", { path: ordinary.path }).then((reply) => reply.result);
+    const ordinaryPending = await call("session/pending/list", { path: ordinary.path }).then((reply) => reply.result);
+    expect(ordinaryLoad.state).toMatchObject({ id: ordinary.id, path: ordinary.path, model: ordinary.model, thinkingLevel: ordinary.thinkingLevel, agent: ordinary.agent });
+    expect(JSON.stringify(ordinaryEntries)).toContain("test/candidate-projection");
+    expect(ordinaryGoal).toEqual({ goal: null });
+    expect(ordinaryPending).toEqual({ messages: [] });
+    expect(notificationsSince(ordinaryStart, "pi/ui/request").filter((message) => (message.params as { id: string }).id === ordinaryQuestionId)).toHaveLength(2);
+    expect((await call("pi/ui/response", { id: ordinaryQuestionId, confirmed: true })).result).toEqual({ delivered: true });
+    expect(await prompting).toMatchObject({ result: { accepted: true, queued: false } });
+    expect(stub.requests).toHaveLength(2);
     await server.dispose();
   }, 60_000);
 
