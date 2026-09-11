@@ -9,6 +9,7 @@ import {
   HARNESS_TOOL_NAMES,
   ProtocolError,
   agentMessageModeSchema,
+  agentQuestionAnswerHint,
   agentRunStatusSchema,
   backgroundTaskUpdateSchema,
   isTerminalRunStatus,
@@ -42,6 +43,20 @@ describe("agent parent-message modes", () => {
     for (const mode of AGENT_MESSAGE_MODES) expect(agentMessageModeSchema.parse(mode)).toBe(mode);
     expect(agentMessageModeSchema.parse(undefined)).toBe("interrupt");
     for (const legacy of [true, false, "followUp", ""]) expect(agentMessageModeSchema.safeParse(legacy).success).toBe(false);
+  });
+
+  it("uses one explicit answer-mode hint for every typed live question", () => {
+    const expected = {
+      select: "one of the choices",
+      confirm: '"yes" or "no"',
+      input: "the message is the answer",
+      editor: "the message replaces the text",
+    } as const;
+    for (const [kind, detail] of Object.entries(expected) as Array<[keyof typeof expected, string]>) {
+      const hint = agentQuestionAnswerHint({ kind });
+      expect(hint).toContain('mode "answer"');
+      expect(hint).toContain(detail);
+    }
   });
 });
 

@@ -8,14 +8,34 @@ export type PromptAdmission = "invoke" | "engine-queue" | "local-queue" | "bare-
 
 export type InvocationBoundary<End> = { settled: boolean; end: End | undefined };
 export type InvocationFinish<End> = InvocationBoundary<End> | { fenced: true };
-
-interface Interruption<End> {
+export type InvocationControlKind = "interrupt" | "stop";
+export type InvocationControlOutcome = { ok: true } | { ok: false; error: string; cancelled?: boolean };
+export interface InvocationControlTicket {
   token: number;
-  controlReady: boolean;
-  finished?: InvocationBoundary<End>;
+  created: boolean;
+  outcome: Promise<InvocationControlOutcome>;
+}
+export type InvocationControlTransition<End, Invocation, Context> =
+  | { kind: "pending" }
+  | { kind: "retry"; token: number }
+  | { kind: "failed"; control: InvocationControlKind; token: number; context: Context; finished?: { boundary: InvocationBoundary<End>; invocation: Invocation } }
+  | { kind: "ready"; control: InvocationControlKind; token: number; context: Context };
+
+interface InvocationControl<End, Invocation, Context> {
+  runId: string;
+  token: number;
+  kind: InvocationControlKind;
+  context: Context;
+  phase: "requested" | "aborting" | "awaiting-execution" | "ready" | "controlled";
+  waitForExecution: boolean;
+  executionStarted: boolean;
+  abortAttempt?: "initial" | "execution";
+  finished?: { boundary: InvocationBoundary<End>; invocation: Invocation };
+  outcome: Promise<InvocationControlOutcome>;
+  resolve: (outcome: InvocationControlOutcome) => void;
 }
 
-export class SessionLifecycle<End, Message> {
+export class SessionLifecycle<End, Message, Invocation = unknown, Context = undefined> {
   private phaseValue: SessionPhase<End> = { kind: "idle" };
   private successorRunId: string | undefined;
   private readonly inboxes = new Map<string, Message[]>();
@@ -27,9 +47,11 @@ export class SessionLifecycle<End, Message> {
   private readonly descendantSettled = new Set<string>();
   /** Exact native epoch for the current owner; absent only for legacy/fake drivers. */
   private readonly invocations = new Map<string, Set<string>>();
-  /** An interrupt keeps ownership until both abort control and the prompt promise settle. */
-  private interruptionValue: { runId: string; state: Interruption<End> } | undefined;
-  private interruptionSerial = 0;
+  /** One typed interrupt/stop transaction owns cancellation and the prompt fence. */
+  private controlValue: InvocationControl<End, Invocation, Context> | undefined;
+  private controlSerial = 0;
+  /** Every portable dialog accepted under the current exact owner, not only the projected oldest question. */
+  private readonly dialogs = new Map<string, Map<string, string | undefined>>();
 
   phase(): SessionPhase<End> {
     return this.phaseValue;
@@ -133,59 +155,169 @@ export class SessionLifecycle<End, Message> {
     return this.phaseValue.kind === "terminal-pending" && this.phaseValue.runId === runId ? this.phaseValue.end : undefined;
   }
 
-  /**
-   * Hold the engine-ready boundary while abort control is still unresolved.
-   * The caller stores its invocation result and resumes it from
-   * `resolveInterrupt`; ownership never briefly becomes idle between them.
-   */
-  finish(runId: string): InvocationFinish<End> | undefined {
+  /** Hold the engine-ready boundary while a typed interrupt/stop transaction is unresolved. */
+  finish(runId: string, invocation: Invocation): InvocationFinish<End> | undefined {
     if (this.phaseValue.kind === "idle" || this.phaseValue.runId !== runId) return undefined;
-    const result: InvocationBoundary<End> = {
+    const boundary: InvocationBoundary<End> = {
       settled: this.phaseValue.settled,
       ...(this.phaseValue.kind === "terminal-pending" ? { end: this.phaseValue.end } : { end: undefined }),
     };
-    const interruption = this.interruptionValue;
-    if (interruption?.runId === runId && !interruption.state.controlReady) {
-      interruption.state.finished = result;
+    const control = this.controlValue;
+    if (control?.runId === runId && control.phase !== "controlled") {
+      control.finished = { boundary, invocation };
       return { fenced: true };
     }
     this.releaseOwner(runId);
-    return result;
+    return boundary;
   }
 
-  /** Start or join the one interrupt controlling this exact owner. */
-  requestInterrupt(runId: string): { token: number; created: boolean } | undefined {
+  beginInterrupt(runId: string, input: { waitForExecution: boolean; context: Context }): InvocationControlTicket | undefined {
     if (this.owner() !== runId) return undefined;
-    if (this.interruptionValue?.runId === runId) return { token: this.interruptionValue.state.token, created: false };
-    const token = ++this.interruptionSerial;
-    this.interruptionValue = { runId, state: { token, controlReady: false } };
-    return { token, created: true };
+    const current = this.controlValue;
+    if (current?.runId === runId) {
+      if (current.kind !== "interrupt") return undefined;
+      return { token: current.token, created: false, outcome: current.outcome };
+    }
+    return this.createControl(runId, "interrupt", input);
   }
 
-  interruption(runId: string): number | undefined {
-    return this.interruptionValue?.runId === runId ? this.interruptionValue.state.token : undefined;
+  /** Direct stop starts one control; promotion keeps its fence and refuses only an unresolved interrupt ticket. */
+  beginStop(
+    runId: string,
+    input: { waitForExecution: boolean; context: Context; interruptOutcome: InvocationControlOutcome },
+  ): (InvocationControlTicket & { refusedInterruptToken?: number }) | undefined {
+    if (this.owner() !== runId) return undefined;
+    const current = this.controlValue;
+    if (!current) return this.createControl(runId, "stop", input);
+    if (current.runId !== runId) return undefined;
+    if (current.kind === "stop") return { token: current.token, created: false, outcome: current.outcome };
+    const refusedInterruptToken = current.phase === "controlled" ? undefined : current.token;
+    if (refusedInterruptToken !== undefined) current.resolve(input.interruptOutcome);
+    let resolve!: (outcome: InvocationControlOutcome) => void;
+    const outcome = new Promise<InvocationControlOutcome>((settle) => { resolve = settle; });
+    current.kind = "stop";
+    current.context = input.context;
+    current.waitForExecution ||= input.waitForExecution;
+    current.outcome = outcome;
+    current.resolve = resolve;
+    if (current.phase === "controlled" || current.phase === "ready") current.phase = "requested";
+    return {
+      token: current.token,
+      created: true,
+      outcome,
+      ...(refusedInterruptToken !== undefined ? { refusedInterruptToken } : {}),
+    };
   }
 
-  /** Abort control succeeded; release a prompt boundary that arrived first. */
-  resolveInterrupt(runId: string, token: number): InvocationBoundary<End> | undefined {
-    const interruption = this.interruptionValue;
-    if (!interruption || interruption.runId !== runId || interruption.state.token !== token) return undefined;
-    interruption.state.controlReady = true;
-    const finished = interruption.state.finished;
+  control(runId: string): { token: number; kind: InvocationControlKind; outcome: Promise<InvocationControlOutcome> } | undefined {
+    const control = this.controlValue;
+    return control?.runId === runId ? { token: control.token, kind: control.kind, outcome: control.outcome } : undefined;
+  }
+
+  /** Transition one allowed abort attempt to in-flight. */
+  startAbort(runId: string, token: number, attempt: "initial" | "execution"): boolean {
+    const control = this.controlValue;
+    if (!control || control.runId !== runId || control.token !== token) return false;
+    if (control.phase === "aborting" || control.phase === "ready" || control.phase === "controlled") return false;
+    if (attempt === "execution") control.executionStarted = true;
+    control.phase = "aborting";
+    control.abortAttempt = attempt;
+    return true;
+  }
+
+  /** A stamped execution event either arms the current attempt or asks the harness to abort now. */
+  executionStarted(runId: string): { token: number } | undefined {
+    const control = this.controlValue;
+    if (!control || control.runId !== runId || control.phase === "ready" || control.phase === "controlled") return undefined;
+    control.executionStarted = true;
+    if (control.phase !== "awaiting-execution") return undefined;
+    control.phase = "requested";
+    return { token: control.token };
+  }
+
+  /** Feed one abort result back into the transaction; only `ready` may be committed. */
+  settleAbort(runId: string, token: number, outcome: { ok: true } | { ok: false; error: string }): InvocationControlTransition<End, Invocation, Context> {
+    const control = this.controlValue;
+    if (!control || control.runId !== runId || control.token !== token || control.phase !== "aborting") return { kind: "pending" };
+    const attempt = control.abortAttempt ?? "initial";
+    delete control.abortAttempt;
+    if (!outcome.ok) {
+      const finished = control.finished;
+      control.resolve({ ok: false, error: outcome.error });
+      this.controlValue = undefined;
+      if (finished) this.releaseOwner(runId);
+      return { kind: "failed", control: control.kind, token, context: control.context, ...(finished ? { finished } : {}) };
+    }
+    if (control.waitForExecution && attempt === "initial" && !control.finished) {
+      if (control.executionStarted) {
+        control.phase = "requested";
+        return { kind: "retry", token };
+      }
+      control.phase = "awaiting-execution";
+      return { kind: "pending" };
+    }
+    control.phase = "ready";
+    return { kind: "ready", control: control.kind, token, context: control.context };
+  }
+
+  /** Commit cancellation effects only after abort control is ready. */
+  commitControl(runId: string, token: number): { boundary: InvocationBoundary<End>; invocation: Invocation } | undefined {
+    const control = this.controlValue;
+    if (!control || control.runId !== runId || control.token !== token || control.phase !== "ready") return undefined;
+    control.phase = "controlled";
+    control.resolve({ ok: true });
+    const finished = control.finished;
     if (!finished) return undefined;
+    const boundary: InvocationBoundary<End> = {
+      settled: this.phaseValue.kind !== "idle" ? this.phaseValue.settled : finished.boundary.settled,
+      ...(this.phaseValue.kind === "terminal-pending" ? { end: this.phaseValue.end } : { end: finished.boundary.end }),
+    };
     this.releaseOwner(runId);
-    return finished;
+    return { boundary, invocation: finished.invocation };
   }
 
-  /** Abort control failed; remove the marker and release a boundary that arrived first. */
-  cancelInterrupt(runId: string, token: number): InvocationBoundary<End> | undefined {
-    const interruption = this.interruptionValue;
-    if (!interruption || interruption.runId !== runId || interruption.state.token !== token) return undefined;
-    const finished = interruption.state.finished;
-    this.interruptionValue = undefined;
-    if (!finished) return undefined;
-    this.releaseOwner(runId);
-    return finished;
+  private createControl(runId: string, kind: InvocationControlKind, input: { waitForExecution: boolean; context: Context }): InvocationControlTicket {
+    const token = ++this.controlSerial;
+    let resolve!: (outcome: InvocationControlOutcome) => void;
+    const outcome = new Promise<InvocationControlOutcome>((settle) => { resolve = settle; });
+    this.controlValue = {
+      runId,
+      token,
+      kind,
+      context: input.context,
+      phase: "requested",
+      waitForExecution: input.waitForExecution,
+      executionStarted: false,
+      outcome,
+      resolve,
+    };
+    return { token, created: true, outcome };
+  }
+
+  /** Track all dialogs under the exact current invocation, and cancel new ones while controlled. */
+  recordDialog(runId: string, id: string, invocationId?: string): { cancel: boolean } {
+    const owner = this.owner();
+    if (owner !== undefined && owner !== runId) return { cancel: false };
+    const owned = this.dialogs.get(runId) ?? new Map<string, string | undefined>();
+    owned.set(id, invocationId);
+    this.dialogs.set(runId, owned);
+    return { cancel: this.controlValue?.runId === runId };
+  }
+
+  resolveDialog(runId: string, id: string): void {
+    const owned = this.dialogs.get(runId);
+    owned?.delete(id);
+    if (owned?.size === 0) this.dialogs.delete(runId);
+  }
+
+  ownedDialogs(runId: string, pendingIds?: ReadonlySet<string>): string[] {
+    const owned = this.dialogs.get(runId);
+    if (!owned) return [];
+    const ids = [...owned.keys()].filter((id) => pendingIds === undefined || pendingIds.has(id));
+    if (pendingIds) {
+      for (const id of [...owned.keys()]) if (!pendingIds.has(id)) owned.delete(id);
+    }
+    return ids;
   }
 
   private releaseOwner(runId: string): void {
@@ -193,7 +325,8 @@ export class SessionLifecycle<End, Message> {
     this.invocations.delete(runId);
     this.descendants.delete(runId);
     this.descendantSettled.delete(runId);
-    if (this.interruptionValue?.runId === runId) this.interruptionValue = undefined;
+    this.dialogs.delete(runId);
+    if (this.controlValue?.runId === runId) this.controlValue = undefined;
   }
 
   successor(): string | undefined {
@@ -291,7 +424,11 @@ export class SessionLifecycle<End, Message> {
     this.invocations.delete(runId);
     this.descendants.delete(runId);
     this.descendantSettled.delete(runId);
-    if (this.interruptionValue?.runId === runId) this.interruptionValue = undefined;
+    this.dialogs.delete(runId);
+    if (this.controlValue?.runId === runId) {
+      this.controlValue.resolve({ ok: false, error: "The agent session ended before cancellation control settled." });
+      this.controlValue = undefined;
+    }
     if (this.successorRunId === runId) this.successorRunId = undefined;
   }
 

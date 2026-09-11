@@ -286,6 +286,21 @@ export interface AgentRunQuestion {
   askedAt: string;
 }
 
+/** One canonical model-facing instruction for answering a live typed question. */
+export function agentQuestionAnswerHint(question: Pick<AgentRunQuestion, "kind">): string {
+  const call = 'send_agent_message with its sessionId and mode "answer"';
+  switch (question.kind) {
+    case "select":
+      return `Answer it with ${call} and one of the choices, exactly, as the message.`;
+    case "confirm":
+      return `Answer it with ${call} and "yes" or "no" as the message.`;
+    case "input":
+      return `Answer it with ${call}; the message is the answer, verbatim.`;
+    case "editor":
+      return `Answer it with ${call}; the message replaces the text, verbatim.`;
+  }
+}
+
 /** The four identities, exactly as the architecture reference names them. */
 export interface AgentRunIdentity {
   agentName: string;

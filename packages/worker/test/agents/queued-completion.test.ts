@@ -404,6 +404,16 @@ beforeEach(async () => {
         return { content: [{ type: "text", text: answer === undefined ? "no answer" : `answer: ${answer}` }], details: undefined };
       },
     });
+    pi.registerTool({
+      name: "ask_without_signal",
+      label: "Ask without signal",
+      description: "Asks through the valid portable surface without attaching the tool signal.",
+      parameters: { type: "object", properties: {} } as never,
+      async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+        const answer = await ctx.ui.select("No signal?", ["x", "y"]);
+        return { content: [{ type: "text", text: answer === undefined ? "no answer" : `answer: ${answer}` }], details: undefined };
+      },
+    });
   };
   server = new WorkerServer({
     cwd: join(base, "project"),
@@ -1140,7 +1150,7 @@ describe("queued completion ownership against the real engine", () => {
     expectNoBodiesInModuleLogs(["Start.", F1, "old done", "successor done", "Later?"]);
   }, 60_000);
 
-  it("attributes a dialog and its resolution to the epoch that raised it, so the owning run asks and is answered by the same stamp", async () => {
+  it("attributes a dialog to its epoch so stop cancels only the exact owned request before abort", async () => {
     provider.answer(0, { toolCall: { name: "ask_now", args: {}, id: "call-ask-now" } });
     provider.route(() => ({ text: "ok" }));
     const asked = waitForRun((run) => run.sessionPath === childPath && run.status === "needs_input");
@@ -1152,14 +1162,11 @@ describe("queued completion ownership against the real engine", () => {
     expect(request.invocation).toEqual(owning);
     expect(parentEvents.map((entry) => entry.event.type)).toEqual(["agent.needs_input"]);
 
-    // The person stops the run: the abort reaches the dialog through the
-    // tool's signal, and its resolution carries the stamp its request took.
-    const resolved = waitForDriverEvent((event) => event.kind === "ui_event" && event.method === "dialogResolved");
+    // The person stops the run: lifecycle ownership cancels the exact dialog
+    // synchronously before abort waits for idle. `respondToUi(cancelled)` is
+    // intentionally not a second client event; the run projection drops it.
     const stopped = await call("agents/runs/stop", { runId: started.runId, reason: "never mind" });
     expect(stopped.error).toBeUndefined();
-    await resolved;
-    const resolution = driverEvents.find((event) => event.kind === "ui_event" && event.method === "dialogResolved")!;
-    expect(resolution).toMatchObject({ dialogId: request.dialogId, invocation: owning });
     await waitForTerminal(started.runId);
     expect(server.agents().run(started.runId)).toMatchObject({ status: "cancelled", endedBy: { initiator: "user", reason: "never mind" } });
     expect(server.agents().run(started.runId)).not.toHaveProperty("question");
@@ -1204,6 +1211,41 @@ describe("queued completion ownership against the real engine", () => {
     expect(command).toMatchObject({ kind: "command", state: "completed", status: "Done" });
     expect(provider.requests.map(lastUserText).slice(0, 3)).toEqual(["Start detached work.", undefined, REDIRECT]);
     expect(server.agents().run(started.runId)).toMatchObject({ status: "completed", result: { message: "detached done" } });
+    assertNoOverlappingInvocations();
+  }, 60_000);
+
+  it("interrupts a real pinned-engine no-signal question without waiting forever for idle", async () => {
+    const REDIRECT = "Redirect the no-signal tool.";
+    provider.answer(0, { toolCall: { name: "ask_without_signal", args: {}, id: "call-no-signal" } });
+    provider.route((request) => lastUserText(request) === REDIRECT
+      ? { toolCall: { name: "complete_agent_run", args: { status: "completed", message: "no-signal redirected" } } }
+      : { text: "old invocation must not continue" });
+    const asked = waitForRun((run) => run.sessionPath === childPath && run.status === "needs_input");
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Ask without a signal.", mode: "queue" });
+    const paused = await asked;
+    expect(paused.question).toMatchObject({ title: "No signal?", toolName: "ask_without_signal" });
+
+    await expect(parentBridge.sendAgentMessage({ sessionId: childSessionId, message: REDIRECT, mode: "interrupt" })).resolves.toMatchObject({ delivery: "queued", runId: started.runId });
+    await waitForTerminal(started.runId);
+    expect(liveDriver.pendingUi()).toEqual([]);
+    expect(provider.requests.map(lastUserText)).toEqual(["Ask without a signal.", REDIRECT]);
+    expect(server.agents().run(started.runId)).toMatchObject({ status: "completed", result: { message: "no-signal redirected" } });
+    assertNoOverlappingInvocations();
+  }, 60_000);
+
+  it("stops a real pinned-engine no-signal question through the shared control transaction", async () => {
+    provider.answer(0, { toolCall: { name: "ask_without_signal", args: {}, id: "call-no-signal-stop" } });
+    provider.route(() => ({ text: "old invocation must not continue" }));
+    const asked = waitForRun((run) => run.sessionPath === childPath && run.status === "needs_input");
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Ask before stop.", mode: "queue" });
+    await asked;
+
+    const stopped = await call("agents/runs/stop", { runId: started.runId, reason: "stop the question" });
+    expect(stopped.error).toBeUndefined();
+    await waitForTerminal(started.runId);
+    expect(liveDriver.pendingUi()).toEqual([]);
+    expect(provider.requests.map(lastUserText)).toEqual(["Ask before stop."]);
+    expect(server.agents().run(started.runId)).toMatchObject({ status: "cancelled", endedBy: { initiator: "user", reason: "stop the question" } });
     assertNoOverlappingInvocations();
   }, 60_000);
 

@@ -383,7 +383,7 @@ describe("subagents module: tool registration", () => {
     });
     expect(view).not.toHaveProperty("agentName");
     expect(view["what_it_needs"]).toBe(
-      "review-auth-refresh is paused on a question and cannot continue until it is answered. Answer it with send_agent_message with its sessionId and one of the choices, exactly, as the message. The person can also answer it in review-auth-refresh's own chat.",
+      'review-auth-refresh is paused on a question and cannot continue until it is answered. Answer it with send_agent_message with its sessionId and mode "answer" and one of the choices, exactly, as the message. The person can also answer it in review-auth-refresh\'s own chat.',
     );
     expect(result.details).toBe(inspected);
 
@@ -398,9 +398,13 @@ describe("subagents module: tool registration", () => {
     const base = { subagentName: "w", result: undefined, question: undefined };
     expect(whatItNeeds({ ...base, status: "running" })).toBeUndefined();
     expect(whatItNeeds({ ...base, status: "completed" })).toBeUndefined();
-    expect(whatItNeeds({ ...base, status: "needs_input", question: { id: "q", kind: "confirm", title: "Go?", askedAt: "" } })).toContain('"yes" or "no" as the message');
-    expect(whatItNeeds({ ...base, status: "needs_input", question: { id: "q", kind: "input", title: "Name?", askedAt: "" } })).toContain("the message is the answer, verbatim");
-    expect(whatItNeeds({ ...base, status: "needs_input", question: { id: "q", kind: "editor", title: "Edit", askedAt: "" } })).toContain("the message replaces the text, verbatim");
+    const confirm = whatItNeeds({ ...base, status: "needs_input", question: { id: "q", kind: "confirm", title: "Go?", askedAt: "" } });
+    const input = whatItNeeds({ ...base, status: "needs_input", question: { id: "q", kind: "input", title: "Name?", askedAt: "" } });
+    const editor = whatItNeeds({ ...base, status: "needs_input", question: { id: "q", kind: "editor", title: "Edit", askedAt: "" } });
+    for (const guidance of [confirm, input, editor]) expect(guidance).toContain('mode "answer"');
+    expect(confirm).toContain('"yes" or "no" as the message');
+    expect(input).toContain("the message is the answer, verbatim");
+    expect(editor).toContain("the message replaces the text, verbatim");
     // A child that ended blocked asked in its final message; the answer starts a new run.
     expect(whatItNeeds({ ...base, status: "blocked", result: { status: "blocked", message: "Which config?" } })).toContain("Answer with send_agent_message: that starts a new run in the same session");
   });

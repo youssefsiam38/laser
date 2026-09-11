@@ -41,7 +41,7 @@ import {
   AGENT_TASK_EXCERPT,
   AGENT_TASK_MAX,
   SUBAGENT_NAME_MAX,
-  type AgentRunQuestion,
+  agentQuestionAnswerHint,
 } from "@lasercode/protocol";
 import { Type } from "typebox";
 import type {
@@ -277,27 +277,12 @@ export function inspectedView(result: InspectAgentResult): Record<string, unknow
 /** What a stalled child needs from its parent, or nothing for a child that is working or done. */
 export function whatItNeeds(result: Pick<InspectAgentResult, "status" | "subagentName" | "question" | "result">): string | undefined {
   if (result.status === "needs_input" && result.question) {
-    return `${result.subagentName} is paused on a question and cannot continue until it is answered. ${answerHint(result.question)} The person can also answer it in ${result.subagentName}'s own chat.`;
+    return `${result.subagentName} is paused on a question and cannot continue until it is answered. ${agentQuestionAnswerHint(result.question)} The person can also answer it in ${result.subagentName}'s own chat.`;
   }
   if (result.status === "blocked") {
     return `${result.subagentName} ended without finishing; its final message says what it could not do or is asking you. Answer with send_agent_message: that starts a new run in the same session, with its history intact.`;
   }
   return undefined;
-}
-
-/** How to answer a question of this kind, said once here and once in the harness's event (they must agree). */
-function answerHint(question: AgentRunQuestion): string {
-  const call = "send_agent_message with its sessionId";
-  switch (question.kind) {
-    case "select":
-      return `Answer it with ${call} and one of the choices, exactly, as the message.`;
-    case "confirm":
-      return `Answer it with ${call} and "yes" or "no" as the message.`;
-    case "input":
-      return `Answer it with ${call}; the message is the answer, verbatim.`;
-    case "editor":
-      return `Answer it with ${call}; the message replaces the text, verbatim.`;
-  }
 }
 
 function asResult(view: unknown, details: unknown) {

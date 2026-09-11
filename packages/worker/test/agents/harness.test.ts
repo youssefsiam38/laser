@@ -47,6 +47,7 @@ class FakeDriver implements SessionDriver {
   /** Dialogs raised and not yet answered, as `StableSdkDriver.pendingUi()` lists them. */
   pending: UiDialogRequest[] = [];
   responses: UiDialogResponse[] = [];
+  dialogCancellationSettlesPrompt = false;
   /** The session file's lines, for `entries()`; the last one is the leaf. */
   lines: Array<Record<string, unknown>> = [];
   private readonly listeners = new Set<DriverListener>();
@@ -142,10 +143,14 @@ class FakeDriver implements SessionDriver {
   async compact() {}
   async navigateTree() { return { cancelled: false }; }
   async fork() { return { state: this.st }; }
-  respondToUi(r: UiDialogResponse) { this.responses.push(r); this.pending = this.pending.filter((p) => p.id !== r.id); }
+  respondToUi(r: UiDialogResponse) {
+    this.responses.push(r);
+    this.pending = this.pending.filter((p) => p.id !== r.id);
+    if (this.dialogCancellationSettlesPrompt && "cancelled" in r && this.promptResolvers.length > 0) this.resolvePrompt(false);
+  }
   pendingUi(): UiDialogRequest[] { return [...this.pending]; }
   /** Raise a dialog the way the real bridge does: listed as pending first, then announced. */
-  ask(request: UiDialogRequest) { this.pending.push(request); this.emit({ type: "ui_request", request }); }
+  ask(request: UiDialogRequest, invocation?: { id: string; runId?: string }) { this.pending.push(request); this.emit({ type: "ui_request", request, ...(invocation ? { invocation } : {}) }); }
   /** The dialog settled without a client answer (timeout, abort): gone from the list, then announced. */
   resolveDialog(id: string) { this.pending = this.pending.filter((p) => p.id !== id); this.emit({ type: "ui_event", event: { method: "dialogResolved", id } }); }
   async commands() { return []; }
@@ -2288,5 +2293,154 @@ describe("AgentHarness", () => {
       await expect(parent.handle.bridge.removeAgentWorktree({ runId: started.runId })).rejects.toThrow(/Could not find the git repository/);
       expect(world.worktrees.removed).toEqual([]);
     });
+  });
+});
+
+describe("M13-T104 review corrections: one interrupt/stop control owner", () => {
+  let world: ReturnType<typeof makeWorld>;
+  beforeEach(() => {
+    world = makeWorld();
+    world.definitions.sync(snapshotWith([PARENT, WORKER, REVIEWER]));
+    world.setAutoResolveChildPrompts(false);
+  });
+
+  it("cancels a no-signal question before an interrupt waits for prompt idle", async () => {
+    const root = world.openRoot("lead");
+    const started = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "question", task: "initial" });
+    const child = world.drivers.get("/sessions/child-1.jsonl")!;
+    child.ask({ method: "select", id: "ui-nosignal", title: "Choose", options: ["a", "b"] }, { id: "fake-1", runId: started.runId });
+    child.abortAwaitsPrompt = true;
+    child.dialogCancellationSettlesPrompt = true;
+
+    await expect(root.handle.bridge.sendAgentMessage({ sessionId: started.sessionId, message: "redirect", mode: "interrupt" })).resolves.toMatchObject({ delivery: "queued" });
+    expect(child.responses).toContainEqual({ id: "ui-nosignal", cancelled: true });
+    await flushLifecycle();
+    expect(child.prompted.map((prompt) => prompt.text)).toEqual(["initial", "redirect"]);
+  });
+
+  it("cancels every dialog in the controlled invocation, including late arrivals, but not another invocation", async () => {
+    const root = world.openRoot("lead");
+    const started = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "questions", task: "initial" });
+    const child = world.drivers.get("/sessions/child-1.jsonl")!;
+    const owned = { id: "fake-1", runId: started.runId };
+    child.ask({ method: "input", id: "owned-1", title: "One" }, owned);
+    child.ask({ method: "confirm", id: "owned-2", title: "Two", message: "Continue?" }, owned);
+    child.ask({ method: "input", id: "person-dialog", title: "Person" }, { id: "person-command" });
+
+    const interrupting = root.handle.bridge.sendAgentMessage({ sessionId: started.sessionId, message: "redirect", mode: "interrupt" });
+    await flushLifecycle();
+    expect(child.responses).toEqual(expect.arrayContaining([
+      { id: "owned-1", cancelled: true },
+      { id: "owned-2", cancelled: true },
+    ]));
+    expect(child.responses).not.toContainEqual({ id: "person-dialog", cancelled: true });
+    expect(world.harness.run(started.runId)).not.toHaveProperty("question");
+    child.ask({ method: "editor", id: "owned-late", title: "Late" }, owned);
+    expect(child.responses).toContainEqual({ id: "owned-late", cancelled: true });
+    child.resolvePrompt();
+    await interrupting;
+  });
+
+  it("retains a promoted stop fence through idle preflight and re-aborts its exact execution", async () => {
+    const root = world.openRoot("lead");
+    const started = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "preflight-stop", task: "initial" });
+    const child = world.drivers.get("/sessions/child-1.jsonl")!;
+    child.setStreaming(false);
+    const interrupting = root.handle.bridge.sendAgentMessage({ sessionId: started.sessionId, message: "redirect", mode: "interrupt" });
+    await flushLifecycle();
+    expect(child.aborts).toBe(1);
+
+    const stopping = world.harness.stopRun(started.runId, { initiator: "user", reason: "stop all" });
+    await flushLifecycle();
+    await expect(interrupting).resolves.toMatchObject({ delivery: "refused" });
+    expect(child.aborts).toBe(2);
+    child.emit({ type: "update", invocation: { id: "fake-1", runId: started.runId }, update: { kind: "turn_start" } });
+    await flushLifecycle();
+    expect(child.aborts).toBe(3);
+    child.resolvePrompt();
+    await expect(stopping).resolves.toMatchObject({ status: "cancelled" });
+    expect(child.prompted.map((prompt) => prompt.text)).toEqual(["initial"]);
+  });
+
+  it("uses the same owned-dialog cancellation before direct stop abort", async () => {
+    const root = world.openRoot("lead");
+    const started = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "question-stop", task: "initial" });
+    const child = world.drivers.get("/sessions/child-1.jsonl")!;
+    child.ask({ method: "select", id: "stop-nosignal", title: "Choose", options: ["a", "b"] }, { id: "fake-1", runId: started.runId });
+    child.abortAwaitsPrompt = true;
+    child.dialogCancellationSettlesPrompt = true;
+
+    await expect(world.harness.stopRun(started.runId, { initiator: "user", reason: "stop all" })).resolves.toMatchObject({ status: "cancelled" });
+    expect(child.responses).toContainEqual({ id: "stop-nosignal", cancelled: true });
+    expect(child.aborts).toBe(1);
+  });
+
+  it("retains all ownership and publishes no cancellation when stop queue takeover fails", async () => {
+    const root = world.openRoot("lead");
+    const started = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "stop-clear", task: "initial" });
+    const child = world.drivers.get("/sessions/child-1.jsonl")!;
+    await root.handle.bridge.sendAgentMessage({ sessionId: started.sessionId, message: "engine steer", mode: "steer" });
+    await root.handle.bridge.sendAgentMessage({ sessionId: started.sessionId, message: "engine follow-up", mode: "queue" });
+    child.clearQueueRejects = true;
+
+    await expect(world.harness.stopRun(started.runId, { initiator: "user", reason: "stop all" })).rejects.toThrow(/Could not stop this agent safely: queue unavailable/);
+    expect(child.aborts).toBe(0);
+    expect(world.harness.run(started.runId)).toMatchObject({ status: "running" });
+    expect(world.events().some((event) => event.kind === "stop_requested" || event.kind === "cancelled")).toBe(false);
+    child.clearQueueRejects = false;
+    expect(await child.clearQueue()).toEqual({ steering: ["engine steer"], followUp: ["engine follow-up"] });
+    child.resolvePrompt();
+  });
+
+  it("restores ordinary accepted work exactly once when stop takeover succeeds but abort rejects", async () => {
+    const root = world.openRoot("lead");
+    const started = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "stop-abort-direct", task: "initial" });
+    const child = world.drivers.get("/sessions/child-1.jsonl")!;
+    await root.handle.bridge.sendAgentMessage({ sessionId: started.sessionId, message: "preserved queue", mode: "queue" });
+    await root.handle.bridge.sendAgentMessage({ sessionId: started.sessionId, message: "preserved steer", mode: "steer" });
+    child.abortRejects = true;
+
+    await expect(world.harness.stopRun(started.runId, { initiator: "user", reason: "stop all" })).rejects.toThrow(/Could not control this agent safely: abort unavailable/);
+    expect(world.harness.run(started.runId)).toMatchObject({ status: "running" });
+    expect(world.events().some((event) => event.kind === "stop_requested" || event.kind === "cancelled")).toBe(false);
+    child.resolvePrompt();
+    await flushLifecycle();
+    expect(child.prompted.map((prompt) => prompt.text)).toEqual(["initial", "preserved steer"]);
+    child.resolvePrompt();
+    await flushLifecycle();
+    expect(child.prompted.map((prompt) => prompt.text)).toEqual(["initial", "preserved steer", "preserved queue"]);
+  });
+
+  it("restores an already-accepted interrupt redirect when a later stop abort fails", async () => {
+    const root = world.openRoot("lead");
+    const started = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "accepted-redirect", task: "initial" });
+    const child = world.drivers.get("/sessions/child-1.jsonl")!;
+    await expect(root.handle.bridge.sendAgentMessage({ sessionId: started.sessionId, message: "accepted redirect", mode: "interrupt" })).resolves.toMatchObject({ delivery: "queued" });
+    child.abortRejects = true;
+
+    await expect(world.harness.stopRun(started.runId, { initiator: "user", reason: "stop all" })).rejects.toThrow(/Could not control this agent safely: abort unavailable/);
+    child.resolvePrompt();
+    await flushLifecycle();
+    expect(child.prompted.map((prompt) => prompt.text)).toEqual(["initial", "accepted redirect"]);
+  });
+
+  it("restores accepted work once after stop takeover succeeds but abort fails, without restoring refused redirects", async () => {
+    const root = world.openRoot("lead");
+    const started = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "stop-abort", task: "initial" });
+    const child = world.drivers.get("/sessions/child-1.jsonl")!;
+    child.setStreaming(false);
+    const interrupting = root.handle.bridge.sendAgentMessage({ sessionId: started.sessionId, message: "provisional redirect", mode: "interrupt" });
+    await flushLifecycle();
+    await root.handle.bridge.sendAgentMessage({ sessionId: started.sessionId, message: "preserved work", mode: "steer" });
+    child.abortRejectAfter = 2;
+
+    await expect(world.harness.stopRun(started.runId, { initiator: "user", reason: "stop all" })).rejects.toThrow(/Could not control this agent safely: abort unavailable/);
+    await expect(interrupting).resolves.toMatchObject({ delivery: "refused" });
+    expect(world.harness.run(started.runId)).toMatchObject({ status: "running" });
+    expect(world.events().some((event) => event.kind === "stop_requested" || event.kind === "cancelled")).toBe(false);
+    child.resolvePrompt();
+    await flushLifecycle();
+    expect(child.prompted.map((prompt) => prompt.text)).toEqual(["initial", "preserved work"]);
+    expect(child.prompted.some((prompt) => prompt.text === "provisional redirect")).toBe(false);
   });
 });

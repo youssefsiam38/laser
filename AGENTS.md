@@ -536,10 +536,13 @@ blockers, not advice.
   then runs first ahead of preserved queued work; `steer` reaches the next
   model-call boundary without cancellation; `queue` waits after current work;
   `answer` alone settles a typed `needs_input` question and is refused when no
-  question is open. Steer/queue never become answers. Interrupt control failure
-  is never reported queued/delivered. Explicit stop visibly cancels queued work
-  without auto-resume; late aborts cannot reach a successor; detached background
-  commands are not implicitly killed.
+  question is open. Interrupt and stop cancel every pending question owned by
+  the exact invocation before awaiting abort; steer/queue never become answers.
+  Interrupt control failure is never reported queued/delivered. Explicit stop
+  first takes every engine queue, then commits queued-work/terminal cancellation
+  only after abort control succeeds; either failure preserves accepted work and
+  reports control failure without auto-resume. Late aborts cannot reach a
+  successor; detached background commands are not implicitly killed.
 - The parent chooses isolation per child: `start_agent`'s `worktree` defaults
   to true, and true means a worktree under `<project>/.worktrees/` on
   `agents/<slug>` or a person-facing refusal (not a repository, no commit, a
