@@ -432,15 +432,12 @@ export function AssistantMessage() {
                 // Consecutive reasoning and calls collapse into one activity
                 // row (D-20 §4, D-83, D-89); a single tool stays standalone.
                 if (part.type === "group-activity") {
-                  // One action already has its own disclosure; do not make
-                  // the reader open a second identical header to reach it.
-                  if (part.indices.length === 1) return children;
+                  // ToolGroup observes the first child before an aggregate is
+                  // needed, while preserving that child's standalone row.
                   return (
-                    <div className="my-2 flex flex-col first:mt-0 last:mb-0">
-                      <ToolGroup part={part as MessagePrimitive.GroupedParts.GroupPart} timingKey={`${messageId}:activity:${part.indices[0] ?? 0}`}>
-                        {children}
-                      </ToolGroup>
-                    </div>
+                    <ToolGroup part={part as MessagePrimitive.GroupedParts.GroupPart} timingKey={`${messageId}:activity:${part.indices[0] ?? 0}`}>
+                      {children}
+                    </ToolGroup>
                   );
                 }
                 return null;

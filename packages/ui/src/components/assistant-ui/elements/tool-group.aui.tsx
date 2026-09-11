@@ -44,7 +44,7 @@ import {
   type ToolGroupSummary,
 } from "@/components/thread/tool-groups";
 import { isNonZeroExit, resultText } from "@/components/thread/tool-summary";
-import { elapsedOf, markDone, markRunning, useElapsed, useTick } from "@/components/thread/timing";
+import { markDone, markRunning, useElapsed } from "@/components/thread/timing";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { duration } from "@/format";
 import { cn } from "@/lib/utils";
@@ -332,6 +332,39 @@ function useGroupActivity(part: GroupPart): GroupActivity {
 }
 
 function ToolGroupImpl({ part, timingKey, children }: ToolGroupProps) {
+  const partCount = useAuiState((state) => state.message.parts.length);
+  const messageStatus = useAuiState((state) => state.message.status?.type);
+  const lastIndex = part.indices.at(-1);
+  // A settled child does not end an activity span: the model may pause before
+  // its next reasoning/tool step. The span ends only when another kind of
+  // message part has committed after this adjacent group, or the turn itself
+  // terminates. A decision remains live until it is answered.
+  const spanRunning =
+    lastIndex !== undefined &&
+    lastIndex === partCount - 1 &&
+    (messageStatus === "running" || messageStatus === "requires-action");
+  const elapsed = useElapsed(timingKey, spanRunning ? "running" : "done");
+
+  // Observe the group while it still has one child so a later aggregate starts
+  // at the first reasoning/tool step. Keep the one-action presentation exactly
+  // as it was: the child already owns its disclosure row.
+  if (part.indices.length === 1) return children;
+
+  return (
+    <div className="my-2 flex flex-col first:mt-0 last:mb-0">
+      <ToolGroupDetails part={part} timingKey={timingKey} elapsedMs={elapsed}>
+        {children}
+      </ToolGroupDetails>
+    </div>
+  );
+}
+
+function ToolGroupDetails({
+  part,
+  timingKey,
+  elapsedMs,
+  children,
+}: ToolGroupProps & { elapsedMs: number | undefined }) {
   const { members, reasoning } = useGroupActivity(part);
   const path = useLaserState((state) => state.current);
   const activityLevel = useActivityDetailLevel(path);
@@ -348,6 +381,7 @@ function ToolGroupImpl({ part, timingKey, children }: ToolGroupProps) {
       activityLevel={activityLevel}
       timingKey={timingKey}
       groupStatus={part.status}
+      elapsedMs={elapsedMs}
       activeLabel={namerLabel}
     >
       {children}
@@ -361,6 +395,7 @@ export function ToolGroupSummaryRow({
   activityLevel,
   timingKey,
   groupStatus,
+  elapsedMs,
   activeLabel,
   children,
 }: {
@@ -369,6 +404,8 @@ export function ToolGroupSummaryRow({
   activityLevel: ActivityDetailLevel;
   timingKey: string;
   groupStatus: GroupPart["status"];
+  /** Full wall-clock span supplied by the runtime-connected group. */
+  elapsedMs?: number | undefined;
   /** A name for the call in flight that beats the computed one (Namer). */
   activeLabel?: string | undefined;
   children: ReactNode;
@@ -386,14 +423,6 @@ export function ToolGroupSummaryRow({
       else markDone(m.toolCallId);
     }
   }, [members]);
-  useTick(summary.running && reasoning.count === 0);
-  const activityElapsed = useElapsed(timingKey, summary.running ? "running" : "done");
-  const toolElapsed = members.reduce<number | undefined>((total, m) => {
-    const ms = elapsedOf(m.toolCallId);
-    return ms === undefined ? total : (total ?? 0) + ms;
-  }, undefined);
-  const elapsed = reasoning.count > 0 ? activityElapsed : toolElapsed;
-
   // A settled group that contains a failure is still a settled group. Nothing
   // about the block goes red — no rail, no icon, no count — because a failure
   // inside an agent's work is ordinary: a file it looked for and did not find,
@@ -416,7 +445,7 @@ export function ToolGroupSummaryRow({
         active={summary.running}
         failed={failed}
         attention={summary.hasDecision}
-        elapsedMs={elapsed}
+        elapsedMs={elapsedMs}
         lines={summary.lines}
         breakdown={summary.breakdown}
         activeLabel={summary.running && activeLabel ? activeLabel : summary.activeLabel}
