@@ -57,6 +57,7 @@ import {
   type UiDialogResponse,
 } from "@lasercode/protocol";
 import type {
+  ClearedQueue,
   DriverAgentOptions,
   DriverEvent,
   ExtensionModelAdmission,
@@ -548,6 +549,10 @@ export class AgentHarness {
    * later `clearQueue()` at completion cannot replay onto a successor what
    * the person just removed. Messages waiting here alone (behind a fence,
    * on a reserved successor) are not the queue the person sees and stay.
+   * Neither is a custom message an extension queued straight into a lane (a
+   * background command's exit, a grandchild's ending): the person never saw
+   * it and the model was promised it, so it is parked here as a message of
+   * its own for the fence to deliver, and it never goes back to a composer.
    * Root sessions, and sessions this harness does not know, are the
    * driver's alone.
    */
@@ -557,7 +562,7 @@ export class AgentHarness {
     if (!driver) return { steering: [], followUp: [] };
     if (!entry || entry.role.kind !== "child") return driver.clearQueue();
     return this.withEntry(entry, async () => {
-      const cleared = await driver.clearQueue();
+      const { custom, ...cleared } = await driver.clearQueue();
       const owner = entry.lifecycle.owner();
       const state = owner ? this.runStates.get(owner) : this.activeRunState(sessionPath);
       if (!state) return cleared;
@@ -579,8 +584,12 @@ export class AgentHarness {
         dropped += 1;
         settlePending(pending, new HarnessError("The person cleared this message from the agent's queue before it could start."));
       }
+      const origin = state.run.origin === "user" ? "user" as const : "agent" as const;
+      for (const text of [...(custom?.steering ?? []), ...(custom?.followUp ?? [])]) {
+        kept.push({ content: [{ type: "text", text }], options: { expandPromptTemplates: false }, origin, engine: false });
+      }
       entry.lifecycle.replaceInbox(state.run.runId, kept);
-      this.diagnose(entry, "info", "queue-cleared", { runId: state.run.runId, clearedSteering: cleared.steering.length, clearedFollowUp: cleared.followUp.length, twins: dropped, phase: entry.lifecycle.phase().kind });
+      this.diagnose(entry, "info", "queue-cleared", { runId: state.run.runId, clearedSteering: cleared.steering.length, clearedFollowUp: cleared.followUp.length, twins: dropped, custom: customCount({ ...cleared, ...(custom ? { custom } : {}) }), phase: entry.lifecycle.phase().kind });
       return cleared;
     });
   }
@@ -1446,8 +1455,17 @@ export class AgentHarness {
       try {
         const cleared = await driver.clearQueue();
         const before = entry.lifecycle.inbox(state.run.runId).length;
+        const custom = customCount(cleared);
+        if (custom > 0) {
+          // An extension's send behind the running turn went straight into
+          // the engine's lanes, where this harness had no record of it and
+          // the engine's own queue never listed it. It is kept below as a
+          // message of its own (its text; the custom type is gone) — said
+          // out loud, because the engine would have dropped it here.
+          this.diagnose(entry, "warn", "engine-custom-queued", { runId: state.run.runId, reason, steering: cleared.custom?.steering.length ?? 0, followUp: cleared.custom?.followUp.length ?? 0 });
+        }
         preserved = this.preservedMessages(entry, state, cleared);
-        counts = { clearedSteering: cleared.steering.length, clearedFollowUp: cleared.followUp.length, local: before, preserved: preserved.length };
+        counts = { clearedSteering: cleared.steering.length, clearedFollowUp: cleared.followUp.length, local: before, preserved: preserved.length, custom };
       } catch (error) {
         preserved = entry.lifecycle.clearInbox(state.run.runId);
         counts = { cleared: "unknown", local: preserved.length, preserved: preserved.length, error: error instanceof Error ? error.name : "error" };
@@ -1784,9 +1802,12 @@ export class AgentHarness {
    * gone for good; a remaining text with no local twin (queued by something
    * that bypassed this harness, or expanded by Pi's template/skill expansion
    * so that its text no longer equals what was sent) is kept as a message of
-   * its own. Nothing the engine still held is dropped.
+   * its own, and so is every custom message an extension queued straight
+   * into a lane (`cleared.custom`), after that lane's texts — the engine
+   * drains steering before follow-ups. Nothing the engine still held is
+   * dropped.
    */
-  private preservedMessages(entry: Entry, state: RunState, cleared: { steering: readonly string[]; followUp: readonly string[] }): PendingMessage[] {
+  private preservedMessages(entry: Entry, state: RunState, cleared: ClearedQueue): PendingMessage[] {
     const remaining: Record<EngineLane, string[]> = { steer: [...cleared.steering], followUp: [...cleared.followUp] };
     const preserved: PendingMessage[] = [];
     for (const pending of entry.lifecycle.clearInbox(state.run.runId)) {
@@ -1810,7 +1831,8 @@ export class AgentHarness {
       origin: state.run.origin === "user" ? "user" : "agent",
       engine: false,
     });
-    return [...preserved, ...remaining.steer.map(foreign), ...remaining.followUp.map(foreign)];
+    const custom = cleared.custom ?? { steering: [], followUp: [] };
+    return [...preserved, ...remaining.steer.map(foreign), ...custom.steering.map(foreign), ...remaining.followUp.map(foreign), ...custom.followUp.map(foreign)];
   }
 
   private requestEnd(
@@ -2366,6 +2388,11 @@ function pendingUiOf(driver: SessionDriver | undefined): UiDialogRequest[] | und
 function contentTask(content: readonly ContentBlock[]): string {
   const text = content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n").trim();
   return text || "Continue this run with the attached content.";
+}
+
+/** How many custom messages the engine had queued out of sight of its own queue. */
+function customCount(cleared: ClearedQueue): number {
+  return (cleared.custom?.steering.length ?? 0) + (cleared.custom?.followUp.length ?? 0);
 }
 
 /** The update kinds worth a line when they arrive late from an invocation the session no longer owns; deltas are not. */

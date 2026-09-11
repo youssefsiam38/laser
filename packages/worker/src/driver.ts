@@ -175,6 +175,21 @@ export interface PromptOptions {
   onAccepted?: () => void;
 }
 
+/**
+ * What `clearQueue()` emptied. `steering` and `followUp` are the texts the
+ * engine's own queue listed — a person's queued messages, in queue order, fit
+ * to go back into a composer. `custom` is what an extension had queued
+ * straight into the engine's lanes behind a running turn (`sendMessage` with
+ * `deliverAs`, which the engine never lists and its clear silently drops):
+ * the text of each, per lane, so a caller taking the queue over can keep it.
+ * Absent when there was none, or when the driver cannot see that far.
+ */
+export interface ClearedQueue {
+  steering: string[];
+  followUp: string[];
+  custom?: { steering: string[]; followUp: string[] };
+}
+
 /** One driver instance = one live Pi session inside one worker process. */
 export interface SessionDriver {
   readonly kind: "stable-sdk" | "chord";
@@ -190,7 +205,7 @@ export interface SessionDriver {
   prompt(content: ContentBlock[], options?: PromptOptions): Promise<{ accepted: boolean; queued: boolean }>;
   steer(content: ContentBlock[]): Promise<void>;
   followUp(content: ContentBlock[]): Promise<void>;
-  clearQueue(): Promise<{ steering: string[]; followUp: string[] }>;
+  clearQueue(): Promise<ClearedQueue>;
   abort(): Promise<void>;
 
   listModels(): Promise<ModelRef[]>;

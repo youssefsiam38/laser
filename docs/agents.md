@@ -193,7 +193,13 @@ would carry any queued steering or follow-up message on under the run
 harness empties the engine's queues (`clearQueue()`) and puts every message
 it held — plus every message waiting in its own inbox — on **one** successor
 run, in order, each exactly once; a text the engine had already delivered is
-gone, a text the harness never sent is kept. Everything that arrives during
+gone, a text the harness never sent is kept. So is a custom message an
+extension queued straight into a lane behind the running turn — a background
+command's exit, a grandchild's ending, sent while the child streamed — which
+the engine's own queue never lists and its clear would silently drop: the
+driver reads agent-core's queues first (`ClearedQueue.custom`), the transfer
+keeps each as a message of its own (its text; the custom type is gone) and
+writes a `warn` line with the counts. Everything that arrives during
 the window joins that successor: a parent's `send_agent_message`, a person's
 queued prompt, an extension's triggering send, a goal's automatic
 continuation, a background command's exit. A person's message written while
@@ -252,7 +258,9 @@ child's chat — `pi/session/steer`, `pi/session/follow_up`, a pending-tray
 row's Steer, the tray's own drain at `agent_settled`, and
 `pi/session/clear_queue` — go through the same fence as the parent's
 messages, so nothing a person types can enter a queue the engine is about to
-drop. A dialog is stamped with the invocation that raised it; one
+drop. A clear takes back only the person's texts; a custom message an
+extension had queued behind the turn is parked for the fence instead, and
+never returned to a composer. A dialog is stamped with the invocation that raised it; one
 from an invocation the session no longer owns is cancelled (never the
 successor's question, never left hanging) and is not shown to the person.
 

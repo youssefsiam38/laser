@@ -59,6 +59,7 @@ class FakeDriver implements SessionDriver {
     if (e.type === "update" && e.update.kind === "agent_settled") {
       this.engineSteers = [];
       this.engineFollowUps = [];
+      this.engineCustom = { steering: [], followUp: [] };
       this.setStreaming(false);
     }
     for (const l of this.listeners) l(e);
@@ -72,6 +73,9 @@ class FakeDriver implements SessionDriver {
   }
   /** Something other than the harness queued in the engine (a person's steer in the child's own chat). */
   foreignFollowUp(text: string) { this.engineFollowUps.push(text); }
+  /** An extension's custom message the engine queued straight into a lane: never in its own queue, only in what `clearQueue()` reads from agent-core. */
+  private engineCustom = { steering: [] as string[], followUp: [] as string[] };
+  foreignCustom(lane: "steer" | "followUp", text: string) { (lane === "steer" ? this.engineCustom.steering : this.engineCustom.followUp).push(text); }
   /** Pi's preflight accepted the oldest waiting prompt; its turn goes on. */
   acceptPending() {
     const pending = this.promptResolvers[0];
@@ -119,9 +123,11 @@ class FakeDriver implements SessionDriver {
     if (this.clearQueueRejects) throw new Error("queue unavailable");
     const steering = [...this.engineSteers];
     const followUp = [...this.engineFollowUps];
+    const custom = { steering: [...this.engineCustom.steering], followUp: [...this.engineCustom.followUp] };
     this.engineSteers = [];
     this.engineFollowUps = [];
-    return { steering, followUp };
+    this.engineCustom = { steering: [], followUp: [] };
+    return custom.steering.length > 0 || custom.followUp.length > 0 ? { steering, followUp, custom } : { steering, followUp };
   }
   async abort() {
     this.aborts += 1;
@@ -2035,6 +2041,33 @@ describe("AgentHarness", () => {
       await person;
       expect(personSettled).toBe(true);
       expect(world.harness.runs().filter((run) => run.sessionPath === path).map((run) => run.status)).toEqual(["failed", "completed"]);
+    });
+
+    it("keeps an extension's custom message when the person clears a child's queue: parked for the fence, never handed back to the composer", async () => {
+      // F5, the person's side: `clearQueue()` now reports what an extension
+      // queued straight into the engine's lanes. A person's clear returns
+      // their own texts alone; the wake the model was promised waits here
+      // and is delivered as the next prompt under the same run.
+      world.setAutoResolveChildPrompts(false);
+      const root = world.openRoot("lead");
+      const first = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "initial" });
+      const path = "/sessions/child-1.jsonl";
+      const child = world.drivers.get(path)!;
+      child.queueWhileStreaming = true;
+      expect(await world.harness.promptUser(path, [{ type: "text", text: "mine" }], { streamingBehavior: "followUp" })).toEqual({ accepted: true, queued: true });
+      child.foreignCustom("steer", "Background task t1 exited with code 0.");
+
+      expect(await world.harness.clearQueue(path)).toEqual({ steering: [], followUp: ["mine"] });
+      expect(await child.clearQueue()).toEqual({ steering: [], followUp: [] });
+      expect(lifecycleLogs().some((log) => log.line.includes(`queue-cleared runId=${first.runId} clearedSteering=0 clearedFollowUp=1 twins=1 custom=1`))).toBe(true);
+      expect(lifecycleLogs().some((log) => log.line.includes("Background task"))).toBe(false);
+
+      child.emit({ type: "update", update: { kind: "agent_settled" } });
+      child.resolvePrompt();
+      await flushLifecycle();
+      expect(child.prompted.map((item) => [item.text, item.options?.streamingBehavior ?? "prompt"])).toEqual([["initial", "prompt"], ["mine", "followUp"], ["Background task t1 exited with code 0.", "prompt"]]);
+      expect(world.harness.activeRun(path)?.runId).toBe(first.runId);
+      expect(world.harness.runs().filter((run) => run.sessionPath === path)).toHaveLength(1);
     });
   });
 

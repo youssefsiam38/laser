@@ -1220,4 +1220,73 @@ describe("queued completion ownership against the real engine", () => {
     assertNoOverlappingInvocations();
     expectNoBodiesInModuleLogs(["Start.", WAKE, TRAY, "old done", "successor done"]);
   }, 60_000);
+
+  it("takes back a custom wake the engine queued out of sight of its own queue, so a terminal declaration carries it to the successor instead of dropping it", async () => {
+    // F5: a background command started in an earlier turn exits while a later
+    // turn streams. Its wake is not causal to that turn, so the harness lets
+    // the engine decide, and Pi's `sendCustomMessage` puts it straight into
+    // agent-core's steering queue — where the session's own `clearQueue()`
+    // cannot see it and its `clearAllQueues()` would drop it. The transfer at
+    // completion reads that queue first, says so, and keeps the wake.
+    const marker = join(base, "release-bg-wake");
+    const OUTPUT = "bg-exit-token-77";
+    const command = `while [ ! -f '${marker}' ]; do sleep 0.02; done; echo ${OUTPUT}`;
+    // Turn 1 starts the command and stops without the tool → turn 2 is the
+    // nudge, held; the command exits meanwhile; turn 2 completes through the tool.
+    provider.answer(0, { toolCall: { name: "bash", args: { command, background: true } } });
+    provider.answer(1, { text: "started it; done for now" });
+    const releaseNudge = provider.hold(2);
+    provider.answer(2, { toolCall: { name: "complete_agent_run", args: { status: "completed", message: "old done" } } });
+    provider.route((request) => {
+      const last = request.messages.at(-1);
+      if (last?.role === "user" && textOfContent(last.content).includes(OUTPUT)) return { toolCall: { name: "complete_agent_run", args: { status: "completed", message: "successor done" } } };
+      return { text: "ok" };
+    });
+    const taskFinished = waitForMessage((message) => {
+      if (!("method" in message) || message.method !== "pi/extension/message") return false;
+      const value = message as { params?: { message?: { type?: string; task?: { status?: string } } } };
+      return value.params?.message?.type === "lasercode/task/update" && value.params.message.task?.status === "completed";
+    });
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start background work.", interrupt: false });
+    await provider.arrived(2);
+    expect(lastUserText(provider.requests[2]!)).toBe(NUDGE_TEXT);
+    // The engine's queue as agent-core holds it: the very thing the session's
+    // own `pendingMessageCount` and `queue_update` never show.
+    const agent = (liveDriver as unknown as { runtime: { session: { agent: { steeringQueue: { hasItems(): boolean } } } } }).runtime.session.agent;
+    expect(agent.steeringQueue.hasItems()).toBe(false);
+    expect(liveDriver.state().isStreaming).toBe(true);
+
+    writeFileSync(marker, "go\n");
+    await taskFinished;
+    await waitForMessage((message) => "method" in message && message.method === "pi/extension/message" && ((message as { params: { message: { message?: string } } }).params.message.message ?? "").includes("admission source=extension kind=custom decision=engine-decides"));
+    expect(agent.steeringQueue.hasItems()).toBe(true);
+    expect(liveDriver.state().pendingMessageCount).toBe(0);
+    expect(queueUpdates().some((update) => update.steering.length > 0)).toBe(false);
+
+    releaseNudge();
+    await waitForTerminal(started.runId);
+    expect(server.agents().run(started.runId)).toMatchObject({ status: "completed", result: { message: "old done" } });
+    // The transfer found what the engine's own queue could not list, said so
+    // as a warning (counts only), and kept it as the successor's message.
+    const transfer = lifecycleLogs().find((log) => log.line.includes("queue-transferred"))!;
+    expect(transfer.line).toMatch(/reason=complete successor=run_[0-9a-f]+ clearedSteering=0 clearedFollowUp=0 local=0 preserved=1 custom=1/);
+    expect(lifecycleLogs().some((log) => log.level === "warn" && log.line.includes(`engine-custom-queued runId=${started.runId} reason=complete steering=1 followUp=0`))).toBe(true);
+    const successor = server.agents().runs().find((run) => run.sessionPath === childPath && run.runId !== started.runId)!;
+    expect(successor).toMatchObject({ origin: "agent" });
+    expect(successor.task).toContain("Background task");
+    await waitForTerminal(successor.runId);
+    expect(server.agents().run(successor.runId)).toMatchObject({ status: "completed", result: { message: "successor done" } });
+    expect(agent.steeringQueue.hasItems()).toBe(false);
+    expect(server.agents().runs().filter((run) => run.sessionPath === childPath)).toHaveLength(2);
+    // The wake reached the model exactly once — as the successor's own
+    // request, never under the completed run's two turns.
+    expect(provider.requests).toHaveLength(4);
+    const wakeRequests = provider.requests.filter((request) => request.messages.some((message) => textOfContent(message.content).includes(OUTPUT)));
+    expect(wakeRequests).toHaveLength(1);
+    expect(provider.requests.indexOf(wakeRequests[0]!)).toBe(3);
+    expect(provider.requests[3]!.messages.filter((message) => textOfContent(message.content).includes(OUTPUT))).toHaveLength(1);
+    expect(parentEvents.map((entry) => [entry.event.type, entry.event.runId])).toEqual([["agent.completed", started.runId], ["agent.completed", successor.runId]]);
+    assertNoOverlappingInvocations();
+    expectNoBodiesInModuleLogs(["Start background work.", OUTPUT, "old done", "successor done"]);
+  }, 60_000);
 });
