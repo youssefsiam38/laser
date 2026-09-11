@@ -8,7 +8,8 @@ import { AgentEventMessage } from "./AgentEventMessage.js";
 import { TaskEventNotice } from "./TaskEventNotice.js";
 import { AGENT_COMPLETION_DATA_PART, AGENT_EVENT_DATA_PART, GOAL_DATA_PART, TASK_EVENT_DATA_PART, type AgentCompletionData } from "@/runtime/projection";
 import type { GoalRecord as GoalRecordData } from "@/runtime/goal-history";
-import { memo, useContext, useMemo, useState } from "react";
+import { memo, useContext, useMemo, useRef, useState } from "react";
+import { FileViewer, type FileViewerSource } from "./FileViewer.js";
 import { FindSelectionContext, SearchMessageContext, useSearchReveal } from "./search-state.js";
 
 import { UserMessageAttachments } from "@/components/assistant-ui/elements/attachment.aui";
@@ -168,6 +169,14 @@ export function UserMessage() {
   const versions = useMemo(() => (entryId ? versionsOf(entries, entryId) : []), [entries, entryId]);
   const versionIndex = entryId ? versions.indexOf(entryId) : -1;
   const { quote, rest } = useMemo(() => splitLeadingQuote(text), [text]);
+  const [imagePreview, setImagePreview] = useState<FileViewerSource>();
+  const attachmentButton = useRef<HTMLElement | null>(null);
+  const imageBytes = useMemo(() => {
+    const entry = entries.find(raw => (raw as { id?: string } | null)?.id === entryId) as { message?: { content?: unknown } } | undefined;
+    const content = entry?.message?.content;
+    return Array.isArray(content) ? content.filter((part): part is { type: "image"; mimeType: string; data: string } =>
+      part?.type === "image" && typeof part.mimeType === "string" && part.mimeType.startsWith("image/") && typeof part.data === "string") : [];
+  }, [entries, entryId]);
   const attachments = useMemo<MessageAttachmentItem[]>(
     () => Array.from({ length: images }, (_, i) => ({ id: `image-${i}`, name: images === 1 ? "Image" : `Image ${i + 1}`, kind: "image" })),
     [images],
@@ -250,7 +259,14 @@ export function UserMessage() {
                 <DirectiveString text={rest} />
               </p>
             ) : null}
-            <MessageAttachments attachments={attachments} className="self-end" />
+            <MessageAttachments attachments={attachments} className="self-end [@media(pointer:coarse)]:[&_button]:min-h-11" onOpen={imageBytes.length === images && images > 0 ? id => {
+              const index = Number(id.slice("image-".length));
+              const image = imageBytes[index];
+              if (!image) return;
+              attachmentButton.current = document.activeElement as HTMLElement;
+              setImagePreview({ name: images === 1 ? "Image" : `Image ${index + 1}`, mediaType: image.mimeType, data: image.data });
+            } : undefined} />
+            {imagePreview ? <FileViewer source={imagePreview} open onOpenChange={open => { if (!open) setImagePreview(undefined); }} returnFocus={attachmentButton.current} /> : null}
             <UserMessageAttachments />
           </UserBubble>
         )}

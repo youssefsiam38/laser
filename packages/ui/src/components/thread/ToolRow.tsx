@@ -23,6 +23,7 @@ import { useIsTouch } from "@/hooks/use-mobile";
 import { DialogBody, dialogFormOf, ToolRowDialog, uiResponseFor, useRegisterToolRow } from "@/dialogs";
 import { toolDetailsDefaultOpen, toolDisplayResult, useActivityDetailLevel, useLaserStable, useLaserState } from "@/runtime";
 import { useActivityDisclosureOverride } from "@/runtime/sessionPreferences";
+import { FileCard } from "./FileCard.js";
 import { activeToolLabel } from "./tool-groups.js";
 import { classifyMcpTool } from "./mcp-tools.js";
 import { McpToolRow } from "./McpToolRow.js";
@@ -109,6 +110,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
     ? (diffView.stats ?? diffStats(diffView.hunks))
     : undefined;
   const diffDescription = appliedDiffStats ? diffStatDescription(appliedDiffStats) : undefined;
+  const fileArgs = args as { path?: unknown; content?: unknown } | undefined;
   const footer = (
     <>
       {approval ? <RowApproval {...props} /> : null}
@@ -211,6 +213,9 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
       peek={failed && text ? <ToolError message={text} compact /> : undefined}
       footer={footer}
     >
+      {(kind === "write" || kind === "edit") && state === "done" && status?.type === "complete" && typeof fileArgs?.path === "string" ? (
+        <FileCard path={fileArgs.path} content={kind === "write" && typeof fileArgs.content === "string" ? fileArgs.content : undefined} />
+      ) : null}
       {hasBody ? (
         body === "terminal" ? (
           <BashBody args={args} text={text} running={running} isError={failed} />
