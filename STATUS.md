@@ -2,7 +2,7 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-11T14:57:48Z · orchestrator · HEAD: cba19f2
+**Last updated:** 2026-09-11T15:06:17Z · orchestrator · HEAD: ab4472e
 
 **Current focus:** user-requested one-command release automation (T114), then use it to publish0.3.8 (T113). Version-only candidate is ready. T110 remains dropped; one-time script supplied; installed processes untouched.
 
@@ -33,7 +33,7 @@ Publication waits for tested/reviewed release automation and final versioned CI/
 
 ## Next up
 
-1. Approve and implement T114 release orchestrator/AGENTS guidance.
+1. Complete approved T114 release orchestrator and AGENTS guidance.
 2. Review combined0.3.8 candidate and verify corrections.
 3. Run the new release command; verify both architectures and public provenance.
 

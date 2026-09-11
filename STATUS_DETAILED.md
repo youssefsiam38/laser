@@ -1379,8 +1379,9 @@ lane T's own if both were written.
 
 
 #### M13-T114 notes
+- 2026-09-11 plan `/tmp/laser-release-automation-plan.md` approved with bounded corrections: adopt existing exact-SHA CI for no-op pushes, default frozen install without mandatory offline cache, exclusive validated release lock, truthful partial publication reporting, and remove unsafe tag shortcuts from helper/README. Same owner implementing run_5b838096 atop e87eaf6; parent stays out of its script/AGENTS paths. Current0.3.8 will invoke final parent-integrated source, with no version-only extra commit when already synchronized.
 - 2026-09-11 claimed by continuing release owner after clean e87eaf6 checkpoint: add a bounded orchestrator over existing helpers, not a second publisher. Plan required before code. User goal is routine releases through one command, not spawning a release-prep subagent each time; current0.3.8 will exercise it after review.
-- Ownership ledger: release automation · 01a08fdb-f2fe-7754-a665-f1c78349c067 · plan then one release-entrypoint milestone · scripts/release entrypoint/direct helpers/tests/README, AGENTS release instructions, optional package command alias; no workflow rewrites, product behavior, version churn or ledgers · basee87eaf6 (version-only0.3.8 candidate) · existing helpers/contracts stable; no other writers · plan-first · next: approve design, test/review combined candidate, parent invokes for0.3.8.
+- Ownership ledger: release automation · 01a08fdb-f2fe-7754-a665-f1c78349c067 · plan then one release-entrypoint milestone · scripts/release entrypoint/direct helpers/tests/README, AGENTS release instructions, optional package command alias; no workflow rewrites, product behavior, version churn or ledgers · basee87eaf6 (version-only0.3.8 candidate) · existing helpers/contracts stable; no other writers · approved plan implementing in run_5b838096 · next: test/review combined candidate, parent invokes for0.3.8.
 
 #### M13-T111 notes
 - 2026-09-11 exact source CI34611182930 passed atf9a5195. Routing integration is green locally and remotely.
