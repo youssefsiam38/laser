@@ -8,22 +8,24 @@ import { ComposerTriggerPopover, revealPickerOption } from "../../src/components
 const items: Unstable_TriggerItem[] = Array.from({ length: 30 }, (_, index) => ({ id: `file-${index}`, type: "file", label: `src/file-${index}.ts` }));
 const adapter = { categories: () => [], categoryItems: () => [], search: (query: string) => items.filter((item) => item.label.includes(query)) };
 const inserted = vi.fn();
+const completed = vi.fn();
 const sent = vi.fn();
 let container: HTMLDivElement;
 let root: Root;
-function Fixture({ source = false }: { source?: boolean }) {
+function Fixture({ source = false, completes = false }: { source?: boolean; completes?: boolean }) {
   const runtime = useExternalStoreRuntime({ messages: [], isRunning: false, onNew: sent });
   const sourceAdapter = { ...adapter, search: () => [{ id: "skill", type: "skill", label: "/skill:review", description: "A detailed skill description. ".repeat(100) + "Final instruction.", metadata: { filePath: "/tmp/SKILL.md" } }] };
   return <AssistantRuntimeProvider runtime={runtime}><ComposerPrimitive.Unstable_TriggerPopoverRoot><ComposerPrimitive.Root>
     <button type="button">Before input</button>
     <ComposerPrimitive.Input aria-label="Message" onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing && !event.shiftKey) { event.preventDefault(); sent(); } }} />
-    <ComposerTriggerPopover char="@" adapter={source ? sourceAdapter : adapter} directive={{ onInserted: inserted }} title="Files & agents" />
+    <ComposerTriggerPopover char="@" adapter={source ? sourceAdapter : adapter} directive={{ onInserted: inserted }} title="Files & agents"
+      {...(completes ? { onComplete: (item: Unstable_TriggerItem) => { completed(item); return { text: `@${item.label} `, caret: item.label.length + 1 }; } } : {})} />
     <ComposerPrimitive.Send>Send</ComposerPrimitive.Send>
   </ComposerPrimitive.Root></ComposerPrimitive.Unstable_TriggerPopoverRoot><button type="button">Outside</button></AssistantRuntimeProvider>;
 }
 beforeEach(async () => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
-  inserted.mockReset(); sent.mockReset();
+  inserted.mockReset(); completed.mockReset(); sent.mockReset();
   container = document.createElement('div'); document.body.append(container); root = createRoot(container);
   await act(async () => root.render(<Fixture />));
 });
@@ -102,6 +104,26 @@ it('Tab selects, Shift+Tab exits, and empty results do not trap Tab or submit En
   await key('Enter'); expect(sent).not.toHaveBeenCalled();
   expect((await key('Tab')).defaultPrevented).toBe(false); expect(popup()).toBeNull();
 });
+// M15-T5: a picker whose rows *do* something needs Tab to mean "complete",
+// not "choose". Given a completer, Tab writes the draft and nothing else
+// happens: no selection, no execution, no submit — and the picker stays open
+// on what it completed, so Enter remains the person's explicit second act.
+it('Tab completes and Enter still selects when a completer is given', async () => {
+  await act(async () => root.render(<Fixture completes />));
+  await type('@file-2');
+  const event = await key('Tab');
+  expect(event.defaultPrevented).toBe(true);
+  expect(completed).toHaveBeenCalledTimes(1);
+  expect(inserted).not.toHaveBeenCalled();
+  expect(sent).not.toHaveBeenCalled();
+  expect(input().value).toBe('@src/file-2.ts ');
+  expect(popup()).not.toBeNull();
+
+  await key('Enter');
+  expect(inserted).toHaveBeenCalledTimes(1);
+  expect(sent).not.toHaveBeenCalled();
+});
+
 it('does not select or submit an IME confirmation', async () => {
   await type('@'); await key('Enter', { isComposing: true });
   expect(inserted).not.toHaveBeenCalled(); expect(sent).not.toHaveBeenCalled(); expect(popup()).not.toBeNull();

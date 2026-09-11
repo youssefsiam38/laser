@@ -11,6 +11,7 @@ import {
   ComposerPrimitive,
   unstable_defaultDirectiveFormatter,
   unstable_useTriggerPopoverScopeContext,
+  useAui,
   type Unstable_DirectiveFormatter,
   type Unstable_TriggerItem,
 } from "@assistant-ui/react";
@@ -58,6 +59,20 @@ type ComposerTriggerPopoverBaseProps = Omit<
   notice?: ReactNode;
   onQueryChange?: ((query: string) => void) | undefined;
   onOpenChange?: ((open: boolean) => void) | undefined;
+  /**
+   * Makes Tab a **completion** gesture instead of a selection one (M15-T5).
+   *
+   * The primitive's keyboard resource treats Tab exactly like Enter: both
+   * select the highlighted row, and for an action picker selecting *runs* the
+   * command. Completing `/compa` therefore compacted the session. Where this
+   * is given, Tab only writes the completed draft — it runs nothing, sends
+   * nothing, and leaves the picker open on what it just completed, so Enter
+   * (or the Send button) stays the person's explicit second act.
+   *
+   * Returns the draft to write and where the caret belongs, or `null` when
+   * there is nothing to complete.
+   */
+  onComplete?: ((item: Unstable_TriggerItem, text: string) => { text: string; caret: number } | null) | undefined;
 };
 
 const optionClass = "group flex min-h-11 w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-start text-sm text-ink outline-none transition-colors duration-(--motion-instant) hover:bg-surface-2 data-[highlighted]:bg-surface-2";
@@ -112,10 +127,14 @@ function SourceFileDetails({ item, onDetails }: { item: Unstable_TriggerItem; on
   </div>;
 }
 
-function PickerSurface({ title, notice, onQueryChange, onOpenChange, children }: {
-  title: string; notice: ReactNode; onQueryChange: ((query: string) => void) | undefined; onOpenChange: ((open: boolean) => void) | undefined; children: ReactNode;
+function PickerSurface({ title, notice, onQueryChange, onOpenChange, onComplete, children }: {
+  title: string; notice: ReactNode; onQueryChange: ((query: string) => void) | undefined; onOpenChange: ((open: boolean) => void) | undefined;
+  onComplete: ComposerTriggerPopoverBaseProps["onComplete"]; children: ReactNode;
 }) {
   const scope = unstable_useTriggerPopoverScopeContext();
+  const aui = useAui();
+  const completeRef = useRef(onComplete);
+  completeRef.current = onComplete;
   const listRef = useRef<HTMLDivElement>(null);
   const [details, setDetails] = useState(false);
   const detailsRef = useRef(details);
@@ -166,6 +185,20 @@ function PickerSurface({ title, notice, onQueryChange, onOpenChange, children }:
       }
       if (event.key === 'Tab' && (event.shiftKey || state.items.length + state.categories.length === 0)) {
         state.close(); event.stopPropagation(); return; // normal focus traversal
+      }
+      // Tab completes; it never selects, so it never runs a command and never
+      // sends (M15-T5). The picker stays open on the completed word.
+      const complete = completeRef.current;
+      if (event.key === 'Tab' && complete && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        const item = state.items[state.highlightedIndex];
+        const completed = item ? complete(item, aui.composer.getState().text) : null;
+        if (completed) {
+          event.preventDefault();
+          event.stopPropagation();
+          aui.composer.setText(completed.text);
+          state.setCursorPosition(completed.caret);
+          return;
+        }
       }
       if (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
       if (event.key === 'PageDown' || event.key === 'PageUp') {
@@ -238,7 +271,7 @@ function PickerSurface({ title, notice, onQueryChange, onOpenChange, children }:
     </div>
     {selected && typeof selected.metadata?.filePath === 'string' && <SourceFileDetails key={selected.id} item={selected} onDetails={details ? undefined : () => setDetails(true)} />}
     {notice && <div className="shrink-0 px-3 py-2 text-xs text-ink-2 hairline-t">{notice}</div>}
-    <div aria-hidden className="flex shrink-0 items-center gap-3 px-3 py-2 text-xs text-ink-3 hairline-t pointer-coarse:hidden group-data-[compact=true]/picker:hidden">{details ? <span>Esc back to results</span> : <><span>↑ ↓ navigate</span><span>Tab / ↵ select</span><span className="ms-auto">Esc close</span></>}</div>
+    <div aria-hidden className="flex shrink-0 items-center gap-3 px-3 py-2 text-xs text-ink-3 hairline-t pointer-coarse:hidden group-data-[compact=true]/picker:hidden">{details ? <span>Esc back to results</span> : <><span>↑ ↓ navigate</span><span>{onComplete ? 'Tab complete' : 'Tab / ↵ select'}</span>{onComplete ? <span>↵ select</span> : null}<span className="ms-auto">Esc close</span></>}</div>
   </>;
 }
 
@@ -398,6 +431,7 @@ const ComposerTriggerPopoverImpl: FC<ComposerTriggerPopoverProps> = ({
   notice,
   onQueryChange,
   onOpenChange,
+  onComplete,
   className,
   directive,
   action,
@@ -439,7 +473,7 @@ const ComposerTriggerPopoverImpl: FC<ComposerTriggerPopoverProps> = ({
           removeOnExecute={action.removeOnExecute}
         />
       ) : null}
-      <PickerSurface title={title} notice={notice} onQueryChange={onQueryChange} onOpenChange={onOpenChange}>
+      <PickerSurface title={title} notice={notice} onQueryChange={onQueryChange} onOpenChange={onOpenChange} onComplete={onComplete}>
       <Categories
         iconMap={iconMap}
         fallbackIcon={fallbackIcon}

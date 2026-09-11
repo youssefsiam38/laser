@@ -127,7 +127,7 @@ function ComposerBody() {
           </ComposerPrimitive.AttachmentDropzone>
         )}
         {/* `/` runs a laser command; `@` addresses a running subagent by handle. */}
-        <ComposerTriggerPopover char="/" title="Commands & skills" matcher={matchLeadingSlash} adapter={slash.adapter} action={slash.action} {...(slash.iconMap ? { iconMap: slash.iconMap } : {})} fallbackIcon={SlashSquare} />
+        <ComposerTriggerPopover char="/" title="Commands & skills" matcher={matchLeadingSlash} adapter={slash.adapter} action={slash.action} onComplete={completeSlashDraft} {...(slash.iconMap ? { iconMap: slash.iconMap } : {})} fallbackIcon={SlashSquare} />
         <ComposerTriggerPopover char="@" title="Files & agents" adapter={mention.adapter} directive={mention.directive} iconMap={MENTION_ICONS} fallbackIcon={AtSign} emptyItemsLabel="No project files or agents to mention yet." isLoading={mention.loading} onQueryChange={mention.setQuery} onOpenChange={mention.setOpen} notice={mention.failed ? <>Couldn’t search project files. <button type="button" className="underline underline-offset-2" onClick={mention.retry}>Try again</button></> : mention.truncated ? 'Showing the best 80 files. Keep typing to narrow the search.' : undefined} />
       </ComposerPrimitive.Root>
     </ComposerPrimitive.Unstable_TriggerPopoverRoot>
@@ -323,6 +323,12 @@ function SendOrStop({ mobile = false }: { mobile?: boolean }) {
 // are deliberately absent: they open its terminal pickers, and laser has its
 // own control for every one of them. A row that opened nothing would be worse
 // than no row (R2).
+//
+// Two gestures, and they are not the same one (M15-T5). **Tab completes**:
+// `completeSlashDraft` writes the command's word and stops — nothing runs and
+// nothing is sent, whatever the row does. **Enter, or a click, chooses**: an
+// agent's command is written out for its arguments, and one of laser's own
+// runs, because choosing it is what asking for it looks like.
 // ---------------------------------------------------------------------------
 
 const SLASH_ICONS = {
@@ -488,6 +494,27 @@ function useHandleMentions() {
     },
   }), [mention.adapter, query]);
   return { ...mention, ...search, adapter, setQuery, setOpen };
+}
+
+/**
+ * What Tab writes (M15-T5). Completion is not selection: it puts the command's
+ * own word in the draft and stops there, so a command that *does* something —
+ * laser's own `/compact`, `/fork`, `/new` — runs only when the person chooses
+ * the row (Enter, or a click) or sends the message they can now read.
+ *
+ * The word is completed without a trailing space, the way a shell completes
+ * one: the caret lands at the end of it, which is still inside the command
+ * token, so the picker stays open on the exact match and the next Enter is a
+ * deliberate choice rather than a surprise. Typing a space moves past the
+ * command and the picker leaves, as it does for anything else typed there.
+ * Arguments already in the draft are kept exactly where they were.
+ */
+function completeSlashDraft(item: { id: string; label?: string | undefined }, text: string): { text: string; caret: number } | null {
+  const name = (item.label ?? item.id).replace(/^\//u, "");
+  if (name === "" || !text.startsWith("/")) return null;
+  const whitespace = text.search(/\s/u);
+  const completed = whitespace === -1 ? `/${name}` : completeLeadingSlash(name, text.slice(whitespace));
+  return { text: completed, caret: name.length + 1 };
 }
 
 /** One line under a command row: what it does, and where it came from. */
