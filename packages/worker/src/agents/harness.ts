@@ -1621,7 +1621,12 @@ export class AgentHarness {
     const entry = this.byPath.get(state.run.sessionPath);
     const driver = this.host.driver(state.run.sessionPath);
     if (!entry || !driver) {
-      this.endRun(state, "failed", { error: "The agent's session is not open." });
+      // Every ending of a run that could have a successor reserved behind it
+      // goes through `finalizePendingEnd`, the one place that takes the
+      // successor; a session with no entry has nothing waiting on it.
+      const end: RunEnd = { status: "failed", outcome: { error: "The agent's session is not open." } };
+      if (entry) this.finalizePendingEnd(entry, state, end);
+      else this.endRun(state, end.status, end.outcome);
       return;
     }
     if (!entry.lifecycle.begin(state.run.runId)) {
@@ -1716,10 +1721,16 @@ export class AgentHarness {
     if (boundary.settled) this.settled(entry, state);
   }
 
-  /** The child stopped without `complete_agent_run`: nudge once, then record the failure. */
+  /**
+   * The child stopped without `complete_agent_run`: nudge once, then record
+   * the failure. Both endings go through `finalizePendingEnd`: a successor
+   * reserved while this invocation was settled but not yet fenced (a
+   * background exit, a grandchild's completion, a person's prompt) is taken
+   * and started by the ending, never left `queued` with nobody to start it.
+   */
   private settled(entry: Entry, state: RunState): void {
     if (state.lastAssistant?.error) {
-      this.endRun(state, "failed", { error: state.lastAssistant.error });
+      this.finalizePendingEnd(entry, state, { status: "failed", outcome: { error: state.lastAssistant.error } });
       return;
     }
     if (!state.nudged) {
@@ -1729,7 +1740,7 @@ export class AgentHarness {
     }
     const driver = this.host.driver(entry.path!);
     const context = driver?.lastAssistantText?.() ?? state.lastAssistant?.text;
-    this.endRun(state, "failed", { error: ENDED_WITHOUT_TOOL, ...(context ? { context: excerpt(context, RESULT_EXCERPT) } : {}) });
+    this.finalizePendingEnd(entry, state, { status: "failed", outcome: { error: ENDED_WITHOUT_TOOL, ...(context ? { context: excerpt(context, RESULT_EXCERPT) } : {}) } });
   }
 
   /** Reserve or extend the one run waiting behind the current invocation. */

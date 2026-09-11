@@ -1954,6 +1954,88 @@ describe("AgentHarness", () => {
       expect(await world.harness.clearQueue(root.path)).toEqual({ steering: [], followUp: ["root follow-up"] });
       expect(lifecycleLogs().filter((log) => log.line.includes("queue-cleared"))).toHaveLength(1);
     });
+
+    it("takes a successor reserved in the settled-unfenced window when its owner ends through settled(): started at once, and every waiter behind it served", async () => {
+      // F2: the owner has settled (the driver's agent_settled ran) but its
+      // prompt promise has not resolved — Pi's post-settle unwind — when a
+      // non-causal extension trigger (a background exit, a grandchild's
+      // ending) reserves a successor. The owner then ends without the tool.
+      // That ending must take the successor: a run nobody starts is not a
+      // Waiting row, it is a wedge.
+      world.setAutoResolveChildPrompts(false);
+      const root = world.openRoot("lead");
+      const first = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "t" });
+      const path = "/sessions/child-1.jsonl";
+      const child = world.drivers.get(path)!;
+      child.emit({ type: "update", invocation: { id: "fake-1", runId: first.runId }, update: { kind: "agent_settled" } });
+      let started = 0;
+      let completeWake!: (value: { disposition: "started" }) => void;
+      const wakeCompletion = new Promise<{ disposition: "started" }>((resolve) => { completeWake = resolve; });
+      const request: ExtensionModelWorkRequest = {
+        kind: "custom",
+        content: [{ type: "text", text: "wake" }],
+        task: "wake",
+        origin: "agent",
+        start: () => { throw new Error("the wrapper below is what starts it"); },
+      };
+      const admitted = world.harness.admitExtensionModelWork(path, request, (ownerRunId, onInvocation) => {
+        started += 1;
+        onInvocation?.({ id: `ext-${started}`, ...(ownerRunId ? { runId: ownerRunId } : {}) });
+        return { admission: Promise.resolve(), completion: wakeCompletion };
+      });
+      let admission: "pending" | "settled" = "pending";
+      void admitted.admission.then(() => { admission = "settled"; }, () => { admission = "settled"; });
+      const successor = world.harness.runs().find((run) => run.sessionPath === path && run.runId !== first.runId)!;
+      expect(successor).toMatchObject({ status: "queued", origin: "agent", task: "wake" });
+      expect(lifecycleLogs().some((log) => log.line.includes("admission source=extension kind=custom decision=queued-successor"))).toBe(true);
+
+      // The old prompt resolves without the tool: the nudge, under the owner;
+      // the successor still waits, untouched.
+      child.resolvePrompt();
+      await flushLifecycle();
+      expect(child.prompted.map((item) => item.text)).toEqual(["t", NUDGE_TEXT]);
+      expect(started).toBe(0);
+      expect(world.harness.run(successor.runId)?.status).toBe("queued");
+
+      // The nudge settles without the tool as well: the owner fails — and
+      // the successor is taken, activated and started in the same breath.
+      child.emit({ type: "update", invocation: { id: "fake-2", runId: first.runId }, update: { kind: "agent_settled" } });
+      child.resolvePrompt();
+      await flushLifecycle();
+      expect(world.harness.run(first.runId)).toMatchObject({ status: "failed", error: "Ended without complete_agent_run" });
+      expect(world.harness.run(successor.runId)?.status).toBe("running");
+      expect(started).toBe(1);
+      expect(admission).toBe("settled");
+      expect(world.harness.activeRun(path)?.runId).toBe(successor.runId);
+      expect(world.harness.sessionInfo(path)).toMatchObject({ runId: successor.runId, runStatus: "running" });
+      expect(lifecycleLogs().some((log) => log.line.includes(`terminal-published runId=${first.runId} status=failed successor=${successor.runId} successorLive=true`))).toBe(true);
+      expect(lifecycleLogs().some((log) => log.line.includes(`successor-activated runId=${successor.runId} predecessor=${first.runId}`))).toBe(true);
+      expect(world.events().filter((event) => event.kind === "failed" && event.runId === first.runId)).toHaveLength(1);
+
+      // What arrives now waits on a live run, not on one nobody starts: the
+      // parent's message and a person's prompt are delivered by the fence,
+      // in order, once the wake's invocation ends.
+      const later = await root.handle.bridge.sendAgentMessage({ sessionId: first.sessionId, message: "hello?", interrupt: false });
+      expect(later).toMatchObject({ delivery: "queued", runId: successor.runId, status: "running" });
+      let personSettled = false;
+      const person = world.harness.promptUser(path, [{ type: "text", text: "person" }]).then(() => { personSettled = true; }, () => { personSettled = true; });
+      await flushLifecycle();
+      expect(personSettled).toBe(false);
+      expect(child.prompted.map((item) => item.text)).toEqual(["t", NUDGE_TEXT]);
+      completeWake({ disposition: "started" });
+      await flushLifecycle();
+      expect(child.prompted.map((item) => item.text)).toEqual(["t", NUDGE_TEXT, "hello?"]);
+      child.emit({ type: "update", invocation: { id: "fake-3", runId: successor.runId }, update: { kind: "agent_settled" } });
+      child.resolvePrompt();
+      await flushLifecycle();
+      expect(child.prompted.map((item) => item.text)).toEqual(["t", NUDGE_TEXT, "hello?", "person"]);
+      expect(await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "successor done" })).toEqual({ ok: true, runId: successor.runId });
+      child.emit({ type: "update", invocation: { id: "fake-4", runId: successor.runId }, update: { kind: "agent_settled" } });
+      child.resolvePrompt();
+      await person;
+      expect(personSettled).toBe(true);
+      expect(world.harness.runs().filter((run) => run.sessionPath === path).map((run) => run.status)).toEqual(["failed", "completed"]);
+    });
   });
 
   // M13-T42 / D-157: merging and removing a child's worktree belong to the

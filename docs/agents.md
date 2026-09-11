@@ -209,7 +209,11 @@ invoking empties the engine's queues into the successor *before* the abort,
 so nothing continues under a cancelled run. The completion is published only
 when the prompt promise — the one engine-ready fence — resolves: the old run
 turns terminal, the successor becomes the session's live run, and only then
-is the parent told. Late callbacks stamped with the finished invocation's
+is the parent told. Every ending of an owning run publishes through that
+same fence and takes the successor — the tool's declaration, a stop, a
+settle without the tool, the failed nudge — so a run reserved while the
+owner had settled but was not yet fenced is started by the ending, never
+left waiting for nobody. Late callbacks stamped with the finished invocation's
 epoch are dropped, and never touch the successor. If the session closes
 during the window, the declared result is still what the run ends with; the
 successor that never started fails with "The agent's session closed before
