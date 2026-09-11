@@ -4,11 +4,12 @@
  * the model refusal, and the agent record written
  * on a new session and recovered on load.
  */
+import { type InlineExtension, type SessionManager } from "@earendil-works/pi-coding-agent";
 import { PRODUCT_DISPLAY_NAME, PRODUCT_NAME, SESSION_AGENT_ENTRY_TYPE, SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE, type AgentDefinition, type JsonRpcMessage, type SessionState } from "@lasercode/protocol";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fallbackBeamAgent, fallbackDefaultAgent, fallbackPolicy, fallbackSnapshot } from "../../src/agents/definitions.js";
 import { ENGINE_BUILTIN_TOOLS, readSessionAgentRecord, rootRecord, rootRole } from "../../src/agents/session-config.js";
 import { StableSdkDriver } from "../../src/drivers/stable-sdk.js";
@@ -40,6 +41,12 @@ function writeSkill(root: string, name: string): void {
 
 function agentOptions(definition: AgentDefinition, name = definition.name): DriverAgentOptions {
   return { definition, role: rootRole(name), record: rootRecord(name), policy: fallbackPolicy() };
+}
+
+function deferred(): { promise: Promise<void>; resolve(): void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
 }
 
 async function openAndPrompt(definition: AgentDefinition, text = "hello"): Promise<{ driver: StableSdkDriver; path: string }> {
@@ -188,23 +195,19 @@ describe("StableSdkDriver with an agent definition", () => {
     const created = await creator.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), projectTrusted: true, agent: agentOptions(original) });
     await creator.rename("Saved empty");
     await creator.setThinkingLevel("off");
-    const saved = await creator.entries();
     await creator.dispose();
-    // Pi normally flushes metadata with the first message. Model a catalogued
-    // saved-empty file explicitly: header + metadata, no message entry.
-    mkdirSync(join(base, "sessions"), { recursive: true });
-    writeFileSync(created.path, [
-      { type: "session", version: 3, id: created.id, timestamp: "2026-09-10T00:00:00.000Z", cwd: join(base, "project") },
-      ...saved.entries,
-    ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+    const durableEmpty = readFileSync(created.path);
+    expect(durableEmpty.toString()).not.toContain('"type":"message"');
 
     const driver = new StableSdkDriver();
     drivers.push(driver);
     const before = await driver.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), sessionPath: created.path, projectTrusted: true, agent: agentOptions(original) });
     expect(await readSessionAgentRecord(before.path)).toEqual({ agentName: "default", kind: "root" });
+    const baseline = readFileSync(before.path);
     await driver.prepareFirstTurn({ agent: agentOptions(selected), thinkingLevel: "off" });
     expect(driver.state()).toMatchObject({ path: before.path, id: before.id, name: "Saved empty" });
     // Runtime preparation is still tentative on disk.
+    expect(readFileSync(before.path)).toEqual(baseline);
     expect(await readSessionAgentRecord(before.path)).toEqual({ agentName: "default", kind: "root" });
 
     let accepted = 0;
@@ -215,8 +218,11 @@ describe("StableSdkDriver with an agent definition", () => {
     expect(systemTextOf(stub.requests[0]!)).toContain("SELECTED FIRST TURN");
     expect(systemTextOf(stub.requests[0]!)).not.toContain("ORIGINAL FIRST TURN");
     expect(await readSessionAgentRecord(before.path)).toEqual({ agentName: "reviewer", kind: "root" });
-    const lines = readFileSync(before.path, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { type?: string; message?: { role?: string } });
+    const acceptedBytes = readFileSync(before.path);
+    expect(acceptedBytes.subarray(0, baseline.length)).toEqual(baseline);
+    const lines = acceptedBytes.toString().trim().split("\n").map((line) => JSON.parse(line) as { type?: string; customType?: string; message?: { role?: string } });
     expect(lines.filter((line) => line.type === "message" && line.message?.role === "user")).toHaveLength(1);
+    expect(lines.filter((line) => line.customType === SESSION_AGENT_ENTRY_TYPE)).toHaveLength(2);
   }, 60_000);
 
   it("binds first-turn model intent through WorkerServer with exact precedence", async () => {
@@ -418,7 +424,8 @@ describe("StableSdkDriver with an agent definition", () => {
       model: { provider: "anthropic", id: "claude-sonnet-4-5" },
     });
     expect(setAnthropic.error).toBeUndefined();
-    expect(existsSync(refusesA.path)).toBe(false);
+    expect(existsSync(refusesA.path)).toBe(true);
+    const refusalBaseline = readFileSync(refusesA.path);
     await call("pi/providers/logout", { cwd: join(base, "project"), provider: "anthropic" });
     const refused = await call("session/prompt", {
       path: refusesA.path,
@@ -429,7 +436,7 @@ describe("StableSdkDriver with an agent definition", () => {
     expect(stub.requests).toHaveLength(1);
     expect((await call("session/load", { path: refusesA.path }).then((reply) => reply.result as { state: SessionState })).state)
       .toMatchObject({ model: { provider: "anthropic", id: "claude-sonnet-4-5" }, agent: { agentName: "default", kind: "root" } });
-    expect(existsSync(refusesA.path)).toBe(false);
+    expect(readFileSync(refusesA.path)).toEqual(refusalBaseline);
     await server.dispose();
   }, 60_000);
 
@@ -459,11 +466,14 @@ describe("StableSdkDriver with an agent definition", () => {
       agent: agentOptions(original),
     });
     await driver.setThinkingLevel("high");
+    const rejectionBaseline = readFileSync(driver.state().path);
 
     await driver.prepareFirstTurn({ agent: agentOptions(selected), model: null, thinkingLevel: "high" });
     expect(driver.state().thinkingLevel).toBe("off");
+    expect(readFileSync(driver.state().path)).toEqual(rejectionBaseline);
     await driver.rollbackFirstTurn();
     expect(driver.state().thinkingLevel).toBe("high");
+    expect(readFileSync(driver.state().path)).toEqual(rejectionBaseline);
 
     // Acceptance persists the normalized effective level, not the incompatible
     // request or the stale pristine override, and a recreated engine agrees.
@@ -472,9 +482,13 @@ describe("StableSdkDriver with an agent definition", () => {
     await driver.prompt([{ type: "text", text: "accept normalized thinking" }]);
     expect(stub.requests[0]).toMatchObject({ model: "stub-1" });
     expect(stub.requests[0]).not.toHaveProperty("reasoning_effort");
-    const overrides = readFileSync(path, "utf8").trim().split("\n")
-      .map((line) => JSON.parse(line) as { customType?: string; data?: { thinkingLevel?: string } })
-      .filter((line) => line.customType === SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE);
+    const acceptedEntries = readFileSync(path, "utf8").trim().split("\n")
+      .map((line) => JSON.parse(line) as { type?: string; provider?: string; modelId?: string; thinkingLevel?: string; customType?: string; data?: { thinkingLevel?: string }; message?: { role?: string } });
+    const baselineEntries = rejectionBaseline.toString().trim().split("\n").map((line) => JSON.parse(line) as { type?: string });
+    expect(acceptedEntries.filter((entry) => entry.type === "model_change" && entry.provider === "stub" && entry.modelId === "stub-1")).toHaveLength(1);
+    expect(acceptedEntries.filter((entry) => entry.type === "thinking_level_change")).toHaveLength(baselineEntries.filter((entry) => entry.type === "thinking_level_change").length + 1);
+    expect(acceptedEntries.filter((entry) => entry.type === "message" && entry.message?.role === "user")).toHaveLength(1);
+    const overrides = acceptedEntries.filter((entry) => entry.customType === SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE);
     expect(overrides.at(-1)?.data?.thinkingLevel).toBe("off");
     await driver.dispose();
     const again = new StableSdkDriver();
@@ -488,6 +502,165 @@ describe("StableSdkDriver with an agent definition", () => {
       agent: agentOptions(selected),
     });
     expect(reloaded.thinkingLevel).toBe("off");
+  }, 60_000);
+
+  it("retains accepted provenance and retries it in order after an atomic commit failure", async () => {
+    const original = { ...fallbackDefaultAgent(), model: { provider: "stub", id: "stub-1" }, thinkingLevel: "low" as const } satisfies AgentDefinition;
+    const selected = { ...original, name: "reviewer", thinkingLevel: "high" as const } satisfies AgentDefinition;
+    const driver = new StableSdkDriver();
+    drivers.push(driver);
+    const opened = await driver.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), projectTrusted: true, agent: agentOptions(original) });
+    const baseline = readFileSync(opened.path);
+    await driver.prepareFirstTurn({ agent: agentOptions(selected), model: null, thinkingLevel: "high" });
+    chmodSync(join(base, "sessions"), 0o500);
+    const errors: unknown[][] = [];
+    const diagnostic = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      errors.push(args);
+      // The next manager append gets the one allowed atomic retry.
+      chmodSync(join(base, "sessions"), 0o700);
+    });
+    try {
+      await expect(driver.prompt([{ type: "text", text: "accepted once" }])).resolves.toEqual({ accepted: true, queued: false });
+    } finally {
+      chmodSync(join(base, "sessions"), 0o700);
+      diagnostic.mockRestore();
+    }
+    expect(errors.some((args) => args.join(" ").includes("could not persist the accepted agent choice"))).toBe(true);
+    expect(stub.requests).toHaveLength(1);
+    const bytes = readFileSync(opened.path);
+    expect(bytes.subarray(0, baseline.length)).toEqual(baseline);
+    const entries = bytes.toString().trim().split("\n").map((line) => JSON.parse(line) as { type?: string; customType?: string; data?: { agentName?: string }; message?: { role?: string } });
+    expect(entries.filter((entry) => entry.customType === SESSION_AGENT_ENTRY_TYPE && entry.data?.agentName === "reviewer")).toHaveLength(1);
+    expect(entries.filter((entry) => entry.type === "message" && entry.message?.role === "user")).toHaveLength(1);
+  }, 60_000);
+
+  it("keeps a no-signal candidate question answerable before acceptance and retires it on cancellation", async () => {
+    const original = { ...fallbackDefaultAgent(), model: { provider: "stub", id: "stub-1" }, thinkingLevel: "low" as const } satisfies AgentDefinition;
+    const selected = { ...original, name: "reviewer", thinkingLevel: "high" as const } satisfies AgentDefinition;
+    const entered = [deferred(), deferred()];
+    let promptOrdinal = 0;
+    let diagnosticOrdinal = 0;
+    const question: InlineExtension = (pi) => {
+      pi.on("before_agent_start", (_event, context) => {
+        context.ui.notify(`candidate diagnostic ${diagnosticOrdinal++}`, "warning");
+        throw new Error("candidate diagnostic");
+      });
+      pi.on("before_agent_start", async (_event, context) => {
+        const ordinal = promptOrdinal++;
+        pi.appendEntry("test/candidate-projection", { ordinal });
+        context.ui.setStatus("candidate", `waiting-${ordinal}`);
+        const answer = context.ui.confirm("Candidate question", `Accept candidate ${ordinal}?`);
+        entered[ordinal]?.resolve();
+        await answer;
+      });
+    };
+    const messages: JsonRpcMessage[] = [];
+    const driverEvents: DriverEvent[] = [];
+    const server = new WorkerServer({
+      cwd: join(base, "project"),
+      agentDir: join(base, "agent"),
+      sessionDir: join(base, "sessions"),
+      stateDir: join(base, "state"),
+      createDriver: () => {
+        const driver = new StableSdkDriver([question]);
+        driver.subscribe((event) => driverEvents.push(event));
+        drivers.push(driver);
+        return driver;
+      },
+      send: (message) => messages.push(message),
+    });
+    let id = 0;
+    const call = async (method: string, params: unknown) => {
+      const requestId = ++id;
+      await server.handle({ jsonrpc: "2.0", id: requestId, method, params });
+      return messages.find((message) => "id" in message && message.id === requestId) as { result?: unknown; error?: unknown };
+    };
+    const notificationsSince = (start: number, method: string) => messages.slice(start)
+      .filter((message): message is Extract<JsonRpcMessage, { method: string }> => "method" in message && !("id" in message) && message.method === method);
+    const snapshot = fallbackSnapshot();
+    await call("agents/sync", { snapshot: { ...snapshot, agents: [...snapshot.agents, selected] } });
+
+    const accepted = (await call("session/new", { cwd: join(base, "project"), agentName: original.name }).then((reply) => reply.result as { state: SessionState })).state;
+    const acceptedStart = messages.length;
+    const acceptedRequestId = id + 1;
+    const accepting = call("session/prompt", {
+      path: accepted.path,
+      content: [{ type: "text", text: "answer before acceptance" }],
+      firstTurn: { agentName: "reviewer", model: null, thinkingLevel: "high" },
+    });
+    await entered[0]!.promise;
+    const acceptedQuestion = notificationsSince(acceptedStart, "pi/ui/request")[0];
+    expect(acceptedQuestion?.params).toMatchObject({ path: accepted.path, method: "confirm", title: "Candidate question" });
+    expect(messages.some((message) => "id" in message && !("method" in message) && message.id === acceptedRequestId)).toBe(false);
+    expect(notificationsSince(acceptedStart, "session/update").map((message) => (message.params as { update: { kind: string } }).update.kind)).toEqual(["extension_error"]);
+    expect(notificationsSince(acceptedStart, "pi/ui/event").map((message) => (message.params as { method: string }).method)).toEqual(["notify"]);
+    const acceptedQuestionId = (acceptedQuestion!.params as { id: string }).id;
+    const acceptedQuestionEvent = driverEvents.find((event) => event.type === "ui_request" && event.request.id === acceptedQuestionId);
+    expect(acceptedQuestionEvent).toMatchObject({ type: "ui_request", invocation: { id: expect.any(String) } });
+    expect((await call("pi/ui/response", { id: acceptedQuestionId, confirmed: true })).result).toEqual({ delivered: true });
+    expect(await accepting).toMatchObject({ result: { accepted: true, queued: false } });
+    expect(stub.requests).toHaveLength(1);
+
+    const cancelled = (await call("session/new", { cwd: join(base, "project"), agentName: original.name }).then((reply) => reply.result as { state: SessionState })).state;
+    const baseline = readFileSync(cancelled.path);
+    const cancelledStart = messages.length;
+    const cancelling = call("session/prompt", {
+      path: cancelled.path,
+      content: [{ type: "text", text: "must remain unsent" }],
+      firstTurn: { agentName: "reviewer", model: null, thinkingLevel: "high" },
+    });
+    await entered[1]!.promise;
+    const cancelledQuestion = notificationsSince(cancelledStart, "pi/ui/request")[0];
+    expect(cancelledQuestion?.params).toMatchObject({ path: cancelled.path, method: "confirm", title: "Candidate question" });
+    const cancelledQuestionId = (cancelledQuestion!.params as { id: string }).id;
+    expect(notificationsSince(cancelledStart, "session/update").map((message) => (message.params as { update: { kind: string } }).update.kind)).toEqual(["extension_error"]);
+    expect(notificationsSince(cancelledStart, "pi/ui/event").map((message) => (message.params as { method: string }).method)).toEqual(["notify"]);
+    expect((await call("session/cancel", { path: cancelled.path })).error).toBeUndefined();
+    expect((await cancelling).error).toBeDefined();
+    expect(stub.requests).toHaveLength(1);
+    expect(readFileSync(cancelled.path)).toEqual(baseline);
+    expect(notificationsSince(cancelledStart, "session/update").filter((message) => (message.params as { update?: { kind?: string } }).update?.kind !== "extension_error")).toEqual([]);
+    expect(notificationsSince(cancelledStart, "pi/ui/event").map((message) => message.params)).toContainEqual(expect.objectContaining({ path: cancelled.path, method: "dialogResolved", id: cancelledQuestionId }));
+    const cancelledQuestionEvent = driverEvents.find((event) => event.type === "ui_request" && event.request.id === cancelledQuestionId);
+    const retiredQuestionEvent = driverEvents.find((event) => event.type === "ui_event" && event.event.method === "dialogResolved" && event.event.id === cancelledQuestionId);
+    expect(cancelledQuestionEvent).toMatchObject({ type: "ui_request", invocation: { id: expect.any(String) } });
+    expect(retiredQuestionEvent).toMatchObject({ type: "ui_event", invocation: (cancelledQuestionEvent as Extract<DriverEvent, { type: "ui_request" }>).invocation });
+    expect((await call("pi/ui/response", { id: cancelledQuestionId, confirmed: true })).result).toEqual({ delivered: false });
+    expect((await call("session/load", { path: cancelled.path }).then((reply) => reply.result as { state: SessionState })).state)
+      .toMatchObject({ id: cancelled.id, path: cancelled.path, model: cancelled.model, thinkingLevel: cancelled.thinkingLevel, agent: cancelled.agent });
+    await server.dispose();
+  }, 60_000);
+
+  it("keeps a speculative extension setup append invisible and discards it on rollback", async () => {
+    const original = { ...fallbackDefaultAgent(), model: { provider: "stub", id: "stub-1" }, thinkingLevel: "low" as const } satisfies AgentDefinition;
+    const selected = { ...original, name: "reviewer", thinkingLevel: "high" as const } satisfies AgentDefinition;
+    let failSetup = false;
+    const injectedSetup: InlineExtension = (pi) => {
+      pi.on("session_start", async (_event, context) => {
+        if (!failSetup) return;
+        (context.sessionManager as unknown as SessionManager).appendCustomEntry("test/speculative-setup", { candidate: true });
+        // Pi isolates extension handler failures, so the manager append is the
+        // observable setup side effect this transaction must still contain.
+      });
+    };
+    const driver = new StableSdkDriver([injectedSetup]);
+    drivers.push(driver);
+    const opened = await driver.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), projectTrusted: true, agent: agentOptions(original) });
+    const baseline = readFileSync(opened.path);
+    const speculativeEvents: DriverEvent[] = [];
+    driver.subscribe((event) => speculativeEvents.push(event));
+    failSetup = true;
+
+    await driver.prepareFirstTurn({ agent: agentOptions(selected), model: null, thinkingLevel: "high" });
+    expect(readFileSync(opened.path)).toEqual(baseline);
+    expect(speculativeEvents).toEqual([]);
+    expect((await driver.entries()).entries.some((entry) => JSON.stringify(entry).includes("test/speculative-setup"))).toBe(true);
+    await driver.rollbackFirstTurn();
+    expect(readFileSync(opened.path)).toEqual(baseline);
+    expect(driver.state()).toMatchObject({ id: opened.id, path: opened.path, model: opened.model, thinkingLevel: opened.thinkingLevel });
+    expect((await driver.entries()).entries.some((entry) => JSON.stringify(entry).includes("test/speculative-setup"))).toBe(false);
+    expect(speculativeEvents).toEqual([]);
+    expect(await readSessionAgentRecord(opened.path)).toEqual({ agentName: "default", kind: "root" });
   }, 60_000);
 
   it.each([false, true])("restores exact effective state after preparation failure/rollback (manual override: %s)", async (manual) => {
@@ -527,9 +700,12 @@ describe("StableSdkDriver with an agent definition", () => {
       expect(stub.requests).toHaveLength(0);
     }
     const effective = driver.state();
+    const baseline = readFileSync(effective.path);
     await driver.prepareFirstTurn({ agent: agentOptions(selected), model: null, thinkingLevel: "off" });
+    expect(readFileSync(effective.path)).toEqual(baseline);
     await driver.rollbackFirstTurn();
     expect(driver.state()).toMatchObject({ path: effective.path, id: effective.id, model: effective.model, thinkingLevel: effective.thinkingLevel });
+    expect(readFileSync(effective.path)).toEqual(baseline);
     await driver.prompt([{ type: "text", text: "continue" }]);
 
     expect(stub.requests[0]).toMatchObject({ model: manual ? "stub-2" : "stub-1", reasoning_effort: manual ? "high" : "low" });
@@ -540,8 +716,7 @@ describe("StableSdkDriver with an agent definition", () => {
 
   it("writes the agent record as the first custom entry of a new session and recovers it on load", async () => {
     const definition: AgentDefinition = { ...fallbackDefaultAgent(), name: "recorder", model: { provider: "stub", id: "stub-1" } };
-    // The engine flushes a new session's file on its first assistant message;
-    // the record, appended at open, is the first custom entry in it.
+    // The genuine empty state and its first agent record are durable at open.
     const { driver, path } = await openAndPrompt(definition);
     expect(existsSync(path)).toBe(true);
     const lines = readFileSync(path, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { type: string; customType?: string; data?: unknown });
@@ -558,7 +733,7 @@ describe("StableSdkDriver with an agent definition", () => {
     await again.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), sessionPath: state.path, agent: agentOptions(definition) });
     const afterLoad = readFileSync(state.path, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { type: string; customType?: string });
     expect(afterLoad.filter((line) => line.customType === SESSION_AGENT_ENTRY_TYPE)).toHaveLength(1);
-    // An ephemeral open without an agent writes nothing.
+    // A no-agent resource-preview open is never exposed and writes nothing.
     const plain = new StableSdkDriver();
     drivers.push(plain);
     const ephemeral = await plain.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir: join(base, "sessions") });

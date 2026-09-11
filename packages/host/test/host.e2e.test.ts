@@ -117,29 +117,92 @@ afterEach(async () => {
 });
 
 describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
-  it("never resurrects an unwritten conversation when its real worker restarts", async () => {
-    const { url } = await host.listen();
+  it("reopens genuine empty project, Beam and Chat sessions after worker retirement and a full host restart", async () => {
+    // Give a later host a different default. The saved empty-session tuple,
+    // not that changed default, must win on reopen.
+    writeFileSync(
+      join(base, "agent", "models.json"),
+      JSON.stringify({ providers: { stub: { baseUrl: stub.url, api: "openai-completions", apiKey: "k", models: [
+        { id: "stub-1", contextWindow: 8000, maxTokens: 500, reasoning: true },
+        { id: "stub-2", contextWindow: 8000, maxTokens: 500, reasoning: true },
+      ] } } }),
+    );
+    writeFileSync(join(base, "agent", "settings.json"), JSON.stringify({ defaultProvider: "stub", defaultModel: "stub-1", enabledModels: ["stub/stub-1", "stub/stub-2"], defaultThinkingLevel: "low" }));
+
+    let client = new Client();
+    await client.connect((await host.listen()).url);
+    const roots = [
+      { name: "default", cwd: join(base, "project"), kind: "root" },
+      { name: "beam", cwd: join(base, "state", "workspaces", "beam"), kind: "beam" },
+      { name: "chat", cwd: join(base, "state", "workspaces", "chat"), kind: "chat" },
+    ] as const;
+    const created: SessionState[] = [];
+    try {
+      for (const item of roots) {
+        const { state } = await client.request<{ state: SessionState }>("session/new", { cwd: item.cwd, agentName: item.name });
+        expect(state).toMatchObject({ messageCount: 0, model: { provider: "stub", id: "stub-1" }, thinkingLevel: "low", agent: { agentName: item.name, kind: item.kind } });
+        expect(existsSync(state.path)).toBe(true);
+        const bytes = readFileSync(state.path, "utf8");
+        const entries = bytes.trim().split("\n").map((line) => JSON.parse(line) as { type?: string; id?: string; cwd?: string });
+        expect(entries[0]).toMatchObject({ type: "session", id: state.id, cwd: state.cwd });
+        expect(entries.some((entry) => entry.type === "message")).toBe(false);
+        const firstPid = host.pool.workerInfo(state.cwd)?.pid;
+        await host.pool.restart(state.cwd);
+        expect(host.pool.workerInfo(state.cwd)?.pid).not.toBe(firstPid);
+        const { state: retired } = await client.request<{ state: SessionState }>("session/load", { path: state.path });
+        expect(retired).toMatchObject({ id: state.id, path: state.path, cwd: state.cwd, messageCount: 0, model: state.model, thinkingLevel: state.thinkingLevel, agent: state.agent });
+        expect(readFileSync(state.path, "utf8")).toBe(bytes);
+        created.push(state);
+      }
+
+      client.close();
+      await host.close();
+      writeFileSync(join(base, "agent", "settings.json"), JSON.stringify({ defaultProvider: "stub", defaultModel: "stub-2", enabledModels: ["stub/stub-1", "stub/stub-2"], defaultThinkingLevel: "high" }));
+      host = new HostServer({
+        agentDir: join(base, "agent"),
+        sessionDir: join(base, "sessions"),
+        stateDir: join(base, "state"),
+        log: (line) => logs.push(line),
+      });
+      client = new Client();
+      await client.connect((await host.listen()).url);
+
+      for (const state of created) {
+        const { state: restarted } = await client.request<{ state: SessionState }>("session/load", { path: state.path });
+        expect(restarted).toMatchObject({ id: state.id, path: state.path, cwd: state.cwd, messageCount: 0, model: state.model, thinkingLevel: state.thinkingLevel, agent: state.agent });
+        await expect(client.request("session/prompt", { path: state.path, content: [{ type: "text", text: `first ${state.agent?.kind ?? "project"}` }] }))
+          .resolves.toEqual({ accepted: true, queued: false });
+      }
+      const firstTurns = stub.requests.filter((request) => JSON.stringify(request).includes('"first '));
+      expect(firstTurns).toHaveLength(3);
+      expect(firstTurns.map((request) => request.model)).toEqual(["stub-1", "stub-1", "stub-1"]);
+    } finally { client.close(); }
+  }, 120_000);
+
+  it("keeps deleted, zero-byte and corrupt transcript guards closed without recreating files", async () => {
     const client = new Client();
-    await client.connect(url);
+    await client.connect((await host.listen()).url);
     const cwd = join(base, "project");
     try {
-      const { state: unsaved } = await client.request<{ state: SessionState }>("session/new", { cwd });
-      expect(existsSync(unsaved.path)).toBe(false);
-      const firstPid = host.pool.workerInfo(cwd)?.pid;
+      const { state } = await client.request<{ state: SessionState }>("session/new", { cwd });
+      expect(existsSync(state.path)).toBe(true);
       await host.pool.restart(cwd);
-      expect(host.pool.workerInfo(cwd)?.pid).not.toBe(firstPid);
-      expect(host.pool.openSessions(cwd)).not.toContain(unsaved.path);
-      expect(existsSync(unsaved.path)).toBe(false);
-      await expect(client.request("session/load", { path: unsaved.path })).rejects.toThrow(/no saved transcript|no project known/);
-      // Direct recovery bypasses the router: the worker itself must refuse it.
-      await expect((await host.pool.get(cwd)).request("session/load", { path: unsaved.path })).rejects.toThrow(/no saved transcript/);
-      const { state: fresh } = await client.request<{ state: SessionState }>("session/new", { cwd });
-      expect(fresh.cwd).toBe(cwd);
-      expect(fresh.id).not.toBe(unsaved.id);
-      expect(fresh.path).not.toBe(unsaved.path);
-      const { sessions } = await client.request<{ sessions: SessionState[] }>("pi/session/list", {});
-      expect(sessions.map(s => s.path)).toEqual([fresh.path]);
-      expect(existsSync(unsaved.path)).toBe(false);
+      rmSync(state.path);
+      // Retire the process that had already resumed it; recovery must now use
+      // the missing durable path rather than surviving in-memory state.
+      await host.pool.restart(cwd);
+      await expect(client.request("session/load", { path: state.path })).rejects.toThrow(/no saved transcript|no project known/);
+      expect(existsSync(state.path)).toBe(false);
+
+      const zero = join(base, "sessions", "zero.jsonl");
+      const corrupt = join(base, "sessions", "corrupt.jsonl");
+      writeFileSync(zero, "");
+      writeFileSync(corrupt, "not json\n");
+      const worker = await host.pool.get(cwd);
+      await expect(worker.request("session/load", { path: zero })).rejects.toThrow(/no saved transcript/);
+      await expect(worker.request("session/load", { path: corrupt })).rejects.toThrow(/not a valid/);
+      expect(readFileSync(zero, "utf8")).toBe("");
+      expect(readFileSync(corrupt, "utf8")).toBe("not json\n");
     } finally { client.close(); }
   }, 60_000);
 

@@ -13,6 +13,7 @@ small and self-contained (`AGENTS.md` §6).
 | earendil-works/pi | `SettingsManager.applyOverrides()` is not durable: `reload()` and `setProjectTrusted()` recompute settings from the two files and drop it, and `createAgentSessionServices()` reloads the resource loader (hence settings) before the session exists. Fix: retain applied overrides and re-merge them after every recompute, or expose a hook to re-apply. Local workaround: `packages/worker/src/settings-overrides.ts`. | M13-T12 | — | not filed |
 | earendil-works/pi | `dist/main.js` → `dist/experimental/server.js` imports `@earendil-works/pi-server`, undeclared in `package.json`; resolves only under npm's flat hoisting, fails under pnpm/strict installers with ERR_MODULE_NOT_FOUND. Fix: declare the dependency (or lazy-import the experimental server). Local workaround: `packageExtensions` in `pnpm-workspace.yaml`. | M0-T4 | — | not filed |
 | earendil-works/pi | `ExtensionAPI.sendMessage` / `sendUserMessage` return `void`, so neither an extension nor a host embedding the SDK can observe whether a send was accepted or refused; the underlying promise is swallowed and a rejection reaches only `emitError`. Fix: return the operation promise from the loader API and the core binding, and widen `SendMessageHandler` / `SendUserMessageHandler` to `Promise<void>`. Local patch: `patches/@earendil-works__pi-coding-agent@0.85.0.patch`. | M13-T93 | — | not filed |
+| earendil-works/pi | Opt-in durable zero-message sessions and append-scoped admission transactions: explicit `SessionManager.flush()`, deferred append commit/rollback, and saved runtime settings counting as existing session state. Local exact-version patch: `patches/@earendil-works__pi-coding-agent@0.85.0.patch`; generic proposal: `/tmp/laser-m13-t108-upstream-proposal.md`. | M13-T108 | — | pending parent review; not filed |
 
 ---
 
@@ -34,6 +35,30 @@ Written and reviewed here, **not filed**. Each is small, self-contained, and
 justified on the upstream project's own terms (extensibility, headless-host
 support) — never on ours. Nothing about laser appears in a patch, a commit
 message or a PR body.
+
+### pi-coding-agent · durable empty sessions and append admission (M13-T108)
+
+**Against:** `github.com/earendil-works/pi` @ 0.85.0. Local exact-version patch:
+`patches/@earendil-works__pi-coding-agent@0.85.0.patch`, applied through pnpm.
+
+A headless SDK host may need a newly allocated session identity to survive before
+an assistant message exists, and may need to stage runtime setup until an
+external prompt-admission decision. The local patch adds opt-in
+`SessionManager.flush()` and a single append-scoped transaction. Rollback changes
+no durable byte; commit verifies the exact baseline and atomically replaces it
+with baseline plus the accepted suffix. A failed commit retains that suffix in
+the same manager for one ordered retry, then fails closed. Pi's default remains
+lazy. SDK construction also treats saved model/thinking entries as existing
+zero-message state, so resume does not append another initialization tuple.
+
+Direct policy tests live in
+`packages/worker/test/session-manager.transaction.test.ts`; Stable integration
+and real-host lifecycle tests cover refusal, setup writes, cancellation,
+acceptance, failure, worker retirement and host restart. The generic proposal
+and diff evidence are in `/tmp/laser-m13-t108-upstream-proposal.md`.
+
+**Status: pending parent review; not filed.** The parent owns any public issue or
+PR after reviewing this seam.
 
 ### pi-coding-agent · awaitable extension sends (M13-T93)
 

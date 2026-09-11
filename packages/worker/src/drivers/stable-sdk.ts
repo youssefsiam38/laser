@@ -41,6 +41,7 @@ import {
   type ExtensionError,
   type InlineExtension,
   type ModelRuntime,
+  type SessionAppendTransaction,
 } from "@earendil-works/pi-coding-agent";
 import { goalExtensionPath, goalStateFromEntries } from "@lasercode/pi-goal";
 import { createCommandBus, createLaserExtension, createPromptProvenanceObserver, toSessionGoal, type LaserExtensionOptions } from "@lasercode/pi-extension";
@@ -128,6 +129,15 @@ export class StableSdkDriver implements SessionDriver {
     modelOverride: ModelRef | undefined;
     thinkingOverride: ThinkingLevel | undefined;
   } | undefined;
+  /** Pi owns the only writer; preparation appends stay in this manager transaction until admission. */
+  private firstTurnTransaction: SessionAppendTransaction | undefined;
+  private firstTurnManager: SessionManager | undefined;
+  /** Candidate transcript/state projections are invisible until that candidate is accepted. */
+  private deferredFirstTurnEvents: DriverEvent[] | undefined;
+  /** Answerable dialogs stay live before acceptance and are retired if their candidate is discarded. */
+  private readonly firstTurnDialogIds = new Set<string>();
+  /** Cancellation can arrive while replacement/preflight owns the server lease. */
+  private firstTurnCancelled = false;
   private preparedAgentRecord: DriverAgentOptions["record"] | undefined;
   /** Undefined preserves prior override provenance; null clears it on acceptance. */
   private preparedModelIntent: ModelRef | null | undefined;
@@ -176,11 +186,15 @@ export class StableSdkDriver implements SessionDriver {
           for (const id of [...this.dialogInvocations.keys()]) if (!open.has(id)) this.dialogInvocations.delete(id);
           const invocation = this.extensionAdmission.eventInvocation()?.ref;
           if (invocation) this.dialogInvocations.set(request.id, invocation);
+          if (this.firstTurnTransaction) this.firstTurnDialogIds.add(request.id);
           this.emit({ type: "ui_request", request, ...(invocation ? { invocation } : {}) });
         },
         onEvent: (event) => {
           const invocation = event.method === "dialogResolved" ? this.dialogInvocations.get(event.id) : undefined;
-          if (event.method === "dialogResolved") this.dialogInvocations.delete(event.id);
+          if (event.method === "dialogResolved") {
+            this.dialogInvocations.delete(event.id);
+            this.firstTurnDialogIds.delete(event.id);
+          }
           this.emit({ type: "ui_event", event, ...(invocation ? { invocation } : {}) });
         },
       },
@@ -390,6 +404,15 @@ export class StableSdkDriver implements SessionDriver {
     const overrides = savedOverrides && typeof savedOverrides === "object" ? savedOverrides as SessionFirstTurnOverrides : undefined;
     this.explicitModelOverride = overrides?.model;
     this.explicitThinkingOverride = overrides?.thinkingLevel;
+    // A durable empty is an existing session, not another invocation of the
+    // selected agent's current defaults. Restore the exact saved runtime tuple.
+    const savedEmptyRuntime = !openingEntries.some((entry) => entry.type === "message")
+      && openingEntries.some((entry) => entry.type === "model_change" || entry.type === "thinking_level_change");
+    if (options.sessionPath && savedEmptyRuntime) {
+      const context = sessionManager.buildSessionContext();
+      if (context.model) this.runtimeModelOverride = { provider: context.model.provider, id: context.model.modelId };
+      this.runtimeThinkingOverride = context.thinkingLevel as ThinkingLevel;
+    }
     this.runtimeFactory = createRuntime;
     const runtime = await createAgentSessionRuntime(createRuntime, {
       cwd: sessionManager.getCwd(),
@@ -410,6 +433,12 @@ export class StableSdkDriver implements SessionDriver {
     if (agent && !options.sessionPath) {
       this.session().sessionManager.appendCustomEntry(SESSION_AGENT_ENTRY_TYPE, agent.record);
     }
+    // A returned identity is immediately catalogued and routable after worker
+    // retirement or host restart. Flush the final manager: parent-session
+    // creation replaces the manager above.
+    // Resource-preview drivers have no agent and never expose their temporary
+    // identity. Every real WorkerServer session has an agent record.
+    if (!options.sessionPath && agent) this.session().sessionManager.flush();
     return this.state();
   }
 
@@ -451,6 +480,7 @@ export class StableSdkDriver implements SessionDriver {
     thinkingOverride: ThinkingLevel | undefined,
     normalizeThinking = false,
     resetThinking = false,
+    restoreOnFailure = true,
   ): Promise<void> {
     const current = this.runtime;
     const factory = this.runtimeFactory;
@@ -498,6 +528,7 @@ export class StableSdkDriver implements SessionDriver {
       this.unsubscribe = undefined;
       await disposeRuntime(this.runtime);
       this.runtime = undefined;
+      if (!restoreOnFailure) throw error;
       this.runtimeAgent = previous.agent;
       this.runtimeModelOverride = previous.modelOverride;
       this.runtimeThinkingOverride = previous.thinkingOverride;
@@ -514,11 +545,83 @@ export class StableSdkDriver implements SessionDriver {
     }
   }
 
+  /** Close only unanswered dialogs raised while the tentative runtime owned the manager. */
+  private retirePreparedFirstTurnDialogs(): void {
+    const pending = new Set(this.ui.pending().map((request) => request.id));
+    for (const id of this.firstTurnDialogIds) {
+      if (!pending.has(id)) continue;
+      const invocation = this.dialogInvocations.get(id);
+      // A synthetic cancellation settles a no-signal question in the shared
+      // bridge; unlike a real client answer, the client still needs its close.
+      this.ui.respond({ id, cancelled: true });
+      this.dialogInvocations.delete(id);
+      this.emit({
+        type: "ui_event",
+        event: { method: "dialogResolved", id },
+        ...(invocation ? { invocation } : {}),
+      });
+    }
+    this.firstTurnDialogIds.clear();
+  }
+
+  /** Discard a candidate and rebuild the prior runtime without writing restoration entries. */
+  private async restorePreparedFirstTurn(): Promise<void> {
+    const previous = this.firstTurnRollback;
+    const transaction = this.firstTurnTransaction;
+    const manager = this.firstTurnManager;
+    const factory = this.runtimeFactory;
+    if (!previous || !transaction || !manager || !factory) return;
+    const candidate = this.runtime;
+    this.flushHeldUserEnd();
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
+    this.extensionAdmission.invalidate();
+    this.retirePreparedFirstTurnDialogs();
+    await disposeRuntime(candidate);
+    this.runtime = undefined;
+    transaction.rollback();
+    this.firstTurnTransaction = undefined;
+    this.runtimeAgent = previous.agent;
+    this.runtimeModelOverride = previous.modelOverride;
+    this.runtimeThinkingOverride = previous.thinkingOverride;
+    this.runtimeNormalizeThinking = false;
+    this.runtimeResetThinking = false;
+    const restoration = manager.beginAppendTransaction();
+    const previousSessionFile = manager.getSessionFile();
+    try {
+      this.runtime = await createAgentSessionRuntime(factory, {
+        cwd: manager.getCwd(),
+        agentDir: this.agentDir,
+        sessionManager: manager,
+        sessionStartEvent: {
+          type: "session_start" as const,
+          reason: "resume" as const,
+          ...(previousSessionFile ? { previousSessionFile } : {}),
+        },
+      });
+      await this.applySession();
+    } catch (error) {
+      await disposeRuntime(this.runtime);
+      this.runtime = undefined;
+      throw error;
+    } finally {
+      restoration.rollback();
+      this.deferredFirstTurnEvents = undefined;
+      this.firstTurnDialogIds.clear();
+      this.firstTurnCancelled = false;
+      this.firstTurnRollback = undefined;
+      this.firstTurnManager = undefined;
+      this.preparedAgentRecord = undefined;
+      this.preparedModelIntent = undefined;
+      this.preparedThinkingIntent = undefined;
+    }
+  }
+
   async prepareFirstTurn(options: FirstTurnOptions): Promise<void> {
     if (this.promptPreflight) {
       throw new ProtocolError(ErrorCodes.InvalidParams, "This conversation is already accepting its first prompt.");
     }
-    if (this.firstTurnRollback || this.preparedAgentRecord) {
+    if (this.firstTurnRollback || this.preparedAgentRecord || this.firstTurnTransaction) {
       throw new ProtocolError(ErrorCodes.InvalidParams, "A first-turn agent choice is already being prepared for this conversation.");
     }
     // Restoration is an exact effective-state snapshot, not another default
@@ -529,53 +632,87 @@ export class StableSdkDriver implements SessionDriver {
       modelOverride: effective.model ?? undefined,
       thinkingOverride: effective.thinkingLevel,
     };
-    const hasModelIntent = Object.hasOwn(options, "model");
-    await this.replaceRuntime(
-      options.agent,
-      hasModelIntent ? (options.model ?? undefined) : this.explicitModelOverride,
-      options.thinkingLevel ?? (hasModelIntent ? undefined : this.explicitThinkingOverride),
-      true,
-      hasModelIntent,
-    );
+    const manager = this.session().sessionManager;
+    const transaction = manager.beginAppendTransaction();
     this.firstTurnRollback = previous;
-    this.preparedAgentRecord = options.agent.record;
-    this.preparedModelIntent = options.model;
-    this.preparedThinkingIntent = options.thinkingLevel !== undefined
-      ? (this.state().thinkingLevel ?? options.thinkingLevel)
-      : hasModelIntent ? null : undefined;
+    this.firstTurnManager = manager;
+    this.firstTurnTransaction = transaction;
+    this.deferredFirstTurnEvents = [];
+    const hasModelIntent = Object.hasOwn(options, "model");
+    try {
+      await this.replaceRuntime(
+        options.agent,
+        hasModelIntent ? (options.model ?? undefined) : this.explicitModelOverride,
+        options.thinkingLevel ?? (hasModelIntent ? undefined : this.explicitThinkingOverride),
+        true,
+        hasModelIntent,
+        false,
+      );
+      if (this.firstTurnCancelled) {
+        throw new ProtocolError(ErrorCodes.InvalidParams, "The first prompt was cancelled before acceptance.");
+      }
+      this.preparedAgentRecord = options.agent.record;
+      this.preparedModelIntent = options.model;
+      this.preparedThinkingIntent = options.thinkingLevel !== undefined
+        ? (this.state().thinkingLevel ?? options.thinkingLevel)
+        : hasModelIntent ? null : undefined;
+    } catch (error) {
+      try {
+        await this.restorePreparedFirstTurn();
+      } catch (rollbackError) {
+        throw new AggregateError([error, rollbackError], "Could not prepare the selected agent or restore this conversation.");
+      }
+      throw error;
+    }
   }
 
   async rollbackFirstTurn(): Promise<void> {
-    const previous = this.firstTurnRollback;
-    if (!previous) return;
-    await this.replaceRuntime(previous.agent, previous.modelOverride, previous.thinkingOverride);
-    this.firstTurnRollback = undefined;
-    this.preparedAgentRecord = undefined;
-    this.preparedModelIntent = undefined;
-    this.preparedThinkingIntent = undefined;
+    if (!this.firstTurnRollback) return;
+    await this.restorePreparedFirstTurn();
   }
 
-  /** Persist the replacement identity and accepted intent at Pi's exact prompt-acceptance boundary. */
+  /** Persist the replacement identity and accepted tuple at Pi's exact acceptance boundary. */
   private commitPreparedFirstTurn(): void {
     const record = this.preparedAgentRecord;
-    if (!record) return;
+    const transaction = this.firstTurnTransaction;
+    const previous = this.firstTurnRollback;
+    if (!record || !transaction || !previous) return;
     const modelIntent = this.preparedModelIntent;
     const thinkingIntent = this.preparedThinkingIntent;
-    // Acceptance is monotonic even if persistence reports an I/O error: never
-    // leave a rollback armed for a prompt the engine already owns.
+    const accepted = this.state();
+    const manager = this.session().sessionManager;
+    const events = this.deferredFirstTurnEvents ?? [];
+    // Acceptance is monotonic even if the atomic persistence attempt reports
+    // an I/O error: retain the accepted tuple and suffix in this one manager.
     this.preparedAgentRecord = undefined;
     this.preparedModelIntent = undefined;
     this.preparedThinkingIntent = undefined;
     this.firstTurnRollback = undefined;
-    this.session().sessionManager.appendCustomEntry(SESSION_AGENT_ENTRY_TYPE, record);
-    if (modelIntent !== undefined) this.explicitModelOverride = modelIntent ?? undefined;
-    if (thinkingIntent !== undefined) {
-      this.explicitThinkingOverride = thinkingIntent ?? undefined;
-      this.runtimeThinkingOverride = thinkingIntent ?? undefined;
+    try {
+      if (accepted.model && (accepted.model.provider !== previous.modelOverride?.provider || accepted.model.id !== previous.modelOverride.id)) {
+        manager.appendModelChange(accepted.model.provider, accepted.model.id);
+      }
+      if (accepted.thinkingLevel !== previous.thinkingOverride) {
+        manager.appendThinkingLevelChange(accepted.thinkingLevel);
+      }
+      manager.appendCustomEntry(SESSION_AGENT_ENTRY_TYPE, record);
+      if (modelIntent !== undefined) this.explicitModelOverride = modelIntent ?? undefined;
+      if (thinkingIntent !== undefined) {
+        this.explicitThinkingOverride = thinkingIntent ?? undefined;
+        this.runtimeThinkingOverride = thinkingIntent ?? undefined;
+      }
+      this.runtimeNormalizeThinking = false;
+      this.runtimeResetThinking = false;
+      if (modelIntent !== undefined || thinkingIntent !== undefined) this.persistExplicitOverrides();
+      transaction.commit();
+    } finally {
+      this.firstTurnTransaction = undefined;
+      this.firstTurnManager = undefined;
+      this.deferredFirstTurnEvents = undefined;
+      this.firstTurnDialogIds.clear();
+      this.firstTurnCancelled = false;
+      for (const event of events) this.emit(event);
     }
-    this.runtimeNormalizeThinking = false;
-    this.runtimeResetThinking = false;
-    if (modelIntent !== undefined || thinkingIntent !== undefined) this.persistExplicitOverrides();
   }
 
   async dispose(): Promise<void> {
@@ -584,8 +721,24 @@ export class StableSdkDriver implements SessionDriver {
     this.extensionAdmission.invalidate();
     this.unsubscribe = undefined;
     this.toolCalls.clear();
+    if (this.firstTurnTransaction) {
+      this.firstTurnCancelled = true;
+      this.retirePreparedFirstTurnDialogs();
+    }
     this.ui.dispose();
     await this.runtime?.dispose();
+    if (this.firstTurnTransaction) {
+      try {
+        this.firstTurnTransaction.rollback();
+      } catch (error) {
+        console.error(`${PRODUCT_NAME} worker: could not discard an unaccepted first-turn transaction:`, error instanceof Error ? error.message : error);
+      }
+    }
+    this.firstTurnTransaction = undefined;
+    this.firstTurnManager = undefined;
+    this.deferredFirstTurnEvents = undefined;
+    this.firstTurnDialogIds.clear();
+    this.firstTurnCancelled = false;
     this.runtime = undefined;
     this.runtimeFactory = undefined;
     this.runtimeAgent = undefined;
@@ -718,6 +871,10 @@ export class StableSdkDriver implements SessionDriver {
     let accepted = false;
     const accept = () => {
       if (accepted) return;
+      if (this.firstTurnCancelled) {
+        finishPreflight();
+        throw new ProtocolError(ErrorCodes.InvalidParams, "The first prompt was cancelled before acceptance.");
+      }
       accepted = true;
       finishPreflight();
       try {
@@ -809,6 +966,12 @@ export class StableSdkDriver implements SessionDriver {
   }
 
   async abort(): Promise<void> {
+    if (this.firstTurnTransaction) {
+      this.firstTurnCancelled = true;
+      this.retirePreparedFirstTurnDialogs();
+      await this.runtime?.session.abort();
+      return;
+    }
     await this.session().abort();
   }
 
@@ -946,6 +1109,8 @@ export class StableSdkDriver implements SessionDriver {
 
   respondToUi(response: UiDialogResponse): void {
     this.ui.respond(response);
+    this.dialogInvocations.delete(response.id);
+    this.firstTurnDialogIds.delete(response.id);
   }
 
   /**
@@ -1119,6 +1284,20 @@ export class StableSdkDriver implements SessionDriver {
   }
 
   private emit(event: DriverEvent): void {
+    if (this.deferredFirstTurnEvents) {
+      // Questions and their close events are control-plane: an extension may
+      // await a no-signal answer before Pi reports prompt acceptance. Error
+      // diagnostics must also remain visible while that wait is in progress.
+      // Everything else is a speculative candidate projection and is either
+      // published after commit or discarded on rollback.
+      const immediate = event.type === "ui_request"
+        || (event.type === "ui_event" && (event.event.method === "dialogResolved" || event.event.method === "notify"))
+        || (event.type === "update" && event.update.kind === "extension_error");
+      if (!immediate) {
+        this.deferredFirstTurnEvents.push(event);
+        return;
+      }
+    }
     for (const listener of this.listeners) listener(event);
   }
 

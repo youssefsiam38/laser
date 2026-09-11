@@ -40,6 +40,16 @@ describe("StableSdkDriver.open", () => {
     if (kind === "empty") expect(readFileSync(path, "utf8")).toBe("");
   });
 
+  it("refuses a corrupt non-empty transcript without changing it", async () => {
+    const sessionDir = join(base, "sessions");
+    mkdirSync(sessionDir);
+    const path = join(sessionDir, "corrupt.jsonl");
+    writeFileSync(path, "not json\n");
+    await expect(driver.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir, sessionPath: path }))
+      .rejects.toThrow(/not a valid/);
+    expect(readFileSync(path, "utf8")).toBe("not json\n");
+  });
+
   it("loads the saved identity and cwd directly, without a throwaway new-session runtime", async () => {
     const sessionDir = join(base, "sessions");
     mkdirSync(sessionDir);
@@ -82,10 +92,10 @@ describe("StableSdkDriver.open", () => {
       expect(caps.message.failed).toEqual([]);
     }
 
-    // Pi creates the session file lazily on the first persisted entry, so at
-    // open time only the path is decided. It must point inside the sandbox and
-    // the real ~/.pi/agent must not have been touched.
+    // A no-agent open is a resource preview, not an exposed conversation: it
+    // keeps Pi's lazy behavior and leaves no orphan transcript.
     expect(state.path.startsWith(join(base, "sessions"))).toBe(true);
+    expect(existsSync(state.path)).toBe(false);
     expect(existsSync(join(base, "agent", "sessions"))).toBe(false);
   }, 60_000);
 

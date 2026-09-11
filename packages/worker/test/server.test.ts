@@ -26,6 +26,7 @@ class FakeDriver implements SessionDriver {
   prepareGate: Promise<void> | undefined;
   prepareObserved: (() => void) | undefined;
   prepareFailure: Error | undefined;
+  abortPreparation = false;
   generation = "original";
   routed: Array<{ route: string; generation: string; content?: unknown; options?: PromptOptions }> = [];
   rollbacks = 0;
@@ -125,14 +126,18 @@ class FakeDriver implements SessionDriver {
     this.engine = { steering: [], followUp: [] };
     return cleared;
   }
-  async abort() { this.routed.push({ route: "abort", generation: this.generation }); }
-  async listModels() { return [{ provider: "p", id: "m" }]; }
+  async abort() {
+    this.routed.push({ route: "abort", generation: this.generation });
+    if (this.abortPreparation && this.generation === "original") this.prepareFailure = new Error("cancelled during preparation");
+  }
+  async listModels() { this.routed.push({ route: "models", generation: this.generation }); return [{ provider: "p", id: "m" }]; }
   async setModel() { this.routed.push({ route: "model", generation: this.generation }); return this.st; }
   async setThinkingLevel(level: SessionState["thinkingLevel"]) { this.routed.push({ route: "thinking", generation: this.generation }); this.st = { ...this.st, thinkingLevel: level }; return this.st; }
-  async rename() {} async compact() {}
+  async rename() { this.routed.push({ route: "rename", generation: this.generation }); }
+  async compact() { this.routed.push({ route: "compact", generation: this.generation }); }
   /** Every move, with the options the server handed over. */
   moves: Array<{ op: "navigate" | "fork"; entryId: string; options: unknown }> = [];
-  async navigateTree(entryId: string, options?: unknown) { this.moves.push({ op: "navigate", entryId, options }); return { cancelled: false }; }
+  async navigateTree(entryId: string, options?: unknown) { this.routed.push({ route: "navigate", generation: this.generation }); this.moves.push({ op: "navigate", entryId, options }); return { cancelled: false }; }
   async fork(entryId: string, options?: unknown) { this.moves.push({ op: "fork", entryId, options }); this.st = { ...this.st, path: `/tmp/fake/fork-${entryId}.jsonl` }; return { state: this.st, editorText: "redo" }; }
   respondToUi(r: unknown) { this.answered.push(r); }
   deliverExtensionCommand(command: unknown) { this.extensionCommands.push(command); return true; }
@@ -140,7 +145,7 @@ class FakeDriver implements SessionDriver {
   extensionWork: ExtensionModelWorkHandler | undefined;
   setExtensionModelWorkHandler(handler: ExtensionModelWorkHandler | undefined) { this.extensionWork = handler; }
   pendingUi() { return this.pending; }
-  async entries() { return { entries: [], leafId: null }; }
+  async entries() { this.routed.push({ route: "entries", generation: this.generation }); return { entries: [], leafId: null }; }
   async goalState() { return null; }
   async commands() { return [{ name: "skill:test", source: "skill" as const, description: "Test skill" }]; }
   async prompts() { return []; }
@@ -298,17 +303,22 @@ describe("WorkerServer", () => {
       path: "/tmp/fake/s1.jsonl",
       id: (tray.result as { message: { id: string } }).message.id,
     });
-    const cancel = h.call(11, "session/cancel", { path: "/tmp/fake/s1.jsonl" });
+    driver.routed = [];
+    const entries = h.call(11, "pi/session/entries", { path: "/tmp/fake/s1.jsonl" });
+    const rename = h.call(12, "pi/session/rename", { path: "/tmp/fake/s1.jsonl", name: "wait" });
+    const models = h.call(13, "pi/model/list", { path: "/tmp/fake/s1.jsonl" });
 
     expect(driver.routed).toEqual([]);
     prepare.resolve();
-    await Promise.all([binding, steer, follow, thinking, traySteer, cancel]);
+    await Promise.all([binding, steer, follow, thinking, traySteer, entries, rename, models]);
 
     expect(driver.routed.map((call) => call.route).sort()).toEqual([
-      "abort",
+      "entries",
       "followUp",
+      "models",
       "prompt",
       "prompt",
+      "rename",
       "steer",
       "steer",
       "thinking",
@@ -318,7 +328,35 @@ describe("WorkerServer", () => {
       [{ type: "text", text: "first" }],
       [{ type: "text", text: "queued tray" }],
     ]);
-    expect((await h.call(12, "session/pending/list", { path: "/tmp/fake/s1.jsonl" })).result).toEqual({ messages: [] });
+    expect((await h.call(14, "session/pending/list", { path: "/tmp/fake/s1.jsonl" })).result).toEqual({ messages: [] });
+  });
+
+  it("lets cancellation reach preparation before acceptance, then rolls back", async () => {
+    const h = harness();
+    const snapshot = fallbackSnapshot();
+    await h.call(1, "agents/sync", { snapshot: { ...snapshot, agents: [...snapshot.agents, { ...fallbackDefaultAgent(), name: "reviewer" }] } });
+    await h.call(2, "session/new", { cwd: "/tmp/fake" });
+    const driver = h.drivers[0]!;
+    const prepare = deferred();
+    const entered = deferred();
+    driver.prepareGate = prepare.promise;
+    driver.prepareObserved = entered.resolve;
+    driver.abortPreparation = true;
+
+    const binding = h.call(3, "session/prompt", {
+      path: "/tmp/fake/s1.jsonl",
+      content: [{ type: "text", text: "must not be accepted" }],
+      firstTurn: { agentName: "reviewer" },
+    });
+    await entered.promise;
+    const cancelled = await h.call(4, "session/cancel", { path: "/tmp/fake/s1.jsonl" });
+    expect(cancelled.error).toBeUndefined();
+    expect(driver.routed.at(-1)).toMatchObject({ route: "abort", generation: "original" });
+    prepare.resolve();
+    expect((await binding).error).toBeDefined();
+    expect(driver.prompted).toEqual([]);
+    expect(driver.rollbacks).toBe(1);
+    expect(driver.generation).toBe("original");
   });
 
   it("rolls back a refused first-turn prompt for retry and rejects a stale bind", async () => {

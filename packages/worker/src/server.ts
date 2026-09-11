@@ -222,7 +222,11 @@ export class WorkerServer {
         return (await this.promptRequest(this.live(req.params.path), req.params)) satisfies Result<"session/prompt">;
       case "session/cancel": {
         const live = this.live(req.params.path);
-        await this.firstTurnLock.run(live.path, () => live.driver.abort());
+        // A first-turn lease spans runtime replacement and engine preflight.
+        // Cancellation must reach that candidate rather than wait until after
+        // acceptance; Stable records it safely even in the replacement gap.
+        if (this.firstTurnLock.busy(live.path)) await live.driver.abort();
+        else await this.firstTurnLock.run(live.path, () => live.driver.abort());
         return {};
       }
       case "session/set_mode":
@@ -260,7 +264,7 @@ export class WorkerServer {
         if (this.harness.roleOf(live.path)?.kind === "child") return this.harness.clearQueue(live.path);
         // The wire result is the composer's two lanes; an extension's custom
         // messages the driver also reports are not the person's to see.
-        const { steering, followUp } = await live.driver.clearQueue();
+        const { steering, followUp } = await this.firstTurnLock.run(live.path, () => live.driver.clearQueue());
         return { steering, followUp } satisfies Result<"pi/session/clear_queue">;
       }
       case "pi/session/close": {
@@ -300,41 +304,51 @@ export class WorkerServer {
         return { messages: this.tray(req.params.path).clear() } satisfies Result<"session/pending/clear">;
       case "pi/session/fork": {
         const live = this.live(req.params.path);
-        // `stopFirst` is the driver's sequence, not two requests: the stop is
-        // recorded on the original before the runtime is replaced, and a fork
-        // that fails leaves the session stopped and served here unchanged.
-        const forked = await live.driver.fork(req.params.entryId, { ...(req.params.stopFirst !== undefined ? { stopFirst: req.params.stopFirst } : {}) });
-        const { state } = forked;
-        if (state.path !== live.path) {
-          // The driver now serves the forked session file; re-key it so later
-          // requests by the new path find it. Clients learn the new path from
-          // the result and from the state update that follows.
-          this.sessions.delete(live.path);
-          this.harness.rekeySession(live.path, state.path);
-          live.path = state.path;
-          this.sessions.set(state.path, live);
-        }
-        this.onDriverEvent(live, { type: "update", update: { kind: "state", state } });
-        return { ...forked, state: this.decorate(live, forked.state) } satisfies Result<"pi/session/fork">;
+        return this.firstTurnLock.run(live.path, async () => {
+          // `stopFirst` is the driver's sequence, not two requests: the stop is
+          // recorded on the original before the runtime is replaced, and a fork
+          // that fails leaves the session stopped and served here unchanged.
+          const forked = await live.driver.fork(req.params.entryId, { ...(req.params.stopFirst !== undefined ? { stopFirst: req.params.stopFirst } : {}) });
+          const { state } = forked;
+          if (state.path !== live.path) {
+            // The driver now serves the forked session file; re-key it so later
+            // requests by the new path find it. Clients learn the new path from
+            // the result and from the state update that follows.
+            this.sessions.delete(live.path);
+            this.harness.rekeySession(live.path, state.path);
+            live.path = state.path;
+            this.sessions.set(state.path, live);
+          }
+          this.onDriverEvent(live, { type: "update", update: { kind: "state", state } });
+          return { ...forked, state: this.decorate(live, forked.state) } satisfies Result<"pi/session/fork">;
+        });
       }
       case "pi/session/navigate": {
-        const { driver } = this.live(req.params.path);
-        return driver.navigateTree(req.params.entryId, {
+        const live = this.live(req.params.path);
+        return this.firstTurnLock.run(live.path, () => live.driver.navigateTree(req.params.entryId, {
           ...(req.params.summarize !== undefined ? { summarize: req.params.summarize } : {}),
           ...(req.params.label !== undefined ? { label: req.params.label } : {}),
           ...(req.params.stopFirst !== undefined ? { stopFirst: req.params.stopFirst } : {}),
-        });
+        }));
       }
-      case "pi/session/rename":
-        await this.live(req.params.path).driver.rename(req.params.name);
+      case "pi/session/rename": {
+        const live = this.live(req.params.path);
+        await this.firstTurnLock.run(live.path, () => live.driver.rename(req.params.name));
         return {};
-      case "pi/session/entries":
-        return (await this.live(req.params.path).driver.entries()) satisfies Result<"pi/session/entries">;
-      case "pi/session/compact":
-        await this.live(req.params.path).driver.compact(req.params.instructions);
+      }
+      case "pi/session/entries": {
+        const live = this.live(req.params.path);
+        return (await this.firstTurnLock.run(live.path, () => live.driver.entries())) satisfies Result<"pi/session/entries">;
+      }
+      case "pi/session/compact": {
+        const live = this.live(req.params.path);
+        await this.firstTurnLock.run(live.path, () => live.driver.compact(req.params.instructions));
         return {};
-      case "pi/model/list":
-        return { models: await this.live(req.params.path).driver.listModels() } satisfies Result<"pi/model/list">;
+      }
+      case "pi/model/list": {
+        const live = this.live(req.params.path);
+        return { models: await this.firstTurnLock.run(live.path, () => live.driver.listModels()) } satisfies Result<"pi/model/list">;
+      }
       case "pi/model/set": {
         const live = this.live(req.params.path);
         return this.firstTurnLock.run(live.path, async () => ({ state: await live.driver.setModel(req.params.model) } satisfies Result<"pi/model/set">));
@@ -344,13 +358,15 @@ export class WorkerServer {
         return this.firstTurnLock.run(live.path, async () => ({ state: await live.driver.setThinkingLevel(req.params.level) } satisfies Result<"pi/thinking/set">));
       }
       case "pi/account-usage/refresh": {
-        const delivered = this.live(req.params.path).driver.deliverExtensionCommand?.({
+        const live = this.live(req.params.path);
+        const delivered = await this.firstTurnLock.run(live.path, async () => live.driver.deliverExtensionCommand?.({
           type: "lasercode/account-usage/refresh",
-        }) ?? false;
+        }) ?? false);
         return { delivered } satisfies Result<"pi/account-usage/refresh">;
       }
       case "session/goal/get": {
-        const goal = await this.live(req.params.path).driver.goalState?.();
+        const live = this.live(req.params.path);
+        const goal = await this.firstTurnLock.run(live.path, async () => live.driver.goalState ? live.driver.goalState() : null);
         return { goal: goal ?? null } satisfies Result<"session/goal/get">;
       }
       case "session/goal/action": {
@@ -711,9 +727,11 @@ export class WorkerServer {
   private async sessionLoad(params: ClientRequests["session/load"]["params"]): Promise<Result<"session/load">> {
     const existing = this.sessions.get(params.path);
     if (existing) {
-      const state = existing.driver.state();
-      this.replay(existing, params.fromSeq);
-      return { state: this.decorate(existing, state), replayFrom: this.replayFloor(existing, params.fromSeq), seq: existing.seq };
+      return this.firstTurnLock.run(existing.path, async () => {
+        const state = existing.driver.state();
+        this.replay(existing, params.fromSeq);
+        return { state: this.decorate(existing, state), replayFrom: this.replayFloor(existing, params.fromSeq), seq: existing.seq };
+      });
     }
     const inFlight = this.opening.get(params.path);
     if (inFlight) {
@@ -1091,7 +1109,12 @@ export class WorkerServer {
       return result;
     } catch (error) {
       if (!accepted) {
-        await live.driver.rollbackFirstTurn().catch(() => {});
+        try {
+          await live.driver.rollbackFirstTurn();
+        } catch (rollbackError) {
+          nextHandle.discard();
+          throw new AggregateError([error, rollbackError], "The first prompt failed and its previous runtime could not be restored.");
+        }
         nextHandle.discard();
       }
       throw error;

@@ -130,12 +130,10 @@ const UPLOAD_ROUTED = new Set(["pi/transcribe/chunk", "pi/transcribe/end", "pi/t
 
 export class Router {
   /**
-   * Sessions a worker holds open that Pi has not written to disk yet. Pi
-   * persists lazily, so a session created by `session/new` is invisible to the
-   * catalog until its first message lands — without this a brand-new session is
-   * missing from the sidebar (and from `laser sessions`) until the first turn.
-   * An entry is dropped as soon as the catalog sees the file or the worker
-   * closes it, so nothing here can outlive the real session.
+   * Compatibility rows for an older or alternate driver that returns before
+   * writing its file. Stable sessions are durable before `session/new` returns.
+   * A row is dropped as soon as the catalog sees the file or the worker closes
+   * it, so this fallback can never become a second persistence owner.
    */
   private readonly unwritten = new Map<string, SessionSummary>();
 
@@ -219,11 +217,9 @@ export class Router {
       createdAt: now,
       modifiedAt: now,
       messageCount: state.messageCount,
-      // The worker already knows which agent this session runs; the catalog
-      // will only learn it once Pi writes the file, which happens on the first
-      // message. Without it here, an empty Beam chat lists as "no agent", the
-      // launcher resolves that to the default agent, never matches it, and
-      // every press of Beam's + made another empty session (M13-T47).
+      // An alternate driver's compatibility row still needs the agent before
+      // its file appears. Stable's durable empty file normally makes this path
+      // unnecessary, but keeping it preserves the driver seam (M13-T47).
       ...(state.agent !== undefined ? { agent: state.agent } : {}),
     });
   }
