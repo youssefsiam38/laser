@@ -53,17 +53,44 @@ export function instructionTemplateToken(key: string): string {
   return `{{${key}}}`;
 }
 
-type AstNode = { type?: string; path?: { original?: string }; params?: unknown[]; hash?: { pairs?: unknown[] }; [key: string]: unknown };
+interface AstPosition { line: number; column: number }
+type AstNode = {
+  type?: string;
+  path?: { original?: string };
+  params?: unknown[];
+  hash?: { pairs?: unknown[] };
+  loc?: { start: AstPosition; end: AstPosition };
+  [key: string]: unknown;
+};
 
-/** One actionable validation message, or null when the template is safe. */
-export function instructionTemplateIssue(template: string, target: InstructionTemplateTarget): string | null {
+export interface InstructionTemplateFieldRange {
+  key: string;
+  start: number;
+  end: number;
+}
+
+interface InstructionTemplateAnalysis {
+  issue: string | null;
+  ranges: InstructionTemplateFieldRange[];
+}
+
+function instructionTemplateAnalysis(template: string, target: InstructionTemplateTarget): InstructionTemplateAnalysis {
   let ast: AstNode;
   try {
     ast = Handlebars.parse(template) as unknown as AstNode;
   } catch {
-    return "One inserted field is incomplete. Remove it and insert the field again.";
+    return { issue: "One inserted field is incomplete. Remove it and insert the field again.", ranges: [] };
   }
+  const lineStarts = [0];
+  for (let index = 0; index < template.length; index += 1) {
+    if (template[index] === "\n") lineStarts.push(index + 1);
+  }
+  const offset = (position: AstPosition): number | undefined => {
+    const lineStart = lineStarts[position.line - 1];
+    return lineStart === undefined ? undefined : lineStart + position.column;
+  };
   const allowed = new Set(instructionTemplateFields(target).map((field) => field.key));
+  const ranges: InstructionTemplateFieldRange[] = [];
   let issue: string | null = null;
   const visit = (value: unknown): void => {
     if (issue || value === null || typeof value !== "object") return;
@@ -82,6 +109,9 @@ export function instructionTemplateIssue(template: string, target: InstructionTe
         issue = `“${key}” is not available here. Remove it and choose a field from Insert field.`;
         return;
       }
+      const start = node.loc ? offset(node.loc.start) : undefined;
+      const end = node.loc ? offset(node.loc.end) : undefined;
+      if (start !== undefined && end !== undefined) ranges.push({ key, start, end });
     } else if (node.type === "BlockStatement" || node.type === "PartialStatement" || node.type === "SubExpression") {
       issue = "Instructions support inserted fields only, not template commands.";
       return;
@@ -89,7 +119,17 @@ export function instructionTemplateIssue(template: string, target: InstructionTe
     for (const child of Object.values(node)) visit(child);
   };
   visit(ast);
-  return issue;
+  return { issue, ranges: issue ? [] : ranges };
+}
+
+/** Exact source ranges for valid live fields; invalid templates expose none. */
+export function instructionTemplateFieldRanges(template: string, target: InstructionTemplateTarget): readonly InstructionTemplateFieldRange[] {
+  return instructionTemplateAnalysis(template, target).ranges;
+}
+
+/** One actionable validation message, or null when the template is safe. */
+export function instructionTemplateIssue(template: string, target: InstructionTemplateTarget): string | null {
+  return instructionTemplateAnalysis(template, target).issue;
 }
 
 export function renderInstructionTemplate(

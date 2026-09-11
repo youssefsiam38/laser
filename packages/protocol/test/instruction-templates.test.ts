@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  instructionTemplateFieldRanges,
   instructionTemplateFields,
   instructionTemplateIssue,
   instructionTemplateToken,
@@ -22,6 +23,24 @@ describe("instruction templates", () => {
         availableTools: "- read: Read <path>",
       }),
     ).toBe("Work in /work/a&b.\n\n- read: Read <path>");
+  });
+
+  it("locates only fields the canonical parser will render", () => {
+    const template = String.raw`😀 escaped: \{{agentName}}
+{{! {{agentName}} }} {{!-- {{model}} --}}
+{{ agentName }} {{{productName}}} {{~model~}}`;
+    const ranges = instructionTemplateFieldRanges(template, "agent");
+    expect(ranges.map(({ key, start, end }) => [key, template.slice(start, end)])).toEqual([
+      ["agentName", "{{ agentName }}"],
+      ["productName", "{{{productName}}}"],
+      ["model", "{{~model~}}"],
+    ]);
+  });
+
+  it("exposes no live ranges when nested braces or another invalid expression makes the template unsafe", () => {
+    expect(instructionTemplateFieldRanges("{{{{agentName}}}}", "agent")).toEqual([]);
+    expect(instructionTemplateFieldRanges("{{agentName}} {{madeUp}}", "agent")).toEqual([]);
+    expect(instructionTemplateFieldRanges("{{agentName other}}", "agent")).toEqual([]);
   });
 
   it("refuses unknown fields, incomplete tokens and template commands in plain language", () => {
