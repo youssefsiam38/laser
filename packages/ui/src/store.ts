@@ -270,8 +270,8 @@ export type Action =
   | { type: "hydrate"; path: string; entries: unknown[]; leafId?: string | null | undefined; expectSeq?: number; seq?: number }
   | { type: "entries"; path: string; entries: unknown[]; leafId?: string | null | undefined }
   | { type: "goal"; path: string; goal: SessionGoal | null }
-  /** `session/pending/list`, the tray's opening snapshot for a client that just arrived. */
-  | { type: "pending"; path: string; messages: PendingMessage[] }
+  /** `session/pending/list`, applied only if no newer tray update replaced the captured reference. */
+  | { type: "pending"; path: string; messages: PendingMessage[]; expectPending: PendingMessage[] }
   /**
    * The worker that owns this session restarted its per-process `seq` counter
    * (worker crash, host restart). Adopt the new epoch and re-hydrate, or every
@@ -423,9 +423,13 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, open };
     }
     case "pending":
-      return updateView(state, action.path, (v) =>
-        v.pending.length === 0 && action.messages.length === 0 ? v : { ...v, pending: action.messages },
-      );
+      return updateView(state, action.path, (v) => {
+        // A numbered pending_update can overtake the opening list request. The
+        // array reference is its watermark: unrelated view updates preserve it,
+        // while every real tray change replaces it, including newer `[]`.
+        if (v.pending !== action.expectPending) return v;
+        return v.pending.length === 0 && action.messages.length === 0 ? v : { ...v, pending: action.messages };
+      });
     case "notification":
       return applyNotification(state, action.method, action.params);
     case "agents/loading":

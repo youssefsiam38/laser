@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { isMessageNotSentError } from "@assistant-ui/react";
 import type { AppendMessage } from "@assistant-ui/react";
 import type { ClientMethod, ClientRequests, PendingMessage, SessionState } from "@lasercode/protocol";
 import type { Action, SessionView } from "../../src/store.js";
@@ -17,6 +18,7 @@ import {
   uiResponseForInterrupt,
   type RequestClient,
 } from "../../src/runtime/adapter.js";
+import { withFirstTurn } from "../../src/runtime/first-turn.js";
 
 // --- helpers ---------------------------------------------------------------
 
@@ -208,6 +210,25 @@ describe("sendToSession", () => {
     expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: "optimisticUser", path: "/s.jsonl", text: "hi", images: 0 }));
   });
 
+  it("forwards tentative first-turn configuration on the prompt", async () => {
+    const client = mockClient({ "session/prompt": { accepted: true, queued: false } });
+    const firstTurn = { agentName: "reviewer", thinkingLevel: "high" as const };
+    await expect(sendToSession(client, "/s.jsonl", content, "prompt", undefined, firstTurn)).resolves.toBe("prompt");
+    expect(client.calls[0]).toEqual({
+      method: "session/prompt",
+      params: { path: "/s.jsonl", content, firstTurn },
+    });
+  });
+
+  it("never steers a refused first-turn prompt without its chosen agent", async () => {
+    const client = mockClient({ "session/prompt": { accepted: false, queued: false } });
+    const dispatch = vi.fn<(action: Action) => void>();
+    await expect(sendToSession(client, "/s.jsonl", content, "prompt", dispatch, { agentName: "reviewer" }))
+      .rejects.toThrow("started before the agent choice");
+    expect(client.calls.map((call) => call.method)).toEqual(["session/prompt"]);
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: "optimisticFailed", path: "/s.jsonl" }));
+  });
+
   it("falls back to a steer when the worker refuses the prompt", async () => {
     const client = mockClient({ "session/prompt": { accepted: false, queued: false } });
     await expect(sendToSession(client, "/s.jsonl", content, "prompt")).resolves.toBe("steer");
@@ -397,6 +418,53 @@ describe("createThreadAdapter", () => {
     const { adapter } = build({ client });
     await adapter.onNew(message());
     expect(client.calls.map((c) => c.method)).toEqual(["session/prompt", "pi/session/steer"]);
+  });
+
+  it("captures a landing choice from the sending message before creating the session", async () => {
+    const firstTurn = { agentName: "reviewer", thinkingLevel: "high" as const };
+    let resolve!: (path: string) => void;
+    const resolvePath = vi.fn(() => new Promise<string>((done) => { resolve = done; }));
+    const { adapter, client } = build({ path: undefined, view: undefined, resolvePath });
+
+    const sending = adapter.onNew(message({ runConfig: withFirstTurn(undefined, firstTurn) }));
+    resolve("/created.jsonl");
+    await sending;
+
+    expect(client.calls[0]).toEqual({
+      method: "session/prompt",
+      params: { path: "/created.jsonl", content: [{ type: "text", text: "hello" }], firstTurn },
+    });
+  });
+
+  it("keeps a refused message's first-turn choice available for retry", async () => {
+    const path = "/retry-created.jsonl";
+    const firstTurn = { agentName: "reviewer", thinkingLevel: "high" as const };
+    const configured = message({ runConfig: withFirstTurn(undefined, firstTurn) });
+    const client = mockClient({ "session/prompt": { accepted: false, queued: false } });
+    const { adapter } = build({ client, path: undefined, view: undefined, resolvePath: async () => path });
+
+    // Rethrown as the error assistant-ui hands a message back to the composer on.
+    await expect(adapter.onNew(configured)).rejects.toSatisfy((error: unknown) => isMessageNotSentError(error) && (error as Error).message.includes("started before the agent choice"));
+    await expect(adapter.onNew(configured)).rejects.toThrow("started before the agent choice");
+    expect(client.calls).toEqual([
+      { method: "session/prompt", params: { path, content: [{ type: "text", text: "hello" }], firstTurn } },
+      { method: "session/prompt", params: { path, content: [{ type: "text", text: "hello" }], firstTurn } },
+    ]);
+  });
+
+  it("keeps two composers on one path bound to each sending message in either order", async () => {
+    const client = mockClient({ "session/prompt": { accepted: true, queued: false } });
+    const first = build({ client }).adapter;
+    const second = build({ client }).adapter;
+    const high = message({ content: [{ type: "text", text: "high" }], runConfig: withFirstTurn(undefined, { agentName: "reviewer", thinkingLevel: "high" }) });
+    const low = message({ content: [{ type: "text", text: "low" }], runConfig: withFirstTurn(undefined, { agentName: "reviewer", thinkingLevel: "low" }) });
+
+    await second.onNew(low);
+    await first.onNew(high);
+    expect(client.calls.map((call) => call.params)).toEqual([
+      { path: "/s.jsonl", content: [{ type: "text", text: "low" }], firstTurn: { agentName: "reviewer", thinkingLevel: "low" } },
+      { path: "/s.jsonl", content: [{ type: "text", text: "high" }], firstTurn: { agentName: "reviewer", thinkingLevel: "high" } },
+    ]);
   });
 
   it("creates the session first when the thread has no path yet", async () => {

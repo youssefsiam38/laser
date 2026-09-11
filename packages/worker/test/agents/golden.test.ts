@@ -191,6 +191,9 @@ describe.skipIf(!harnessModulePresent || !haveGit)("golden path: start_agent →
       const events = parentLines.filter((line) => line.customType === AGENT_EVENT_MESSAGE_TYPE || line.message?.customType === AGENT_EVENT_MESSAGE_TYPE);
       expect(events).toHaveLength(1);
       expect(JSON.stringify(events[0])).toContain("done: touched nothing");
+      // The companion's real triggerTurn custom send starts a provider turn in
+      // the parent; persistence alone would not put the event in a request.
+      expect(stub.requests.some((request) => request.messages.some((message) => textOfContent(message.content).includes("done: touched nothing")))).toBe(true);
       const parentTools = stub.requests.filter((r) => toolNamesOf(r).includes("start_agent")).flatMap(toolNamesOf);
       expect(parentTools).toContain("inspect_agent");
       expect(parentTools).not.toContain("wait_for_agents");

@@ -68,6 +68,29 @@ describe("AgentRunRegistry", () => {
     expect(registry.latestByChildPath().get(path)?.runId).toBe("second");
   });
 
+  it("stands a child on the run that can still act while a newer successor only waits behind it", () => {
+    const registry = new AgentRunRegistry({ now: NOW });
+    const path = "/sessions/child-y.jsonl";
+    // A declared completion unwinding: the old invocation can still write, the
+    // successor is queued behind it (M13-T98). The row must say the old run.
+    registry.upsert(run("old", { sessionPath: path, status: "running", startedAt: "2026-06-01T00:00:01.000Z" }));
+    registry.upsert(run("next", { sessionPath: path, status: "queued", startedAt: "2026-06-01T00:00:05.000Z" }));
+    expect(registry.latestFor(path)?.runId).toBe("old");
+    expect(registry.latestByChildPath().get(path)?.runId).toBe("old");
+    // A live question keeps the same rank as working.
+    registry.upsert(run("old", { sessionPath: path, status: "needs_input", startedAt: "2026-06-01T00:00:01.000Z" }));
+    expect(registry.latestFor(path)?.runId).toBe("old");
+    // Once the old run is terminal, the successor stands — queued or running.
+    registry.upsert(run("old", { sessionPath: path, status: "completed", startedAt: "2026-06-01T00:00:01.000Z", endedAt: "2026-06-01T00:00:09.000Z" }));
+    expect(registry.latestFor(path)?.runId).toBe("next");
+    registry.upsert(run("next", { sessionPath: path, status: "running", startedAt: "2026-06-01T00:00:05.000Z" }));
+    expect(registry.latestByChildPath().get(path)?.runId).toBe("next");
+    // A newer active run still outranks an older failure (D-189).
+    registry.upsert(run("next", { sessionPath: path, status: "failed", startedAt: "2026-06-01T00:00:05.000Z", endedAt: "2026-06-01T00:00:10.000Z" }));
+    registry.upsert(run("resumed", { sessionPath: path, status: "running", startedAt: "2026-06-01T00:00:11.000Z" }));
+    expect(registry.latestFor(path)?.runId).toBe("resumed");
+  });
+
   it("fails every live run of a project whose worker is gone, and notifies each", () => {
     const notified: AgentRun[] = [];
     const registry = new AgentRunRegistry({ onRun: (r) => notified.push(r), now: () => new Date("2026-06-02T00:00:00.000Z") });

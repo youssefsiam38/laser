@@ -22,6 +22,10 @@ const mocks = vi.hoisted(() => ({
       name: "default",
       model: { provider: "test", id: "reasoner" } as { provider: string; id: string } | null,
       thinkingLevel: "low" as string | null,
+    }, {
+      name: "reviewer",
+      model: { provider: "test", id: "reasoner" } as { provider: string; id: string } | null,
+      thinkingLevel: "high" as string | null,
     }],
   },
   composerState: { text: "", attachments: [] as unknown[] },
@@ -30,6 +34,11 @@ const mocks = vi.hoisted(() => ({
   setSourceComposerText: vi.fn(),
   finishPreparation: vi.fn(),
   beginPreparation: vi.fn(),
+  unstarted: false,
+  firstTurn: undefined as { agentName: string; thinkingLevel?: string } | undefined,
+  chooseThinking: vi.fn((thinkingLevel: string) => {
+    mocks.firstTurn = { agentName: "default", thinkingLevel };
+  }),
 }));
 
 const client = {
@@ -70,10 +79,17 @@ vi.mock("@assistant-ui/react", async (importActual) => ({
 }));
 
 vi.mock("@/components/thread/session-preparation", () => ({
-  useSessionPreparation: () => ({ pending: false, begin: mocks.beginPreparation }),
+  useSessionPreparation: () => ({
+    pending: false,
+    begin: mocks.beginPreparation,
+    firstTurn: mocks.firstTurn,
+    chooseAgent: vi.fn(),
+    chooseThinking: mocks.chooseThinking,
+  }),
 }));
 
 vi.mock("@/runtime", () => ({
+  isUnstartedSession: () => mocks.unstarted,
   useLaserStable: () => ({ client, actions, dispatch: mocks.dispatch, currentProject: mocks.currentProject }),
   useLaserState: (selector: (state: unknown) => unknown) => selector({ agents: { snapshot: mocks.snapshot } }),
   useLaserView: () => mocks.view,
@@ -89,6 +105,9 @@ let container: HTMLDivElement;
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   mocks.level = "high";
+  mocks.unstarted = false;
+  mocks.firstTurn = undefined;
+  mocks.chooseThinking.mockClear();
   mocks.session = { cwd: "/project", path: "/project/current.jsonl" };
   mocks.view = { path: "/project/current.jsonl" };
   mocks.model = { provider: "test", id: "reasoner" };
@@ -137,50 +156,36 @@ it("shows the current compact level without opening the picker, and updates with
   expect(mocks.setThinking).toHaveBeenCalledWith("high");
 });
 
-it.each([false, true])("locks through a deferred thinking override without pasting into intervening navigation (%s)", async (navigateAway) => {
-  let resolveThinking!: (value: { state: object }) => void;
-  mocks.applyThinking.mockImplementationOnce(() => new Promise((resolve) => { resolveThinking = resolve; }));
+it("shows the tentative agent's thinking default on a saved-empty session", async () => {
+  mocks.level = "low";
+  mocks.unstarted = true;
+  mocks.firstTurn = { agentName: "reviewer" };
+  await act(async () => root.render(<TooltipProvider><ThinkingEffort /></TooltipProvider>));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(container.querySelector<HTMLButtonElement>("button")?.textContent).toBe("high");
+});
+
+it("keeps a pre-session thinking choice tentative without moving the draft or attachments", async () => {
   mocks.level = undefined;
   mocks.session = undefined;
   mocks.view = undefined;
   mocks.model = null;
   mocks.currentProject = "/landing";
-  mocks.composerState = { text: "Keep this thought", attachments: [] };
-  mocks.sourceComposerState = { text: "Keep this thought" };
+  mocks.composerState = { text: "Keep this thought", attachments: [{}] };
   await act(async () => root.render(<TooltipProvider><ThinkingEffort /></TooltipProvider>));
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 
   const trigger = container.querySelector<HTMLButtonElement>("button")!;
-  expect(trigger.disabled).toBe(false);
   expect(trigger.textContent).toBe("low");
   await act(async () => trigger.click());
   const high = document.querySelector<HTMLButtonElement>('[role="radio"][aria-label="high"]')!;
   await act(async () => high.click());
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 
-  expect(mocks.newSession).toHaveBeenCalledWith("/landing");
-  expect(mocks.applyThinking).toHaveBeenCalledWith({ path: "/landing/new.jsonl", level: "high" });
-  expect(mocks.newSession.mock.invocationCallOrder[0]).toBeLessThan(mocks.applyThinking.mock.invocationCallOrder[0]!);
-  expect(mocks.beginPreparation).toHaveBeenCalledOnce();
-  expect(mocks.finishPreparation).not.toHaveBeenCalled();
-
-  mocks.session = { cwd: "/landing", path: "/landing/new.jsonl" };
-  mocks.view = { path: navigateAway ? "/other/session.jsonl" : "/landing/new.jsonl" };
-  mocks.level = "high";
-  mocks.model = { provider: "test", id: "reasoner" };
-  mocks.composerState = { text: "", attachments: [] };
-  await act(async () => root.render(<TooltipProvider><ThinkingEffort /></TooltipProvider>));
-  expect(mocks.finishPreparation).not.toHaveBeenCalled();
-  expect(mocks.setComposerText).not.toHaveBeenCalled();
-  await act(async () => resolveThinking({ state: {} }));
-  if (navigateAway) {
-    expect(mocks.setComposerText).not.toHaveBeenCalled();
-    expect(mocks.setSourceComposerText).not.toHaveBeenCalled();
-  } else {
-    expect(mocks.setComposerText).toHaveBeenCalledWith("Keep this thought");
-    expect(mocks.setSourceComposerText).toHaveBeenCalledWith("");
-  }
-  expect(mocks.finishPreparation).toHaveBeenCalledOnce();
+  expect(mocks.chooseThinking).toHaveBeenCalledWith("high");
+  expect(mocks.newSession).not.toHaveBeenCalled();
+  expect(mocks.applyThinking).not.toHaveBeenCalled();
+  expect(mocks.beginPreparation).not.toHaveBeenCalled();
+  expect(mocks.composerState).toEqual({ text: "Keep this thought", attachments: [{}] });
 });
 
 it("refreshes pre-session capabilities after the project model default changes", async () => {

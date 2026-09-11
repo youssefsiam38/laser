@@ -12,8 +12,17 @@
 
 import { AGENT_MAX_DEPTH_LIMIT, ErrorCodes, PRODUCT_NAME, ProtocolError, parseClientRequest, type AgentDefinition, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type SettingsScope, type TypedClientRequest } from "@lasercode/protocol";
 import { join, resolve } from "node:path";
-import type { DriverAgentOptions, DriverEvent, SessionDriver } from "./driver.js";
+import type {
+  DriverAgentOptions,
+  DriverEvent,
+  ExtensionModelAdmission,
+  ExtensionModelExecution,
+  ExtensionModelWorkRequest,
+  SessionAdmissionLease,
+  SessionDriver,
+} from "./driver.js";
 import { ProjectFilesService } from "./files.js";
+import { assertFirstTurnAdmission, FirstTurnLock } from "./first-turn.js";
 import { PendingTray } from "./pending.js";
 import { GitService } from "./git.js";
 import { KeybindingsAdapter } from "./keybindings.js";
@@ -24,7 +33,7 @@ import { TranscribeService } from "./transcribe.js";
 import type { HarnessSessionRole } from "./agents/bridge.js";
 import { DefinitionsCache } from "./agents/definitions.js";
 import { defaultAgentInstructions } from "./agents/engine-instructions.js";
-import { AgentHarness, type SessionHandle, type SessionHost } from "./agents/harness.js";
+import { AgentHarness, modelUnavailableMessage, type SessionHandle, type SessionHost } from "./agents/harness.js";
 import { NamerService, type NamerModelRuntime } from "./agents/namer.js";
 import { readSessionAgentRecord, rootRecord, rootRole } from "./agents/session-config.js";
 import { listAgentSkills } from "./agents/skills.js";
@@ -122,6 +131,8 @@ export class WorkerServer {
   private readonly unnamed = new Map<string, string>();
   /** Tool calls currently running, by session path: a label for a finished call is never shown. */
   private readonly runningTools = new Map<string, Set<string>>();
+  /** Held only through prompt preflight; prevents runtime replacement races. */
+  private readonly firstTurnLock = new FirstTurnLock();
 
   constructor(private readonly options: WorkerServerOptions) {
     this.replayBuffer = options.replayBuffer ?? 5000;
@@ -192,7 +203,7 @@ export class WorkerServer {
     this.transcribeService = undefined;
     for (const live of this.sessions.values()) {
       live.unsubscribe();
-      await live.driver.dispose().catch(() => {});
+      await this.firstTurnLock.run(live.path, () => live.driver.dispose()).catch(() => {});
     }
     this.sessions.clear();
     this.runningTools.clear();
@@ -208,10 +219,12 @@ export class WorkerServer {
       case "session/load":
         return this.sessionLoad(req.params);
       case "session/prompt":
-        return (await this.promptLive(this.live(req.params.path), req.params.content, req.params.streamingBehavior)) satisfies Result<"session/prompt">;
-      case "session/cancel":
-        await this.live(req.params.path).driver.abort();
+        return (await this.promptRequest(this.live(req.params.path), req.params)) satisfies Result<"session/prompt">;
+      case "session/cancel": {
+        const live = this.live(req.params.path);
+        await this.firstTurnLock.run(live.path, () => live.driver.abort());
         return {};
+      }
       case "session/set_mode":
         throw new ProtocolError(ErrorCodes.Unsupported, "session/set_mode is not supported by this worker yet");
 
@@ -222,29 +235,48 @@ export class WorkerServer {
           ErrorCodes.Unsupported,
           "pi/session/detach is host bookkeeping; a worker has nothing to detach from",
         );
-      case "pi/session/steer":
+      case "pi/session/steer": {
         // steer/follow_up call the runtime directly and so bypass Pi's `input`
         // hook, where the companion extension folds in a phrase still being
         // transcribed. Doing it here keeps the three send paths identical.
-        await this.live(req.params.path).driver.steer(await this.withDictation(req.params.path, req.params.content));
+        const live = this.live(req.params.path);
+        const content = await this.withDictation(req.params.path, req.params.content);
+        if (this.harness.roleOf(live.path)?.kind === "child") await this.queueIntoChild(live, content, "steer");
+        else await this.firstTurnLock.run(live.path, () => live.driver.steer(content));
         return {};
-      case "pi/session/follow_up":
-        await this.live(req.params.path).driver.followUp(await this.withDictation(req.params.path, req.params.content));
+      }
+      case "pi/session/follow_up": {
+        const live = this.live(req.params.path);
+        const content = await this.withDictation(req.params.path, req.params.content);
+        if (this.harness.roleOf(live.path)?.kind === "child") await this.queueIntoChild(live, content, "followUp");
+        else await this.firstTurnLock.run(live.path, () => live.driver.followUp(content));
         return {};
-      case "pi/session/clear_queue":
-        return this.live(req.params.path).driver.clearQueue();
+      }
+      case "pi/session/clear_queue": {
+        // A child's queue is emptied through the harness, which also forgets
+        // its engine-owned twins of the cleared texts (else a later transfer
+        // at completion could replay onto a successor what the person removed).
+        const live = this.live(req.params.path);
+        if (this.harness.roleOf(live.path)?.kind === "child") return this.harness.clearQueue(live.path);
+        // The wire result is the composer's two lanes; an extension's custom
+        // messages the driver also reports are not the person's to see.
+        const { steering, followUp } = await live.driver.clearQueue();
+        return { steering, followUp } satisfies Result<"pi/session/clear_queue">;
+      }
       case "pi/session/close": {
         // The host is about to move the file (M13-T58): it must have no writer
         // while that happens (AGENTS.md invariant 8). Disposing the driver
         // emits `closed`, which drops the session from every table here.
         const live = this.sessions.get(req.params.path);
         if (!live) return { closed: false } satisfies Result<"pi/session/close">;
-        if (live.driver.state().isStreaming) {
-          throw new ProtocolError(ErrorCodes.SessionBusy, "This chat is still answering. Wait for it to finish, or stop it, then move it.");
-        }
-        await live.driver.dispose();
-        this.sessions.delete(live.path);
-        return { closed: true } satisfies Result<"pi/session/close">;
+        return this.firstTurnLock.run(live.path, async () => {
+          if (live.driver.state().isStreaming) {
+            throw new ProtocolError(ErrorCodes.SessionBusy, "This chat is still answering. Wait for it to finish, or stop it, then move it.");
+          }
+          await live.driver.dispose();
+          this.sessions.delete(live.path);
+          return { closed: true } satisfies Result<"pi/session/close">;
+        });
       }
 
       // --- the pending tray (pending.ts) ---
@@ -303,12 +335,14 @@ export class WorkerServer {
         return {};
       case "pi/model/list":
         return { models: await this.live(req.params.path).driver.listModels() } satisfies Result<"pi/model/list">;
-      case "pi/model/set":
-        return { state: await this.live(req.params.path).driver.setModel(req.params.model) } satisfies Result<"pi/model/set">;
-      case "pi/thinking/set":
-        return {
-          state: await this.live(req.params.path).driver.setThinkingLevel(req.params.level),
-        } satisfies Result<"pi/thinking/set">;
+      case "pi/model/set": {
+        const live = this.live(req.params.path);
+        return this.firstTurnLock.run(live.path, async () => ({ state: await live.driver.setModel(req.params.model) } satisfies Result<"pi/model/set">));
+      }
+      case "pi/thinking/set": {
+        const live = this.live(req.params.path);
+        return this.firstTurnLock.run(live.path, async () => ({ state: await live.driver.setThinkingLevel(req.params.level) } satisfies Result<"pi/thinking/set">));
+      }
       case "pi/account-usage/refresh": {
         const delivered = this.live(req.params.path).driver.deliverExtensionCommand?.({
           type: "lasercode/account-usage/refresh",
@@ -320,9 +354,19 @@ export class WorkerServer {
         return { goal: goal ?? null } satisfies Result<"session/goal/get">;
       }
       case "session/goal/action": {
-        const driver = this.live(req.params.path).driver;
-        if (!driver.goalAction) throw new ProtocolError(ErrorCodes.Unsupported, "Goals are not available in this session.");
-        return { goal: await driver.goalAction(req.params.action) } satisfies Result<"session/goal/action">;
+        const live = this.live(req.params.path);
+        if (!live.driver.goalAction) throw new ProtocolError(ErrorCodes.Unsupported, "Goals are not available in this session.");
+        const lease = (await this.firstTurnLock.acquireLease(live.path, true))!;
+        try {
+          return {
+            goal: await live.driver.goalAction(req.params.action, {
+              admissionLease: lease,
+              onAccepted: () => lease.release(),
+            }),
+          } satisfies Result<"session/goal/action">;
+        } finally {
+          lease.release();
+        }
       }
       case "pi/ui/response": {
         // Answer only the session that raised the dialog: ids are minted per
@@ -839,6 +883,7 @@ export class WorkerServer {
   private async openAndAttach(openOptions: Parameters<SessionDriver["open"]>[0], handle?: SessionHandle): Promise<Live> {
     const driver = this.options.createDriver();
     const live: Live = { driver, seq: 0, buffer: [], unsubscribe: () => {}, path: "" };
+    driver.setExtensionModelWorkHandler?.((request) => this.admitExtensionModelWork(live, request));
     const queued: DriverEvent[] = [];
     let ready = false;
     live.unsubscribe = driver.subscribe((event) => (ready ? this.onDriverEvent(live, event) : queued.push(event)));
@@ -919,13 +964,158 @@ export class WorkerServer {
     const live = this.live(path);
     if (!live.pending) {
       live.pending = new PendingTray({
-        steer: (content) => live.driver.steer(content),
-        prompt: (content, onAccepted) => this.promptLive(live, content, undefined, onAccepted),
+        // A child's tray row goes through the harness fence like the chat's own
+        // steer (M13-T98): during a declared completion it waits on the
+        // successor instead of entering a queue the engine is about to drop.
+        steer: (content) => this.harness.roleOf(live.path)?.kind === "child"
+          ? this.queueIntoChild(live, content, "steer")
+          : this.firstTurnLock.run(live.path, () => live.driver.steer(content)),
+        prompt: (content, onAccepted) => this.promptWithFence(live, content, undefined, onAccepted, true),
         streaming: () => live.driver.state().isStreaming,
         publish: (pending) => this.onDriverEvent(live, { type: "update", update: { kind: "pending_update", pending } }),
       });
     }
     return live.pending;
+  }
+
+  /** One extension transaction: register ownership first, then take/borrow preflight admission. */
+  private admitExtensionModelWork(live: Live, request: ExtensionModelWorkRequest): ExtensionModelAdmission {
+    let path = live.path;
+    if (!path) {
+      try {
+        path = live.driver.state().path;
+      } catch {
+        path = "";
+      }
+    }
+    const start = (
+      ownerRunId?: string,
+      onInvocation?: Parameters<ExtensionModelWorkRequest["start"]>[1],
+    ): ExtensionModelExecution | Promise<ExtensionModelExecution> => {
+      const borrowed = request.admissionLease;
+      if (borrowed?.active) return request.start(ownerRunId, onInvocation);
+      if (!path) return request.start(ownerRunId, onInvocation);
+      return this.firstTurnLock.acquireLease(path, true).then((lease) => {
+        if (!lease) return request.start(ownerRunId, onInvocation);
+        let execution: ExtensionModelExecution;
+        try {
+          execution = request.start(ownerRunId, onInvocation);
+        } catch (error) {
+          lease.release();
+          throw error;
+        }
+        // Positive acceptance releases before the model turn. Refusal and any
+        // defensive no-callback path release without waiting for completion.
+        void execution.admission.then(() => lease.release(), () => lease.release());
+        void execution.completion.then(() => lease.release(), () => lease.release());
+        return execution;
+      });
+    };
+    return this.harness.admitExtensionModelWork(path, request, start);
+  }
+
+  /** A public prompt's preflight lease and optional same-identity agent bind. */
+  private async promptRequest(
+    live: Live,
+    params: ClientRequests["session/prompt"]["params"],
+  ): Promise<Result<"session/prompt">> {
+    const firstTurn = params.firstTurn;
+    if (!firstTurn) {
+      // A bare concurrent prompt keeps its refusal semantics. The lease closes
+      // the check/use race with a first-turn runtime replacement.
+      return this.promptWithFence(live, params.content, params.streamingBehavior, undefined, false);
+    }
+    const lease = (await this.firstTurnLock.acquireLease(live.path, true))!;
+
+    const definition = this.definitions.definition(firstTurn.agentName);
+    if (!definition || definition.kind !== "custom") {
+      lease.release();
+      throw new ProtocolError(ErrorCodes.InvalidParams, `No custom agent is called "${firstTurn.agentName}".`);
+    }
+    try {
+      if (definition.model && !(await this.modelAvailable(definition.model))) {
+        throw new ProtocolError(ErrorCodes.InvalidParams, modelUnavailableMessage(definition.model));
+      }
+      const pendingUi = (live.driver as { pendingUi?: () => unknown[] }).pendingUi?.call(live.driver) ?? [];
+      const { entries } = await live.driver.entries();
+      const goal = await live.driver.goalState?.() ?? null;
+      assertFirstTurnAdmission({
+        state: live.driver.state(),
+        entries,
+        roleKind: this.harness.roleOf(live.path)?.kind,
+        pendingTrayCount: live.pending?.list().length ?? 0,
+        dialogCount: pendingUi.length,
+        hasGoal: goal !== null,
+        hasLiveWork: this.harness.runs().some((run) => run.rootSessionPath === live.path || run.parent?.sessionPath === live.path),
+        runningToolCount: this.runningTools.get(live.path)?.size ?? 0,
+      });
+    } catch (error) {
+      lease.release();
+      throw error;
+    }
+
+    const previousHandle = live.handle;
+    if (!previousHandle || !live.driver.prepareFirstTurn || !live.driver.rollbackFirstTurn) {
+      lease.release();
+      throw new ProtocolError(ErrorCodes.Unsupported, "This runtime cannot apply a first-turn agent choice safely.");
+    }
+    const nextHandle = this.harness.prepareSession({
+      role: rootRole(definition.name),
+      definition,
+      record: rootRecord(definition.name),
+      projectCwd: this.options.cwd,
+    });
+    let accepted = false;
+    try {
+      await live.driver.prepareFirstTurn({
+        agent: this.agentOptions(definition, nextHandle),
+        ...(firstTurn.thinkingLevel ? { thinkingLevel: firstTurn.thinkingLevel } : {}),
+      });
+      const result = await this.promptLive(live, params.content, params.streamingBehavior, () => {
+        accepted = true;
+        previousHandle.discard();
+        nextHandle.attach(live.path, live.driver.state().id);
+        live.handle = nextHandle;
+        lease.release();
+      }, lease);
+      if (!accepted) {
+        await live.driver.rollbackFirstTurn();
+        nextHandle.discard();
+      }
+      return result;
+    } catch (error) {
+      if (!accepted) {
+        await live.driver.rollbackFirstTurn().catch(() => {});
+        nextHandle.discard();
+      }
+      throw error;
+    } finally {
+      lease.release();
+    }
+  }
+
+  /** Hold one prompt at a single runtime generation through engine preflight. */
+  private async promptWithFence(
+    live: Live,
+    content: ContentBlock[],
+    streamingBehavior: "steer" | "followUp" | undefined,
+    onAccepted: (() => void) | undefined,
+    wait: boolean,
+  ): Promise<{ accepted: boolean; queued: boolean }> {
+    // Preserve the bare concurrent refusal before a fake/alternate driver can
+    // turn it into a never-settling call. Stable re-checks under its own slot.
+    if (!streamingBehavior && live.driver.state().isStreaming) return { accepted: false, queued: false };
+    const lease = await this.firstTurnLock.acquireLease(live.path, wait);
+    if (!lease) return { accepted: false, queued: false };
+    const finish = () => lease.release();
+    try {
+      return await this.promptLive(live, content, streamingBehavior, () => {
+        finish();
+        onAccepted?.();
+      }, lease);
+    } finally {
+      finish();
+    }
   }
 
   /**
@@ -948,16 +1138,46 @@ export class WorkerServer {
     content: ContentBlock[],
     streamingBehavior?: "steer" | "followUp",
     onAccepted?: () => void,
+    admissionLease?: SessionAdmissionLease,
   ): Promise<{ accepted: boolean; queued: boolean }> {
     const text = textOf(content);
     const idle = !live.driver.state().isStreaming;
-    // A person prompting a child that has no active run starts one of
-    // their own, so the run map and the parent's summary keep working.
-    if (!streamingBehavior && idle) this.harness.startUserRun(live.path, text);
     if ((idle || streamingBehavior) && !live.driver.state().name && text.trim() !== "") void this.nameSession(live, text);
-    return live.driver.prompt(content, {
+    return this.harness.promptUser(live.path, content, {
       ...(streamingBehavior ? { streamingBehavior } : {}),
       ...(onAccepted ? { onAccepted } : {}),
+      ...(admissionLease ? { admissionLease } : {}),
+    });
+  }
+
+  /**
+   * A person's steer or follow-up typed in a child agent's own chat goes
+   * through the harness fence, never straight into the engine (M13-T98 §8.4):
+   * during a declared completion the engine's queues were already emptied
+   * into the successor, and a text put there now would run under the ended
+   * run. The harness queues it in the engine while the run demonstrably
+   * streams — tracked as an engine-owned twin, so a terminal declaration can
+   * take it back — and holds it for the successor otherwise. The request
+   * answers once the engine holds the message, the moment the direct verb
+   * answered, never after the turn it may start; a message that can never
+   * start (a cancelled successor, a closed session) answers with the
+   * harness's sentence. Root sessions keep the driver's direct verbs: the
+   * harness owns no run there.
+   */
+  private queueIntoChild(live: Live, content: ContentBlock[], lane: "steer" | "followUp"): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      let accepted = false;
+      const onAccepted = () => {
+        accepted = true;
+        resolve();
+      };
+      this.harness.promptUser(live.path, content, { streamingBehavior: lane, expandPromptTemplates: true, onAccepted }).then(
+        (result) => {
+          if (accepted || result.accepted) resolve();
+          else reject(new ProtocolError(ErrorCodes.SessionBusy, "The agent's chat could not take this message right now. Try again in a moment."));
+        },
+        reject,
+      );
     });
   }
 
@@ -1012,9 +1232,16 @@ export class WorkerServer {
         else if (update.kind === "agent_settled" && live.pending) void live.pending.drain();
         return;
       }
-      case "ui_request":
+      case "ui_request": {
+        // The harness answers a question it cannot route — a dialog raised by
+        // an invocation the session no longer owns — synchronously, before this
+        // forwarder runs; a person must never be shown a dialog nobody can
+        // answer. Drivers that cannot list their open dialogs forward as before.
+        const pendingUi = (live.driver as { pendingUi?: () => Array<{ id: string }> }).pendingUi;
+        if (typeof pendingUi === "function" && !pendingUi.call(live.driver).some((request) => request.id === event.request.id)) return;
         this.notify("pi/ui/request", { path: live.path, ...event.request });
         return;
+      }
       case "ui_event":
         this.notify("pi/ui/event", { path: live.path, ...event.event });
         return;

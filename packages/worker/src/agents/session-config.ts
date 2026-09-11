@@ -46,7 +46,7 @@ export function rootRecord(agentName: string): SessionAgentRecord {
   return { agentName, kind: rootRole(agentName).kind };
 }
 
-/** How much of a session file is read to find its agent record (it is the first custom entry). */
+/** How much of a session file is read to find its pre-message agent record. */
 export const RECORD_SCAN_BYTES = 64 * 1024;
 
 const KINDS: readonly SessionAgentKind[] = ["root", "child", "beam", "chat"];
@@ -85,7 +85,7 @@ export function parseSessionAgentRecord(data: unknown): SessionAgentRecord | und
 }
 
 /**
- * The agent record stored in a session file, found in its first
+ * The latest agent record before the first message, found in the file's first
  * `RECORD_SCAN_BYTES`. Undefined for a session written before agents existed
  * (the caller falls back to the default agent) or a file that cannot be read.
  */
@@ -103,9 +103,8 @@ export async function readSessionAgentRecord(path: string): Promise<SessionAgent
   } catch {
     return undefined;
   }
-  const marker = `"customType":"${SESSION_AGENT_ENTRY_TYPE}"`;
+  let latest: SessionAgentRecord | undefined;
   for (const line of text.split("\n")) {
-    if (!line.includes(marker) && !line.includes(SESSION_AGENT_ENTRY_TYPE)) continue;
     let entry: unknown;
     try {
       entry = JSON.parse(line);
@@ -113,11 +112,15 @@ export async function readSessionAgentRecord(path: string): Promise<SessionAgent
       continue; // a truncated last line inside the scan window
     }
     const e = entry as { type?: unknown; customType?: unknown; data?: unknown } | null;
+    // First-turn rebinding may append a replacement record to an old saved-empty
+    // session. Only records before conversation history count; once a message
+    // exists the identity is immutable even if a malformed later entry claims otherwise.
+    if (e?.type === "message") break;
     if (e?.type !== "custom" || e.customType !== SESSION_AGENT_ENTRY_TYPE) continue;
     const record = parseSessionAgentRecord(e.data);
-    if (record) return record;
+    if (record) latest = record;
   }
-  return undefined;
+  return latest;
 }
 
 /**

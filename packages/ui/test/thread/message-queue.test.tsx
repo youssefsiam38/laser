@@ -18,9 +18,15 @@ vi.mock("../../src/client.js", async (original) => ({
   HostClient: (await import("../beam/fake-host.js")).FakeHostClient,
 }));
 
+vi.mock("../../src/components/shell/shell-context.js", async (original) => ({
+  ...(await original<typeof import("../../src/components/shell/shell-context.js")>()),
+  useShell: () => ({ newSession: async () => {}, canCreate: true }),
+}));
+
 import { ComposerPrimitive } from "@assistant-ui/react";
 import type { PendingMessage } from "@lasercode/protocol";
 import { ComposerQueue } from "../../src/components/assistant-ui/elements/message-queue.js";
+import { Composer } from "../../src/components/thread/Composer.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { LaserProvider, useLaserStable } from "../../src/runtime/LaserProvider.js";
 import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../beam/fake-host.js";
@@ -46,11 +52,45 @@ function Open() {
   return null;
 }
 
+function Reopen() {
+  const { actions } = useLaserStable();
+  return <button data-slot="reopen-scoped" onClick={() => void actions.openSession(PATH, { select: false })} />;
+}
+
+function FirstTurnHarness() {
+  return (
+    <LaserProvider url="ws://test">
+      <TooltipProvider>
+        <Open />
+        <Composer />
+      </TooltipProvider>
+    </LaserProvider>
+  );
+}
+
+function FirstTurnTree({ name }: { name: string }) {
+  return (
+    <div data-tree={name}>
+      <LaserProvider url={`ws://${name}`}>
+        <TooltipProvider>
+          <Open />
+          <Composer />
+        </TooltipProvider>
+      </LaserProvider>
+    </div>
+  );
+}
+
+function DualFirstTurnHarness() {
+  return <><FirstTurnTree name="a" /><FirstTurnTree name="b" /></>;
+}
+
 function Harness() {
   return (
     <LaserProvider url="ws://test">
       <TooltipProvider>
         <Open />
+        <Reopen />
         <ComposerPrimitive.Root>
           <ComposerPrimitive.Input data-slot="composer-input" />
           <ComposerQueue />
@@ -277,6 +317,206 @@ describe("the pending tray", () => {
     });
     await act(async () => settle(0));
     expect(rows().map((row) => row.dataset["lane"])).toEqual(["steer", "waiting"]);
+  });
+
+  it("does not resurrect a delivered row when an offscreen re-open snapshot resolves late", async () => {
+    await mount();
+    const stale = pending("p-stale", "already delivered", { state: "delivering" });
+    await publish([stale]);
+
+    let resolveList!: (value: { messages: PendingMessage[] }) => void;
+    world.overrides["session/pending/list"] = (() => new Promise((resolve) => { resolveList = resolve; })) as never;
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-slot="reopen-scoped"]')!.click());
+    while (calls("session/pending/list").length < 2) await act(async () => settle(0));
+
+    // The numbered acknowledgement overtakes a list computed while the row was
+    // still delivering. Returning to this session must not bring Sending back.
+    await publish([]);
+    await act(async () => {
+      resolveList({ messages: [stale] });
+      await settle(10);
+    });
+
+    expect(tray()).toBeNull();
+  });
+
+  it("binds a tentative agent on the same empty path only when the first message sends", async () => {
+    world.states[PATH] = {
+      ...world.states[PATH]!,
+      isStreaming: false,
+      messageCount: 0,
+      agent: { agentName: "default", kind: "root" },
+    };
+    world.sessions[0] = {
+      ...world.sessions[0]!,
+      messageCount: 0,
+      agent: { agentName: "default", kind: "root" },
+    };
+    await act(async () => root.render(<FirstTurnHarness />));
+    await act(async () => settle(20));
+
+    const picker = container.querySelector<HTMLButtonElement>('[data-slot="model-selector-trigger"]')!;
+    await act(async () => picker.click());
+    await act(async () => settle(0));
+    const reviewer = [...document.querySelectorAll<HTMLElement>('[data-slot="model-selector-item"]')]
+      .find((item) => item.textContent?.includes("reviewer"))!;
+    await act(async () => reviewer.click());
+    expect(calls("session/new")).toEqual([]);
+    expect(calls("session/prompt")).toEqual([]);
+
+    const input = container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "Review this change");
+      input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: "Review this change" }));
+    });
+    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.click());
+    await act(async () => settle(10));
+
+    expect(calls("session/new")).toEqual([]);
+    expect(calls("session/prompt")).toEqual([{
+      method: "session/prompt",
+      params: {
+        path: PATH,
+        content: [{ type: "text", text: "Review this change" }],
+        firstTurn: { agentName: "reviewer" },
+      },
+    }]);
+  });
+
+  it("keeps two production composers on one pristine path bound to their own thinking choice in both send orders", async () => {
+    world.states[PATH] = {
+      ...world.states[PATH]!,
+      isStreaming: false,
+      messageCount: 0,
+      model: { provider: "openai", id: "gpt-big" },
+      agent: { agentName: "default", kind: "root" },
+    };
+    world.sessions[0] = { ...world.sessions[0]!, messageCount: 0, agent: { agentName: "default", kind: "root" } };
+    world.snapshot = {
+      ...world.snapshot,
+      agents: world.snapshot.agents.map((agent) => agent.name === "reviewer"
+        ? { ...agent, model: { provider: "openai", id: "gpt-big" }, thinkingLevel: "high" }
+        : agent),
+    };
+    let accepted = false;
+    world.overrides["session/prompt"] = (() => {
+      if (accepted) return { accepted: false, queued: false };
+      accepted = true;
+      return { accepted: true, queued: false };
+    }) as never;
+    await act(async () => root.render(<DualFirstTurnHarness />));
+    await act(async () => settle(20));
+    const tree = (name: string) => container.querySelector<HTMLElement>(`[data-tree="${name}"]`)!;
+    const chooseAgent = async (name: string) => {
+      await act(async () => tree(name).querySelector<HTMLButtonElement>('button[aria-label^="Agent:"]')!.click());
+      await act(async () => settle(0));
+      const reviewer = [...document.querySelectorAll<HTMLElement>('[data-slot="model-selector-item"]')]
+        .find((item) => item.textContent?.includes("reviewer"))!;
+      await act(async () => reviewer.click());
+      await act(async () => settle(0));
+    };
+    const chooseThinking = async (name: string, level: string) => {
+      await act(async () => tree(name).querySelector<HTMLButtonElement>('button[aria-label^="Thinking:"]')!.click());
+      await act(async () => settle(0));
+      await act(async () => document.querySelector<HTMLButtonElement>(`[role="radio"][aria-label="${level}"]`)!.click());
+    };
+    const type = async (name: string, text: string) => {
+      const input = tree(name).querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, text);
+        input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+      });
+      return input;
+    };
+    const pointerSend = async (name: string, text: string) => {
+      await type(name, text);
+      await act(async () => tree(name).querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.click());
+      await act(async () => settle(0));
+    };
+    const keyboardSend = async (name: string, text: string) => {
+      const input = await type(name, text);
+      await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+      await act(async () => settle(0));
+    };
+
+    await chooseAgent("a");
+    await chooseThinking("a", "high");
+    await chooseAgent("b");
+    await chooseThinking("b", "off");
+    world.calls.length = 0;
+    await keyboardSend("a", "a first");
+    await pointerSend("b", "b second");
+    expect(calls("session/prompt").map((call) => call.params)).toEqual([
+      { path: PATH, content: [{ type: "text", text: "a first" }], firstTurn: { agentName: "reviewer", thinkingLevel: "high" } },
+      { path: PATH, content: [{ type: "text", text: "b second" }], firstTurn: { agentName: "reviewer", thinkingLevel: "off" } },
+    ]);
+    world.calls.length = 0;
+    await pointerSend("b", "b retry");
+    expect(calls("session/prompt")[0]?.params).toEqual({
+      path: PATH,
+      content: [{ type: "text", text: "b retry" }],
+      firstTurn: { agentName: "reviewer", thinkingLevel: "off" },
+    });
+
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    FakeHostClient.reset(world);
+    accepted = false;
+    world.calls.length = 0;
+    await act(async () => root.render(<DualFirstTurnHarness />));
+    await act(async () => settle(20));
+    await chooseAgent("a");
+    await chooseThinking("a", "high");
+    await chooseAgent("b");
+    await chooseThinking("b", "off");
+    world.calls.length = 0;
+    await pointerSend("b", "b first");
+    await keyboardSend("a", "a second");
+    expect(calls("session/prompt").map((call) => call.params)).toEqual([
+      { path: PATH, content: [{ type: "text", text: "b first" }], firstTurn: { agentName: "reviewer", thinkingLevel: "off" } },
+      { path: PATH, content: [{ type: "text", text: "a second" }], firstTurn: { agentName: "reviewer", thinkingLevel: "high" } },
+    ]);
+  });
+
+  // A reload: the whole tree goes and comes back. The single-page switch —
+  // the same tree, another session — is test/thread/first-turn-refusal.test.tsx.
+  it("discards a tentative agent when the page is reloaded", async () => {
+    world.states[PATH] = {
+      ...world.states[PATH]!,
+      isStreaming: false,
+      messageCount: 0,
+      agent: { agentName: "default", kind: "root" },
+    };
+    world.sessions[0] = {
+      ...world.sessions[0]!,
+      messageCount: 0,
+      agent: { agentName: "default", kind: "root" },
+    };
+    await act(async () => root.render(<FirstTurnHarness />));
+    await act(async () => settle(20));
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-slot="model-selector-trigger"]')!.click());
+    await act(async () => settle(0));
+    const reviewer = [...document.querySelectorAll<HTMLElement>('[data-slot="model-selector-item"]')]
+      .find((item) => item.textContent?.includes("reviewer"))!;
+    await act(async () => reviewer.click());
+    expect(calls("session/prompt")).toEqual([]);
+
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await act(async () => root.render(<FirstTurnHarness />));
+    await act(async () => settle(20));
+    const input = container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "Use the default");
+      input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: "Use the default" }));
+    });
+    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.click());
+    await act(async () => settle(10));
+
+    expect(calls("session/prompt").at(-1)).toEqual({
+      method: "session/prompt",
+      params: { path: PATH, content: [{ type: "text", text: "Use the default" }] },
+    });
   });
 
   it("comes back after a reload, because it lives in the worker and not in this browser", async () => {

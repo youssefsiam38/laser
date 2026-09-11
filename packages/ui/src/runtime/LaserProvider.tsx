@@ -30,7 +30,7 @@ import {
   useExternalStoreRuntime,
   useRemoteThreadListRuntime,
 } from "@assistant-ui/react";
-import type { AssistantRuntime, RemoteThreadListAdapter, ThreadMessageLike } from "@assistant-ui/react";
+import type { AssistantRuntime, RemoteThreadListAdapter, ThreadComposerRuntime, ThreadMessageLike } from "@assistant-ui/react";
 import type {
   ContentBlock,
   GoalAction,
@@ -63,6 +63,7 @@ import { createTasksActions, type TasksActions } from "../fleet/actions.js";
 import { HostClient } from "../client.js";
 import { initialState, reduce, type Action, type AppState, type SessionView } from "../store.js";
 import { createThreadAdapter, sendToSession, type SendBehavior } from "./adapter.js";
+import { useDiscardFirstTurnOnLeave } from "./first-turn.js";
 import { createSessionLauncher, type NewSessionOptions } from "./new-session.js";
 import { rememberSessionForTab, sessionKindTab } from "./session-tab-memory.js";
 import { useThemeSync } from "./prefs.js";
@@ -674,13 +675,13 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         client.track(path, readState().open[path]?.lastSeq ?? loadedSeq);
         const { goal } = await client.request("session/goal/get", { path });
         dispatch({ type: "goal", path, goal });
-        // The pending tray, once, now that the view exists. Every later change
-        // arrives as a numbered `pending_update` on the session's own stream;
-        // this snapshot is what a reload (which has no watermark to replay
-        // from) starts it with, and the worker computes it after any update it
-        // has already sent, so it can never be the stale one.
+        // The pending tray, once, now that the view exists. A numbered update
+        // can overtake this request, including the empty update that acknowledges
+        // delivery. Capture the array itself as a watermark so a delayed list
+        // cannot resurrect an older row; unrelated view updates preserve it.
+        const expectPending = readState().open[path]?.pending;
         const { messages } = await client.request("session/pending/list", { path });
-        dispatch({ type: "pending", path, messages });
+        if (expectPending) dispatch({ type: "pending", path, messages, expectPending });
       })();
       const entry = {
         select,
@@ -1306,7 +1307,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
 
   useEffect(() => {
     snapshotStore.set({ store, client, dispatch, onError, openSession });
-  }, [snapshotStore, store, client, dispatch, onError, openSession]);
+  }, [snapshotStore, store, client, dispatch, onError, openSession, currentProject]);
 
   /** Number of `initialize()` calls in flight; gates the thread-list reload and the controlled selection. */
   const [initializing, setInitializing] = useState(0);
@@ -1498,6 +1499,10 @@ function useThreadRuntime(store: SnapshotStore<RuntimeSnapshot>): AssistantRunti
     return externalId ?? remoteId;
   }, [aui]);
 
+  // This thread's own composer, for the adapter to hand an unsent message back
+  // to (M13-T89 U1). Read lazily: the runtime exists only once the adapter does,
+  // and a send can only start after the commit that fills the ref.
+  const composerRef = useRef<ThreadComposerRuntime | undefined>(undefined);
   const adapter = useMemo(
     () =>
       createThreadAdapter({
@@ -1509,11 +1514,19 @@ function useThreadRuntime(store: SnapshotStore<RuntimeSnapshot>): AssistantRunti
         onError: snapshot.onError,
         resolvePath,
         projection: { ...projection, messages: messages as ThreadMessageLike[] },
+        composer: () => composerRef.current,
       }),
     [connection, messages, path, projection, resolvePath, snapshot, view],
   );
 
-  return useExternalStoreRuntime<ThreadMessageLike>(adapter);
+  const runtime = useExternalStoreRuntime<ThreadMessageLike>(adapter);
+  useEffect(() => {
+    composerRef.current = runtime.thread.composer;
+  }, [runtime]);
+  // A tentative first-turn choice lives only while this thread is the one on
+  // screen (M13-T89 U2): keyed on this thread's composer, never on the current one.
+  useDiscardFirstTurnOnLeave(runtime.thread.composer, isMain);
+  return runtime;
 }
 
 // ---------------------------------------------------------------------------
@@ -1724,7 +1737,7 @@ export function LaserThreadScope({ path, onPathChange, filter, createIn, unavail
   );
   useEffect(() => {
     snapshotStore.set({ store, client, dispatch, onError: scopedOnError, openSession: (target) => openSession(target, { select: false }) });
-  }, [snapshotStore, store, client, dispatch, scopedOnError, openSession]);
+  }, [snapshotStore, store, client, dispatch, scopedOnError, openSession, path]);
 
   const runtimeHook = useCallback(
     // oxlint-disable-next-line react-hooks/rules-of-hooks -- invoked by useRemoteThreadListRuntime at a stable hook position

@@ -81,18 +81,88 @@ export interface DriverOpenOptions {
   agent?: DriverAgentOptions;
 }
 
+export interface DriverInvocationRef {
+  /** Unique only inside this driver generation. */
+  id: string;
+  /** Present when the agent harness owns the native invocation. */
+  runId?: string;
+}
+
+/** Opaque server admission lease shared only across one causal invocation. */
+export interface SessionAdmissionLease {
+  readonly token: symbol;
+  readonly active: boolean;
+  release(): void;
+}
+
+export type ExtensionWorkDisposition = "started" | "queued" | "consumed";
+
+export interface ExtensionModelExecution {
+  /** Extension-visible acceptance: never the full model turn. */
+  admission: Promise<void>;
+  /** Worker-owned native lifetime. */
+  completion: Promise<{ disposition: ExtensionWorkDisposition }>;
+}
+
+export interface ExtensionModelWorkRequest {
+  kind: "user" | "custom";
+  content: ContentBlock[];
+  task: string;
+  origin: "agent" | "user";
+  parent?: DriverInvocationRef;
+  /** Whether the causal parent had already entered a model run. */
+  parentStarted?: boolean;
+  /** The exact outer lease; only a still-active causal call may borrow it. */
+  admissionLease?: SessionAdmissionLease;
+  /** Start after ownership exists. Calling this twice is an error. */
+  start(ownerRunId?: string, onInvocation?: (ref: DriverInvocationRef) => void): ExtensionModelExecution;
+}
+
+export interface ExtensionModelAdmission {
+  admission: Promise<void>;
+  completion: Promise<void>;
+  /** Only work still owned by the causal run joins its parent's completion drain. */
+  joinsParent: boolean;
+}
+
+export type ExtensionModelWorkHandler = (request: ExtensionModelWorkRequest) => ExtensionModelAdmission;
+
 export type DriverEvent =
-  | { type: "update"; update: SessionUpdate }
-  | { type: "ui_request"; request: UiDialogRequest }
-  | { type: "ui_event"; event: UiFireAndForget }
+  | { type: "update"; update: SessionUpdate; invocation?: DriverInvocationRef }
+  /**
+   * A dialog is raised from inside the tool that asks, so a driver with epochs
+   * stamps it with the prompt invocation it was raised under, and its
+   * `dialogResolved` with the same one; the harness fences both the way it
+   * fences stamped updates. Absent for drivers without epochs.
+   */
+  | { type: "ui_request"; request: UiDialogRequest; invocation?: DriverInvocationRef }
+  | { type: "ui_event"; event: UiFireAndForget; invocation?: DriverInvocationRef }
   /** Emitted by the laser companion extension running inside the session. */
   | { type: "extension"; message: PiExtensionMessage }
   | { type: "closed"; reason: string };
 
 export type DriverListener = (event: DriverEvent) => void;
 
+export interface FirstTurnOptions {
+  agent: DriverAgentOptions;
+  thinkingLevel?: ThinkingLevel;
+}
+
 export interface PromptOptions {
   streamingBehavior?: "steer" | "followUp";
+  /** Internal owner propagated to extension work; never crosses protocol. */
+  ownerRunId?: string;
+  /**
+   * Who started the run this prompt serves, from its run record. The driver
+   * stamps the invocation with it, so extension work sent from inside the
+   * turn inherits the run's origin rather than a per-prompt guess. Absent
+   * means the person (a prompt from a chat).
+   */
+  origin?: "agent" | "user";
+  /** Server preflight lease, borrowed only by a causal nested extension send. */
+  admissionLease?: SessionAdmissionLease;
+  /** Receives the exact driver epoch before native work or events begin. */
+  onInvocation?: (ref: DriverInvocationRef) => void;
   /** False sends the text verbatim: no slash-command dispatch, no template expansion. */
   expandPromptTemplates?: boolean;
   /**
@@ -105,6 +175,21 @@ export interface PromptOptions {
   onAccepted?: () => void;
 }
 
+/**
+ * What `clearQueue()` emptied. `steering` and `followUp` are the texts the
+ * engine's own queue listed — a person's queued messages, in queue order, fit
+ * to go back into a composer. `custom` is what an extension had queued
+ * straight into the engine's lanes behind a running turn (`sendMessage` with
+ * `deliverAs`, which the engine never lists and its clear silently drops):
+ * the text of each, per lane, so a caller taking the queue over can keep it.
+ * Absent when there was none, or when the driver cannot see that far.
+ */
+export interface ClearedQueue {
+  steering: string[];
+  followUp: string[];
+  custom?: { steering: string[]; followUp: string[] };
+}
+
 /** One driver instance = one live Pi session inside one worker process. */
 export interface SessionDriver {
   readonly kind: "stable-sdk" | "chord";
@@ -113,10 +198,14 @@ export interface SessionDriver {
   state(): SessionState;
   subscribe(listener: DriverListener): () => void;
 
+  /** Replace only a pristine root runtime around its existing session manager. */
+  prepareFirstTurn?(options: FirstTurnOptions): Promise<void>;
+  /** Restore the prior runtime when prompt preflight did not accept ownership. */
+  rollbackFirstTurn?(): Promise<void>;
   prompt(content: ContentBlock[], options?: PromptOptions): Promise<{ accepted: boolean; queued: boolean }>;
   steer(content: ContentBlock[]): Promise<void>;
   followUp(content: ContentBlock[]): Promise<void>;
-  clearQueue(): Promise<{ steering: string[]; followUp: string[] }>;
+  clearQueue(): Promise<ClearedQueue>;
   abort(): Promise<void>;
 
   listModels(): Promise<ModelRef[]>;
@@ -159,7 +248,10 @@ export interface SessionDriver {
 
   /** Durable goal control. Optional for engines that do not implement Goals. */
   goalState?(): Promise<SessionGoal | null>;
-  goalAction?(action: GoalAction): Promise<SessionGoal | null>;
+  goalAction?(action: GoalAction, options?: { admissionLease?: SessionAdmissionLease; onAccepted?: () => void }): Promise<SessionGoal | null>;
+
+  /** Worker-owned admission for extension calls that can enter the model. */
+  setExtensionModelWorkHandler?(handler: ExtensionModelWorkHandler | undefined): void;
 
   /**
    * Persist a custom entry in this session's file (the harness writes run

@@ -4,14 +4,15 @@
  * the model refusal, and the agent record written
  * on a new session and recovered on load.
  */
-import { PRODUCT_DISPLAY_NAME, PRODUCT_NAME, SESSION_AGENT_ENTRY_TYPE, type AgentDefinition } from "@lasercode/protocol";
+import { PRODUCT_DISPLAY_NAME, PRODUCT_NAME, SESSION_AGENT_ENTRY_TYPE, type AgentDefinition, type JsonRpcMessage, type SessionState } from "@lasercode/protocol";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { fallbackBeamAgent, fallbackDefaultAgent, fallbackPolicy } from "../../src/agents/definitions.js";
+import { fallbackBeamAgent, fallbackDefaultAgent, fallbackPolicy, fallbackSnapshot } from "../../src/agents/definitions.js";
 import { ENGINE_BUILTIN_TOOLS, readSessionAgentRecord, rootRecord, rootRole } from "../../src/agents/session-config.js";
 import { StableSdkDriver } from "../../src/drivers/stable-sdk.js";
+import { WorkerServer } from "../../src/server.js";
 import type { DriverAgentOptions, DriverEvent } from "../../src/driver.js";
 import { startStubProvider, systemTextOf, toolNamesOf, writeStubModels, type StubProvider } from "./stub-provider.js";
 
@@ -165,6 +166,187 @@ describe("StableSdkDriver with an agent definition", () => {
     await expect(back.open({ cwd: project, agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), sessionPath: projectState.path, projectTrusted: true, agent: agentOptions(fallbackDefaultAgent()) })).rejects.toThrow(/does not exist/);
     expect(existsSync(project)).toBe(false);
     // Four real sessions against the engine; the default 5 s is not enough on a loaded machine.
+  }, 60_000);
+
+  it("rebinds the same pristine identity and runs the selected agent on its one first prompt", async () => {
+    const original: AgentDefinition = {
+      ...fallbackDefaultAgent(),
+      name: "default",
+      engineInstructions: false,
+      instructions: "ORIGINAL FIRST TURN",
+      model: { provider: "stub", id: "stub-1" },
+    };
+    const selected: AgentDefinition = {
+      ...fallbackDefaultAgent(),
+      name: "reviewer",
+      engineInstructions: false,
+      instructions: "SELECTED FIRST TURN",
+      model: { provider: "stub", id: "stub-1" },
+    };
+    const creator = new StableSdkDriver();
+    drivers.push(creator);
+    const created = await creator.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), projectTrusted: true, agent: agentOptions(original) });
+    await creator.rename("Saved empty");
+    await creator.setThinkingLevel("off");
+    const saved = await creator.entries();
+    await creator.dispose();
+    // Pi normally flushes metadata with the first message. Model a catalogued
+    // saved-empty file explicitly: header + metadata, no message entry.
+    mkdirSync(join(base, "sessions"), { recursive: true });
+    writeFileSync(created.path, [
+      { type: "session", version: 3, id: created.id, timestamp: "2026-09-10T00:00:00.000Z", cwd: join(base, "project") },
+      ...saved.entries,
+    ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+
+    const driver = new StableSdkDriver();
+    drivers.push(driver);
+    const before = await driver.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), sessionPath: created.path, projectTrusted: true, agent: agentOptions(original) });
+    expect(await readSessionAgentRecord(before.path)).toEqual({ agentName: "default", kind: "root" });
+    await driver.prepareFirstTurn({ agent: agentOptions(selected), thinkingLevel: "off" });
+    expect(driver.state()).toMatchObject({ path: before.path, id: before.id, name: "Saved empty" });
+    // Runtime preparation is still tentative on disk.
+    expect(await readSessionAgentRecord(before.path)).toEqual({ agentName: "default", kind: "root" });
+
+    let accepted = 0;
+    await expect(driver.prompt([{ type: "text", text: "review it" }], { onAccepted: () => { accepted += 1; } }))
+      .resolves.toEqual({ accepted: true, queued: false });
+    expect(accepted).toBe(1);
+    expect(stub.requests).toHaveLength(1);
+    expect(systemTextOf(stub.requests[0]!)).toContain("SELECTED FIRST TURN");
+    expect(systemTextOf(stub.requests[0]!)).not.toContain("ORIGINAL FIRST TURN");
+    expect(await readSessionAgentRecord(before.path)).toEqual({ agentName: "reviewer", kind: "root" });
+    const lines = readFileSync(before.path, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { type?: string; message?: { role?: string } });
+    expect(lines.filter((line) => line.type === "message" && line.message?.role === "user")).toHaveLength(1);
+  }, 60_000);
+
+  it("binds the first turn through WorkerServer on the same StableSDK session and preserves explicit overrides", async () => {
+    writeSkill(join(base, "agent", "skills"), "selected-skill");
+    writeFileSync(join(base, "agent", "models.json"), JSON.stringify({
+      providers: {
+        stub: {
+          baseUrl: stub.url,
+          api: "openai-completions",
+          apiKey: "stub-key",
+          models: [
+            { id: "stub-1", name: "Stub One", contextWindow: 8000, maxTokens: 1000, reasoning: true },
+            { id: "stub-2", name: "Stub Two", contextWindow: 8000, maxTokens: 1000, reasoning: true },
+          ],
+        },
+      },
+    }));
+    const selected: AgentDefinition = {
+      ...fallbackDefaultAgent(),
+      name: "reviewer",
+      engineInstructions: true,
+      instructions: "SERVER SELECTED AGENT",
+      scopedSkills: true,
+      skills: [{ name: "selected-skill", path: join(base, "agent", "skills", "selected-skill", "SKILL.md"), scope: "global" }],
+      model: { provider: "stub", id: "stub-2" },
+      thinkingLevel: "high",
+    };
+    const messages: JsonRpcMessage[] = [];
+    const server = new WorkerServer({
+      cwd: join(base, "project"),
+      agentDir: join(base, "agent"),
+      sessionDir: join(base, "sessions"),
+      stateDir: join(base, "state"),
+      createDriver: () => {
+        const driver = new StableSdkDriver();
+        drivers.push(driver);
+        return driver;
+      },
+      send: (message) => messages.push(message),
+    });
+    let id = 0;
+    const call = async (method: string, params: unknown) => {
+      const requestId = ++id;
+      await server.handle({ jsonrpc: "2.0", id: requestId, method, params });
+      return messages.find((message) => "id" in message && message.id === requestId) as { result?: unknown; error?: unknown };
+    };
+    const snapshot = fallbackSnapshot();
+    await call("agents/sync", { snapshot: { ...snapshot, agents: [...snapshot.agents, selected] } });
+    const created = await call("session/new", { cwd: join(base, "project") });
+    const before = (created.result as { state: SessionState }).state;
+    await call("pi/model/set", { path: before.path, model: { provider: "stub", id: "stub-1" } });
+    const prompted = await call("session/prompt", {
+      path: before.path,
+      content: [{ type: "text", text: "one exact first message" }],
+      firstTurn: { agentName: "reviewer", thinkingLevel: "high" },
+    });
+
+    expect(prompted.result).toEqual({ accepted: true, queued: false });
+    const loaded = await call("session/load", { path: before.path });
+    const after = (loaded.result as { state: SessionState }).state;
+    expect(after).toMatchObject({ path: before.path, id: before.id, thinkingLevel: "high", model: { provider: "stub", id: "stub-1" }, agent: { agentName: "reviewer", kind: "root" } });
+    expect(server.openSessions()).toEqual([before.path]);
+    expect(stub.requests).toHaveLength(1);
+    expect(stub.requests[0]).toMatchObject({ model: "stub-1", reasoning_effort: "high" });
+    expect(systemTextOf(stub.requests[0]!)).toContain("selected-skill");
+    const lines = readFileSync(before.path, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { type?: string; message?: { role?: string; content?: unknown } });
+    expect(lines.filter((line) => line.type === "message" && line.message?.role === "user")).toHaveLength(1);
+    expect(JSON.stringify(lines.find((line) => line.type === "message" && line.message?.role === "user")?.message?.content)).toContain("one exact first message");
+
+    // Pi writes automatic initial model/thinking entries. They are defaults,
+    // not person overrides: an untouched second session takes the selected
+    // agent's different defaults.
+    const untouched = (await call("session/new", { cwd: join(base, "project") }).then((reply) => reply.result as { state: SessionState })).state;
+    await call("session/prompt", {
+      path: untouched.path,
+      content: [{ type: "text", text: "selected defaults" }],
+      firstTurn: { agentName: "reviewer" },
+    });
+    expect(stub.requests[1]).toMatchObject({ model: "stub-2", reasoning_effort: "high" });
+    expect((await call("session/load", { path: untouched.path }).then((reply) => reply.result as { state: SessionState })).state)
+      .toMatchObject({ path: untouched.path, id: untouched.id, model: { provider: "stub", id: "stub-2" }, thinkingLevel: "high" });
+    await server.dispose();
+  }, 60_000);
+
+  it.each([false, true])("restores exact effective state after preparation failure/rollback (manual override: %s)", async (manual) => {
+    writeFileSync(join(base, "agent", "models.json"), JSON.stringify({
+      providers: {
+        stub: {
+          baseUrl: stub.url,
+          api: "openai-completions",
+          apiKey: "stub-key",
+          models: [
+            { id: "stub-1", name: "Stub One", contextWindow: 8000, maxTokens: 1000, reasoning: true },
+            { id: "stub-2", name: "Stub Two", contextWindow: 8000, maxTokens: 1000, reasoning: true },
+          ],
+        },
+      },
+    }));
+    const original: AgentDefinition = {
+      ...fallbackDefaultAgent(), name: "default", engineInstructions: false,
+      instructions: "ORIGINAL AFTER ROLLBACK", model: { provider: "stub", id: "stub-1" }, thinkingLevel: "low",
+    };
+    const selected: AgentDefinition = {
+      ...fallbackDefaultAgent(), name: "reviewer", engineInstructions: false,
+      instructions: "SHOULD NOT RUN", model: { provider: "stub", id: "stub-1" },
+    };
+    const driver = new StableSdkDriver();
+    drivers.push(driver);
+    const before = await driver.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), projectTrusted: true, agent: agentOptions(original) });
+    if (manual) {
+      await driver.setModel({ provider: "stub", id: "stub-2" });
+      await driver.setThinkingLevel("high");
+    } else {
+      // Factory failure happens after the old runtime has been disposed, but
+      // must leave the original effective session served and retryable.
+      await expect(driver.prepareFirstTurn({ agent: agentOptions({ ...selected, model: { provider: "missing", id: "unavailable" } }) }))
+        .rejects.toThrow(/not available/);
+      expect(driver.state()).toMatchObject({ path: before.path, id: before.id, model: before.model, thinkingLevel: before.thinkingLevel });
+      expect(stub.requests).toHaveLength(0);
+    }
+    const effective = driver.state();
+    await driver.prepareFirstTurn({ agent: agentOptions(selected), thinkingLevel: "off" });
+    await driver.rollbackFirstTurn();
+    expect(driver.state()).toMatchObject({ path: effective.path, id: effective.id, model: effective.model, thinkingLevel: effective.thinkingLevel });
+    await driver.prompt([{ type: "text", text: "continue" }]);
+
+    expect(stub.requests[0]).toMatchObject({ model: manual ? "stub-2" : "stub-1", reasoning_effort: manual ? "high" : "low" });
+    expect(systemTextOf(stub.requests[0]!)).toContain("ORIGINAL AFTER ROLLBACK");
+    expect(systemTextOf(stub.requests[0]!)).not.toContain("SHOULD NOT RUN");
+    expect(await readSessionAgentRecord(before.path)).toEqual({ agentName: "default", kind: "root" });
   }, 60_000);
 
   it("writes the agent record as the first custom entry of a new session and recovers it on load", async () => {

@@ -112,12 +112,12 @@ module from the worker-supplied `AgentHarnessBridge`:
 | Tool | Who gets it | Does |
 | --- | --- | --- |
 | `start_agent { agent_name, subagent_name, task, worktree? }` | a session whose definition permits delegation and whose depth allows another level | validates the name against the allowed list and depth, loads the child's full configuration, creates the child session and (unless `worktree: false`) its worktree, starts the child loop in the background, returns `{ agent_name, subagent_name, sessionId, runId, status: "running", working_directory, branch?, guidance, your_responsibility }` immediately. `guidance` is the sentence the parent reads at the moment it matters: *Do not wait for `<name>`. Carry on with your own work; when it ends, its result will be sent to you as a message. Use `inspect_agent` with runId `<runId>` to check on it meanwhile — a status of `needs_input` means it is paused on a question you can answer with `send_agent_message`.* |
-| `send_agent_message { sessionId, message, interrupt? }` | same | a running child receives it as its next instruction (`delivery: "queued"` while busy); an idle child starts a new run and the result carries the new `runId`; a child that is `needs_input` has its open question **answered** by the message (`delivery: "answered"`, the question returned as `answered`) — see "Questions" below |
+| `send_agent_message { sessionId, message, interrupt? }` | same | a running child receives it as its next instruction: while its engine streams, the message goes into the engine's own queue — the follow-up lane, or the steering lane with `interrupt: true` — and the result says `delivery: "queued"`; an idle child starts a new run and the result carries the new `runId` with `delivery: "delivered"` only once the child's engine has accepted the message as its next turn — never before admission is known — or `delivery: "refused"` with `error` (and a `failed` run for the attempt) when it would not take it; a child that is `needs_input` has its open question **answered** by the message (`delivery: "answered"`, the question returned as `answered`) — see "Questions" below. A message sent while the child is finishing a declared completion waits, in order, on the one successor run the harness reserves behind it (still `"queued"`); with `interrupt: true` it also aborts the finishing invocation, which cannot change the result that invocation's tool already declared — see "Completion" |
 | `inspect_fleet` | same | the tree of work under this session, as the person's fleet column draws it (D-163, below): the agents it started, theirs, and the background commands any of them — the caller included — left running or finished. One row per session, standing on its newest run, and one per command; every row carries its kind (`agent` or `command`), title, the fleet's status word, elapsed time, one line (what it is doing, or how it ended) and the id to follow it with (`runId`, `taskId`). At most `AGENT_FLEET_ROWS_MAX` = 50 rows, cut deepest-first with `omitted` saying how many. Read-only; never transcripts |
 | `inspect_agent { runId? \| sessionId?, messages? }` | same | one agent in depth — any agent row of the caller's tree, a child or a child's child (D-163): the run summary (identities, status, result, `endedBy`, the open `question`) plus the **whole** task, `origin`, `depth`, `model`, `cwd` and `branch` (only with a worktree), the worktree as it is now (`exists`, `unmergedCommits`, `uncommittedFiles`, `removedAt?`), `activity` (turns, tool calls, the tool running now, when it was last active), its last assistant messages excerpted (`messages`: default `AGENT_INSPECT_MESSAGES_DEFAULT` = 1, at most `AGENT_INSPECT_MESSAGES_MAX` = 10, each cut at `AGENT_INSPECT_MESSAGE_EXCERPT` = 1000 characters), the question it is paused on, a `what_it_needs` sentence when it is stalled, and its own children as run summaries. Read-only: it never wakes the child or delivers anything to it. A live child is read through its driver; an ended child whose driver is gone, from its session file |
 | `stop_agent { runId, reason? }` | same | ends one run now with `endedBy: { initiator: "parent", reason }`; the session stays addressable |
 | `remove_agent_worktree { sessionId? \| runId?, force? }` | same | removes a finished child's worktree and branch (M13-T42, §3 below) |
-| `complete_agent_run { status: "completed" \| "blocked", message }` | every child | the only successful ending; the tool result terminates the child turn |
+| `complete_agent_run { status: "completed" \| "blocked", message }` | every child | the only successful ending; the tool result terminates the child turn. Inside the tool the harness records the declared result, empties the engine's steering and follow-up queues into one successor run, and keeps the run `running` until the engine's prompt promise resolves — see "Completion" |
 
 Children never block, and **parents never wait**: `start_agent` returns
 before the child has done anything, there is no foreground mode, and there
@@ -143,7 +143,7 @@ agent rows nest as the tree nests, a session's commands hang off the row for
 the session that ran them (after its child agents), ordering is creation
 order, the title is the instance name or the command's first line, the status
 word is the column's (`FLEET_STATUS_WORD` = `FLEET_STATE_LABEL`: Waiting,
-Working, Asking, Needs you, Done, Failed, Ended), elapsed is formatted the
+Working, Asking, Blocked, Done, Failed, Ended), elapsed is formatted the
 same way, and the line is what the row says — the question a paused child is
 stuck on, the tool it is running, the last line a command printed; else the
 final message, the error, the exit code, or who ended it (the column's "you
@@ -182,6 +182,62 @@ once ("You stopped without calling complete_agent_run…", `NUDGE_TEXT` in
 the run is `failed` with "Ended without complete_agent_run" and the last
 assistant text kept as context — never `completed`.
 
+**Declared is not published (M13-T98).** The tool call only *declares* the
+end: the session's lifecycle moves to `terminal-pending`, and the run stays
+`running` — in the registry, the fleet, `inspect_fleet` and `inspect_agent`
+— for exactly as long as the engine invocation that ran the tool can still
+write. That window is real: Pi executes every other tool of the same batch,
+calls the model again after a batch in which not every tool terminated, and
+would carry any queued steering or follow-up message on under the run
+(`_handlePostAgentRun` → `agent.continue()`). So, still inside the tool, the
+harness empties the engine's queues (`clearQueue()`) and puts every message
+it held — plus every message waiting in its own inbox — on **one** successor
+run, in order, each exactly once; a text the engine had already delivered is
+gone, a text the harness never sent is kept. So is a custom message an
+extension queued straight into a lane behind the running turn — a background
+command's exit, a grandchild's ending, sent while the child streamed — which
+the engine's own queue never lists and its clear would silently drop: the
+driver reads agent-core's queues first (`ClearedQueue.custom`), the transfer
+keeps each as a message of its own (its text; the custom type is gone) and
+writes a `warn` line with the counts. Everything that arrives during
+the window joins that successor: a parent's `send_agent_message`, a person's
+queued prompt, an extension's triggering send, a goal's automatic
+continuation, a background command's exit. A person's message written while
+the child worked reaches it through the pending tray's drain at
+`agent_settled`; the admission lease the server took for that delivery is
+released the moment the harness parks the message, because an extension's
+send ahead of it on the successor starts through the same lease — held until
+the person's acceptance, it would wait for the very turn that acceptance
+follows. `interrupt: true` and a person's
+stop additionally abort the finishing invocation (the declared result
+stands: first declaration wins), and a stop of the run while it is still
+invoking empties the engine's queues into the successor *before* the abort,
+so nothing continues under a cancelled run. The completion is published only
+when the prompt promise — the one engine-ready fence — resolves: the old run
+turns terminal, the successor becomes the session's live run, and only then
+is the parent told. Every ending of an owning run publishes through that
+same fence and takes the successor — the tool's declaration, a stop, a
+settle without the tool, the failed nudge — so a run reserved while the
+owner had settled but was not yet fenced is started by the ending, never
+left waiting for nobody. A run created for a message the engine handled
+without a model turn (a slash command its `input` hook consumed, typed into
+an idle child's chat) ends the moment its prompt resolves: `cancelled`,
+`initiator: "harness"`, reason "Handled without a model turn." — the fleet's
+neutral *Ended* — and its parent, never told it began, is not woken for it.
+Late callbacks stamped with the finished invocation's
+epoch are dropped, and never touch the successor. If the session closes
+during the window, the declared result is still what the run ends with; the
+successor that never started fails with "The agent's session closed before
+this queued message could start.", and whoever was waiting on it (a person's
+prompt, an extension's send) is answered with that sentence. The harness
+writes each of these moments — admission decisions, phase changes, successor
+reservation and activation, queue transfers as counts, terminal publication,
+dropped late callbacks — as credential-free `module:subagents` lines in the
+host's log store (identities, phases, counts and timestamps; never a prompt
+or a message body). Pinned by
+`packages/worker/test/agents/queued-completion.test.ts` against the real
+engine.
+
 Every run the harness knows is published exactly once, as `agents/run`
 (M13-T26): that notification and `agents/runs/list` are the single truth, and
 the fleet, the sidebar and the live map all read it. There is no second
@@ -198,7 +254,20 @@ before its next model call, an idle parent wakes up, and the transcript stores
 each event exactly once. The text the model reads is the event type, the four
 identities, `endedBy` (with the person's verbatim reason) and the message. The
 UI renders the same entry as the parent-side card (Handoff row in
-[`ux-elements.md`](ux-elements.md)).
+[`ux-elements.md`](ux-elements.md)). A run's ending is pushed only once the
+run is truly terminal — after its engine invocation has stopped — and, when
+a successor was waiting behind it, only after that successor has become the
+session's live run, so a parent that reacts to the ending by messaging the
+child reaches the run that is actually working. A person's own sends into a
+child's chat — `pi/session/steer`, `pi/session/follow_up`, a pending-tray
+row's Steer, the tray's own drain at `agent_settled`, and
+`pi/session/clear_queue` — go through the same fence as the parent's
+messages, so nothing a person types can enter a queue the engine is about to
+drop. A clear takes back only the person's texts; a custom message an
+extension had queued behind the turn is parked for the fence instead, and
+never returned to a composer. A dialog is stamped with the invocation that raised it; one
+from an invocation the session no longer owns is cancelled (never the
+successor's question, never left hanging) and is not shown to the person.
 
 ### States, and who sets them
 
@@ -214,14 +283,29 @@ Three of these are live, and the one a parent most needs to tell apart from
 | --- | --- | --- |
 | `running` | yes | the child is working |
 | `needs_input` | yes, **stuck** | something the child did raised a question through the portable UI surface (`select`, `confirm`, `input`, `editor` — including any tool that asks before it acts) and its loop is paused until someone answers. The question is on `AgentRun.question` (`AgentRunQuestion`: `id`, `kind`, `title`, `detail?`, `options?`, `toolCallId?`, `toolName?`, `askedAt`). Nothing has ended |
-| `blocked` | no | the child **ended** by saying it could not finish (`complete_agent_run { status: "blocked" }`); the question it asked its parent, if any, is its final `result.message` |
+| `blocked` | no | the child **ended** by saying it could not finish (`complete_agent_run { status: "blocked" }`); the question it asked its parent, if any, is its final `result.message`. Finished work, not a live question (D-189) |
 
 The parent can tell "working" from "stuck waiting on me" from the status
 alone, in `inspect_fleet` (the row says *Asking*, with the question as its
 line), `inspect_agent` and the `start_agent` guidance; in
-the UI the two live shapes are "Working" (live tone) and "Asking" (attention
-tone, the same warm hue as "Needs you"), and both `needs_input` and `blocked`
-count as needing someone in the sidebar chip, the fleet and the map summary.
+the UI the two live shapes are "Working" (live tone) and "Asking" (the warm
+attention tone), and only `needs_input` counts as needing someone in the
+sidebar chip, the fleet and the map summary.
+
+A terminal `blocked` run is **neutral finished work** (D-189). Its word is
+*Blocked* and its tone is muted, the same ink as Done and Ended
+(`RUN_STATUS_LABEL` / `RUN_STATUS_TONE` in `packages/ui/src/agents/model.ts`,
+`FLEET_STATE_LABEL` / `STATE_ATTENTION` in `packages/ui/src/fleet/model.ts`,
+`FLEET_STATUS_WORD` in `packages/worker/src/agents/fleet.ts`); it sits in the
+finished fold with every other ended run, and it counts as finished, never as
+needing someone, in the fleet header, the sidebar chip, `inspect_fleet`'s
+`needsYou` and the map summary. It also never outranks a newer active run: a
+session stands on its newest run (`latestRunForSession`,
+`compareRunsNewestFirst`), so yesterday's blocked ending cannot hide what the
+same session is doing now. Nothing is lost by the move: the final message
+still says what the child could not do, and a live descendant keeps its whole
+branch out of the fold, because a branch is settled only when its whole
+subtree is.
 
 | State | Set by |
 | --- | --- |
@@ -236,8 +320,8 @@ the reason verbatim to the parent's event.
 
 ### Questions: what a stalled child needs, and who answers (M13-T45)
 
-A child can stall on someone in exactly two ways, and each has its own
-status:
+A child's work can come to rest on its parent in exactly two ways, and each
+has its own status — one live, one ended:
 
 1. **It raised a question and is paused on it** — `needs_input`. The question
    travels as a `ui_request` from the child's driver; the harness records it on
@@ -265,13 +349,14 @@ status:
    re-reading the driver's open dialogs on the next event.
 
 2. **It asked its parent something in its final message and ended** —
-   `blocked`, unchanged. The parent reads the question without opening the
-   session: it is the `result.message` in the `agent.blocked` event, in
-   `inspect_fleet` (*Needs you*, with the message as the row's line) and in
-   `inspect_agent` (whose `what_it_needs` says so and
-   says how to reply: `send_agent_message` starts a new run in the same
-   session with the child's history intact). The child's role block tells it
-   this is the way to ask when it genuinely cannot go on.
+   `blocked`. The run is over, so this is finished work rather than a live
+   question (D-189), and what it asked survives in its final message. The
+   parent reads that without opening the session: it is the `result.message`
+   in the `agent.blocked` event, in `inspect_fleet` (*Blocked*, with the
+   message as the row's line) and in `inspect_agent` (whose `what_it_needs`
+   says so and says how to reply: `send_agent_message` starts a new run in the
+   same session with the child's history intact). The child's role block tells
+   it this is the way to ask when it genuinely cannot go on.
 
 Inspecting is read-only in both cases: nothing is prompted, steered or
 answered by looking.
@@ -646,6 +731,11 @@ The binding list lives in `AGENTS.md` ("Agents harness regression checks"):
   ended asking is `blocked`. Every reader of `AgentRunStatus` — the sidebar
   chip and folds, the fleet, the live map, `agents/model.ts`, the CLI — has a
   test for the live-and-stuck value, in the attention tone, never folded away.
+- Terminal `blocked` is neutral finished work (D-189): the neutral word
+  *Blocked* in the muted tone, inside the finished fold, counted as finished
+  and never as needing someone, and never outranking a newer active run of the
+  same session in the fleet, the sidebar or `inspect_fleet`. A live descendant
+  still keeps its branch out of the fold.
 - `inspect_agent` is read-only and bounded (at most 10 excerpted messages).
 - One `inspect_fleet` and no list of either kind (D-163): the tree it returns
   is the fleet column's, scoped to the caller — a child never sees a sibling

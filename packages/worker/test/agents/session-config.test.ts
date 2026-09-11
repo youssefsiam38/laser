@@ -72,6 +72,19 @@ describe("readSessionAgentRecord", () => {
     expect(await readSessionAgentRecord(join(base, "missing.jsonl"))).toBeUndefined();
   });
 
+  it("uses the last saved-empty binding but ignores identity claims after history starts", async () => {
+    const path = join(base, "rebound.jsonl");
+    const line = (value: unknown) => `${JSON.stringify(value)}\n`;
+    writeFileSync(path,
+      line({ type: "session", id: "s", cwd: "/r" })
+      + line({ type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, data: { agentName: "default", kind: "root" } })
+      + line({ type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, data: { agentName: "reviewer", kind: "root" } })
+      + line({ type: "message", message: { role: "user", content: "hi" } })
+      + line({ type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, data: { agentName: "late", kind: "root" } }),
+    );
+    expect(await readSessionAgentRecord(path)).toEqual({ agentName: "reviewer", kind: "root" });
+  });
+
   it("survives a truncated line at the scan boundary", async () => {
     const path = join(base, "big.jsonl");
     const header = JSON.stringify({ type: "session", id: "s", cwd: "/r" });

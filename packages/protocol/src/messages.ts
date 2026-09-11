@@ -854,7 +854,13 @@ export interface ClientRequests {
    */
   "session/load": { params: { path: string; fromSeq?: number }; result: { state: SessionState; replayFrom: number; seq: number } };
   "session/prompt": {
-    params: { path: string; content: ContentBlock[]; streamingBehavior?: "steer" | "followUp" };
+    params: {
+      path: string;
+      content: ContentBlock[];
+      streamingBehavior?: "steer" | "followUp";
+      /** Applied only while this exact root session is still pristine. */
+      firstTurn?: { agentName: string; thinkingLevel?: ThinkingLevel };
+    };
     result: { accepted: boolean; queued: boolean };
   };
   "session/cancel": { params: { path: string }; result: {} };

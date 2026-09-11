@@ -38,6 +38,8 @@ const mocks = vi.hoisted(() => {
     }),
     finishPreparation: vi.fn(),
     beginPreparation: vi.fn(),
+    firstTurn: undefined as { agentName: string } | undefined,
+    chooseAgent: vi.fn((agentName: string) => { mocks.firstTurn = { agentName }; }),
   };
 });
 
@@ -70,7 +72,13 @@ vi.mock("@/agents", () => ({
 }));
 
 vi.mock("@/components/thread/session-preparation", () => ({
-  useSessionPreparation: () => ({ pending: false, begin: mocks.beginPreparation }),
+  useSessionPreparation: () => ({
+    pending: false,
+    begin: mocks.beginPreparation,
+    firstTurn: mocks.firstTurn,
+    chooseAgent: mocks.chooseAgent,
+    chooseThinking: vi.fn(),
+  }),
 }));
 
 vi.mock("@/runtime", () => ({
@@ -105,6 +113,8 @@ beforeEach(async () => {
   mocks.finishPreparation.mockReset();
   mocks.beginPreparation.mockReset();
   mocks.beginPreparation.mockReturnValue(mocks.finishPreparation);
+  mocks.firstTurn = undefined;
+  mocks.chooseAgent.mockClear();
   mocks.composerState = { text: "", attachments: [] };
   mocks.sourceComposerState = { text: "" };
   container = document.createElement("div");
@@ -144,87 +154,37 @@ it("selects the default and searches custom agents without exposing built-ins", 
   expect(researcher).toBeTruthy();
   await act(async () => researcher!.click());
   await settle();
-  expect(mocks.newSession).toHaveBeenCalledWith("/project", { agentName: "researcher" });
-});
-
-it("keeps session preparation locked until a deferred identity switch settles", async () => {
-  let resolveSession!: (path: string) => void;
-  mocks.newSession.mockImplementation(() => new Promise((resolve) => { resolveSession = resolve; }));
-  await act(async () => trigger()!.click());
-  await settle();
-  const researcher = [...document.querySelectorAll<HTMLElement>('[data-slot="model-selector-item"]')]
-    .find((item) => item.textContent?.includes("researcher"))!;
-  await act(async () => researcher.click());
-  expect(mocks.beginPreparation).toHaveBeenCalledOnce();
-  expect(mocks.finishPreparation).not.toHaveBeenCalled();
-  await act(async () => resolveSession("/project/researcher.jsonl"));
-  await settle();
-  expect(mocks.finishPreparation).toHaveBeenCalledOnce();
-});
-
-it("carries a typed draft to the newly selected agent and refuses to strand attachments", async () => {
-  mocks.composerState = { text: "Keep this draft", attachments: [] };
-  mocks.sourceComposerState = { text: "Keep this draft" };
-  mocks.newSession.mockImplementationOnce(async () => {
-    mocks.view = { path: "/project/researcher.jsonl", state: { cwd: "/project", agent: { agentName: "researcher", kind: "root" } } };
-    mocks.composerState = { text: "Target note", attachments: [] };
-    return "/project/researcher.jsonl";
-  });
-  await act(async () => trigger()!.click());
-  await settle();
-  const researcher = [...document.querySelectorAll<HTMLElement>('[data-slot="model-selector-item"]')]
-    .find((item) => item.textContent?.includes("researcher"))!;
-  await act(async () => researcher.click());
-  await settle();
-
-  mocks.view = {
-    path: "/project/researcher.jsonl",
-    state: { cwd: "/project", agent: { agentName: "researcher", kind: "root" } },
-  };
-  mocks.composerState = { text: "Target note", attachments: [] };
-  await act(async () => root.render(<SessionAgentSelector />));
-  expect(mocks.setComposerText).toHaveBeenCalledWith("Keep this draft\n\nTarget note");
-  expect(mocks.setSourceComposerText).toHaveBeenCalledWith("");
-  expect(mocks.finishPreparation).toHaveBeenCalledOnce();
-
-  // Moving back carries the merged target once; clearing the first source
-  // prevents the round trip from multiplying the original draft.
-  mocks.composerState = { text: "Keep this draft\n\nTarget note", attachments: [] };
-  mocks.sourceComposerState = { text: "Keep this draft\n\nTarget note" };
-  await act(async () => trigger()!.click());
-  await settle();
-  const defaultAgent = [...document.querySelectorAll<HTMLElement>('[data-slot="model-selector-item"]')]
-    .find((item) => item.textContent?.includes("Default agent"))!;
-  mocks.newSession.mockImplementationOnce(async () => {
-    mocks.view = { path: "/project/default.jsonl", state: { cwd: "/project", agent: { agentName: "default", kind: "root" } } };
-    mocks.composerState = { text: "", attachments: [] };
-    return "/project/default.jsonl";
-  });
-  await act(async () => defaultAgent.click());
-  await settle();
-  mocks.view = {
-    path: "/project/default.jsonl",
-    state: { cwd: "/project", agent: { agentName: "default", kind: "root" } },
-  };
-  mocks.composerState = { text: "", attachments: [] };
-  await act(async () => root.render(<SessionAgentSelector />));
-  expect(mocks.setComposerText).toHaveBeenLastCalledWith("Keep this draft\n\nTarget note");
-
-  mocks.view = {
-    path: "/project/default.jsonl",
-    state: { cwd: "/project", agent: { agentName: "default", kind: "root" } },
-  };
-  mocks.composerState = { text: "Still here", attachments: [{}] };
-  mocks.newSession.mockClear();
-  await act(async () => root.render(<SessionAgentSelector />));
-  await act(async () => trigger()!.click());
-  await settle();
-  const blockedChoice = [...document.querySelectorAll<HTMLElement>('[data-slot="model-selector-item"]')]
-    .find((item) => item.textContent?.includes("researcher"))!;
-  await act(async () => blockedChoice.click());
+  expect(mocks.chooseAgent).toHaveBeenCalledWith("researcher");
   expect(mocks.newSession).not.toHaveBeenCalled();
-  expect(mocks.toast).toHaveBeenCalledWith("warning", "Remove attachments before changing the agent. Your draft is unchanged.");
-  expect(mocks.composerState.text).toBe("Still here");
+});
+
+it("changes only the tentative label and leaves the session identity untouched", async () => {
+  await act(async () => trigger()!.click());
+  await settle();
+  const researcher = [...document.querySelectorAll<HTMLElement>('[data-slot="model-selector-item"]')]
+    .find((item) => item.textContent?.includes("researcher"))!;
+  await act(async () => researcher.click());
+  mocks.firstTurn = { agentName: "researcher" };
+  await act(async () => root.render(<SessionAgentSelector />));
+
+  expect(trigger()?.textContent).toContain("researcher");
+  expect(mocks.newSession).not.toHaveBeenCalled();
+  expect(mocks.beginPreparation).not.toHaveBeenCalled();
+});
+
+it("preserves a typed draft and attachments while choosing", async () => {
+  mocks.composerState = { text: "Keep this draft", attachments: [{}] };
+  await act(async () => trigger()!.click());
+  await settle();
+  const researcher = [...document.querySelectorAll<HTMLElement>('[data-slot="model-selector-item"]')]
+    .find((item) => item.textContent?.includes("researcher"))!;
+  await act(async () => researcher.click());
+
+  expect(mocks.chooseAgent).toHaveBeenCalledWith("researcher");
+  expect(mocks.newSession).not.toHaveBeenCalled();
+  expect(mocks.setComposerText).not.toHaveBeenCalled();
+  expect(mocks.composerState).toEqual({ text: "Keep this draft", attachments: [{}] });
+  expect(mocks.toast).not.toHaveBeenCalled();
 });
 
 it("appears before session creation, then disappears once started or inside a built-in channel", async () => {

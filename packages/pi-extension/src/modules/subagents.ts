@@ -351,7 +351,8 @@ function registerParentTools(pi: ExtensionAPI, bridge: AgentHarnessBridge): void
     label: "Message an agent",
     description:
       "Send a message to an agent you started, addressed by its sessionId. A running agent receives it as its next instruction; an idle agent starts a new run and the result carries the new runId. " +
-      "An agent whose status is needs_input is paused on a question, and your message answers it: one of the choices for a select, yes or no for a confirm, the text itself for an input or editor — anything else is refused with the question restated.",
+      "An agent whose status is needs_input is paused on a question, and your message answers it: one of the choices for a select, yes or no for a confirm, the text itself for an input or editor — anything else is refused with the question restated. " +
+      "The result's delivery says what became of the message: queued (waiting its turn, or behind a run the agent is finishing), delivered (the agent's engine accepted it as its next turn), answered (it settled an open question), or refused (the engine would not take it; error says why and the attempt is recorded as a failed run).",
     promptSnippet: "Continue a conversation with an agent you started, or answer its question, by sessionId",
     promptGuidelines: [
       "Use send_agent_message with sessionId to continue a conversation with an agent; set interrupt true only when it must change course now.",
@@ -377,9 +378,9 @@ function registerParentTools(pi: ExtensionAPI, bridge: AgentHarnessBridge): void
     label: "Inspect the fleet",
     description:
       "The work going on under this session, as one tree: the agents you started, the agents they started, and the background commands any of them — you included — left running or finished. " +
-      "It is the same tree, in the same words, that the person sees in the fleet column. Each row says its kind (agent or command), its name, its status word (Working, Asking, Needs you, Done, Failed, Ended, Waiting), " +
+      "It is the same tree, in the same words, that the person sees in the fleet column. Each row says its kind (agent or command), its name, its status word (Working, Asking, Blocked, Done, Failed, Ended, Waiting), " +
       "how long it has run, and one line — what it is doing, or how it ended — plus the id to follow it with: an agent row's runId for inspect_agent, a command row's taskId for task_output. " +
-      "Asking means an agent is paused on a question you can answer with send_agent_message; Needs you means it ended asking you something. " +
+      "Asking means an agent is live and paused on a question you can answer with send_agent_message; Blocked means it ended without finishing, and its final message says what it could not do or is asking you. " +
       `At most ${String(AGENT_FLEET_ROWS_MAX)} rows, the deepest cut first; the result says how many were left out. Read-only: it wakes nothing and sends nothing.`,
     promptSnippet: "See everything running under you — agents and background commands — as the tree the person sees",
     promptGuidelines: [

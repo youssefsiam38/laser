@@ -44,7 +44,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { goalExtensionPath, goalStateFromEntries } from "@lasercode/pi-goal";
 import { createCommandBus, createLaserExtension, createPromptProvenanceObserver, toSessionGoal, type LaserExtensionOptions } from "@lasercode/pi-extension";
-import { ErrorCodes, ProtocolError, PRODUCT_NAME, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE } from "@lasercode/protocol";
+import { ErrorCodes, ProtocolError, PRODUCT_NAME, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE, SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE } from "@lasercode/protocol";
 import type {
   CommandInfo,
   ContentBlock,
@@ -55,6 +55,7 @@ import type {
   ModelRef,
   PiExtensionCommand,
   PromptInfo,
+  SessionFirstTurnOverrides,
   SessionGoal,
   SessionState,
   SessionUpdate,
@@ -72,11 +73,16 @@ import { applyDurableOverrides, type EngineSettingsOverrides } from "../settings
 import { WebSearchService } from "../web-search.js";
 import {
   DriverUnavailableError,
+  type ClearedQueue,
   type DriverAgentOptions,
   type DriverEvent,
   type DriverListener,
   type DriverOpenOptions,
+  type DriverInvocationRef,
+  type ExtensionModelWorkHandler,
+  type FirstTurnOptions,
   type PromptOptions,
+  type SessionAdmissionLease,
   type SessionDriver,
 } from "../driver.js";
 import { createUiBridge, type UiBridge } from "../ui-bridge.js";
@@ -86,8 +92,13 @@ import { ENGINE_BUILTIN_TOOLS, ensureWorkspaceSessionCwd, filterSkills } from ".
 import { defaultAgentInstructions } from "../agents/engine-instructions.js";
 import { createInstructionTemplateExtension } from "../agents/instruction-templates.js";
 import { modelUnavailableMessage } from "../agents/harness.js";
+import { StableExtensionAdmission } from "./stable-extension-admission.js";
 
 type PiModel = ReturnType<ModelRuntime["getModels"]>[number];
+
+async function disposeRuntime(runtime: AgentSessionRuntime | undefined): Promise<void> {
+  if (runtime) await runtime.dispose().catch(() => {});
+}
 
 export class StableSdkDriver implements SessionDriver {
   readonly kind = "stable-sdk" as const;
@@ -100,6 +111,19 @@ export class StableSdkDriver implements SessionDriver {
   private readonly extensionBus = createCommandBus();
   private accountUsage: SessionState["accountUsage"];
   private runtime: AgentSessionRuntime | undefined;
+  private runtimeFactory: CreateAgentSessionRuntimeFactory | undefined;
+  private runtimeAgent: DriverAgentOptions | undefined;
+  private runtimeModelOverride: ModelRef | undefined;
+  private runtimeThinkingOverride: ThinkingLevel | undefined;
+  /** Person-selected values, distinct from Pi's automatic initial entries. */
+  private explicitModelOverride: ModelRef | undefined;
+  private explicitThinkingOverride: ThinkingLevel | undefined;
+  private firstTurnRollback: {
+    agent: DriverAgentOptions | undefined;
+    modelOverride: ModelRef | undefined;
+    thinkingOverride: ThinkingLevel | undefined;
+  } | undefined;
+  private preparedAgentRecord: DriverAgentOptions["record"] | undefined;
   private unsubscribe: (() => void) | undefined;
   private cwd = "";
   private projectTrusted: boolean | undefined;
@@ -111,19 +135,45 @@ export class StableSdkDriver implements SessionDriver {
    * (see the header). It leaves first if anything else arrives, so the order
    * of updates a client sees never changes.
    */
-  private heldUserEnd: { update: Extract<SessionUpdate, { kind: "message_end" }>; message: unknown } | undefined;
+  private heldUserEnd: {
+    update: Extract<SessionUpdate, { kind: "message_end" }>;
+    message: unknown;
+    invocation?: DriverInvocationRef;
+  } | undefined;
   /**
    * The current engine preflight. Every invocation reserves this slot; queued
    * waiters re-check it after each await and claim it one at a time, so an idle
    * gap can never admit two prompts before `isStreaming` flips.
    */
   private promptPreflight: Promise<void> | undefined;
+  private readonly extensionAdmission = new StableExtensionAdmission();
 
-  constructor() {
+  /**
+   * The prompt invocation each open dialog was raised under, by dialog id.
+   * A dialog is raised from inside the tool that asks — inside the admission
+   * helper's invocation context — but settles from whatever context closes
+   * it (a timer, an abort, disposal), so the resolution reads the stamp its
+   * request took rather than the context it fires in. Pruned against the
+   * bridge's own pending list whenever a dialog is raised, so a closed
+   * dialog never holds a stamp for long.
+   */
+  private readonly dialogInvocations = new Map<string, DriverInvocationRef>();
+
+  constructor(private readonly extraExtensionFactories: InlineExtension[] = []) {
     this.ui = createUiBridge(
       {
-        onRequest: (request) => this.emit({ type: "ui_request", request }),
-        onEvent: (event) => this.emit({ type: "ui_event", event }),
+        onRequest: (request) => {
+          const open = new Set(this.ui.pending().map((pending) => pending.id));
+          for (const id of [...this.dialogInvocations.keys()]) if (!open.has(id)) this.dialogInvocations.delete(id);
+          const invocation = this.extensionAdmission.eventInvocation()?.ref;
+          if (invocation) this.dialogInvocations.set(request.id, invocation);
+          this.emit({ type: "ui_request", request, ...(invocation ? { invocation } : {}) });
+        },
+        onEvent: (event) => {
+          const invocation = event.method === "dialogResolved" ? this.dialogInvocations.get(event.id) : undefined;
+          if (event.method === "dialogResolved") this.dialogInvocations.delete(event.id);
+          this.emit({ type: "ui_event", event, ...(invocation ? { invocation } : {}) });
+        },
       },
       // Lazy: the bridge outlives every session, and no session exists yet here.
       { pendingToolCallId: () => this.currentToolCallId() },
@@ -140,12 +190,15 @@ export class StableSdkDriver implements SessionDriver {
     const agentDir = options.agentDir ?? getAgentDir();
     this.agentDir = agentDir;
     const enabled = new Set<FeatureId>(options.features ?? ["subagents", "goals"]);
-    const agent = options.agent;
+    this.runtimeAgent = options.agent;
     // Web search is an extension tool: offered whenever its feature is on.
     // Every agent has every tool (D-144), so no definition narrows this.
     const searchWanted = enabled.has("web-search");
     const search = searchWanted ? new WebSearchService(agentDir) : undefined;
-    const createCompanion = (requestProvenance: ReturnType<typeof createPromptProvenanceObserver>) => {
+    const createCompanion = (
+      requestProvenance: ReturnType<typeof createPromptProvenanceObserver>,
+      agent: DriverAgentOptions | undefined,
+    ) => {
       const companion: LaserExtensionOptions = {
         requestProvenance,
         ...(search ? { webSearch: search.search.bind(search) } : {}),
@@ -172,8 +225,11 @@ export class StableSdkDriver implements SessionDriver {
     };
 
     const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
+      const agent = this.runtimeAgent;
+      const modelOverride = this.runtimeModelOverride;
+      const thinkingOverride = this.runtimeThinkingOverride;
       const requestProvenance = createPromptProvenanceObserver();
-      const laser = createCompanion(requestProvenance);
+      const laser = createCompanion(requestProvenance, agent);
       let liveSession: AgentSession | undefined;
       const settingsManager = SettingsManager.create(cwd, agentDir, {
         // Laser never asks the engine to discover `<cwd>/.pi`. Project
@@ -217,7 +273,7 @@ export class StableSdkDriver implements SessionDriver {
           }),
         );
       }
-      extensionFactories.push(laser);
+      extensionFactories.push(...this.extraExtensionFactories, laser);
 
       const services = await createAgentSessionServices({
         cwd,
@@ -240,7 +296,13 @@ export class StableSdkDriver implements SessionDriver {
         },
       });
       requestProvenance.setResourceLoader(services.resourceLoader);
-      const selected = agent ? await resolveAgentModel(services.modelRuntime, agent) : undefined;
+      const selected = modelOverride
+        ? services.modelRuntime.getModels().find((model) => model.provider === modelOverride.provider && model.id === modelOverride.id)
+        : agent ? await resolveAgentModel(services.modelRuntime, agent) : undefined;
+      if (modelOverride && !selected) {
+        throw new DriverUnavailableError(this.kind, `unknown model ${modelOverride.provider}/${modelOverride.id}`);
+      }
+      const selectedThinking = thinkingOverride ?? agent?.definition.thinkingLevel ?? undefined;
       const created = await createAgentSessionFromServices({
         services,
         sessionManager,
@@ -250,7 +312,7 @@ export class StableSdkDriver implements SessionDriver {
         // used: it is an allowlist that would also deny every extension tool
         // (the harness's, background work's, the goal's, web search's).
         ...(selected ? { model: selected } : {}),
-        ...(agent?.definition.thinkingLevel ? { thinkingLevel: agent.definition.thinkingLevel } : {}),
+        ...(selectedThinking ? { thinkingLevel: selectedThinking } : {}),
       });
       // The definition's built-ins beyond the engine's default four (grep,
       // find, ls) are switched on here, not through a `defaultTools` setting:
@@ -261,6 +323,7 @@ export class StableSdkDriver implements SessionDriver {
       return { ...created, services, diagnostics: services.diagnostics };
     };
 
+    const agent = this.runtimeAgent;
     // Beam and Chat run in the app's own workspace. The engine records the
     // directory in the session header and refuses to build a runtime whose
     // stored directory is gone, so a workspace that vanished (a moved state
@@ -289,6 +352,12 @@ export class StableSdkDriver implements SessionDriver {
     const sessionManager = options.sessionPath
       ? SessionManager.open(options.sessionPath)
       : SessionManager.create(options.cwd, options.sessionDir);
+    const openingEntries = sessionManager.getEntries() as Array<{ type?: unknown; customType?: unknown; data?: unknown }>;
+    const savedOverrides = openingEntries.findLast((entry) => entry.type === "custom" && entry.customType === SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE)?.data;
+    const overrides = savedOverrides && typeof savedOverrides === "object" ? savedOverrides as SessionFirstTurnOverrides : undefined;
+    this.explicitModelOverride = overrides?.model;
+    this.explicitThinkingOverride = overrides?.thinkingLevel;
+    this.runtimeFactory = createRuntime;
     const runtime = await createAgentSessionRuntime(createRuntime, {
       cwd: sessionManager.getCwd(),
       agentDir,
@@ -318,24 +387,152 @@ export class StableSdkDriver implements SessionDriver {
     this.unsubscribe?.();
     // A replaced runtime carries none of the old session's in-flight tool calls.
     this.toolCalls.clear();
+    const generation = this.extensionAdmission.install(session);
     await session.bindExtensions({
       mode: "rpc",
       uiContext: this.ui.context,
       abortHandler: () => void session.abort(),
-      onError: (error: ExtensionError) =>
-        this.push({ kind: "extension_error", extension: error.extensionPath, message: error.error }),
+      onError: (error: ExtensionError) => {
+        // Attribution comes only from the async context the error was raised
+        // in — the causal invocation the extension called from, if any —
+        // never from the error text. The engine's own send-rejection
+        // diagnostic runs in the sender's context, so a refused top-level
+        // send arrives unowned; the harness leaves unowned Stable
+        // diagnostics alone because the completion promise already carries
+        // that failure. The update itself is always pushed, so the error
+        // stays visible in the transcript.
+        const invocation = this.extensionAdmission.diagnosticInvocation(generation);
+        this.push(
+          { kind: "extension_error", extension: error.extensionPath, message: error.error },
+          invocation,
+        );
+      },
     });
-    this.unsubscribe = session.subscribe((event) => this.onSessionEvent(event));
+    this.unsubscribe = session.subscribe((event) => this.onSessionEvent(event, generation));
+  }
+
+  /** Rebuild this runtime around the same manager; never two live writers. */
+  private async replaceRuntime(
+    agent: DriverAgentOptions | undefined,
+    modelOverride: ModelRef | undefined,
+    thinkingOverride: ThinkingLevel | undefined,
+  ): Promise<void> {
+    const current = this.runtime;
+    const factory = this.runtimeFactory;
+    if (!current || !factory) throw new DriverUnavailableError(this.kind, "no session open");
+    const manager = current.session.sessionManager;
+    const effective = this.state();
+    const previous = {
+      agent: this.runtimeAgent,
+      modelOverride: effective.model ?? undefined,
+      thinkingOverride: effective.thinkingLevel,
+    };
+    const previousSessionFile = manager.getSessionFile();
+    const create = () => createAgentSessionRuntime(factory, {
+      cwd: manager.getCwd(),
+      agentDir: this.agentDir,
+      sessionManager: manager,
+      sessionStartEvent: {
+        type: "session_start" as const,
+        reason: "resume" as const,
+        ...(previousSessionFile ? { previousSessionFile } : {}),
+      },
+    });
+
+    this.flushHeldUserEnd();
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
+    this.extensionAdmission.invalidate();
+    await current.dispose();
+    this.runtime = undefined;
+    this.runtimeAgent = agent;
+    this.runtimeModelOverride = modelOverride;
+    this.runtimeThinkingOverride = thinkingOverride;
+    let replacement: AgentSessionRuntime | undefined;
+    try {
+      replacement = await create();
+      this.runtime = replacement;
+      await this.applySession();
+    } catch (error) {
+      const failedUnsubscribe = this.unsubscribe as (() => void) | undefined;
+      failedUnsubscribe?.();
+      this.unsubscribe = undefined;
+      await disposeRuntime(this.runtime);
+      this.runtime = undefined;
+      this.runtimeAgent = previous.agent;
+      this.runtimeModelOverride = previous.modelOverride;
+      this.runtimeThinkingOverride = previous.thinkingOverride;
+      try {
+        this.runtime = await create();
+        await this.applySession();
+      } catch (rollbackError) {
+        this.runtime = undefined;
+        throw new AggregateError([error, rollbackError], "Could not prepare the selected agent or restore this conversation.");
+      }
+      throw error;
+    }
+  }
+
+  async prepareFirstTurn(options: FirstTurnOptions): Promise<void> {
+    if (this.promptPreflight) {
+      throw new ProtocolError(ErrorCodes.InvalidParams, "This conversation is already accepting its first prompt.");
+    }
+    if (this.firstTurnRollback || this.preparedAgentRecord) {
+      throw new ProtocolError(ErrorCodes.InvalidParams, "A first-turn agent choice is already being prepared for this conversation.");
+    }
+    // Restoration is an exact effective-state snapshot, not another default
+    // resolution. Explicit provenance governs the selected agent only.
+    const effective = this.state();
+    const previous = {
+      agent: this.runtimeAgent,
+      modelOverride: effective.model ?? undefined,
+      thinkingOverride: effective.thinkingLevel,
+    };
+    await this.replaceRuntime(
+      options.agent,
+      this.explicitModelOverride,
+      options.thinkingLevel ?? this.explicitThinkingOverride,
+    );
+    this.firstTurnRollback = previous;
+    this.preparedAgentRecord = options.agent.record;
+  }
+
+  async rollbackFirstTurn(): Promise<void> {
+    const previous = this.firstTurnRollback;
+    if (!previous) return;
+    await this.replaceRuntime(previous.agent, previous.modelOverride, previous.thinkingOverride);
+    this.firstTurnRollback = undefined;
+    this.preparedAgentRecord = undefined;
+  }
+
+  /** Persist the replacement identity at Pi's exact prompt-acceptance boundary. */
+  private commitPreparedFirstTurn(): void {
+    const record = this.preparedAgentRecord;
+    if (!record) return;
+    // Acceptance is monotonic even if persistence reports an I/O error: never
+    // leave a rollback armed for a prompt the engine already owns.
+    this.preparedAgentRecord = undefined;
+    this.firstTurnRollback = undefined;
+    this.session().sessionManager.appendCustomEntry(SESSION_AGENT_ENTRY_TYPE, record);
   }
 
   async dispose(): Promise<void> {
     this.flushHeldUserEnd();
     this.unsubscribe?.();
+    this.extensionAdmission.invalidate();
     this.unsubscribe = undefined;
     this.toolCalls.clear();
     this.ui.dispose();
     await this.runtime?.dispose();
     this.runtime = undefined;
+    this.runtimeFactory = undefined;
+    this.runtimeAgent = undefined;
+    this.runtimeModelOverride = undefined;
+    this.runtimeThinkingOverride = undefined;
+    this.explicitModelOverride = undefined;
+    this.explicitThinkingOverride = undefined;
+    this.firstTurnRollback = undefined;
+    this.preparedAgentRecord = undefined;
     this.emit({ type: "closed", reason: "disposed" });
     this.listeners.clear();
   }
@@ -343,6 +540,10 @@ export class StableSdkDriver implements SessionDriver {
   subscribe(listener: DriverListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  setExtensionModelWorkHandler(handler: ExtensionModelWorkHandler | undefined): void {
+    this.extensionAdmission.setHandler(handler);
   }
 
   // -------------------------------------------------------------------- state
@@ -391,9 +592,26 @@ export class StableSdkDriver implements SessionDriver {
     return toSessionGoal(goalStateFromEntries(this.session().sessionManager.getBranch()));
   }
 
-  async goalAction(action: GoalAction): Promise<SessionGoal | null> {
-    activateGoalTools(this.session());
-    await this.session().prompt(goalCommand(action));
+  async goalAction(action: GoalAction, options?: { admissionLease?: SessionAdmissionLease; onAccepted?: () => void }): Promise<SessionGoal | null> {
+    const session = this.session();
+    const nativePrompt = this.extensionAdmission.nativePrompt(session);
+    activateGoalTools(session);
+    let accepted = false;
+    const context = this.extensionAdmission.createInvocation({
+      origin: "user",
+      task: goalActionTask(action),
+      ...(options?.admissionLease ? { admissionLease: options.admissionLease } : {}),
+      accept: () => {
+        if (accepted) return;
+        accepted = true;
+        options?.onAccepted?.();
+      },
+    });
+    await this.extensionAdmission.runInvocation(
+      context,
+      () => nativePrompt(goalCommand(action), { preflightResult: () => context.accept() }),
+      false,
+    );
     const goal = await this.goalState();
     this.emit({ type: "extension", message: { type: "lasercode/goal/state", goal } });
     return goal;
@@ -432,11 +650,42 @@ export class StableSdkDriver implements SessionDriver {
     };
     const streaming = session.isStreaming;
     let accepted = false;
+    const accept = () => {
+      if (accepted) return;
+      accepted = true;
+      finishPreflight();
+      try {
+        // The replacement record must precede Pi's user-message append.
+        // Like every acceptance observer, a disk failure is reported but
+        // cannot revoke a prompt the engine already owns.
+        this.commitPreparedFirstTurn();
+      } catch (error) {
+        console.error(`${PRODUCT_NAME} worker: could not persist the accepted agent choice:`, error instanceof Error ? error.message : error);
+      }
+      if (!options?.onAccepted) return;
+      try {
+        // Observing acceptance must never prevent the accepted engine run.
+        options.onAccepted();
+      } catch (error) {
+        console.error(`${PRODUCT_NAME} worker: could not publish an accepted prompt:`, error instanceof Error ? error.message : error);
+      }
+    };
+    const context = this.extensionAdmission.createInvocation({
+      ...(options?.ownerRunId ? { ownerRunId: options.ownerRunId } : {}),
+      // The run record's word, handed down by the harness: a send made from
+      // inside this turn inherits it, so a parent-started run's extension
+      // work never reads as the person's.
+      origin: options?.origin ?? "user",
+      task: text,
+      ...(options?.admissionLease ? { admissionLease: options.admissionLease } : {}),
+      accept,
+    });
+    options?.onInvocation?.(context.ref);
     try {
       if (streaming && !options?.streamingBehavior) {
         return { accepted: false, queued: false };
       }
-      await session.prompt(text, {
+      await this.extensionAdmission.runInvocation(context, () => session.prompt(text, {
         ...(images.length > 0 ? { images } : {}),
         ...(options?.streamingBehavior ? { streamingBehavior: options.streamingBehavior } : {}),
         ...(options?.expandPromptTemplates !== undefined ? { expandPromptTemplates: options.expandPromptTemplates } : {}),
@@ -444,17 +693,10 @@ export class StableSdkDriver implements SessionDriver {
         // we still own and a user message the engine owns. `session.prompt()`
         // itself resolves only after the whole turn, including retries.
         preflightResult: (preflightAccepted: boolean) => {
-          if (preflightAccepted) accepted = true;
-          finishPreflight();
-          if (!preflightAccepted || !options?.onAccepted) return;
-          try {
-            // Observing acceptance must never prevent the accepted engine run.
-            options.onAccepted();
-          } catch (error) {
-            console.error(`${PRODUCT_NAME} worker: could not publish an accepted prompt:`, error instanceof Error ? error.message : error);
-          }
+          if (preflightAccepted) accept();
+          else finishPreflight();
         },
-      });
+      }), true);
     } catch (error) {
       // Pi can throw the same busy-shaped error after reporting true. Acceptance
       // is monotonic: only a busy error from before acknowledgement is refusal.
@@ -477,8 +719,27 @@ export class StableSdkDriver implements SessionDriver {
     await this.session().followUp(text, images.length > 0 ? images : undefined);
   }
 
-  async clearQueue(): Promise<{ steering: string[]; followUp: string[] }> {
-    return this.session().clearQueue();
+  /**
+   * Empty both of the engine's lanes and say what they held. The session's
+   * own `clearQueue()` lists only the user texts it queued itself
+   * (`_steeringMessages` / `_followUpMessages`); an extension's `sendMessage`
+   * with `deliverAs` behind a running turn goes straight to agent-core
+   * (`agent.steer()` / `agent.followUp()`, agent-session.js `sendCustomMessage`)
+   * and is dropped by `agent.clearAllQueues()` without ever being listed. Those
+   * are read here first, from agent-core's queues (`Agent.steeringQueue` /
+   * `followUpQueue`, each a `PendingMessageQueue` with a public `messages`
+   * array in the installed dist; declared private in its typings), and
+   * reported as `custom` so the harness can carry them to a successor.
+   */
+  async clearQueue(): Promise<ClearedQueue> {
+    const session = this.session();
+    const queues = session.agent as unknown as { steeringQueue?: { messages?: unknown[] }; followUpQueue?: { messages?: unknown[] } };
+    const custom = {
+      steering: customQueueTexts(queues.steeringQueue?.messages),
+      followUp: customQueueTexts(queues.followUpQueue?.messages),
+    };
+    const cleared = session.clearQueue();
+    return custom.steering.length > 0 || custom.followUp.length > 0 ? { ...cleared, custom } : cleared;
   }
 
   async abort(): Promise<void> {
@@ -542,12 +803,24 @@ export class StableSdkDriver implements SessionDriver {
       .find((m) => m.provider === model.provider && m.id === model.id);
     if (!match) throw new DriverUnavailableError(this.kind, `unknown model ${model.provider}/${model.id}`);
     await session.setModel(match);
+    this.explicitModelOverride = { ...model };
+    this.persistExplicitOverrides();
     return this.state();
   }
 
   async setThinkingLevel(level: ThinkingLevel): Promise<SessionState> {
     this.session().setThinkingLevel(level);
+    this.explicitThinkingOverride = level;
+    this.persistExplicitOverrides();
     return this.state();
+  }
+
+  private persistExplicitOverrides(): void {
+    const data: SessionFirstTurnOverrides = {
+      ...(this.explicitModelOverride ? { model: this.explicitModelOverride } : {}),
+      ...(this.explicitThinkingOverride ? { thinkingLevel: this.explicitThinkingOverride } : {}),
+    };
+    this.session().sessionManager.appendCustomEntry(SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE, data);
   }
 
   // ------------------------------------------------------------------ session
@@ -783,11 +1056,13 @@ export class StableSdkDriver implements SessionDriver {
     for (const listener of this.listeners) listener(event);
   }
 
-  private push(update: SessionUpdate): void {
-    this.emit({ type: "update", update });
+  private push(update: SessionUpdate, invocation?: DriverInvocationRef): void {
+    this.emit({ type: "update", update, ...(invocation ? { invocation } : {}) });
   }
 
-  private onSessionEvent(event: AgentSessionEvent): void {
+  private onSessionEvent(event: AgentSessionEvent, generation: number): void {
+    const invocation = this.extensionAdmission.eventInvocation(generation);
+    if (event.type === "agent_start" && invocation) invocation.started = true;
     this.toolCalls.note(event);
     this.flushHeldUserEnd();
     const update = mapEvent(event);
@@ -795,11 +1070,15 @@ export class StableSdkDriver implements SessionDriver {
       // Pi writes the entry right after this listener returns; the id is
       // readable one microtask from now (header). Nothing else is pushed for
       // a user message_end, so holding it changes no order.
-      this.heldUserEnd = { update, message: event.message };
+      this.heldUserEnd = {
+        update,
+        message: event.message,
+        ...(invocation ? { invocation: invocation.ref } : {}),
+      };
       queueMicrotask(() => this.flushHeldUserEnd());
       return;
     }
-    if (update) this.push(update);
+    if (update) this.emit({ type: "update", update, ...(invocation ? { invocation: invocation.ref } : {}) });
     // These change visible session state, so follow them with a state snapshot.
     if (
       event.type === "agent_end" ||
@@ -819,7 +1098,7 @@ export class StableSdkDriver implements SessionDriver {
     if (!held) return;
     this.heldUserEnd = undefined;
     const entry = this.persistedEntryOf(held.message);
-    this.push(entry ? { ...held.update, entry } : held.update);
+    this.push(entry ? { ...held.update, entry } : held.update, held.invocation);
   }
 
   /**
@@ -986,6 +1265,20 @@ function asIdSet(value: unknown): ReadonlySet<string> | undefined {
   return value as ReadonlySet<string>;
 }
 
+function goalActionTask(action: GoalAction): string {
+  switch (action.action) {
+    case "start":
+    case "edit":
+      return action.objective;
+    case "resume":
+      return "Resume goal";
+    case "pause":
+      return "Pause goal";
+    case "clear":
+      return "Clear goal";
+  }
+}
+
 // ------------------------------------------------------------------- mapping
 
 function isBusyError(error: unknown): boolean {
@@ -1011,6 +1304,33 @@ function split(content: ContentBlock[]): { text: string; images: ImageContent[] 
     .join("\n");
   const images = content.filter((b): b is ImageContent => b.type === "image");
   return { text, images };
+}
+
+/**
+ * The text of every custom message in one of agent-core's queues, in queue
+ * order. User messages there are the session's own queued texts, already
+ * reported by its `clearQueue()`; only `role: "custom"` entries (an
+ * extension's `sendMessage` while a turn ran) are invisible to it. A custom
+ * message carries a string or content blocks; images have no text and are
+ * left out — nothing shipped queues one.
+ */
+function customQueueTexts(messages: unknown[] | undefined): string[] {
+  if (!Array.isArray(messages)) return [];
+  const texts: string[] = [];
+  for (const message of messages) {
+    if (!message || typeof message !== "object" || (message as { role?: unknown }).role !== "custom") continue;
+    const content = (message as { content?: unknown }).content;
+    const text = typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content
+            .filter((block): block is { type: "text"; text: string } => !!block && typeof block === "object" && (block as { type?: unknown }).type === "text" && typeof (block as { text?: unknown }).text === "string")
+            .map((block) => block.text)
+            .join("\n")
+        : "";
+    if (text.trim() !== "") texts.push(text);
+  }
+  return texts;
 }
 
 function roleOf(message: unknown): "user" | "assistant" | "tool" | "custom" {

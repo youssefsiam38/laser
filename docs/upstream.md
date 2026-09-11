@@ -12,6 +12,7 @@ small and self-contained (`AGENTS.md` §6).
 | pi-gpt-transcribe | non-tui entry point for hosts that provide the widget contract | M8-T2 | — | not filed |
 | earendil-works/pi | `SettingsManager.applyOverrides()` is not durable: `reload()` and `setProjectTrusted()` recompute settings from the two files and drop it, and `createAgentSessionServices()` reloads the resource loader (hence settings) before the session exists. Fix: retain applied overrides and re-merge them after every recompute, or expose a hook to re-apply. Local workaround: `packages/worker/src/settings-overrides.ts`. | M13-T12 | — | not filed |
 | earendil-works/pi | `dist/main.js` → `dist/experimental/server.js` imports `@earendil-works/pi-server`, undeclared in `package.json`; resolves only under npm's flat hoisting, fails under pnpm/strict installers with ERR_MODULE_NOT_FOUND. Fix: declare the dependency (or lazy-import the experimental server). Local workaround: `packageExtensions` in `pnpm-workspace.yaml`. | M0-T4 | — | not filed |
+| earendil-works/pi | `ExtensionAPI.sendMessage` / `sendUserMessage` return `void`, so neither an extension nor a host embedding the SDK can observe whether a send was accepted or refused; the underlying promise is swallowed and a rejection reaches only `emitError`. Fix: return the operation promise from the loader API and the core binding, and widen `SendMessageHandler` / `SendUserMessageHandler` to `Promise<void>`. Local patch: `patches/@earendil-works__pi-coding-agent@0.85.0.patch`. | M13-T93 | — | not filed |
 
 ---
 
@@ -33,6 +34,68 @@ Written and reviewed here, **not filed**. Each is small, self-contained, and
 justified on the upstream project's own terms (extensibility, headless-host
 support) — never on ours. Nothing about laser appears in a patch, a commit
 message or a PR body.
+
+### pi-coding-agent · awaitable extension sends (M13-T93)
+
+**Against:** `github.com/earendil-works/pi` @ 0.85.0. Local exact-version patch:
+`patches/@earendil-works__pi-coding-agent@0.85.0.patch`, applied through pnpm.
+
+**The problem, in the project's terms.** `ExtensionAPI.sendMessage` and
+`ExtensionAPI.sendUserMessage` are declared `void`, but the work they start is a
+promise. `AgentSession.sendCustomMessage` and `AgentSession.sendUserMessage` are
+`async`, and the operation behind them can be refused outright: `prompt()`
+throws while a compaction is in progress, throws when the agent is already
+processing and no `streamingBehavior` was given, and throws when no model is
+selected. The core binding in `dist/core/agent-session.js` discards that promise
+with `.catch()`, converting every refusal into an `emitError` diagnostic, and
+the loader in `dist/core/extensions/loader.js` drops the return value on its way
+out to the extension.
+
+For a terminal user that is the right default: the error is printed and the
+prompt carries on. For an extension — and for a headless host embedding the SDK
+— it makes every send fire-and-forget. There is no supported way to await
+delivery, to sequence a second send after the first has been accepted, or to
+distinguish "accepted" from "refused" other than by subscribing to the error bus
+and matching on an `event` string and a message text. An extension that must not
+continue until its message is actually in a queue cannot find out that it never
+arrived.
+
+**The change.** Return the operation instead of discarding it, in the three
+places that already hold it:
+
+- `dist/core/extensions/loader.js` — `return runtime.sendMessage(…)` and
+  `return runtime.sendUserMessage(…)` rather than calling and dropping;
+- `dist/core/agent-session.js` — `bindCore` keeps the promise, attaches the same
+  `emitError` diagnostic as a non-replacing `then(undefined, …)` handler (inside
+  a `try`/`catch`, so a failing diagnostic cannot mask the original rejection),
+  and returns the promise;
+- `dist/core/extensions/types.d.ts` — `SendMessageHandler` and
+  `SendUserMessageHandler` return `Promise<void>` instead of `void`.
+
+**Why it is safe for existing callers.** A returned promise is ignorable. Every
+call site that ignores the result today behaves exactly as it did: the
+diagnostic still fires, nothing new throws synchronously, no argument or
+overload changes, and a `Promise<void>`-returning implementation satisfies the
+old `void` declaration. The only new obligation is the ordinary one for any
+promise-returning API — a caller that *takes* the promise owns its rejection —
+and the retained `emitError` handler means an ignored rejection is still both
+reported and handled rather than becoming an unhandled rejection.
+
+**Test coverage.** `packages/worker/test/extension-awaitable-patch.test.ts`
+exercises the patched dependency itself rather than a mock: it imports the
+installed `dist/core/extensions/loader.js` and asserts the extension API returns
+the *identical* promise the runtime handed it; it calls the installed
+`AgentSession.prototype._bindExtensionCore` with only the collaborators it reads
+at bind time and asserts the bound actions return the original operations, that
+an ignored rejection still reaches `emitError`, and that it raises no
+`unhandledRejection`; and it drives a real `AgentSession` whose extension
+answers the `input` hook with `handled`, proving an extension-sourced send
+reported as accepted with no `agent_start` and no `agent_settled` behind it.
+
+**Status: not filed.** A future contribution should propose this as the upstream
+default rather than something each embedder patches in: knowing whether a send
+was accepted is as useful to a terminal extension as to a headless host, and the
+diagnostic path stays exactly where it is.
 
 ### pi-gpt-transcribe · a non-tui entry point (M8-T2)
 

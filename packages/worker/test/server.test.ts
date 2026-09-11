@@ -3,14 +3,15 @@
  * load, dialog notifications, and error mapping. The real driver is covered
  * by stable-sdk.*.test.ts.
  */
-import { afterEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PRODUCT_NAME, PROJECT_DIR_NAME } from "@lasercode/protocol";
-import type { JsonRpcMessage, SessionState, UiDialogRequest } from "@lasercode/protocol";
+import { PRODUCT_NAME, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE } from "@lasercode/protocol";
+import type { ContentBlock, JsonRpcMessage, SessionState, UiDialogRequest } from "@lasercode/protocol";
 import { WorkerServer } from "../src/server.js";
-import type { DriverEvent, DriverListener, SessionDriver } from "../src/driver.js";
+import type { DriverEvent, DriverListener, ExtensionModelWorkHandler, FirstTurnOptions, PromptOptions, SessionDriver } from "../src/driver.js";
+import { fallbackDefaultAgent, fallbackSnapshot } from "../src/agents/definitions.js";
 
 class FakeDriver implements SessionDriver {
   readonly kind = "stable-sdk" as const;
@@ -20,6 +21,21 @@ class FakeDriver implements SessionDriver {
   answered: unknown[] = [];
   extensionCommands: unknown[] = [];
   disposed = false;
+  prompted: unknown[][] = [];
+  prepared: FirstTurnOptions[] = [];
+  prepareGate: Promise<void> | undefined;
+  prepareObserved: (() => void) | undefined;
+  prepareFailure: Error | undefined;
+  generation = "original";
+  routed: Array<{ route: string; generation: string; content?: unknown; options?: PromptOptions }> = [];
+  rollbacks = 0;
+  acceptPrompt = true;
+  /** Hold every accepted prompt until `releasePrompt()`, streaming meanwhile; `nextHeld()` is the barrier. */
+  holdPrompts = false;
+  private held: Array<{ resolve: (result: { accepted: boolean; queued: boolean }) => void }> = [];
+  private heldWaiters: Array<() => void> = [];
+  /** Pi's two lanes as `clearQueue()` reports them: what steer/follow_up and a queued prompt put there. */
+  engine = { steering: [] as string[], followUp: [] as string[] };
   private st: SessionState = {
     path: "/tmp/fake/s1.jsonl",
     id: "s1",
@@ -56,18 +72,63 @@ class FakeDriver implements SessionDriver {
   reloadSettings?: () => Promise<{ deferred: boolean }> = async () => { this.reloads += 1; return { deferred: false }; };
   subscribe(l: DriverListener) { this.listeners.add(l); return () => this.listeners.delete(l); }
   emit(e: DriverEvent) { for (const l of this.listeners) l(e); }
-  async prompt() {
+  async prepareFirstTurn(options: FirstTurnOptions) {
+    this.prepared.push(options);
+    this.prepareObserved?.();
+    await this.prepareGate;
+    if (this.prepareFailure) throw this.prepareFailure;
+    this.generation = "selected";
+  }
+  async rollbackFirstTurn() { this.rollbacks += 1; this.generation = "original"; }
+  async prompt(content: unknown[], options?: PromptOptions) {
+    this.prompted.push(content);
+    this.routed.push({ route: "prompt", generation: this.generation, content, ...(options ? { options } : {}) });
+    if (!this.acceptPrompt) return { accepted: false, queued: false };
+    // Like Pi: an explicitly queued prompt while streaming goes into that
+    // lane, is accepted at once, and answers before the turn it joins ends.
+    if (this.st.isStreaming && options?.streamingBehavior) {
+      (options.streamingBehavior === "steer" ? this.engine.steering : this.engine.followUp).push(textOf(content as ContentBlock[]));
+      options.onAccepted?.();
+      this.emit({ type: "update", update: { kind: "queue_update", steering: [...this.engine.steering], followUp: [...this.engine.followUp] } });
+      return { accepted: true, queued: true };
+    }
+    options?.onAccepted?.();
+    this.st = { ...this.st, messageCount: this.st.messageCount + 1 };
     this.emit({ type: "update", update: { kind: "agent_start" } });
+    if (this.holdPrompts) {
+      this.setStreaming(true);
+      const result = new Promise<{ accepted: boolean; queued: boolean }>((resolve) => this.held.push({ resolve }));
+      for (const waiter of this.heldWaiters.splice(0)) waiter();
+      return result;
+    }
     this.emit({ type: "update", update: { kind: "text_delta", delta: "hi", contentIndex: 0 } });
     this.emit({ type: "update", update: { kind: "agent_settled" } });
     return { accepted: true, queued: false };
   }
-  async steer() {} async followUp() {}
-  async clearQueue() { return { steering: [], followUp: [] }; }
-  async abort() {}
+  /** Resolves once the next prompt is held (or at once if one already is). */
+  nextHeld(): Promise<void> {
+    if (this.held.length > 0) return Promise.resolve();
+    return new Promise<void>((resolve) => this.heldWaiters.push(resolve));
+  }
+  /** The held turn ends: settled first, then the prompt promise, as Pi does. */
+  releasePrompt() {
+    const pending = this.held.shift();
+    if (!pending) throw new Error("No prompt is held.");
+    this.setStreaming(false);
+    this.emit({ type: "update", update: { kind: "agent_settled" } });
+    pending.resolve({ accepted: true, queued: false });
+  }
+  async steer(content: ContentBlock[]) { this.routed.push({ route: "steer", generation: this.generation, content }); this.engine.steering.push(textOf(content)); }
+  async followUp(content: ContentBlock[]) { this.routed.push({ route: "followUp", generation: this.generation, content }); this.engine.followUp.push(textOf(content)); }
+  async clearQueue() {
+    const cleared = { steering: this.engine.steering, followUp: this.engine.followUp };
+    this.engine = { steering: [], followUp: [] };
+    return cleared;
+  }
+  async abort() { this.routed.push({ route: "abort", generation: this.generation }); }
   async listModels() { return [{ provider: "p", id: "m" }]; }
-  async setModel() { return this.st; }
-  async setThinkingLevel(level: SessionState["thinkingLevel"]) { this.st = { ...this.st, thinkingLevel: level }; return this.st; }
+  async setModel() { this.routed.push({ route: "model", generation: this.generation }); return this.st; }
+  async setThinkingLevel(level: SessionState["thinkingLevel"]) { this.routed.push({ route: "thinking", generation: this.generation }); this.st = { ...this.st, thinkingLevel: level }; return this.st; }
   async rename() {} async compact() {}
   /** Every move, with the options the server handed over. */
   moves: Array<{ op: "navigate" | "fork"; entryId: string; options: unknown }> = [];
@@ -75,11 +136,25 @@ class FakeDriver implements SessionDriver {
   async fork(entryId: string, options?: unknown) { this.moves.push({ op: "fork", entryId, options }); this.st = { ...this.st, path: `/tmp/fake/fork-${entryId}.jsonl` }; return { state: this.st, editorText: "redo" }; }
   respondToUi(r: unknown) { this.answered.push(r); }
   deliverExtensionCommand(command: unknown) { this.extensionCommands.push(command); return true; }
+  /** The server's admission for extension work that can enter the model; a test drives it the way an extension's `sendMessage` would. */
+  extensionWork: ExtensionModelWorkHandler | undefined;
+  setExtensionModelWorkHandler(handler: ExtensionModelWorkHandler | undefined) { this.extensionWork = handler; }
   pendingUi() { return this.pending; }
-  async entries() { return []; }
+  async entries() { return { entries: [], leafId: null }; }
+  async goalState() { return null; }
   async commands() { return [{ name: "skill:test", source: "skill" as const, description: "Test skill" }]; }
   async prompts() { return []; }
   async dispose() { this.disposed = true; this.emit({ type: "closed", reason: "disposed" }); }
+}
+
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function textOf(content: ContentBlock[]): string {
+  return content.map((block) => (block.type === "text" ? block.text : "")).join("");
 }
 
 function harness() {
@@ -146,6 +221,151 @@ describe("WorkerServer", () => {
     const refreshed = await h.call(5, "pi/account-usage/refresh", { path: "/tmp/fake/s1.jsonl" });
     expect(refreshed.result).toEqual({ delivered: true });
     expect(h.drivers[0]?.extensionCommands).toContainEqual({ type: "lasercode/account-usage/refresh" });
+  });
+
+  it("binds a custom agent to the same pristine path at first-prompt acceptance", async () => {
+    const h = harness();
+    const snapshot = fallbackSnapshot();
+    await h.call(1, "agents/sync", {
+      snapshot: {
+        ...snapshot,
+        agents: [...snapshot.agents, { ...fallbackDefaultAgent(), name: "reviewer", engineInstructions: false, instructions: "Review carefully." }],
+      },
+    });
+    await h.call(2, "session/new", { cwd: "/tmp/fake" });
+    const driver = h.drivers[0]!;
+    const prompted = await h.call(3, "session/prompt", {
+      path: "/tmp/fake/s1.jsonl",
+      content: [{ type: "text", text: "check this" }],
+      firstTurn: { agentName: "reviewer", thinkingLevel: "high" },
+    });
+
+    expect(prompted.result).toEqual({ accepted: true, queued: false });
+    expect(driver.prepared).toHaveLength(1);
+    expect(driver.prepared[0]).toMatchObject({ agent: { definition: { name: "reviewer" } }, thinkingLevel: "high" });
+    expect(driver.prompted).toEqual([[{ type: "text", text: "check this" }]]);
+    expect(driver.rollbacks).toBe(0);
+    expect(h.server.openSessions()).toEqual(["/tmp/fake/s1.jsonl"]);
+    const loaded = await h.call(4, "session/load", { path: "/tmp/fake/s1.jsonl" });
+    expect(loaded.result).toMatchObject({ state: { path: "/tmp/fake/s1.jsonl", agent: { agentName: "reviewer", kind: "root" } } });
+  });
+
+  it("holds every prompt-entry route at one runtime generation during first-turn replacement", async () => {
+    const h = harness();
+    const snapshot = fallbackSnapshot();
+    await h.call(1, "agents/sync", {
+      snapshot: {
+        ...snapshot,
+        agents: [...snapshot.agents, { ...fallbackDefaultAgent(), name: "reviewer" }],
+      },
+    });
+    await h.call(2, "session/new", { cwd: "/tmp/fake" });
+    const driver = h.drivers[0]!;
+    const prepare = deferred();
+    const entered = deferred();
+    driver.prepareGate = prepare.promise;
+    driver.prepareObserved = entered.resolve;
+
+    const binding = h.call(3, "session/prompt", {
+      path: "/tmp/fake/s1.jsonl",
+      content: [{ type: "text", text: "first" }],
+      firstTurn: { agentName: "reviewer" },
+    });
+    await entered.promise;
+
+    // Bare prompt remains a refusal rather than silently changing semantics.
+    await expect(h.call(4, "session/prompt", {
+      path: "/tmp/fake/s1.jsonl",
+      content: [{ type: "text", text: "bare" }],
+    })).resolves.toMatchObject({ result: { accepted: false, queued: false } });
+
+    // A queued tray item begins draining while replacement owns the fence.
+    await h.call(5, "session/pending/add", {
+      path: "/tmp/fake/s1.jsonl",
+      content: [{ type: "text", text: "queued tray" }],
+    });
+    driver.emit({ type: "update", update: { kind: "agent_settled" } });
+
+    const steer = h.call(6, "pi/session/steer", { path: "/tmp/fake/s1.jsonl", content: [{ type: "text", text: "steer" }] });
+    const follow = h.call(7, "pi/session/follow_up", { path: "/tmp/fake/s1.jsonl", content: [{ type: "text", text: "follow" }] });
+    const thinking = h.call(8, "pi/thinking/set", { path: "/tmp/fake/s1.jsonl", level: "high" });
+    const tray = await h.call(9, "session/pending/add", {
+      path: "/tmp/fake/s1.jsonl",
+      content: [{ type: "text", text: "tray steer" }],
+    });
+    driver.setStreaming(true);
+    const traySteer = h.call(10, "session/pending/steer", {
+      path: "/tmp/fake/s1.jsonl",
+      id: (tray.result as { message: { id: string } }).message.id,
+    });
+    const cancel = h.call(11, "session/cancel", { path: "/tmp/fake/s1.jsonl" });
+
+    expect(driver.routed).toEqual([]);
+    prepare.resolve();
+    await Promise.all([binding, steer, follow, thinking, traySteer, cancel]);
+
+    expect(driver.routed.map((call) => call.route).sort()).toEqual([
+      "abort",
+      "followUp",
+      "prompt",
+      "prompt",
+      "steer",
+      "steer",
+      "thinking",
+    ]);
+    expect(driver.routed.every((call) => call.generation === "selected")).toBe(true);
+    expect(driver.prompted).toEqual([
+      [{ type: "text", text: "first" }],
+      [{ type: "text", text: "queued tray" }],
+    ]);
+    expect((await h.call(12, "session/pending/list", { path: "/tmp/fake/s1.jsonl" })).result).toEqual({ messages: [] });
+  });
+
+  it("rolls back a refused first-turn prompt for retry and rejects a stale bind", async () => {
+    const h = harness();
+    const snapshot = fallbackSnapshot();
+    await h.call(1, "agents/sync", {
+      snapshot: {
+        ...snapshot,
+        agents: [...snapshot.agents, { ...fallbackDefaultAgent(), name: "reviewer" }],
+      },
+    });
+    await h.call(2, "session/new", { cwd: "/tmp/fake" });
+    const driver = h.drivers[0]!;
+    driver.prepareFailure = new Error("replacement failed");
+    const failed = await h.call(3, "session/prompt", {
+      path: "/tmp/fake/s1.jsonl",
+      content: [{ type: "text", text: "failed replacement" }],
+      firstTurn: { agentName: "reviewer" },
+    });
+    expect(failed.error).toBeDefined();
+    expect(driver.rollbacks).toBe(1);
+    expect(driver.prompted).toEqual([]);
+
+    driver.prepareFailure = undefined;
+    driver.acceptPrompt = false;
+    const refused = await h.call(4, "session/prompt", {
+      path: "/tmp/fake/s1.jsonl",
+      content: [{ type: "text", text: "first try" }],
+      firstTurn: { agentName: "reviewer" },
+    });
+    expect(refused.result).toEqual({ accepted: false, queued: false });
+    expect(driver.rollbacks).toBe(2);
+
+    driver.acceptPrompt = true;
+    const accepted = await h.call(5, "session/prompt", {
+      path: "/tmp/fake/s1.jsonl",
+      content: [{ type: "text", text: "retry" }],
+      firstTurn: { agentName: "reviewer" },
+    });
+    const stale = await h.call(6, "session/prompt", {
+      path: "/tmp/fake/s1.jsonl",
+      content: [{ type: "text", text: "duplicate" }],
+      firstTurn: { agentName: "reviewer" },
+    });
+    expect(accepted.result).toEqual({ accepted: true, queued: false });
+    expect(stale.error?.code).toBe(-32602);
+    expect(driver.prompted).toHaveLength(2);
   });
 
   it("replays buffered updates after fromSeq and re-emits pending dialogs on load", async () => {
@@ -279,6 +499,22 @@ describe("WorkerServer", () => {
     d.pending = [];
     const stale = await h.call(3, "pi/ui/response", { id: "ui-1", confirmed: true });
     expect(stale.result).toEqual({ delivered: false });
+  });
+
+  it("does not forward a dialog the driver no longer holds, so a person is never shown a question nobody can answer", async () => {
+    const h = harness();
+    await h.call(1, "session/new", { cwd: "/tmp/fake" });
+    const d = h.drivers[0]!;
+    // The harness cancels an unroutable question synchronously, before the
+    // forwarder runs (M13-T98): by the time the event reaches the server the
+    // bridge has already let go of the id.
+    d.pending = [];
+    d.emit({ type: "ui_request", request: { method: "select", id: "ui-gone", title: "Later?", options: ["a"] } });
+    expect(h.notifications("pi/ui/request")).toEqual([]);
+    // A dialog the bridge still holds is forwarded as before.
+    d.pending = [{ method: "select", id: "ui-open", title: "Now?", options: ["a"] }];
+    d.emit({ type: "ui_request", request: { method: "select", id: "ui-open", title: "Now?", options: ["a"] } });
+    expect(h.notifications("pi/ui/request").map((n) => (n.params as { id: string }).id)).toEqual(["ui-open"]);
   });
 
   it("routes a ui response only to the session that raised the dialog", async () => {
@@ -463,6 +699,244 @@ describe("WorkerServer settings writes and live sessions", () => {
     const written = await h.call(3, "pi/settings/set", { cwd: h.cwd, scope: "global", changes: [{ path: "steeringMode", op: "set", value: "all" }] });
     expect(written.error).toBeUndefined();
     expect(written.result?.snapshot?.effective["steeringMode"]).toBe("all");
+    await h.server.dispose();
+  });
+});
+
+/**
+ * A person typing in a child agent's own chat (M13-T98 §8.4). The three
+ * queue verbs go through the harness fence for a child and stay the driver's
+ * for a root; the fake driver holds prompts so the terminal-pending window
+ * can be observed without an engine.
+ */
+describe("WorkerServer sends into a child agent's own chat", () => {
+  let base: string;
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-server-child-`));
+  });
+  afterEach(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  function childHarness() {
+    const out: JsonRpcMessage[] = [];
+    const observers = new Set<(message: JsonRpcMessage) => void>();
+    const drivers: FakeDriver[] = [];
+    const server = new WorkerServer({
+      cwd: base,
+      createDriver: () => { const d = new FakeDriver(); drivers.push(d); return d; },
+      send: (m) => {
+        out.push(m);
+        for (const observe of [...observers]) observe(m);
+      },
+    });
+    let nextId = 1;
+    const call = async (method: string, params?: unknown) => {
+      const id = nextId++;
+      await server.handle({ jsonrpc: "2.0", id, method, params });
+      return out.find((m) => "id" in m && m.id === id) as { result?: unknown; error?: { code: number; message: string } };
+    };
+    /** A notification that has not arrived yet. */
+    const waitFor = (predicate: (message: JsonRpcMessage) => boolean): Promise<JsonRpcMessage> => {
+      const existing = out.find(predicate);
+      if (existing) return Promise.resolve(existing);
+      return new Promise((resolve) => {
+        const observe = (message: JsonRpcMessage) => {
+          if (!predicate(message)) return;
+          observers.delete(observe);
+          resolve(message);
+        };
+        observers.add(observe);
+      });
+    };
+    const lifecycleLine = (text: string) => (message: JsonRpcMessage) =>
+      "method" in message && message.method === "pi/extension/message"
+      && (message as { params: { message: { type?: string; message?: string } } }).params.message.type === "lasercode/module/log"
+      && ((message as { params: { message: { message?: string } } }).params.message.message ?? "").includes(text);
+    const parentPath = join(base, "parent.jsonl");
+    const childPath = join(base, "child.jsonl");
+    writeFileSync(parentPath, `${JSON.stringify({ type: "session", id: "p" })}\n${JSON.stringify({ type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, data: { agentName: "default", kind: "root" } })}\n`);
+    writeFileSync(childPath, `${JSON.stringify({ type: "session", id: "c" })}\n${JSON.stringify({ type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, data: { agentName: "default", kind: "child", subagentName: "fixer", parentPath, parentSessionId: "p", rootPath: parentPath, runId: "run_seed" } })}\n`);
+    const runs = () => server.agents().runs().filter((run) => run.sessionPath === childPath);
+    const text = (value: string): ContentBlock[] => [{ type: "text", text: value }];
+    return { server, out, drivers, call, waitFor, lifecycleLine, childPath, runs, text };
+  }
+
+  it("queues a person's steer and follow-up in the engine through the harness while the child streams, forgets them on clear, and holds one for the successor during terminal-pending", async () => {
+    const h = childHarness();
+    expect((await h.call("session/load", { path: h.childPath })).error).toBeUndefined();
+    const d = h.drivers[0]!;
+    d.holdPrompts = true;
+    const first = h.call("session/prompt", { path: h.childPath, content: h.text("first") });
+    await d.nextHeld();
+    const [run] = h.runs();
+    expect(run).toMatchObject({ origin: "user", status: "running", task: "first" });
+
+    // While it streams: the engine's lanes, through the harness's prompt with
+    // the lane as its behaviour — never the driver's direct verb — and the
+    // request answers at acceptance, not when the turn ends.
+    expect((await h.call("pi/session/follow_up", { path: h.childPath, content: h.text("F") })).result).toEqual({});
+    expect((await h.call("pi/session/steer", { path: h.childPath, content: h.text("S") })).result).toEqual({});
+    expect(d.routed.filter((entry) => entry.route === "steer" || entry.route === "followUp")).toEqual([]);
+    expect(d.routed.slice(-2).map((entry) => [textOf(entry.content as ContentBlock[]), entry.options?.streamingBehavior, entry.options?.expandPromptTemplates])).toEqual([["F", "followUp", true], ["S", "steer", true]]);
+    expect(d.engine).toEqual({ steering: ["S"], followUp: ["F"] });
+    expect(h.runs()).toHaveLength(1);
+
+    // Clear: the engine's texts come back, and the harness forgets its twins.
+    expect((await h.call("pi/session/clear_queue", { path: h.childPath })).result).toEqual({ steering: ["S"], followUp: ["F"] });
+    expect(d.engine).toEqual({ steering: [], followUp: [] });
+    await h.waitFor(h.lifecycleLine(`queue-cleared runId=${run!.runId} clearedSteering=1 clearedFollowUp=1 twins=2`));
+
+    // Terminal-pending: the completion is declared while the prompt is still
+    // held. Nothing was left to transfer, so no successor exists yet.
+    expect(await h.server.agents().bridgeOf(h.childPath)!.completeRun({ status: "completed", message: "done" })).toEqual({ ok: true, runId: run!.runId });
+    expect(h.runs()).toHaveLength(1);
+
+    // A follow-up now waits for the successor, never the engine, and its
+    // request is still open: the engine does not hold the message yet.
+    const late = h.call("pi/session/follow_up", { path: h.childPath, content: h.text("P") });
+    await h.waitFor(h.lifecycleLine("admission source=person decision=queued-successor"));
+    const successor = h.runs().find((candidate) => candidate.runId !== run!.runId)!;
+    expect(successor).toMatchObject({ status: "queued", origin: "user", task: "P" });
+    expect(d.engine).toEqual({ steering: [], followUp: [] });
+    expect(d.routed.filter((entry) => entry.route === "followUp")).toEqual([]);
+    let lateSettled = false;
+    void late.then(() => { lateSettled = true; });
+    await Promise.resolve();
+    expect(lateSettled).toBe(false);
+
+    // The old prompt resolves: the successor's own prompt is P, with the
+    // follow-up behaviour, and the person's request answers at its acceptance.
+    d.releasePrompt();
+    expect((await first).result).toEqual({ accepted: true, queued: false });
+    await d.nextHeld();
+    expect(d.routed.at(-1)).toMatchObject({ route: "prompt", content: h.text("P"), options: { streamingBehavior: "followUp", expandPromptTemplates: true } });
+    expect((await late).result).toEqual({});
+    expect(h.server.agents().run(run!.runId)).toMatchObject({ status: "completed", result: { message: "done" } });
+    expect(h.server.agents().run(successor.runId)?.status).toBe("running");
+    expect(d.engine).toEqual({ steering: [], followUp: [] });
+    expect(await h.server.agents().bridgeOf(h.childPath)!.completeRun({ status: "completed", message: "successor done" })).toEqual({ ok: true, runId: successor.runId });
+    d.releasePrompt();
+    await h.waitFor((message) => "method" in message && message.method === "agents/run" && (message as { params: { run: { runId: string; status: string } } }).params.run.runId === successor.runId && (message as { params: { run: { status: string } } }).params.run.status === "completed");
+    expect(h.runs().map((candidate) => candidate.status)).toEqual(["completed", "completed"]);
+    await h.server.dispose();
+  });
+
+  it("releases the lease a parked tray message took, so an extension's message ahead of it on the successor can start", async () => {
+    // F1 at the fake level: the tray's drain at agent_settled prompts under
+    // the session's admission lease; parked behind an extension's wake on the
+    // successor, it must let that lease go — the wake's start runs through
+    // the server's wrapper, which takes the same lease before the engine
+    // sees the message, and the person's acceptance follows the wake's turn.
+    const h = childHarness();
+    expect((await h.call("session/load", { path: h.childPath })).error).toBeUndefined();
+    const d = h.drivers[0]!;
+    d.holdPrompts = true;
+    const first = h.call("session/prompt", { path: h.childPath, content: h.text("first") });
+    await d.nextHeld();
+    const [run] = h.runs();
+    expect((await h.call("session/pending/add", { path: h.childPath, content: h.text("T") })).error).toBeUndefined();
+    expect(await h.server.agents().bridgeOf(h.childPath)!.completeRun({ status: "completed", message: "done" })).toEqual({ ok: true, runId: run!.runId });
+
+    // During terminal-pending, an extension's custom trigger: first on the
+    // successor. Its `start` is reached only through the server's wrapper.
+    let started = 0;
+    const startedSignal = deferred();
+    const completeWake = deferred<{ disposition: "started" }>();
+    const admitted = d.extensionWork!({
+      kind: "custom",
+      content: h.text("wake"),
+      task: "wake",
+      origin: "agent",
+      start: (ownerRunId, onInvocation) => {
+        started += 1;
+        onInvocation?.({ id: "ext-1", ...(ownerRunId ? { runId: ownerRunId } : {}) });
+        startedSignal.resolve();
+        return { admission: Promise.resolve(), completion: completeWake.promise };
+      },
+    });
+    void admitted.admission.catch(() => undefined);
+    const successor = h.runs().find((candidate) => candidate.runId !== run!.runId)!;
+    expect(successor).toMatchObject({ status: "queued", task: "wake" });
+    expect(started).toBe(0);
+
+    // The old turn ends: the tray drains, its message is parked behind the
+    // wake, the lease that delivery took is released there — and the wake starts.
+    d.releasePrompt();
+    expect((await first).result).toEqual({ accepted: true, queued: false });
+    await startedSignal.promise;
+    expect(started).toBe(1);
+    expect(h.server.agents().run(run!.runId)).toMatchObject({ status: "completed", result: { message: "done" } });
+    expect(h.server.agents().run(successor.runId)?.status).toBe("running");
+    // The tray row is still on its way: the wake's turn comes first.
+    expect(((await h.call("session/pending/list", { path: h.childPath })).result as { messages: Array<{ state: string; text: string }> }).messages).toMatchObject([{ state: "delivering", text: "T" }]);
+    expect(d.routed.filter((entry) => entry.route === "prompt").map((entry) => textOf(entry.content as ContentBlock[]))).toEqual(["first"]);
+
+    // The wake's invocation ends: the tray message is the successor's next
+    // prompt, accepted and gone from the tray; nothing holds the lease, so a
+    // lease-bound request answers while that prompt is still held.
+    completeWake.resolve({ disposition: "started" });
+    await d.nextHeld();
+    expect(d.routed.at(-1)).toMatchObject({ route: "prompt", content: h.text("T") });
+    expect(((await h.call("session/pending/list", { path: h.childPath })).result as { messages: unknown[] }).messages).toEqual([]);
+    expect((await h.call("pi/thinking/set", { path: h.childPath, level: "high" })).error).toBeUndefined();
+    expect(await h.server.agents().bridgeOf(h.childPath)!.completeRun({ status: "completed", message: "successor done" })).toEqual({ ok: true, runId: successor.runId });
+    d.releasePrompt();
+    await h.waitFor((message) => "method" in message && message.method === "agents/run" && (message as { params: { run: { runId: string; status: string } } }).params.run.runId === successor.runId && (message as { params: { run: { status: string } } }).params.run.status === "completed");
+    expect(h.runs().map((candidate) => candidate.status)).toEqual(["completed", "completed"]);
+    await h.server.dispose();
+  });
+
+  it("sends a child's pending tray row through the harness fence, never the driver's bare steer", async () => {
+    const h = childHarness();
+    expect((await h.call("session/load", { path: h.childPath })).error).toBeUndefined();
+    const d = h.drivers[0]!;
+    d.holdPrompts = true;
+    const first = h.call("session/prompt", { path: h.childPath, content: h.text("first") });
+    await d.nextHeld();
+    const added = (await h.call("session/pending/add", { path: h.childPath, content: h.text("T") })).result as { message: { id: string } };
+    expect((await h.call("session/pending/steer", { path: h.childPath, id: added.message.id })).result).toEqual({ steered: true });
+    // The row went into the engine's steering lane through the harness's
+    // prompt, with the lane as its behaviour — the driver's direct verb was
+    // never used, so a declared completion can still carry it to the successor.
+    expect(d.routed.filter((entry) => entry.route === "steer")).toEqual([]);
+    expect(d.routed.at(-1)).toMatchObject({ route: "prompt", content: h.text("T"), options: { streamingBehavior: "steer", expandPromptTemplates: true } });
+    expect(d.engine).toEqual({ steering: ["T"], followUp: [] });
+    expect(h.runs()).toHaveLength(1);
+    d.releasePrompt();
+    expect((await first).result).toEqual({ accepted: true, queued: false });
+    await h.server.dispose();
+  });
+
+  it("answers a person's deferred follow-up with the harness's sentence when the successor is stopped, and keeps the direct verbs for a root", async () => {
+    const h = childHarness();
+    await h.call("session/load", { path: h.childPath });
+    const d = h.drivers[0]!;
+    d.holdPrompts = true;
+    const first = h.call("session/prompt", { path: h.childPath, content: h.text("first") });
+    await d.nextHeld();
+    const [run] = h.runs();
+    expect(await h.server.agents().bridgeOf(h.childPath)!.completeRun({ status: "completed", message: "done" })).toEqual({ ok: true, runId: run!.runId });
+    const late = h.call("pi/session/follow_up", { path: h.childPath, content: h.text("P") });
+    await h.waitFor(h.lifecycleLine("admission source=person decision=queued-successor"));
+    const successor = h.runs().find((candidate) => candidate.runId !== run!.runId)!;
+    const stopped = await h.call("agents/runs/stop", { runId: successor.runId, reason: "not needed" });
+    expect((stopped.result as { run: { status: string } }).run.status).toBe("cancelled");
+    const reply = await late;
+    expect(reply.result).toBeUndefined();
+    expect(reply.error?.message).toMatch(/ended \(cancelled\) before this message could start/);
+    expect(d.engine).toEqual({ steering: [], followUp: [] });
+    d.releasePrompt();
+    expect((await first).result).toEqual({ accepted: true, queued: false });
+
+    // A root keeps the driver's verbs: nothing of the harness in the way.
+    await h.call("session/new", { cwd: base });
+    const root = h.drivers[1]!;
+    expect((await h.call("pi/session/steer", { path: root.state().path, content: h.text("root steer") })).result).toEqual({});
+    expect((await h.call("pi/session/follow_up", { path: root.state().path, content: h.text("root follow") })).result).toEqual({});
+    expect(root.routed.map((entry) => entry.route)).toEqual(["steer", "followUp"]);
+    expect((await h.call("pi/session/clear_queue", { path: root.state().path })).result).toEqual({ steering: ["root steer"], followUp: ["root follow"] });
+    expect(h.out.some(h.lifecycleLine("queue-cleared") as (message: JsonRpcMessage) => boolean)).toBe(false);
     await h.server.dispose();
   });
 });

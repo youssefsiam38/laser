@@ -90,12 +90,18 @@ export interface SendAgentMessageResult {
   runId: string;
   status: AgentRunStatus;
   /**
-   * "queued" when the child was busy and the message waits; "answered" when
-   * the child was paused on a question and the message settled it (the
-   * question comes back as `answered`); "delivered" otherwise.
+   * "queued" when the child was busy and the message waits (in its engine's
+   * queue while it streams, or behind the run it is finishing); "answered"
+   * when the child was paused on a question and the message settled it (the
+   * question comes back as `answered`); "delivered" only once the child's
+   * engine has accepted the message as its next turn — never before admission
+   * is known; "refused" when the engine would not take it, in which case the
+   * run recorded for the attempt is `failed` and `error` says why.
    */
-  delivery: "delivered" | "queued" | "answered";
+  delivery: "delivered" | "queued" | "answered" | "refused";
   answered?: AgentRunQuestion;
+  /** Why a `refused` message did not start. */
+  error?: string;
 }
 
 /** What the model sees for one run: the identities plus outcome, never transcripts. */
@@ -131,7 +137,7 @@ export interface FleetRowBase {
   /** What you would address it by: the agent's instance name, or the command's first line. */
   title: string;
   state: FleetRowState;
-  /** The state's word as the person reads it: Working, Asking, Needs you, Done, Failed, Ended, Waiting. */
+  /** The state's word as the person reads it: Working, Asking, Blocked, Done, Failed, Ended, Waiting. */
   status: string;
   /** Live while the work is going, frozen once it ends; `4m 12s`. Absent when the start is unknown. */
   elapsed?: string;
