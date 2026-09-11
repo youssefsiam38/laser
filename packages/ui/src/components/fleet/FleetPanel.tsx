@@ -49,24 +49,54 @@ export interface FleetPanelProps {
 }
 
 const sameDisclosure = (left: FleetDisclosure | undefined, right: FleetDisclosure): boolean =>
-  left?.surface === right.surface && left.groupPath === right.groupPath && left.section === right.section && left.key === right.key;
+  left?.surface === right.surface &&
+  left.groupPath === right.groupPath &&
+  left.section === right.section &&
+  left.key === right.key &&
+  left.role === right.role;
 
-function branchHasActual(items: readonly FleetProjectedItem[], key: string): boolean {
-  return items.some((projected) =>
-    (!projected.contextOnly && projected.item.key === key) || branchHasActual(projected.children, key),
-  );
+function projectedItemFor(items: readonly FleetProjectedItem[], key: string): FleetProjectedItem | undefined {
+  for (const projected of items) {
+    if (projected.item.key === key) return projected;
+    const child = projectedItemFor(projected.children, key);
+    if (child) return child;
+  }
+  return undefined;
 }
 
-/** Resolve a canonical reveal key to its one actual lifecycle membership. */
-function disclosureFor(sections: FleetSections, surface: FleetSurfaceName, key: string): FleetDisclosure | undefined {
+/** Resolve a canonical key to its one actual lifecycle membership. */
+function actualDisclosureFor(sections: FleetSections, surface: FleetSurfaceName, key: string): FleetDisclosure | undefined {
   for (const section of ["active", "finished"] as const satisfies readonly FleetSectionName[]) {
     for (const projectedGroup of sections[section].groups) {
-      if (branchHasActual(projectedGroup.items, key)) {
-        return { surface, groupPath: projectedGroup.group.path, section, key };
+      const projected = projectedItemFor(projectedGroup.items, key);
+      if (projected && !projected.contextOnly) {
+        return { surface, groupPath: projectedGroup.group.path, section, key, role: "actual" };
       }
     }
   }
   return undefined;
+}
+
+function reconcileDisclosure(
+  current: FleetDisclosure,
+  treeSections: FleetSections,
+  elsewhereSections: FleetSections,
+): FleetDisclosure | undefined {
+  if (current.role === "actual") {
+    const here =
+      current.surface === "tree"
+        ? actualDisclosureFor(treeSections, "tree", current.key)
+        : actualDisclosureFor(elsewhereSections, "strays", current.key);
+    const moved =
+      current.surface === "tree"
+        ? actualDisclosureFor(elsewhereSections, "strays", current.key)
+        : actualDisclosureFor(treeSections, "tree", current.key);
+    return here ?? moved;
+  }
+  const sections = current.surface === "tree" ? treeSections : elsewhereSections;
+  const group = sections[current.section].groups.find((candidate) => candidate.group.path === current.groupPath);
+  const projected = group ? projectedItemFor(group.items, current.key) : undefined;
+  return projected?.contextOnly ? current : undefined;
 }
 
 export function FleetPanel({ variant, onClose }: FleetPanelProps) {
@@ -82,10 +112,21 @@ export function FleetPanel({ variant, onClose }: FleetPanelProps) {
   // of one ancestor. Spent immediately, so asking twice works twice.
   useEffect(() => {
     if (revealed === undefined) return;
-    const target = disclosureFor(treeSections, "tree", revealed) ?? disclosureFor(elsewhereSections, "strays", revealed);
+    const target = actualDisclosureFor(treeSections, "tree", revealed) ?? actualDisclosureFor(elsewhereSections, "strays", revealed);
     if (target) setExpanded(target);
     clearFleetReveal();
   }, [elsewhereSections, revealed, treeSections]);
+
+  // Projection changes can move actual work between lifecycle sections. Follow
+  // that canonical membership, but never let a vanished context disclosure be
+  // inherited by a later projection that happens to reuse its coordinates.
+  useEffect(() => {
+    setExpanded((current) => {
+      if (!current) return current;
+      const next = reconcileDisclosure(current, treeSections, elsewhereSections);
+      return next && sameDisclosure(current, next) ? current : next;
+    });
+  }, [elsewhereSections, treeSections]);
 
   const toggle = useCallback(
     (target: FleetDisclosure) => setExpanded((current) => (sameDisclosure(current, target) ? undefined : target)),

@@ -38,12 +38,13 @@ export type { FleetItem, FleetSections };
 export type FleetSectionName = "active" | "finished";
 export type FleetSurfaceName = "tree" | "strays";
 
-/** A projected row's disclosure identity; canonical keys may exist in both sections. */
+/** A projected row's disclosure identity; canonical keys may exist in both sections and roles. */
 export interface FleetDisclosure {
   surface: FleetSurfaceName;
   groupPath: string;
   section: FleetSectionName;
   key: string;
+  role: "actual" | "context";
 }
 
 export interface SubagentListProps extends Omit<ComponentProps<"div">, "children" | "onToggle"> {
@@ -186,7 +187,7 @@ function FleetGroups({
             <FleetBranch
               key={`${section}:${item.item.key}`}
               item={item}
-              target={{ surface, groupPath: group.path, section, key: item.item.key }}
+              target={{ surface, groupPath: group.path, section, key: item.item.key, role: item.contextOnly ? "context" : "actual" }}
               expanded={expanded}
               currentKey={currentKey}
               onToggle={onToggle}
@@ -290,7 +291,11 @@ export function SubagentStrays({ sections, expanded, onToggle, renderDetail, onC
 }
 
 const sameDisclosure = (left: FleetDisclosure | undefined, right: FleetDisclosure): boolean =>
-  left?.surface === right.surface && left.groupPath === right.groupPath && left.section === right.section && left.key === right.key;
+  left?.surface === right.surface &&
+  left.groupPath === right.groupPath &&
+  left.section === right.section &&
+  left.key === right.key &&
+  left.role === right.role;
 
 /** One subtree. Nested lists keep lineage intact in both the DOM and the paint. */
 function FleetBranch({
@@ -326,7 +331,7 @@ function FleetBranch({
             <FleetBranch
               key={`${target.section}:${child.item.key}`}
               item={child}
-              target={{ ...target, key: child.item.key }}
+              target={{ ...target, key: child.item.key, role: child.contextOnly ? "context" : "actual" }}
               nested
               expanded={expanded}
               currentKey={currentKey}

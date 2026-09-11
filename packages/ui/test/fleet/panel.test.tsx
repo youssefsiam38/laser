@@ -182,6 +182,28 @@ describe("the fleet column", () => {
     expect(container.querySelectorAll('[data-slot="fleet-row"][data-expanded="true"]')).toHaveLength(1);
   });
 
+  it("follows an expanded actual row to Finished when it becomes terminal and leaves context behind", async () => {
+    fixture.state.agents.runs = { r1: child };
+    fixture.state.tasks.tasks = { t1: task({ id: "t1", sessionPath: CHILD }) };
+    await render();
+    const activeAgent = rowIn(section("active"), "explorer");
+    await act(async () => activeAgent.querySelector("button")!.click());
+    expect(activeAgent.getAttribute("data-expanded")).toBe("true");
+
+    fixture.state.agents.runs = {
+      r1: { ...child, status: "completed", endedAt: "2026-09-08T10:04:00.000Z" },
+    };
+    await render();
+    const activeContext = rowIn(section("active"), "explorer");
+    const finishedAgent = rowIn(section("finished"), "explorer");
+    expect(activeContext.getAttribute("data-context")).toBe("true");
+    expect(activeContext.getAttribute("data-expanded")).toBeNull();
+    expect(rowIn(section("active"), "pnpm vite dev")).toBeDefined();
+    expect(finishedAgent.getAttribute("data-context")).toBeNull();
+    expect(finishedAgent.getAttribute("data-expanded")).toBe("true");
+    expect(container.querySelectorAll('[data-slot="fleet-row"][data-expanded="true"]')).toHaveLength(1);
+  });
+
   it("opens one row at a time, in place, and closes it again", async () => {
     fixture.state.agents.runs = { r1: child };
     await render();
@@ -403,16 +425,21 @@ describe("the fleet column", () => {
     expect(clear()).toBeUndefined();
   });
 
-  it("clears an old terminal descendant without hiding its live parent, then reveals a newer finish with context", async () => {
+  it("clears an expanded context descendant without letting a newer finish revive that disclosure", async () => {
     fixture.state.agents.runs = { r1: child };
     fixture.state.tasks.tasks = {
       old: task({ id: "old", sessionPath: CHILD, command: "pnpm old", title: "pnpm old", status: "completed", endedAt: "2000-01-01T00:00:00.000Z", exitCode: 0 }),
     };
     await render();
+    await openFinished();
+    const oldContext = rowIn(section("finished"), "explorer");
+    await act(async () => oldContext.querySelector("button")!.click());
+    expect(oldContext.getAttribute("data-expanded")).toBe("true");
     await act(async () => container.querySelector<HTMLButtonElement>('[data-slot="fleet-clear-finished"]')!.click());
     expect(container.textContent).toContain("explorer");
     expect(container.textContent).not.toContain("pnpm old");
     expect(container.querySelector('[data-slot="fleet-clear-finished"]')).toBeNull();
+    expect(container.querySelector('[data-slot="fleet-row"][data-expanded="true"]')).toBeNull();
 
     fixture.state.tasks.tasks = {
       ...fixture.state.tasks.tasks,
@@ -420,11 +447,12 @@ describe("the fleet column", () => {
     };
     await render();
     expect(container.querySelector('[data-slot="subagent-list"]')?.textContent).toContain("Finished1");
-    await openFinished();
+    // The person's Finished fold choice persists, but the old row choice does not.
     const finished = section("finished");
     expect(finished.textContent).not.toContain("pnpm old");
     expect(rowIn(finished, "explorer").getAttribute("data-context")).toBe("true");
-    expect(rowIn(finished, "pnpm fresh")).toBeDefined();
+    expect(rowIn(finished, "explorer").getAttribute("data-expanded")).toBeNull();
+    expect(rowIn(finished, "pnpm fresh").getAttribute("data-expanded")).toBeNull();
   });
 
   it("keeps work that ended after the clear, and work whose end it does not know", async () => {
@@ -538,6 +566,24 @@ describe("the fleet column", () => {
     await act(async () => revealInFleet("task:t1", { sheet: false }));
     await act(async () => {});
     expect(rowFor("pnpm vite dev").getAttribute("data-expanded")).toBe("true");
+  });
+
+  it("follows an external reveal issued immediately before a task crosses into Finished", async () => {
+    fixture.state.agents.runs = { r1: child };
+    fixture.state.tasks.tasks = { t1: task({ id: "t1", sessionPath: CHILD }) };
+    await render();
+    await act(async () => revealInFleet("task:t1", { sheet: false }));
+    await act(async () => {});
+    expect(rowIn(section("active"), "pnpm vite dev").getAttribute("data-expanded")).toBe("true");
+
+    fixture.state.tasks.tasks = {
+      t1: task({ id: "t1", sessionPath: CHILD, status: "completed", exitCode: 0, endedAt: "2026-09-08T10:01:00.000Z" }),
+    };
+    await render();
+    const finished = section("finished");
+    expect(rowIn(finished, "pnpm vite dev").getAttribute("data-expanded")).toBe("true");
+    expect(rowIn(finished, "explorer").getAttribute("data-expanded")).toBeNull();
+    expect(rowIn(section("active"), "explorer").getAttribute("data-expanded")).toBeNull();
   });
 
   it("resolves a terminal task reveal to Finished rather than its duplicated live ancestor", async () => {
@@ -700,7 +746,34 @@ describe("the fleet is one session's tree (M13-T51)", () => {
       expect(fixture.actions.openSession).toHaveBeenCalledWith(GONE_CHILD);
     });
 
-    it("partitions and clears terminal descendants under live deleted-session ancestry", async () => {
+    it("follows an externally revealed actual stray to Finished when it leaves active context behind", async () => {
+      withStray();
+      fixture.state.tasks.tasks = {
+        ...fixture.state.tasks.tasks,
+        nested: task({ id: "nested", sessionPath: GONE_CHILD, command: "pnpm nested", title: "pnpm nested" }),
+      };
+      await render();
+      await act(async () => revealInFleet(`agent:${GONE_CHILD}`, { sheet: false }));
+      await act(async () => {});
+      const activeAgent = rowIn(section("active", strays()!), "stray");
+      expect(activeAgent.getAttribute("data-expanded")).toBe("true");
+
+      fixture.state.agents.runs = {
+        ...fixture.state.agents.runs,
+        r3: { ...strayChild, status: "completed", endedAt: "2026-09-08T10:04:00.000Z" },
+      };
+      await render();
+      const activeContext = rowIn(section("active", strays()!), "stray");
+      const finishedAgent = rowIn(section("finished", strays()!), "stray");
+      expect(activeContext.getAttribute("data-context")).toBe("true");
+      expect(activeContext.getAttribute("data-expanded")).toBeNull();
+      expect(rowIn(section("active", strays()!), "pnpm nested")).toBeDefined();
+      expect(finishedAgent.getAttribute("data-context")).toBeNull();
+      expect(finishedAgent.getAttribute("data-expanded")).toBe("true");
+      expect(strays()!.querySelectorAll('[data-slot="fleet-row"][data-expanded="true"]')).toHaveLength(1);
+    });
+
+    it("clears expanded stray context without letting a newer finish revive that disclosure", async () => {
       withStray();
       fixture.state.tasks.tasks = {
         ...fixture.state.tasks.tasks,
@@ -713,12 +786,16 @@ describe("the fleet is one session's tree (M13-T51)", () => {
       expect(rowIn(section("active", strays()!), "stray").getAttribute("data-context")).toBeNull();
       await act(async () => [...strays()!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.startsWith("Finished"))!.click());
       const finished = section("finished", strays()!);
-      expect(rowIn(finished, "stray").getAttribute("data-context")).toBe("true");
+      const oldContext = rowIn(finished, "stray");
+      expect(oldContext.getAttribute("data-context")).toBe("true");
       expect(rowIn(finished, "pnpm old")).toBeDefined();
+      await act(async () => oldContext.querySelector("button")!.click());
+      expect(oldContext.getAttribute("data-expanded")).toBe("true");
 
       await act(async () => container.querySelector<HTMLButtonElement>('[data-slot="fleet-strays-clear"]')!.click());
       expect(toggle().textContent).toContain("2 pieces of work from a deleted session");
       expect(strays()!.textContent).not.toContain("pnpm old");
+      expect(strays()!.querySelector('[data-slot="fleet-row"][data-expanded="true"]')).toBeNull();
 
       fixture.state.tasks.tasks = {
         ...fixture.state.tasks.tasks,
@@ -726,8 +803,11 @@ describe("the fleet is one session's tree (M13-T51)", () => {
       };
       await render();
       expect(toggle().textContent).toContain("3 pieces of work from a deleted session");
-      expect(section("finished", strays()!).textContent).toContain("pnpm fresh");
-      expect(section("finished", strays()!).textContent).not.toContain("pnpm old");
+      const freshFinished = section("finished", strays()!);
+      expect(freshFinished.textContent).toContain("pnpm fresh");
+      expect(freshFinished.textContent).not.toContain("pnpm old");
+      expect(rowIn(freshFinished, "stray").getAttribute("data-expanded")).toBeNull();
+      expect(rowIn(freshFinished, "pnpm fresh").getAttribute("data-expanded")).toBeNull();
     });
 
     it("is not drawn before the catalog has loaded: an empty list is not a deletion", async () => {
