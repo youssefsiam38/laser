@@ -13,6 +13,7 @@ vi.mock("../../src/client.js", async (original) => ({
 import {
   LaserProvider,
   PROJECT_STORAGE_KEY,
+  SESSION_STORAGE_KEY,
   useLaserStable,
   useLaserState,
   useLaserView,
@@ -23,6 +24,7 @@ import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type Worl
 
 const CODE = `${PROJECT_CWD}/code.jsonl`;
 const CHAT = "/state/chat/chat.jsonl";
+const BEAM = "/state/beam/beam.jsonl";
 
 type Controls = {
   actions: LaserActions;
@@ -34,6 +36,7 @@ type Controls = {
   text: string;
   attachments: number;
   codeProject: string | undefined;
+  dialogs: number;
   toasts: string[];
 };
 let controls: Controls;
@@ -47,7 +50,7 @@ function Probe() {
   const disabled = useAuiState((state) => state.thread.isDisabled);
   const text = useAuiState((state) => state.composer.text);
   const attachments = useAuiState((state) => state.composer.attachments.length);
-  controls = { actions, aui, tab: destination.tab, path: view?.path, phase: destination.phase, disabled, text, attachments, codeProject: currentProject, toasts };
+  controls = { actions, aui, tab: destination.tab, path: view?.path, phase: destination.phase, disabled, text, attachments, codeProject: currentProject, dialogs: view?.dialogs.length ?? 0, toasts };
   return <output data-tab={destination.tab} data-path={view?.path ?? ""} data-phase={destination.phase} data-disabled={disabled} />;
 }
 
@@ -126,6 +129,22 @@ describe("main destination isolation", () => {
     expect(history[CODE]).toEqual([[{ type: "text", text: "original code history" }]]);
   });
 
+  it("opens Beam in Code without poisoning the remembered project session", async () => {
+    addSession(world, CODE, PROJECT_CWD);
+    addSession(world, BEAM, world.snapshot.workspaces.beam!, { agent: { agentName: "beam", kind: "beam" } });
+    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ [PROJECT_CWD]: CODE }));
+    await mount();
+    expect(controls).toMatchObject({ tab: "code", path: CODE, codeProject: PROJECT_CWD });
+
+    await act(async () => { await controls.actions.openSession(BEAM); await settle(20); });
+    expect(controls).toMatchObject({ tab: "code", path: BEAM, codeProject: PROJECT_CWD });
+    expect(JSON.parse(localStorage.getItem(SESSION_STORAGE_KEY)!)).toEqual({ [PROJECT_CWD]: CODE });
+
+    await act(async () => { await controls.actions.goProject(PROJECT_CWD); await settle(20); });
+    expect(controls).toMatchObject({ tab: "code", path: CODE, codeProject: PROJECT_CWD });
+  });
+
   it("blocks an immediate origin send while Chat allocation is pending and restores text plus image to Code", async () => {
     addSession(world, CODE, PROJECT_CWD);
     localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
@@ -163,6 +182,30 @@ describe("main destination isolation", () => {
     expect(controls).toMatchObject({ tab: "code", path: CODE, text: "stay with Code", attachments: 1 });
     expect(controls.aui.composer.getState().attachments[0]).toMatchObject({ name: "origin.png", status: { type: "complete" } });
     expect(calls("session/prompt")).toHaveLength(0);
+  });
+
+  it("refuses a captured old dialog answer in the same turn as a tab switch", async () => {
+    addSession(world, CODE, PROJECT_CWD);
+    addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
+    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
+    await mount();
+    await act(async () => {
+      FakeHostClient.current.notify("pi/ui/request", { path: CODE, id: "old-question", method: "confirm", title: "Proceed?" });
+    });
+    expect(controls).toMatchObject({ path: CODE, dialogs: 1 });
+    const answerOldQuestion = controls.actions.answerDialog;
+
+    await act(async () => {
+      const switching = controls.actions.goTab("chat");
+      await answerOldQuestion({ id: "old-question", confirmed: true });
+      await switching;
+      await settle(20);
+    });
+    expect(controls).toMatchObject({ tab: "chat", path: CHAT, dialogs: 0 });
+    expect(calls("pi/ui/response")).toHaveLength(0);
+
+    await act(async () => { await controls.actions.goTab("code"); await settle(20); });
+    expect(controls).toMatchObject({ path: CODE, dialogs: 1 });
   });
 
   it("latest navigation wins when opposite-kind loads settle out of order", async () => {

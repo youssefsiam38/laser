@@ -145,6 +145,15 @@ describe("scope isolation", () => {
     expect(container.querySelector('[data-slot="probe-main"]')?.getAttribute("data-model")).toBe("");
     // The scope's "current project" is Beam's workspace, so the composer never asks for a project.
     expect(container.querySelector('[data-slot="scoped-set-model"]')?.getAttribute("data-project")).toBe(BEAM_CWD);
+
+    await act(async () => {
+      FakeHostClient.current.notify("pi/ui/request", { path: BEAM, id: "beam-question", method: "confirm", title: "Continue Beam?" });
+      await settle(0);
+      await handles.beam!.actions.answerDialog({ id: "beam-question", confirmed: true });
+    });
+    const responses = world.calls.filter((call) => call.method === "pi/ui/response");
+    expect(responses).toHaveLength(1);
+    expect(responses[0]!.params).toEqual({ id: "beam-question", confirmed: true });
   });
 
   it("keeps Beam targeting its scope while the main destination switches to Chat", async () => {

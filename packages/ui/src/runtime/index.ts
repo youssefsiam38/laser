@@ -94,6 +94,7 @@ export {
   creationTargetForDestination,
   destinationSessionForTab,
   initialMainDestination,
+  isSessionInCodeProject,
   rootCwdForSession,
   type MainCreationTarget,
   type MainDestination,

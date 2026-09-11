@@ -70,6 +70,7 @@ import {
   creationTargetForDestination,
   destinationSessionForTab,
   initialMainDestination,
+  isSessionInCodeProject,
   type MainDestination,
   type MainTab,
 } from "./main-destination.js";
@@ -822,14 +823,19 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     if (destination.path !== undefined) {
       rememberSessionForTab(destination.tab, destination.path);
       if (destination.tab === "code" && destination.codeProject !== undefined) {
-        const remembered = readStringMap(SESSION_STORAGE_KEY);
-        if (remembered[destination.codeProject] !== destination.path) {
-          writeString(SESSION_STORAGE_KEY, JSON.stringify({ ...remembered, [destination.codeProject]: destination.path }));
+        const snapshot = readState();
+        const sessions = mergeSessions(snapshot.sessions, snapshot.open);
+        const selected = sessions.find((session) => session.path === destination.path);
+        if (selected && isSessionInCodeProject(selected, sessions, snapshot.agents.runs, destination.codeProject)) {
+          const remembered = readStringMap(SESSION_STORAGE_KEY);
+          if (remembered[destination.codeProject] !== destination.path) {
+            writeString(SESSION_STORAGE_KEY, JSON.stringify({ ...remembered, [destination.codeProject]: destination.path }));
+          }
         }
       }
     }
     return true;
-  }, []);
+  }, [readState]);
 
   const failDestination = useCallback((intent: number, message: string): void => {
     const current = readState().destination;
@@ -921,7 +927,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     const candidate = remembered
       ? merged.find((session) => session.path === remembered
           && sessionKindTab(session, current.agents.snapshot?.workspaces ?? {}) === "code"
-          && codeProjectForSession(session, merged, current.agents.runs, cwd) === cwd)
+          && isSessionInCodeProject(session, merged, current.agents.runs, cwd))
       : undefined;
     if (candidate) await resolveSessionIntent(candidate.path, intent);
     else commitDestination({ tab: "code", codeProject: cwd, path: undefined, targetPath: undefined, phase: "ready", intent });
@@ -1172,17 +1178,16 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     };
 
     const answerDialog = async (response: UiDialogResponse) => {
-      const path = readScoped().current;
-      const dialog = path ? readScoped().open[path]?.dialogs.find((d) => d.id === response.id) : undefined;
-      dispatch({ type: "dialogAnswered", id: response.id, ...(path !== undefined ? { path } : {}) });
+      const path = requireCurrent();
+      const dialog = readScoped().open[path]?.dialogs.find((candidate) => candidate.id === response.id);
+      if (!dialog) throw new Error("That question no longer belongs to this conversation.");
+      dispatch({ type: "dialogAnswered", id: response.id, path });
       try {
         await client.request("pi/ui/response", response);
       } catch (error) {
         // The extension is still blocked on `ask()`: put the card back rather
         // than strand it with no way to answer.
-        if (path !== undefined && dialog) {
-          dispatch({ type: "notification", method: "pi/ui/request", params: { path, ...dialog } });
-        }
+        dispatch({ type: "notification", method: "pi/ui/request", params: { path, ...dialog } });
         throw error;
       }
     };
@@ -1503,11 +1508,14 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     if (destination.phase !== "ready" || !destination.path) return;
     rememberSessionForTab(destination.tab, destination.path);
     if (destination.tab !== "code" || !destination.codeProject) return;
+    const sessions = mergeSessions(state.sessions, state.open);
+    const selected = sessions.find((session) => session.path === destination.path);
+    if (!selected || !isSessionInCodeProject(selected, sessions, state.agents.runs, destination.codeProject)) return;
     const remembered = readStringMap(SESSION_STORAGE_KEY);
     if (remembered[destination.codeProject] !== destination.path) {
       writeString(SESSION_STORAGE_KEY, JSON.stringify({ ...remembered, [destination.codeProject]: destination.path }));
     }
-  }, [state.destination]);
+  }, [state.destination, state.sessions, state.open, state.agents.runs]);
 
   /**
    * Reopen it once, on the first connection, unless a deep link is asking for

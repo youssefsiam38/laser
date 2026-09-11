@@ -498,14 +498,13 @@ export function createThreadAdapter(deps: ThreadAdapterDeps): ExternalStoreAdapt
   const answerDialog = async (id: string, response: UiDialogResponse): Promise<void> => {
     deps.assertCanAct?.();
     const path = deps.path;
-    const dialog = deps.view?.dialogs.find((d) => d.id === id);
-    deps.dispatch({ type: "dialogAnswered", id, ...(path !== undefined ? { path } : {}) });
+    const dialog = deps.view?.dialogs.find((candidate) => candidate.id === id);
+    if (!path || !dialog) throw new Error("That question no longer belongs to this conversation.");
+    deps.dispatch({ type: "dialogAnswered", id, path });
     try {
       await deps.client.request("pi/ui/response", response);
     } catch (error) {
-      if (path !== undefined && dialog) {
-        deps.dispatch({ type: "notification", method: "pi/ui/request", params: { path, ...dialog } });
-      }
+      deps.dispatch({ type: "notification", method: "pi/ui/request", params: { path, ...dialog } });
       throw error;
     }
   };

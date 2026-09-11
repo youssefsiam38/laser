@@ -489,10 +489,18 @@ describe("createThreadAdapter", () => {
   });
 
   it("onRespondToToolApproval answers the dialog and clears it locally", async () => {
-    const { adapter, client, dispatch } = build();
+    const dialog = { method: "confirm" as const, id: "u1", title: "Sure?" };
+    const { adapter, client, dispatch } = build({ view: view({ dialogs: [dialog] }) });
     await adapter.onRespondToToolApproval!({ approvalId: "u1", approved: false });
     expect(dispatch).toHaveBeenCalledWith({ type: "dialogAnswered", id: "u1", path: "/s.jsonl" });
     expect(client.calls).toEqual([{ method: "pi/ui/response", params: { id: "u1", confirmed: false } }]);
+  });
+
+  it("refuses an approval that no longer belongs to this thread", async () => {
+    const { adapter, client, dispatch } = build();
+    await expect(adapter.onRespondToToolApproval!({ approvalId: "old", approved: true })).rejects.toThrow("no longer belongs");
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(client.calls).toEqual([]);
   });
 
   it("puts the dialog back when the answer never reaches the worker", async () => {

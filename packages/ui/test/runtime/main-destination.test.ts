@@ -6,6 +6,7 @@ import {
   creationTargetForDestination,
   destinationSessionForTab,
   initialMainDestination,
+  isSessionInCodeProject,
 } from "../../src/runtime/main-destination.js";
 
 const item = (path: string, cwd: string, modifiedAt: string, agent?: SessionSummary["agent"]): SessionSummary => ({
@@ -53,6 +54,8 @@ describe("main destination model", () => {
     const beam = item("/beam/session", "/private/beam", "2026-09-10T00:00:00Z", { agentName: "beam", kind: "beam" });
     expect(codeProjectForSession(child, [root, child], {}, "/other")).toBe("/project");
     expect(codeProjectForSession(beam, [beam], {}, "/project")).toBe("/project");
+    expect(isSessionInCodeProject(child, [root, child], {}, "/project")).toBe(true);
+    expect(isSessionInCodeProject(beam, [beam], {}, "/project")).toBe(false);
 
     const detached = { ...child, agent: { ...child.agent!, parentPath: "/gone", rootPath: "/gone" } };
     const run: AgentRun = {

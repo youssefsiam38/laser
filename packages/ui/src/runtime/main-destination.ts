@@ -72,6 +72,17 @@ export function rootCwdForSession(
   return latestRunForSession(runs, session.path)?.projectCwd ?? session.cwd;
 }
 
+/** True only when this row actually belongs to the requested Code project. */
+export function isSessionInCodeProject(
+  session: SessionSummary,
+  sessions: readonly SessionSummary[],
+  runs: Readonly<Record<string, AgentRun>>,
+  cwd: string,
+): boolean {
+  if (session.agent?.kind === "chat" || session.agent?.kind === "beam") return false;
+  return projectRootOfCwd(rootCwdForSession(session, sessions, runs)) === cwd;
+}
+
 /** The Code project a row belongs to. Chat and Beam retain Code memory. */
 export function codeProjectForSession(
   session: SessionSummary,

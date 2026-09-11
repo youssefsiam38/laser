@@ -179,13 +179,14 @@ describe("a session created from outside while the project screen is up", () => 
   it("opens the row when a deep link selects it", async () => {
     const path = await cliCreates();
     container.querySelector<HTMLButtonElement>('[data-slot="open-row"]')!.click();
-    await settle(50);
+    await vi.waitFor(() => {
+      expect(probe()?.dataset["current"]).toBe(path);
+      expect(probe()?.dataset["main"]).toBe(path);
+      expect(probe()?.dataset["remote"]).toBe(path);
+      expect(probe()?.dataset["threads"]).toBe(path);
+    });
     expect(crash()).toBeUndefined();
     expect(errorsLike("useClientLookup")).toEqual([]);
-    expect(probe()?.dataset["current"]).toBe(path);
-    expect(probe()?.dataset["main"]).toBe(path);
-    expect(probe()?.dataset["remote"]).toBe(path);
-    expect(probe()?.dataset["threads"]).toBe(path);
   });
 
   it("survives a suggestion pressed after the row arrived, reusing that session", async () => {
