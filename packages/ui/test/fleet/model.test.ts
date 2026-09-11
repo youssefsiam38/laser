@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BackgroundTask } from "@lasercode/protocol";
 
-import { branchIsActive, buildFleet, flattenFleet, fleetSummary, partitionItems, scopeFleet, type FleetGroup } from "../../src/fleet/model.js";
+import { buildFleet, flattenFleet, fleetSummary, projectFleetSections, scopeFleet, type FleetGroup, type FleetProjectedItem } from "../../src/fleet/model.js";
 import { run, summary, view } from "../agents/fixtures.js";
 
 const ROOT = "/p/root.jsonl";
@@ -23,6 +23,18 @@ const byId = <T extends { runId?: string; id?: string }>(list: readonly T[], key
 
 const build = (input: Partial<Parameters<typeof buildFleet>[0]> = {}): FleetGroup[] =>
   buildFleet({ sessions: [], runs: {}, tasks: {}, views: {}, now: NOW, ...input });
+
+const projected = (items: readonly FleetProjectedItem[]): FleetProjectedItem[] => {
+  const out: FleetProjectedItem[] = [];
+  const walk = (list: readonly FleetProjectedItem[]): void => {
+    for (const item of list) {
+      out.push(item);
+      walk(item.children);
+    }
+  };
+  walk(items);
+  return out;
+};
 
 describe("buildFleet", () => {
   it("is empty when there is no agent work and no background command", () => {
@@ -136,7 +148,7 @@ describe("buildFleet", () => {
     expect(item.terminalReason).toBeUndefined();
     expect(groups[0]).toMatchObject({ running: 1, needsYou: 1, attention: "waiting_for_input" });
     expect(fleetSummary(groups)).toMatchObject({ running: 1, needsYou: 1 });
-    expect(partitionItems(groups[0]!.items).active).toHaveLength(1);
+    expect(projectFleetSections(groups).active.count).toBe(1);
   });
 
   it("ticks elapsed for live work and freezes it once the work ends", () => {
@@ -217,16 +229,18 @@ describe("buildFleet", () => {
   it("puts every terminal outcome in Finished, including blocked", () => {
     for (const status of ["completed", "blocked", "failed", "cancelled"] as const) {
       const ended = run({ runId: status, sessionPath: `/p/${status}.jsonl`, status, endedAt: "2026-09-08T10:01:00.000Z" });
-      const items = build({ sessions: [summary({ path: ROOT })], runs: byId([ended], "runId") })[0]!.items;
-      expect(partitionItems(items)).toMatchObject({ active: [], finished: [{ state: status, terminal: true }] });
+      const sections = projectFleetSections(build({ sessions: [summary({ path: ROOT })], runs: byId([ended], "runId") }));
+      expect(sections.active.count).toBe(0);
+      expect(projected(sections.finished.groups[0]!.items).map((item) => item.item.state)).toEqual([status]);
     }
   });
 
-  it("moves whole branches between in-progress and finished, never half a branch", () => {
-    const liveParent = run({ runId: "r1", sessionPath: "/p/child.jsonl" });
+  it("projects terminal descendants into Finished immediately while repeating only their live ancestry", () => {
+    const liveParent = run({ runId: "r1", sessionPath: "/p/child.jsonl", subagentName: "explorer" });
     const doneChild = run({
       runId: "r2",
       sessionPath: "/p/grandchild.jsonl",
+      subagentName: "reader",
       status: "completed",
       endedAt: "2026-09-08T10:01:00.000Z",
       parent: { sessionPath: "/p/child.jsonl", sessionId: "child", runId: "r1" },
@@ -235,13 +249,78 @@ describe("buildFleet", () => {
       sessions: [summary({ path: ROOT }), summary({ path: "/p/child.jsonl" }), summary({ path: "/p/grandchild.jsonl" })],
       runs: byId([liveParent, doneChild], "runId"),
     });
-    const items = groups[0]!.items;
-    expect(branchIsActive(items[0]!)).toBe(true);
-    const parts = partitionItems(items);
-    expect(parts.active).toHaveLength(1);
-    expect(parts.finished).toHaveLength(0);
-    // The finished child stays inside the live branch rather than being moved.
-    expect(parts.active[0]!.children.map((item) => item.state)).toEqual(["completed"]);
+    const canonicalParent = groups[0]!.items[0]!;
+    const canonicalChildren = canonicalParent.children;
+    const sections = projectFleetSections(groups);
+    const activeParent = sections.active.groups[0]!.items[0]!;
+    const finishedParent = sections.finished.groups[0]!.items[0]!;
+
+    expect(activeParent).toMatchObject({ item: canonicalParent, contextOnly: false, attention: "working", children: [] });
+    expect(finishedParent).toMatchObject({ item: canonicalParent, contextOnly: true, attention: "finished_unread" });
+    expect(finishedParent.children).toHaveLength(1);
+    expect(finishedParent.children[0]).toMatchObject({ item: canonicalChildren[0], contextOnly: false });
+    expect(sections.active).toMatchObject({ count: 1, running: 1, needsYou: 0, attention: "working" });
+    expect(sections.finished).toMatchObject({ count: 1, running: 0, needsYou: 0, attention: "finished_unread" });
+    // Projection references canonical records and never rewrites their tree.
+    expect(canonicalParent.children).toBe(canonicalChildren);
+    expect(canonicalParent.children.map((item) => item.state)).toEqual(["completed"]);
+  });
+
+  it("keeps a terminal parent as actual Finished work and only context around its live descendant", () => {
+    const doneParent = run({
+      runId: "r1",
+      sessionPath: "/p/child.jsonl",
+      subagentName: "explorer",
+      status: "completed",
+      endedAt: "2026-09-08T10:01:00.000Z",
+    });
+    const liveChild = run({
+      runId: "r2",
+      sessionPath: "/p/grandchild.jsonl",
+      subagentName: "reader",
+      parent: { sessionPath: "/p/child.jsonl", sessionId: "child", runId: "r1" },
+    });
+    const sections = projectFleetSections(build({
+      sessions: [summary({ path: ROOT }), summary({ path: "/p/child.jsonl" }), summary({ path: "/p/grandchild.jsonl" })],
+      runs: byId([doneParent, liveChild], "runId"),
+    }));
+    const activeParent = sections.active.groups[0]!.items[0]!;
+    const finishedParent = sections.finished.groups[0]!.items[0]!;
+    expect(activeParent).toMatchObject({ contextOnly: true, attention: "working" });
+    expect(activeParent.children[0]).toMatchObject({ contextOnly: false, item: { state: "running" } });
+    expect(finishedParent).toMatchObject({ contextOnly: false, item: { state: "completed" }, children: [] });
+    expect(sections.active.count).toBe(1);
+    expect(sections.finished.count).toBe(1);
+
+    const cleared = projectFleetSections(build({
+      sessions: [summary({ path: ROOT }), summary({ path: "/p/child.jsonl" }), summary({ path: "/p/grandchild.jsonl" })],
+      runs: byId([doneParent, liveChild], "runId"),
+    }), { clearedBefore: "2026-09-08T10:02:00.000Z" });
+    expect(cleared.finished.count).toBe(0);
+    expect(cleared.active.groups[0]!.items[0]).toMatchObject({ contextOnly: true, item: { state: "completed" } });
+    expect(cleared.active.groups[0]!.items[0]!.children[0]).toMatchObject({ contextOnly: false, item: { state: "running" } });
+  });
+
+  it("clears terminal descendants recursively while retaining new work and required ancestry in creation order", () => {
+    const parent = run({ runId: "r1", sessionPath: "/p/child.jsonl", subagentName: "explorer" });
+    const tasks = [
+      task({ id: "old", sessionPath: "/p/child.jsonl", title: "old", status: "completed", startedAt: "2026-09-08T09:59:00.000Z", endedAt: "2026-09-08T10:01:00.000Z" }),
+      task({ id: "fresh", sessionPath: "/p/child.jsonl", title: "fresh", status: "completed", startedAt: "2026-09-08T10:00:00.000Z", endedAt: "2026-09-08T10:03:00.000Z" }),
+      task({ id: "unknown", sessionPath: "/p/child.jsonl", title: "unknown", status: "completed", startedAt: "2026-09-08T10:01:00.000Z" }),
+    ];
+    const groups = build({
+      sessions: [summary({ path: ROOT }), summary({ path: "/p/child.jsonl" })],
+      runs: byId([parent], "runId"),
+      tasks: byId(tasks, "id"),
+    });
+    const canonicalParent = groups[0]!.items[0]!;
+    const sections = projectFleetSections(groups, { clearedBefore: "2026-09-08T10:02:00.000Z" });
+    expect(sections.active.count).toBe(1);
+    expect(sections.finished.count).toBe(2);
+    const finishedParent = sections.finished.groups[0]!.items[0]!;
+    expect(finishedParent.contextOnly).toBe(true);
+    expect(finishedParent.children.map((child) => child.item.title)).toEqual(["fresh", "unknown"]);
+    expect(canonicalParent.children.map((child) => child.title)).toEqual(["old", "fresh", "unknown"]);
   });
 
   it("shows a resumed session from its newest run while retaining failed history", () => {
@@ -250,7 +329,7 @@ describe("buildFleet", () => {
     const groups = build({ sessions: [summary({ path: ROOT })], runs: byId([failed, resumed], "runId") });
     const item = groups[0]!.items[0]!;
     expect(item).toMatchObject({ state: "running", tone: "live", terminal: false, run: resumed });
-    expect(partitionItems(groups[0]!.items).active).toHaveLength(1);
+    expect(projectFleetSections(groups).active.count).toBe(1);
     expect(item.run).not.toBe(failed);
   });
 

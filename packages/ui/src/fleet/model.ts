@@ -362,20 +362,148 @@ export function flattenFleet(items: readonly FleetItem[]): FleetItem[] {
   return out;
 }
 
-/**
- * A branch stays active while anything inside it is active. Moving a finished
- * child away from a live parent would make the fleet easier to scan but
- * structurally false, so lifecycle partitioning always moves whole branches.
- */
-export function branchIsActive(item: FleetItem): boolean {
-  return !item.terminal || item.children.some(branchIsActive);
+/** A section-specific view of one canonical item. Only ancestry repeats. */
+export interface FleetProjectedItem {
+  /** The one canonical run/task record. Never cloned or rewritten here. */
+  item: FleetItem;
+  /** True when this row exists only to preserve lineage to included work. */
+  contextOnly: boolean;
+  /** Attention from actual work included in this projection, rolled upward. */
+  attention: Attention;
+  children: FleetProjectedItem[];
 }
 
-export function partitionItems(items: readonly FleetItem[]): { active: FleetItem[]; finished: FleetItem[] } {
-  const active: FleetItem[] = [];
-  const finished: FleetItem[] = [];
-  for (const item of items) (branchIsActive(item) ? active : finished).push(item);
-  return { active, finished };
+export interface FleetProjectedGroup {
+  /** Canonical group metadata: title, path, cwd and deleted state. */
+  group: FleetGroup;
+  items: FleetProjectedItem[];
+  /** Actual work in this section; context rows are excluded. */
+  count: number;
+  running: number;
+  needsYou: number;
+  attention: Attention;
+}
+
+export interface FleetSectionProjection {
+  groups: FleetProjectedGroup[];
+  count: number;
+  running: number;
+  needsYou: number;
+  attention: Attention;
+}
+
+export interface FleetSections {
+  active: FleetSectionProjection;
+  finished: FleetSectionProjection;
+}
+
+interface ProjectedNode {
+  active: FleetProjectedItem | undefined;
+  finished: FleetProjectedItem | undefined;
+  activeCount: number;
+  activeNeedsYou: number;
+  finishedCount: number;
+}
+
+/** A bad or absent end time is not evidence that a terminal row was cleared. */
+function terminalIsVisible(item: FleetItem, clearedBefore: string | undefined): boolean {
+  if (!item.terminal || clearedBefore === undefined) return true;
+  const mark = time(clearedBefore);
+  const ended = time(item.endedAt);
+  return mark === 0 || ended === 0 || ended > mark;
+}
+
+/**
+ * Recursively project one canonical tree into lifecycle sections (D-205).
+ *
+ * Live work belongs only to In progress and terminal work only to Finished.
+ * An agent ancestor is repeated as uncounted context wherever descendants in
+ * the other section need it. Clear is part of the same projection: old
+ * terminal descendants disappear without taking live/new work or its ancestry
+ * with them. Canonical items, records and child arrays are never mutated.
+ */
+export function projectFleetSections(
+  groups: readonly FleetGroup[],
+  options: { clearedBefore?: string | undefined } = {},
+): FleetSections {
+  const projectItem = (item: FleetItem): ProjectedNode => {
+    const children = item.children.map(projectItem);
+    const activeChildren = children.flatMap((child) => (child.active ? [child.active] : []));
+    const finishedChildren = children.flatMap((child) => (child.finished ? [child.finished] : []));
+    const ownActive = !item.terminal;
+    const ownFinished = item.terminal && terminalIsVisible(item, options.clearedBefore);
+    const active =
+      ownActive || activeChildren.length > 0
+        ? {
+            item,
+            contextOnly: !ownActive,
+            attention: highestAttention([
+              ...(ownActive ? [item.own] : []),
+              ...activeChildren.map((child) => child.attention),
+            ]),
+            children: activeChildren,
+          }
+        : undefined;
+    const finished =
+      ownFinished || finishedChildren.length > 0
+        ? {
+            item,
+            contextOnly: !ownFinished,
+            attention: highestAttention([
+              ...(ownFinished ? [item.own] : []),
+              ...finishedChildren.map((child) => child.attention),
+            ]),
+            children: finishedChildren,
+          }
+        : undefined;
+    return {
+      active,
+      finished,
+      activeCount: Number(ownActive) + children.reduce((total, child) => total + child.activeCount, 0),
+      activeNeedsYou: Number(ownActive && item.state === "needs_input") + children.reduce((total, child) => total + child.activeNeedsYou, 0),
+      finishedCount: Number(ownFinished) + children.reduce((total, child) => total + child.finishedCount, 0),
+    };
+  };
+
+  const activeGroups: FleetProjectedGroup[] = [];
+  const finishedGroups: FleetProjectedGroup[] = [];
+  for (const group of groups) {
+    const projected = group.items.map(projectItem);
+    const activeItems = projected.flatMap((item) => (item.active ? [item.active] : []));
+    const finishedItems = projected.flatMap((item) => (item.finished ? [item.finished] : []));
+    const activeCount = projected.reduce((total, item) => total + item.activeCount, 0);
+    const activeNeedsYou = projected.reduce((total, item) => total + item.activeNeedsYou, 0);
+    const finishedCount = projected.reduce((total, item) => total + item.finishedCount, 0);
+    if (activeItems.length > 0) {
+      activeGroups.push({
+        group,
+        items: activeItems,
+        count: activeCount,
+        running: activeCount,
+        needsYou: activeNeedsYou,
+        attention: highestAttention(activeItems.map((item) => item.attention)),
+      });
+    }
+    if (finishedItems.length > 0) {
+      finishedGroups.push({
+        group,
+        items: finishedItems,
+        count: finishedCount,
+        running: 0,
+        needsYou: 0,
+        attention: highestAttention(finishedItems.map((item) => item.attention)),
+      });
+    }
+  }
+
+  const section = (projectedGroups: FleetProjectedGroup[]): FleetSectionProjection => ({
+    groups: projectedGroups,
+    count: projectedGroups.reduce((total, group) => total + group.count, 0),
+    running: projectedGroups.reduce((total, group) => total + group.running, 0),
+    needsYou: projectedGroups.reduce((total, group) => total + group.needsYou, 0),
+    attention: highestAttention(projectedGroups.map((group) => group.attention)),
+  });
+  return { active: section(activeGroups), finished: section(finishedGroups) };
 }
 
 /**

@@ -28,7 +28,7 @@
 import { Radio, PanelRightClose, Square, FolderX, MessageSquare, MessagesSquare, RotateCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { SubagentList, SubagentStrays } from "@/components/assistant-ui/elements/subagent-list";
+import { SubagentList, SubagentStrays, type FleetDisclosure, type FleetSectionName, type FleetSurfaceName } from "@/components/assistant-ui/elements/subagent-list";
 import { TerminalBlock } from "@/components/assistant-ui/elements/terminal-block";
 import { requestRemoveWorktree } from "@/agents/worktree";
 import { requestEndAgent } from "@/components/agents/end-agent";
@@ -37,7 +37,7 @@ import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { clearFinishedFleet, clearFleetReveal, useFleetClearedBefore, useFleetReveal } from "@/fleet/fleet-state";
 import { useFleet, type FleetView } from "@/fleet/hooks";
 import { useTaskOutput } from "@/fleet/output";
-import { branchIsActive, type FleetGroup, type FleetItem } from "@/fleet/model";
+import { projectFleetSections, type FleetItem, type FleetProjectedItem, type FleetSections } from "@/fleet/model";
 import { formatBytes, formatElapsed } from "@/format";
 import { cn } from "@/lib/utils";
 import { useLaserStable, useLaserState } from "@/runtime";
@@ -48,55 +48,58 @@ export interface FleetPanelProps {
   onClose?: (() => void) | undefined;
 }
 
+const sameDisclosure = (left: FleetDisclosure | undefined, right: FleetDisclosure): boolean =>
+  left?.surface === right.surface && left.groupPath === right.groupPath && left.section === right.section && left.key === right.key;
+
+function branchHasActual(items: readonly FleetProjectedItem[], key: string): boolean {
+  return items.some((projected) =>
+    (!projected.contextOnly && projected.item.key === key) || branchHasActual(projected.children, key),
+  );
+}
+
+/** Resolve a canonical reveal key to its one actual lifecycle membership. */
+function disclosureFor(sections: FleetSections, surface: FleetSurfaceName, key: string): FleetDisclosure | undefined {
+  for (const section of ["active", "finished"] as const satisfies readonly FleetSectionName[]) {
+    for (const projectedGroup of sections[section].groups) {
+      if (branchHasActual(projectedGroup.items, key)) {
+        return { surface, groupPath: projectedGroup.group.path, section, key };
+      }
+    }
+  }
+  return undefined;
+}
+
 export function FleetPanel({ variant, onClose }: FleetPanelProps) {
   const fleet = useFleet();
+  const clearedBefore = useFleetClearedBefore();
+  const treeSections = useMemo(() => projectFleetSections(fleet.tree ? [fleet.tree] : [], { clearedBefore }), [fleet.tree, clearedBefore]);
+  const elsewhereSections = useMemo(() => projectFleetSections(fleet.elsewhere, { clearedBefore }), [fleet.elsewhere, clearedBefore]);
   const revealed = useFleetReveal();
-  const [expanded, setExpanded] = useState<string | undefined>(undefined);
+  const [expanded, setExpanded] = useState<FleetDisclosure | undefined>(undefined);
 
-  // Something asked for a particular row: that row is the one you meant, so it
-  // is the one open. Spent immediately, so asking twice works twice.
+  // A reveal carries canonical identity. Resolve it to the actual work's
+  // current section so a task that just ended opens Finished, never both copies
+  // of one ancestor. Spent immediately, so asking twice works twice.
   useEffect(() => {
     if (revealed === undefined) return;
-    setExpanded(revealed);
+    const target = disclosureFor(treeSections, "tree", revealed) ?? disclosureFor(elsewhereSections, "strays", revealed);
+    if (target) setExpanded(target);
     clearFleetReveal();
-  }, [revealed]);
+  }, [elsewhereSections, revealed, treeSections]);
 
-  const toggle = useCallback((key: string) => setExpanded((current) => (current === key ? undefined : key)), []);
-  const renderDetail = useCallback((item: FleetItem) => <FleetDetail item={item} />, []);
-
-  // Work the person has already put away. Nothing is deleted — the runs and
-  // tasks are the host's records and their sessions are still in the sidebar —
-  // so this hides only branches that were already finished when Clear was
-  // pressed. Anything still going, and anything that finishes later, stays.
-  // The mark is one per viewer (D-154), so it applies to the tree being shown
-  // and to work from deleted sessions alike; Clear here clears what is here.
-  const clearedBefore = useFleetClearedBefore();
-  const putAway = useCallback(
-    (groups: readonly FleetGroup[]): FleetGroup[] => {
-      if (clearedBefore === undefined) return [...groups];
-      // Keep a branch when anything in it is still going, or when anything in it
-      // ended after the mark — a parent that finished before Clear can still have
-      // a child that finished after it, and hiding the parent would hide that.
-      // An item with no `endedAt` is kept: not knowing when something ended is
-      // not a reason to put it away.
-      const keep = (item: FleetItem): boolean =>
-        branchIsActive(item) || item.endedAt === undefined || item.endedAt > clearedBefore || item.children.some(keep);
-      const out: FleetGroup[] = [];
-      for (const group of groups) {
-        const items = group.items.filter(keep);
-        if (items.length > 0) out.push({ ...group, items });
-      }
-      return out;
-    },
-    [clearedBefore],
+  const toggle = useCallback(
+    (target: FleetDisclosure) => setExpanded((current) => (sameDisclosure(current, target) ? undefined : target)),
+    [],
   );
-  const tree = useMemo<FleetGroup | undefined>(() => (fleet.tree ? putAway([fleet.tree])[0] : undefined), [fleet.tree, putAway]);
-  const elsewhere = useMemo<FleetGroup[]>(() => putAway(fleet.elsewhere), [fleet.elsewhere, putAway]);
-  const anyFinished = (groups: readonly FleetGroup[]): boolean => groups.some((group) => group.items.some((item) => !branchIsActive(item)));
-  const hasFinished = useMemo(() => (tree ? anyFinished([tree]) : false), [tree]);
-  const hasFinishedElsewhere = useMemo(() => anyFinished(elsewhere), [elsewhere]);
-  // Only what this panel shows lights its dot: the tree, and the strays under it.
-  const going = fleet.running > 0 || elsewhere.some((group) => group.running > 0);
+  const renderDetail = useCallback((item: FleetItem, contextOnly: boolean) => <FleetDetail item={item} contextOnly={contextOnly} />, []);
+
+  const hasTreeWork = treeSections.active.count + treeSections.finished.count > 0;
+  const hasElsewhereWork = elsewhereSections.active.count + elsewhereSections.finished.count > 0;
+  const hasFinished = treeSections.finished.count > 0;
+  const hasFinishedElsewhere = elsewhereSections.finished.count > 0;
+  // Only actual live membership shown here lights the dot. Context ancestors
+  // in Finished never make that section or the panel look live.
+  const going = treeSections.active.running > 0 || elsewhereSections.active.running > 0;
 
   return (
     <aside
@@ -129,10 +132,11 @@ export function FleetPanel({ variant, onClose }: FleetPanelProps) {
         <div className="min-h-0 flex-1">
           {fleet.current === undefined ? (
             <FleetNoSession />
-          ) : tree ? (
+          ) : hasTreeWork ? (
             <SubagentList
-              groups={[tree]}
-              expandedKey={expanded}
+              sections={treeSections}
+              surface="tree"
+              expanded={expanded}
               currentKey={`agent:${fleet.current}`}
               onToggle={toggle}
               renderDetail={renderDetail}
@@ -142,10 +146,10 @@ export function FleetPanel({ variant, onClose }: FleetPanelProps) {
             <FleetEmpty />
           )}
         </div>
-        {elsewhere.length > 0 && (
+        {hasElsewhereWork && (
           <SubagentStrays
-            groups={elsewhere}
-            expandedKey={expanded}
+            sections={elsewhereSections}
+            expanded={expanded}
             onToggle={toggle}
             renderDetail={renderDetail}
             onClearFinished={hasFinishedElsewhere ? () => clearFinishedFleet() : undefined}
@@ -208,8 +212,8 @@ function FleetNoSession() {
 // The open row
 // ---------------------------------------------------------------------------
 
-function FleetDetail({ item }: { item: FleetItem }) {
-  return item.kind === "task" ? <TaskDetail item={item} /> : <AgentDetail item={item} />;
+function FleetDetail({ item, contextOnly }: { item: FleetItem; contextOnly: boolean }) {
+  return item.kind === "task" ? <TaskDetail item={item} contextOnly={contextOnly} /> : <AgentDetail item={item} contextOnly={contextOnly} />;
 }
 
 /**
@@ -304,7 +308,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function AgentDetail({ item }: { item: FleetItem }) {
+function AgentDetail({ item, contextOnly }: { item: FleetItem; contextOnly: boolean }) {
   const run = item.run;
   // Ending an agent is the one confirmation in the app (`EndAgentDialog`), so
   // this asks it rather than inventing a second way to stop a run.
@@ -345,8 +349,8 @@ function AgentDetail({ item }: { item: FleetItem }) {
             <span className="mt-0.5 block text-ink-3">Shares its parent’s checkout.</span>
           </Field>
         ) : null}
-        {item.elapsedMs !== undefined && <Field label="Elapsed">{formatElapsed(item.elapsedMs)}</Field>}
-        {run?.status === "needs_input" && run.question && (
+        {!contextOnly && item.elapsedMs !== undefined && <Field label="Elapsed">{formatElapsed(item.elapsedMs)}</Field>}
+        {!contextOnly && run?.status === "needs_input" && run.question && (
           // Live, paused on a question (M13-T45): the question is the one
           // thing the person can act on, so it is here in full, with its
           // choices, and the chat is where it is answered.
@@ -369,7 +373,7 @@ function AgentDetail({ item }: { item: FleetItem }) {
   );
 }
 
-function TaskDetail({ item }: { item: FleetItem }) {
+function TaskDetail({ item, contextOnly }: { item: FleetItem; contextOnly: boolean }) {
   const { actions } = useLaserStable();
   const [reload, setReload] = useState(0);
   const [stopping, setStopping] = useState(false);
@@ -397,7 +401,7 @@ function TaskDetail({ item }: { item: FleetItem }) {
   return (
     <div className="min-w-0">
       <dl className="flex flex-col gap-2">
-        {item.elapsedMs !== undefined && <Field label="Elapsed">{formatElapsed(item.elapsedMs)}</Field>}
+        {!contextOnly && item.elapsedMs !== undefined && <Field label="Elapsed">{formatElapsed(item.elapsedMs)}</Field>}
         {item.terminalReason && <Field label="Ended">{item.terminalReason}</Field>}
         {item.outputBytes !== undefined && <Field label="Output">{formatBytes(item.outputBytes)}</Field>}
       </dl>

@@ -173,7 +173,10 @@ project that this column no longer makes.
 it in a session's tree puts that tree's finished work away; the mark itself is
 global, so finished work from a deleted session is put away by the same press,
 and the deleted-session line offers its own Clear when the tree has nothing
-finished to attach one to.
+finished to attach one to. The cut is recursive: terminal descendants already
+finished at the mark disappear even under a live parent. Live work, work that
+finishes later and work without a trustworthy end time remain; any ancestry
+needed to reach them remains as context only.
 
 ## Structure, and the two rules that shape it
 
@@ -189,10 +192,14 @@ the tree. Attention still reaches you, because an item wears the loudest state
 anywhere beneath it: a question three levels down lights the row you can
 actually see, the header, the session row and the toggle.
 
-**R2 · Lifecycle partitioning moves whole branches.** "In progress" and
-"Finished" are the only two sections. A branch is in progress while anything
-inside it is, so a finished child stays under its live parent rather than
-being filed away somewhere structurally false.
+**R2 · Lifecycle sections are recursive projections of one tree.** Every live
+piece of work appears in **In progress** and every terminal piece appears in
+**Finished** as soon as its own state changes. The agent ancestors needed to
+preserve lineage repeat as context in either section — including the same live
+agent in In progress and around its ended command in Finished — but context is
+labelled, is never counted as work in that section, and contributes attention
+only from the descendants actually shown there. The canonical run or task is
+never duplicated or reordered; only its ancestry is projected.
 
 ## The rules that survived the panels
 

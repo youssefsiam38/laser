@@ -5,17 +5,20 @@
  */
 export {
   FLEET_STATE_LABEL,
-  branchIsActive,
   buildFleet,
   flattenFleet,
   fleetSummary,
-  partitionItems,
+  projectFleetSections,
   scopeFleet,
   type FleetGroup,
   type FleetInput,
   type FleetItem,
   type FleetItemKind,
+  type FleetProjectedGroup,
+  type FleetProjectedItem,
   type FleetScope,
+  type FleetSectionProjection,
+  type FleetSections,
   type FleetState,
 } from "./model.js";
 export { useFleet, useFleetReconcile, type FleetView } from "./hooks.js";
