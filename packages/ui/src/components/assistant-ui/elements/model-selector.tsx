@@ -415,13 +415,13 @@ function ModelSelectorContent({
       sideOffset={sideOffset}
       onOpenAutoFocus={focusSearch}
       className={cn(
-        "w-80 min-w-(--radix-popover-trigger-width) gap-0 overflow-hidden rounded-xl p-0",
+        "max-h-(--radix-popover-content-available-height) w-80 min-w-(--radix-popover-trigger-width) gap-0 overflow-hidden rounded-xl p-0",
         className,
       )}
       {...props}
     >
       <Command
-        className="bg-transparent"
+        className="min-h-0 bg-transparent [&_[data-slot=command-input-wrapper]]:shrink-0"
         shouldFilter={!unfiltered}
         {...(value !== undefined ? { defaultValue: value } : {})}
       >
@@ -469,7 +469,7 @@ function ModelSelectorList({
     <CommandList
       data-slot="model-selector-list"
       className={cn(
-        "[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+        "min-h-0 flex-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
         className,
       )}
       {...props}
@@ -717,7 +717,7 @@ export function ProviderModelMenu({ loading = false, error, onRetry, side = "bot
   return (
     <ModelSelectorContent side={side} align={align} searchable={false} className="w-88" container={container}>
       {beforeFilters}
-      <div className="grid gap-2 border-b border-line p-2">
+      <div className="grid shrink-0 gap-2 border-b border-line p-2">
         <LabeledFilter label="Provider">
           <ProviderFilterField providers={providers} value={providerFilter} onValueChange={setProviderOverride} container={container} />
         </LabeledFilter>
@@ -790,10 +790,14 @@ export function ProviderFilterField({ providers, value, onValueChange, className
           <ChevronsUpDown aria-hidden="true" className="size-3.5 shrink-0 text-ink-3" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent container={container} align="start" className="w-72 max-w-[calc(100vw-2rem)] overflow-hidden p-0">
-        <Command className="bg-transparent">
+      <PopoverContent
+        container={container}
+        align="start"
+        className="max-h-(--radix-popover-content-available-height) w-72 max-w-[calc(100vw-2rem)] overflow-hidden p-0"
+      >
+        <Command className="min-h-0 bg-transparent [&_[data-slot=command-input-wrapper]]:shrink-0">
           <CommandInput aria-label="Search providers" placeholder="Search providers" />
-          <CommandList>
+          <CommandList className="min-h-0 flex-1">
             <CommandEmpty>No provider matches.</CommandEmpty>
             <CommandGroup heading="Providers">
               <CommandItem
