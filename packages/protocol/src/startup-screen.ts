@@ -230,7 +230,9 @@ export const STARTUP_SCREEN_CSS = `.startup-restoration {
   --startup-beam-track-opacity: 0.16;
   position: fixed;
   inset: 0;
-  z-index: 100;
+  /* Above the frame, below the z-50 overlays: a question the host asks before
+     the shell exists (project trust) must be answerable over this screen. */
+  z-index: 40;
   display: grid;
   overflow: hidden;
   isolation: isolate;

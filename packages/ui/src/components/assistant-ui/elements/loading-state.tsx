@@ -164,21 +164,37 @@ interface StartupRestorationGateProps {
   active: boolean;
   label: string;
   notice?: ReactNode;
+  /**
+   * Questions the host can ask before the shell exists — project trust holds
+   * the very session load this screen is waiting on. They mount in both
+   * states, so a person can answer while the screen is up and the answer is
+   * what lets it come down; leaving them in the shell would hide them until
+   * the host gave up on its own.
+   */
+  prompts?: ReactNode;
   children: ReactNode;
 }
 
 /** Do not mount the operational shell until restoration is complete. */
-export function StartupRestorationGate({ active, label, notice, children }: StartupRestorationGateProps) {
+export function StartupRestorationGate({ active, label, notice, prompts, children }: StartupRestorationGateProps) {
   const [overlayPresent, setOverlayPresent] = useState(active);
 
   useEffect(() => {
     if (active) setOverlayPresent(true);
   }, [active]);
 
-  if (active) return <StartupRestorationScreen label={label} notice={notice} />;
+  if (active) {
+    return (
+      <>
+        {prompts}
+        <StartupRestorationScreen label={label} notice={notice} />
+      </>
+    );
+  }
 
   return (
     <>
+      {prompts}
       {children}
       {overlayPresent && (
         <StartupRestorationScreen

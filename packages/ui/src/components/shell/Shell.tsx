@@ -108,6 +108,9 @@ export function Shell() {
       active={startupRestoring}
       label={versionMismatch ? "Waiting for the update before reconnecting" : connection === "open" ? "Returning to your last session" : "Connecting to your workspace"}
       notice={<HostConnectionState className="absolute inset-x-0 top-0 z-20" />}
+      // The host holds the restored session's worker start behind this
+      // question, so it must be answerable while the screen is still up.
+      prompts={<TrustDialog />}
     >
       <FileLinkDirectory.Provider value={view?.state.cwd}>{content}</FileLinkDirectory.Provider>
     </StartupRestorationGate>
@@ -429,7 +432,6 @@ function ShellFrame() {
         <MoveSessionDialog />
         <CommandPaletteDialog open={paletteOpen} onOpenChange={setPaletteOpen} />
         <GlobalSearch />
-        <TrustDialog />
         {!fleetIsColumn && <FleetSheet />}
         <EndAgentDialog />
         <RemoveWorktreeDialog />

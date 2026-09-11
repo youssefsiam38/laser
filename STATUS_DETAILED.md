@@ -1252,6 +1252,8 @@ lane T's own if both were written.
 | M13-T112 | Collapsed edit/write diff statistics | done | collapsed-diff-counts | af96144; isolated identity/full verify | see notes; D-214 |
 | M13-T113 | Release complete current batch as 0.3.8 | in-progress | orchestrator-release | final source CI34611182930 passed | T110 excluded; D-215/D-216 |
 | M13-T114 | Automated release entrypoint and AGENTS instructions | in-progress | release-prep owner | — | user scope addition before0.3.8 publication; D-217 |
+| M13-T115 | Answer the project-trust question over the opening screen | done | claude-2026-09-11-trust | `pnpm -F @lasercode/ui test -- startup-restoration startup-screen trust-dialog-startup`; packages/ui/test/shell/trust-dialog-startup.test.tsx | see notes; D-218 |
+| M13-T116 | Release the startup trust fix as 0.3.9 | in-progress | claude-2026-09-11-trust | — | see notes |
 | M13-T65 | A fork is a top-level session, never nested under its origin | done | claude-2026-09-09-agents | `pnpm -F @lasercode/host test -- test/catalog.test.ts`; `pnpm -F @lasercode/ui test -- test/shell/session-groups-fork.test.ts` | requested by the user; D-166 |
 | M13-T64 | Namer labels every call of a top-level session, none of a child's | done | claude-2026-09-09-agents | `pnpm -F @lasercode/worker test` (`agents/namer.test.ts` "labels every call in a burst at once"; `agents/server-agents.test.ts` "a child agent's tool calls are never labelled") | requested by the user; D-165 |
 | M13-T63 | Restoring an unsent draft puts the person in the field | done | claude-2026-09-09-agents | `pnpm -F @lasercode/ui test -- test/thread/draft-restore-focus.test.tsx` | requested by the user; see notes |
@@ -1370,6 +1372,7 @@ lane T's own if both were written.
 - Ownership ledger: legacy-empty recovery · 01a09036-916c-7754-a665-f2507878889b · one cohesive UI recovery milestone · runtime new-session/controller/draft helpers and existing EmptyState/Composer/Beam surfaces plus direct tests; no ToolRow, backend/protocol/lockfile/ledgers/release writes · base8650d89 plus parent claim ledger, explicit fast-forward handoff · T108/T111 done and combined gates green · dropped before worker assignment by user · next: no product work; one-time script from parent, then T113.
 
 #### M13-T113 notes
+- 2026-09-11 release command t-9f0f5a72 was stopped after release-passed; not restarted. Exact-source CI34619190366 and release34619609145 passed for6355b782eb91889c85200bd88830c6cdffc6d48f; annotated tag objectd67211eb3b16bde26a761867f968322092f6290b. Read-only GitHub check confirms public non-prerelease v0.3.8 with12 assets. Final local downloaded-asset/provenance receipt remains incomplete. Preserve checkpoint `.git/lasercode-release/v0.3.8.json` and isolated worktree `/tmp/lasercode-release-0.3.8-B13a1Y`; only resume on authorization.
 - 2026-09-11 candidate0.3.8 and release orchestrator integrated after review corrections; parent now invokes the command directly. Source includes user-authorized maintainer/contact-email changes, excludes T110 product recovery. No tag/publication yet; command owns staged isolated verify, exact source CI, annotated tag, architecture build/publication and downloaded-asset verification.
 - 2026-09-11 version-only candidate e87eaf6 is ready on frozen cba19f2: exact12 version files, full verify2199 workspace+13release tests and staged identity reported green. User now requests a reusable release orchestrator/script in AGENTS before publication; no metadata reviewer/tag/push yet. Same release owner receives T114 as next milestone atop immutable e87eaf6, combined candidate reviewed once before execution.
 - 2026-09-11 isolated release-prep ownership handed from parent to continuing owner01a08fdb-f2fe-7754-a665-f1c78349c067, run_e3aa492a; clean frozen basecba19f2 in `.worktrees/release-037-prep-53dcadee`. Version-only0.3.8 preparation, identity/full verify and release-note artifact; no tag/push/publication by worker. Parent no longer writes this worktree during preparation.
@@ -1379,7 +1382,16 @@ lane T's own if both were written.
 - Ownership ledger: release0.3.8 · orchestrator-release · pending complete-batch freeze and isolated release preparation · version/generated metadata, release notes and gates; planning parent-only · final sourcef9a5195 plus freeze ledger · T111 done, T110 dropped · version-only prep active with01a08fdb-f2fe-7754-a665-f1c78349c067/run_e3aa492a · next: single metadata review, exact source CI before tag, verified assets before publication.
 
 
+#### M13-T116 notes
+- 2026-09-11 claimed: routine orchestrator run (`node scripts/release/release.mjs 0.3.9 --source <sha>` preview, then `--publish`) from the T115 commit atop 6355b78; no manual tag or release page.
+
+#### M13-T115 notes
+- 2026-09-11 claimed: the installed 0.3.8 sat on "Returning to your last session" for two minutes on every launch. host.log shows `project trust: asking about <project> (.laser/settings.json)` at each start; the restored session's `session/load` needs a worker, the worker start waits in `ProjectRegistry.ensureTrusted`, and the only client that could answer had `TrustDialog` inside `ShellFrame`, which `StartupRestorationGate` does not mount until that same load completes. Nothing shown, so the host declined after `DEFAULT_TRUST_TIMEOUT_MS` (120 s) and the screen finally came down. Second defect underneath: the opening screen is `position: fixed; z-index: 100` while dialogs are `z-50`, so even a mounted dialog would have been painted under it.
+- 2026-09-11 fix: `StartupRestorationGate` grows a `prompts` slot rendered in both states; `Shell` passes `<TrustDialog />` there and the frame no longer mounts one; the opening screen moves to `z-index: 40` (above the frame, whose highest fixed layer is the z-40 Beam bubble mounted only after the gate lifts; below the z-50 overlays and the z-110 version notice) in `@lasercode/protocol/startup-screen` and the pinned `globals.css` block. Not a 0.3.8 regression in code: the same placement shipped in 0.3.7; it bites the first launch after a project with local settings was left undecided.
+- 2026-09-11 done, evidence: 25 focused UI tests (gate prompts in both states, dialog answerable over the active gate with focus on Not now, Shell source pin, z-index below 50, CSS block pinned) and 18 desktop startup-screen tests pass; UI typecheck clean. Local `pnpm identity:check` also reports the person's untracked `.laser/settings.json` in this checkout, which is their project configuration and not part of the change.
+
 #### M13-T114 notes
+- 2026-09-11 release command t-9f0f5a72 was stopped after release-passed; not restarted. Exact-source CI34619190366 and release34619609145 passed for6355b782eb91889c85200bd88830c6cdffc6d48f; annotated tag objectd67211eb3b16bde26a761867f968322092f6290b. Read-only GitHub check confirms public non-prerelease v0.3.8 with12 assets. Final local downloaded-asset/provenance receipt remains incomplete. Preserve checkpoint `.git/lasercode-release/v0.3.8.json` and isolated worktree `/tmp/lasercode-release-0.3.8-B13a1Y`; only resume on authorization.
 - 2026-09-11 single combined review `/tmp/review-release038-automation.md` requested annotated-tag object enforcement and one remaining unsafe publish.sh hint. Parent fixed both in4c9c121, verified39 release tests and full staged identity/verify; no second review. Integrated automation/version metadata, then explicitly included user contact-email edits as1a69704 (product.json, desktop metadata, COMMERCIAL, TRADEMARKS). Unrelated deletions/local state/images remain unstaged. Next direct command execution at final ledger-inclusive source.
 - 2026-09-11 parent direct correction5fd8adf implements the safety fixes and adds regressions:37 release tests, staged identity, full verify2199 workspace+37 release and live read-only dry-run pass; no public mutation. Combined metadata+automation review is active at exactcba19f2..5fd8adf under01a09124-eda4-7754-a665-f301ff495eeb/run_72701554 (`/tmp/review-release038-automation.md`). Parent fixes any findings directly; no worker implementation resumes. Logs `/tmp/laser-release-direct-{tests,verify,dry-run}.log`.
 - 2026-09-11 user requests parent finish directly. Worker stopped run_3bb828e8 and explicitly acknowledged handoff in run_ce6faf01: clean committed578afc0 plus uncommitted draft-lookup helper in publish-github.mjs, no running processes. Parent now owns release.mjs/helper/tests/README/AGENTS corrections and execution; no further implementation delegation. Pre-review corrections cover Git environment isolation, semantic metadata checks, explicit absence/draft lookup, command budgets, credential-safe diagnostics and resume/proof binding.
@@ -2270,6 +2282,12 @@ lane T's own if both were written.
 ---
 
 ## Handoffs
+
+### H-9 · M13-T113 / M13-T114 · 2026-09-11 · orchestrator
+State: v0.3.8 public with12 assets; CI and release workflow passed. Release monitor stopped during final local verification, not resumed.
+Uncommitted: planning checkpoint only plus preserved unrelated user deletions/untracked files.
+Next: obtain authorization before resuming the existing release checkpoint; preserve source6355b78 and annotated tag. No installed app/host changes.
+
 
 ### Current stabilization ownership
 
@@ -4106,3 +4124,8 @@ Next: T111 finishes routing; T108 completes its single review correction. Only t
 **Decision.** Add T114 and document its use in AGENTS. Reuse existing architecture-build, installer and publication guards; routine releases run the command directly rather than delegating version preparation and monitoring to a subagent.
 **Why.** The person explicitly requests release automation before this publication.
 **Consequences.** Keep prepared e87eaf6 immutable and add automation atop it; review the combined candidate before using the new entrypoint for0.3.8. No tag/publication until exact-source CI; no forced refs, user-work cleanup, installed-process changes, or alternate publisher.
+
+### D-218 · 2026-09-11 · Questions the host asks before the shell exists ride the startup gate
+**Decision.** A prompt that can hold the restored session's worker start (today: project trust) mounts on `StartupRestorationGate`'s `prompts` slot, in both of its states, and the opening screen stacks below the z-50 overlays. Nothing a person must answer lives only inside `ShellFrame`.
+**Why.** The gate does not mount the shell until the restored session loads, and that load waits on the answer; a dialog inside the shell can never appear, and the app freezes until the host's 120 s trust timeout. 0.3.8 shipped this on every launch after a project with `.laser/settings.json` was left undecided.
+**Consequences.** New host-side questions raised during startup (a future permission or credential prompt) go in the same slot and get the same over-the-screen test. The opening screen's z-index is pinned below 50 by `packages/ui/test/startup-restoration.test.tsx`; the version notice keeps its z-110 above both.
