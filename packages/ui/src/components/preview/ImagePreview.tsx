@@ -79,7 +79,7 @@ export function ImagePreview({ src, alt, className }: ImagePreviewProps) {
           onError={() => setFailed(true)}
           draggable={false}
           className={cn(
-            actual ? "max-w-none shrink-0" : "max-h-full max-w-full object-contain",
+            actual ? "max-w-none shrink-0 self-start" : "max-h-full max-w-full object-contain",
             // A transparent PNG on a light ground and on a dark one both need
             // to read; a hairline is enough to show where the image ends.
             "rounded-sm ring-1 ring-line",
@@ -97,7 +97,7 @@ export function ImagePreview({ src, alt, className }: ImagePreviewProps) {
             size="xs"
             onClick={() => setActual((v) => !v)}
             aria-pressed={actual}
-            className="shrink-0"
+            className="shrink-0 pointer-coarse:min-h-11"
           >
             {actual ? <Minimize2 /> : <Maximize2 />}
             {actual ? "Fit" : "Actual size"}

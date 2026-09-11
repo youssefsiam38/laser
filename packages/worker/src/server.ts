@@ -484,6 +484,9 @@ export class WorkerServer {
         return { commands: await this.live(req.params.path).driver.commands() } satisfies Result<"pi/commands/list">;
       case "pi/prompts/list":
         return { prompts: await this.live(req.params.path).driver.prompts() } satisfies Result<"pi/prompts/list">;
+      case "pi/project/read":
+        this.assertCwd(req.params.cwd);
+        return (await this.files().read(req.params.path)) satisfies Result<"pi/project/read">;
       case "pi/project/files": {
         this.assertCwd(req.params.cwd);
         return (await this.files().list({

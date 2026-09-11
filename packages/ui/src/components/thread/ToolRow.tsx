@@ -23,6 +23,7 @@ import { useIsTouch } from "@/hooks/use-mobile";
 import { DialogBody, dialogFormOf, ToolRowDialog, uiResponseFor, useRegisterToolRow } from "@/dialogs";
 import { toolDetailsDefaultOpen, toolDisplayResult, useActivityDetailLevel, useLaserStable, useLaserState } from "@/runtime";
 import { useActivityDisclosureOverride } from "@/runtime/sessionPreferences";
+import { FileCard } from "./FileCard.js";
 import { activeToolLabel } from "./tool-groups.js";
 import { classifyMcpTool } from "./mcp-tools.js";
 import { McpToolRow } from "./McpToolRow.js";
@@ -211,6 +212,9 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
       peek={failed && text ? <ToolError message={text} compact /> : undefined}
       footer={footer}
     >
+      {(kind === "write" || kind === "edit") && state === "done" && status?.type === "complete" && diffView?.path ? (
+        <FileCard path={diffView.path} lines={kind === "write" ? appliedDiffStats?.added : undefined} />
+      ) : null}
       {hasBody ? (
         body === "terminal" ? (
           <BashBody args={args} text={text} running={running} isError={failed} />

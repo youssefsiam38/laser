@@ -17,6 +17,9 @@
  * both rather than a bridge to either.
  */
 
+import type { ProjectFileContent } from "@lasercode/protocol";
+import { formatBytes } from "@/format";
+
 /** The body that draws the content, or `none` when we will not guess. */
 export type PreviewKind = "markdown" | "diff" | "image" | "text" | "none";
 
@@ -114,12 +117,37 @@ const NAMES: ReadonlyMap<string, string> = new Map([
   ["text/x-patch", "Unified diff"],
   ["application/x-patch", "Unified diff"],
   ["text/plain", "Plain text"],
+  ["text/typescript", "TypeScript"],
+  ["text/javascript", "JavaScript"],
+  ["text/python", "Python"],
+  ["text/go", "Go"],
+  ["text/rust", "Rust"],
   ["application/json", "JSON"],
   ["application/xml", "XML"],
   ["application/yaml", "YAML"],
   ["application/toml", "TOML"],
   ["image/svg+xml", "SVG image"],
 ]);
+
+/** A descriptor from validated file metadata or the tool's known line count. */
+export function fileDescription(path: string, info: { mediaType?: string | undefined; size?: number; lines?: number } = {}, language = "text"): string {
+  const canonical = ({ md: "markdown", ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript", patch: "diff" } as Record<string, string>)[language] ?? language;
+  const mediaType = info.mediaType ?? (canonical === "text" ? "text/plain" : `text/${canonical}`);
+  const kind = previewKindFor(mediaType, path);
+  const format = kind === "markdown" ? `${describeMediaType("text/markdown")} document`
+    : kind === "diff" ? describeMediaType("text/x-diff")
+    : kind === "image" ? describeMediaType(mediaType)
+    : canonical !== "text" ? `${describeMediaType(`text/${canonical}`)} source` : info.mediaType ? describeMediaType(mediaType) : "File";
+  const detail = info.size !== undefined ? formatBytes(info.size) : info.lines !== undefined ? `${info.lines} ${info.lines === 1 ? "line" : "lines"}` : undefined;
+  return `${format}${detail ? ` · ${detail}` : ""}`;
+}
+
+/** Attachments have bytes but no filesystem path or modification time. */
+export function attachmentFile(image: { mimeType: string; data: string }, name: string): ProjectFileContent {
+  const padding = image.data.endsWith("==") ? 2 : image.data.endsWith("=") ? 1 : 0;
+  return { path: "", name, mediaType: image.mimeType, size: Math.max(0, Math.floor(image.data.length * 3 / 4) - padding),
+    modifiedAt: "", encoding: "base64", content: image.data, truncated: false };
+}
 
 /**
  * A name for the format, for the eyebrow and for the "open externally" card.

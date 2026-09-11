@@ -180,6 +180,24 @@ function harness() {
 }
 
 describe("WorkerServer", () => {
+  it("dispatches project reads without a driver and refuses a different cwd", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "file-read-server-"));
+    const out: JsonRpcMessage[] = [];
+    let drivers = 0;
+    const server = new WorkerServer({ cwd, send: message => out.push(message), createDriver: () => { drivers++; return new FakeDriver(); } });
+    try {
+      writeFileSync(join(cwd, "note.md"), "# Note");
+      await server.handle({ jsonrpc: "2.0", id: 1, method: "pi/project/read", params: { cwd, path: "note.md" } });
+      expect(out.find(message => "id" in message && message.id === 1)).toMatchObject({ result: { path: "note.md", content: "# Note", mediaType: "text/markdown" } });
+      await server.handle({ jsonrpc: "2.0", id: 2, method: "pi/project/read", params: { cwd: join(cwd, "other"), path: "note.md" } });
+      expect(out.find(message => "id" in message && message.id === 2)).toHaveProperty("error");
+      await server.handle({ jsonrpc: "2.0", id: 3, method: "pi/project/read", params: { cwd, path: "missing.txt" } });
+      expect(out.find(message => "id" in message && message.id === 3)).toMatchObject({ error: { code: -32603, message: "That file could not be found. It may have been moved or deleted." } });
+      await server.handle({ jsonrpc: "2.0", id: 4, method: "pi/project/read", params: { cwd, path: ".." } });
+      expect(out.find(message => "id" in message && message.id === 4)).toMatchObject({ error: { code: -32603, message: "That file is outside this project." } });
+      expect(drivers).toBe(0);
+    } finally { rmSync(cwd, { recursive: true, force: true }); }
+  });
   it("lists project commands before a session exists without attaching the preview driver", async () => {
     const h = harness();
     const listed = await h.call(1, "pi/commands/list", { cwd: "/tmp/fake" });

@@ -8,7 +8,9 @@ import { AgentEventMessage } from "./AgentEventMessage.js";
 import { TaskEventNotice } from "./TaskEventNotice.js";
 import { AGENT_COMPLETION_DATA_PART, AGENT_EVENT_DATA_PART, GOAL_DATA_PART, TASK_EVENT_DATA_PART, type AgentCompletionData } from "@/runtime/projection";
 import type { GoalRecord as GoalRecordData } from "@/runtime/goal-history";
-import { memo, useContext, useMemo, useState } from "react";
+import { memo, useContext, useMemo, useRef, useState } from "react";
+import { FileViewer, type FileViewerSource } from "./FileViewer.js";
+import { attachmentFile } from "@/components/preview/media";
 import { FindSelectionContext, SearchMessageContext, useSearchReveal } from "./search-state.js";
 
 import { UserMessageAttachments } from "@/components/assistant-ui/elements/attachment.aui";
@@ -38,7 +40,7 @@ import { useCopy } from "@/hooks/use-copy";
 import { duration as formatDuration } from "@/format";
 import { cn } from "@/lib/utils";
 import { NOTICE_DATA_PART, sessionTitle, useLaserStable, useLaserState } from "@/runtime";
-import { leafOf, userEntryAt, versionsOf } from "./entries.js";
+import { imagePartsOf, leafOf, userEntryAt, versionsOf } from "./entries.js";
 import { THINKING_LEVELS, useSupportedThinkingLevels } from "@/components/assistant-ui/elements/reasoning-effort";
 import { useElapsed } from "./timing.js";
 import { toolGroupKey } from "./tool-groups.js";
@@ -168,6 +170,9 @@ export function UserMessage() {
   const versions = useMemo(() => (entryId ? versionsOf(entries, entryId) : []), [entries, entryId]);
   const versionIndex = entryId ? versions.indexOf(entryId) : -1;
   const { quote, rest } = useMemo(() => splitLeadingQuote(text), [text]);
+  const [imagePreview, setImagePreview] = useState<FileViewerSource>();
+  const attachmentButton = useRef<HTMLElement | null>(null);
+  const imageBytes = useMemo(() => imagePartsOf(entries, entryId), [entries, entryId]);
   const attachments = useMemo<MessageAttachmentItem[]>(
     () => Array.from({ length: images }, (_, i) => ({ id: `image-${i}`, name: images === 1 ? "Image" : `Image ${i + 1}`, kind: "image" })),
     [images],
@@ -250,7 +255,14 @@ export function UserMessage() {
                 <DirectiveString text={rest} />
               </p>
             ) : null}
-            <MessageAttachments attachments={attachments} className="self-end" />
+            <MessageAttachments attachments={attachments} className="self-end" onOpen={imageBytes.length === images && images > 0 ? (id, trigger) => {
+              const index = Number(id.slice("image-".length));
+              const image = imageBytes[index];
+              if (!image) return;
+              attachmentButton.current = trigger;
+              setImagePreview({ file: attachmentFile(image, images === 1 ? "Image" : `Image ${index + 1}`) });
+            } : undefined} />
+            {imagePreview ? <FileViewer source={imagePreview} open onOpenChange={open => { if (!open) setImagePreview(undefined); }} returnFocus={attachmentButton.current} /> : null}
             <UserMessageAttachments />
           </UserBubble>
         )}

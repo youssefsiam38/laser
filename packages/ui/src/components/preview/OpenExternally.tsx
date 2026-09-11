@@ -24,6 +24,8 @@ import { describeMediaType } from "./media.js";
 
 export interface OpenExternallyProps {
   mediaType: string;
+  /** Why otherwise supported bytes cannot be displayed (for example a capped image). */
+  reason?: string | undefined;
   /** Where the file lives, when it lives somewhere. */
   path?: string | undefined;
   /** Ask the shell to open it with the OS handler. Omitted where that cannot work. */
@@ -31,7 +33,7 @@ export interface OpenExternallyProps {
   className?: string | undefined;
 }
 
-export function OpenExternally({ mediaType, path, onOpen, className }: OpenExternallyProps) {
+export function OpenExternally({ mediaType, reason, path, onOpen, className }: OpenExternallyProps) {
   const { copied, copy } = useCopy();
   const format = describeMediaType(mediaType);
 
@@ -43,7 +45,7 @@ export function OpenExternally({ mediaType, path, onOpen, className }: OpenExter
       <div className="flex max-w-[46ch] flex-col items-center gap-3 text-center">
         <FileQuestion aria-hidden="true" className="size-6 text-ink-3" />
         <p className="text-md font-semibold text-ink">
-          {PRODUCT_NAME} does not draw {format} files
+          {reason ?? `${format} preview is not available in ${PRODUCT_NAME}`}
         </p>
         <p className="text-sm text-ink-2">
           Rather than show you a broken viewer, it stays out of the way. Open the file in the app that handles it.
@@ -57,9 +59,9 @@ export function OpenExternally({ mediaType, path, onOpen, className }: OpenExter
 
         <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
           {onOpen ? (
-            <Button variant="secondary" size="sm" onClick={onOpen}>
+            <Button variant="secondary" size="sm" className="pointer-coarse:min-h-11" onClick={onOpen}>
               <ExternalLink />
-              Open
+              Open in editor
             </Button>
           ) : null}
           {path ? (
@@ -67,7 +69,7 @@ export function OpenExternally({ mediaType, path, onOpen, className }: OpenExter
               variant="outline"
               size="sm"
               onClick={() => void copy(path)}
-              className={cn(copied && "text-ok")}
+              className={cn("pointer-coarse:min-h-11", copied && "text-ok")}
             >
               {copied ? <Check /> : <Copy />}
               {copied ? "Copied" : "Copy path"}
