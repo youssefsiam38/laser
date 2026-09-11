@@ -117,6 +117,30 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/settings/set": { cwd: "/p", scope: "global", changes: [{ path: "compaction.reserveTokens", op: "set", value: 8192 }] },
   "feature/list": { cwd: "/p" },
   "feature/set": { id: "subagents", enabled: true, scope: "project", cwd: "/p" },
+  // --- M14 MCP servers (docs/mcp.md) ---
+  "mcp/list": { cwd: "/p" },
+  "mcp/save": {
+    cwd: "/p",
+    scope: "project",
+    server: {
+      name: "playwright",
+      transport: { kind: "stdio", command: "npx", args: ["-y", "@playwright/mcp@latest", "--isolated"], env: { TOKEN: { secret: true, value: "abc" }, MODE: "test" } },
+      startup: "on-demand",
+      tools: { exposure: "direct", exclude: ["browser_install"], approve: ["browser_file_upload"] },
+      catalogId: "playwright",
+    },
+  },
+  "mcp/remove": { cwd: "/p", scope: "global", name: "playwright" },
+  "mcp/inspect": { cwd: "/p", scope: "global", server: { name: "docs", transport: { kind: "http", url: "https://mcp.example.com/mcp", headers: { Authorization: { secret: true } } }, auth: { kind: "bearer", token: { secret: true, value: "t" } } } },
+  "mcp/ping": { cwd: "/p", scope: "global", name: "docs" },
+  "mcp/call": { cwd: "/p", scope: "project", name: "playwright", tool: "browser_navigate", args: { url: "https://example.com" } },
+  "mcp/disconnect": { cwd: "/p", scope: "project", name: "playwright" },
+  "mcp/auth/start": { cwd: "/p", scope: "global", name: "github" },
+  "mcp/auth/complete": { cwd: "/p", scope: "global", name: "github", redirectUrl: "http://127.0.0.1:19876/callback?code=x&state=y" },
+  "mcp/auth/logout": { cwd: "/p", scope: "global", name: "github" },
+  "mcp/import/detect": { cwd: "/p" },
+  "mcp/import/apply": { cwd: "/p", source: "claude-code", names: ["github"], scope: "global", replace: false },
+
   "web-search/status": { cwd: "/p" },
   "web-search/configure": { cwd: "/p", change: { action: "configure", provider: "openai", connection: { source: "shared", sharedProvider: "openai" }, activate: true } },
   "pi/packages/list": { cwd: "/p" },
@@ -197,6 +221,30 @@ const samples: Record<ClientMethod, unknown> = {
 };
 
 describe("client request schemas", () => {
+  it("refuses MCP definitions a person could not have meant", () => {
+    const save = clientParamsSchemas["mcp/save"];
+    const stdio = { name: "pw", transport: { kind: "stdio", command: "npx" } };
+    expect(save.safeParse({ cwd: "/p", scope: "project", server: stdio }).success).toBe(true);
+    // Sign-in belongs to HTTP servers only.
+    expect(save.safeParse({ cwd: "/p", scope: "project", server: { ...stdio, auth: { kind: "oauth" } } }).success).toBe(false);
+    expect(save.safeParse({ cwd: "/p", scope: "project", server: { ...stdio, auth: { kind: "none" } } }).success).toBe(true);
+    // The name becomes a tool prefix: no spaces, no slashes.
+    expect(save.safeParse({ cwd: "/p", scope: "project", server: { ...stdio, name: "my server" } }).success).toBe(false);
+    expect(save.safeParse({ cwd: "/p", scope: "project", server: { ...stdio, name: "a/b" } }).success).toBe(false);
+    // A secret input needs a value; a reference needs nothing.
+    expect(save.safeParse({ cwd: "/p", scope: "global", server: { name: "d", transport: { kind: "http", url: "https://x/mcp" }, auth: { kind: "bearer", token: { secret: true } } } }).success).toBe(true);
+    expect(save.safeParse({ cwd: "/p", scope: "global", server: { name: "d", transport: { kind: "http", url: "https://x/mcp" }, auth: { kind: "bearer", token: { secret: true, value: "" } } } }).success).toBe(false);
+    // Inspect names a saved server or carries a definition, never both or neither.
+    const inspect = clientParamsSchemas["mcp/inspect"];
+    expect(inspect.safeParse({ cwd: "/p", scope: "global", name: "d" }).success).toBe(true);
+    expect(inspect.safeParse({ cwd: "/p", scope: "global" }).success).toBe(false);
+    expect(inspect.safeParse({ cwd: "/p", scope: "global", name: "d", server: stdio }).success).toBe(false);
+    // Completing sign-in needs the callback URL or the code.
+    const complete = clientParamsSchemas["mcp/auth/complete"];
+    expect(complete.safeParse({ cwd: "/p", scope: "global", name: "d", code: "abc" }).success).toBe(true);
+    expect(complete.safeParse({ cwd: "/p", scope: "global", name: "d" }).success).toBe(false);
+  });
+
   it("round-trips the search connection probe without a provider override", () => {
     const request = { jsonrpc: "2.0", id: 1, method: "web-search/configure", params: { cwd: "/p", change: { action: "test" } } };
     expect(parseClientRequest(JSON.parse(JSON.stringify(request)))).toEqual(request);

@@ -8,6 +8,7 @@
  */
 import { z } from "zod";
 import { WEB_SEARCH_PROVIDER_IDS } from "./web-search.js";
+import { MCP_IMPORT_SOURCES, MCP_PROTOCOL_VERSIONS, MCP_STARTUP_MODES, MCP_TOOL_EXPOSURES } from "./mcp.js";
 import {
   AGENT_DESCRIPTION_MAX,
   AGENT_INSTRUCTIONS_MAX,
@@ -116,6 +117,80 @@ const pendingId = z.string().regex(/^p-[0-9a-f]{8,32}$/);
 // ---------- M4 values (settings, packages, providers, logs) ----------
 
 const cwd = z.string().min(1);
+
+// ---------- M14 MCP servers ----------
+
+/** Letters, digits, `-` and `_`: it becomes a tool-name prefix (docs/mcp.md). */
+export const MCP_SERVER_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const mcpServerName = z.string().regex(MCP_SERVER_NAME_PATTERN, "Use letters, digits, hyphens and underscores; up to 64 characters.");
+const mcpSecretRef = z.object({ secret: z.literal(true), present: z.boolean().optional() }).strict();
+const mcpSecretInput = z.object({ secret: z.literal(true), value: z.string().min(1).max(16384).regex(/^[^\x00-\x1f\x7f]+$/) }).strict();
+const mcpValueInput = z.union([z.string().max(16384), mcpSecretRef, mcpSecretInput]);
+const mcpNamePattern = z.string().min(1).max(256);
+const mcpTransportInputSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("stdio"),
+      command: z.string().trim().min(1).max(4096),
+      args: z.array(z.string().max(4096)).max(256).optional(),
+      env: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), mcpValueInput).optional(),
+      cwd: z.string().max(4096).optional(),
+      inheritEnv: z.boolean().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("http"),
+      url: z.string().trim().min(1).max(8192),
+      headers: z.record(z.string().regex(/^[A-Za-z0-9-]+$/), mcpValueInput).optional(),
+      stream: z.enum(["auto", "streamable-http", "sse"]).optional(),
+      caFile: z.string().max(4096).optional(),
+    })
+    .strict(),
+  z.object({ kind: z.literal("socket"), path: z.string().trim().min(1).max(4096) }).strict(),
+]);
+const mcpAuthInputSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("none") }).strict(),
+  z.object({ kind: z.literal("bearer"), token: mcpValueInput }).strict(),
+  z
+    .object({
+      kind: z.literal("oauth"),
+      clientId: z.string().max(1024).optional(),
+      clientSecret: mcpValueInput.optional(),
+      scope: z.string().max(2048).optional(),
+      redirectUri: z.string().max(2048).optional(),
+      authServerMetadataUrl: z.string().max(2048).optional(),
+      grantType: z.enum(["authorization_code", "client_credentials"]).optional(),
+    })
+    .strict(),
+]);
+const mcpToolPolicySchema = z
+  .object({
+    exposure: z.enum(MCP_TOOL_EXPOSURES),
+    only: z.array(mcpNamePattern).max(1000).optional(),
+    include: z.array(mcpNamePattern).max(1000).optional(),
+    exclude: z.array(mcpNamePattern).max(1000).optional(),
+    approve: z.union([z.boolean(), z.array(mcpNamePattern).max(1000)]).optional(),
+  })
+  .strict();
+export const mcpServerConfigInputSchema = z
+  .object({
+    name: mcpServerName,
+    label: z.string().trim().min(1).max(120).optional(),
+    transport: mcpTransportInputSchema,
+    auth: mcpAuthInputSchema.optional(),
+    startup: z.enum(MCP_STARTUP_MODES).optional(),
+    tools: mcpToolPolicySchema.optional(),
+    idleMinutes: z.number().int().min(0).max(100_000).optional(),
+    requestTimeoutMs: z.number().int().min(0).max(3_600_000).optional(),
+    protocolVersion: z.enum(MCP_PROTOCOL_VERSIONS).optional(),
+    resourcesAsTools: z.boolean().optional(),
+    debug: z.boolean().optional(),
+    disabled: z.boolean().optional(),
+    catalogId: z.string().max(64).optional(),
+  })
+  .strict()
+  .refine((server) => server.auth === undefined || server.auth.kind === "none" || server.transport.kind === "http", "Sign-in applies to HTTP servers only.");
 export const settingsScopeSchema = z.enum(["global", "project"]);
 export const featureScopeSchema = z.enum(["global", "project"]);
 export const packageScopeSchema = z.enum(["user", "project"]);
@@ -446,6 +521,30 @@ export const clientParamsSchemas = {
   ]) }).strict(),
   "feature/set": z
     .object({ id: z.string().min(1).max(80), enabled: z.boolean().nullable(), scope: featureScopeSchema, cwd: cwd.optional() })
+    .strict(),
+
+  // --- M14 MCP servers (docs/mcp.md) ---
+  "mcp/list": z.object({ cwd }).strict(),
+  "mcp/save": z.object({ cwd, scope: featureScopeSchema, server: mcpServerConfigInputSchema, originalName: mcpServerName.optional() }).strict(),
+  "mcp/remove": z.object({ cwd, scope: featureScopeSchema, name: mcpServerName }).strict(),
+  "mcp/inspect": z
+    .object({ cwd, scope: featureScopeSchema, name: mcpServerName.optional(), server: mcpServerConfigInputSchema.optional() })
+    .strict()
+    .refine((value) => (value.name === undefined) !== (value.server === undefined), "Name a saved server or pass a definition, not both."),
+  "mcp/ping": z.object({ cwd, scope: featureScopeSchema, name: mcpServerName }).strict(),
+  "mcp/call": z
+    .object({ cwd, scope: featureScopeSchema, name: mcpServerName, tool: z.string().min(1).max(256), args: z.record(z.string(), z.unknown()) })
+    .strict(),
+  "mcp/disconnect": z.object({ cwd, scope: featureScopeSchema, name: mcpServerName }).strict(),
+  "mcp/auth/start": z.object({ cwd, scope: featureScopeSchema, name: mcpServerName }).strict(),
+  "mcp/auth/complete": z
+    .object({ cwd, scope: featureScopeSchema, name: mcpServerName, redirectUrl: z.string().trim().min(1).max(8192).optional(), code: z.string().trim().min(1).max(4096).optional() })
+    .strict()
+    .refine((value) => value.redirectUrl !== undefined || value.code !== undefined, "Paste the callback URL or the code."),
+  "mcp/auth/logout": z.object({ cwd, scope: featureScopeSchema, name: mcpServerName }).strict(),
+  "mcp/import/detect": z.object({ cwd }).strict(),
+  "mcp/import/apply": z
+    .object({ cwd, source: z.enum(MCP_IMPORT_SOURCES), names: z.array(mcpServerName).min(1).max(200), scope: featureScopeSchema, replace: z.boolean().optional() })
     .strict(),
   "session/goal/get": z.object({ path: sessionPath }).strict(),
   "session/goal/action": z

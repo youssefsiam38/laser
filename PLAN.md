@@ -610,6 +610,39 @@ Depends on: M12.
 
 Stabilization order (D-193): repair the failed approved-subset source gate under M13-T97 first; then continue the preserved M13-T89/T92/T93 batch through the dedicated HLC-010 admission seam and independent review. M13-T94 retains every original complete-fix criterion; M13-T98 (D-195) adds the concrete runtime-incident reproduction and packaged identity gate under the same continuing lifecycle owner, not a parallel writer. Optional work remains outside this sequence.
 
+## M14 · MCP servers
+
+Goal: a person gives the model tools from any MCP server — a real browser
+(Playwright), databases, issue trackers, documentation — entirely from Settings,
+over every way of connecting the protocol defines (a command over stdio, an HTTP
+endpoint with Streamable HTTP or SSE, a Unix socket) and every way of signing
+in (none, bearer token, OAuth). The engine is the exact-pinned upstream
+`pi-mcp-adapter`, driven only through its programmatic entry with a
+Laser-owned configuration; the experience is Laser's. A developer sees
+exactly what is inside each server (name, version, capabilities,
+instructions, every tool with its schema, resources, prompts), controls each
+tool individually (on/off, direct or on-demand, ask-first), pings and
+reconnects, runs a tool by hand before the model ever does, and imports what
+other tools already configured on the machine. Binding design: `docs/mcp.md`.
+
+Done when: Playwright added from the gallery in one click works in a new
+session over stdio and, started with `--port`, over HTTP; the inspector lists
+its 24 tools with schemas and a per-tool switch changes what the model sees;
+Ping and Run work outside a session; an OAuth server (GitHub) signs in from the
+page; a project `.mcp.json` is importable; the packaged app opens a session
+with a stdio server from the bundled runtime with an empty PATH.
+
+Dependencies: M8 (companion extension), M13-T3 (worker harness and stub-provider tests), M4 (Settings).
+
+| ID | Task | Done when |
+| --- | --- | --- |
+| M14-T1 | Protocol: MCP vocabulary, methods and catalog | `packages/protocol/src/mcp.ts` defines transport/auth/policy/status/inspection types, the twelve `mcp/*` methods, `mcp/changed`, the `mcp` feature and module name, `lasercode/mcp/status`, and `MCP_KNOWN_SERVERS`; schemas refuse impossible definitions; round-trip samples pass |
+| M14-T2 | Worker engine: pinned adapter, Laser-owned store, inspector, sign-in, import, companion module, host routing | the worker pins `pi-mcp-adapter`, reads/writes both scope files and the secrets file, builds the adapter's config in memory, loads the adapter only when servers exist, answers every `mcp/*` method (inspect/ping/call on a standalone connection; OAuth start/complete/logout; detect/apply imports), forwards status through the `mcp` module, augments PATH for stdio children with the bundled runtime; host routes `mcp/*` by cwd; real-engine tests pass against a local fixture server over stdio and HTTP and, opt-in, against Playwright |
+| M14-T3 | Settings → MCP servers: list, gallery, add doors, inspector, run, import, sign-in | the page in `docs/mcp.md` "The experience" exists with interaction tests against a fake host, both widths, both themes, keyboard paths, honest empty/loading/error states; the Features card links to it |
+| M14-T4 | Transcript: MCP tool rows and image results | direct tool calls render as `Server · tool` with arguments; proxy modes render readable summaries; image content blocks render as images; search projections cover value regions; `docs/search-content.md` and `docs/ux-elements.md` rows updated; interaction tests |
+| M14-T5 | Packaged build carries the adapter | electron-builder keeps the adapter's executable TypeScript, bundle and helper, and the native bindings for both architectures; the clean-machine gate opens a session with a stdio server from the unpacked build with an empty PATH |
+| M14-T6 | Live end-to-end proof with Playwright | a real session drives Playwright over stdio and over HTTP from the installed app; sign-in proven against one OAuth server; findings recorded in `docs/mcp.md` |
+
 ## MX · Cross-cutting (runs alongside every milestone)
 
 | ID | Task | Done when |

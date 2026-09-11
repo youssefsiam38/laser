@@ -7,8 +7,9 @@
 
 import type { SessionGoal } from "./features.js";
 import type { BackgroundTaskUpdate } from "./tasks.js";
+import type { McpRuntimeSnapshot } from "./mcp.js";
 
-export type PiExtensionModuleName = "provider-log" | "account-usage" | "subagents" | "background-work" | "file-freshness" | "transcribe" | "web-access" | "goal";
+export type PiExtensionModuleName = "provider-log" | "account-usage" | "subagents" | "background-work" | "file-freshness" | "transcribe" | "web-access" | "goal" | "mcp";
 
 /** One server-owned allowance window for an account-authenticated provider. */
 export interface AccountUsageWindow {
@@ -100,6 +101,8 @@ export type PiExtensionMessage =
   /** Namer's early label for a tool call still running (`lasercode/namer/label`). */
   | { type: "lasercode/namer/label"; toolCallId: string; label: string }
   | { type: "lasercode/goal/state"; goal: SessionGoal | null }
+  /** The `mcp` module: the engine's sanitized per-session server status (docs/mcp.md). */
+  | { type: "lasercode/mcp/status"; snapshot: McpRuntimeSnapshot }
   /**
    * The `background-work` module: one of this session's long commands
    * appeared or changed (docs/ux-fleet.md). The worker stamps the session

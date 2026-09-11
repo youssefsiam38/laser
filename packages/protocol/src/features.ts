@@ -6,7 +6,7 @@
  * never crosses this boundary.
  */
 
-export type FeatureId = "subagents" | "goals" | "web-search";
+export type FeatureId = "subagents" | "goals" | "web-search" | "mcp";
 export type FeatureScope = "global" | "project";
 export type FeatureHealth = "ready" | "disabled" | "needs-restart" | "unavailable" | "error";
 
@@ -51,6 +51,16 @@ export const FEATURE_MANIFESTS: readonly FeatureManifest[] = [
     scopes: ["global", "project"],
     dependencies: [],
     capabilities: ["delegation", "sub-sessions", "worktrees", "background-tasks", "live-map"],
+    restart: "worker",
+  },
+  {
+    id: "mcp",
+    name: "MCP servers",
+    description: "Give the model tools from MCP servers: a real browser, databases, issue trackers, documentation. Add and inspect servers in Settings → MCP servers.",
+    defaultEnabled: true,
+    scopes: ["global", "project"],
+    dependencies: [],
+    capabilities: ["stdio", "http", "socket", "sign-in", "tool-control", "inspector"],
     restart: "worker",
   },
   {
