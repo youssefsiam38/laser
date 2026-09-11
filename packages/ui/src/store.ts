@@ -951,6 +951,29 @@ function dropRetryingProviderError(blocks: Block[]): Block[] {
   return blocks;
 }
 
+/**
+ * A stored tool result, as the transcript reads it back.
+ *
+ * A plain text result stays the joined string it has always been: every row
+ * that reads one — the terminal body, the diff, the fallback — already treats
+ * a string as the output, and nothing about those tools is lost by joining.
+ * A result that carries `details`, or a content block that is not text, keeps
+ * the envelope `tool_execution_end` delivers live (`{ content, details }`), so
+ * a reopened session draws the row the live one drew: an MCP screenshot is an
+ * image again, and the server that answered is known from `details.server`
+ * even when the session has no MCP snapshot (docs/mcp.md "In the transcript").
+ */
+function storedToolResult(message: { content?: unknown; details?: unknown }): unknown {
+  const content = message.content;
+  const details = message.details;
+  const hasDetails = typeof details === "object" && details !== null && !Array.isArray(details);
+  const hasNonText =
+    Array.isArray(content) &&
+    content.some((part) => typeof part === "object" && part !== null && (part as { type?: unknown }).type !== "text");
+  if (!Array.isArray(content) || (!hasDetails && !hasNonText)) return textOf(content);
+  return { content, ...(hasDetails ? { details } : {}) };
+}
+
 export function textOf(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -998,6 +1021,7 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null): B
       message?: {
         role?: string;
         content?: unknown;
+        details?: unknown;
         toolCallId?: string;
         toolName?: string;
         isError?: boolean;
@@ -1070,7 +1094,7 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null): B
       if (block) blocks.push(block);
     } else if (m.role === "toolResult" && m.toolCallId) {
       const i = toolIndex.get(m.toolCallId);
-      const result = textOf(m.content);
+      const result = storedToolResult(m);
       if (i !== undefined) {
         const b = blocks[i] as Extract<Block, { kind: "tool" }>;
         blocks[i] = { ...b, result, isError: m.isError ?? false, done: true };

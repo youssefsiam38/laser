@@ -18,7 +18,8 @@ import { findTextMatches } from "../../src/components/thread/use-conversation-fi
 import { textMatches } from "../../src/components/thread/search-text.js";
 import { ToolRow } from "../../src/components/thread/ToolRow.js";
 import { classifyMcpTool, mcpGatewaySummary, mcpGatewayView, mcpServerLabel, mcpToolLabel } from "../../src/components/thread/mcp-tools.js";
-import { initialState, reduce, type AppState } from "../../src/store.js";
+import { blocksFromEntries, initialState, reduce, type AppState, type Block } from "../../src/store.js";
+import { projectMessages } from "../../src/runtime/projection.js";
 import { sessionState } from "../agents/fixtures.js";
 
 const preferences = vi.hoisted(() => ({ path: "/test/session", mcpServers: ["playwright"] as readonly string[] }));
@@ -331,6 +332,68 @@ describe("an mcpScript row", () => {
     expect(calls.textContent).toBe("playwright·browser_navigate");
     // The code is the body, so it is not repeated as an argument disclosure.
     expect(container.querySelector('[data-slot="tool-fallback-args"]')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Hydration — a reopened session draws the row the live one drew
+// ---------------------------------------------------------------------------
+
+describe("a session read back from its file", () => {
+  const at = 1789152889963;
+  const message = (id: string, body: Record<string, unknown>) => ({ type: "message", id, timestamp: at, message: { ...body, timestamp: at } });
+  const entries = [
+    message("e1", {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Taking a screenshot." },
+        { type: "toolCall", id: "call_1", name: "playwright_browser_take_screenshot", arguments: { fullPage: false } },
+        { type: "toolCall", id: "call_2", name: "bash", arguments: { command: "echo hello" } },
+      ],
+    }),
+    // The adapter's own result: text, an image, and the server that answered.
+    message("e2", {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "playwright_browser_take_screenshot",
+      content: [{ type: "text", text: "### Result\n- Screenshot of viewport" }, { type: "image", data: SCREENSHOT_BASE64, mimeType: "image/png" }],
+      details: { server: "playwright", tool: "browser_take_screenshot" },
+      isError: false,
+    }),
+    message("e3", { role: "toolResult", toolCallId: "call_2", toolName: "bash", content: [{ type: "text", text: "hello\n" }], isError: false }),
+  ];
+
+  it("keeps an MCP result whole and leaves an ordinary one the string it was", () => {
+    const blocks = blocksFromEntries(entries);
+    const tool = (id: string) => blocks.find((block): block is Extract<Block, { kind: "tool" }> => block.kind === "tool" && block.id === id)!;
+    // A text-only result with no details is still the joined text: nothing
+    // about the terminal, the diff or the fallback body moves.
+    expect(tool("call_2").result).toBe("hello\n");
+    expect(tool("call_1").result).toEqual({
+      content: [{ type: "text", text: "### Result\n- Screenshot of viewport" }, { type: "image", data: SCREENSHOT_BASE64, mimeType: "image/png" }],
+      details: { server: "playwright", tool: "browser_take_screenshot" },
+    });
+  });
+
+  it("draws the reloaded MCP row with its image, classified by the server that answered alone", async () => {
+    // No status snapshot: this is a transcript opened long after the session.
+    preferences.mcpServers = [];
+    const projected = projectMessages({ blocks: blocksFromEntries(entries), running: false, dialogs: [] });
+    const part = projected.messages
+      .flatMap((m) => (Array.isArray(m.content) ? m.content : []))
+      .find((p) => (p as { type?: string }).type === "tool-call" && (p as { toolCallId?: string }).toolCallId === "call_1")!;
+
+    await act(async () => root.render(<Fixture {...({ ...(part as object), addResult: vi.fn(), resume: vi.fn(), respondToApproval: vi.fn(async () => {}) } as unknown as React.ComponentProps<typeof ToolRow>)} />));
+    const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
+    expect(trigger.textContent).toContain("Playwright");
+    expect(trigger.textContent).toContain("browser take screenshot");
+
+    await expand(trigger);
+    expect(container.querySelector<HTMLImageElement>('[data-slot="mcp-image"] img')?.getAttribute("src")).toBe(
+      `data:image/png;base64,${SCREENSHOT_BASE64}`,
+    );
+    expect(container.querySelector('[data-slot="mcp-text"]')?.textContent).toContain("Screenshot of viewport");
+    expect(container.textContent).not.toContain(SCREENSHOT_BASE64.slice(0, 24));
   });
 });
 
