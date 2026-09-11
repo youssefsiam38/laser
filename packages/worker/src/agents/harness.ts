@@ -528,6 +528,51 @@ export class AgentHarness {
   }
 
   /**
+   * A person emptied a child's queue (`pi/session/clear_queue`). The engine
+   * drops what it held and reports the texts; the harness then forgets its
+   * own engine-owned twins of those texts for the run that owns the session,
+   * first match per lane like the transfer at a terminal declaration — so a
+   * later `clearQueue()` at completion cannot replay onto a successor what
+   * the person just removed. Messages waiting here alone (behind a fence,
+   * on a reserved successor) are not the queue the person sees and stay.
+   * Root sessions, and sessions this harness does not know, are the
+   * driver's alone.
+   */
+  async clearQueue(sessionPath: string): Promise<{ steering: string[]; followUp: string[] }> {
+    const entry = this.byPath.get(sessionPath);
+    const driver = this.host.driver(sessionPath);
+    if (!driver) return { steering: [], followUp: [] };
+    if (!entry || entry.role.kind !== "child") return driver.clearQueue();
+    return this.withEntry(entry, async () => {
+      const cleared = await driver.clearQueue();
+      const owner = entry.lifecycle.owner();
+      const state = owner ? this.runStates.get(owner) : this.activeRunState(sessionPath);
+      if (!state) return cleared;
+      const remaining: Record<EngineLane, string[]> = { steer: [...cleared.steering], followUp: [...cleared.followUp] };
+      const kept: PendingMessage[] = [];
+      let dropped = 0;
+      for (const pending of entry.lifecycle.inbox(state.run.runId)) {
+        if (!pending.engine) {
+          kept.push(pending);
+          continue;
+        }
+        const texts = remaining[pending.lane ?? "steer"];
+        const index = texts.indexOf(contentTask(pending.content));
+        if (index < 0) {
+          kept.push(pending);
+          continue;
+        }
+        texts.splice(index, 1);
+        dropped += 1;
+        settlePending(pending, new HarnessError("The person cleared this message from the agent's queue before it could start."));
+      }
+      entry.lifecycle.replaceInbox(state.run.runId, kept);
+      this.diagnose(entry, "info", "queue-cleared", { runId: state.run.runId, clearedSteering: cleared.steering.length, clearedFollowUp: cleared.followUp.length, twins: dropped, phase: entry.lifecycle.phase().kind });
+      return cleared;
+    });
+  }
+
+  /**
    * Own an extension-generated model entry before its native preflight. The
    * returned admission promise is for the extension; completion stays with
    * the current invocation/run.
@@ -553,12 +598,13 @@ export class AgentHarness {
     const owner = entry.lifecycle.owner();
     const executing = owner ? this.runStates.get(owner) : undefined;
     const causal = request.parent !== undefined && entry.lifecycle.ownsInvocation(request.parent);
-    // Work sent from inside a run the harness owns belongs to that run, and
-    // the run's record — not the driver's per-invocation stamp — says who
-    // started it; a stale capability from an older epoch earns nothing.
-    const origin = causal && executing
-      ? executing.run.origin
-      : request.parent?.runId !== undefined && !causal ? "agent" as const : request.origin;
+    // Who started the work comes from the run record, once: `invoke` hands
+    // `state.run.origin` to the driver on `PromptOptions.origin`, the driver
+    // stamps the invocation with it, and a send made from inside that
+    // invocation inherits it — so `request.origin` already says what the
+    // owning run says. A stale capability from an older epoch earns nothing
+    // and reads as agent work.
+    const origin = request.parent?.runId !== undefined && !causal ? "agent" as const : request.origin;
     const effectiveRequest: ExtensionModelWorkRequest = {
       ...request,
       origin,
@@ -692,6 +738,23 @@ export class AgentHarness {
       if (isLifecycleKind(event.update.kind)) {
         this.diagnose(entry, "info", "late-callback-dropped", { kind: event.update.kind, invocation: event.invocation.id, invocationRun: event.invocation.runId, owner: entry.lifecycle.owner(), phase: entry.lifecycle.phase().kind });
       }
+      return;
+    }
+    // A dialog is raised from inside the tool that asks, so a driver with
+    // epochs stamps it with the invocation it was raised under, and the same
+    // fence applies: a question from an invocation the session no longer
+    // owns (its run's end declared or published, a successor now standing)
+    // is never the successor's question. It has nobody here to answer it
+    // either, and the portable surface's rule is that what cannot be routed
+    // cancels rather than hangs (AGENTS.md §4.6): the asker gets its
+    // fallback. A stamp without a run (a person's own command invocation on
+    // this session) is only left unattributed — the person raised it and
+    // can answer it in the chat. Unstamped dialogs keep the run-scoped
+    // fallback for drivers without epochs.
+    if ((event.type === "ui_request" || event.type === "ui_event") && event.invocation && !entry.lifecycle.ownsInvocation(event.invocation)) {
+      const kind = event.type === "ui_request" ? `ui_request:${event.request.method}` : `ui_event:${event.event.method}`;
+      this.diagnose(entry, "info", "late-callback-dropped", { kind, invocation: event.invocation.id, invocationRun: event.invocation.runId, owner: entry.lifecycle.owner(), phase: entry.lifecycle.phase().kind, ...(event.type === "ui_request" ? { dialog: event.request.id } : {}) });
+      if (event.type === "ui_request" && event.invocation.runId !== undefined) this.cancelDialog(sessionPath, event.request.id);
       return;
     }
     if (
@@ -1582,6 +1645,10 @@ export class AgentHarness {
         ? {
             ...options,
             ownerRunId: state.run.runId,
+            // The run record is the one source of who started this work; the
+            // driver stamps its invocation with it so a send made from inside
+            // the turn inherits it (`admitExtensionModelWork` reads it back).
+            origin: state.run.origin,
             onInvocation: (invocation) => {
               if (!entry.lifecycle.bindInvocation(state.run.runId, invocation)) {
                 throw new HarnessError("The prompt invocation lost session ownership before it could start.");
@@ -1765,6 +1832,15 @@ export class AgentHarness {
       if (successor?.first) this.kickMessage(queued, successor.first);
       else this.kick(queued, queued.task);
       if (state.run.parent) this.notifyParent(state.run, pending.outcome.context);
+    }
+  }
+
+  /** Settle a dialog nobody here can answer with its fallback; the driver's bridge never throws for an id it no longer holds. */
+  private cancelDialog(sessionPath: string, id: string): void {
+    try {
+      this.host.driver(sessionPath)?.respondToUi({ id, cancelled: true });
+    } catch {
+      // The driver's fault, not the run's.
     }
   }
 

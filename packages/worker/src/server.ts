@@ -241,17 +241,25 @@ export class WorkerServer {
         // transcribed. Doing it here keeps the three send paths identical.
         const live = this.live(req.params.path);
         const content = await this.withDictation(req.params.path, req.params.content);
-        await this.firstTurnLock.run(live.path, () => live.driver.steer(content));
+        if (this.harness.roleOf(live.path)?.kind === "child") await this.queueIntoChild(live, content, "steer");
+        else await this.firstTurnLock.run(live.path, () => live.driver.steer(content));
         return {};
       }
       case "pi/session/follow_up": {
         const live = this.live(req.params.path);
         const content = await this.withDictation(req.params.path, req.params.content);
-        await this.firstTurnLock.run(live.path, () => live.driver.followUp(content));
+        if (this.harness.roleOf(live.path)?.kind === "child") await this.queueIntoChild(live, content, "followUp");
+        else await this.firstTurnLock.run(live.path, () => live.driver.followUp(content));
         return {};
       }
-      case "pi/session/clear_queue":
-        return this.live(req.params.path).driver.clearQueue();
+      case "pi/session/clear_queue": {
+        // A child's queue is emptied through the harness, which also forgets
+        // its engine-owned twins of the cleared texts (else a later transfer
+        // at completion could replay onto a successor what the person removed).
+        const live = this.live(req.params.path);
+        if (this.harness.roleOf(live.path)?.kind === "child") return this.harness.clearQueue(live.path);
+        return live.driver.clearQueue();
+      }
       case "pi/session/close": {
         // The host is about to move the file (M13-T58): it must have no writer
         // while that happens (AGENTS.md invariant 8). Disposing the driver
@@ -1131,6 +1139,37 @@ export class WorkerServer {
       ...(streamingBehavior ? { streamingBehavior } : {}),
       ...(onAccepted ? { onAccepted } : {}),
       ...(admissionLease ? { admissionLease } : {}),
+    });
+  }
+
+  /**
+   * A person's steer or follow-up typed in a child agent's own chat goes
+   * through the harness fence, never straight into the engine (M13-T98 §8.4):
+   * during a declared completion the engine's queues were already emptied
+   * into the successor, and a text put there now would run under the ended
+   * run. The harness queues it in the engine while the run demonstrably
+   * streams — tracked as an engine-owned twin, so a terminal declaration can
+   * take it back — and holds it for the successor otherwise. The request
+   * answers once the engine holds the message, the moment the direct verb
+   * answered, never after the turn it may start; a message that can never
+   * start (a cancelled successor, a closed session) answers with the
+   * harness's sentence. Root sessions keep the driver's direct verbs: the
+   * harness owns no run there.
+   */
+  private queueIntoChild(live: Live, content: ContentBlock[], lane: "steer" | "followUp"): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      let accepted = false;
+      const onAccepted = () => {
+        accepted = true;
+        resolve();
+      };
+      this.harness.promptUser(live.path, content, { streamingBehavior: lane, expandPromptTemplates: true, onAccepted }).then(
+        (result) => {
+          if (accepted || result.accepted) resolve();
+          else reject(new ProtocolError(ErrorCodes.SessionBusy, "The agent's chat could not take this message right now. Try again in a moment."));
+        },
+        reject,
+      );
     });
   }
 

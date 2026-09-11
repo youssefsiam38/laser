@@ -147,11 +147,32 @@ export class StableSdkDriver implements SessionDriver {
   private promptPreflight: Promise<void> | undefined;
   private readonly extensionAdmission = new StableExtensionAdmission();
 
+  /**
+   * The prompt invocation each open dialog was raised under, by dialog id.
+   * A dialog is raised from inside the tool that asks — inside the admission
+   * helper's invocation context — but settles from whatever context closes
+   * it (a timer, an abort, disposal), so the resolution reads the stamp its
+   * request took rather than the context it fires in. Pruned against the
+   * bridge's own pending list whenever a dialog is raised, so a closed
+   * dialog never holds a stamp for long.
+   */
+  private readonly dialogInvocations = new Map<string, DriverInvocationRef>();
+
   constructor(private readonly extraExtensionFactories: InlineExtension[] = []) {
     this.ui = createUiBridge(
       {
-        onRequest: (request) => this.emit({ type: "ui_request", request }),
-        onEvent: (event) => this.emit({ type: "ui_event", event }),
+        onRequest: (request) => {
+          const open = new Set(this.ui.pending().map((pending) => pending.id));
+          for (const id of [...this.dialogInvocations.keys()]) if (!open.has(id)) this.dialogInvocations.delete(id);
+          const invocation = this.extensionAdmission.eventInvocation()?.ref;
+          if (invocation) this.dialogInvocations.set(request.id, invocation);
+          this.emit({ type: "ui_request", request, ...(invocation ? { invocation } : {}) });
+        },
+        onEvent: (event) => {
+          const invocation = event.method === "dialogResolved" ? this.dialogInvocations.get(event.id) : undefined;
+          if (event.method === "dialogResolved") this.dialogInvocations.delete(event.id);
+          this.emit({ type: "ui_event", event, ...(invocation ? { invocation } : {}) });
+        },
       },
       // Lazy: the bridge outlives every session, and no session exists yet here.
       { pendingToolCallId: () => this.currentToolCallId() },
@@ -650,7 +671,10 @@ export class StableSdkDriver implements SessionDriver {
     };
     const context = this.extensionAdmission.createInvocation({
       ...(options?.ownerRunId ? { ownerRunId: options.ownerRunId } : {}),
-      origin: "user",
+      // The run record's word, handed down by the harness: a send made from
+      // inside this turn inherits it, so a parent-started run's extension
+      // work never reads as the person's.
+      origin: options?.origin ?? "user",
       task: text,
       ...(options?.admissionLease ? { admissionLease: options.admissionLease } : {}),
       accept,

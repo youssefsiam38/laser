@@ -38,6 +38,8 @@ class FakeDriver implements SessionDriver {
   abortAwaitsPrompt = false;
   abortRejects = false;
   clearQueueRejects = false;
+  /** Like Pi: a prompt with `streamingBehavior` while streaming goes into that lane and is accepted at once. Off by default so held-prompt tests keep their shape. */
+  queueWhileStreaming = false;
   /** Pi's two lanes, as `clearQueue()` reports them: texts in queue order, drained front to back. */
   private engineSteers: string[] = [];
   private engineFollowUps: string[] = [];
@@ -81,6 +83,11 @@ class FakeDriver implements SessionDriver {
     this.prompted.push({ text, content, ...(options ? { options } : {}) });
     if (!this.autoResolvePrompts && this.promptResolvers.length > 0 && this.st.isStreaming && options?.streamingBehavior === undefined) {
       return { accepted: false, queued: false };
+    }
+    if (this.queueWhileStreaming && this.st.isStreaming && options?.streamingBehavior !== undefined) {
+      (options.streamingBehavior === "steer" ? this.engineSteers : this.engineFollowUps).push(text);
+      options.onAccepted?.();
+      return { accepted: true, queued: true };
     }
     options?.onInvocation?.({ id: `fake-${++this.invocationSerial}`, ...(options.ownerRunId ? { runId: options.ownerRunId } : {}) });
     if (this.autoResolvePrompts) {
@@ -1857,6 +1864,95 @@ describe("AgentHarness", () => {
       expect(logs.every((log) => / at=\d{4}-\d{2}-\d{2}T/.test(log.line))).toBe(true);
       expect(logs.some((log) => /secret/.test(log.line))).toBe(false);
       expect(logs.find((log) => log.line.includes("terminal-declared"))!.line).toMatch(new RegExp(`runId=${first.runId} status=completed invoking=true phase=terminal-pending`));
+    });
+
+    it("fences a stamped dialog like a stamped update: an invocation the session no longer owns gets no question, is cancelled, and is said in the log", async () => {
+      world.setAutoResolveChildPrompts(false);
+      const root = world.openRoot("lead");
+      const received: AgentModelEvent[] = [];
+      root.handle.bridge.onEvent((event) => received.push(event));
+      const first = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "initial" });
+      const path = "/sessions/child-1.jsonl";
+      const child = world.drivers.get(path)!;
+      // `prompt()` bound `fake-1` to the run; an older epoch of an ended run is not this session's.
+      const owned = { id: "fake-1", runId: first.runId };
+      const stale = { id: "fake-0", runId: "run_gone" };
+      const dialog = (id: string): UiDialogRequest => ({ method: "select", id, title: "Which one?", options: ["a", "b"] });
+
+      // A stale epoch's question: not this run's, cancelled through the driver so the asker never hangs, said out loud.
+      child.pending.push(dialog("ui-stale"));
+      child.emit({ type: "ui_request", request: dialog("ui-stale"), invocation: stale });
+      expect(world.harness.run(first.runId)!.status).toBe("running");
+      expect(world.harness.run(first.runId)).not.toHaveProperty("question");
+      expect(child.responses).toEqual([{ id: "ui-stale", cancelled: true }]);
+      expect(child.pendingUi()).toEqual([]);
+      expect(received).toEqual([]);
+      expect(lifecycleLogs().some((log) => log.line.includes("late-callback-dropped kind=ui_request:select invocation=fake-0 invocationRun=run_gone") && log.line.includes("dialog=ui-stale"))).toBe(true);
+      // Its resolution, however it arrives, is dropped the same way.
+      child.emit({ type: "ui_event", event: { method: "dialogResolved", id: "ui-stale" }, invocation: stale });
+      expect(world.harness.run(first.runId)!.status).toBe("running");
+      expect(lifecycleLogs().some((log) => log.line.includes("late-callback-dropped kind=ui_event:dialogResolved invocation=fake-0"))).toBe(true);
+
+      // A stamp without a run — a person's own command invocation on this
+      // session — is left alone: not this run's question, not cancelled either.
+      child.pending.push(dialog("ui-bare"));
+      child.emit({ type: "ui_request", request: dialog("ui-bare"), invocation: { id: "fake-cmd" } });
+      expect(world.harness.run(first.runId)!.status).toBe("running");
+      expect(child.responses).toHaveLength(1);
+      expect(child.pendingUi().map((pending) => pending.id)).toEqual(["ui-bare"]);
+      child.pending = [];
+
+      // The owning epoch's question is the run's question, and its stamped resolution settles it.
+      child.pending.push(dialog("ui-owned"));
+      child.emit({ type: "ui_request", request: dialog("ui-owned"), invocation: owned });
+      expect(world.harness.run(first.runId)).toMatchObject({ status: "needs_input", question: { id: "ui-owned" } });
+      expect(received.map((event) => event.type)).toEqual(["agent.needs_input"]);
+      child.pending = [];
+      child.emit({ type: "ui_event", event: { method: "dialogResolved", id: "ui-owned" }, invocation: owned });
+      expect(world.harness.run(first.runId)!.status).toBe("running");
+      expect(world.harness.run(first.runId)).not.toHaveProperty("question");
+
+      // Unstamped dialogs keep the run-scoped fallback: a driver without epochs still asks.
+      child.ask(dialog("ui-plain"));
+      expect(world.harness.run(first.runId)).toMatchObject({ status: "needs_input", question: { id: "ui-plain" } });
+      expect(child.responses).toHaveLength(1);
+    });
+
+    it("forgets the engine-owned twins of what a person cleared, so a later transfer cannot match them against another sender's text", async () => {
+      world.setAutoResolveChildPrompts(false);
+      const root = world.openRoot("lead");
+      const first = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "initial" });
+      const path = "/sessions/child-1.jsonl";
+      const child = world.drivers.get(path)!;
+      child.queueWhileStreaming = true;
+
+      // The person queues a follow-up in the child's own chat: an engine-owned twin of theirs.
+      expect(await world.harness.promptUser(path, [{ type: "text", text: "same text" }], { streamingBehavior: "followUp" })).toEqual({ accepted: true, queued: true });
+      // Then clears the queue: the engine reports what it dropped; the twin goes with it.
+      expect(await world.harness.clearQueue(path)).toEqual({ steering: [], followUp: ["same text"] });
+      expect(lifecycleLogs().some((log) => log.line.includes(`queue-cleared runId=${first.runId} clearedSteering=0 clearedFollowUp=1 twins=1`))).toBe(true);
+      expect(await child.clearQueue()).toEqual({ steering: [], followUp: [] });
+
+      // The parent sends the same words: a twin of its own, the only one left.
+      await root.handle.bridge.sendAgentMessage({ sessionId: first.sessionId, message: "same text", interrupt: false });
+      expect(await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "done" })).toEqual({ ok: true, runId: first.runId });
+      // Had the person's twin survived, it would have matched the cleared text
+      // first (local=2) and the parent's message would have been dropped as consumed.
+      expect(lifecycleLogs().some((log) => /queue-transferred .*reason=complete .*clearedSteering=0 clearedFollowUp=1 local=1 preserved=1/.test(log.line))).toBe(true);
+      const successor = world.harness.runs().find((run) => run.sessionPath === path && run.runId !== first.runId)!;
+      expect(successor).toMatchObject({ status: "queued", origin: "agent", task: "same text" });
+
+      child.emit({ type: "update", update: { kind: "agent_settled" } });
+      child.resolvePrompt();
+      await flushLifecycle();
+      // The person's queued send, then the parent's message as the successor's own prompt — once.
+      expect(child.prompted.map((item) => [item.text, item.options?.streamingBehavior ?? "prompt"])).toEqual([["initial", "prompt"], ["same text", "followUp"], ["same text", "prompt"]]);
+      expect(world.harness.activeRun(path)?.runId).toBe(successor.runId);
+
+      // A root session's queue is the driver's alone: no twins, no log.
+      await root.driver.followUp([{ type: "text", text: "root follow-up" }]);
+      expect(await world.harness.clearQueue(root.path)).toEqual({ steering: [], followUp: ["root follow-up"] });
+      expect(lifecycleLogs().filter((log) => log.line.includes("queue-cleared"))).toHaveLength(1);
     });
   });
 
