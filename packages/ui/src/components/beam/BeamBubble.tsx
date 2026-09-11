@@ -4,7 +4,6 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Keyboar
 import { useAgentsSnapshot } from "@/agents";
 import { Thread } from "@/components/thread/Thread";
 import { useShell } from "@/components/shell/shell-context";
-import { sessionsList } from "@/components/shell/session-groups";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { cn } from "@/lib/utils";
@@ -87,7 +86,6 @@ function BeamPanel({ onClose }: { onClose: () => void }) {
   const openInFullView = async (): Promise<void> => {
     if (!path) return;
     try {
-      sessionsList.setTab("code");
       await actions.openSession(path);
       onClose();
     } catch (error) {

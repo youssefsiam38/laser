@@ -60,9 +60,8 @@ export interface ChatNavigation {
  */
 export function useChatNavigation({ closeSheets }: { closeSheets(): void }): ChatNavigation {
   const workbench = useWorkbench();
-  const { actions, currentProject } = useLaserStable();
-  const current = useLaserState((s) => s.current);
-  const sessions = useLaserState((s) => s.sessions);
+  const { actions } = useLaserStable();
+  const destination = useLaserState((s) => s.destination);
 
   const showChat = useCallback(() => {
     mapUi.setFullscreen(false);
@@ -74,14 +73,9 @@ export function useChatNavigation({ closeSheets }: { closeSheets(): void }): Cha
 
   const returnToChat = useCallback(() => {
     showChat();
-    // Already reading a session: uncovering it is the whole trip.
-    if (current !== undefined) return;
-    const remembered = rememberedSessionFor(currentProject, sessions);
-    // Nothing remembered: the project's new-session state is the landing, and
-    // it is not created here — a click on the logo never starts anything.
-    if (remembered === undefined) return;
-    actions.openSession(remembered).catch((error: unknown) => actions.toast("error", errorText(error)));
-  }, [actions, current, currentProject, sessions, showChat]);
+    if (destination.path !== undefined && destination.phase === "ready") return;
+    actions.goTab(destination.tab).catch((error: unknown) => actions.toast("error", errorText(error)));
+  }, [actions, destination, showChat]);
 
   return { showChat, returnToChat };
 }

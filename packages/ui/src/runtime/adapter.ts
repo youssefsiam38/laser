@@ -437,6 +437,8 @@ export interface ThreadAdapterDeps {
    * other, whichever session is on screen by the time the refusal arrives.
    */
   composer?: (() => UnsentMessageComposer | undefined) | undefined;
+  /** Lazy main-destination fence. Scoped runtimes omit it. */
+  assertCanAct?: ((resolvedPath?: string) => void) | undefined;
 }
 
 /**
@@ -466,7 +468,9 @@ export function createThreadAdapter(deps: ThreadAdapterDeps): ExternalStoreAdapt
     // never the one on screen.
     const origin = deps.composer?.();
     try {
+      deps.assertCanAct?.();
       const path = await resolvePath();
+      deps.assertCanAct?.(path);
       const running = deps.path === path ? projection.isRunning : false;
       const behavior = resolveSendBehavior({ running, lane, message });
       await sendToSession(deps.client, path, content, behavior, deps.dispatch, behavior === "prompt" ? firstTurn : undefined);
@@ -492,6 +496,7 @@ export function createThreadAdapter(deps: ThreadAdapterDeps): ExternalStoreAdapt
    * that silently disappeared would leave the user no way to answer it.
    */
   const answerDialog = async (id: string, response: UiDialogResponse): Promise<void> => {
+    deps.assertCanAct?.();
     const path = deps.path;
     const dialog = deps.view?.dialogs.find((d) => d.id === id);
     deps.dispatch({ type: "dialogAnswered", id, ...(path !== undefined ? { path } : {}) });
@@ -512,6 +517,12 @@ export function createThreadAdapter(deps: ThreadAdapterDeps): ExternalStoreAdapt
     // A row from the engine's own queue has no id of ours. The UI does not draw
     // these controls on such a row; a stray call is a no-op, never a throw.
     if (!id || !deps.path) return;
+    try {
+      deps.assertCanAct?.();
+    } catch (error) {
+      deps.onError(error);
+      return;
+    }
     fireAndForget(work(deps.path, id));
   };
   const queue: ExternalThreadQueueAdapter = {
@@ -547,8 +558,15 @@ export function createThreadAdapter(deps: ThreadAdapterDeps): ExternalStoreAdapt
     messages: projection.messages,
     convertMessage: (message) => message,
     isRunning: projection.isRunning,
-    // A closed socket disables the whole composer; there is nothing to send to.
-    isDisabled: deps.connection !== "open",
+    // A closed socket or a main destination in motion disables the composer.
+    isDisabled: deps.connection !== "open" || (() => {
+      try {
+        deps.assertCanAct?.();
+        return false;
+      } catch {
+        return true;
+      }
+    })(),
     queue,
     unstable_capabilities: { copy: true },
     // Enables ComposerPrimitive.AddAttachment and paste-to-attach; the pending
@@ -574,6 +592,7 @@ export function createThreadAdapter(deps: ThreadAdapterDeps): ExternalStoreAdapt
       const path = deps.path;
       if (!path) return;
       try {
+        deps.assertCanAct?.();
         await deps.client.request("session/cancel", { path });
       } catch (error) {
         deps.onError(error);

@@ -37,7 +37,7 @@ export function desktopFolderPicker(): DesktopFolderPicker | undefined {
  */
 export function AddProjectDialog() {
   const { addProjectOpen, setAddProjectOpen } = useShell();
-  const { actions, setCurrentProject } = useLaserStable();
+  const { actions } = useLaserStable();
   const opening = useRef(false);
   const desktop = desktopFolderPicker();
 
@@ -50,7 +50,7 @@ export function AddProjectDialog() {
       .then(async (cwd) => {
         if (!cwd) return;
         const project = await actions.addProject(cwd);
-        if (project) setCurrentProject(project.cwd);
+        if (project) void actions.goProject(project.cwd);
       })
       .catch((error: unknown) => {
         actions.toast(
@@ -62,7 +62,7 @@ export function AddProjectDialog() {
         opening.current = false;
         setAddProjectOpen(false);
       });
-  }, [actions, addProjectOpen, desktop, setAddProjectOpen, setCurrentProject]);
+  }, [actions, addProjectOpen, desktop, setAddProjectOpen]);
 
   // Electron owns the visible dialog. Do not put a second Laser modal behind
   // it: cancellation should return directly to the surface that launched it.

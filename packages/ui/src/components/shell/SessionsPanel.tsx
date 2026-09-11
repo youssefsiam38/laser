@@ -19,7 +19,7 @@ import { useWorkbench } from "@/components/workbench";
 import { shortCwd, shortcutLabel } from "@/format";
 import { useTheme } from "@/hooks";
 import { cn } from "@/lib/utils";
-import { mergeSessions, rememberedSessionForTab, useLaserStable, useLaserState } from "@/runtime";
+import { useLaserStable, useLaserState } from "@/runtime";
 import type { AppState } from "@/store";
 
 import { SESSIONS_TABS, groupsFor, sameGroups, sessionsList, useSessionsList, workspacesOf, type SessionsTab } from "./session-groups.js";
@@ -69,10 +69,10 @@ export function SessionsPanel({ variant }: SessionsPanelProps) {
 const TAB_LABEL: Record<SessionsTab, string> = { chat: "Chat", code: "Code" };
 
 function SessionsPanelBody({ variant }: SessionsPanelProps) {
-  const { projects, currentProject, setCurrentProject, actions, dispatch } = useLaserStable();
+  const { projects, currentProject, actions } = useLaserStable();
   const shell = useShell();
   const list = useSessionsList();
-  const tab = list.tab;
+  const tab = useLaserState((s) => s.destination.tab);
   useClock();
 
   const groups = useLaserState(
@@ -80,8 +80,6 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
     sameGroups,
   );
   const connection = useLaserState((s) => s.connection);
-  const sessions = useLaserState((s) => s.sessions);
-  const openViews = useLaserState((s) => s.open);
   const chatCwd = useLaserState((s) => workspacesOf(s).chat);
   const beamCwd = useLaserState((s) => workspacesOf(s).beam);
   const snapshot = useAgentsSnapshot();
@@ -113,7 +111,6 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
       // Beam's group is a built-in feature, not a project: it starts its own
       // agent, and it must not become the rail's current project.
       const isBeam = beamCwd !== undefined && cwd === beamCwd;
-      if (!isBeam) setCurrentProject(cwd);
       if (connection !== "open") {
         actions.toast("warning", "Not connected to the host yet.");
         return;
@@ -126,7 +123,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
         actions.toast("error", errorText(error));
       }
     },
-    [actions, beamCwd, connection, onOpen, setCurrentProject, snapshot],
+    [actions, beamCwd, connection, onOpen, snapshot],
   );
 
   // A chat is a conversation that is not about a project: it runs the
@@ -182,7 +179,6 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
     (id: string) => {
       const cwd = cwdOf(id);
       if (cwd) {
-        if (!chat) setCurrentProject(cwd);
         void actions.openSession(id).then(() => {
           onOpen();
           requestAnimationFrame(() => requestAnimationFrame(() => openConversationFind(query, searchable.find(row => row.id === id)?.matchSource)));
@@ -190,7 +186,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
       }
       setQuery("");
     },
-    [cwdOf, chat, actions, setCurrentProject, onOpen, query, searchable],
+    [cwdOf, actions, onOpen, query, searchable],
   );
 
   const newLabel = chat ? "New chat" : `New session${currentProject ? ` in ${shortCwd(currentProject)}` : ""}`;
@@ -199,34 +195,10 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
 
   const changeTab = useCallback((next: SessionsTab) => {
     if (next === tab) return;
-    sessionsList.setTab(next);
+    if (next === "chat") sessionsList.clearFilter();
     setQuery("");
-    const merged = mergeSessions(sessions, openViews);
-    const eligible = merged.filter((session) => {
-      const kind = session.agent?.kind;
-      const cwd = session.cwd.replace(/\\/g, "/");
-      const root = chatCwd?.replace(/\\/g, "/").replace(/\/+$/, "");
-      const isChat = kind === "chat" || (root !== undefined && (cwd === root || cwd.startsWith(`${root}/`)));
-      return (next === "chat") === isChat;
-    });
-    const remembered = rememberedSessionForTab(next);
-    const destination = eligible.find((session) => session.path === remembered)
-      ?? [...eligible].sort((a, b) => Date.parse(b.modifiedAt) - Date.parse(a.modifiedAt))[0];
-    // Do not leave the old tab's conversation under the newly selected tab
-    // while a persisted session is loading, or when the new tab is empty.
-    dispatch({ type: "select", path: undefined });
-    if (!destination) {
-      onOpen();
-      return;
-    }
-    if (next === "code" && destination.agent?.kind !== "beam") {
-      const root = destination.agent?.kind === "child" && destination.agent.rootPath
-        ? merged.find((session) => session.path === destination.agent?.rootPath)
-        : undefined;
-      setCurrentProject(root?.cwd ?? destination.cwd);
-    }
-    void actions.openSession(destination.path).then(onOpen).catch((error) => actions.toast("error", errorText(error)));
-  }, [actions, chatCwd, dispatch, onOpen, openViews, sessions, setCurrentProject, tab]);
+    void actions.goTab(next).then(onOpen).catch((error) => actions.toast("error", errorText(error)));
+  }, [actions, onOpen, tab]);
 
   return (
     <section

@@ -60,7 +60,7 @@ export function CommandPaletteDialog({ open, onOpenChange }: { open: boolean; on
 type RunnableCommand = PaletteCommand & { run(): void };
 
 function usePaletteCommands(): RunnableCommand[] {
-  const { actions, currentProject, projects, setCurrentProject } = useLaserStable();
+  const { actions, currentProject, projects } = useLaserStable();
   const view = useLaserView();
   const meta = useSessionMeta();
   const shell = useShell();
@@ -99,8 +99,8 @@ function usePaletteCommands(): RunnableCommand[] {
       label: g.name,
       detail: `${g.rows.length} session${g.rows.length === 1 ? "" : "s"}${g.needYou ? ` · ${g.needYou} need${g.needYou === 1 ? "s" : ""} you` : ""}`,
       run: () => {
-        setCurrentProject(g.cwd);
         sessionsList.filter(g.cwd);
+        void actions.goProject(g.cwd);
         shell.setSessionsOpen(true);
       },
     }));
@@ -112,13 +112,12 @@ function usePaletteCommands(): RunnableCommand[] {
         detail: `${g.name} · ${relativeTime(row.summary.modifiedAt)}${row.sub.tone === "attention" ? " · waiting for you" : ""}`,
         icon: (({ className }: { className?: string }) => <StatusDot status={row.status} size="sm" className={className} />) as unknown as PaletteCommand["icon"],
         run: () => {
-          if (g.cwd !== currentProject) setCurrentProject(g.cwd);
           void actions.openSession(row.path).catch((error: unknown) => actions.toast("error", errorText(error)));
         },
       })),
     );
     return [...session, ...app, ...sessionRows, ...projectRows];
-  }, [actions, busy, currentProject, groups, meta.running, setCurrentProject, shell, theme, toggle, view, workbench]);
+  }, [actions, busy, currentProject, groups, meta.running, shell, theme, toggle, view, workbench]);
 }
 
 async function forkFromLastPrompt(entries: readonly unknown[], actions: ReturnType<typeof useLaserStable>["actions"]): Promise<void> {

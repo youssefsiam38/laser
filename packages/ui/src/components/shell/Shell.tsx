@@ -121,7 +121,7 @@ function ShellFrame() {
   const layout = useBreakpoint();
   const isWide = useIsWide();
   const desktop = layout === "desktop";
-  const { currentProject, actions, dispatch } = useLaserStable();
+  const { currentProject, actions } = useLaserStable();
   const view = useLaserView();
   const connection = useLaserState((s) => s.connection);
   const sessions = useLaserState((s) => s.sessions);
@@ -300,8 +300,8 @@ function ShellFrame() {
     }
     if (honoured.current) return;
     honoured.current = true;
-    honourSetupRequest({ refresh: setup.refresh, leaveSession: () => dispatch({ type: "select", path: undefined }) });
-  }, [dispatch, setup, setupRequested]);
+    honourSetupRequest({ refresh: setup.refresh, leaveSession: actions.leaveSession });
+  }, [actions, setup, setupRequested]);
   // Spent once the flow is on screen, so a second press can ask again.
   useEffect(() => {
     if (setupRequested && firstRun) clearSetupRequest();

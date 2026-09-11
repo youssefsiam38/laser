@@ -79,7 +79,27 @@ export {
 
 export { THEME_PREFS_NAMESPACE, useThemeSync } from "./prefs.js";
 export { createSessionLauncher, isUnstartedSession, type NewSessionOptions, type SessionLauncher } from "./new-session.js";
-export { SESSION_TAB_MEMORY_KEY, rememberSessionForTab, rememberedSessionForTab, sessionKindTab, type SessionKindTab } from "./session-tab-memory.js";
+export {
+  SESSION_TAB_MEMORY_KEY,
+  SESSIONS_TAB_STORAGE_KEY,
+  rememberSessionForTab,
+  rememberSessionsTab,
+  rememberedSessionForTab,
+  rememberedSessionsTab,
+  sessionKindTab,
+  type SessionKindTab,
+} from "./session-tab-memory.js";
+export {
+  codeProjectForSession,
+  creationTargetForDestination,
+  destinationSessionForTab,
+  initialMainDestination,
+  rootCwdForSession,
+  type MainCreationTarget,
+  type MainDestination,
+  type MainDestinationPhase,
+  type MainTab,
+} from "./main-destination.js";
 export {
   activityDetailLevel,
   activityGroupDefaultOpen,

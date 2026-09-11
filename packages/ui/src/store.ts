@@ -29,6 +29,7 @@ import type {
 } from "@lasercode/protocol";
 
 import { activePathIds } from "./components/thread/entries.js";
+import { initialMainDestination, type MainDestination } from "./runtime/main-destination.js";
 
 /**
  * A user message a parent agent put into this child session, rather than the
@@ -222,7 +223,10 @@ export interface AppState {
   /** True once a `pi/session/list` has landed, so an empty list is real. */
   sessionsLoaded: boolean;
   open: Record<string, SessionView>;
+  /** Read projection of `destination.path`; scoped runtimes overlay only this field. */
   current: string | undefined;
+  /** The sole tab/project/session intent for the main window. */
+  destination: MainDestination;
   workers: Record<string, { status: string; message?: string }>;
   toasts: Array<{ id: number; level: "info" | "warning" | "error"; text: string }>;
   agents: AgentsSlice;
@@ -236,6 +240,7 @@ export const initialState: AppState = {
   sessionsLoaded: false,
   open: {},
   current: undefined,
+  destination: initialMainDestination,
   workers: {},
   toasts: [],
   agents: initialAgents,
@@ -252,6 +257,9 @@ export type Action =
    * move the main view (runtime/LaserProvider.tsx `LaserThreadScope`).
    */
   | { type: "opened"; state: SessionState; select?: boolean }
+  /** Atomic main-window intent. `current` is updated only as its projection. */
+  | { type: "destination"; destination: MainDestination }
+  /** Compatibility seam for pure/scoped tests; main UI navigation uses `destination`. */
   | { type: "select"; path: string | undefined }
   | { type: "closeView"; path: string }
   /**
@@ -353,7 +361,10 @@ export function reduce(state: AppState, action: Action): AppState {
             goal: null,
             namerLabels: {},
           };
-      return { ...state, open: { ...state.open, [view.path]: view }, current: action.select === false ? state.current : view.path };
+      if (action.select === false) return { ...state, open: { ...state.open, [view.path]: view } };
+      const previousDestination = state.destination ?? initialMainDestination;
+      const destination = { ...previousDestination, path: view.path, targetPath: undefined, phase: "ready" as const, intent: previousDestination.intent + 1 };
+      return { ...state, open: { ...state.open, [view.path]: view }, current: view.path, destination };
     }
     case "forked": {
       // The old view's live state moved to a new path; carry the transcript over.
@@ -362,13 +373,24 @@ export function reduce(state: AppState, action: Action): AppState {
       const view: SessionView = old
         ? { ...old, path: action.state.path, state: action.state, lastSeq: 0, hydrated: false, entries: [], goal: null }
         : { path: action.state.path, state: action.state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, pending: [], dialogs: [], statuses: {}, widgets: {}, openedAt: new Date().toISOString(), hydrated: false, entries: [], capabilities: [], goal: null, namerLabels: {} };
-      return { ...state, open: { ...rest, [view.path]: view }, current: view.path };
+      if (state.current !== action.from) return { ...state, open: { ...rest, [view.path]: view } };
+      const previousDestination = state.destination ?? initialMainDestination;
+      const destination = { ...previousDestination, path: view.path, targetPath: undefined, phase: "ready" as const, intent: previousDestination.intent + 1 };
+      return { ...state, open: { ...rest, [view.path]: view }, current: view.path, destination };
     }
-    case "select":
-      return { ...state, current: action.path };
+    case "destination":
+      return { ...state, destination: action.destination, current: action.destination.path };
+    case "select": {
+      const previousDestination = state.destination ?? initialMainDestination;
+      const destination = { ...previousDestination, path: action.path, targetPath: undefined, phase: "ready" as const, intent: previousDestination.intent + 1 };
+      return { ...state, current: action.path, destination };
+    }
     case "closeView": {
       const { [action.path]: _gone, ...rest } = state.open;
-      return { ...state, open: rest, current: state.current === action.path ? undefined : state.current };
+      if (state.current !== action.path) return { ...state, open: rest };
+      const previousDestination = state.destination ?? initialMainDestination;
+      const destination = { ...previousDestination, path: undefined, targetPath: undefined, phase: "ready" as const, intent: previousDestination.intent + 1 };
+      return { ...state, open: rest, current: undefined, destination };
     }
     case "hydrate":
       return updateView(state, action.path, (v) => {

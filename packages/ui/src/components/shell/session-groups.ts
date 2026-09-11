@@ -10,8 +10,9 @@ import { WORKTREES_DIR_NAME, storageKey } from "@lasercode/protocol";
 import { useSyncExternalStore } from "react";
 import type { AgentRun, SessionSummary } from "@lasercode/protocol";
 
-import { latestRunForSession } from "../../agents/model.js";
 import { shortCwd } from "../../format.js";
+import { rootCwdForSession, type MainTab } from "../../runtime/main-destination.js";
+import { SESSIONS_TAB_STORAGE_KEY } from "../../runtime/session-tab-memory.js";
 import { mergeSessions, parentPathOf, sessionTitle, sortSessions } from "../../runtime/threadList.js";
 import type { AppState } from "../../store.js";
 import { aggregateStatus, type Status } from "../status/status.js";
@@ -27,9 +28,9 @@ import { isUntitled, sessionStatus, sessionSubtitle, type SessionSubtitle, type 
 // to the worktree directory it happens to run in.
 // ---------------------------------------------------------------------------
 
-export type SessionsTab = "chat" | "code";
+export type SessionsTab = MainTab;
 export const SESSIONS_TABS: readonly SessionsTab[] = ["chat", "code"];
-export const SESSIONS_TAB_STORAGE_KEY = storageKey("sessions-tab");
+export { SESSIONS_TAB_STORAGE_KEY };
 
 /** The built-in workspace directories, from the agents snapshot; absent until it lands. */
 export interface Workspaces {
@@ -75,17 +76,8 @@ export function groupCwdOf(
   byPath: ReadonlyMap<string, SessionSummary>,
   runs: Readonly<Record<string, AgentRun>> | readonly AgentRun[] = {},
 ): string {
-  let cursor: SessionSummary = summary;
-  const seen = new Set<string>([summary.path]);
-  for (;;) {
-    const parent = isChildSession(cursor) ? parentPathOf(cursor) : undefined;
-    const next = parent !== undefined ? byPath.get(parent) : undefined;
-    if (!next || seen.has(next.path)) break;
-    seen.add(next.path);
-    cursor = next;
-  }
-  if (cursor !== summary || !isChildSession(summary)) return cursor.cwd;
-  return latestRunForSession(runs, summary.path)?.projectCwd ?? summary.cwd;
+  const registry = Array.isArray(runs) ? Object.fromEntries(runs.map((run) => [run.runId, run])) : runs;
+  return rootCwdForSession(summary, [...byPath.values()], registry);
 }
 
 /** The name a group header shows. */
@@ -245,8 +237,6 @@ export const SESSION_GROUPS_STORAGE_KEY = storageKey("session-groups");
 export const SESSION_PINS_STORAGE_KEY = storageKey("session-pins");
 
 export interface SessionsListState {
-  /** Which tab the panel shows; persisted per browser. */
-  readonly tab: SessionsTab;
   /** Only this project's group is shown; `undefined` = every project. */
   readonly filter: string | undefined;
   /** Scroll request: the panel consumes it by nonce. */
@@ -274,24 +264,7 @@ const writeCollapsed = (collapsed: ReadonlySet<string>): void => {
   }
 };
 
-const readTab = (): SessionsTab => {
-  try {
-    const raw = globalThis.localStorage?.getItem(SESSIONS_TAB_STORAGE_KEY);
-    return raw === "chat" ? "chat" : "code";
-  } catch {
-    return "code";
-  }
-};
-
-const writeTab = (tab: SessionsTab): void => {
-  try {
-    globalThis.localStorage?.setItem(SESSIONS_TAB_STORAGE_KEY, tab);
-  } catch {
-    /* private mode / quota: the choice lives for this tab */
-  }
-};
-
-let listState: SessionsListState = { tab: readTab(), filter: undefined, jump: undefined, collapsed: readPaths(SESSION_GROUPS_STORAGE_KEY), pinned: readPaths(SESSION_PINS_STORAGE_KEY) };
+let listState: SessionsListState = { filter: undefined, jump: undefined, collapsed: readPaths(SESSION_GROUPS_STORAGE_KEY), pinned: readPaths(SESSION_PINS_STORAGE_KEY) };
 const listeners = new Set<() => void>();
 let jumpNonce = 0;
 
@@ -313,9 +286,7 @@ export const sessionsList = {
     const collapsed = new Set(listState.collapsed);
     collapsed.delete(cwd);
     if (collapsed.size !== listState.collapsed.size) writeCollapsed(collapsed);
-    // The rail's projects live on the Code tab; asking for one lands there.
-    if (listState.tab !== "code") writeTab("code");
-    publish({ ...listState, tab: "code", filter: cwd, jump: { cwd, nonce: ++jumpNonce }, collapsed });
+    publish({ ...listState, filter: cwd, jump: { cwd, nonce: ++jumpNonce }, collapsed });
   },
   /** Back to every project, scrolled to `cwd` when given. */
   clearFilter(cwd?: string): void {
@@ -325,14 +296,7 @@ export const sessionsList = {
     const collapsed = new Set(listState.collapsed);
     collapsed.delete(cwd);
     if (collapsed.size !== listState.collapsed.size) writeCollapsed(collapsed);
-    if (listState.tab !== "code") writeTab("code");
-    publish({ ...listState, tab: "code", collapsed, jump: { cwd, nonce: ++jumpNonce } });
-  },
-  /** Switch tabs. A rail filter belongs to Code, so Chat clears it. */
-  setTab(tab: SessionsTab): void {
-    if (tab === listState.tab) return;
-    writeTab(tab);
-    publish({ ...listState, tab, ...(tab === "chat" ? { filter: undefined } : {}) });
+    publish({ ...listState, collapsed, jump: { cwd, nonce: ++jumpNonce } });
   },
   toggleCollapsed(cwd: string): void {
     const collapsed = new Set(listState.collapsed);
@@ -354,7 +318,7 @@ export const sessionsList = {
   },
   /** Test seam. */
   reset(): void {
-    publish({ tab: "code", filter: undefined, jump: undefined, collapsed: new Set(), pinned: new Set() });
+    publish({ filter: undefined, jump: undefined, collapsed: new Set(), pinned: new Set() });
   },
 };
 

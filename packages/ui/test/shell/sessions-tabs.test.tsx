@@ -14,7 +14,7 @@ import type { SessionSummary } from "@lasercode/protocol";
 import { SessionsPanel } from "../../src/components/shell/SessionsPanel.js";
 import { ShellContext, type ShellContextValue } from "../../src/components/shell/shell-context.js";
 import { SESSIONS_TAB_STORAGE_KEY, sessionsList } from "../../src/components/shell/session-groups.js";
-import { rememberSessionForTab } from "../../src/runtime/session-tab-memory.js";
+import { rememberSessionForTab, rememberSessionsTab, rememberedSessionForTab } from "../../src/runtime/session-tab-memory.js";
 import { sessionFolds } from "../../src/components/assistant-ui/elements/session-folds.js";
 import { clearEndAgentRequest, useEndAgentRequest } from "../../src/components/agents/end-agent.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
@@ -28,7 +28,7 @@ const stable = vi.hoisted(() => ({
   currentProject: "/one",
   setCurrentProject: vi.fn(),
   dispatch: vi.fn(),
-  actions: { toast: vi.fn(), removeProject: vi.fn(), newSession: vi.fn(async () => "/state/chat/new.jsonl"), openSession: vi.fn(async () => undefined) },
+  actions: { toast: vi.fn(), removeProject: vi.fn(), newSession: vi.fn(async () => "/state/chat/new.jsonl"), openSession: vi.fn(async () => undefined), goTab: vi.fn(async () => undefined) },
   archive: { add: vi.fn(), has: () => false },
   client: { request: vi.fn(async () => ({ hits: [], unreadable: 0 })) },
 }));
@@ -101,6 +101,7 @@ beforeEach(() => {
   localStorage.clear();
   sessionsList.reset();
   stable.actions.openSession.mockClear();
+  stable.actions.goTab.mockClear();
   stable.setCurrentProject.mockClear();
   stable.dispatch.mockClear();
   sessionFolds.reset();
@@ -117,6 +118,14 @@ afterEach(async () => {
 });
 
 const mount = async (node: ReactNode = <Fixture store={store} />) => act(async () => root.render(node));
+const completeTab = async (next: "chat" | "code") => {
+  rememberSessionsTab(next);
+  const target = next === "chat"
+    ? (rememberedSessionForTab("chat") ?? "/state/chat/c1.jsonl")
+    : (rememberedSessionForTab("code") ?? "/one/root.jsonl");
+  store.dispatch({ type: "destination", destination: { ...store.getSnapshot().destination, tab: next, path: target, phase: "ready", intent: store.getSnapshot().destination.intent + 1 } });
+  await stable.actions.openSession(target);
+};
 const rows = () => [...container.querySelectorAll<HTMLElement>('[data-slot="aui_thread-list-item"]')];
 const rowTitled = (text: string) => rows().find((row) => row.textContent?.includes(text));
 const tab = (kind: "chat" | "code") => container.querySelector<HTMLButtonElement>(`[role="tab"][data-tab="${kind}"]`)!;
@@ -136,7 +145,9 @@ describe("sessions panel tabs", () => {
     expect(rowTitled("Recipe ideas")).toBeUndefined();
     expect(container.querySelector('[data-slot="new-session"]')).not.toBeNull();
 
-    await act(async () => tab("chat").click());
+    await act(async () => { tab("chat").click(); await completeTab("chat"); });
+    expect(stable.actions.goTab).toHaveBeenCalledWith("chat");
+    expect(store.getSnapshot().destination.tab).toBe("chat");
     expect(tab("chat").getAttribute("aria-selected")).toBe("true");
     expect(localStorage.getItem(SESSIONS_TAB_STORAGE_KEY)).toBe("chat");
     expect(container.querySelector('[data-slot="aui_thread-list-root"]')?.getAttribute("data-tab")).toBe("chat");
@@ -151,13 +162,13 @@ describe("sessions panel tabs", () => {
     await act(async () => root.unmount());
     root = createRoot(container);
     sessionsList.reset();
-    (sessionsList as unknown as { setTab(tab: "chat" | "code"): void }).setTab(localStorage.getItem(SESSIONS_TAB_STORAGE_KEY) === "chat" ? "chat" : "code");
+    store.dispatch({ type: "destination", destination: { ...store.getSnapshot().destination, tab: "chat", phase: "ready", intent: store.getSnapshot().destination.intent + 1 } });
     await mount();
     expect(tab("chat").getAttribute("aria-selected")).toBe("true");
 
     // Arrow keys move between the segments.
     tab("chat").focus();
-    await act(async () => tab("chat").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+    await act(async () => { tab("chat").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); await completeTab("code"); });
     expect(tab("code").getAttribute("aria-selected")).toBe("true");
     expect(document.activeElement).toBe(tab("code"));
     expect(rowTitled("Ship the release")).toBeDefined();
@@ -168,16 +179,16 @@ describe("sessions panel tabs", () => {
     rememberSessionForTab("chat", "/state/chat/c2.jsonl");
     rememberSessionForTab("code", "/two/plain.jsonl");
     await mount();
-    await act(async () => tab("chat").click());
+    await act(async () => { tab("chat").click(); await completeTab("chat"); });
     expect(stable.actions.openSession).toHaveBeenLastCalledWith("/state/chat/c2.jsonl");
-    await act(async () => tab("code").click());
+    await act(async () => { tab("code").click(); await completeTab("code"); });
     expect(stable.actions.openSession).toHaveBeenLastCalledWith("/two/plain.jsonl");
-    expect(stable.setCurrentProject).toHaveBeenLastCalledWith("/two");
+    expect(store.getSnapshot().destination.tab).toBe("code");
   });
 
   it("starts a new chat with the Chat agent in the Chat workspace", async () => {
     await mount();
-    await act(async () => tab("chat").click());
+    await act(async () => { tab("chat").click(); await completeTab("chat"); });
     await act(async () => container.querySelector<HTMLButtonElement>('[data-slot="new-chat"]')!.click());
     expect(stable.actions.newSession).toHaveBeenCalledWith("/state/chat", { agentName: "chat" });
   });
@@ -213,7 +224,7 @@ describe("Beam and children in the Code tab", () => {
     const project = container.querySelector<HTMLElement>('section[data-cwd="/two"]')!;
     await act(async () => project.querySelector<HTMLButtonElement>('[aria-label^="New session in"]')!.click());
     expect(stable.actions.newSession).toHaveBeenCalledWith("/two");
-    expect(stable.setCurrentProject).toHaveBeenCalledWith("/two");
+    expect(stable.setCurrentProject).not.toHaveBeenCalled();
   });
 
   it("nests a child under its parent on a lineage rail with its run status, and detaches an orphan", async () => {

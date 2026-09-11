@@ -27,7 +27,7 @@ export interface ProjectStepProps {
 }
 
 export function ProjectStep({ onAdded }: ProjectStepProps) {
-  const { client, actions, setCurrentProject, projects } = useLaserStable();
+  const { client, actions, projects } = useLaserStable();
   const sessions = useLaserState((s) => s.sessions);
   const [listing, setListing] = useState<DirectoryListing>();
   const [loading, setLoading] = useState(true);
@@ -62,7 +62,7 @@ export function ProjectStep({ onAdded }: ProjectStepProps) {
     try {
       const project = await actions.addProject(cwd);
       if (project) {
-        setCurrentProject(project.cwd);
+        void actions.goProject(project.cwd);
         onAdded(project.cwd);
       }
     } finally {

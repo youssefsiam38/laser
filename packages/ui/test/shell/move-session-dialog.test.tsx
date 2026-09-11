@@ -43,6 +43,8 @@ const stable = vi.hoisted(() => ({
     removeProject: vi.fn(),
     newSession: vi.fn(async () => "/state/chat/new.jsonl"),
     openSession: vi.fn(async () => undefined),
+    goTab: vi.fn(async (_tab: "chat" | "code") => undefined),
+    goProject: vi.fn(async (_cwd: string) => undefined),
     moveSession: vi.fn(async () => MOVED),
   },
   archive: { add: vi.fn(), has: () => false },
@@ -103,7 +105,15 @@ beforeEach(() => {
   sessionFolds.reset();
   clearMoveSessionRequest();
   stable.actions.moveSession.mockReset().mockResolvedValue(MOVED);
-  stable.actions.openSession.mockClear();
+  stable.actions.openSession.mockReset().mockImplementation(async (path: string) => {
+    if (path !== MOVED) return;
+    const current = store.getSnapshot().destination;
+    store.dispatch({ type: "destination", destination: { ...current, tab: "code", codeProject: "/one", path, phase: "ready", intent: current.intent + 1 } });
+  });
+  stable.actions.goTab.mockReset().mockImplementation(async (tab: "chat" | "code") => {
+    const current = store.getSnapshot().destination;
+    store.dispatch({ type: "destination", destination: { ...current, tab, path: undefined, phase: "ready", intent: current.intent + 1 } });
+  });
   stable.actions.toast.mockClear();
   stable.setCurrentProject.mockClear();
   showChat.mockClear();
@@ -187,8 +197,7 @@ describe("the move dialog", () => {
     await act(async () => confirmButton().click());
     await tick();
     expect(stable.actions.moveSession).toHaveBeenCalledWith(CHAT, "/one");
-    expect(stable.setCurrentProject).toHaveBeenCalledWith("/one");
-    expect(sessionsList.get().tab).toBe("code");
+    expect(store.getSnapshot().destination.tab).toBe("code");
     expect(sessionsList.get().jump?.cwd).toBe("/one");
     expect(stable.actions.openSession).toHaveBeenCalledWith(MOVED);
     expect(showChat).toHaveBeenCalled();
@@ -213,7 +222,7 @@ describe("the move dialog", () => {
     expect(confirmButton().disabled).toBe(false);
     expect(stable.actions.openSession).not.toHaveBeenCalled();
     expect(stable.setCurrentProject).not.toHaveBeenCalled();
-    expect(sessionsList.get().tab).toBe("chat");
+    expect(store.getSnapshot().destination.tab).toBe("chat");
   });
 
   it("in a browser, New project… asks for a path, and Enter in the field moves there", async () => {
@@ -233,7 +242,7 @@ describe("the move dialog", () => {
     await act(async () => field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
     await tick();
     expect(stable.actions.moveSession).toHaveBeenCalledWith(CHAT, "/home/me/new-app");
-    expect(stable.setCurrentProject).toHaveBeenCalledWith("/home/me/new-app");
+    expect(stable.actions.openSession).toHaveBeenCalledWith(MOVED);
   });
 
   it("in the desktop app, New project… runs the native picker; a chosen folder is listed as new and a cancelled picker changes nothing", async () => {

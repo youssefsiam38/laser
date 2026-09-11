@@ -25,12 +25,11 @@ import {
   AuiConfig,
   AuiProvider,
   useAui,
-  useAuiEvent,
   useAuiState,
   useExternalStoreRuntime,
   useRemoteThreadListRuntime,
 } from "@assistant-ui/react";
-import type { AssistantRuntime, RemoteThreadListAdapter, ThreadComposerRuntime, ThreadMessageLike } from "@assistant-ui/react";
+import type { AssistantRuntime, CreateAttachment, RemoteThreadListAdapter, ThreadComposerRuntime, ThreadMessageLike } from "@assistant-ui/react";
 import type {
   ContentBlock,
   GoalAction,
@@ -51,6 +50,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -65,12 +65,27 @@ import { initialState, reduce, type Action, type AppState, type SessionView } fr
 import { createThreadAdapter, sendToSession, type SendBehavior } from "./adapter.js";
 import { useDiscardFirstTurnOnLeave } from "./first-turn.js";
 import { createSessionLauncher, type NewSessionOptions } from "./new-session.js";
-import { rememberSessionForTab, sessionKindTab } from "./session-tab-memory.js";
+import {
+  codeProjectForSession,
+  creationTargetForDestination,
+  destinationSessionForTab,
+  initialMainDestination,
+  type MainDestination,
+  type MainTab,
+} from "./main-destination.js";
+import {
+  rememberSessionForTab,
+  rememberSessionsTab,
+  rememberedSessionForTab,
+  rememberedSessionsTab,
+  sessionKindTab,
+} from "./session-tab-memory.js";
 import { useThemeSync } from "./prefs.js";
 import { projectSessionView, shareProjectedMessages, splitDialogs } from "./projection.js";
 import {
   createArchiveStore,
   createThreadListAdapter,
+  mergeSessions,
   orderProjectInfos,
   threadListSignature,
   visibleProjectCwds,
@@ -113,8 +128,16 @@ export interface MoveOptions {
 }
 
 export interface LaserActions {
-  /** `session/load` (+ `pi/session/entries` on first open) and select it. */
+  /** Navigate the main window to this session, aligning its tab and Code memory. */
   openSession(path: string): Promise<void>;
+  /** Navigate the main window to one tab. */
+  goTab(tab: MainTab): Promise<void>;
+  /** Navigate to a Code project and its remembered session or safe landing. */
+  goProject(cwd: string): Promise<void>;
+  /** Retry the current unavailable destination without changing its identity. */
+  retryDestination(): Promise<void>;
+  /** Leave the main session on its safe tab landing. */
+  leaveSession(): void;
   /**
    * Select an unstarted session in `cwd`, or create one; returns its path.
    * `agentName` picks the definition (omitted: the default agent); an empty
@@ -203,6 +226,8 @@ export interface LaserContextValue {
   client: HostClient;
   /** The currently open session view, if any. */
   view: SessionView | undefined;
+  /** Destination for this runtime context; scopes replace the main value. */
+  destination: MainDestination;
   currentProject: string | undefined;
   /** The remembered startup destination is still connecting or hydrating. */
   startupRestoring: boolean;
@@ -353,6 +378,8 @@ interface RuntimeSnapshot {
   dispatch: (action: Action) => void;
   onError: (error: unknown) => void;
   openSession: (path: string) => Promise<void>;
+  /** Main adapters are fenced by the canonical destination; scoped adapters are not. */
+  main?: boolean | undefined;
 }
 
 interface SnapshotStore<T> {
@@ -451,20 +478,72 @@ export interface LaserProviderProps {
   url?: string | undefined;
 }
 
+type MainComposerState = ReturnType<ThreadComposerRuntime["getState"]>;
+interface MainLandingDraft {
+  text: string;
+  runConfig: MainComposerState["runConfig"];
+  quote: MainComposerState["quote"];
+  attachments: Array<File | CreateAttachment>;
+}
+
+const codeLandingKey = (destination: MainDestination): string | undefined =>
+  destination.tab === "code" && destination.phase === "ready" && destination.path === undefined
+    ? `code:${destination.codeProject ?? ""}`
+    : undefined;
+
+const captureLandingDraft = (composer: ThreadComposerRuntime): MainLandingDraft => {
+  const state = composer.getState();
+  return {
+    text: state.text,
+    runConfig: state.runConfig,
+    quote: state.quote,
+    attachments: state.attachments.flatMap<File | CreateAttachment>((attachment) => {
+      if (attachment.file) return [attachment.file];
+      if (!attachment.content) return [];
+      return [{
+        id: attachment.id,
+        type: attachment.type,
+        name: attachment.name,
+        ...(attachment.contentType !== undefined ? { contentType: attachment.contentType } : {}),
+        content: attachment.content,
+      }];
+    }),
+  };
+};
+
 export function LaserProvider({ children, url }: LaserProviderProps): ReactNode {
-  const store = useMemo(() => createStateStore(), []);
+  const store = useMemo(() => {
+    const destination: MainDestination = {
+      ...initialMainDestination,
+      tab: rememberedSessionsTab(),
+      codeProject: readString(PROJECT_STORAGE_KEY),
+    };
+    return createStateStore({ ...initialState, destination });
+  }, []);
   const dispatch = store.dispatch;
   // Always the committed state, even inside a socket callback that runs before
   // React re-renders.
   const readState = store.getSnapshot;
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
 
-  const [currentProject, setCurrentProjectState] = useState<string | undefined>(() => readString(PROJECT_STORAGE_KEY));
+  const currentProject = state.destination.codeProject;
   const [startupRestoring, setStartupRestoring] = useState(true);
   const [projectList, setProjectList] = useState<ProjectInfo[]>([]);
   const [trustRequests, setTrustRequests] = useState<TrustRequest[]>([]);
-  const projectRef = useRef<string | undefined>(currentProject);
-  projectRef.current = currentProject;
+  const intentRef = useRef(state.destination.intent);
+  if (state.destination.intent > intentRef.current) intentRef.current = state.destination.intent;
+  // assistant-ui owns one local (pathless) thread. Key its composer state by
+  // Code project so switching between two landings cannot carry a draft,
+  // attachment, quote, or first-turn choice into the wrong directory.
+  const mainComposerRef = useRef<ThreadComposerRuntime | undefined>(undefined);
+  const landingDraftsRef = useRef(new Map<string, MainLandingDraft>());
+  const saveMainLandingDraft = useCallback((destination: MainDestination): void => {
+    const key = codeLandingKey(destination);
+    const composer = mainComposerRef.current;
+    if (!key || !composer) return;
+    landingDraftsRef.current.set(key, captureLandingDraft(composer));
+    void composer.reset();
+  }, []);
 
   const archive = useMemo(() => createArchiveStore(storage()), []);
   const archiveRevision = useSyncExternalStore(archive.subscribe, archive.getSnapshot, archive.getSnapshot);
@@ -695,7 +774,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     [client],
   );
 
-  const newSession = useMemo(() => createSessionLauncher({
+  const launchSession = useMemo(() => createSessionLauncher({
     state: readState,
     archived: (path) => archive.has(path),
     refresh: async () => {
@@ -722,6 +801,182 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       return session.path;
     },
   }), [archive, client, openSession, refreshSessions]);
+
+  // --- one main-window destination ---------------------------------------
+
+  const beginDestination = useCallback((tab: MainTab, codeProject: string | undefined, targetPath?: string): number => {
+    saveMainLandingDraft(readState().destination);
+    const intent = ++intentRef.current;
+    rememberSessionsTab(tab);
+    dispatch({ type: "destination", destination: { tab, codeProject, path: undefined, targetPath, phase: "resolving", intent } });
+    return intent;
+  }, [readState, saveMainLandingDraft]);
+
+  const commitDestination = useCallback((destination: MainDestination): boolean => {
+    if (intentRef.current !== destination.intent) return false;
+    dispatch({ type: "destination", destination });
+    rememberSessionsTab(destination.tab);
+    if (destination.tab === "code" && destination.codeProject !== undefined) {
+      writeString(PROJECT_STORAGE_KEY, destination.codeProject);
+    }
+    if (destination.path !== undefined) {
+      rememberSessionForTab(destination.tab, destination.path);
+      if (destination.tab === "code" && destination.codeProject !== undefined) {
+        const remembered = readStringMap(SESSION_STORAGE_KEY);
+        if (remembered[destination.codeProject] !== destination.path) {
+          writeString(SESSION_STORAGE_KEY, JSON.stringify({ ...remembered, [destination.codeProject]: destination.path }));
+        }
+      }
+    }
+    return true;
+  }, []);
+
+  const failDestination = useCallback((intent: number, message: string): void => {
+    const current = readState().destination;
+    if (intentRef.current !== intent || current.intent !== intent) return;
+    dispatch({
+      type: "destination",
+      destination: { ...current, path: undefined, phase: "unavailable", unavailable: message },
+    });
+  }, [readState]);
+
+  const resolveSessionIntent = useCallback(async (path: string, intent: number): Promise<boolean> => {
+    const resolving = readState().destination;
+    if (intentRef.current === intent && resolving.intent === intent && resolving.targetPath !== path) {
+      dispatch({ type: "destination", destination: { ...resolving, targetPath: path } });
+    }
+    try {
+      await openSession(path, { select: false });
+    } catch (error) {
+      // A superseded load may finish (or fail) into cache, but it does not own
+      // the visible destination or its errors anymore.
+      if (intentRef.current !== intent) return false;
+      failDestination(intent, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+    if (intentRef.current !== intent) return false;
+    const next = readState();
+    const merged = mergeSessions(next.sessions, next.open);
+    const session = merged.find((item) => item.path === path);
+    if (!session) {
+      const message = "That conversation could not be loaded. Retry it or start a new one.";
+      failDestination(intent, message);
+      throw new Error(message);
+    }
+    const tab = sessionKindTab(session, next.agents.snapshot?.workspaces ?? {});
+    const codeProject = tab === "code"
+      ? codeProjectForSession(session, merged, next.agents.runs, next.destination.codeProject)
+      : next.destination.codeProject;
+    return commitDestination({ tab, codeProject, path, targetPath: undefined, phase: "ready", intent });
+  }, [commitDestination, dispatch, failDestination, openSession, readState]);
+
+  const resolveTabIntent = useCallback(async (tab: MainTab, intent: number): Promise<void> => {
+    if (intentRef.current !== intent) return;
+    const current = readState();
+    const workspaces = current.agents.snapshot?.workspaces;
+    const remembered = rememberedSessionForTab(tab)
+      ?? (tab === "code" && current.destination.codeProject ? readStringMap(SESSION_STORAGE_KEY)[current.destination.codeProject] : undefined);
+    const target = destinationSessionForTab(tab, remembered, {
+      sessions: current.sessions,
+      views: current.open,
+      workspaces: workspaces ?? {},
+      archived: (path) => archive.has(path),
+    });
+    if (target) {
+      await resolveSessionIntent(target.path, intent);
+      return;
+    }
+    if (tab === "code") {
+      commitDestination({ ...current.destination, tab, path: undefined, targetPath: undefined, phase: "ready", intent });
+      return;
+    }
+    const creation = creationTargetForDestination(current.destination, workspaces?.chat);
+    // The agents snapshot is still arriving. Stay visibly Chat and inert; the
+    // effect below resumes this same intent rather than guessing a project.
+    if (!creation) return;
+    try {
+      const path = await launchSession(creation.cwd, { agentName: "chat", select: false });
+      if (intentRef.current !== intent) return;
+      commitDestination({ ...readState().destination, tab: "chat", path, targetPath: undefined, phase: "ready", intent });
+    } catch (error) {
+      if (intentRef.current !== intent) return;
+      failDestination(intent, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+  }, [archive, commitDestination, failDestination, launchSession, readState, resolveSessionIntent]);
+
+  const goTab = useCallback(async (tab: MainTab): Promise<void> => {
+    const current = readState().destination;
+    if (current.tab === tab && current.phase === "ready" && current.path !== undefined) return;
+    const intent = beginDestination(tab, current.codeProject);
+    await resolveTabIntent(tab, intent);
+  }, [beginDestination, readState, resolveTabIntent]);
+
+  const goProject = useCallback(async (cwd: string): Promise<void> => {
+    const intent = beginDestination("code", cwd);
+    writeString(PROJECT_STORAGE_KEY, cwd);
+    const current = readState();
+    const remembered = readStringMap(SESSION_STORAGE_KEY)[cwd];
+    const merged = mergeSessions(current.sessions, current.open);
+    const candidate = remembered
+      ? merged.find((session) => session.path === remembered
+          && sessionKindTab(session, current.agents.snapshot?.workspaces ?? {}) === "code"
+          && codeProjectForSession(session, merged, current.agents.runs, cwd) === cwd)
+      : undefined;
+    if (candidate) await resolveSessionIntent(candidate.path, intent);
+    else commitDestination({ tab: "code", codeProject: cwd, path: undefined, targetPath: undefined, phase: "ready", intent });
+  }, [beginDestination, commitDestination, readState, resolveSessionIntent]);
+
+  const navigateSession = useCallback(async (path: string): Promise<void> => {
+    const current = readState();
+    const merged = mergeSessions(current.sessions, current.open);
+    const known = merged.find((session) => session.path === path);
+    const tab = known ? sessionKindTab(known, current.agents.snapshot?.workspaces ?? {}) : current.destination.tab;
+    const codeProject = known && tab === "code"
+      ? codeProjectForSession(known, merged, current.agents.runs, current.destination.codeProject)
+      : current.destination.codeProject;
+    const intent = beginDestination(tab, codeProject, path);
+    await resolveSessionIntent(path, intent);
+  }, [beginDestination, readState, resolveSessionIntent]);
+
+  const navigateNewSession = useCallback(async (cwd: string, options: NewSessionOptions = {}): Promise<string> => {
+    if (options.select === false) return launchSession(cwd, options);
+    const agentName = options.agentName;
+    const tab: MainTab = agentName === "chat" ? "chat" : "code";
+    const previous = readState().destination;
+    const codeProject = tab === "code" && agentName !== "beam" ? cwd : previous.codeProject;
+    const intent = beginDestination(tab, codeProject);
+    try {
+      const path = await launchSession(cwd, { ...options, select: false });
+      if (intentRef.current === intent) commitDestination({ tab, codeProject, path, targetPath: undefined, phase: "ready", intent });
+      return path;
+    } catch (error) {
+      if (intentRef.current === intent) failDestination(intent, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+  }, [beginDestination, commitDestination, failDestination, launchSession, readState]);
+
+  const retryDestination = useCallback(async (): Promise<void> => {
+    const current = readState().destination;
+    const intent = beginDestination(current.tab, current.codeProject, current.targetPath);
+    if (current.targetPath) await resolveSessionIntent(current.targetPath, intent);
+    else await resolveTabIntent(current.tab, intent);
+  }, [beginDestination, readState, resolveTabIntent]);
+
+  const leaveSession = useCallback((): void => {
+    const current = readState().destination;
+    const intent = beginDestination(current.tab, current.codeProject);
+    commitDestination({ ...readState().destination, path: undefined, targetPath: undefined, phase: "ready", intent });
+  }, [beginDestination, commitDestination, readState]);
+
+  // Resume a Chat intent that started before the authoritative workspace
+  // snapshot arrived. The intent is not replaced, so a later click still wins.
+  useEffect(() => {
+    const destination = state.destination;
+    if (state.connection !== "open" || destination.tab !== "chat" || destination.phase !== "resolving" || destination.targetPath !== undefined) return;
+    if (!state.agents.snapshot?.workspaces.chat) return;
+    void resolveTabIntent("chat", destination.intent).catch(() => {});
+  }, [resolveTabIntent, state.agents.snapshot?.workspaces.chat, state.connection, state.destination]);
 
   // `requireCurrent`, `send`, `answerDialog` and `fork` live inside
   // `buildActions` below: they read "the current session" through the state
@@ -897,8 +1152,15 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    */
   const buildActions = useCallback((readScoped: () => AppState): LaserActions => {
     const requireCurrent = (): string => {
-      const path = readScoped().current;
+      const snapshot = readScoped();
+      const path = snapshot.current;
       if (!path) throw new Error("No session is open.");
+      if (readScoped === readState) {
+        const destination = snapshot.destination;
+        if (destination.phase !== "ready" || destination.path !== path) {
+          throw new Error("That conversation is still changing. Your action was not sent.");
+        }
+      }
       return path;
     };
 
@@ -984,8 +1246,12 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     };
 
     return {
-      openSession: (path) => guard(() => openSession(path)).then(() => undefined),
-      newSession: (cwd, options) => newSession(cwd, options),
+      openSession: (path) => guard(() => readScoped === readState ? navigateSession(path) : openSession(path, { select: false })).then(() => undefined),
+      goTab: (tab) => guard(() => goTab(tab)).then(() => undefined),
+      goProject: (cwd) => guard(() => goProject(cwd)).then(() => undefined),
+      retryDestination: () => guard(() => retryDestination()).then(() => undefined),
+      leaveSession: () => leaveSession(),
+      newSession: (cwd, options) => readScoped === readState ? navigateNewSession(cwd, options) : launchSession(cwd, { ...options, select: false }),
       send: (content, behavior) => send(content, behavior),
       abort: () => guard(async () => client.request("session/cancel", { path: requireCurrent() })).then(() => undefined),
       answerDialog: (response) => guard(() => answerDialog(response)).then(() => undefined),
@@ -1128,8 +1394,13 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
               text: `${basenameOf(cwd)} is off the list. It stays in the rail while one of its sessions is open, so that session cannot go missing.`,
             });
           } else {
-            if (projectRef.current === cwd) {
-              setCurrentProjectState(undefined);
+            const destination = readState().destination;
+            if (destination.codeProject === cwd) {
+              saveMainLandingDraft(destination);
+              dispatch({
+                type: "destination",
+                destination: { ...destination, codeProject: undefined, intent: ++intentRef.current },
+              });
               writeString(PROJECT_STORAGE_KEY, undefined);
             }
             dispatch({ type: "toast", level: "info", text: `${basenameOf(cwd)} is off the list. Nothing on disk was deleted.` });
@@ -1160,11 +1431,18 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     archive,
     client,
     guard,
+    goProject,
+    goTab,
+    launchSession,
+    leaveSession,
     markSeen,
-    newSession,
+    navigateNewSession,
+    navigateSession,
     openSession,
     refreshProjects,
+    retryDestination,
     refreshSessions,
+    saveMainLandingDraft,
   ]);
 
   const actions = useMemo<LaserActions>(() => buildActions(readState), [buildActions, readState]);
@@ -1173,9 +1451,21 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   actionsRef.current = actions;
 
   const setCurrentProject = useCallback((cwd: string | undefined) => {
-    setCurrentProjectState(cwd);
+    const current = readState().destination;
+    // Compatibility for code that only remembers a project: on a Code landing
+    // this is also a newer, completed landing intent, so an older startup
+    // restoration cannot leave the page inert in its resolving phase.
+    const codeLanding = current.tab === "code" && current.path === undefined;
+    if (codeLanding && current.codeProject !== cwd) saveMainLandingDraft(current);
+    const destination = {
+      ...current,
+      codeProject: cwd,
+      ...(codeLanding ? { targetPath: undefined, phase: "ready" as const, unavailable: undefined } : {}),
+      intent: ++intentRef.current,
+    };
+    dispatch({ type: "destination", destination });
     writeString(PROJECT_STORAGE_KEY, cwd);
-  }, []);
+  }, [readState, saveMainLandingDraft]);
 
   // The host owns the list; a session opened before the list arrives (or in a
   // directory the host has not indexed yet) still gets a rail icon. Via a
@@ -1194,8 +1484,11 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
 
   // Default the project to the first one we learn about.
   useEffect(() => {
-    if (currentProject === undefined && projects[0]) setCurrentProject(projects[0]);
-  }, [currentProject, projects, setCurrentProject]);
+    if (currentProject !== undefined || !projects[0]) return;
+    const destination = readState().destination;
+    dispatch({ type: "destination", destination: { ...destination, codeProject: projects[0] } });
+    writeString(PROJECT_STORAGE_KEY, projects[0]);
+  }, [currentProject, projects, readState]);
 
   /**
    * Remember the session being read, per project.
@@ -1206,20 +1499,15 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    * downstream of it.
    */
   useEffect(() => {
-    const path = state.current;
-    if (!path) return;
-    const session = state.open[path]?.state;
-    const cwd = session?.cwd;
-    if (!cwd) return;
+    const destination = state.destination;
+    if (destination.phase !== "ready" || !destination.path) return;
+    rememberSessionForTab(destination.tab, destination.path);
+    if (destination.tab !== "code" || !destination.codeProject) return;
     const remembered = readStringMap(SESSION_STORAGE_KEY);
-    if (remembered[cwd] !== path) writeString(SESSION_STORAGE_KEY, JSON.stringify({ ...remembered, [cwd]: path }));
-    const summary = state.sessions.find((entry) => entry.path === path);
-    const agent = session.agent ?? summary?.agent;
-    rememberSessionForTab(
-      sessionKindTab({ cwd, ...(agent ? { agent } : {}) }, state.agents.snapshot?.workspaces ?? {}),
-      path,
-    );
-  }, [state.current, state.open, state.sessions, state.agents.snapshot?.workspaces]);
+    if (remembered[destination.codeProject] !== destination.path) {
+      writeString(SESSION_STORAGE_KEY, JSON.stringify({ ...remembered, [destination.codeProject]: destination.path }));
+    }
+  }, [state.destination]);
 
   /**
    * Reopen it once, on the first connection, unless a deep link is asking for
@@ -1231,27 +1519,20 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    */
   const restoredSession = useRef(false);
   useEffect(() => {
-    if (restoredSession.current || state.connection !== "open") return;
+    if (restoredSession.current || state.connection !== "open" || !state.sessionsLoaded) return;
     if (/^#\/session\//.test(globalThis.location?.hash ?? "")) return;
     restoredSession.current = true;
-    const cwd = projectRef.current;
-    if (!cwd) {
-      setStartupRestoring(false);
-      return;
-    }
-    const remembered = readStringMap(SESSION_STORAGE_KEY);
-    const path = remembered[cwd];
-    if (!path) {
-      setStartupRestoring(false);
-      return;
-    }
-    void openSession(path)
-      .catch(() => {
-        const { [cwd]: _gone, ...rest } = readStringMap(SESSION_STORAGE_KEY);
-        writeString(SESSION_STORAGE_KEY, JSON.stringify(rest));
-      })
-      .finally(() => setStartupRestoring(false));
-  }, [state.connection, openSession, readState]);
+    // A click, project pick, or explicit open that happened while the catalog
+    // was connecting is newer than startup memory. Never let restoration take
+    // the destination back after the person has already chosen one.
+    if (readState().destination.intent > 0) return;
+    void goTab(readState().destination.tab).catch(() => {});
+  }, [goTab, readState, state.connection, state.sessionsLoaded]);
+
+  useEffect(() => {
+    if (state.connection !== "open") return;
+    if (state.destination.phase === "ready" || state.destination.phase === "unavailable") setStartupRestoring(false);
+  }, [state.connection, state.destination.phase]);
 
   /**
    * Deep link: `laser open` / `laser new --open` send the browser to
@@ -1277,11 +1558,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       setStartupRestoring(false);
       return;
     }
-    void openSession(path)
-      .then(() => {
-        const cwd = readState().open[path]?.state.cwd;
-        if (cwd) setCurrentProject(cwd);
-      })
+    void navigateSession(path)
       .catch((error: unknown) => {
         onError(
           new Error(
@@ -1295,22 +1572,31 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         globalThis.history?.replaceState(null, "", `${pathname}${search}`);
         setStartupRestoring(false);
       });
-  }, [state.connection, openSession, onError, readState, setCurrentProject]);
+  }, [state.connection, navigateSession, onError]);
 
   // --- runtime ------------------------------------------------------------
 
   const snapshotStore = useMemo(
-    () => createSnapshotStore<RuntimeSnapshot>({ store, client, dispatch, onError, openSession }),
+    () => createSnapshotStore<RuntimeSnapshot>({ store, client, dispatch, onError, openSession: (path) => openSession(path, { select: false }), main: true }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- created once; kept in sync below
     [],
   );
 
   useEffect(() => {
-    snapshotStore.set({ store, client, dispatch, onError, openSession });
-  }, [snapshotStore, store, client, dispatch, onError, openSession, currentProject]);
+    snapshotStore.set({ store, client, dispatch, onError, openSession: (path) => openSession(path, { select: false }), main: true });
+  }, [snapshotStore, store, client, dispatch, onError, openSession]);
 
   /** Number of `initialize()` calls in flight; gates the thread-list reload and the controlled selection. */
   const [initializing, setInitializing] = useState(0);
+  const initializingRef = useRef(0);
+  const beginInitialize = useCallback(() => {
+    initializingRef.current += 1;
+    setInitializing((n) => n + 1);
+  }, []);
+  const endInitialize = useCallback(() => {
+    initializingRef.current = Math.max(0, initializingRef.current - 1);
+    setInitializing((n) => Math.max(0, n - 1));
+  }, []);
 
   const threadListAdapter = useMemo(
     () =>
@@ -1318,13 +1604,30 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         sessions: () => readState().sessions,
         views: () => readState().open,
         archive,
-        currentProject: () => projectRef.current ?? Object.values(readState().open)[0]?.state.cwd,
+        creationTarget: () => creationTargetForDestination(
+          readState().destination,
+          readState().agents.snapshot?.workspaces.chat,
+        ),
         // Quietly: the runtime is adopting this path into its "new" thread and
         // selects it through `onThreadIdChange` once that is done. Selecting
         // here — in particular a listed, unstarted session the launcher reuses
         // (one the CLI created, M13-T53) — moved the runtime onto a row it was
         // about to drop, and every render threw.
-        createSession: (cwd) => actionsRef.current.newSession(cwd, { select: false }),
+        createSession: async (target) => {
+          const path = await launchSession(target.cwd, {
+            ...(target.agentName !== undefined ? { agentName: target.agentName } : {}),
+            select: false,
+          });
+          // assistant-ui adopts the returned path on the settling microtask.
+          // Commit only afterward and only for the intent that initialized it.
+          setTimeout(() => {
+            const current = readState().destination;
+            if (target.intent === current.intent && current.path === undefined && current.phase !== "unavailable") {
+              commitDestination({ ...current, path, phase: "ready" });
+            }
+          }, 0);
+          return path;
+        },
         renameSession: async (path, name) => {
           await client.request("pi/session/rename", { path, name });
         },
@@ -1333,21 +1636,19 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           // here; absent, the host keeps it (M13-T42).
           await client.request("pi/session/delete", { path, worktree: takeWorktreeDisposition(path) });
         },
-        loadSession: (path) => openSession(path),
+        loadSession: (path) => openSession(path, { select: false }),
         refreshSessions,
-        beginInitialize: () => setInitializing((n) => n + 1),
-        endInitialize: () => setInitializing((n) => Math.max(0, n - 1)),
+        beginInitialize,
+        endInitialize,
       }),
-    [archive, client, openSession, refreshSessions],
+    [archive, beginInitialize, client, commitDestination, endInitialize, launchSession, openSession, refreshSessions],
   );
 
   const onThreadIdChange = useCallback((threadId: string | undefined) => {
-    if (!threadId || threadId === readState().current) return;
-    // A session already here (the one a first send just created or reused)
-    // becomes current at once; the open below only catches it up.
-    if (readState().open[threadId]) dispatch({ type: "select", path: threadId });
-    void actionsRef.current.openSession(threadId);
-  }, []);
+    const destination = readState().destination;
+    if (!threadId || initializingRef.current > 0 || destination.phase !== "ready" || threadId === destination.path) return;
+    void navigateSession(threadId).catch(() => {});
+  }, [navigateSession, readState]);
 
   // Stable so `useRemoteThreadListRuntime` does not re-publish the hook (and
   // re-render every mounted thread) on each of our state updates; the hook
@@ -1365,7 +1666,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     // runtime onto a row it is about to fold into the new thread leaves the
     // main thread pointing at nothing (M13-T53). It catches up once the
     // bracket closes, by which time the path resolves to the adopted thread.
-    threadId: useHeldWhile(initializing > 0, state.current),
+    threadId: useHeldWhile(initializing > 0, state.destination.path),
     onThreadIdChange,
     runtimeHook,
   });
@@ -1390,6 +1691,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     () => ({
       dispatch,
       client,
+      destination: state.destination,
       currentProject,
       startupRestoring,
       setCurrentProject,
@@ -1399,7 +1701,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       archive,
       actions,
     }),
-    [actions, archive, client, currentProject, dispatch, projectInfo, projects, setCurrentProject, startupRestoring, trustRequests],
+    [actions, archive, client, currentProject, dispatch, projectInfo, projects, setCurrentProject, startupRestoring, state.destination, trustRequests],
   );
 
   const internals = useMemo<LaserInternals>(
@@ -1412,13 +1714,55 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       <LaserStableContext.Provider value={stable}>
         <LaserInternalsContext.Provider value={internals}>
           <AssistantRuntimeProvider runtime={runtime}>
-            <ThreadSelectionSync />
+            <MainLandingComposerMemory
+              destination={state.destination}
+              composerRef={mainComposerRef}
+              draftsRef={landingDraftsRef}
+            />
             {children}
           </AssistantRuntimeProvider>
         </LaserInternalsContext.Provider>
       </LaserStableContext.Provider>
     </LaserStateContext.Provider>
   );
+}
+
+function MainLandingComposerMemory({
+  destination,
+  composerRef,
+  draftsRef,
+}: {
+  destination: MainDestination;
+  composerRef: { current: ThreadComposerRuntime | undefined };
+  draftsRef: { current: Map<string, MainLandingDraft> };
+}): null {
+  const aui = useAui();
+  const key = codeLandingKey(destination);
+  useLayoutEffect(() => {
+    const composer = aui.composer as unknown as ThreadComposerRuntime;
+    composerRef.current = composer;
+    if (!key) return () => {
+      if (composerRef.current === composer) composerRef.current = undefined;
+    };
+    const draft = draftsRef.current.get(key);
+    let cancelled = false;
+    void (async () => {
+      await composer.reset();
+      if (cancelled || composerRef.current !== composer || !draft) return;
+      composer.setText(draft.text);
+      composer.setRunConfig(draft.runConfig);
+      composer.setQuote(draft.quote);
+      for (const attachment of draft.attachments) {
+        if (cancelled || composerRef.current !== composer) return;
+        await composer.addAttachment(attachment);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (composerRef.current === composer) composerRef.current = undefined;
+    };
+  }, [aui, composerRef, draftsRef, key]);
+  return null;
 }
 
 /**
@@ -1430,28 +1774,6 @@ function useHeldWhile<T>(hold: boolean, value: T): T {
   const [held, setHeld] = useState(value);
   if (!hold && held !== value) setHeld(value);
   return hold ? held : value;
-}
-
-/**
- * assistant-ui → laser: a thread picked in an assistant-ui `ThreadList`
- * becomes the open session here. The reverse direction is the controlled
- * `threadId` prop above.
- */
-function ThreadSelectionSync(): null {
-  const { actions } = useLaserStable();
-  const current = useLaserState((s) => s.current);
-  const aui = useAui();
-  useAuiEvent("threads.selectionChanged", ({ threadId }) => {
-    let remoteId: string | undefined;
-    try {
-      remoteId = aui.threads.item({ id: threadId }).getState().remoteId;
-    } catch {
-      remoteId = undefined;
-    }
-    if (!remoteId || remoteId === current) return;
-    void actions.openSession(remoteId);
-  });
-  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1475,6 +1797,8 @@ function useThreadRuntime(store: SnapshotStore<RuntimeSnapshot>): AssistantRunti
   const view = useSyncExternalStore(stateStore.subscribe, readView, readView);
   const readConnection = useCallback(() => stateStore.getSnapshot().connection, [stateStore]);
   const connection = useSyncExternalStore(stateStore.subscribe, readConnection, readConnection);
+  const readDestination = useCallback(() => stateStore.getSnapshot().destination, [stateStore]);
+  const destination = useSyncExternalStore(stateStore.subscribe, readDestination, readDestination);
 
   // Load + hydrate a thread the first time it becomes the main one. Cheap and
   // idempotent: an already-hydrated view is skipped, and a load the thread list
@@ -1494,10 +1818,41 @@ function useThreadRuntime(store: SnapshotStore<RuntimeSnapshot>): AssistantRunti
     return shared;
   }, [projection]);
 
+  const initializedIntent = useRef<number | undefined>(undefined);
   const resolvePath = useCallback(async () => {
+    const before = stateStore.getSnapshot().destination;
     const { remoteId, externalId } = await aui.threadListItem.initialize();
+    if (snapshot.main && stateStore.getSnapshot().destination.intent !== before.intent) {
+      throw new Error("The destination changed before this conversation was ready. Your message was not sent.");
+    }
+    initializedIntent.current = before.intent;
     return externalId ?? remoteId;
-  }, [aui]);
+  }, [aui, snapshot.main, stateStore]);
+
+  const assertCanAct = useCallback((resolvedPath?: string) => {
+    if (!snapshot.main) return;
+    const destination = stateStore.getSnapshot().destination;
+    const initializingThisLanding = path === undefined && resolvedPath !== undefined
+      && (destination.path === resolvedPath
+        || (destination.path === undefined && initializedIntent.current === destination.intent));
+    // assistant-ui can adopt an already-listed, unstarted row into the local
+    // landing thread before the controlled destination callback commits it.
+    // Permit only that exact eligible row; a prior non-empty conversation can
+    // never pass this bridge during a tab switch.
+    const physical = path ? stateStore.getSnapshot().sessions.find((session) => session.path === path) : undefined;
+    const adoptingListedLanding = destination.path === undefined && physical?.messageCount === 0
+      && sessionKindTab(physical, stateStore.getSnapshot().agents.snapshot?.workspaces ?? {}) === destination.tab
+      && (destination.tab === "chat"
+        || codeProjectForSession(
+          physical,
+          stateStore.getSnapshot().sessions,
+          stateStore.getSnapshot().agents.runs,
+          destination.codeProject,
+        ) === destination.codeProject);
+    if (!isMain || destination.phase !== "ready" || (!initializingThisLanding && !adoptingListedLanding && destination.path !== path)) {
+      throw new Error("That conversation is still changing. Your action was not sent.");
+    }
+  }, [isMain, path, snapshot.main, stateStore]);
 
   // This thread's own composer, for the adapter to hand an unsent message back
   // to (M13-T89 U1). Read lazily: the runtime exists only once the adapter does,
@@ -1515,8 +1870,9 @@ function useThreadRuntime(store: SnapshotStore<RuntimeSnapshot>): AssistantRunti
         resolvePath,
         projection: { ...projection, messages: messages as ThreadMessageLike[] },
         composer: () => composerRef.current,
+        assertCanAct,
       }),
-    [connection, messages, path, projection, resolvePath, snapshot, view],
+    [assertCanAct, connection, destination, messages, path, projection, resolvePath, snapshot, view],
   );
 
   const runtime = useExternalStoreRuntime<ThreadMessageLike>(adapter);
@@ -1643,10 +1999,19 @@ export function LaserThreadScope({ path, onPathChange, filter, createIn, unavail
   // about a directory (commands, files, the default model) is asked there.
   const workspace = useLaserState(useCallback((s: AppState) => createInRef.current(s)?.cwd, []));
   const scopedStore = useMemo(() => createScopedStateStore(store, path), [store, path]);
-  const stable = useMemo<LaserStable>(
-    () => ({ ...parent, ...(workspace !== undefined ? { currentProject: workspace } : {}), actions: buildActions(scopedStore.getSnapshot) }),
-    [parent, buildActions, scopedStore, workspace],
-  );
+  const stable = useMemo<LaserStable>(() => ({
+    ...parent,
+    destination: {
+      tab: "code",
+      codeProject: workspace,
+      path,
+      targetPath: undefined,
+      phase: "ready",
+      intent: 0,
+    },
+    ...(workspace !== undefined ? { currentProject: workspace } : {}),
+    actions: buildActions(scopedStore.getSnapshot),
+  }), [parent, buildActions, path, scopedStore, workspace]);
   const unavailableRef = useRef(unavailable);
   unavailableRef.current = unavailable;
   const onPathChangeRef = useRef(onPathChange);
@@ -1689,12 +2054,14 @@ export function LaserThreadScope({ path, onPathChange, filter, createIn, unavail
         sessions,
         views,
         archive,
-        currentProject: () => createInRef.current(store.getSnapshot())?.cwd,
-        createSession: async (cwd) => {
+        creationTarget: () => createInRef.current(store.getSnapshot()),
+        createSession: async (requested) => {
           try {
             const target = createInRef.current(store.getSnapshot());
-            if (!target) throw new Error(unavailableRef.current);
-            const created = await newSessionRef.current(cwd, {
+            if (!target || target.cwd !== requested.cwd || target.agentName !== requested.agentName) {
+              throw new Error(unavailableRef.current);
+            }
+            const created = await newSessionRef.current(requested.cwd, {
               ...(target.agentName !== undefined ? { agentName: target.agentName } : {}),
               select: false,
             });
