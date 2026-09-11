@@ -210,7 +210,7 @@ export function SubagentStrays({ groups, expandedKey, onToggle, renderDetail, on
             <span className="relative flex size-4 shrink-0 items-center justify-center text-ink-3">
               <FileX aria-hidden="true" className="size-4" />
               {(running > 0 || needsYou > 0) && (
-                <StatusDot status={needsYou > 0 ? "waiting_for_input" : "working"} label={needsYou > 0 ? "Needs you" : "Working"} className="absolute -end-1 -top-1" />
+                <StatusDot status={needsYou > 0 ? "waiting_for_input" : "working"} label={needsYou > 0 ? "Asking" : "Working"} className="absolute -end-1 -top-1" />
               )}
             </span>
             <span className="flex min-w-0 flex-1 flex-col">
