@@ -33,7 +33,8 @@
 const { execFileSync } = require("node:child_process");
 const { createHash } = require("node:crypto");
 const { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } = require("node:fs");
-const { join, sep } = require("node:path");
+const { dirname, join, sep } = require("node:path");
+const { createRequire } = require("node:module");
 
 /** electron-builder's Arch enum, which is an index rather than a name. */
 const ARCH_NAMES = ["ia32", "x64", "armv7l", "arm64", "universal"];
@@ -103,28 +104,42 @@ function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
-/**
- * The packages every workspace manifest declares. This is what electron-builder
- * walks, so it is the definition of "the packager can see it".
+/** Resolve the package directory without relying on an exported package.json. */
+function packageRootFrom(from, name) {
+  for (let dir = from; ; dir = dirname(dir)) {
+    const candidate = join(dir, "node_modules", ...name.split("/"));
+    if (existsSync(join(candidate, "package.json"))) return realpathSync(candidate);
+    if (dirname(dir) === dir) return undefined;
+  }
+}
+
+/** The exact installed instances reachable by the packager's manifest walk.
+ * Peers, dev dependencies and disconnected workspace packages are not edges.
  */
-function declaredAcrossWorkspace(packagesDir) {
-  const declared = new Set();
-  for (const entry of readdirSync(packagesDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const manifestPath = join(packagesDir, entry.name, "package.json");
-    if (!existsSync(manifestPath)) continue;
-    const manifest = readJson(manifestPath);
-    for (const field of ["dependencies", "optionalDependencies"]) {
-      for (const name of Object.keys(manifest[field] ?? {})) declared.add(name);
+function reachableFromDesktop(packagesDir) {
+  const reachable = new Set();
+  function visit(dir) {
+    dir = realpathSync(dir);
+    if (reachable.has(dir)) return;
+    reachable.add(dir);
+    const manifest = readJson(join(dir, "package.json"));
+    const dependencies = { ...manifest.dependencies, ...manifest.optionalDependencies };
+    for (const name of Object.keys(dependencies)) {
+      const resolved = packageRootFrom(dir, name);
+      if (resolved) visit(resolved);
+      else if (!(name in (manifest.optionalDependencies ?? {}))) {
+        throw new Error(`${identity.name}: ${manifest.name} requires ${name}, but it is not installed. Run pnpm install before packaging.`);
+      }
     }
   }
-  return declared;
+  visit(join(packagesDir, "desktop"));
+  return reachable;
 }
 
 /**
- * Compare what the installer actually gave one package against what any
- * manifest declares. Anything in the first set and not the second exists on
- * this machine and will not exist in the package.
+ * Compare what the installer gave one package against the dependency closure
+ * reachable from the desktop. A peer-only or disconnected workspace declaration
+ * is not evidence that electron-builder will copy that installed instance.
  *
  * Only meaningful under pnpm's virtual store, which is where the gap comes
  * from; under a flat installer there is nothing to compare and the artifact
@@ -149,25 +164,17 @@ function assertTreeIsPackagable({ packagesDir, owner, subject, label, declareIn 
     return;
   }
 
-  const manifest = readJson(join(dir, "package.json"));
-  const declaredBySubject = new Set([
-    ...Object.keys(manifest.dependencies ?? {}),
-    ...Object.keys(manifest.optionalDependencies ?? {}),
-    ...Object.keys(manifest.peerDependencies ?? {}),
-  ]);
-  // `<store>/<id>/node_modules/<scope>/<name>` → the directory holding every
-  // package the installer resolved for this one.
-  const installed = packageNamesIn(join(dir, "..", ".."));
-  const declaredByWorkspace = declaredAcrossWorkspace(packagesDir);
-
-  const invisible = installed
-    .filter((name) => name !== subject)
-    .filter((name) => !declaredBySubject.has(name))
-    .filter((name) => !declaredByWorkspace.has(name));
+  // Scoped subjects are two levels below node_modules; unscoped subjects
+  // (such as pi-mcp-adapter) are only one. Inspect their resolved siblings,
+  // not the store entry's parent, which would silently miss dependencies.
+  const siblings = subject.startsWith("@") ? join(dir, "..", "..") : join(dir, "..");
+  const installed = packageNamesIn(siblings);
+  const reachable = reachableFromDesktop(packagesDir);
+  const invisible = installed.filter((name) => !reachable.has(realpathSync(join(siblings, ...name.split("/")))));
 
   if (invisible.length > 0) {
     throw new Error(
-      `${identity.name}: ${label} needs ${invisible.join(", ")}, which the installer supplies but no manifest declares.\n` +
+      `${identity.name}: ${label} needs ${invisible.join(", ")}, which the installer supplies but the desktop's dependency manifests do not reach.\n` +
         `electron-builder walks manifests, so ${invisible.length === 1 ? "it" : "they"} would be missing from the ` +
         `packaged app and it would fail at runtime.\n` +
         `Fix: add ${invisible.map((name) => `"${name}": "<exact version>"`).join(", ")} to the dependencies of ` +
@@ -184,31 +191,31 @@ function assertTreeIsPackagable({ packagesDir, owner, subject, label, declareIn 
  * *manifest* is what has to name it — and it has to name the binding for the
  * platform being built, not the platform building it.
  */
-function assertNativeBindingIsStaged(packageRoot, platform, arch) {
-  const manifest = readJson(join(packageRoot, "package.json"));
-  const declared = Object.keys(manifest.optionalDependencies ?? {});
+function assertNativeBindingIsStaged({ ownerRoot, keyringRoot, declareIn, platform, arch }) {
+  const manifest = readJson(join(ownerRoot, "package.json"));
+  const version = readJson(join(keyringRoot, "package.json")).version;
   const suffix = { darwin: `darwin-${arch}`, win32: `win32-${arch}-msvc`, linux: `linux-${arch}-gnu` }[platform];
-  const wanted = declared.filter((name) => name.endsWith(suffix));
-  if (wanted.length === 0) {
-    throw new Error(
-      `${identity.name}: packages/desktop declares no native binding for ${platform}-${arch}.\n` +
-        `The keychain is loaded from @napi-rs/keyring-${suffix}, and without it the app will not start.\n` +
-        `Fix: add "@napi-rs/keyring-${suffix}" to the optionalDependencies of packages/desktop/package.json ` +
-        `with the same exact version as "@napi-rs/keyring".`,
-    );
+  const name = `@napi-rs/keyring-${suffix}`;
+  const fix = `Add "${name}": "${version}" to optionalDependencies in ${declareIn}, then run ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install.`;
+  if (manifest.optionalDependencies?.[name] !== version) {
+    throw new Error(`${identity.name}: ${declareIn} must declare the target binding ${name}@${version}. ${fix}`);
   }
-  for (const name of wanted) {
-    if (!existsSync(join(packageRoot, "node_modules", ...name.split("/")))) {
-      throw new Error(
-        `${identity.name}: ${name} is declared but not installed, so the packaged app would have no keychain binding ` +
-          `and would fail at startup with "Cannot find native binding".\n` +
-          `This is what a cross-architecture build looks like: pnpm installs only the binding matching the ` +
-          `machine it ran on. Build ${arch} on ${arch} hardware, or run ` +
-          `\`ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install\` on an ${arch} machine.`,
-      );
+  // Check both the direct declaration and what this specific keyring instance
+  // resolves in the pnpm store. Desktop's 2.x binding cannot satisfy MCP's 1.x.
+  for (const from of [ownerRoot, keyringRoot]) {
+    const binding = packageRootFrom(from, name);
+    let installed = false;
+    if (binding && readJson(join(binding, "package.json")).version === version) {
+      try {
+        installed = existsSync(createRequire(join(from, "package.json")).resolve(name));
+      } catch { /* the manifest alone is not a native binary */ }
+    }
+    if (!installed) {
+      throw new Error(`${identity.name}: ${name}@${version} is not installed for ${platform}-${arch} as resolved from ${from}. ` +
+        `${fix} Build ${arch} on ${arch} hardware; pnpm installs only the binding for its machine.`);
     }
   }
-  console.log(`${identity.name}: native keychain binding for ${platform}-${arch} is declared and installed (${wanted.join(", ")})`);
+  console.log(`${identity.name}: target binding ${name}@${version} is declared in ${declareIn} and installed for its keyring`);
 }
 
 /**
@@ -307,7 +314,25 @@ exports.default = async function beforePack(context) {
     label: "the keychain",
     declareIn: "packages/desktop/package.json",
   });
-  assertNativeBindingIsStaged(packageRoot, platform, arch);
+  assertTreeIsPackagable({
+    packagesDir: join(packageRoot, ".."),
+    owner: "worker",
+    subject: "pi-mcp-adapter",
+    label: "the MCP adapter",
+    declareIn: "packages/worker/package.json",
+  });
+  assertNativeBindingIsStaged({
+    ownerRoot: packageRoot,
+    keyringRoot: packageRootFrom(packageRoot, "@napi-rs/keyring"),
+    declareIn: "packages/desktop/package.json", platform, arch,
+  });
+  const workerRoot = join(packageRoot, "..", "worker");
+  const adapterRoot = packageRootFrom(workerRoot, "pi-mcp-adapter");
+  assertNativeBindingIsStaged({
+    ownerRoot: workerRoot,
+    keyringRoot: packageRootFrom(adapterRoot, "@napi-rs/keyring"),
+    declareIn: "packages/worker/package.json", platform, arch,
+  });
 
   const target = `${platform}-${arch}`;
   const binary = platform === "win32" ? "node.exe" : "node";

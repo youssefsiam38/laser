@@ -40,5 +40,14 @@
     "smol-toml": "1.8.0",
     "pi-gpt-transcribe": "github:youssefsiam38/pi-gpt-transcribe#bee9cfffae2ab6badbf4bda727e680e423aea9fd"
   },
+  "//optionalDependencies": "The MCP adapter's own keyring bindings, separate from desktop 2.0.0. Direct exact pins make them visible to the packager; each binding's os/cpu fields select the build machine.",
+  "optionalDependencies": {
+    "@napi-rs/keyring-darwin-arm64": "1.3.0",
+    "@napi-rs/keyring-darwin-x64": "1.3.0",
+    "@napi-rs/keyring-linux-arm64-gnu": "1.3.0",
+    "@napi-rs/keyring-linux-x64-gnu": "1.3.0",
+    "@napi-rs/keyring-win32-arm64-msvc": "1.3.0",
+    "@napi-rs/keyring-win32-x64-msvc": "1.3.0"
+  },
   "devDependencies": { "esbuild": "0.28.1", "@types/proper-lockfile": "4.1.4" }
 }

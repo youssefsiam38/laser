@@ -207,13 +207,30 @@ MCP tool renders inline in the tool row like every other question.
 
 ## Packaged builds
 
-Executable dependency source must survive packaging (AGENTS.md §5a): the
-adapter ships TypeScript the engine transpiles at runtime, `app-bridge.bundle.js`,
-and a CommonJS keyring helper, and its native modules (`@napi-rs/keyring` and
-`fs-native-extensions`) need their platform bindings on disk. The packaged
-gate opens a session with a stdio server from the unpacked build with an empty
-`PATH`: the worker prepends the bundled runtime's `bin` directory so `node`,
-`npm` and `npx` resolve without a system Node.
+The unpacked build carries the adapter's executable TypeScript, compiled
+exports, `app-bridge.bundle.js`, `mcp-keyring-helper.cjs`,
+`mcp-script-worker.mjs`, and `skills/` (including Markdown instructions), plus
+jiti, TOML, both integrity-pinned MCP SDK tarballs, the adapter's keyring 1.3.0
+platform binding (separate from the desktop's 2.0.0), and
+`fs-native-extensions/prebuilds`. The worker directly pins all six desktop
+keyring 1.3.0 platform bindings as optional dependencies, and the pre-pack guard
+checks the build target against the adapter's own resolved keyring. jiti caches
+transpilation under `<agentDir>/cache/jiti` across worker restarts, falling back
+to memory if that directory cannot be created or written; installed resources
+need no write access. The adapter's published
+`files` excludes `conformance/`, `examples/`, `__tests__/` and `*.test.ts`;
+only root Markdown documentation is disposable, not its skills. After
+`pnpm -F @lasercode/desktop run pack`,
+`node packages/desktop/scripts/clean-machine.mjs` validates those assets and
+loads both native bindings with bundled Node. With an empty incoming `PATH`
+and fake `HOME`, it configures the small, inert acceptance fixture shipped at
+`resources/checks/mcp-server.mjs` using the
+literal command `node`, opens a real session with MCP enabled, observes
+`packaged_runtime` in an actual local provider request, checks the companion's
+active MCP module, and inspects/calls the fixture through the worker's MCP
+service. The call reports the bundled Node's exact executable path, proving
+`runtime-env.ts` supplied the runtime rather than a system installation; no
+`npx`, credentials or network download is needed for the gate.
 
 ## Verification
 

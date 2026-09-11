@@ -54,6 +54,11 @@ files:
   # enabled. Read a package's `exports`, `files` and engine manifest before
   # excluding a file type from it (AGENTS.md §5a).
   - "!**/node_modules/**/*.{md,markdown,map,flow}"
+  # MCP skills are executable instructions, not disposable package docs.
+  # Its TypeScript, JS bridge, CJS keyring helper, MJS worker and native
+  # prebuilds are preserved by the rules above. conformance/, examples/,
+  # __tests__/ and *.test.ts are not in the adapter's published `files`.
+  - "**/node_modules/pi-mcp-adapter/skills/**"
   # Prebuilt native audio bindings for every platform, ~28 MB, reachable from
   # exactly one function: pi-gpt-transcribe's openMic. Nothing here opens a
   # microphone — the browser does the capture and the worker only makes the
@@ -62,6 +67,9 @@ files:
   - "!**/node_modules/{decibri,@decibri}/**"
 
 extraResources:
+  # Offline stdio server used by the real packaged-session acceptance gate.
+  - from: scripts/fixtures/packaged-mcp-server.mjs
+    to: checks/mcp-server.mjs
   # The stock Node the host is spawned from (M5-T2).
   - from: build/runtime
     to: runtime
