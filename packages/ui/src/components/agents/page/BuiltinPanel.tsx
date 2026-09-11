@@ -4,7 +4,7 @@
  * built in; their system instructions and model belong to the person. Namer's
  * card also shows the state of its qualification and the candidates it tried.
  */
-import { AGENT_INSTRUCTIONS_MAX, instructionTemplateIssue, type AgentModelChoice, type AgentsSnapshot, type BuiltinAgentName, type NamerCandidate, type NamerState } from "@lasercode/protocol";
+import { AGENT_INSTRUCTIONS_MAX, instructionTemplateIssue, type AgentDefinition, type AgentModelChoice, type AgentsSnapshot, type BuiltinAgentName, type NamerCandidate, type NamerState } from "@lasercode/protocol";
 import { Check, RotateCw, Save, Undo2, X, Zap } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
@@ -45,7 +45,7 @@ export function BuiltinPanel({ name, snapshot, routeCwd }: BuiltinPanelProps) {
       {definition ? (
         <BuiltinInstructionsEditor
           name={name}
-          current={definition.instructions}
+          definition={definition}
           customized={snapshot.builtinInstructions[name] !== null}
         />
       ) : null}
@@ -54,8 +54,9 @@ export function BuiltinPanel({ name, snapshot, routeCwd }: BuiltinPanelProps) {
   );
 }
 
-function BuiltinInstructionsEditor({ name, current, customized }: { name: BuiltinAgentName; current: string; customized: boolean }) {
+function BuiltinInstructionsEditor({ name, definition, customized }: { name: BuiltinAgentName; definition: AgentDefinition; customized: boolean }) {
   const agents = useAgentsActions();
+  const current = definition.instructions;
   const [draft, setDraft] = useState(current);
   const [busy, setBusy] = useState<"save" | "restore">();
   const [error, setError] = useState<string>();
@@ -104,6 +105,13 @@ function BuiltinInstructionsEditor({ name, current, customized }: { name: Builti
     >
       <InstructionTemplateEditor
         target={name}
+        context={{
+          agentName: name === "namer" ? agentDisplayName(name) : name,
+          agentDescription: definition.description,
+          model: definition.model,
+          thinkingLevel: definition.thinkingLevel,
+          provenance: "Current agent setting",
+        }}
         ariaLabel={`${agentDisplayName(name)} system instructions`}
         invalid={Boolean(invalid || error || templateIssue)}
         value={draft}

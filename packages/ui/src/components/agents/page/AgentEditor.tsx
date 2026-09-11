@@ -45,7 +45,7 @@ import { prefersReducedMotion } from "@/motion";
 
 import { DeleteAgentDialog } from "./dialogs.js";
 import { CheckRow, Hint, IssueNotice, Section, WarningNotice } from "./fields.js";
-import { InstructionTemplateEditor } from "./InstructionTemplateEditor.js";
+import { InstructionTemplateEditor, InstructionTemplateSourceView } from "./InstructionTemplateEditor.js";
 import {
   THINKING_LABEL,
   checkRange,
@@ -348,11 +348,18 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
           notices={<IssueNotice messages={[...(localTemplateIssue ? [localTemplateIssue] : []), ...(byField.root.instructions ?? []), ...(byField.root.engineInstructions ?? [])]} />}
         >
           {draft.engineInstructions ? (
-            <EngineInstructions cwd={routeCwd} onCustomize={(text) => patch({ engineInstructions: false, instructions: text })} />
+            <EngineInstructions draft={draft} cwd={routeCwd} onCustomize={(text) => patch({ engineInstructions: false, instructions: text })} />
           ) : (
             <>
               <InstructionTemplateEditor
                 target="agent"
+                context={{
+                  agentName: draft.name,
+                  agentDescription: draft.description,
+                  model: draft.model,
+                  thinkingLevel: draft.thinkingLevel,
+                  provenance: "Current draft",
+                }}
                 value={draft.instructions}
                 placeholder="You review diffs. Read every changed file before you judge it…"
                 maxLength={AGENT_INSTRUCTIONS_MAX}
@@ -588,7 +595,7 @@ export function AgentEditor({ agent, snapshot, routeCwd, projectCwd, warnings, f
 // Product default instructions, read-only until customised
 // ---------------------------------------------------------------------------
 
-function EngineInstructions({ cwd, onCustomize }: { cwd: string | undefined; onCustomize(text: string): void }) {
+function EngineInstructions({ draft, cwd, onCustomize }: { draft: AgentDefinitionInput; cwd: string | undefined; onCustomize(text: string): void }) {
   const engine = useEngineInstructions(cwd, cwd !== undefined);
   return (
     <div data-slot="engine-instructions" className="flex flex-col gap-2">
@@ -603,7 +610,19 @@ function EngineInstructions({ cwd, onCustomize }: { cwd: string | undefined; onC
       ) : engine.data === undefined ? (
         <GenerationLoader label={`Loading ${PRODUCT_DISPLAY_NAME}'s default instructions`} layout="inline" />
       ) : (
-        <pre className="max-h-80 overflow-auto rounded-lg border border-line bg-surface-2 p-3 font-mono text-xs leading-code whitespace-pre-wrap text-ink-2">{engine.data}</pre>
+        <InstructionTemplateSourceView
+          target="agent"
+          value={engine.data}
+          ariaLabel={`${PRODUCT_DISPLAY_NAME}'s default instructions highlighted source`}
+          context={{
+            agentName: draft.name,
+            agentDescription: draft.description,
+            model: draft.model,
+            thinkingLevel: draft.thinkingLevel,
+            provenance: "Current agent setting",
+          }}
+          className="max-h-80 min-h-0 text-xs text-ink-2"
+        />
       )}
       <div>
         <Button type="button" variant="secondary" size="sm" disabled={engine.data === undefined} onClick={() => onCustomize(engine.data ?? "")}>

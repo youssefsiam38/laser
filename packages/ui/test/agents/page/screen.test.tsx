@@ -467,10 +467,15 @@ describe("Agents page", () => {
     const editor = q<HTMLFormElement>('[data-slot="agent-editor"]');
     await settle();
     expect(editor.querySelector('[data-slot="engine-instructions"]')?.textContent).toContain("You are the product's default agent.");
+    expect(editor.querySelector('[data-slot="engine-instructions"] [data-slot="instruction-template-source"]')).not.toBeNull();
+    expect(editor.querySelector('[data-slot="engine-instructions"] textarea')).toBeNull();
     expect(mocks.agents.engineInstructions).toHaveBeenCalledWith("/p");
     await click(button("Customize"));
     const instructions = editor.querySelector<HTMLTextAreaElement>('textarea[name="instructions"]')!;
     expect(instructions.value).toBe("You are the product's default agent.");
+    await click(button("Highlighted source"));
+    expect(editor.querySelector('[data-slot="instruction-template-source"] code')?.textContent).toBe("You are the product's default agent.");
+    await click(button("Edit"));
     expect(button(`Use ${PRODUCT_DISPLAY_NAME}'s default instructions again`)).toBeTruthy();
     await click(button(`Use ${PRODUCT_DISPLAY_NAME}'s default instructions again`));
     expect(editor.querySelector('[data-slot="engine-instructions"]')).not.toBeNull();
@@ -656,8 +661,14 @@ describe("Agents page", () => {
     await mount();
     for (const name of ["beam", "chat", "namer"] as const) {
       await click(row(name));
-      const input = q<HTMLTextAreaElement>(`textarea[aria-label="${name === "beam" ? "Beam" : name === "chat" ? "Chat" : "Namer"} system instructions"]`);
+      let input = q<HTMLTextAreaElement>(`textarea[aria-label="${name === "beam" ? "Beam" : name === "chat" ? "Chat" : "Namer"} system instructions"]`);
       expect(input.value.length).toBeGreaterThan(0);
+      const original = input.value;
+      await click(button("Highlighted source"));
+      expect(q('[data-slot="instruction-template-source"] code').textContent).toBe(original);
+      await click(button("Edit"));
+      input = q<HTMLTextAreaElement>(`textarea[aria-label="${name === "beam" ? "Beam" : name === "chat" ? "Chat" : "Namer"} system instructions"]`);
+      expect(document.activeElement).toBe(input);
       await type(input, `Custom ${name} instructions.`);
       await click(button("Save instructions"));
       await settle();
