@@ -205,9 +205,20 @@ export function buildAgentTree(input: AgentTreeInput): AgentTree {
     return parent !== undefined && members.has(parent) ? parent : rootPath;
   };
 
+  // A session's place among its siblings is when its first run started —
+  // read across its runs, never from the head of the oldest-first list: that
+  // head is the run least able to act (a queued successor while a declared
+  // completion unwinds), and keying on it would swap two siblings for the
+  // length of that window and back again. Mirrors the worker's `fleet.ts`.
   const startedAt = (path: string): number => {
-    const first = runsBySession.get(path)?.[0];
-    return time(first?.startedAt ?? summaries.get(path)?.createdAt);
+    const runs = runsBySession.get(path);
+    if (!runs || runs.length === 0) return time(summaries.get(path)?.createdAt);
+    let earliest = 0;
+    for (const run of runs) {
+      const started = time(run.startedAt);
+      if (started > 0 && (earliest === 0 || started < earliest)) earliest = started;
+    }
+    return earliest;
   };
 
   const childrenOf = new Map<string, string[]>();

@@ -65,6 +65,21 @@ const time = (value: string | undefined): number => {
 /** 1 for a run that can still act (`running`, `needs_input`), 0 for one that waits or has ended: nothing outranks a run that can still write. */
 const liveness = (run: AgentRun): number => (run.status === "queued" || isTerminalRunStatus(run.status) ? 0 : 1);
 
+/**
+ * When a session's first run started — its place among its siblings, fixed
+ * for good. Read across every run rather than from the head of the sorted
+ * list, whose head is the run least able to act (a queued successor during a
+ * declared completion), not the oldest. Mirrors `run-tree.ts` `startedAt`.
+ */
+function earliestStart(runs: readonly AgentRun[]): number {
+  let earliest = 0;
+  for (const run of runs) {
+    const started = time(run.startedAt);
+    if (started > 0 && (earliest === 0 || started < earliest)) earliest = started;
+  }
+  return earliest;
+}
+
 /** `4m 12s`, as the fleet column formats it (`packages/ui/src/format.ts`, `formatElapsed`). */
 export function formatElapsed(ms: number): string {
   const s = Math.floor(ms / 1000);
@@ -210,7 +225,7 @@ export function buildFleetTree(input: FleetTreeInput): InspectFleetResult {
     if (list) list.push(path);
     else childrenOf.set(parent, [path]);
   }
-  for (const list of childrenOf.values()) list.sort((a, b) => time(runsBySession.get(a)![0]!.startedAt) - time(runsBySession.get(b)![0]!.startedAt) || a.localeCompare(b));
+  for (const list of childrenOf.values()) list.sort((a, b) => earliestStart(runsBySession.get(a)!) - earliestStart(runsBySession.get(b)!) || a.localeCompare(b));
 
   const seen = new Set<string>([callerPath]);
   const build = (path: string, depth: number): FleetRow[] => {

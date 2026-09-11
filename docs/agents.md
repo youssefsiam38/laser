@@ -193,17 +193,38 @@ would carry any queued steering or follow-up message on under the run
 harness empties the engine's queues (`clearQueue()`) and puts every message
 it held — plus every message waiting in its own inbox — on **one** successor
 run, in order, each exactly once; a text the engine had already delivered is
-gone, a text the harness never sent is kept. Everything that arrives during
+gone, a text the harness never sent is kept. So is a custom message an
+extension queued straight into a lane behind the running turn — a background
+command's exit, a grandchild's ending, sent while the child streamed — which
+the engine's own queue never lists and its clear would silently drop: the
+driver reads agent-core's queues first (`ClearedQueue.custom`), the transfer
+keeps each as a message of its own (its text; the custom type is gone) and
+writes a `warn` line with the counts. Everything that arrives during
 the window joins that successor: a parent's `send_agent_message`, a person's
 queued prompt, an extension's triggering send, a goal's automatic
-continuation, a background command's exit. `interrupt: true` and a person's
+continuation, a background command's exit. A person's message written while
+the child worked reaches it through the pending tray's drain at
+`agent_settled`; the admission lease the server took for that delivery is
+released the moment the harness parks the message, because an extension's
+send ahead of it on the successor starts through the same lease — held until
+the person's acceptance, it would wait for the very turn that acceptance
+follows. `interrupt: true` and a person's
 stop additionally abort the finishing invocation (the declared result
 stands: first declaration wins), and a stop of the run while it is still
 invoking empties the engine's queues into the successor *before* the abort,
 so nothing continues under a cancelled run. The completion is published only
 when the prompt promise — the one engine-ready fence — resolves: the old run
 turns terminal, the successor becomes the session's live run, and only then
-is the parent told. Late callbacks stamped with the finished invocation's
+is the parent told. Every ending of an owning run publishes through that
+same fence and takes the successor — the tool's declaration, a stop, a
+settle without the tool, the failed nudge — so a run reserved while the
+owner had settled but was not yet fenced is started by the ending, never
+left waiting for nobody. A run created for a message the engine handled
+without a model turn (a slash command its `input` hook consumed, typed into
+an idle child's chat) ends the moment its prompt resolves: `cancelled`,
+`initiator: "harness"`, reason "Handled without a model turn." — the fleet's
+neutral *Ended* — and its parent, never told it began, is not woken for it.
+Late callbacks stamped with the finished invocation's
 epoch are dropped, and never touch the successor. If the session closes
 during the window, the declared result is still what the run ends with; the
 successor that never started fails with "The agent's session closed before
@@ -239,9 +260,12 @@ a successor was waiting behind it, only after that successor has become the
 session's live run, so a parent that reacts to the ending by messaging the
 child reaches the run that is actually working. A person's own sends into a
 child's chat — `pi/session/steer`, `pi/session/follow_up`, a pending-tray
-row's Steer, and `pi/session/clear_queue` — go through the same fence as the
-parent's messages, so nothing a person types can enter a queue the engine is
-about to drop. A dialog is stamped with the invocation that raised it; one
+row's Steer, the tray's own drain at `agent_settled`, and
+`pi/session/clear_queue` — go through the same fence as the parent's
+messages, so nothing a person types can enter a queue the engine is about to
+drop. A clear takes back only the person's texts; a custom message an
+extension had queued behind the turn is parked for the fence instead, and
+never returned to a composer. A dialog is stamped with the invocation that raised it; one
 from an invocation the session no longer owns is cancelled (never the
 successor's question, never left hanging) and is not shown to the person.
 

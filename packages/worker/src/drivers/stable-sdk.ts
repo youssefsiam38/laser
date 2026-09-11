@@ -73,6 +73,7 @@ import { applyDurableOverrides, type EngineSettingsOverrides } from "../settings
 import { WebSearchService } from "../web-search.js";
 import {
   DriverUnavailableError,
+  type ClearedQueue,
   type DriverAgentOptions,
   type DriverEvent,
   type DriverListener,
@@ -718,8 +719,27 @@ export class StableSdkDriver implements SessionDriver {
     await this.session().followUp(text, images.length > 0 ? images : undefined);
   }
 
-  async clearQueue(): Promise<{ steering: string[]; followUp: string[] }> {
-    return this.session().clearQueue();
+  /**
+   * Empty both of the engine's lanes and say what they held. The session's
+   * own `clearQueue()` lists only the user texts it queued itself
+   * (`_steeringMessages` / `_followUpMessages`); an extension's `sendMessage`
+   * with `deliverAs` behind a running turn goes straight to agent-core
+   * (`agent.steer()` / `agent.followUp()`, agent-session.js `sendCustomMessage`)
+   * and is dropped by `agent.clearAllQueues()` without ever being listed. Those
+   * are read here first, from agent-core's queues (`Agent.steeringQueue` /
+   * `followUpQueue`, each a `PendingMessageQueue` with a public `messages`
+   * array in the installed dist; declared private in its typings), and
+   * reported as `custom` so the harness can carry them to a successor.
+   */
+  async clearQueue(): Promise<ClearedQueue> {
+    const session = this.session();
+    const queues = session.agent as unknown as { steeringQueue?: { messages?: unknown[] }; followUpQueue?: { messages?: unknown[] } };
+    const custom = {
+      steering: customQueueTexts(queues.steeringQueue?.messages),
+      followUp: customQueueTexts(queues.followUpQueue?.messages),
+    };
+    const cleared = session.clearQueue();
+    return custom.steering.length > 0 || custom.followUp.length > 0 ? { ...cleared, custom } : cleared;
   }
 
   async abort(): Promise<void> {
@@ -1284,6 +1304,33 @@ function split(content: ContentBlock[]): { text: string; images: ImageContent[] 
     .join("\n");
   const images = content.filter((b): b is ImageContent => b.type === "image");
   return { text, images };
+}
+
+/**
+ * The text of every custom message in one of agent-core's queues, in queue
+ * order. User messages there are the session's own queued texts, already
+ * reported by its `clearQueue()`; only `role: "custom"` entries (an
+ * extension's `sendMessage` while a turn ran) are invisible to it. A custom
+ * message carries a string or content blocks; images have no text and are
+ * left out — nothing shipped queues one.
+ */
+function customQueueTexts(messages: unknown[] | undefined): string[] {
+  if (!Array.isArray(messages)) return [];
+  const texts: string[] = [];
+  for (const message of messages) {
+    if (!message || typeof message !== "object" || (message as { role?: unknown }).role !== "custom") continue;
+    const content = (message as { content?: unknown }).content;
+    const text = typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content
+            .filter((block): block is { type: "text"; text: string } => !!block && typeof block === "object" && (block as { type?: unknown }).type === "text" && typeof (block as { text?: unknown }).text === "string")
+            .map((block) => block.text)
+            .join("\n")
+        : "";
+    if (text.trim() !== "") texts.push(text);
+  }
+  return texts;
 }
 
 function roleOf(message: unknown): "user" | "assistant" | "tool" | "custom" {

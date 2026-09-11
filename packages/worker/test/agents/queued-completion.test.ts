@@ -25,7 +25,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PRODUCT_NAME, SESSION_AGENT_ENTRY_TYPE, type AgentRun, type JsonRpcMessage, type SessionUpdate } from "@lasercode/protocol";
 import type { AgentHarnessBridge, AgentModelEvent, CompleteRunResult } from "../../src/agents/bridge.js";
 import { fallbackSnapshot } from "../../src/agents/definitions.js";
-import { NUDGE_TEXT } from "../../src/agents/harness.js";
+import { HANDLED_WITHOUT_TURN, NUDGE_TEXT } from "../../src/agents/harness.js";
 import { rootRecord, rootRole } from "../../src/agents/session-config.js";
 import type { DriverInvocationRef } from "../../src/driver.js";
 import { StableSdkDriver } from "../../src/drivers/stable-sdk.js";
@@ -1132,5 +1132,199 @@ describe("queued completion ownership against the real engine", () => {
     expect(lifecycleLogs().some((log) => log.line.includes("late-callback-dropped kind=ui_"))).toBe(false);
     assertNoOverlappingInvocations();
     expectNoBodiesInModuleLogs(["Ask.", "Now?", "never mind"]);
+  }, 60_000);
+
+  it("releases a person's admission lease the moment their message is parked, so a tray message behind an extension's wake on the successor cannot wedge the session", async () => {
+    // The shipped route to the deadlock the review found (F1): the person
+    // writes into a child's chat while it works (the pending tray), the child
+    // completes with a blocking tool in the same batch, an extension's wake
+    // lands first on the successor, and the tray drains at agent_settled. The
+    // drain's prompt took the session's admission lease; parked behind the
+    // wake, it must not keep it — the wake's start waits for that lease, and
+    // the lease waited for an acceptance only the wake's turn could bring.
+    const WAKE = "wake: the long command exited";
+    const TRAY = "Person: written into the tray while it worked.";
+    const marker = join(base, "release-tray-bash");
+    const command = `while [ ! -f '${marker}' ]; do sleep 0.02; done; echo released`;
+    const releaseFirst = provider.hold(0);
+    provider.answer(0, {
+      toolCalls: [
+        { name: "complete_agent_run", args: { status: "completed", message: "old done" }, id: "call-complete" },
+        { name: "bash", args: { command }, id: "call-bash" },
+      ],
+    });
+    provider.route((request) => (lastUserText(request) === TRAY ? { toolCall: { name: "complete_agent_run", args: { status: "completed", message: "successor done" } } } : { text: "ok" }));
+    let admission: Promise<void> | undefined;
+    let admitted = false;
+    const completions = observeCompletions((_result, ordinal) => {
+      if (ordinal !== 1) return;
+      // Inside the terminating tool: a background wake / grandchild ending
+      // shape — a custom trigger nothing waits on — is first on the successor.
+      admission = extensionActions.sendMessage({ customType: "test/wake", content: WAKE, display: true }, { deliverAs: "steer", triggerTurn: true }).then(() => { admitted = true; });
+    });
+
+    // 1. The child streams under the parent's run; the person writes into
+    //    its chat meanwhile. The UI's queue is the tray, delivered at settle.
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start.", interrupt: false });
+    const oldRunId = started.runId;
+    await provider.arrived(0);
+    expect((await call("session/pending/add", { path: childPath, content: [{ type: "text", text: TRAY }] })).error).toBeUndefined();
+    releaseFirst();
+    await completions.first;
+    const successor = server.agents().runs().find((run) => run.sessionPath === childPath && run.runId !== oldRunId)!;
+    expect(successor).toMatchObject({ status: "queued", task: WAKE, origin: "agent" });
+    expect(lifecycleLogs().some((log) => log.line.includes("admission source=extension kind=custom decision=queued-successor"))).toBe(true);
+
+    // 2. The blocked command ends; at agent_settled the tray drains and the
+    //    person's message is parked behind the wake (on the successor, or
+    //    locally under it if its activation won the lock first). The lease
+    //    that delivery took is released there and then: a request that needs
+    //    the same lease answers while the tray row is still on its way.
+    const parked = waitForMessage((message) => "method" in message && message.method === "pi/extension/message"
+      && new RegExp(`admission source=person decision=(queued-successor|local-queue) runId=${successor.runId}`).test((message as { params: { message: { message?: string } } }).params.message.message ?? ""));
+    writeFileSync(marker, "go\n");
+    await parked;
+    const tray = (await call("session/pending/list", { path: childPath })).result as { messages: Array<{ state: string }> };
+    expect(tray.messages.map((message) => message.state)).toEqual(["delivering"]);
+    const leaseFree = call("pi/thinking/set", { path: childPath, level: liveDriver.state().thinkingLevel });
+
+    // 3. The old prompt resolves; the successor starts with the wake, the
+    //    tray message follows under it, and the lease-bound request answered.
+    await waitForTerminal(oldRunId);
+    expect(server.agents().run(oldRunId)).toMatchObject({ status: "completed", result: { message: "old done" } });
+    await waitForDriverEvent((event) => event.kind === "agent_start" && event.invocation?.runId === successor.runId);
+    await admission!;
+    expect(admitted).toBe(true);
+    expect((await leaseFree).error).toBeUndefined();
+    await waitForTerminal(successor.runId);
+    expect(server.agents().run(successor.runId)).toMatchObject({ status: "completed", result: { message: "successor done" } });
+    expect(completions.results).toEqual([{ ok: true, runId: oldRunId }, { ok: true, runId: successor.runId }]);
+    // The wake's turn came first under the successor, then the tray message,
+    // each exactly once; the old run's requests carried neither.
+    const wakeIndex = provider.requests.findIndex((request) => request.messages.some((message) => textOfContent(message.content).includes(WAKE)));
+    const trayIndex = provider.requests.findIndex((request) => lastUserText(request) === TRAY);
+    expect(wakeIndex).toBeGreaterThan(-1);
+    expect(trayIndex).toBeGreaterThan(wakeIndex);
+    for (const request of provider.requests.slice(0, wakeIndex)) {
+      expect(request.messages.some((message) => textOfContent(message.content).includes(WAKE) || textOfContent(message.content) === TRAY)).toBe(false);
+    }
+    const history = provider.requests.at(-1)!;
+    expect(history.messages.filter((message) => textOfContent(message.content).includes(WAKE))).toHaveLength(1);
+    expect(userOccurrences(history, TRAY)).toBe(1);
+    expect(userOccurrences(history, NUDGE_TEXT)).toBe(0);
+    // The tray is empty — its message was accepted under the successor — and
+    // nothing holds the child's admission lease: a person's stop answers.
+    expect(((await call("session/pending/list", { path: childPath })).result as { messages: unknown[] }).messages).toEqual([]);
+    expect((await call("session/cancel", { path: childPath })).error).toBeUndefined();
+    expect(parentEvents.map((entry) => [entry.event.type, entry.event.runId])).toEqual([["agent.completed", oldRunId], ["agent.completed", successor.runId]]);
+    assertNoOverlappingInvocations();
+    expectNoBodiesInModuleLogs(["Start.", WAKE, TRAY, "old done", "successor done"]);
+  }, 60_000);
+
+  it("takes back a custom wake the engine queued out of sight of its own queue, so a terminal declaration carries it to the successor instead of dropping it", async () => {
+    // F5: a background command started in an earlier turn exits while a later
+    // turn streams. Its wake is not causal to that turn, so the harness lets
+    // the engine decide, and Pi's `sendCustomMessage` puts it straight into
+    // agent-core's steering queue — where the session's own `clearQueue()`
+    // cannot see it and its `clearAllQueues()` would drop it. The transfer at
+    // completion reads that queue first, says so, and keeps the wake.
+    const marker = join(base, "release-bg-wake");
+    const OUTPUT = "bg-exit-token-77";
+    const command = `while [ ! -f '${marker}' ]; do sleep 0.02; done; echo ${OUTPUT}`;
+    // Turn 1 starts the command and stops without the tool → turn 2 is the
+    // nudge, held; the command exits meanwhile; turn 2 completes through the tool.
+    provider.answer(0, { toolCall: { name: "bash", args: { command, background: true } } });
+    provider.answer(1, { text: "started it; done for now" });
+    const releaseNudge = provider.hold(2);
+    provider.answer(2, { toolCall: { name: "complete_agent_run", args: { status: "completed", message: "old done" } } });
+    provider.route((request) => {
+      const last = request.messages.at(-1);
+      if (last?.role === "user" && textOfContent(last.content).includes(OUTPUT)) return { toolCall: { name: "complete_agent_run", args: { status: "completed", message: "successor done" } } };
+      return { text: "ok" };
+    });
+    const taskFinished = waitForMessage((message) => {
+      if (!("method" in message) || message.method !== "pi/extension/message") return false;
+      const value = message as { params?: { message?: { type?: string; task?: { status?: string } } } };
+      return value.params?.message?.type === "lasercode/task/update" && value.params.message.task?.status === "completed";
+    });
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start background work.", interrupt: false });
+    await provider.arrived(2);
+    expect(lastUserText(provider.requests[2]!)).toBe(NUDGE_TEXT);
+    // The engine's queue as agent-core holds it: the very thing the session's
+    // own `pendingMessageCount` and `queue_update` never show.
+    const agent = (liveDriver as unknown as { runtime: { session: { agent: { steeringQueue: { hasItems(): boolean } } } } }).runtime.session.agent;
+    expect(agent.steeringQueue.hasItems()).toBe(false);
+    expect(liveDriver.state().isStreaming).toBe(true);
+
+    writeFileSync(marker, "go\n");
+    await taskFinished;
+    await waitForMessage((message) => "method" in message && message.method === "pi/extension/message" && ((message as { params: { message: { message?: string } } }).params.message.message ?? "").includes("admission source=extension kind=custom decision=engine-decides"));
+    expect(agent.steeringQueue.hasItems()).toBe(true);
+    expect(liveDriver.state().pendingMessageCount).toBe(0);
+    expect(queueUpdates().some((update) => update.steering.length > 0)).toBe(false);
+
+    releaseNudge();
+    await waitForTerminal(started.runId);
+    expect(server.agents().run(started.runId)).toMatchObject({ status: "completed", result: { message: "old done" } });
+    // The transfer found what the engine's own queue could not list, said so
+    // as a warning (counts only), and kept it as the successor's message.
+    const transfer = lifecycleLogs().find((log) => log.line.includes("queue-transferred"))!;
+    expect(transfer.line).toMatch(/reason=complete successor=run_[0-9a-f]+ clearedSteering=0 clearedFollowUp=0 local=0 preserved=1 custom=1/);
+    expect(lifecycleLogs().some((log) => log.level === "warn" && log.line.includes(`engine-custom-queued runId=${started.runId} reason=complete steering=1 followUp=0`))).toBe(true);
+    const successor = server.agents().runs().find((run) => run.sessionPath === childPath && run.runId !== started.runId)!;
+    expect(successor).toMatchObject({ origin: "agent" });
+    expect(successor.task).toContain("Background task");
+    await waitForTerminal(successor.runId);
+    expect(server.agents().run(successor.runId)).toMatchObject({ status: "completed", result: { message: "successor done" } });
+    expect(agent.steeringQueue.hasItems()).toBe(false);
+    expect(server.agents().runs().filter((run) => run.sessionPath === childPath)).toHaveLength(2);
+    // The wake reached the model exactly once — as the successor's own
+    // request, never under the completed run's two turns.
+    expect(provider.requests).toHaveLength(4);
+    const wakeRequests = provider.requests.filter((request) => request.messages.some((message) => textOfContent(message.content).includes(OUTPUT)));
+    expect(wakeRequests).toHaveLength(1);
+    expect(provider.requests.indexOf(wakeRequests[0]!)).toBe(3);
+    expect(provider.requests[3]!.messages.filter((message) => textOfContent(message.content).includes(OUTPUT))).toHaveLength(1);
+    expect(parentEvents.map((entry) => [entry.event.type, entry.event.runId])).toEqual([["agent.completed", started.runId], ["agent.completed", successor.runId]]);
+    assertNoOverlappingInvocations();
+    expectNoBodiesInModuleLogs(["Start background work.", OUTPUT, "old done", "successor done"]);
+  }, 60_000);
+
+  it("ends the run a handled slash command created without a model turn, quietly and without waking the parent", async () => {
+    // F4: a person types a command Pi's `input` hook handles (`/goal pause`
+    // with no goal) into an idle child's chat. The prompt is admitted with a
+    // run of its own, the engine accepts it and runs nothing, and the prompt
+    // resolves. The run must not be left `running` with nothing executing:
+    // it ends in the neutral word, with its reason, and the parent — never
+    // told it began — hears nothing.
+    provider.route(() => ({ text: "ok" }));
+    const reply = await call("session/prompt", { path: childPath, content: [{ type: "text", text: "/goal pause" }] });
+    expect(reply.error).toBeUndefined();
+    expect(reply.result).toEqual({ accepted: true, queued: false });
+    const runs = server.agents().runs().filter((run) => run.sessionPath === childPath);
+    expect(runs).toHaveLength(1);
+    const [run] = runs;
+    expect(run).toMatchObject({ origin: "user", status: "cancelled", endedBy: { initiator: "harness", reason: HANDLED_WITHOUT_TURN } });
+    expect(run!.activity?.turns ?? 0).toBe(0);
+    expect(server.agents().activeRun(childPath)).toBeUndefined();
+    expect(server.agents().sessionInfo(childPath)).toMatchObject({ runId: run!.runId, runStatus: "cancelled" });
+    expect(liveDriver.state().isStreaming).toBe(false);
+    expect(provider.requests).toHaveLength(0);
+    expect(driverEvents.filter((event) => event.kind === "agent_start")).toEqual([]);
+    // The fleet's word is Ended, with the reason as its line — not Failed.
+    const fleet = await parentBridge.inspectFleet();
+    expect(fleet.rows[0]).toMatchObject({ kind: "agent", runId: run!.runId, state: "cancelled", status: "Ended", line: HANDLED_WITHOUT_TURN });
+    expect(parentEvents).toEqual([]);
+    expect(lifecycleLogs().some((log) => log.line.includes(`handled-without-turn runId=${run!.runId} origin=user`))).toBe(true);
+    expect(lifecycleLogs().some((log) => log.line.includes(`invocation-finished runId=${run!.runId} accepted=true settled=false`) && log.line.includes("modelWork=false"))).toBe(true);
+    // The session is idle and whole: an ordinary prompt starts a fresh run.
+    const next = await call("session/prompt", { path: childPath, content: [{ type: "text", text: "Now do something." }] });
+    expect(next.error).toBeUndefined();
+    const fresh = server.agents().runs().filter((candidate) => candidate.sessionPath === childPath);
+    expect(fresh).toHaveLength(2);
+    expect(fresh[1]!.runId).not.toBe(run!.runId);
+    expect(provider.requests).toHaveLength(1);
+    assertNoOverlappingInvocations();
+    expectNoBodiesInModuleLogs(["/goal pause", "Now do something."]);
   }, 60_000);
 });

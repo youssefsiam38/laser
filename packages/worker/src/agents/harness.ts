@@ -57,6 +57,7 @@ import {
   type UiDialogResponse,
 } from "@lasercode/protocol";
 import type {
+  ClearedQueue,
   DriverAgentOptions,
   DriverEvent,
   ExtensionModelAdmission,
@@ -109,6 +110,8 @@ export interface WorktreeProvider {
 /** What a child is told when it stops without its final tool. */
 export const NUDGE_TEXT = "You stopped without calling complete_agent_run. Call complete_agent_run now with status completed or blocked and your final message.";
 const ENDED_WITHOUT_TOOL = "Ended without complete_agent_run";
+/** Why a run ends when the engine took its one message without starting a model turn (a handled slash command). */
+export const HANDLED_WITHOUT_TURN = "Handled without a model turn.";
 const RESULT_EXCERPT = 2000;
 const QUESTION_SUMMARY_EXCERPT = 80;
 const ROLE_TASK_EXCERPT = 2000;
@@ -501,7 +504,20 @@ export class AgentHarness {
       if (admission === "local-queue") return { kind: "deferred" as const };
       return { kind: admission, state };
     });
-    if (plan.kind === "deferred") return deferred;
+    if (plan.kind === "deferred") {
+      // A parked message holds no engine preflight, so the admission lease
+      // the server took for it has done its one job — keeping the runtime
+      // generation still through preflight — and is released now, not at the
+      // message's eventual acceptance. Held that long, it wedges the session:
+      // an extension send ahead of this message on the successor starts
+      // through the server's wrapper, which waits for this very lease, while
+      // the lease waits for an acceptance that only follows that send's turn
+      // (the tray's drain at `agent_settled` reaches here). The kick that
+      // later delivers the message holds no lease either; release is
+      // idempotent, so the server's own `finally` is harmless.
+      options?.admissionLease?.release();
+      return deferred;
+    }
     if (plan.kind === "invoke") return this.invoke(entry, plan.state, driver, content, options);
     if (plan.kind === "bare-concurrent") return driver.prompt(content, options);
 
@@ -535,6 +551,10 @@ export class AgentHarness {
    * later `clearQueue()` at completion cannot replay onto a successor what
    * the person just removed. Messages waiting here alone (behind a fence,
    * on a reserved successor) are not the queue the person sees and stay.
+   * Neither is a custom message an extension queued straight into a lane (a
+   * background command's exit, a grandchild's ending): the person never saw
+   * it and the model was promised it, so it is parked here as a message of
+   * its own for the fence to deliver, and it never goes back to a composer.
    * Root sessions, and sessions this harness does not know, are the
    * driver's alone.
    */
@@ -544,7 +564,7 @@ export class AgentHarness {
     if (!driver) return { steering: [], followUp: [] };
     if (!entry || entry.role.kind !== "child") return driver.clearQueue();
     return this.withEntry(entry, async () => {
-      const cleared = await driver.clearQueue();
+      const { custom, ...cleared } = await driver.clearQueue();
       const owner = entry.lifecycle.owner();
       const state = owner ? this.runStates.get(owner) : this.activeRunState(sessionPath);
       if (!state) return cleared;
@@ -566,8 +586,12 @@ export class AgentHarness {
         dropped += 1;
         settlePending(pending, new HarnessError("The person cleared this message from the agent's queue before it could start."));
       }
+      const origin = state.run.origin === "user" ? "user" as const : "agent" as const;
+      for (const text of [...(custom?.steering ?? []), ...(custom?.followUp ?? [])]) {
+        kept.push({ content: [{ type: "text", text }], options: { expandPromptTemplates: false }, origin, engine: false });
+      }
       entry.lifecycle.replaceInbox(state.run.runId, kept);
-      this.diagnose(entry, "info", "queue-cleared", { runId: state.run.runId, clearedSteering: cleared.steering.length, clearedFollowUp: cleared.followUp.length, twins: dropped, phase: entry.lifecycle.phase().kind });
+      this.diagnose(entry, "info", "queue-cleared", { runId: state.run.runId, clearedSteering: cleared.steering.length, clearedFollowUp: cleared.followUp.length, twins: dropped, custom: customCount({ ...cleared, ...(custom ? { custom } : {}) }), phase: entry.lifecycle.phase().kind });
       return cleared;
     });
   }
@@ -1433,8 +1457,17 @@ export class AgentHarness {
       try {
         const cleared = await driver.clearQueue();
         const before = entry.lifecycle.inbox(state.run.runId).length;
+        const custom = customCount(cleared);
+        if (custom > 0) {
+          // An extension's send behind the running turn went straight into
+          // the engine's lanes, where this harness had no record of it and
+          // the engine's own queue never listed it. It is kept below as a
+          // message of its own (its text; the custom type is gone) — said
+          // out loud, because the engine would have dropped it here.
+          this.diagnose(entry, "warn", "engine-custom-queued", { runId: state.run.runId, reason, steering: cleared.custom?.steering.length ?? 0, followUp: cleared.custom?.followUp.length ?? 0 });
+        }
         preserved = this.preservedMessages(entry, state, cleared);
-        counts = { clearedSteering: cleared.steering.length, clearedFollowUp: cleared.followUp.length, local: before, preserved: preserved.length };
+        counts = { clearedSteering: cleared.steering.length, clearedFollowUp: cleared.followUp.length, local: before, preserved: preserved.length, custom };
       } catch (error) {
         preserved = entry.lifecycle.clearInbox(state.run.runId);
         counts = { cleared: "unknown", local: preserved.length, preserved: preserved.length, error: error instanceof Error ? error.name : "error" };
@@ -1608,7 +1641,12 @@ export class AgentHarness {
     const entry = this.byPath.get(state.run.sessionPath);
     const driver = this.host.driver(state.run.sessionPath);
     if (!entry || !driver) {
-      this.endRun(state, "failed", { error: "The agent's session is not open." });
+      // Every ending of a run that could have a successor reserved behind it
+      // goes through `finalizePendingEnd`, the one place that takes the
+      // successor; a session with no entry has nothing waiting on it.
+      const end: RunEnd = { status: "failed", outcome: { error: "The agent's session is not open." } };
+      if (entry) this.finalizePendingEnd(entry, state, end);
+      else this.endRun(state, end.status, end.outcome);
       return;
     }
     if (!entry.lifecycle.begin(state.run.runId)) {
@@ -1635,6 +1673,12 @@ export class AgentHarness {
     let failure: string | undefined;
     let thrown: unknown;
     let accepted = false;
+    // With an exact epoch from the driver, the harness can tell whether the
+    // engine ever started a turn under this invocation: `turn_start` counts
+    // toward the run only when its stamp is owned. Without one (legacy and
+    // fake drivers), that is unknowable here and stays undecided.
+    let stamped = false;
+    const turnsBefore = state.run.activity?.turns ?? 0;
     const acceptedObserver = () => {
       accepted = true;
       this.diagnose(entry, "info", "invocation-accepted", { runId: state.run.runId, phase: entry.lifecycle.phase().kind });
@@ -1653,6 +1697,7 @@ export class AgentHarness {
               if (!entry.lifecycle.bindInvocation(state.run.runId, invocation)) {
                 throw new HarnessError("The prompt invocation lost session ownership before it could start.");
               }
+              stamped = true;
               options?.onInvocation?.(invocation);
             },
             onAccepted: acceptedObserver,
@@ -1663,23 +1708,31 @@ export class AgentHarness {
       thrown = error;
       failure = error instanceof Error ? error.message : String(error);
     }
-    await this.withEntry(entry, () => this.afterInvocation(entry, state, result, failure));
+    const modelWork = stamped ? (state.run.activity?.turns ?? 0) > turnsBefore : undefined;
+    await this.withEntry(entry, () => this.afterInvocation(entry, state, result, failure, modelWork));
     if (thrown !== undefined) throw thrown;
     return result;
   }
 
+  /**
+   * The invocation's promise resolved: the one engine-ready fence. `modelWork`
+   * says whether the engine started a turn under it — `false` only when the
+   * driver stamped the invocation and no turn was counted, `undefined` when
+   * that cannot be known.
+   */
   private afterInvocation(
     entry: Entry,
     state: RunState,
     result: { accepted: boolean; queued: boolean },
     failure?: string,
+    modelWork?: boolean,
   ): void {
     const boundary = entry.lifecycle.finish(state.run.runId);
     if (!boundary) {
       this.diagnose(entry, "info", "late-invocation-ignored", { runId: state.run.runId, owner: entry.lifecycle.owner(), status: state.run.status });
       return;
     }
-    this.diagnose(entry, "info", "invocation-finished", { runId: state.run.runId, accepted: result.accepted, settled: boundary.settled, declared: boundary.end?.status, status: state.run.status });
+    this.diagnose(entry, "info", "invocation-finished", { runId: state.run.runId, accepted: result.accepted, settled: boundary.settled, declared: boundary.end?.status, status: state.run.status, modelWork });
     if (isTerminalRunStatus(state.run.status)) return;
     const end = boundary.end ?? (!result.accepted
       ? { status: "failed" as const, outcome: { error: failure ?? "The agent's session refused the task because it was busy." } }
@@ -1700,13 +1753,35 @@ export class AgentHarness {
       this.kickMessage(state, next);
       return;
     }
-    if (boundary.settled) this.settled(entry, state);
+    if (boundary.settled) {
+      this.settled(entry, state);
+      return;
+    }
+    if (modelWork !== false) return;
+    // The engine took the message and ran no model work on it — a slash
+    // command its `input` hook handled — and nothing else waits. A run that
+    // never saw a turn is a record of nothing: it ends quietly, in the
+    // neutral word (Ended, not Failed), and its parent, which was never told
+    // it began, is not woken for it. A run that did work earlier and settled
+    // without the tool is judged as such: the command changed nothing.
+    if ((state.run.activity?.turns ?? 0) > 0) {
+      this.settled(entry, state);
+      return;
+    }
+    this.diagnose(entry, "info", "handled-without-turn", { runId: state.run.runId, origin: state.run.origin });
+    this.finalizePendingEnd(entry, state, { status: "cancelled", outcome: { endedBy: { initiator: "harness", reason: HANDLED_WITHOUT_TURN } } }, { wakeParent: false });
   }
 
-  /** The child stopped without `complete_agent_run`: nudge once, then record the failure. */
+  /**
+   * The child stopped without `complete_agent_run`: nudge once, then record
+   * the failure. Both endings go through `finalizePendingEnd`: a successor
+   * reserved while this invocation was settled but not yet fenced (a
+   * background exit, a grandchild's completion, a person's prompt) is taken
+   * and started by the ending, never left `queued` with nobody to start it.
+   */
   private settled(entry: Entry, state: RunState): void {
     if (state.lastAssistant?.error) {
-      this.endRun(state, "failed", { error: state.lastAssistant.error });
+      this.finalizePendingEnd(entry, state, { status: "failed", outcome: { error: state.lastAssistant.error } });
       return;
     }
     if (!state.nudged) {
@@ -1716,7 +1791,7 @@ export class AgentHarness {
     }
     const driver = this.host.driver(entry.path!);
     const context = driver?.lastAssistantText?.() ?? state.lastAssistant?.text;
-    this.endRun(state, "failed", { error: ENDED_WITHOUT_TOOL, ...(context ? { context: excerpt(context, RESULT_EXCERPT) } : {}) });
+    this.finalizePendingEnd(entry, state, { status: "failed", outcome: { error: ENDED_WITHOUT_TOOL, ...(context ? { context: excerpt(context, RESULT_EXCERPT) } : {}) } });
   }
 
   /** Reserve or extend the one run waiting behind the current invocation. */
@@ -1760,9 +1835,12 @@ export class AgentHarness {
    * gone for good; a remaining text with no local twin (queued by something
    * that bypassed this harness, or expanded by Pi's template/skill expansion
    * so that its text no longer equals what was sent) is kept as a message of
-   * its own. Nothing the engine still held is dropped.
+   * its own, and so is every custom message an extension queued straight
+   * into a lane (`cleared.custom`), after that lane's texts — the engine
+   * drains steering before follow-ups. Nothing the engine still held is
+   * dropped.
    */
-  private preservedMessages(entry: Entry, state: RunState, cleared: { steering: readonly string[]; followUp: readonly string[] }): PendingMessage[] {
+  private preservedMessages(entry: Entry, state: RunState, cleared: ClearedQueue): PendingMessage[] {
     const remaining: Record<EngineLane, string[]> = { steer: [...cleared.steering], followUp: [...cleared.followUp] };
     const preserved: PendingMessage[] = [];
     for (const pending of entry.lifecycle.clearInbox(state.run.runId)) {
@@ -1786,7 +1864,8 @@ export class AgentHarness {
       origin: state.run.origin === "user" ? "user" : "agent",
       engine: false,
     });
-    return [...preserved, ...remaining.steer.map(foreign), ...remaining.followUp.map(foreign)];
+    const custom = cleared.custom ?? { steering: [], followUp: [] };
+    return [...preserved, ...remaining.steer.map(foreign), ...custom.steering.map(foreign), ...remaining.followUp.map(foreign), ...custom.followUp.map(foreign)];
   }
 
   private requestEnd(
@@ -1816,22 +1895,28 @@ export class AgentHarness {
     }
   }
 
-  private finalizePendingEnd(entry: Entry, state: RunState, pending: RunEnd): void {
+  /**
+   * Publish a run's end at the fence — the only place a reserved successor is
+   * taken, so every ending of an owner passes through here. `wakeParent:
+   * false` ends a run its parent was never told about without a model event.
+   */
+  private finalizePendingEnd(entry: Entry, state: RunState, pending: RunEnd, options: { wakeParent?: boolean } = {}): void {
     if (isTerminalRunStatus(state.run.status)) return;
+    const wakeParent = options.wakeParent ?? true;
     const successor = entry.lifecycle.takeSuccessor();
     const queued = successor ? this.runStates.get(successor.runId) : undefined;
     const live = queued !== undefined && !isTerminalRunStatus(queued.run.status);
     this.diagnose(entry, "info", "terminal-published", { runId: state.run.runId, status: pending.status, successor: queued?.run.runId, successorLive: live, delayedParent: live });
     // Publish the old terminal history first, but delay its parent wake until
     // the already-accepted resume has become the session's canonical live run.
-    this.endRun(state, pending.status, pending.outcome, live);
+    this.endRun(state, pending.status, pending.outcome, live, wakeParent);
     if (queued && live) {
       this.touch(queued, (run) => ({ ...run, status: "running" }));
       this.activateRun(entry, queued);
       this.diagnose(entry, "info", "successor-activated", { runId: queued.run.runId, predecessor: state.run.runId, inbox: entry.lifecycle.inbox(queued.run.runId).length + (successor?.first ? 1 : 0) });
       if (successor?.first) this.kickMessage(queued, successor.first);
       else this.kick(queued, queued.task);
-      if (state.run.parent) this.notifyParent(state.run, pending.outcome.context);
+      if (state.run.parent && wakeParent) this.notifyParent(state.run, pending.outcome.context);
     }
   }
 
@@ -1866,6 +1951,7 @@ export class AgentHarness {
     status: AgentRunTerminalStatus,
     outcome: { result?: { status: "completed" | "blocked"; message: string }; error?: string; endedBy?: { initiator: AgentRunInitiator; reason?: string }; context?: string },
     delayParent = false,
+    wakeParent = true,
   ): void {
     if (isTerminalRunStatus(state.run.status)) return;
     const endedAt = this.iso();
@@ -1913,7 +1999,7 @@ export class AgentHarness {
       for (const pending of leftovers) settlePending(pending, reason);
     }
     entry?.lifecycle.didTerminate(run.runId);
-    if (!delayParent) this.notifyParent(run, outcome.context);
+    if (!delayParent && wakeParent) this.notifyParent(run, outcome.context);
   }
 
   // ------------------------------------------------------------- questions
@@ -2342,6 +2428,11 @@ function pendingUiOf(driver: SessionDriver | undefined): UiDialogRequest[] | und
 function contentTask(content: readonly ContentBlock[]): string {
   const text = content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n").trim();
   return text || "Continue this run with the attached content.";
+}
+
+/** How many custom messages the engine had queued out of sight of its own queue. */
+function customCount(cleared: ClearedQueue): number {
+  return (cleared.custom?.steering.length ?? 0) + (cleared.custom?.followUp.length ?? 0);
 }
 
 /** The update kinds worth a line when they arrive late from an invocation the session no longer owns; deltas are not. */

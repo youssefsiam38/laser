@@ -59,6 +59,7 @@ class FakeDriver implements SessionDriver {
     if (e.type === "update" && e.update.kind === "agent_settled") {
       this.engineSteers = [];
       this.engineFollowUps = [];
+      this.engineCustom = { steering: [], followUp: [] };
       this.setStreaming(false);
     }
     for (const l of this.listeners) l(e);
@@ -72,6 +73,9 @@ class FakeDriver implements SessionDriver {
   }
   /** Something other than the harness queued in the engine (a person's steer in the child's own chat). */
   foreignFollowUp(text: string) { this.engineFollowUps.push(text); }
+  /** An extension's custom message the engine queued straight into a lane: never in its own queue, only in what `clearQueue()` reads from agent-core. */
+  private engineCustom = { steering: [] as string[], followUp: [] as string[] };
+  foreignCustom(lane: "steer" | "followUp", text: string) { (lane === "steer" ? this.engineCustom.steering : this.engineCustom.followUp).push(text); }
   /** Pi's preflight accepted the oldest waiting prompt; its turn goes on. */
   acceptPending() {
     const pending = this.promptResolvers[0];
@@ -119,9 +123,11 @@ class FakeDriver implements SessionDriver {
     if (this.clearQueueRejects) throw new Error("queue unavailable");
     const steering = [...this.engineSteers];
     const followUp = [...this.engineFollowUps];
+    const custom = { steering: [...this.engineCustom.steering], followUp: [...this.engineCustom.followUp] };
     this.engineSteers = [];
     this.engineFollowUps = [];
-    return { steering, followUp };
+    this.engineCustom = { steering: [], followUp: [] };
+    return custom.steering.length > 0 || custom.followUp.length > 0 ? { steering, followUp, custom } : { steering, followUp };
   }
   async abort() {
     this.aborts += 1;
@@ -1953,6 +1959,115 @@ describe("AgentHarness", () => {
       await root.driver.followUp([{ type: "text", text: "root follow-up" }]);
       expect(await world.harness.clearQueue(root.path)).toEqual({ steering: [], followUp: ["root follow-up"] });
       expect(lifecycleLogs().filter((log) => log.line.includes("queue-cleared"))).toHaveLength(1);
+    });
+
+    it("takes a successor reserved in the settled-unfenced window when its owner ends through settled(): started at once, and every waiter behind it served", async () => {
+      // F2: the owner has settled (the driver's agent_settled ran) but its
+      // prompt promise has not resolved — Pi's post-settle unwind — when a
+      // non-causal extension trigger (a background exit, a grandchild's
+      // ending) reserves a successor. The owner then ends without the tool.
+      // That ending must take the successor: a run nobody starts is not a
+      // Waiting row, it is a wedge.
+      world.setAutoResolveChildPrompts(false);
+      const root = world.openRoot("lead");
+      const first = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "t" });
+      const path = "/sessions/child-1.jsonl";
+      const child = world.drivers.get(path)!;
+      child.emit({ type: "update", invocation: { id: "fake-1", runId: first.runId }, update: { kind: "agent_settled" } });
+      let started = 0;
+      let completeWake!: (value: { disposition: "started" }) => void;
+      const wakeCompletion = new Promise<{ disposition: "started" }>((resolve) => { completeWake = resolve; });
+      const request: ExtensionModelWorkRequest = {
+        kind: "custom",
+        content: [{ type: "text", text: "wake" }],
+        task: "wake",
+        origin: "agent",
+        start: () => { throw new Error("the wrapper below is what starts it"); },
+      };
+      const admitted = world.harness.admitExtensionModelWork(path, request, (ownerRunId, onInvocation) => {
+        started += 1;
+        onInvocation?.({ id: `ext-${started}`, ...(ownerRunId ? { runId: ownerRunId } : {}) });
+        return { admission: Promise.resolve(), completion: wakeCompletion };
+      });
+      let admission: "pending" | "settled" = "pending";
+      void admitted.admission.then(() => { admission = "settled"; }, () => { admission = "settled"; });
+      const successor = world.harness.runs().find((run) => run.sessionPath === path && run.runId !== first.runId)!;
+      expect(successor).toMatchObject({ status: "queued", origin: "agent", task: "wake" });
+      expect(lifecycleLogs().some((log) => log.line.includes("admission source=extension kind=custom decision=queued-successor"))).toBe(true);
+
+      // The old prompt resolves without the tool: the nudge, under the owner;
+      // the successor still waits, untouched.
+      child.resolvePrompt();
+      await flushLifecycle();
+      expect(child.prompted.map((item) => item.text)).toEqual(["t", NUDGE_TEXT]);
+      expect(started).toBe(0);
+      expect(world.harness.run(successor.runId)?.status).toBe("queued");
+
+      // The nudge settles without the tool as well: the owner fails — and
+      // the successor is taken, activated and started in the same breath.
+      child.emit({ type: "update", invocation: { id: "fake-2", runId: first.runId }, update: { kind: "agent_settled" } });
+      child.resolvePrompt();
+      await flushLifecycle();
+      expect(world.harness.run(first.runId)).toMatchObject({ status: "failed", error: "Ended without complete_agent_run" });
+      expect(world.harness.run(successor.runId)?.status).toBe("running");
+      expect(started).toBe(1);
+      expect(admission).toBe("settled");
+      expect(world.harness.activeRun(path)?.runId).toBe(successor.runId);
+      expect(world.harness.sessionInfo(path)).toMatchObject({ runId: successor.runId, runStatus: "running" });
+      expect(lifecycleLogs().some((log) => log.line.includes(`terminal-published runId=${first.runId} status=failed successor=${successor.runId} successorLive=true`))).toBe(true);
+      expect(lifecycleLogs().some((log) => log.line.includes(`successor-activated runId=${successor.runId} predecessor=${first.runId}`))).toBe(true);
+      expect(world.events().filter((event) => event.kind === "failed" && event.runId === first.runId)).toHaveLength(1);
+
+      // What arrives now waits on a live run, not on one nobody starts: the
+      // parent's message and a person's prompt are delivered by the fence,
+      // in order, once the wake's invocation ends.
+      const later = await root.handle.bridge.sendAgentMessage({ sessionId: first.sessionId, message: "hello?", interrupt: false });
+      expect(later).toMatchObject({ delivery: "queued", runId: successor.runId, status: "running" });
+      let personSettled = false;
+      const person = world.harness.promptUser(path, [{ type: "text", text: "person" }]).then(() => { personSettled = true; }, () => { personSettled = true; });
+      await flushLifecycle();
+      expect(personSettled).toBe(false);
+      expect(child.prompted.map((item) => item.text)).toEqual(["t", NUDGE_TEXT]);
+      completeWake({ disposition: "started" });
+      await flushLifecycle();
+      expect(child.prompted.map((item) => item.text)).toEqual(["t", NUDGE_TEXT, "hello?"]);
+      child.emit({ type: "update", invocation: { id: "fake-3", runId: successor.runId }, update: { kind: "agent_settled" } });
+      child.resolvePrompt();
+      await flushLifecycle();
+      expect(child.prompted.map((item) => item.text)).toEqual(["t", NUDGE_TEXT, "hello?", "person"]);
+      expect(await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "successor done" })).toEqual({ ok: true, runId: successor.runId });
+      child.emit({ type: "update", invocation: { id: "fake-4", runId: successor.runId }, update: { kind: "agent_settled" } });
+      child.resolvePrompt();
+      await person;
+      expect(personSettled).toBe(true);
+      expect(world.harness.runs().filter((run) => run.sessionPath === path).map((run) => run.status)).toEqual(["failed", "completed"]);
+    });
+
+    it("keeps an extension's custom message when the person clears a child's queue: parked for the fence, never handed back to the composer", async () => {
+      // F5, the person's side: `clearQueue()` now reports what an extension
+      // queued straight into the engine's lanes. A person's clear returns
+      // their own texts alone; the wake the model was promised waits here
+      // and is delivered as the next prompt under the same run.
+      world.setAutoResolveChildPrompts(false);
+      const root = world.openRoot("lead");
+      const first = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "initial" });
+      const path = "/sessions/child-1.jsonl";
+      const child = world.drivers.get(path)!;
+      child.queueWhileStreaming = true;
+      expect(await world.harness.promptUser(path, [{ type: "text", text: "mine" }], { streamingBehavior: "followUp" })).toEqual({ accepted: true, queued: true });
+      child.foreignCustom("steer", "Background task t1 exited with code 0.");
+
+      expect(await world.harness.clearQueue(path)).toEqual({ steering: [], followUp: ["mine"] });
+      expect(await child.clearQueue()).toEqual({ steering: [], followUp: [] });
+      expect(lifecycleLogs().some((log) => log.line.includes(`queue-cleared runId=${first.runId} clearedSteering=0 clearedFollowUp=1 twins=1 custom=1`))).toBe(true);
+      expect(lifecycleLogs().some((log) => log.line.includes("Background task"))).toBe(false);
+
+      child.emit({ type: "update", update: { kind: "agent_settled" } });
+      child.resolvePrompt();
+      await flushLifecycle();
+      expect(child.prompted.map((item) => [item.text, item.options?.streamingBehavior ?? "prompt"])).toEqual([["initial", "prompt"], ["mine", "followUp"], ["Background task t1 exited with code 0.", "prompt"]]);
+      expect(world.harness.activeRun(path)?.runId).toBe(first.runId);
+      expect(world.harness.runs().filter((run) => run.sessionPath === path)).toHaveLength(1);
     });
   });
 
