@@ -63,6 +63,7 @@ export const ENV = {
   "extensionName": "LASERCODE_EXTENSION_NAME",
   "features": "LASERCODE_FEATURES",
   "home": "LASERCODE_HOME",
+  "mcpLive": "LASERCODE_MCP_LIVE",
   "node": "LASERCODE_NODE",
   "nodeMirror": "LASERCODE_NODE_MIRROR",
   "npmCli": "LASERCODE_NPM_CLI",

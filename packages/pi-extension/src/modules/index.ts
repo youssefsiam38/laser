@@ -9,7 +9,9 @@ import { providerLogModule } from "./provider-log.js";
 import { subagentsModule } from "./subagents.js";
 import { transcribeModule } from "./transcribe.js";
 import { goalModule } from "./goal.js";
+import { mcpModule, type McpModuleOptions } from "./mcp.js";
 import { webAccessModule, type WebSearchHandler } from "./web-access.js";
+export type { McpModuleOptions } from "./mcp.js";
 export type { WebSearchHandler } from "./web-access.js";
 export { isGoalCommand, toSessionGoal } from "./goal.js";
 
@@ -50,6 +52,12 @@ export interface ModuleContext {
    * the worker does not own a shell here; the built-in `bash` then stays.
    */
   backgroundWork?: BackgroundWorkOptions;
+  /**
+   * MCP servers (`mcp` module). Present only when the worker loaded the MCP
+   * engine for this session, which it does only for a project that has at
+   * least one enabled server (docs/mcp.md).
+   */
+  mcp?: McpModuleOptions;
 }
 
 export interface LaserModule {
@@ -100,4 +108,5 @@ export const modules: readonly LaserModule[] = [
   fileFreshnessModule,
   transcribeModule,
   webAccessModule,
+  mcpModule,
 ];

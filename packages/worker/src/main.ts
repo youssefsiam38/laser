@@ -12,6 +12,7 @@
  *       [--project-trusted yes|no]
  */
 import { Socket } from "node:net";
+import { delimiter, dirname, resolve } from "node:path";
 import { ENV, FEATURE_MANIFESTS, LineDecoder, PRODUCT_NAME, parseJsonLine, type FeatureId, type JsonRpcMessage } from "@lasercode/protocol";
 import { StableSdkDriver } from "./drivers/stable-sdk.js";
 import { AgentResolutionError, assertBundledAgent } from "./resolve-pi.js";
@@ -22,6 +23,53 @@ const PROTOCOL_FD = Number(process.env[ENV.workerFd] ?? 3);
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
   return i >= 0 ? process.argv[i + 1] : undefined;
+}
+
+/**
+ * The engine locates its own data directory from the environment, not from
+ * the SDK's `agentDir` option — the MCP engine's caches and its OAuth state
+ * are found that way (docs/mcp.md). Every product path already spawns the
+ * worker with it set (`piEnv()` in `packages/cli/src/config.ts`); this makes
+ * a worker started any other way agree with the directory it was given,
+ * before anything in the process can read it.
+ */
+function alignEngineAgentDir(agentDir: string | undefined): void {
+  if (!agentDir) return;
+  const resolved = resolve(agentDir);
+  // The engine's own variable name, deliberately literal: the worker must not
+  // import the CLI package, which is where it is otherwise spelled.
+  if (process.env["PI_CODING_AGENT_DIR"] !== resolved) process.env["PI_CODING_AGENT_DIR"] = resolved;
+}
+
+/**
+ * MCP servers are ordinary programs: `npx …`, `node …`, `npm exec …`. A
+ * packaged app runs on its own bundled runtime with an empty `PATH`, so the
+ * first `npx` resolution of a stdio server would fail on a clean machine.
+ * Prepend the runtime's own bin directory and the bundled package manager's,
+ * once, at worker start — and never remove anything the person's environment
+ * already had.
+ */
+export function runtimePathAdditions(env: NodeJS.ProcessEnv = process.env, execPath = process.execPath): string[] {
+  const additions: string[] = [dirname(execPath)];
+  const npmCli = env[ENV.npmCli];
+  if (npmCli) additions.push(dirname(npmCli));
+  try {
+    const command: unknown = JSON.parse(env[ENV.npmCommand] ?? "null");
+    if (Array.isArray(command)) {
+      for (const part of command) if (typeof part === "string" && part.includes("/")) additions.push(dirname(part));
+    }
+  } catch {
+    // A malformed value adds nothing; the runtime's own directory still does.
+  }
+  const existing = new Set((env["PATH"] ?? "").split(delimiter).filter(Boolean));
+  return [...new Set(additions)].filter((entry) => entry && !existing.has(entry));
+}
+
+function extendRuntimePath(): void {
+  const additions = runtimePathAdditions();
+  if (additions.length === 0) return;
+  const current = process.env["PATH"] ?? "";
+  process.env["PATH"] = current ? `${additions.join(delimiter)}${delimiter}${current}` : additions.join(delimiter);
 }
 
 function openTransport(): { input: NodeJS.ReadableStream; write: (line: string) => void } {
@@ -60,6 +108,8 @@ async function main(): Promise<void> {
   // Laser-specific instructions. Optional for callers outside the host.
   const stateDir = arg("state-dir");
   const projectTrusted = arg("project-trusted");
+  alignEngineAgentDir(agentDir);
+  extendRuntimePath();
   if (projectTrusted !== undefined && projectTrusted !== "yes" && projectTrusted !== "no") {
     console.error(`${PRODUCT_NAME} worker: --project-trusted must be "yes" or "no", got ${JSON.stringify(projectTrusted)}`);
     process.exit(2);
