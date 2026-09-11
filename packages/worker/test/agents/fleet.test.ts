@@ -62,6 +62,10 @@ const runs: AgentRun[] = [
   // The row stands on the run that can still act, on both sides (M13-T98).
   run({ runId: "run_old", sessionPath: "/sessions/pending.jsonl", subagentName: "pending", startedAt: "2026-09-09T10:08:00.000Z", status: "running", task: "First task.", activity: { turns: 2, tools: 3, currentTool: "bash", lastAt: "2026-09-09T10:09:30.000Z" } }),
   run({ runId: "run_next", sessionPath: "/sessions/pending.jsonl", subagentName: "pending", startedAt: "2026-09-09T10:09:00.000Z", status: "queued", task: "Also do this." }),
+  // A sibling started between that session's first run and its queued
+  // successor: its place is after "pending", whatever run stands for the
+  // pending session now — never the successor's later start (F3).
+  run({ runId: "run_6", sessionPath: "/sessions/c5.jsonl", subagentName: "between", startedAt: "2026-09-09T10:08:30.000Z", task: "Between the two." }),
 ];
 const tasks: BackgroundTask[] = [
   task({ id: "t-dev", sessionPath: ROOT, startedAt: "2026-09-09T09:55:00.000Z", title: "pnpm vite dev", command: "pnpm vite dev --host", activity: "ready in 412 ms" }),
@@ -73,9 +77,9 @@ const tasksOf = (path: string): BackgroundTask[] => tasks.filter((candidate) => 
 describe("buildFleetTree", () => {
   it("nests as the tree nests, orders by creation, and says each row in the fleet's words", () => {
     const fleet = buildFleetTree({ callerPath: ROOT, runs, tasksOf, now: NOW });
-    expect(fleet).toMatchObject({ working: 4, needsYou: 1, finished: 5, total: 9, omitted: 0 });
-    expect(fleet.rows.map((row) => row.title)).toEqual(["migrate", "review", "ended", "done", "pending", "pnpm vite dev", "pnpm -r build"]);
-    const [migrate, review, ended, done, pending, dev, build] = fleet.rows;
+    expect(fleet).toMatchObject({ working: 5, needsYou: 1, finished: 5, total: 10, omitted: 0 });
+    expect(fleet.rows.map((row) => row.title)).toEqual(["migrate", "review", "ended", "done", "pending", "between", "pnpm vite dev", "pnpm -r build"]);
+    const [migrate, review, ended, done, pending, between, dev, build] = fleet.rows;
     expect(migrate).toMatchObject({ kind: "agent", agentName: "worker", subagentName: "migrate", sessionId: "id-/sessions/c1.jsonl", runId: "run_1", state: "needs_input", status: "Asking", line: "Which database?", elapsed: "10m 00s", depth: 0 });
     expect(migrate!.children.map((row) => row.title)).toEqual(["check-tests", "pnpm test"]);
     expect(migrate!.children[0]).toMatchObject({ kind: "agent", runId: "run_3", status: "Working", line: "Reading packages/ui/src/store.ts", elapsed: "8m 00s", depth: 1, children: [] });
@@ -84,8 +88,10 @@ describe("buildFleetTree", () => {
     expect(ended).toMatchObject({ state: "cancelled", status: "Ended", line: "the person ended it" });
     // A final message is one line, its first.
     expect(done).toMatchObject({ state: "completed", status: "Done", line: "Counted the files.", elapsed: "3m 00s" });
-    // The executing run, not the successor waiting behind it.
+    // The executing run, not the successor waiting behind it — and the
+    // sibling that started between the two keeps its place after it.
     expect(pending).toMatchObject({ kind: "agent", runId: "run_old", state: "running", status: "Working", line: "Running bash", elapsed: "2m 00s" });
+    expect(between).toMatchObject({ kind: "agent", runId: "run_6", state: "running", status: "Working", line: "Between the two.", elapsed: "1m 30s" });
     expect(dev).toMatchObject({ kind: "command", taskId: "t-dev", state: "running", status: "Working", line: "ready in 412 ms", elapsed: "15m 00s", depth: 0 });
     expect(dev).not.toHaveProperty("exitCode");
     expect(build).toMatchObject({ kind: "command", state: "completed", status: "Done", line: "exit code 0", exitCode: 0 });
@@ -106,8 +112,33 @@ describe("buildFleetTree", () => {
     const row = fleet.rows.find((candidate) => candidate.title === "done")!;
     expect(row).toMatchObject({ kind: "agent", runId: "run_9", state: "running", status: "Working", line: "One more thing.", elapsed: "1m 00s" });
     // Its place in the order is still where its first run put it.
-    expect(fleet.rows.map((candidate) => candidate.title)).toEqual(["migrate", "review", "ended", "done", "pending"]);
+    expect(fleet.rows.map((candidate) => candidate.title)).toEqual(["migrate", "review", "ended", "done", "pending", "between"]);
     expect(fleet.rows.filter((candidate) => candidate.title === "done")).toHaveLength(1);
+  });
+
+  it("keeps siblings in the order their first runs started while one of them is terminal-pending, on both sides", () => {
+    // F3: during a declared completion the per-session sort puts the queued
+    // successor first (least able to act). A child's place among its
+    // siblings is its first run's start, never that head — so the order is
+    // the same before the window, during it, and after, and the map has no
+    // structural change to re-layout. Both sides, one fixture.
+    const a1 = run({ runId: "run_a1", sessionPath: "/sessions/a.jsonl", subagentName: "a", startedAt: "2026-09-09T10:00:00.000Z" });
+    const b1 = run({ runId: "run_b1", sessionPath: "/sessions/b.jsonl", subagentName: "b", startedAt: "2026-09-09T10:01:00.000Z" });
+    const a2 = run({ runId: "run_a2", sessionPath: "/sessions/a.jsonl", subagentName: "a", startedAt: "2026-09-09T10:02:00.000Z", status: "queued", task: "Next." });
+    const states: Record<string, AgentRun[]> = {
+      before: [a1, b1],
+      during: [a1, b1, a2],
+      after: [{ ...a1, status: "completed", endedAt: "2026-09-09T10:03:00.000Z", result: { status: "completed", message: "First done." } }, b1, { ...a2, status: "running" }],
+    };
+    for (const [name, candidates] of Object.entries(states)) {
+      const ours = buildFleetTree({ callerPath: ROOT, runs: candidates, tasksOf: () => [], now: NOW }).rows.map((row) => row.title);
+      const groups = buildFleet({ sessions: [], runs: Object.fromEntries(candidates.map((candidate) => [candidate.runId, candidate])), tasks: {}, views: {}, currentPath: ROOT, sessionsLoaded: false, now: NOW });
+      const theirs = scopeFleet(groups, ROOT).tree!.items.map((item) => item.title);
+      expect(ours, name).toEqual(["a", "b"]);
+      expect(theirs, name).toEqual(["a", "b"]);
+    }
+    // The row still stands on the run that can act — the head the order must not key on.
+    expect(buildFleetTree({ callerPath: ROOT, runs: states["during"]!, tasksOf: () => [], now: NOW }).rows[0]).toMatchObject({ runId: "run_a1", status: "Working" });
   });
 
   it("keeps a session on the run that can still act while a newer successor only waits behind it", () => {
@@ -215,7 +246,7 @@ describe("the agent's fleet agrees with the person's", () => {
       id: item.kind === "agent" ? item.run!.runId : item.task!.id,
     }));
     expect(ours).toEqual(theirs);
-    expect(ours).toHaveLength(9);
+    expect(ours).toHaveLength(10);
     // The terminal-pending session stands on its executing run on both sides.
     expect(ours.find((row) => row.title === "pending")).toEqual({ kind: "agent", title: "pending", status: "Working", depth: 0, id: "run_old" });
     // And the counts the header says.

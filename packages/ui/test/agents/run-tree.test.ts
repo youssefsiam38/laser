@@ -104,6 +104,28 @@ describe("buildAgentTree", () => {
     expect(buildAgentTree({ rootPath: ROOT, sessions, runs: [ended, waiting, ...runs.slice(1)] }).byPath.get("/p/a.jsonl")!).toMatchObject({ run: { runId: "r-a-next" }, status: "queued", ended: false });
   });
 
+  it("keeps siblings in the order their first runs started while one of them is terminal-pending", () => {
+    // F3: during a declared completion a session's oldest-first list starts
+    // with its queued successor (the run least able to act comes first). A
+    // child's place among its siblings is its first run's start, never that
+    // head — so nothing about the tree's structure changes across the
+    // window, and a map has nothing to re-layout.
+    const { sessions } = family();
+    const a1 = run({ runId: "r-a", sessionPath: "/p/a.jsonl", subagentName: "reviewer-1", startedAt: "2026-09-08T10:00:00.000Z" });
+    const b1 = run({ runId: "r-b", sessionPath: "/p/b.jsonl", agentName: "tester", subagentName: "tester-1", startedAt: "2026-09-08T10:01:00.000Z" });
+    const a2 = run({ runId: "r-a-next", sessionPath: "/p/a.jsonl", subagentName: "reviewer-1", startedAt: "2026-09-08T10:02:00.000Z", status: "queued" });
+    const before = buildAgentTree({ rootPath: ROOT, sessions, runs: [a1, b1] });
+    const during = buildAgentTree({ rootPath: ROOT, sessions, runs: [a1, b1, a2] });
+    const after = buildAgentTree({ rootPath: ROOT, sessions, runs: [{ ...a1, status: "completed", endedAt: "2026-09-08T10:03:00.000Z" }, b1, { ...a2, status: "running" }] });
+    for (const tree of [before, during, after]) {
+      expect(tree.root.children).toEqual(["/p/a.jsonl", "/p/b.jsonl"]);
+      expect(subtreePaths(tree)).toEqual([ROOT, "/p/a.jsonl", "/p/b.jsonl"]);
+    }
+    // The head of the window's list is the successor — exactly why the order must not key on it.
+    expect(during.byPath.get("/p/a.jsonl")!.runs.map((r) => r.runId)).toEqual(["r-a-next", "r-a"]);
+    expect(during.byPath.get("/p/a.jsonl")!.run?.runId).toBe("r-a");
+  });
+
   it("derives the root's status from attention and the live view", () => {
     const { runs, sessions } = family();
     // A session waiting on a person is live and paused: `needs_input`, never
