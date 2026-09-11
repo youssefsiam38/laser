@@ -22,6 +22,9 @@ requests or result envelopes for indexing.
 | Edit/write | Displayed path and bounded diff lines; error text on failure | Hidden success confirmation, omitted diff lines, gutters |
 | Read/grep/find/list | Argument JSON values and displayed output | JSON keys, result-envelope metadata and images |
 | Unknown tool | Nested argument/result JSON values, or plain output text | JSON keys and content-envelope metadata/images |
+| MCP direct tool (`<server>_<tool>`) | Argument JSON values, then the result's text blocks in order, and a resource block's uri and text | JSON keys, the `details` envelope (server, tool, error kind), the registered tool name, image and audio base64 |
+| MCP gateway (`mcp`, `mcp__<server>`) | Argument values, the mode's own list — a search's `server`/`tool` matches, a status row's name, status and tool count — then the visible text; a call shows the called tool's result | Match scores, listen state, byte counts and every other `details` field |
+| MCP script (`mcpScript`) | The code it ran and the result text | The call trace beneath it, and the code a second time as an argument |
 | Agent completion (`complete_agent_run`) | The final message, drawn as the child's last assistant block | The status badge, the clock, the harness's reply |
 | Agent event / task exit (custom messages) | The child's message and the person's reason; the task's command | The sentence, labels, clocks and the Output action |
 
@@ -38,6 +41,10 @@ viewer displays; terminal strings stay untouched. Nothing decodes user escapes.
 
 1. If it uses the generic JSON fallback, no registry entry is necessary. All
    primitive values are searchable recursively, including future nested fields.
+   A tool whose *name* cannot be known in advance needs a rule instead of an
+   entry: an MCP server's tools are registered as `<server>_<tool>`, so they are
+   recognised by the `details.server` their result carries, and the shared
+   `mcpContentBlocks` transform is what both the row and the projection walk.
 2. If it has a specialized body, add a `TOOL_SEARCH_PROJECTIONS` entry naming
    precisely the fields it displays. Reuse pure display transforms rather than
    reimplementing them for search (`tool-diff.ts` is shared for this reason).

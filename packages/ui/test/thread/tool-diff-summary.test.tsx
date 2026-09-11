@@ -22,7 +22,7 @@ vi.mock("@/runtime", async () => ({
   useLaserStable: () => ({ actions: { answerDialog: vi.fn(), send: vi.fn(async () => {}) } }),
   useLaserView: () => ({ dialogs: [] }),
 }));
-vi.mock("@/agents/hooks", () => ({ useNamerLabel: () => undefined }));
+vi.mock("@/agents/hooks", () => ({ useNamerLabel: () => undefined, useSessionMcpServers: () => [] }));
 vi.mock("@assistant-ui/react", async (original) => ({
   ...await original<typeof import("@assistant-ui/react")>(),
   useToolCallElapsed: () => undefined,

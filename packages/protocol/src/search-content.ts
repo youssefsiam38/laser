@@ -30,6 +30,138 @@ export function toolOutputText(result: unknown): string | undefined {
   }).join("\n");
 }
 
+// ---------------------------------------------------------------------------
+// MCP content (docs/mcp.md "In the transcript")
+//
+// A server's tools are registered under `<server>_<tool>`, so a direct MCP
+// tool has no name that can be enumerated here; what it carries is a result
+// envelope whose `details.server` names the server that answered. `details`
+// itself is transport metadata and never content, and an image or audio
+// block's `data` is a base64 blob that must never enter the index.
+
+/** The one search-and-call tool the adapter registers. */
+export const MCP_GATEWAY_TOOL = "mcp";
+/** A server-scoped gateway: `mcp__playwright`. */
+export const MCP_GATEWAY_NAMESPACE_PREFIX = "mcp__";
+/** The scripting tool: `{ code }` plus a call trace. */
+export const MCP_SCRIPT_TOOL = "mcpScript";
+
+export const isMcpGatewayTool = (name: string): boolean =>
+  name === MCP_GATEWAY_TOOL || name.startsWith(MCP_GATEWAY_NAMESPACE_PREFIX);
+
+/** The server a gateway is scoped to, for `mcp__<server>`. */
+export const mcpGatewayNamespace = (name: string): string | undefined =>
+  name.startsWith(MCP_GATEWAY_NAMESPACE_PREFIX) && name.length > MCP_GATEWAY_NAMESPACE_PREFIX.length
+    ? name.slice(MCP_GATEWAY_NAMESPACE_PREFIX.length)
+    : undefined;
+
+/**
+ * One block of an MCP result, normalized. The renderer and the search
+ * projection walk the same list in the same order, so a highlight and a
+ * projected occurrence cannot drift apart.
+ */
+export type McpContentBlock =
+  | { kind: "text"; text: string }
+  | { kind: "image"; data: string; mimeType: string }
+  | { kind: "audio"; data: string; mimeType: string }
+  | { kind: "resource"; uri: string; mimeType?: string; text?: string; name?: string };
+
+const MIME_RE = /^[\w.+-]+\/[\w.+-]+$/;
+const BASE64_RE = /^[A-Za-z0-9+/=\s]+$/;
+
+const text = (value: unknown): string | undefined => (typeof value === "string" && value !== "" ? value : undefined);
+
+/**
+ * Normalize one content block. Unknown types, a malformed media type and a
+ * payload that is not base64 are dropped rather than guessed at: the row shows
+ * less content, never something it cannot vouch for (AGENTS.md invariant 9).
+ */
+function contentBlock(raw: unknown): McpContentBlock | undefined {
+  const part = record(raw);
+  const type = part["type"];
+  if (type === "text") {
+    const value = text(part["text"]);
+    return value === undefined ? undefined : { kind: "text", text: value };
+  }
+  if (type === "image" || type === "audio") {
+    const data = text(part["data"]);
+    const mimeType = text(part["mimeType"]);
+    if (data === undefined || mimeType === undefined || !MIME_RE.test(mimeType) || !BASE64_RE.test(data)) return undefined;
+    return { kind: type, data, mimeType };
+  }
+  if (type === "resource" || type === "resource_link") {
+    const inner = type === "resource" ? record(part["resource"]) : part;
+    const uri = text(inner["uri"]);
+    if (uri === undefined) return undefined;
+    const mimeType = text(inner["mimeType"]);
+    const body = text(inner["text"]);
+    const name = text(inner["name"]);
+    return {
+      kind: "resource",
+      uri,
+      ...(mimeType !== undefined ? { mimeType } : {}),
+      ...(body !== undefined ? { text: body } : {}),
+      ...(name !== undefined ? { name } : {}),
+    };
+  }
+  return undefined;
+}
+
+/**
+ * The blocks of an MCP result, in the order the server sent them. A hydrated
+ * transcript keeps only the joined text of a result, so a plain string is one
+ * text block; anything without a content envelope has no blocks at all.
+ */
+export function mcpContentBlocks(result: unknown): McpContentBlock[] {
+  if (typeof result === "string") return result ? [{ kind: "text", text: result }] : [];
+  const content = record(result)["content"];
+  if (!Array.isArray(content)) return [];
+  return content.flatMap(part => {
+    const block = contentBlock(part);
+    return block ? [block] : [];
+  });
+}
+
+/**
+ * A gateway call carries the called tool's own result under
+ * `details.mcpResult`; when that was too large to keep, the envelope's own
+ * `content` is what the row shows and what search indexes.
+ */
+export function mcpResultContent(result: unknown): unknown {
+  const inner = record(record(record(result)["details"])["mcpResult"]);
+  return Array.isArray(inner["content"]) ? inner : result;
+}
+
+/** Visible fragments of a content envelope: text, and a resource's uri and text. Never media data. */
+const contentFragments = (result: unknown): string[] =>
+  mcpContentBlocks(result).flatMap(block => {
+    if (block.kind === "text") return [block.text];
+    if (block.kind === "resource") return [block.uri, ...(block.text ? [block.text] : [])];
+    return [];
+  });
+
+/** What a gateway row draws beside the text: the search matches, the status table. */
+function gatewayModeFragments(details: Record<string, unknown>): string[] {
+  const mode = details["mode"];
+  if (mode === "search" && Array.isArray(details["matches"])) {
+    return details["matches"].flatMap(raw => {
+      const match = record(raw);
+      return [text(match["server"]), text(match["tool"])].filter((v): v is string => v !== undefined);
+    });
+  }
+  if (mode === "status" && Array.isArray(details["servers"])) {
+    return details["servers"].flatMap(raw => {
+      const server = record(raw);
+      const count = server["toolCount"];
+      return [
+        ...[text(server["name"]), text(server["status"])].filter((v): v is string => v !== undefined),
+        ...(typeof count === "number" ? [String(count)] : []),
+      ];
+    });
+  }
+  return [];
+}
+
 export interface SearchableTool {
   name: string;
   args?: unknown;
@@ -57,6 +189,22 @@ const diff: ToolSearchProjection = ({ name, args, result, isError }) => {
   return [...content, ...(isError ? [toolOutputText(result) ?? ""].filter(Boolean) : [])];
 };
 
+/** A server's own tool: its arguments, then the blocks of its result. */
+const mcpDirect: ToolSearchProjection = ({ args, result }) => [...jsonSearchValues(args), ...contentFragments(result)];
+
+/** `mcp` and `mcp__<server>`: the arguments, the mode's own list, then the text. */
+const mcpGateway: ToolSearchProjection = ({ args, result }) => [
+  ...jsonSearchValues(args),
+  ...gatewayModeFragments(record(record(result)["details"])),
+  ...contentFragments(mcpResultContent(result)),
+];
+
+/** `mcpScript`: the code is the body, so it is indexed once — not again as an argument. */
+const mcpScript: ToolSearchProjection = ({ args, result }) => {
+  const code = record(args)["code"];
+  return [...(typeof code === "string" && code ? [code] : []), ...contentFragments(result)];
+};
+
 /**
  * Search is a DISPLAY contract, not a tool-schema crawler. When adding a custom
  * body, add its projection here and mark its rendered values data-search-content.
@@ -80,8 +228,21 @@ export const TOOL_SEARCH_PROJECTIONS: Readonly<Record<string, ToolSearchProjecti
     const message = record(args)["message"];
     return typeof message === "string" && message ? [message] : [];
   },
+  // The MCP rows: arguments through the args disclosure, then exactly what the
+  // body draws. `details` (server, tool, mode, trace, byte counts) is transport
+  // metadata, and a screenshot's base64 is not text.
+  [MCP_GATEWAY_TOOL]: mcpGateway,
+  [MCP_SCRIPT_TOOL]: mcpScript,
 };
 
 export function toolSearchContent(tool: SearchableTool): string[] {
-  return (Object.hasOwn(TOOL_SEARCH_PROJECTIONS, tool.name) ? TOOL_SEARCH_PROJECTIONS[tool.name]! : jsonBody)(tool);
+  return projectionFor(tool)(tool);
+}
+
+function projectionFor(tool: SearchableTool): ToolSearchProjection {
+  if (Object.hasOwn(TOOL_SEARCH_PROJECTIONS, tool.name)) return TOOL_SEARCH_PROJECTIONS[tool.name]!;
+  if (isMcpGatewayTool(tool.name)) return mcpGateway;
+  // A direct MCP tool is known by the server that answered, not by its name.
+  if (typeof record(record(tool.result)["details"])["server"] === "string") return mcpDirect;
+  return jsonBody;
 }

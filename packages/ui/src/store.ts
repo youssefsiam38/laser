@@ -159,6 +159,15 @@ export interface SessionView {
    */
   namerLabels: Record<string, string>;
   /**
+   * The MCP servers this session started with, in snapshot order
+   * (`lasercode/mcp/status`, docs/mcp.md). A transcript reads it to know that
+   * `playwright_browser_navigate` is Playwright's own tool rather than a tool
+   * nobody recognises. Absent until the companion reports, and never emptied
+   * by the shutdown snapshot: a session being read back would otherwise lose
+   * the names its rows are drawn from.
+   */
+  mcpServers?: readonly string[];
+  /**
    * The attribution the next parent-sent user message gets, live. The harness
    * writes its durable marker straight to the session file, which raises no
    * engine event, so a transcript that is already open cannot read it before
@@ -650,6 +659,18 @@ function applyNotification(state: AppState, method: HostNotificationMethod, para
       }
       if (p.message.type === "lasercode/module/log" && p.message.level === "error") {
         return pushToast(state, "error", `${p.message.module}: ${p.message.message}`);
+      }
+      if (p.message.type === "lasercode/mcp/status") {
+        const names = p.message.snapshot.servers.map((server) => server.name);
+        // An empty snapshot is "this session has no MCP" — which is also what
+        // shutdown reports. Keeping the last non-empty list means closing a
+        // session never un-names the rows already on screen.
+        if (names.length === 0) return state;
+        return updateView(state, p.path, (v) =>
+          v.mcpServers !== undefined && v.mcpServers.length === names.length && names.every((n, i) => v.mcpServers![i] === n)
+            ? v
+            : { ...v, mcpServers: names },
+        );
       }
       if (p.message.type === "lasercode/namer/label") {
         const { toolCallId, label } = p.message;

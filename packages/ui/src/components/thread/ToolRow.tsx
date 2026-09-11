@@ -4,7 +4,7 @@ import type { UiDialogRequest } from "@lasercode/protocol";
 import { Bot, FolderOpen, GitBranch, MessageSquare } from "lucide-react";
 import { lazy, memo, Suspense, useCallback, useMemo } from "react";
 
-import { useNamerLabel } from "@/agents/hooks";
+import { useNamerLabel, useSessionMcpServers } from "@/agents/hooks";
 import { CodeDiff, DiffStat, diffStatDescription } from "@/components/assistant-ui/elements/code-diff";
 import { TerminalBlock } from "@/components/assistant-ui/elements/terminal-block";
 import { ToolCall } from "@/components/assistant-ui/elements/tool-call";
@@ -24,6 +24,8 @@ import { DialogBody, dialogFormOf, ToolRowDialog, uiResponseFor, useRegisterTool
 import { toolDetailsDefaultOpen, toolDisplayResult, useActivityDetailLevel, useLaserStable, useLaserState } from "@/runtime";
 import { useActivityDisclosureOverride } from "@/runtime/sessionPreferences";
 import { activeToolLabel } from "./tool-groups.js";
+import { classifyMcpTool } from "./mcp-tools.js";
+import { McpToolRow } from "./McpToolRow.js";
 import { diffStats, diffViewForTool } from "./diff.js";
 import { useElapsed } from "./timing.js";
 import { isNonZeroExit, parseBashOutput, pretty, resultDetails, resultText, summarizeTool, toolBody } from "./tool-summary.js";
@@ -81,6 +83,10 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
   // suite" instead of "Running pnpm test". Once the call ends the computed
   // summary is the truth again (docs/agents.md §7, Namer).
   const namerLabel = useNamerLabel(path, toolCallId);
+  // Which MCP servers this session started with, so `playwright_browser_*` is
+  // read as Playwright's own tool and not as a tool nobody recognises
+  // (docs/mcp.md "In the transcript").
+  const mcpServers = useSessionMcpServers(path);
 
   // The decision footer remains visible outside the fold. It never forces the
   // body open, and a manual row choice supersedes later status/mode changes.
@@ -91,6 +97,10 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
   const elapsed = timing ? (timing.completedAt ?? Date.now()) - timing.startedAt : localElapsed;
 
   const details = useMemo(() => resultDetails(result), [result]);
+  const mcp = useMemo(
+    () => (kind === "other" ? classifyMcpTool(toolName, details, mcpServers) : undefined),
+    [kind, toolName, details, mcpServers],
+  );
   const diffView = useMemo(
     () => (kind === "edit" || kind === "write" ? diffViewForTool(kind, args, details) : undefined),
     [kind, args, details],
@@ -109,6 +119,27 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
     </>
   );
   const activeLabel = running && namerLabel ? namerLabel : activeToolLabel({ toolName, args });
+
+  // An MCP call: the server's own tool, the gateway, or a script. Its row is
+  // composed from the same parts, with the server's content as its body.
+  if (mcp) {
+    return (
+      <McpToolRow
+        info={mcp}
+        toolName={toolName}
+        args={args}
+        result={result}
+        text={text}
+        details={details}
+        state={state}
+        elapsedMs={elapsed}
+        open={open}
+        onOpenChange={rememberOpen}
+        namerLabel={running ? namerLabel : undefined}
+        footer={footer}
+      />
+    );
+  }
 
   // The harness's own tools (docs/agents.md): starting an agent gets a row
   // that names who was started and leads to its chat.

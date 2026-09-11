@@ -1,5 +1,8 @@
 import { expect, it } from "vitest";
-import { toolSearchContent, jsonSearchValues } from "../src/search-content.js";
+import { toolSearchContent, jsonSearchValues, mcpContentBlocks } from "../src/search-content.js";
+
+/** The screenshot block of a real Playwright result, shortened. */
+const SCREENSHOT = { type: "image", data: "iVBORw0KGgoAAAANSUhEUg", mimeType: "image/png" };
 
 it("uses visible terminal content, never command keys, tool names or hidden parameters", () => {
   expect(toolSearchContent({ name: "bash", args: { command: "echo hello", timeout: 12345, secret: "hidden" }, result: { content: [{ type: "text", text: "world" }, { type: "image", data: "private" }], details: { secret: "hidden" } } })).toEqual(["echo hello", "world"]);
@@ -22,6 +25,82 @@ it("treats a rendered error as literal text, while JSON fallback output searches
   expect(toolSearchContent({ name: "read", args: { path: "file" }, result, isError: true })).toEqual(["file", result]);
   expect(toolSearchContent({ name: "future_tool", args: {}, result, isError: true })).toEqual(["permission denied"]);
 });
+it("projects a direct MCP tool by the server that answered, never its details or image bytes", () => {
+  const result = {
+    content: [{ type: "text", text: "### Page\n- Page URL: https://example.com/" }, SCREENSHOT],
+    details: { server: "playwright", tool: "browser_take_screenshot" },
+  };
+  const values = toolSearchContent({ name: "playwright_browser_take_screenshot", args: { url: "https://example.com", fullPage: true }, result });
+  expect(values).toEqual(["https://example.com", "true", "### Page\n- Page URL: https://example.com/"]);
+  // Keys, the server's own name in `details` and the base64 payload are not content.
+  for (const miss of ["fullPage", "browser_take_screenshot", "iVBORw0KGgo", "mimeType", "image/png"]) {
+    expect(values.some(value => value.includes(miss))).toBe(false);
+  }
+});
+
+it("projects a resource block's uri and text in the order the server sent them", () => {
+  const result = {
+    content: [
+      { type: "resource", resource: { uri: "file:///tmp/report.md", mimeType: "text/markdown", text: "All green" } },
+      { type: "text", text: "done" },
+    ],
+    details: { server: "docs" },
+  };
+  expect(toolSearchContent({ name: "docs_report", args: {}, result })).toEqual(["file:///tmp/report.md", "All green", "done"]);
+});
+
+it("projects each gateway mode's visible values and nothing of the transport", () => {
+  const search = toolSearchContent({
+    name: "mcp",
+    args: { search: "navigate" },
+    result: {
+      content: [{ type: "text", text: 'Found 2 tools matching "navigate":' }],
+      details: { mode: "search", query: "navigate", count: 2, matches: [{ server: "playwright", tool: "playwright_browser_navigate", score: 318 }] },
+    },
+  });
+  expect(search).toEqual(["navigate", "playwright", "playwright_browser_navigate", 'Found 2 tools matching "navigate":']);
+  expect(search).not.toContain("318");
+
+  // A call shows the called tool's own result; the oversized-summary fallback
+  // is the envelope's own content, and neither carries the screenshot bytes.
+  const call = toolSearchContent({
+    name: "mcp__playwright",
+    args: { tool: "playwright_browser_navigate", args: { url: "https://example.com" } },
+    result: {
+      content: [{ type: "text", text: "outer" }],
+      details: { mode: "call", server: "playwright", tool: "browser_navigate", mcpResult: { content: [{ type: "text", text: "### Ran Playwright code" }, SCREENSHOT] } },
+    },
+  });
+  expect(call).toEqual(["playwright_browser_navigate", "https://example.com", "### Ran Playwright code"]);
+
+  const status = toolSearchContent({
+    name: "mcp",
+    args: {},
+    result: {
+      content: [{ type: "text", text: "MCP: 1/1 servers, 24 tools" }],
+      details: { mode: "status", servers: [{ name: "playwright", status: "connected", toolCount: 24, listenState: "legacy" }], directToolsFrozen: false },
+    },
+  });
+  expect(status).toEqual(["playwright", "connected", "24", "MCP: 1/1 servers, 24 tools"]);
+  expect(status).not.toContain("legacy");
+});
+
+it("projects an mcpScript's code once, with its output", () => {
+  const values = toolSearchContent({
+    name: "mcpScript",
+    args: { code: "await playwright.browser_navigate({ url: 'https://example.com' })" },
+    result: { content: [{ type: "text", text: "Navigated." }], details: { calls: [{ server: "playwright", tool: "browser_navigate", ok: true }] } },
+  });
+  expect(values).toEqual(["await playwright.browser_navigate({ url: 'https://example.com' })", "Navigated."]);
+  expect(values.filter(value => value.includes("browser_navigate"))).toHaveLength(1);
+});
+
+it("reads a hydrated MCP result, and refuses a block it cannot vouch for", () => {
+  expect(mcpContentBlocks("### Page")).toEqual([{ kind: "text", text: "### Page" }]);
+  expect(mcpContentBlocks({ content: [{ type: "image", data: "<script>", mimeType: "image/png" }, { type: "image", data: "AAAA", mimeType: "javascript:alert(1)" }, { type: "future" }] })).toEqual([]);
+  expect(mcpContentBlocks({ content: [SCREENSHOT] })).toEqual([{ kind: "image", data: SCREENSHOT.data, mimeType: "image/png" }]);
+});
+
 it("projects only the final message of complete_agent_run, never its status or the harness reply", () => {
   expect(toolSearchContent({ name: "complete_agent_run", args: { status: "completed", message: "Counted the files." }, result: { content: [{ type: "text", text: "Run r1 ended with status completed." }], details: { runId: "r1", status: "completed" } } })).toEqual(["Counted the files."]);
   expect(toolSearchContent({ name: "complete_agent_run", args: { status: "blocked" }, result: "ignored" })).toEqual([]);
