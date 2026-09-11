@@ -1369,17 +1369,17 @@ packages:
     resolution: {integrity: sha512-Y28PR25bHXUg88kCV7nivXrP2Nj2RueZ3/l/jdx6J9f8J4nsEGcgX0Qe6lt7Pa+J79+kPiJU3LguR6O/6zrLOw==}
 
   '@modelcontextprotocol/client@https://pkg.pr.new/@modelcontextprotocol/client@3b205e7dd2f997b6a87e479e36421f7eaa2058e0':
-    resolution: {tarball: https://pkg.pr.new/@modelcontextprotocol/client@3b205e7dd2f997b6a87e479e36421f7eaa2058e0}
+    resolution: {integrity: sha512-ZlibxQrqxSzt9L2FWO5PM22zhpdcLOaAdHJCZxHL+3vrZzJrvD49LwsLlt+l7YVt+9S3vYMOZwi9Vc96odBfhw==, tarball: https://pkg.pr.new/@modelcontextprotocol/client@3b205e7dd2f997b6a87e479e36421f7eaa2058e0}
     version: 2.0.0
     engines: {node: '>=20'}
 
   '@modelcontextprotocol/core@https://pkg.pr.new/@modelcontextprotocol/core@3b205e7dd2f997b6a87e479e36421f7eaa2058e0':
-    resolution: {tarball: https://pkg.pr.new/@modelcontextprotocol/core@3b205e7dd2f997b6a87e479e36421f7eaa2058e0}
+    resolution: {integrity: sha512-lJLq7wP4hNwRcckA1Hd1fF1vPyA0QCDUqi+EO6GKzoXlxM10oIlY+f8m2pq+WLQJsG+/VwlJ4GA6Mx3Ei8uXKw==, tarball: https://pkg.pr.new/@modelcontextprotocol/core@3b205e7dd2f997b6a87e479e36421f7eaa2058e0}
     version: 2.0.0
     engines: {node: '>=20'}
 
   '@modelcontextprotocol/core@https://pkg.pr.new/modelcontextprotocol/typescript-sdk/@modelcontextprotocol/core@3b205e7':
-    resolution: {tarball: https://pkg.pr.new/modelcontextprotocol/typescript-sdk/@modelcontextprotocol/core@3b205e7}
+    resolution: {integrity: sha512-lJLq7wP4hNwRcckA1Hd1fF1vPyA0QCDUqi+EO6GKzoXlxM10oIlY+f8m2pq+WLQJsG+/VwlJ4GA6Mx3Ei8uXKw==, tarball: https://pkg.pr.new/modelcontextprotocol/typescript-sdk/@modelcontextprotocol/core@3b205e7}
     version: 2.0.0
     engines: {node: '>=20'}
 
