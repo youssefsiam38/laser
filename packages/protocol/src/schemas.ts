@@ -359,7 +359,11 @@ export const clientParamsSchemas = {
       path: sessionPath,
       content,
       streamingBehavior: z.enum(["steer", "followUp"]).optional(),
-      firstTurn: z.object({ agentName: agentNameSchema, thinkingLevel: thinkingLevelSchema.optional() }).strict().optional(),
+      firstTurn: z.object({
+        agentName: agentNameSchema,
+        model: modelRefSchema.nullable().optional(),
+        thinkingLevel: thinkingLevelSchema.optional(),
+      }).strict().optional(),
     })
     .strict(),
   "session/cancel": z.object({ path: sessionPath }).strict(),

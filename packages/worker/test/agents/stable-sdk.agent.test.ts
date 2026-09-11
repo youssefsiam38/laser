@@ -4,7 +4,7 @@
  * the model refusal, and the agent record written
  * on a new session and recovered on load.
  */
-import { PRODUCT_DISPLAY_NAME, PRODUCT_NAME, SESSION_AGENT_ENTRY_TYPE, type AgentDefinition, type JsonRpcMessage, type SessionState } from "@lasercode/protocol";
+import { PRODUCT_DISPLAY_NAME, PRODUCT_NAME, SESSION_AGENT_ENTRY_TYPE, SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE, type AgentDefinition, type JsonRpcMessage, type SessionState } from "@lasercode/protocol";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -219,7 +219,7 @@ describe("StableSdkDriver with an agent definition", () => {
     expect(lines.filter((line) => line.type === "message" && line.message?.role === "user")).toHaveLength(1);
   }, 60_000);
 
-  it("binds the first turn through WorkerServer on the same StableSDK session and preserves explicit overrides", async () => {
+  it("binds first-turn model intent through WorkerServer with exact precedence", async () => {
     writeSkill(join(base, "agent", "skills"), "selected-skill");
     writeFileSync(join(base, "agent", "models.json"), JSON.stringify({
       providers: {
@@ -234,6 +234,11 @@ describe("StableSdkDriver with an agent definition", () => {
         },
       },
     }));
+    writeFileSync(join(base, "agent", "settings.json"), JSON.stringify({
+      defaultProvider: "stub",
+      defaultModel: "stub-1",
+      defaultThinkingLevel: "medium",
+    }));
     const selected: AgentDefinition = {
       ...fallbackDefaultAgent(),
       name: "reviewer",
@@ -244,6 +249,7 @@ describe("StableSdkDriver with an agent definition", () => {
       model: { provider: "stub", id: "stub-2" },
       thinkingLevel: "high",
     };
+    const followsDefault: AgentDefinition = { ...selected, name: "follower", model: null, thinkingLevel: null };
     const messages: JsonRpcMessage[] = [];
     const server = new WorkerServer({
       cwd: join(base, "project"),
@@ -264,7 +270,7 @@ describe("StableSdkDriver with an agent definition", () => {
       return messages.find((message) => "id" in message && message.id === requestId) as { result?: unknown; error?: unknown };
     };
     const snapshot = fallbackSnapshot();
-    await call("agents/sync", { snapshot: { ...snapshot, agents: [...snapshot.agents, selected] } });
+    await call("agents/sync", { snapshot: { ...snapshot, agents: [...snapshot.agents, selected, followsDefault] } });
     const created = await call("session/new", { cwd: join(base, "project") });
     const before = (created.result as { state: SessionState }).state;
     await call("pi/model/set", { path: before.path, model: { provider: "stub", id: "stub-1" } });
@@ -286,19 +292,202 @@ describe("StableSdkDriver with an agent definition", () => {
     expect(lines.filter((line) => line.type === "message" && line.message?.role === "user")).toHaveLength(1);
     expect(JSON.stringify(lines.find((line) => line.type === "message" && line.message?.role === "user")?.message?.content)).toContain("one exact first message");
 
-    // Pi writes automatic initial model/thinking entries. They are defaults,
-    // not person overrides: an untouched second session takes the selected
-    // agent's different defaults.
+    // The field was absent above, so legacy pristine-session precedence kept
+    // the explicit stub-1 override. Null is the new agent-selection intent:
+    // it bypasses and durably clears that stale override.
+    const followsAgent = (await call("session/new", { cwd: join(base, "project") }).then((reply) => reply.result as { state: SessionState })).state;
+    await call("pi/model/set", { path: followsAgent.path, model: { provider: "stub", id: "stub-1" } });
+    await call("pi/thinking/set", { path: followsAgent.path, level: "low" });
+    await call("session/prompt", {
+      path: followsAgent.path,
+      content: [{ type: "text", text: "newest agent choice" }],
+      firstTurn: { agentName: "reviewer", model: null },
+    });
+    expect(stub.requests[1]).toMatchObject({ model: "stub-2", reasoning_effort: "high" });
+    await call("pi/session/close", { path: followsAgent.path });
+    expect((await call("session/load", { path: followsAgent.path }).then((reply) => reply.result as { state: SessionState })).state)
+      .toMatchObject({ path: followsAgent.path, id: followsAgent.id, model: { provider: "stub", id: "stub-2" }, thinkingLevel: "high" });
+    const acceptedOverrides = readFileSync(followsAgent.path, "utf8").trim().split("\n")
+      .map((line) => JSON.parse(line) as { customType?: string; data?: Record<string, unknown> })
+      .filter((line) => line.customType === SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE);
+    expect(acceptedOverrides.at(-1)?.data).toEqual({});
+
+    // A manual model chosen after the agent is explicit and wins.
+    const explicit = (await call("session/new", { cwd: join(base, "project") }).then((reply) => reply.result as { state: SessionState })).state;
+    await call("session/prompt", {
+      path: explicit.path,
+      content: [{ type: "text", text: "later explicit choice" }],
+      firstTurn: { agentName: "reviewer", model: { provider: "stub", id: "stub-1" } },
+    });
+    expect(stub.requests[2]).toMatchObject({ model: "stub-1", reasoning_effort: "high" });
+
+    // Null on both the intent and definition delegates to the project default.
+    const fallback = (await call("session/new", { cwd: join(base, "project") }).then((reply) => reply.result as { state: SessionState })).state;
+    await call("pi/thinking/set", { path: fallback.path, level: "low" });
+    await call("session/prompt", {
+      path: fallback.path,
+      content: [{ type: "text", text: "project default" }],
+      firstTurn: { agentName: "follower", model: null },
+    });
+    expect(stub.requests[3]).toMatchObject({ model: "stub-1", reasoning_effort: "medium" });
+    await call("pi/session/close", { path: fallback.path });
+    expect((await call("session/load", { path: fallback.path }).then((reply) => reply.result as { state: SessionState })).state)
+      .toMatchObject({ path: fallback.path, id: fallback.id, model: { provider: "stub", id: "stub-1" }, thinkingLevel: "medium" });
+
+    // Pi's automatic initial entries are defaults, not person overrides: an
+    // untouched session with absent model intent takes the selected agent.
     const untouched = (await call("session/new", { cwd: join(base, "project") }).then((reply) => reply.result as { state: SessionState })).state;
     await call("session/prompt", {
       path: untouched.path,
       content: [{ type: "text", text: "selected defaults" }],
       firstTurn: { agentName: "reviewer" },
     });
-    expect(stub.requests[1]).toMatchObject({ model: "stub-2", reasoning_effort: "high" });
+    expect(stub.requests[4]).toMatchObject({ model: "stub-2", reasoning_effort: "high" });
     expect((await call("session/load", { path: untouched.path }).then((reply) => reply.result as { state: SessionState })).state)
       .toMatchObject({ path: untouched.path, id: untouched.id, model: { provider: "stub", id: "stub-2" }, thinkingLevel: "high" });
+
+    const unavailable = (await call("session/new", { cwd: join(base, "project") }).then((reply) => reply.result as { state: SessionState })).state;
+    const refused = await call("session/prompt", {
+      path: unavailable.path,
+      content: [{ type: "text", text: "must not run" }],
+      firstTurn: { agentName: "reviewer", model: { provider: "missing", id: "not-connected" } },
+    });
+    expect(refused.error).toBeDefined();
+    expect(stub.requests).toHaveLength(5);
     await server.dispose();
+  }, 60_000);
+
+  it("validates the prepared effective model rather than the selected definition", async () => {
+    writeFileSync(join(base, "agent", "models.json"), JSON.stringify({
+      providers: {
+        stub: {
+          baseUrl: stub.url,
+          api: "openai-completions",
+          apiKey: "stub-key",
+          models: [{ id: "stub-1", name: "Available", contextWindow: 8000, maxTokens: 1000 }],
+        },
+      },
+    }));
+    writeFileSync(join(base, "agent", "settings.json"), JSON.stringify({ defaultProvider: "stub", defaultModel: "stub-1" }));
+    writeFileSync(join(base, "agent", "auth.json"), JSON.stringify({
+      anthropic: { type: "api_key", key: "revoked-test-key" },
+    }));
+
+    const available = { ...fallbackDefaultAgent(), name: "available", model: { provider: "stub", id: "stub-1" } } satisfies AgentDefinition;
+    const unavailable = { ...fallbackDefaultAgent(), name: "unavailable", model: { provider: "missing", id: "missing-1" } } satisfies AgentDefinition;
+    const messages: JsonRpcMessage[] = [];
+    const server = new WorkerServer({
+      cwd: join(base, "project"),
+      agentDir: join(base, "agent"),
+      sessionDir: join(base, "sessions"),
+      stateDir: join(base, "state"),
+      createDriver: () => {
+        const driver = new StableSdkDriver();
+        drivers.push(driver);
+        return driver;
+      },
+      send: (message) => messages.push(message),
+    });
+    let id = 0;
+    const call = async (method: string, params: unknown) => {
+      const requestId = ++id;
+      await server.handle({ jsonrpc: "2.0", id: requestId, method, params });
+      return messages.find((message) => "id" in message && message.id === requestId) as { result?: unknown; error?: unknown };
+    };
+    const snapshot = fallbackSnapshot();
+    await call("agents/sync", { snapshot: { ...snapshot, agents: [...snapshot.agents, available, unavailable] } });
+
+    // Definition B is unavailable, but absent model intent preserves the
+    // pristine session's available explicit A. The prepared A is what runs.
+    const keepsA = (await call("session/new", { cwd: join(base, "project") }).then((reply) => reply.result as { state: SessionState })).state;
+    await call("pi/model/set", { path: keepsA.path, model: { provider: "stub", id: "stub-1" } });
+    expect((await call("session/prompt", {
+      path: keepsA.path,
+      content: [{ type: "text", text: "use available A" }],
+      firstTurn: { agentName: "unavailable" },
+    })).result).toEqual({ accepted: true, queued: false });
+    expect(stub.requests).toHaveLength(1);
+    expect(stub.requests[0]).toMatchObject({ model: "stub-1" });
+
+    // Definition B is available, but absent intent preserves catalogued A
+    // whose provider has no credential. Preparation succeeds, canonical
+    // post-prepare validation refuses before provider work, then rolls back.
+    const refusesA = (await call("session/new", { cwd: join(base, "project") }).then((reply) => reply.result as { state: SessionState })).state;
+    const setAnthropic = await call("pi/model/set", {
+      path: refusesA.path,
+      model: { provider: "anthropic", id: "claude-sonnet-4-5" },
+    });
+    expect(setAnthropic.error).toBeUndefined();
+    expect(existsSync(refusesA.path)).toBe(false);
+    await call("pi/providers/logout", { cwd: join(base, "project"), provider: "anthropic" });
+    const refused = await call("session/prompt", {
+      path: refusesA.path,
+      content: [{ type: "text", text: "must stop before provider" }],
+      firstTurn: { agentName: "available" },
+    });
+    expect(refused.error).toBeDefined();
+    expect(stub.requests).toHaveLength(1);
+    expect((await call("session/load", { path: refusesA.path }).then((reply) => reply.result as { state: SessionState })).state)
+      .toMatchObject({ model: { provider: "anthropic", id: "claude-sonnet-4-5" }, agent: { agentName: "default", kind: "root" } });
+    expect(existsSync(refusesA.path)).toBe(false);
+    await server.dispose();
+  }, 60_000);
+
+  it("normalizes incompatible first-turn thinking and restores the prior level on refusal", async () => {
+    writeFileSync(join(base, "agent", "models.json"), JSON.stringify({
+      providers: {
+        stub: {
+          baseUrl: stub.url,
+          api: "openai-completions",
+          apiKey: "stub-key",
+          models: [
+            { id: "stub-1", name: "Plain", contextWindow: 8000, maxTokens: 1000, reasoning: false },
+            { id: "stub-2", name: "Reasoner", contextWindow: 8000, maxTokens: 1000, reasoning: true },
+          ],
+        },
+      },
+    }));
+    const original = { ...fallbackDefaultAgent(), model: { provider: "stub", id: "stub-2" } } satisfies AgentDefinition;
+    const selected = { ...original, name: "reviewer", model: { provider: "stub", id: "stub-1" }, thinkingLevel: "high" as const } satisfies AgentDefinition;
+    const driver = new StableSdkDriver();
+    drivers.push(driver);
+    await driver.open({
+      cwd: join(base, "project"),
+      agentDir: join(base, "agent"),
+      sessionDir: join(base, "sessions"),
+      projectTrusted: true,
+      agent: agentOptions(original),
+    });
+    await driver.setThinkingLevel("high");
+
+    await driver.prepareFirstTurn({ agent: agentOptions(selected), model: null, thinkingLevel: "high" });
+    expect(driver.state().thinkingLevel).toBe("off");
+    await driver.rollbackFirstTurn();
+    expect(driver.state().thinkingLevel).toBe("high");
+
+    // Acceptance persists the normalized effective level, not the incompatible
+    // request or the stale pristine override, and a recreated engine agrees.
+    const path = driver.state().path;
+    await driver.prepareFirstTurn({ agent: agentOptions(selected), model: null, thinkingLevel: "high" });
+    await driver.prompt([{ type: "text", text: "accept normalized thinking" }]);
+    expect(stub.requests[0]).toMatchObject({ model: "stub-1" });
+    expect(stub.requests[0]).not.toHaveProperty("reasoning_effort");
+    const overrides = readFileSync(path, "utf8").trim().split("\n")
+      .map((line) => JSON.parse(line) as { customType?: string; data?: { thinkingLevel?: string } })
+      .filter((line) => line.customType === SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE);
+    expect(overrides.at(-1)?.data?.thinkingLevel).toBe("off");
+    await driver.dispose();
+    const again = new StableSdkDriver();
+    drivers.push(again);
+    const reloaded = await again.open({
+      cwd: join(base, "project"),
+      agentDir: join(base, "agent"),
+      sessionDir: join(base, "sessions"),
+      sessionPath: path,
+      projectTrusted: true,
+      agent: agentOptions(selected),
+    });
+    expect(reloaded.thinkingLevel).toBe("off");
   }, 60_000);
 
   it.each([false, true])("restores exact effective state after preparation failure/rollback (manual override: %s)", async (manual) => {
@@ -338,7 +527,7 @@ describe("StableSdkDriver with an agent definition", () => {
       expect(stub.requests).toHaveLength(0);
     }
     const effective = driver.state();
-    await driver.prepareFirstTurn({ agent: agentOptions(selected), thinkingLevel: "off" });
+    await driver.prepareFirstTurn({ agent: agentOptions(selected), model: null, thinkingLevel: "off" });
     await driver.rollbackFirstTurn();
     expect(driver.state()).toMatchObject({ path: effective.path, id: effective.id, model: effective.model, thinkingLevel: effective.thinkingLevel });
     await driver.prompt([{ type: "text", text: "continue" }]);

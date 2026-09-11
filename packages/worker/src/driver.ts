@@ -145,6 +145,12 @@ export type DriverListener = (event: DriverEvent) => void;
 
 export interface FirstTurnOptions {
   agent: DriverAgentOptions;
+  /**
+   * Absent preserves the pristine session's explicit override, `null` follows
+   * the newly selected agent/project default, and a ref is a later explicit
+   * composer choice.
+   */
+  model?: ModelRef | null;
   thinkingLevel?: ThinkingLevel;
 }
 

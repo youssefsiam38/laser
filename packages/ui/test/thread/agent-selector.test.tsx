@@ -77,6 +77,7 @@ vi.mock("@/components/thread/session-preparation", () => ({
     begin: mocks.beginPreparation,
     firstTurn: mocks.firstTurn,
     chooseAgent: mocks.chooseAgent,
+    chooseModel: vi.fn(),
     chooseThinking: vi.fn(),
   }),
 }));

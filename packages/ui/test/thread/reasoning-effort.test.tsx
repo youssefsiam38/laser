@@ -35,9 +35,9 @@ const mocks = vi.hoisted(() => ({
   finishPreparation: vi.fn(),
   beginPreparation: vi.fn(),
   unstarted: false,
-  firstTurn: undefined as { agentName: string; thinkingLevel?: string } | undefined,
+  firstTurn: undefined as { agentName: string; model?: { provider: string; id: string } | null; thinkingLevel?: string } | undefined,
   chooseThinking: vi.fn((thinkingLevel: string) => {
-    mocks.firstTurn = { agentName: "default", thinkingLevel };
+    mocks.firstTurn = { ...(mocks.firstTurn ?? { agentName: "default" }), thinkingLevel };
   }),
 }));
 
@@ -54,7 +54,15 @@ const client = {
         defaultModel: mocks.catalogDefault,
         defaultThinkingLevel: mocks.defaultThinkingLevel,
       }
-    : { models: [{ provider: "test", id: "reasoner", thinkingLevels: ["off", "low", "medium", "high", "xhigh"] }] },
+    : {
+        models: [
+          { provider: "test", id: "reasoner", name: "Reasoner", thinkingLevels: ["off", "low", "medium", "high", "xhigh"], thinkingLevel: "high" },
+          { provider: "test", id: "plain", name: "Plain", thinkingLevels: ["off"], thinkingLevel: "off" },
+        ],
+        defaultProvider: "test",
+        defaultModel: "reasoner",
+        defaultThinkingLevel: mocks.defaultThinkingLevel,
+      },
 };
 const actions = { setThinking: mocks.setThinking, newSession: mocks.newSession, toast: mocks.toast };
 
@@ -84,6 +92,7 @@ vi.mock("@/components/thread/session-preparation", () => ({
     begin: mocks.beginPreparation,
     firstTurn: mocks.firstTurn,
     chooseAgent: vi.fn(),
+    chooseModel: vi.fn(),
     chooseThinking: mocks.chooseThinking,
   }),
 }));
@@ -118,6 +127,8 @@ beforeEach(() => {
   mocks.dispatch.mockClear();
   mocks.snapshot.agents[0]!.model = { provider: "test", id: "reasoner" };
   mocks.snapshot.agents[0]!.thinkingLevel = "low";
+  mocks.snapshot.agents[1]!.model = { provider: "test", id: "reasoner" };
+  mocks.snapshot.agents[1]!.thinkingLevel = "high";
   mocks.composerState = { text: "", attachments: [] };
   mocks.sourceComposerState = { text: "" };
   mocks.setThinking.mockClear();
@@ -165,12 +176,45 @@ it("shows the tentative agent's thinking default on a saved-empty session", asyn
   expect(container.querySelector<HTMLButtonElement>("button")?.textContent).toBe("high");
 });
 
+it("uses the selected model default when the selected agent has no thinking level", async () => {
+  mocks.level = "low";
+  mocks.unstarted = true;
+  mocks.firstTurn = { agentName: "reviewer", model: null };
+  mocks.snapshot.agents[1]!.thinkingLevel = null;
+  await act(async () => root.render(<TooltipProvider><ThinkingEffort /></TooltipProvider>));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+  expect(container.querySelector<HTMLButtonElement>('button[aria-label^="Thinking:"]')?.getAttribute("aria-label")).toBe("Thinking: high");
+  expect(mocks.chooseThinking).not.toHaveBeenCalled();
+});
+
+it("normalizes an incompatible thinking choice for a later explicit model without losing model intent", async () => {
+  mocks.unstarted = true;
+  mocks.firstTurn = {
+    agentName: "reviewer",
+    model: { provider: "test", id: "plain" },
+    thinkingLevel: "high",
+  };
+  await act(async () => root.render(<TooltipProvider><ThinkingEffort /></TooltipProvider>));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+  expect(container.querySelector('[role="note"]')?.getAttribute("aria-label")).toContain("Plain does not reason");
+  expect(mocks.chooseThinking).toHaveBeenCalledWith("off");
+  expect(mocks.firstTurn).toEqual({
+    agentName: "reviewer",
+    model: { provider: "test", id: "plain" },
+    thinkingLevel: "off",
+  });
+});
+
 it("keeps a pre-session thinking choice tentative without moving the draft or attachments", async () => {
   mocks.level = undefined;
   mocks.session = undefined;
   mocks.view = undefined;
   mocks.model = null;
   mocks.currentProject = "/landing";
+  mocks.catalogDefault = "reasoner";
+  invalidateThinkingCatalog("/landing");
   mocks.composerState = { text: "Keep this thought", attachments: [{}] };
   await act(async () => root.render(<TooltipProvider><ThinkingEffort /></TooltipProvider>));
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });

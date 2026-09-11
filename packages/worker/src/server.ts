@@ -1033,9 +1033,6 @@ export class WorkerServer {
       throw new ProtocolError(ErrorCodes.InvalidParams, `No custom agent is called "${firstTurn.agentName}".`);
     }
     try {
-      if (definition.model && !(await this.modelAvailable(definition.model))) {
-        throw new ProtocolError(ErrorCodes.InvalidParams, modelUnavailableMessage(definition.model));
-      }
       const pendingUi = (live.driver as { pendingUi?: () => unknown[] }).pendingUi?.call(live.driver) ?? [];
       const { entries } = await live.driver.entries();
       const goal = await live.driver.goalState?.() ?? null;
@@ -1069,8 +1066,17 @@ export class WorkerServer {
     try {
       await live.driver.prepareFirstTurn({
         agent: this.agentOptions(definition, nextHandle),
+        ...(Object.hasOwn(firstTurn, "model") ? { model: firstTurn.model } : {}),
         ...(firstTurn.thinkingLevel ? { thinkingLevel: firstTurn.thinkingLevel } : {}),
       });
+      // Preparation is the only canonical resolution boundary: it preserves
+      // an absent intent, follows a null intent, and applies an explicit ref.
+      // Validate exactly the runtime that would receive the prompt, while the
+      // rollback guard is still armed and before the engine can accept it.
+      const effectiveModel = live.driver.state().model;
+      if (effectiveModel && !(await this.modelAvailable(effectiveModel))) {
+        throw new ProtocolError(ErrorCodes.InvalidParams, modelUnavailableMessage(effectiveModel));
+      }
       const result = await this.promptLive(live, params.content, params.streamingBehavior, () => {
         accepted = true;
         previousHandle.discard();

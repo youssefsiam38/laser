@@ -98,7 +98,7 @@ it("keeps agent and thinking on this composer's run config without replacing oth
 
   expect(container.querySelector("[data-agent]")?.textContent).toBe("reviewer");
   expect(container.querySelector("[data-thinking]")?.textContent).toBe("high");
-  expect(firstTurnFromRunConfig(composer.runConfig)).toEqual({ agentName: "reviewer", thinkingLevel: "high" });
+  expect(firstTurnFromRunConfig(composer.runConfig)).toEqual({ agentName: "reviewer", model: null, thinkingLevel: "high" });
   expect(composer.runConfig.custom?.retained).toBe("yes");
 });
 

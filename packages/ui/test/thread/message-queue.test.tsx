@@ -378,7 +378,7 @@ describe("the pending tray", () => {
       params: {
         path: PATH,
         content: [{ type: "text", text: "Review this change" }],
-        firstTurn: { agentName: "reviewer" },
+        firstTurn: { agentName: "reviewer", model: null },
       },
     }]);
   });
@@ -447,15 +447,15 @@ describe("the pending tray", () => {
     await keyboardSend("a", "a first");
     await pointerSend("b", "b second");
     expect(calls("session/prompt").map((call) => call.params)).toEqual([
-      { path: PATH, content: [{ type: "text", text: "a first" }], firstTurn: { agentName: "reviewer", thinkingLevel: "high" } },
-      { path: PATH, content: [{ type: "text", text: "b second" }], firstTurn: { agentName: "reviewer", thinkingLevel: "off" } },
+      { path: PATH, content: [{ type: "text", text: "a first" }], firstTurn: { agentName: "reviewer", model: null, thinkingLevel: "high" } },
+      { path: PATH, content: [{ type: "text", text: "b second" }], firstTurn: { agentName: "reviewer", model: null, thinkingLevel: "off" } },
     ]);
     world.calls.length = 0;
     await pointerSend("b", "b retry");
     expect(calls("session/prompt")[0]?.params).toEqual({
       path: PATH,
       content: [{ type: "text", text: "b retry" }],
-      firstTurn: { agentName: "reviewer", thinkingLevel: "off" },
+      firstTurn: { agentName: "reviewer", model: null, thinkingLevel: "off" },
     });
 
     await act(async () => root.unmount());
@@ -473,8 +473,8 @@ describe("the pending tray", () => {
     await pointerSend("b", "b first");
     await keyboardSend("a", "a second");
     expect(calls("session/prompt").map((call) => call.params)).toEqual([
-      { path: PATH, content: [{ type: "text", text: "b first" }], firstTurn: { agentName: "reviewer", thinkingLevel: "off" } },
-      { path: PATH, content: [{ type: "text", text: "a second" }], firstTurn: { agentName: "reviewer", thinkingLevel: "high" } },
+      { path: PATH, content: [{ type: "text", text: "b first" }], firstTurn: { agentName: "reviewer", model: null, thinkingLevel: "off" } },
+      { path: PATH, content: [{ type: "text", text: "a second" }], firstTurn: { agentName: "reviewer", model: null, thinkingLevel: "high" } },
     ]);
   });
 

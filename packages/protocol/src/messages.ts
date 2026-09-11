@@ -858,8 +858,14 @@ export interface ClientRequests {
       path: string;
       content: ContentBlock[];
       streamingBehavior?: "steer" | "followUp";
-      /** Applied only while this exact root session is still pristine. */
-      firstTurn?: { agentName: string; thinkingLevel?: ThinkingLevel };
+      /**
+       * Applied only while this exact root session is still pristine. `model`
+       * is intent, not merely a value: absent preserves a prior explicit
+       * session override, `null` follows the selected agent (and therefore the
+       * project default when that agent has no model), and a ref is a later
+       * explicit composer choice.
+       */
+      firstTurn?: { agentName: string; model?: ModelRef | null; thinkingLevel?: ThinkingLevel };
     };
     result: { accepted: boolean; queued: boolean };
   };

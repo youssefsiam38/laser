@@ -1,7 +1,7 @@
 "use client";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useAui, useAuiState } from "@assistant-ui/react";
-import type { ThinkingLevel } from "@lasercode/protocol";
+import type { ModelRef, ThinkingLevel } from "@lasercode/protocol";
 import { useLaserState, useLaserView } from "../../runtime/LaserProvider.js";
 import { firstTurnFromRunConfig, mergeRunConfigCustom, withFirstTurn, type TentativeFirstTurn } from "../../runtime/first-turn.js";
 
@@ -12,6 +12,7 @@ interface SessionPreparationValue {
   /** The choice owned by this assistant-ui composer runtime. */
   firstTurn: TentativeFirstTurn | undefined;
   chooseAgent(agentName: string): void;
+  chooseModel(model: ModelRef): void;
   chooseThinking(thinkingLevel: ThinkingLevel): void;
 }
 
@@ -20,6 +21,7 @@ const SessionPreparationContext = createContext<SessionPreparationValue>({
   begin: () => () => {},
   firstTurn: undefined,
   chooseAgent: () => {},
+  chooseModel: () => {},
   chooseThinking: () => {},
 });
 
@@ -57,13 +59,31 @@ export function SessionPreparationProvider({ children }: { children: ReactNode }
   }, [aui]);
 
   const chooseAgent = useCallback((agentName: string) => {
-    commit({ agentName, ...(firstTurn?.thinkingLevel ? { thinkingLevel: firstTurn.thinkingLevel } : {}) });
+    // Agent selection is the newest model intent. Null means follow this
+    // definition (and the project default when its model is null), never a
+    // stale explicit model from the pristine session.
+    commit({ agentName, model: null, ...(firstTurn?.thinkingLevel ? { thinkingLevel: firstTurn.thinkingLevel } : {}) });
   }, [commit, firstTurn]);
+
+  const chooseModel = useCallback((model: ModelRef) => {
+    const agentName = firstTurn?.agentName ?? persistedAgent;
+    if (!agentName) return;
+    commit({ agentName, model, ...(firstTurn?.thinkingLevel ? { thinkingLevel: firstTurn.thinkingLevel } : {}) });
+  }, [commit, firstTurn, persistedAgent]);
 
   const chooseThinking = useCallback((thinkingLevel: ThinkingLevel) => {
     const agentName = firstTurn?.agentName ?? persistedAgent;
     if (!agentName) return;
-    commit({ agentName, thinkingLevel });
+    const next = { agentName, thinkingLevel };
+    // Presence matters: null is the explicit "follow agent" intent. A thinking
+    // change must not turn it back into the absent legacy behavior.
+    if (firstTurn && Object.hasOwn(firstTurn, "model")) {
+      commit(firstTurn.model === null
+        ? { ...next, model: null }
+        : { ...next, model: firstTurn.model! });
+      return;
+    }
+    commit(next);
   }, [commit, firstTurn, persistedAgent]);
 
   useEffect(() => {
@@ -85,8 +105,9 @@ export function SessionPreparationProvider({ children }: { children: ReactNode }
     begin,
     firstTurn,
     chooseAgent,
+    chooseModel,
     chooseThinking,
-  }), [begin, chooseAgent, chooseThinking, count, firstTurn]);
+  }), [begin, chooseAgent, chooseModel, chooseThinking, count, firstTurn]);
   return <SessionPreparationContext.Provider value={value}>{children}</SessionPreparationContext.Provider>;
 }
 
