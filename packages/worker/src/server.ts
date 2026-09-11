@@ -258,7 +258,10 @@ export class WorkerServer {
         // at completion could replay onto a successor what the person removed).
         const live = this.live(req.params.path);
         if (this.harness.roleOf(live.path)?.kind === "child") return this.harness.clearQueue(live.path);
-        return live.driver.clearQueue();
+        // The wire result is the composer's two lanes; an extension's custom
+        // messages the driver also reports are not the person's to see.
+        const { steering, followUp } = await live.driver.clearQueue();
+        return { steering, followUp } satisfies Result<"pi/session/clear_queue">;
       }
       case "pi/session/close": {
         // The host is about to move the file (M13-T58): it must have no writer
