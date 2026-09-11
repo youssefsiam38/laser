@@ -157,10 +157,13 @@ export class SessionLifecycle<End, Message> {
     return { runId, first: this.shift(runId) };
   }
 
+  /**
+   * Release the reservation. The inbox stays: whoever ends the run reads it
+   * to answer every waiter, then `didTerminate` drops it.
+   */
   cancelSuccessor(runId: string): boolean {
     if (this.successorRunId !== runId) return false;
     this.successorRunId = undefined;
-    this.inboxes.delete(runId);
     return true;
   }
 

@@ -112,12 +112,12 @@ module from the worker-supplied `AgentHarnessBridge`:
 | Tool | Who gets it | Does |
 | --- | --- | --- |
 | `start_agent { agent_name, subagent_name, task, worktree? }` | a session whose definition permits delegation and whose depth allows another level | validates the name against the allowed list and depth, loads the child's full configuration, creates the child session and (unless `worktree: false`) its worktree, starts the child loop in the background, returns `{ agent_name, subagent_name, sessionId, runId, status: "running", working_directory, branch?, guidance, your_responsibility }` immediately. `guidance` is the sentence the parent reads at the moment it matters: *Do not wait for `<name>`. Carry on with your own work; when it ends, its result will be sent to you as a message. Use `inspect_agent` with runId `<runId>` to check on it meanwhile — a status of `needs_input` means it is paused on a question you can answer with `send_agent_message`.* |
-| `send_agent_message { sessionId, message, interrupt? }` | same | a running child receives it as its next instruction (`delivery: "queued"` while busy); an idle child starts a new run and the result carries the new `runId`; a child that is `needs_input` has its open question **answered** by the message (`delivery: "answered"`, the question returned as `answered`) — see "Questions" below |
+| `send_agent_message { sessionId, message, interrupt? }` | same | a running child receives it as its next instruction: while its engine streams, the message goes into the engine's own queue — the follow-up lane, or the steering lane with `interrupt: true` — and the result says `delivery: "queued"`; an idle child starts a new run and the result carries the new `runId` with `delivery: "delivered"` only once the child's engine has accepted the message as its next turn — never before admission is known — or `delivery: "refused"` with `error` (and a `failed` run for the attempt) when it would not take it; a child that is `needs_input` has its open question **answered** by the message (`delivery: "answered"`, the question returned as `answered`) — see "Questions" below. A message sent while the child is finishing a declared completion waits, in order, on the one successor run the harness reserves behind it (still `"queued"`); with `interrupt: true` it also aborts the finishing invocation, which cannot change the result that invocation's tool already declared — see "Completion" |
 | `inspect_fleet` | same | the tree of work under this session, as the person's fleet column draws it (D-163, below): the agents it started, theirs, and the background commands any of them — the caller included — left running or finished. One row per session, standing on its newest run, and one per command; every row carries its kind (`agent` or `command`), title, the fleet's status word, elapsed time, one line (what it is doing, or how it ended) and the id to follow it with (`runId`, `taskId`). At most `AGENT_FLEET_ROWS_MAX` = 50 rows, cut deepest-first with `omitted` saying how many. Read-only; never transcripts |
 | `inspect_agent { runId? \| sessionId?, messages? }` | same | one agent in depth — any agent row of the caller's tree, a child or a child's child (D-163): the run summary (identities, status, result, `endedBy`, the open `question`) plus the **whole** task, `origin`, `depth`, `model`, `cwd` and `branch` (only with a worktree), the worktree as it is now (`exists`, `unmergedCommits`, `uncommittedFiles`, `removedAt?`), `activity` (turns, tool calls, the tool running now, when it was last active), its last assistant messages excerpted (`messages`: default `AGENT_INSPECT_MESSAGES_DEFAULT` = 1, at most `AGENT_INSPECT_MESSAGES_MAX` = 10, each cut at `AGENT_INSPECT_MESSAGE_EXCERPT` = 1000 characters), the question it is paused on, a `what_it_needs` sentence when it is stalled, and its own children as run summaries. Read-only: it never wakes the child or delivers anything to it. A live child is read through its driver; an ended child whose driver is gone, from its session file |
 | `stop_agent { runId, reason? }` | same | ends one run now with `endedBy: { initiator: "parent", reason }`; the session stays addressable |
 | `remove_agent_worktree { sessionId? \| runId?, force? }` | same | removes a finished child's worktree and branch (M13-T42, §3 below) |
-| `complete_agent_run { status: "completed" \| "blocked", message }` | every child | the only successful ending; the tool result terminates the child turn |
+| `complete_agent_run { status: "completed" \| "blocked", message }` | every child | the only successful ending; the tool result terminates the child turn. Inside the tool the harness records the declared result, empties the engine's steering and follow-up queues into one successor run, and keeps the run `running` until the engine's prompt promise resolves — see "Completion" |
 
 Children never block, and **parents never wait**: `start_agent` returns
 before the child has done anything, there is no foreground mode, and there
@@ -182,6 +182,41 @@ once ("You stopped without calling complete_agent_run…", `NUDGE_TEXT` in
 the run is `failed` with "Ended without complete_agent_run" and the last
 assistant text kept as context — never `completed`.
 
+**Declared is not published (M13-T98).** The tool call only *declares* the
+end: the session's lifecycle moves to `terminal-pending`, and the run stays
+`running` — in the registry, the fleet, `inspect_fleet` and `inspect_agent`
+— for exactly as long as the engine invocation that ran the tool can still
+write. That window is real: Pi executes every other tool of the same batch,
+calls the model again after a batch in which not every tool terminated, and
+would carry any queued steering or follow-up message on under the run
+(`_handlePostAgentRun` → `agent.continue()`). So, still inside the tool, the
+harness empties the engine's queues (`clearQueue()`) and puts every message
+it held — plus every message waiting in its own inbox — on **one** successor
+run, in order, each exactly once; a text the engine had already delivered is
+gone, a text the harness never sent is kept. Everything that arrives during
+the window joins that successor: a parent's `send_agent_message`, a person's
+queued prompt, an extension's triggering send, a goal's automatic
+continuation, a background command's exit. `interrupt: true` and a person's
+stop additionally abort the finishing invocation (the declared result
+stands: first declaration wins), and a stop of the run while it is still
+invoking empties the engine's queues into the successor *before* the abort,
+so nothing continues under a cancelled run. The completion is published only
+when the prompt promise — the one engine-ready fence — resolves: the old run
+turns terminal, the successor becomes the session's live run, and only then
+is the parent told. Late callbacks stamped with the finished invocation's
+epoch are dropped, and never touch the successor. If the session closes
+during the window, the declared result is still what the run ends with; the
+successor that never started fails with "The agent's session closed before
+this queued message could start.", and whoever was waiting on it (a person's
+prompt, an extension's send) is answered with that sentence. The harness
+writes each of these moments — admission decisions, phase changes, successor
+reservation and activation, queue transfers as counts, terminal publication,
+dropped late callbacks — as credential-free `module:subagents` lines in the
+host's log store (identities, phases, counts and timestamps; never a prompt
+or a message body). Pinned by
+`packages/worker/test/agents/queued-completion.test.ts` against the real
+engine.
+
 Every run the harness knows is published exactly once, as `agents/run`
 (M13-T26): that notification and `agents/runs/list` are the single truth, and
 the fleet, the sidebar and the live map all read it. There is no second
@@ -198,7 +233,11 @@ before its next model call, an idle parent wakes up, and the transcript stores
 each event exactly once. The text the model reads is the event type, the four
 identities, `endedBy` (with the person's verbatim reason) and the message. The
 UI renders the same entry as the parent-side card (Handoff row in
-[`ux-elements.md`](ux-elements.md)).
+[`ux-elements.md`](ux-elements.md)). A run's ending is pushed only once the
+run is truly terminal — after its engine invocation has stopped — and, when
+a successor was waiting behind it, only after that successor has become the
+session's live run, so a parent that reacts to the ending by messaging the
+child reaches the run that is actually working.
 
 ### States, and who sets them
 

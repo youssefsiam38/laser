@@ -103,6 +103,25 @@ describe("buildFleetTree", () => {
     expect(fleet.rows.filter((candidate) => candidate.title === "done")).toHaveLength(1);
   });
 
+  it("keeps a session on the run that can still act while a newer successor only waits behind it", () => {
+    // Terminal-pending: the old run's invocation is still executing (its
+    // completion was declared but the engine has not stopped), and the one
+    // successor reserved behind it is queued. The row says Working, on the
+    // old run, until the fence; then the successor stands for the session.
+    const unwinding = run({ runId: "run_old", sessionPath: "/sessions/pending.jsonl", subagentName: "pending", startedAt: "2026-09-09T10:08:00.000Z", status: "running", task: "First task.", activity: { turns: 2, tools: 3, currentTool: "bash", lastAt: "2026-09-09T10:09:30.000Z" } });
+    const waiting = run({ runId: "run_next", sessionPath: unwinding.sessionPath, subagentName: "pending", startedAt: "2026-09-09T10:09:00.000Z", status: "queued", task: "Also do this." });
+    for (const candidates of [[unwinding, waiting], [waiting, unwinding]]) {
+      const row = buildFleetTree({ callerPath: ROOT, runs: candidates, tasksOf: () => [], now: NOW }).rows[0]!;
+      expect(row).toMatchObject({ runId: "run_old", state: "running", status: "Working", line: "Running bash" });
+    }
+    const asking = { ...unwinding, status: "needs_input" as const, question: { id: "q", kind: "confirm" as const, title: "Overwrite?", askedAt: "2026-09-09T10:09:40.000Z" } };
+    expect(buildFleetTree({ callerPath: ROOT, runs: [waiting, asking], tasksOf: () => [], now: NOW }).rows[0]).toMatchObject({ runId: "run_old", state: "needs_input", status: "Asking", line: "Overwrite?" });
+    // Once the old run has truly ended, the successor — still queued or already running — is the row.
+    const ended = { ...unwinding, status: "completed" as const, endedAt: "2026-09-09T10:09:50.000Z", result: { status: "completed" as const, message: "First done." } };
+    expect(buildFleetTree({ callerPath: ROOT, runs: [ended, waiting], tasksOf: () => [], now: NOW }).rows[0]).toMatchObject({ runId: "run_next", state: "queued", status: "Waiting" });
+    expect(buildFleetTree({ callerPath: ROOT, runs: [ended, { ...waiting, status: "running" as const }], tasksOf: () => [], now: NOW }).rows[0]).toMatchObject({ runId: "run_next", state: "running", status: "Working" });
+  });
+
   it("shows a resumed run as current while retaining its failed predecessor", () => {
     const failed = run({ runId: "run_failed", sessionPath: "/sessions/resumed.jsonl", subagentName: "resumed", startedAt: "2026-09-09T10:08:00.000Z", updatedAt: "2026-09-09T10:08:30.000Z", status: "failed", endedAt: "2026-09-09T10:08:30.000Z", error: "Provider disconnected." });
     const resumed = run({ runId: "run_resumed", sessionPath: failed.sessionPath, subagentName: "resumed", startedAt: "2026-09-09T10:09:00.000Z", status: "running", task: "Try again." });
