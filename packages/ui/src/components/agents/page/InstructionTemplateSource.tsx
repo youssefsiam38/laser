@@ -94,7 +94,6 @@ function tokenStyle(token: Pick<SyntaxToken, "color" | "fontStyle"> | undefined)
 
 function SourceVariable({ variable, context }: { variable: InstructionTemplateVariable; context: InstructionTemplateValueContext }) {
   const field = variable.field;
-  if (!field) return variable.token;
   const current = instructionTemplateValue(field.key, context);
   return (
     <Popover>

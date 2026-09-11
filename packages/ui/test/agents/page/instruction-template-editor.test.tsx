@@ -55,17 +55,17 @@ function EditorHarness({ initial, maxLength = 4096 }: { initial: string; maxLeng
 }
 
 describe("instruction template source", () => {
-  it("recognizes the protocol's spaced and triple field forms without making unknown or malformed fields valid", () => {
-    const source = "{{ agentName }} / {{{productName}}} / {{madeUp}} / {{agentName";
+  it("uses canonical parser ranges for spaced, triple and whitespace-control fields only", () => {
+    const source = String.raw`\{{agentDescription}} {{! {{model}} }} {{ agentName }} {{{productName}}} {{~thinkingLevel~}}`;
     const variables = instructionTemplateVariables(source, "agent");
-    expect(variables.map((variable) => [variable.token, variable.field?.key])).toEqual([
+    expect(variables.map((variable) => [variable.token, variable.field.key])).toEqual([
       ["{{ agentName }}", "agentName"],
       ["{{{productName}}}", "productName"],
-      ["{{madeUp}}", undefined],
+      ["{{~thinkingLevel~}}", "thinkingLevel"],
     ]);
-    expect(instructionTemplateIssue("{{ agentName }} / {{{productName}}}", "agent")).toBeNull();
-    expect(instructionTemplateIssue("{{madeUp}}", "agent")).toContain("not available");
-    expect(instructionTemplateIssue("{{agentName", "agent")).toContain("incomplete");
+    expect(instructionTemplateIssue("{{ agentName }} / {{{productName}}} / {{~thinkingLevel~}}", "agent")).toBeNull();
+    expect(instructionTemplateVariables("{{agentName}} / {{{{productName}}}}", "agent")).toEqual([]);
+    expect(instructionTemplateVariables("{{agentName}} / {{madeUp}}", "agent")).toEqual([]);
   });
 
   it("reports editor-known values separately from values that only exist during a run", () => {
@@ -85,15 +85,24 @@ describe("instruction template source", () => {
     expect(ranges.map((range) => source.slice(range.start, range.end))).toEqual(["#", " Title"]);
   });
 
-  it("preserves exact Markdown source and opens known and run-only variables", async () => {
-    const source = "# Review\n\nUse {{ agentName }}.\n\n{{availableTools}}";
+  it("preserves exact Markdown source and opens only canonical known and run-only variables", async () => {
+    const source = String.raw`# Review
+
+\{{agentDescription}}
+{{! {{model}} }}
+Use {{ agentName }} and {{{productName}}}.
+
+{{~availableTools~}}`;
     await act(async () => root.render(<EditorHarness initial={source} />));
     await click(button("Highlighted source"));
     await settle(200);
 
     const view = container.querySelector<HTMLElement>('[data-slot="instruction-template-source"]')!;
     expect(view.querySelector("code")?.textContent).toBe(source);
-    expect(container.querySelector('[data-field="madeUp"]')).toBeNull();
+    expect(container.querySelector('[data-field="agentDescription"]')).toBeNull();
+    expect(container.querySelector('[data-field="model"]')).toBeNull();
+    expect(container.querySelector('[data-field="productName"]')?.textContent).toBe("{{{productName}}}");
+    expect(container.querySelector('[data-field="availableTools"]')?.textContent).toBe("{{~availableTools~}}");
 
     await click(container.querySelector('[data-field="agentName"]')!);
     expect(document.body.querySelector('[data-slot="instruction-template-current-value"]')?.textContent).toBe("reviewer");
@@ -133,6 +142,14 @@ describe("instruction template source", () => {
     expect(product.disabled).toBe(true);
     expect(product.textContent).toContain("Not enough room");
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("full");
+  });
+
+  it("keeps a malformed nested template exact and noninteractive", async () => {
+    const source = "# Invalid\n\n{{agentName}} {{{{productName}}}}";
+    await act(async () => root.render(<InstructionTemplateSourceView target="agent" value={source} context={context} ariaLabel="Invalid highlighted source" invalid />));
+    await settle(200);
+    expect(container.querySelector('[data-slot="instruction-template-source"] code')?.textContent).toBe(source);
+    expect(container.querySelector('[data-slot="instruction-template-variable"]')).toBeNull();
   });
 
   it("shares the viewer with a read-only default surface without edit controls", async () => {

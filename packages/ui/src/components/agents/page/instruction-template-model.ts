@@ -1,5 +1,6 @@
 import {
   PRODUCT_DISPLAY_NAME,
+  instructionTemplateFieldRanges,
   instructionTemplateFields,
   type AgentModelChoice,
   type InstructionTemplateField,
@@ -25,27 +26,16 @@ export interface InstructionTemplateVariable {
   end: number;
   token: string;
   key: string;
-  field: InstructionTemplateField | undefined;
+  field: InstructionTemplateField;
 }
 
-const TOKEN = /\{\{\{\s*([A-Za-z][A-Za-z0-9]*)\s*\}\}\}|\{\{\s*([A-Za-z][A-Za-z0-9]*)\s*\}\}/g;
-
-/**
- * Finds only the two simple field forms accepted by the restricted protocol:
- * `{{field}}` / `{{{field}}}`, with optional inner whitespace. Commands,
- * malformed tokens and unknown names stay source text and are not interactive.
- */
+/** Maps the protocol parser's valid field locations onto their editor metadata. */
 export function instructionTemplateVariables(source: string, target: InstructionTemplateTarget): InstructionTemplateVariable[] {
   const fields = new Map(instructionTemplateFields(target).map((field) => [field.key, field]));
-  const variables: InstructionTemplateVariable[] = [];
-  for (const match of source.matchAll(TOKEN)) {
-    const token = match[0];
-    const key = match[1] ?? match[2];
-    const start = match.index;
-    if (!token || !key || start === undefined) continue;
-    variables.push({ start, end: start + token.length, token, key, field: fields.get(key) });
-  }
-  return variables;
+  return instructionTemplateFieldRanges(source, target).flatMap(({ key, start, end }) => {
+    const field = fields.get(key);
+    return field ? [{ start, end, token: source.slice(start, end), key, field }] : [];
+  });
 }
 
 function runtimeReason(key: string): string {
