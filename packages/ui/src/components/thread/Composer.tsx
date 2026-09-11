@@ -26,7 +26,7 @@ import { DictateButton } from "@/components/mobile";
 import { useShell } from "@/components/shell/shell-context";
 import { useIsMobile, useIsTouch } from "@/hooks/use-mobile";
 import { finishActiveDictation } from "@/pwa";
-import { composerSendPlan, useLaserStable, useLaserView, useSessionMeta } from "@/runtime";
+import { composerSendPlan, mainCodeProject, mainError, mainTab, useLaserStable, useLaserView, useSessionMeta } from "@/runtime";
 import { mergeRunConfigCustom } from "@/runtime/first-turn";
 import { completeLeadingSlash, matchLeadingSlash, rankSlashCommandMatches } from "./slash-completion.js";
 import { StatusLine } from "./StatusLine.js";
@@ -65,9 +65,9 @@ function ComposerBody() {
   const blocked = useNothingToSendTo();
   const { pending: preparingSession } = useSessionPreparation();
   const { destination } = useLaserStable();
-  const allowProjectLanding = destination?.tab !== "chat";
+  const allowProjectLanding = !destination || mainTab(destination) !== "chat";
   const disabled = useAuiState((s) => s.thread.isDisabled) || blocked !== undefined || preparingSession;
-  const destinationBusy = destination?.phase === "resolving" || destination?.phase === "syncing";
+  const destinationBusy = destination?.phase === "resolving";
   const placeholder = usePlaceholder();
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
@@ -150,13 +150,13 @@ function ComposerBody() {
 function useNothingToSendTo(): string | undefined {
   const { destination, currentProject } = useLaserStable();
   const view = useLaserView();
-  if (destination && (destination.phase === "resolving" || destination.phase === "syncing")) {
-    return destination.tab === "chat" ? "Preparing Chat…" : "Opening this conversation…";
+  if (destination?.phase === "resolving") {
+    return mainTab(destination) === "chat" ? "Preparing Chat…" : "Opening this conversation…";
   }
   if (destination?.phase === "unavailable") {
-    return destination.unavailable ?? "This conversation is unavailable. Retry it or start a new one.";
+    return mainError(destination) ?? "This conversation is unavailable. Retry it or start a new one.";
   }
-  if (view || (!destination ? currentProject !== undefined : destination.tab === "code" && destination.codeProject !== undefined)) return undefined;
+  if (view || (!destination ? currentProject !== undefined : mainTab(destination) === "code" && mainCodeProject(destination) !== undefined)) return undefined;
   return "Open a project first — the agent works inside a folder on this computer.";
 }
 

@@ -19,6 +19,7 @@ import { sessionFolds } from "../../src/components/assistant-ui/elements/session
 import { clearEndAgentRequest, useEndAgentRequest } from "../../src/components/agents/end-agent.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { LaserStoreProvider, createStateStore, type StateStore } from "../../src/runtime/LaserProvider.js";
+import { mainTab } from "../../src/runtime/main-destination.js";
 import { toThreadMetadata } from "../../src/runtime/threadList.js";
 import { initialState, reduce, type AppState } from "../../src/store.js";
 import { run, snapshot, summary } from "../agents/fixtures.js";
@@ -123,7 +124,10 @@ const completeTab = async (next: "chat" | "code") => {
   const target = next === "chat"
     ? (rememberedSessionForTab("chat") ?? "/state/chat/c1.jsonl")
     : (rememberedSessionForTab("code") ?? "/one/root.jsonl");
-  store.dispatch({ type: "destination", destination: { ...store.getSnapshot().destination, tab: next, path: target, phase: "ready", intent: store.getSnapshot().destination.intent + 1 } });
+  const intent = store.getSnapshot().destination.intent + 1;
+  store.dispatch({ type: "destination", destination: next === "chat"
+    ? { phase: "ready-chat", intent, path: target, rememberedCode: { kind: "project-session", project: "/one", path: ROOT } }
+    : { phase: "ready-code", intent, code: { kind: "project-session", project: target.startsWith("/two/") ? "/two" : "/one", path: target } } });
   await stable.actions.openSession(target);
 };
 const rows = () => [...container.querySelectorAll<HTMLElement>('[data-slot="aui_thread-list-item"]')];
@@ -147,7 +151,7 @@ describe("sessions panel tabs", () => {
 
     await act(async () => { tab("chat").click(); await completeTab("chat"); });
     expect(stable.actions.goTab).toHaveBeenCalledWith("chat");
-    expect(store.getSnapshot().destination.tab).toBe("chat");
+    expect(mainTab(store.getSnapshot().destination)).toBe("chat");
     expect(tab("chat").getAttribute("aria-selected")).toBe("true");
     expect(localStorage.getItem(SESSIONS_TAB_STORAGE_KEY)).toBe("chat");
     expect(container.querySelector('[data-slot="aui_thread-list-root"]')?.getAttribute("data-tab")).toBe("chat");
@@ -162,7 +166,7 @@ describe("sessions panel tabs", () => {
     await act(async () => root.unmount());
     root = createRoot(container);
     sessionsList.reset();
-    store.dispatch({ type: "destination", destination: { ...store.getSnapshot().destination, tab: "chat", phase: "ready", intent: store.getSnapshot().destination.intent + 1 } });
+    store.dispatch({ type: "destination", destination: { phase: "ready-chat", path: "/state/chat/c1.jsonl", rememberedCode: { kind: "project-session", project: "/one", path: ROOT }, intent: store.getSnapshot().destination.intent + 1 } });
     await mount();
     expect(tab("chat").getAttribute("aria-selected")).toBe("true");
 
@@ -183,7 +187,7 @@ describe("sessions panel tabs", () => {
     expect(stable.actions.openSession).toHaveBeenLastCalledWith("/state/chat/c2.jsonl");
     await act(async () => { tab("code").click(); await completeTab("code"); });
     expect(stable.actions.openSession).toHaveBeenLastCalledWith("/two/plain.jsonl");
-    expect(store.getSnapshot().destination.tab).toBe("code");
+    expect(mainTab(store.getSnapshot().destination)).toBe("code");
   });
 
   it("starts a new chat with the Chat agent in the Chat workspace", async () => {

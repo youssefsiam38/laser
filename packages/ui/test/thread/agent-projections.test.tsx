@@ -126,6 +126,7 @@ describe("rendering", () => {
     stable.actions.openSession.mockClear();
     fleet.reveal.mockClear();
     let state = reduce(initialState, { type: "opened", state: sessionState({ path: PATH }) });
+    state = reduce(state, { type: "destination", destination: { phase: "ready-code", intent: 0, code: { kind: "project-session", project: "/p", path: PATH } } });
     state = reduce(state, { type: "agents/run", run: event.run });
     store = createStateStore(state);
     container = document.createElement("div");

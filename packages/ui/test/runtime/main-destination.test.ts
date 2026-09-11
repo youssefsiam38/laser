@@ -5,7 +5,6 @@ import {
   codeProjectForSession,
   creationTargetForDestination,
   destinationSessionForTab,
-  initialMainDestination,
   isSessionInCodeProject,
 } from "../../src/runtime/main-destination.js";
 
@@ -33,12 +32,11 @@ describe("main destination model", () => {
   });
 
   it("creates Chat only from its workspace and Code only from Code memory", () => {
-    const chat = { ...initialMainDestination, tab: "chat" as const, phase: "ready" as const, intent: 3 };
-    expect(creationTargetForDestination(chat, "/private/chat")).toEqual({ cwd: "/private/chat", agentName: "chat", intent: 3 });
-    expect(creationTargetForDestination(chat, undefined)).toBeUndefined();
-    const code = { ...chat, tab: "code" as const, codeProject: "/project" };
+    const chat = { phase: "ready-chat" as const, path: "/chat/one", rememberedCode: { kind: "project-landing" as const, project: "/project" }, intent: 3 };
+    expect(creationTargetForDestination(chat, "/private/chat")).toBeUndefined();
+    const code = { phase: "ready-code" as const, code: { kind: "project-landing" as const, project: "/project" }, intent: 3 };
     expect(creationTargetForDestination(code, "/private/chat")).toEqual({ cwd: "/project", intent: 3 });
-    expect(creationTargetForDestination({ ...code, codeProject: undefined }, "/private/chat")).toBeUndefined();
+    expect(creationTargetForDestination({ ...code, code: { kind: "no-project-landing" as const } }, "/private/chat")).toBeUndefined();
   });
 
   it("resolves children to the root project and lets Beam retain Code memory", () => {

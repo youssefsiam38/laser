@@ -371,8 +371,8 @@ export interface ThreadListDeps {
    * `threadId` stays where it was until `endInitialize`, which fires only after
    * the runtime has finished adopting the result (see `initialize`).
    */
-  beginInitialize?(): void;
-  endInitialize?(): void;
+  beginInitialize?(target: { cwd: string; agentName?: string | undefined; intent?: number | undefined }): void;
+  endInitialize?(target: { cwd: string; agentName?: string | undefined; intent?: number | undefined }): void;
 }
 
 /** An always-closed stream: Pi has no server-side title generation. */
@@ -420,7 +420,7 @@ export function createThreadListAdapter(deps: ThreadListDeps): RemoteThreadListA
     initialize: async () => {
       const target = deps.creationTarget();
       if (!target) throw new Error("This destination is not ready to start a conversation.");
-      deps.beginInitialize?.();
+      deps.beginInitialize?.(target);
       try {
         const path = await deps.createSession(target);
         // Deliberately no `refreshSessions()` here: the catalog reload that the
@@ -432,7 +432,7 @@ export function createThreadListAdapter(deps: ThreadListDeps): RemoteThreadListA
         // settles; a bracket closed synchronously here would let the reload
         // and the selection catch-up land in between. The next macrotask is
         // strictly after that adoption.
-        setTimeout(() => deps.endInitialize?.(), 0);
+        setTimeout(() => deps.endInitialize?.(target), 0);
       }
     },
 

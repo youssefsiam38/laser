@@ -97,6 +97,7 @@ const promptTaken = (text: string, entry?: { id: string; parentId: string | null
 
 const open = (entries: unknown[], leafId: string) => {
   let state: AppState = reduce(initialState, { type: "opened", state: sessionState({ path: SESSION }) });
+  state = reduce(state, { type: "destination", destination: { phase: "ready-code", intent: 0, code: { kind: "project-session", project: "/p", path: SESSION } } });
   state = reduce(state, { type: "hydrate", path: SESSION, entries, leafId });
   store = createStateStore(state);
 };

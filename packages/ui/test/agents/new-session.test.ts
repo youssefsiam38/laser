@@ -12,7 +12,7 @@ function fixture() {
     state = { ...state, sessions: [...state.sessions, summary({ path, cwd, messageCount: 0, ...agent })] };
   };
   const open = vi.fn(async () => {});
-  const select = vi.fn((path: string) => { state = reduce(state, { type: "select", path }); });
+  const select = vi.fn((path: string) => { state = { ...state, current: path }; });
   let count = 0;
   const create = vi.fn(async (cwd: string, options: { agentName?: string }) => {
     const path = `/new-${++count}`;

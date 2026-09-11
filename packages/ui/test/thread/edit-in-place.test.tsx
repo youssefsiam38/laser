@@ -87,6 +87,7 @@ beforeEach(() => {
   for (const fn of Object.values(stable.actions)) fn.mockClear();
   stable.actions.navigate.mockResolvedValue({ editorText: "list the tests" });
   let state: AppState = reduce(initialState, { type: "opened", state: sessionState({ path: SESSION }) });
+  state = reduce(state, { type: "destination", destination: { phase: "ready-code", intent: 0, code: { kind: "project-session", project: "/p", path: SESSION } } });
   state = reduce(state, { type: "hydrate", path: SESSION, entries, leafId: LEAF });
   store = createStateStore(state);
   container = document.createElement("div");

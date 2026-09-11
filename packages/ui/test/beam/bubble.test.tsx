@@ -22,6 +22,7 @@ import { BeamSpark } from "../../src/components/beam/BeamSpark.js";
 import { startBeamSession } from "../../src/components/beam/beam-model.js";
 import { useLaserStable } from "../../src/runtime/LaserProvider.js";
 import { BEAM_SESSION_STORAGE_KEY, beamStore } from "../../src/components/beam/beam-store.js";
+import { mainTab } from "../../src/runtime/main-destination.js";
 import { ShellContext, type ShellContextValue } from "../../src/components/shell/shell-context.js";
 import { sessionsList } from "../../src/components/shell/session-groups.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
@@ -53,7 +54,7 @@ const shell = (layout: ShellContextValue["layout"]): ShellContextValue => ({
 function MainCurrent() {
   const { actions } = useLaserStable();
   const current = useLaserState((s) => s.current);
-  const tab = useLaserState((s) => s.destination.tab);
+  const tab = useLaserState((s) => mainTab(s.destination));
   const toasts = useLaserState((s) => s.toasts.map((toast) => `${toast.level}:${toast.text}`).join("\n"));
   return (
     <>

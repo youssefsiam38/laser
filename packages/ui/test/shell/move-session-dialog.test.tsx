@@ -22,6 +22,7 @@ import { sessionsList } from "../../src/components/shell/session-groups.js";
 import { sessionFolds } from "../../src/components/assistant-ui/elements/session-folds.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { LaserStoreProvider, createStateStore, type StateStore } from "../../src/runtime/LaserProvider.js";
+import { mainTab } from "../../src/runtime/main-destination.js";
 import { toThreadMetadata } from "../../src/runtime/threadList.js";
 import { initialState, reduce, type AppState } from "../../src/store.js";
 import { snapshot, summary } from "../agents/fixtures.js";
@@ -108,11 +109,13 @@ beforeEach(() => {
   stable.actions.openSession.mockReset().mockImplementation(async (path: string) => {
     if (path !== MOVED) return;
     const current = store.getSnapshot().destination;
-    store.dispatch({ type: "destination", destination: { ...current, tab: "code", codeProject: "/one", path, phase: "ready", intent: current.intent + 1 } });
+    store.dispatch({ type: "destination", destination: { phase: "ready-code", code: { kind: "project-session", project: "/one", path }, intent: current.intent + 1 } });
   });
   stable.actions.goTab.mockReset().mockImplementation(async (tab: "chat" | "code") => {
     const current = store.getSnapshot().destination;
-    store.dispatch({ type: "destination", destination: { ...current, tab, path: undefined, phase: "ready", intent: current.intent + 1 } });
+    store.dispatch({ type: "destination", destination: tab === "chat"
+      ? { phase: "resolving", target: { kind: "chat-tab" }, rememberedCode: { kind: "project-landing", project: "/two" }, intent: current.intent + 1 }
+      : { phase: "ready-code", code: { kind: "project-landing", project: "/two" }, intent: current.intent + 1 } });
   });
   stable.actions.toast.mockClear();
   stable.setCurrentProject.mockClear();
@@ -197,7 +200,7 @@ describe("the move dialog", () => {
     await act(async () => confirmButton().click());
     await tick();
     expect(stable.actions.moveSession).toHaveBeenCalledWith(CHAT, "/one");
-    expect(store.getSnapshot().destination.tab).toBe("code");
+    expect(mainTab(store.getSnapshot().destination)).toBe("code");
     expect(sessionsList.get().jump?.cwd).toBe("/one");
     expect(stable.actions.openSession).toHaveBeenCalledWith(MOVED);
     expect(showChat).toHaveBeenCalled();
@@ -222,7 +225,7 @@ describe("the move dialog", () => {
     expect(confirmButton().disabled).toBe(false);
     expect(stable.actions.openSession).not.toHaveBeenCalled();
     expect(stable.setCurrentProject).not.toHaveBeenCalled();
-    expect(store.getSnapshot().destination.tab).toBe("chat");
+    expect(mainTab(store.getSnapshot().destination)).toBe("chat");
   });
 
   it("in a browser, New project… asks for a path, and Enter in the field moves there", async () => {

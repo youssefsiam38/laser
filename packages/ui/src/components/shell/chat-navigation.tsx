@@ -24,7 +24,7 @@ import { useCallback } from "react";
 import { mapUi } from "@/components/agents/map";
 import { useWorkbench } from "@/components/workbench";
 import { closeFleetSheet } from "@/fleet";
-import { useLaserStable, useLaserState } from "@/runtime";
+import { isMainReady, mainPath, mainTab, useLaserStable, useLaserState } from "@/runtime";
 import { SESSION_STORAGE_KEY } from "@/runtime/LaserProvider";
 
 import { errorText } from "./shell-context.js";
@@ -73,8 +73,8 @@ export function useChatNavigation({ closeSheets }: { closeSheets(): void }): Cha
 
   const returnToChat = useCallback(() => {
     showChat();
-    if (destination.path !== undefined && destination.phase === "ready") return;
-    actions.goTab(destination.tab).catch((error: unknown) => actions.toast("error", errorText(error)));
+    if (isMainReady(destination) && mainPath(destination) !== undefined) return;
+    actions.goTab(mainTab(destination)).catch((error: unknown) => actions.toast("error", errorText(error)));
   }, [actions, destination, showChat]);
 
   return { showChat, returnToChat };

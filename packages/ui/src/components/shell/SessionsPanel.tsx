@@ -19,7 +19,7 @@ import { useWorkbench } from "@/components/workbench";
 import { shortCwd, shortcutLabel } from "@/format";
 import { useTheme } from "@/hooks";
 import { cn } from "@/lib/utils";
-import { useLaserStable, useLaserState } from "@/runtime";
+import { mainTab, useLaserStable, useLaserState } from "@/runtime";
 import type { AppState } from "@/store";
 
 import { SESSIONS_TABS, groupsFor, sameGroups, sessionsList, useSessionsList, workspacesOf, type SessionsTab } from "./session-groups.js";
@@ -72,7 +72,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
   const { projects, currentProject, actions } = useLaserStable();
   const shell = useShell();
   const list = useSessionsList();
-  const tab = useLaserState((s) => s.destination.tab);
+  const tab = useLaserState((s) => mainTab(s.destination));
   useClock();
 
   const groups = useLaserState(

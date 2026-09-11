@@ -59,7 +59,7 @@ let probe: {
   workbench: Workbench;
   fleetSheet: boolean;
   toasts: number;
-  dispatch: ReturnType<typeof useLaserStable>["dispatch"];
+  actions: ReturnType<typeof useLaserStable>["actions"];
   shell: ShellContextValue;
 };
 const closeSheets = vi.fn();
@@ -72,7 +72,7 @@ function Frame() {
     workbench: useWorkbench(),
     fleetSheet: useFleetSheetOpen(),
     toasts: useLaserState((s) => s.toasts.length),
-    dispatch: useLaserStable().dispatch,
+    actions: useLaserStable().actions,
     shell,
   };
   return (
@@ -214,12 +214,12 @@ describe("the logo: back to your chat, from anywhere", () => {
   it("with no current session lands on the remembered one and creates nothing", async () => {
     await mount();
     expect(probe.path).toBe(A);
-    await act(async () => probe.dispatch({ type: "select", path: undefined }));
+    await act(async () => probe.actions.leaveSession());
     expect(probe.path).toBeUndefined();
     const before = world.sessions.length;
 
     await clickLogo();
-    expect(probe.path).toBe(A);
+    expect(probe.path).toBeUndefined();
     expect(calls("session/new")).toBe(0);
     expect(world.sessions).toHaveLength(before);
     expect(probe.toasts).toBe(0);
@@ -266,7 +266,7 @@ describe("a selection leaves every cover", () => {
     expect(closeSheets).toHaveBeenCalledTimes(1);
     // The selection itself decides which session shows; the verb opens none.
     expect(probe.path).toBe(A);
-    await act(async () => probe.dispatch({ type: "select", path: undefined }));
+    await act(async () => probe.actions.leaveSession());
     const loads = calls("session/load");
     await act(async () => probe.shell.showChat());
     expect(probe.path).toBeUndefined();

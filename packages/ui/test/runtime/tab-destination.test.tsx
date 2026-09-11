@@ -19,7 +19,8 @@ import {
   useLaserView,
   type LaserActions,
 } from "../../src/runtime/LaserProvider.js";
-import { SESSIONS_TAB_STORAGE_KEY } from "../../src/runtime/session-tab-memory.js";
+import { isMainReady, mainTab } from "../../src/runtime/main-destination.js";
+import { SESSION_TAB_MEMORY_KEY, SESSIONS_TAB_STORAGE_KEY } from "../../src/runtime/session-tab-memory.js";
 import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../beam/fake-host.js";
 
 const CODE = `${PROJECT_CWD}/code.jsonl`;
@@ -50,8 +51,10 @@ function Probe() {
   const disabled = useAuiState((state) => state.thread.isDisabled);
   const text = useAuiState((state) => state.composer.text);
   const attachments = useAuiState((state) => state.composer.attachments.length);
-  controls = { actions, aui, tab: destination.tab, path: view?.path, phase: destination.phase, disabled, text, attachments, codeProject: currentProject, dialogs: view?.dialogs.length ?? 0, toasts };
-  return <output data-tab={destination.tab} data-path={view?.path ?? ""} data-phase={destination.phase} data-disabled={disabled} />;
+  const tab = mainTab(destination);
+  const phase = isMainReady(destination) ? "ready" : destination.phase;
+  controls = { actions, aui, tab, path: view?.path, phase, disabled, text, attachments, codeProject: currentProject, dialogs: view?.dialogs.length ?? 0, toasts };
+  return <output data-tab={tab} data-path={view?.path ?? ""} data-phase={phase} data-disabled={disabled} />;
 }
 
 let root: Root;
@@ -364,5 +367,82 @@ describe("main destination isolation", () => {
     await mount();
     expect(controls).toMatchObject({ tab: "chat", phase: "ready" });
     expect(controls.path).not.toBe(CODE);
+  });
+
+  it("restores an exact pathless Code project landing across a Chat excursion and reload", async () => {
+    const oldProject = "/old-project";
+    const oldCode = `${oldProject}/old.jsonl`;
+    addSession(world, oldCode, oldProject);
+    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
+    localStorage.setItem(SESSIONS_TAB_STORAGE_KEY, "chat");
+    localStorage.setItem(SESSION_TAB_MEMORY_KEY, JSON.stringify({ code: oldCode }));
+    await mount();
+
+    await act(async () => { await controls.actions.goProject(PROJECT_CWD); await settle(20); });
+    expect(controls).toMatchObject({ tab: "code", codeProject: PROJECT_CWD, path: undefined });
+    await act(async () => { await controls.actions.goTab("chat"); await settle(20); });
+    await act(async () => { await controls.actions.goTab("code"); await settle(20); });
+    expect(controls).toMatchObject({ tab: "code", codeProject: PROJECT_CWD, path: undefined });
+
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    FakeHostClient.reset(world);
+    await mount();
+    expect(controls).toMatchObject({ tab: "code", codeProject: PROJECT_CWD, path: undefined });
+  });
+
+  it("does not let a stale old-project load displace a newer pathless project landing", async () => {
+    const oldProject = "/old-project";
+    const oldCode = `${oldProject}/old.jsonl`;
+    addSession(world, oldCode, oldProject);
+    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
+    await mount();
+    await act(async () => { await controls.actions.goProject(PROJECT_CWD); await settle(20); });
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const original = world.overrides["session/load"]!;
+    world.overrides["session/load"] = async (params: { path: string }) => {
+      if (params.path === oldCode) await gate;
+      return original(params);
+    };
+    let stale!: Promise<void>;
+    await act(async () => { stale = controls.actions.openSession(oldCode); await settle(5); });
+    await act(async () => { await controls.actions.goProject(PROJECT_CWD); await settle(10); });
+    await act(async () => { release(); await stale; await settle(20); });
+    expect(controls).toMatchObject({ tab: "code", codeProject: PROJECT_CWD, path: undefined });
+  });
+
+  it("retries the exact created Chat identity after hydration fails without recreating it", async () => {
+    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
+    let failedPath: string | undefined;
+    world.overrides["session/load"] = async (params: { path: string }) => {
+      if (params.path.includes("/state/chat/") && failedPath === undefined) {
+        failedPath = params.path;
+        throw new Error("hydrate failed");
+      }
+      const state = world.states[params.path];
+      if (!state) throw new Error("missing session");
+      return { state, replayFrom: 0, seq: 0 };
+    };
+    await mount();
+    await act(async () => { await controls.actions.goTab("chat"); await settle(20); });
+    expect(controls).toMatchObject({ tab: "chat", path: undefined, phase: "unavailable", disabled: true });
+    expect(calls("session/new")).toHaveLength(1);
+    expect(failedPath).toBeTruthy();
+
+    await act(async () => { await controls.actions.retryDestination(); await settle(20); });
+    expect(controls).toMatchObject({ tab: "chat", path: failedPath, phase: "ready", disabled: false });
+    expect(calls("session/new")).toHaveLength(1);
+    expect(calls("session/load").filter((call) => (call.params as { path: string }).path === failedPath)).toHaveLength(2);
+  });
+
+  it("settles a malformed session hash onto safe remembered Code memory", async () => {
+    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
+    localStorage.setItem(SESSIONS_TAB_STORAGE_KEY, "chat");
+    globalThis.history.replaceState(null, "", "/#/session/%E0%A4%A");
+    await mount();
+    expect(controls).toMatchObject({ tab: "code", codeProject: PROJECT_CWD, path: undefined, phase: "ready", disabled: false });
+    expect(globalThis.location.hash).toBe("");
   });
 });

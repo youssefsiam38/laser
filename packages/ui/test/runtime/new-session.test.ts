@@ -19,11 +19,12 @@ function fixture() {
   const add = (path: string, cwd = "/one") => {
     state = reduce(state, { type: "opened", state: session(path, cwd) });
     state = reduce(state, { type: "hydrate", path, entries: [] });
+    state = { ...state, current: path };
     return state.open[path]!;
   };
   const refresh = vi.fn(async () => {});
   const open = vi.fn(async (path: string) => { add(path); });
-  const select = vi.fn((path: string) => { state = reduce(state, { type: "select", path }); });
+  const select = vi.fn((path: string) => { state = { ...state, current: path }; });
   let count = 0;
   const create = vi.fn(async (cwd: string) => { const path = `/new-${++count}`; add(path, cwd); return path; });
   const launch = createSessionLauncher({ state: () => state, archived: (path) => archived.has(path), refresh, open, select, create });
@@ -115,7 +116,7 @@ describe("New session", () => {
       archived: () => false,
       refresh: async () => {},
       open: async () => {},
-      select: (path) => { state = reduce(state, { type: "select", path }); },
+      select: (path) => { state = { ...state, current: path }; },
       create,
       resolveAgent: (name) => name ?? "default",
     });
@@ -158,7 +159,7 @@ describe("New session", () => {
       archived: () => false,
       refresh: async () => {},
       open: async () => {},
-      select: (path) => { state = reduce(state, { type: "select", path }); },
+      select: (path) => { state = { ...state, current: path }; },
       create,
       resolveAgent: (name) => name ?? "default",
     });
