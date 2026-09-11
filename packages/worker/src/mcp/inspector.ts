@@ -8,6 +8,7 @@
  * and a tool result is bounded in memory — the inspector never spills output
  * to disk the way a session's tool call may.
  */
+import { delimiter } from "node:path";
 import type {
   McpCallResult,
   McpInspection,
@@ -69,7 +70,8 @@ export class McpInspector {
 
   /** True when a live connection is held for this server right now. */
   inspecting(scope: McpScope, name: string): boolean {
-    return this.held.has(McpInspector.key(scope, name));
+    const held = this.held.get(McpInspector.key(scope, name));
+    return held !== undefined && this.manager?.getConnection(held.name)?.status === "connected";
   }
 
   latency(scope: McpScope, name: string): number | undefined {
@@ -119,7 +121,7 @@ export class McpInspector {
     try {
       const connection = await this.connect(key, config, target.secrets, signal);
       if (connection.status === "needs-auth") {
-        if (target.ephemeral) await this.close(key);
+        await this.close(key);
         return { ...base, status: "needs-auth", detail: signInDetail(config.name) };
       }
       const latencyMs = Date.now() - started;
@@ -158,8 +160,8 @@ export class McpInspector {
       if (target.ephemeral) await this.close(key);
       return inspection;
     } catch (error) {
-      if (target.ephemeral) await this.close(key);
-      const failure = describeFailure(error, config.name);
+      await this.close(key);
+      const failure = this.failure(error, config, target.secrets);
       return { ...base, status: failure.status, detail: failure.detail, ...(failure.stderr ? { stderr: failure.stderr } : {}) };
     }
   }
@@ -170,7 +172,10 @@ export class McpInspector {
     if (config.disabled) return { status: "off", detail: OFF_DETAIL };
     try {
       const connection = await this.connect(key, config, secrets, signal);
-      if (connection.status === "needs-auth") return { status: "needs-auth", detail: signInDetail(config.name) };
+      if (connection.status === "needs-auth") {
+        await this.close(key);
+        return { status: "needs-auth", detail: signInDetail(config.name) };
+      }
       const started = Date.now();
       await connection.client.ping();
       const latencyMs = Date.now() - started;
@@ -178,7 +183,8 @@ export class McpInspector {
       if (held) held.latencyMs = latencyMs;
       return { status: "connected", latencyMs };
     } catch (error) {
-      const failure = describeFailure(error, config.name);
+      await this.close(key);
+      const failure = this.failure(error, config, secrets);
       return { status: failure.status, detail: failure.detail };
     }
   }
@@ -204,7 +210,7 @@ export class McpInspector {
       const result = await connection.client.callTool({ name: original, arguments: args });
       return toCallResult(result, Date.now() - started);
     } catch (error) {
-      return { ok: false, durationMs: Date.now() - started, content: [], error: describeFailure(error, config.name).detail };
+      return { ok: false, durationMs: Date.now() - started, content: [], error: this.failure(error, config, secrets).detail };
     }
   }
 
@@ -292,6 +298,11 @@ export class McpInspector {
     this.oauthRuntime = undefined;
   }
 
+  private failure(error: unknown, config: McpConfiguredServer, secrets: ResolvedSecrets) {
+    const entry = toServerEntry(config, secrets);
+    return describeFailure(error, config.name, entry.command, entry.env?.["PATH"] ?? process.env["PATH"] ?? "");
+  }
+
   private async connect(key: string, config: McpConfiguredServer, secrets: ResolvedSecrets, signal?: AbortSignal): Promise<McpConnection> {
     const manager = await this.managerOrCreate();
     const entry = toServerEntry(config, secrets);
@@ -305,7 +316,13 @@ export class McpInspector {
     const timeout = AbortSignal.timeout(CONNECT_TIMEOUT_MS);
     const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
     const connection = await manager.connect(config.name, entry, combined);
-    this.held.set(key, { name: config.name, entry });
+    const tools = toolInfos(config, connection);
+    this.held.set(key, { name: config.name, entry, counts: {
+      toolCount: tools.length,
+      directToolCount: tools.filter((tool) => tool.visibility === "direct").length,
+      resourceCount: connection.resources.length,
+      promptCount: connection.prompts.length,
+    } });
     return connection;
   }
 }
@@ -465,12 +482,20 @@ function signInDetail(name: string): string {
 }
 
 /** A failure as a person should read it: the server's own words, no stack. */
-export function describeFailure(error: unknown, name: string): { status: McpInspection["status"]; detail: string; stderr?: string[] } {
+export function describeFailure(error: unknown, name: string, command?: string, path = process.env["PATH"] ?? ""): { status: McpInspection["status"]; detail: string; stderr?: string[] } {
   if (isAbort(error)) {
     return { status: "failed", detail: `"${name}" did not answer within 30 seconds. Check the command or address, then try again.` };
   }
   const message = messageOf(error);
   const stderr = stderrOf(error);
+  // Upstream may wrap the spawn error as plain text, losing errno/syscall.
+  const spawnFailure = command && new RegExp(`\\bspawn ${escapeRegExp(command)} (ENOENT|EACCES)\\b`).exec(message);
+  if (spawnFailure) {
+    const entries = path.split(delimiter).filter(Boolean);
+    const searched = [...entries.slice(0, 6), ...(entries.length > 6 ? ["…"] : [])].join(", ") || "(PATH is empty)";
+    const missing = spawnFailure[1] === "ENOENT";
+    return { status: "failed", detail: `The command \`${command}\` ${missing ? "was not found. Give its full path, or install it" : "is not executable. Give its full path, or allow it to run"}; the app looked in: ${searched}` };
+  }
   if (isUnauthorized(error) || /\b(401|HTTP 401)\b/.test(message)) {
     return { status: "needs-auth", detail: signInDetail(name), ...(stderr ? { stderr } : {}) };
   }
@@ -495,6 +520,10 @@ function isUnauthorized(error: unknown): boolean {
     current = candidate.cause;
   }
   return false;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function isAbort(error: unknown): boolean {

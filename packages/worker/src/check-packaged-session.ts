@@ -13,6 +13,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import { once } from "node:events";
+import { execFileSync } from "node:child_process";
 
 import { DATA_DIR_NAME, PRODUCT_NAME, type PiExtensionModuleName } from "@lasercode/protocol";
 import { DefinitionsCache } from "./agents/definitions.js";
@@ -26,7 +27,7 @@ import { McpService } from "./mcp/service.js";
 import { alignEngineAgentDir, extendRuntimePath } from "./runtime-env.js";
 
 export type PackagedSessionReport =
-  | { ok: true; sessionId: string; modelCount: number; modules: PiExtensionModuleName[]; mcp: { modelTool: string; inspectedTool: string; runtime: string } }
+  | { ok: true; sessionId: string; modelCount: number; modules: PiExtensionModuleName[]; mcp: { modelTool: string; inspectedTool: string; runtime: string; npxVersion: string } }
   | { ok: false; error: string };
 
 /** The companion modules a packaged build must activate for a project session with every feature on. */
@@ -84,6 +85,11 @@ export async function checkPackagedSession(fixture: string): Promise<PackagedSes
     // Exactly the worker startup path: no system Node is used for stdio.
     alignEngineAgentDir(join(root, "agent"), join(root, "sessions"));
     extendRuntimePath();
+    // Offline: exercise the same bare command the gallery gives the worker.
+    const npxVersion = (process.platform === "win32"
+      ? execFileSync(process.env["ComSpec"] ?? "cmd.exe", ["/d", "/s", "/c", "npx --version"], { encoding: "utf8", timeout: 20_000 })
+      : execFileSync("npx", ["--version"], { encoding: "utf8", timeout: 20_000 })).trim();
+    if (!/^\d+\.\d+\.\d+/.test(npxVersion)) throw new Error("The bundled package runner did not report its version.");
     mkdirSync(join(root, "agent", DATA_DIR_NAME), { recursive: true });
     writeFileSync(join(root, "agent", DATA_DIR_NAME, "mcp.json"), JSON.stringify({ version: 1, servers: [{
       name: "packaged", transport: { kind: "stdio", command: "node", args: [fixture] },
@@ -155,7 +161,7 @@ export async function checkPackagedSession(fixture: string): Promise<PackagedSes
     if (!driver.deliverExtensionCommand({ type: "lasercode/account-usage/refresh" })) {
       throw new Error("The bundled subscription allowance module did not accept refresh.");
     }
-    return { ok: true, sessionId: state.id, modelCount: models.length, modules: active, mcp: { modelTool, inspectedTool: inspectedTool.name, runtime: runtime.text } };
+    return { ok: true, sessionId: state.id, modelCount: models.length, modules: active, mcp: { modelTool, inspectedTool: inspectedTool.name, runtime: runtime.text, npxVersion } };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   } finally {

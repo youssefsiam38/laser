@@ -230,7 +230,8 @@ literal command `node`, opens a real session with MCP enabled, observes
 active MCP module, and inspects/calls the fixture through the worker's MCP
 service. The call reports the bundled Node's exact executable path, proving
 `runtime-env.ts` supplied the runtime rather than a system installation; no
-`npx`, credentials or network download is needed for the gate.
+credentials or network download is needed for the gate.
+When the bundled runtime has no `npm`/`npx` executables, the worker creates launchers in `<agentDir>/bin` that run its bundled Node and package-manager entry points, never adds npm's internal `bin` directory to PATH, and the offline gate also checks `npx --version`.
 
 ## Verification
 
