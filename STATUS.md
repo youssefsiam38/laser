@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-11T17:00:00Z · claude-2026-09-11-trust · HEAD: 6df5d99 (StartupShell guard commit on top)
+**Last updated:** 2026-09-11T18:20:00Z · claude-2026-09-11-trust · HEAD: 6d82130 (ledger commit on top)
 
-**Current focus:** 0.3.8 froze on "Returning to your last session" for 120 s whenever the restored session's project had no trust decision: the trust dialog lived inside the shell the startup gate does not mount. Fixed and guarded end to end (M13-T115); releasing as 0.3.9 (M13-T116). The Chat dead end on a vanished remembered session was cleared on the one affected machine by the recovery script; its code fallback is parked on `chat-memory-fallback` (M13-T117, D-219).
+**Current focus:** v0.3.9 is public (startup trust fix, M13-T115/T116). Committed on main since, unreleased: release notes required and API-only publication check (T118, orchestrator change awaiting the person's review), Chat + navigation (T119), children with removed worktrees reopen in the checkout (T120). The Chat gone-memory fallback stays parked on `chat-memory-fallback` (T117, D-219).
 
 ## Milestones
 
@@ -24,23 +24,23 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M10 Distribution | in-progress | in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
 | M12 Product experience | done | 0.2.13 dispatched |
-| M13 Agents Leap | in-progress | T115 startup trust fix done; T116 release 0.3.9 in progress; T117 parked |
+| M13 Agents Leap | in-progress | 0.3.9 public; T118/T119/T120 done on main, unreleased; T117 parked |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
 
-T113/T114 final local verification of 0.3.8: monitor stopped; authorization required to resume the preserved checkpoint.
+None. (The 0.3.8 stale release lock was recovered and its checkpoint verified.)
 
 ## Next up
 
-1. M13-T116: run the 0.3.9 release orchestrator from the reviewed source; record public asset verification.
+1. Release T118–T120 as 0.3.10 once the person reviews the orchestrator change and writes/approves the notes (`--notes` is now required).
 2. M13-T117: land `chat-memory-fallback` (7d121ef) in a later release.
-3. Resume the 0.3.8 final local verification once authorized (T113/T114).
+3. T113/T114 0.3.8 final verification: now complete (checkpoint verified during the lock recovery); close their rows.
 
 ## Recently done
 
+- M13-T120: `6d82130`; removed-worktree children reopen in the checkout; resolver + real-engine driver tests, 40/40 worker agent tests.
+- M13-T119: `111bf56`; Chat + opens its new session; fake-host test, full UI 1112 green.
+- M13-T118: `13c066d`; `--notes` required, tag body carries notes, API-only publication check; 39/39 release tests.
+- M13-T116: v0.3.9 public with 12 assets; CI 34626252419, release 34626602601, checkpoint verified; installed app restores the last session in ~210 ms (was 120 s).
 - M13-T115: trust dialog rides the startup gate above the opening screen; end-to-end guard over a fake host, 9 focused tests + 18 desktop startup tests; full UI suite 1111 green; browser proof at desktop/dark and 375px/light.
-- M13-T111: `8650d89`; typed destination controller, all routing review fixes, 78 focused tests, combined full verify and CI `34611182930` passed.
-- M13-T108: `7a37677`; durable empties, 102 focused tests, full verify and CI `34603076800` passed.
-- M13-T112: `af96144`; both collapsed count levels, 390px proof, full verify and CI `34602657563` passed.
-- M13-T104: `34da454`; interruption ownership fixes, 204 focused tests, full verify and CI `34595968503` passed.
