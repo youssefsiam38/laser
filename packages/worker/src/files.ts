@@ -17,10 +17,11 @@
  * keystroke and the answer cannot change that fast.
  */
 import { execFile } from "node:child_process";
-import type { Dirent } from "node:fs";
-import { readdir } from "node:fs/promises";
-import { join, relative, sep } from "node:path";
-import type { ProjectFile, ProjectFiles } from "@lasercode/protocol";
+import { constants, type Dirent } from "node:fs";
+import { open, readdir, realpath, stat } from "node:fs/promises";
+import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { StringDecoder } from "node:string_decoder";
+import type { ProjectFile, ProjectFileContent, ProjectFiles } from "@lasercode/protocol";
 
 /** How long one scan is reused. Long enough for a burst of keystrokes. */
 const CACHE_MS = 5_000;
@@ -51,6 +52,24 @@ const SKIP_DIRECTORIES = new Set([
   "vendor",
 ]);
 
+// The extension → media-type table lives only here. The UI consumes the declared
+// media type; its Shiki path lookup selects grammars, not MIME types.
+const FILE_MEDIA_TYPES: Readonly<Record<string, string>> = {
+  ".md": "text/markdown", ".markdown": "text/markdown", ".mdx": "text/markdown",
+  ".diff": "text/x-diff", ".patch": "text/x-patch",
+  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+  ".webp": "image/webp", ".avif": "image/avif", ".svg": "image/svg+xml", ".bmp": "image/bmp",
+  ".tif": "image/tiff", ".tiff": "image/tiff", ".heic": "image/heic", ".heif": "image/heif", ".ico": "image/x-icon",
+  ".txt": "text/plain", ".log": "text/plain", ".csv": "text/csv", ".html": "text/html", ".htm": "text/html",
+  ".ts": "text/typescript", ".tsx": "text/tsx", ".mts": "text/typescript", ".cts": "text/typescript",
+  ".js": "text/javascript", ".jsx": "text/jsx", ".mjs": "text/javascript", ".cjs": "text/javascript", ".css": "text/css",
+  ".py": "text/x-python", ".go": "text/x-go", ".rs": "text/x-rust", ".rb": "text/x-ruby",
+  ".c": "text/x-c", ".h": "text/x-c", ".cpp": "text/x-c++", ".sh": "text/x-shellscript",
+  ".json": "application/json", ".jsonc": "text/jsonc", ".xml": "application/xml",
+  ".yaml": "application/yaml", ".yml": "application/yaml", ".toml": "application/toml",
+  ".pdf": "application/pdf", ".zip": "application/zip",
+};
+
 interface Scan {
   files: ProjectFile[];
   source: "git" | "walk";
@@ -73,6 +92,52 @@ export class ProjectFilesService {
       truncated: matched.length > limit,
       source: scan.source,
     };
+  }
+
+  /** Bounded display read. Resolve symlinks before testing project containment. */
+  async read(path: string): Promise<ProjectFileContent> {
+    try {
+      const root = await realpath(this.options.cwd);
+      const target = await realpath(resolve(root, path));
+      const rel = relative(root, target);
+      if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+        throw new Error("That file is outside this project.");
+      }
+      const before = await stat(target);
+      if (!before.isFile()) throw new Error("That path is not a regular file. Choose a file to preview.");
+      // Nonblocking avoids hanging on a FIFO swapped in after stat; no-follow
+      // refuses a final symlink swapped in after realpath.
+      const file = await open(target, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
+      try {
+        const info = await file.stat();
+        if (!info.isFile() || info.dev !== before.dev || info.ino !== before.ino) {
+          throw new Error("That file changed while opening. Try opening it again.");
+        }
+        const mediaType = FILE_MEDIA_TYPES[extname(target).toLowerCase()] ?? "application/octet-stream";
+        const binary = mediaType.startsWith("image/");
+        const cap = (binary ? 12 : 2) * 1024 * 1024;
+        const buffer = Buffer.alloc(Math.min(info.size, cap) + 1);
+        let length = 0;
+        while (length < buffer.length) {
+          const { bytesRead } = await file.read(buffer, length, buffer.length - length, length);
+          if (!bytesRead) break;
+          length += bytesRead;
+        }
+        const truncated = length > cap || info.size > cap;
+        const bytes = buffer.subarray(0, Math.min(length, cap));
+        // Do not invent a replacement character for a UTF-8 sequence cut by the cap.
+        const decoder = new StringDecoder("utf8");
+        const content = binary ? bytes.toString("base64") : decoder.write(bytes) + (truncated ? "" : decoder.end());
+        return { path: rel.split(sep).join("/"), name: basename(target), mediaType,
+          size: info.size, modifiedAt: info.mtime.toISOString(), encoding: binary ? "base64" : "utf8", content, truncated };
+      } finally { await file.close(); }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") throw new Error("That file could not be found. It may have been moved or deleted.");
+      if (code === "EACCES" || code === "EPERM") throw new Error("That file could not be read. Check its permissions and try again.");
+      if (code) throw new Error("That file could not be opened. Try opening it again.");
+      throw error;
+    }
   }
 
   private now(): number {
