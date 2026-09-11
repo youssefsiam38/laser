@@ -1408,6 +1408,9 @@ export class StableSdkDriver implements SessionDriver {
         const match = this.session().modelRuntime.getModels().find((m) => m.provider === model.provider && m.id === model.id);
         if (!match) throw new DriverUnavailableError(this.kind, `unknown model ${model.provider}/${model.id}`);
         await this.session().setModel(match);
+        // The status line names the model being tried, so it has to hear about
+        // it while the failover is still running.
+        this.push({ kind: "state", state: this.state() }, this.extensionAdmission.eventInvocation()?.ref);
       },
       continueTurn: (options) => this.continueTurn(options),
       appendEntry: (entry) => {

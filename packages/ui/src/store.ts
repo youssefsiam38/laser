@@ -6,7 +6,7 @@
  * `entry_appended` only for extension custom entries, so it is not the source
  * of transcript state). Past sessions hydrate from `pi/session/entries`.
  */
-import { AGENT_EVENT_MESSAGE_TYPE, SESSION_RUN_ENTRY_TYPE, TASK_EVENT_MESSAGE_TYPE, isTerminalRunStatus } from "@lasercode/protocol";
+import { AGENT_EVENT_MESSAGE_TYPE, SESSION_FALLBACK_ENTRY_TYPE, SESSION_RUN_ENTRY_TYPE, TASK_EVENT_MESSAGE_TYPE, failureWording, isTerminalRunStatus } from "@lasercode/protocol";
 import type {
   AgentEvent,
   BackgroundTask,
@@ -916,6 +916,15 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
       // in low-level logs and engine history, but it is not an answer and must
       // never look like a red stopped turn beside a still-working session.
       return { ...v, running: true, blocks: dropRetryingProviderError(v.blocks) };
+    case "model_fallback": {
+      // A switch is a durable record in the transcript, where the person was
+      // reading. The steps that lead to one — trying a candidate, one failing —
+      // are transient control state, like a provider retry (D-180): the status
+      // line carries them and nothing lands in the conversation.
+      if (u.phase === "switched") return notice(v, "info", switchedText(u.to, u.detail));
+      if (u.phase === "exhausted") return notice(v, "warning", exhaustedText(u.detail));
+      return v;
+    }
     case "extension_error":
       return notice(v, "error", `${u.extension}: ${u.message}`);
     default:
@@ -1045,7 +1054,14 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null): B
     // draws nothing of its own, it says who the next prompt came from.
     if (e.type === "custom") {
       const marker = sentByOfMarker(raw);
-      if (marker) armed = marker;
+      if (marker) {
+        armed = marker;
+        continue;
+      }
+      // A model fallback wrote its own record here (M15-T3). Reading a session
+      // back must show the same line the person saw when it happened.
+      const record = fallbackRecord(raw, entryTimestamp(e.timestamp));
+      if (record) blocks.push(record);
       continue;
     }
     if (e.type !== "message" || !e.message) continue;
@@ -1153,6 +1169,50 @@ function sentByOfMarker(raw: unknown): SentByParent | undefined {
   if (!data || data.moment !== "started" || data.origin !== "agent") return undefined;
   if (typeof data.parentPath !== "string" || data.parentPath === "") return undefined;
   return { parentPath: data.parentPath, ...(typeof data.runId === "string" ? { runId: data.runId } : {}) };
+}
+
+/** "Continued on X · Y is not answering." — one line, both live and on reload. */
+function switchedText(to: { name?: string; id: string } | undefined, detail: string | undefined): string {
+  const model = to ? (to.name ?? to.id) : "another model";
+  return detail ? `Continued on ${model} · ${detail}` : `Continued on ${model}.`;
+}
+
+function exhaustedText(detail: string | undefined): string {
+  return detail ?? "No other model in this chain could take over.";
+}
+
+/**
+ * The transcript line a `lasercode/fallback` record carries, or undefined for
+ * the records that are state rather than a moment (an activation, a candidate
+ * that was skipped). Written by the worker, read here and nowhere else.
+ */
+function fallbackRecord(raw: unknown, at: string | undefined): Extract<Block, { kind: "notice" }> | undefined {
+  const entry = raw as { customType?: unknown; data?: unknown } | undefined;
+  if (entry?.customType !== SESSION_FALLBACK_ENTRY_TYPE) return undefined;
+  const data = entry.data as {
+    event?: unknown;
+    from?: { provider?: string; id?: string };
+    to?: { provider?: string; id?: string };
+    failure?: { class?: unknown };
+  } | undefined;
+  if (!data) return undefined;
+  const failure = typeof data.failure?.class === "string" ? failureWording(data.failure.class as Parameters<typeof failureWording>[0]) : undefined;
+  const said = (model: { id?: string } | undefined) => (typeof model?.id === "string" ? model.id : undefined);
+  const because = failure && said(data.from) ? `${said(data.from)} ${failure}.` : undefined;
+  if (data.event === "switched" || data.event === "returned") {
+    const to = said(data.to);
+    return { kind: "notice", id: nextBlockId(), ...(at ? { at } : {}), level: "info", text: switchedText(to ? { id: to } : undefined, because) };
+  }
+  if (data.event === "exhausted") {
+    return {
+      kind: "notice",
+      id: nextBlockId(),
+      ...(at ? { at } : {}),
+      level: "warning",
+      text: because ? `${because} No other model in this chain could take over.` : exhaustedText(undefined),
+    };
+  }
+  return undefined;
 }
 
 /** Pi entries stamp `timestamp` as epoch ms or an ISO string; both become ISO. */

@@ -21,6 +21,7 @@
 
 import {
   classifyProviderFailure,
+  failureWording,
   modelKey,
   sameModel,
   type FallbackActivation,
@@ -407,35 +408,6 @@ export class FallbackController {
   }
 }
 
-/** What happened, for a person, with no provider payload and no credential in it. */
-export function failureWording(failure: ProviderFailureClass): string {
-  switch (failure) {
-    case "credential":
-      return "did not accept its credential";
-    case "permission":
-      return "refused this request";
-    case "credits":
-      return "has no credit left";
-    case "allowance":
-      return "has used up its allowance";
-    case "rate_limit":
-      return "is being rate-limited";
-    case "provider_down":
-      return "is not answering";
-    case "connection":
-      return "could not be reached";
-    case "model_missing":
-      return "is no longer offered by its provider";
-    case "context_overflow":
-      return "cannot hold this conversation";
-    case "safety":
-      return "declined to answer";
-    case "aborted":
-      return "was stopped";
-    default:
-      return "failed";
-  }
-}
 
 /** Exported for the driver's own equality checks. */
 export { sameModel };

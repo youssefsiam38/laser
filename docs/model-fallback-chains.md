@@ -653,18 +653,28 @@ state**, which is why it goes where session state already goes:
 
 **The durable record** is a transcript notice, projected from the
 `lasercode/fallback` entry the same way `store.ts` already projects harness
-entries (`packages/ui/src/store.ts:1101`), plus the live `model_fallback`
-update for the session that is watching. It is quiet, informational-toned, one
-line, and it says the two things a person needs:
+entries, plus the live `model_fallback` update for the session that is
+watching. It is quiet, informational-toned, one line, and it says the two
+things a person needs:
 
-> **Continued on DeepSeek V3** · Sonnet 4.5 was rate-limited after 3 retries.
-> Anthropic is rate-limiting this key.
+> Continued on DeepSeek V3 · Sonnet 4.5 is being rate-limited.
 
-A return that worked reads *"Back on Sonnet 4.5"*; an exhausted chain adds its
-sentence to the existing stopped-run warning (§2.7) rather than drawing a
-second error. Skipped candidates are **not** separate records — they are the
-detail behind the disclosure on that one record, so a chain of five models does
-not produce five rows.
+**Implemented differently from the first draft, deliberately (M15-T3, step 5):**
+an exhausted chain gets its **own** attention-toned record directly under the
+stopped run, rather than its sentence being spliced into that row. A spliced
+sentence exists only in the live update and would vanish on reload, and a
+record that disappears when you reopen the conversation is not a record. The
+two lines are complementary, not duplicates: the stopped row says what the
+provider said, the record says what the chain could and could not do. For the
+same reason a return reads with the same wording as a forward switch
+("Continued on …"): the record is composed from the durable entry, which stores
+identities and a failure class, not a direction-specific sentence.
+
+Skipped candidates are **not** records: they are attempts inside the failover
+event, carried in the entry's own `failover.attempts`, so a chain of five
+models does not produce five rows. Trying a candidate and a candidate failing
+emit `model_fallback` updates but write nothing into the conversation — they
+are transient control state, exactly as a provider retry is under D-180.
 
 **No credentials, no raw provider payloads.** The record renders the class's
 sentence through the same person-first vocabulary `provider-error.ts` already
