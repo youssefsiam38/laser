@@ -14,6 +14,7 @@
  */
 import type {
   AgentEvent,
+  AgentMessageMode,
   AgentRun,
   AgentRunQuestion,
   AgentRunStatus,
@@ -82,7 +83,8 @@ export interface StartAgentResult {
 export interface SendAgentMessageInput {
   sessionId: string;
   message: string;
-  interrupt: boolean;
+  /** Required internally; the model-facing tool alone defaults omission to interrupt. */
+  mode: AgentMessageMode;
 }
 
 export interface SendAgentMessageResult {
@@ -90,17 +92,17 @@ export interface SendAgentMessageResult {
   runId: string;
   status: AgentRunStatus;
   /**
-   * "queued" when the child was busy and the message waits (in its engine's
-   * queue while it streams, or behind the run it is finishing); "answered"
-   * when the child was paused on a question and the message settled it (the
-   * question comes back as `answered`); "delivered" only once the child's
-   * engine has accepted the message as its next turn — never before admission
-   * is known; "refused" when the engine would not take it, in which case the
-   * run recorded for the attempt is `failed` and `error` says why.
+   * "queued" when an interrupt/steer/queue message is accepted but waits;
+   * "answered" only when explicit answer mode settled the returned question;
+   * "delivered" only once the engine accepted a new turn; "refused" when
+   * admission or answer validation failed; "control_failed" when interrupt
+   * could not take queue/cancellation ownership and therefore did not enqueue.
    */
-  delivery: "delivered" | "queued" | "answered" | "refused";
+  delivery: "delivered" | "queued" | "answered" | "refused" | "control_failed";
   answered?: AgentRunQuestion;
-  /** Why a `refused` message did not start. */
+  /** Still-open question when answer mode was refused. */
+  question?: AgentRunQuestion;
+  /** Why a refused/control-failed message did not start. */
   error?: string;
 }
 

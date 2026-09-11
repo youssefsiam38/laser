@@ -12,6 +12,7 @@ import {
   AGENT_DESCRIPTION_MAX,
   AGENT_INSTRUCTIONS_MAX,
   AGENT_MAX_DEPTH_LIMIT,
+  AGENT_MESSAGE_MODES,
   AGENT_NAME_PATTERN,
   AGENT_RUN_STATUSES,
   BUILTIN_AGENT_NAMES,
@@ -301,6 +302,7 @@ export const agentNameSchema = z.string().regex(AGENT_NAME_PATTERN, {
   message: "lower case, starts with a letter, letters, digits and hyphens only, at most 40 characters",
 });
 export const agentModelChoiceSchema = z.object({ provider: z.string().min(1).max(100), id: z.string().min(1).max(200) }).strict();
+export const agentMessageModeSchema = z.enum(AGENT_MESSAGE_MODES).default("interrupt");
 export const builtinAgentNameSchema = z.enum(BUILTIN_AGENT_NAMES);
 export const agentSkillRefSchema = z
   .object({ name: z.string().min(1).max(64), path: z.string().min(1).max(4096), scope: z.enum(["global", "project"]) })

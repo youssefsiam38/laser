@@ -5,7 +5,7 @@
  * follow-ups sat in the engine's queue; the released harness published
  * `completed` at once, aborted one turn, and Pi's post-run loop carried the
  * queued messages on under a run that had ended. The parent's correction and
- * its `interrupt: true` request then became fresh runs that failed busy, and
+ * its old `interrupt: true` request then became fresh runs that failed busy, and
  * the child's real completion was answered "This run already ended."
  *
  * Every step here is a barrier — a held provider request, a tool blocked on
@@ -404,6 +404,16 @@ beforeEach(async () => {
         return { content: [{ type: "text", text: answer === undefined ? "no answer" : `answer: ${answer}` }], details: undefined };
       },
     });
+    pi.registerTool({
+      name: "ask_without_signal",
+      label: "Ask without signal",
+      description: "Asks through the valid portable surface without attaching the tool signal.",
+      parameters: { type: "object", properties: {} } as never,
+      async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+        const answer = await ctx.ui.select("No signal?", ["x", "y"]);
+        return { content: [{ type: "text", text: answer === undefined ? "no answer" : `answer: ${answer}` }], details: undefined };
+      },
+    });
   };
   server = new WorkerServer({
     cwd: join(base, "project"),
@@ -493,7 +503,7 @@ describe("queued completion ownership against the real engine", () => {
     });
     provider.route((request) => {
       const last = lastUserText(request);
-      if (last === INTERRUPT) return { toolCall: { name: "complete_agent_run", args: { status: "completed", message: "successor done" } } };
+      if (last === CORRECTION) return { toolCall: { name: "complete_agent_run", args: { status: "completed", message: "successor done" } } };
       if (last !== undefined) return { text: `noted: ${last}` };
       return { text: "nothing to add" };
     });
@@ -525,7 +535,7 @@ describe("queued completion ownership against the real engine", () => {
     });
 
     // 1. The child is streaming: its first provider request is held.
-    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start the work.", interrupt: false });
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start the work.", mode: "queue" });
     expect(started).toMatchObject({ delivery: "delivered", status: "running" });
     const oldRunId = started.runId;
     // "delivered" means the engine owns it as its next turn: it is streaming now.
@@ -538,8 +548,8 @@ describe("queued completion ownership against the real engine", () => {
       const update = (message as { params: { update: SessionUpdate } }).params.update;
       return update.kind === "queue_update" && update.followUp.length === 2;
     });
-    const first = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: F1, interrupt: false });
-    const second = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: F2, interrupt: false });
+    const first = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: F1, mode: "queue" });
+    const second = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: F2, mode: "queue" });
     expect(first).toMatchObject({ delivery: "queued", runId: oldRunId, status: "running" });
     expect(second).toMatchObject({ delivery: "queued", runId: oldRunId, status: "running" });
     await queuedFollowUps;
@@ -573,10 +583,10 @@ describe("queued completion ownership against the real engine", () => {
     //    an ordinary correction and an interrupt. Both are truthfully queued
     //    on the one successor; the interrupt aborts the old invocation.
     const bashAborted = waitForDriverEvent((event) => event.kind === "tool_execution_end" && event.toolCallId === "call-bash");
-    const correction = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: CORRECTION, interrupt: false });
+    const correction = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: CORRECTION, mode: "queue" });
     expect(correction).toMatchObject({ delivery: "queued", runId: successor.runId, status: "queued" });
     expect(server.agents().run(oldRunId)?.status).toBe("running");
-    const interrupt = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: INTERRUPT, interrupt: true });
+    const interrupt = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: INTERRUPT, mode: "interrupt" });
     expect(interrupt).toMatchObject({ delivery: "queued", runId: successor.runId, status: "queued" });
     expect(server.agents().runs().filter((run) => run.sessionPath === childPath)).toHaveLength(2);
     await bashAborted;
@@ -586,7 +596,7 @@ describe("queued completion ownership against the real engine", () => {
     expect(existsSync(marker)).toBe(false);
     // Nothing was steered into the engine under the ended run.
     expect(queueUpdates().some((update) => update.steering.includes(INTERRUPT) || update.followUp.includes(CORRECTION))).toBe(false);
-    expect(lifecycleLogs().some((log) => log.line.includes(`abort-requested runId=${oldRunId} reason=interrupt-during-terminal-pending`))).toBe(true);
+    expect(lifecycleLogs().some((log) => log.line.includes(`abort-requested runId=${oldRunId} reason=parent-interrupt`))).toBe(true);
 
     // 6. The old prompt promise resolves: one completion, delivered only once
     //    the successor is the live run; the successor consumes every message
@@ -609,9 +619,9 @@ describe("queued completion ownership against the real engine", () => {
 
     // Five provider requests in all: the task, then one per successor message.
     // The abort of the old invocation never became a provider round-trip.
-    expect(provider.requests.map(lastUserText)).toEqual(["Start the work.", F1, F2, CORRECTION, INTERRUPT]);
+    expect(provider.requests.map(lastUserText)).toEqual(["Start the work.", INTERRUPT, F1, F2, CORRECTION]);
     const consumed = provider.requests.slice(1).map(lastUserText).filter((text): text is string => text !== undefined);
-    expect(consumed).toEqual([F1, F2, CORRECTION, INTERRUPT]);
+    expect(consumed).toEqual([INTERRUPT, F1, F2, CORRECTION]);
     const history = provider.requests.at(-1)!;
     for (const text of [F1, F2, CORRECTION, INTERRUPT]) expect(userOccurrences(history, text), text).toBe(1);
     expect(userOccurrences(history, NUDGE_TEXT)).toBe(0);
@@ -647,15 +657,47 @@ describe("queued completion ownership against the real engine", () => {
     expectNoBodiesInModuleLogs(["Start the work.", F1, F2, CORRECTION, INTERRUPT, "old done", "successor done", "late words", "late error", "late extension error"]);
   }, 60_000);
 
+  it("interrupts a normal held provider call and delivers repeated interrupts FIFO before preserved queued work", async () => {
+    const I1 = "Redirect one.";
+    const I2 = "Redirect two.";
+    const NORMAL = "Preserved ordinary work.";
+    const releaseFirst = provider.hold(0);
+    provider.route((request) => {
+      const last = lastUserText(request);
+      if (last === NORMAL) return { toolCall: { name: "complete_agent_run", args: { status: "completed", message: "redirected done" } } };
+      return { text: `handled ${last ?? "unknown"}` };
+    });
+
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Original held work.", mode: "queue" });
+    await provider.arrived(0);
+    expect((await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: NORMAL, mode: "queue" })).delivery).toBe("queued");
+
+    const first = parentBridge.sendAgentMessage({ sessionId: childSessionId, message: I1, mode: "interrupt" });
+    const second = parentBridge.sendAgentMessage({ sessionId: childSessionId, message: I2, mode: "interrupt" });
+    const results = await Promise.all([first, second]);
+    expect(results.map((result) => result.delivery)).toEqual(["queued", "queued"]);
+    expect(results.every((result) => result.runId === started.runId)).toBe(true);
+    await provider.arrived(1);
+    releaseFirst();
+    await waitForTerminal(started.runId);
+
+    expect(provider.requests.map(lastUserText)).toEqual(["Original held work.", I1, I2, NORMAL]);
+    const history = provider.requests.at(-1)!;
+    for (const text of [I1, I2, NORMAL]) expect(userOccurrences(history, text), text).toBe(1);
+    expect(server.agents().run(started.runId)).toMatchObject({ status: "completed", result: { message: "redirected done" } });
+    expect(server.agents().runs().filter((run) => run.sessionPath === childPath)).toHaveLength(1);
+    assertNoOverlappingInvocations();
+  }, 60_000);
+
   it("ignores late predecessor callbacks while the successor is still working, not only once it has ended", async () => {
     provider.answer(0, { toolCall: { name: "complete_agent_run", args: { status: "completed", message: "old done" } } });
     const heldSuccessor = provider.holdWhen((request) => lastUserText(request) === F1);
     provider.route((request) => (lastUserText(request) === F1 ? { toolCall: { name: "complete_agent_run", args: { status: "completed", message: "successor done" } } } : { text: "ok" }));
     const completions = observeCompletions();
     const releaseFirst = provider.hold(0);
-    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start.", interrupt: false });
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start.", mode: "queue" });
     await provider.arrived(0);
-    await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: F1, interrupt: false });
+    await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: F1, mode: "queue" });
     releaseFirst();
     await completions.first;
     await waitForTerminal(started.runId);
@@ -700,7 +742,7 @@ describe("queued completion ownership against the real engine", () => {
       admission = extensionActions.sendMessage({ customType: "test/wake", content: WAKE, display: true }, { deliverAs: "steer", triggerTurn: true }).then(() => { admitted = true; });
     });
     const releaseFirst = provider.hold(0);
-    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start.", interrupt: false });
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start.", mode: "queue" });
     await provider.arrived(0);
     releaseFirst();
     await completions.first;
@@ -788,7 +830,7 @@ describe("queued completion ownership against the real engine", () => {
       await successorQueued;
     });
 
-    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start background work then finish.", interrupt: false });
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start background work then finish.", mode: "queue" });
     await provider.arrived(1);
     const old = server.agents().run(started.runId)!;
     expect(old).toMatchObject({ origin: "agent", status: "running" });
@@ -821,7 +863,7 @@ describe("queued completion ownership against the real engine", () => {
     assertNoOverlappingInvocations();
   }, 60_000);
 
-  it("stops a completing run's blocked tool on a person's stop, keeps its declared completion, and still runs the queued successor", async () => {
+  it("stops a completing run's blocked tool, keeps its declared completion, and visibly cancels queued work without resuming", async () => {
     const marker = join(base, "release-stopped-bash");
     const command = `while [ ! -f '${marker}' ]; do sleep 0.02; done; echo released`;
     const releaseFirst = provider.hold(0);
@@ -833,9 +875,9 @@ describe("queued completion ownership against the real engine", () => {
     });
     provider.route((request) => (lastUserText(request) === F1 ? { toolCall: { name: "complete_agent_run", args: { status: "completed", message: "successor done" } } } : { text: "ok" }));
     const completions = observeCompletions();
-    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start.", interrupt: false });
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start.", mode: "queue" });
     await provider.arrived(0);
-    const queued = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: F1, interrupt: false });
+    const queued = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: F1, mode: "queue" });
     expect(queued.delivery).toBe("queued");
     releaseFirst();
     await completions.first;
@@ -853,8 +895,11 @@ describe("queued completion ownership against the real engine", () => {
     expect(lifecycleLogs().some((log) => log.line.includes(`stop-after-declared-end runId=${started.runId} initiator=user declared=completed`))).toBe(true);
 
     await waitForTerminal(successor.runId);
-    expect(completions.results).toEqual([{ ok: true, runId: started.runId }, { ok: true, runId: successor.runId }]);
-    expect(parentEvents.map((entry) => [entry.event.type, entry.event.runId])).toEqual([["agent.completed", started.runId], ["agent.completed", successor.runId]]);
+    expect(server.agents().run(successor.runId)).toMatchObject({ status: "cancelled", endedBy: { initiator: "user", reason: "enough" } });
+    expect(completions.results).toEqual([{ ok: true, runId: started.runId }]);
+    expect(parentEvents.map((entry) => [entry.event.type, entry.event.runId])).toEqual([["agent.cancelled", successor.runId], ["agent.completed", started.runId]]);
+    expect(provider.requests).toHaveLength(1);
+    expect(server.agents().activeRun(childPath)).toBeUndefined();
     assertNoOverlappingInvocations();
   }, 60_000);
 
@@ -870,9 +915,9 @@ describe("queued completion ownership against the real engine", () => {
     });
     provider.route(() => ({ text: "nothing more" }));
     const completions = observeCompletions();
-    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start.", interrupt: false });
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start.", mode: "queue" });
     await provider.arrived(0);
-    const queued = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: F1, interrupt: false });
+    const queued = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: F1, mode: "queue" });
     releaseFirst();
     await completions.first;
     const successorId = queued.runId === started.runId ? server.agents().runs().find((run) => run.sessionPath === childPath && run.runId !== started.runId)!.runId : queued.runId;
@@ -913,9 +958,9 @@ describe("queued completion ownership against the real engine", () => {
       if (ordinal !== 1) return;
       person = call("session/prompt", { path: childPath, content: [{ type: "text", text: "from the person" }], streamingBehavior: "followUp" });
     });
-    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start.", interrupt: false });
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start.", mode: "queue" });
     await provider.arrived(0);
-    await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: F1, interrupt: false });
+    await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: F1, mode: "queue" });
     releaseFirst();
     await completions.first;
     const successor = server.agents().runs().find((run) => run.sessionPath === childPath && run.runId !== started.runId)!;
@@ -983,7 +1028,7 @@ describe("queued completion ownership against the real engine", () => {
     });
 
     // 1. The child streams under the parent's run; the person steers and follows up in its chat.
-    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start the work.", interrupt: false });
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start the work.", mode: "queue" });
     const oldRunId = started.runId;
     await provider.arrived(0);
     const bothQueued = waitForMessage((message) => {
@@ -1063,9 +1108,9 @@ describe("queued completion ownership against the real engine", () => {
     provider.route((request) => (lastUserText(request) === F1 ? { toolCall: { name: "complete_agent_run", args: { status: "completed", message: "successor done" } } } : { text: "ok" }));
     const completions = observeCompletions();
     const releaseFirst = provider.hold(0);
-    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start.", interrupt: false });
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start.", mode: "queue" });
     await provider.arrived(0);
-    await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: F1, interrupt: false });
+    await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: F1, mode: "queue" });
     releaseFirst();
     await completions.first;
     await waitForTerminal(started.runId);
@@ -1105,11 +1150,11 @@ describe("queued completion ownership against the real engine", () => {
     expectNoBodiesInModuleLogs(["Start.", F1, "old done", "successor done", "Later?"]);
   }, 60_000);
 
-  it("attributes a dialog and its resolution to the epoch that raised it, so the owning run asks and is answered by the same stamp", async () => {
+  it("attributes a dialog to its epoch so stop cancels only the exact owned request before abort", async () => {
     provider.answer(0, { toolCall: { name: "ask_now", args: {}, id: "call-ask-now" } });
     provider.route(() => ({ text: "ok" }));
     const asked = waitForRun((run) => run.sessionPath === childPath && run.status === "needs_input");
-    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Ask.", interrupt: false });
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Ask.", mode: "queue" });
     const paused = await asked;
     expect(paused).toMatchObject({ runId: started.runId, question: { kind: "select", title: "Now?", options: ["x", "y"], toolName: "ask_now", toolCallId: "call-ask-now" } });
     const request = driverEvents.find((event) => event.kind === "ui_request")!;
@@ -1117,14 +1162,11 @@ describe("queued completion ownership against the real engine", () => {
     expect(request.invocation).toEqual(owning);
     expect(parentEvents.map((entry) => entry.event.type)).toEqual(["agent.needs_input"]);
 
-    // The person stops the run: the abort reaches the dialog through the
-    // tool's signal, and its resolution carries the stamp its request took.
-    const resolved = waitForDriverEvent((event) => event.kind === "ui_event" && event.method === "dialogResolved");
+    // The person stops the run: lifecycle ownership cancels the exact dialog
+    // synchronously before abort waits for idle. `respondToUi(cancelled)` is
+    // intentionally not a second client event; the run projection drops it.
     const stopped = await call("agents/runs/stop", { runId: started.runId, reason: "never mind" });
     expect(stopped.error).toBeUndefined();
-    await resolved;
-    const resolution = driverEvents.find((event) => event.kind === "ui_event" && event.method === "dialogResolved")!;
-    expect(resolution).toMatchObject({ dialogId: request.dialogId, invocation: owning });
     await waitForTerminal(started.runId);
     expect(server.agents().run(started.runId)).toMatchObject({ status: "cancelled", endedBy: { initiator: "user", reason: "never mind" } });
     expect(server.agents().run(started.runId)).not.toHaveProperty("question");
@@ -1132,6 +1174,120 @@ describe("queued completion ownership against the real engine", () => {
     expect(lifecycleLogs().some((log) => log.line.includes("late-callback-dropped kind=ui_"))).toBe(false);
     assertNoOverlappingInvocations();
     expectNoBodiesInModuleLogs(["Ask.", "Now?", "never mind"]);
+  }, 60_000);
+
+  it("does not kill a detached background command when interrupt aborts the foreground provider", async () => {
+    const REDIRECT = "Redirect while background work lives.";
+    const marker = join(base, "finish-detached-after-interrupt");
+    const OUTPUT = "detached-survived";
+    const releaseOldProvider = provider.hold(1);
+    const releaseRedirect = provider.hold(2);
+    provider.answer(0, { toolCall: { name: "bash", args: { command: `while [ ! -f '${marker}' ]; do sleep 0.02; done; echo ${OUTPUT}`, background: true }, id: "call-detached" } });
+    provider.answer(2, { text: "redirect accepted" });
+    provider.route((_request, index) => index >= 3
+      ? { toolCall: { name: "complete_agent_run", args: { status: "completed", message: "detached done" } } }
+      : { text: "working" });
+    const taskFinished = waitForMessage((message) => {
+      if (!("method" in message) || message.method !== "pi/extension/message") return false;
+      const value = message as { params?: { message?: { type?: string; task?: { status?: string } } } };
+      return value.params?.message?.type === "lasercode/task/update" && value.params.message.task?.status === "completed";
+    });
+
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start detached work.", mode: "queue" });
+    await provider.arrived(1);
+    expect((await parentBridge.inspectFleet()).rows.flatMap((row) => row.children).some((row) => row.kind === "command" && row.state === "running")).toBe(true);
+
+    const interrupted = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: REDIRECT, mode: "interrupt" });
+    expect(interrupted).toMatchObject({ delivery: "queued", runId: started.runId });
+    await provider.arrived(2);
+    expect((await parentBridge.inspectFleet()).rows.flatMap((row) => row.children).some((row) => row.kind === "command" && row.state === "running")).toBe(true);
+
+    writeFileSync(marker, "go\n");
+    await taskFinished;
+    releaseOldProvider();
+    releaseRedirect();
+    await waitForTerminal(started.runId);
+    const command = (await parentBridge.inspectFleet()).rows.flatMap((row) => row.children).find((row) => row.kind === "command");
+    expect(command).toMatchObject({ kind: "command", state: "completed", status: "Done" });
+    expect(provider.requests.map(lastUserText).slice(0, 3)).toEqual(["Start detached work.", undefined, REDIRECT]);
+    expect(server.agents().run(started.runId)).toMatchObject({ status: "completed", result: { message: "detached done" } });
+    assertNoOverlappingInvocations();
+  }, 60_000);
+
+  it("interrupts a real pinned-engine no-signal question without waiting forever for idle", async () => {
+    const REDIRECT = "Redirect the no-signal tool.";
+    provider.answer(0, { toolCall: { name: "ask_without_signal", args: {}, id: "call-no-signal" } });
+    provider.route((request) => lastUserText(request) === REDIRECT
+      ? { toolCall: { name: "complete_agent_run", args: { status: "completed", message: "no-signal redirected" } } }
+      : { text: "old invocation must not continue" });
+    const asked = waitForRun((run) => run.sessionPath === childPath && run.status === "needs_input");
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Ask without a signal.", mode: "queue" });
+    const paused = await asked;
+    expect(paused.question).toMatchObject({ title: "No signal?", toolName: "ask_without_signal" });
+
+    await expect(parentBridge.sendAgentMessage({ sessionId: childSessionId, message: REDIRECT, mode: "interrupt" })).resolves.toMatchObject({ delivery: "queued", runId: started.runId });
+    await waitForTerminal(started.runId);
+    expect(liveDriver.pendingUi()).toEqual([]);
+    expect(provider.requests.map(lastUserText)).toEqual(["Ask without a signal.", REDIRECT]);
+    expect(server.agents().run(started.runId)).toMatchObject({ status: "completed", result: { message: "no-signal redirected" } });
+    assertNoOverlappingInvocations();
+  }, 60_000);
+
+  it("stops a real pinned-engine no-signal question through the shared control transaction", async () => {
+    provider.answer(0, { toolCall: { name: "ask_without_signal", args: {}, id: "call-no-signal-stop" } });
+    provider.route(() => ({ text: "old invocation must not continue" }));
+    const asked = waitForRun((run) => run.sessionPath === childPath && run.status === "needs_input");
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Ask before stop.", mode: "queue" });
+    await asked;
+
+    const stopped = await call("agents/runs/stop", { runId: started.runId, reason: "stop the question" });
+    expect(stopped.error).toBeUndefined();
+    await waitForTerminal(started.runId);
+    expect(liveDriver.pendingUi()).toEqual([]);
+    expect(provider.requests.map(lastUserText)).toEqual(["Ask before stop."]);
+    expect(server.agents().run(started.runId)).toMatchObject({ status: "cancelled", endedBy: { initiator: "user", reason: "stop the question" } });
+    assertNoOverlappingInvocations();
+  }, 60_000);
+
+  it("answers a real pinned-engine question only with explicit answer mode", async () => {
+    provider.answer(0, { toolCall: { name: "ask_now", args: {}, id: "call-answer-now" } });
+    provider.answer(1, { toolCall: { name: "complete_agent_run", args: { status: "completed", message: "answered done" } } });
+    const asked = waitForRun((run) => run.sessionPath === childPath && run.status === "needs_input");
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Ask explicitly.", mode: "queue" });
+    const paused = await asked;
+    expect(paused.question).toMatchObject({ kind: "select", options: ["x", "y"] });
+
+    const answer = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "x", mode: "answer" });
+    expect(answer).toMatchObject({ delivery: "answered", runId: started.runId, answered: { id: paused.question!.id, kind: "select" } });
+    expect(liveDriver.pendingUi()).toEqual([]);
+    await waitForTerminal(started.runId);
+    expect(server.agents().run(started.runId)).toMatchObject({ status: "completed", result: { message: "answered done" } });
+    expect(provider.requests).toHaveLength(2);
+    assertNoOverlappingInvocations();
+  }, 60_000);
+
+  it("interrupts and fences a real pinned-engine question instead of parsing the redirect as its answer", async () => {
+    const REDIRECT = "Do a different task now.";
+    provider.answer(0, { toolCall: { name: "ask_now", args: {}, id: "call-interrupt-question" } });
+    provider.route((request) => lastUserText(request) === REDIRECT
+      ? { toolCall: { name: "complete_agent_run", args: { status: "completed", message: "redirect done" } } }
+      : { text: "old invocation must not continue" });
+    const asked = waitForRun((run) => run.sessionPath === childPath && run.status === "needs_input");
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Ask then redirect.", mode: "queue" });
+    const paused = await asked;
+    const oldInvocation = driverEvents.find((event) => event.kind === "agent_start" && event.invocation?.runId === started.runId)!.invocation!;
+
+    const interrupted = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: REDIRECT, mode: "interrupt" });
+    expect(interrupted).toMatchObject({ delivery: "queued", runId: started.runId });
+    expect(liveDriver.pendingUi()).toEqual([]);
+    expect(server.agents().run(started.runId)).not.toHaveProperty("question");
+    await waitForTerminal(started.runId);
+
+    expect(provider.requests.map(lastUserText)).toEqual(["Ask then redirect.", REDIRECT]);
+    expect(server.agents().run(started.runId)).toMatchObject({ status: "completed", result: { message: "redirect done" } });
+    expect(driverEvents.filter((event) => event.kind === "agent_start" && event.invocation?.runId === started.runId)).toHaveLength(2);
+    expect(driverEvents.some((event) => event.kind === "ui_request" && event.dialogId === paused.question!.id && event.invocation?.id === oldInvocation.id)).toBe(true);
+    assertNoOverlappingInvocations();
   }, 60_000);
 
   it("releases a person's admission lease the moment their message is parked, so a tray message behind an extension's wake on the successor cannot wedge the session", async () => {
@@ -1165,7 +1321,7 @@ describe("queued completion ownership against the real engine", () => {
 
     // 1. The child streams under the parent's run; the person writes into
     //    its chat meanwhile. The UI's queue is the tray, delivered at settle.
-    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start.", interrupt: false });
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start.", mode: "queue" });
     const oldRunId = started.runId;
     await provider.arrived(0);
     expect((await call("session/pending/add", { path: childPath, content: [{ type: "text", text: TRAY }] })).error).toBeUndefined();
@@ -1247,7 +1403,7 @@ describe("queued completion ownership against the real engine", () => {
       const value = message as { params?: { message?: { type?: string; task?: { status?: string } } } };
       return value.params?.message?.type === "lasercode/task/update" && value.params.message.task?.status === "completed";
     });
-    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start background work.", interrupt: false });
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start background work.", mode: "queue" });
     await provider.arrived(2);
     expect(lastUserText(provider.requests[2]!)).toBe(NUDGE_TEXT);
     // The engine's queue as agent-core holds it: the very thing the session's

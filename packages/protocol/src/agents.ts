@@ -23,6 +23,9 @@ export const AGENT_DESCRIPTION_MAX = 300;
 export const AGENT_INSTRUCTIONS_MAX = 64 * 1024;
 export const AGENT_TASK_MAX = 64 * 1024;
 export const AGENT_MESSAGE_MAX = 64 * 1024;
+/** How a parent's message interacts with the child's current invocation (D-204). */
+export const AGENT_MESSAGE_MODES = ["interrupt", "steer", "queue", "answer"] as const;
+export type AgentMessageMode = (typeof AGENT_MESSAGE_MODES)[number];
 /** A subagent's stored task excerpt on the run record. */
 export const AGENT_TASK_EXCERPT = 500;
 /**
@@ -248,8 +251,8 @@ export interface AgentSkillsListing {
  *   someone answers. The question is on `AgentRun.question`. It is live —
  *   nothing has ended — and it is the one state a parent most needs to tell
  *   apart from `running`, because only an answer moves it on. Its parent may
- *   answer through `send_agent_message`; the person may answer in the child's
- *   own chat; whichever comes first settles it.
+ *   answer through `send_agent_message` with `mode: "answer"`; the person may
+ *   answer in the child's own chat; whichever comes first settles it.
  * - `blocked` — the child **ended** by saying it could not finish
  *   (`complete_agent_run { status: "blocked" }`); its question, if it asked
  *   one, is its final message. Terminal, though it reads as "needs you".
@@ -281,6 +284,21 @@ export interface AgentRunQuestion {
   toolCallId?: string;
   toolName?: string;
   askedAt: string;
+}
+
+/** One canonical model-facing instruction for answering a live typed question. */
+export function agentQuestionAnswerHint(question: Pick<AgentRunQuestion, "kind">): string {
+  const call = 'send_agent_message with its sessionId and mode "answer"';
+  switch (question.kind) {
+    case "select":
+      return `Answer it with ${call} and one of the choices, exactly, as the message.`;
+    case "confirm":
+      return `Answer it with ${call} and "yes" or "no" as the message.`;
+    case "input":
+      return `Answer it with ${call}; the message is the answer, verbatim.`;
+    case "editor":
+      return `Answer it with ${call}; the message replaces the text, verbatim.`;
+  }
 }
 
 /** The four identities, exactly as the architecture reference names them. */

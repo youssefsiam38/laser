@@ -111,8 +111,8 @@ module from the worker-supplied `AgentHarnessBridge`:
 
 | Tool | Who gets it | Does |
 | --- | --- | --- |
-| `start_agent { agent_name, subagent_name, task, worktree? }` | a session whose definition permits delegation and whose depth allows another level | validates the name against the allowed list and depth, loads the child's full configuration, creates the child session and (unless `worktree: false`) its worktree, starts the child loop in the background, returns `{ agent_name, subagent_name, sessionId, runId, status: "running", working_directory, branch?, guidance, your_responsibility }` immediately. `guidance` is the sentence the parent reads at the moment it matters: *Do not wait for `<name>`. Carry on with your own work; when it ends, its result will be sent to you as a message. Use `inspect_agent` with runId `<runId>` to check on it meanwhile — a status of `needs_input` means it is paused on a question you can answer with `send_agent_message`.* |
-| `send_agent_message { sessionId, message, interrupt? }` | same | a running child receives it as its next instruction: while its engine streams, the message goes into the engine's own queue — the follow-up lane, or the steering lane with `interrupt: true` — and the result says `delivery: "queued"`; an idle child starts a new run and the result carries the new `runId` with `delivery: "delivered"` only once the child's engine has accepted the message as its next turn — never before admission is known — or `delivery: "refused"` with `error` (and a `failed` run for the attempt) when it would not take it; a child that is `needs_input` has its open question **answered** by the message (`delivery: "answered"`, the question returned as `answered`) — see "Questions" below. A message sent while the child is finishing a declared completion waits, in order, on the one successor run the harness reserves behind it (still `"queued"`); with `interrupt: true` it also aborts the finishing invocation, which cannot change the result that invocation's tool already declared — see "Completion" |
+| `start_agent { agent_name, subagent_name, task, worktree? }` | a session whose definition permits delegation and whose depth allows another level | validates the name against the allowed list and depth, loads the child's full configuration, creates the child session and (unless `worktree: false`) its worktree, starts the child loop in the background, returns `{ agent_name, subagent_name, sessionId, runId, status: "running", working_directory, branch?, guidance, your_responsibility }` immediately. `guidance` is the sentence the parent reads at the moment it matters: *Do not wait for `<name>`. Carry on with your own work; when it ends, its result will be sent to you as a message. Use `inspect_agent` with runId `<runId>` to check on it meanwhile — a status of `needs_input` means it is paused on a question you can answer with `send_agent_message` mode `answer`.* |
+| `send_agent_message { sessionId, message, mode? }` | same | D-204 defines four modes. `interrupt` (the default) takes back both engine queues, cancels every pending question owned by the exact current invocation, waits for its prompt/abort fence, then delivers the redirect ahead of preserved ordinary work. `steer` reaches the next model-call boundary without cancellation; `queue` waits after current work; neither becomes an answer while a question is open. `answer` alone validates and settles an open `needs_input` select/confirm/input/editor question, and is refused when none is open. Idle interrupt/steer/queue starts a new run. Delivery is `queued` only after accepted ownership, `delivered` only after engine admission, `answered` only after exact dialog settlement, `refused` for admission/answer rejection, and `control_failed` when interruption control was not established. A terminal declaration still wins; its interrupt-priority redirect waits on the one successor ahead of preserved work. Detached background commands survive interruption. Explicit stop uses the same exact-dialog/prompt fence and commits queued-work/terminal cancellation only after queue takeover and abort both succeed; failure retains accepted work and publishes no false cancellation |
 | `inspect_fleet` | same | the tree of work under this session, as the person's fleet column draws it (D-163, below): the agents it started, theirs, and the background commands any of them — the caller included — left running or finished. One row per session, standing on its newest run, and one per command; every row carries its kind (`agent` or `command`), title, the fleet's status word, elapsed time, one line (what it is doing, or how it ended) and the id to follow it with (`runId`, `taskId`). At most `AGENT_FLEET_ROWS_MAX` = 50 rows, cut deepest-first with `omitted` saying how many. Read-only; never transcripts |
 | `inspect_agent { runId? \| sessionId?, messages? }` | same | one agent in depth — any agent row of the caller's tree, a child or a child's child (D-163): the run summary (identities, status, result, `endedBy`, the open `question`) plus the **whole** task, `origin`, `depth`, `model`, `cwd` and `branch` (only with a worktree), the worktree as it is now (`exists`, `unmergedCommits`, `uncommittedFiles`, `removedAt?`), `activity` (turns, tool calls, the tool running now, when it was last active), its last assistant messages excerpted (`messages`: default `AGENT_INSPECT_MESSAGES_DEFAULT` = 1, at most `AGENT_INSPECT_MESSAGES_MAX` = 10, each cut at `AGENT_INSPECT_MESSAGE_EXCERPT` = 1000 characters), the question it is paused on, a `what_it_needs` sentence when it is stalled, and its own children as run summaries. Read-only: it never wakes the child or delivers anything to it. A live child is read through its driver; an ended child whose driver is gone, from its session file |
 | `stop_agent { runId, reason? }` | same | ends one run now with `endedBy: { initiator: "parent", reason }`; the session stays addressable |
@@ -208,11 +208,14 @@ the child worked reaches it through the pending tray's drain at
 released the moment the harness parks the message, because an extension's
 send ahead of it on the successor starts through the same lease — held until
 the person's acceptance, it would wait for the very turn that acceptance
-follows. `interrupt: true` and a person's
-stop additionally abort the finishing invocation (the declared result
-stands: first declaration wins), and a stop of the run while it is still
-invoking empties the engine's queues into the successor *before* the abort,
-so nothing continues under a cancelled run. The completion is published only
+follows. `mode: "interrupt"` additionally aborts and fences the finishing
+invocation, and puts the redirect at the successor's priority head (the
+already-declared result stands: first declaration wins). An explicit parent or
+person stop instead transactionally takes the engine queues and controls the
+exact invocation first. Only then does it visibly cancel every accepted message
+that has not started; queue-takeover or abort failure restores accepted work and
+publishes no cancellation. A successful stop creates no successor, so stopped
+work never auto-resumes. The completion is published only
 when the prompt promise — the one engine-ready fence — resolves: the old run
 turns terminal, the successor becomes the session's live run, and only then
 is the parent told. Every ending of an owning run publishes through that
@@ -337,16 +340,19 @@ has its own status — one live, one ended:
    drops it.
 
    Whoever answers first settles it. The person answers inline in the child's
-   transcript, as before (`docs/ux-fleet.md` "Questions"). The parent answers
-   through `send_agent_message { sessionId, message }`: while the child is
-   `needs_input`, the message **is** the answer — one of the choices (by name,
-   case-insensitively, or by 1-based number) for a `select`; a plain yes or no
-   for a `confirm`; the text verbatim for an `input` or `editor`. Anything that
-   does not fit is refused with the question restated, so an instruction can
-   never silently pick an option. The result is
-   `{ delivery: "answered", answered: <the question>, status }`, and the
-   harness sees the question gone the same way it sees a person's answer: by
-   re-reading the driver's open dialogs on the next event.
+   transcript, as before (`docs/ux-fleet.md` "Questions"). The parent must use
+   `send_agent_message { sessionId, message, mode: "answer" }`: one choice (by
+   name, case-insensitively, or by 1-based number) for a `select`; plain yes or
+   no for a `confirm`; the text verbatim for an `input` or `editor`. Invalid or
+   stale answers are refused and leave the question open; answer mode with no
+   open question is refused and starts nothing. No other mode is intercepted as
+   an answer: interrupt cancels/fences every open dialog owned by the exact
+   invocation before the redirect; steer and queue remain explicitly queued
+   while the question waits. Direct stop uses the same owned-dialog cancellation
+   so even no-signal extension questions cannot deadlock its abort.
+   A successful result is `{ delivery: "answered", answered: <the question>,
+   status }`, and the harness confirms the exact dialog is gone from the
+   driver's open dialogs.
 
 2. **It asked its parent something in its final message and ended** —
    `blocked`. The run is over, so this is finished work rather than a live
@@ -715,7 +721,8 @@ Every method has a schema, a round-trip sample and a router owner
   with; and (`golden.test.ts`, M13-T45) a child that raises a `select` through
   its real driver's UI bridge inside a running tool goes `needs_input`, its
   parent is woken, reads it through `inspect_agent` and answers it through
-  `send_agent_message`, and the child's dialog resolves with that answer.
+  `send_agent_message` with `mode: "answer"`, and the child's dialog resolves
+  with that answer.
 - The packaged gate: `check-packaged-session` reports the active modules;
   `packages/desktop/scripts/clean-machine.mjs` asserts `subagents` and
   `background-work` are active.

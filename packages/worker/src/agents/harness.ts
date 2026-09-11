@@ -22,7 +22,7 @@
  *   - a child that raises a question and is paused on it is `needs_input`,
  *     never `running`: the parent can tell "working" from "stuck waiting on
  *     me" from the status alone, reads the question, and may answer it
- *     through `send_agent_message`.
+ *     through `send_agent_message` mode `answer`.
  *   - a child gets its own worktree unless its parent said otherwise
  *     (`start_agent { worktree: false }`, for a child that only reads), in
  *     which case it works in the parent's checkout and is told so; nesting
@@ -38,6 +38,7 @@ import {
   AGENT_TASK_MAX,
   SESSION_RUN_ENTRY_TYPE,
   SUBAGENT_NAME_MAX,
+  agentQuestionAnswerHint,
   isTerminalRunStatus,
   type AgentDefinition,
   type AgentEvent,
@@ -93,7 +94,7 @@ import { HarnessError } from "./errors.js";
 import { buildFleetTree } from "./fleet.js";
 import { assistantMessagesOf, readSessionEntries } from "./inspect.js";
 import { readLogTail, type IndexedTask } from "./tasks.js";
-import { SessionLifecycle } from "./session-lifecycle.js";
+import { SessionLifecycle, type InvocationBoundary, type InvocationControlTicket } from "./session-lifecycle.js";
 import type { CreateWorktreeInput, Worktree, WorktreeFacts } from "./worktrees.js";
 
 /** What the harness needs from `WorktreeManager`; an interface so lifecycle tests run without git. */
@@ -183,7 +184,7 @@ interface Entry {
   /** Events for this session's model that arrived before its module registered a listener. */
   pendingEvents: AgentModelEvent[];
   /** One explicit owner/fence and one ordered successor inbox per child session. */
-  lifecycle: SessionLifecycle<RunEnd, PendingMessage>;
+  lifecycle: SessionLifecycle<RunEnd, PendingMessage, InvocationOutcome, ControlContext>;
 }
 
 interface Deferred<T> {
@@ -221,6 +222,10 @@ interface PendingMessage {
   engine: boolean;
   /** Present exactly when `engine` is true. */
   lane?: EngineLane;
+  /** Stable FIFO prefix used only while an invocation is fenced. */
+  priority?: "interrupt" | "steer";
+  /** Interrupt admission stays provisional until this control token succeeds. */
+  interruptToken?: number;
   resolve?: (result: { accepted: boolean; queued: boolean }) => void;
   reject?: (error: unknown) => void;
   extension?: PendingExtensionWork;
@@ -240,6 +245,16 @@ interface RunEnd {
   outcome: { result?: { status: "completed" | "blocked"; message: string }; error?: string; endedBy?: { initiator: AgentRunInitiator; reason?: string }; context?: string };
 }
 
+interface InvocationOutcome {
+  result: { accepted: boolean; queued: boolean };
+  failure?: string;
+  modelWork?: boolean;
+}
+
+interface ControlContext {
+  stop?: { initiator: AgentRunInitiator; reason?: string };
+}
+
 interface RunState {
   run: AgentRun;
   /** The whole task; the run record carries only its excerpt. */
@@ -256,6 +271,14 @@ const MODEL_EVENT_TYPE: Record<AgentRunTerminalStatus, AgentModelEvent["type"]> 
   failed: "agent.failed",
   cancelled: "agent.cancelled",
 };
+
+function isInterruptMessage(message: PendingMessage): boolean {
+  return message.priority === "interrupt";
+}
+
+function isPriorityMessage(message: PendingMessage): boolean {
+  return message.priority !== undefined;
+}
 
 function deferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
@@ -323,7 +346,7 @@ export class AgentHarness {
       eventListeners: new Set(),
       roleListeners: new Set(),
       pendingEvents: [],
-      lifecycle: new SessionLifecycle<RunEnd, PendingMessage>(),
+      lifecycle: new SessionLifecycle<RunEnd, PendingMessage, InvocationOutcome, ControlContext>(),
     };
     entry.bridge = this.bridgeFor(entry);
     return {
@@ -688,45 +711,81 @@ export class AgentHarness {
       this.endRun(state, "cancelled", { endedBy });
       return state.run;
     }
-    let abort = false;
-    let wait: Promise<void> | undefined;
-    await this.withEntry(entry, async () => {
-      if (isTerminalRunStatus(state.run.status)) return;
-      this.event({ kind: "stop_requested", sessionPath: state.run.sessionPath, runId, summary: endedBy.initiator === "user" ? "The person asked this run to stop" : "The parent asked this run to stop" });
+    type StopPlan =
+      | { kind: "done" }
+      | { kind: "idle"; driver: SessionDriver }
+      | { kind: "control"; ticket: InvocationControlTicket; driver: SessionDriver; wait: Promise<void> };
+    const plan = await this.withEntry(entry, async (): Promise<StopPlan> => {
+      if (isTerminalRunStatus(state.run.status)) return { kind: "done" };
       if (entry.lifecycle.cancelSuccessor(runId)) {
+        this.event({ kind: "stop_requested", sessionPath: state.run.sessionPath, runId, summary: endedBy.initiator === "user" ? "The person asked this run to stop" : "The parent asked this run to stop" });
         this.diagnose(entry, "info", "successor-cancelled", { runId, initiator: endedBy.initiator });
         this.endRun(state, "cancelled", { endedBy });
-        return;
+        return { kind: "done" };
       }
       const owner = entry.lifecycle.owner();
-      if (owner === runId) {
-        // First terminal declaration wins: a stop cannot replace an accepted
-        // complete_agent_run result while that tool's turn unwinds. The abort
-        // still goes out either way — the invocation that owns the session may
-        // be executing a later tool of the same batch, and a stop must reach
-        // what is actually running, not only the record (contract 4).
-        if (!entry.lifecycle.end(runId)) {
-          entry.lifecycle.declareEnd(runId, { status: "cancelled", outcome: { endedBy } });
-          this.diagnose(entry, "info", "terminal-declared", { runId, status: "cancelled", initiator: endedBy.initiator, phase: entry.lifecycle.phase().kind });
-          // Pi's abort does not empty its queues, and its post-run loop would
-          // carry every queued message on under this cancelled run. Take them
-          // back first; they wait behind the fence as the successor.
-          await this.transferEngineQueue(entry, state, "stop");
-        } else {
-          this.diagnose(entry, "info", "stop-after-declared-end", { runId, initiator: endedBy.initiator, declared: entry.lifecycle.end(runId)?.status });
+      if (owner !== runId) {
+        // No invocation can auto-resume queues for this run, but a driver that
+        // still owns queued text must nevertheless prove takeover first.
+        try {
+          const preserved = await this.takeEngineQueue(entry, state, "stop");
+          this.retainTakenMessages(entry, state, preserved);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          this.diagnose(entry, "warn", "stop-control-failed", { runId, stage: "clear-queue", error: reason });
+          throw new HarnessError(`Could not stop this agent safely: ${reason}`);
         }
-        abort = true;
-        wait = entry.lifecycle.waitForTerminal(runId);
-      } else {
-        this.endRun(state, "cancelled", { endedBy });
-        abort = true;
+        const driver = this.host.driver(state.run.sessionPath);
+        if (!driver) throw new HarnessError("The agent session is no longer open.");
+        return { kind: "idle", driver };
       }
+
+      let preserved: PendingMessage[];
+      try {
+        preserved = await this.takeEngineQueue(entry, state, "stop");
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        this.diagnose(entry, "warn", "stop-control-failed", { runId, stage: "clear-queue", error: reason });
+        throw new HarnessError(`Could not stop this agent safely: ${reason}`);
+      }
+      this.retainTakenMessages(entry, state, preserved);
+      const ticket = entry.lifecycle.beginStop(runId, {
+        waitForExecution: !this.host.driver(state.run.sessionPath)?.state().isStreaming,
+        context: { stop: endedBy },
+        interruptOutcome: { ok: false, cancelled: true, error: "The agent was explicitly stopped before the interrupt redirect could start." },
+      });
+      const driver = this.host.driver(state.run.sessionPath);
+      if (!ticket || !driver) throw new HarnessError("The agent invocation ended before stop control could be established.");
+      if (ticket.refusedInterruptToken !== undefined) this.removeProvisionalInterrupt(entry, runId, ticket.refusedInterruptToken);
+      this.cancelControlledDialogs(entry, state);
+      return { kind: "control", ticket, driver, wait: entry.lifecycle.waitForTerminal(runId) };
     });
-    if (abort) {
-      this.diagnose(entry, "info", "abort-requested", { runId, reason: "stop" });
-      this.scheduleAbort(this.host.driver(state.run.sessionPath));
+    if (plan.kind === "done") return state.run;
+    if (plan.kind === "idle") {
+      try {
+        await plan.driver.abort();
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        await this.withEntry(entry, () => {
+          const next = entry.lifecycle.nextLocalAfterFence(runId, (pending) => pending.engine);
+          if (next) this.kickMessage(state, next);
+        });
+        throw new HarnessError(`Could not stop this agent safely: ${reason}`);
+      }
+      await this.withEntry(entry, () => {
+        if (isTerminalRunStatus(state.run.status)) return;
+        this.event({ kind: "stop_requested", sessionPath: state.run.sessionPath, runId, summary: endedBy.initiator === "user" ? "The person asked this run to stop" : "The parent asked this run to stop" });
+        this.commitQueuedCancellation(entry, state, endedBy);
+        this.endRun(state, "cancelled", { endedBy });
+      });
+      return state.run;
     }
-    await wait;
+    if (plan.ticket.created && entry.lifecycle.startAbort(runId, plan.ticket.token, "initial")) {
+      void this.controlInvocation(entry, state, plan.driver, plan.ticket.token, "initial");
+    }
+    const controlled = await plan.ticket.outcome;
+    if (!controlled.ok) throw new HarnessError(controlled.error);
+    await plan.wait;
     return state.run;
   }
 
@@ -789,6 +848,21 @@ export class AgentHarness {
     ) return;
     const owner = entry.lifecycle.owner();
     const active = owner ? this.runStates.get(owner) : this.activeRunState(sessionPath);
+    // An interrupt or stop requested during asynchronous preflight can reach
+    // an idle driver before its native turn exists. The lifecycle retains that
+    // exact owner and asks for another abort only on its stamped execution.
+    if (
+      event.type === "update"
+      && active
+      && owner === active.run.runId
+      && (event.update.kind === "turn_start" || event.update.kind === "tool_execution_start")
+    ) {
+      const action = entry.lifecycle.executionStarted(active.run.runId);
+      const driver = this.host.driver(sessionPath);
+      if (action && driver && entry.lifecycle.startAbort(active.run.runId, action.token, "execution")) {
+        void this.controlInvocation(entry, active, driver, action.token, "execution");
+      }
+    }
     // An invocation that keeps going after its run's end was declared (a tool
     // later in the same batch, or a model turn after a mixed batch) is the
     // exact window the incident lived in: say so, never hide it (contract 7).
@@ -798,15 +872,27 @@ export class AgentHarness {
     // A question through the portable UI surface pauses the child's loop
     // until someone answers, so the run is `needs_input` for exactly as long
     // as the question is open — the answer may come from the parent (through
-    // `send_agent_message`), from the person (in the child's own chat, which
+    // `send_agent_message` mode `answer`), from the person (in the child's own chat, which
     // this harness never sees), from a timeout or from an abort, so the open
     // questions are re-read from the driver rather than tracked by hand.
     if (event.type === "ui_request") {
-      if (active) this.ask(active, event.request);
+      if (active) {
+        const owned = entry.lifecycle.recordDialog(active.run.runId, event.request.id, event.invocation?.id);
+        if (owned.cancel) {
+          this.cancelDialog(sessionPath, event.request.id);
+          entry.lifecycle.resolveDialog(active.run.runId, event.request.id);
+          this.reconcileQuestion(active, event.request.id);
+        } else {
+          this.ask(active, event.request);
+        }
+      }
       return;
     }
     if (event.type === "ui_event") {
-      if (active && event.event.method === "dialogResolved") this.reconcileQuestion(active, event.event.id);
+      if (active && event.event.method === "dialogResolved") {
+        entry.lifecycle.resolveDialog(active.run.runId, event.event.id);
+        this.reconcileQuestion(active, event.event.id);
+      }
       return;
     }
     if (event.type !== "update") return;
@@ -1047,71 +1133,123 @@ export class AgentHarness {
     if (!parent.path) throw new HarnessError("This session is not ready yet.");
     const sessionId = (input.sessionId ?? "").trim();
     const message = (input.message ?? "").trim();
+    const mode = input.mode;
     if (message === "") throw new HarnessError("message is required.");
     if (message.length > AGENT_MESSAGE_MAX) throw new HarnessError(`message must be at most ${AGENT_MESSAGE_MAX} characters.`);
     const child = [...this.byPath.values()].find((entry) => entry.sessionId === sessionId && entry.record.parentPath === parent.path);
     if (!child || !child.path) {
       throw new HarnessError(`No agent session is called "${sessionId}" among the agents this session started. Use the sessionId that start_agent returned.`);
     }
-    const interrupt = input.interrupt === true;
     type Plan =
-      | { kind: "answered"; result: SendAgentMessageResult }
+      | { kind: "result"; result: SendAgentMessageResult }
       | { kind: "queued"; state: RunState }
+      | { kind: "interrupt"; state: RunState; owner: RunState; ticket: InvocationControlTicket; driver: SessionDriver }
       | { kind: "kicked"; state: RunState; acknowledged: Promise<KickAcknowledgement> };
-    // The routing decision and the kick it may start happen under the entry's
-    // lock; the acknowledgement is awaited after it is released, because a
-    // refusal is reported through `afterInvocation`, which takes that lock.
+    // The routing decision and any queue takeover happen under the entry lock.
+    // Prompt/control acknowledgements wait outside it because their fences
+    // finish by taking the same lock.
     const plan = await this.withEntry(child, async (): Promise<Plan> => {
       const driver = this.host.driver(child.path!);
       if (!driver) throw new HarnessError(`The agent session "${sessionId}" is no longer open.`);
-      const owner = child.lifecycle.owner();
-      const executing = owner ? this.runStates.get(owner) : undefined;
+      const ownerId = child.lifecycle.owner();
+      const executing = ownerId ? this.runStates.get(ownerId) : undefined;
       const active = executing ?? this.activeRunState(child.path!);
-      if (active?.run.status === "needs_input" && active.run.question) {
-        // The child is paused on a question: a message to it is an answer to
-        // that question, and nothing else could reach the child anyway — its
-        // loop is inside the tool that asked. Anything that does not fit the
-        // question is refused with the question restated, never misrouted.
-        const question = active.run.question;
-        driver.respondToUi(answerFor(question, message));
+      const latest = active ?? this.latestRun(child.path!);
+
+      if (mode === "answer") {
+        if (active?.run.status === "needs_input") this.reconcileQuestion(active);
+        const question = active?.run.status === "needs_input" ? active.run.question : undefined;
+        if (!active || !question || child.lifecycle.end(active.run.runId)) {
+          if (!latest) throw new HarnessError("No run exists in this agent session.");
+          const error = "This agent has no open question to answer. Use interrupt, steer, or queue for an instruction.";
+          return { kind: "result", result: { sessionId, runId: latest.run.runId, status: latest.run.status, delivery: "refused", error } };
+        }
+        try {
+          driver.respondToUi(answerFor(question, message));
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          return { kind: "result", result: { sessionId, runId: active.run.runId, status: active.run.status, delivery: "refused", error: reason, question } };
+        }
+        child.lifecycle.resolveDialog(active.run.runId, question.id);
         this.reconcileQuestion(active, question.id);
-        this.diagnose(child, "info", "admission", { source: "parent", decision: "answered", runId: active.run.runId, question: question.id });
+        this.diagnose(child, "info", "admission", { source: "parent", decision: "answered", runId: active.run.runId, question: question.id, mode });
         this.event({ kind: "message_sent", sessionPath: parent.path!, runId: active.run.runId, counterpart: { sessionPath: child.path!, label: labelOf(child.role) }, summary: `Answered ${labelOf(child.role)}'s question` });
         this.event({ kind: "message_received", sessionPath: child.path!, runId: active.run.runId, counterpart: { sessionPath: parent.path!, label: labelOf(parent.role) }, summary: `Answer from ${labelOf(parent.role)}` });
-        return { kind: "answered", result: { sessionId, runId: active.run.runId, status: active.run.status, delivery: "answered", answered: question } };
+        return { kind: "result", result: { sessionId, runId: active.run.runId, status: active.run.status, delivery: "answered", answered: question } };
       }
 
       const declared = executing ? child.lifecycle.end(executing.run.runId) : undefined;
-      if (declared || child.lifecycle.successor()) {
-        // Completion/stop has been declared but Pi still owns the old prompt.
-        // Reserve one visible queued run now so immediate and concurrent
-        // resumes share a real identity instead of spawning busy failures.
-        const state = this.queueRun(child, message, executing ?? active, parent);
-        this.diagnose(child, "info", "admission", { source: "parent", decision: "queued-successor", runId: state.run.runId, owner, interrupt, phase: child.lifecycle.phase().kind });
-        if (interrupt && executing && declared) {
-          // Contract 4: the execution this interrupt targets is the old
-          // invocation, which may still be running a later tool of the same
-          // batch. Its result is already declared and survives the abort; the
-          // message itself waits its turn on the successor, in order.
-          this.diagnose(child, "info", "abort-requested", { runId: executing.run.runId, reason: "interrupt-during-terminal-pending" });
-          this.scheduleAbort(driver);
+      if (mode === "interrupt" && executing) {
+        const existing = child.lifecycle.control(executing.run.runId);
+        if (existing?.kind === "stop") {
+          return { kind: "result", result: { sessionId, runId: executing.run.runId, status: executing.run.status, delivery: "refused", error: "This agent is already stopping." } };
         }
+        let preserved: PendingMessage[] = [];
+        if (!existing) {
+          try {
+            preserved = await this.takeEngineQueue(child, executing, "interrupt");
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            this.diagnose(child, "warn", "interrupt-control-failed", { runId: executing.run.runId, stage: "clear-queue", error: reason });
+            return { kind: "result", result: { sessionId, runId: executing.run.runId, status: executing.run.status, delivery: "control_failed", error: `Could not interrupt this agent safely: ${reason}` } };
+          }
+        }
+        const ticket = child.lifecycle.beginInterrupt(executing.run.runId, { waitForExecution: !driver.state().isStreaming, context: {} });
+        if (!ticket) throw new HarnessError("The agent invocation ended before interruption control could be established.");
+        const pending: PendingMessage = {
+          content: [{ type: "text", text: message }],
+          options: { expandPromptTemplates: false },
+          origin: "agent",
+          engine: false,
+          priority: "interrupt",
+          interruptToken: ticket.token,
+        };
+        let target: RunState;
+        if (declared || child.lifecycle.successor()) {
+          for (const queued of preserved) this.queueRunMessage(child, queued, executing);
+          target = this.queueRunMessage(child, pending, executing, parent);
+          child.lifecycle.remove(target.run.runId, pending);
+          child.lifecycle.enqueuePriority(target.run.runId, pending, isInterruptMessage);
+        } else {
+          this.retainTakenMessages(child, executing, preserved);
+          child.lifecycle.enqueuePriority(executing.run.runId, pending, isInterruptMessage);
+          target = executing;
+        }
+        this.cancelControlledDialogs(child, executing);
+        this.diagnose(child, "info", "admission", { source: "parent", decision: "interrupt-fenced", runId: target.run.runId, owner: executing.run.runId, phase: child.lifecycle.phase().kind, token: ticket.token });
+        return { kind: "interrupt", state: target, owner: executing, ticket, driver };
+      }
+
+      if (declared || child.lifecycle.successor()) {
+        const pending: PendingMessage = {
+          content: [{ type: "text", text: message }],
+          options: { expandPromptTemplates: false },
+          origin: "agent",
+          engine: false,
+          ...(mode === "steer" ? { priority: "steer" as const } : {}),
+        };
+        const state = this.queueRunMessage(child, pending, executing ?? active, parent);
+        if (isPriorityMessage(pending)) {
+          child.lifecycle.remove(state.run.runId, pending);
+          child.lifecycle.enqueuePriority(state.run.runId, pending, isPriorityMessage);
+        }
+        this.diagnose(child, "info", "admission", { source: "parent", decision: "queued-successor", runId: state.run.runId, owner: ownerId, mode, phase: child.lifecycle.phase().kind });
         return { kind: "queued", state };
       }
       if (active) {
-        if (driver.state().isStreaming || owner !== undefined) {
-          // While the engine demonstrably streams, the message goes into its
-          // queue — the steering lane for an interrupt (before the next model
-          // call), the follow-up lane otherwise (when the model would stop) —
-          // and is tracked here as engine-owned so a terminal declaration can
-          // take it back through `clearQueue()`. An owned but not yet
-          // streaming run (preflight in flight, settled but unfenced) holds
-          // it here alone: the fence delivers it as the next prompt, which is
-          // the soonest the engine could take it anyway.
-          const engine = driver.state().isStreaming;
-          const lane: EngineLane = interrupt ? "steer" : "followUp";
-          const pending: PendingMessage = { content: [{ type: "text", text: message }], origin: "agent", engine, ...(engine ? { lane } : {}) };
-          child.lifecycle.enqueue(active.run.runId, pending);
+        if (driver.state().isStreaming || ownerId !== undefined) {
+          const interrupted = ownerId !== undefined && child.lifecycle.control(ownerId) !== undefined;
+          const engine = driver.state().isStreaming && !interrupted;
+          const lane: EngineLane = mode === "steer" ? "steer" : "followUp";
+          const pending: PendingMessage = {
+            content: [{ type: "text", text: message }],
+            origin: "agent",
+            engine,
+            ...(engine ? { lane } : {}),
+            ...(!engine && mode === "steer" ? { priority: "steer" as const } : {}),
+          };
+          if (isPriorityMessage(pending)) child.lifecycle.enqueuePriority(active.run.runId, pending, isPriorityMessage);
+          else child.lifecycle.enqueue(active.run.runId, pending);
           if (engine) {
             try {
               if (lane === "steer") await driver.steer(pending.content);
@@ -1121,28 +1259,34 @@ export class AgentHarness {
               throw error;
             }
           }
-          this.diagnose(child, "info", "admission", { source: "parent", decision: engine ? `engine-${lane}` : "local-queue", runId: active.run.runId, interrupt, phase: child.lifecycle.phase().kind });
+          this.diagnose(child, "info", "admission", { source: "parent", decision: engine ? `engine-${lane}` : "local-queue", runId: active.run.runId, mode, phase: child.lifecycle.phase().kind });
           return { kind: "queued", state: active };
         }
-        this.diagnose(child, "info", "admission", { source: "parent", decision: "invoke", runId: active.run.runId, interrupt, phase: child.lifecycle.phase().kind });
+        this.diagnose(child, "info", "admission", { source: "parent", decision: "invoke", runId: active.run.runId, mode, phase: child.lifecycle.phase().kind });
         return { kind: "kicked", state: active, acknowledged: this.kickAcknowledged(active, message) };
       }
       const state = this.createRun(child, { origin: "agent", task: message, goal: await readGoal(this.host.driver(parent.path!)), parentRunId: this.activeRun(parent.path!)?.runId });
-      this.diagnose(child, "info", "admission", { source: "parent", decision: "invoke", runId: state.run.runId, interrupt, phase: child.lifecycle.phase().kind, created: true });
+      this.diagnose(child, "info", "admission", { source: "parent", decision: "invoke", runId: state.run.runId, mode, phase: child.lifecycle.phase().kind, created: true });
       return { kind: "kicked", state, acknowledged: this.kickAcknowledged(state, message) };
     });
-    if (plan.kind === "answered") return plan.result;
+    if (plan.kind === "result") return plan.result;
 
     const { state } = plan;
     let delivery: SendAgentMessageResult["delivery"] = "queued";
     let error: string | undefined;
     if (plan.kind === "kicked") {
-      // Not "delivered" until the engine has taken the message as its next
-      // turn (contract 5). A refusal is the truth the parent needs now, not a
-      // run that fails a moment later under a reassuring result.
       ({ delivery, error } = await plan.acknowledged);
+    } else if (plan.kind === "interrupt") {
+      if (plan.ticket.created && child.lifecycle.startAbort(plan.owner.run.runId, plan.ticket.token, "initial")) {
+        void this.controlInvocation(child, plan.owner, plan.driver, plan.ticket.token, "initial");
+      }
+      const controlled = await plan.ticket.outcome;
+      if (!controlled.ok) {
+        delivery = controlled.cancelled ? "refused" : "control_failed";
+        error = controlled.error;
+      }
     }
-    if (delivery === "refused") {
+    if (delivery === "refused" || delivery === "control_failed") {
       this.event({ kind: "message_sent", sessionPath: parent.path!, runId: state.run.runId, counterpart: { sessionPath: child.path!, label: labelOf(child.role) }, summary: `${labelOf(child.role)} could not take the message` });
       return { sessionId, runId: state.run.runId, status: state.run.status, delivery, ...(error !== undefined ? { error } : {}) };
     }
@@ -1401,7 +1545,7 @@ export class AgentHarness {
     return this.withEntry(child, async () => {
       const owner = child.lifecycle.owner();
       const active = owner ? this.runStates.get(owner) : this.activeRunState(child.path!);
-      if (!active || active.completedByTool || child.lifecycle.end(active.run.runId) || isTerminalRunStatus(active.run.status)) {
+      if (!active || active.completedByTool || child.lifecycle.end(active.run.runId) || child.lifecycle.control(active.run.runId)?.kind === "stop" || isTerminalRunStatus(active.run.status)) {
         const latest = this.latestRun(child.path!);
         return { ok: false, error: latest ? "This run already ended." : "No run is active in this session." };
       }
@@ -1435,6 +1579,63 @@ export class AgentHarness {
       }
       return { ok: true, runId: active.run.runId };
     });
+  }
+
+  /** Commit accepted-message cancellation only after stop abort control succeeds. */
+  private commitQueuedCancellation(entry: Entry, state: RunState, endedBy: { initiator: AgentRunInitiator; reason?: string }): void {
+    const reason = new Error(`The agent's run ${state.run.runId} was explicitly stopped before this message could start.`);
+    for (const pending of entry.lifecycle.clearInbox(state.run.runId)) settlePending(pending, reason);
+    const successor = entry.lifecycle.takeSuccessor();
+    if (!successor) return;
+    if (successor.first) settlePending(successor.first, reason);
+    const queued = this.runStates.get(successor.runId);
+    for (const pending of entry.lifecycle.clearInbox(successor.runId)) settlePending(pending, reason);
+    if (queued && !isTerminalRunStatus(queued.run.status)) {
+      this.diagnose(entry, "info", "successor-cancelled", { runId: queued.run.runId, predecessor: state.run.runId, initiator: endedBy.initiator });
+      this.endRun(queued, "cancelled", { endedBy });
+    }
+  }
+
+  /** Put a successful queue takeover back under canonical lifecycle ownership until control commits. */
+  private retainTakenMessages(entry: Entry, state: RunState, preserved: readonly PendingMessage[]): void {
+    if (entry.lifecycle.end(state.run.runId) || entry.lifecycle.successor()) {
+      for (const pending of preserved) this.queueRunMessage(entry, pending, state);
+      return;
+    }
+    for (const pending of preserved) {
+      if (isPriorityMessage(pending)) entry.lifecycle.enqueuePriority(state.run.runId, pending, isPriorityMessage);
+      else entry.lifecycle.enqueue(state.run.runId, pending);
+    }
+  }
+
+  /** Cancel every still-open dialog recorded under this exact controlled owner. */
+  private cancelControlledDialogs(entry: Entry, state: RunState): void {
+    const driver = this.host.driver(state.run.sessionPath);
+    const pending = pendingUiOf(driver);
+    const ids = entry.lifecycle.ownedDialogs(
+      state.run.runId,
+      pending === undefined ? undefined : new Set(pending.map((request) => request.id)),
+    );
+    for (const id of ids) {
+      this.cancelDialog(state.run.sessionPath, id);
+      entry.lifecycle.resolveDialog(state.run.runId, id);
+    }
+    if (ids.length > 0) this.reconcileQuestion(state);
+  }
+
+  /** Strict queue takeover before either interrupt or stop control is claimed. */
+  private async takeEngineQueue(entry: Entry, state: RunState, reason: "interrupt" | "stop"): Promise<PendingMessage[]> {
+    const driver = this.host.driver(state.run.sessionPath);
+    if (!driver) throw new Error("The agent session is no longer open.");
+    const before = entry.lifecycle.inbox(state.run.runId).length;
+    const cleared = await driver.clearQueue();
+    const custom = customCount(cleared);
+    if (custom > 0) {
+      this.diagnose(entry, "warn", "engine-custom-queued", { runId: state.run.runId, reason, steering: cleared.custom?.steering.length ?? 0, followUp: cleared.custom?.followUp.length ?? 0 });
+    }
+    const preserved = this.preservedMessages(entry, state, cleared);
+    this.diagnose(entry, "info", "queue-taken", { runId: state.run.runId, reason, clearedSteering: cleared.steering.length, clearedFollowUp: cleared.followUp.length, local: before, preserved: preserved.length, custom });
+    return preserved;
   }
 
   /**
@@ -1727,14 +1928,36 @@ export class AgentHarness {
     failure?: string,
     modelWork?: boolean,
   ): void {
-    const boundary = entry.lifecycle.finish(state.run.runId);
+    const invocation: InvocationOutcome = { result, ...(failure !== undefined ? { failure } : {}), ...(modelWork !== undefined ? { modelWork } : {}) };
+    const boundary = entry.lifecycle.finish(state.run.runId, invocation);
     if (!boundary) {
       this.diagnose(entry, "info", "late-invocation-ignored", { runId: state.run.runId, owner: entry.lifecycle.owner(), status: state.run.status });
       return;
     }
-    this.diagnose(entry, "info", "invocation-finished", { runId: state.run.runId, accepted: result.accepted, settled: boundary.settled, declared: boundary.end?.status, status: state.run.status, modelWork });
+    if ("fenced" in boundary) {
+      this.diagnose(entry, "info", "invocation-fenced", { runId: state.run.runId, accepted: result.accepted, status: state.run.status, modelWork });
+      const control = entry.lifecycle.control(state.run.runId);
+      const driver = this.host.driver(state.run.sessionPath);
+      if (control && driver && entry.lifecycle.startAbort(state.run.runId, control.token, "execution")) {
+        void this.controlInvocation(entry, state, driver, control.token, "execution");
+      }
+      return;
+    }
+    this.finishInvocationBoundary(entry, state, boundary, result, failure, modelWork, false);
+  }
+
+  private finishInvocationBoundary(
+    entry: Entry,
+    state: RunState,
+    boundary: InvocationBoundary<RunEnd>,
+    result: { accepted: boolean; queued: boolean },
+    failure?: string,
+    modelWork?: boolean,
+    interrupted = false,
+  ): void {
+    this.diagnose(entry, "info", "invocation-finished", { runId: state.run.runId, accepted: result.accepted, settled: boundary.settled, declared: boundary.end?.status, status: state.run.status, modelWork, interrupted });
     if (isTerminalRunStatus(state.run.status)) return;
-    const end = boundary.end ?? (!result.accepted
+    const end = boundary.end ?? (!result.accepted && !interrupted
       ? { status: "failed" as const, outcome: { error: failure ?? "The agent's session refused the task because it was busy." } }
       : undefined);
     if (end) {
@@ -1770,6 +1993,75 @@ export class AgentHarness {
     }
     this.diagnose(entry, "info", "handled-without-turn", { runId: state.run.runId, origin: state.run.origin });
     this.finalizePendingEnd(entry, state, { status: "cancelled", outcome: { endedBy: { initiator: "harness", reason: HANDLED_WITHOUT_TURN } } }, { wakeParent: false });
+  }
+
+  /** Run one lifecycle-authorized abort outside its lock, then feed the result back. */
+  private async controlInvocation(
+    entry: Entry,
+    state: RunState,
+    driver: SessionDriver,
+    token: number,
+    attempt: "initial" | "execution",
+  ): Promise<void> {
+    let failure: string | undefined;
+    try {
+      const control = entry.lifecycle.control(state.run.runId);
+      this.diagnose(entry, "info", "abort-requested", {
+        runId: state.run.runId,
+        reason: attempt === "execution" ? "controlled-invocation-started" : control?.kind === "stop" ? "stop" : "parent-interrupt",
+        token,
+      });
+      await driver.abort();
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
+    let retry = false;
+    await this.withEntry(entry, () => {
+      const transition = entry.lifecycle.settleAbort(
+        state.run.runId,
+        token,
+        failure === undefined ? { ok: true } : { ok: false, error: `Could not control this agent safely: ${failure}` },
+      );
+      if (transition.kind === "pending") return;
+      if (transition.kind === "retry") {
+        retry = entry.lifecycle.startAbort(state.run.runId, transition.token, "execution");
+        return;
+      }
+      if (transition.kind === "failed") {
+        if (transition.control === "interrupt") this.removeProvisionalInterrupt(entry, state.run.runId, transition.token);
+        this.diagnose(entry, "warn", transition.control === "stop" ? "stop-control-failed" : "interrupt-control-failed", { runId: state.run.runId, stage: "abort", control: transition.control, token, error: failure ?? "unknown" });
+        if (transition.finished) {
+          const { boundary, invocation } = transition.finished;
+          this.finishInvocationBoundary(entry, state, boundary, invocation.result, invocation.failure, invocation.modelWork, false);
+        }
+        return;
+      }
+      if (transition.control === "stop") {
+        const endedBy = transition.context.stop;
+        if (!endedBy) throw new Error("Stop control lost its initiator.");
+        this.event({ kind: "stop_requested", sessionPath: state.run.sessionPath, runId: state.run.runId, summary: endedBy.initiator === "user" ? "The person asked this run to stop" : "The parent asked this run to stop" });
+        if (!entry.lifecycle.end(state.run.runId)) {
+          entry.lifecycle.declareEnd(state.run.runId, { status: "cancelled", outcome: { endedBy } });
+          this.diagnose(entry, "info", "terminal-declared", { runId: state.run.runId, status: "cancelled", initiator: endedBy.initiator, phase: entry.lifecycle.phase().kind });
+        } else {
+          this.diagnose(entry, "info", "stop-after-declared-end", { runId: state.run.runId, initiator: endedBy.initiator, declared: entry.lifecycle.end(state.run.runId)?.status });
+        }
+        this.commitQueuedCancellation(entry, state, endedBy);
+      }
+      const finished = entry.lifecycle.commitControl(state.run.runId, transition.token);
+      if (finished) {
+        const { boundary, invocation } = finished;
+        this.finishInvocationBoundary(entry, state, boundary, invocation.result, invocation.failure, invocation.modelWork, true);
+      }
+    });
+    if (retry) await this.controlInvocation(entry, state, driver, token, "execution");
+  }
+
+  private removeProvisionalInterrupt(entry: Entry, runId: string, token: number): void {
+    const withoutToken = (messages: readonly PendingMessage[]) => messages.filter((pending) => pending.interruptToken !== token);
+    entry.lifecycle.replaceInbox(runId, withoutToken(entry.lifecycle.inbox(runId)));
+    const successor = entry.lifecycle.successor();
+    if (successor) entry.lifecycle.replaceInbox(successor, withoutToken(entry.lifecycle.inbox(successor)));
   }
 
   /**
@@ -1842,10 +2134,11 @@ export class AgentHarness {
    */
   private preservedMessages(entry: Entry, state: RunState, cleared: ClearedQueue): PendingMessage[] {
     const remaining: Record<EngineLane, string[]> = { steer: [...cleared.steering], followUp: [...cleared.followUp] };
-    const preserved: PendingMessage[] = [];
+    const local: PendingMessage[] = [];
+    const matched: Record<EngineLane, PendingMessage[]> = { steer: [], followUp: [] };
     for (const pending of entry.lifecycle.clearInbox(state.run.runId)) {
       if (!pending.engine) {
-        preserved.push(pending);
+        local.push(pending);
         continue;
       }
       const lane = pending.lane ?? "steer";
@@ -1856,7 +2149,7 @@ export class AgentHarness {
       const { engine: _engine, lane: _lane, ...rest } = pending;
       void _engine;
       void _lane;
-      preserved.push({ ...rest, engine: false });
+      matched[lane].push({ ...rest, engine: false });
     }
     const foreign = (text: string): PendingMessage => ({
       content: [{ type: "text", text }],
@@ -1865,7 +2158,17 @@ export class AgentHarness {
       engine: false,
     });
     const custom = cleared.custom ?? { steering: [], followUp: [] };
-    return [...preserved, ...remaining.steer.map(foreign), ...custom.steering.map(foreign), ...remaining.followUp.map(foreign), ...custom.followUp.map(foreign)];
+    // Pi drains steering before follow-ups. Harness-only work could not have
+    // entered either lane and therefore follows what the engine still owned.
+    return [
+      ...matched.steer,
+      ...remaining.steer.map(foreign),
+      ...custom.steering.map(foreign),
+      ...matched.followUp,
+      ...remaining.followUp.map(foreign),
+      ...custom.followUp.map(foreign),
+      ...local,
+    ];
   }
 
   private requestEnd(
@@ -2052,7 +2355,7 @@ export class AgentHarness {
   /**
    * Re-read what the child's driver still holds open. `resolvedId` is the
    * question the driver just said is gone, for a driver that cannot list its
-   * pending dialogs. The oldest open question is the one the run shows.
+   * pending dialogs. The oldest still-owned question is the one the run shows.
    */
   private reconcileQuestion(state: RunState, resolvedId?: string): void {
     if (isTerminalRunStatus(state.run.status)) return;
@@ -2061,7 +2364,10 @@ export class AgentHarness {
     let open: UiDialogRequest | undefined;
     const pending = pendingUiOf(driver);
     if (pending) {
-      open = pending[0];
+      const entry = this.byPath.get(state.run.sessionPath);
+      const pendingIds = new Set(pending.map((request) => request.id));
+      const owned = new Set(entry?.lifecycle.ownedDialogs(state.run.runId, pendingIds) ?? []);
+      open = pending.find((request) => owned.has(request.id) || request.id === current?.id);
     } else if (current && current.id !== resolvedId) {
       // A driver that cannot list its dialogs: the question stands until the
       // driver says that exact one is gone.
@@ -2375,20 +2681,8 @@ export function questionMessage(run: AgentRun, question: AgentRunQuestion): stri
   return lines.join("\n");
 }
 
-/** How to answer this kind of question, in one sentence. */
-export function answerHint(question: AgentRunQuestion): string {
-  const call = "send_agent_message with its sessionId";
-  switch (question.kind) {
-    case "select":
-      return `Answer it with ${call} and one of the choices, exactly, as the message.`;
-    case "confirm":
-      return `Answer it with ${call} and "yes" or "no" as the message.`;
-    case "input":
-      return `Answer it with ${call}; the message is the answer, verbatim.`;
-    case "editor":
-      return `Answer it with ${call}; the message replaces the text, verbatim.`;
-  }
-}
+/** Backward-compatible export; protocol owns the one model-facing wording. */
+export const answerHint = agentQuestionAnswerHint;
 
 /** The sentence the parent model reads for a terminal run. */
 export function modelMessage(run: AgentRun, context: string | undefined): string {
