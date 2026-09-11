@@ -129,8 +129,14 @@ export type ExtensionModelWorkHandler = (request: ExtensionModelWorkRequest) => 
 
 export type DriverEvent =
   | { type: "update"; update: SessionUpdate; invocation?: DriverInvocationRef }
-  | { type: "ui_request"; request: UiDialogRequest }
-  | { type: "ui_event"; event: UiFireAndForget }
+  /**
+   * A dialog is raised from inside the tool that asks, so a driver with epochs
+   * stamps it with the prompt invocation it was raised under, and its
+   * `dialogResolved` with the same one; the harness fences both the way it
+   * fences stamped updates. Absent for drivers without epochs.
+   */
+  | { type: "ui_request"; request: UiDialogRequest; invocation?: DriverInvocationRef }
+  | { type: "ui_event"; event: UiFireAndForget; invocation?: DriverInvocationRef }
   /** Emitted by the laser companion extension running inside the session. */
   | { type: "extension"; message: PiExtensionMessage }
   | { type: "closed"; reason: string };
@@ -146,6 +152,13 @@ export interface PromptOptions {
   streamingBehavior?: "steer" | "followUp";
   /** Internal owner propagated to extension work; never crosses protocol. */
   ownerRunId?: string;
+  /**
+   * Who started the run this prompt serves, from its run record. The driver
+   * stamps the invocation with it, so extension work sent from inside the
+   * turn inherits the run's origin rather than a per-prompt guess. Absent
+   * means the person (a prompt from a chat).
+   */
+  origin?: "agent" | "user";
   /** Server preflight lease, borrowed only by a causal nested extension send. */
   admissionLease?: SessionAdmissionLease;
   /** Receives the exact driver epoch before native work or events begin. */

@@ -6,6 +6,7 @@ import {
   agentIssueRoot,
   agentIssuesByField,
   agentKindOf,
+  compareRunsNewestFirst,
   defaultAgentDefinitionInput,
   isActiveRun,
   isBuiltinAgent,
@@ -156,6 +157,37 @@ describe("runs", () => {
 
     const completed = { ...working, runId: "run_0", status: "completed" as const, updatedAt: "2026-09-08T10:22:00.000Z" };
     expect(latestRunForSession([failed, completed], failed.sessionPath)).toBe(completed);
+  });
+
+  it("stands a session on the run that can still act while a newer successor only waits behind it", () => {
+    // Terminal-pending (M13-T98): the old run's completion is declared but its
+    // invocation is still executing, and the one successor reserved behind it
+    // is queued. The worker's `liveness` picks the executing run; so does this.
+    const unwinding = run({ runId: "run_old", sessionPath: "/p/pending.jsonl", status: "running", startedAt: "2026-09-08T10:30:00.000Z", updatedAt: "2026-09-08T10:31:30.000Z" });
+    const waiting = run({ runId: "run_next", sessionPath: unwinding.sessionPath, status: "queued", startedAt: "2026-09-08T10:31:00.000Z", updatedAt: "2026-09-08T10:31:00.000Z" });
+    for (const candidates of [[unwinding, waiting], [waiting, unwinding]]) {
+      expect(latestRunForSession(candidates, unwinding.sessionPath)).toBe(unwinding);
+      // Creation order still ends on the run that stands for the session.
+      expect(runsForSession(candidates, unwinding.sessionPath).at(-1)).toBe(unwinding);
+    }
+    expect(compareRunsNewestFirst(unwinding, waiting)).toBeLessThan(0);
+    expect(compareRunsNewestFirst(waiting, unwinding)).toBeGreaterThan(0);
+    const asking = { ...unwinding, status: "needs_input" as const };
+    expect(latestRunForSession([waiting, asking], unwinding.sessionPath)).toBe(asking);
+    // A successor the person stopped is history; the executing run still stands.
+    const stopped = { ...waiting, status: "cancelled" as const, endedAt: "2026-09-08T10:31:20.000Z", updatedAt: "2026-09-08T10:31:20.000Z" };
+    expect(latestRunForSession([stopped, unwinding], unwinding.sessionPath)).toBe(unwinding);
+    // Once the old run has truly ended, the successor stands — waiting or working.
+    const ended = { ...unwinding, status: "completed" as const, endedAt: "2026-09-08T10:32:00.000Z", updatedAt: "2026-09-08T10:32:00.000Z" };
+    expect(latestRunForSession([ended, waiting], unwinding.sessionPath)).toBe(waiting);
+    expect(latestRunForSession([ended, { ...waiting, status: "running" as const }], unwinding.sessionPath)?.runId).toBe("run_next");
+    // D-189 stands: a newer active run outranks historic failures, and a
+    // finished Blocked is neutral history like any other ended run.
+    const failed = { ...unwinding, runId: "run_failed", status: "failed" as const, endedAt: "2026-09-08T10:30:30.000Z" };
+    const resumed = { ...waiting, runId: "run_resumed", status: "running" as const };
+    expect(latestRunForSession([resumed, failed], unwinding.sessionPath)).toBe(resumed);
+    const blocked = { ...unwinding, status: "blocked" as const, endedAt: "2026-09-08T10:32:00.000Z", updatedAt: "2026-09-08T10:32:00.000Z" };
+    expect(latestRunForSession([blocked, waiting], unwinding.sessionPath)).toBe(waiting);
   });
 });
 

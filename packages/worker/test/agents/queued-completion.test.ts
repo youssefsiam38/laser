@@ -164,8 +164,14 @@ let extensionActions: {
   sendUserMessage(content: string): Promise<void>;
   sendMessage(message: { customType: string; content: string; display: boolean }, options: { deliverAs: "steer"; triggerTurn: boolean }): Promise<void>;
 };
-/** Every lifecycle-shaped driver event, with the engine epoch it carried. */
-let driverEvents: Array<{ kind: SessionUpdate["kind"]; invocation?: DriverInvocationRef; toolName?: string; toolCallId?: string; isError?: boolean; text?: string }>;
+/** Every lifecycle-shaped driver event — and every dialog raised or resolved — with the engine epoch it carried. */
+let driverEvents: Array<{ kind: SessionUpdate["kind"] | "ui_request" | "ui_event"; invocation?: DriverInvocationRef; toolName?: string; toolCallId?: string; isError?: boolean; text?: string; dialogId?: string; method?: string }>;
+/**
+ * A question a loose test tool scheduled from inside its own invocation and
+ * raises only when the test says so: `release()` fires the continuation the
+ * tool registered, `answer` is what the dialog resolved to.
+ */
+let detached: { release(): void; answer: Promise<string | undefined> } | undefined;
 /** What reached the parent's model, and what the child looked like at that moment. */
 let parentEvents: Array<{ event: AgentModelEvent; activeRunId: string | undefined; runStatuses: Record<string, string> }>;
 const runWaiters = new Map<string, Array<() => void>>();
@@ -243,6 +249,24 @@ function lifecycleLogs(): Array<{ level: string; line: string }> {
     .map((message) => (message as { params: { path: string; message: { type: string; level?: string; message?: string } } }).params)
     .filter((params) => params.path === childPath && params.message.type === "lasercode/module/log" && typeof params.message.message === "string" && params.message.message.startsWith("lifecycle "))
     .map((params) => ({ level: params.message.level!, line: params.message.message! }));
+}
+
+/** Every `module:subagents` log line the worker emitted, for any session: the harness's lifecycle lines and the companion module's own. */
+function moduleLogs(): string[] {
+  return out
+    .filter((message) => "method" in message && message.method === "pi/extension/message")
+    .map((message) => (message as { params: { message: { type?: string; module?: string; message?: string } } }).params.message)
+    .filter((message) => message.type === "lasercode/module/log" && message.module === "subagents" && typeof message.message === "string")
+    .map((message) => message.message!);
+}
+
+/** No diagnostic line ever carries a task, a prompt, a message or a question body (contract 7). */
+function expectNoBodiesInModuleLogs(texts: readonly string[]): void {
+  const lines = moduleLogs();
+  expect(lines.length).toBeGreaterThan(0);
+  for (const text of texts) {
+    expect(lines.filter((line) => line.includes(text)), `a module:subagents line carries "${text}"`).toEqual([]);
+  }
 }
 
 function textOfContent(content: unknown): string {
@@ -345,11 +369,41 @@ beforeEach(async () => {
   runObservers.clear();
   messageObservers.clear();
   driverEventObservers.clear();
+  detached = undefined;
   const captureActions: InlineExtension = (pi) => {
     extensionActions = {
       sendUserMessage: pi.sendUserMessage.bind(pi),
       sendMessage: (message, options) => pi.sendMessage(message, options),
     };
+    // Two loose tools. `ask_later` returns at once but leaves a continuation
+    // behind in its own async context — the prompt invocation it ran under —
+    // and that continuation asks a question when the test releases it: a
+    // dialog raised by an invocation after it has finished. `ask_now` asks
+    // and waits, giving the dialog its abort signal.
+    pi.registerTool({
+      name: "ask_later",
+      label: "Ask later",
+      description: "Schedules a question that is raised from this tool's own async context after the tool has returned.",
+      parameters: { type: "object", properties: {} } as never,
+      async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+        const gate = deferred();
+        let settle!: (value: string | undefined) => void;
+        const answer = new Promise<string | undefined>((resolve) => { settle = resolve; });
+        void gate.promise.then(() => ctx.ui.select("Later?", ["a", "b"])).then(settle, () => settle(undefined));
+        detached = { release: gate.resolve, answer };
+        return { content: [{ type: "text", text: "scheduled" }], details: undefined };
+      },
+    });
+    pi.registerTool({
+      name: "ask_now",
+      label: "Ask now",
+      description: "Asks the person a question and waits for the answer, giving up on abort.",
+      parameters: { type: "object", properties: {} } as never,
+      async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
+        const answer = await ctx.ui.select("Now?", ["x", "y"], { signal });
+        return { content: [{ type: "text", text: answer === undefined ? "no answer" : `answer: ${answer}` }], details: undefined };
+      },
+    });
   };
   server = new WorkerServer({
     cwd: join(base, "project"),
@@ -359,6 +413,16 @@ beforeEach(async () => {
     createDriver: () => {
       liveDriver = new StableSdkDriver([captureActions]);
       liveDriver.subscribe((event) => {
+        if (event.type === "ui_request" || event.type === "ui_event") {
+          const record: (typeof driverEvents)[number] = {
+            kind: event.type,
+            ...(event.invocation ? { invocation: event.invocation } : {}),
+            ...(event.type === "ui_request" ? { dialogId: event.request.id, method: event.request.method } : { method: event.event.method, ...("id" in event.event ? { dialogId: event.event.id } : {}) }),
+          };
+          driverEvents.push(record);
+          for (const observe of [...driverEventObservers]) if (observe(record)) driverEventObservers.delete(observe);
+          return;
+        }
         if (event.type !== "update") return;
         const update = event.update;
         if (!["agent_start", "agent_end", "agent_settled", "turn_start", "tool_execution_start", "tool_execution_end", "message_end"].includes(update.kind)) return;
@@ -577,6 +641,10 @@ describe("queued completion ownership against the real engine", () => {
     expect(parentEvents).toHaveLength(eventsBefore);
     expect(server.agents().runs()).toHaveLength(runsBefore);
     expect(lifecycleLogs().filter((log) => log.line.includes("late-callback-dropped") && log.line.includes(`invocation=${oldRef.id}`)).map((log) => /kind=(\S+)/.exec(log.line)?.[1])).toEqual(["agent_settled", "message_end", "extension_error", "tool_execution_start"]);
+
+    // 9. Every diagnostic line of the scenario names identities and counts,
+    //    never the task, a message or a result (contract 7).
+    expectNoBodiesInModuleLogs(["Start the work.", F1, F2, CORRECTION, INTERRUPT, "old done", "successor done", "late words", "late error", "late extension error"]);
   }, 60_000);
 
   it("ignores late predecessor callbacks while the successor is still working, not only once it has ended", async () => {
@@ -876,5 +944,193 @@ describe("queued completion ownership against the real engine", () => {
     expect(server.agents().runs().filter((run) => run.sessionPath === childPath).map((run) => [run.runId, run.status])).toEqual([[started.runId, "completed"], [successor.runId, "failed"]]);
     expect(parentEvents).toHaveLength(2);
     expect(completions.results).toEqual([{ ok: true, runId: started.runId }]);
+  }, 60_000);
+
+  it("carries a person's steer and follow-up from the child's own chat through the fence: the engine's lanes while it streams, the successor during terminal-pending, never the ended run", async () => {
+    const STEER = "Person: prefer the smaller diff.";
+    const FOLLOW = "Person: also update the changelog.";
+    const LATE = "Person: and say which files changed.";
+    const marker = join(base, "release-person-bash");
+    const command = `while [ ! -f '${marker}' ]; do sleep 0.02; done; echo released`;
+    const releaseFirst = provider.hold(0);
+    provider.answer(0, {
+      toolCalls: [
+        { name: "complete_agent_run", args: { status: "completed", message: "old done" }, id: "call-complete" },
+        { name: "bash", args: { command }, id: "call-bash" },
+      ],
+    });
+    provider.route((request) => {
+      const last = lastUserText(request);
+      if (last === LATE) return { toolCall: { name: "complete_agent_run", args: { status: "completed", message: "successor done" } } };
+      return { text: last !== undefined ? `noted: ${last}` : "nothing to add" };
+    });
+    const text = (value: string) => [{ type: "text", text: value }];
+
+    // The person's follow-up typed during terminal-pending, from inside the
+    // terminating tool so the window is certain. Its request stays open until
+    // the engine holds the message — under the successor, never the old run.
+    let late: ReturnType<typeof call> | undefined;
+    let atCompletion: { pendingInEngine: number; queue: { steering: string[]; followUp: string[] } | undefined; childRuns: Array<{ runId: string; status: string; task: string; origin: string }> } | undefined;
+    const completions = observeCompletions(async (_result, ordinal) => {
+      if (ordinal !== 1) return;
+      late = call("pi/session/follow_up", { path: childPath, content: text(LATE) });
+      await waitForMessage((message) => "method" in message && message.method === "pi/extension/message" && ((message as { params: { message: { message?: string } } }).params.message.message ?? "").includes("admission source=person decision=queued-successor"));
+      atCompletion = {
+        pendingInEngine: liveDriver.state().pendingMessageCount,
+        queue: queueUpdates().at(-1),
+        childRuns: server.agents().runs().filter((run) => run.sessionPath === childPath).map((run) => ({ runId: run.runId, status: run.status, task: run.task, origin: run.origin })),
+      };
+    });
+
+    // 1. The child streams under the parent's run; the person steers and follows up in its chat.
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start the work.", interrupt: false });
+    const oldRunId = started.runId;
+    await provider.arrived(0);
+    const bothQueued = waitForMessage((message) => {
+      if (!("method" in message) || message.method !== "session/update") return false;
+      const update = (message as { params: { update: SessionUpdate } }).params.update;
+      return update.kind === "queue_update" && update.steering.length === 1 && update.followUp.length === 1;
+    });
+    // Each request answers once the engine holds the message, while the turn still runs.
+    expect((await call("pi/session/steer", { path: childPath, content: text(STEER) })).result).toEqual({});
+    expect((await call("pi/session/follow_up", { path: childPath, content: text(FOLLOW) })).result).toEqual({});
+    await bothQueued;
+    expect(queueUpdates().at(-1)).toEqual({ steering: [STEER], followUp: [FOLLOW] });
+    expect(liveDriver.state().pendingMessageCount).toBe(2);
+    expect(liveDriver.state().isStreaming).toBe(true);
+    expect(server.agents().runs().filter((run) => run.sessionPath === childPath)).toHaveLength(1);
+    expect(lifecycleLogs().filter((log) => log.line.includes("admission source=person decision=engine-queue"))).toHaveLength(2);
+
+    // 2. Completion declared while both wait in the engine: both leave it once,
+    //    for one successor the person's steer starts; the late follow-up joins
+    //    that successor without touching the engine.
+    releaseFirst();
+    await completions.first;
+    expect(atCompletion).toBeDefined();
+    expect(atCompletion!.pendingInEngine).toBe(0);
+    expect(atCompletion!.queue).toEqual({ steering: [], followUp: [] });
+    expect(atCompletion!.childRuns).toHaveLength(2);
+    const successor = atCompletion!.childRuns.find((run) => run.runId !== oldRunId)!;
+    expect(successor).toMatchObject({ status: "queued", task: STEER, origin: "user" });
+    expect(lifecycleLogs().some((log) => /queue-transferred .*reason=complete .*clearedSteering=1 clearedFollowUp=1 local=2 preserved=2/.test(log.line))).toBe(true);
+    expect(lifecycleLogs().filter((log) => log.line.includes("successor-reserved"))).toHaveLength(1);
+    let lateSettled = false;
+    void late!.then(() => { lateSettled = true; });
+    await Promise.resolve();
+    expect(lateSettled).toBe(false);
+    expect(server.agents().run(oldRunId)?.status).toBe("running");
+
+    // 3. The old invocation finishes; the successor runs the three messages in
+    //    order, each its own prompt, each once; the late request answers at
+    //    the moment the engine took its message.
+    writeFileSync(marker, "go\n");
+    await waitForTerminal(oldRunId);
+    expect(server.agents().run(oldRunId)).toMatchObject({ status: "completed", result: { message: "old done" } });
+    const reply = await late!;
+    expect(reply.error).toBeUndefined();
+    expect(reply.result).toEqual({});
+    await waitForTerminal(successor.runId);
+    expect(server.agents().run(successor.runId)).toMatchObject({ status: "completed", result: { message: "successor done" }, origin: "user" });
+    expect(completions.results).toEqual([{ ok: true, runId: oldRunId }, { ok: true, runId: successor.runId }]);
+    // Five requests: the task; the old invocation's one call after its mixed
+    // batch (a terminating tool beside a plain one keeps the loop going — its
+    // last message is the tool result, not anything of the person's); then
+    // one per successor message.
+    expect(provider.requests.map(lastUserText)).toEqual(["Start the work.", undefined, STEER, FOLLOW, LATE]);
+    expect(provider.requests[1]!.messages.at(-1)?.role).toBe("tool");
+    for (const request of provider.requests.slice(0, 2)) for (const value of [STEER, FOLLOW, LATE]) expect(userOccurrences(request, value), `${value} under the old run`).toBe(0);
+    const history = provider.requests.at(-1)!;
+    for (const value of [STEER, FOLLOW, LATE]) expect(userOccurrences(history, value), value).toBe(1);
+    expect(userOccurrences(history, NUDGE_TEXT)).toBe(0);
+    // The late follow-up never sat in the engine's queue: it was the successor's own prompt.
+    expect(queueUpdates().some((update) => update.steering.includes(LATE) || update.followUp.includes(LATE))).toBe(false);
+    expect(parentEvents.map((entry) => [entry.event.type, entry.event.runId])).toEqual([["agent.completed", oldRunId], ["agent.completed", successor.runId]]);
+    assertNoOverlappingInvocations();
+    for (const event of driverEvents) {
+      if (event.kind === "agent_start" || event.kind === "tool_execution_start") expect([oldRunId, successor.runId]).toContain(event.invocation?.runId);
+    }
+    expectNoBodiesInModuleLogs(["Start the work.", STEER, FOLLOW, LATE, "old done", "successor done"]);
+  }, 60_000);
+
+  it("fences a dialog raised by an invocation the session no longer owns: not the successor's question, cancelled rather than left hanging", async () => {
+    provider.answer(0, {
+      toolCalls: [
+        { name: "complete_agent_run", args: { status: "completed", message: "old done" }, id: "call-complete" },
+        { name: "ask_later", args: {}, id: "call-ask-later" },
+      ],
+    });
+    const heldSuccessor = provider.holdWhen((request) => lastUserText(request) === F1);
+    provider.route((request) => (lastUserText(request) === F1 ? { toolCall: { name: "complete_agent_run", args: { status: "completed", message: "successor done" } } } : { text: "ok" }));
+    const completions = observeCompletions();
+    const releaseFirst = provider.hold(0);
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Start.", interrupt: false });
+    await provider.arrived(0);
+    await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: F1, interrupt: false });
+    releaseFirst();
+    await completions.first;
+    await waitForTerminal(started.runId);
+    const successor = server.agents().activeRun(childPath)!;
+    expect(successor).toMatchObject({ status: "running", task: F1 });
+    await heldSuccessor.arrived;
+    expect(detached, "ask_later ran inside the old invocation").toBeDefined();
+    const oldRef = driverEvents.find((event) => event.kind === "agent_start" && event.invocation?.runId === started.runId)!.invocation!;
+
+    // The successor owns the session and is mid-turn. The old invocation's
+    // continuation asks its question now.
+    const eventsBefore = parentEvents.length;
+    const raised = waitForDriverEvent((event) => event.kind === "ui_request");
+    detached!.release();
+    await raised;
+    const request = driverEvents.find((event) => event.kind === "ui_request")!;
+    // Stamped with the old epoch — the old run — by the driver.
+    expect(request.invocation).toEqual(oldRef);
+    expect(request.method).toBe("select");
+    // Cancelled, not hung: the asker gets its fallback, and nothing is left open.
+    expect(await detached!.answer).toBeUndefined();
+    expect(liveDriver.pendingUi()).toEqual([]);
+    // Nothing of it reached the successor or its parent.
+    expect(server.agents().run(successor.runId)).toMatchObject({ status: "running" });
+    expect(server.agents().run(successor.runId)).not.toHaveProperty("question");
+    expect(server.agents().sessionInfo(childPath)).toMatchObject({ runId: successor.runId, runStatus: "running" });
+    expect(parentEvents).toHaveLength(eventsBefore);
+    expect(parentEvents.some((entry) => entry.event.type === "agent.needs_input")).toBe(false);
+    expect(lifecycleLogs().some((log) => log.line.includes(`late-callback-dropped kind=ui_request:select invocation=${oldRef.id} invocationRun=${started.runId} owner=${successor.runId}`) && log.line.includes(`dialog=${request.dialogId}`))).toBe(true);
+    expect((await call("pi/ui/response", { id: request.dialogId, value: "a" })).result).toEqual({ delivered: false });
+
+    heldSuccessor.release();
+    await waitForTerminal(successor.runId);
+    expect(server.agents().run(successor.runId)).toMatchObject({ status: "completed", result: { message: "successor done" } });
+    expect(completions.results).toEqual([{ ok: true, runId: started.runId }, { ok: true, runId: successor.runId }]);
+    assertNoOverlappingInvocations();
+    expectNoBodiesInModuleLogs(["Start.", F1, "old done", "successor done", "Later?"]);
+  }, 60_000);
+
+  it("attributes a dialog and its resolution to the epoch that raised it, so the owning run asks and is answered by the same stamp", async () => {
+    provider.answer(0, { toolCall: { name: "ask_now", args: {}, id: "call-ask-now" } });
+    provider.route(() => ({ text: "ok" }));
+    const asked = waitForRun((run) => run.sessionPath === childPath && run.status === "needs_input");
+    const started = await parentBridge.sendAgentMessage({ sessionId: childSessionId, message: "Ask.", interrupt: false });
+    const paused = await asked;
+    expect(paused).toMatchObject({ runId: started.runId, question: { kind: "select", title: "Now?", options: ["x", "y"], toolName: "ask_now", toolCallId: "call-ask-now" } });
+    const request = driverEvents.find((event) => event.kind === "ui_request")!;
+    const owning = driverEvents.find((event) => event.kind === "agent_start" && event.invocation?.runId === started.runId)!.invocation!;
+    expect(request.invocation).toEqual(owning);
+    expect(parentEvents.map((entry) => entry.event.type)).toEqual(["agent.needs_input"]);
+
+    // The person stops the run: the abort reaches the dialog through the
+    // tool's signal, and its resolution carries the stamp its request took.
+    const resolved = waitForDriverEvent((event) => event.kind === "ui_event" && event.method === "dialogResolved");
+    const stopped = await call("agents/runs/stop", { runId: started.runId, reason: "never mind" });
+    expect(stopped.error).toBeUndefined();
+    await resolved;
+    const resolution = driverEvents.find((event) => event.kind === "ui_event" && event.method === "dialogResolved")!;
+    expect(resolution).toMatchObject({ dialogId: request.dialogId, invocation: owning });
+    await waitForTerminal(started.runId);
+    expect(server.agents().run(started.runId)).toMatchObject({ status: "cancelled", endedBy: { initiator: "user", reason: "never mind" } });
+    expect(server.agents().run(started.runId)).not.toHaveProperty("question");
+    expect(liveDriver.pendingUi()).toEqual([]);
+    expect(lifecycleLogs().some((log) => log.line.includes("late-callback-dropped kind=ui_"))).toBe(false);
+    assertNoOverlappingInvocations();
+    expectNoBodiesInModuleLogs(["Ask.", "Now?", "never mind"]);
   }, 60_000);
 });

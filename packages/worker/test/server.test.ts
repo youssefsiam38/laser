@@ -3,11 +3,11 @@
  * load, dialog notifications, and error mapping. The real driver is covered
  * by stable-sdk.*.test.ts.
  */
-import { afterEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PRODUCT_NAME, PROJECT_DIR_NAME } from "@lasercode/protocol";
+import { PRODUCT_NAME, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE } from "@lasercode/protocol";
 import type { ContentBlock, JsonRpcMessage, SessionState, UiDialogRequest } from "@lasercode/protocol";
 import { WorkerServer } from "../src/server.js";
 import type { DriverEvent, DriverListener, FirstTurnOptions, PromptOptions, SessionDriver } from "../src/driver.js";
@@ -27,9 +27,15 @@ class FakeDriver implements SessionDriver {
   prepareObserved: (() => void) | undefined;
   prepareFailure: Error | undefined;
   generation = "original";
-  routed: Array<{ route: string; generation: string; content?: unknown }> = [];
+  routed: Array<{ route: string; generation: string; content?: unknown; options?: PromptOptions }> = [];
   rollbacks = 0;
   acceptPrompt = true;
+  /** Hold every accepted prompt until `releasePrompt()`, streaming meanwhile; `nextHeld()` is the barrier. */
+  holdPrompts = false;
+  private held: Array<{ resolve: (result: { accepted: boolean; queued: boolean }) => void }> = [];
+  private heldWaiters: Array<() => void> = [];
+  /** Pi's two lanes as `clearQueue()` reports them: what steer/follow_up and a queued prompt put there. */
+  engine = { steering: [] as string[], followUp: [] as string[] };
   private st: SessionState = {
     path: "/tmp/fake/s1.jsonl",
     id: "s1",
@@ -76,18 +82,49 @@ class FakeDriver implements SessionDriver {
   async rollbackFirstTurn() { this.rollbacks += 1; this.generation = "original"; }
   async prompt(content: unknown[], options?: PromptOptions) {
     this.prompted.push(content);
-    this.routed.push({ route: "prompt", generation: this.generation, content });
+    this.routed.push({ route: "prompt", generation: this.generation, content, ...(options ? { options } : {}) });
     if (!this.acceptPrompt) return { accepted: false, queued: false };
+    // Like Pi: an explicitly queued prompt while streaming goes into that
+    // lane, is accepted at once, and answers before the turn it joins ends.
+    if (this.st.isStreaming && options?.streamingBehavior) {
+      (options.streamingBehavior === "steer" ? this.engine.steering : this.engine.followUp).push(textOf(content as ContentBlock[]));
+      options.onAccepted?.();
+      this.emit({ type: "update", update: { kind: "queue_update", steering: [...this.engine.steering], followUp: [...this.engine.followUp] } });
+      return { accepted: true, queued: true };
+    }
     options?.onAccepted?.();
     this.st = { ...this.st, messageCount: this.st.messageCount + 1 };
     this.emit({ type: "update", update: { kind: "agent_start" } });
+    if (this.holdPrompts) {
+      this.setStreaming(true);
+      const result = new Promise<{ accepted: boolean; queued: boolean }>((resolve) => this.held.push({ resolve }));
+      for (const waiter of this.heldWaiters.splice(0)) waiter();
+      return result;
+    }
     this.emit({ type: "update", update: { kind: "text_delta", delta: "hi", contentIndex: 0 } });
     this.emit({ type: "update", update: { kind: "agent_settled" } });
     return { accepted: true, queued: false };
   }
-  async steer(content: ContentBlock[]) { this.routed.push({ route: "steer", generation: this.generation, content }); }
-  async followUp(content: ContentBlock[]) { this.routed.push({ route: "followUp", generation: this.generation, content }); }
-  async clearQueue() { return { steering: [], followUp: [] }; }
+  /** Resolves once the next prompt is held (or at once if one already is). */
+  nextHeld(): Promise<void> {
+    if (this.held.length > 0) return Promise.resolve();
+    return new Promise<void>((resolve) => this.heldWaiters.push(resolve));
+  }
+  /** The held turn ends: settled first, then the prompt promise, as Pi does. */
+  releasePrompt() {
+    const pending = this.held.shift();
+    if (!pending) throw new Error("No prompt is held.");
+    this.setStreaming(false);
+    this.emit({ type: "update", update: { kind: "agent_settled" } });
+    pending.resolve({ accepted: true, queued: false });
+  }
+  async steer(content: ContentBlock[]) { this.routed.push({ route: "steer", generation: this.generation, content }); this.engine.steering.push(textOf(content)); }
+  async followUp(content: ContentBlock[]) { this.routed.push({ route: "followUp", generation: this.generation, content }); this.engine.followUp.push(textOf(content)); }
+  async clearQueue() {
+    const cleared = { steering: this.engine.steering, followUp: this.engine.followUp };
+    this.engine = { steering: [], followUp: [] };
+    return cleared;
+  }
   async abort() { this.routed.push({ route: "abort", generation: this.generation }); }
   async listModels() { return [{ provider: "p", id: "m" }]; }
   async setModel() { this.routed.push({ route: "model", generation: this.generation }); return this.st; }
@@ -111,6 +148,10 @@ function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   const promise = new Promise<T>((done) => { resolve = done; });
   return { promise, resolve };
+}
+
+function textOf(content: ContentBlock[]): string {
+  return content.map((block) => (block.type === "text" ? block.text : "")).join("");
 }
 
 function harness() {
@@ -639,6 +680,158 @@ describe("WorkerServer settings writes and live sessions", () => {
     const written = await h.call(3, "pi/settings/set", { cwd: h.cwd, scope: "global", changes: [{ path: "steeringMode", op: "set", value: "all" }] });
     expect(written.error).toBeUndefined();
     expect(written.result?.snapshot?.effective["steeringMode"]).toBe("all");
+    await h.server.dispose();
+  });
+});
+
+/**
+ * A person typing in a child agent's own chat (M13-T98 §8.4). The three
+ * queue verbs go through the harness fence for a child and stay the driver's
+ * for a root; the fake driver holds prompts so the terminal-pending window
+ * can be observed without an engine.
+ */
+describe("WorkerServer sends into a child agent's own chat", () => {
+  let base: string;
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-server-child-`));
+  });
+  afterEach(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  function childHarness() {
+    const out: JsonRpcMessage[] = [];
+    const observers = new Set<(message: JsonRpcMessage) => void>();
+    const drivers: FakeDriver[] = [];
+    const server = new WorkerServer({
+      cwd: base,
+      createDriver: () => { const d = new FakeDriver(); drivers.push(d); return d; },
+      send: (m) => {
+        out.push(m);
+        for (const observe of [...observers]) observe(m);
+      },
+    });
+    let nextId = 1;
+    const call = async (method: string, params?: unknown) => {
+      const id = nextId++;
+      await server.handle({ jsonrpc: "2.0", id, method, params });
+      return out.find((m) => "id" in m && m.id === id) as { result?: unknown; error?: { code: number; message: string } };
+    };
+    /** A notification that has not arrived yet. */
+    const waitFor = (predicate: (message: JsonRpcMessage) => boolean): Promise<JsonRpcMessage> => {
+      const existing = out.find(predicate);
+      if (existing) return Promise.resolve(existing);
+      return new Promise((resolve) => {
+        const observe = (message: JsonRpcMessage) => {
+          if (!predicate(message)) return;
+          observers.delete(observe);
+          resolve(message);
+        };
+        observers.add(observe);
+      });
+    };
+    const lifecycleLine = (text: string) => (message: JsonRpcMessage) =>
+      "method" in message && message.method === "pi/extension/message"
+      && (message as { params: { message: { type?: string; message?: string } } }).params.message.type === "lasercode/module/log"
+      && ((message as { params: { message: { message?: string } } }).params.message.message ?? "").includes(text);
+    const parentPath = join(base, "parent.jsonl");
+    const childPath = join(base, "child.jsonl");
+    writeFileSync(parentPath, `${JSON.stringify({ type: "session", id: "p" })}\n${JSON.stringify({ type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, data: { agentName: "default", kind: "root" } })}\n`);
+    writeFileSync(childPath, `${JSON.stringify({ type: "session", id: "c" })}\n${JSON.stringify({ type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, data: { agentName: "default", kind: "child", subagentName: "fixer", parentPath, parentSessionId: "p", rootPath: parentPath, runId: "run_seed" } })}\n`);
+    const runs = () => server.agents().runs().filter((run) => run.sessionPath === childPath);
+    const text = (value: string): ContentBlock[] => [{ type: "text", text: value }];
+    return { server, out, drivers, call, waitFor, lifecycleLine, childPath, runs, text };
+  }
+
+  it("queues a person's steer and follow-up in the engine through the harness while the child streams, forgets them on clear, and holds one for the successor during terminal-pending", async () => {
+    const h = childHarness();
+    expect((await h.call("session/load", { path: h.childPath })).error).toBeUndefined();
+    const d = h.drivers[0]!;
+    d.holdPrompts = true;
+    const first = h.call("session/prompt", { path: h.childPath, content: h.text("first") });
+    await d.nextHeld();
+    const [run] = h.runs();
+    expect(run).toMatchObject({ origin: "user", status: "running", task: "first" });
+
+    // While it streams: the engine's lanes, through the harness's prompt with
+    // the lane as its behaviour — never the driver's direct verb — and the
+    // request answers at acceptance, not when the turn ends.
+    expect((await h.call("pi/session/follow_up", { path: h.childPath, content: h.text("F") })).result).toEqual({});
+    expect((await h.call("pi/session/steer", { path: h.childPath, content: h.text("S") })).result).toEqual({});
+    expect(d.routed.filter((entry) => entry.route === "steer" || entry.route === "followUp")).toEqual([]);
+    expect(d.routed.slice(-2).map((entry) => [textOf(entry.content as ContentBlock[]), entry.options?.streamingBehavior, entry.options?.expandPromptTemplates])).toEqual([["F", "followUp", true], ["S", "steer", true]]);
+    expect(d.engine).toEqual({ steering: ["S"], followUp: ["F"] });
+    expect(h.runs()).toHaveLength(1);
+
+    // Clear: the engine's texts come back, and the harness forgets its twins.
+    expect((await h.call("pi/session/clear_queue", { path: h.childPath })).result).toEqual({ steering: ["S"], followUp: ["F"] });
+    expect(d.engine).toEqual({ steering: [], followUp: [] });
+    await h.waitFor(h.lifecycleLine(`queue-cleared runId=${run!.runId} clearedSteering=1 clearedFollowUp=1 twins=2`));
+
+    // Terminal-pending: the completion is declared while the prompt is still
+    // held. Nothing was left to transfer, so no successor exists yet.
+    expect(await h.server.agents().bridgeOf(h.childPath)!.completeRun({ status: "completed", message: "done" })).toEqual({ ok: true, runId: run!.runId });
+    expect(h.runs()).toHaveLength(1);
+
+    // A follow-up now waits for the successor, never the engine, and its
+    // request is still open: the engine does not hold the message yet.
+    const late = h.call("pi/session/follow_up", { path: h.childPath, content: h.text("P") });
+    await h.waitFor(h.lifecycleLine("admission source=person decision=queued-successor"));
+    const successor = h.runs().find((candidate) => candidate.runId !== run!.runId)!;
+    expect(successor).toMatchObject({ status: "queued", origin: "user", task: "P" });
+    expect(d.engine).toEqual({ steering: [], followUp: [] });
+    expect(d.routed.filter((entry) => entry.route === "followUp")).toEqual([]);
+    let lateSettled = false;
+    void late.then(() => { lateSettled = true; });
+    await Promise.resolve();
+    expect(lateSettled).toBe(false);
+
+    // The old prompt resolves: the successor's own prompt is P, with the
+    // follow-up behaviour, and the person's request answers at its acceptance.
+    d.releasePrompt();
+    expect((await first).result).toEqual({ accepted: true, queued: false });
+    await d.nextHeld();
+    expect(d.routed.at(-1)).toMatchObject({ route: "prompt", content: h.text("P"), options: { streamingBehavior: "followUp", expandPromptTemplates: true } });
+    expect((await late).result).toEqual({});
+    expect(h.server.agents().run(run!.runId)).toMatchObject({ status: "completed", result: { message: "done" } });
+    expect(h.server.agents().run(successor.runId)?.status).toBe("running");
+    expect(d.engine).toEqual({ steering: [], followUp: [] });
+    expect(await h.server.agents().bridgeOf(h.childPath)!.completeRun({ status: "completed", message: "successor done" })).toEqual({ ok: true, runId: successor.runId });
+    d.releasePrompt();
+    await h.waitFor((message) => "method" in message && message.method === "agents/run" && (message as { params: { run: { runId: string; status: string } } }).params.run.runId === successor.runId && (message as { params: { run: { status: string } } }).params.run.status === "completed");
+    expect(h.runs().map((candidate) => candidate.status)).toEqual(["completed", "completed"]);
+    await h.server.dispose();
+  });
+
+  it("answers a person's deferred follow-up with the harness's sentence when the successor is stopped, and keeps the direct verbs for a root", async () => {
+    const h = childHarness();
+    await h.call("session/load", { path: h.childPath });
+    const d = h.drivers[0]!;
+    d.holdPrompts = true;
+    const first = h.call("session/prompt", { path: h.childPath, content: h.text("first") });
+    await d.nextHeld();
+    const [run] = h.runs();
+    expect(await h.server.agents().bridgeOf(h.childPath)!.completeRun({ status: "completed", message: "done" })).toEqual({ ok: true, runId: run!.runId });
+    const late = h.call("pi/session/follow_up", { path: h.childPath, content: h.text("P") });
+    await h.waitFor(h.lifecycleLine("admission source=person decision=queued-successor"));
+    const successor = h.runs().find((candidate) => candidate.runId !== run!.runId)!;
+    const stopped = await h.call("agents/runs/stop", { runId: successor.runId, reason: "not needed" });
+    expect((stopped.result as { run: { status: string } }).run.status).toBe("cancelled");
+    const reply = await late;
+    expect(reply.result).toBeUndefined();
+    expect(reply.error?.message).toMatch(/ended \(cancelled\) before this message could start/);
+    expect(d.engine).toEqual({ steering: [], followUp: [] });
+    d.releasePrompt();
+    expect((await first).result).toEqual({ accepted: true, queued: false });
+
+    // A root keeps the driver's verbs: nothing of the harness in the way.
+    await h.call("session/new", { cwd: base });
+    const root = h.drivers[1]!;
+    expect((await h.call("pi/session/steer", { path: root.state().path, content: h.text("root steer") })).result).toEqual({});
+    expect((await h.call("pi/session/follow_up", { path: root.state().path, content: h.text("root follow") })).result).toEqual({});
+    expect(root.routed.map((entry) => entry.route)).toEqual(["steer", "followUp"]);
+    expect((await h.call("pi/session/clear_queue", { path: root.state().path })).result).toEqual({ steering: ["root steer"], followUp: ["root follow"] });
+    expect(h.out.some(h.lifecycleLine("queue-cleared") as (message: JsonRpcMessage) => boolean)).toBe(false);
     await h.server.dispose();
   });
 });

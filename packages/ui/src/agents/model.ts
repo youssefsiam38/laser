@@ -134,15 +134,36 @@ const time = (value: string | undefined): number => {
   return Number.isNaN(parsed) ? 0 : parsed;
 };
 
-/** Newest start first; a live follow-up wins a same-millisecond tie. */
+/**
+ * 1 for a run that can still act (`running`, `needs_input`), 0 for one that
+ * only waits or has ended. The worker's `liveness` in `agents/fleet.ts`,
+ * mirrored: `test/agents/fleet.test.ts` there holds the two to one answer.
+ */
+const liveness = (run: Pick<AgentRun, "status">): number => (run.status === "queued" || isTerminalRunStatus(run.status) ? 0 : 1);
+
+/**
+ * The run that stands for a session first. One that can still act outranks
+ * one that only waits behind it: while a declared completion unwinds, the old
+ * invocation can still write and the row says Working until it truly cannot,
+ * and the successor is Waiting, not the session. Then newest start first — a
+ * newer active run outranks historic failures (D-189) — and a live follow-up
+ * wins a same-millisecond tie.
+ */
 export function compareRunsNewestFirst(a: AgentRun, b: AgentRun): number {
-  return time(b.startedAt) - time(a.startedAt)
+  return liveness(b) - liveness(a)
+    || time(b.startedAt) - time(a.startedAt)
     || Number(isTerminalRunStatus(a.status)) - Number(isTerminalRunStatus(b.status))
     || time(b.updatedAt) - time(a.updatedAt)
     || b.runId.localeCompare(a.runId);
 }
 
-/** Creation order: the order children were started in, which a map must never reshuffle. */
+/**
+ * Creation order: the order children were started in, which a map must never
+ * reshuffle — the exact reverse of {@link compareRunsNewestFirst}, so a
+ * session's list ends on the run that stands for it (the worker's
+ * `agents/fleet.ts` sorts the same way). Among runs that can equally act, the
+ * older start comes first.
+ */
 export function compareRunsOldestFirst(a: AgentRun, b: AgentRun): number {
   return -compareRunsNewestFirst(a, b);
 }
