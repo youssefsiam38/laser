@@ -30,7 +30,7 @@ import {
   useExternalStoreRuntime,
   useRemoteThreadListRuntime,
 } from "@assistant-ui/react";
-import type { AssistantRuntime, RemoteThreadListAdapter, ThreadMessageLike } from "@assistant-ui/react";
+import type { AssistantRuntime, RemoteThreadListAdapter, ThreadComposerRuntime, ThreadMessageLike } from "@assistant-ui/react";
 import type {
   ContentBlock,
   GoalAction,
@@ -63,6 +63,7 @@ import { createTasksActions, type TasksActions } from "../fleet/actions.js";
 import { HostClient } from "../client.js";
 import { initialState, reduce, type Action, type AppState, type SessionView } from "../store.js";
 import { createThreadAdapter, sendToSession, type SendBehavior } from "./adapter.js";
+import { useDiscardFirstTurnOnLeave } from "./first-turn.js";
 import { createSessionLauncher, type NewSessionOptions } from "./new-session.js";
 import { rememberSessionForTab, sessionKindTab } from "./session-tab-memory.js";
 import { useThemeSync } from "./prefs.js";
@@ -1498,6 +1499,10 @@ function useThreadRuntime(store: SnapshotStore<RuntimeSnapshot>): AssistantRunti
     return externalId ?? remoteId;
   }, [aui]);
 
+  // This thread's own composer, for the adapter to hand an unsent message back
+  // to (M13-T89 U1). Read lazily: the runtime exists only once the adapter does,
+  // and a send can only start after the commit that fills the ref.
+  const composerRef = useRef<ThreadComposerRuntime | undefined>(undefined);
   const adapter = useMemo(
     () =>
       createThreadAdapter({
@@ -1509,11 +1514,19 @@ function useThreadRuntime(store: SnapshotStore<RuntimeSnapshot>): AssistantRunti
         onError: snapshot.onError,
         resolvePath,
         projection: { ...projection, messages: messages as ThreadMessageLike[] },
+        composer: () => composerRef.current,
       }),
     [connection, messages, path, projection, resolvePath, snapshot, view],
   );
 
-  return useExternalStoreRuntime<ThreadMessageLike>(adapter);
+  const runtime = useExternalStoreRuntime<ThreadMessageLike>(adapter);
+  useEffect(() => {
+    composerRef.current = runtime.thread.composer;
+  }, [runtime]);
+  // A tentative first-turn choice lives only while this thread is the one on
+  // screen (M13-T89 U2): keyed on this thread's composer, never on the current one.
+  useDiscardFirstTurnOnLeave(runtime.thread.composer, isMain);
+  return runtime;
 }
 
 // ---------------------------------------------------------------------------

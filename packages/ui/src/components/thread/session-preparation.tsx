@@ -23,7 +23,16 @@ const SessionPreparationContext = createContext<SessionPreparationValue>({
   chooseThinking: () => {},
 });
 
-/** Serializes persistent model preparation and owns tentative first-turn choices. */
+/**
+ * Serializes persistent model preparation and owns tentative first-turn choices.
+ *
+ * The choice lives on this composer's `runConfig.custom.firstTurn` and nowhere
+ * else (FB-01, D-185). It ends in one of two places: here, once canonical
+ * history starts (the worker took the first prompt); or at the leave boundary,
+ * `useDiscardFirstTurnOnLeave` in the per-thread runtime hook, when the person
+ * moves to another session. A refused first prompt is neither — the choice, the
+ * text and the attachments all stay so the send can be corrected and retried.
+ */
 export function SessionPreparationProvider({ children }: { children: ReactNode }) {
   const [count, setCount] = useState(0);
   const aui = useAui();

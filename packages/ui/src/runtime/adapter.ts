@@ -25,14 +25,28 @@
  * boundary, so the transcript keeps only the message and the reply — no stop
  * notice for a person who redirected rather than stopped.
  *
+ * A message the worker never took (M13-T89 U1). assistant-ui's composer clears
+ * its text the moment Send is pressed and puts it back only when `onNew`
+ * rejects with `MessageNotSentError` — and `onNew` is exactly the lane a
+ * thread-composer send never takes here, because `queue.enqueue` and
+ * `queue.steer` are called without their result being awaited. So `send`
+ * owns the restoration for every lane: it reads the composer of the thread it
+ * serves *as the send starts* (`deps.composer`), and when nothing reached the
+ * worker it puts the text and attachments back into that composer, provided
+ * it is still empty. The tentative first-turn choice needs no restoring: a
+ * send never clears `runConfig`. Every such failure is rethrown as a
+ * `MessageNotSentError` so the one lane assistant-ui does handle behaves the
+ * same, and the toast says what happened next.
+ *
  * Everything above `createThreadAdapter` is pure and unit-tested.
  */
-import { SimpleImageAttachmentAdapter } from "@assistant-ui/react";
+import { MessageNotSentError, SimpleImageAttachmentAdapter } from "@assistant-ui/react";
 import type {
   AppendMessage,
   ExternalStoreAdapter,
   ExternalThreadQueueAdapter,
   QueueItemState,
+  ThreadComposerRuntime,
   ThreadMessageLike,
 } from "@assistant-ui/react";
 import type { ContentBlock, ImageContent, PendingMessage, UiDialogResponse } from "@lasercode/protocol";
@@ -295,6 +309,69 @@ export async function sendToSession(
 }
 
 // ---------------------------------------------------------------------------
+// A message that never reached the worker
+// ---------------------------------------------------------------------------
+
+/** The slice of a thread composer an unsent message goes back into. */
+export type UnsentMessageComposer = Pick<ThreadComposerRuntime, "getState" | "setText" | "addAttachment">;
+
+/** What a composer holds: nothing the person typed or attached since the send. */
+function composerIsEmpty(composer: UnsentMessageComposer): boolean {
+  const { text, attachments, quote } = composer.getState();
+  return text.trim() === "" && attachments.length === 0 && quote === undefined;
+}
+
+/**
+ * Put an unsent message back into the composer that sent it: its text and its
+ * completed attachments, exactly as they were. Refused — and the composer left
+ * untouched — when it holds anything of its own, so a refusal that arrives
+ * late never writes over what the person typed in the meantime. Reports
+ * whether the message came back, so the toast can say so.
+ */
+export async function restoreUnsentMessage(
+  composer: UnsentMessageComposer | undefined,
+  message: AppendMessage,
+): Promise<boolean> {
+  if (!composer || !composerIsEmpty(composer)) return false;
+  const text = message.content
+    .filter((part): part is Extract<AppendMessage["content"][number], { type: "text" }> => part.type === "text")
+    .map((part) => part.text)
+    .join("\n\n");
+  if (text) composer.setText(text);
+  // `addAttachment` with content (not a File) is synchronous in effect and
+  // marks the attachment complete; it was accepted once already, so a refusal
+  // here is not a state the person can reach — settle rather than throw so one
+  // odd attachment never hides the reason the send failed.
+  await Promise.allSettled(
+    (message.attachments ?? []).flatMap((attachment) =>
+      attachment.content
+        ? [composer.addAttachment({
+            id: attachment.id,
+            type: attachment.type,
+            name: attachment.name,
+            ...(attachment.contentType !== undefined ? { contentType: attachment.contentType } : {}),
+            content: attachment.content,
+          })]
+        : [],
+    ),
+  );
+  return true;
+}
+
+/**
+ * The toast for a message that was not sent: what went wrong, in the worker's
+ * words, and what to do next — which is only worth saying when the message is
+ * actually back in the composer.
+ */
+export function notSentMessage(reason: string, options: { restored: boolean; firstTurn: boolean }): string {
+  const trimmed = reason.trim();
+  if (!options.restored) return trimmed;
+  const sentence = /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+  const next = options.firstTurn ? "check the agent and thinking choice, then send it again" : "send it again when you are ready";
+  return `${sentence} Your message is back in the composer — ${next}.`;
+}
+
+// ---------------------------------------------------------------------------
 // Queue
 // ---------------------------------------------------------------------------
 
@@ -354,6 +431,12 @@ export interface ThreadAdapterDeps {
   resolvePath?: (() => Promise<string>) | undefined;
   /** Pre-projected messages; supplied by the hook so the projection is memoized. */
   projection?: ProjectionResult | undefined;
+  /**
+   * The composer of the thread this adapter serves, read at send time. It is
+   * where a message the worker never took goes back to — that composer and no
+   * other, whichever session is on screen by the time the refusal arrives.
+   */
+  composer?: (() => UnsentMessageComposer | undefined) | undefined;
 }
 
 /**
@@ -378,10 +461,25 @@ export function createThreadAdapter(deps: ThreadAdapterDeps): ExternalStoreAdapt
     // The sending composer's runtime owns this value. Capturing it from the
     // message prevents another composer on the same path from replacing it.
     const firstTurn = firstTurnFromRunConfig(message.runConfig);
-    const path = await resolvePath();
-    const running = deps.path === path ? projection.isRunning : false;
-    const behavior = resolveSendBehavior({ running, lane, message });
-    await sendToSession(deps.client, path, content, behavior, deps.dispatch, behavior === "prompt" ? firstTurn : undefined);
+    // The composer that is sending, captured now for the same reason: a
+    // refusal that lands after the person moved on must find this composer,
+    // never the one on screen.
+    const origin = deps.composer?.();
+    try {
+      const path = await resolvePath();
+      const running = deps.path === path ? projection.isRunning : false;
+      const behavior = resolveSendBehavior({ running, lane, message });
+      await sendToSession(deps.client, path, content, behavior, deps.dispatch, behavior === "prompt" ? firstTurn : undefined);
+    } catch (error) {
+      // Nothing reached the worker: `sendToSession` rolled back its optimistic
+      // bubble (or never drew one), so the message has nowhere to live but the
+      // composer it came from.
+      const restored = await restoreUnsentMessage(origin, message);
+      const reason = error instanceof Error ? error.message : String(error);
+      const notSent = new MessageNotSentError(notSentMessage(reason, { restored, firstTurn: firstTurn !== undefined }));
+      notSent.cause = error;
+      throw notSent;
+    }
   };
 
   const fireAndForget = (work: Promise<unknown>): void => {
