@@ -20,6 +20,8 @@ import {
   FOREGROUND_COMMAND_SECONDS_MAX,
   FOREGROUND_COMMAND_SECONDS_MIN,
 } from "./agents.js";
+import { MAX_FALLBACK_CHAIN_MODELS } from "./fallback.js";
+import { PROVIDER_FAILURE_CLASSES } from "./provider-failure.js";
 import { ErrorCodes, type JsonRpcRequest } from "./jsonrpc.js";
 import { PREFS_MAX_BYTES } from "./messages.js";
 import type { ClientMethod, ClientRequests } from "./messages.js";
@@ -403,6 +405,72 @@ export const agentPolicyPatchSchema = z
   })
   .strict();
 export const agentRunStatusSchema = z.enum(AGENT_RUN_STATUSES as [string, ...string[]]);
+
+/**
+ * The fallback record a session file carries (M15-T3).
+ *
+ * It is read back from a file that a previous generation of this app wrote, so
+ * it is validated rather than trusted: a malformed entry must leave a session
+ * with no chain, never with half a traversal. Strict, so a new field cannot
+ * appear without this schema and the round-trip sample saying what it means.
+ */
+const fallbackModelRefSchema = z
+  .object({ provider: z.string().min(1).max(100), id: z.string().min(1).max(200) })
+  .strict();
+const providerFailureClassSchema = z.enum(PROVIDER_FAILURE_CLASSES as unknown as [string, ...string[]]);
+const isoInstant = z.string().min(1).max(64);
+export const sessionFallbackEntrySchema = z
+  .object({
+    version: z.literal(1),
+    event: z.enum(["activated", "switched", "returned", "attempt_failed", "exhausted", "cleared"]),
+    at: isoInstant,
+    from: fallbackModelRefSchema.optional(),
+    to: fallbackModelRefSchema.optional(),
+    failure: z.object({ class: providerFailureClassSchema, at: isoInstant }).strict().optional(),
+    activation: z
+      .object({
+        id: z.string().min(1).max(100),
+        chainKey: z.string().min(1).max(320),
+        models: z.array(fallbackModelRefSchema).min(1).max(MAX_FALLBACK_CHAIN_MODELS),
+        position: z.number().int().nonnegative().max(MAX_FALLBACK_CHAIN_MODELS),
+        startedAt: isoInstant,
+      })
+      .strict()
+      .nullable(),
+    failover: z
+      .object({
+        id: z.string().min(1).max(100),
+        startedAt: isoInstant,
+        attempts: z
+          .array(
+            z
+              .object({
+                model: z.string().min(1).max(320),
+                at: isoInstant,
+                outcome: z.enum(["failed", "succeeded", "skipped"]),
+                class: providerFailureClassSchema.optional(),
+                reason: z.string().max(300).optional(),
+              })
+              .strict(),
+          )
+          .max(4 * MAX_FALLBACK_CHAIN_MODELS),
+        endedAt: isoInstant.optional(),
+        ended: z.enum(["switched", "returned", "exhausted", "aborted"]).optional(),
+      })
+      .strict()
+      .optional(),
+    models: z.record(
+      z
+        .object({
+          lastFailure: z.object({ class: providerFailureClassSchema, at: isoInstant }).strict().optional(),
+          cooldownUntil: isoInstant.optional(),
+          knownResetAt: isoInstant.optional(),
+          nonTransient: z.boolean().optional(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
 const runId = z.string().min(1).max(100);
 /** Loose on purpose: the host relays what a worker produced; the worker validated it. */
 const agentsSnapshotSchema = z.object({ revision: z.number().int().nonnegative() }).passthrough();

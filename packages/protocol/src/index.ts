@@ -9,6 +9,8 @@ export * from "./identity.js";
 export * from "./features.js";
 export * from "./agents.js";
 export * from "./web-search.js";
+export * from "./provider-failure.js";
+export * from "./fallback.js";
 export * from "./mcp.js";
 export * from "./jsonrpc.js";
 export * from "./messages.js";
