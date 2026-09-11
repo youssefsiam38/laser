@@ -297,9 +297,26 @@ record(
   "Reinstall the dependencies and rebuild the package.",
 );
 
+// Lazy MCP helpers/native code are not all reached by a stdio-only session.
+// Resolve them from the adapter, not the desktop (which uses keyring 2.x).
+const mcpArtifactRun = runBare(nodeBinary, [
+  join(packageRoot, "scripts", "check-mcp-artifact.mjs"),
+  join(modules, "@lasercode", "worker", "package.json"), modules,
+], bareEnv);
+const mcpArtifact = lastJsonLine(mcpArtifactRun.stdout);
+record(
+  "MCP executable assets and native bindings are packaged",
+  mcpArtifactRun.code === 0 && Boolean(mcpArtifact?.ok),
+  mcpArtifact?.ok
+    ? `${mcpArtifact.assets} assets, ${mcpArtifact.skills} skill; keyring ${mcpArtifact.keyringVersion} and filesystem prebuild load; jiti, TOML and both MCP SDK packages resolve inside the build`
+    : mcpArtifact?.error ?? mcpArtifactRun.stderr.trim() ?? "no answer",
+  "Preserve the adapter's published files, skills and native prebuilds; verify its own keyring version and platform binding, not the desktop's.",
+);
+
 // 7 ── a real session loads every bundled feature --------------------------
 const sessionProbe = join(modules, "@lasercode", "worker", "dist", "check-packaged-session.js");
-const sessionRun = runBare(nodeBinary, [sessionProbe], bareEnv);
+const mcpFixture = join(resources, "checks", "mcp-server.mjs");
+const sessionRun = runBare(nodeBinary, [sessionProbe, mcpFixture], bareEnv);
 const sessionReport = lastJsonLine(sessionRun.stdout);
 record(
   "a real session opens with every bundled feature",
@@ -328,6 +345,17 @@ record(
       : `missing: ${missingModules.join(", ")}; active: ${activeModules.join(", ") || "none"}`
     : "the session did not open",
   "The companion extension did not activate the harness. Check that the packaged worker builds the agents bridge for every session and that the extension's modules are bundled whole.",
+);
+
+record(
+  "MCP stdio tools reach the model and the inspector",
+  Boolean(sessionReport?.ok) && activeModules.includes("mcp") &&
+    sessionReport.mcp?.modelTool === "packaged_runtime" && sessionReport.mcp?.inspectedTool === "runtime" &&
+    sessionReport.mcp?.runtime === nodeBinary,
+  sessionReport?.mcp
+    ? `model: ${sessionReport.mcp.modelTool}; inspect/call: ${sessionReport.mcp.inspectedTool}; child: ${sessionReport.mcp.runtime}`
+    : "the offline MCP probe did not complete",
+  "Preserve the adapter's executable sources and dependencies; stdio must resolve node through the worker's bundled-runtime PATH additions.",
 );
 
 // 8 ── the machine's own agent is found and not used ------------------------

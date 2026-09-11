@@ -155,9 +155,10 @@ function assertTreeIsPackagable({ packagesDir, owner, subject, label, declareIn 
     ...Object.keys(manifest.optionalDependencies ?? {}),
     ...Object.keys(manifest.peerDependencies ?? {}),
   ]);
-  // `<store>/<id>/node_modules/<scope>/<name>` → the directory holding every
-  // package the installer resolved for this one.
-  const installed = packageNamesIn(join(dir, "..", ".."));
+  // Scoped subjects are two levels below node_modules; unscoped subjects
+  // (such as pi-mcp-adapter) are only one. Inspect their resolved siblings,
+  // not the store entry's parent, which would silently miss dependencies.
+  const installed = packageNamesIn(subject.startsWith("@") ? join(dir, "..", "..") : join(dir, ".."));
   const declaredByWorkspace = declaredAcrossWorkspace(packagesDir);
 
   const invisible = installed
@@ -306,6 +307,13 @@ exports.default = async function beforePack(context) {
     subject: "@napi-rs/keyring",
     label: "the keychain",
     declareIn: "packages/desktop/package.json",
+  });
+  assertTreeIsPackagable({
+    packagesDir: join(packageRoot, ".."),
+    owner: "worker",
+    subject: "pi-mcp-adapter",
+    label: "the MCP adapter",
+    declareIn: "packages/worker/package.json",
   });
   assertNativeBindingIsStaged(packageRoot, platform, arch);
 

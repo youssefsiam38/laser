@@ -131,7 +131,9 @@ export function loadMcpEngine(): Promise<McpEngine> {
   loading ??= (async (): Promise<McpEngine> => {
     const root = adapterRoot();
     const { createJiti } = await import("jiti");
-    const jiti = createJiti(import.meta.url, { moduleCache: true, interopDefault: true });
+    // Installed resources can be read-only. Keep transpilation in memory;
+    // moduleCache still shares imports without writing beside the adapter.
+    const jiti = createJiti(import.meta.url, { moduleCache: true, interopDefault: true, fsCache: false });
     const load = async <T>(file: string): Promise<T> => (await jiti.import(join(root, file))) as T;
     // One at a time, deliberately: jiti records a module in its cache when the
     // import resolves, so two concurrent imports of graphs that share a module
