@@ -258,9 +258,11 @@ describe("Beam and children in the Code tab", () => {
     const grandchild = innerRail.querySelector('[data-slot="aui_thread-list-item"][data-child]')!;
     expect(grandchild.querySelector('[data-slot="subagent-name"]')?.textContent).toBe("digger");
     expect(grandchild.querySelector('[data-slot="run-state"]')).toBeNull();
-    // Descendant state lives in the fold gutter rather than a width-taking tag.
+    // No width-taking tag, and no descendant state on the parent: its child is
+    // working, the parent is not, and only a hidden question would speak for
+    // the branch (M15-T4).
     expect(parent.querySelector('[data-slot="session-children-chip"]')).toBeNull();
-    expect(branch.querySelector('[data-slot="session-fold-status"]')?.getAttribute("data-tone")).toBe("live");
+    expect(branch.querySelector('[data-slot="session-fold-status"]')).toBeNull();
     // Only finished work under the child: the fold says "1 finished", and the
     // row keeps its width for the name.
     expect(child.querySelector('[data-slot="session-children-chip"]')).toBeNull();

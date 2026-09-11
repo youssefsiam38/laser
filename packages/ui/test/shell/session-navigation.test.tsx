@@ -46,14 +46,17 @@ afterEach(async () => { await act(async () => root.unmount()); container.remove(
 const rows = () => [...container.querySelectorAll('[data-slot="aui_thread-list-item"]')];
 
 describe("compact session navigation", () => {
-  it("shows activity only on the chat, with a real spinner and no idle markers", async () => {
+  it("shows activity only on the chat, as one leading mark per row, and no idle markers", async () => {
     await act(async () => root.render(<Fixture />));
     expect(rows()).toHaveLength(3);
-    expect(container.querySelectorAll('[data-slot="session-working"]')).toHaveLength(1);
+    // M15-T4: working is the shared sweep dot before the name, not a trailing
+    // spinner, so a row never wears two marks in two places.
+    expect(container.querySelectorAll('[data-slot="session-working"]')).toHaveLength(0);
+    expect(container.querySelectorAll('[data-status="working"]')).toHaveLength(1);
     expect(container.querySelectorAll('[data-status="finished_unread"]')).toHaveLength(1);
     expect(container.querySelectorAll('[data-status="waiting_for_input"]')).toHaveLength(1);
     expect(container.querySelectorAll('[data-status="idle"]')).toHaveLength(0);
-    expect(container.querySelector('[data-slot="session-working"]')?.getAttribute("class")).toContain("motion-safe:animate-sweep");
+    expect(container.querySelector('[data-status="working"] span')?.getAttribute("class")).toContain("motion-safe:animate-sweep");
     expect(rows()[0]?.textContent).toContain("Active work");
     const header = container.querySelector('[data-cwd="/one"] button')!;
     await act(async () => (header as HTMLButtonElement).click());
