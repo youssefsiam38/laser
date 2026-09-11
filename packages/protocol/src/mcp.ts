@@ -104,7 +104,12 @@ export interface McpServerConfigBase<V = McpValue> {
   name: string;
   /** What a person sees; defaults to `name`. */
   label?: string;
-  transport: McpTransport<V>;
+  /**
+   * Absent only on a project entry that does nothing but switch a global
+   * server off for that project: `{ name, disabled: true }` (docs/mcp.md).
+   * Every other entry carries one.
+   */
+  transport?: McpTransport<V>;
   /** HTTP only. Absent means `none` for stdio and socket, and auto-detected sign-in for HTTP. */
   auth?: McpAuth<V>;
   startup?: McpStartup;
@@ -132,9 +137,17 @@ export type McpServerStatus = (typeof MCP_SERVER_STATUSES)[number];
 export interface McpServerState {
   scope: McpScope;
   config: McpServerConfig;
-  /** A project entry of the same name replaces this global one for this project. */
+  /**
+   * On a global row: a project entry of the same name exists, so this
+   * definition is not what this project uses (replaced, or switched off).
+   */
   shadowed?: boolean;
-  /** The project entry only switches the global one off here; the global definition is what runs. */
+  /**
+   * On a project row: this entry carries no definition of its own; it only
+   * switches the global server off for this project. Its `config` is the
+   * global definition with `disabled: true`, so the row reads like the server
+   * it switches off.
+   */
   overridesGlobal?: boolean;
   status: McpServerStatus;
   /** From the newest session snapshot or the inspector, when either has seen the server. */
