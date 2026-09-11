@@ -961,7 +961,12 @@ export class WorkerServer {
     const live = this.live(path);
     if (!live.pending) {
       live.pending = new PendingTray({
-        steer: (content) => this.firstTurnLock.run(live.path, () => live.driver.steer(content)),
+        // A child's tray row goes through the harness fence like the chat's own
+        // steer (M13-T98): during a declared completion it waits on the
+        // successor instead of entering a queue the engine is about to drop.
+        steer: (content) => this.harness.roleOf(live.path)?.kind === "child"
+          ? this.queueIntoChild(live, content, "steer")
+          : this.firstTurnLock.run(live.path, () => live.driver.steer(content)),
         prompt: (content, onAccepted) => this.promptWithFence(live, content, undefined, onAccepted, true),
         streaming: () => live.driver.state().isStreaming,
         publish: (pending) => this.onDriverEvent(live, { type: "update", update: { kind: "pending_update", pending } }),
@@ -1224,9 +1229,16 @@ export class WorkerServer {
         else if (update.kind === "agent_settled" && live.pending) void live.pending.drain();
         return;
       }
-      case "ui_request":
+      case "ui_request": {
+        // The harness answers a question it cannot route — a dialog raised by
+        // an invocation the session no longer owns — synchronously, before this
+        // forwarder runs; a person must never be shown a dialog nobody can
+        // answer. Drivers that cannot list their open dialogs forward as before.
+        const pendingUi = (live.driver as { pendingUi?: () => Array<{ id: string }> }).pendingUi;
+        if (typeof pendingUi === "function" && !pendingUi.call(live.driver).some((request) => request.id === event.request.id)) return;
         this.notify("pi/ui/request", { path: live.path, ...event.request });
         return;
+      }
       case "ui_event":
         this.notify("pi/ui/event", { path: live.path, ...event.event });
         return;

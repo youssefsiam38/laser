@@ -498,6 +498,22 @@ describe("WorkerServer", () => {
     expect(stale.result).toEqual({ delivered: false });
   });
 
+  it("does not forward a dialog the driver no longer holds, so a person is never shown a question nobody can answer", async () => {
+    const h = harness();
+    await h.call(1, "session/new", { cwd: "/tmp/fake" });
+    const d = h.drivers[0]!;
+    // The harness cancels an unroutable question synchronously, before the
+    // forwarder runs (M13-T98): by the time the event reaches the server the
+    // bridge has already let go of the id.
+    d.pending = [];
+    d.emit({ type: "ui_request", request: { method: "select", id: "ui-gone", title: "Later?", options: ["a"] } });
+    expect(h.notifications("pi/ui/request")).toEqual([]);
+    // A dialog the bridge still holds is forwarded as before.
+    d.pending = [{ method: "select", id: "ui-open", title: "Now?", options: ["a"] }];
+    d.emit({ type: "ui_request", request: { method: "select", id: "ui-open", title: "Now?", options: ["a"] } });
+    expect(h.notifications("pi/ui/request").map((n) => (n.params as { id: string }).id)).toEqual(["ui-open"]);
+  });
+
   it("routes a ui response only to the session that raised the dialog", async () => {
     const h = harness();
     await h.call(1, "session/new", { cwd: "/tmp/fake" });
@@ -800,6 +816,27 @@ describe("WorkerServer sends into a child agent's own chat", () => {
     d.releasePrompt();
     await h.waitFor((message) => "method" in message && message.method === "agents/run" && (message as { params: { run: { runId: string; status: string } } }).params.run.runId === successor.runId && (message as { params: { run: { status: string } } }).params.run.status === "completed");
     expect(h.runs().map((candidate) => candidate.status)).toEqual(["completed", "completed"]);
+    await h.server.dispose();
+  });
+
+  it("sends a child's pending tray row through the harness fence, never the driver's bare steer", async () => {
+    const h = childHarness();
+    expect((await h.call("session/load", { path: h.childPath })).error).toBeUndefined();
+    const d = h.drivers[0]!;
+    d.holdPrompts = true;
+    const first = h.call("session/prompt", { path: h.childPath, content: h.text("first") });
+    await d.nextHeld();
+    const added = (await h.call("session/pending/add", { path: h.childPath, content: h.text("T") })).result as { message: { id: string } };
+    expect((await h.call("session/pending/steer", { path: h.childPath, id: added.message.id })).result).toEqual({ steered: true });
+    // The row went into the engine's steering lane through the harness's
+    // prompt, with the lane as its behaviour — the driver's direct verb was
+    // never used, so a declared completion can still carry it to the successor.
+    expect(d.routed.filter((entry) => entry.route === "steer")).toEqual([]);
+    expect(d.routed.at(-1)).toMatchObject({ route: "prompt", content: h.text("T"), options: { streamingBehavior: "steer", expandPromptTemplates: true } });
+    expect(d.engine).toEqual({ steering: ["T"], followUp: [] });
+    expect(h.runs()).toHaveLength(1);
+    d.releasePrompt();
+    expect((await first).result).toEqual({ accepted: true, queued: false });
     await h.server.dispose();
   });
 

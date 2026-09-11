@@ -237,7 +237,13 @@ UI renders the same entry as the parent-side card (Handoff row in
 run is truly terminal — after its engine invocation has stopped — and, when
 a successor was waiting behind it, only after that successor has become the
 session's live run, so a parent that reacts to the ending by messaging the
-child reaches the run that is actually working.
+child reaches the run that is actually working. A person's own sends into a
+child's chat — `pi/session/steer`, `pi/session/follow_up`, a pending-tray
+row's Steer, and `pi/session/clear_queue` — go through the same fence as the
+parent's messages, so nothing a person types can enter a queue the engine is
+about to drop. A dialog is stamped with the invocation that raised it; one
+from an invocation the session no longer owns is cancelled (never the
+successor's question, never left hanging) and is not shown to the person.
 
 ### States, and who sets them
 
