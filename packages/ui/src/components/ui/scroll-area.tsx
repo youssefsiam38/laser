@@ -16,14 +16,17 @@ function ScrollArea({
   return (
     <ScrollAreaPrimitive.Root
       data-slot="scroll-area"
-      className={cn("relative overflow-hidden", className)}
+      className={cn("relative flex flex-col overflow-hidden", className)}
       {...props}
     >
       <ScrollAreaPrimitive.Viewport
         data-slot="scroll-area-viewport"
         ref={viewportRef}
+        style={{ overflowY: "auto" }}
         className={cn(
-          "size-full rounded-[inherit] outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
+          // Flex sizing also works in a max-height dialog: a percentage height
+          // would resolve to content height there and clip instead of scrolling.
+          "min-h-0 w-full flex-auto rounded-[inherit] outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
           // Radix wraps viewport content in a `display: table` div, which
           // shrink-wraps to its own max-width instead of filling the viewport
           // — anything wider than the content then scrolls horizontally for no

@@ -13,6 +13,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ImagePreview, ImageRoot, ImageZoom } from "@/components/assistant-ui/elements/image";
 import { JsonViewer } from "@/components/assistant-ui/elements/json-viewer";
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
+import { MarkdownPreview } from "@/components/preview/MarkdownPreview";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -180,9 +181,7 @@ function CallResult({ result }: { result: McpCallResult }) {
       {result.content.map((block, index) => {
         if (block.type === "text") {
           return (
-            <pre key={index} className="typed max-h-80 overflow-auto rounded-lg bg-surface p-2 whitespace-pre-wrap text-ink-2">
-              {block.text}
-            </pre>
+            <MarkdownPreview key={index} text={block.text} className="rounded-lg bg-surface p-2" />
           );
         }
         if (block.type === "image") {

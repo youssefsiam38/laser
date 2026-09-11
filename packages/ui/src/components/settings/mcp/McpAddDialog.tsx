@@ -164,17 +164,16 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
       {/* The dialog itself is bounded and scrolls inside: on a short phone the
           header must not be pushed off the top where nothing can reach it. */}
       <DialogContent data-slot="mcp-add-dialog" className="flex max-h-[90dvh] min-h-0 flex-col sm:max-w-160">
+        <DialogHeader className="shrink-0">
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>
+            {edit
+              ? "Changes apply to conversations started after you save."
+              : "Test it first: you will see what it can do before it is saved."}
+          </DialogDescription>
+        </DialogHeader>
         <ScrollArea className="min-h-0 flex-1">
           <div className="flex min-w-0 flex-col gap-4 pe-3">
-            <DialogHeader>
-              <DialogTitle>{title}</DialogTitle>
-              <DialogDescription>
-                {edit
-                  ? "Changes apply to conversations started after you save."
-                  : "Test it first: you will see what it can do before it is saved."}
-              </DialogDescription>
-            </DialogHeader>
-
             {entry && !edit && (
               <section className="flex flex-col gap-3 rounded-xl border border-line bg-surface-2 p-3" aria-label={`${entry.name} options`}>
                 <p className="text-sm leading-6 text-ink-2">{entry.description}</p>
@@ -228,7 +227,7 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
           </div>
         </ScrollArea>
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0">
           <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>
             Cancel
           </Button>

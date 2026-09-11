@@ -46,15 +46,15 @@ beforeEach(() => {
       servers: [
         {
           name: "linear",
-          config: { name: "linear", transport: { kind: "http", url: "https://mcp.linear.app/mcp" } },
+          config: { name: "linear", transport: { kind: "http", url: "https://mcp.linear.app/mcp/full/path", headers: { Authorization: { secret: true }, "X-Team": "public-team" } } },
           conflicts: ["global"],
-          inlineSecrets: ["Authorization header"],
+          inlineSecrets: ["transport.headers.Authorization"],
         },
         {
           name: "memory",
-          config: { name: "memory", transport: { kind: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-memory"] } },
+          config: { name: "memory", transport: { kind: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-memory", "--headless", "--isolated", "two words"], env: { API_KEY: { secret: true }, MODE: "test" } } },
           conflicts: [],
-          inlineSecrets: [],
+          inlineSecrets: ["transport.env.API_KEY"],
         },
         {
           name: "weird",
@@ -107,7 +107,14 @@ it("imports the servers a person chose, into the scope they chose", async () => 
   await mount();
   await click("Import");
   expect(text()).toContain("/home/a/.claude.json");
-  expect(text()).toContain("mcp.linear.app · HTTP");
+  expect(text()).toContain("https://mcp.linear.app/mcp/full/path");
+  expect(text()).toContain('npx -y @modelcontextprotocol/server-memory --headless --isolated "two words"');
+  expect(text()).toContain("Headers: Authorization, X-Team");
+  expect(text()).toContain("Environment: API_KEY, MODE");
+  expect(text()).toContain("Authorization header");
+  expect(text()).toContain("the API_KEY environment variable");
+  expect(text()).not.toContain("transport.headers.");
+  expect(text()).not.toContain("transport.env.");
   expect(text()).toContain("already in Every project");
   expect(text()).toContain("kept in the app’s secret store");
   const unsupported = document.querySelector<HTMLElement>('[data-slot="mcp-import-row"][data-server="weird"]')!;
