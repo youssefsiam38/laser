@@ -272,9 +272,12 @@ interface StartAgentResultInfo {
 }
 
 /**
- * What `start_agent` answered: live results carry the harness's own
- * `details` (`cwd`), hydrated ones only the model's JSON view
- * (`working_directory`). Both name the run and where it works.
+ * What `start_agent` answered. A result that carries the harness's own
+ * `details` (`cwd`) is read from there — live, and now also on reload, since a
+ * stored result keeps its envelope when it has details (`storedToolResult`,
+ * store.ts). A result written before that, or by a harness that attached
+ * none, still reads the model's JSON view (`working_directory`). Both name
+ * the run and where it works.
  */
 function startAgentInfo(result: unknown, details: Record<string, unknown> | undefined, text: string): StartAgentResultInfo {
   const str = (source: Record<string, unknown> | undefined, ...keys: string[]): string | undefined => {

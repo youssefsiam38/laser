@@ -10,7 +10,7 @@ import { ToolGroup } from "../../src/components/assistant-ui/elements/tool-group
 import { toolTimelineFromParts } from "../../src/components/assistant-ui/elements/tool-timeline.js";
 import { ToolRow } from "../../src/components/thread/ToolRow.js";
 import { projectMessages } from "../../src/runtime/projection.js";
-import type { Block } from "../../src/store.js";
+import { blocksFromEntries, type Block } from "../../src/store.js";
 import { MAX_DIFF_LINES } from "@lasercode/protocol/tool-diff";
 
 const preferences = vi.hoisted(() => ({ path: "/test/session" }));
@@ -276,6 +276,30 @@ describe("collapsed diff summaries", () => {
     expect(diff.textContent).toContain(`+${added.length}`);
     expect(diff.querySelectorAll("tr[data-kind]")).toHaveLength(MAX_DIFF_LINES);
     expect(diff.textContent).toContain("diff truncated");
+  });
+
+  it("reads a reloaded edit from its stored details, with the counts the live row had", async () => {
+    const patch = ["@@ -1,2 +1,3 @@", "-old one", "+new one", "+new two", "+new three"].join("\n");
+    const message = (id: string, body: Record<string, unknown>) => ({ type: "message", id, timestamp: 1789152889963, message: { ...body, timestamp: 1789152889963 } });
+    const blocks = blocksFromEntries([
+      message("e1", { role: "assistant", content: [{ type: "toolCall", id: "call_1", name: "edit", arguments: { path: "src/reloaded.ts", edits: [{ oldText: "old one", newText: "new one" }] } }] }),
+      message("e2", { role: "toolResult", toolCallId: "call_1", toolName: "edit", content: [{ type: "text", text: "Edited" }], details: { patch }, isError: false }),
+    ]);
+    const stored = blocks.find((b): b is Extract<Block, { kind: "tool" }> => b.kind === "tool")!;
+    // The stored result keeps its envelope because it carries details, so the
+    // reloaded row draws the real diff instead of falling back to arguments.
+    expect(stored.result).toEqual({ content: [{ type: "text", text: "Edited" }], details: { patch } });
+
+    await act(async () => root.render(
+      <ToolRowFixture {...toolProps("call_1", "edit", stored.args as Record<string, unknown>)}
+        status={{ type: "complete", reason: "stop" }} result={stored.result} />,
+    ));
+    const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
+    expect(trigger.textContent).toContain("+3 −1");
+    expect(trigger.getAttribute("aria-description")).toBe("3 lines added, 1 line removed");
+
+    await act(async () => trigger.click());
+    expect(container.querySelector('[data-slot="code-diff"]')?.textContent).toContain("new three");
   });
 
   it("keeps the tool timeline on the same full-source metric", () => {

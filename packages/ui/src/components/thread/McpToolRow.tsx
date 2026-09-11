@@ -39,16 +39,15 @@ import {
 import { cn } from "@/lib/utils";
 
 import {
-  mcpDirectSummary,
-  mcpGatewaySummary,
+  mcpActiveLabel,
   mcpGatewayView,
+  mcpRowSummary,
   mcpScriptCalls,
-  mcpScriptSummary,
   mcpSearchMatches,
   mcpStatusRows,
   type McpToolInfo,
 } from "./mcp-tools.js";
-import { oneLine, pretty } from "./tool-summary.js";
+import { pretty } from "./tool-summary.js";
 
 export interface McpToolRowProps {
   info: McpToolInfo;
@@ -73,19 +72,13 @@ function McpToolRowImpl(props: McpToolRowProps) {
   const failed = state === "failed";
   const running = state === "running";
 
-  const gateway = useMemo(() => (info.kind === "gateway" ? mcpGatewayView(args, details) : undefined), [info.kind, args, details]);
-  const row = useMemo(() => {
-    if (info.kind === "script") return { icon: Braces, verb: "MCP script", summary: mcpScriptSummary(args), exact: toolName };
-    if (gateway) return { icon: Waypoints, verb: "MCP", summary: mcpGatewaySummary(gateway), exact: toolName };
-    const direct = mcpDirectSummary(info, toolName, args);
-    return { icon: Plug, verb: direct.verb, summary: direct.summary, exact: direct.exact ?? toolName };
-  }, [info, gateway, args, toolName]);
-
-  const activeLabel = namerLabel ?? oneLine(`Using ${row.verb}${row.summary ? ` · ${row.summary}` : ""}`, 90);
+  const row = useMemo(() => mcpRowSummary(info, toolName, args, details), [info, toolName, args, details]);
+  const icon = info.kind === "script" ? Braces : info.kind === "gateway" ? Waypoints : Plug;
+  const activeLabel = namerLabel ?? mcpActiveLabel(info, toolName, args, details);
 
   return (
     <ToolCall
-      icon={row.icon}
+      icon={icon}
       verb={row.verb}
       activeLabel={activeLabel}
       summary={row.summary}
@@ -102,7 +95,7 @@ function McpToolRowImpl(props: McpToolRowProps) {
     >
       <McpBody
         info={info}
-        toolName={row.exact}
+        toolName={row.exact ?? toolName}
         args={args}
         result={result}
         text={text}
@@ -144,6 +137,7 @@ function McpBody({
     const calls = mcpScriptCalls(details);
     return (
       <>
+        <ToolFallbackArgs argsText={pretty(args)} />
         {code ? (
           <ToolFallbackSection label="script">
             <McpMarkdown text={`\`\`\`js\n${code}\n\`\`\``} />

@@ -132,11 +132,54 @@ export function mcpResultContent(result: unknown): unknown {
   return Array.isArray(inner["content"]) ? inner : result;
 }
 
-/** Visible fragments of a content envelope: text, and a resource's uri and text. Never media data. */
+// A server's text is drawn by the transcript's Markdown renderer, so what a
+// person can actually select is the *rendered* text: a link is its label, a
+// fence is its code without the ``` line, a heading has no hashes. Find picks
+// a highlight by occurrence index, so the projection has to count the same
+// things the DOM does; these are the differences that move content rather
+// than punctuation. The remaining tolerance is written down in
+// docs/search-content.md.
+const FENCE_LINE = /^\s{0,3}(?:```|~~~)/;
+const MD_IMAGE = /!\[[^\]\n]*\]\([^)\n]*\)/g;
+const MD_LINK = /\[([^\]\n]*)\]\([^)\n]*\)/g;
+const MD_BLOCK_MARKER = /^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)/;
+
+/**
+ * A Markdown block as the row renders it. Fence delimiters (and their language
+ * label, which the renderer marks `data-search-exclude`) disappear, code
+ * inside a fence stays verbatim, an image is not text at all, a link is its
+ * label, and a heading, quote or list marker is drawn by the layout rather
+ * than written out.
+ */
+export function mcpDisplayText(value: string): string {
+  let inFence = false;
+  const lines: string[] = [];
+  for (const line of value.split("\n")) {
+    if (FENCE_LINE.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) {
+      lines.push(line);
+      continue;
+    }
+    lines.push(line.replace(MD_IMAGE, "").replace(MD_LINK, "$1").replace(MD_BLOCK_MARKER, ""));
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Visible fragments of a content envelope: the rendered text, and a resource's
+ * displayed name and text. Never media data, never a uri the row does not show.
+ */
 const contentFragments = (result: unknown): string[] =>
   mcpContentBlocks(result).flatMap(block => {
-    if (block.kind === "text") return [block.text];
-    if (block.kind === "resource") return [block.uri, ...(block.text ? [block.text] : [])];
+    if (block.kind === "text") {
+      const shown = mcpDisplayText(block.text);
+      return shown ? [shown] : [];
+    }
+    // The card shows one identity for the resource — its name when it has one.
+    if (block.kind === "resource") return [block.name ?? block.uri, ...(block.text ? [mcpDisplayText(block.text)] : [])];
     return [];
   });
 
@@ -199,10 +242,15 @@ const mcpGateway: ToolSearchProjection = ({ args, result }) => [
   ...contentFragments(mcpResultContent(result)),
 ];
 
-/** `mcpScript`: the code is the body, so it is indexed once — not again as an argument. */
+/**
+ * `mcpScript`: the arguments disclosure every row carries, then the code as the
+ * body draws it (verbatim in a fence), then the output. The code is in both
+ * regions because the row shows it in both — the JSON viewer's escaped
+ * spelling and the fence's own.
+ */
 const mcpScript: ToolSearchProjection = ({ args, result }) => {
   const code = record(args)["code"];
-  return [...(typeof code === "string" && code ? [code] : []), ...contentFragments(result)];
+  return [...jsonSearchValues(args), ...(typeof code === "string" && code ? [code] : []), ...contentFragments(result)];
 };
 
 /**

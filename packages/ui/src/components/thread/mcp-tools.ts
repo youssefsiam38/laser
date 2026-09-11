@@ -14,9 +14,22 @@
  * Shapes verified against the real adapter (Playwright over stdio, HTTP and
  * the proxy) before this file was written.
  */
-import { isMcpGatewayTool, mcpGatewayNamespace, MCP_SCRIPT_TOOL } from "@lasercode/protocol";
+import { BACKGROUND_TOOL_NAMES, HARNESS_TOOL_NAMES, isMcpGatewayTool, mcpGatewayNamespace, MCP_SCRIPT_TOOL } from "@lasercode/protocol";
 
 import { oneLine } from "./tool-summary.js";
+
+/**
+ * Names the name-prefix fallback must never claim. A person may call a server
+ * `task`, `start` or `web`, and `<server>_` would then swallow `task_output`,
+ * `start_agent` or `web_search` — a row losing the harness behaviour because
+ * of a name the person chose elsewhere. `details.server` stays authoritative:
+ * a tool that a server actually answered is still an MCP row.
+ */
+const LASER_TOOL_NAMES: ReadonlySet<string> = new Set<string>([
+  ...HARNESS_TOOL_NAMES,
+  ...BACKGROUND_TOOL_NAMES,
+  "web_search",
+]);
 
 export type McpToolKind = "direct" | "gateway" | "script";
 
@@ -56,6 +69,7 @@ export function classifyMcpTool(
     const tool = str(details?.["tool"]) ?? stripServerPrefix(toolName, answered);
     return { kind: "direct", server: answered, ...(tool !== undefined ? { tool } : {}) };
   }
+  if (LASER_TOOL_NAMES.has(toolName)) return undefined;
   // Longest prefix first: two configured servers can share a stem.
   for (const server of [...servers].sort((a, b) => b.length - a.length)) {
     const tool = stripServerPrefix(toolName, server);
@@ -176,6 +190,35 @@ export function mcpGatewayView(args: unknown, details: Record<string, unknown> |
     ...(tool !== undefined ? { tool } : {}),
     ...(query !== undefined ? { query } : {}),
   };
+}
+
+/**
+ * The verb and summary of any MCP row, wherever it is drawn. The row uses it,
+ * and so does the live activity aggregate above it: "Using Playwright ·
+ * browser navigate" in both places, never the registered name in one and the
+ * humanised one in the other.
+ */
+export function mcpRowSummary(
+  info: McpToolInfo,
+  toolName: string,
+  args: unknown,
+  /** The result's details, when it has answered; the modes read from it. */
+  details?: Record<string, unknown> | undefined,
+): McpRowSummary {
+  if (info.kind === "script") return { verb: "MCP script", summary: mcpScriptSummary(args), exact: toolName };
+  if (info.kind === "gateway") return { verb: "MCP", summary: mcpGatewaySummary(mcpGatewayView(args, details)), exact: toolName };
+  return mcpDirectSummary(info, toolName, args);
+}
+
+/** What the row and the aggregate above it say while the call is in flight. */
+export function mcpActiveLabel(
+  info: McpToolInfo,
+  toolName: string,
+  args: unknown,
+  details?: Record<string, unknown> | undefined,
+): string {
+  const { verb, summary } = mcpRowSummary(info, toolName, args, details);
+  return oneLine(`Using ${verb}${summary ? ` · ${summary}` : ""}`, 90);
 }
 
 /** `Search "navigate"`, `Call playwright · browser_navigate`, `Status`. */

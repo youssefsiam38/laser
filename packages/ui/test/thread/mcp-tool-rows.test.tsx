@@ -18,6 +18,7 @@ import { findTextMatches } from "../../src/components/thread/use-conversation-fi
 import { textMatches } from "../../src/components/thread/search-text.js";
 import { ToolRow } from "../../src/components/thread/ToolRow.js";
 import { classifyMcpTool, mcpGatewaySummary, mcpGatewayView, mcpServerLabel, mcpToolLabel } from "../../src/components/thread/mcp-tools.js";
+import { summarizeToolGroup } from "../../src/components/thread/tool-groups.js";
 import { blocksFromEntries, initialState, reduce, type AppState, type Block } from "../../src/store.js";
 import { projectMessages } from "../../src/runtime/projection.js";
 import { sessionState } from "../agents/fixtures.js";
@@ -102,6 +103,23 @@ const render = async (props: Parameters<typeof toolProps> extends never ? never 
   return container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
 };
 
+/**
+ * Activate a row from the keyboard. The trigger is a native button, so a
+ * browser turns Enter into a click with `detail: 0`; happy-dom does not
+ * synthesize it, so the key event and the activation it causes are both
+ * dispatched here — the point of the test is that the row opens from the
+ * keyboard path and keeps focus, and that nothing swallows the key.
+ */
+const pressEnter = async (trigger: HTMLButtonElement) => {
+  await act(async () => {
+    const down = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    trigger.dispatchEvent(down);
+    expect(down.defaultPrevented).toBe(false);
+    trigger.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 0 }));
+    trigger.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
+  });
+};
+
 const expand = async (trigger: HTMLButtonElement) => {
   await act(async () => trigger.click());
   // The markdown renderer defers its first paint to an effect.
@@ -127,6 +145,37 @@ describe("recognising an MCP call", () => {
     expect(classifyMcpTool("docs_search", undefined, ["docs", "docs_search"])).toEqual({ kind: "direct", server: "docs", tool: "search" });
     expect(classifyMcpTool("bash", undefined, ["playwright"])).toBeUndefined();
     expect(classifyMcpTool("playwright_browser_navigate", undefined, [])).toBeUndefined();
+  });
+
+  it("never lets a server's name swallow a tool of this app's own", () => {
+    // A person may call a server `task`, `start`, `inspect`, `web` or
+    // `complete`; the harness row must still be the harness row.
+    const servers = ["task", "start", "inspect", "web", "complete", "send", "remove"];
+    for (const name of ["task_output", "task_stop", "start_agent", "inspect_fleet", "inspect_agent", "send_agent_message", "remove_agent_worktree", "complete_agent_run", "web_search"]) {
+      expect(classifyMcpTool(name, undefined, servers)).toBeUndefined();
+    }
+    // Those servers keep their own tools, and a result that actually came from
+    // a server is an MCP row whatever it is called.
+    expect(classifyMcpTool("task_create", undefined, servers)).toEqual({ kind: "direct", server: "task", tool: "create" });
+    expect(classifyMcpTool("web_search", { server: "web", tool: "search" }, servers)).toEqual({ kind: "direct", server: "web", tool: "search" });
+  });
+
+  it("names a live MCP call in the aggregate the way its own row does", () => {
+    const member = {
+      toolCallId: "c1",
+      toolName: "playwright_browser_navigate",
+      args: { url: "https://example.com" },
+      isError: false,
+      running: true,
+      awaiting: false,
+      cancelled: false,
+      mcp: classifyMcpTool("playwright_browser_navigate", undefined, ["playwright"])!,
+    };
+    const summary = summarizeToolGroup([member]);
+    expect(summary.activeLabel).toBe("Using Playwright · browser navigate · https://example.com");
+    expect(summary.detail).toBe("browser navigate · https://example.com");
+    expect(summary.lines[0]).toBe("Playwright browser navigate · https://example.com — running");
+    expect(summary.activeLabel).not.toContain("playwright_browser_navigate");
   });
 
   it("lets the server that answered win, so a call classifies with no snapshot at all", () => {
@@ -243,6 +292,56 @@ describe("a direct MCP tool row", () => {
     expect(container.querySelector('[aria-label="Copy image"]')).not.toBeNull();
   });
 
+  it("keeps its live status while output is still arriving", async () => {
+    // Partial output rides the UI-only artifact channel; `result` stays absent
+    // until the call ends (AGENTS.md, live activity regression guards).
+    const props = {
+      ...toolProps("p1", "playwright_browser_snapshot", {}),
+      status: { type: "running" as const },
+      artifact: { partialOutput: "### Page\n- Page Title: Example" },
+    } as unknown as React.ComponentProps<typeof ToolRow>;
+    await act(async () => root.render(<Fixture {...props} />));
+    const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
+    const row = container.querySelector<HTMLElement>('[data-slot="tool-call"]')!;
+
+    expect(row.getAttribute("data-state-row")).toBe("running");
+    expect(trigger.getAttribute("aria-label")).toBe("Using Playwright · browser snapshot");
+
+    await expand(trigger);
+    // While it runs the section says output, not result — and the output is
+    // there, drawn by the same renderer.
+    expect(container.querySelector('[data-slot="tool-fallback-content"]')?.textContent).toContain("output");
+    expect(container.querySelector('[data-slot="mcp-text"]')?.textContent).toContain("Page Title: Example");
+    expect(row.getAttribute("data-state-row")).toBe("running");
+  });
+
+  it("draws an audio block as a player and a resource block as a card", async () => {
+    const result = {
+      content: [
+        { type: "audio", data: "UklGRiQAAABXQVZF", mimeType: "audio/wav" },
+        { type: "resource", resource: { uri: "file:///tmp/report.md", mimeType: "text/markdown", text: "All green" } },
+        { type: "resource_link", uri: "file:///tmp/run.log", name: "Run log" },
+      ],
+      details: { server: "playwright", tool: "browser_record" },
+    };
+    const trigger = await render(toolProps("a1", "playwright_browser_record", {}, result));
+    await expand(trigger);
+
+    const audio = container.querySelector<HTMLAudioElement>('[data-slot="mcp-audio"]')!;
+    expect(audio.getAttribute("src")).toBe("data:audio/wav;base64,UklGRiQAAABXQVZF");
+    expect(audio.hasAttribute("controls")).toBe(true);
+    expect(audio.getAttribute("aria-label")).toBe("Audio returned by the server");
+
+    const cards = [...container.querySelectorAll<HTMLElement>('[data-slot="mcp-resource"]')];
+    expect(cards).toHaveLength(2);
+    // The card shows one identity, and it is the one search indexes.
+    expect(cards[0]?.querySelector("[data-search-content]")?.textContent).toBe("file:///tmp/report.md");
+    expect(cards[0]?.textContent).toContain("All green");
+    expect(cards[1]?.querySelector("[data-search-content]")?.textContent).toBe("Run log");
+    expect(findTextMatches(container, "file:///tmp/run.log")).toHaveLength(0);
+    expect(findTextMatches(container, "Run log")).toHaveLength(1);
+  });
+
   it("shows a failure through the error path, collapsed and expanded", async () => {
     const result = { content: [{ type: "text", text: "Error: Browser is already in use" }], details: { error: "tool_error", server: "playwright" } };
     const trigger = await render(toolProps("c4", "playwright_browser_navigate", { url: "https://example.com" }, result, true));
@@ -330,8 +429,11 @@ describe("an mcpScript row", () => {
     expect(container.textContent).toContain("Navigated to https://example.com");
     const calls = container.querySelector<HTMLElement>('[data-search-exclude] li')!;
     expect(calls.textContent).toBe("playwright·browser_navigate");
-    // The code is the body, so it is not repeated as an argument disclosure.
-    expect(container.querySelector('[data-slot="tool-fallback-args"]')).toBeNull();
+    // The arguments keep the disclosure every other row has, and the two
+    // regions are the two occurrences search counts.
+    const args = container.querySelector<HTMLElement>('[data-slot="tool-fallback-args"]')!;
+    expect(args.textContent).toContain("code");
+    expect(findTextMatches(container, "browser_navigate")).toHaveLength(2);
   });
 });
 
@@ -372,6 +474,22 @@ describe("a session read back from its file", () => {
     expect(tool("call_1").result).toEqual({
       content: [{ type: "text", text: "### Result\n- Screenshot of viewport" }, { type: "image", data: SCREENSHOT_BASE64, mimeType: "image/png" }],
       details: { server: "playwright", tool: "browser_take_screenshot" },
+    });
+  });
+
+  it("keeps details whatever shape the stored content has", () => {
+    // A result written with plain-string content still carries the server it
+    // came from: the shape of the content does not decide this.
+    const blocks = blocksFromEntries([
+      message("s1", { role: "assistant", content: [{ type: "toolCall", id: "call_9", name: "playwright_browser_navigate", arguments: { url: "https://example.com" } }] }),
+      message("s2", { role: "toolResult", toolCallId: "call_9", toolName: "playwright_browser_navigate", content: "Navigated.", details: { server: "playwright", tool: "browser_navigate" }, isError: false }),
+    ]);
+    const stored = blocks.find((block): block is Extract<Block, { kind: "tool" }> => block.kind === "tool")!;
+    expect(stored.result).toEqual({ content: [{ type: "text", text: "Navigated." }], details: { server: "playwright", tool: "browser_navigate" } });
+    expect(classifyMcpTool(stored.name, { server: "playwright", tool: "browser_navigate" }, [])).toEqual({
+      kind: "direct",
+      server: "playwright",
+      tool: "browser_navigate",
     });
   });
 
@@ -417,6 +535,37 @@ describe("finding text in an MCP row", () => {
       expect(projectedHits(query)).toBe(0);
     }
   });
+
+  it("counts the same occurrences as the row draws for a real screenshot answer", async () => {
+    // The verbatim outer block of a Playwright screenshot: a heading, a link
+    // whose URL is not on screen, and a js fence whose label is not a word of
+    // the answer (docs/search-content.md, "Markdown bodies").
+    const text = [
+      "### Result",
+      "- [Screenshot of viewport](.playwright-mcp/page-2026-09-11T18-41-21-880Z.png)",
+      "### Ran Playwright code",
+      "```js",
+      "// Screenshot viewport and save it as .playwright-mcp/page-2026-09-11T18-41-21-880Z.png",
+      "await page.screenshot({ path: '.playwright-mcp/page-2026-09-11T18-41-21-880Z.png', type: 'png' });",
+      "```",
+    ].join("\n");
+    const result = { content: [{ type: "text", text }, { type: "image", data: SCREENSHOT_BASE64, mimeType: "image/png" }], details: { server: "playwright", tool: "browser_take_screenshot" } };
+    const trigger = await render(toolProps("f2", "playwright_browser_take_screenshot", {}, result));
+    await expand(trigger);
+
+    const projected = toolSearchContent({ name: "playwright_browser_take_screenshot", args: {}, result });
+    for (const query of ["Screenshot of viewport", "Ran Playwright code", "playwright-mcp", "page.screenshot", "png"]) {
+      const dom = findTextMatches(container, query).length;
+      const projectedCount = projected.reduce((total, value) => total + textMatches(value, query).length, 0);
+      expect({ query, dom }).toEqual({ query, dom: projectedCount });
+      expect(dom).toBeGreaterThan(0);
+    }
+    // The fence label and the heading marks belong to the drawing, not the answer.
+    for (const query of ["js", "###"]) {
+      expect(findTextMatches(container, query)).toHaveLength(0);
+      expect(projected.reduce((total, value) => total + textMatches(value, query).length, 0)).toBe(0);
+    }
+  });
 });
 
 describe("disclosure", () => {
@@ -426,9 +575,9 @@ describe("disclosure", () => {
     expect(content.hasAttribute("hidden")).toBe(true);
 
     trigger.focus();
-    await act(async () => trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
-    await act(async () => trigger.click());
+    await pressEnter(trigger);
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(trigger);
     expect(container.querySelector('[data-slot="mcp-text"]')).not.toBeNull();
 
     await act(async () => trigger.click());

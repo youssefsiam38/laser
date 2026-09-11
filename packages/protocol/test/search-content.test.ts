@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { toolSearchContent, jsonSearchValues, mcpContentBlocks } from "../src/search-content.js";
+import { toolSearchContent, jsonSearchValues, mcpContentBlocks, mcpDisplayText } from "../src/search-content.js";
 
 /** The screenshot block of a real Playwright result, shortened. */
 const SCREENSHOT = { type: "image", data: "iVBORw0KGgoAAAANSUhEUg", mimeType: "image/png" };
@@ -31,22 +31,54 @@ it("projects a direct MCP tool by the server that answered, never its details or
     details: { server: "playwright", tool: "browser_take_screenshot" },
   };
   const values = toolSearchContent({ name: "playwright_browser_take_screenshot", args: { url: "https://example.com", fullPage: true }, result });
-  expect(values).toEqual(["https://example.com", "true", "### Page\n- Page URL: https://example.com/"]);
+  // The rendered text: no heading hashes, no list marker (docs/search-content.md).
+  expect(values).toEqual(["https://example.com", "true", "Page\nPage URL: https://example.com/"]);
   // Keys, the server's own name in `details` and the base64 payload are not content.
   for (const miss of ["fullPage", "browser_take_screenshot", "iVBORw0KGgo", "mimeType", "image/png"]) {
     expect(values.some(value => value.includes(miss))).toBe(false);
   }
 });
 
-it("projects a resource block's uri and text in the order the server sent them", () => {
+it("projects a resource block by the identity the card shows, then its text", () => {
   const result = {
     content: [
       { type: "resource", resource: { uri: "file:///tmp/report.md", mimeType: "text/markdown", text: "All green" } },
+      { type: "resource_link", uri: "file:///tmp/run.log", name: "Run log" },
       { type: "text", text: "done" },
     ],
     details: { server: "docs" },
   };
-  expect(toolSearchContent({ name: "docs_report", args: {}, result })).toEqual(["file:///tmp/report.md", "All green", "done"]);
+  // The card draws `name ?? uri`, so that is the indexed value; the uri behind
+  // a named resource is not on screen and is not searchable.
+  expect(toolSearchContent({ name: "docs_report", args: {}, result })).toEqual([
+    "file:///tmp/report.md",
+    "All green",
+    "Run log",
+    "done",
+  ]);
+});
+
+it("indexes Markdown as the renderer draws it, not as the model wrote it", () => {
+  const source = [
+    "### Result",
+    "- [Screenshot of viewport](.playwright-mcp/page-2026.png)",
+    "![](.playwright-mcp/inline.png)",
+    "> quoted line",
+    "```js",
+    "await page.screenshot({ path: '.playwright-mcp/page-2026.png' });",
+    "```",
+  ].join("\n");
+  expect(mcpDisplayText(source)).toBe(
+    ["Result", "Screenshot of viewport", "", "quoted line", "await page.screenshot({ path: '.playwright-mcp/page-2026.png' });"].join("\n"),
+  );
+  // The fence's language never becomes a word of the answer.
+  expect(mcpDisplayText(source)).not.toContain("js\n");
+  const projected = toolSearchContent({
+    name: "playwright_browser_take_screenshot",
+    args: {},
+    result: { content: [{ type: "text", text: source }], details: { server: "playwright" } },
+  });
+  expect(projected[0]).toBe(mcpDisplayText(source));
 });
 
 it("projects each gateway mode's visible values and nothing of the transport", () => {
@@ -71,7 +103,7 @@ it("projects each gateway mode's visible values and nothing of the transport", (
       details: { mode: "call", server: "playwright", tool: "browser_navigate", mcpResult: { content: [{ type: "text", text: "### Ran Playwright code" }, SCREENSHOT] } },
     },
   });
-  expect(call).toEqual(["playwright_browser_navigate", "https://example.com", "### Ran Playwright code"]);
+  expect(call).toEqual(["playwright_browser_navigate", "https://example.com", "Ran Playwright code"]);
 
   const status = toolSearchContent({
     name: "mcp",
@@ -85,14 +117,16 @@ it("projects each gateway mode's visible values and nothing of the transport", (
   expect(status).not.toContain("legacy");
 });
 
-it("projects an mcpScript's code once, with its output", () => {
+it("projects an mcpScript's arguments and its code as both regions draw them, with the output", () => {
+  const code = "await playwright.browser_navigate({ url: 'https://example.com' })";
   const values = toolSearchContent({
     name: "mcpScript",
-    args: { code: "await playwright.browser_navigate({ url: 'https://example.com' })" },
+    args: { code },
     result: { content: [{ type: "text", text: "Navigated." }], details: { calls: [{ server: "playwright", tool: "browser_navigate", ok: true }] } },
   });
-  expect(values).toEqual(["await playwright.browser_navigate({ url: 'https://example.com' })", "Navigated."]);
-  expect(values.filter(value => value.includes("browser_navigate"))).toHaveLength(1);
+  // The args disclosure and the fence are two visible regions, so two
+  // occurrences; the call trace below them is chrome and is not indexed.
+  expect(values).toEqual([code, code, "Navigated."]);
 });
 
 it("reads a hydrated MCP result, and refuses a block it cannot vouch for", () => {

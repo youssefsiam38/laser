@@ -962,6 +962,10 @@ function dropRetryingProviderError(blocks: Block[]): Block[] {
  * a reopened session draws the row the live one drew: an MCP screenshot is an
  * image again, and the server that answered is known from `details.server`
  * even when the session has no MCP snapshot (docs/mcp.md "In the transcript").
+ *
+ * `details` decides on its own, whatever shape the content has: a stored
+ * result whose content is a bare string still carries the diff, the run or the
+ * server its row is drawn from.
  */
 function storedToolResult(message: { content?: unknown; details?: unknown }): unknown {
   const content = message.content;
@@ -970,8 +974,8 @@ function storedToolResult(message: { content?: unknown; details?: unknown }): un
   const hasNonText =
     Array.isArray(content) &&
     content.some((part) => typeof part === "object" && part !== null && (part as { type?: unknown }).type !== "text");
-  if (!Array.isArray(content) || (!hasDetails && !hasNonText)) return textOf(content);
-  return { content, ...(hasDetails ? { details } : {}) };
+  if (!hasDetails && !hasNonText) return textOf(content);
+  return { content: Array.isArray(content) ? content : [{ type: "text", text: textOf(content) }], ...(hasDetails ? { details } : {}) };
 }
 
 export function textOf(content: unknown): string {

@@ -43,7 +43,9 @@ import {
   type ToolGroupMember,
   type ToolGroupSummary,
 } from "@/components/thread/tool-groups";
+import { useSessionMcpServers } from "@/agents/hooks";
 import { diffStats, diffViewForTool, type DiffStats } from "@/components/thread/diff";
+import { classifyMcpTool } from "@/components/thread/mcp-tools";
 import { isNonZeroExit, resultDetails, resultText } from "@/components/thread/tool-summary";
 import { markDone, markRunning, useElapsed } from "@/components/thread/timing";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -304,6 +306,10 @@ interface GroupActivity {
 /** Projects the message's reasoning and tool parts into what the summary needs. */
 function useGroupActivity(part: GroupPart): GroupActivity {
   const parts = useAuiState((s) => s.message.parts);
+  // The aggregate names an MCP call the way its own row does, so the live line
+  // reads "Using Playwright · browser navigate" rather than the registered
+  // name (docs/mcp.md "In the transcript").
+  const mcpServers = useSessionMcpServers(useLaserState((laser) => laser.current));
   return useMemo(() => {
     const out: ToolGroupMember[] = [];
     let reasoningCount = 0;
@@ -326,6 +332,7 @@ function useGroupActivity(part: GroupPart): GroupActivity {
         ? diffViewForTool(p.toolName, p.args, resultDetails(displayResult))
         : undefined;
       const changes = view ? (view.stats ?? diffStats(view.hunks)) : undefined;
+      const mcp = classifyMcpTool(p.toolName, resultDetails(displayResult), mcpServers);
       out.push({
         toolCallId: p.toolCallId,
         toolName: p.toolName,
@@ -338,10 +345,11 @@ function useGroupActivity(part: GroupPart): GroupActivity {
         awaiting,
         cancelled: status.type === "incomplete" && status.reason === "cancelled",
         ...(changes ? { diffStats: changes } : {}),
+        ...(mcp ? { mcp } : {}),
       });
     }
     return { members: out, reasoning: { count: reasoningCount, running: reasoningRunning } };
-  }, [part.indices, parts]);
+  }, [part.indices, parts, mcpServers]);
 }
 
 function ToolGroupImpl({ part, timingKey, children }: ToolGroupProps) {
