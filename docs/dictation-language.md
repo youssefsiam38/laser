@@ -5,7 +5,11 @@ any credential on this machine.
 
 ## The decision
 
-Every dictation request pins English in the request itself. The person's
+Every dictation request pins the **input-language hint** to English in the
+request itself — `languages`/`language` describe "possible languages of the
+input audio", and the endpoint writes the recording down in the language it
+decoded, so this steers the decoding rather than promising an output language.
+The person's
 `pi-gpt-transcribe` config (`languages`) and a client's per-recording
 `pi/transcribe/begin` `language` are still parsed — a typo there must never take
 dictation away — and then ignored, with one log line the first time each ignored
@@ -64,13 +68,15 @@ language codes." `en` is ISO-639-1 and valid for both fields.
 
 ## Does pinning English produce English, or garbage?
 
-English. The field describes the **input** language, and the endpoint
-"[t]ranscribes audio into the input language" — the guide contrasts transcription,
-which "preserves the recording's original language", with translation. Telling
-the model the audio is English makes it decode accented and code-switched speech
-in the English vocabulary and write it in Latin script, which is the behaviour
-asked for: an accent, or an Arabic word dropped into an English sentence, comes
-back as English text rather than as another script.
+English in practice — but by steering the decoding, not by a guarantee in the
+API. The field describes the **input** language, and the endpoint
+"[t]ranscribes audio into the input language"; the guide contrasts transcription,
+which "preserves the recording's original language", with translation. Nothing
+in the reference promises the language of the returned text. What telling the
+model the audio is English does is make it decode accented and code-switched
+speech in the English vocabulary and write it in Latin script, which is the
+behaviour asked for: an accent, or an Arabic word dropped into an English
+sentence, comes back as English text rather than as another script.
 
 It is not a translator. A phrase spoken entirely in another language comes back
 as an English-script approximation, not as a translation of its meaning. That is

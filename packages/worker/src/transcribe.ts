@@ -22,8 +22,8 @@
  * so the native waveform shows exactly what the terminal one shows.
  *
  * The spoken language is not one of the things either side chooses: every
- * recording is transcribed as English, pinned in the request itself
- * ({@link TRANSCRIBE_LANGUAGE}, `docs/dictation-language.md`).
+ * request pins the input-language hint to English rather than letting the API
+ * detect it ({@link TRANSCRIBE_LANGUAGE}, `docs/dictation-language.md`).
  *
  * The one thing that cannot be done in the browser is the pre-send transform.
  * A phrase still being transcribed when you press Enter belongs to the prompt
@@ -269,8 +269,12 @@ const ARRAY_FIELD_SUFFIX = "[]";
 // accent and the occasional word from another language in the middle of a
 // sentence. Left to auto-detect, one such word flips the whole phrase into
 // another language — and a transliterated phrase in another script is not a
-// prompt anyone can send. So the spoken language is pinned by the product, not
-// configured: `docs/dictation-language.md` has the API reference citations.
+// prompt anyone can send. So the request says which language the audio is in
+// rather than asking the API to guess: the field carries the *possible input
+// languages*, and the endpoint writes the recording down in the language it
+// decoded, so this steers the decoding to English — it does not translate, and
+// the API promises no language for the text it returns. The product makes that
+// choice, not a setting: `docs/dictation-language.md` has the citations.
 // ---------------------------------------------------------------------------
 
 /** The one language dictation transcribes, ISO-639-1. */
@@ -293,7 +297,9 @@ const MULTI_LANGUAGE_MODEL_PREFIX = "gpt-transcribe";
  * request is silence where a phrase should have been.
  */
 export function languageFieldFor(model: string): string {
-  const id = model.trim().toLowerCase();
+  // A gateway namespaces the id it forwards (`openai/gpt-transcribe`), so the
+  // model is the last segment; the prefix still cannot catch `gpt-4o-transcribe`.
+  const id = model.trim().toLowerCase().split("/").pop() ?? "";
   return id.startsWith(MULTI_LANGUAGE_MODEL_PREFIX) ? `languages${ARRAY_FIELD_SUFFIX}` : "language";
 }
 
@@ -332,7 +338,8 @@ function noteIgnoredLanguages(
   reportedLanguages.add(key);
   const listed = ignored.map((value) => `"${value}"`).join(", ");
   const origin = source === "config" ? `"languages" in ${where}` : "this recording's own language hint";
-  log(`Dictation always transcribes English, so ${listed} from ${origin} is ignored.`);
+  const verb = ignored.length === 1 ? "is" : "are";
+  log(`Dictation always transcribes English, so ${listed} from ${origin} ${verb} ignored.`);
 }
 
 export interface TranscribeAudioRequest {
@@ -386,9 +393,8 @@ function buildMultipart(request: TranscribeAudioRequest): { body: Uint8Array; co
   field("model", config.model);
   if (config.prompt) field("prompt", config.prompt);
   for (const keyword of config.keywords ?? []) field(`keywords${ARRAY_FIELD_SUFFIX}`, keyword);
-  // The pin, never the configured list: English is the product's answer, and a
-  // configured language is reported once and dropped rather than obeyed.
-  noteIgnoredLanguages(config.languages, "config", config.configPath, request.log ?? defaultLog);
+  // The pin, never the configured list. What was configured instead is reported
+  // by the caller, once per recording rather than once per attempt.
   field(languageFieldFor(config.model), TRANSCRIBE_LANGUAGE);
   parts.push(Buffer.from(`--${boundary}--${CRLF}`));
 
@@ -463,6 +469,9 @@ async function postOnce(request: TranscribeAudioRequest): Promise<string> {
  * empty for a segment of silence.
  */
 export async function transcribeAudio(request: TranscribeAudioRequest): Promise<string> {
+  // Once for the recording, outside the retry loop: a 429 and its retry are one
+  // phrase, and the person's config was ignored once.
+  noteIgnoredLanguages(request.config.languages, "config", request.config.configPath, request.log ?? defaultLog);
   let lastError: unknown;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {

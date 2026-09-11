@@ -246,6 +246,36 @@ describe("TranscribeService", () => {
     // gpt-transcribe accepts, rather than a guess.
     expect(languageFieldFor("some-gateway/stt-v9")).toBe("language");
     expect(languageFieldFor(" GPT-Transcribe ")).toBe("languages[]");
+    // A gateway namespaces the id it forwards; the model is the last segment.
+    expect(languageFieldFor("openai/gpt-transcribe")).toBe("languages[]");
+    expect(languageFieldFor("azure/gpt-transcribe-2026-01-01")).toBe("languages[]");
+    expect(languageFieldFor("openai/gpt-4o-transcribe")).toBe("language");
+    const namespaced = await recorded(withConfig({ model: "openai/gpt-transcribe" }));
+    expect(multipartField(namespaced, "languages[]")).toEqual([TRANSCRIBE_LANGUAGE]);
+    expect(multipartField(namespaced, "language")).toEqual([]);
+  });
+
+  it("says nothing when the configured language is the one it was going to send", async () => {
+    const lines: string[] = [];
+    await recorded({ ...withConfig({ languages: ["en"] }), log: (message: string) => lines.push(message) });
+    expect(lines).toEqual([]);
+  });
+
+  it("complains once for a recording that is retried, not once per attempt", async () => {
+    const lines: string[] = [];
+    let attempts = 0;
+    const flaky: typeof fetch = (async () => {
+      attempts += 1;
+      return attempts === 1
+        ? new Response(JSON.stringify({ error: { message: "slow down" } }), { status: 429 })
+        : new Response(JSON.stringify({ text: "after the retry" }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const service = build(flaky, { ...withConfig({ languages: ["ar"] }), log: (message: string) => lines.push(message) });
+    const { id } = service.begin({ mimeType: "audio/webm" });
+    service.chunk(id, audio);
+    await expect(service.end(id)).resolves.toEqual({ text: "after the retry" });
+    expect(attempts).toBe(2);
+    expect(lines).toHaveLength(1);
   });
 
   it("ignores a configured language and a per-recording hint, and says so once", async () => {
@@ -269,6 +299,14 @@ describe("TranscribeService", () => {
     // A second phrase is not a second complaint: this is per recording.
     await recorded(options, { mimeType: "audio/webm", language: "fr" });
     expect(lines).toHaveLength(2);
+    for (const line of lines) expect(line).toContain("is ignored");
+
+    // Several at once read as several.
+    const many: string[] = [];
+    await recorded({ ...withConfig({ languages: ["ar", "de"] }), log: (message: string) => many.push(message) });
+    expect(many).toHaveLength(1);
+    expect(many[0]).toContain('"ar", "de"');
+    expect(many[0]).toContain("are ignored");
   });
 
   it("keeps the keywords and prompt the person did configure", async () => {
