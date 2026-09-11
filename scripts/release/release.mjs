@@ -14,14 +14,13 @@ import {
   renameSync,
   rmSync,
   rmdirSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { identity } from "../identity/identity.mjs";
-import { inspectReleaseByTag, isExplicitMissingRelease, releaseInventory, verifyAssets, verifyInventory } from "./publish-github.mjs";
+import { inspectReleaseByTag, isExplicitMissingRelease, releaseInventory, verifyInventory } from "./publish-github.mjs";
 
 const MAIN_REF = "refs/heads/main";
 const CI_WORKFLOW = "ci.yml";
@@ -45,6 +44,7 @@ export function parseArgs(argv) {
     publish: false,
     resume: false,
     recoverStaleLock: false,
+    notesFile: "",
     offline: false,
     ciTimeoutMinutes: 45,
     releaseTimeoutMinutes: 120,
@@ -58,6 +58,7 @@ export function parseArgs(argv) {
     else if (arg === "--recover-stale-lock") options.recoverStaleLock = true;
     else if (arg === "--offline") options.offline = true;
     else if (arg === "--source") options.source = args.shift() ?? "";
+    else if (arg === "--notes") options.notesFile = args.shift() ?? "";
     else if (arg === "--ci-timeout-minutes") options.ciTimeoutMinutes = Number(args.shift());
     else if (arg === "--release-timeout-minutes") options.releaseTimeoutMinutes = Number(args.shift());
     else if (arg === "--help" || arg === "-h") options.help = true;
@@ -67,6 +68,7 @@ export function parseArgs(argv) {
   if (!VERSION_RE.test(options.version)) fail("VERSION must be MAJOR.MINOR.PATCH, optionally with a prerelease suffix.");
   if (options.source && !FULL_SHA_RE.test(options.source)) fail("--source must be a full 40-character lowercase commit SHA.");
   if (options.publish && !options.source) fail("--publish requires --source FULL_SHA from the reviewed release authorization.");
+  if (options.publish && !options.notesFile) fail("--publish requires --notes FILE: the release notes a person reads on the release page.");
   if (options.resume && !options.publish) fail("--resume is valid only with --publish.");
   if (options.recoverStaleLock && (!options.publish || !options.resume)) {
     fail("--recover-stale-lock requires --publish --resume.");
@@ -75,6 +77,25 @@ export function parseArgs(argv) {
     if (!Number.isFinite(value) || value <= 0 || value > 24 * 60) fail(`${name} must be between 1 and 1440.`);
   }
   return options;
+}
+
+/**
+ * The release notes, from a Markdown file written for this release. They go
+ * into the annotated tag's body, and the publisher (publish.sh) reads them from
+ * there as the release page's text — so the notes are part of the tagged
+ * object, not typed into a form. Empty notes are refused.
+ */
+export function loadReleaseNotes(path) {
+  const file = resolve(path);
+  let text;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (error) {
+    fail(`--notes ${path} could not be read: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const trimmed = text.replace(/\r\n/g, "\n").trim();
+  if (!trimmed) fail(`--notes ${path} is empty; write what changed for the people who install this release.`);
+  return { path: file, text: `${trimmed}\n`, digest: createHash("sha256").update(trimmed).digest("hex"), lines: trimmed.split("\n").length };
 }
 
 function commandText(command, args) {
@@ -119,21 +140,6 @@ function normalizeOrigin(url) {
     .replace(/\.git$/, "");
 }
 
-function sha256(path) {
-  const hash = createHash("sha256");
-  const buffer = Buffer.allocUnsafe(1024 * 1024);
-  const descriptor = openSync(path, "r");
-  try {
-    for (;;) {
-      const length = readSync(descriptor, buffer, 0, buffer.length, null);
-      if (length === 0) break;
-      hash.update(buffer.subarray(0, length));
-    }
-  } finally {
-    closeSync(descriptor);
-  }
-  return hash.digest("hex");
-}
 
 function atomicJson(path, value) {
   mkdirSync(dirname(path), { recursive: true });
@@ -575,7 +581,10 @@ export function ensureTag(exec, journal, checkpoint = () => {}) {
   let result = exec("git", ["rev-parse", ref], { cwd: journal.worktree, allowCodes: [0, 128] });
   if (result.code === 128) {
     if (journal.tagObject) fail("The checkpoint's annotated local tag is missing; refusing to replace it.");
-    checked(exec, "git", ["tag", "-a", journal.tag, journal.candidate, "-m", `${identity.displayName} ${journal.version}`], { cwd: journal.worktree });
+    if (typeof journal.notes !== "string" || !journal.notes.trim()) fail("The release tag carries the release notes; the checkpoint has none.");
+    // Subject, then the notes as the body: publish.sh reads `%(contents:body)`.
+    // Verbatim, or git would strip every Markdown heading as a `#` comment.
+    checked(exec, "git", ["tag", "-a", "--cleanup=verbatim", journal.tag, journal.candidate, "-m", `${identity.displayName} ${journal.version}`, "-m", journal.notes], { cwd: journal.worktree });
     result = exec("git", ["rev-parse", ref], { cwd: journal.worktree });
   }
   const object = result.stdout.trim();
@@ -592,24 +601,13 @@ export function ensureTag(exec, journal, checkpoint = () => {}) {
   return true;
 }
 
-export function verifyManifestDirectory(directory, assetNames) {
-  const manifestPath = join(directory, "SHA256SUMS");
-  const lines = readFileSync(manifestPath, "utf8").split("\n").filter(Boolean);
-  const entries = new Map();
-  for (const line of lines) {
-    const match = /^([0-9a-f]{64})  ([^/\n]+)$/.exec(line);
-    if (!match) fail(`Invalid SHA256SUMS line: ${line}`);
-    if (entries.has(match[2])) fail(`Duplicate SHA256SUMS entry: ${match[2]}`);
-    entries.set(match[2], match[1]);
-  }
-  const expected = assetNames.filter((name) => !["SHA256SUMS", "SHA256SUMS.sig", "provenance.jsonl"].includes(name)).sort();
-  const actual = [...entries.keys()].sort();
-  if (JSON.stringify(actual) !== JSON.stringify(expected)) fail("SHA256SUMS coverage does not match the release inventory.");
-  for (const [name, digest] of entries) {
-    if (sha256(join(directory, name)) !== digest) fail(`SHA256SUMS does not match ${name}.`);
-  }
-}
-
+/**
+ * The public release, read through the API only: not a draft, the recorded
+ * tag, the exact inventory (names, sizes, upload states) and Latest promotion.
+ * Nothing is downloaded; the release workflow already attested and verified
+ * the bytes it uploaded, and a post-hoc download added twenty minutes and no
+ * new fact.
+ */
 export function verifyPublicRelease(exec, journal) {
   const release = releaseByTag(exec, journal.tag, false);
   if (release.draft) fail(`Release ${journal.tag} is still a draft.`);
@@ -625,45 +623,18 @@ export function verifyPublicRelease(exec, journal) {
     digest: asset.digest,
   }));
   verifyInventory(remoteAssets, journal.version);
+  const notUploaded = remoteAssets.filter((asset) => asset.state !== "uploaded");
+  if (notUploaded.length > 0) fail(`Published release has assets that are not uploaded: ${notUploaded.map((asset) => asset.name).join(", ")}.`);
   const requiredNames = releaseInventory(journal.version);
   const allowedNames = new Set([...requiredNames, "SHA256SUMS.sig"]);
   const unexpected = remoteAssets.filter((asset) => !allowedNames.has(asset.name));
   if (unexpected.length > 0 || ![requiredNames.length, requiredNames.length + 1].includes(remoteAssets.length)) {
     fail(`Published release contains unexpected assets: ${unexpected.map((asset) => asset.name).join(", ") || "duplicate inventory"}.`);
   }
-  const download = mkdtempSync(join(tmpdir(), `${identity.dirName}-release-assets-${journal.version}-`));
-  try {
-    checked(exec, "gh", ["release", "download", journal.tag, "--repo", identity.repository, "--dir", download], { cwd: journal.repoRoot });
-    const files = readdirSync(download, { withFileTypes: true }).filter((entry) => entry.isFile()).map((entry) => entry.name).sort();
-    const expectedNames = remoteAssets.map((asset) => asset.name).sort();
-    if (JSON.stringify(files) !== JSON.stringify(expectedNames)) fail("Downloaded release inventory differs from the GitHub asset inventory.");
-    const localAssets = files.map((name) => ({
-      name,
-      path: join(download, name),
-      size: statSync(join(download, name)).size,
-      digest: `sha256:${sha256(join(download, name))}`,
-    }));
-    verifyAssets(localAssets, remoteAssets);
-    verifyManifestDirectory(download, files);
-    const provenance = join(download, "provenance.jsonl");
-    for (const asset of localAssets.filter((item) => item.name !== "provenance.jsonl")) {
-      checked(exec, "gh", [
-        "attestation", "verify", asset.path,
-        "--bundle", provenance,
-        "--repo", identity.repository,
-        "--signer-workflow", `${identity.repository}/${RELEASE_WORKFLOW_PATH}`,
-        "--source-digest", journal.candidate,
-        "--source-ref", `refs/tags/${journal.tag}`,
-        "--format", "json",
-      ]);
-    }
-    const latest = ghApi(exec, `repos/${identity.repository}/releases/latest`);
-    if (!prerelease && latest.id !== release.id) fail(`Stable release ${journal.tag} is not Latest.`);
-    if (prerelease && latest.id === release.id) fail(`Prerelease ${journal.tag} must not be Latest.`);
-    return { releaseId: release.id, url: release.html_url, assets: files.length };
-  } finally {
-    rmSync(download, { recursive: true, force: true });
-  }
+  const latest = ghApi(exec, `repos/${identity.repository}/releases/latest`);
+  if (!prerelease && latest.id !== release.id) fail(`Stable release ${journal.tag} is not Latest.`);
+  if (prerelease && latest.id === release.id) fail(`Prerelease ${journal.tag} must not be Latest.`);
+  return { releaseId: release.id, url: release.html_url, assets: remoteAssets.length };
 }
 
 export function publicationState(exec, journal) {
@@ -679,7 +650,7 @@ export function publicationState(exec, journal) {
     }
     if (release.draft) return "tag pushed; release draft remains private";
     return stageAtLeast(journal, "release-passed")
-      ? "published; workflow succeeded; post-publication verification incomplete"
+      ? "published; workflow succeeded; inventory check incomplete"
       : "published; deployment incomplete";
   } catch (error) {
     return `publication state unknown (${error instanceof Error ? error.message : String(error)})`;
@@ -688,9 +659,10 @@ export function publicationState(exec, journal) {
 
 function help() {
   return `Release a reviewed source through the existing CI and release workflows.\n\n` +
-    `  node scripts/release/release.mjs VERSION [--source FULL_SHA]\n` +
-    `  node scripts/release/release.mjs VERSION --publish --source FULL_SHA [--resume]\n\n` +
-    `Dry-run is the default and makes no Git or GitHub writes. --publish requires explicit user authorization.\n` +
+    `  node scripts/release/release.mjs VERSION [--source FULL_SHA] [--notes FILE]\n` +
+    `  node scripts/release/release.mjs VERSION --publish --source FULL_SHA --notes FILE [--resume]\n\n` +
+    `Dry-run is the default and makes no Git or GitHub writes. --publish requires explicit user authorization\n` +
+    `and --notes FILE, the release notes (Markdown) that become the tag annotation and the release page.\n` +
     `Optional: --offline, --ci-timeout-minutes N, --release-timeout-minutes N,\n` +
     `          --recover-stale-lock (only with --publish --resume).\n`;
 }
@@ -707,11 +679,13 @@ export async function runRelease(options, dependencies = {}) {
     source: options.source,
     allowRemoteAhead: options.resume,
   });
+  const notes = options.notesFile ? loadReleaseNotes(options.notesFile) : undefined;
   if (!options.publish) {
     return {
       status: "dry-run",
       ...frozen,
-      next: `node scripts/release/release.mjs ${options.version} --publish --source ${frozen.source}`,
+      ...(notes ? { notes: { path: notes.path, lines: notes.lines } } : {}),
+      next: `node scripts/release/release.mjs ${options.version} --publish --source ${frozen.source} --notes ${notes ? notes.path : "RELEASE_NOTES.md"}`,
     };
   }
   if (frozen.release && !options.resume) fail(`Release ${frozen.tag} already exists; refusing a new publication transaction.`);
@@ -739,6 +713,7 @@ export async function runRelease(options, dependencies = {}) {
       if (!existsSync(lock.journalPath)) fail(`No checkpoint exists for ${frozen.tag}.`);
       journal = readJson(lock.journalPath, "release checkpoint");
       validateJournal(journal, identityFields);
+      if (journal.notesDigest !== notes.digest) fail("The release notes differ from the checkpoint's; resume with the same notes or start a new release.");
     } else {
       if (existsSync(lock.journalPath)) fail(`Checkpoint ${lock.journalPath} already exists; use --resume after inspection.`);
       journal = {
@@ -746,6 +721,8 @@ export async function runRelease(options, dependencies = {}) {
         frozenRemoteMain: frozen.frozenRemoteMain,
         stage: "created",
         createdAt: new Date().toISOString(),
+        notes: notes.text,
+        notesDigest: notes.digest,
         worktree: createWorktree(exec, frozen.repoRoot, frozen.source, options.version, lock.checkpointId),
       };
       writeJournal(lock.journalPath, journal);
@@ -866,12 +843,14 @@ async function main() {
       `Source: ${result.source}\nRemote main: ${result.frozenRemoteMain}\nTag: ${result.tag} (${result.remoteTagSha ?? "absent"})\n` +
       `Release: ${result.release ? (result.release.draft ? "draft" : "published") : "absent"}\n` +
       `Exact-SHA CI: ${result.existingCiRun ? `${result.existingCiRun.status}/${result.existingCiRun.conclusion ?? "pending"}` : "not found yet"}\n` +
+      `Notes: ${result.notes ? `${result.notes.path} (${result.notes.lines} lines)` : "none given; --publish needs --notes FILE"}\n` +
       `Authorized execution: ${result.next}\n`,
     );
   } else {
     process.stdout.write(
       `Published ${result.tag} from candidate ${result.candidate}.\n` +
-      `Source CI run: ${result.ciRunId}; release run: ${result.releaseRunId}; assets: ${result.publication.assets}.\n` +
+      `Source CI run: ${result.ciRunId}; release run: ${result.releaseRunId}; assets: ${result.publication.assets} (inventory checked, nothing downloaded).\n` +
+      `Notes: in the ${result.tag} annotation and on the release page.\n` +
       `${result.callerFollowUp}\n`,
     );
   }

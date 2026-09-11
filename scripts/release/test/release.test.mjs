@@ -8,6 +8,7 @@ import {
   ReleaseError,
   assertRecordedTag,
   ensureTag,
+  loadReleaseNotes,
   assertVersionOnlyContent,
   validateCandidate,
   validateWorkflowProof,
@@ -19,7 +20,6 @@ import {
   pushMain,
   selectWorkflowRun,
   systemExec,
-  verifyManifestDirectory,
   verifyPublicRelease,
   waitForWorkflow,
 } from "../release.mjs";
@@ -71,8 +71,10 @@ test("argument contract keeps dry-run read-only and publish explicit", () => {
   assert.equal(parseArgs(["--help"]).help, true);
   assert.deepEqual(parseArgs(["0.3.8", "--source", SHA]).publish, false);
   assert.throws(() => parseArgs(["0.3.8", "--publish"]), /requires --source/);
+  assert.throws(() => parseArgs(["0.3.8", "--publish", "--source", SHA]), /requires --notes FILE/);
+  assert.equal(parseArgs(["0.3.8", "--publish", "--source", SHA, "--notes", "notes.md"]).notesFile, "notes.md");
   assert.throws(() => parseArgs(["0.3.8", "--resume"]), /only with --publish/);
-  assert.throws(() => parseArgs(["0.3.8", "--recover-stale-lock", "--publish", "--source", SHA]), /requires --publish --resume/);
+  assert.throws(() => parseArgs(["0.3.8", "--recover-stale-lock", "--publish", "--source", SHA, "--notes", "notes.md"]), /requires --publish --resume/);
 });
 
 test("dry-run preflight performs no local or remote writes", () => {
@@ -318,20 +320,6 @@ test("ordinary candidate push leaves caller ref, index and unrelated files untou
   rmSync(root, { recursive: true, force: true });
 });
 
-test("manifest verification requires exact coverage, unique safe names and matching bytes", () => {
-  const root = temp("release-manifest");
-  writeFileSync(join(root, "artifact.bin"), "bytes");
-  writeFileSync(join(root, "install.sh"), "install");
-  const manifest = ["artifact.bin", "install.sh"].map((name) => `${sha256(join(root, name))}  ${name}`).join("\n");
-  writeFileSync(join(root, "SHA256SUMS"), `${manifest}\n`);
-  verifyManifestDirectory(root, ["artifact.bin", "install.sh", "SHA256SUMS", "provenance.jsonl"]);
-  writeFileSync(join(root, "artifact.bin"), "changed");
-  assert.throws(() => verifyManifestDirectory(root, ["artifact.bin", "install.sh", "SHA256SUMS", "provenance.jsonl"]), /does not match/);
-  writeFileSync(join(root, "SHA256SUMS"), `${"a".repeat(64)}  ../escape\n`);
-  assert.throws(() => verifyManifestDirectory(root, ["SHA256SUMS", "provenance.jsonl"]), /Invalid/);
-  rmSync(root, { recursive: true, force: true });
-});
-
 function publicReleaseFixture(version = "0.3.8") {
   const source = "c".repeat(40);
   const directory = temp("release-public-fixture");
@@ -353,57 +341,58 @@ function publicReleaseFixture(version = "0.3.8") {
   return { version, source, directory, release };
 }
 
-test("public verification reuses inventory policy, hashes downloads and pins attestation source/ref/workflow", () => {
+test("public verification reads the inventory through the API and downloads nothing", () => {
   const fixture = publicReleaseFixture();
-  const attestationCalls = [];
+  const calls = [];
   const exec = (command, args) => {
+    calls.push([command, ...args]);
     if (command === "git" && args[0] === "ls-remote") {
       return ok(`${"d".repeat(40)}\trefs/tags/v${fixture.version}\n${fixture.source}\trefs/tags/v${fixture.version}^{}\n`);
     }
     if (command === "gh" && args[0] === "release" && args[1] === "view") return ok(JSON.stringify({ databaseId: fixture.release.id }));
     if (command === "gh" && args[0] === "api" && args[1].endsWith("/releases/44")) return ok(JSON.stringify(fixture.release));
     if (command === "gh" && args[0] === "api" && args[1].endsWith("/releases/latest")) return ok(JSON.stringify({ id: fixture.release.id }));
-    if (command === "gh" && args[0] === "release" && args[1] === "download") {
-      const output = args[args.indexOf("--dir") + 1];
-      cpSync(fixture.directory, output, { recursive: true });
-      return ok();
-    }
-    if (command === "gh" && args[0] === "attestation") {
-      attestationCalls.push(args);
-      return ok("[]");
-    }
     throw new Error(`unexpected command: ${command} ${args.join(" ")}`);
   };
-  const result = verifyPublicRelease(exec, {
-    repoRoot: "/fixture", version: fixture.version, tag: `v${fixture.version}`, candidate: fixture.source, tagObject: "d".repeat(40),
-  });
+  const journal = { repoRoot: "/fixture", version: fixture.version, tag: `v${fixture.version}`, candidate: fixture.source, tagObject: "d".repeat(40) };
+  const result = verifyPublicRelease(exec, journal);
   assert.equal(result.assets, fixture.release.assets.length);
-  assert.ok(attestationCalls.length > 0);
-  for (const args of attestationCalls) {
-    assert.equal(args[args.indexOf("--source-digest") + 1], fixture.source);
-    assert.equal(args[args.indexOf("--source-ref") + 1], `refs/tags/v${fixture.version}`);
-    assert.equal(args[args.indexOf("--signer-workflow") + 1], `${identity.repository}/.github/workflows/release.yml`);
-  }
+  assert.equal(result.releaseId, 44);
+  assert.ok(!calls.some((call) => call[1] === "release" && call[2] === "download"));
+  assert.ok(!calls.some((call) => call[1] === "attestation"));
+  fixture.release.assets.find((asset) => asset.name === "install.sh").state = "starter";
+  assert.throws(() => verifyPublicRelease(exec, journal), /not uploaded: install.sh/);
   fixture.release.assets = fixture.release.assets.filter((asset) => asset.name !== "install.sh");
-  assert.throws(() => verifyPublicRelease(exec, {
-    repoRoot: "/fixture", version: fixture.version, tag: `v${fixture.version}`, candidate: fixture.source, tagObject: "d".repeat(40),
-  }), /missing install.sh/);
+  assert.throws(() => verifyPublicRelease(exec, journal), /missing install.sh/);
   rmSync(fixture.directory, { recursive: true, force: true });
 });
 
-test("public verification rejects an unexpected remote asset before download", () => {
+test("public verification rejects an unexpected remote asset", () => {
   const fixture = publicReleaseFixture();
   fixture.release.assets.push({ name: "unexpected.bin", size: 1, state: "uploaded", digest: `sha256:${"a".repeat(64)}` });
   const exec = (command, args) => {
     if (command === "git") return ok(`${"d".repeat(40)}\trefs/tags/v${fixture.version}\n${fixture.source}\trefs/tags/v${fixture.version}^{}\n`);
     if (command === "gh" && args[0] === "release" && args[1] === "view") return ok(JSON.stringify({ databaseId: fixture.release.id }));
     if (command === "gh" && args[0] === "api") return ok(JSON.stringify(fixture.release));
-    throw new Error("download must not start");
+    throw new Error(`unexpected command: ${command} ${args.join(" ")}`);
   };
   assert.throws(() => verifyPublicRelease(exec, {
     repoRoot: "/fixture", version: fixture.version, tag: `v${fixture.version}`, candidate: fixture.source, tagObject: "d".repeat(40),
   }), /unexpected assets/);
   rmSync(fixture.directory, { recursive: true, force: true });
+});
+
+test("release notes come from a non-empty file and are digested for the checkpoint", () => {
+  const root = temp("release-notes");
+  writeFileSync(join(root, "empty.md"), "\n  \n");
+  assert.throws(() => loadReleaseNotes(join(root, "empty.md")), /is empty/);
+  assert.throws(() => loadReleaseNotes(join(root, "missing.md")), /could not be read/);
+  writeFileSync(join(root, "notes.md"), "## What changed\r\n\r\n- one\r\n");
+  const notes = loadReleaseNotes(join(root, "notes.md"));
+  assert.equal(notes.text, "## What changed\n\n- one\n");
+  assert.equal(notes.lines, 3);
+  assert.match(notes.digest, /^[0-9a-f]{64}$/);
+  rmSync(root, { recursive: true, force: true });
 });
 
 test("post-publication workflow failure reports publication truth without editing it", () => {
@@ -414,7 +403,7 @@ test("post-publication workflow failure reports publication truth without editin
     return ok(JSON.stringify({ draft: false }));
   };
   assert.equal(publicationState(exec, { tag: "v0.3.8", stage: "tag-pushed" }), "published; deployment incomplete");
-  assert.equal(publicationState(exec, { tag: "v0.3.8", stage: "release-passed" }), "published; workflow succeeded; post-publication verification incomplete");
+  assert.equal(publicationState(exec, { tag: "v0.3.8", stage: "release-passed" }), "published; workflow succeeded; inventory check incomplete");
 });
 
 test("an unpublished in-progress release reports building state from its recorded run", () => {
@@ -518,7 +507,8 @@ test("release tags reject lightweight locals and same-commit object replacement"
 test("annotated tag ownership is checkpointed before remote push", () => {
   const root = makePreparationRepo("0.3.8");
   const candidate = git(root, "rev-parse", "HEAD");
-  const journal = { repoRoot: root, worktree: root, tag: "v0.3.8", version: "0.3.8", candidate };
+  const notes = "## What changed\n\n- The opening screen no longer waits out a hidden question.\n";
+  const journal = { repoRoot: root, worktree: root, tag: "v0.3.8", version: "0.3.8", candidate, notes };
   let pushed = false, checkpointed = false;
   const exec = (command, args, options) => {
     if (args[0] === "ls-remote" && args.includes("--heads")) return ok(`${candidate}\trefs/heads/main\n`);
@@ -526,7 +516,11 @@ test("annotated tag ownership is checkpointed before remote push", () => {
     if (args[0] === "push") { assert.equal(checkpointed, true); pushed = true; return ok(); }
     return systemExec(command, args, options);
   };
+  // Without notes there is no tag: the notes are the tag's body.
+  assert.throws(() => ensureTag(exec, { repoRoot: root, worktree: root, tag: "v0.3.8", version: "0.3.8", candidate }), /carries the release notes/);
   assert.equal(ensureTag(exec, journal, () => { checkpointed = true; assert.equal(git(root, "cat-file", "-t", journal.tagObject), "tag"); }), true);
   assert.equal(pushed, true);
+  assert.equal(git(root, "tag", "-l", "--format=%(contents:subject)", "v0.3.8"), `${identity.displayName} 0.3.8`);
+  assert.equal(`${git(root, "tag", "-l", "--format=%(contents:body)", "v0.3.8")}\n`, notes);
   rmSync(root, { recursive: true, force: true });
 });

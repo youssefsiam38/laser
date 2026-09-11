@@ -7,7 +7,7 @@ for the one thing a laptop cannot mint, the build attestation.
 
 | Script | What it does |
 | --- | --- |
-| `release.mjs` | Orchestrates an authorized reviewed release through isolated versioning, exact-source CI, immutable tag, release workflow and public verification |
+| `release.mjs` | Orchestrates an authorized reviewed release through isolated versioning, exact-source CI, an immutable tag carrying the release notes, the release workflow and an API-side check of the public release |
 | `set-version.sh` | Sets one version across every `package.json` in the workspace; it never commits, tags or pushes |
 | `build-linux.sh` | Builds every Linux artifact for **one** architecture into a staging directory, gates on the clean-machine check, and derives the tarball from the AppImage so both carry identical bytes |
 | `manifest.sh` | Writes `SHA256SUMS` over a staging directory, in `sha256sum` format, sorted |
@@ -19,14 +19,21 @@ for the one thing a laptop cannot mint, the build attestation.
 ## Routine authorized release
 
 Once the person has authorized a release and the complete source is reviewed and
-committed, use its full SHA. The first command is read-only; inspect its frozen
-source, remote main, tag, release and exact-SHA CI facts before executing the
-second:
+committed, use its full SHA, and write the release notes first: a Markdown
+file for the people who install the release. The first command is read-only;
+inspect its frozen source, remote main, tag, release, exact-SHA CI and notes
+facts before executing the second:
 
 ```bash
-node scripts/release/release.mjs 0.1.0 --source FULL_REVIEWED_SHA
-node scripts/release/release.mjs 0.1.0 --publish --source FULL_REVIEWED_SHA
+node scripts/release/release.mjs 0.1.0 --source FULL_REVIEWED_SHA --notes RELEASE_NOTES.md
+node scripts/release/release.mjs 0.1.0 --publish --source FULL_REVIEWED_SHA --notes RELEASE_NOTES.md
 ```
+
+`--notes FILE` is required for `--publish` and refused when empty. The notes
+become the body of the annotated tag (`git tag -a --cleanup=verbatim`, so
+Markdown headings survive), and `publish.sh` reads that body as the release
+page's text, so the notes are part of the tagged object rather than typed into
+a form. A resume must present the same notes; a changed file is refused.
 
 Routine execution needs no release-preparation agent and no second feature
 review. Changes to the orchestrator itself still require review. The command
@@ -47,9 +54,10 @@ is built on native hardware; there is no cross-compile because bundled Node,
 prebuilt keyring bindings and AppImage runtime are architecture-specific. The
 workflow runs the packaged clean-machine and installer gates, uploads to a draft,
 attests the exact assets, publishes only after remote verification, and deploys
-native package repositories. The orchestrator then downloads the public assets,
-checks inventory, sizes, states and `SHA256SUMS`, and verifies offline provenance
-against the expected source, tag and release workflow before reporting success.
+native package repositories. The orchestrator then reads the public release
+through the API — not a draft, the recorded tag, the exact inventory with every
+asset uploaded, Latest promotion — and reports success. It downloads nothing:
+the workflow already verified and attested the bytes it uploaded.
 
 The lower-level helpers remain useful for local staging and diagnosis, but they
 do not replace the CI-before-tag transaction:

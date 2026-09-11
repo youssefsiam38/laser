@@ -356,13 +356,22 @@ reached a pushed release candidate. Treat them as release blockers, not advice.
 
 ### Routine releases use the reviewed orchestrator
 
-After explicit user authorization and source review, run the read-only preview,
-then the transaction with the same full reviewed SHA:
+After explicit user authorization and source review, write the release notes,
+run the read-only preview, then the transaction with the same full reviewed
+SHA and the same notes file:
 
 ```bash
-node scripts/release/release.mjs VERSION --source FULL_REVIEWED_SHA
-node scripts/release/release.mjs VERSION --publish --source FULL_REVIEWED_SHA
+node scripts/release/release.mjs VERSION --source FULL_REVIEWED_SHA --notes RELEASE_NOTES.md
+node scripts/release/release.mjs VERSION --publish --source FULL_REVIEWED_SHA --notes RELEASE_NOTES.md
 ```
+
+**Release notes are a required parameter, every release.** `--notes FILE` is a
+Markdown file written for the people who install the release: what changed and
+what it means for them, not a commit list. `--publish` refuses to run without
+it, and an empty file is refused. The orchestrator puts the notes into the
+annotated tag's body (verbatim, so headings survive) and `publish.sh` reads
+them from the tag as the release page's text; a resume must present the same
+notes. There is no separate notes form to fill in afterwards.
 
 Do not spawn a release-preparation agent for this routine path and do not repeat
 the feature review. Changes to the release orchestrator still receive normal
@@ -370,7 +379,11 @@ review. It prepares in its own worktree, stages only package version metadata
 and generated product identity, runs staged identity/full verification with no inherited `GIT_INDEX_FILE`,
 pushes the exact candidate without touching the caller's branch/index, adopts or
 waits for that SHA's trusted `ci.yml` push run, and creates the immutable tag only
-after success. Resume only from its exact checkpoint; stale-lock recovery is
+after success. After the release workflow passes it checks the public release
+through the API only (not a draft, the recorded tag, the exact inventory with
+every asset uploaded, Latest promotion) and downloads nothing: the workflow
+attested and verified the bytes it uploaded, and a second download proved
+nothing new for twenty minutes of waiting. Resume only from its exact checkpoint; stale-lock recovery is
 explicit. It never stashes, resets, cleans, force-pushes, moves a tag, touches an
 installed process, or interprets a network/API error as absence. See
 `scripts/release/README.md` for status wording and recovery.
@@ -383,7 +396,7 @@ publishes after complete x64/ARM64 installers, checksums and offline provenance
 are uploaded and their remote sizes and SHA-256 digests match. Upload failures
 remain drafts; published assets must not be overwritten. A no-monitor request
 means report "tag pushed; release building", not "published". Record download
-readiness only after checking the actual assets. Run the publication regression
+readiness only after checking the public inventory through the API. Run the publication regression
 tests with `node --test scripts/release/test/*.test.mjs`.
 
 ### New files and the identity check

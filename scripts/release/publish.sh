@@ -147,6 +147,13 @@ if [ "$STAGE_ONLY" = 1 ]; then
   exit 0
 fi
 
+# The release orchestrator writes the release notes into the annotated tag's
+# body; that text is the release page. A tag without a body (a manual tag)
+# falls back to GitHub's generated notes inside publish-github.mjs.
+if [ -z "$NOTES" ]; then
+  NOTES="$(git tag -l --format='%(contents:body)' "$TAG" 2>/dev/null || true)"
+fi
+
 node "$HERE/publish-github.mjs" "$TAG" "$VERSION" "$REPO" "$DIR" "$PROVENANCE" "$DRAFT" "$NOTES"
 
 if [ "$DRAFT" = 1 ]; then
