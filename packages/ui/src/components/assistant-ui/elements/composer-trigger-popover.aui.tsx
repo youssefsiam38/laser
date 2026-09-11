@@ -183,13 +183,21 @@ function PickerSurface({ title, notice, onQueryChange, onOpenChange, onComplete,
         if (action) { event.preventDefault(); event.stopPropagation(); action.click(); }
         return;
       }
-      if (event.key === 'Tab' && (event.shiftKey || state.items.length + state.categories.length === 0)) {
+      // Shift+Tab, a chorded Tab, or a Tab with nothing to choose from: the
+      // picker gets out of the way. `stopPropagation` matters as much as
+      // closing does — the popover is a composer-input plugin, so an event
+      // that reaches React's handler still reaches the primitive's keyboard
+      // resource, whose `case "Enter": case "Tab":` excludes only Shift and
+      // would select (and so run) the highlighted row (M15-T5, F4).
+      if (event.key === 'Tab' && (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey || state.items.length + state.categories.length === 0)) {
         state.close(); event.stopPropagation(); return; // normal focus traversal
       }
       // Tab completes; it never selects, so it never runs a command and never
       // sends (M15-T5). The picker stays open on the completed word.
       const complete = completeRef.current;
-      if (event.key === 'Tab' && complete && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      if (event.key === 'Tab' && complete) {
+        // `items` is what the highlight indexes while a query is typed, which
+        // is the only mode these pickers have (neither offers categories).
         const item = state.items[state.highlightedIndex];
         const completed = item ? complete(item, aui.composer.getState().text) : null;
         if (completed) {
@@ -197,6 +205,19 @@ function PickerSurface({ title, notice, onQueryChange, onOpenChange, onComplete,
           event.stopPropagation();
           aui.composer.setText(completed.text);
           state.setCursorPosition(completed.caret);
+          // The primitive's cursor is its own detection state; nothing moves
+          // the caret the person can see, and React does not restore a
+          // selection when focus did not change, so assigning the new value
+          // leaves it at the end — past the arguments the completion kept.
+          // Put it back once the textarea actually holds the new draft.
+          const place = (): boolean => {
+            if (input.value !== completed.text) return false;
+            input.setSelectionRange(completed.caret, completed.caret);
+            return true;
+          };
+          queueMicrotask(() => {
+            if (!place()) requestAnimationFrame(place);
+          });
           return;
         }
       }
@@ -271,7 +292,7 @@ function PickerSurface({ title, notice, onQueryChange, onOpenChange, onComplete,
     </div>
     {selected && typeof selected.metadata?.filePath === 'string' && <SourceFileDetails key={selected.id} item={selected} onDetails={details ? undefined : () => setDetails(true)} />}
     {notice && <div className="shrink-0 px-3 py-2 text-xs text-ink-2 hairline-t">{notice}</div>}
-    <div aria-hidden className="flex shrink-0 items-center gap-3 px-3 py-2 text-xs text-ink-3 hairline-t pointer-coarse:hidden group-data-[compact=true]/picker:hidden">{details ? <span>Esc back to results</span> : <><span>↑ ↓ navigate</span><span>{onComplete ? 'Tab complete' : 'Tab / ↵ select'}</span>{onComplete ? <span>↵ select</span> : null}<span className="ms-auto">Esc close</span></>}</div>
+    <div aria-hidden className="flex shrink-0 items-center gap-3 px-3 py-2 text-xs text-ink-3 hairline-t pointer-coarse:hidden group-data-[compact=true]/picker:hidden">{details ? <span>Esc back to results</span> : <><span>↑ ↓ navigate</span><span>{onComplete ? 'Tab complete · ↵ select' : 'Tab / ↵ select'}</span><span className="ms-auto">Esc close</span></>}</div>
   </>;
 }
 

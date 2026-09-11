@@ -155,8 +155,10 @@ describe("completing a slash command", () => {
     await key("Tab");
     nothingHappened();
     // The command's own word, completed the way a shell completes one: no
-    // trailing space, so the caret is still inside the command token.
+    // trailing space, so the caret — the one the person can see — is still
+    // inside the command token.
     expect(input().value).toBe("/compact");
+    expect(input().selectionStart).toBe("/compact".length);
     // Still open on what it completed, so the person's next Enter is the
     // explicit second act — and it is the one that runs the command.
     expect(popup()).not.toBeNull();
@@ -189,6 +191,9 @@ describe("completing a slash command", () => {
     await type("/compa keep this\nand this", 6);
     await key("Tab");
     expect(input().value).toBe("/compact keep this\nand this");
+    // The caret lands after the command, not after the arguments: assigning a
+    // new value would otherwise leave it at the end of the draft.
+    expect(input().selectionStart).toBe("/compact".length);
     // The picker still holds the completed command — the completion moved the
     // query to the end of the command's own word, not past its arguments.
     expect(highlighted()?.getAttribute("aria-label")).toBe("/compact");
@@ -206,6 +211,31 @@ describe("completing a slash command", () => {
     await type("/compa");
     await key("Tab");
     expect(input().value).toBe("/compact");
+    nothingHappened();
+  });
+
+  // F4: the primitive's keyboard resource excludes only Shift from its
+  // `case "Enter": case "Tab":`, so a chorded Tab that reached it would select
+  // — and selecting one of the app's own commands runs it.
+  it("lets a chorded Tab traverse without selecting or running anything", async () => {
+    await mount();
+    for (const modifier of ["ctrlKey", "metaKey", "altKey"] as const) {
+      await type("");
+      await type("/compa");
+      expect(popup()).not.toBeNull();
+      const event = await key("Tab", { [modifier]: true });
+      expect(event.defaultPrevented).toBe(false);
+      expect(input().value).toBe("/compa");
+      expect(popup()).toBeNull();
+      nothingHappened();
+    }
+    // Shift+Tab is the same traversal it always was.
+    await type("");
+    await type("/compa");
+    const shift = await key("Tab", { shiftKey: true });
+    expect(shift.defaultPrevented).toBe(false);
+    expect(input().value).toBe("/compa");
+    expect(popup()).toBeNull();
     nothingHappened();
   });
 
@@ -247,7 +277,7 @@ describe("completing a slash command", () => {
     nothingHappened();
   });
 
-  it("runs a laser command when the row is chosen, and still never sends the draft", async () => {
+  it("runs one of the app's own commands when the row is chosen, and still never sends the draft", async () => {
     await mount();
     // Choosing the row — with the mouse or a tap — is the person picking the
     // command, so it runs; it is still never a send.

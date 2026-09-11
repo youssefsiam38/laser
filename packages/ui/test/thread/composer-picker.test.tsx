@@ -153,6 +153,26 @@ it('keeps verbose skill previews compact and provides a scrollable full-descript
   expect(popup()).not.toBeNull(); expect(container.querySelectorAll('[role="option"]')).toHaveLength(1);
   await key('Enter'); expect(inserted).toHaveBeenCalledOnce(); expect(sent).not.toHaveBeenCalled();
 });
+it('leaves Tab alone while the description is open, and completes again once it closes', async () => {
+  // Reading a description must not complete or choose the hidden result; Tab
+  // there is normal focus traversal (M15-T5, F6).
+  await act(async () => root.render(<Fixture source completes />));
+  await type('@');
+  await act(async () => container.querySelector<HTMLButtonElement>('[data-picker-details]')!.click());
+  expect(container.querySelector('[data-slot="composer-picker-description"]')).not.toBeNull();
+  const inDetails = await key('Tab');
+  expect(inDetails.defaultPrevented).toBe(false);
+  expect(completed).not.toHaveBeenCalled();
+  expect(inserted).not.toHaveBeenCalled();
+  expect(sent).not.toHaveBeenCalled();
+  expect(input().value).toBe('@');
+
+  await key('Escape');
+  await key('Tab');
+  expect(completed).toHaveBeenCalledTimes(1);
+  expect(inserted).not.toHaveBeenCalled();
+  expect(sent).not.toHaveBeenCalled();
+});
 it('opens a skill source with Alt+O without selecting or running it', async () => {
   const openSourceFile = vi.fn().mockResolvedValue({ opened: true }); vi.stubGlobal('desktop', { openSourceFile });
   await act(async () => root.render(<Fixture source />));
