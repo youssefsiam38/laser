@@ -1246,6 +1246,7 @@ lane T's own if both were written.
 | M13-T106 | Scrollable built-in model picker lists | in-progress | agent-model-selection | — | see notes; D-206 |
 | M13-T107 | Release reviewed subset 0.3.7 | done | orchestrator-release-subset | `v0.3.7` at8577bef; sourceCI34587200633/releaseCI34587503564 green;12 public assets/digests and offline attestation verified | see notes; D-207 |
 | M13-T108 | Empty New Session reopen after retirement/restart | in-progress | empty-session-lifecycle | — | see notes; D-209 |
+| M13-T109 | Safe future-attribution prevention | in-progress | orchestrator | — | see notes; D-210 |
 | M13-T65 | A fork is a top-level session, never nested under its origin | done | claude-2026-09-09-agents | `pnpm -F @lasercode/host test -- test/catalog.test.ts`; `pnpm -F @lasercode/ui test -- test/shell/session-groups-fork.test.ts` | requested by the user; D-166 |
 | M13-T64 | Namer labels every call of a top-level session, none of a child's | done | claude-2026-09-09-agents | `pnpm -F @lasercode/worker test` (`agents/namer.test.ts` "labels every call in a burst at once"; `agents/server-agents.test.ts` "a child agent's tool calls are never labelled") | requested by the user; D-165 |
 | M13-T63 | Restoring an unsent draft puts the person in the field | done | claude-2026-09-09-agents | `pnpm -F @lasercode/ui test -- test/thread/draft-restore-focus.test.tsx` | requested by the user; see notes |
@@ -1327,6 +1328,10 @@ lane T's own if both were written.
 - 2026-09-11 held: `/tmp/laser-m13-t106-scroll-plan.md` confirms real wheel blocked by portals outside modal lock (main6586/288 and nested1146/288 scrollable geometry, scrollTop unchanged); moving main portal into dialog gives0→650. No source change; ports stopped. Next opt-in dialog container propagation through both popovers after T102 fixes/integration and release; preserve lock.
 - 2026-09-11 claimed: user reports Namer provider-filtered model list cannot wheel-scroll. BuiltinModelDialog in agents/page/dialogs.tsx mounts shared ProviderModelPicker; model/provider PopoverContent portals to body while outer Dialog owns scroll lock. Confirm in real browser before choosing a scoped portal fix.
 - Ownership ledger: model-picker modal scrolling · `01a08fa8-b865-7754-a665-f1785ddcd05e` · cause confirmed, no source changes · provider/model portal container + builtin dialog/tests · base `7fe28af` · T102 corrected/verified · implementing approved portal fix · next: ready commit, real wheel/touch proof and one review.
+
+#### M13-T109 notes
+- 2026-09-11 claimed: user requests removing co-author only if history/messages/worktrees/published releases remain undisturbed, then push. Existing trailers are part of hashed messages, so historic removal cannot meet that constraint; parent explicitly told user only future automatic attribution will be disabled. Read-only audit found4 Claude trailers, zero primary Claude authors,195 affected main commits if rewritten, all release tags retain earliest attribution. No history edit permitted.
+- Ownership ledger: future Claude attribution · orchestrator direct bounded fix · `.claude/settings.json` only plus owned ledgers · baseadfffa1 · no worker overlap; setting absent · implementing · next: JSON/identity/tag-preservation checks and normal push. No global settings edit, amend, filter-repo, force-push or retag.
 
 #### M13-T108 notes
 - 2026-09-11 claimed: person reports old empty Beam New Session gives “no longer open and has no saved transcript” plus first-send draft-restoration toast; explicitly check ordinary projects too. Source guard host/router.ts workerFor matches exact text; worker stable-sdk.ts open also rejects missing/empty files. Host unwritten summaries are ephemeral and pool retires idle workers. Investigate canonical lifetime before choosing repair; do not just remove guards.
@@ -3974,3 +3979,8 @@ Consequences: the worker, not the UI, owns stop-then-move, because two requests 
 **Decision.** Treat the new screenshot as a canonical session lifecycle bug, checking Beam and ordinary projects across worker retirement and host restart; protect missing-transcript recovery guards until a truthful fix is planned.
 **Why.** The exact host error is reached when an unwritten session outlives its worker. Removing the guard risks silently making an unrelated session under a stale path.
 **Consequences.** Bounded read-only investigation can run alongside T102/T105 and frozen8577bef release; implementation ownership must be settled with the active first-turn owner if SDK creation/persistence is implicated. No expansion of the release candidate without explicit release-scope approval. Preserve live state, old paths and drafts.
+
+### D-210 · 2026-09-11 · Preserve history; disable only future Claude attribution
+**Decision.** Add project Claude Code `attribution.commit` and `attribution.pr` empty strings using its documented settings; retain all existing co-author trailers and original commit/tag objects.
+**Why.** The person explicitly forbids changing historical messages or disrupting worktrees/releases. Existing co-author trailers are part of the commit message and cannot be removed without changing commit IDs and descendants.
+**Consequences.** Normal new commit/push only; future automatic attribution suppressed alongside existing AGENTS prohibition. Historical cleanup is not performed or claimed.
