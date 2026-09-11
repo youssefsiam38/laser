@@ -247,11 +247,12 @@ describe("sub-sessions fold", () => {
     expect(foldOf("Ship the release").getAttribute("title")).toBe("6 agents under this session: 1 working, 1 needs you, 4 finished, 1 of them failed");
     await act(async () => foldOf("Ship the release").click());
     // Answered: the child dot returns to the working sweep, and the folded
-    // branch has no question left to keep visible.
+    // branch falls back to the failure it is still hiding — never to the
+    // working child, which is one disclosure away.
     await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[0]!, status: "running", updatedAt: at(8) } }));
     expect(rowNamed("alpha")?.querySelector('[data-slot="run-dot"]')?.getAttribute("aria-label")).toBe("Working");
     await act(async () => foldOf("Ship the release").click());
-    expect(foldStatusOf("Ship the release")).toBeNull();
+    expect(foldStatusOf("Ship the release")?.getAttribute("data-tone")).toBe("danger");
   });
 
   it("returns a resumed session to the live fold and does not brand it with an older failure", async () => {
@@ -282,14 +283,21 @@ describe("sub-sessions fold", () => {
 
   // M15-T4: a folded branch keeps exactly one descendant signal — a question.
   // Everything else a descendant is doing stays with the descendant.
-  it("marks a folded branch only when it hides a question, never for work below it", async () => {
+  it("marks a folded branch for a question or a failure, never for work below it", async () => {
     await mount();
     await act(async () => foldOf("Ship the release").click());
-    // Working, waiting and a failed child are all hidden in there; none of
-    // them makes the parent wear a mark it did not earn.
-    expect(foldStatusOf("Ship the release")).toBeNull();
+    // A failure is hidden two folds deep in there, so the disclosure keeps it
+    // — still, not pulsing: nothing is happening (D-186).
+    const failure = foldStatusOf("Ship the release")!;
+    expect(failure.getAttribute("data-tone")).toBe("danger");
+    expect(failure.className).not.toContain("animate-attention");
+    expect(failure.style.getPropertyValue("--dot")).toBe("var(--danger)");
     expect(foldOf("Ship the release").getAttribute("title")).toBe("6 agents under this session: 2 working, 4 finished, 1 of them failed");
 
+    // With the failure gone, working and waiting children below say nothing
+    // for the parent: that work is one disclosure away, on the rows doing it.
+    await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[3]!, status: "completed", updatedAt: at(9) } }));
+    expect(foldStatusOf("Ship the release")).toBeNull();
     await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[0]!, status: "queued", updatedAt: at(9) } }));
     expect(foldStatusOf("Ship the release")).toBeNull();
 
@@ -326,6 +334,28 @@ describe("sub-sessions fold", () => {
     expect(marksOf("delta").map((mark) => mark.getAttribute("aria-label"))).toEqual(["Failed"]);
   });
 
+  // A run that has just failed almost always leaves its session unread, and
+  // `finished_unread` is drawn in the live colour: letting unread win there
+  // would paint a failure green until someone happened to open it.
+  it("keeps the failure mark on a failed child that is also unread", async () => {
+    await act(async () => store.dispatch({
+      type: "sessions",
+      sessions: sessions.map((session) => session.path === DELTA ? { ...session, attention: "finished_unread" as const } : session),
+    }));
+    await mount();
+    await act(async () => finishedFoldOf("Ship the release")!.click());
+    const delta = rowNamed("delta")!;
+    expect(marksOf("delta").map((mark) => mark.getAttribute("aria-label"))).toEqual(["Failed"]);
+    expect(marksOf("delta")[0]!.style.getPropertyValue("--dot")).toBe("var(--danger)");
+    // And it keeps its ink inside the dimmed fold, as a failure always has.
+    expect(delta.getAttribute("data-dimmed")).toBeNull();
+
+    // A child that failed and *is* waiting for the person still says so: a
+    // live question outranks a finished failure.
+    await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[3]!, status: "needs_input", updatedAt: at(9) } }));
+    expect(marksOf("delta").map((mark) => mark.getAttribute("aria-label"))).toEqual(["Asking"]);
+  });
+
   it("gives a childless row no disclosure or descendant-state mark", async () => {
     await mount();
     const quiet = branchOf("Quiet session")!;
@@ -344,7 +374,8 @@ describe("sub-sessions fold", () => {
 
     const parent = foldOf("Ship the release");
     expect(parent.getAttribute("aria-expanded")).toBe("false");
-    expect(foldStatusOf("Ship the release")).toBeNull();
+    // Two folds deep, one of them failed: the only trace is this mark.
+    expect(foldStatusOf("Ship the release")?.getAttribute("data-tone")).toBe("danger");
     expect(rowNamed("alpha")).toBeUndefined();
 
     await act(async () => parent.click());
@@ -397,7 +428,9 @@ describe("sub-sessions fold", () => {
     // disclosure's summary and mark; it does not reopen the branch.
     await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[2]!, status: "running", updatedAt: at(9) } }));
     expect(foldOf("Ship the release").getAttribute("aria-expanded")).toBe("false");
-    expect(foldStatusOf("Ship the release")).toBeNull();
+    // The new live work adds nothing to the disclosure; the hidden failure is
+    // what it was already carrying.
+    expect(foldStatusOf("Ship the release")?.getAttribute("data-tone")).toBe("danger");
 
     // And the reverse: a run ending never collapses the branch under the
     // person — the child moves into the finished fold, the branch stays.
@@ -482,6 +515,8 @@ describe("one indicator per row", () => {
 
   it("never makes a parent look busy because a child is", async () => {
     await setAttention({});
+    // Nothing failed under this parent: the only hidden state is live work.
+    await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[3]!, status: "completed", updatedAt: at(9) } }));
     await mount();
     // alpha is running under it; the parent itself is doing nothing.
     expect(labelsOf("Ship the release")).toEqual([]);
