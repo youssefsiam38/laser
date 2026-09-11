@@ -206,6 +206,27 @@ describe("a refused first-turn prompt (U1)", () => {
     expect(modelLabel("main")).toBe("Model: gpt-big");
   });
 
+  it("shows the selected agent thinking default instead of a stale compatible pristine level", async () => {
+    world.catalog = world.catalog.map((model) => model.id === "gpt-big"
+      ? { ...model, thinkingLevels: ["off", "low", "high"] }
+      : model);
+    world.states[A] = { ...world.states[A]!, model: { provider: "openai", id: "gpt-big" }, thinkingLevel: "low" };
+    await mount();
+    expect(thinkingLabel("main")).toBe("Thinking: low");
+
+    await chooseAgent("main", "reviewer");
+    expect(thinkingLabel("main")).toBe("Thinking: high");
+    expect(firstTurnFromRunConfig(composerState("main").runConfig)).toEqual({ agentName: "reviewer", model: null });
+
+    await type("main", "use the agent default");
+    await pressSend("main");
+    expect(prompts()).toEqual([{
+      path: A,
+      content: [{ type: "text", text: "use the agent default" }],
+      firstTurn: { agentName: "reviewer", model: null },
+    }]);
+  });
+
   it("shows the selected agent model immediately, lets a later model win, and resets it on another agent choice", async () => {
     world.overrides["pi/model/list"] = (() => ({ models: [
       { provider: "openai", id: "gpt-fast", name: "GPT Fast" },

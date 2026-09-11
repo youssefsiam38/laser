@@ -54,10 +54,15 @@ const client = {
         defaultModel: mocks.catalogDefault,
         defaultThinkingLevel: mocks.defaultThinkingLevel,
       }
-    : { models: [
-        { provider: "test", id: "reasoner", name: "Reasoner", thinkingLevels: ["off", "low", "medium", "high", "xhigh"] },
-        { provider: "test", id: "plain", name: "Plain", thinkingLevels: ["off"], thinkingLevel: "off" },
-      ] },
+    : {
+        models: [
+          { provider: "test", id: "reasoner", name: "Reasoner", thinkingLevels: ["off", "low", "medium", "high", "xhigh"], thinkingLevel: "high" },
+          { provider: "test", id: "plain", name: "Plain", thinkingLevels: ["off"], thinkingLevel: "off" },
+        ],
+        defaultProvider: "test",
+        defaultModel: "reasoner",
+        defaultThinkingLevel: mocks.defaultThinkingLevel,
+      },
 };
 const actions = { setThinking: mocks.setThinking, newSession: mocks.newSession, toast: mocks.toast };
 
@@ -122,6 +127,8 @@ beforeEach(() => {
   mocks.dispatch.mockClear();
   mocks.snapshot.agents[0]!.model = { provider: "test", id: "reasoner" };
   mocks.snapshot.agents[0]!.thinkingLevel = "low";
+  mocks.snapshot.agents[1]!.model = { provider: "test", id: "reasoner" };
+  mocks.snapshot.agents[1]!.thinkingLevel = "high";
   mocks.composerState = { text: "", attachments: [] };
   mocks.sourceComposerState = { text: "" };
   mocks.setThinking.mockClear();
@@ -167,6 +174,18 @@ it("shows the tentative agent's thinking default on a saved-empty session", asyn
   await act(async () => root.render(<TooltipProvider><ThinkingEffort /></TooltipProvider>));
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
   expect(container.querySelector<HTMLButtonElement>("button")?.textContent).toBe("high");
+});
+
+it("uses the selected model default when the selected agent has no thinking level", async () => {
+  mocks.level = "low";
+  mocks.unstarted = true;
+  mocks.firstTurn = { agentName: "reviewer", model: null };
+  mocks.snapshot.agents[1]!.thinkingLevel = null;
+  await act(async () => root.render(<TooltipProvider><ThinkingEffort /></TooltipProvider>));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+  expect(container.querySelector<HTMLButtonElement>('button[aria-label^="Thinking:"]')?.getAttribute("aria-label")).toBe("Thinking: high");
+  expect(mocks.chooseThinking).not.toHaveBeenCalled();
 });
 
 it("normalizes an incompatible thinking choice for a later explicit model without losing model intent", async () => {
