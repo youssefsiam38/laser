@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { isDeepStrictEqual } from "node:util";
 import {
   closeSync,
   existsSync,
@@ -20,7 +21,7 @@ import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { identity } from "../identity/identity.mjs";
-import { releaseInventory, verifyAssets, verifyInventory } from "./publish-github.mjs";
+import { inspectReleaseByTag, isExplicitMissingRelease, releaseInventory, verifyAssets, verifyInventory } from "./publish-github.mjs";
 
 const MAIN_REF = "refs/heads/main";
 const CI_WORKFLOW = "ci.yml";
@@ -83,7 +84,9 @@ function commandText(command, args) {
 export function systemExec(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd,
-    env: options.env ?? process.env,
+    env: sanitizedEnvironment(options.env ?? process.env),
+    timeout: options.timeoutMs ?? (command === "pnpm" || args.includes("download") ? 30 * 60_000 : 5 * 60_000),
+    maxBuffer: 16 * 1024 * 1024,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -200,7 +203,7 @@ export function acquireReleaseLock({ commonDir, version, source, resume, recover
 export function selectWorkflowRun(runs, { workflowPath, event, branch, headSha }) {
   const exact = runs.filter((run) =>
     run.event === event && run.head_branch === branch && run.head_sha === headSha &&
-    (!run.path || run.path === workflowPath || run.path.startsWith(`${workflowPath}@`)),
+    (run.path === workflowPath || (typeof run.path === "string" && run.path.startsWith(`${workflowPath}@`))),
   );
   const ids = new Set(exact.map((run) => String(run.id ?? run.databaseId)));
   if (ids.size > 1) fail(`More than one ${workflowPath} ${event} run matches ${branch} at ${headSha}; refusing ambiguity.`);
@@ -211,7 +214,7 @@ export function selectWorkflowRun(runs, { workflowPath, event, branch, headSha }
 function ghApi(exec, endpoint, { allow404 = false } = {}) {
   const result = exec("gh", ["api", endpoint], { allowCodes: allow404 ? [0, 1] : [0] });
   if (result.code === 0) return parseJson(result.stdout, `GitHub API ${endpoint}`);
-  if (allow404 && /(?:HTTP 404|Not Found)/i.test(result.stderr)) return null;
+  if (allow404 && /\bHTTP 404\b/i.test(result.stderr)) return null;
   fail(`GitHub API ${endpoint} failed; this is not evidence of absence.\n${result.stderr || result.stdout}`.trim());
 }
 
@@ -241,7 +244,16 @@ function workflowRuns(exec, workflow, branch) {
 }
 
 function releaseByTag(exec, tag, allow404 = true) {
-  return ghApi(exec, `repos/${identity.repository}/releases/tags/${encodeURIComponent(tag)}`, { allow404 });
+  const release = inspectReleaseByTag(tag, identity.repository, (args, allowMissing = false) => {
+    const result = exec("gh", args, { allowCodes: allowMissing ? [0, 1] : [0] });
+    if (result.code !== 0) {
+      if (allowMissing && isExplicitMissingRelease(result.stderr)) return null;
+      fail("Release lookup failed; this is not evidence of absence.\n" + result.stderr);
+    }
+    return parseJson(result.stdout, "Release lookup");
+  });
+  if (!release && !allow404) fail(`Release ${tag} is missing.`);
+  return release;
 }
 
 function assertSource(exec, repoRoot, source) {
@@ -267,7 +279,7 @@ export function preflight({ exec = systemExec, repoRoot, version, source, allowR
   }
   assertSource(exec, root, exactSource);
   const origin = checked(exec, "git", ["remote", "get-url", "origin"], { cwd: root });
-  if (normalizeOrigin(origin) !== identity.repository) fail(`origin is ${origin}, not ${identity.repository}.`);
+  if (normalizeOrigin(origin) !== identity.repository) fail(`origin does not match the configured repository ${identity.repository}.`);
   const main = remoteMain(exec, root);
   const ancestor = exec("git", ["merge-base", "--is-ancestor", main, exactSource], { cwd: root, allowCodes: [0, 1] });
   if (ancestor.code !== 0) {
@@ -285,7 +297,7 @@ export function preflight({ exec = systemExec, repoRoot, version, source, allowR
     source: exactSource,
     version,
     tag,
-    origin,
+    origin: identity.repository,
     frozenRemoteMain: main,
     remoteTagSha: tagSha,
     release,
@@ -328,11 +340,19 @@ function assertCleanStatus(exec, cwd) {
   if (status) fail(`Isolated release worktree is not clean:\n${status}`);
 }
 
-function withoutAlternateIndex() {
-  const env = { ...process.env };
-  delete env.GIT_INDEX_FILE;
+export function sanitizedEnvironment(input = process.env) {
+  const env = { ...input };
+  // Repository/index/config selection must not escape into linked worktrees or
+  // the temporary repositories created by verification tests.
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("GIT_")) delete env[key];
+  }
+  env.GIT_TERMINAL_PROMPT = "0";
+  env.GIT_OPTIONAL_LOCKS = "0";
   return env;
 }
+
+function withoutAlternateIndex() { return sanitizedEnvironment(); }
 
 function assertSynchronizedVersions(worktree, paths, version) {
   const manifests = paths.filter((path) => path.endsWith("package.json"));
@@ -346,14 +366,21 @@ function assertSynchronizedVersions(worktree, paths, version) {
   }
 }
 
-function assertVersionOnlyDiff(exec, worktree, changed, version) {
-  if (changed.length === 0) return;
-  const numstat = checked(exec, "git", ["diff", "HEAD", "--numstat", "--", ...changed], { cwd: worktree });
-  const rows = numstat.split("\n").filter(Boolean);
-  if (rows.length !== changed.length || rows.some((row) => !/^1\s+1\s+/.test(row))) {
-    fail("Version synchronization was not a one-line replacement in every metadata file.");
+export function assertVersionOnlyContent(before, after, path, version) {
+  if (path.endsWith("package.json")) {
+    const expected = { ...parseJson(before, path), version };
+    if (!isDeepStrictEqual(parseJson(after, path), expected)) fail(`${path} contains changes other than its version.`);
+  } else {
+    const expected = before.replace(/(PRODUCT_VERSION: string = )"[^"]*"/, `$1"${version}"`);
+    if (after.trim() !== expected.trim()) fail(`${path} contains changes other than its generated version.`);
   }
-  assertSynchronizedVersions(worktree, metadataPaths(worktree), version);
+}
+
+function assertVersionOnlyDiff(exec, worktree, changed, version) {
+  for (const path of changed) {
+    const before = checked(exec, "git", ["show", `HEAD:${path}`], { cwd: worktree });
+    assertVersionOnlyContent(before, readFileSync(join(worktree, path), "utf8"), path, version);
+  }
 }
 
 export function prepareCandidate({ exec = systemExec, worktree, version, offline = false, resume = false }) {
@@ -362,6 +389,7 @@ export function prepareCandidate({ exec = systemExec, worktree, version, offline
   else {
     const existing = changedFromHead(exec, worktree);
     ensureExactPaths(existing, allowed, "Resumed release checkpoint");
+    assertVersionOnlyDiff(exec, worktree, existing, version);
     const existingUntracked = checked(exec, "git", ["ls-files", "--others", "--exclude-standard"], { cwd: worktree });
     if (existingUntracked) fail(`Resumed release checkpoint has untracked files:\n${existingUntracked}`);
   }
@@ -399,10 +427,12 @@ export function prepareCandidate({ exec = systemExec, worktree, version, offline
   return { candidate, metadataCommit, changed };
 }
 
-function createWorktree(exec, repoRoot, source, version) {
+function createWorktree(exec, repoRoot, source, version, checkpointId) {
   const path = mkdtempSync(join(tmpdir(), `${identity.dirName}-release-${version}-`));
   rmdirSync(path);
   checked(exec, "git", ["worktree", "add", "--detach", path, source], { cwd: repoRoot });
+  const gitDir = checked(exec, "git", ["rev-parse", "--absolute-git-dir"], { cwd: path });
+  atomicJson(join(gitDir, "release-owner.json"), { checkpointId, source });
   return path;
 }
 
@@ -428,6 +458,55 @@ function validateJournal(journal, expected) {
   if (!STAGES.includes(journal.stage)) fail(`Checkpoint has unknown stage ${journal.stage}.`);
 }
 
+/** A candidate is the reviewed source or its single, version-only child. */
+export function validateCandidate(exec, { repoRoot, source, candidate, version }, requireVersion = true) {
+  if (!FULL_SHA_RE.test(source) || !FULL_SHA_RE.test(candidate)) fail("Checkpoint source/candidate is not a commit SHA.");
+  const parents = checked(exec, "git", ["rev-list", "--parents", "-n", "1", candidate], { cwd: repoRoot }).split(/\s+/);
+  if (parents[0] !== candidate || (candidate !== source && (parents.length !== 2 || parents[1] !== source))) {
+    fail("Candidate is not the reviewed source or its one metadata-only child.");
+  }
+  const tree = checked(exec, "git", ["ls-tree", "-r", "--name-only", source], { cwd: repoRoot }).split("\n");
+  const allowed = tree.filter((path) => path === "package.json" || /^packages\/[^/]+\/package\.json$/.test(path) || path === "packages/protocol/src/product.generated.ts");
+  const changed = checked(exec, "git", ["diff", "--name-only", source, candidate], { cwd: repoRoot }).split("\n").filter(Boolean);
+  ensureExactPaths(changed, allowed, "Candidate lineage");
+  if (candidate !== source || requireVersion) {
+    for (const path of allowed) {
+      const before = checked(exec, "git", ["show", `${source}:${path}`], { cwd: repoRoot });
+      const after = checked(exec, "git", ["show", `${candidate}:${path}`], { cwd: repoRoot });
+      assertVersionOnlyContent(before, after, path, version);
+    }
+  }
+}
+
+function validateOwnedWorktree(exec, journal) {
+  if (resolve(journal.worktree) === resolve(journal.repoRoot)) fail("Checkpoint cannot own the caller's checkout.");
+  const common = checked(exec, "git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: journal.worktree });
+  const gitDir = checked(exec, "git", ["rev-parse", "--absolute-git-dir"], { cwd: journal.worktree });
+  if (resolve(common) !== resolve(journal.commonDir) || resolve(gitDir) === resolve(common)) fail("Checkpoint worktree ownership changed.");
+  const marker = readJson(join(gitDir, "release-owner.json"), "worktree owner");
+  if (marker.checkpointId !== journal.id || marker.source !== journal.source) fail("Checkpoint does not own this worktree.");
+  const branch = exec("git", ["symbolic-ref", "-q", "HEAD"], { cwd: journal.worktree, allowCodes: [0, 1] });
+  if (branch.code !== 1) fail("Release worktree must remain detached.");
+  const head = checked(exec, "git", ["rev-parse", "HEAD"], { cwd: journal.worktree });
+  if (stageAtLeast(journal, "prepared") && head !== journal.candidate) fail("Checkpoint worktree HEAD moved after preparation.");
+  validateCandidate(exec, { ...journal, candidate: head }, stageAtLeast(journal, "prepared"));
+}
+
+export function validateWorkflowProof(exec, journal, kind) {
+  const id = journal[`${kind}RunId`];
+  if (!Number.isSafeInteger(id) || id <= 0) fail(`Checkpoint has no valid ${kind} workflow proof.`);
+  const run = ghApi(exec, `repos/${identity.repository}/actions/runs/${id}`);
+  const exact = selectWorkflowRun([run], {
+    workflowPath: kind === "ci" ? `.github/workflows/${CI_WORKFLOW}` : RELEASE_WORKFLOW_PATH,
+    event: "push", branch: kind === "ci" ? "main" : journal.tag, headSha: journal.candidate,
+  });
+  if (!exact || run.id !== id || run.status !== "completed" || run.conclusion !== "success" ||
+      Number(run.run_attempt ?? 1) < Number(journal[`${kind}RunAttempt`] ?? 1)) {
+    fail(`Recorded ${kind} workflow proof is no longer an exact successful run; resume after its current attempt succeeds.`);
+  }
+  journal[`${kind}RunAttempt`] = run.run_attempt ?? 1;
+}
+
 export function pushMain(exec, journal) {
   const current = remoteMain(exec, journal.repoRoot);
   if (current === journal.candidate) return false;
@@ -445,8 +524,13 @@ export function pushMain(exec, journal) {
 
 export async function waitForWorkflow({ exec, sleep, now, journal, workflow, workflowPath, branch, timeoutMinutes, onObserved }) {
   const deadline = now() + timeoutMinutes * 60_000;
+  const timedExec = (command, args, options = {}) => {
+    const remaining = deadline - now();
+    if (remaining <= 0) fail(`Timed out waiting for ${workflowPath} at ${journal.candidate}.`);
+    return exec(command, args, { ...options, timeoutMs: Math.min(5 * 60_000, remaining) });
+  };
   while (now() <= deadline) {
-    const run = selectWorkflowRun(workflowRuns(exec, workflow, branch), {
+    const run = selectWorkflowRun(workflowRuns(timedExec, workflow, branch), {
       workflowPath,
       event: "push",
       branch,
@@ -455,7 +539,7 @@ export async function waitForWorkflow({ exec, sleep, now, journal, workflow, wor
     if (run) {
       const id = run.id ?? run.databaseId;
       onObserved?.(run);
-      const detail = ghApi(exec, `repos/${identity.repository}/actions/runs/${id}`);
+      const detail = ghApi(timedExec, `repos/${identity.repository}/actions/runs/${id}`);
       const exact = selectWorkflowRun([detail], { workflowPath, event: "push", branch, headSha: journal.candidate });
       if (!exact) fail(`Workflow run ${id} changed identity while being inspected.`);
       if (detail.status === "completed") {
@@ -467,7 +551,7 @@ export async function waitForWorkflow({ exec, sleep, now, journal, workflow, wor
         return detail;
       }
     }
-    await sleep(10_000);
+    await sleep(Math.min(10_000, Math.max(0, deadline - now())));
   }
   fail(`Timed out waiting for ${workflowPath} at ${journal.candidate}.`);
 }
@@ -654,13 +738,15 @@ export async function runRelease(options, dependencies = {}) {
         frozenRemoteMain: frozen.frozenRemoteMain,
         stage: "created",
         createdAt: new Date().toISOString(),
-        worktree: createWorktree(exec, frozen.repoRoot, frozen.source, options.version),
+        worktree: createWorktree(exec, frozen.repoRoot, frozen.source, options.version, lock.checkpointId),
       };
       writeJournal(lock.journalPath, journal);
     }
     if (!existsSync(journal.worktree) && !stageAtLeast(journal, "verified")) {
       fail(`Checkpoint worktree is missing: ${journal.worktree}`);
     }
+    if (existsSync(journal.worktree)) validateOwnedWorktree(exec, journal);
+    if (stageAtLeast(journal, "prepared")) validateCandidate(exec, journal);
     if (!stageAtLeast(journal, "prepared")) {
       const prepared = prepareCandidate({
         exec,
@@ -670,6 +756,8 @@ export async function runRelease(options, dependencies = {}) {
         resume: options.resume,
       });
       Object.assign(journal, prepared);
+      if (journal.candidate !== journal.source) journal.metadataCommit = journal.candidate;
+      validateCandidate(exec, journal);
       writeJournal(lock.journalPath, journal, "prepared");
     }
     if (!stageAtLeast(journal, "main-pushed")) {
@@ -695,6 +783,8 @@ export async function runRelease(options, dependencies = {}) {
       journal.ciUrl = run.html_url;
       writeJournal(lock.journalPath, journal, "ci-passed");
     }
+    validateWorkflowProof(exec, journal, "ci");
+    writeJournal(lock.journalPath, journal);
     if (remoteMain(exec, journal.repoRoot) !== journal.candidate) fail("Remote main moved after source CI; refusing to tag.");
     if (!stageAtLeast(journal, "tag-pushed")) {
       journal.tagPushPerformed = ensureTag(exec, journal);
@@ -720,10 +810,10 @@ export async function runRelease(options, dependencies = {}) {
       journal.releaseUrl = run.html_url;
       writeJournal(lock.journalPath, journal, "release-passed");
     }
-    if (!stageAtLeast(journal, "verified")) {
-      journal.publication = verifyPublicRelease(exec, journal);
-      writeJournal(lock.journalPath, journal, "verified");
-    }
+    validateWorkflowProof(exec, journal, "release");
+    // A receipt is not a substitute for today's public asset/provenance facts.
+    journal.publication = verifyPublicRelease(exec, journal);
+    writeJournal(lock.journalPath, journal, "verified");
     if (existsSync(journal.worktree)) removeWorktree(exec, journal.repoRoot, journal.worktree);
     journal.worktreeRemoved = true;
     journal.completedAt = new Date().toISOString();

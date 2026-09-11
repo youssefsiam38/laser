@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   ReleaseError,
+  assertVersionOnlyContent,
+  validateCandidate,
+  validateWorkflowProof,
   acquireReleaseLock,
   parseArgs,
   preflight,
@@ -51,7 +54,7 @@ function dryRunExec({ apiError = false } = {}) {
       return ok(`${MAIN}\trefs/heads/main\n`);
     }
     if (command === "git" && args[0] === "ls-remote") return ok();
-    if (command === "gh" && args[0] === "api" && args[1].includes("/releases/tags/")) {
+    if (command === "gh" && args[0] === "release" && args[1] === "view") {
       return apiError ? { code: 1, stdout: "", stderr: "network unavailable" } : { code: 1, stdout: "", stderr: "HTTP 404: Not Found" };
     }
     if (command === "gh" && args[0] === "api" && args[1].includes("/actions/workflows/")) {
@@ -79,7 +82,7 @@ test("dry-run preflight performs no local or remote writes", () => {
   assert.equal(result.release, null);
   const writes = fake.calls.filter((call) =>
     (call[0] === "git" && ["add", "commit", "push", "tag", "worktree", "reset", "clean", "stash"].includes(call[1])) ||
-    (call[0] === "gh" && call[1] !== "api"),
+    (call[0] === "gh" && call[1] !== "api" && !(call[1] === "release" && call[2] === "view")),
   );
   assert.deepEqual(writes, []);
 });
@@ -355,7 +358,8 @@ test("public verification reuses inventory policy, hashes downloads and pins att
     if (command === "git" && args[0] === "ls-remote") {
       return ok(`${fixture.source}\trefs/tags/v${fixture.version}\n`);
     }
-    if (command === "gh" && args[0] === "api" && args[1].includes("/releases/tags/")) return ok(JSON.stringify(fixture.release));
+    if (command === "gh" && args[0] === "release" && args[1] === "view") return ok(JSON.stringify({ databaseId: fixture.release.id }));
+    if (command === "gh" && args[0] === "api" && args[1].endsWith("/releases/44")) return ok(JSON.stringify(fixture.release));
     if (command === "gh" && args[0] === "api" && args[1].endsWith("/releases/latest")) return ok(JSON.stringify({ id: fixture.release.id }));
     if (command === "gh" && args[0] === "release" && args[1] === "download") {
       const output = args[args.indexOf("--dir") + 1];
@@ -378,6 +382,10 @@ test("public verification reuses inventory policy, hashes downloads and pins att
     assert.equal(args[args.indexOf("--source-ref") + 1], `refs/tags/v${fixture.version}`);
     assert.equal(args[args.indexOf("--signer-workflow") + 1], `${identity.repository}/.github/workflows/release.yml`);
   }
+  fixture.release.assets = fixture.release.assets.filter((asset) => asset.name !== "install.sh");
+  assert.throws(() => verifyPublicRelease(exec, {
+    repoRoot: "/fixture", version: fixture.version, tag: `v${fixture.version}`, candidate: fixture.source,
+  }), /missing install.sh/);
   rmSync(fixture.directory, { recursive: true, force: true });
 });
 
@@ -386,6 +394,7 @@ test("public verification rejects an unexpected remote asset before download", (
   fixture.release.assets.push({ name: "unexpected.bin", size: 1, state: "uploaded", digest: `sha256:${"a".repeat(64)}` });
   const exec = (command, args) => {
     if (command === "git") return ok(`${fixture.source}\trefs/tags/v${fixture.version}\n`);
+    if (command === "gh" && args[0] === "release" && args[1] === "view") return ok(JSON.stringify({ databaseId: fixture.release.id }));
     if (command === "gh" && args[0] === "api") return ok(JSON.stringify(fixture.release));
     throw new Error("download must not start");
   };
@@ -398,7 +407,8 @@ test("public verification rejects an unexpected remote asset before download", (
 test("post-publication workflow failure reports publication truth without editing it", () => {
   const exec = (command, args) => {
     assert.equal(command, "gh");
-    assert.deepEqual(args.slice(0, 2), ["api", `repos/${identity.repository}/releases/tags/v0.3.8`]);
+    if (args[0] === "release" && args[1] === "view") return ok(JSON.stringify({ databaseId: 44 }));
+    assert.deepEqual(args.slice(0, 2), ["api", `repos/${identity.repository}/releases/44`]);
     return ok(JSON.stringify({ draft: false }));
   };
   assert.equal(publicationState(exec, { tag: "v0.3.8", stage: "tag-pushed" }), "published; deployment incomplete");
@@ -407,9 +417,87 @@ test("post-publication workflow failure reports publication truth without editin
 
 test("an unpublished in-progress release reports building state from its recorded run", () => {
   const exec = (command, args) => {
-    if (args[1].includes("/releases/tags/")) return { code: 1, stdout: "", stderr: "HTTP 404: Not Found" };
+    if (args[0] === "release" && args[1] === "view") return { code: 1, stdout: "", stderr: "release not found" };
     if (args[1].includes("/actions/runs/71")) return ok(JSON.stringify({ status: "in_progress", conclusion: null }));
     throw new Error(`unexpected: ${command} ${args.join(" ")}`);
   };
   assert.equal(publicationState(exec, { tag: "v0.3.8", stage: "tag-pushed", releaseRunId: 71 }), "tag pushed; release workflow in_progress");
+});
+
+
+test("non-404 Not Found errors remain fatal and private drafts stay visible", () => {
+  const fake = dryRunExec();
+  const unavailable = (command, args, options) => args[0] === "release" && args[1] === "view"
+    ? { code: 1, stdout: "", stderr: "HTTP 503: Not Found upstream" } : fake.exec(command, args, options);
+  assert.throws(() => preflight({ exec: unavailable, repoRoot: "/fixture", version: "0.3.8", source: SHA }), /not evidence of absence/);
+  const draft = (command, args) => args[0] === "release" ? ok('{"databaseId":44}') : ok('{"draft":true}');
+  assert.equal(publicationState(draft, { tag: "v0.3.8", stage: "tag-pushed" }), "tag pushed; release draft remains private");
+});
+
+test("manifest validation rejects non-version changes before install on resume", () => {
+  assert.throws(() => assertVersionOnlyContent('{"version":"0.3.7","scripts":{"test":"test"}}', '{"version":"0.3.8","scripts":{"test":"skip"}}', "package.json", "0.3.8"), /other than/);
+  const root = makePreparationRepo("0.3.8");
+  writeFileSync(join(root, "package.json"), '{"version":"0.3.8","description":"not reviewed"}');
+  const observations = [];
+  assert.throws(() => prepareCandidate({ exec: preparationExec(root, "0.3.8", observations), worktree: root, version: "0.3.8", resume: true }), /other than/);
+  assert.equal(observations.length, 0);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("all Git operations ignore and preserve a caller alternate index", () => {
+  const root = makePreparationRepo("0.3.7");
+  const alternate = join(root, "alternate-index");
+  cpSync(join(root, ".git", "index"), alternate);
+  // Keep the alternate outside the worktree so it is not an untracked input.
+  const external = temp("release-index");
+  const index = join(external, "index");
+  cpSync(alternate, index); rmSync(alternate);
+  const before = readFileSync(index);
+  const previous = process.env.GIT_INDEX_FILE;
+  try {
+    process.env.GIT_INDEX_FILE = index;
+    prepareCandidate({ exec: preparationExec(root, "0.3.8", []), worktree: root, version: "0.3.8" });
+    assert.deepEqual(readFileSync(index), before);
+  } finally {
+    if (previous === undefined) delete process.env.GIT_INDEX_FILE; else process.env.GIT_INDEX_FILE = previous;
+    rmSync(root, { recursive: true, force: true }); rmSync(external, { recursive: true, force: true });
+  }
+});
+
+test("subprocess and workflow requests have finite remaining budgets", async () => {
+  assert.throws(() => systemExec(process.execPath, ["-e", "setTimeout(()=>{},10000)"], { timeoutMs: 20 }), /ETIMEDOUT/);
+  let budget;
+  await assert.rejects(waitForWorkflow({
+    exec(_command, _args, options) { budget = options.timeoutMs; throw new Error("timed request"); },
+    sleep: async () => {}, now: () => 0, journal: { candidate: SHA }, workflow: "ci.yml",
+    workflowPath: ".github/workflows/ci.yml", branch: "main", timeoutMinutes: 0.01,
+  }), /timed request/);
+  assert.equal(budget, 600);
+});
+
+test("candidate lineage rejects a moved or unrelated synchronized-version HEAD", () => {
+  const root = makePreparationRepo("0.3.8");
+  const source = git(root, "rev-parse", "HEAD");
+  validateCandidate(systemExec, { repoRoot: root, source, candidate: source, version: "0.3.8" });
+  writeFileSync(join(root, "unreviewed.txt"), "not version metadata");
+  git(root, "add", "unreviewed.txt"); git(root, "commit", "-m", "unreviewed");
+  const candidate = git(root, "rev-parse", "HEAD");
+  assert.throws(() => validateCandidate(systemExec, { repoRoot: root, source, candidate, version: "0.3.8" }), /outside release metadata/);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("resume rejects stale CI proof and may adopt a newer successful attempt", () => {
+  const journal = { candidate: SHA, ciRunId: 17, ciRunAttempt: 1 };
+  const run = { id: 17, path: ".github/workflows/ci.yml", event: "push", head_branch: "main", head_sha: SHA, run_attempt: 2, status: "completed", conclusion: "cancelled" };
+  assert.throws(() => validateWorkflowProof(() => ok(JSON.stringify(run)), journal, "ci"), /no longer/);
+  run.conclusion = "success";
+  validateWorkflowProof(() => ok(JSON.stringify(run)), journal, "ci");
+  assert.equal(journal.ciRunAttempt, 2);
+});
+
+test("origin diagnostics never print embedded credentials", () => {
+  const fake = dryRunExec();
+  const exec = (command, args, options) => command === "git" && args[0] === "remote"
+    ? ok(`https://secret-token@github.com/${identity.repository}.git`) : fake.exec(command, args, options);
+  assert.throws(() => preflight({ exec, repoRoot: "/fixture", version: "0.3.8", source: SHA }), error => !error.message.includes("secret-token") && error.message.includes("origin does not match"));
 });
