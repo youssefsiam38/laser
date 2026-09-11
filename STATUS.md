@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-11T09:45:08Z · orchestrator-release-subset · HEAD: 4acae2e (+ release ledger)
+**Last updated:** 2026-09-11T10:19:49Z · orchestrator · HEAD: 2bc89d6
 
-**Current focus:** M13-T107 — release0.3.7 with reviewed T101 instruction highlighting and T103 full-span timing only; other changes preserved for the next batch.
+**Current focus:** v0.3.7 published with T101/T103 only. T102 merged for next release; T104/T105/T106 continue isolated, T108 investigates empty-session recovery.
 
 ## Milestones
 
@@ -24,12 +24,12 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M10 Distribution | in-progress | in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
 | M12 Product experience | done | 0.2.13 dispatched |
-| M13 Agents Leap | in-progress | T107 release gates; T101/T103 included; other work excluded; 0.3.6 published; T99/T100 follow-ups recorded |
+| M13 Agents Leap | in-progress | 0.3.7 published; T102 integrated; T104–T106 active, T108 investigating |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
 
-- M13-T104: implementation waits for M13-T102’s reviewed/integrated transaction interface.
+None in the active batch. T102 fixes verified; T104/T106 unblocked in isolated worktrees.
 
 ## Next up
 
@@ -39,8 +39,8 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Recently done
 
-- M13-T101: highlighted instructions and parser-correct variable inspection (`4acae2e`); review APPROVE, protocol/UI checks and browser proof.
-- M13-T103: full-span activity timing (`3bdacf5`), review APPROVE; 34 post-merge tests and live phone/desktop proof.
-- M13-T94: 0.3.6 Latest at `dc11c4d`; CI 34571854176 and release 34572122489 passed; 12 verified assets, attestation and feeds (D-194).
-- M13-T98: queued-completion ownership on the real engine and the identified packaged worker (`82fe0d5`…`46e6e19`, 14 real-engine tests, packaged 91/91, review + re-review APPROVE).
-- M13-T93: extension admission A/C and causal attribution (`db52a6b`, review APPROVE).
+- M13-T102: integrated `2bc89d6`; both review findings fixed, postmerge44worker+30UI/build/typecheck pass; next release only.
+- M13-T107: v0.3.7 Latest at `8577bef`; source/release CI green,12 public assets/digests and offline attestation verified.
+- M13-T101: highlighted instructions and variable inspection (`4acae2e`); review, tests and responsive browser proof.
+- M13-T103: full-span activity timing (`3bdacf5`); review,34 focused tests and live responsive proof.
+- M13-T94: v0.3.6 at `dc11c4d`; CI/release/assets/feeds verified (D-194).
