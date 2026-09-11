@@ -110,6 +110,8 @@ export interface WorktreeProvider {
 /** What a child is told when it stops without its final tool. */
 export const NUDGE_TEXT = "You stopped without calling complete_agent_run. Call complete_agent_run now with status completed or blocked and your final message.";
 const ENDED_WITHOUT_TOOL = "Ended without complete_agent_run";
+/** Why a run ends when the engine took its one message without starting a model turn (a handled slash command). */
+export const HANDLED_WITHOUT_TURN = "Handled without a model turn.";
 const RESULT_EXCERPT = 2000;
 const QUESTION_SUMMARY_EXCERPT = 80;
 const ROLE_TASK_EXCERPT = 2000;
@@ -1671,6 +1673,12 @@ export class AgentHarness {
     let failure: string | undefined;
     let thrown: unknown;
     let accepted = false;
+    // With an exact epoch from the driver, the harness can tell whether the
+    // engine ever started a turn under this invocation: `turn_start` counts
+    // toward the run only when its stamp is owned. Without one (legacy and
+    // fake drivers), that is unknowable here and stays undecided.
+    let stamped = false;
+    const turnsBefore = state.run.activity?.turns ?? 0;
     const acceptedObserver = () => {
       accepted = true;
       this.diagnose(entry, "info", "invocation-accepted", { runId: state.run.runId, phase: entry.lifecycle.phase().kind });
@@ -1689,6 +1697,7 @@ export class AgentHarness {
               if (!entry.lifecycle.bindInvocation(state.run.runId, invocation)) {
                 throw new HarnessError("The prompt invocation lost session ownership before it could start.");
               }
+              stamped = true;
               options?.onInvocation?.(invocation);
             },
             onAccepted: acceptedObserver,
@@ -1699,23 +1708,31 @@ export class AgentHarness {
       thrown = error;
       failure = error instanceof Error ? error.message : String(error);
     }
-    await this.withEntry(entry, () => this.afterInvocation(entry, state, result, failure));
+    const modelWork = stamped ? (state.run.activity?.turns ?? 0) > turnsBefore : undefined;
+    await this.withEntry(entry, () => this.afterInvocation(entry, state, result, failure, modelWork));
     if (thrown !== undefined) throw thrown;
     return result;
   }
 
+  /**
+   * The invocation's promise resolved: the one engine-ready fence. `modelWork`
+   * says whether the engine started a turn under it — `false` only when the
+   * driver stamped the invocation and no turn was counted, `undefined` when
+   * that cannot be known.
+   */
   private afterInvocation(
     entry: Entry,
     state: RunState,
     result: { accepted: boolean; queued: boolean },
     failure?: string,
+    modelWork?: boolean,
   ): void {
     const boundary = entry.lifecycle.finish(state.run.runId);
     if (!boundary) {
       this.diagnose(entry, "info", "late-invocation-ignored", { runId: state.run.runId, owner: entry.lifecycle.owner(), status: state.run.status });
       return;
     }
-    this.diagnose(entry, "info", "invocation-finished", { runId: state.run.runId, accepted: result.accepted, settled: boundary.settled, declared: boundary.end?.status, status: state.run.status });
+    this.diagnose(entry, "info", "invocation-finished", { runId: state.run.runId, accepted: result.accepted, settled: boundary.settled, declared: boundary.end?.status, status: state.run.status, modelWork });
     if (isTerminalRunStatus(state.run.status)) return;
     const end = boundary.end ?? (!result.accepted
       ? { status: "failed" as const, outcome: { error: failure ?? "The agent's session refused the task because it was busy." } }
@@ -1736,7 +1753,23 @@ export class AgentHarness {
       this.kickMessage(state, next);
       return;
     }
-    if (boundary.settled) this.settled(entry, state);
+    if (boundary.settled) {
+      this.settled(entry, state);
+      return;
+    }
+    if (modelWork !== false) return;
+    // The engine took the message and ran no model work on it — a slash
+    // command its `input` hook handled — and nothing else waits. A run that
+    // never saw a turn is a record of nothing: it ends quietly, in the
+    // neutral word (Ended, not Failed), and its parent, which was never told
+    // it began, is not woken for it. A run that did work earlier and settled
+    // without the tool is judged as such: the command changed nothing.
+    if ((state.run.activity?.turns ?? 0) > 0) {
+      this.settled(entry, state);
+      return;
+    }
+    this.diagnose(entry, "info", "handled-without-turn", { runId: state.run.runId, origin: state.run.origin });
+    this.finalizePendingEnd(entry, state, { status: "cancelled", outcome: { endedBy: { initiator: "harness", reason: HANDLED_WITHOUT_TURN } } }, { wakeParent: false });
   }
 
   /**
@@ -1862,22 +1895,28 @@ export class AgentHarness {
     }
   }
 
-  private finalizePendingEnd(entry: Entry, state: RunState, pending: RunEnd): void {
+  /**
+   * Publish a run's end at the fence — the only place a reserved successor is
+   * taken, so every ending of an owner passes through here. `wakeParent:
+   * false` ends a run its parent was never told about without a model event.
+   */
+  private finalizePendingEnd(entry: Entry, state: RunState, pending: RunEnd, options: { wakeParent?: boolean } = {}): void {
     if (isTerminalRunStatus(state.run.status)) return;
+    const wakeParent = options.wakeParent ?? true;
     const successor = entry.lifecycle.takeSuccessor();
     const queued = successor ? this.runStates.get(successor.runId) : undefined;
     const live = queued !== undefined && !isTerminalRunStatus(queued.run.status);
     this.diagnose(entry, "info", "terminal-published", { runId: state.run.runId, status: pending.status, successor: queued?.run.runId, successorLive: live, delayedParent: live });
     // Publish the old terminal history first, but delay its parent wake until
     // the already-accepted resume has become the session's canonical live run.
-    this.endRun(state, pending.status, pending.outcome, live);
+    this.endRun(state, pending.status, pending.outcome, live, wakeParent);
     if (queued && live) {
       this.touch(queued, (run) => ({ ...run, status: "running" }));
       this.activateRun(entry, queued);
       this.diagnose(entry, "info", "successor-activated", { runId: queued.run.runId, predecessor: state.run.runId, inbox: entry.lifecycle.inbox(queued.run.runId).length + (successor?.first ? 1 : 0) });
       if (successor?.first) this.kickMessage(queued, successor.first);
       else this.kick(queued, queued.task);
-      if (state.run.parent) this.notifyParent(state.run, pending.outcome.context);
+      if (state.run.parent && wakeParent) this.notifyParent(state.run, pending.outcome.context);
     }
   }
 
@@ -1912,6 +1951,7 @@ export class AgentHarness {
     status: AgentRunTerminalStatus,
     outcome: { result?: { status: "completed" | "blocked"; message: string }; error?: string; endedBy?: { initiator: AgentRunInitiator; reason?: string }; context?: string },
     delayParent = false,
+    wakeParent = true,
   ): void {
     if (isTerminalRunStatus(state.run.status)) return;
     const endedAt = this.iso();
@@ -1959,7 +1999,7 @@ export class AgentHarness {
       for (const pending of leftovers) settlePending(pending, reason);
     }
     entry?.lifecycle.didTerminate(run.runId);
-    if (!delayParent) this.notifyParent(run, outcome.context);
+    if (!delayParent && wakeParent) this.notifyParent(run, outcome.context);
   }
 
   // ------------------------------------------------------------- questions

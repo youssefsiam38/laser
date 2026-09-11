@@ -219,7 +219,12 @@ is the parent told. Every ending of an owning run publishes through that
 same fence and takes the successor — the tool's declaration, a stop, a
 settle without the tool, the failed nudge — so a run reserved while the
 owner had settled but was not yet fenced is started by the ending, never
-left waiting for nobody. Late callbacks stamped with the finished invocation's
+left waiting for nobody. A run created for a message the engine handled
+without a model turn (a slash command its `input` hook consumed, typed into
+an idle child's chat) ends the moment its prompt resolves: `cancelled`,
+`initiator: "harness"`, reason "Handled without a model turn." — the fleet's
+neutral *Ended* — and its parent, never told it began, is not woken for it.
+Late callbacks stamped with the finished invocation's
 epoch are dropped, and never touch the successor. If the session closes
 during the window, the declared result is still what the run ends with; the
 successor that never started fails with "The agent's session closed before

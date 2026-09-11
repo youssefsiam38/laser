@@ -25,7 +25,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PRODUCT_NAME, SESSION_AGENT_ENTRY_TYPE, type AgentRun, type JsonRpcMessage, type SessionUpdate } from "@lasercode/protocol";
 import type { AgentHarnessBridge, AgentModelEvent, CompleteRunResult } from "../../src/agents/bridge.js";
 import { fallbackSnapshot } from "../../src/agents/definitions.js";
-import { NUDGE_TEXT } from "../../src/agents/harness.js";
+import { HANDLED_WITHOUT_TURN, NUDGE_TEXT } from "../../src/agents/harness.js";
 import { rootRecord, rootRole } from "../../src/agents/session-config.js";
 import type { DriverInvocationRef } from "../../src/driver.js";
 import { StableSdkDriver } from "../../src/drivers/stable-sdk.js";
@@ -1288,5 +1288,43 @@ describe("queued completion ownership against the real engine", () => {
     expect(parentEvents.map((entry) => [entry.event.type, entry.event.runId])).toEqual([["agent.completed", started.runId], ["agent.completed", successor.runId]]);
     assertNoOverlappingInvocations();
     expectNoBodiesInModuleLogs(["Start background work.", OUTPUT, "old done", "successor done"]);
+  }, 60_000);
+
+  it("ends the run a handled slash command created without a model turn, quietly and without waking the parent", async () => {
+    // F4: a person types a command Pi's `input` hook handles (`/goal pause`
+    // with no goal) into an idle child's chat. The prompt is admitted with a
+    // run of its own, the engine accepts it and runs nothing, and the prompt
+    // resolves. The run must not be left `running` with nothing executing:
+    // it ends in the neutral word, with its reason, and the parent — never
+    // told it began — hears nothing.
+    provider.route(() => ({ text: "ok" }));
+    const reply = await call("session/prompt", { path: childPath, content: [{ type: "text", text: "/goal pause" }] });
+    expect(reply.error).toBeUndefined();
+    expect(reply.result).toEqual({ accepted: true, queued: false });
+    const runs = server.agents().runs().filter((run) => run.sessionPath === childPath);
+    expect(runs).toHaveLength(1);
+    const [run] = runs;
+    expect(run).toMatchObject({ origin: "user", status: "cancelled", endedBy: { initiator: "harness", reason: HANDLED_WITHOUT_TURN } });
+    expect(run!.activity?.turns ?? 0).toBe(0);
+    expect(server.agents().activeRun(childPath)).toBeUndefined();
+    expect(server.agents().sessionInfo(childPath)).toMatchObject({ runId: run!.runId, runStatus: "cancelled" });
+    expect(liveDriver.state().isStreaming).toBe(false);
+    expect(provider.requests).toHaveLength(0);
+    expect(driverEvents.filter((event) => event.kind === "agent_start")).toEqual([]);
+    // The fleet's word is Ended, with the reason as its line — not Failed.
+    const fleet = await parentBridge.inspectFleet();
+    expect(fleet.rows[0]).toMatchObject({ kind: "agent", runId: run!.runId, state: "cancelled", status: "Ended", line: HANDLED_WITHOUT_TURN });
+    expect(parentEvents).toEqual([]);
+    expect(lifecycleLogs().some((log) => log.line.includes(`handled-without-turn runId=${run!.runId} origin=user`))).toBe(true);
+    expect(lifecycleLogs().some((log) => log.line.includes(`invocation-finished runId=${run!.runId} accepted=true settled=false`) && log.line.includes("modelWork=false"))).toBe(true);
+    // The session is idle and whole: an ordinary prompt starts a fresh run.
+    const next = await call("session/prompt", { path: childPath, content: [{ type: "text", text: "Now do something." }] });
+    expect(next.error).toBeUndefined();
+    const fresh = server.agents().runs().filter((candidate) => candidate.sessionPath === childPath);
+    expect(fresh).toHaveLength(2);
+    expect(fresh[1]!.runId).not.toBe(run!.runId);
+    expect(provider.requests).toHaveLength(1);
+    assertNoOverlappingInvocations();
+    expectNoBodiesInModuleLogs(["/goal pause", "Now do something."]);
   }, 60_000);
 });
