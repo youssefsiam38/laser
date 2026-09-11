@@ -44,10 +44,11 @@
  *     once opened; the person's toggle wins over that default and is
  *     remembered per device.
  *   - **The settled ones fold again**, into a second disclosure beneath the
- *     live ones, closed by default and dimmed when open. It names how many and
- *     how many failed, and a failed child keeps its normal ink and its danger
- *     dot inside it: dimming must never be the reason you cannot find the one
- *     that went wrong.
+ *     live ones, closed by default and dimmed when open. It names how many
+ *     finished and nothing else — a child that ended with an error is finished
+ *     work, not an alarm for the session above it — while that child keeps its
+ *     normal ink and its own quiet mark inside the fold: dimming must never be
+ *     the reason you cannot find the one that went wrong.
  *   - A branch is "settled" only when its whole subtree is, so an ended child
  *     that still has a working grandchild stays with the live ones — the fleet
  *     sheet's rule (docs/ux-elements.md "Subagent list"), for the same reason:
@@ -166,10 +167,6 @@ export interface BranchInfo {
   finished: readonly ThreadListNode[];
   /** How many rows the finished fold holds, at every depth. */
   finishedRows: number;
-  /** How many finished-fold rows failed. Named on that fold. */
-  finishedFailed: number;
-  /** Every failed run below this row, including a live branch's parent. */
-  failed: number;
   /** Every row beneath this one, at every depth. */
   total: number;
   running: number;
@@ -404,8 +401,6 @@ function branchInfoOf(groups: readonly ThreadListGroup[], runs: Readonly<Record<
     return status !== undefined && SETTLED_RUN.has(status) && node.children.every(settled);
   };
   const rows = (node: ThreadListNode): number => 1 + node.children.reduce((n, child) => n + rows(child), 0);
-  const failures = (node: ThreadListNode): number =>
-    (statusOf(node) === "failed" ? 1 : 0) + node.children.reduce((n, child) => n + failures(child), 0);
 
   const walk = (node: ThreadListNode): void => {
     node.children.forEach(walk);
@@ -417,14 +412,12 @@ function branchInfoOf(groups: readonly ThreadListGroup[], runs: Readonly<Record<
     let running = 0;
     let blocked = 0;
     let waiting = 0;
-    let failed = 0;
     const tally = (child: ThreadListNode): void => {
       total += 1;
       const status = statusOf(child);
       if (status === "running") running += 1;
       else if (status === "needs_input") blocked += 1;
       else if (status === "queued" || status === undefined) waiting += 1;
-      else if (status === "failed") failed += 1;
       child.children.forEach(tally);
     };
     node.children.forEach(tally);
@@ -432,8 +425,6 @@ function branchInfoOf(groups: readonly ThreadListGroup[], runs: Readonly<Record<
       live,
       finished,
       finishedRows: finished.reduce((n, child) => n + rows(child), 0),
-      finishedFailed: finished.reduce((n, child) => n + failures(child), 0),
-      failed,
       total,
       running,
       blocked,
@@ -449,32 +440,24 @@ function branchInfoOf(groups: readonly ThreadListGroup[], runs: Readonly<Record<
 }
 
 /**
- * What a parent disclosure still inherits from its agents (M15-T4).
+ * The one state a parent disclosure still inherits from its agents (M15-T4).
  *
  * A row's mark is its *own* state: a session whose child is working is not
  * itself working, and a row that wore its descendants' states made a parent
  * and every ancestor above it look busy for work none of them were doing.
- * `live` and `muted` are gone for that reason — work that is *going* is
- * visible on the rows doing it, one disclosure away.
+ * A child's **failure** is not the parent's either — the parent did not fail;
+ * a child came back with a failed result, which may be exactly the answer the
+ * parent asked for — so it stays on the child, and the fold's own words count
+ * it if anyone reads them.
  *
- * Two states survive, and only while the branch is **folded**, because folded
- * is exactly when they have nowhere else to appear (D-186, DESIGN.md
- * "Sessions"):
- *   - `attention` — a child is paused on a question. A question a person has
- *     to answer is the one thing that must never hide (docs/ux-fleet.md).
- *   - `danger` — a child failed. A failed run is *settled*, so it sits inside
- *     the finished fold, inside a branch with no live work left, which is two
- *     closed folds deep: without this mark a failure has no visual trace at
- *     all, and a tooltip is not something anyone scans.
- *
- * The difference in kind shows in the motion, not just the colour: the
- * question pulses, because someone is waiting; the failure is still, because
- * nothing is happening and a moving mark would read as live work.
+ * One state survives, and only while the branch is **folded**, because folded
+ * is exactly when it has nowhere else to appear: `attention`, a child paused
+ * on a question. A question a person has to answer is the one thing that must
+ * never hide (docs/ux-fleet.md, "Questions"). It pulses, because someone is
+ * waiting.
  */
 export function branchTone(info: BranchInfo): AgentStatusTone | undefined {
-  if (info.blocked > 0) return "attention";
-  if (info.failed > 0) return "danger";
-  return undefined;
+  return info.blocked > 0 ? "attention" : undefined;
 }
 
 /** The whole picture, for the disclosure and row tooltips: every count. */
@@ -484,29 +467,24 @@ export function branchSummary(info: BranchInfo): string {
   if (info.blocked > 0) parts.push(`${info.blocked} needs you`);
   if (info.waiting > 0) parts.push(`${info.waiting} waiting`);
   const done = info.total - info.running - info.blocked - info.waiting;
-  if (done > 0) parts.push(info.failed > 0 ? `${done} finished, ${info.failed} of them failed` : `${done} finished`);
+  if (done > 0) parts.push(`${done} finished`);
   return `${info.total} agent${info.total === 1 ? "" : "s"} under this session${parts.length > 0 ? `: ${parts.join(", ")}` : ""}`;
 }
 
 /**
- * A folded branch that is hiding a question or a failure, marked in the
- * disclosure's own gutter — never a width-taking tag, and never any other
- * descendant state (see {@link branchTone}). The disclosure's accessible name
- * carries the complete words and counts; this only says "something under here
- * is asking" or "something under here went wrong". The question pulses; the
- * failure is static, because it is finished. Reduced motion keeps colour and
- * the spoken counts, and loses the pulse.
+ * A folded branch that is hiding a question, marked in the disclosure's own
+ * gutter — never a width-taking tag, and never any other descendant state
+ * (see {@link branchTone}). The disclosure's accessible name carries the
+ * complete words and counts; this only says "something under here is asking".
+ * Reduced motion keeps the colour and the spoken counts, and loses the pulse.
  */
-function BranchStatusMark({ tone }: { tone: Extract<AgentStatusTone, "attention" | "danger"> }) {
+function BranchStatusMark({ tone }: { tone: Extract<AgentStatusTone, "attention"> }) {
   return (
     <span
       aria-hidden="true"
       data-slot="session-fold-status"
       data-tone={tone}
-      className={cn(
-        "absolute end-0 top-1 inline-block size-2 rounded-full bg-(--dot)",
-        tone === "attention" && "motion-safe:animate-attention",
-      )}
+      className="absolute end-0 top-1 inline-block size-2 rounded-full bg-(--dot) motion-safe:animate-attention"
       style={{ "--dot": TONE_COLOR[tone] } as React.CSSProperties}
     />
   );
@@ -880,10 +858,10 @@ function SessionBranch({ node, editing, onEdit, onOpen }: BranchProps) {
             )}
           >
             <ChevronRight aria-hidden="true" className={cn("size-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none", open && "rotate-90")} />
-            {/* Only while the branch is closed, and only for a question or a
-                failure: an open branch shows the children wearing their own
-                marks, so the parent has nothing of its own left to say. */}
-            {!open && (branchStatusTone === "attention" || branchStatusTone === "danger") ? <BranchStatusMark tone={branchStatusTone} /> : null}
+            {/* Only while the branch is closed, and only for a question: an
+                open branch shows the children wearing their own marks, so the
+                parent has nothing of its own left to say. */}
+            {!open && branchStatusTone === "attention" ? <BranchStatusMark tone={branchStatusTone} /> : null}
           </button>
         )}
         <ThreadListPrimitive.ItemByIndex key={threadIds[node.index]} index={node.index} components={{ ThreadListItem: itemComponent(editing, onEdit, onOpen) }} />
@@ -926,8 +904,10 @@ function FinishedFold({ parent, info, editing, onEdit, onOpen }: { parent: Threa
       <CollapsibleTrigger
         data-slot="finished-fold"
         // Several branches can show "3 finished" at once, so the name says
-        // whose, and says out loud what the red count says in colour.
-        aria-label={`${open ? "Hide" : "Show"} the ${info.finishedRows === 1 ? "finished agent" : `${info.finishedRows} finished agents`} under ${parent.label}${info.finishedFailed > 0 ? `, ${info.finishedFailed} failed` : ""}`}
+        // whose. It says nothing about how those runs ended: finished work is
+        // history, and a child that ended with an error is the child's news,
+        // carried on the child's own row inside the fold.
+        aria-label={`${open ? "Hide" : "Show"} the ${info.finishedRows === 1 ? "finished agent" : `${info.finishedRows} finished agents`} under ${parent.label}`}
         className={cn(
           "group/finished flex h-7 w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1 text-start text-ink-3 outline-none",
           "transition-colors duration-(--motion-instant) hover:bg-surface-2 hover:text-ink-2 active:bg-surface-2 motion-reduce:transition-none",
@@ -938,11 +918,6 @@ function FinishedFold({ parent, info, editing, onEdit, onOpen }: { parent: Threa
         <span className="min-w-0 truncate text-xs leading-4">
           <span className="tnum">{info.finishedRows}</span> finished
         </span>
-        {info.finishedFailed > 0 && (
-          <span data-slot="finished-failed" className="shrink-0 text-xs leading-4 text-danger">
-            <span className="tnum">{info.finishedFailed}</span> failed
-          </span>
-        )}
       </CollapsibleTrigger>
       <CollapsibleContent className={collapsePanel}>
         <LayoutContext value={dimmedLayout}>
@@ -1156,17 +1131,25 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
   const stateTone: AgentStatusTone | undefined = row.runStatus !== undefined ? runStatusTone(row.runStatus) : undefined;
   // One indicator per row, before the name, saying what *this* session is
   // doing (M15-T4). A live run speaks first, because it is the loudest thing
-  // this session can be, and so does a **failed** one: a run that has just
-  // failed usually leaves the session `finished_unread`, and letting unread
-  // win there would paint a failure green. Otherwise the session's own
-  // attention state speaks (unread, waiting, error, or working for a session
-  // with no run of its own), and a quiet settled child falls back to its run's
-  // terminal mark. Never two marks, never a second one at the row's end, and
-  // never a descendant's state.
+  // this session can be, and so does a run that ended with an error: that
+  // usually leaves the session `finished_unread`, and letting unread win there
+  // would leave the row with no trace of how it ended at all. Otherwise the
+  // session's own attention state speaks (unread, waiting, error, or working
+  // for a session with no run of its own), and a quiet settled child falls
+  // back to its run's terminal mark. Never two marks, never a second one at
+  // the row's end, and never a descendant's state.
   const rowStatus: Status = archived ? "idle" : row.status;
+  const errored = row.runStatus === "failed";
   const runMark =
-    row.child && row.runStatus !== undefined && stateTone !== undefined ? <RunDot status={row.runStatus} tone={stateTone} /> : null;
-  const runSpeaks = runMark !== null && (activeRun || (row.runStatus === "failed" && !archived));
+    row.child && row.runStatus !== undefined && stateTone !== undefined ? (
+      // A child that ended with an error is *finished work*, not an alarm: it
+      // wears the quiet terminal tone the other finished runs wear, hollow so
+      // it is still tellable apart from a clean one at a glance, and it says
+      // in words what it is. Red here made a result the parent may well have
+      // asked for look like something broke in the app.
+      <RunDot status={row.runStatus} tone={errored ? "muted" : stateTone} {...(errored ? { label: ERRORED_RUN_LABEL, hollow: true } : {})} />
+    ) : null;
+  const runSpeaks = runMark !== null && (activeRun || (errored && !archived));
   const activity = runSpeaks ? runMark : rowStatus !== "idle" ? <SessionActivity status={rowStatus} /> : runMark;
   // Inside the finished fold the row quiets down — but a failure keeps its ink
   // and its dot, and so does the session you are reading right now.
@@ -1249,20 +1232,29 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
   );
 };
 
+/** What a run that ended with an error says on its row. Never "failed", in red. */
+const ERRORED_RUN_LABEL = "Finished with an error";
+
 /**
  * A child row's dot: its run's status in the tone `runStatusTone` names, with
  * the shared sweep while it works and the attention pulse only while it is
- * live and asking. Reduced motion keeps the colour and accessible name.
+ * live and asking. `hollow` draws the same dot as a ring — the treatment
+ * `StatusDot` gives finished-unread — for a terminal state that wants telling
+ * apart without a louder colour. Reduced motion keeps colour and the name.
  */
-function RunDot({ status, tone }: { status: AgentRunStatus; tone: AgentStatusTone }) {
+function RunDot({ status, tone, label, hollow = false }: { status: AgentRunStatus; tone: AgentStatusTone; label?: string; hollow?: boolean }) {
   const color = TONE_COLOR[tone === "muted" ? "neutral" : tone];
   return (
     <span
       role="img"
-      aria-label={runStatusLabel(status)}
+      aria-label={label ?? runStatusLabel(status)}
       data-slot="run-dot"
       data-run-status={status}
-      className={cn("relative inline-block size-2 shrink-0 rounded-full bg-(--dot)", status === "needs_input" && "motion-safe:animate-attention")}
+      className={cn(
+        "relative inline-block size-2 shrink-0 rounded-full",
+        hollow ? "bg-transparent shadow-[inset_0_0_0_1.5px_var(--dot)]" : "bg-(--dot)",
+        status === "needs_input" && "motion-safe:animate-attention",
+      )}
       style={{ "--dot": color } as React.CSSProperties}
     >
       {status === "running" && (
