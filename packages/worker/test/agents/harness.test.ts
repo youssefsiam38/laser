@@ -38,7 +38,9 @@ class FakeDriver implements SessionDriver {
   abortAwaitsPrompt = false;
   abortRejects = false;
   clearQueueRejects = false;
+  /** Pi's two lanes, as `clearQueue()` reports them: texts in queue order, drained front to back. */
   private engineSteers: string[] = [];
+  private engineFollowUps: string[] = [];
   /** Dialogs raised and not yet answered, as `StableSdkDriver.pendingUi()` lists them. */
   pending: UiDialogRequest[] = [];
   responses: UiDialogResponse[] = [];
@@ -54,9 +56,25 @@ class FakeDriver implements SessionDriver {
   emit(e: DriverEvent) {
     if (e.type === "update" && e.update.kind === "agent_settled") {
       this.engineSteers = [];
+      this.engineFollowUps = [];
       this.setStreaming(false);
     }
     for (const l of this.listeners) l(e);
+  }
+  /** The engine delivered this queued text from that lane (agent-session.js removes a consumed text by first match). */
+  consumeEngine(lane: "steer" | "followUp", text: string) {
+    const texts = lane === "steer" ? this.engineSteers : this.engineFollowUps;
+    const index = texts.indexOf(text);
+    if (index < 0) throw new Error(`The engine's ${lane} lane holds no "${text}".`);
+    texts.splice(index, 1);
+  }
+  /** Something other than the harness queued in the engine (a person's steer in the child's own chat). */
+  foreignFollowUp(text: string) { this.engineFollowUps.push(text); }
+  /** Pi's preflight accepted the oldest waiting prompt; its turn goes on. */
+  acceptPending() {
+    const pending = this.promptResolvers[0];
+    if (!pending) throw new Error("No prompt is waiting.");
+    pending.options?.onAccepted?.();
   }
   async prompt(content: ContentBlock[], options?: PromptOptions) {
     const text = content.map((b) => (b.type === "text" ? b.text : "")).join("");
@@ -85,12 +103,18 @@ class FakeDriver implements SessionDriver {
     this.steers.push(text);
     this.engineSteers.push(text);
   }
-  async followUp(content: ContentBlock[]) { this.followUps.push(content.map((b) => (b.type === "text" ? b.text : "")).join("")); }
+  async followUp(content: ContentBlock[]) {
+    const text = content.map((b) => (b.type === "text" ? b.text : "")).join("");
+    this.followUps.push(text);
+    this.engineFollowUps.push(text);
+  }
   async clearQueue() {
     if (this.clearQueueRejects) throw new Error("queue unavailable");
     const steering = [...this.engineSteers];
+    const followUp = [...this.engineFollowUps];
     this.engineSteers = [];
-    return { steering, followUp: [] };
+    this.engineFollowUps = [];
+    return { steering, followUp };
   }
   async abort() {
     this.aborts += 1;
@@ -405,7 +429,10 @@ describe("AgentHarness", () => {
     expect(await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "canonical result" })).toEqual({ ok: true, runId });
     const stopping = world.harness.stopRun(runId, { initiator: "user", reason: "too late" });
     await flushLifecycle();
-    expect(child.aborts).toBe(0);
+    // The result is the tool's; the stop still reaches whatever that
+    // invocation is still executing (a later tool of the same batch).
+    expect(child.aborts).toBe(1);
+    expect(world.harness.run(runId)?.status).toBe("running");
     child.emit({ type: "update", update: { kind: "agent_settled" } });
     child.resolvePrompt();
     await expect(stopping).resolves.toMatchObject({ status: "completed", result: { message: "canonical result" } });
@@ -900,14 +927,20 @@ describe("AgentHarness", () => {
     const path = "/sessions/child-1.jsonl";
     const child = world.drivers.get(path)!;
     child.setStreaming(true);
+    // While the engine streams, both lanes are its: a follow-up waits for the
+    // moment the model would stop, an interrupt goes before its next call.
+    // The person sees both in the child's own queue; the harness tracks them
+    // as engine-owned so a terminal declaration can take them back.
     expect(await root.handle.bridge.sendAgentMessage({ sessionId, message: "also check refresh", interrupt: false })).toEqual({ sessionId, runId, status: "running", delivery: "queued" });
-    expect(child.followUps).toEqual([]); // the harness owns the queue
+    expect(child.followUps).toEqual(["also check refresh"]);
     expect(await root.handle.bridge.sendAgentMessage({ sessionId, message: "stop, wrong file", interrupt: true })).toEqual({ sessionId, runId, status: "running", delivery: "queued" });
     expect(child.steers).toEqual(["stop, wrong file"]);
     child.setStreaming(false);
     child.emit({ type: "update", update: { kind: "agent_settled" } });
     await flushLifecycle();
-    expect(child.prompted.map((p) => p.text)).toEqual(["t", "also check refresh"]);
+    // The engine delivered both inside its run; nothing is prompted twice —
+    // and a child that then settles without complete_agent_run is nudged.
+    expect(child.prompted.map((p) => p.text)).toEqual(["t", NUDGE_TEXT]);
     expect(await root.handle.bridge.sendAgentMessage({ sessionId, message: "carry on", interrupt: false })).toMatchObject({ runId, delivery: "delivered" });
     expect(child.prompted.at(-1)?.text).toBe("carry on");
     await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "done" });
@@ -1548,6 +1581,283 @@ describe("AgentHarness", () => {
     await expect(late.completion).rejects.toThrow("provider failed late");
     expect(world.harness.activeRun(path)).toBeUndefined();
     expect(world.harness.runs().at(-1)).toMatchObject({ status: "failed", error: "provider failed late" });
+  });
+
+  // M13-T98: the boundary between a declared end and the moment the engine
+  // truly stops. The real-engine scenario lives in queued-completion.test.ts;
+  // these pin the harness's own bookkeeping where the engine is irrelevant.
+  describe("queued completion ownership", () => {
+    const lifecycleLogs = () => world.extensionMessages()
+      .map((m) => m.message as { type: string; module?: string; level?: string; message?: string })
+      .filter((m) => m.type === "lasercode/module/log" && typeof m.message === "string" && m.message.startsWith("lifecycle "))
+      .map((m) => ({ level: m.level!, line: m.message! }));
+
+    it("transfers both engine lanes to one successor in order, matching identical texts once, dropping what the engine consumed, keeping what it did not send", async () => {
+      world.setAutoResolveChildPrompts(false);
+      const root = world.openRoot("lead");
+      const first = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "initial" });
+      const path = "/sessions/child-1.jsonl";
+      const child = world.drivers.get(path)!;
+      const { sessionId } = first;
+
+      await root.handle.bridge.sendAgentMessage({ sessionId, message: "same text", interrupt: true });
+      await root.handle.bridge.sendAgentMessage({ sessionId, message: "same text", interrupt: false });
+      await root.handle.bridge.sendAgentMessage({ sessionId, message: "same text", interrupt: false });
+      await root.handle.bridge.sendAgentMessage({ sessionId, message: "later", interrupt: false });
+      expect(child.steers).toEqual(["same text"]);
+      expect(child.followUps).toEqual(["same text", "same text", "later"]);
+      // The engine delivered the first follow-up before the child finished;
+      // the person queued one of their own in the child's chat meanwhile.
+      child.consumeEngine("followUp", "same text");
+      child.foreignFollowUp("from the person");
+
+      expect(await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "done" })).toEqual({ ok: true, runId: first.runId });
+      const successor = world.harness.runs().find((run) => run.sessionPath === path && run.runId !== first.runId)!;
+      expect(successor).toMatchObject({ status: "queued", origin: "agent", task: "same text" });
+      expect(world.harness.runs().filter((run) => run.sessionPath === path)).toHaveLength(2);
+
+      // The fence: the steer, then one of the two identical follow-ups, then
+      // "later", then the text the harness never sent — each exactly once.
+      const prompts = () => child.prompted.map((item) => item.text);
+      for (const expected of [["initial", "same text"], ["initial", "same text", "same text"], ["initial", "same text", "same text", "later"], ["initial", "same text", "same text", "later", "from the person"]]) {
+        child.emit({ type: "update", update: { kind: "agent_settled" } });
+        child.resolvePrompt();
+        await flushLifecycle();
+        expect(prompts()).toEqual(expected);
+      }
+      expect(world.harness.run(first.runId)?.status).toBe("completed");
+      expect(world.harness.activeRun(path)?.runId).toBe(successor.runId);
+      expect(lifecycleLogs().some((log) => /queue-transferred .*clearedSteering=1 clearedFollowUp=3 local=4 preserved=4/.test(log.line))).toBe(true);
+    });
+
+    it("acknowledges a parent's message only once the engine accepted it, and says refused when it did not", async () => {
+      world.setAutoResolveChildPrompts(false);
+      const root = world.openRoot("lead");
+      const received: AgentModelEvent[] = [];
+      root.handle.bridge.onEvent((event) => received.push(event));
+      const first = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "initial" });
+      const path = "/sessions/child-1.jsonl";
+      const child = world.drivers.get(path)!;
+      await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "initial done" });
+      child.emit({ type: "update", update: { kind: "agent_settled" } });
+      child.resolvePrompt();
+      await flushLifecycle();
+      expect(world.harness.activeRun(path)).toBeUndefined();
+
+      // Refused at preflight: the parent hears it from the tool, not a moment
+      // later from a run that "was delivered" and then failed.
+      const refused = root.handle.bridge.sendAgentMessage({ sessionId: first.sessionId, message: "resume", interrupt: false });
+      await flushLifecycle();
+      expect(child.prompted.map((item) => item.text)).toEqual(["initial", "resume"]);
+      child.resolvePrompt(false);
+      const refusal = await refused;
+      expect(refusal).toMatchObject({ delivery: "refused", status: "failed", error: expect.stringMatching(/refused the task because it was busy/) });
+      expect(world.harness.run(refusal.runId)).toMatchObject({ status: "failed", task: "resume" });
+      expect(received.at(-1)).toMatchObject({ type: "agent.failed", run: { runId: refusal.runId } });
+
+      // Accepted at preflight: "delivered" the moment the engine owns the
+      // message as its next turn, while that turn is still running.
+      let settled: unknown;
+      const accepted = root.handle.bridge.sendAgentMessage({ sessionId: first.sessionId, message: "resume again", interrupt: false }).then((result) => { settled = result; return result; });
+      await flushLifecycle();
+      expect(settled).toBeUndefined();
+      child.acceptPending();
+      const delivery = await accepted;
+      expect(delivery).toMatchObject({ delivery: "delivered", status: "running" });
+      expect(child.state().isStreaming).toBe(true);
+      expect(world.harness.activeRun(path)?.runId).toBe(delivery.runId);
+      expect(await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "resumed done" })).toEqual({ ok: true, runId: delivery.runId });
+      child.emit({ type: "update", update: { kind: "agent_settled" } });
+      child.resolvePrompt();
+      await flushLifecycle();
+      expect(world.harness.run(delivery.runId)?.status).toBe("completed");
+    });
+
+    it("aborts the executing invocation for an interrupt during terminal-pending and queues it in order behind the successor's messages", async () => {
+      world.setAutoResolveChildPrompts(false);
+      const root = world.openRoot("lead");
+      const received: AgentModelEvent[] = [];
+      root.handle.bridge.onEvent((event) => received.push(event));
+      const first = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "initial" });
+      const path = "/sessions/child-1.jsonl";
+      const child = world.drivers.get(path)!;
+      child.setStreaming(true);
+      expect(await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "old done" })).toEqual({ ok: true, runId: first.runId });
+
+      const correction = await root.handle.bridge.sendAgentMessage({ sessionId: first.sessionId, message: "correction", interrupt: false });
+      expect(correction).toMatchObject({ delivery: "queued", status: "queued" });
+      expect(child.aborts).toBe(0);
+      const urgent = await root.handle.bridge.sendAgentMessage({ sessionId: first.sessionId, message: "stop that", interrupt: true });
+      expect(urgent).toMatchObject({ delivery: "queued", runId: correction.runId });
+      // The interrupt reached the invocation that can still write; nothing
+      // was steered into the engine's queue under a run that has ended.
+      expect(child.aborts).toBe(1);
+      expect(child.steers).toEqual([]);
+      expect(world.harness.runs().filter((run) => run.sessionPath === path)).toHaveLength(2);
+      expect(world.harness.run(first.runId)?.status).toBe("running");
+      expect(received).toEqual([]);
+
+      child.emit({ type: "update", update: { kind: "agent_settled" } });
+      child.resolvePrompt();
+      await flushLifecycle();
+      expect(world.harness.run(first.runId)).toMatchObject({ status: "completed", result: { message: "old done" } });
+      expect(received.map((event) => event.type)).toEqual(["agent.completed"]);
+      expect(child.prompted.map((item) => item.text)).toEqual(["initial", "correction"]);
+      child.emit({ type: "update", update: { kind: "agent_settled" } });
+      child.resolvePrompt();
+      await flushLifecycle();
+      expect(child.prompted.map((item) => item.text)).toEqual(["initial", "correction", "stop that"]);
+      expect(await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "successor done" })).toEqual({ ok: true, runId: correction.runId });
+    });
+
+    it("cancels a queued successor with a person's stop and answers every waiter behind it", async () => {
+      world.setAutoResolveChildPrompts(false);
+      const root = world.openRoot("lead");
+      const received: AgentModelEvent[] = [];
+      root.handle.bridge.onEvent((event) => received.push(event));
+      const first = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "initial" });
+      const path = "/sessions/child-1.jsonl";
+      const child = world.drivers.get(path)!;
+      await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "old done" });
+
+      const queued = await root.handle.bridge.sendAgentMessage({ sessionId: first.sessionId, message: "next", interrupt: false });
+      const person = world.harness.promptUser(path, [{ type: "text", text: "from the person" }]);
+      const admitted = world.harness.admitExtensionModelWork(path, {
+        kind: "user",
+        content: [{ type: "text", text: "extension wake" }],
+        task: "extension wake",
+        origin: "agent",
+        start: () => { throw new Error("server start wrapper should be used"); },
+      }, () => { throw new Error("must not start under a cancelled successor"); });
+      await flushLifecycle();
+      expect(world.harness.run(queued.runId)).toMatchObject({ status: "queued", task: "next" });
+
+      const stopped = await world.harness.stopRun(queued.runId, { initiator: "user", reason: "not needed" });
+      expect(stopped).toMatchObject({ status: "cancelled", endedBy: { initiator: "user", reason: "not needed" } });
+      await expect(person).rejects.toThrow(/ended \(cancelled\) before this message could start/);
+      await expect(admitted.admission).rejects.toThrow(/ended \(cancelled\) before this message could start/);
+      // The old run is still unwinding; the person's stop of the waiting
+      // successor did not touch its declared completion.
+      expect(world.harness.run(first.runId)?.status).toBe("running");
+      child.emit({ type: "update", update: { kind: "agent_settled" } });
+      child.resolvePrompt();
+      await flushLifecycle();
+      expect(world.harness.run(first.runId)).toMatchObject({ status: "completed" });
+      expect(world.harness.activeRun(path)).toBeUndefined();
+      expect(child.prompted.map((item) => item.text)).toEqual(["initial"]);
+      expect(received.map((event) => [event.type, event.run.runId])).toEqual([["agent.cancelled", queued.runId], ["agent.completed", first.runId]]);
+    });
+
+    it("fails a queued successor when the session closes during terminal-pending, with an error the parent can read, and answers its waiters", async () => {
+      world.setAutoResolveChildPrompts(false);
+      const root = world.openRoot("lead");
+      const received: AgentModelEvent[] = [];
+      root.handle.bridge.onEvent((event) => received.push(event));
+      const first = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "initial" });
+      const path = "/sessions/child-1.jsonl";
+      await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "old done" });
+      const queued = await root.handle.bridge.sendAgentMessage({ sessionId: first.sessionId, message: "next", interrupt: false });
+      const person = world.harness.promptUser(path, [{ type: "text", text: "from the person" }]);
+      await flushLifecycle();
+
+      world.harness.onDriverEvent(path, { type: "closed", reason: "crash" });
+      // The old run's result was declared by its tool; the close keeps it and
+      // ends only what was still open — the successor that never started.
+      expect(world.harness.run(first.runId)).toMatchObject({ status: "completed", result: { message: "old done" } });
+      expect(world.harness.run(queued.runId)).toMatchObject({ status: "failed", error: "The agent's session closed before this queued message could start.", task: "next" });
+      await expect(person).rejects.toThrow(/closed before this queued message could start/);
+      expect(received.map((event) => [event.type, event.run.runId, event.message])).toEqual([
+        ["agent.completed", first.runId, "old done"],
+        ["agent.failed", queued.runId, "The agent's session closed before this queued message could start."],
+      ]);
+      expect(world.harness.sessionInfo(path)).toBeUndefined();
+
+      // A run with nothing declared is the failure the close made it.
+      const again = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w2", task: "second" });
+      world.harness.onDriverEvent("/sessions/child-2.jsonl", { type: "closed", reason: "crash" });
+      expect(world.harness.run(again.runId)).toMatchObject({ status: "failed", error: "The agent's session closed before it finished." });
+    });
+
+    it("empties the engine's queue into the successor before aborting a stopped run, so nothing continues under it", async () => {
+      world.setAutoResolveChildPrompts(false);
+      const root = world.openRoot("lead");
+      const received: AgentModelEvent[] = [];
+      root.handle.bridge.onEvent((event) => received.push(event));
+      const first = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "initial" });
+      const path = "/sessions/child-1.jsonl";
+      const child = world.drivers.get(path)!;
+      await root.handle.bridge.sendAgentMessage({ sessionId: first.sessionId, message: "steered", interrupt: true });
+      await root.handle.bridge.sendAgentMessage({ sessionId: first.sessionId, message: "followed", interrupt: false });
+      expect(child.steers).toEqual(["steered"]);
+      expect(child.followUps).toEqual(["followed"]);
+
+      const stopping = world.harness.stopRun(first.runId, { initiator: "user", reason: "wrong direction" });
+      await flushLifecycle();
+      expect(child.aborts).toBe(1);
+      const successor = world.harness.runs().find((run) => run.sessionPath === path && run.runId !== first.runId)!;
+      expect(successor).toMatchObject({ status: "queued", task: "steered" });
+      expect(await child.clearQueue()).toEqual({ steering: [], followUp: [] });
+      expect(lifecycleLogs().findIndex((log) => log.line.includes("queue-transferred") && log.line.includes("reason=stop"))).toBeLessThan(lifecycleLogs().findIndex((log) => log.line.includes("abort-requested") && log.line.includes("reason=stop")));
+
+      child.emit({ type: "update", update: { kind: "agent_settled" } });
+      child.resolvePrompt();
+      await expect(stopping).resolves.toMatchObject({ status: "cancelled", endedBy: { initiator: "user", reason: "wrong direction" } });
+      await flushLifecycle();
+      expect(world.harness.activeRun(path)?.runId).toBe(successor.runId);
+      expect(child.prompted.map((item) => item.text)).toEqual(["initial", "steered"]);
+      child.emit({ type: "update", update: { kind: "agent_settled" } });
+      child.resolvePrompt();
+      await flushLifecycle();
+      expect(child.prompted.map((item) => item.text)).toEqual(["initial", "steered", "followed"]);
+      expect(received.map((event) => event.type)).toEqual(["agent.cancelled"]);
+    });
+
+    it("keeps the fleet, the session info and the parent's view on the executing run while its declared completion unwinds", async () => {
+      world.setAutoResolveChildPrompts(false);
+      const root = world.openRoot("lead");
+      const first = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "initial" });
+      const path = "/sessions/child-1.jsonl";
+      const child = world.drivers.get(path)!;
+      child.emit({ type: "update", update: { kind: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: {} } });
+      await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "old done" });
+      const queued = await root.handle.bridge.sendAgentMessage({ sessionId: first.sessionId, message: "next", interrupt: false });
+      expect(world.harness.run(queued.runId)?.status).toBe("queued");
+
+      const row = (await root.handle.bridge.inspectFleet()).rows[0]!;
+      expect(row).toMatchObject({ kind: "agent", runId: first.runId, state: "running", status: "Working", line: "Running bash" });
+      expect(world.harness.sessionInfo(path)).toMatchObject({ runId: first.runId, runStatus: "running" });
+      expect(await root.handle.bridge.inspectAgent({ runId: first.runId })).toMatchObject({ status: "running", activity: { currentTool: "bash" } });
+
+      child.emit({ type: "update", update: { kind: "agent_settled" } });
+      child.resolvePrompt();
+      await flushLifecycle();
+      expect((await root.handle.bridge.inspectFleet()).rows[0]).toMatchObject({ runId: queued.runId, state: "running", status: "Working" });
+      expect(world.harness.sessionInfo(path)).toMatchObject({ runId: queued.runId, runStatus: "running" });
+    });
+
+    it("records lifecycle diagnostics as module logs with identities and counts, never a message body", async () => {
+      world.setAutoResolveChildPrompts(false);
+      const root = world.openRoot("lead");
+      const first = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "secret task text" });
+      const path = "/sessions/child-1.jsonl";
+      const child = world.drivers.get(path)!;
+      await root.handle.bridge.sendAgentMessage({ sessionId: first.sessionId, message: "secret follow-up", interrupt: false });
+      await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "secret result" });
+      child.emit({ type: "update", update: { kind: "agent_settled" } });
+      child.resolvePrompt();
+      await flushLifecycle();
+
+      const logs = lifecycleLogs();
+      const events = logs.map((log) => log.line.split(" ")[1]);
+      for (const expected of ["invocation-begun", "admission", "terminal-declared", "queue-transferred", "successor-reserved", "invocation-finished", "terminal-published", "successor-activated"]) {
+        expect(events, expected).toContain(expected);
+      }
+      expect(logs.every((log) => log.level === "info" || log.level === "warn")).toBe(true);
+      expect(logs.every((log) => /runId=run_[0-9a-f]+|predecessor=run_|owner=run_|successor=run_/.test(log.line) || log.line.includes("admission"))).toBe(true);
+      expect(logs.every((log) => / at=\d{4}-\d{2}-\d{2}T/.test(log.line))).toBe(true);
+      expect(logs.some((log) => /secret/.test(log.line))).toBe(false);
+      expect(logs.find((log) => log.line.includes("terminal-declared"))!.line).toMatch(new RegExp(`runId=${first.runId} status=completed invoking=true phase=terminal-pending`));
+    });
   });
 
   // M13-T42 / D-157: merging and removing a child's worktree belong to the

@@ -351,7 +351,8 @@ function registerParentTools(pi: ExtensionAPI, bridge: AgentHarnessBridge): void
     label: "Message an agent",
     description:
       "Send a message to an agent you started, addressed by its sessionId. A running agent receives it as its next instruction; an idle agent starts a new run and the result carries the new runId. " +
-      "An agent whose status is needs_input is paused on a question, and your message answers it: one of the choices for a select, yes or no for a confirm, the text itself for an input or editor — anything else is refused with the question restated.",
+      "An agent whose status is needs_input is paused on a question, and your message answers it: one of the choices for a select, yes or no for a confirm, the text itself for an input or editor — anything else is refused with the question restated. " +
+      "The result's delivery says what became of the message: queued (waiting its turn, or behind a run the agent is finishing), delivered (the agent's engine accepted it as its next turn), answered (it settled an open question), or refused (the engine would not take it; error says why and the attempt is recorded as a failed run).",
     promptSnippet: "Continue a conversation with an agent you started, or answer its question, by sessionId",
     promptGuidelines: [
       "Use send_agent_message with sessionId to continue a conversation with an agent; set interrupt true only when it must change course now.",
