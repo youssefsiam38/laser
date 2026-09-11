@@ -21,6 +21,10 @@
  * kept across that split — `{ level, pending, inserted, error, startedAt }` —
  * so the native waveform shows exactly what the terminal one shows.
  *
+ * The spoken language is not one of the things either side chooses: every
+ * recording is transcribed as English, pinned in the request itself
+ * ({@link TRANSCRIBE_LANGUAGE}, `docs/dictation-language.md`).
+ *
  * The one thing that cannot be done in the browser is the pre-send transform.
  * A phrase still being transcribed when you press Enter belongs to the prompt
  * you just sent, not to the next one, and only something inside the Pi process
@@ -80,7 +84,12 @@ export interface TranscribeConfig {
   /** Free-form context: jargon, project names, style. */
   readonly prompt: string | undefined;
   readonly keywords: readonly string[] | undefined;
-  /** ISO-639-1 hints. Absent means auto-detect. */
+  /**
+   * ISO-639-1 hints from the package's config file. Parsed so a typo in that
+   * file still cannot break dictation — and then ignored: dictation is English,
+   * always ({@link TRANSCRIBE_LANGUAGE}, `docs/dictation-language.md`).
+   * A value here is reported once and dropped.
+   */
   readonly languages: readonly string[] | undefined;
   /** Where the file was read from, for error messages that tell you what to edit. */
   readonly configPath: string;
@@ -253,6 +262,79 @@ const ERROR_BODY_LIMIT = 400;
 const CRLF = "\r\n";
 const ARRAY_FIELD_SUFFIX = "[]";
 
+// ---------------------------------------------------------------------------
+// English, always
+//
+// Dictation here is one person talking to a coding agent in English, with an
+// accent and the occasional word from another language in the middle of a
+// sentence. Left to auto-detect, one such word flips the whole phrase into
+// another language — and a transliterated phrase in another script is not a
+// prompt anyone can send. So the spoken language is pinned by the product, not
+// configured: `docs/dictation-language.md` has the API reference citations.
+// ---------------------------------------------------------------------------
+
+/** The one language dictation transcribes, ISO-639-1. */
+export const TRANSCRIBE_LANGUAGE = "en";
+
+/** Models that take the plural set of expected languages. */
+const MULTI_LANGUAGE_MODEL_PREFIX = "gpt-transcribe";
+
+/**
+ * The multipart field that pins the spoken language for a given model.
+ *
+ * `gpt-transcribe` (the default) takes `languages[]`, a set of expected input
+ * languages, and the guide is explicit that for that model `languages`
+ * *replaces* the singular `language` and that both must never be sent. Every
+ * other model on `/v1/audio/transcriptions` — `whisper-1`, `gpt-4o-transcribe`,
+ * `gpt-4o-mini-transcribe`, `gpt-4o-transcribe-diarize` — takes the singular
+ * `language`, and the reference marks `languages` as supported by
+ * `gpt-transcribe` alone. Hence one field per model, never both: the endpoint
+ * rejects the whole request over a field it does not accept, and a rejected
+ * request is silence where a phrase should have been.
+ */
+export function languageFieldFor(model: string): string {
+  const id = model.trim().toLowerCase();
+  return id.startsWith(MULTI_LANGUAGE_MODEL_PREFIX) ? `languages${ARRAY_FIELD_SUFFIX}` : "language";
+}
+
+/** Where an ignored language value came from, for the log line. */
+type IgnoredLanguageSource = "config" | "request";
+
+/** Values already reported, so a per-phrase request cannot log per phrase. */
+const reportedLanguages = new Set<string>();
+
+/** Test seam: forget what has already been reported. */
+export function forgetIgnoredLanguageNotices(): void {
+  reportedLanguages.clear();
+}
+
+export type TranscribeLog = (message: string) => void;
+
+const defaultLog: TranscribeLog = (message) => {
+  console.error(`${PRODUCT_NAME} worker: ${message}`);
+};
+
+/**
+ * Say once — not once per phrase — that a language someone configured is not
+ * being used. Silence would look like a bug in their config file; a line per
+ * recording would be a flood.
+ */
+function noteIgnoredLanguages(
+  values: readonly string[] | undefined,
+  source: IgnoredLanguageSource,
+  where: string | undefined,
+  log: TranscribeLog,
+): void {
+  const ignored = (values ?? []).filter((value) => value.trim().toLowerCase() !== TRANSCRIBE_LANGUAGE);
+  if (ignored.length === 0) return;
+  const key = `${source}:${ignored.join(",")}`;
+  if (reportedLanguages.has(key)) return;
+  reportedLanguages.add(key);
+  const listed = ignored.map((value) => `"${value}"`).join(", ");
+  const origin = source === "config" ? `"languages" in ${where}` : "this recording's own language hint";
+  log(`Dictation always transcribes English, so ${listed} from ${origin} is ignored.`);
+}
+
 export interface TranscribeAudioRequest {
   readonly audio: Uint8Array;
   readonly mimeType: string;
@@ -261,6 +343,8 @@ export interface TranscribeAudioRequest {
   readonly signal?: AbortSignal | undefined;
   /** Injectable for tests. Defaults to the global fetch. */
   readonly fetchImpl?: typeof fetch | undefined;
+  /** Where an ignored config value is reported. Defaults to the worker's log. */
+  readonly log?: TranscribeLog | undefined;
 }
 
 /** A CR or LF in a config value would end its multipart part early. */
@@ -302,7 +386,10 @@ function buildMultipart(request: TranscribeAudioRequest): { body: Uint8Array; co
   field("model", config.model);
   if (config.prompt) field("prompt", config.prompt);
   for (const keyword of config.keywords ?? []) field(`keywords${ARRAY_FIELD_SUFFIX}`, keyword);
-  for (const language of config.languages ?? []) field(`languages${ARRAY_FIELD_SUFFIX}`, language);
+  // The pin, never the configured list: English is the product's answer, and a
+  // configured language is reported once and dropped rather than obeyed.
+  noteIgnoredLanguages(config.languages, "config", config.configPath, request.log ?? defaultLog);
+  field(languageFieldFor(config.model), TRANSCRIBE_LANGUAGE);
   parts.push(Buffer.from(`--${boundary}--${CRLF}`));
 
   // Copied into a plain ArrayBuffer: Node's pool-backed Buffer is not a BodyInit.
@@ -407,7 +494,11 @@ export type { TranscribeStatus };
 /** Container the transcription API accepts, from `pi/transcribe/begin`. */
 export interface BeginUpload {
   mimeType: string;
-  /** ISO-639-1 hint for this recording, overriding the config's `languages`. */
+  /**
+   * ISO-639-1 hint for this recording. Accepted so an older client still
+   * dictates, and then ignored for the same reason the config's `languages` is:
+   * every recording is transcribed as English ({@link TRANSCRIBE_LANGUAGE}).
+   */
   language?: string | undefined;
   /**
    * The session this recording is being dictated into. Optional because a
@@ -455,6 +546,8 @@ export interface TranscribeServiceOptions {
   config?: TranscribeConfig;
   fetchImpl?: typeof fetch;
   drainTimeoutMs?: number;
+  /** Where an ignored language value is reported. Defaults to the worker's log. */
+  log?: TranscribeLog;
 }
 
 /**
@@ -573,12 +666,17 @@ export class TranscribeService {
       try {
         const apiKey = await resolveTranscriptionKey(config, this.options.keys);
         const audio = concat(upload.chunks, upload.bytes);
+        const log = this.options.log ?? defaultLog;
+        // A client that still sends a per-recording language gets the same
+        // answer the config file gets: noted once, then English.
+        noteIgnoredLanguages(upload.language ? [upload.language] : undefined, "request", undefined, log);
         const text = await transcribeAudio({
           audio,
           mimeType: upload.mimeType,
           apiKey,
-          config: upload.language ? { ...config, languages: [upload.language] } : config,
+          config,
           signal: upload.controller.signal,
+          log,
           ...(this.options.fetchImpl ? { fetchImpl: this.options.fetchImpl } : {}),
         });
         upload.tail = text.trim();

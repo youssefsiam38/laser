@@ -9,20 +9,31 @@ import type { ProviderAuthInfo } from "@lasercode/protocol";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_TRANSCRIBE_BASE_URL,
   DEFAULT_TRANSCRIBE_MODEL,
+  TRANSCRIBE_LANGUAGE,
   TranscribeError,
   TranscribeService,
   audioExtensionFor,
   followEnvelope,
+  forgetIgnoredLanguageNotices,
+  languageFieldFor,
   levelToUnit,
   loadTranscribeConfig,
   resolveTranscriptionKey,
   transcribeBridge,
   type KeySources,
 } from "../src/transcribe.js";
+
+/** Every value sent under one multipart field name, in order. */
+function multipartField(body: string, name: string): string[] {
+  const values: string[] = [];
+  const pattern = new RegExp(`name="${name.replace(/[[\]]/g, "\\$&")}"\r\n\r\n([^\r]*)\r\n`, "g");
+  for (const match of body.matchAll(pattern)) values.push(match[1] ?? "");
+  return values;
+}
 
 const provider = (id: string, over: Partial<ProviderAuthInfo> = {}): ProviderAuthInfo => ({
   id,
@@ -46,6 +57,11 @@ function configDir(): string {
   mkdirSync(join(home, "pi-gpt-transcribe"), { recursive: true });
   return home;
 }
+
+beforeEach(() => {
+  // The "said once" guard is process-wide, like the log it protects.
+  forgetIgnoredLanguageNotices();
+});
 
 describe("loadTranscribeConfig", () => {
   it("works with no file at all", () => {
@@ -182,22 +198,84 @@ describe("TranscribeService", () => {
     await expect(service.end(id)).resolves.toEqual({ text: "hello there" });
   });
 
-  it("sends the model and the right filename extension", async () => {
+  /** The multipart body of the one request a recording makes. */
+  const recorded = async (
+    over: Partial<ConstructorParameters<typeof TranscribeService>[0]> = {},
+    begin: Parameters<TranscribeService["begin"]>[0] = { mimeType: "audio/mp4" },
+  ): Promise<string> => {
     let body = "";
     const capture: typeof fetch = (async (_url: string, init: RequestInit) => {
       body = Buffer.from(init.body as Uint8Array).toString("utf8");
       return new Response(JSON.stringify({ text: "x" }), { status: 200 });
     }) as unknown as typeof fetch;
-    const service = build(capture);
-    const { id } = service.begin({ mimeType: "audio/mp4", language: "en" });
+    const service = build(capture, over);
+    const { id } = service.begin(begin);
     service.chunk(id, audio);
     await service.end(id);
+    return body;
+  };
+
+  const withConfig = (
+    over: Partial<ReturnType<typeof loadTranscribeConfig>>,
+  ): { config: ReturnType<typeof loadTranscribeConfig> } => ({
+    config: { ...loadTranscribeConfig({ XDG_CONFIG_HOME: configDir() }), ...over },
+  });
+
+  it("sends the model and the right filename extension", async () => {
+    const body = await recorded();
     expect(body).toContain('filename="audio.mp4"');
-    expect(body).toContain(`name="model"`);
-    expect(body).toContain(DEFAULT_TRANSCRIBE_MODEL);
-    // The per-recording language hint overrides the config's list.
-    expect(body).toContain(`name="languages[]"`);
-    expect(body).toContain("en");
+    expect(multipartField(body, "model")).toEqual([DEFAULT_TRANSCRIBE_MODEL]);
+  });
+
+  it("pins English with the field the default model documents, and never both fields", async () => {
+    // gpt-transcribe takes the set of expected languages, and its guide says
+    // that field replaces the singular one — sending both is refused.
+    expect(DEFAULT_TRANSCRIBE_MODEL).toBe("gpt-transcribe");
+    const body = await recorded();
+    expect(multipartField(body, "languages[]")).toEqual([TRANSCRIBE_LANGUAGE]);
+    expect(multipartField(body, "language")).toEqual([]);
+  });
+
+  it("pins English with the singular field on every other transcription model", async () => {
+    for (const model of ["whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe", "gpt-4o-transcribe-diarize"]) {
+      const body = await recorded(withConfig({ model }));
+      expect(multipartField(body, "language"), model).toEqual([TRANSCRIBE_LANGUAGE]);
+      expect(multipartField(body, "languages[]"), model).toEqual([]);
+    }
+    // A model id nobody has heard of gets the parameter every model but
+    // gpt-transcribe accepts, rather than a guess.
+    expect(languageFieldFor("some-gateway/stt-v9")).toBe("language");
+    expect(languageFieldFor(" GPT-Transcribe ")).toBe("languages[]");
+  });
+
+  it("ignores a configured language and a per-recording hint, and says so once", async () => {
+    const lines: string[] = [];
+    const options = {
+      ...withConfig({ languages: ["ar"] }),
+      log: (message: string) => lines.push(message),
+    };
+
+    const first = await recorded(options, { mimeType: "audio/webm", language: "fr" });
+    expect(multipartField(first, "languages[]")).toEqual([TRANSCRIBE_LANGUAGE]);
+    expect(first).not.toContain('name="language"');
+    // Neither value reaches the request in any shape.
+    expect(first).not.toMatch(/\bar\b/);
+    expect(first).not.toMatch(/\bfr\b/);
+    expect(lines.filter((line) => line.includes('"ar"'))).toHaveLength(1);
+    expect(lines.filter((line) => line.includes('"fr"'))).toHaveLength(1);
+    expect(lines[0]).toContain("always transcribes English");
+    expect(lines.find((line) => line.includes('"ar"'))).toContain("config.json");
+
+    // A second phrase is not a second complaint: this is per recording.
+    await recorded(options, { mimeType: "audio/webm", language: "fr" });
+    expect(lines).toHaveLength(2);
+  });
+
+  it("keeps the keywords and prompt the person did configure", async () => {
+    const body = await recorded(withConfig({ prompt: "a session about account AC-42", keywords: ["AC-42"], languages: ["de"] }));
+    expect(multipartField(body, "prompt")).toEqual(["a session about account AC-42"]);
+    expect(multipartField(body, "keywords[]")).toEqual(["AC-42"]);
+    expect(multipartField(body, "languages[]")).toEqual([TRANSCRIBE_LANGUAGE]);
   });
 
   it("returns an empty transcript for a recording with no audio", async () => {
