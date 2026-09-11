@@ -10,7 +10,8 @@
  * Divergences from the registry copy, so a reviewer can diff them:
  *   - Groups are quiet project folders, newest first inside. Client-local
  *     pins move into a top section with project labels, never duplicate rows.
- *   - Rounded single-line rows carry a title and trailing activity indicator.
+ *   - Rounded single-line rows carry one activity indicator before the title
+ *     (M15-T4): one mark, one position, and it is the session's own state.
  *     Full path, preview and time remain in the tooltip. No idle dots and no
  *     separate inbox/project activity highlights (D-103).
  *   - The more-menu offers Rename, Archive (client-local; Pi has no verb) and
@@ -18,8 +19,9 @@
  *     the host validates the path against Pi's session catalogue first.
  *   - Archived sessions live under a collapsible "Archived" group at the end
  *     with Unarchive and Delete; the registry copy had none.
- *   - Colours, sizes and durations read tokens; the running session uses a
- *     small spinner with the shared sweep and a reduced-motion fallback.
+ *   - Colours, sizes and durations read tokens; a working session wears the
+ *     shared sweep dot, with a reduced-motion fallback that keeps colour and
+ *     accessible name.
  *
  * Since the agents leap (docs/agents.md, Lane U2):
  *   - Two tabs. **Code** is the project list; **Chat** is the projectless
@@ -447,19 +449,24 @@ function branchInfoOf(groups: readonly ThreadListGroup[], runs: Readonly<Record<
 }
 
 /**
- * The state a parent disclosure inherits from its agents. It has to agree
- * with what the two folds hold without opening either, so it takes the most
- * attention-worthy thing at every depth. Order follows the protocol attention
- * rank: needs you, then failed, then working, then waiting, then done.
+ * The one state a parent disclosure still inherits from its agents (M15-T4).
+ *
+ * A row's mark is its *own* state: a session whose child is working is not
+ * itself working, and a row that wore its descendants' states made a parent
+ * and every ancestor above it look busy for work none of them were doing.
+ * When the branch is open the children are on screen wearing their own marks,
+ * so the parent has nothing left to say.
+ *
+ * The single exception, and it is deliberate: **a folded branch that hides a
+ * question keeps the attention mark**, because a question a person has to
+ * answer is the one thing that must never hide (docs/ux-fleet.md, "Questions";
+ * R1's attention roll-up). Working, waiting and even a failed descendant are
+ * information the person can go and find — the disclosure's own accessible
+ * name and tooltip carry every count (`branchSummary`) — but a child paused on
+ * a question is waiting on them right now.
  */
 export function branchTone(info: BranchInfo): AgentStatusTone | undefined {
-  if (info.blocked > 0) return "attention";
-  if (info.failed > 0) return "danger";
-  if (info.running > 0) return "live";
-  if (info.waiting > 0) return "muted";
-  // Nothing live under the row: no mark. The finished fold below owns the
-  // terminal count; repeating it beside the title would cost name width.
-  return undefined;
+  return info.blocked > 0 ? "attention" : undefined;
 }
 
 /** The whole picture, for the disclosure and row tooltips: every count. */
@@ -474,34 +481,21 @@ export function branchSummary(info: BranchInfo): string {
 }
 
 /**
- * The folded branch's state without a width-taking tag. The disclosure's
- * accessible name carries the complete words and counts; this mark keeps the
- * same semantic tone and motion in the gutter when the child rows are hidden.
+ * A folded branch that is hiding a question, marked in the disclosure's own
+ * gutter — never a width-taking tag, and never any other descendant state
+ * (see {@link branchTone}). The disclosure's accessible name carries the
+ * complete words and counts; this only says "something under here is asking".
+ * Reduced motion keeps the colour and the name, and loses the pulse.
  */
-function BranchStatusMark({ tone }: { tone: AgentStatusTone }) {
-  const color = TONE_COLOR[tone === "muted" ? "neutral" : tone];
+function BranchStatusMark({ tone }: { tone: Extract<AgentStatusTone, "attention"> }) {
   return (
     <span
       aria-hidden="true"
       data-slot="session-fold-status"
       data-tone={tone}
-      className={cn(
-        "absolute end-0 top-1 inline-block size-2 rounded-full bg-(--dot)",
-        tone === "attention" && "motion-safe:animate-attention",
-      )}
-      style={{ "--dot": color } as React.CSSProperties}
-    >
-      {tone === "live" ? (
-        <span
-          className={cn(
-            "absolute -inset-0.75 rounded-full motion-safe:animate-sweep",
-            "bg-[conic-gradient(from_0deg,transparent_0deg,transparent_250deg,color-mix(in_oklab,var(--dot)_55%,transparent)_360deg)]",
-            "[mask:radial-gradient(farthest-side,transparent_calc(100%-2px),#000_calc(100%-2px))]",
-            "motion-reduce:hidden",
-          )}
-        />
-      ) : null}
-    </span>
+      className="absolute end-0 top-1 inline-block size-2 rounded-full bg-(--dot) motion-safe:animate-attention"
+      style={{ "--dot": TONE_COLOR[tone] } as React.CSSProperties}
+    />
   );
 }
 
@@ -873,7 +867,9 @@ function SessionBranch({ node, editing, onEdit, onOpen }: BranchProps) {
             )}
           >
             <ChevronRight aria-hidden="true" className={cn("size-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none", open && "rotate-90")} />
-            {branchStatusTone ? <BranchStatusMark tone={branchStatusTone} /> : null}
+            {/* Only while the branch is closed, and only for a question: an
+                open branch shows the children wearing their own marks. */}
+            {!open && branchStatusTone === "attention" ? <BranchStatusMark tone={branchStatusTone} /> : null}
           </button>
         )}
         <ThreadListPrimitive.ItemByIndex key={threadIds[node.index]} index={node.index} components={{ ThreadListItem: itemComponent(editing, onEdit, onOpen) }} />
@@ -1144,6 +1140,17 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
   const childTitle = row.child && row.subagentName !== undefined && shownTitle !== row.subagentName ? shownTitle : undefined;
   const activeRun = row.runStatus !== undefined && ACTIVE_RUN.has(row.runStatus);
   const stateTone: AgentStatusTone | undefined = row.runStatus !== undefined ? runStatusTone(row.runStatus) : undefined;
+  // One indicator per row, before the name, saying what *this* session is
+  // doing (M15-T4). A live run speaks first, because it is the loudest thing
+  // this session can be; otherwise the session's own attention state does
+  // (unread, waiting, error, working for a session with no run of its own);
+  // and a settled child falls back to its run's terminal mark so a failure is
+  // still visible inside the finished fold. Never two marks, never a second
+  // one at the row's end, and never a descendant's state.
+  const rowStatus: Status = archived ? "idle" : row.status;
+  const runMark =
+    row.child && row.runStatus !== undefined && stateTone !== undefined ? <RunDot status={row.runStatus} tone={stateTone} /> : null;
+  const activity = runMark && activeRun ? runMark : rowStatus !== "idle" ? <SessionActivity status={rowStatus} /> : runMark;
   // Inside the finished fold the row quiets down — but a failure keeps its ink
   // and its dot, and so does the session you are reading right now.
   const dimmed = layout.dimmed && row.runStatus !== "failed" && !active;
@@ -1186,7 +1193,7 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
             layout.nested || layout.flat ? (layout.gutter ? "ps-6" : "ps-3") : isPinned ? "ps-3" : "ps-9",
           )}
         >
-          {row.child && row.runStatus !== undefined && stateTone ? <RunDot status={row.runStatus} tone={stateTone} /> : null}
+          {activity}
           <span
             data-slot="aui_thread-list-item-title"
             // The row's own title, so a name the column cuts is still readable
@@ -1207,12 +1214,6 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
             )}
           </span>
           {isPinned && row.cwd && <span data-slot="pinned-session-project" {...(workspaceKind ? {} : { title: row.cwd })} aria-label={workspaceKind ? `Workspace: ${workspaceLabel}` : `Project: ${row.cwd}`} className="max-w-16 shrink-0 truncate rounded-sm bg-surface-2 px-1 text-xs leading-4 text-ink-3">{workspaceLabel}</span>}
-          {/* Active child runs already lead with their complete state mark.
-              Once the run settles, keep the session's own trailing activity:
-              it can independently be unread or in error. */}
-          {row.child && row.runStatus !== undefined && ACTIVE_RUN.has(row.runStatus)
-            ? null
-            : <SessionActivity status={archived ? "idle" : row.status} />}
         </ThreadListItemPrimitive.Trigger>
       )}
       {!isEditing && (

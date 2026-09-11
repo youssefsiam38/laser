@@ -170,6 +170,9 @@ const foldOf = (text: string) => branchOf(text)!.querySelector<HTMLButtonElement
 const finishedFoldOf = (text: string) =>
   branchOf(text)!.querySelector<HTMLButtonElement>('[data-slot="session-children"] > [data-slot="finished-sessions"] > [data-slot="finished-fold"]');
 const foldStatusOf = (text: string) => foldOf(text).querySelector<HTMLElement>('[data-slot="session-fold-status"]');
+/** Every activity indicator a row wears, in DOM order. One row, one mark (M15-T4). */
+const marksOf = (text: string) =>
+  [...rowNamed(text)!.querySelectorAll<HTMLElement>('[data-slot="run-dot"], [data-slot="status-dot"], [data-slot="session-working"]')];
 
 describe("sub-sessions fold", () => {
   it("opens a parent with live work, keeps the settled ones behind a second fold, and counts both without opening either", async () => {
@@ -198,10 +201,11 @@ describe("sub-sessions fold", () => {
     // and says the failure out loud rather than only in red.
     expect(finished.getAttribute("aria-label")).toBe("Show the 3 finished agents under Ship the release, 1 failed");
 
-    // No width-taking tag: the disclosure mark carries the most important
-    // descendant state, and its own name/title spells out every count.
+    // No width-taking tag, and no descendant state on the parent: a failure
+    // below is counted in the disclosure's own name/title, not worn by a row
+    // that did not fail (M15-T4).
     expect(rowNamed("Ship the release")?.querySelector('[data-slot="session-children-chip"]')).toBeNull();
-    expect(foldStatusOf("Ship the release")?.getAttribute("data-tone")).toBe("danger");
+    expect(foldStatusOf("Ship the release")).toBeNull();
     expect(parent.getAttribute("title")).toBe("6 agents under this session: 2 working, 4 finished, 1 of them failed");
     expect(rowNamed("Ship the release")?.querySelector('[data-slot="aui_thread-list-item-trigger"]')?.getAttribute("title")).toContain("6 agents under this session: 2 working, 4 finished, 1 of them failed");
 
@@ -234,13 +238,20 @@ describe("sub-sessions fold", () => {
     expect(alpha.getAttribute("data-dimmed")).toBeNull();
     // Not folded away: the finished fold still holds the three terminal siblings.
     expect(finishedFoldOf("Ship the release")?.textContent).toContain("3 finished");
+    // The children are on screen wearing their own marks, so the parent says
+    // nothing (M15-T4) — until the branch is folded and the question would be
+    // hidden, which is the one state that must still reach the person.
+    expect(foldStatusOf("Ship the release")).toBeNull();
+    await act(async () => foldOf("Ship the release").click());
     expect(foldStatusOf("Ship the release")?.getAttribute("data-tone")).toBe("attention");
     expect(foldOf("Ship the release").getAttribute("title")).toBe("6 agents under this session: 1 working, 1 needs you, 4 finished, 1 of them failed");
-    // Answered: the child dot returns to the working sweep; the genuine failed
-    // history remains truthful on the folded branch.
+    await act(async () => foldOf("Ship the release").click());
+    // Answered: the child dot returns to the working sweep, and the folded
+    // branch has no question left to keep visible.
     await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[0]!, status: "running", updatedAt: at(8) } }));
     expect(rowNamed("alpha")?.querySelector('[data-slot="run-dot"]')?.getAttribute("aria-label")).toBe("Working");
-    expect(foldStatusOf("Ship the release")?.getAttribute("data-tone")).toBe("danger");
+    await act(async () => foldOf("Ship the release").click());
+    expect(foldStatusOf("Ship the release")).toBeNull();
   });
 
   it("returns a resumed session to the live fold and does not brand it with an older failure", async () => {
@@ -269,32 +280,37 @@ describe("sub-sessions fold", () => {
     expect(rowNamed("alpha")?.querySelector('[data-slot="run-dot"]')?.getAttribute("aria-label")).toBe("Done");
   });
 
-  it("rolls descendant attention into one compact disclosure mark", async () => {
+  // M15-T4: a folded branch keeps exactly one descendant signal — a question.
+  // Everything else a descendant is doing stays with the descendant.
+  it("marks a folded branch only when it hides a question, never for work below it", async () => {
     await mount();
-    expect(foldStatusOf("Ship the release")?.getAttribute("data-tone")).toBe("danger");
-
-    // An error outranks simultaneous working children even when the failed run
-    // is itself the parent of a still-running descendant (so its branch is live).
-    await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[3]!, status: "completed", updatedAt: at(8) } }));
-    await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[4]!, status: "failed", updatedAt: at(8) } }));
-    await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[1]!, status: "completed", updatedAt: at(8) } }));
-    expect(foldStatusOf("Ship the release")?.getAttribute("data-tone")).toBe("danger");
-
-    // With that live-branch error gone, working wins; queued-only work is the muted wait.
-    await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[4]!, status: "completed", updatedAt: at(9) } }));
-    expect(foldStatusOf("Ship the release")?.getAttribute("data-tone")).toBe("live");
-    await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[0]!, status: "queued", updatedAt: at(10) } }));
-    await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[5]!, status: "queued", updatedAt: at(10) } }));
-    expect(foldStatusOf("Ship the release")?.getAttribute("data-tone")).toBe("muted");
-
-    // Finished-only branches retain their fold summary, but need no state mark.
-    await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[0]!, status: "completed", updatedAt: at(11) } }));
-    await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[5]!, status: "completed", updatedAt: at(11) } }));
+    await act(async () => foldOf("Ship the release").click());
+    // Working, waiting and a failed child are all hidden in there; none of
+    // them makes the parent wear a mark it did not earn.
     expect(foldStatusOf("Ship the release")).toBeNull();
-    expect(foldOf("Ship the release").getAttribute("title")).toContain("6 finished");
+    expect(foldOf("Ship the release").getAttribute("title")).toBe("6 agents under this session: 2 working, 4 finished, 1 of them failed");
+
+    await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[0]!, status: "queued", updatedAt: at(9) } }));
+    expect(foldStatusOf("Ship the release")).toBeNull();
+
+    // A child paused on a question: the mark appears, pulsing, and the counts
+    // stay in the accessible name so the reason is spoken too.
+    await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[5]!, status: "needs_input", updatedAt: at(10) } }));
+    const mark = foldStatusOf("Ship the release")!;
+    expect(mark.getAttribute("data-tone")).toBe("attention");
+    expect(mark.className).toContain("motion-safe:animate-attention");
+    expect(foldOf("Ship the release").getAttribute("aria-label")).toContain("1 needs you");
+
+    // Opened, the asking grandchild is reachable, so the parent stops speaking
+    // for it — but the child that still hides it keeps the mark.
+    await act(async () => foldOf("Ship the release").click());
+    expect(foldStatusOf("Ship the release")).toBeNull();
+    expect(foldOf("echo").getAttribute("aria-expanded")).toBe("true");
+    await act(async () => foldOf("echo").click());
+    expect(foldStatusOf("echo")?.getAttribute("data-tone")).toBe("attention");
   });
 
-  it("keeps a settled child's unread session mark alongside its terminal run mark", async () => {
+  it("gives a settled child one mark: the session's own unread state, not a second dot", async () => {
     await act(async () => store.dispatch({
       type: "sessions",
       sessions: sessions.map((session) => session.path === CHARLIE ? { ...session, attention: "finished_unread" as const } : session),
@@ -302,9 +318,12 @@ describe("sub-sessions fold", () => {
     await mount();
     const finished = finishedFoldOf("Ship the release")!;
     await act(async () => finished.click());
-    const charlie = rowNamed("charlie")!;
-    expect(charlie.querySelector('[data-slot="run-dot"]')?.getAttribute("aria-label")).toBe("Done");
-    expect(charlie.querySelector('[data-slot="status-dot"]')?.getAttribute("aria-label")).toBe("Finished, unread");
+    // One indicator, before the name: the unread session outranks "Done",
+    // which the finished fold already counts (M15-T4).
+    expect(marksOf("charlie").map((mark) => mark.getAttribute("aria-label"))).toEqual(["Finished, unread"]);
+    // A settled child with nothing else to say still shows its run's outcome,
+    // so a failure inside the fold is findable.
+    expect(marksOf("delta").map((mark) => mark.getAttribute("aria-label"))).toEqual(["Failed"]);
   });
 
   it("gives a childless row no disclosure or descendant-state mark", async () => {
@@ -325,7 +344,7 @@ describe("sub-sessions fold", () => {
 
     const parent = foldOf("Ship the release");
     expect(parent.getAttribute("aria-expanded")).toBe("false");
-    expect(foldStatusOf("Ship the release")?.getAttribute("data-tone")).toBe("danger");
+    expect(foldStatusOf("Ship the release")).toBeNull();
     expect(rowNamed("alpha")).toBeUndefined();
 
     await act(async () => parent.click());
@@ -378,7 +397,7 @@ describe("sub-sessions fold", () => {
     // disclosure's summary and mark; it does not reopen the branch.
     await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[2]!, status: "running", updatedAt: at(9) } }));
     expect(foldOf("Ship the release").getAttribute("aria-expanded")).toBe("false");
-    expect(foldStatusOf("Ship the release")?.getAttribute("data-tone")).toBe("danger");
+    expect(foldStatusOf("Ship the release")).toBeNull();
 
     // And the reverse: a run ending never collapses the branch under the
     // person — the child moves into the finished fold, the branch stays.
@@ -416,5 +435,108 @@ describe("sub-sessions fold", () => {
     expect(names()).toEqual(["charlie"]);
     expect(container.querySelector('[data-slot="session-fold"]')).toBeNull();
     expect(container.querySelector('[data-slot="finished-fold"]')).toBeNull();
+  });
+});
+
+/**
+ * M15-T4. One row, one activity indicator, before the name, saying what that
+ * session is doing — never what something under it is doing, and never a
+ * second mark at the row's end.
+ */
+describe("one indicator per row", () => {
+  /** The catalog with the given sessions' attention set and every other one idle. */
+  const withAttention = (overrides: Readonly<Record<string, SessionSummary["attention"]>>): SessionSummary[] =>
+    sessions.map((session) => {
+      const attention = overrides[session.path];
+      if (attention !== undefined) return { ...session, attention };
+      const { attention: _idle, ...rest } = session;
+      return rest;
+    });
+  const setAttention = (overrides: Readonly<Record<string, SessionSummary["attention"]>>) =>
+    act(async () => store.dispatch({ type: "sessions", sessions: withAttention(overrides) }));
+  const labelsOf = (text: string) => marksOf(text).map((mark) => mark.getAttribute("aria-label"));
+
+  it("gives a working session one mark before its name and nothing at the row's end", async () => {
+    await setAttention({ [QUIET]: "working" });
+    await mount();
+    const row = rowNamed("Quiet session")!;
+    const marks = marksOf("Quiet session");
+    expect(marks).toHaveLength(1);
+    expect(marks[0]!.getAttribute("aria-label")).toBe("Working");
+    expect(marks[0]!.getAttribute("data-status")).toBe("working");
+    // Before the name, not after it.
+    const title = row.querySelector('[data-slot="aui_thread-list-item-title"]')!;
+    expect(marks[0]!.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The trailing spinner is gone from the whole list, in every state.
+    expect(container.querySelector('[data-slot="session-working"]')).toBeNull();
+    // Unread, waiting and error keep the same single leading position.
+    await setAttention({ [QUIET]: "waiting_for_input" });
+    expect(labelsOf("Quiet session")).toEqual(["Waiting for you"]);
+    await setAttention({ [QUIET]: "finished_unread" });
+    expect(labelsOf("Quiet session")).toEqual(["Finished, unread"]);
+    await setAttention({ [QUIET]: "error" });
+    expect(labelsOf("Quiet session")).toEqual(["Error"]);
+    await setAttention({});
+    expect(labelsOf("Quiet session")).toEqual([]);
+  });
+
+  it("never makes a parent look busy because a child is", async () => {
+    await setAttention({});
+    await mount();
+    // alpha is running under it; the parent itself is doing nothing.
+    expect(labelsOf("Ship the release")).toEqual([]);
+    expect(foldStatusOf("Ship the release")).toBeNull();
+    expect(labelsOf("alpha")).toEqual(["Working"]);
+
+    // Folding the working child away does not move its state onto the parent.
+    await act(async () => foldOf("Ship the release").click());
+    expect(labelsOf("Ship the release")).toEqual([]);
+    expect(foldStatusOf("Ship the release")).toBeNull();
+
+    // The parent's own work is its own: it speaks for that, and only that.
+    await setAttention({ [ROOT]: "working" });
+    expect(labelsOf("Ship the release")).toEqual(["Working"]);
+  });
+
+  it("gives a child with a child of its own exactly one mark: its own", async () => {
+    await setAttention({});
+    await mount();
+    // echo is paused, foxtrot is working under it. Each row says its own state.
+    expect(labelsOf("echo")).toEqual(["Blocked"]);
+    expect(labelsOf("foxtrot")).toEqual(["Working"]);
+    expect(foldStatusOf("echo")).toBeNull();
+
+    // A grandchild that starts working changes the grandchild's row, nothing above it.
+    await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[4]!, status: "running", updatedAt: at(9) } }));
+    expect(labelsOf("echo")).toEqual(["Working"]);
+    expect(labelsOf("Ship the release")).toEqual([]);
+    await act(async () => foldOf("echo").click());
+    expect(foldStatusOf("echo")).toBeNull();
+  });
+
+  it("keeps colour and accessible names when motion is switched off", async () => {
+    await setAttention({ [QUIET]: "working" });
+    await mount();
+    const working = marksOf("Quiet session")[0]!;
+    expect(working.getAttribute("aria-label")).toBe("Working");
+    expect(working.style.getPropertyValue("--dot")).toBe("var(--live)");
+    // The sweep is the only thing reduced motion loses.
+    const sweep = working.querySelector("span")!;
+    expect(sweep.className).toContain("motion-safe:animate-sweep");
+    expect(sweep.className).toContain("motion-reduce:hidden");
+
+    await act(async () => store.dispatch({ type: "agents/run", run: { ...runs[0]!, status: "needs_input", updatedAt: at(9) } }));
+    const asking = marksOf("alpha")[0]!;
+    expect(asking.getAttribute("aria-label")).toBe("Asking");
+    expect(asking.className).toContain("motion-safe:animate-attention");
+    expect(asking.style.getPropertyValue("--dot")).toBe("var(--attention)");
+
+    // Folded, the question's mark is the same motion-gated colour, and the
+    // counts stay in words on the disclosure.
+    await act(async () => foldOf("Ship the release").click());
+    const folded = foldStatusOf("Ship the release")!;
+    expect(folded.className).toContain("motion-safe:animate-attention");
+    expect(folded.style.getPropertyValue("--dot")).toBe("var(--attention)");
+    expect(foldOf("Ship the release").getAttribute("aria-label")).toContain("1 needs you");
   });
 });
