@@ -2168,10 +2168,10 @@ lane T's own if both were written.
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
 | M15-T1 | Native file opener: file card and format-aware viewer modal | todo | — | — | after M14 release (D-222) |
-| M15-T2 | Dictation is always transcribed as English | todo | — | — | research OpenAI transcription language/translation parameters first |
-| M15-T3 | Model fallback chains: settings, runtime, persistence, verification | todo | — | — | specification verbatim in the M15-T3 notes below; write `docs/model-fallback-chains.md` from it before code |
-| M15-T4 | Sidebar activity indicators: one indicator, owned by the session itself | todo | — | — | evidence: `image.png` at the repository root (parent row shows dot + trailing spinner; a child with a child shows two dots; parent runs because a child runs) |
-| M15-T5 | Slash completion completes, never sends | todo | — | — | `/compa` + Tab completed to `/compact` and sent; audit every completion path |
+| M15-T2 | Dictation is always transcribed as English | in-progress | worker dictation-english (01a091e2-ac35-73a4-a484-ea5595d1b475, `agents/dictation-english-7a68babc`) | — | research first, then `transcribe.ts`; merges after the M14 tag |
+| M15-T3 | Model fallback chains: settings, runtime, persistence, verification | in-progress | worker fallback-chains (01a091e3-8b36-73a4-a484-ea6b0227d7dd, `agents/fallback-chains-e0b3ad20`) | — | phase 1: design doc + plan (no code) while the MCP engine worker holds `stable-sdk.ts`; phase 2 on the orchestrator's go |
+| M15-T4 | Sidebar activity indicators: one indicator, owned by the session itself | in-progress | worker sidebar-and-slash-fixes (01a091e1-c6e5-73a4-a484-ea4576dad59a, `agents/sidebar-and-slash-fixes-84cd3548`) | — | evidence: `image.png` at the repository root; same owner as T5, T4 first |
+| M15-T5 | Slash completion completes, never sends | in-progress | worker sidebar-and-slash-fixes (same session as T4) | — | after T4; owns Composer.tsx, slash-completion.ts, composer-trigger-popover.aui.tsx (taken out of the MCP transcript worker's scope) |
 | M15-T6 | Release M15 | todo | — | — | depends on T1–T5 |
 
 #### M15-T3 notes
@@ -4238,4 +4238,4 @@ Next: T111 finishes routing; T108 completes its single review correction. Only t
 ### D-222 · 2026-09-11 · MCP ships alone; the queued batch follows as its own release
 **Decision.** M14 is completed and released on its own before any M15 work is merged to `main`. M15 (file opener and viewer, English-only dictation, model fallback chains, the sidebar indicator fix, the slash-completion fix) then ships as one release.
 **Why.** The person asked for it: MCP is a large feature and its release must be readable as that feature. Mixing the batch in would blur the release notes and widen the verification surface.
-**Consequences.** No M15 branch merges before the M14 tag exists. M15 work may be investigated or started in worktrees meanwhile only if review capacity allows; nothing from it reaches `main` first.
+**Consequences.** No M15 branch merges before the M14 tag exists. M15 work runs in parallel in its own worktrees wherever its write set does not overlap the MCP workers' (the person asked for parallelism explicitly); it waits on its branch until the tag, then merges in dependency order.
