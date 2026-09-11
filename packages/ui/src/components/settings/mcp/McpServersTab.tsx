@@ -141,7 +141,7 @@ export function McpServersTab({ cwd, projectOpen = true }: { cwd: string; projec
       <div className="mx-auto flex max-w-200 flex-col gap-5 px-4 py-5 md:px-6">
         <header className="flex flex-wrap items-start justify-between gap-3">
           <div className="max-w-140">
-            <p className="eyebrow text-live">Tools from other programs</p>
+            <p className="typed uppercase tracking-eyebrow text-live">Tools from other programs</p>
             <h2 className="mt-1 text-lg font-semibold text-ink">MCP servers</h2>
             <p className="mt-1 text-sm leading-6 text-ink-2">
               A server brings tools {PRODUCT_DISPLAY_NAME} can use — a browser, a database, an issue tracker. What you change here

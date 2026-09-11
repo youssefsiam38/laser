@@ -125,7 +125,8 @@ export function McpToolsPanel({
                   label="On"
                   hint={locks.enabled ? PATTERN_POLICY_NOTE : "The model can use it."}
                   checked={state.enabled}
-                  disabled={busy || locks.enabled}
+                  busy={busy}
+                  disabled={locks.enabled}
                   onChange={(next) => onPolicy(setToolEnabled(policy, tool.originalName, next))}
                   name={tool.originalName}
                 />
@@ -139,7 +140,8 @@ export function McpToolsPanel({
                         : "In the model’s own list."
                   }
                   checked={state.direct}
-                  disabled={busy || locks.direct || onDemand || !state.enabled}
+                  busy={busy}
+                  disabled={locks.direct || onDemand || !state.enabled}
                   onChange={(next) => onPolicy(setToolDirect(policy, tool.originalName, next, names))}
                   name={tool.originalName}
                 />
@@ -147,7 +149,8 @@ export function McpToolsPanel({
                   label="Ask first"
                   hint={policy.approve === true ? "Every call asks" : locks.ask ? PATTERN_POLICY_NOTE : "A call waits for you."}
                   checked={state.ask}
-                  disabled={busy || locks.ask}
+                  busy={busy}
+                  disabled={locks.ask}
                   onChange={(next) => onPolicy(setToolApproved(policy, tool.originalName, next))}
                   name={tool.originalName}
                 />
@@ -166,6 +169,7 @@ function ToolSwitch({
   hint,
   checked,
   disabled,
+  busy,
   onChange,
   name,
 }: {
@@ -173,13 +177,23 @@ function ToolSwitch({
   hint: string;
   checked: boolean;
   disabled: boolean;
+  busy: boolean;
   onChange: (next: boolean) => void;
   name: string;
 }) {
   return (
     <span className="flex items-center gap-2" title={hint}>
-      <SettingsSwitch checked={checked} disabled={disabled} aria-label={`${label} · ${name}`} onCheckedChange={onChange} />
-      <span className={disabled ? "text-sm text-ink-3" : "text-sm text-ink-2"}>{label}</span>
+      {/* Pending saves must not discard keyboard focus. Native disabled is
+          reserved for a policy that actually forbids changing this dimension. */}
+      <SettingsSwitch
+        checked={checked}
+        disabled={disabled}
+        aria-disabled={busy || disabled}
+        aria-label={`${label} · ${name}`}
+        className={busy ? "cursor-wait opacity-45" : undefined}
+        onCheckedChange={(next) => { if (!busy) onChange(next); }}
+      />
+      <span className={disabled || busy ? "text-sm text-ink-3" : "text-sm text-ink-2"}>{label}</span>
     </span>
   );
 }

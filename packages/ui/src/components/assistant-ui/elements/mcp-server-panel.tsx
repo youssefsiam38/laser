@@ -87,7 +87,7 @@ export interface McpServerPanelProps extends Omit<ComponentProps<"div">, "childr
 export function McpServerPanel({ rows, selectedId, onSelect, onSignIn, heading, className, ...props }: McpServerPanelProps) {
   return (
     <div data-slot="mcp-server-panel" className={cn("flex min-w-0 flex-col gap-2", className)} {...props}>
-      {heading !== undefined && <div className="eyebrow px-1 text-ink-3">{heading}</div>}
+      {heading !== undefined && <div className="typed uppercase tracking-eyebrow px-1 text-ink-3">{heading}</div>}
       <ul className="flex min-w-0 flex-col gap-1.5">
         {rows.map((row) => (
           <li key={row.id} className="min-w-0">

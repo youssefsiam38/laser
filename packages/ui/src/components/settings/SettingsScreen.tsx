@@ -84,6 +84,23 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
 
+  const tabStrip = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const strip = tabStrip.current;
+    if (!strip) return;
+    const reveal = () => {
+      // Instant restoration avoids a resize animation fighting the next resize;
+      // it also respects reduced motion without a separate preference branch.
+      strip.querySelector<HTMLElement>('[aria-current="page"]')?.scrollIntoView({
+        block: "nearest", inline: "nearest", behavior: "auto",
+      });
+    };
+    reveal();
+    const observer = new ResizeObserver(reveal);
+    observer.observe(strip);
+    return () => observer.disconnect();
+  }, [tab]);
+
   // The host's project-less directory, fetched once and only when it is needed.
   useEffect(() => {
     if (project || setupCwd) return;
@@ -169,7 +186,7 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
       <div className="flex shrink-0 items-center gap-1 px-3 py-2 hairline-b">
         {/* Seven tabs do not fit a phone. The strip scrolls inside itself
             rather than the page scrolling sideways (DESIGN.md, the floor). */}
-        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+        <div ref={tabStrip} className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
           {TABS.map((entry) => (
             <Button
               key={entry.id}

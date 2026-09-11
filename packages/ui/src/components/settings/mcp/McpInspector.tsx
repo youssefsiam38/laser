@@ -87,7 +87,7 @@ export function McpInspector({
   const [confirmRemove, setConfirmRemove] = useState(false);
   const generation = useRef(0);
   // A write this page just made produces a `mcp/changed` of its own; it must
-  // not cost a reconnection.
+  // not trigger a second inspection beside the policy save's explicit refresh.
   const selfWrite = useRef(false);
 
   const scope = state?.scope;
@@ -110,7 +110,10 @@ export function McpInspector({
       if (request !== generation.current) return;
       setInspection(result);
     } catch (error) {
-      if (request === generation.current) setFailure(error instanceof Error ? error.message : String(error));
+      if (request === generation.current) {
+        setInspection(undefined);
+        setFailure(error instanceof Error ? error.message : String(error));
+      }
     } finally {
       if (request === generation.current) setConnecting(false);
     }
@@ -128,8 +131,8 @@ export function McpInspector({
     void connect();
   }, [scope, name, switchOffOnly, connect]);
 
-  // A status change from the worker is worth a reconnection; a configuration
-  // write this page made is not (a 30 s inspect per switch is not free).
+  // External status changes refresh the inspection. Our own policy saves
+  // refresh explicitly below, so their notifications must not duplicate it.
   const seenStatus = useRef<McpServerStatus | undefined>(undefined);
   useEffect(() => {
     if (!scope || !name || switchOffOnly) return;
@@ -152,12 +155,17 @@ export function McpInspector({
 
   const save = async (patch: Partial<McpServerState["config"]>, optimistic?: () => void, rollback?: () => void) => {
     if (!state || !scope) return;
+    const request = generation.current;
     optimistic?.();
     selfWrite.current = true;
     setBusy(true);
     try {
       const { servers } = await client.request("mcp/save", { cwd, scope, server: { ...state.config, ...patch } });
       onServers(servers);
+      // Save invalidates the worker's connection. Ask it for the effective
+      // policy again rather than duplicating its pattern/name matching here.
+      // Keep controls busy and replace the inspection in place when it arrives.
+      if (patch.tools && request === generation.current) await connect();
     } catch (error) {
       rollback?.();
       onError(error instanceof Error ? error.message : String(error));

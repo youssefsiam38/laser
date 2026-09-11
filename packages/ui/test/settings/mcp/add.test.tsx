@@ -87,6 +87,9 @@ it("tests the gallery definition it composed, then saves it direct for 24 tools"
   expect(text()).toContain("24 tools");
   expect(text()).toContain("navigate something");
   expect(text()).toContain("in the model’s list from the start");
+  const viewport = document.querySelector<HTMLElement>('[data-slot="mcp-add-dialog"] [data-slot="scroll-area-viewport"]')!;
+  expect(getComputedStyle(viewport).overflowY).toBe("auto");
+  expect(getComputedStyle(viewport).height).not.toContain("%");
 
   await click("Add");
   expect(saved).toHaveLength(1);

@@ -5,7 +5,8 @@
  * fails, Run proves the server on the same connection, and leaving closes a
  * command it started.
  */
-import { act } from "react";
+import { act, type ReactNode } from "react";
+import { AssistantRuntimeProvider, useExternalStoreRuntime } from "@assistant-ui/react";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { McpCallResult, McpInspection, McpServerConfigInput, McpServerState } from "@lasercode/protocol";
@@ -59,7 +60,7 @@ beforeEach(() => {
     ok: true,
     durationMs: 91,
     content: [
-      { type: "text", text: "Opened the page." },
+      { type: "text", text: "### Opened the page.\n\n[Example](https://example.com)\n\n<script>bad()</script>" },
       { type: "image", data: "aGk=", mimeType: "image/png" },
     ],
     structuredContent: { title: "Example" },
@@ -93,10 +94,15 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
+function Runtime({ children }: { children: ReactNode }) {
+  const runtime = useExternalStoreRuntime({ messages: [], isRunning: false, onNew: async () => {} });
+  return <AssistantRuntimeProvider runtime={runtime}>{children}</AssistantRuntimeProvider>;
+}
+
 async function open() {
   ({ root } = await render(
     <TooltipProvider>
-      <McpServersTab cwd="/project" />
+      <Runtime><McpServersTab cwd="/project" /></Runtime>
     </TooltipProvider>,
   ));
   const row = document.querySelector<HTMLButtonElement>('[data-slot="mcp-server-row"] button')!;
@@ -153,6 +159,58 @@ it("maintains exclude, only and approve, one whole save per change", async () =>
   expect(saved.at(-1)!.server.tools).toMatchObject({ exclude: ["click", "navigate", "screenshot"] });
   await click("All direct");
   expect(saved.at(-1)!.server.tools).not.toHaveProperty("only");
+});
+
+it.each([
+  ["On", "false", "true", { visibility: "excluded" }, "Switched off", "exclude"],
+  ["Direct", "false", "true", { visibility: "on-demand" }, "Reached on demand", "only"],
+  ["Ask first", "true", "false", { approval: true }, undefined, "approve"],
+] as const)("updates %s from the saved inspection and reverses on the second click", async (label, first, second, changed, note, key) => {
+  await open();
+  await click("Tools");
+  // Model the worker's next answer, not UI-side policy arithmetic.
+  inspectResult = inspection({ name: "playwright", tools: TOOLS.map((entry) => entry.originalName === "navigate" ? { ...entry, ...changed } : entry) });
+  await clickElement(toolSwitch(label, "navigate"));
+  expect(toolSwitch(label, "navigate").getAttribute("aria-checked")).toBe(first);
+  if (note) expect(toolRow("navigate").textContent).toContain(note);
+  inspectResult = inspection({ name: "playwright", tools: TOOLS });
+  await clickElement(toolSwitch(label, "navigate"));
+  expect(toolSwitch(label, "navigate").getAttribute("aria-checked")).toBe(second);
+  expect(saved).toHaveLength(2);
+  expect(saved[1]!.server.tools?.[key]).not.toEqual(saved[0]!.server.tools?.[key]);
+  if (note) expect(toolRow("navigate").textContent).not.toContain(note);
+});
+
+it("holds controls while refreshing and never leaves stale controls after a refresh failure", async () => {
+  await open();
+  await click("Tools");
+  let reject!: (error: Error) => void;
+  const original = mocks.request.getMockImplementation()!;
+  mocks.request.mockImplementation((method: string, params: Record<string, unknown>) => method === "mcp/inspect"
+    ? new Promise((_, fail) => { reject = fail; }) : original(method, params));
+  toolSwitch("On", "navigate").focus();
+  await clickElement(toolSwitch("On", "navigate"));
+  expect(toolSwitch("On", "navigate").getAttribute("aria-disabled")).toBe("true");
+  expect(document.activeElement).toBe(toolSwitch("On", "navigate"));
+  await clickElement(toolSwitch("On", "navigate"));
+  expect(saved).toHaveLength(1);
+  await act(async () => reject(new Error("Connection lost. Try again.")));
+  expect(document.querySelector('[aria-label="On · navigate"]')).toBeNull();
+  expect(text()).toContain("Connection lost. Try again.");
+});
+
+it("does not reopen a connection when a pending save finishes after the inspector closes", async () => {
+  await open();
+  await click("Tools");
+  let finish!: () => void;
+  const original = mocks.request.getMockImplementation()!;
+  mocks.request.mockImplementation((method: string, params: Record<string, unknown>) => method === "mcp/save"
+    ? new Promise((resolve) => { finish = () => resolve({ servers }); }) : original(method, params));
+  await clickElement(toolSwitch("On", "navigate"));
+  await click("Close");
+  await act(async () => finish());
+  expect(calls.filter((method) => method === "mcp/inspect")).toHaveLength(1);
+  expect(calls).toContain("mcp/disconnect");
 });
 
 it("rolls a failed change back and says what went wrong", async () => {
@@ -265,7 +323,9 @@ it("runs a tool with typed arguments and renders what came back", async () => {
   const result = document.querySelector<HTMLElement>('[data-slot="mcp-call-result"]')!;
   expect(result.textContent).toContain("Worked");
   expect(result.textContent).toContain("91 ms");
-  expect(result.textContent).toContain("Opened the page.");
+  expect(result.querySelector("h3")?.textContent).toBe("Opened the page.");
+  expect(result.querySelector('a[href="https://example.com"]')).not.toBeNull();
+  expect(result.querySelector("script")).toBeNull();
   // The image goes through the `image` element, never into the page as text.
   const image = result.querySelector<HTMLElement>('[data-slot="mcp-result-image"] [data-slot="image-preview"]');
   expect(image).not.toBeNull();
@@ -362,13 +422,13 @@ it("reads an entry that only switches an every-project server off, and turns it 
   expect(mocks.request).toHaveBeenCalledWith("mcp/remove", { cwd: "/project", scope: "project", name: "playwright" });
 });
 
-it("does not reconnect because of a write it made itself", async () => {
+it("refreshes effective policy once after its own write, without re-scanning imports", async () => {
   await open();
   const inspects = () => calls.filter((method) => method === "mcp/inspect").length;
   expect(inspects()).toBe(1);
   await click("Tools");
   await clickElement(toolSwitch("On", "click"));
-  expect(inspects()).toBe(1);
+  expect(inspects()).toBe(2);
   expect(calls.filter((method) => method === "mcp/import/detect").length).toBe(1);
 });
 
