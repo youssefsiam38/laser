@@ -82,7 +82,9 @@ function CodeHeader({ language, code }: CodeHeaderProps) {
       data-slot="code-header"
       className="mt-3 flex h-8 items-center justify-between rounded-t-lg border border-b-0 border-line bg-surface-2 pe-1 ps-3"
     >
-      <span className="eyebrow">{language || "code"}</span>
+      {/* The language is the fence's label, not the answer's words: a search
+          for "js" must not land on every code block (docs/search-content.md). */}
+      <span data-search-exclude className="eyebrow">{language || "code"}</span>
       <TooltipIconButton
         tooltip={copied ? "Copied" : "Copy code"}
         size="icon-xs"

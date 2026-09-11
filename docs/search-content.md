@@ -22,8 +22,29 @@ requests or result envelopes for indexing.
 | Edit/write | Displayed path and bounded diff lines; error text on failure | Hidden success confirmation, omitted diff lines, gutters |
 | Read/grep/find/list | Argument JSON values and displayed output | JSON keys, result-envelope metadata and images |
 | Unknown tool | Nested argument/result JSON values, or plain output text | JSON keys and content-envelope metadata/images |
+| MCP direct tool (`<server>_<tool>`) | Argument JSON values, then the result's text blocks in order **as the Markdown renderer draws them**, and a resource block's displayed name (its uri when it has none) with its text | JSON keys, the `details` envelope (server, tool, error kind), the registered tool name, a resource's uri when a name is shown, image and audio base64 |
+| MCP gateway (`mcp`, `mcp__<server>`) | Argument values, the mode's own list — a search's `server`/`tool` matches, a status row's name, status and tool count — then the visible text; a call shows the called tool's result | Match scores, listen state, byte counts and every other `details` field |
+| MCP script (`mcpScript`) | The argument values (the row draws the same disclosure every other row does), the code as the fence shows it, and the result text | The call trace beneath it |
 | Agent completion (`complete_agent_run`) | The final message, drawn as the child's last assistant block | The status badge, the clock, the harness's reply |
 | Agent event / task exit (custom messages) | The child's message and the person's reason; the task's command | The sentence, labels, clocks and the Output action |
+
+### Markdown bodies
+
+A body drawn by the Markdown renderer is indexed as the renderer draws it, not
+as the model wrote it: `mcpDisplayText` drops a fence's ``` line and its
+language label (marked `data-search-exclude` in `markdown-text.tsx`, so no
+answer matches on `js`), keeps code inside a fence verbatim, replaces a link
+with its label, removes an image, and drops heading, quote and list markers
+that the layout draws instead of writing out. Assistant message text is indexed
+raw for the same renderer; the tolerance below therefore applies to both.
+
+**Tolerance.** Inline emphasis (`**bold**`), inline code backticks, table pipes
+and backslash escapes are still in the projected text and not in the DOM. A
+query made only of those characters can produce a result row whose highlight is
+not found. Anything that moves *words* — links, images, fence labels, block
+markers — must be reconciled, and a new Markdown-drawn body adds its case to
+`mcpDisplayText` and to the equality test in
+`packages/ui/test/thread/mcp-tool-rows.test.tsx`.
 
 For example, `{ "command": "echo hello" }` does **not** match `command`.
 `{ "command": "command -v node" }` does. Text inside commands, source code,
@@ -38,6 +59,10 @@ viewer displays; terminal strings stay untouched. Nothing decodes user escapes.
 
 1. If it uses the generic JSON fallback, no registry entry is necessary. All
    primitive values are searchable recursively, including future nested fields.
+   A tool whose *name* cannot be known in advance needs a rule instead of an
+   entry: an MCP server's tools are registered as `<server>_<tool>`, so they are
+   recognised by the `details.server` their result carries, and the shared
+   `mcpContentBlocks` transform is what both the row and the projection walk.
 2. If it has a specialized body, add a `TOOL_SEARCH_PROJECTIONS` entry naming
    precisely the fields it displays. Reuse pure display transforms rather than
    reimplementing them for search (`tool-diff.ts` is shared for this reason).
@@ -53,7 +78,17 @@ viewer displays; terminal strings stay untouched. Nothing decodes user escapes.
    and equality between projected occurrences and actual DOM highlight ranges.
 
 Host search pairs saved calls with their results and flushes unfinished calls at
-end of file. It uses the same textual result shape as session hydration. Live
+end of file. It flattens a stored result to the joined text of its text blocks
+(`toolOutputText`) — no base64, no `details` — which is what the UI indexed for
+every tool until the transcript began keeping the stored envelope for a result
+that carries `details` or a non-text block (`storedToolResult`, `store.ts`).
+The two therefore agree on words and diverge on three things for those results:
+the host joins blocks that Find keeps apart (so only in the host can a phrase
+span two blocks), and, having no `details`, the host indexes neither a gateway's
+matches and status rows nor a diff's lines where the UI now does. Bringing the
+host to the same shape is the host owner's change; until then the note in
+`packages/host/src/session-search.ts` describing hydration as text-only is
+stale, and this paragraph is the contract. Live
 session search also consumes partial output; it never indexes provider metadata,
 credentials or image data from the tool result envelope. No workers are started
 to search saved sessions.

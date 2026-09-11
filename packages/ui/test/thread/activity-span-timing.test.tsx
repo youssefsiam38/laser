@@ -32,7 +32,7 @@ vi.mock("@assistant-ui/react", async (original) => ({
   ...await original<typeof import("@assistant-ui/react")>(),
   useToolCallElapsed: () => undefined,
 }));
-vi.mock("@/agents/hooks", () => ({ useNamerLabel: () => undefined }));
+vi.mock("@/agents/hooks", () => ({ useNamerLabel: () => undefined, useSessionMcpServers: () => [] }));
 
 type Part = Exclude<ThreadMessageLike["content"], string>[number];
 type MessageStatus = NonNullable<ThreadMessageLike["status"]>;
