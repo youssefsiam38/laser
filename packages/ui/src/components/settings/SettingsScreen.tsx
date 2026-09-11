@@ -32,13 +32,14 @@ import { NotificationsSetting } from "@/components/mobile";
 
 import { AppearanceTab } from "./appearance/AppearanceTab.js";
 import { KeyboardTab } from "./KeyboardTab.js";
+import { McpServersTab } from "./mcp/McpServersTab.js";
 import { ModelsTab } from "./ModelsTab.js";
 import { FeaturesScreen } from "./FeaturesScreen.js";
 import { SettingsForm } from "./SettingsForm.js";
 import { TrustTab } from "./TrustTab.js";
 import { UsageTab } from "./UsageTab.js";
 
-type Tab = "general" | "advanced" | "appearance" | "features" | "models" | "usage" | "keyboard" | "trust" | "device";
+type Tab = "general" | "advanced" | "appearance" | "features" | "mcp" | "models" | "usage" | "keyboard" | "trust" | "device";
 
 /**
  * `PROJECTLESS` lists tabs that do not require a selected project, keeping
@@ -56,13 +57,14 @@ const PROJECTLESS: readonly Tab[] = ["appearance", "keyboard", "trust", "device"
  * just installed laser and has no project yet — is the one person who
  * cannot reach them.
  */
-const GLOBAL_THROUGH_SETUP: readonly Tab[] = ["general", "advanced", "features", "models"];
+const GLOBAL_THROUGH_SETUP: readonly Tab[] = ["general", "advanced", "features", "mcp", "models"];
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "general", label: "General" },
   { id: "advanced", label: "Advanced" },
   { id: "appearance", label: "Appearance" },
   { id: "features", label: "Features" },
+  { id: "mcp", label: "MCP servers" },
   { id: "models", label: "Providers and models" },
   { id: "usage", label: "Usage" },
   { id: "keyboard", label: "Help and shortcuts" },
@@ -212,7 +214,10 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
               <SettingsForm audience={tab} cwd={cwd} catalog={catalog} snapshot={snapshot} onApply={apply} />
             )}
             {tab === "appearance" && <AppearanceTab />}
-            {tab === "features" && <FeaturesScreen {...(cwd ? { cwd } : {})} />}
+            {tab === "features" && <FeaturesScreen {...(cwd ? { cwd } : {})} onManageServers={() => setTab("mcp")} />}
+            {/* Without a project this is the every-project list; the project
+                filter simply has nothing to show. */}
+            {tab === "mcp" && cwd && <McpServersTab cwd={cwd} projectOpen={Boolean(project)} />}
             {tab === "models" && cwd && <ModelsTab cwd={cwd} snapshot={snapshot} onApply={apply} />}
             {tab === "usage" && <UsageTab />}
             {tab === "keyboard" && <KeyboardTab cwd={cwd} />}

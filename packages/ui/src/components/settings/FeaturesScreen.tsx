@@ -1,7 +1,7 @@
 "use client";
 
 import { PRODUCT_DISPLAY_NAME, type FeatureScope, type FeatureState } from "@lasercode/protocol";
-import { Bot, Check, CircleDot, Globe, RotateCw, Target } from "lucide-react";
+import { Bot, Check, CircleDot, Globe, Plug, RotateCw, Target } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
@@ -12,7 +12,7 @@ import { Toggle } from "@/components/ui/toggle";
 import { cn } from "@/lib/utils";
 import { useLaserStable } from "@/runtime";
 
-export function FeaturesScreen({ cwd }: { cwd?: string }) {
+export function FeaturesScreen({ cwd, onManageServers }: { cwd?: string; onManageServers?: () => void }) {
   const { client, actions } = useLaserStable();
   const [features, setFeatures] = useState<FeatureState[]>([]);
   const [scope, setScope] = useState<FeatureScope>("global");
@@ -79,7 +79,14 @@ export function FeaturesScreen({ cwd }: { cwd?: string }) {
         ) : (
           <div className="grid gap-3 md:grid-cols-2">
             {features.map((feature) => {
-              const Icon = feature.manifest.id === "goals" ? Target : feature.manifest.id === "web-search" ? Globe : Bot;
+              const Icon =
+                feature.manifest.id === "goals"
+                  ? Target
+                  : feature.manifest.id === "web-search"
+                    ? Globe
+                    : feature.manifest.id === "mcp"
+                      ? Plug
+                      : Bot;
               const changing = busy === feature.manifest.id;
               const selected = scope === "global" ? feature.globalEnabled : feature.projectEnabled ?? feature.globalEnabled;
               return (
@@ -113,6 +120,11 @@ export function FeaturesScreen({ cwd }: { cwd?: string }) {
                       : feature.projectEnabled !== undefined ? "Overridden for this project" : "Follows every-project choice"}
                     {feature.manifest.restart === "worker" ? " · Changing this restarts the affected project" : ""}
                   </p>
+                  {feature.manifest.id === "mcp" && onManageServers && (
+                    <Button type="button" variant="link" size="sm" className="mt-2 h-auto self-start p-0 text-xs" onClick={onManageServers}>
+                      Manage servers
+                    </Button>
+                  )}
                   {scope === "project" && feature.projectEnabled !== undefined && (
                     <Button type="button" variant="link" size="sm" className="mt-2 h-auto self-start p-0 text-xs" disabled={changing} onClick={() => void change(feature, null)}>
                       Use every-project choice
