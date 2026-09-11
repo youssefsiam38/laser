@@ -450,6 +450,12 @@ agents during a full host restart. Preserve drafts before frontend reload.
 
 ### Native reminders must follow session acknowledgement
 
+Only a top-level session may interrupt a person outside the window (D-225): a
+child agent's question or ending reaches its parent inside the conversation, so
+the desktop shows no banner and the host sends no phone push for it. The host
+tags `pi/session/attention` with the session's agent; the desktop's `shouldNotify`
+refuses a child; `pi/ui/request` from a child sends no push. Test both.
+
 Retain native notification handles by session and withdraw them when that session
 is actually viewed. A host seen acknowledgement is distinct from attention:
 viewing an unanswered approval must dismiss its OS reminder, not answer it.

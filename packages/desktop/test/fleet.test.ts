@@ -170,4 +170,41 @@ describe("shouldNotify", () => {
   it("still interrupts when an already-unread session starts blocking on you", () => {
     expect(shouldNotify(change("finished_unread", "waiting_for_input"))).toBe(true);
   });
+
+  it("never interrupts for a child agent's session: its parent hears it inside the conversation", () => {
+    const child = (from: AttentionChange["from"], to: AttentionChange["to"]): AttentionChange => ({ ...change(from, to), session: { ...change(from, to).session, child: true } });
+    expect(shouldNotify(child("working", "finished_unread"))).toBe(false);
+    expect(shouldNotify(child("working", "waiting_for_input"))).toBe(false);
+    expect(shouldNotify(child("working", "error"))).toBe(false);
+    // A session the host has not classified keeps the top-level rule.
+    expect(shouldNotify({ ...change("working", "finished_unread"), session: { ...change("working", "finished_unread").session, child: false } })).toBe(true);
+  });
+});
+
+describe("child sessions in the fleet model", () => {
+  it("learns a child from the listing and keeps it across attention events that carry no agent", () => {
+    const model = new FleetModel();
+    model.setConnected(true);
+    model.setSessions([
+      summary({ path: "/s/parent", cwd: "/w/a", name: "Parent", attention: "working" }),
+      summary({ path: "/s/child", cwd: "/w/a", name: "fixer", attention: "working", agent: { agentName: "default", kind: "child", subagentName: "fixer", parentPath: "/s/parent" } }),
+    ]);
+    const finished = model.applyAttention({ path: "/s/child", cwd: "/w/a", attention: "finished_unread", at: "2026-09-05T10:05:00.000Z" });
+    expect(finished?.session.child).toBe(true);
+    expect(shouldNotify(finished as AttentionChange)).toBe(false);
+    const parent = model.applyAttention({ path: "/s/parent", cwd: "/w/a", attention: "finished_unread", at: "2026-09-05T10:06:00.000Z" });
+    expect(parent?.session.child).toBeUndefined();
+    expect(shouldNotify(parent as AttentionChange)).toBe(true);
+  });
+
+  it("learns a child from the attention event itself, before any listing", () => {
+    const model = new FleetModel();
+    model.setConnected(true);
+    const agent = { agentName: "default", kind: "child" as const, subagentName: "fixer", parentPath: "/s/parent" };
+    const first = model.applyAttention({ path: "/s/child", cwd: "/w/a", attention: "working", at: "2026-09-05T10:05:00.000Z", agent });
+    expect(first?.initial).toBe(true);
+    const second = model.applyAttention({ path: "/s/child", cwd: "/w/a", attention: "waiting_for_input", at: "2026-09-05T10:06:00.000Z", agent });
+    expect(second).toMatchObject({ initial: false, session: { child: true } });
+    expect(shouldNotify(second as AttentionChange)).toBe(false);
+  });
 });

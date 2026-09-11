@@ -32,7 +32,7 @@ import type { AddressInfo } from "node:net";
 import { basename, dirname, extname, join, normalize, resolve as resolvePath, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@lasercode/crypto";
-import { ENV, PRODUCT_NAME, decisionPushPayload, type ClientRequests, type HostNotifications, type JsonRpcNotification, type LogEntry, type NamerState, type SessionUpdateParams } from "@lasercode/protocol";
+import { ENV, PRODUCT_NAME, decisionPushPayload, type ClientRequests, type HostNotifications, type JsonRpcNotification, type LogEntry, type NamerState, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
 import { suggestBeamModel } from "./agents/models.js";
 import { AgentRunRegistry } from "./agents/runs.js";
 import { SkillsCheck } from "./agents/skills-check.js";
@@ -267,8 +267,10 @@ export class HostServer {
     this.attention = new AttentionTracker({
       storePath: join(stateDir, "attention.json"),
       modifiedAt: (path) => this.catalog.get(path)?.modifiedAt,
-      onChange: ({ path, cwd, attention, at }) =>
-        this.notify("pi/session/attention", { path, cwd, attention, at }),
+      onChange: ({ path, cwd, attention, at }) => {
+        const agent = this.agentInfoOf(path);
+        this.notify("pi/session/attention", { path, cwd, attention, at, ...(agent ? { agent } : {}) });
+      },
       onSeen: (path) => this.notify("pi/session/seen", { path }),
     });
 
@@ -545,6 +547,28 @@ export class HostServer {
     return `http://${this.options.host ?? "127.0.0.1"}:${this.boundPort ?? this.options.port ?? 0}`;
   }
 
+  /**
+   * Which agent a session belongs to, from what the host already holds: the
+   * run registry names every child session it has heard of, and the catalog
+   * carries the agent record of any session it has scanned. Undefined for a
+   * session neither knows yet.
+   */
+  private agentInfoOf(path: string): SessionAgentInfo | undefined {
+    const run = this.runs.latestFor(path);
+    if (run) {
+      return {
+        agentName: run.agentName,
+        kind: "child",
+        subagentName: run.subagentName,
+        ...(run.parent ? { parentPath: run.parent.sessionPath } : {}),
+        rootPath: run.rootSessionPath,
+        runId: run.runId,
+        runStatus: run.status,
+      };
+    }
+    return this.catalog.get(path)?.agent;
+  }
+
   /** Send one host notification to every connected client. */
   notify<M extends keyof HostNotifications>(method: M, params: HostNotifications[M]): void {
     this.broadcast({ jsonrpc: "2.0", method, params });
@@ -575,6 +599,10 @@ export class HostServer {
       case "pi/ui/request": {
         const params = notification.params as HostNotifications["pi/ui/request"];
         this.attention.dialogRaised(params.path, cwd, params.id);
+        // A child's question is its parent's to answer, inside the parent's
+        // conversation; a phone is interrupted only for a top-level session
+        // (D-225).
+        if (this.agentInfoOf(params.path)?.kind === "child") return;
         // One notification per question, tagged by dialog id so a re-send
         // replaces rather than stacks. Fire and forget: a phone that is not
         // subscribed costs nothing, and a push failure must never block a turn.
