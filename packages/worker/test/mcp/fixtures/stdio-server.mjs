@@ -68,6 +68,7 @@ export function handle(request) {
         instructions: "Call echo to hear yourself think.",
       };
     case "ping":
+      if (args.includes("--fail-ping")) throw new Error("the fixture refused the ping");
       return {};
     case "tools/list":
       if (failTools) throw new Error("tools are unavailable in this fixture");

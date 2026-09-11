@@ -6,9 +6,9 @@
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { McpInspector } from "../../src/mcp/inspector.js";
@@ -132,6 +132,29 @@ describe("McpInspector", () => {
     expect(inspection.detail).toContain("\"broken\" could not be reached");
     expect(inspection.detail).not.toContain("    at ");
     expect(inspection.stderr?.join(" ")).toContain("could not open the database");
+  }, 60_000);
+
+  it("explains a missing executable and caps the searched PATH at six entries", async () => {
+    const path = Array.from({ length: 8 }, (_, i) => join(base, `bin-${i}`));
+    const command = "mcp-test-nonexistent-command";
+    const inspection = await inspector.inspect({ scope: "global", secrets: new Map(), config: {
+      name: "missing", transport: { kind: "stdio", command, env: { PATH: path.join(delimiter) } },
+    } });
+    expect(inspection.status).toBe("failed");
+    expect(inspection.detail).toBe(`The command \`${command}\` was not found. Give its full path, or install it; the app looked in: ${path.slice(0, 6).join(", ")}, …`);
+    expect(inspector.inspecting("global", "missing")).toBe(false);
+  }, 60_000);
+
+  it.skipIf(process.platform === "win32")("explains a non-executable file through the real inspector", async () => {
+    const command = join(base, "not-executable");
+    writeFileSync(command, "#!/bin/sh\nexit 0\n", { mode: 0o600 });
+    const inspection = await inspector.inspect({ scope: "global", secrets: new Map(), config: {
+      name: "denied", transport: { kind: "stdio", command },
+    } });
+    expect(inspection.status).toBe("failed");
+    expect(inspection.detail).toContain(`The command \`${command}\` is not executable.`);
+    expect(inspection.detail).toContain("the app looked in:");
+    expect(inspection.detail).not.toContain("EACCES");
   }, 60_000);
 
   it("says a turned-off server is off instead of connecting to it", async () => {

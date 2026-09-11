@@ -27,12 +27,12 @@ beforeEach(() => {
 afterEach(() => rmSync(base, { recursive: true, force: true }));
 
 describe("runtimePathAdditions", () => {
-  it("adds the runtime's own directory and the bundled package manager's", () => {
+  it("adds the runtime's own directory, never npm's internal bin", () => {
     const additions = runtimePathAdditions(
       { PATH: "/usr/bin", [ENV.npmCli]: "/opt/app/runtime/npm/bin/npm-cli.js" },
       "/opt/app/runtime/node",
     );
-    expect(additions).toEqual(["/opt/app/runtime", "/opt/app/runtime/npm/bin"]);
+    expect(additions).toEqual(["/opt/app/runtime"]);
   });
 
   it("adds the runtime's directory even with no PATH at all", () => {
@@ -43,12 +43,12 @@ describe("runtimePathAdditions", () => {
     expect(runtimePathAdditions({ PATH: ["/opt/app/runtime", "/usr/bin"].join(delimiter) }, "/opt/app/runtime/node")).toEqual([]);
   });
 
-  it("takes the package manager's directory from the command the host passes", () => {
+  it("never adds internal directories from the command the host passes", () => {
     const additions = runtimePathAdditions(
       { PATH: "/usr/bin", [ENV.npmCommand]: JSON.stringify(["/opt/app/runtime/node", "/opt/app/runtime/npm/bin/npm-cli.js", "--no-audit"]) },
       "/opt/app/runtime/node",
     );
-    expect(additions).toEqual(["/opt/app/runtime", "/opt/app/runtime/npm/bin"]);
+    expect(additions).toEqual(["/opt/app/runtime"]);
     expect(runtimePathAdditions({ PATH: "/usr/bin", [ENV.npmCommand]: "not json" }, "/opt/app/runtime/node")).toEqual(["/opt/app/runtime"]);
   });
 });
