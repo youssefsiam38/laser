@@ -34,7 +34,7 @@ import {
   type ReactNode,
 } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
-import type { ModelRef, SettingChange } from "@lasercode/protocol";
+import type { ModelRef, SessionFallbackSummary, SettingChange } from "@lasercode/protocol";
 import { CheckIcon, ChevronDownIcon, ChevronsUpDown, Cpu } from "lucide-react";
 import { narrowToConnected } from "./connected-models.js";
 import { cn } from "@/lib/utils";
@@ -1109,10 +1109,22 @@ function useProjectDefaultModel(cwd: string | undefined, enabled: boolean): { mo
  * That is the point at which choosing a model is most useful; disabling the
  * control until after the first prompt falsely looks like a provider failure.
  */
+/**
+ * What the model trigger says about a chain, for the label a screen reader
+ * reads. Empty when this session has no chain — the common case, and the one
+ * that must sound exactly as it did before.
+ */
+function chainSuffix(fallback: SessionFallbackSummary | undefined): string {
+  if (!fallback || fallback.chain.length < 2) return "";
+  if (fallback.switching) return ", switching to another model in this chain";
+  return `, model ${fallback.position + 1} of ${fallback.chain.length} in this fallback chain`;
+}
+
 export function SessionModelSelector({ className }: { className?: string | undefined }) {
   const { actions, client, currentProject } = useLaserStable();
   const { firstTurn, chooseModel, pending: preparingSession } = useSessionPreparation();
   const { model: sessionModel, session } = useSessionMeta();
+  const fallback = session?.fallback;
   const snapshot = useLaserState((state) => state.agents.snapshot);
   const sessionPath = session?.path;
   const cwd = session?.cwd ?? currentProject;
@@ -1211,7 +1223,7 @@ export function SessionModelSelector({ className }: { className?: string | undef
         disabled={!cwd || saving || preparingSession}
         aria-label={
           sessionPath || hasModelIntent
-            ? `Model: ${model ? (model.name ?? model.id) : "none"}`
+            ? `Model: ${model ? (model.name ?? model.id) : "none"}${chainSuffix(fallback)}`
             : unknown
               ? "Checking which model a new session starts with"
               : model
@@ -1229,6 +1241,23 @@ export function SessionModelSelector({ className }: { className?: string | undef
             <span className="truncate typed" title={model.name ?? model.id}>
               {model.name ?? model.id}
             </span>
+            {/* The chain, when one is running this session: which model of it is
+                live, or that a switch is happening right now. The trigger's own
+                aria-label already says it in words, so this stays decorative
+                rather than a second thing to read (M15-T3). */}
+            {fallback && fallback.chain.length > 1 && (
+              <span
+                data-slot="fallback-chain-badge"
+                data-switching={fallback.switching ? "true" : undefined}
+                aria-hidden="true"
+                className={cn(
+                  "shrink-0 rounded-sm px-1 text-xs leading-4 tabular-nums",
+                  fallback.switching ? "bg-[color-mix(in_oklab,var(--live)_12%,transparent)] text-live" : "bg-surface-2 text-ink-3",
+                )}
+              >
+                {fallback.switching ? "switching" : `chain ${fallback.position + 1}/${fallback.chain.length}`}
+              </span>
+            )}
           </span>
         ) : (
           <span className="flex items-center gap-1.5 text-ink-3">

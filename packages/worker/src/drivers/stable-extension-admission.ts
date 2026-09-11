@@ -67,9 +67,25 @@ export class StableExtensionAdmission {
   private readonly invocation = new AsyncLocalStorage<StableInvocation>();
   private handler: ExtensionModelWorkHandler | undefined;
   private native: NativeMethods | undefined;
+  private afterNativeTurn: (() => Promise<void>) | undefined;
 
   setHandler(handler: ExtensionModelWorkHandler | undefined): void {
     this.handler = handler;
+  }
+
+  /**
+   * Run once after every native turn this object drives — a person's prompt, a
+   * goal action, and the extension send that wakes a turn of its own
+   * (`triggerTurn`: a child agent's ending, a background command's exit).
+   *
+   * There is exactly one place every one of those passes through, and it is
+   * `runInvocation`. Hanging anything off the individual call sites instead
+   * leaves the woken turn out, which is the path AGENTS.md pins under D-158
+   * and D-162 (M15-T3: the model fallback runs here, and the settle the driver
+   * held for it is released here too, so no throw can leave a run unsettled).
+   */
+  setAfterNativeTurn(hook: (() => Promise<void>) | undefined): void {
+    this.afterNativeTurn = hook;
   }
 
   /** Install once for each replacement Pi session, before its extensions bind. */
@@ -165,6 +181,15 @@ export class StableExtensionAdmission {
           await operation();
         } catch (error) {
           failure = error;
+        }
+        // Still inside the invocation's async context, so anything it emits
+        // keeps this turn's stamp, and a failed operation reaches it too.
+        if (this.afterNativeTurn) {
+          try {
+            await this.afterNativeTurn();
+          } catch (error) {
+            failure ??= error;
+          }
         }
         if (drainChildren) {
           try {

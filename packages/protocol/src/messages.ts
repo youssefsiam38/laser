@@ -9,6 +9,7 @@
  */
 
 import type { AgentWorktreeStatus, SessionAgentInfo, SessionWorktreeDisposition } from "./agents.js";
+import type { ProviderFailureClass } from "./provider-failure.js";
 import { WIRE_NAMESPACE } from "./identity.js";
 import type { AccountUsageState, PiExtensionMessage, PiExtensionModuleName } from "./pi-extension.js";
 import type { FeatureScope, FeatureState, GoalAction, SessionGoal } from "./features.js";
@@ -203,6 +204,22 @@ export interface SessionState {
   contextUsage?: { tokens: number | null; contextWindow: number; percent: number | null };
   /** Which agent runs this session and, for a child, whose child it is. */
   agent?: SessionAgentInfo;
+  /** The fallback chain this session activated, when one applies (M15-T3). */
+  fallback?: SessionFallbackSummary;
+}
+
+/**
+ * What a client needs to draw a session's chain: the snapshot it activated, the
+ * model inside it that is active now, whether a switch is happening this very
+ * moment, and the last one that happened.
+ */
+export interface SessionFallbackSummary {
+  /** The activation's snapshot, resolved against the catalogue for display. */
+  chain: ModelRef[];
+  position: number;
+  /** A failover event is in flight: the session is working, on no settled model. */
+  switching?: boolean;
+  lastSwitch?: { from: ModelRef; to: ModelRef; reason: ProviderFailureClass; at: string };
 }
 
 // ---------- Session updates (host → client notifications) ----------
@@ -268,6 +285,21 @@ export type SessionUpdate =
   | { kind: "compaction_end"; ok: boolean }
   | { kind: "auto_retry_start"; attempt: number; maxAttempts: number }
   | { kind: "auto_retry_end"; ok: boolean }
+  /**
+   * A fallback chain moved this session to another model, or could not
+   * (M15-T3, `docs/model-fallback-chains.md`). `detail` is a sentence for a
+   * person; a provider's own payload never travels here.
+   */
+  | {
+      kind: "model_fallback";
+      phase: "switching" | "switched" | "attempt_failed" | "exhausted";
+      from?: ModelRef;
+      to?: ModelRef;
+      reason: ProviderFailureClass;
+      detail?: string;
+      /** Index in the activation's chain snapshot after this update. */
+      position: number;
+    }
   /** Only for custom entries appended by extensions (pi.appendEntry); regular messages do not produce this. */
   | { kind: "entry_appended"; entry: unknown }
   | { kind: "state"; state: SessionState }

@@ -28,6 +28,13 @@ const wordsFor = (s: AppState): Words | undefined => {
   }
   if (view.dialogs.length > 0) return { status: "waiting_for_input", text: "waiting for you", live: true };
   if (view.state.isCompacting) return { status: "working", text: "compacting", live: true };
+  // A fallback chain is moving this conversation to another model. The engine
+  // is idle between its own runs while that happens, so this reads ahead of
+  // "working" — and it names the model being tried, not just the fact.
+  if (view.state.fallback?.switching) {
+    const model = view.state.model;
+    return { status: "working", text: model ? `switching to ${model.name ?? model.id}` : "switching models", live: true };
+  }
   if (view.running) return { status: "working", text: "working", live: true };
   const worker = s.workers[view.state.cwd];
   if (worker?.status === "crashed") return { status: "error", text: "worker crashed", live: false };

@@ -44,7 +44,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { goalExtensionPath, goalStateFromEntries } from "@lasercode/pi-goal";
 import { createCommandBus, createLaserExtension, createPromptProvenanceObserver, toSessionGoal, type LaserExtensionOptions } from "@lasercode/pi-extension";
-import { ErrorCodes, ProtocolError, PRODUCT_NAME, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE, SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE } from "@lasercode/protocol";
+import { ErrorCodes, modelKey, ProtocolError, PRODUCT_NAME, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE, SESSION_FALLBACK_ENTRY_TYPE, SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE } from "@lasercode/protocol";
 import type {
   CommandInfo,
   ContentBlock,
@@ -69,7 +69,7 @@ import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { supportedThinkingLevels } from "../packages.js";
-import { disabledModelRefs, engineSettingsOnly, modelSwitchedOff, readEffectiveProductSettings, readLaserProjectSettings } from "../settings.js";
+import { disabledModelRefs, engineSettingsOnly, modelSwitchedOff, readEffectiveProductSettings, readFallbackChains, readLaserProjectSettings } from "../settings.js";
 import { applyDurableOverrides, type EngineSettingsOverrides } from "../settings-overrides.js";
 import { WebSearchService } from "../web-search.js";
 import { MCP_ENGINE_COMMANDS, mcpPromptServer, mcpSessionSetup, type McpSessionSetup } from "../mcp/session.js";
@@ -94,6 +94,8 @@ import { ENGINE_BUILTIN_TOOLS, ensureWorkspaceSessionCwd, filterSkills, removedW
 import { defaultAgentInstructions } from "../agents/engine-instructions.js";
 import { createInstructionTemplateExtension } from "../agents/instruction-templates.js";
 import { modelUnavailableMessage } from "../agents/harness.js";
+import { FallbackController, type FallbackEngine } from "../fallback/controller.js";
+import { createFallbackEnginePort } from "../fallback/engine-port.js";
 import { StableExtensionAdmission } from "./stable-extension-admission.js";
 import { FirstTurnAttempt, type FirstTurnAttemptOwner } from "./first-turn-attempt.js";
 
@@ -148,6 +150,20 @@ export class StableSdkDriver implements SessionDriver {
   private mcpServers: Array<{ name: string; label?: string }> | undefined;
   /** A settings reload asked for mid-turn, owed once the session is idle (M13-T55). */
   private settingsReloadWanted = false;
+  /** This session's fallback chain, when the product has any (M15-T3). */
+  private fallback: FallbackController | undefined;
+  /** The last assistant message's failure, cleared by a response that worked. */
+  private assistantFailure: { stopReason?: string; errorMessage?: string } | undefined;
+  /** The provider response of the attempt in flight; a request clears it. */
+  private providerResponse: { status: number; headers?: Record<string, string> } | undefined;
+  /**
+   * The engine's `agent_settled` for a turn that may still fail over. It fires
+   * before the failover can begin, and the harness reads it as "the run is
+   * over" (agents/harness.ts), so it is held and released once — either when
+   * the chain has settled the turn on another model, or at once when it turns
+   * out there is nothing to do.
+   */
+  private heldSettled: { invocation?: DriverInvocationRef } | undefined;
   private agentDir = "";
   /**
    * A user `message_end` waiting one microtask for Pi to persist its message
@@ -234,6 +250,11 @@ export class StableSdkDriver implements SessionDriver {
         ...(mcp ? { mcp: { statusEvent: mcp.statusEvent } } : {}),
         send: (message) => {
           if (message.type === "lasercode/account-usage/state") this.accountUsage = message.state;
+          // The only structured failure signal the engine exposes: the status
+          // and headers of the response this attempt received. A new request
+          // clears it, so it can never describe an older attempt (M15-T3).
+          if (message.type === "lasercode/provider/request") this.providerResponse = undefined;
+          if (message.type === "lasercode/provider/response") this.providerResponse = { status: message.status, headers: message.headers };
           this.emit({ type: "extension", message });
         },
         commands: this.extensionBus,
@@ -468,6 +489,15 @@ export class StableSdkDriver implements SessionDriver {
     // Resource-preview drivers have no agent and never expose their temporary
     // identity. Every real WorkerServer session has an agent record.
     if (!options.sessionPath && agent) this.session().sessionManager.flush();
+    // The chain this session is on, from its own file first (a traversal is
+    // never re-resolved from the model it ended on) and only then from the
+    // settings a person wrote (M15-T3).
+    this.fallback = new FallbackController(this.fallbackEngine());
+    // One boundary for every native turn this driver drives (B1): prompt, goal
+    // action, and the extension send that wakes a turn of its own.
+    this.extensionAdmission.setAfterNativeTurn(() => this.settleFallback());
+    this.fallback.restore(this.session().sessionManager.getEntries());
+    this.fallback.activateIfUnset();
     return this.state();
   }
 
@@ -718,6 +748,10 @@ export class StableSdkDriver implements SessionDriver {
   }
 
   async dispose(): Promise<void> {
+    this.fallback?.cancel();
+    this.fallback = undefined;
+    this.extensionAdmission.setAfterNativeTurn(undefined);
+    this.releaseHeldSettled();
     this.flushHeldUserEnd();
     this.unsubscribe?.();
     this.extensionAdmission.invalidate();
@@ -761,6 +795,7 @@ export class StableSdkDriver implements SessionDriver {
   state(): SessionState {
     const session = this.session();
     const usage = session.getContextUsage();
+    const fallback = this.fallback?.summary();
     return {
       path: session.sessionFile ?? "",
       id: session.sessionId,
@@ -769,7 +804,9 @@ export class StableSdkDriver implements SessionDriver {
       // With no configured auth Pi substitutes an "unknown/unknown" placeholder; report it as no model.
       model: session.model && session.model.provider !== "unknown" ? toModelRef(session.model) : null,
       thinkingLevel: session.thinkingLevel as ThinkingLevel,
-      isStreaming: session.isStreaming,
+      // A failover runs between the engine's own runs: the session is working
+      // even while the engine is idle, and nothing may enter that gap.
+      isStreaming: session.isStreaming || this.fallback?.busy === true,
       isCompacting: session.isCompacting,
       steeringMode: session.steeringMode,
       followUpMode: session.followUpMode,
@@ -786,6 +823,7 @@ export class StableSdkDriver implements SessionDriver {
           }
         : {}),
       ...(this.accountUsage ? { accountUsage: this.accountUsage } : {}),
+      ...(fallback ? { fallback } : {}),
     };
   }
 
@@ -858,7 +896,7 @@ export class StableSdkDriver implements SessionDriver {
       this.promptPreflight = undefined;
       release();
     };
-    const streaming = session.isStreaming;
+    const streaming = session.isStreaming || this.fallback?.busy === true;
     let accepted = false;
     const accept = () => {
       if (accepted) return;
@@ -899,18 +937,20 @@ export class StableSdkDriver implements SessionDriver {
       if (streaming && !options?.streamingBehavior) {
         return { accepted: false, queued: false };
       }
-      await this.extensionAdmission.runInvocation(context, () => session.prompt(text, {
-        ...(images.length > 0 ? { images } : {}),
-        ...(options?.streamingBehavior ? { streamingBehavior: options.streamingBehavior } : {}),
-        ...(options?.expandPromptTemplates !== undefined ? { expandPromptTemplates: options.expandPromptTemplates } : {}),
-        // Pi's per-invocation preflight is the exact boundary between a prompt
-        // we still own and a user message the engine owns. `session.prompt()`
-        // itself resolves only after the whole turn, including retries.
-        preflightResult: (preflightAccepted: boolean) => {
-          if (preflightAccepted) accept();
-          else finishPreflight();
-        },
-      }), true);
+      await this.extensionAdmission.runInvocation(context, async () => {
+        await session.prompt(text, {
+          ...(images.length > 0 ? { images } : {}),
+          ...(options?.streamingBehavior ? { streamingBehavior: options.streamingBehavior } : {}),
+          ...(options?.expandPromptTemplates !== undefined ? { expandPromptTemplates: options.expandPromptTemplates } : {}),
+          // Pi's per-invocation preflight is the exact boundary between a prompt
+          // we still own and a user message the engine owns. `session.prompt()`
+          // itself resolves only after the whole turn, including retries.
+          preflightResult: (preflightAccepted: boolean) => {
+            if (preflightAccepted) accept();
+            else finishPreflight();
+          },
+        });
+      }, true);
     } catch (error) {
       // Pi can throw the same busy-shaped error after reporting true. Acceptance
       // is monotonic: only a busy error from before acknowledgement is refusal.
@@ -957,6 +997,9 @@ export class StableSdkDriver implements SessionDriver {
   }
 
   async abort(): Promise<void> {
+    // A person's stop ends the failover too, and the release below lets the
+    // turn settle in the transcript rather than staying open forever.
+    this.fallback?.cancel();
     if (this.firstTurn.active) {
       this.retirePreparedFirstTurnDialogs();
       await this.runtime?.session.abort();
@@ -1024,6 +1067,9 @@ export class StableSdkDriver implements SessionDriver {
     await session.setModel(match);
     this.explicitModelOverride = { ...model };
     this.persistExplicitOverrides();
+    // A person's choice wins over anything in flight and starts a fresh
+    // activation from the chain that model starts, if it starts one (M15-T3).
+    this.fallback?.onManualSelection({ provider: model.provider, id: model.id });
     return this.state();
   }
 
@@ -1293,7 +1339,14 @@ export class StableSdkDriver implements SessionDriver {
     const invocation = this.extensionAdmission.eventInvocation(generation);
     if (event.type === "agent_start" && invocation) invocation.started = true;
     this.toolCalls.note(event);
+    this.noteFallbackEvent(event);
     this.flushHeldUserEnd();
+    // The engine settles a turn before the chain can even look at it, and the
+    // harness ends a run on that update. Hold it while a failover is possible.
+    if (event.type === "agent_settled" && this.fallback?.pending()) {
+      this.heldSettled = { ...(invocation ? { invocation: invocation.ref } : {}) };
+      return;
+    }
     const update = mapEvent(event);
     if (update?.kind === "message_end" && update.role === "user" && event.type === "message_end") {
       // Pi writes the entry right after this listener returns; the id is
@@ -1319,6 +1372,92 @@ export class StableSdkDriver implements SessionDriver {
       this.push({ kind: "state", state: this.state() });
     }
     if (event.type === "agent_settled" || event.type === "compaction_end") this.runDeferredSettingsReload();
+  }
+
+  // ------------------------------------------------------------- fallback
+
+  /**
+   * The chain's window onto this session (`fallback/engine-port.ts`). The
+   * driver supplies the session and the two things only it can see: the
+   * failure it observed on the event stream, and where an update goes.
+   */
+  private fallbackEngine(): FallbackEngine {
+    return createFallbackEnginePort({
+      session: () => this.session(),
+      agentDir: this.agentDir,
+      cwd: this.cwd,
+      projectTrusted: this.projectTrusted,
+      failure: () => {
+        const failure = this.assistantFailure;
+        if (!failure) return undefined;
+        return { ...failure, ...(this.providerResponse ? { response: this.providerResponse } : {}) };
+      },
+      emit: (update) => this.push(update, this.extensionAdmission.eventInvocation()?.ref),
+      onModelChanged: () => this.push({ kind: "state", state: this.state() }, this.extensionAdmission.eventInvocation()?.ref),
+    });
+  }
+
+  /**
+   * What the chain needs from the event stream: how the last assistant message
+   * ended, and the HTTP response of the attempt that produced it. The response
+   * arrives from the companion's `provider-log` module (Pi gives extensions the
+   * status and headers and nothing else) and is cleared by the next request, so
+   * it can only ever describe the attempt in hand.
+   */
+  private noteFallbackEvent(event: AgentSessionEvent): void {
+    if (event.type === "agent_start") {
+      // A new turn: whatever failed before is history. Leaving the old signal
+      // in place would let an invocation that produces no assistant message at
+      // all — a slash command, a compaction, a goal action — open a failover
+      // from a dead failure and change the model nobody asked to change.
+      this.assistantFailure = undefined;
+      this.providerResponse = undefined;
+      // And a settle held for a failover that never ran must not outlive the
+      // turn it belonged to: releasing it here is how that heals instead of
+      // hanging (the harness ends a run on it).
+      if (!this.fallback?.busy) this.releaseHeldSettled();
+      return;
+    }
+    if (event.type !== "message_end") return;
+    const message = event.message as { role?: unknown; stopReason?: unknown; errorMessage?: unknown };
+    if (message.role !== "assistant") return;
+    this.assistantFailure = message.stopReason === "error" || message.stopReason === "aborted"
+      ? {
+          ...(typeof message.stopReason === "string" ? { stopReason: message.stopReason } : {}),
+          ...(typeof message.errorMessage === "string" ? { errorMessage: message.errorMessage } : {}),
+        }
+      : undefined;
+  }
+
+  /**
+   * Run the chain for a turn that has settled, then release its
+   * `agent_settled`. Called from one place only — the admission object's
+   * after-turn hook — so a person's prompt, a goal action and the extension
+   * send that wakes a turn (a child's ending, a background command's exit) all
+   * reach it, and no throw can skip the release.
+   */
+  private async settleFallback(): Promise<void> {
+    try {
+      // Never mid-turn: a nested extension invocation can finish while the
+      // engine is still working or between its own retries, and the failure it
+      // would see there belongs to an attempt the engine has not given up on.
+      const session = this.runtime?.session;
+      if (session && session.isIdle && !session.isRetrying) await this.fallback?.settle();
+    } catch (error) {
+      console.error(`${PRODUCT_NAME} worker: a model fallback could not be completed:`, error instanceof Error ? error.message : error);
+    } finally {
+      this.releaseHeldSettled();
+    }
+  }
+
+  /** The turn is over for real now: settle it in the transcript, once. */
+  private releaseHeldSettled(): void {
+    const held = this.heldSettled;
+    if (!held) return;
+    this.heldSettled = undefined;
+    this.push({ kind: "agent_settled" }, held.invocation);
+    this.push({ kind: "state", state: this.state() }, held.invocation);
+    this.runDeferredSettingsReload();
   }
 
   /** Send the held user `message_end`, with its entry when Pi has written it. */
@@ -1352,6 +1491,9 @@ export class StableSdkDriver implements SessionDriver {
     }
   }
 }
+
+
+
 
 /** De-duplicate existing resource roots while preserving precedence. */
 function existingResourceRoots(paths: string[]): string[] {
