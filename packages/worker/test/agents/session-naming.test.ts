@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { fallbackSnapshot } from "../../src/agents/definitions.js";
 import type { NamerModelRuntime } from "../../src/agents/namer.js";
-import type { DriverEvent, DriverListener, DriverOpenOptions, SessionDriver } from "../../src/driver.js";
+import type { DriverEvent, DriverListener, DriverOpenOptions, PromptOptions, SessionDriver } from "../../src/driver.js";
 import { WorkerServer } from "../../src/server.js";
 
 let base: string;
@@ -33,8 +33,9 @@ class LongTurnDriver implements SessionDriver {
   streaming(on: boolean) { this.st = { ...this.st, isStreaming: on }; }
   subscribe(l: DriverListener) { this.listeners.add(l); return () => this.listeners.delete(l); }
   emit(e: DriverEvent) { for (const l of this.listeners) l(e); }
-  prompt(content: Array<{ type: string; text?: string }>, options?: { streamingBehavior?: "steer" | "followUp" }) {
+  prompt(content: Array<{ type: string; text?: string }>, options?: PromptOptions) {
     this.prompted.push({ text: content.map((b) => b.text ?? "").join(""), ...(options?.streamingBehavior ? { streamingBehavior: options.streamingBehavior } : {}) });
+    options?.onAccepted?.();
     if (!options?.streamingBehavior) this.streaming(true);
     return new Promise<{ accepted: boolean; queued: boolean }>(() => {});
   }

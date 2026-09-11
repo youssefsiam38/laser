@@ -87,3 +87,323 @@ index 94ca0722daa6a65691587e52a6fb269417337152..d259af7eb119c95484cb6ff7725dddfc
  export type AppendEntryHandler = <T = unknown>(customType: string, data?: T) => void;
  export type SetSessionNameHandler = (name: string) => void;
  export type GetSessionNameHandler = () => string | undefined;
+diff --git a/dist/core/sdk.js b/dist/core/sdk.js
+index 8bb4595a64ca83f4ffd72d46dd65f1a75c283021..16368faf12b5fc338c44a32cf8684b07556cb17e 100644
+--- a/dist/core/sdk.js
++++ b/dist/core/sdk.js
+@@ -77,10 +77,13 @@ export async function createAgentSession(options = {}) {
+         await resourceLoader.reload();
+         time("resourceLoader.reload");
+     }
+-    // Check if session has existing data to restore
++    // Saved runtime settings make a zero-message session resumable too. Hosts
++    // may explicitly flush a genuine empty session before its first prompt.
+     const existingSession = sessionManager.buildSessionContext();
+-    const hasExistingSession = existingSession.messages.length > 0;
+-    const hasThinkingEntry = sessionManager.getBranch().some((entry) => entry.type === "thinking_level_change");
++    const existingBranch = sessionManager.getBranch();
++    const hasSavedRuntimeState = existingBranch.some((entry) => entry.type === "model_change" || entry.type === "thinking_level_change");
++    const hasExistingSession = existingSession.messages.length > 0 || hasSavedRuntimeState;
++    const hasThinkingEntry = existingBranch.some((entry) => entry.type === "thinking_level_change");
+     let model = options.model;
+     let modelFallbackMessage;
+     // If session has data, try to restore model from it
+diff --git a/dist/core/session-manager.d.ts b/dist/core/session-manager.d.ts
+index a8d14157e590b439bbe83bacb24d4449d9ea54cb..f2cf836bd2547172a81dff92438df19f99a6bfd3 100644
+--- a/dist/core/session-manager.d.ts
++++ b/dist/core/session-manager.d.ts
+@@ -170,6 +170,11 @@ export declare function loadEntriesFromFile(filePath: string): FileEntry[];
+ /** Exported for testing */
+ export declare function findMostRecentSession(sessionDir: string, cwd?: string): string | null;
+ export type SessionListProgress = (loaded: number, total: number) => void;
++/** A single-use handle for one append-scoped persistence transaction. */
++export interface SessionAppendTransaction {
++    commit(): void;
++    rollback(): void;
++}
+ /**
+  * Manages conversation sessions as append-only trees stored in JSONL files.
+  *
+@@ -193,6 +198,8 @@ export declare class SessionManager {
+     private labelsById;
+     private labelTimestampsById;
+     private leafId;
++    private appendTransaction;
++    private pendingPersistence;
+     private constructor();
+     /** Switch to a different session file (used for resume and branching) */
+     setSessionFile(sessionFile: string): void;
+@@ -207,6 +214,10 @@ export declare class SessionManager {
+     usesDefaultSessionDir(): boolean;
+     getSessionId(): string;
+     getSessionFile(): string | undefined;
++    /** Persist the genuine current session state without changing the default lazy policy. */
++    flush(): void;
++    /** Defer appends until commit, or restore the exact in-memory snapshot on rollback. */
++    beginAppendTransaction(): SessionAppendTransaction;
+     _persist(entry: SessionEntry): void;
+     private _appendEntry;
+     /** Append a message as child of current leaf, then advance leaf. Returns entry id.
+diff --git a/dist/core/session-manager.js b/dist/core/session-manager.js
+index fbb784f771553c21e993cf82200a80a854261437..ed6ec44dd1faaa78830aed35eec89c4c3589d08d 100644
+--- a/dist/core/session-manager.js
++++ b/dist/core/session-manager.js
+@@ -1,6 +1,6 @@
+ import { uuidv7 } from "@earendil-works/pi-ai";
+ import { randomUUID } from "crypto";
+-import { appendFileSync, closeSync, createReadStream, existsSync, mkdirSync, openSync, readdirSync, readSync, statSync, writeFileSync, } from "fs";
++import { appendFileSync, closeSync, createReadStream, existsSync, fchmodSync, fchownSync, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, renameSync, statSync, unlinkSync, writeFileSync, } from "fs";
+ import { readdir, stat } from "fs/promises";
+ import { join, resolve } from "path";
+ import { createInterface } from "readline";
+@@ -595,6 +595,8 @@ export class SessionManager {
+     labelsById = new Map();
+     labelTimestampsById = new Map();
+     leafId = null;
++    appendTransaction;
++    pendingPersistence;
+     constructor(cwd, sessionDir, sessionFile, persist, newSessionOptions, preloadedFileEntries) {
+         this.cwd = resolvePath(cwd);
+         this.sessionDir = normalizePath(sessionDir);
+@@ -612,8 +614,17 @@ export class SessionManager {
+             this.newSession(newSessionOptions);
+         }
+     }
++    _assertNoAppendTransaction(operation) {
++        if (this.appendTransaction) {
++            throw new Error(`Cannot ${operation} while a session append transaction is active`);
++        }
++        if (this.pendingPersistence) {
++            throw new Error(`Cannot ${operation} while accepted session entries are waiting to be persisted`);
++        }
++    }
+     /** Switch to a different session file (used for resume and branching) */
+     setSessionFile(sessionFile) {
++        this._assertNoAppendTransaction("switch session files");
+         this._setSessionFile(sessionFile);
+     }
+     _setSessionFile(sessionFile, preloadedFileEntries) {
+@@ -643,6 +654,7 @@ export class SessionManager {
+         }
+     }
+     newSession(options) {
++        this._assertNoAppendTransaction("start a new session");
+         if (options?.id !== undefined) {
+             assertValidSessionId(options.id);
+         }
+@@ -706,6 +718,7 @@ export class SessionManager {
+         }
+     }
+     _rewriteFile() {
++        this._assertNoAppendTransaction("rewrite the session file");
+         if (!this.persist || !this.sessionFile)
+             return;
+         const fd = openSync(this.sessionFile, "w");
+@@ -736,9 +749,162 @@ export class SessionManager {
+     getSessionFile() {
+         return this.sessionFile;
+     }
++    /** Persist the genuine current session state without changing Pi's default lazy policy. */
++    flush() {
++        this._assertNoAppendTransaction("flush the session");
++        if (!this.persist || !this.sessionFile || this.flushed)
++            return;
++        let fd;
++        let created = false;
++        try {
++            fd = openSync(this.sessionFile, "wx");
++            created = true;
++            for (const entry of this.fileEntries) {
++                writeFileSync(fd, `${JSON.stringify(entry)}\n`);
++            }
++            closeSync(fd);
++            fd = undefined;
++            this.flushed = true;
++        }
++        catch (error) {
++            if (fd !== undefined) {
++                try {
++                    closeSync(fd);
++                }
++                catch { }
++            }
++            if (created) {
++                try {
++                    unlinkSync(this.sessionFile);
++                }
++                catch { }
++            }
++            throw error;
++        }
++    }
++    _atomicPersist(baselineBytes, baselineEntryCount) {
++        if (!this.sessionFile)
++            throw new Error("Cannot persist a session without a file path");
++        const current = readFileSync(this.sessionFile);
++        if (!current.equals(baselineBytes)) {
++            throw new Error("Session file changed while an append transaction was active");
++        }
++        const sourceStat = statSync(this.sessionFile);
++        const suffix = this.fileEntries.slice(baselineEntryCount).map((entry) => `${JSON.stringify(entry)}\n`).join("");
++        if (!suffix)
++            return;
++        const tempFile = `${this.sessionFile}.append-${randomUUID()}.tmp`;
++        let fd;
++        try {
++            // Keep the replacement private while it is incomplete. Before the
++            // rename, restore the canonical file's owner/group and exact mode;
++            // if this process cannot preserve them, fail without replacing it.
++            fd = openSync(tempFile, "wx", 0o600);
++            const tempStat = fstatSync(fd);
++            if (tempStat.uid !== sourceStat.uid || tempStat.gid !== sourceStat.gid) {
++                fchownSync(fd, sourceStat.uid, sourceStat.gid);
++            }
++            writeFileSync(fd, baselineBytes);
++            writeFileSync(fd, suffix);
++            fchmodSync(fd, sourceStat.mode & 0o7777);
++            closeSync(fd);
++            fd = undefined;
++            renameSync(tempFile, this.sessionFile);
++        }
++        catch (error) {
++            if (fd !== undefined) {
++                try {
++                    closeSync(fd);
++                }
++                catch { }
++            }
++            try {
++                unlinkSync(tempFile);
++            }
++            catch { }
++            throw error;
++        }
++    }
++    /**
++     * Defer append persistence until an external admission boundary. Appends
++     * remain visible to the candidate runtime; rollback restores the exact
++     * manager snapshot without touching the durable file.
++     */
++    beginAppendTransaction() {
++        if (this.appendTransaction)
++            throw new Error("A session append transaction is already active");
++        if (this.pendingPersistence)
++            throw new Error("Accepted session entries are still waiting to be persisted");
++        if (!this.persist || !this.sessionFile || !this.flushed)
++            throw new Error("A session append transaction requires a flushed session file");
++        const transaction = {
++            entries: [...this.fileEntries],
++            leafId: this.leafId,
++            sessionId: this.sessionId,
++            sessionFile: this.sessionFile,
++            baselineBytes: readFileSync(this.sessionFile),
++            done: false,
++        };
++        this.appendTransaction = transaction;
++        const finish = (action) => {
++            if (transaction.done || this.appendTransaction !== transaction) {
++                throw new Error("Session append transaction is no longer active");
++            }
++            if (this.sessionId !== transaction.sessionId || this.sessionFile !== transaction.sessionFile) {
++                throw new Error("Session identity changed while an append transaction was active");
++            }
++            if (action === "rollback") {
++                this.fileEntries = [...transaction.entries];
++                this._buildIndex();
++                this.leafId = transaction.leafId;
++                transaction.done = true;
++                this.appendTransaction = undefined;
++                return;
++            }
++            transaction.done = true;
++            this.appendTransaction = undefined;
++            try {
++                this._atomicPersist(transaction.baselineBytes, transaction.entries.length);
++            }
++            catch (error) {
++                // The accepted in-memory suffix is authoritative. The next
++                // append gets one atomic retry containing this suffix first;
++                // after that failure the manager stays closed to disk writes.
++                this.pendingPersistence = {
++                    baselineBytes: transaction.baselineBytes,
++                    baselineEntryCount: transaction.entries.length,
++                    retryAllowed: true,
++                    error,
++                };
++                throw error;
++            }
++        };
++        return {
++            commit: () => finish("commit"),
++            rollback: () => finish("rollback"),
++        };
++    }
+     _persist(entry) {
+         if (!this.persist || !this.sessionFile)
+             return;
++        if (this.appendTransaction)
++            return;
++        if (this.pendingPersistence) {
++            const pending = this.pendingPersistence;
++            if (!pending.retryAllowed) {
++                throw new AggregateError([pending.error], "Accepted session entries could not be persisted");
++            }
++            pending.retryAllowed = false;
++            try {
++                this._atomicPersist(pending.baselineBytes, pending.baselineEntryCount);
++                this.pendingPersistence = undefined;
++            }
++            catch (error) {
++                pending.error = error;
++                throw error;
++            }
++            return;
++        }
+         const hasAssistant = this.fileEntries.some((e) => e.type === "message" && e.message.role === "assistant");
+         if (!hasAssistant) {
+             if (this.flushed) {
+@@ -1047,6 +1213,7 @@ export class SessionManager {
+      * are not modified or deleted.
+      */
+     branch(branchFromId) {
++        this._assertNoAppendTransaction("change branches");
+         if (!this.byId.has(branchFromId)) {
+             throw new Error(`Entry ${branchFromId} not found`);
+         }
+@@ -1058,6 +1225,7 @@ export class SessionManager {
+      * Use this when navigating to re-edit the first user message.
+      */
+     resetLeaf() {
++        this._assertNoAppendTransaction("reset the session leaf");
+         this.leafId = null;
+     }
+     /**
+@@ -1066,6 +1234,7 @@ export class SessionManager {
+      * context from the abandoned conversation path.
+      */
+     branchWithSummary(branchFromId, summary, details, fromHook, usage) {
++        this._assertNoAppendTransaction("branch with a summary");
+         if (branchFromId !== null && !this.byId.has(branchFromId)) {
+             throw new Error(`Entry ${branchFromId} not found`);
+         }
+@@ -1091,6 +1260,7 @@ export class SessionManager {
+      * Returns the new session file path, or undefined if not persisting.
+      */
+     createBranchedSession(leafId) {
++        this._assertNoAppendTransaction("create a branched session");
+         const previousSessionFile = this.sessionFile;
+         const path = this.getBranch(leafId);
+         if (path.length === 0) {
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index e2b640b661a7712fa3f86ed5ecb494b98a6f9e4d..995ff74b6481c0675856f2dc542abb69a43c3fc4 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -16,7 +16,7 @@ export { DefaultPackageManager } from "./core/package-manager.ts";
+ export type { ResourceCollision, ResourceDiagnostic, ResourceLoader } from "./core/resource-loader.ts";
+ export { DefaultResourceLoader, loadProjectContextFiles } from "./core/resource-loader.ts";
+ export { AgentSessionRuntime, type AgentSessionRuntimeDiagnostic, type AgentSessionServices, type CreateAgentSessionFromServicesOptions, type CreateAgentSessionOptions, type CreateAgentSessionResult, type CreateAgentSessionRuntimeFactory, type CreateAgentSessionRuntimeResult, type CreateAgentSessionServicesOptions, createAgentSession, createAgentSessionFromServices, createAgentSessionRuntime, createAgentSessionServices, createBashTool, createCodingTools, createEditTool, createFindTool, createGrepTool, createLsTool, createPowerShellTool, createReadOnlyTools, createReadTool, createWriteTool, type PromptTemplate, } from "./core/sdk.ts";
+-export { type BranchSummaryEntry, buildContextEntries, buildSessionContext, type CompactionEntry, CURRENT_SESSION_VERSION, type CustomEntry, type CustomMessageEntry, type FileEntry, getLatestCompactionEntry, type ModelChangeEntry, migrateSessionEntries, type NewSessionOptions, parseSessionEntries, type SessionContext, type SessionEntry, type SessionEntryBase, type SessionHeader, type SessionInfo, type SessionInfoEntry, SessionManager, type SessionMessageEntry, type SessionTreeNode, sessionEntryToContextMessages, type ThinkingLevelChangeEntry, } from "./core/session-manager.ts";
++export { type BranchSummaryEntry, buildContextEntries, buildSessionContext, type CompactionEntry, CURRENT_SESSION_VERSION, type CustomEntry, type CustomMessageEntry, type FileEntry, getLatestCompactionEntry, type ModelChangeEntry, migrateSessionEntries, type NewSessionOptions, parseSessionEntries, type SessionContext, type SessionEntry, type SessionEntryBase, type SessionHeader, type SessionInfo, type SessionInfoEntry, type SessionAppendTransaction, SessionManager, type SessionMessageEntry, type SessionTreeNode, sessionEntryToContextMessages, type ThinkingLevelChangeEntry, } from "./core/session-manager.ts";
+ export { type CompactionSettings, type DefaultProjectTrust, type FullscreenExitOutput, type ImageSettings, type PackageSource, type RetrySettings, SettingsManager, type SettingsManagerCreateOptions, type TuiMode, } from "./core/settings-manager.ts";
+ export { formatSkillsForPrompt, type LoadSkillsFromDirOptions, type LoadSkillsResult, loadSkills, loadSkillsFromDir, type Skill, type SkillFrontmatter, } from "./core/skills.ts";
+ export { createSyntheticSourceInfo } from "./core/source-info.ts";

@@ -58,7 +58,11 @@ describe("ui bridge", () => {
 
     await expect(ctx.custom()).resolves.toBeUndefined();
     ctx.notify("hi", "warning");
-    expect(events).toEqual([{ method: "notify", message: "hi", level: "warning" }]);
+    expect(events).toEqual([
+      { method: "dialogResolved", id: requests[0]!.id },
+      { method: "dialogResolved", id: requests[1]!.id },
+      { method: "notify", message: "hi", level: "warning" },
+    ]);
   });
 
   it("input and editor round-trip; unknown members are safe no-ops", async () => {
@@ -205,7 +209,7 @@ describe("ui bridge", () => {
     expect(events).toHaveLength(0);
   });
 
-  it("a client answer never emits dialogResolved", async () => {
+  it("every client or direct answer emits one authoritative dialogResolved", async () => {
     const { bridge, requests, events, ctx } = harness();
 
     const a = ctx.select("Pick", ["a"], { timeout: 1000 });
@@ -220,10 +224,10 @@ describe("ui bridge", () => {
     bridge.respond({ id: requests[2]!.id, cancelled: true });
     await expect(c).resolves.toBeUndefined();
 
-    expect(resolved(events)).toEqual([]);
-    // The answered timeout dialog must not fire later either.
+    expect(resolved(events)).toEqual(requests.map((request) => request.id));
+    // The answered timeout dialog must not close a second time later.
     await new Promise((r) => setTimeout(r, 20));
-    expect(resolved(events)).toEqual([]);
+    expect(resolved(events)).toEqual(requests.map((request) => request.id));
   });
 
   it("an abort after the client answered changes nothing", async () => {
@@ -234,7 +238,8 @@ describe("ui bridge", () => {
     bridge.respond({ id: requests[0]!.id, value: "a" });
     await expect(p).resolves.toBe("a");
 
+    expect(resolved(events)).toEqual([requests[0]!.id]);
     controller.abort();
-    expect(resolved(events)).toEqual([]);
+    expect(resolved(events)).toEqual([requests[0]!.id]);
   });
 });

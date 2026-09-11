@@ -12,10 +12,8 @@
  *     `stopReason: "aborted"`, then `agent_end`, `agent_settled`, exactly the
  *     row the Stop button leaves. After it the leaf moves.
  *   - The engine's own `fork` mid-turn aborts the original inside its
- *     teardown, *after* validating — so a session whose first reply is still
- *     streaming (no file on disk yet) is refused and keeps streaming.
- *     Stopping first writes the aborted reply, which creates the file, and
- *     the fork then works on the first turn too.
+ *     teardown, *after* validating. A no-agent resource-preview driver remains
+ *     lazy, so its first reply still has no file and is refused unchanged.
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";
 import type { SessionUpdate } from "@lasercode/protocol";
@@ -241,7 +239,7 @@ describe("moving the leaf while a turn runs (real engine)", () => {
       expect(onDisk(result.state.path).some((e) => e.message?.stopReason === "aborted")).toBe(false);
     }, 30_000);
 
-    it("the engine's own fork during the first turn is refused — no file yet — and the turn keeps running", async () => {
+    it("a no-agent preview driver remains lazy, so its first-turn fork is refused and keeps running", async () => {
       await boot(1);
       const { turn } = await streamingTurn("one");
       const [user] = await userEntries();
