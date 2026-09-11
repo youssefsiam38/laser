@@ -218,13 +218,25 @@ function ghApi(exec, endpoint, { allow404 = false } = {}) {
   fail(`GitHub API ${endpoint} failed; this is not evidence of absence.\n${result.stderr || result.stdout}`.trim());
 }
 
-function remoteRef(exec, repoRoot, ref) {
+function remoteTagIdentity(exec, repoRoot, ref) {
   const output = checked(exec, "git", ["ls-remote", "origin", ref, `${ref}^{}`], { cwd: repoRoot });
   if (!output) return null;
   const rows = output.split("\n").map((line) => line.trim().split(/\s+/));
-  const peeled = rows.find(([, name]) => name === `${ref}^{}`)?.[0];
-  const direct = rows.find(([, name]) => name === ref)?.[0];
-  return peeled ?? direct ?? null;
+  const commit = rows.find(([, name]) => name === `${ref}^{}`)?.[0];
+  const object = rows.find(([, name]) => name === ref)?.[0];
+  if (!FULL_SHA_RE.test(object ?? "") || (commit && !FULL_SHA_RE.test(commit))) fail("Invalid remote tag response.");
+  return { object, commit: commit ?? object, annotated: Boolean(commit) };
+}
+
+function remoteRef(exec, repoRoot, ref) {
+  return remoteTagIdentity(exec, repoRoot, ref)?.commit ?? null;
+}
+
+export function assertRecordedTag(tag, journal) {
+  if (!tag?.annotated) fail(`Remote tag ${journal.tag} must be annotated.`);
+  if (!journal.tagObject || tag.object !== journal.tagObject || tag.commit !== journal.candidate) {
+    fail(`Remote tag ${journal.tag} no longer matches its checkpoint object and candidate.`);
+  }
 }
 
 function remoteMain(exec, repoRoot) {
@@ -556,31 +568,27 @@ export async function waitForWorkflow({ exec, sleep, now, journal, workflow, wor
   fail(`Timed out waiting for ${workflowPath} at ${journal.candidate}.`);
 }
 
-function localTagCommit(exec, cwd, tag) {
-  const result = exec("git", ["rev-parse", `refs/tags/${tag}^{commit}`], { cwd, allowCodes: [0, 128] });
-  if (result.code === 128) return null;
-  return result.stdout.trim();
-}
-
-export function ensureTag(exec, journal) {
+export function ensureTag(exec, journal, checkpoint = () => {}) {
   const ref = `refs/tags/${journal.tag}`;
-  let remote = remoteRef(exec, journal.repoRoot, ref);
-  if (remote) {
-    if (remote !== journal.candidate) fail(`Remote tag ${journal.tag} points to ${remote}, not ${journal.candidate}.`);
-    return false;
+  let remote = remoteTagIdentity(exec, journal.repoRoot, ref);
+  if (remote) { assertRecordedTag(remote, journal); return false; }
+  let result = exec("git", ["rev-parse", ref], { cwd: journal.worktree, allowCodes: [0, 128] });
+  if (result.code === 128) {
+    if (journal.tagObject) fail("The checkpoint's annotated local tag is missing; refusing to replace it.");
+    checked(exec, "git", ["tag", "-a", journal.tag, journal.candidate, "-m", `${identity.displayName} ${journal.version}`], { cwd: journal.worktree });
+    result = exec("git", ["rev-parse", ref], { cwd: journal.worktree });
   }
-  const local = localTagCommit(exec, journal.worktree, journal.tag);
-  if (local && local !== journal.candidate) fail(`Local tag ${journal.tag} points to ${local}, not ${journal.candidate}.`);
-  if (!local) checked(exec, "git", ["tag", "-a", journal.tag, journal.candidate, "-m", `${identity.displayName} ${journal.version}`], { cwd: journal.worktree });
-  remote = remoteRef(exec, journal.repoRoot, ref);
-  if (remote) {
-    if (remote !== journal.candidate) fail(`Remote tag race: ${journal.tag} points to ${remote}.`);
-    return false;
-  }
+  const object = result.stdout.trim();
+  if (checked(exec, "git", ["cat-file", "-t", object], { cwd: journal.worktree }) !== "tag") fail("Local release tag must be annotated; refusing a lightweight tag.");
+  const commit = checked(exec, "git", ["rev-parse", `${ref}^{commit}`], { cwd: journal.worktree });
+  if (commit !== journal.candidate || (journal.tagObject && journal.tagObject !== object)) fail("Local tag differs from the checkpoint candidate/object.");
+  journal.tagObject = object;
+  checkpoint(); // Persist ownership BEFORE the irreversible remote push.
+  remote = remoteTagIdentity(exec, journal.repoRoot, ref);
+  if (remote) { assertRecordedTag(remote, journal); return false; }
   if (remoteMain(exec, journal.repoRoot) !== journal.candidate) fail("Remote main moved before the release tag was pushed.");
   checked(exec, "git", ["push", "origin", ref], { cwd: journal.worktree });
-  const after = remoteRef(exec, journal.repoRoot, ref);
-  if (after !== journal.candidate) fail(`Remote tag ${journal.tag} did not resolve to ${journal.candidate}.`);
+  assertRecordedTag(remoteTagIdentity(exec, journal.repoRoot, ref), journal);
   return true;
 }
 
@@ -608,7 +616,7 @@ export function verifyPublicRelease(exec, journal) {
   if (release.tag_name !== journal.tag) fail(`Release tag is ${release.tag_name}, expected ${journal.tag}.`);
   const prerelease = journal.version.includes("-");
   if (Boolean(release.prerelease) !== prerelease) fail("Release prerelease state does not match its version.");
-  if (remoteRef(exec, journal.repoRoot, `refs/tags/${journal.tag}`) !== journal.candidate) fail("Published release tag no longer names the candidate.");
+  assertRecordedTag(remoteTagIdentity(exec, journal.repoRoot, `refs/tags/${journal.tag}`), journal);
   if (!Array.isArray(release.assets)) fail("Published release has no asset inventory.");
   const remoteAssets = release.assets.map((asset) => ({
     name: asset.name,
@@ -787,12 +795,11 @@ export async function runRelease(options, dependencies = {}) {
     writeJournal(lock.journalPath, journal);
     if (remoteMain(exec, journal.repoRoot) !== journal.candidate) fail("Remote main moved after source CI; refusing to tag.");
     if (!stageAtLeast(journal, "tag-pushed")) {
-      journal.tagPushPerformed = ensureTag(exec, journal);
-      journal.tagObject = checked(exec, "git", ["rev-parse", `refs/tags/${journal.tag}`], { cwd: journal.worktree });
+      journal.tagPushPerformed = ensureTag(exec, journal, () => writeJournal(lock.journalPath, journal));
       journal.tagPushedAt = new Date().toISOString();
       writeJournal(lock.journalPath, journal, "tag-pushed");
-    } else if (remoteRef(exec, journal.repoRoot, `refs/tags/${journal.tag}`) !== journal.candidate) {
-      fail(`Remote tag ${journal.tag} no longer points to ${journal.candidate}.`);
+    } else {
+      assertRecordedTag(remoteTagIdentity(exec, journal.repoRoot, `refs/tags/${journal.tag}`), journal);
     }
     if (!stageAtLeast(journal, "release-passed")) {
       const run = await waitForWorkflow({

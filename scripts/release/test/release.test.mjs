@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   ReleaseError,
+  assertRecordedTag,
+  ensureTag,
   assertVersionOnlyContent,
   validateCandidate,
   validateWorkflowProof,
@@ -272,13 +274,13 @@ test("branch and tag races fail before any push", async () => {
   const tagCalls = [];
   const tagExec = (command, args) => {
     tagCalls.push([command, ...args]);
-    if (command === "git" && args[0] === "ls-remote") return ok(`${moved}\trefs/tags/v0.3.8\n`);
+    if (command === "git" && args[0] === "ls-remote") return ok(`${moved}\trefs/tags/v0.3.8\n${MAIN}\trefs/tags/v0.3.8^{}\n`);
     throw new Error(`unexpected: ${command} ${args.join(" ")}`);
   };
   const { ensureTag } = await import("../release.mjs");
   assert.throws(() => ensureTag(tagExec, {
-    repoRoot: "/caller", worktree: "/isolated", tag: "v0.3.8", candidate: SHA,
-  }), /points to/);
+    repoRoot: "/caller", worktree: "/isolated", tag: "v0.3.8", candidate: SHA, tagObject: moved,
+  }), /checkpoint object/);
   assert.ok(!tagCalls.some((call) => call[1] === "push" || call[1] === "tag"));
 });
 
@@ -356,7 +358,7 @@ test("public verification reuses inventory policy, hashes downloads and pins att
   const attestationCalls = [];
   const exec = (command, args) => {
     if (command === "git" && args[0] === "ls-remote") {
-      return ok(`${fixture.source}\trefs/tags/v${fixture.version}\n`);
+      return ok(`${"d".repeat(40)}\trefs/tags/v${fixture.version}\n${fixture.source}\trefs/tags/v${fixture.version}^{}\n`);
     }
     if (command === "gh" && args[0] === "release" && args[1] === "view") return ok(JSON.stringify({ databaseId: fixture.release.id }));
     if (command === "gh" && args[0] === "api" && args[1].endsWith("/releases/44")) return ok(JSON.stringify(fixture.release));
@@ -373,7 +375,7 @@ test("public verification reuses inventory policy, hashes downloads and pins att
     throw new Error(`unexpected command: ${command} ${args.join(" ")}`);
   };
   const result = verifyPublicRelease(exec, {
-    repoRoot: "/fixture", version: fixture.version, tag: `v${fixture.version}`, candidate: fixture.source,
+    repoRoot: "/fixture", version: fixture.version, tag: `v${fixture.version}`, candidate: fixture.source, tagObject: "d".repeat(40),
   });
   assert.equal(result.assets, fixture.release.assets.length);
   assert.ok(attestationCalls.length > 0);
@@ -384,7 +386,7 @@ test("public verification reuses inventory policy, hashes downloads and pins att
   }
   fixture.release.assets = fixture.release.assets.filter((asset) => asset.name !== "install.sh");
   assert.throws(() => verifyPublicRelease(exec, {
-    repoRoot: "/fixture", version: fixture.version, tag: `v${fixture.version}`, candidate: fixture.source,
+    repoRoot: "/fixture", version: fixture.version, tag: `v${fixture.version}`, candidate: fixture.source, tagObject: "d".repeat(40),
   }), /missing install.sh/);
   rmSync(fixture.directory, { recursive: true, force: true });
 });
@@ -393,13 +395,13 @@ test("public verification rejects an unexpected remote asset before download", (
   const fixture = publicReleaseFixture();
   fixture.release.assets.push({ name: "unexpected.bin", size: 1, state: "uploaded", digest: `sha256:${"a".repeat(64)}` });
   const exec = (command, args) => {
-    if (command === "git") return ok(`${fixture.source}\trefs/tags/v${fixture.version}\n`);
+    if (command === "git") return ok(`${"d".repeat(40)}\trefs/tags/v${fixture.version}\n${fixture.source}\trefs/tags/v${fixture.version}^{}\n`);
     if (command === "gh" && args[0] === "release" && args[1] === "view") return ok(JSON.stringify({ databaseId: fixture.release.id }));
     if (command === "gh" && args[0] === "api") return ok(JSON.stringify(fixture.release));
     throw new Error("download must not start");
   };
   assert.throws(() => verifyPublicRelease(exec, {
-    repoRoot: "/fixture", version: fixture.version, tag: `v${fixture.version}`, candidate: fixture.source,
+    repoRoot: "/fixture", version: fixture.version, tag: `v${fixture.version}`, candidate: fixture.source, tagObject: "d".repeat(40),
   }), /unexpected assets/);
   rmSync(fixture.directory, { recursive: true, force: true });
 });
@@ -500,4 +502,31 @@ test("origin diagnostics never print embedded credentials", () => {
   const exec = (command, args, options) => command === "git" && args[0] === "remote"
     ? ok(`https://secret-token@github.com/${identity.repository}.git`) : fake.exec(command, args, options);
   assert.throws(() => preflight({ exec, repoRoot: "/fixture", version: "0.3.8", source: SHA }), error => !error.message.includes("secret-token") && error.message.includes("origin does not match"));
+});
+
+
+test("release tags reject lightweight locals and same-commit object replacement", () => {
+  const root = makePreparationRepo("0.3.8");
+  const candidate = git(root, "rev-parse", "HEAD");
+  git(root, "tag", "v0.3.8");
+  const exec = (command, args, options) => args[0] === "ls-remote" ? ok() : systemExec(command, args, options);
+  assert.throws(() => ensureTag(exec, { repoRoot: root, worktree: root, tag: "v0.3.8", version: "0.3.8", candidate }), /lightweight/);
+  assert.throws(() => assertRecordedTag({ object: "a".repeat(40), commit: candidate, annotated: true }, { tag: "v0.3.8", candidate, tagObject: "b".repeat(40) }), /checkpoint object/);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("annotated tag ownership is checkpointed before remote push", () => {
+  const root = makePreparationRepo("0.3.8");
+  const candidate = git(root, "rev-parse", "HEAD");
+  const journal = { repoRoot: root, worktree: root, tag: "v0.3.8", version: "0.3.8", candidate };
+  let pushed = false, checkpointed = false;
+  const exec = (command, args, options) => {
+    if (args[0] === "ls-remote" && args.includes("--heads")) return ok(`${candidate}\trefs/heads/main\n`);
+    if (args[0] === "ls-remote") return pushed ? ok(`${journal.tagObject}\trefs/tags/v0.3.8\n${candidate}\trefs/tags/v0.3.8^{}\n`) : ok();
+    if (args[0] === "push") { assert.equal(checkpointed, true); pushed = true; return ok(); }
+    return systemExec(command, args, options);
+  };
+  assert.equal(ensureTag(exec, journal, () => { checkpointed = true; assert.equal(git(root, "cat-file", "-t", journal.tagObject), "tag"); }), true);
+  assert.equal(pushed, true);
+  rmSync(root, { recursive: true, force: true });
 });
