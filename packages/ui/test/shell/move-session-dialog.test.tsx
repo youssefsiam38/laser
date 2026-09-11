@@ -22,6 +22,7 @@ import { sessionsList } from "../../src/components/shell/session-groups.js";
 import { sessionFolds } from "../../src/components/assistant-ui/elements/session-folds.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { LaserStoreProvider, createStateStore, type StateStore } from "../../src/runtime/LaserProvider.js";
+import { mainTab } from "../../src/runtime/main-destination.js";
 import { toThreadMetadata } from "../../src/runtime/threadList.js";
 import { initialState, reduce, type AppState } from "../../src/store.js";
 import { snapshot, summary } from "../agents/fixtures.js";
@@ -43,6 +44,8 @@ const stable = vi.hoisted(() => ({
     removeProject: vi.fn(),
     newSession: vi.fn(async () => "/state/chat/new.jsonl"),
     openSession: vi.fn(async () => undefined),
+    goTab: vi.fn(async (_tab: "chat" | "code") => undefined),
+    goProject: vi.fn(async (_cwd: string) => undefined),
     moveSession: vi.fn(async () => MOVED),
   },
   archive: { add: vi.fn(), has: () => false },
@@ -103,7 +106,17 @@ beforeEach(() => {
   sessionFolds.reset();
   clearMoveSessionRequest();
   stable.actions.moveSession.mockReset().mockResolvedValue(MOVED);
-  stable.actions.openSession.mockClear();
+  stable.actions.openSession.mockReset().mockImplementation(async (path: string) => {
+    if (path !== MOVED) return;
+    const current = store.getSnapshot().destination;
+    store.dispatch({ type: "destination", destination: { phase: "ready-code", code: { kind: "project-session", project: "/one", path }, intent: current.intent + 1 } });
+  });
+  stable.actions.goTab.mockReset().mockImplementation(async (tab: "chat" | "code") => {
+    const current = store.getSnapshot().destination;
+    store.dispatch({ type: "destination", destination: tab === "chat"
+      ? { phase: "resolving", target: { kind: "chat-tab" }, rememberedCode: { kind: "project-landing", project: "/two" }, intent: current.intent + 1 }
+      : { phase: "ready-code", code: { kind: "project-landing", project: "/two" }, intent: current.intent + 1 } });
+  });
   stable.actions.toast.mockClear();
   stable.setCurrentProject.mockClear();
   showChat.mockClear();
@@ -187,8 +200,7 @@ describe("the move dialog", () => {
     await act(async () => confirmButton().click());
     await tick();
     expect(stable.actions.moveSession).toHaveBeenCalledWith(CHAT, "/one");
-    expect(stable.setCurrentProject).toHaveBeenCalledWith("/one");
-    expect(sessionsList.get().tab).toBe("code");
+    expect(mainTab(store.getSnapshot().destination)).toBe("code");
     expect(sessionsList.get().jump?.cwd).toBe("/one");
     expect(stable.actions.openSession).toHaveBeenCalledWith(MOVED);
     expect(showChat).toHaveBeenCalled();
@@ -213,7 +225,7 @@ describe("the move dialog", () => {
     expect(confirmButton().disabled).toBe(false);
     expect(stable.actions.openSession).not.toHaveBeenCalled();
     expect(stable.setCurrentProject).not.toHaveBeenCalled();
-    expect(sessionsList.get().tab).toBe("chat");
+    expect(mainTab(store.getSnapshot().destination)).toBe("chat");
   });
 
   it("in a browser, New project… asks for a path, and Enter in the field moves there", async () => {
@@ -233,7 +245,7 @@ describe("the move dialog", () => {
     await act(async () => field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
     await tick();
     expect(stable.actions.moveSession).toHaveBeenCalledWith(CHAT, "/home/me/new-app");
-    expect(stable.setCurrentProject).toHaveBeenCalledWith("/home/me/new-app");
+    expect(stable.actions.openSession).toHaveBeenCalledWith(MOVED);
   });
 
   it("in the desktop app, New project… runs the native picker; a chosen folder is listed as new and a cancelled picker changes nothing", async () => {

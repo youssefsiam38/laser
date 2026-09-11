@@ -14,7 +14,7 @@ import { useShellOptional } from "@/components/shell/shell-context";
 import { groupNameOf, workspaceKindOf } from "@/components/shell/session-groups";
 import { Button } from "@/components/ui/button";
 import { shortCwd } from "@/format";
-import { useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
+import { mainError, mainTab, useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
 
 const SUGGESTIONS: ReadonlyArray<{ title: string; prompt: string }> = [
   {
@@ -43,17 +43,43 @@ const SUGGESTIONS: ReadonlyArray<{ title: string; prompt: string }> = [
  * the composer beside it is disabled with the same sentence as its placeholder.
  */
 export function EmptyState() {
-  const { currentProject } = useLaserStable();
+  const { actions, currentProject, destination } = useLaserStable();
   const { session } = useSessionMeta();
   const shell = useShellOptional();
   const disabled = useAuiState((s) => s.thread.isDisabled);
   const workspaces = useLaserState((s) => s.agents.snapshot?.workspaces);
-  const cwd = session?.cwd ?? currentProject;
+  const tab = mainTab(destination);
+  const cwd = session?.cwd ?? (tab === "chat" ? workspaces?.chat : currentProject);
   const workspaceKind =
     session?.agent?.kind === "beam" || session?.agent?.kind === "chat"
       ? session.agent.kind
       : workspaceKindOf(cwd, workspaces ?? {});
   const name = workspaceKind && cwd ? groupNameOf(cwd, workspaceKind) : cwd ? shortCwd(cwd) : PRODUCT_DISPLAY_NAME;
+
+  if (destination.phase === "resolving") {
+    return (
+      <EmptyStateRoot>
+        <div className="flex flex-col gap-2" role="status">
+          <EmptyStateEyebrow>{tab === "chat" ? "Private workspace" : "Conversation"}</EmptyStateEyebrow>
+          <EmptyStateGreeting>{tab === "chat" ? "Preparing Chat" : "Opening conversation"}</EmptyStateGreeting>
+          <EmptyStateDescription>Your previous conversation is no longer actionable while this destination loads.</EmptyStateDescription>
+        </div>
+      </EmptyStateRoot>
+    );
+  }
+
+  if (destination.phase === "unavailable") {
+    return (
+      <EmptyStateRoot>
+        <div className="flex flex-col gap-2">
+          <EmptyStateEyebrow>{tab === "chat" ? "Chat" : "Conversation"}</EmptyStateEyebrow>
+          <EmptyStateGreeting>Couldn’t open this conversation</EmptyStateGreeting>
+          <EmptyStateDescription>{mainError(destination) ?? "Retry it, or start a new conversation from the sessions list."}</EmptyStateDescription>
+        </div>
+        <div><Button size="sm" onClick={() => void actions.retryDestination()}>Retry</Button></div>
+      </EmptyStateRoot>
+    );
+  }
 
   if (!cwd) {
     return (

@@ -5,12 +5,12 @@ import { ThreadSearch, matchesThread, rankSearchThreads, threadSearchKeys, type 
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useWorkbench } from "@/components/workbench";
 import { openConversationFind } from "@/components/thread/search-state";
-import { sessionKindTab, sessionTitle, useLaserStable, useLaserState } from "@/runtime";
+import { sessionTitle, useLaserStable, useLaserState } from "@/runtime";
 import { shortCwd } from "@/format";
 import { sessionStatus } from "./model.js";
 import { SessionSearchProgress } from "./SessionSearchProgress.js";
 import { useSessionSearch } from "./use-session-search.js";
-import { groupNameOf, sessionsList, workspaceKindOf, workspacesOf } from "./session-groups.js";
+import { groupNameOf, workspaceKindOf, workspacesOf } from "./session-groups.js";
 
 export function openGlobalSearch() { window.dispatchEvent(new Event("global-session-search")); }
 
@@ -35,7 +35,7 @@ function GlobalSearchBody({ close }: { close: () => void }) {
   const [query, setQuery] = useState("");
   const [activeId, setActiveId] = useState<string>();
   const [opening, setOpening] = useState(false);
-  const { actions, setCurrentProject } = useLaserStable();
+  const { actions } = useLaserStable();
   const sessions = useLaserState(s => s.sessions);
   const views = useLaserState(s => s.open);
   const workspaces = useLaserState(workspacesOf);
@@ -55,9 +55,6 @@ function GlobalSearchBody({ close }: { close: () => void }) {
     if (!session) return;
     setOpening(true);
     try {
-      const tab = sessionKindTab(session, workspaces);
-      sessionsList.setTab(tab);
-      if (tab === "code" && session.agent?.kind !== "beam") setCurrentProject(session.cwd);
       await actions.openSession(id);
       workbench.close();
       close();

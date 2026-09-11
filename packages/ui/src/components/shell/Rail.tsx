@@ -118,7 +118,7 @@ export function Rail() {
 }
 
 function ProjectList() {
-  const { projects, projectInfo, currentProject, setCurrentProject, actions } = useLaserStable();
+  const { projects, projectInfo, currentProject, actions } = useLaserStable();
   const shell = useShell();
   const { filter } = useSessionsList();
   // Derived inside the selector so a streamed token that changes nothing the
@@ -131,15 +131,15 @@ function ProjectList() {
   const select = useCallback(
     (cwd: string) => {
       const wasActive = cwd === currentProject;
-      setCurrentProject(cwd);
       if (wasActive && filter === cwd) sessionsList.clearFilter(cwd);
       else sessionsList.filter(cwd);
+      void actions.goProject(cwd);
       // Bring the list on screen: the docked column when it was hidden with
       // `[`, the sheet on tablet. The workbench, if open, stays where it is —
       // the list is a peer of it, not a page.
       shell.setSessionsOpen(true);
     },
-    [currentProject, filter, setCurrentProject, shell],
+    [actions, currentProject, filter, shell],
   );
 
   const sensors = useSensors(

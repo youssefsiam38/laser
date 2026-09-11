@@ -29,6 +29,7 @@ import type {
 } from "@lasercode/protocol";
 
 import { activePathIds } from "./components/thread/entries.js";
+import { initialMainDestination, mainPath, type MainDestination } from "./runtime/main-destination.js";
 
 /**
  * A user message a parent agent put into this child session, rather than the
@@ -222,7 +223,10 @@ export interface AppState {
   /** True once a `pi/session/list` has landed, so an empty list is real. */
   sessionsLoaded: boolean;
   open: Record<string, SessionView>;
+  /** Read projection of `destination.path`; scoped runtimes overlay only this field. */
   current: string | undefined;
+  /** The sole tab/project/session intent for the main window. */
+  destination: MainDestination;
   workers: Record<string, { status: string; message?: string }>;
   toasts: Array<{ id: number; level: "info" | "warning" | "error"; text: string }>;
   agents: AgentsSlice;
@@ -236,6 +240,7 @@ export const initialState: AppState = {
   sessionsLoaded: false,
   open: {},
   current: undefined,
+  destination: initialMainDestination,
   workers: {},
   toasts: [],
   agents: initialAgents,
@@ -246,13 +251,10 @@ export type Action =
   | { type: "versionMismatch"; version: string }
   | { type: "connection"; state: AppState["connection"] }
   | { type: "sessions"; sessions: SessionSummary[] }
-  /**
-   * A session was loaded or created. `select: false` keeps `current` where it
-   * is: a scoped surface (the Beam bubble) opening its own session must not
-   * move the main view (runtime/LaserProvider.tsx `LaserThreadScope`).
-   */
-  | { type: "opened"; state: SessionState; select?: boolean }
-  | { type: "select"; path: string | undefined }
+  /** Loading/creation warms a view only; only the destination controller selects. */
+  | { type: "opened"; state: SessionState }
+  /** Controller-owned atomic main-window transition; `current` is its projection. */
+  | { type: "destination"; destination: MainDestination }
   | { type: "closeView"; path: string }
   /**
    * Replace the transcript from a persisted snapshot. `expectSeq` guards the
@@ -353,7 +355,7 @@ export function reduce(state: AppState, action: Action): AppState {
             goal: null,
             namerLabels: {},
           };
-      return { ...state, open: { ...state.open, [view.path]: view }, current: action.select === false ? state.current : view.path };
+      return { ...state, open: { ...state.open, [view.path]: view } };
     }
     case "forked": {
       // The old view's live state moved to a new path; carry the transcript over.
@@ -362,13 +364,13 @@ export function reduce(state: AppState, action: Action): AppState {
       const view: SessionView = old
         ? { ...old, path: action.state.path, state: action.state, lastSeq: 0, hydrated: false, entries: [], goal: null }
         : { path: action.state.path, state: action.state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, pending: [], dialogs: [], statuses: {}, widgets: {}, openedAt: new Date().toISOString(), hydrated: false, entries: [], capabilities: [], goal: null, namerLabels: {} };
-      return { ...state, open: { ...rest, [view.path]: view }, current: view.path };
+      return { ...state, open: { ...rest, [view.path]: view } };
     }
-    case "select":
-      return { ...state, current: action.path };
+    case "destination":
+      return { ...state, destination: action.destination, current: mainPath(action.destination) };
     case "closeView": {
       const { [action.path]: _gone, ...rest } = state.open;
-      return { ...state, open: rest, current: state.current === action.path ? undefined : state.current };
+      return { ...state, open: rest };
     }
     case "hydrate":
       return updateView(state, action.path, (v) => {

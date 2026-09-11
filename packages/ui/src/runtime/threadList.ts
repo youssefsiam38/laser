@@ -334,14 +334,13 @@ export interface ThreadListDeps {
   /** Currently open views, keyed by path. */
   views(): Readonly<Record<string, SessionView | undefined>>;
   archive: ArchiveStore;
-  /** cwd a brand-new session is created in. */
-  currentProject(): string | undefined;
+  /** Explicit destination-owned target for a brand-new session. Never guessed from an open view. */
+  creationTarget(): { cwd: string; agentName?: string | undefined; intent?: number | undefined } | undefined;
   /**
-   * Reuse an unstarted session in this project, or create one; returns its
-   * path. Must not make it current: the runtime does that itself once it has
-   * adopted the path (`onThreadIdChange`), see `beginInitialize`.
+   * Reuse an unstarted session for this exact target, or create one; returns
+   * its path. Must not make it current: the runtime adopts it first.
    */
-  createSession(cwd: string): Promise<string>;
+  createSession(target: { cwd: string; agentName?: string | undefined; intent?: number | undefined }): Promise<string>;
   /** `pi/session/rename`. */
   renameSession(path: string, name: string): Promise<void>;
   /** Permanently delete a closed persisted transcript. */
@@ -372,8 +371,8 @@ export interface ThreadListDeps {
    * `threadId` stays where it was until `endInitialize`, which fires only after
    * the runtime has finished adopting the result (see `initialize`).
    */
-  beginInitialize?(): void;
-  endInitialize?(): void;
+  beginInitialize?(target: { cwd: string; agentName?: string | undefined; intent?: number | undefined }): void;
+  endInitialize?(target: { cwd: string; agentName?: string | undefined; intent?: number | undefined }): void;
 }
 
 /** An always-closed stream: Pi has no server-side title generation. */
@@ -419,11 +418,11 @@ export function createThreadListAdapter(deps: ThreadListDeps): RemoteThreadListA
     },
 
     initialize: async () => {
-      const cwd = deps.currentProject();
-      if (!cwd) throw new Error("Pick a project before starting a session.");
-      deps.beginInitialize?.();
+      const target = deps.creationTarget();
+      if (!target) throw new Error("This destination is not ready to start a conversation.");
+      deps.beginInitialize?.(target);
       try {
-        const path = await deps.createSession(cwd);
+        const path = await deps.createSession(target);
         // Deliberately no `refreshSessions()` here: the catalog reload that the
         // host runs once this bracket closes covers it, and doing it inside the
         // bracket only widens the window described on `beginInitialize`.
@@ -433,7 +432,7 @@ export function createThreadListAdapter(deps: ThreadListDeps): RemoteThreadListA
         // settles; a bracket closed synchronously here would let the reload
         // and the selection catch-up land in between. The next macrotask is
         // strictly after that adoption.
-        setTimeout(() => deps.endInitialize?.(), 0);
+        setTimeout(() => deps.endInitialize?.(target), 0);
       }
     },
 

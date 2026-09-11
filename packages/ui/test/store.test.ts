@@ -191,11 +191,11 @@ describe("applyUpdate", () => {
 });
 
 describe("forked", () => {
-  it("moves the view to the new path and selects it", () => {
+  it("moves the cached view without selecting outside the destination controller", () => {
     const s0 = { ...initialState, open: { "/s.jsonl": { ...view(), lastSeq: 7 } }, current: "/s.jsonl" };
     const s1 = reduce(s0, { type: "forked", from: "/s.jsonl", state: { ...state, path: "/f.jsonl" } });
     expect(Object.keys(s1.open)).toEqual(["/f.jsonl"]);
-    expect(s1.current).toBe("/f.jsonl");
+    expect(s1.current).toBe("/s.jsonl");
     expect(s1.open["/f.jsonl"]).toMatchObject({ path: "/f.jsonl", lastSeq: 0, hydrated: false });
   });
 });

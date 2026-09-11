@@ -3,6 +3,7 @@ import { storageKey, type SessionAgentInfo } from "@lasercode/protocol";
 export type SessionKindTab = "chat" | "code";
 
 export const SESSION_TAB_MEMORY_KEY = storageKey("session-tab-last");
+export const SESSIONS_TAB_STORAGE_KEY = storageKey("sessions-tab");
 
 const normalized = (path: string): string => path.replace(/\\/g, "/").replace(/\/+$/, "");
 
@@ -33,6 +34,22 @@ function read(): Partial<Record<SessionKindTab, string>> {
 
 export function rememberedSessionForTab(tab: SessionKindTab): string | undefined {
   return read()[tab];
+}
+
+export function rememberedSessionsTab(): SessionKindTab {
+  try {
+    return globalThis.localStorage?.getItem(SESSIONS_TAB_STORAGE_KEY) === "chat" ? "chat" : "code";
+  } catch {
+    return "code";
+  }
+}
+
+export function rememberSessionsTab(tab: SessionKindTab): void {
+  try {
+    globalThis.localStorage?.setItem(SESSIONS_TAB_STORAGE_KEY, tab);
+  } catch {
+    /* private mode / quota: the live destination remains authoritative */
+  }
 }
 
 export function rememberSessionForTab(tab: SessionKindTab, path: string): void {

@@ -8,7 +8,7 @@
  */
 import { act, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { useAuiState } from "@assistant-ui/react";
+import { useAui, useAuiState, type Aui } from "@assistant-ui/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../src/client.js", async (original) => ({
@@ -17,7 +17,7 @@ vi.mock("../../src/client.js", async (original) => ({
 }));
 
 import { beamWorkspace, isBeamSession } from "../../src/components/beam/beam-model.js";
-import { LaserProvider, LaserThreadScope, useLaserStable, useLaserView, useSessionMeta } from "../../src/runtime/LaserProvider.js";
+import { LaserProvider, LaserThreadScope, useLaserStable, useLaserView, useSessionMeta, type LaserActions } from "../../src/runtime/LaserProvider.js";
 import type { AppState } from "../../src/store.js";
 import { addSession, BEAM_CWD, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "./fake-host.js";
 
@@ -26,6 +26,7 @@ const BEAM = `${BEAM_CWD}/beam.jsonl`;
 
 const renders: Record<string, number> = {};
 const texts: Record<string, string> = {};
+const handles: Record<string, { aui: Aui; actions: LaserActions }> = {};
 
 /** Reads what a transcript reads: the runtime's messages and the scoped view. */
 function Probe({ id }: { id: string }) {
@@ -33,6 +34,9 @@ function Probe({ id }: { id: string }) {
   const messages = useAuiState((s) => s.thread.messages);
   const view = useLaserView();
   const meta = useSessionMeta();
+  const aui = useAui();
+  const { actions } = useLaserStable();
+  handles[id] = { aui, actions };
   texts[id] = messages.map((m) => m.content.map((p) => (p.type === "text" ? p.text : "")).join("")).join("|");
   return (
     <span data-slot={`probe-${id}`} data-path={view?.path ?? ""} data-model={meta.model?.id ?? ""}>
@@ -81,6 +85,7 @@ beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   localStorage.clear();
   for (const key of Object.keys(renders)) delete renders[key];
+  for (const key of Object.keys(handles)) delete handles[key];
   world = createWorld();
   addSession(world, MAIN, PROJECT_CWD);
   addSession(world, BEAM, BEAM_CWD);
@@ -140,6 +145,53 @@ describe("scope isolation", () => {
     expect(container.querySelector('[data-slot="probe-main"]')?.getAttribute("data-model")).toBe("");
     // The scope's "current project" is Beam's workspace, so the composer never asks for a project.
     expect(container.querySelector('[data-slot="scoped-set-model"]')?.getAttribute("data-project")).toBe(BEAM_CWD);
+
+    await act(async () => {
+      FakeHostClient.current.notify("pi/ui/request", { path: BEAM, id: "beam-question", method: "confirm", title: "Continue Beam?" });
+      await settle(0);
+      await handles.beam!.actions.answerDialog({ id: "beam-question", confirmed: true });
+    });
+    const responses = world.calls.filter((call) => call.method === "pi/ui/response");
+    expect(responses).toHaveLength(1);
+    expect(responses[0]!.params).toEqual({ id: "beam-question", confirmed: true });
+  });
+
+  it("keeps Beam targeting its scope while the main destination switches to Chat", async () => {
+    const chat = "/state/chat/chat.jsonl";
+    addSession(world, chat, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
+    let releaseChat!: () => void;
+    const held = new Promise<void>((resolve) => { releaseChat = resolve; });
+    world.overrides["session/load"] = (async (params: { path: string }) => {
+      if (params.path === chat) await held;
+      return { state: world.states[params.path]!, replayFrom: 0, seq: 0 };
+    }) as never;
+
+    await act(async () => root.render(<Harness />));
+    await act(async () => settle(20));
+    let switching!: Promise<void>;
+    await act(async () => { switching = handles.main!.actions.goTab("chat"); await settle(0); });
+    expect(handles.beam!.aui.thread.getState().isDisabled).toBe(false);
+    expect(container.querySelector('[data-slot="probe-beam"]')?.getAttribute("data-path")).toBe(BEAM);
+
+    await act(async () => {
+      handles.beam!.aui.composer.setText("from Beam");
+      handles.beam!.aui.composer.send();
+      await settle(10);
+      releaseChat();
+      await switching;
+      await settle(20);
+    });
+    expect(container.querySelector('[data-slot="probe-main"]')?.getAttribute("data-path")).toBe(chat);
+    await act(async () => {
+      handles.main!.aui.composer.setText("from Chat");
+      handles.main!.aui.composer.send();
+      await settle(20);
+    });
+    const prompts = world.calls.filter((call) => call.method === "session/prompt").map((call) => call.params as { path: string });
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]!.path).toBe(BEAM);
+    expect(prompts[1]!.path).not.toBe(BEAM);
+    expect(prompts[1]!.path).not.toBe(MAIN);
   });
 
   it("opens the scoped session quietly and keeps it attached while the scope holds it", async () => {

@@ -24,7 +24,7 @@ import { useCallback } from "react";
 import { mapUi } from "@/components/agents/map";
 import { useWorkbench } from "@/components/workbench";
 import { closeFleetSheet } from "@/fleet";
-import { useLaserStable, useLaserState } from "@/runtime";
+import { isMainReady, mainPath, mainTab, useLaserStable, useLaserState } from "@/runtime";
 import { SESSION_STORAGE_KEY } from "@/runtime/LaserProvider";
 
 import { errorText } from "./shell-context.js";
@@ -60,9 +60,8 @@ export interface ChatNavigation {
  */
 export function useChatNavigation({ closeSheets }: { closeSheets(): void }): ChatNavigation {
   const workbench = useWorkbench();
-  const { actions, currentProject } = useLaserStable();
-  const current = useLaserState((s) => s.current);
-  const sessions = useLaserState((s) => s.sessions);
+  const { actions } = useLaserStable();
+  const destination = useLaserState((s) => s.destination);
 
   const showChat = useCallback(() => {
     mapUi.setFullscreen(false);
@@ -74,14 +73,9 @@ export function useChatNavigation({ closeSheets }: { closeSheets(): void }): Cha
 
   const returnToChat = useCallback(() => {
     showChat();
-    // Already reading a session: uncovering it is the whole trip.
-    if (current !== undefined) return;
-    const remembered = rememberedSessionFor(currentProject, sessions);
-    // Nothing remembered: the project's new-session state is the landing, and
-    // it is not created here — a click on the logo never starts anything.
-    if (remembered === undefined) return;
-    actions.openSession(remembered).catch((error: unknown) => actions.toast("error", errorText(error)));
-  }, [actions, current, currentProject, sessions, showChat]);
+    if (isMainReady(destination) && mainPath(destination) !== undefined) return;
+    actions.goTab(mainTab(destination)).catch((error: unknown) => actions.toast("error", errorText(error)));
+  }, [actions, destination, showChat]);
 
   return { showChat, returnToChat };
 }

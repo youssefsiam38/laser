@@ -22,6 +22,7 @@ import { BeamSpark } from "../../src/components/beam/BeamSpark.js";
 import { startBeamSession } from "../../src/components/beam/beam-model.js";
 import { useLaserStable } from "../../src/runtime/LaserProvider.js";
 import { BEAM_SESSION_STORAGE_KEY, beamStore } from "../../src/components/beam/beam-store.js";
+import { mainTab } from "../../src/runtime/main-destination.js";
 import { ShellContext, type ShellContextValue } from "../../src/components/shell/shell-context.js";
 import { sessionsList } from "../../src/components/shell/session-groups.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
@@ -53,11 +54,12 @@ const shell = (layout: ShellContextValue["layout"]): ShellContextValue => ({
 function MainCurrent() {
   const { actions } = useLaserStable();
   const current = useLaserState((s) => s.current);
+  const tab = useLaserState((s) => mainTab(s.destination));
   const toasts = useLaserState((s) => s.toasts.map((toast) => `${toast.level}:${toast.text}`).join("\n"));
   return (
     <>
       <button data-slot="sidebar-beam-new" onClick={() => void startBeamSession(actions, FakeHostClient.world.snapshot)}>New Beam chat</button>
-      <span data-slot="main-current">{current ?? ""}</span>
+      <span data-slot="main-current" data-tab={tab}>{current ?? ""}</span>
       <span data-slot="main-toasts">{toasts}</span>
     </>
   );
@@ -171,7 +173,7 @@ describe("the Beam bubble", () => {
     // Adopted by the bubble and this browser, not by the main view.
     expect(beamStore.getSnapshot().path).toBe(path);
     expect(localStorage.getItem(BEAM_SESSION_STORAGE_KEY)).toBe(path);
-    expect(container.querySelector('[data-slot="main-current"]')?.textContent).toBe("");
+    expect(container.querySelector('[data-slot="main-current"]')?.textContent).toBe(`${PROJECT_CWD}/main.jsonl`);
     expect(bubble()!.querySelector('[data-slot="thread-path"]')?.textContent).toBe(path);
     expect(bubble()!.querySelector('[data-slot="beam-empty-state"]')).toBeNull();
   });
@@ -238,7 +240,7 @@ describe("the Beam bubble", () => {
     await act(async () => bubble()!.querySelector<HTMLButtonElement>('[data-slot="beam-open-full"]')!.click());
     await closeAndSettle();
     expect(container.querySelector('[data-slot="main-current"]')?.textContent).toBe(path);
-    expect(sessionsList.get().tab).toBe("code");
+    expect(container.querySelector('[data-slot="main-current"]')?.getAttribute("data-tab")).toBe("code");
     expect(bubble()).toBeNull();
   });
 
@@ -259,7 +261,7 @@ describe("the Beam bubble", () => {
     // A Beam chat, in Beam's workspace, in the window rather than the bubble.
     expect(opened!.startsWith(`${BEAM_CWD}/`)).toBe(true);
     expect(world.states[opened!]?.agent?.kind).toBe("beam");
-    expect(sessionsList.get().tab).toBe("code");
+    expect(container.querySelector('[data-slot="main-current"]')?.getAttribute("data-tab")).toBe("code");
     expect(bubble()).toBeNull();
   });
 

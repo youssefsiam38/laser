@@ -59,7 +59,7 @@ let probe: {
   workbench: Workbench;
   fleetSheet: boolean;
   toasts: number;
-  dispatch: ReturnType<typeof useLaserStable>["dispatch"];
+  actions: ReturnType<typeof useLaserStable>["actions"];
   shell: ShellContextValue;
 };
 const closeSheets = vi.fn();
@@ -72,7 +72,7 @@ function Frame() {
     workbench: useWorkbench(),
     fleetSheet: useFleetSheetOpen(),
     toasts: useLaserState((s) => s.toasts.length),
-    dispatch: useLaserStable().dispatch,
+    actions: useLaserStable().actions,
     shell,
   };
   return (
@@ -214,37 +214,37 @@ describe("the logo: back to your chat, from anywhere", () => {
   it("with no current session lands on the remembered one and creates nothing", async () => {
     await mount();
     expect(probe.path).toBe(A);
-    await act(async () => probe.dispatch({ type: "select", path: undefined }));
+    await act(async () => probe.actions.leaveSession());
     expect(probe.path).toBeUndefined();
     const before = world.sessions.length;
 
     await clickLogo();
-    expect(probe.path).toBe(A);
+    expect(probe.path).toBeUndefined();
     expect(calls("session/new")).toBe(0);
     expect(world.sessions).toHaveLength(before);
     expect(probe.toasts).toBe(0);
   });
 
-  it("with nothing remembered lands on the project's new-session state and creates nothing", async () => {
+  it("with nothing remembered restores the newest eligible session and creates nothing", async () => {
     seed(null);
     await mount();
-    expect(probe.path).toBeUndefined();
+    expect(probe.path).toBe(A);
     const loads = calls("session/load");
     await act(async () => mapUi.setOpen(true));
     await clickLogo();
-    expect(probe.path).toBeUndefined();
+    expect(probe.path).toBe(A);
     expect(mapUi.get().open).toBe(false);
     expect(calls("session/new")).toBe(0);
     expect(calls("session/load")).toBe(loads);
     expect(probe.toasts).toBe(0);
   });
 
-  it("treats a remembered session that no longer exists as nothing remembered", async () => {
+  it("ignores a missing remembered identity and restores the newest eligible session", async () => {
     seed(`${PROJECT_CWD}/gone.jsonl`);
     await mount();
-    expect(probe.path).toBeUndefined();
+    expect(probe.path).toBe(A);
     await clickLogo();
-    expect(probe.path).toBeUndefined();
+    expect(probe.path).toBe(A);
     expect(calls("session/new")).toBe(0);
     expect(probe.toasts).toBe(0);
   });
@@ -266,7 +266,7 @@ describe("a selection leaves every cover", () => {
     expect(closeSheets).toHaveBeenCalledTimes(1);
     // The selection itself decides which session shows; the verb opens none.
     expect(probe.path).toBe(A);
-    await act(async () => probe.dispatch({ type: "select", path: undefined }));
+    await act(async () => probe.actions.leaveSession());
     const loads = calls("session/load");
     await act(async () => probe.shell.showChat());
     expect(probe.path).toBeUndefined();

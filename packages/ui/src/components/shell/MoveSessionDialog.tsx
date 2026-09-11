@@ -48,7 +48,7 @@ export function MoveSessionDialog() {
 }
 
 function MoveSessionBody({ path, title }: { path: string; title: string }) {
-  const { actions, projects, currentProject, projectInfo, setCurrentProject } = useLaserStable();
+  const { actions, projects, currentProject, projectInfo } = useLaserStable();
   const shell = useShellOptional();
   const desktop = desktopFolderPicker();
   /** A folder picked or typed for a new project; listed above the known ones once it exists. */
@@ -119,7 +119,6 @@ function MoveSessionBody({ path, title }: { path: string; title: string }) {
       const name = shortCwd(destination);
       // The Code tab, with the project's group in view and the session
       // selected under it: the same transcript, in its new home.
-      setCurrentProject(destination);
       sessionsList.jumpTo(destination);
       clearMoveSessionRequest();
       actions.toast("info", `Moved “${title}” to ${name}. Find it under ${name} in Code.`);
@@ -129,7 +128,7 @@ function MoveSessionBody({ path, title }: { path: string; title: string }) {
       setError(errorText(failure));
       setPending(false);
     }
-  }, [actions, destination, path, pending, setCurrentProject, shell, title]);
+  }, [actions, destination, path, pending, shell, title]);
 
   const busy = pending || picking;
   const hasProjects = listed.length > 0;

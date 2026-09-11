@@ -291,9 +291,9 @@ describe("createThreadListAdapter", () => {
       sessions: () => [summary({ path: "/a.jsonl", id: "aaaabbbb", attention: "idle", firstMessage: "Start here" })],
       views: () => ({}),
       archive,
-      currentProject: () => "/proj",
-      createSession: async (cwd) => {
-        calls.push(`new:${cwd}`);
+      creationTarget: () => ({ cwd: "/proj", intent: 7 }),
+      createSession: async (target) => {
+        calls.push(`new:${target.cwd}:${target.intent}`);
         return "/created.jsonl";
       },
       renameSession: async (path, name) => void calls.push(`rename:${path}:${name}`),
@@ -326,14 +326,14 @@ describe("createThreadListAdapter", () => {
     // reloads once `end` closes the bracket instead — and the bracket closes
     // only on the next macrotask, after the runtime has applied the result
     // (M13-T53), so nothing the host holds back can land in between.
-    expect(calls).toEqual(["begin", "new:/proj"]);
+    expect(calls).toEqual(["begin", "new:/proj:7"]);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(calls).toEqual(["begin", "new:/proj", "end"]);
+    expect(calls).toEqual(["begin", "new:/proj:7", "end"]);
   });
 
   it("initialize refuses without a project", async () => {
-    const { adapter } = deps({ currentProject: () => undefined });
-    await expect(adapter.initialize("local-1")).rejects.toThrow(/project/i);
+    const { adapter } = deps({ creationTarget: () => undefined });
+    await expect(adapter.initialize("local-1")).rejects.toThrow(/destination/i);
   });
 
   it("initialize closes its bracket even when the session cannot be created", async () => {

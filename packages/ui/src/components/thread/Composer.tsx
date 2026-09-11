@@ -23,11 +23,10 @@ import { SessionModelSelector } from "@/components/assistant-ui/elements/model-s
 import { ThinkingEffort } from "@/components/assistant-ui/elements/reasoning-effort";
 import { useRunsForRoot } from "@/agents";
 import { DictateButton } from "@/components/mobile";
-import { useSessionsList } from "@/components/shell/session-groups";
 import { useShell } from "@/components/shell/shell-context";
 import { useIsMobile, useIsTouch } from "@/hooks/use-mobile";
 import { finishActiveDictation } from "@/pwa";
-import { composerSendPlan, useLaserStable, useLaserView, useSessionMeta } from "@/runtime";
+import { composerSendPlan, mainCodeProject, mainError, mainTab, useLaserStable, useLaserView, useSessionMeta } from "@/runtime";
 import { mergeRunConfigCustom } from "@/runtime/first-turn";
 import { completeLeadingSlash, matchLeadingSlash, rankSlashCommandMatches } from "./slash-completion.js";
 import { StatusLine } from "./StatusLine.js";
@@ -65,13 +64,14 @@ function ComposerBody() {
   const onInputKeyDown = useComposerKeys();
   const blocked = useNothingToSendTo();
   const { pending: preparingSession } = useSessionPreparation();
-  const { tab } = useSessionsList();
-  const allowProjectLanding = tab === "code";
+  const { destination } = useLaserStable();
+  const allowProjectLanding = !destination || mainTab(destination) !== "chat";
   const disabled = useAuiState((s) => s.thread.isDisabled) || blocked !== undefined || preparingSession;
+  const destinationBusy = destination?.phase === "resolving";
   const placeholder = usePlaceholder();
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
-      <ComposerPrimitive.Root data-slot="composer" inert={preparingSession} aria-busy={preparingSession || undefined} className="relative flex flex-col gap-2">
+      <ComposerPrimitive.Root data-slot="composer" inert={disabled} aria-busy={preparingSession || destinationBusy || undefined} className="relative flex flex-col gap-2">
         <ComposerDraftRestore />
         <ComposerQueue />
         <StatusLine />
@@ -148,9 +148,15 @@ function ComposerBody() {
  * disabled and says why, rather than accepting input it will drop.
  */
 function useNothingToSendTo(): string | undefined {
-  const { currentProject } = useLaserStable();
+  const { destination, currentProject } = useLaserStable();
   const view = useLaserView();
-  if (view || currentProject) return undefined;
+  if (destination?.phase === "resolving") {
+    return mainTab(destination) === "chat" ? "Preparing Chat…" : "Opening this conversation…";
+  }
+  if (destination?.phase === "unavailable") {
+    return mainError(destination) ?? "This conversation is unavailable. Retry it or start a new one.";
+  }
+  if (view || (!destination ? currentProject !== undefined : mainTab(destination) === "code" && mainCodeProject(destination) !== undefined)) return undefined;
   return "Open a project first — the agent works inside a folder on this computer.";
 }
 
@@ -265,7 +271,10 @@ function SendOrStop({ mobile = false }: { mobile?: boolean }) {
   const empty = useAuiState((s) => s.composer.isEmpty);
   const dictating = useAuiState((s) => s.composer.dictation != null);
   const { pending: preparingSession } = useSessionPreparation();
-  const stop = running && empty;
+  const threadDisabled = useAuiState((s) => s.thread.isDisabled);
+  const blocked = useNothingToSendTo();
+  const disabled = preparingSession || threadDisabled || blocked !== undefined;
+  const stop = running && empty && !disabled;
   const size = mobile ? "icon-lg" : "icon-sm";
   const className = mobile ? MobileComposerButtonClass(true) : undefined;
   if (stop) {
@@ -282,7 +291,7 @@ function SendOrStop({ mobile = false }: { mobile?: boolean }) {
         tooltip={running ? "Queue for when this turn ends" : "Send"}
         shortcut="⏎"
         size={size}
-        disabled={preparingSession}
+        disabled={disabled}
         className={className}
         onClick={(event) => {
           const prepare = () => {

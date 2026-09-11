@@ -92,6 +92,7 @@ const seed = (): AppState => {
   };
   return { ...state, connection: "open", current: A, open };
 };
+const select = (store: StateStore, path: string) => store.dispatch({ type: "destination", destination: { phase: "ready-code", intent: store.getSnapshot().destination.intent + 1, code: { kind: "project-session", project: "/project", path } } });
 const mountTopBar = async (store: StateStore) => {
   await act(async () => root.render(
     <LaserStoreProvider store={store}>
@@ -166,13 +167,13 @@ describe("connected top-bar identity", () => {
     await act(async () => store.dispatch({ type: "opened", state: sessionState({ path: A, cwd: "/project", name: summaries[0]!.name, agent: writer, isStreaming: true }) }));
     expect(agentLabel()?.textContent).toBe("writer");
 
-    await act(async () => store.dispatch({ type: "select", path: B }));
+    await act(async () => select(store, B));
     expect(agentLabel()?.textContent).toBe("reviewer");
 
-    await act(async () => store.dispatch({ type: "select", path: C }));
+    await act(async () => select(store, C));
     expect(agentLabel()).toBeNull();
 
-    await act(async () => store.dispatch({ type: "select", path: D }));
+    await act(async () => select(store, D));
     expect(agentLabel()?.textContent).toBe("reviewer");
     expect(agentLabel()?.textContent).not.toContain("reviewer-third-pass");
     const crumb = container.querySelector('[data-slot="parent-crumb"]');
@@ -211,7 +212,7 @@ describe("connected top-bar identity", () => {
     }
 
     await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-    await act(async () => store.dispatch({ type: "select", path: D }));
+    await act(async () => select(store, D));
     await act(async () => {
       const event = new PointerEvent("pointerdown", { bubbles: true, button: 0 });
       Object.defineProperty(event, "pointerType", { value: "mouse" });
