@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-11T15:06:17Z · orchestrator · HEAD: ab4472e
+**Last updated:** 2026-09-11T15:55:50Z · orchestrator · HEAD: 1a69704
 
-**Current focus:** user-requested one-command release automation (T114), then use it to publish0.3.8 (T113). Version-only candidate is ready. T110 remains dropped; one-time script supplied; installed processes untouched.
+**Current focus:** directly execute the reviewed0.3.8 release command. All source/script review corrections and39 release tests pass; user contact-email changes are included. T110 dropped, script supplied, installed processes untouched.
 
 ## Milestones
 
@@ -33,8 +33,8 @@ Publication waits for tested/reviewed release automation and final versioned CI/
 
 ## Next up
 
-1. Complete approved T114 release orchestrator and AGENTS guidance.
-2. Review combined0.3.8 candidate and verify corrections.
+1. Execute the reviewed command against the final frozen source.
+2. Wait for exact-source CI and tag-triggered two-architecture release gates.
 3. Run the new release command; verify both architectures and public provenance.
 
 ## Recently done
