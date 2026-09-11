@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-11T11:20:00Z · claude-2026-09-11-stabilize · HEAD: dc11c4d (+ this ledger commit)
+**Last updated:** 2026-09-11T09:45:08Z · orchestrator-release-subset · HEAD: 4acae2e (+ release ledger)
 
-**Current focus:** M13 — the stabilization patch 0.3.6 is published and verified (D-194); next are the recorded follow-ups M13-T99 (typing-burst crash) and M13-T100 (browser-gate observations), then the remaining milestone proofs.
+**Current focus:** M13-T107 — release0.3.7 with reviewed T101 instruction highlighting and T103 full-span timing only; other changes preserved for the next batch.
 
 ## Milestones
 
@@ -24,12 +24,12 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M10 Distribution | in-progress | in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
 | M12 Product experience | done | 0.2.13 dispatched |
-| M13 Agents Leap | in-progress | 0.3.6 published and verified at `dc11c4d`; T99/T100 follow-ups recorded |
+| M13 Agents Leap | in-progress | T107 release gates; T101/T103 included; other work excluded; 0.3.6 published; T99/T100 follow-ups recorded |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
 
-- None.
+- M13-T104: implementation waits for M13-T102’s reviewed/integrated transaction interface.
 
 ## Next up
 
@@ -39,8 +39,8 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Recently done
 
+- M13-T101: highlighted instructions and parser-correct variable inspection (`4acae2e`); review APPROVE, protocol/UI checks and browser proof.
+- M13-T103: full-span activity timing (`3bdacf5`), review APPROVE; 34 post-merge tests and live phone/desktop proof.
 - M13-T94: 0.3.6 Latest at `dc11c4d`; CI 34571854176 and release 34572122489 passed; 12 verified assets, attestation and feeds (D-194).
 - M13-T98: queued-completion ownership on the real engine and the identified packaged worker (`82fe0d5`…`46e6e19`, 14 real-engine tests, packaged 91/91, review + re-review APPROVE).
 - M13-T93: extension admission A/C and causal attribution (`db52a6b`, review APPROVE).
-- M13-T89: refused first send keeps the draft and choice; leaving drops only the choice (`c42524a`, browser repro exit 0).
-- M13-T96: terminal blocked is neutral finished work across fleet, sidebar, docs and `inspect_fleet` (`d694b07`, `05bec99`, `e165e7c`, `627aaef`).
