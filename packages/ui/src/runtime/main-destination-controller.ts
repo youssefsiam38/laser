@@ -191,6 +191,10 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
   const initializingRef = useRef(0);
   const heldPath = useRef<string | undefined>(mainPath(state.destination));
   if (initializing === 0) heldPath.current = mainPath(state.destination);
+  // The intent of a Chat resolution that found no Chat workspace yet, so the
+  // late-workspace effect below re-resolves exactly that one — never a Chat
+  // intent another verb (a new session) is still driving.
+  const awaitingChatWorkspace = useRef<number | undefined>(undefined);
 
   const transition = useCallback((destination: MainDestination): boolean => {
     if (destination.intent !== intentRef.current) return false;
@@ -307,7 +311,7 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
       : destinationSessionForTab("chat", undefined, source);
     if (remembered || candidate) { await resolveSession(remembered ?? candidate!.path, intent); return; }
     const cwd = snapshot.agents.snapshot?.workspaces.chat;
-    if (!cwd) return;
+    if (!cwd) { awaitingChatWorkspace.current = intent; return; }
     try {
       const path = await depsRef.current.launchSession(cwd, { agentName: "chat", select: false });
       if (intent !== intentRef.current) return;
@@ -488,10 +492,16 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
     void resolveTarget(target, intent).catch(() => {}).finally(() => setStartupRestoring(false));
   }, [begin, openSession, resolveTarget, state.connection, state.sessionsLoaded]);
 
+  // A Chat opened before the host said where Chat lives resolves once it does.
+  // Only the intent that actually waited: a fresh `chat-tab` intent from
+  // `newSession` is still creating its session, and re-resolving it here
+  // would open the previous chat first and strand the new one (M13-T119).
   useEffect(() => {
     const current = state.destination;
     if (state.connection !== "open" || current.phase !== "resolving" || current.target.kind !== "chat-tab") return;
     if (!state.agents.snapshot?.workspaces.chat) return;
+    if (awaitingChatWorkspace.current !== current.intent) return;
+    awaitingChatWorkspace.current = undefined;
     void resolveTarget(current.target, current.intent).catch(() => {});
   }, [resolveTarget, state.agents.snapshot?.workspaces.chat, state.connection, state.destination]);
 
