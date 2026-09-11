@@ -68,7 +68,6 @@ interface PreAcceptanceHydration {
   entries: unknown[];
   leafId: string | null;
   goal: Awaited<ReturnType<NonNullable<SessionDriver["goalState"]>>>;
-  pending: ReturnType<PendingTray["list"]>;
   seq: number;
   buffer: SessionUpdateParams[];
 }
@@ -297,11 +296,11 @@ export class WorkerServer {
       }
 
       // --- the pending tray (pending.ts) ---
-      case "session/pending/list": {
-        const live = this.live(req.params.path);
-        const messages = live.preAcceptance?.pending ?? this.tray(req.params.path).list();
-        return { messages } satisfies Result<"session/pending/list">;
-      }
+      case "session/pending/list":
+        // The tray is candidate-independent and its mutations are intentionally
+        // unfenced. A fresh view must see adds/removes that settled during a
+        // long first-turn preflight, not a frozen preparation-time copy.
+        return { messages: this.tray(req.params.path).list() } satisfies Result<"session/pending/list">;
       case "session/pending/add":
         return {
           message: this.tray(req.params.path).add(await this.withDictation(req.params.path, req.params.content)),
@@ -1102,7 +1101,6 @@ export class WorkerServer {
         entries: [...entries],
         leafId,
         goal,
-        pending: [...pending],
         seq: live.seq,
         buffer: live.buffer.filter((update) => update.seq <= live.seq),
       };

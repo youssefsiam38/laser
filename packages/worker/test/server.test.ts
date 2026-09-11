@@ -278,6 +278,21 @@ describe("WorkerServer", () => {
     });
     await entered.promise;
 
+    // The pending tray is independent of the speculative runtime. A fresh
+    // hydration reads accepted tray mutations that settled after preparation
+    // began, rather than an old snapshot that misses adds or resurrects drops.
+    const addedDuringAttempt = await h.call(40, "session/pending/add", {
+      path: "/tmp/fake/s1.jsonl",
+      content: [{ type: "text", text: "visible during hydration" }],
+    });
+    const addedId = (addedDuringAttempt.result as { message: { id: string } }).message.id;
+    await expect(h.call(44, "session/load", { path: "/tmp/fake/s1.jsonl", fromSeq: 0 }))
+      .resolves.toMatchObject({ result: { state: { path: "/tmp/fake/s1.jsonl" } } });
+    expect((await h.call(41, "session/pending/list", { path: "/tmp/fake/s1.jsonl" })).result)
+      .toMatchObject({ messages: [{ id: addedId, text: "visible during hydration" }] });
+    await h.call(42, "session/pending/remove", { path: "/tmp/fake/s1.jsonl", id: addedId });
+    expect((await h.call(43, "session/pending/list", { path: "/tmp/fake/s1.jsonl" })).result).toEqual({ messages: [] });
+
     // Bare prompt remains a refusal rather than silently changing semantics.
     await expect(h.call(4, "session/prompt", {
       path: "/tmp/fake/s1.jsonl",
