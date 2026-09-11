@@ -1272,7 +1272,13 @@ export interface HostNotifications {
    */
   "pi/worker/status": WorkerInfo;
   /** One session's attention changed (M2-T2). Cheaper than re-listing the catalog. */
-  "pi/session/attention": { path: string; cwd: string; attention: SessionAttention; at: string };
+  /**
+   * `agent` says which agent the session belongs to when the host knows: a
+   * child's news reaches its parent inside the conversation, so nothing
+   * outside the window announces it — only a top-level session interrupts a
+   * person (D-225).
+   */
+  "pi/session/attention": { path: string; cwd: string; attention: SessionAttention; at: string; agent?: SessionAgentInfo };
   /** Read acknowledgement, even when an unanswered approval keeps attention unchanged. */
   "pi/session/seen": { path: string };
   /** The project set or a trust decision changed. Carries the whole list; it is small. */

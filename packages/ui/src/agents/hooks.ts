@@ -16,6 +16,7 @@ import { buildAgentTree, sameAgentTree, type AgentTree } from "./run-tree.js";
 const EMPTY_RUNS: readonly AgentRun[] = Object.freeze([]);
 const EMPTY_EVENTS: readonly AgentEvent[] = Object.freeze([]);
 const EMPTY_WARNINGS: readonly AgentWarning[] = Object.freeze([]);
+const EMPTY_MCP_SERVERS: readonly string[] = Object.freeze([]);
 
 const sameList = <T,>(a: readonly T[], b: readonly T[]): boolean => a === b || (a.length === b.length && a.every((item, i) => item === b[i]));
 
@@ -164,6 +165,16 @@ function sameAgentInfo(a: SessionAgentInfo | undefined, b: SessionAgentInfo | un
 /** Namer's early label for a tool call still running, or `undefined` until it lands. */
 export function useNamerLabel(path: string | undefined, toolCallId: string | undefined): string | undefined {
   return useLaserState((s) => (path === undefined || toolCallId === undefined ? undefined : s.open[path]?.namerLabels[toolCallId]));
+}
+
+/**
+ * The MCP servers this session started with (`lasercode/mcp/status`), in
+ * snapshot order. A tool row asks this to recognise `<server>_<tool>` as a
+ * server's own tool when the stored result no longer carries `details.server`
+ * (docs/mcp.md "In the transcript").
+ */
+export function useSessionMcpServers(path: string | undefined): readonly string[] {
+  return useLaserState((s) => (path === undefined ? EMPTY_MCP_SERVERS : s.open[path]?.mcpServers ?? EMPTY_MCP_SERVERS), sameList);
 }
 
 /** Every periodic-validation warning, as the snapshot orders them. */

@@ -4,7 +4,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 **Last updated:** 2026-09-11T19:05:00Z · orchestrator-2026-09-11-mcp · HEAD: 9ccbf4f (ledger edits uncommitted on top)
 
-**Current focus:** M14 MCP servers (`docs/mcp.md`, D-221): protocol landed (T1, `9ccbf4f`); three workers in parallel worktrees — engine (T2, `agents/mcp-engine-161a7cc9`), Settings page (T3, `agents/mcp-settings-ui-cba83f3f`), transcript rows (T4, `agents/mcp-transcript-568fde54`). Parked: T117 on `chat-memory-fallback` (D-219).
+**Current focus:** M14 MCP servers (`docs/mcp.md`, D-221) — engine, Settings page and transcript workers in parallel worktrees; ships alone first (D-222). M15 runs alongside where write sets do not overlap: sidebar/slash fixes, English dictation, fallback-chains design. Parked: T117 on `chat-memory-fallback` (D-219).
 
 ## Milestones
 
@@ -26,7 +26,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M12 Product experience | done | 0.2.13 dispatched |
 | M13 Agents Leap | in-progress | 0.3.10 public (T118–T121); T117 parked |
 | M14 MCP servers | in-progress | T1 done; T2/T3/T4 in flight; T5 packaging and T6 live proof next; ships alone (D-222) |
-| M15 After the MCP release | todo | file opener, English dictation, fallback chains, sidebar indicator, slash completion; own release |
+| M15 After the MCP release | in-progress | T2/T4/T5 in worktrees, T3 in design phase; branches wait for the M14 tag; T1 waits for the transcript worker |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers

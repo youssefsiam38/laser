@@ -68,7 +68,7 @@ export function parseArgs(argv) {
   if (!VERSION_RE.test(options.version)) fail("VERSION must be MAJOR.MINOR.PATCH, optionally with a prerelease suffix.");
   if (options.source && !FULL_SHA_RE.test(options.source)) fail("--source must be a full 40-character lowercase commit SHA.");
   if (options.publish && !options.source) fail("--publish requires --source FULL_SHA from the reviewed release authorization.");
-  if (options.publish && !options.notesFile) fail("--publish requires --notes FILE: the release notes a person reads on the release page.");
+  if (options.publish && !options.resume && !options.notesFile) fail("--publish requires --notes FILE: the release notes a person reads on the release page.");
   if (options.resume && !options.publish) fail("--resume is valid only with --publish.");
   if (options.recoverStaleLock && (!options.publish || !options.resume)) {
     fail("--recover-stale-lock requires --publish --resume.");
@@ -601,12 +601,92 @@ export function ensureTag(exec, journal, checkpoint = () => {}) {
   return true;
 }
 
+/** The files SHA256SUMS never lists: itself, its signature, and the provenance bundle. */
+const UNMANIFESTED_ASSETS = new Set(["SHA256SUMS", "SHA256SUMS.sig", "provenance.jsonl"]);
+
 /**
- * The public release, read through the API only: not a draft, the recorded
- * tag, the exact inventory (names, sizes, upload states) and Latest promotion.
- * Nothing is downloaded; the release workflow already attested and verified
- * the bytes it uploaded, and a post-hoc download added twenty minutes and no
- * new fact.
+ * `SHA256SUMS` as published: `<hex>  <name>` per line, every name once. A few
+ * hundred bytes, fetched through the API's asset endpoint rather than a full
+ * download of the release.
+ */
+export function parseManifest(text) {
+  const entries = new Map();
+  for (const line of text.split("\n").filter(Boolean)) {
+    const match = /^([0-9a-f]{64})  ([^/\n]+)$/.exec(line);
+    if (!match) fail(`Invalid SHA256SUMS line: ${line}`);
+    if (entries.has(match[2])) fail(`Duplicate SHA256SUMS entry: ${match[2]}`);
+    entries.set(match[2], match[1]);
+  }
+  return entries;
+}
+
+/**
+ * The published bytes, checked without downloading them: the API reports a
+ * SHA-256 digest per asset, the release's own `SHA256SUMS` (fetched, a few
+ * hundred bytes) says what the workflow computed for each file, and the two
+ * must agree for every file the manifest covers — and the manifest must cover
+ * exactly the inventory. An asset replaced after publication keeps its name,
+ * its upload state and a plausible size, and only the digest gives it away.
+ */
+export function verifyPublishedDigests(exec, release, remoteAssets, version) {
+  const manifestAsset = remoteAssets.find((asset) => asset.name === "SHA256SUMS");
+  if (!manifestAsset) fail("Published release has no SHA256SUMS.");
+  const fetched = exec("gh", ["api", "-H", "Accept: application/octet-stream", `repos/${identity.repository}/releases/assets/${manifestAsset.id}`]);
+  if (fetched.code !== 0) fail(`Could not read the published SHA256SUMS; this is not evidence of absence.\n${fetched.stderr || fetched.stdout}`.trim());
+  const manifest = parseManifest(fetched.stdout);
+  const expected = releaseInventory(version).filter((name) => !UNMANIFESTED_ASSETS.has(name)).sort();
+  const listed = [...manifest.keys()].sort();
+  if (!isDeepStrictEqual(listed, expected)) fail("SHA256SUMS coverage does not match the release inventory.");
+  for (const asset of remoteAssets) {
+    if (UNMANIFESTED_ASSETS.has(asset.name)) continue;
+    const digest = typeof asset.digest === "string" ? asset.digest.replace(/^sha256:/, "") : "";
+    if (!/^[0-9a-f]{64}$/.test(digest)) fail(`GitHub reports no SHA-256 digest for ${asset.name}; the published bytes cannot be checked.`);
+    if (manifest.get(asset.name) !== digest) fail(`Published ${asset.name} does not match SHA256SUMS: the asset changed after the workflow uploaded it.`);
+  }
+  if (manifestAsset.size !== Buffer.byteLength(fetched.stdout, "utf8")) fail("The fetched SHA256SUMS is not the size the API reports for it.");
+}
+
+/**
+ * The provenance bundle, verified once against the source this release was
+ * cut from. Every asset was attested by the release workflow; verifying the
+ * manifest's own subject with `--source-digest` and `--source-ref` pinned is
+ * the check that the bundle belongs to this tag and this commit, which the
+ * workflow's local installer gate cannot make (it runs before the attest step).
+ * `install.sh` runs the same verification on every machine, so a bundle that
+ * fails here would fail every install after Latest was promoted.
+ */
+export function verifyPublishedProvenance(exec, journal, remoteAssets, directory) {
+  const bundleAsset = remoteAssets.find((asset) => asset.name === "provenance.jsonl");
+  if (!bundleAsset) fail("Published release has no provenance bundle.");
+  const bundle = join(directory, "provenance.jsonl");
+  const manifest = join(directory, "SHA256SUMS");
+  for (const [asset, path] of [[bundleAsset, bundle], [remoteAssets.find((item) => item.name === "SHA256SUMS"), manifest]]) {
+    const fetched = exec("gh", ["api", "-H", "Accept: application/octet-stream", `repos/${identity.repository}/releases/assets/${asset.id}`]);
+    if (fetched.code !== 0) fail(`Could not read the published ${asset.name}; this is not evidence of absence.\n${fetched.stderr || fetched.stdout}`.trim());
+    writeFileSync(path, fetched.stdout);
+  }
+  const verified = exec("gh", [
+    "attestation", "verify", manifest,
+    "--bundle", bundle,
+    "--repo", identity.repository,
+    "--signer-workflow", `${identity.repository}/${RELEASE_WORKFLOW_PATH}`,
+    "--source-digest", journal.candidate,
+    "--source-ref", `refs/tags/${journal.tag}`,
+    "--format", "json",
+  ], { allowCodes: [0, 1] });
+  if (verified.code !== 0) {
+    fail(`The published provenance bundle does not verify for ${journal.tag} at ${journal.candidate}; every install would refuse it.\n${verified.stderr || verified.stdout}`.trim());
+  }
+}
+
+/**
+ * The public release, read through the API: not a draft, the recorded tag,
+ * the exact inventory with every asset uploaded, every digest agreeing with
+ * the published `SHA256SUMS`, the provenance bundle verified against this
+ * tag's source, the release page carrying the notes the tag carries, and
+ * Latest promotion. Two small files are fetched (the manifest and the
+ * bundle); the installers are not downloaded — their digests are what the
+ * manifest and the API both report, and the workflow attested those bytes.
  */
 export function verifyPublicRelease(exec, journal) {
   const release = releaseByTag(exec, journal.tag, false);
@@ -617,6 +697,7 @@ export function verifyPublicRelease(exec, journal) {
   assertRecordedTag(remoteTagIdentity(exec, journal.repoRoot, `refs/tags/${journal.tag}`), journal);
   if (!Array.isArray(release.assets)) fail("Published release has no asset inventory.");
   const remoteAssets = release.assets.map((asset) => ({
+    id: asset.id,
     name: asset.name,
     size: asset.size,
     state: asset.state,
@@ -630,6 +711,20 @@ export function verifyPublicRelease(exec, journal) {
   const unexpected = remoteAssets.filter((asset) => !allowedNames.has(asset.name));
   if (unexpected.length > 0 || ![requiredNames.length, requiredNames.length + 1].includes(remoteAssets.length)) {
     fail(`Published release contains unexpected assets: ${unexpected.map((asset) => asset.name).join(", ") || "duplicate inventory"}.`);
+  }
+  verifyPublishedDigests(exec, release, remoteAssets, journal.version);
+  const scratch = mkdtempSync(join(tmpdir(), `${identity.dirName}-release-provenance-${journal.version}-`));
+  try {
+    verifyPublishedProvenance(exec, journal, remoteAssets, scratch);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+  // The page is the notes the tag carries, or the chain that carries them
+  // (tag → publish.sh → --notes) broke somewhere and a generated commit list
+  // is standing where a person's words should be.
+  if (typeof journal.notes === "string" && journal.notes.trim()) {
+    const body = String(release.body ?? "").replace(/\r\n/g, "\n").trim();
+    if (body !== journal.notes.trim()) fail(`The release page's text is not the release notes the tag carries; edit the release to the notes in the checkpoint and resume.`);
   }
   const latest = ghApi(exec, `repos/${identity.repository}/releases/latest`);
   if (!prerelease && latest.id !== release.id) fail(`Stable release ${journal.tag} is not Latest.`);
@@ -713,7 +808,16 @@ export async function runRelease(options, dependencies = {}) {
       if (!existsSync(lock.journalPath)) fail(`No checkpoint exists for ${frozen.tag}.`);
       journal = readJson(lock.journalPath, "release checkpoint");
       validateJournal(journal, identityFields);
-      if (journal.notesDigest !== notes.digest) fail("The release notes differ from the checkpoint's; resume with the same notes or start a new release.");
+      // Until the tag exists the notes still have to be typed into it, so a
+      // resume must present the same file. Once the tag carries them the
+      // checkpoint's text is the one source; a resume then needs no file, and
+      // a file that no longer matches is only refused before the tag.
+      if (!stageAtLeast(journal, "tag-pushed")) {
+        if (!notes) fail("--resume before the tag exists needs --notes FILE, the same notes the checkpoint was started with.");
+        if (journal.notesDigest !== notes.digest) fail("The release notes differ from the checkpoint's; resume with the same notes or start a new release.");
+      } else if (notes && journal.notesDigest !== notes.digest) {
+        fail(`The release notes differ from the ones in the tag; resume without --notes (the checkpoint carries them) or start a new release.`);
+      }
     } else {
       if (existsSync(lock.journalPath)) fail(`Checkpoint ${lock.journalPath} already exists; use --resume after inspection.`);
       journal = {

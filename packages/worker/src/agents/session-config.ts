@@ -80,7 +80,8 @@ export function parseSessionAgentRecord(data: unknown): SessionAgentRecord | und
     const path = str(w["path"]);
     const branch = str(w["branch"]);
     const baseCommit = str(w["baseCommit"]);
-    if (path && branch && baseCommit) record.worktree = { path, branch, baseCommit };
+    const removedAt = str(w["removedAt"]);
+    if (path && branch && baseCommit) record.worktree = { path, branch, baseCommit, ...(removedAt ? { removedAt } : {}) };
   }
   return record;
 }
@@ -189,10 +190,30 @@ export async function ensureWorkspaceSessionCwd(kind: SessionAgentKind, cwd: str
  * and anything it does next belongs in the checkout it came from. Undefined
  * for a directory that exists or one that was never a worktree of this
  * project, so nothing else is reinterpreted.
+ *
+ * The worktree is the one the child's own record names, when there is one:
+ * worktrees are created under the git toplevel and a child's directory
+ * re-descends the project's path below it (`worktrees.ts`), so a project
+ * opened below the repository root — or through a symlink — never matches a
+ * `<project>/.worktrees/` prefix. A record whose worktree is marked
+ * `removedAt` needs no directory check at all; the prefix remains only for a
+ * session written before records carried a worktree.
  */
-export async function removedWorktreeCwd(projectCwd: string, sessionPath: string): Promise<string | undefined> {
+export async function removedWorktreeCwd(
+  projectCwd: string,
+  sessionPath: string,
+  worktree?: { path: string; removedAt?: string },
+): Promise<string | undefined> {
   const stored = await readSessionHeaderCwd(sessionPath);
-  if (!stored || existsSync(stored)) return undefined;
-  const worktrees = join(resolve(projectCwd), WORKTREES_DIR_NAME) + sep;
-  return resolve(stored).startsWith(worktrees) ? resolve(projectCwd) : undefined;
+  if (!stored) return undefined;
+  const project = resolve(projectCwd);
+  if (worktree) {
+    const root = resolve(worktree.path);
+    const inside = resolve(stored) === root || resolve(stored).startsWith(root + sep);
+    if (!inside) return undefined;
+    return worktree.removedAt || !existsSync(stored) ? project : undefined;
+  }
+  if (existsSync(stored)) return undefined;
+  const worktrees = join(project, WORKTREES_DIR_NAME) + sep;
+  return resolve(stored).startsWith(worktrees) ? project : undefined;
 }

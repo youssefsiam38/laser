@@ -162,8 +162,39 @@ describe("a stored session whose directory was a removed worktree", () => {
       expect(await removedWorktreeCwd(project, otherProject)).toBeUndefined();
       // No header, no file: nothing.
       expect(await removedWorktreeCwd(project, join(base, "missing.jsonl"))).toBeUndefined();
+
+      // A project below the repository root: the worktree lives under the
+      // toplevel and the child's directory re-descends the project's path, so
+      // only the record's own worktree path can say what the directory was.
+      const repo = join(base, "repo");
+      const nested = join(repo, "packages", "app");
+      const nestedWorktree = join(repo, ".worktrees", "fixer-1a2b3c4d");
+      const nestedChildCwd = join(nestedWorktree, "packages", "app");
+      mkdirSync(nested, { recursive: true });
+      mkdirSync(nestedChildCwd, { recursive: true });
+      const nestedChild = join(base, "nested-child.jsonl");
+      writeFileSync(nestedChild, header(nestedChildCwd));
+      const record = { path: nestedWorktree };
+      expect(await removedWorktreeCwd(nested, nestedChild, record)).toBeUndefined();
+      expect(await removedWorktreeCwd(nested, nestedChild)).toBeUndefined();
+      rmSync(nestedWorktree, { recursive: true, force: true });
+      expect(await removedWorktreeCwd(nested, nestedChild)).toBeUndefined();
+      expect(await removedWorktreeCwd(nested, nestedChild, record)).toBe(nested);
+      // A recorded removal needs no directory check: an unmounted volume is
+      // not a removed worktree, and a removed worktree is one whatever the disk says.
+      mkdirSync(nestedChildCwd, { recursive: true });
+      expect(await removedWorktreeCwd(nested, nestedChild, { ...record, removedAt: "2026-09-11T12:00:00.000Z" })).toBe(nested);
+      // A record naming some other worktree says nothing about this session.
+      expect(await removedWorktreeCwd(nested, nestedChild, { path: join(repo, ".worktrees", "other"), removedAt: "2026-09-11T12:00:00.000Z" })).toBeUndefined();
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
+  });
+
+  it("keeps a recorded worktree removal", async () => {
+    const worktree = { path: "/repo/.worktrees/fixer", branch: "agents/fixer", baseCommit: "abc", removedAt: "2026-09-11T12:00:00.000Z" };
+    expect(parseSessionAgentRecord({ agentName: "default", kind: "child", parentPath: "/p.jsonl", worktree })?.worktree).toEqual(worktree);
+    const { removedAt: _removed, ...kept } = worktree;
+    expect(parseSessionAgentRecord({ agentName: "default", kind: "child", parentPath: "/p.jsonl", worktree: kept })?.worktree).toEqual(kept);
   });
 });

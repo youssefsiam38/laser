@@ -13,7 +13,7 @@
  * notification must fire on the *edge* into "needs you", never on a repeat, and
  * a reconnect that re-lists every session must not fire one per session.
  */
-import { ATTENTION_RANK, type ProjectInfo, type SessionAttention, type SessionSummary } from "@lasercode/protocol";
+import { ATTENTION_RANK, type ProjectInfo, type SessionAgentInfo, type SessionAttention, type SessionSummary } from "@lasercode/protocol";
 
 export interface FleetSession {
   path: string;
@@ -22,6 +22,12 @@ export interface FleetSession {
   name: string | undefined;
   attention: SessionAttention;
   modifiedAt: string;
+  /**
+   * A child agent's session. Its news reaches its parent inside the
+   * conversation, so it never interrupts a person outside the window (D-225).
+   * Undefined until a listing or an attention event has said which it is.
+   */
+  child?: boolean;
 }
 
 export interface FleetProject {
@@ -95,6 +101,7 @@ export class FleetModel {
         name: summary.name ?? summary.firstMessage,
         attention: summary.attention ?? "idle",
         modifiedAt: summary.modifiedAt,
+        ...(summary.agent ? { child: summary.agent.kind === "child" } : {}),
       });
       if (change) changes.push(change);
     }
@@ -105,7 +112,7 @@ export class FleetModel {
   }
 
   /** One `pi/session/attention` notification. */
-  applyAttention(event: { path: string; cwd: string; attention: SessionAttention; at: string }): AttentionChange | undefined {
+  applyAttention(event: { path: string; cwd: string; attention: SessionAttention; at: string; agent?: SessionAgentInfo }): AttentionChange | undefined {
     const known = this.sessions.get(event.path);
     return this.upsert({
       path: event.path,
@@ -115,13 +122,16 @@ export class FleetModel {
       // The notification's `at` is when attention changed, which is a better
       // sort key for "what did I just miss" than a stale catalog mtime.
       modifiedAt: event.at,
+      ...(event.agent ? { child: event.agent.kind === "child" } : {}),
     });
   }
 
   private upsert(next: FleetSession): AttentionChange | undefined {
     const previous = this.sessions.get(next.path);
-    // A listing has the name; an attention event does not. Never lose it.
-    const merged: FleetSession = { ...next, name: next.name ?? previous?.name };
+    // A listing has the name; an attention event may not. Never lose either
+    // that or what kind of session this is.
+    const child = next.child ?? previous?.child;
+    const merged: FleetSession = { ...next, name: next.name ?? previous?.name, ...(child !== undefined ? { child } : {}) };
     this.sessions.set(next.path, merged);
     if (!this.projects.has(merged.cwd)) this.projects.set(merged.cwd, projectNameOf(merged.cwd));
     if (previous && previous.attention === merged.attention) return undefined;
@@ -204,6 +214,10 @@ export const NOTIFIABLE: ReadonlySet<SessionAttention> = new Set<SessionAttentio
  */
 export function shouldNotify(change: AttentionChange): boolean {
   if (change.initial) return false;
+  // A child agent reports to its parent, inside the parent's conversation;
+  // the person is interrupted only by the top-level session they are
+  // actually talking to (D-225).
+  if (change.session.child) return false;
   if (!NOTIFIABLE.has(change.to)) return false;
   if (change.from !== undefined && NOTIFIABLE.has(change.from)) {
     // waiting_for_input is genuinely new information even if the session was

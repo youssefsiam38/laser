@@ -370,8 +370,10 @@ Markdown file written for the people who install the release: what changed and
 what it means for them, not a commit list. `--publish` refuses to run without
 it, and an empty file is refused. The orchestrator puts the notes into the
 annotated tag's body (verbatim, so headings survive) and `publish.sh` reads
-them from the tag as the release page's text; a resume must present the same
-notes. There is no separate notes form to fill in afterwards.
+them from the tag as the release page's text; a resume before the tag exists
+must present the same notes, and a resume after it needs no file (the tag and
+the checkpoint carry them). There is no separate notes form to fill in
+afterwards.
 
 Do not spawn a release-preparation agent for this routine path and do not repeat
 the feature review. Changes to the release orchestrator still receive normal
@@ -380,10 +382,13 @@ and generated product identity, runs staged identity/full verification with no i
 pushes the exact candidate without touching the caller's branch/index, adopts or
 waits for that SHA's trusted `ci.yml` push run, and creates the immutable tag only
 after success. After the release workflow passes it checks the public release
-through the API only (not a draft, the recorded tag, the exact inventory with
-every asset uploaded, Latest promotion) and downloads nothing: the workflow
-attested and verified the bytes it uploaded, and a second download proved
-nothing new for twenty minutes of waiting. Resume only from its exact checkpoint; stale-lock recovery is
+through the API (not a draft, the recorded tag, the exact inventory with every
+asset uploaded, every asset's API digest equal to the published `SHA256SUMS`,
+the provenance bundle verified once against the tag's source, the release page
+carrying the tag's notes, Latest promotion). It fetches only the manifest and
+the bundle — a few kilobytes — and never the installers: their digests are
+what the manifest and the API both report, and the workflow attested those
+bytes (D-223). Resume only from its exact checkpoint; stale-lock recovery is
 explicit. It never stashes, resets, cleans, force-pushes, moves a tag, touches an
 installed process, or interprets a network/API error as absence. See
 `scripts/release/README.md` for status wording and recovery.
@@ -396,7 +401,7 @@ publishes after complete x64/ARM64 installers, checksums and offline provenance
 are uploaded and their remote sizes and SHA-256 digests match. Upload failures
 remain drafts; published assets must not be overwritten. A no-monitor request
 means report "tag pushed; release building", not "published". Record download
-readiness only after checking the public inventory through the API. Run the publication regression
+readiness only after the digest, provenance and notes checks above pass. Run the publication regression
 tests with `node --test scripts/release/test/*.test.mjs`.
 
 ### New files and the identity check
@@ -444,6 +449,12 @@ Remote refresh must not stop/cancel any host work. Do not promise uninterrupted
 agents during a full host restart. Preserve drafts before frontend reload.
 
 ### Native reminders must follow session acknowledgement
+
+Only a top-level session may interrupt a person outside the window (D-225): a
+child agent's question or ending reaches its parent inside the conversation, so
+the desktop shows no banner and the host sends no phone push for it. The host
+tags `pi/session/attention` with the session's agent; the desktop's `shouldNotify`
+refuses a child; `pi/ui/request` from a child sends no push. Test both.
 
 Retain native notification handles by session and withdraw them when that session
 is actually viewed. A host seen acknowledgement is distinct from attention:

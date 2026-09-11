@@ -52,7 +52,9 @@ first turn of the next session.
 The effective set for a project is the global list with the project list laid
 over it by `name`: a project entry replaces a global entry of the same name,
 and a project entry may be just `{ "name": "…", "disabled": true }` to switch a
-global server off for that project. Secrets — a bearer token, an OAuth client
+global server off for that project (the only entry without a transport; the
+list reports it as the global definition with `disabled: true` and
+`overridesGlobal`). Secrets — a bearer token, an OAuth client
 secret, an `env` or header value the person marks as secret — are written to
 the secrets file keyed by scope, project, server and field, and the config file
 holds `{ "secret": true }` where the value would be. A teammate who checks out

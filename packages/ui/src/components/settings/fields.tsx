@@ -44,13 +44,17 @@ interface ControlProps {
   label: string;
 }
 
-const inputClass = [
+/** The one field ground every settings control sits on. */
+export const inputClass = [
   "h-8 w-full min-w-0 rounded-lg border border-line bg-surface px-2.5 text-sm text-ink",
   "placeholder:text-ink-3 transition-[border-color] duration-(--motion-instant) outline-none",
   "hover:border-[color-mix(in_oklab,var(--line)_60%,var(--ink-3))]",
   "focus-visible:border-live focus-visible:ring-2 focus-visible:ring-live/25",
   "disabled:cursor-not-allowed disabled:bg-surface-2 disabled:opacity-60",
 ].join(" ");
+
+/** The same ground with room for the native select's arrow. */
+export const selectClass = `${inputClass} pe-7`;
 
 /** JSON round-trip so `false` and `0` survive a `<select>`'s string values. */
 const encode = (value: SettingOption["value"]): string => JSON.stringify(value);

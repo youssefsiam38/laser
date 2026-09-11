@@ -179,7 +179,7 @@ export const mcpServerConfigInputSchema = z
   .object({
     name: mcpServerName,
     label: z.string().trim().min(1).max(120).optional(),
-    transport: mcpTransportInputSchema,
+    transport: mcpTransportInputSchema.optional(),
     auth: mcpAuthInputSchema.optional(),
     startup: z.enum(MCP_STARTUP_MODES).optional(),
     tools: mcpToolPolicySchema.optional(),
@@ -192,7 +192,9 @@ export const mcpServerConfigInputSchema = z
     catalogId: z.string().max(64).optional(),
   })
   .strict()
-  .refine((server) => server.auth === undefined || server.auth.kind === "none" || server.transport.kind === "http", "Sign-in applies to HTTP servers only.");
+  // A definition, or the one entry that only switches a global server off.
+  .refine((server) => server.transport !== undefined || server.disabled === true, "Choose how to connect, or switch the server off.")
+  .refine((server) => server.auth === undefined || server.auth.kind === "none" || server.transport?.kind === "http", "Sign-in applies to HTTP servers only.");
 export const settingsScopeSchema = z.enum(["global", "project"]);
 export const featureScopeSchema = z.enum(["global", "project"]);
 export const packageScopeSchema = z.enum(["user", "project"]);

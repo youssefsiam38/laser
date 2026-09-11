@@ -5,6 +5,7 @@
  * default. No React, no DOM. Tested in test/thread/tool-groups.test.ts.
  */
 import type { DiffStats } from "./diff.js";
+import { mcpActiveLabel, mcpRowSummary, type McpToolInfo } from "./mcp-tools.js";
 import { shortPath, summarizeTool, toolKind, type ToolKind } from "./tool-summary.js";
 
 export type ActivityIconKind = ToolKind | "reasoning";
@@ -28,6 +29,12 @@ export interface ToolGroupMember {
   readonly cancelled: boolean;
   /** Full-source file changes, present only for a successfully completed edit/write. */
   readonly diffStats?: DiffStats | undefined;
+  /**
+   * Set when this call is an MCP one (docs/mcp.md). The aggregate then names
+   * it the way its own row does — "Playwright · browser navigate", not the
+   * registered `playwright_browser_navigate`.
+   */
+  readonly mcp?: McpToolInfo | undefined;
 }
 
 /** The family a group is named after. `mixed` = more than one family. */
@@ -93,13 +100,18 @@ const familyOf = (kind: ToolKind): Exclude<ToolGroupFamily, "mixed" | "reasoning
 
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
+/** The verb and typed summary of one member, MCP rows included. */
+const memberSummary = (member: Pick<ToolGroupMember, "toolName" | "args" | "mcp">): { verb: string; summary: string } =>
+  member.mcp ? mcpRowSummary(member.mcp, member.toolName, member.args) : summarizeTool(member.toolName, member.args);
+
 const pathOf = (args: unknown): string | undefined => {
   if (!args || typeof args !== "object") return undefined;
   const path = (args as { path?: unknown }).path;
   return typeof path === "string" && path ? path : undefined;
 };
 
-export function activeToolLabel(member: Pick<ToolGroupMember, "toolName" | "args">): string {
+export function activeToolLabel(member: Pick<ToolGroupMember, "toolName" | "args" | "mcp">): string {
+  if (member.mcp) return mcpActiveLabel(member.mcp, member.toolName, member.args);
   const summary = summarizeTool(member.toolName, member.args);
   const path = pathOf(member.args);
   const target = path && ["read", "write", "edit", "ls"].includes(summary.kind) ? shortPath(path, 2) : summary.summary;
@@ -217,7 +229,7 @@ export function summarizeToolGroup(members: readonly ToolGroupMember[]): ToolGro
   // While live, the typed fragment is the call in flight: that is what you
   // would be reading in the expanded row.
   if (live) {
-    const s = summarizeTool(live.toolName, live.args);
+    const s = memberSummary(live);
     const text = s.summary || s.verb;
     if (text) detail = text;
   }
@@ -225,7 +237,7 @@ export function summarizeToolGroup(members: readonly ToolGroupMember[]): ToolGro
   const iconKind: ActivityIconKind = family === "mixed" ? "other" : (ownSummary?.iconKind ?? kinds[0] ?? "other");
 
   const lines = members.map((m) => {
-    const s = summarizeTool(m.toolName, m.args);
+    const s = memberSummary(m);
     // Quiet is not hidden: the line a screen reader and the tooltip read still
     // says a command came back non-zero, it just does not call it a failure.
     const status = m.nonZeroExit === true

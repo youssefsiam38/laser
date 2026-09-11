@@ -335,6 +335,7 @@ Rules for a bridge:
 | `file-freshness` | the engine's own `read`/`write`/`edit` tools | always | one appended sentence on an `edit` to a file that changed since the agent last saw it (§8) |
 | `transcribe` | pi-gpt-transcribe | the `/transcribe` command | detection + the pre-send transform |
 | `web-access` | pi-web-access | retired by D-61 | the module is a stub; the transcript tool disclosure is the single presentation |
+| `mcp` | the pinned MCP engine's status channel | the worker passed `mcp` (it loads the engine only for a project with at least one enabled server) | `laser/mcp/status`: one snapshot per server in the product's status words, for `mcp/list` (docs/mcp.md) |
 
 Historical: before D-140 `subagents` probed pi-subagents' `globalThis`
 registries and its `subagents:rpc:v1` bus and emitted a `laser/subagents/event`

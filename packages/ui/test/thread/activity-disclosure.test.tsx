@@ -29,7 +29,7 @@ vi.mock("@assistant-ui/react", async (original) => ({
   ...await original<typeof import("@assistant-ui/react")>(),
   useToolCallElapsed: () => undefined,
 }));
-vi.mock("@/agents/hooks", () => ({ useNamerLabel: () => undefined }));
+vi.mock("@/agents/hooks", () => ({ useNamerLabel: () => undefined, useSessionMcpServers: () => [] }));
 
 let container: HTMLDivElement;
 let root: Root;

@@ -159,6 +159,15 @@ export interface SessionView {
    */
   namerLabels: Record<string, string>;
   /**
+   * The MCP servers this session started with, in snapshot order
+   * (`lasercode/mcp/status`, docs/mcp.md). A transcript reads it to know that
+   * `playwright_browser_navigate` is Playwright's own tool rather than a tool
+   * nobody recognises. Absent until the companion reports, and never emptied
+   * by the shutdown snapshot: a session being read back would otherwise lose
+   * the names its rows are drawn from.
+   */
+  mcpServers?: readonly string[];
+  /**
    * The attribution the next parent-sent user message gets, live. The harness
    * writes its durable marker straight to the session file, which raises no
    * engine event, so a transcript that is already open cannot read it before
@@ -651,6 +660,18 @@ function applyNotification(state: AppState, method: HostNotificationMethod, para
       if (p.message.type === "lasercode/module/log" && p.message.level === "error") {
         return pushToast(state, "error", `${p.message.module}: ${p.message.message}`);
       }
+      if (p.message.type === "lasercode/mcp/status") {
+        const names = p.message.snapshot.servers.map((server) => server.name);
+        // An empty snapshot is "this session has no MCP" — which is also what
+        // shutdown reports. Keeping the last non-empty list means closing a
+        // session never un-names the rows already on screen.
+        if (names.length === 0) return state;
+        return updateView(state, p.path, (v) =>
+          v.mcpServers !== undefined && v.mcpServers.length === names.length && names.every((n, i) => v.mcpServers![i] === n)
+            ? v
+            : { ...v, mcpServers: names },
+        );
+      }
       if (p.message.type === "lasercode/namer/label") {
         const { toolCallId, label } = p.message;
         return updateView(state, p.path, (v) =>
@@ -930,6 +951,33 @@ function dropRetryingProviderError(blocks: Block[]): Block[] {
   return blocks;
 }
 
+/**
+ * A stored tool result, as the transcript reads it back.
+ *
+ * A plain text result stays the joined string it has always been: every row
+ * that reads one — the terminal body, the diff, the fallback — already treats
+ * a string as the output, and nothing about those tools is lost by joining.
+ * A result that carries `details`, or a content block that is not text, keeps
+ * the envelope `tool_execution_end` delivers live (`{ content, details }`), so
+ * a reopened session draws the row the live one drew: an MCP screenshot is an
+ * image again, and the server that answered is known from `details.server`
+ * even when the session has no MCP snapshot (docs/mcp.md "In the transcript").
+ *
+ * `details` decides on its own, whatever shape the content has: a stored
+ * result whose content is a bare string still carries the diff, the run or the
+ * server its row is drawn from.
+ */
+function storedToolResult(message: { content?: unknown; details?: unknown }): unknown {
+  const content = message.content;
+  const details = message.details;
+  const hasDetails = typeof details === "object" && details !== null && !Array.isArray(details);
+  const hasNonText =
+    Array.isArray(content) &&
+    content.some((part) => typeof part === "object" && part !== null && (part as { type?: unknown }).type !== "text");
+  if (!hasDetails && !hasNonText) return textOf(content);
+  return { content: Array.isArray(content) ? content : [{ type: "text", text: textOf(content) }], ...(hasDetails ? { details } : {}) };
+}
+
 export function textOf(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -977,6 +1025,7 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null): B
       message?: {
         role?: string;
         content?: unknown;
+        details?: unknown;
         toolCallId?: string;
         toolName?: string;
         isError?: boolean;
@@ -1049,7 +1098,7 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null): B
       if (block) blocks.push(block);
     } else if (m.role === "toolResult" && m.toolCallId) {
       const i = toolIndex.get(m.toolCallId);
-      const result = textOf(m.content);
+      const result = storedToolResult(m);
       if (i !== undefined) {
         const b = blocks[i] as Extract<Block, { kind: "tool" }>;
         blocks[i] = { ...b, result, isError: m.isError ?? false, done: true };

@@ -33,8 +33,11 @@
     "@lasercode/pi-extension": "workspace:*",
     "@lasercode/pi-goal": "workspace:*",
     "@lasercode/protocol": "workspace:*",
+    "jiti": "2.7.0",
+    "pi-mcp-adapter": "2.33.0",
     "pi-web-access": "0.28.0",
     "proper-lockfile": "4.1.2",
+    "smol-toml": "1.8.0",
     "pi-gpt-transcribe": "github:youssefsiam38/pi-gpt-transcribe#bee9cfffae2ab6badbf4bda727e680e423aea9fd"
   },
   "devDependencies": { "esbuild": "0.28.1", "@types/proper-lockfile": "4.1.4" }

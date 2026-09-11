@@ -14,6 +14,7 @@
 import { Socket } from "node:net";
 import { ENV, FEATURE_MANIFESTS, LineDecoder, PRODUCT_NAME, parseJsonLine, type FeatureId, type JsonRpcMessage } from "@lasercode/protocol";
 import { StableSdkDriver } from "./drivers/stable-sdk.js";
+import { alignEngineAgentDir, extendRuntimePath } from "./runtime-env.js";
 import { AgentResolutionError, assertBundledAgent } from "./resolve-pi.js";
 import { WorkerServer } from "./server.js";
 
@@ -60,6 +61,8 @@ async function main(): Promise<void> {
   // Laser-specific instructions. Optional for callers outside the host.
   const stateDir = arg("state-dir");
   const projectTrusted = arg("project-trusted");
+  alignEngineAgentDir(agentDir, sessionDir);
+  extendRuntimePath();
   if (projectTrusted !== undefined && projectTrusted !== "yes" && projectTrusted !== "no") {
     console.error(`${PRODUCT_NAME} worker: --project-trusted must be "yes" or "no", got ${JSON.stringify(projectTrusted)}`);
     process.exit(2);
