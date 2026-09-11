@@ -295,7 +295,7 @@ describe("subagents module: tool registration", () => {
     const tool = h.tools.get("inspect_fleet")!;
     expect(Object.keys(tool.parameters.properties)).toEqual([]);
     expect(tool.description).toContain("same tree, in the same words, that the person sees in the fleet column");
-    expect(tool.description).toContain("Working, Asking, Needs you, Done, Failed, Ended, Waiting");
+    expect(tool.description).toContain("Working, Asking, Blocked, Done, Failed, Ended, Waiting");
     expect(tool.description).toContain("At most 50 rows");
     expect(tool.description).toContain("Read-only");
     const result = await tool.execute("call", {});

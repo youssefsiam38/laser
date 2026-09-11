@@ -377,9 +377,9 @@ function registerParentTools(pi: ExtensionAPI, bridge: AgentHarnessBridge): void
     label: "Inspect the fleet",
     description:
       "The work going on under this session, as one tree: the agents you started, the agents they started, and the background commands any of them — you included — left running or finished. " +
-      "It is the same tree, in the same words, that the person sees in the fleet column. Each row says its kind (agent or command), its name, its status word (Working, Asking, Needs you, Done, Failed, Ended, Waiting), " +
+      "It is the same tree, in the same words, that the person sees in the fleet column. Each row says its kind (agent or command), its name, its status word (Working, Asking, Blocked, Done, Failed, Ended, Waiting), " +
       "how long it has run, and one line — what it is doing, or how it ended — plus the id to follow it with: an agent row's runId for inspect_agent, a command row's taskId for task_output. " +
-      "Asking means an agent is paused on a question you can answer with send_agent_message; Needs you means it ended asking you something. " +
+      "Asking means an agent is live and paused on a question you can answer with send_agent_message; Blocked means it ended without finishing, and its final message says what it could not do or is asking you. " +
       `At most ${String(AGENT_FLEET_ROWS_MAX)} rows, the deepest cut first; the result says how many were left out. Read-only: it wakes nothing and sends nothing.`,
     promptSnippet: "See everything running under you — agents and background commands — as the tree the person sees",
     promptGuidelines: [

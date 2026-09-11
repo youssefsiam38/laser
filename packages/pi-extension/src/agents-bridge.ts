@@ -131,7 +131,7 @@ export interface FleetRowBase {
   /** What you would address it by: the agent's instance name, or the command's first line. */
   title: string;
   state: FleetRowState;
-  /** The state's word as the person reads it: Working, Asking, Needs you, Done, Failed, Ended, Waiting. */
+  /** The state's word as the person reads it: Working, Asking, Blocked, Done, Failed, Ended, Waiting. */
   status: string;
   /** Live while the work is going, frozen once it ends; `4m 12s`. Absent when the start is unknown. */
   elapsed?: string;
