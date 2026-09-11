@@ -94,7 +94,7 @@ import { defaultAgentInstructions } from "../agents/engine-instructions.js";
 import { createInstructionTemplateExtension } from "../agents/instruction-templates.js";
 import { modelUnavailableMessage } from "../agents/harness.js";
 import { StableExtensionAdmission } from "./stable-extension-admission.js";
-import { FirstTurnAttempt } from "./first-turn-attempt.js";
+import { FirstTurnAttempt, type FirstTurnAttemptOwner } from "./first-turn-attempt.js";
 
 type FirstTurnPrevious = {
   agent: DriverAgentOptions | undefined;
@@ -556,8 +556,8 @@ export class StableSdkDriver implements SessionDriver {
   }
 
   /** Discard a candidate and rebuild the prior runtime without writing restoration entries. */
-  private async restorePreparedFirstTurn(): Promise<void> {
-    const attempt = this.firstTurn.beginRestore();
+  private async restorePreparedFirstTurn(owner?: FirstTurnAttemptOwner): Promise<void> {
+    const attempt = this.firstTurn.beginRestore(owner);
     const factory = this.runtimeFactory;
     if (!attempt) return;
     if (!factory) throw new Error("cannot restore a first-turn attempt without its runtime factory");
@@ -618,7 +618,7 @@ export class StableSdkDriver implements SessionDriver {
     };
     const manager = this.session().sessionManager;
     const transaction = manager.beginAppendTransaction();
-    this.firstTurn.start(previous, manager, transaction);
+    const attemptOwner = this.firstTurn.start(previous, manager, transaction);
     const hasModelIntent = Object.hasOwn(options, "model");
     try {
       await this.replaceRuntime(
@@ -629,10 +629,12 @@ export class StableSdkDriver implements SessionDriver {
         hasModelIntent,
         false,
       );
-      if (this.firstTurn.isCancelled()) {
+      // The await above may have outlived disposal or another attempt. Check
+      // this exact owner before reading cancellation or installing provenance.
+      if (this.firstTurn.isCancelled(attemptOwner)) {
         throw new ProtocolError(ErrorCodes.InvalidParams, "The first prompt was cancelled before acceptance.");
       }
-      this.firstTurn.markPrepared({
+      this.firstTurn.markPrepared(attemptOwner, {
         record: options.agent.record,
         modelIntent: options.model,
         thinkingIntent: options.thinkingLevel !== undefined
@@ -640,10 +642,14 @@ export class StableSdkDriver implements SessionDriver {
           : hasModelIntent ? null : undefined,
       });
     } catch (error) {
-      try {
-        await this.restorePreparedFirstTurn();
-      } catch (rollbackError) {
-        throw new AggregateError([error, rollbackError], "Could not prepare the selected agent or restore this conversation.");
+      // Async replacement may have been cancelled/disposed and even followed by
+      // another attempt. Never let stale completion restore the newer owner.
+      if (this.firstTurn.owns(attemptOwner)) {
+        try {
+          await this.restorePreparedFirstTurn(attemptOwner);
+        } catch (rollbackError) {
+          throw new AggregateError([error, rollbackError], "Could not prepare the selected agent or restore this conversation.");
+        }
       }
       throw error;
     }
@@ -659,7 +665,7 @@ export class StableSdkDriver implements SessionDriver {
     if (!this.firstTurn.active) return;
     const accepted = this.state();
     const attempt = this.firstTurn.takeForCommit();
-    const { record, modelIntent, thinkingIntent } = attempt.prepared!;
+    const { record, modelIntent, thinkingIntent } = attempt.prepared;
     // Acceptance is monotonic even if the atomic persistence attempt reports
     // an I/O error: retain the accepted tuple and suffix in this one manager.
     try {
