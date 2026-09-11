@@ -399,8 +399,11 @@ export class StableSdkDriver implements SessionDriver {
       }
     }
     // A child's worktree its parent has since removed: open the transcript in
-    // the project checkout instead of refusing it (M13-T120).
-    const cwdOverride = options.sessionPath ? await removedWorktreeCwd(options.cwd, options.sessionPath) : undefined;
+    // the project checkout instead of refusing it (M13-T120). The record's own
+    // worktree path decides, so a project opened below the repository root is
+    // recognised too; the server builds the role from the same rule, so the
+    // child is told it is not isolated there (D-156).
+    const cwdOverride = options.sessionPath ? await removedWorktreeCwd(options.cwd, options.sessionPath, agent?.record.worktree) : undefined;
     const sessionManager = options.sessionPath
       ? SessionManager.open(options.sessionPath, undefined, cwdOverride)
       : SessionManager.create(options.cwd, options.sessionDir);

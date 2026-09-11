@@ -73,6 +73,8 @@ test("argument contract keeps dry-run read-only and publish explicit", () => {
   assert.throws(() => parseArgs(["0.3.8", "--publish"]), /requires --source/);
   assert.throws(() => parseArgs(["0.3.8", "--publish", "--source", SHA]), /requires --notes FILE/);
   assert.equal(parseArgs(["0.3.8", "--publish", "--source", SHA, "--notes", "notes.md"]).notesFile, "notes.md");
+  // A resume may run without the notes file: after the tag exists the checkpoint carries them.
+  assert.equal(parseArgs(["0.3.8", "--publish", "--resume", "--source", SHA]).notesFile, "");
   assert.throws(() => parseArgs(["0.3.8", "--resume"]), /only with --publish/);
   assert.throws(() => parseArgs(["0.3.8", "--recover-stale-lock", "--publish", "--source", SHA, "--notes", "notes.md"]), /requires --publish --resume/);
 });
@@ -331,20 +333,21 @@ function publicReleaseFixture(version = "0.3.8") {
   writeFileSync(join(directory, "SHA256SUMS"), `${names.sort().map((name) => `${sha256(join(directory, name))}  ${name}`).join("\n")}\n`);
   writeFileSync(join(directory, "provenance.jsonl"), "signed fixture\n");
   const files = readdirSync(directory).sort();
-  const assets = files.map((name) => ({
+  const assets = files.map((name, index) => ({
+    id: 1000 + index,
     name,
     size: readFileSync(join(directory, name)).length,
     state: "uploaded",
     digest: `sha256:${sha256(join(directory, name))}`,
   }));
-  const release = { id: 44, draft: false, prerelease: false, tag_name: `v${version}`, html_url: "https://example.invalid/release", assets };
-  return { version, source, directory, release };
+  const notes = "## What changed\n\n- one\n";
+  const release = { id: 44, draft: false, prerelease: false, tag_name: `v${version}`, html_url: "https://example.invalid/release", body: notes, assets };
+  return { version, source, directory, release, notes };
 }
 
-test("public verification reads the inventory through the API and downloads nothing", () => {
-  const fixture = publicReleaseFixture();
-  const calls = [];
-  const exec = (command, args) => {
+/** The gh/git calls public verification makes, answered from the fixture; `calls` records them. */
+function publicExec(fixture, calls = []) {
+  return (command, args) => {
     calls.push([command, ...args]);
     if (command === "git" && args[0] === "ls-remote") {
       return ok(`${"d".repeat(40)}\trefs/tags/v${fixture.version}\n${fixture.source}\trefs/tags/v${fixture.version}^{}\n`);
@@ -352,14 +355,37 @@ test("public verification reads the inventory through the API and downloads noth
     if (command === "gh" && args[0] === "release" && args[1] === "view") return ok(JSON.stringify({ databaseId: fixture.release.id }));
     if (command === "gh" && args[0] === "api" && args[1].endsWith("/releases/44")) return ok(JSON.stringify(fixture.release));
     if (command === "gh" && args[0] === "api" && args[1].endsWith("/releases/latest")) return ok(JSON.stringify({ id: fixture.release.id }));
+    if (command === "gh" && args[0] === "api" && args[1] === "-H") {
+      const id = Number(args[3].split("/").pop());
+      const asset = fixture.release.assets.find((item) => item.id === id);
+      if (!asset) return { code: 1, stdout: "", stderr: "HTTP 404" };
+      return ok(readFileSync(join(fixture.directory, asset.name), "utf8"));
+    }
+    if (command === "gh" && args[0] === "attestation" && args[1] === "verify") {
+      fixture.verified = args;
+      return ok("[]");
+    }
     throw new Error(`unexpected command: ${command} ${args.join(" ")}`);
   };
-  const journal = { repoRoot: "/fixture", version: fixture.version, tag: `v${fixture.version}`, candidate: fixture.source, tagObject: "d".repeat(40) };
+}
+
+function publicJournal(fixture) {
+  return { repoRoot: "/fixture", version: fixture.version, tag: `v${fixture.version}`, candidate: fixture.source, tagObject: "d".repeat(40), notes: fixture.notes };
+}
+
+test("public verification reads the inventory through the API and downloads no installer", () => {
+  const fixture = publicReleaseFixture();
+  const calls = [];
+  const exec = publicExec(fixture, calls);
+  const journal = publicJournal(fixture);
   const result = verifyPublicRelease(exec, journal);
   assert.equal(result.assets, fixture.release.assets.length);
   assert.equal(result.releaseId, 44);
   assert.ok(!calls.some((call) => call[1] === "release" && call[2] === "download"));
-  assert.ok(!calls.some((call) => call[1] === "attestation"));
+  // Only the manifest and the bundle are fetched; every installer stays on GitHub.
+  const fetched = calls.filter((call) => call[1] === "api" && call[2] === "-H").map((call) => Number(call[4].split("/").pop()));
+  const names = fetched.map((id) => fixture.release.assets.find((asset) => asset.id === id).name).sort();
+  assert.deepEqual(names, ["SHA256SUMS", "SHA256SUMS", "provenance.jsonl"]);
   fixture.release.assets.find((asset) => asset.name === "install.sh").state = "starter";
   assert.throws(() => verifyPublicRelease(exec, journal), /not uploaded: install.sh/);
   fixture.release.assets = fixture.release.assets.filter((asset) => asset.name !== "install.sh");
@@ -367,18 +393,60 @@ test("public verification reads the inventory through the API and downloads noth
   rmSync(fixture.directory, { recursive: true, force: true });
 });
 
+test("public verification compares every asset digest to the published SHA256SUMS", () => {
+  const fixture = publicReleaseFixture();
+  const exec = publicExec(fixture);
+  const journal = publicJournal(fixture);
+  verifyPublicRelease(exec, journal);
+  // An asset replaced after publication keeps its name, state and a plausible size.
+  const clobbered = fixture.release.assets.find((asset) => asset.name.endsWith("x86_64.AppImage"));
+  const before = clobbered.digest;
+  clobbered.digest = `sha256:${"e".repeat(64)}`;
+  assert.throws(() => verifyPublicRelease(exec, journal), /does not match SHA256SUMS/);
+  clobbered.digest = before;
+  // A digest the API does not report cannot be waved through.
+  delete clobbered.digest;
+  assert.throws(() => verifyPublicRelease(exec, journal), /reports no SHA-256 digest/);
+  clobbered.digest = before;
+  // A manifest that lists fewer files than the inventory is not coverage.
+  const manifest = readFileSync(join(fixture.directory, "SHA256SUMS"), "utf8");
+  writeFileSync(join(fixture.directory, "SHA256SUMS"), manifest.split("\n").filter((line) => !line.endsWith("install.sh")).join("\n"));
+  assert.throws(() => verifyPublicRelease(exec, journal), /coverage does not match/);
+  rmSync(fixture.directory, { recursive: true, force: true });
+});
+
+test("public verification checks the provenance bundle once, with the source pinned", () => {
+  const fixture = publicReleaseFixture();
+  const exec = publicExec(fixture);
+  const journal = publicJournal(fixture);
+  verifyPublicRelease(exec, journal);
+  const verify = fixture.verified;
+  assert.ok(verify, "gh attestation verify ran");
+  assert.equal(verify[verify.indexOf("--source-digest") + 1], fixture.source);
+  assert.equal(verify[verify.indexOf("--source-ref") + 1], `refs/tags/v${fixture.version}`);
+  assert.equal(verify[verify.indexOf("--signer-workflow") + 1], `${identity.repository}/.github/workflows/release.yml`);
+  assert.ok(verify[2].endsWith("SHA256SUMS"));
+  // A bundle that does not verify fails the release, exactly as it would fail every install.
+  const failing = (command, args) => (command === "gh" && args[0] === "attestation" ? { code: 1, stdout: "", stderr: "no matching attestation" } : exec(command, args));
+  assert.throws(() => verifyPublicRelease(failing, journal), /no matching attestation/);
+  rmSync(fixture.directory, { recursive: true, force: true });
+});
+
+test("public verification refuses a release page that is not the tag's notes", () => {
+  const fixture = publicReleaseFixture();
+  const exec = publicExec(fixture);
+  const journal = publicJournal(fixture);
+  fixture.release.body = "## What's Changed\n* feat: something by @someone\n";
+  assert.throws(() => verifyPublicRelease(exec, journal), /not the release notes the tag carries/);
+  fixture.release.body = `${fixture.notes.trim()}\r\n`;
+  verifyPublicRelease(exec, journal);
+  rmSync(fixture.directory, { recursive: true, force: true });
+});
+
 test("public verification rejects an unexpected remote asset", () => {
   const fixture = publicReleaseFixture();
-  fixture.release.assets.push({ name: "unexpected.bin", size: 1, state: "uploaded", digest: `sha256:${"a".repeat(64)}` });
-  const exec = (command, args) => {
-    if (command === "git") return ok(`${"d".repeat(40)}\trefs/tags/v${fixture.version}\n${fixture.source}\trefs/tags/v${fixture.version}^{}\n`);
-    if (command === "gh" && args[0] === "release" && args[1] === "view") return ok(JSON.stringify({ databaseId: fixture.release.id }));
-    if (command === "gh" && args[0] === "api") return ok(JSON.stringify(fixture.release));
-    throw new Error(`unexpected command: ${command} ${args.join(" ")}`);
-  };
-  assert.throws(() => verifyPublicRelease(exec, {
-    repoRoot: "/fixture", version: fixture.version, tag: `v${fixture.version}`, candidate: fixture.source, tagObject: "d".repeat(40),
-  }), /unexpected assets/);
+  fixture.release.assets.push({ id: 9999, name: "unexpected.bin", size: 1, state: "uploaded", digest: `sha256:${"a".repeat(64)}` });
+  assert.throws(() => verifyPublicRelease(publicExec(fixture), publicJournal(fixture)), /unexpected assets/);
   rmSync(fixture.directory, { recursive: true, force: true });
 });
 

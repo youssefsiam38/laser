@@ -148,10 +148,15 @@ if [ "$STAGE_ONLY" = 1 ]; then
 fi
 
 # The release orchestrator writes the release notes into the annotated tag's
-# body; that text is the release page. A tag without a body (a manual tag)
-# falls back to GitHub's generated notes inside publish-github.mjs.
+# body; that text is the release page. Only an annotated tag carries notes: a
+# lightweight tag has no object of its own, and `%(contents:body)` would hand
+# back the tagged commit's message instead — so a manual lightweight tag falls
+# back to GitHub's generated notes inside publish-github.mjs, as the comment
+# there says, rather than shipping a commit message as the page.
 if [ -z "$NOTES" ]; then
-  NOTES="$(git tag -l --format='%(contents:body)' "$TAG" 2>/dev/null || true)"
+  if [ "$(git -C "$REPO_ROOT" cat-file -t "refs/tags/$TAG" 2>/dev/null || true)" = "tag" ]; then
+    NOTES="$(git -C "$REPO_ROOT" tag -l --format='%(contents:body)' "$TAG")"
+  fi
 fi
 
 node "$HERE/publish-github.mjs" "$TAG" "$VERSION" "$REPO" "$DIR" "$PROVENANCE" "$DRAFT" "$NOTES"

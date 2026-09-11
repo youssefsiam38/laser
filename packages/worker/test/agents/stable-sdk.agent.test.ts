@@ -175,26 +175,60 @@ describe("StableSdkDriver with an agent definition", () => {
     // Four real sessions against the engine; the default 5 s is not enough on a loaded machine.
   }, 60_000);
 
-  it("reopens a child whose worktree its parent removed, in the project checkout", async () => {
+  it("reopens a child whose worktree its parent removed, in the project checkout, no longer isolated", async () => {
     const project = join(base, "owning-project");
     const worktree = join(project, ".worktrees", "fixer-0f5aacfe");
     mkdirSync(worktree, { recursive: true });
+    const definition = fallbackDefaultAgent();
+    const parentPath = join(base, "sessions", "parent.jsonl");
+    const record = { ...rootRecord(definition.name), kind: "child" as const, subagentName: "fixer", parentPath, worktree: { path: worktree, branch: "agents/fixer-0f5aacfe", baseCommit: "abc" } };
+    const role = { ...rootRole(definition.name), kind: "child" as const, subagentName: "fixer", depth: 1, isolated: true, branch: "agents/fixer-0f5aacfe", parent: { sessionPath: parentPath, sessionId: "parent", agentName: definition.name } };
     const child = new StableSdkDriver();
-    const state = await child.open({ cwd: worktree, agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), projectTrusted: true, agent: agentOptions(fallbackDefaultAgent()) });
+    const state = await child.open({ cwd: worktree, agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), projectTrusted: true, agent: { definition, role, record, policy: fallbackPolicy() } });
     await child.prompt([{ type: "text", text: "hello" }]);
     await child.dispose();
     expect(existsSync(state.path)).toBe(true);
+    expect((await readSessionAgentRecord(state.path))?.worktree?.path).toBe(worktree);
 
     // The parent merged and removed the worktree (D-157); the transcript still names it.
     rmSync(worktree, { recursive: true, force: true });
     const again = new StableSdkDriver();
-    const reopened = await again.open({ cwd: project, agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), sessionPath: state.path, projectTrusted: true, agent: agentOptions(fallbackDefaultAgent()) });
+    const reopened = await again.open({ cwd: project, agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), sessionPath: state.path, projectTrusted: true, agent: { definition, role, record, policy: fallbackPolicy() } });
     expect(reopened.path).toBe(state.path);
     expect(reopened.cwd).toBe(project);
     expect(reopened.messageCount).toBeGreaterThan(0);
     // Nothing is recreated under `.worktrees`: a plain folder there would pose as a checkout.
     expect(existsSync(worktree)).toBe(false);
     await again.dispose();
+
+    // Through the worker, which rebuilds the role from the record: the child
+    // now works in the person's checkout and is told so (D-156), never "your
+    // own worktree" pointing at the live checkout.
+    const messages: JsonRpcMessage[] = [];
+    const server = new WorkerServer({
+      cwd: project,
+      agentDir: join(base, "agent"),
+      sessionDir: join(base, "sessions"),
+      stateDir: join(base, "state"),
+      createDriver: () => { const driver = new StableSdkDriver(); drivers.push(driver); return driver; },
+      send: (message) => messages.push(message),
+    });
+    let id = 0;
+    const call = async (method: string, params: unknown) => {
+      const requestId = ++id;
+      await server.handle({ jsonrpc: "2.0", id: requestId, method, params });
+      return messages.find((message) => "id" in message && message.id === requestId) as { result?: unknown; error?: unknown };
+    };
+    const loaded = await call("session/load", { path: state.path });
+    expect(loaded.error).toBeUndefined();
+    expect((loaded.result as { state: SessionState }).state.cwd).toBe(project);
+    const before = stub.requests.length;
+    expect((await call("session/prompt", { path: state.path, content: [{ type: "text", text: "and now?" }] })).error).toBeUndefined();
+    expect(stub.requests.length).toBe(before + 1);
+    const system = systemTextOf(stub.requests.at(-1)!);
+    expect(system).toContain(`You are working in ${project}, your parent's own checkout, not a worktree of your own: you are not isolated from it.`);
+    expect(system).not.toContain("Work only inside your own worktree");
+    await server.dispose();
   }, 60_000);
 
   it("rebinds the same pristine identity and runs the selected agent on its one first prompt", async () => {

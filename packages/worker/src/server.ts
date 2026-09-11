@@ -35,7 +35,7 @@ import { DefinitionsCache } from "./agents/definitions.js";
 import { defaultAgentInstructions } from "./agents/engine-instructions.js";
 import { AgentHarness, modelUnavailableMessage, type SessionHandle, type SessionHost } from "./agents/harness.js";
 import { NamerService, type NamerModelRuntime } from "./agents/namer.js";
-import { readSessionAgentRecord, rootRecord, rootRole } from "./agents/session-config.js";
+import { readSessionAgentRecord, rootRecord, rootRole, removedWorktreeCwd } from "./agents/session-config.js";
 import { listAgentSkills } from "./agents/skills.js";
 import { TaskIndex } from "./agents/tasks.js";
 import { WorktreeManager } from "./agents/worktrees.js";
@@ -829,8 +829,11 @@ export class WorkerServer {
       depth,
       // The record is the only evidence after a restart: no worktree recorded
       // means the child was started to work in its parent's checkout, and its
-      // role block must keep saying so.
-      isolated: record.worktree !== undefined,
+      // role block must keep saying so. A worktree the parent has since
+      // removed is the same case — the driver reopens the child in the project
+      // checkout (`removedWorktreeCwd`), so it must be told it is not isolated
+      // there (D-156), never "your own worktree" pointing at the live checkout.
+      isolated: record.worktree !== undefined && (await removedWorktreeCwd(this.options.cwd, path, record.worktree)) === undefined,
       parent: {
         sessionPath: record.parentPath,
         sessionId: record.parentSessionId ?? "",
