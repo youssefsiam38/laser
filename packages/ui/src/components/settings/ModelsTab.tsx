@@ -11,6 +11,7 @@
 import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
 import { Tabs } from "radix-ui";
 import { WebSearchTab } from "./WebSearchTab.js";
+import { FallbackChainsTab } from "./fallback/FallbackChainsTab.js";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Check, ChevronRight, ChevronsUpDown, Eye, Loader2, Mic2, RefreshCw, Sparkles } from "lucide-react";
 
@@ -83,9 +84,11 @@ export function ModelsTab(props: ModelsTabProps) {
     <Tabs.Root defaultValue="models" className="flex h-full min-h-0 flex-col">
       <Tabs.List aria-label="Provider settings" className="flex shrink-0 gap-1 border-b border-line px-4 py-2">
         <Tabs.Trigger value="models" asChild><Button variant="ghost" size="sm" className="data-[state=active]:bg-surface-2">Models and dictation</Button></Tabs.Trigger>
+        <Tabs.Trigger value="fallback" asChild><Button variant="ghost" size="sm" className="data-[state=active]:bg-surface-2">Fallback chains</Button></Tabs.Trigger>
         <Tabs.Trigger value="search" asChild><Button variant="ghost" size="sm" className="data-[state=active]:bg-surface-2">Web search</Button></Tabs.Trigger>
       </Tabs.List>
       <Tabs.Content value="models" className="min-h-0 flex-1"><ModelConnectionsTab {...props} /></Tabs.Content>
+      <Tabs.Content value="fallback" className="min-h-0 flex-1"><FallbackChainsTab {...props} /></Tabs.Content>
       <Tabs.Content value="search" className="min-h-0 flex-1"><WebSearchTab key={props.cwd} cwd={props.cwd} /></Tabs.Content>
     </Tabs.Root>
   );
