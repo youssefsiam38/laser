@@ -44,9 +44,10 @@ afterEach(async () => {
   rmSync(base, { recursive: true, force: true });
 });
 
-function childProcesses(): string[] {
+/** Only this test's own child: other files run fixtures of their own. */
+function childProcesses(marker: string): string[] {
   try {
-    return execFileSync("pgrep", ["-af", "stdio-server.mjs"], { encoding: "utf8" }).split("\n").filter(Boolean);
+    return execFileSync("pgrep", ["-af", marker], { encoding: "utf8" }).split("\n").filter((line) => line.includes("stdio-server.mjs"));
   } catch {
     return [];
   }
@@ -141,13 +142,14 @@ describe("McpInspector", () => {
   }, 60_000);
 
   it("closes the child process on disconnect", async () => {
-    const before = childProcesses().length;
-    await inspector.inspect({ scope: "global", config: stdioConfig(), secrets: new Map() });
-    expect(childProcesses().length).toBeGreaterThan(before);
+    const marker = `mcp-disconnect-${process.pid}-${Date.now()}`;
+    expect(childProcesses(marker)).toEqual([]);
+    await inspector.inspect({ scope: "global", config: stdioConfig(["--name", marker]), secrets: new Map() });
+    expect(childProcesses(marker)).toHaveLength(1);
     await inspector.closeServer("global", "fixture");
     expect(inspector.inspecting("global", "fixture")).toBe(false);
     await new Promise((resolve) => setTimeout(resolve, 500));
-    expect(childProcesses().length).toBe(before);
+    expect(childProcesses(marker)).toEqual([]);
   }, 60_000);
 
   it("keeps an unsaved definition's connection only for the answer", async () => {

@@ -13,6 +13,7 @@ import type { McpServerConfig, McpStartup, McpToolExposure, McpValue } from "@la
 // second implementation that can drift from it.
 import { formatToolName } from "pi-mcp-adapter/types";
 import type { McpConfig, ServerEntry } from "./engine.js";
+import type { McpConfiguredServer } from "./store.js";
 
 /** A resolved secret, by the field path the store keys it with. */
 export type ResolvedSecrets = Map<string, string>;
@@ -21,10 +22,10 @@ export type ResolvedSecrets = Map<string, string>;
 export function secretFieldPaths(config: McpServerConfig): string[] {
   const paths: string[] = [];
   const transport = config.transport;
-  if (transport.kind === "stdio") {
+  if (transport?.kind === "stdio") {
     for (const [key, value] of Object.entries(transport.env ?? {})) if (isSecret(value)) paths.push(`transport.env.${key}`);
   }
-  if (transport.kind === "http") {
+  if (transport?.kind === "http") {
     for (const [key, value] of Object.entries(transport.headers ?? {})) if (isSecret(value)) paths.push(`transport.headers.${key}`);
   }
   if (config.auth?.kind === "bearer" && isSecret(config.auth.token)) paths.push("auth.token");
@@ -49,8 +50,13 @@ function directTools(exposure: McpToolExposure, only: string[] | undefined): Ser
   return only && only.length > 0 ? only : true;
 }
 
-/** One server. `secrets` maps a field path to its value; a missing one is left unset. */
-export function toServerEntry(config: McpServerConfig, secrets: ResolvedSecrets = new Map()): ServerEntry {
+/**
+ * One server. `secrets` maps a field path to its value; a missing one is left
+ * unset. Only a configured server is mapped: the project entry that merely
+ * switches a global one off has no definition to give the engine, and never
+ * reaches here (docs/mcp.md).
+ */
+export function toServerEntry(config: McpConfiguredServer, secrets: ResolvedSecrets = new Map()): ServerEntry {
   const value = (raw: McpValue | undefined, path: string): string | undefined => {
     if (raw === undefined) return undefined;
     if (!isSecret(raw)) return raw;
@@ -130,7 +136,7 @@ export function toServerEntry(config: McpServerConfig, secrets: ResolvedSecrets 
  * configures servers, never the engine's terminal behaviour (AGENTS.md §6b).
  */
 export function toAdapterConfig(
-  servers: Array<{ config: McpServerConfig; secrets?: ResolvedSecrets }>,
+  servers: Array<{ config: McpConfiguredServer; secrets?: ResolvedSecrets }>,
 ): McpConfig {
   const mcpServers: Record<string, ServerEntry> = {};
   for (const { config, secrets } of servers) mcpServers[config.name] = toServerEntry(config, secrets ?? new Map());

@@ -58,11 +58,35 @@ describe("McpStore", () => {
 
   it("lets a project entry with only a name and disabled switch a global server off", async () => {
     await store.save("global", cwd, stdio("alpha"));
-    writeRaw(join(cwd, PROJECT_DIR_NAME, "mcp.json"), { version: 1, servers: [{ name: "alpha", disabled: true }] });
+    await store.save("project", cwd, { name: "alpha", disabled: true });
+    expect(JSON.parse(readFileSync(join(cwd, PROJECT_DIR_NAME, "mcp.json"), "utf8")).servers).toEqual([{ name: "alpha", disabled: true }]);
 
     const { servers } = await store.effective(cwd);
-    expect(servers.find((server) => server.scope === "project")?.overridesGlobal).toBe(true);
-    expect(servers.find((server) => server.scope === "global")?.effective).toBe(false);
+    const project = servers.find((server) => server.scope === "project");
+    // The row reads as the server it switches off: the global definition,
+    // turned off, marked as an override.
+    expect(project?.overridesGlobal).toBe(true);
+    expect(project?.config).toMatchObject({ name: "alpha", disabled: true, transport: { kind: "stdio", command: "npx" } });
+    expect(project?.effective).toBe(false);
+    const global = servers.find((server) => server.scope === "global");
+    expect(global?.shadowed).toBe(true);
+    expect(global?.effective).toBe(false);
+    expect(await store.enabled(cwd)).toEqual([]);
+  });
+
+  it("refuses a switch-off with nothing to switch off, and one saved for every project", async () => {
+    await expect(store.save("project", cwd, { name: "ghost", disabled: true })).rejects.toThrow(/no server named "ghost" to switch off/i);
+    await expect(store.save("global", cwd, { name: "ghost", disabled: true })).rejects.toThrow(/Only this project/);
+  });
+
+  it("reports a switch-off left behind by a server that is gone, and keeps it out of the engine", async () => {
+    await store.save("global", cwd, stdio("alpha"));
+    await store.save("project", cwd, { name: "alpha", disabled: true });
+    await store.remove("global", cwd, "alpha");
+
+    const { servers, malformed } = await store.effective(cwd);
+    expect(servers).toEqual([]);
+    expect(malformed[0]?.detail).toContain("switches off a server this project does not have");
     expect(await store.enabled(cwd)).toEqual([]);
   });
 

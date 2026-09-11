@@ -168,7 +168,9 @@ describe("WorkerServer · mcp/*", () => {
     expect(inspected.result?.tools.map((tool) => tool.name)).toContain("fixture_echo");
 
     const listedWhileInspecting = await call<{ servers: McpServerState[] }>("mcp/list", { cwd });
-    expect(listedWhileInspecting.result?.servers[0]).toMatchObject({ status: "connected", inspecting: true });
+    // The counts come from the connection the inspector is holding, not from a
+    // cache or a snapshot of some other session.
+    expect(listedWhileInspecting.result?.servers[0]).toMatchObject({ status: "connected", inspecting: true, toolCount: 3, directToolCount: 3, promptCount: 1 });
 
     const pinged = await call<{ status: string; latencyMs?: number }>("mcp/ping", { cwd, scope: "global", name: "fixture" });
     expect(pinged.result?.status).toBe("connected");

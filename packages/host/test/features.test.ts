@@ -13,6 +13,7 @@ describe("FeatureService", () => {
     expect(service.list("/project").map(({ manifest, enabled, source }) => ({ id: manifest.id, enabled, source }))).toEqual([
       { id: "web-search", enabled: false, source: "default" },
       { id: "subagents", enabled: true, source: "default" },
+      { id: "mcp", enabled: true, source: "default" },
       { id: "goals", enabled: true, source: "default" },
     ]);
   });

@@ -21,15 +21,23 @@ import type {
 } from "@lasercode/protocol";
 import { getToolNameCandidates, isToolAllowed, matchesToolPattern } from "pi-mcp-adapter/types";
 import { prefixedToolName, toServerEntry, type ResolvedSecrets } from "./adapter-config.js";
+import type { McpConfiguredServer } from "./store.js";
 import { loadMcpEngine, type McpConnection, type McpEngine, type McpEngineResource, type McpManager, type ServerEntry } from "./engine.js";
 
 /** Inline text a person is shown, matching the engine's own 50 KiB guard. */
 const MAX_TEXT_BYTES = 51_200;
 const CONNECT_TIMEOUT_MS = 30_000;
 
+export interface LiveCounts {
+  toolCount: number;
+  directToolCount: number;
+  resourceCount: number;
+  promptCount: number;
+}
+
 export interface InspectTarget {
   scope: McpScope;
-  config: McpServerConfig;
+  config: McpConfiguredServer;
   secrets: ResolvedSecrets;
   /** An unsaved definition from the add flow; closed as soon as it is answered. */
   ephemeral?: boolean;
@@ -40,7 +48,7 @@ export class McpInspector {
   private manager: McpManager | undefined;
   private oauthRuntime: unknown;
   /** Definitions of the connections currently held, by key. */
-  private readonly held = new Map<string, { name: string; entry: ServerEntry; latencyMs?: number }>();
+  private readonly held = new Map<string, { name: string; entry: ServerEntry; latencyMs?: number; counts?: LiveCounts }>();
   private ephemeralCounter = 0;
 
   constructor(private readonly cwd: string) {}
@@ -56,6 +64,11 @@ export class McpInspector {
 
   latency(scope: McpScope, name: string): number | undefined {
     return this.held.get(McpInspector.key(scope, name))?.latencyMs;
+  }
+
+  /** What the held connection actually advertises, for the list's counts. */
+  liveCounts(scope: McpScope, name: string): LiveCounts | undefined {
+    return this.held.get(McpInspector.key(scope, name))?.counts;
   }
 
   private async engineOrLoad(): Promise<McpEngine> {
@@ -102,7 +115,16 @@ export class McpInspector {
       }
       const latencyMs = Date.now() - started;
       const held = this.held.get(key);
-      if (held) held.latencyMs = latencyMs;
+      const tools = toolInfos(config, connection);
+      if (held) {
+        held.latencyMs = latencyMs;
+        held.counts = {
+          toolCount: tools.length,
+          directToolCount: tools.filter((tool) => tool.visibility === "direct").length,
+          resourceCount: connection.resources.length,
+          promptCount: connection.prompts.length,
+        };
+      }
       const client = connection.client;
       const version = safe(() => client.getServerVersion());
       const capabilities = safe(() => client.getServerCapabilities());
@@ -116,7 +138,7 @@ export class McpInspector {
         ...(protocolVersion(client) ? { protocolVersion: protocolVersion(client)! } : {}),
         ...(capabilities ? { capabilities: toCapabilities(capabilities) } : {}),
         ...(connection.instructions ?? safe(() => client.getInstructions()) ? { instructions: (connection.instructions ?? client.getInstructions())! } : {}),
-        tools: toolInfos(config, connection),
+        tools,
         resources: [
           ...connection.resources.map((resource) => toResource(resource, false)),
           ...(templates ?? []).map((template) => toResource(template, true)),
@@ -134,7 +156,7 @@ export class McpInspector {
   }
 
   /** One `ping` round trip; connects first when nothing is held. */
-  async ping(scope: McpScope, config: McpServerConfig, secrets: ResolvedSecrets, signal?: AbortSignal): Promise<{ status: McpInspection["status"]; latencyMs?: number; detail?: string }> {
+  async ping(scope: McpScope, config: McpConfiguredServer, secrets: ResolvedSecrets, signal?: AbortSignal): Promise<{ status: McpInspection["status"]; latencyMs?: number; detail?: string }> {
     const key = McpInspector.key(scope, config.name);
     try {
       const connection = await this.connect(key, config, secrets, signal);
@@ -154,7 +176,7 @@ export class McpInspector {
   /** Run one tool on the inspector connection and bound its result. */
   async call(
     scope: McpScope,
-    config: McpServerConfig,
+    config: McpConfiguredServer,
     secrets: ResolvedSecrets,
     tool: string,
     args: Record<string, unknown>,
@@ -178,7 +200,7 @@ export class McpInspector {
   /** Begin sign-in. The URL is returned; the worker never opens a browser. */
   async authStart(
     scope: McpScope,
-    config: McpServerConfig,
+    config: McpConfiguredServer,
     secrets: ResolvedSecrets,
     onComplete: () => void,
   ): Promise<{ authorizationUrl: string; callbackListening: boolean; manualHint?: string; alreadyAuthorized?: boolean }> {
@@ -213,7 +235,7 @@ export class McpInspector {
   }
 
   /** Finish sign-in from a pasted callback URL or code. */
-  async authComplete(scope: McpScope, config: McpServerConfig, input: string): Promise<{ status: McpInspection["status"]; detail?: string }> {
+  async authComplete(scope: McpScope, config: McpConfiguredServer, input: string): Promise<{ status: McpInspection["status"]; detail?: string }> {
     const engine = await this.engineOrLoad();
     await this.managerOrCreate();
     const status = await engine.auth.completeAuthFromInput(config.name, input, { runtime: this.oauthRuntime, authStorageOptions: {} });
@@ -228,7 +250,7 @@ export class McpInspector {
   }
 
   /** Forget stored credentials for a server. */
-  async authLogout(scope: McpScope, config: McpServerConfig): Promise<void> {
+  async authLogout(scope: McpScope, config: McpConfiguredServer): Promise<void> {
     const engine = await this.engineOrLoad();
     await engine.auth.removeAuth(config.name, { runtime: this.oauthRuntime, authStorageOptions: {} });
     await this.close(McpInspector.key(scope, config.name)).catch(() => {});
@@ -257,7 +279,7 @@ export class McpInspector {
     this.oauthRuntime = undefined;
   }
 
-  private async connect(key: string, config: McpServerConfig, secrets: ResolvedSecrets, signal?: AbortSignal): Promise<McpConnection> {
+  private async connect(key: string, config: McpConfiguredServer, secrets: ResolvedSecrets, signal?: AbortSignal): Promise<McpConnection> {
     const manager = await this.managerOrCreate();
     const entry = toServerEntry(config, secrets);
     const existing = manager.getConnection(key);

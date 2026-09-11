@@ -100,33 +100,46 @@ export class McpStore {
     ]);
     const projectByName = new Map(projects.servers.map((server) => [server.name, server]));
     const servers: EffectiveServer[] = [];
+    const malformed = [...projects.malformed, ...globals.malformed];
     for (const config of projects.servers) {
-      const overridesGlobal = isDisableOnly(config) && globals.servers.some((global) => global.name === config.name);
-      servers.push({
-        scope: "project",
-        config,
-        ...(overridesGlobal ? { overridesGlobal: true } : {}),
-        effective: !overridesGlobal && !config.disabled,
-      });
+      if (isDisableOnly(config)) {
+        // The one entry with no definition of its own. It reads as the server
+        // it switches off, so a person sees what is being turned off here.
+        const global = globals.servers.find((candidate) => candidate.name === config.name);
+        if (!global) {
+          projectByName.delete(config.name);
+          malformed.push({
+            scope: "project",
+            name: config.name,
+            detail: `"${config.name}" switches off a server this project does not have. Remove the entry, or add the server.`,
+          });
+          continue;
+        }
+        servers.push({ scope: "project", config: { ...global, disabled: true }, overridesGlobal: true, effective: false });
+        continue;
+      }
+      servers.push({ scope: "project", config, effective: !config.disabled });
     }
     for (const config of globals.servers) {
-      const project = projectByName.get(config.name);
-      const shadowed = project !== undefined && !isDisableOnly(project);
-      const switchedOff = project !== undefined && isDisableOnly(project);
+      // A project entry of the same name — a replacement or a switch-off —
+      // means this definition is not what the project uses.
+      const shadowed = projectByName.has(config.name);
       servers.push({
         scope: "global",
         config,
         ...(shadowed ? { shadowed: true } : {}),
-        effective: !shadowed && !switchedOff && !config.disabled,
+        effective: !shadowed && !config.disabled,
       });
     }
-    return { servers, malformed: [...projects.malformed, ...globals.malformed] };
+    return { servers, malformed };
   }
 
   /** The definitions the engine is given for this project, in list order. */
-  async enabled(cwd: string, projectTrusted?: boolean): Promise<Array<{ scope: McpScope; config: McpServerConfig }>> {
+  async enabled(cwd: string, projectTrusted?: boolean): Promise<Array<{ scope: McpScope; config: McpConfiguredServer }>> {
     const { servers } = await this.effective(cwd, projectTrusted);
-    return servers.filter((server) => server.effective).map(({ scope, config }) => ({ scope, config }));
+    return servers
+      .filter((server) => server.effective && isConfigured(server.config))
+      .map(({ scope, config }) => ({ scope, config: config as McpConfiguredServer }));
   }
 
   /**
@@ -140,6 +153,13 @@ export class McpStore {
       throw new Error(firstIssue(parsed.error.issues) ?? "This server's settings are not valid. Check the fields and try again.");
     }
     const server = parsed.data as McpServerConfigInput;
+    if (server.transport === undefined) {
+      if (scope !== "project") throw new Error("Only this project can switch a server off; a server without a way to connect cannot be saved for every project.");
+      const globals = await this.read("global", cwd);
+      if (!globals.servers.some((candidate) => candidate.name === server.name)) {
+        throw new Error(`There is no server named "${server.name}" to switch off for this project.`);
+      }
+    }
     await this.writeScope(scope, cwd, async (servers, secrets) => {
       const previousName = originalName ?? server.name;
       const index = servers.findIndex((entry) => entry.name === previousName);
@@ -192,6 +212,8 @@ export class McpStore {
     secrets: SecretEntry[],
   ): McpServerConfig {
     const stored = structuredClone(input) as unknown as McpServerConfig;
+    // The switch-off entry has no fields a secret could sit in.
+    if (input.transport === undefined) return stored;
     const written = new Set<string>();
     const take = (value: McpValueInput | undefined, field: string): McpValue | undefined => {
       if (value === undefined) return undefined;
@@ -277,7 +299,14 @@ export class McpStore {
 
 /** A project entry that only switches a global server off (docs/mcp.md). */
 export function isDisableOnly(config: McpServerConfig): boolean {
-  return config.disabled === true && (config as { transport?: unknown }).transport === undefined;
+  return config.transport === undefined;
+}
+
+/** Every entry the engine can be given carries a way to connect. */
+export type McpConfiguredServer = McpServerConfig & { transport: NonNullable<McpServerConfig["transport"]> };
+
+export function isConfigured(config: McpServerConfig): config is McpConfiguredServer {
+  return config.transport !== undefined;
 }
 
 function parseScope(raw: unknown, scope: McpScope): ScopeContents {
@@ -294,13 +323,6 @@ function parseScope(raw: unknown, scope: McpScope): ScopeContents {
     }
     if (seen.has(name)) {
       malformed.push({ scope, name, detail: `Two saved servers are named "${name}". Only the first is used; remove the duplicate.` });
-      continue;
-    }
-    if (record?.transport === undefined && record?.disabled === true) {
-      // A project entry that only switches a global server off: valid, and
-      // deliberately not a full definition.
-      seen.add(name);
-      servers.push({ name, disabled: true } as McpServerConfig);
       continue;
     }
     const parsed = mcpServerConfigInputSchema.safeParse(entry);

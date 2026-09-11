@@ -24,7 +24,7 @@ import { ErrorCodes, ProtocolError } from "@lasercode/protocol";
 import { secretFieldPaths, type ResolvedSecrets } from "./adapter-config.js";
 import { detectImportSources, inlineSecretValues, markConflicts, readSourceEntries } from "./import.js";
 import { McpInspector } from "./inspector.js";
-import { McpStore, type EffectiveServer } from "./store.js";
+import { isConfigured, McpStore, type EffectiveServer, type McpConfiguredServer } from "./store.js";
 
 export interface McpServiceOptions {
   cwd: string;
@@ -101,6 +101,7 @@ export class McpService {
       // An unsaved definition from the add flow: its secrets are the ones it
       // carries, plus whatever is already stored under the same name.
       const config = params.server as unknown as McpServerConfig;
+      if (!isConfigured(config)) throw new ProtocolError(ErrorCodes.InvalidParams, "Choose how to connect to this server before testing it.");
       const secrets = await this.draftSecrets(params.scope, params.server);
       return this.inspector.inspect({ scope: params.scope, config, secrets, ephemeral: true });
     }
@@ -186,14 +187,14 @@ export class McpService {
 
   // ------------------------------------------------------------ internals
 
-  private async find(scope: McpScope, name: string): Promise<{ scope: McpScope; config: McpServerConfig }> {
+  private async find(scope: McpScope, name: string): Promise<{ scope: McpScope; config: McpConfiguredServer }> {
     const { servers } = await this.store.effective(this.options.cwd, this.options.projectTrusted);
     const exact = servers.find((server) => server.scope === scope && server.config.name === name);
-    // A project entry that only switches a global server off names a server
-    // whose definition is the global one; inspecting it inspects that.
-    if (exact && (exact.config as { transport?: unknown }).transport !== undefined) return { scope, config: exact.config };
-    const fallback = servers.find((server) => server.config.name === name && (server.config as { transport?: unknown }).transport !== undefined);
-    if (fallback) return { scope: fallback.scope, config: fallback.config };
+    // A project entry that only switches a global server off carries the
+    // global definition, so naming it at project scope still finds a server.
+    if (exact && isConfigured(exact.config)) return { scope, config: exact.config };
+    const fallback = servers.find((server) => server.config.name === name && isConfigured(server.config));
+    if (fallback && isConfigured(fallback.config)) return { scope: fallback.scope, config: fallback.config };
     throw new ProtocolError(ErrorCodes.InvalidParams, `No MCP server named "${name}" is saved for this project.`);
   }
 
@@ -262,7 +263,9 @@ export class McpService {
       if (!entry.name) continue;
       states.push({
         scope: entry.scope,
-        config: { name: entry.name, transport: { kind: "stdio", command: "" } },
+        // Nothing about it could be trusted but its name; the row exists so a
+        // person is told, rather than finding a server silently missing.
+        config: { name: entry.name },
         status: "failed",
         detail: entry.detail,
       });
@@ -286,15 +289,17 @@ export class McpService {
     const inspecting = this.inspector.inspecting(scope, config.name);
     const latencyMs = this.inspector.latency(scope, config.name);
     const runtime = this.runtimeStatus(config.name);
-    const cached = await this.inspector.cachedCounts(config.name).catch(() => undefined);
+    // What the inspector is holding right now beats a snapshot and a cache.
+    const live = this.inspector.liveCounts(scope, config.name);
+    const cached = live ?? (await this.inspector.cachedCounts(config.name).catch(() => undefined));
     const status: McpServerStatus = inspecting
       ? "connected"
       : runtime?.status ?? (cached && cached.toolCount > 0 ? "ready" : "unknown");
     return {
       ...state,
       status,
-      ...(runtime?.toolCount !== undefined ? { toolCount: runtime.toolCount } : cached ? { toolCount: cached.toolCount } : {}),
-      ...(runtime?.directToolCount !== undefined ? { directToolCount: runtime.directToolCount } : {}),
+      ...(live ? { toolCount: live.toolCount } : runtime?.toolCount !== undefined ? { toolCount: runtime.toolCount } : cached ? { toolCount: cached.toolCount } : {}),
+      ...(live ? { directToolCount: live.directToolCount } : runtime?.directToolCount !== undefined ? { directToolCount: runtime.directToolCount } : {}),
       ...(runtime?.resourceCount !== undefined ? { resourceCount: runtime.resourceCount } : cached ? { resourceCount: cached.resourceCount } : {}),
       ...(cached?.promptCount ? { promptCount: cached.promptCount } : {}),
       ...(runtime?.failedAgoSeconds !== undefined ? { failedAgoSeconds: runtime.failedAgoSeconds } : {}),
