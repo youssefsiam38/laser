@@ -642,6 +642,7 @@ Dependencies: M8 (companion extension), M13-T3 (worker harness and stub-provider
 | M14-T4 | Transcript: MCP tool rows and image results | direct tool calls render as `Server · tool` with arguments; proxy modes render readable summaries; image content blocks render as images; search projections cover value regions; `docs/search-content.md` and `docs/ux-elements.md` rows updated; interaction tests |
 | M14-T5 | Packaged build carries the adapter | electron-builder keeps the adapter's executable TypeScript, bundle and helper, and the native bindings for both architectures; the clean-machine gate opens a session with a stdio server from the unpacked build with an empty PATH |
 | M14-T6 | Live end-to-end proof with Playwright | a real session drives Playwright over stdio and over HTTP from the installed app; sign-in proven against one OAuth server; findings recorded in `docs/mcp.md` |
+| M14-T7 | Release M14 as its own release (D-222) | T1–T6 done; the routine release orchestrator runs from the reviewed source with release notes; exact-source CI, immutable tag, both-architecture public assets verified through digests, provenance and notes |
 
 ## M15 · After the MCP release: artifacts, dictation language, model fallback chains, two sidebar and composer fixes
 
