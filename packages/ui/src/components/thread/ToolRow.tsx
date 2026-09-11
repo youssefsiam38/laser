@@ -5,7 +5,7 @@ import { Bot, FolderOpen, GitBranch, MessageSquare } from "lucide-react";
 import { lazy, memo, Suspense, useCallback, useMemo } from "react";
 
 import { useNamerLabel } from "@/agents/hooks";
-import { CodeDiff } from "@/components/assistant-ui/elements/code-diff";
+import { CodeDiff, DiffStat } from "@/components/assistant-ui/elements/code-diff";
 import { TerminalBlock } from "@/components/assistant-ui/elements/terminal-block";
 import { ToolCall } from "@/components/assistant-ui/elements/tool-call";
 import { ToolError } from "@/components/assistant-ui/elements/tool-error";
@@ -24,7 +24,7 @@ import { DialogBody, dialogFormOf, ToolRowDialog, uiResponseFor, useRegisterTool
 import { toolDetailsDefaultOpen, toolDisplayResult, useActivityDetailLevel, useLaserStable, useLaserState } from "@/runtime";
 import { useActivityDisclosureOverride } from "@/runtime/sessionPreferences";
 import { activeToolLabel } from "./tool-groups.js";
-import { diffViewForTool } from "./diff.js";
+import { diffStats, diffViewForTool } from "./diff.js";
 import { useElapsed } from "./timing.js";
 import { isNonZeroExit, parseBashOutput, pretty, resultDetails, resultText, summarizeTool, toolBody } from "./tool-summary.js";
 
@@ -91,6 +91,19 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
   const elapsed = timing ? (timing.completedAt ?? Date.now()) - timing.startedAt : localElapsed;
 
   const details = useMemo(() => resultDetails(result), [result]);
+  const diffView = useMemo(
+    () => (kind === "edit" || kind === "write" ? diffViewForTool(kind, args, details) : undefined),
+    [kind, args, details],
+  );
+  const appliedDiffStats = status?.type === "complete" && state === "done" && diffView
+    ? (diffView.stats ?? diffStats(diffView.hunks))
+    : undefined;
+  const diffDescription = appliedDiffStats
+    ? [
+        appliedDiffStats.added > 0 ? `${appliedDiffStats.added} ${appliedDiffStats.added === 1 ? "line" : "lines"} added` : "",
+        appliedDiffStats.removed > 0 ? `${appliedDiffStats.removed} ${appliedDiffStats.removed === 1 ? "line" : "lines"} removed` : "",
+      ].filter(Boolean).join(", ")
+    : undefined;
   const footer = (
     <>
       {approval ? <RowApproval {...props} /> : null}
@@ -167,6 +180,8 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
       open={open}
       onOpenChange={rememberOpen}
       toolName={toolName}
+      trailing={appliedDiffStats ? <DiffStat added={appliedDiffStats.added} removed={appliedDiffStats.removed} /> : undefined}
+      accessibleDescription={diffDescription}
       peek={failed && text ? <ToolError message={text} compact /> : undefined}
       footer={footer}
     >
@@ -174,7 +189,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
         body === "terminal" ? (
           <BashBody args={args} text={text} running={running} isError={failed} />
         ) : body === "diff" ? (
-          <DiffBody kind={kind as "edit" | "write"} args={args} details={details} text={text} failed={failed} />
+          <DiffBody view={diffView} args={args} text={text} failed={failed} />
         ) : kind === "read" ? (
           <ReadBody args={args} text={text} failed={failed} />
         ) : (
@@ -357,19 +372,16 @@ function BashBody({ args, text, running, isError }: { args: unknown; text: strin
 }
 
 function DiffBody({
-  kind,
+  view,
   args,
-  details,
   text,
   failed,
 }: {
-  kind: "edit" | "write";
+  view: ReturnType<typeof diffViewForTool>;
   args: unknown;
-  details: Record<string, unknown> | undefined;
   text: string;
   failed: boolean;
 }) {
-  const view = useMemo(() => diffViewForTool(kind, args, details), [kind, args, details]);
   return (
     <>
       {view ? <CodeDiff view={view} /> : <ToolFallbackArgs argsText={pretty(args)} />}

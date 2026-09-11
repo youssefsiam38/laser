@@ -27,9 +27,16 @@ export interface DiffHunk {
   readonly lines: readonly DiffLine[];
 }
 
+export interface DiffStats {
+  readonly added: number;
+  readonly removed: number;
+}
+
 export interface DiffView {
   readonly path?: string;
   readonly hunks: readonly DiffHunk[];
+  /** Counts from the full source diff, including lines omitted from the preview. */
+  readonly stats?: DiffStats;
   /** True when lines were dropped to keep the block bounded. */
   readonly truncated: boolean;
 }
@@ -188,7 +195,7 @@ export function parseUnifiedPatch(patch: string): DiffHunk[] {
   return hunks;
 }
 
-export function diffStats(hunks: readonly DiffHunk[]): { added: number; removed: number } {
+export function diffStats(hunks: readonly DiffHunk[]): DiffStats {
   let added = 0;
   let removed = 0;
   for (const h of hunks) {
@@ -236,8 +243,10 @@ export function diffViewForTool(
   if (kind === "edit") {
     const patch = str(details?.["patch"]);
     if (patch) {
-      const { hunks, truncated } = bounded(parseUnifiedPatch(patch));
-      if (hunks.length > 0) return { ...(path ? { path } : {}), hunks, truncated };
+      const sourceHunks = parseUnifiedPatch(patch);
+      const stats = diffStats(sourceHunks);
+      const { hunks, truncated } = bounded(sourceHunks);
+      if (hunks.length > 0) return { ...(path ? { path } : {}), hunks, stats, truncated };
     }
     const edits = Array.isArray(a["edits"]) ? a["edits"] : [];
     const hunks: DiffHunk[] = [];
@@ -249,13 +258,15 @@ export function diffViewForTool(
       hunks.push(...diffLines(oldText, newText));
     }
     if (hunks.length === 0) return undefined;
+    const stats = diffStats(hunks);
     const b = bounded(hunks);
-    return { ...(path ? { path } : {}), hunks: b.hunks, truncated: b.truncated };
+    return { ...(path ? { path } : {}), hunks: b.hunks, stats, truncated: b.truncated };
   }
 
   const content = str(a["content"]);
   if (!content) return undefined;
   const lines = splitLines(content).map((text, i): DiffLine => ({ kind: "add", text, newNo: i + 1 }));
+  const stats: DiffStats = { added: lines.length, removed: 0 };
   const b = bounded([{ header: `@@ -0,0 +1,${lines.length} @@`, lines }]);
-  return { ...(path ? { path } : {}), hunks: b.hunks, truncated: b.truncated };
+  return { ...(path ? { path } : {}), hunks: b.hunks, stats, truncated: b.truncated };
 }

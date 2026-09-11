@@ -31,7 +31,7 @@ const HighlightedCodeDiffRows = lazy(() =>
 
 /** The card: header with path and `+n −m`, rows below, bounded and scrollable. */
 export function CodeDiff({ view, className, ...props }: CodeDiffProps) {
-  const { added, removed } = diffStats(view.hunks);
+  const { added, removed } = view.stats ?? diffStats(view.hunks);
   return (
     <div data-slot="code-diff" className={cn("overflow-hidden rounded-lg border border-line", className)} {...props}>
       <div className="flex items-center gap-3 border-b border-line bg-surface-2 px-3 py-1.5">

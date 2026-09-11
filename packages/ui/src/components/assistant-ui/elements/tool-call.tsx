@@ -36,6 +36,10 @@ export interface ToolCallProps {
   elapsedMs?: number | undefined;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Trailing header content before the duration. */
+  trailing?: ReactNode;
+  /** Extra screen-reader description; the trigger keeps its existing accessible name. */
+  accessibleDescription?: string | undefined;
   /** Rendered under the header while collapsed: an error excerpt, a hint. */
   peek?: ReactNode;
   /** The expanded body. Absent → the row is not expandable. */
@@ -56,6 +60,8 @@ export function ToolCall({
   elapsedMs,
   open,
   onOpenChange,
+  trailing,
+  accessibleDescription,
   peek,
   children,
   footer,
@@ -88,6 +94,9 @@ export function ToolCall({
         state={state}
         elapsedMs={elapsedMs}
         expandable={expandable}
+        trailing={trailing}
+        aria-description={accessibleDescription}
+        className="[&_[data-slot=tool-fallback-trigger-label]]:shrink-0"
       />
       {!open && peek ? <div className="mb-1.5 ms-6">{peek}</div> : null}
       {expandable ? <ToolFallbackContent>{children}</ToolFallbackContent> : null}

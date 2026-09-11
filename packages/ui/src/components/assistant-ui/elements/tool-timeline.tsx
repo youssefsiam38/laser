@@ -70,11 +70,11 @@ export function toolTimelineFromParts(messages: readonly MessageLike[]): ToolTim
         !isNonZeroExit(p.toolName, p.isError === true, resultText(p.result));
       streaming ||= running;
       steps.push({ id: p.toolCallId, kind: s.kind, verb: s.verb, chip: s.summary || s.verb, running, failed });
-      if ((s.kind === "edit" || s.kind === "write") && !failed) {
+      if ((s.kind === "edit" || s.kind === "write") && p.status.type === "complete" && !failed) {
         const view = diffViewForTool(s.kind, p.args, resultDetails(p.result));
         const path = view?.path;
         if (view && path) {
-          const { added, removed } = diffStats(view.hunks);
+          const { added, removed } = view.stats ?? diffStats(view.hunks);
           const prev = churn.get(path) ?? { file: shortPath(path), added: 0, removed: 0 };
           churn.set(path, { ...prev, added: prev.added + added, removed: prev.removed + removed });
         }
