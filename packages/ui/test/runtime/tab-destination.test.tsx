@@ -26,6 +26,9 @@ import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type Worl
 const CODE = `${PROJECT_CWD}/code.jsonl`;
 const CHAT = "/state/chat/chat.jsonl";
 const BEAM = "/state/beam/beam.jsonl";
+const CHAT_FORK = "/state/chat/chat-fork.jsonl";
+const CHILD = `${PROJECT_CWD}/.worktrees/child/child.jsonl`;
+const CHILD_FORK = `${PROJECT_CWD}/.worktrees/child/child-fork.jsonl`;
 
 type Controls = {
   actions: LaserActions;
@@ -435,6 +438,104 @@ describe("main destination isolation", () => {
     expect(controls).toMatchObject({ tab: "chat", path: failedPath, phase: "ready", disabled: false });
     expect(calls("session/new")).toHaveLength(1);
     expect(calls("session/load").filter((call) => (call.params as { path: string }).path === failedPath)).toHaveLength(2);
+  });
+
+  it("keeps a fork of Chat in Chat and preserves its remembered Code destination", async () => {
+    addSession(world, CODE, PROJECT_CWD);
+    addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
+    world.states[CHAT] = { ...world.states[CHAT]!, agent: { agentName: "chat", kind: "chat" } };
+    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ [PROJECT_CWD]: CODE }));
+    localStorage.setItem(SESSIONS_TAB_STORAGE_KEY, "chat");
+    world.overrides["pi/session/fork"] = () => {
+      const state = { ...world.states[CHAT]!, path: CHAT_FORK, id: "chat-fork" };
+      world.states[CHAT_FORK] = state;
+      return { state };
+    };
+    await mount();
+    await act(async () => { await controls.actions.fork("entry"); await settle(20); });
+    expect(controls).toMatchObject({ tab: "chat", path: CHAT_FORK, codeProject: PROJECT_CWD, phase: "ready" });
+  });
+
+  it("resolves a forked child through its canonical root project, not its worktree cwd", async () => {
+    const root = `${PROJECT_CWD}/root.jsonl`;
+    const agent = { agentName: "worker", kind: "child" as const, subagentName: "child", parentPath: root, rootPath: root, runId: "run-child" };
+    addSession(world, root, PROJECT_CWD);
+    addSession(world, CHILD, `${PROJECT_CWD}/.worktrees/child`, { agent, parentPath: root });
+    world.states[CHILD] = { ...world.states[CHILD]!, agent };
+    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ [PROJECT_CWD]: CHILD }));
+    world.overrides["pi/session/fork"] = () => {
+      const state = { ...world.states[CHILD]!, path: CHILD_FORK, id: "child-fork" };
+      world.states[CHILD_FORK] = state;
+      return { state };
+    };
+    await mount();
+    await act(async () => { await controls.actions.fork("entry"); await settle(20); });
+    expect(controls).toMatchObject({ tab: "code", path: CHILD_FORK, codeProject: PROJECT_CWD, phase: "ready" });
+  });
+
+  it("pins a failed project restoration before loading so Retry cannot change identity", async () => {
+    const other = `${PROJECT_CWD}/other.jsonl`;
+    addSession(world, CODE, PROJECT_CWD, { modifiedAt: "2026-09-10T00:00:00.000Z" });
+    addSession(world, other, PROJECT_CWD, { modifiedAt: "2026-09-11T00:00:00.000Z" });
+    localStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_CWD);
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ [PROJECT_CWD]: CODE }));
+    let failures = 0;
+    world.overrides["session/load"] = (params: { path: string }) => {
+      if (params.path === CODE && failures++ === 0) throw new Error("load failed");
+      const state = world.states[params.path];
+      if (!state) throw new Error("missing session");
+      return { state, replayFrom: 0, seq: 0 };
+    };
+    await mount();
+    expect(controls).toMatchObject({ tab: "code", path: undefined, phase: "unavailable" });
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ [PROJECT_CWD]: other }));
+    await act(async () => { await controls.actions.retryDestination(); await settle(20); });
+    expect(controls).toMatchObject({ tab: "code", path: CODE, phase: "ready" });
+    expect(calls("session/load").map(promptPath)).toEqual([CODE, CODE]);
+    expect(calls("session/new")).toHaveLength(0);
+  });
+
+  it("pins a failed Chat candidate so a newer catalog row cannot replace it on Retry", async () => {
+    const newerChat = "/state/chat/newer.jsonl";
+    addSession(world, CHAT, "/state/chat", { modifiedAt: "2026-09-10T00:00:00.000Z", agent: { agentName: "chat", kind: "chat" } });
+    world.states[CHAT] = { ...world.states[CHAT]!, agent: { agentName: "chat", kind: "chat" } };
+    localStorage.setItem(SESSIONS_TAB_STORAGE_KEY, "chat");
+    let failures = 0;
+    world.overrides["session/load"] = (params: { path: string }) => {
+      if (params.path === CHAT && failures++ === 0) throw new Error("load failed");
+      const state = world.states[params.path];
+      if (!state) throw new Error("missing session");
+      return { state, replayFrom: 0, seq: 0 };
+    };
+    await mount();
+    expect(controls).toMatchObject({ tab: "chat", path: undefined, phase: "unavailable" });
+    addSession(world, newerChat, "/state/chat", { modifiedAt: "2026-09-11T00:00:00.000Z", agent: { agentName: "chat", kind: "chat" } });
+    await act(async () => { await controls.actions.retryDestination(); await settle(20); });
+    expect(controls).toMatchObject({ tab: "chat", path: CHAT, phase: "ready" });
+    expect(calls("session/load").map(promptPath)).toEqual([CHAT, CHAT]);
+    expect(calls("session/new")).toHaveLength(0);
+  });
+
+  it("consumes a startup hash without navigating it after a newer explicit intent", async () => {
+    addSession(world, CODE, PROJECT_CWD);
+    globalThis.history.replaceState(null, "", `/#/session/${encodeURIComponent(CODE)}`);
+    let release!: () => void;
+    const catalog = new Promise<void>((resolve) => { release = resolve; });
+    world.overrides["pi/session/list"] = async () => {
+      await catalog;
+      return { sessions: world.sessions };
+    };
+    world.overrides["pi/project/list"] = () => ({ projects: [{ cwd: PROJECT_CWD, name: "p", trusted: true }] });
+    await act(async () => root.render(<LaserProvider url="ws://test"><Probe /></LaserProvider>));
+    await act(async () => settle(10));
+    await act(async () => { await controls.actions.goProject(PROJECT_CWD); await settle(5); });
+    expect(controls).toMatchObject({ tab: "code", path: undefined, codeProject: PROJECT_CWD, phase: "ready" });
+    await act(async () => { release(); await settle(40); });
+    expect(controls).toMatchObject({ tab: "code", path: undefined, codeProject: PROJECT_CWD, phase: "ready" });
+    expect(calls("session/load").filter((call) => promptPath(call) === CODE)).toHaveLength(0);
+    expect(globalThis.location.hash).toBe("");
   });
 
   it("settles a malformed session hash onto safe remembered Code memory", async () => {

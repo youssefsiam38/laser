@@ -185,6 +185,7 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
   if (state.destination.intent > intentRef.current) intentRef.current = state.destination.intent;
   const [startupRestoring, setStartupRestoring] = useState(true);
   const startupHandled = useRef(false);
+  const explicitIntent = useRef(false);
   const [initializing, setInitializing] = useState(0);
   const initializationId = useRef(0);
   const initializingRef = useRef(0);
@@ -198,9 +199,10 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
     return true;
   }, []);
 
-  const begin = useCallback((target: MainTarget): number => {
+  const begin = useCallback((target: MainTarget, automatic = false): number => {
     const current = depsRef.current.readState().destination;
     depsRef.current.beforeTransition(current);
+    if (!automatic) explicitIntent.current = true;
     const intent = ++intentRef.current;
     transition({ phase: "resolving", intent, target, rememberedCode: rememberedCodeOf(current) });
     return intent;
@@ -220,6 +222,19 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
   }, [transition]);
 
   const resolveSession = useCallback(async (path: string, intent: number): Promise<boolean> => {
+    const beforeLoad = depsRef.current.readState();
+    const pending = beforeLoad.destination;
+    if (intent !== intentRef.current || pending.phase !== "resolving" || pending.intent !== intent) return false;
+    const known = mergeSessions(beforeLoad.sessions, beforeLoad.open).find((item) => item.path === path);
+    const visibleTab = known
+      ? sessionKindTab(known, beforeLoad.agents.snapshot?.workspaces ?? {})
+      : pending.target.kind === "session" ? pending.target.visibleTab : mainTab(pending);
+    // Every load failure retries this identity, even when an abstract project
+    // or tab restoration chose it. Pin before the await so memory/catalog
+    // changes cannot make Retry select a different candidate.
+    if (pending.target.kind !== "session" || pending.target.path !== path || pending.target.visibleTab !== visibleTab) {
+      transition({ ...pending, target: { kind: "session", path, visibleTab } });
+    }
     try { await depsRef.current.loadSession(path); }
     catch (error) {
       if (intent !== intentRef.current) return false;
@@ -368,7 +383,7 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
     if (mainCodeProject(current) !== undefined || mainPath(current) !== undefined) return;
     if (current.intent !== 0 && (current.phase !== "ready-code" || current.code.kind !== "no-project-landing")) return;
     const target: MainTarget = { kind: "startup-project", project: cwd };
-    const intent = begin(target);
+    const intent = begin(target, true);
     void resolveTarget(target, intent).catch(() => {});
   }, [begin, resolveTarget]);
 
@@ -390,12 +405,19 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
   }, [begin, readyCode]);
 
   const replaceMainSession = useCallback((from: string, session: SessionState) => {
-    const current = depsRef.current.readState().destination;
+    const snapshot = depsRef.current.readState();
+    const current = snapshot.destination;
     if (mainPath(current) !== from) return;
     const intent = ++intentRef.current;
-    const code: CodeDestination = session.agent?.kind === "beam"
-      ? { kind: "beam-session", path: session.path, returnTo: projectReturnOf(rememberedCodeOf(current)) }
-      : { kind: "project-session", project: session.cwd, path: session.path };
+    const sessions = mergeSessions(snapshot.sessions, snapshot.open);
+    const replacement = sessions.find((item) => item.path === session.path);
+    if (replacement && sessionKindTab(replacement, snapshot.agents.snapshot?.workspaces ?? {}) === "chat") {
+      transition({ phase: "ready-chat", intent, path: session.path, rememberedCode: rememberedCodeOf(current) });
+      return;
+    }
+    const code = replacement
+      ? codeDestinationForSession(replacement, sessions, snapshot.agents.runs, rememberedCodeOf(current))
+      : rememberedCodeOf(current);
     transition({ phase: "ready-code", intent, code });
   }, [transition]);
 
@@ -436,6 +458,12 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
       const { pathname, search } = globalThis.location;
       globalThis.history?.replaceState(null, "", `${pathname}${search}`);
     };
+    const current = depsRef.current.readState().destination;
+    if (explicitIntent.current) {
+      if (parsed.kind !== "none") consume();
+      setStartupRestoring(false);
+      return;
+    }
     if (parsed.kind === "invalid") {
       consume();
       depsRef.current.onError(parsed.error);
@@ -444,7 +472,7 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
         ? { kind: "project-landing" as const, project: remembered.project }
         : remembered;
       const target: MainTarget = { kind: "code-tab", code };
-      const intent = begin(target);
+      const intent = begin(target, true);
       void resolveTarget(target, intent).catch(() => {}).finally(() => setStartupRestoring(false));
       return;
     }
@@ -453,10 +481,10 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
       void openSession(parsed.path).catch(() => {}).finally(() => setStartupRestoring(false));
       return;
     }
-    if (depsRef.current.readState().destination.intent > 0) { setStartupRestoring(false); return; }
-    const initial = depsRef.current.readState().destination;
+    if (current.intent > 0) { setStartupRestoring(false); return; }
+    const initial = current;
     const target = initial.phase === "resolving" ? initial.target : { kind: "code-tab", code: rememberedCodeOf(initial) } satisfies MainTarget;
-    const intent = begin(target);
+    const intent = begin(target, true);
     void resolveTarget(target, intent).catch(() => {}).finally(() => setStartupRestoring(false));
   }, [begin, openSession, resolveTarget, state.connection, state.sessionsLoaded]);
 
