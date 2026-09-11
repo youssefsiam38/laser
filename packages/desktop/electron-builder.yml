@@ -241,7 +241,7 @@ linux:
 
   # fpm refuses to build a package without a maintainer, and it is right to:
   # `apt show` and `rpm -qi` both print this line.
-  maintainer: Laser contributors <ysiam@kwentra.com>
+  maintainer: Laser contributors <youssefsiam38@gmail.com>
   vendor: Laser
 
   # build/icons/{16,32,48,64,128,256,512}x*.png, written by scripts/make-icons.mjs.

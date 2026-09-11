@@ -11,4 +11,4 @@ by or affiliation with the Laser project.
 
 Written permission is required to use the marks in a product or service name,
 domain name, company name, paid promotion, or modified distribution. Questions
-and permission requests may be sent to `ysiam@kwentra.com`.
+and permission requests may be sent to `youssefsiam38@gmail.com`.
