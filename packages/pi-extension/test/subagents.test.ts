@@ -10,7 +10,7 @@ interface FakeTool {
   name: string;
   description: string;
   promptGuidelines?: string[];
-  parameters: { properties: Record<string, unknown>; required?: string[] };
+  parameters: { properties: Record<string, unknown>; required?: string[]; additionalProperties?: boolean };
   execute: (...args: unknown[]) => Promise<{ content: Array<{ type: string; text: string }>; details: unknown; terminate?: boolean }>;
 }
 
@@ -225,7 +225,7 @@ describe("subagents module: tool registration", () => {
       branch: "agents/find-auth",
       guidance:
         "Do not wait for find-auth. Carry on with your own work; when it ends, its result will be sent to you as a message. " +
-        "Use inspect_agent with runId run_7 to check on it meanwhile — a status of needs_input means it is paused on a question you can answer with send_agent_message — or inspect_fleet to see everything running under you at once.",
+        "Use inspect_agent with runId run_7 to check on it meanwhile — a status of needs_input means it is paused on a question you can answer with send_agent_message mode answer — or inspect_fleet to see everything running under you at once.",
       your_responsibility:
         "When find-auth finishes, its work is on the branch agents/find-auth in /project/.worktrees/find-auth. " +
         "Reviewing it, merging it into your own checkout with git, and then removing the worktree with remove_agent_worktree are yours to do — nothing removes it for you.",
@@ -255,9 +255,19 @@ describe("subagents module: tool registration", () => {
 
   it("delegates the other parent tools to the bridge and rethrows its errors", async () => {
     const h = moduleHarness(root, true);
-    const message = await h.tools.get("send_agent_message")!.execute("c", { sessionId: "session_42", message: "Also check rotation." });
-    expect(h.bridge.sendAgentMessage).toHaveBeenCalledWith({ sessionId: "session_42", message: "Also check rotation.", interrupt: false });
+    const tool = h.tools.get("send_agent_message")!;
+    const message = await tool.execute("c", { sessionId: "session_42", message: "Also check rotation." });
+    expect(h.bridge.sendAgentMessage).toHaveBeenCalledWith({ sessionId: "session_42", message: "Also check rotation.", mode: "interrupt" });
     expect(JSON.parse(message.content[0]!.text)).toMatchObject({ runId: "run_8", delivery: "delivered" });
+    expect(tool.parameters.additionalProperties).toBe(false);
+    expect(Object.keys(tool.parameters.properties)).toEqual(["sessionId", "message", "mode"]);
+    expect(tool.parameters.properties).not.toHaveProperty("interrupt");
+    expect(tool.description).toContain("interrupt (the default)");
+    expect(tool.description).toContain("answer only settles an open needs_input question");
+    for (const mode of ["interrupt", "steer", "queue", "answer"] as const) {
+      await tool.execute("c", { sessionId: "session_42", message: mode, mode });
+      expect(h.bridge.sendAgentMessage).toHaveBeenLastCalledWith({ sessionId: "session_42", message: mode, mode });
+    }
     expect(h.tools.get("inspect_agent")!.description).toContain("needs_input (paused on a question");
     const stopped = await h.tools.get("stop_agent")!.execute("c", { runId: "run_7", reason: "no longer needed" });
     expect(h.bridge.stopAgent).toHaveBeenCalledWith({ runId: "run_7", reason: "no longer needed" });
@@ -280,7 +290,7 @@ describe("subagents module: tool registration", () => {
     expect(h.tools.get("start_agent")!.promptGuidelines![0]).toContain("Do not wait for it and do not poll");
     expect(startedGuidance({ subagentName: "find-auth", runId: "run_7" })).toBe(
       "Do not wait for find-auth. Carry on with your own work; when it ends, its result will be sent to you as a message. " +
-        "Use inspect_agent with runId run_7 to check on it meanwhile — a status of needs_input means it is paused on a question you can answer with send_agent_message — or inspect_fleet to see everything running under you at once.",
+        "Use inspect_agent with runId run_7 to check on it meanwhile — a status of needs_input means it is paused on a question you can answer with send_agent_message mode answer — or inspect_fleet to see everything running under you at once.",
     );
     // The guidance is in the result, where the model reads it when it matters — in both worktree shapes.
     const shared = await h.tools.get("start_agent")!.execute("call", { agent_name: "explorer", subagent_name: "review", task: "Read it.", worktree: false });
@@ -395,11 +405,12 @@ describe("subagents module: tool registration", () => {
     expect(whatItNeeds({ ...base, status: "blocked", result: { status: "blocked", message: "Which config?" } })).toContain("Answer with send_agent_message: that starts a new run in the same session");
   });
 
-  it("tells the parent a message to a needs_input child answers its question", () => {
+  it("makes question answering explicit and keeps the other modes non-answering", () => {
     const h = moduleHarness(root, true);
     const send = h.tools.get("send_agent_message")!;
-    expect(send.description).toContain("needs_input is paused on a question, and your message answers it");
-    expect(send.promptGuidelines!.some((line) => line.includes("needs_input"))).toBe(true);
+    expect(send.description).toContain("answer only settles an open needs_input question");
+    expect(send.description).toContain("Steer and queue never answer or cancel a question");
+    expect(send.promptGuidelines!.some((line) => line.includes("mode answer only"))).toBe(true);
   });
 
   it("gives a child that cannot delegate only complete_agent_run, which terminates the turn", async () => {

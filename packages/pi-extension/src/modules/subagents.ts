@@ -36,6 +36,7 @@ import {
   AGENT_INSPECT_MESSAGES_DEFAULT,
   AGENT_INSPECT_MESSAGES_MAX,
   AGENT_MESSAGE_MAX,
+  AGENT_MESSAGE_MODES,
   AGENT_NAME_MAX,
   AGENT_TASK_EXCERPT,
   AGENT_TASK_MAX,
@@ -132,7 +133,7 @@ export function roleBlock(role: HarnessSessionRole, canDelegate: boolean, cwd: s
   }
   if (canDelegate) {
     parts.push(
-      "You can start other agents with start_agent; they run in the background, by default each in its own isolated worktree, and their results arrive here as messages that wake you. Never wait for one: carry on with your own work. inspect_fleet shows everything going on under you — the agents you started, theirs, and every background command — as the one tree the person sees; use inspect_agent to check on a single agent — it also shows a question the agent is paused on, which you can answer with send_agent_message. Use stop_agent for work that is no longer needed.",
+      "You can start other agents with start_agent; they run in the background, by default each in its own isolated worktree, and their results arrive here as messages that wake you. Never wait for one: carry on with your own work. inspect_fleet shows everything going on under you — the agents you started, theirs, and every background command — as the one tree the person sees; use inspect_agent to check on a single agent — it also shows a question the agent is paused on, which you can answer with send_agent_message mode answer. Use stop_agent for work that is no longer needed.",
       "A child with its own worktree leaves its work on a branch of its own when it finishes. Reviewing that branch, merging it into your checkout with git, and removing the worktree with remove_agent_worktree are yours: nothing does any of it for you, and the directory stays until you ask for it to go. A child started with worktree false has neither a branch nor a worktree, because its changes are already in your files.",
     );
   }
@@ -197,7 +198,7 @@ export function startedView(result: StartAgentResult): Record<string, unknown> {
 export function startedGuidance(result: Pick<StartAgentResult, "subagentName" | "runId">): string {
   return (
     `Do not wait for ${result.subagentName}. Carry on with your own work; when it ends, its result will be sent to you as a message. ` +
-    `Use inspect_agent with runId ${result.runId} to check on it meanwhile — a status of needs_input means it is paused on a question you can answer with send_agent_message — or inspect_fleet to see everything running under you at once.`
+    `Use inspect_agent with runId ${result.runId} to check on it meanwhile — a status of needs_input means it is paused on a question you can answer with send_agent_message mode answer — or inspect_fleet to see everything running under you at once.`
   );
 }
 
@@ -220,7 +221,7 @@ export function fleetView(result: InspectFleetResult): Record<string, unknown> {
         }
       : {}),
     guidance:
-      "Endings are sent to you as messages, so do not call inspect_fleet to wait. inspect_agent with a runId reads one agent in depth; task_output with a taskId reads one command's output; send_agent_message answers an agent that is Asking.",
+      "Endings are sent to you as messages, so do not call inspect_fleet to wait. inspect_agent with a runId reads one agent in depth; task_output with a taskId reads one command's output; send_agent_message mode answer answers an agent that is Asking.",
   };
 }
 
@@ -350,23 +351,24 @@ function registerParentTools(pi: ExtensionAPI, bridge: AgentHarnessBridge): void
     name: "send_agent_message",
     label: "Message an agent",
     description:
-      "Send a message to an agent you started, addressed by its sessionId. A running agent receives it as its next instruction; an idle agent starts a new run and the result carries the new runId. " +
-      "An agent whose status is needs_input is paused on a question, and your message answers it: one of the choices for a select, yes or no for a confirm, the text itself for an input or editor — anything else is refused with the question restated. " +
-      "The result's delivery says what became of the message: queued (waiting its turn, or behind a run the agent is finishing), delivered (the agent's engine accepted it as its next turn), answered (it settled an open question), or refused (the engine would not take it; error says why and the attempt is recorded as a failed run).",
-    promptSnippet: "Continue a conversation with an agent you started, or answer its question, by sessionId",
+      "Send a message to an agent you started, addressed by its sessionId. Choose one explicit mode: interrupt (the default) cancels and fences its current invocation, including an open question, then redirects it; steer reaches the next model-call boundary without cancellation; queue waits until current work ends; answer only settles an open needs_input question. " +
+      "For answer, send exactly one listed select choice, yes or no for confirm, or the text for input/editor; it is refused if no question is open. Steer and queue never answer or cancel a question. " +
+      "Delivery is queued while an accepted instruction waits, delivered after engine admission, answered after exact dialog settlement, refused when admission/answer validation fails, or control_failed when interrupt could not establish cancellation control.",
+    promptSnippet: "Interrupt, steer, queue, or explicitly answer an agent you started, by sessionId",
     promptGuidelines: [
-      "Use send_agent_message with sessionId to continue a conversation with an agent; set interrupt true only when it must change course now.",
-      "When an agent is needs_input, send_agent_message answers its open question; inspect_agent shows the question and the kind of answer it takes.",
+      "Use send_agent_message with sessionId and mode interrupt to stop the current invocation and redirect it now; interrupt is the default when mode is omitted.",
+      "Use send_agent_message mode steer for the next model-call boundary without cancellation, or mode queue only after current work; neither mode answers an open question.",
+      "When an agent is needs_input, use send_agent_message mode answer only to answer its open question; inspect_agent shows the question and the exact kind of answer it takes.",
     ],
     parameters: Type.Object({
       sessionId: Type.String({ minLength: 1, description: "The sessionId returned by start_agent." }),
-      message: Type.String({ minLength: 1, maxLength: AGENT_MESSAGE_MAX, description: "What the agent should do or know next." }),
-      interrupt: Type.Optional(
-        Type.Boolean({ description: "Deliver now, interrupting current work. Default false: the message waits for the current work to finish." }),
-      ),
-    }),
+      message: Type.String({ minLength: 1, maxLength: AGENT_MESSAGE_MAX, description: "The redirect/instruction, or the typed answer when mode is answer." }),
+      mode: Type.Optional(StringEnum(AGENT_MESSAGE_MODES, {
+        description: "interrupt (default): cancel/fence current work then redirect; steer: next model boundary without cancellation; queue: after current work; answer: settle an open question only.",
+      })),
+    }, { additionalProperties: false }),
     async execute(_toolCallId, params) {
-      const result = await bridge.sendAgentMessage({ sessionId: params.sessionId, message: params.message, interrupt: params.interrupt === true });
+      const result = await bridge.sendAgentMessage({ sessionId: params.sessionId, message: params.message, mode: params.mode ?? "interrupt" });
       return asResult(result, result);
     },
   });
@@ -380,7 +382,7 @@ function registerParentTools(pi: ExtensionAPI, bridge: AgentHarnessBridge): void
       "The work going on under this session, as one tree: the agents you started, the agents they started, and the background commands any of them — you included — left running or finished. " +
       "It is the same tree, in the same words, that the person sees in the fleet column. Each row says its kind (agent or command), its name, its status word (Working, Asking, Blocked, Done, Failed, Ended, Waiting), " +
       "how long it has run, and one line — what it is doing, or how it ended — plus the id to follow it with: an agent row's runId for inspect_agent, a command row's taskId for task_output. " +
-      "Asking means an agent is live and paused on a question you can answer with send_agent_message; Blocked means it ended without finishing, and its final message says what it could not do or is asking you. " +
+      "Asking means an agent is live and paused on a question you can answer with send_agent_message mode answer; Blocked means it ended without finishing, and its final message says what it could not do or is asking you. " +
       `At most ${String(AGENT_FLEET_ROWS_MAX)} rows, the deepest cut first; the result says how many were left out. Read-only: it wakes nothing and sends nothing.`,
     promptSnippet: "See everything running under you — agents and background commands — as the tree the person sees",
     promptGuidelines: [

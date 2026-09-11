@@ -6,6 +6,15 @@ export type SessionPhase<End> =
 
 export type PromptAdmission = "invoke" | "engine-queue" | "local-queue" | "bare-concurrent";
 
+export type InvocationBoundary<End> = { settled: boolean; end: End | undefined };
+export type InvocationFinish<End> = InvocationBoundary<End> | { fenced: true };
+
+interface Interruption<End> {
+  token: number;
+  controlReady: boolean;
+  finished?: InvocationBoundary<End>;
+}
+
 export class SessionLifecycle<End, Message> {
   private phaseValue: SessionPhase<End> = { kind: "idle" };
   private successorRunId: string | undefined;
@@ -18,6 +27,9 @@ export class SessionLifecycle<End, Message> {
   private readonly descendantSettled = new Set<string>();
   /** Exact native epoch for the current owner; absent only for legacy/fake drivers. */
   private readonly invocations = new Map<string, Set<string>>();
+  /** An interrupt keeps ownership until both abort control and the prompt promise settle. */
+  private interruptionValue: { runId: string; state: Interruption<End> } | undefined;
+  private interruptionSerial = 0;
 
   phase(): SessionPhase<End> {
     return this.phaseValue;
@@ -121,17 +133,67 @@ export class SessionLifecycle<End, Message> {
     return this.phaseValue.kind === "terminal-pending" && this.phaseValue.runId === runId ? this.phaseValue.end : undefined;
   }
 
-  finish(runId: string): { settled: boolean; end: End | undefined } | undefined {
+  /**
+   * Hold the engine-ready boundary while abort control is still unresolved.
+   * The caller stores its invocation result and resumes it from
+   * `resolveInterrupt`; ownership never briefly becomes idle between them.
+   */
+  finish(runId: string): InvocationFinish<End> | undefined {
     if (this.phaseValue.kind === "idle" || this.phaseValue.runId !== runId) return undefined;
-    const result = {
+    const result: InvocationBoundary<End> = {
       settled: this.phaseValue.settled,
       ...(this.phaseValue.kind === "terminal-pending" ? { end: this.phaseValue.end } : { end: undefined }),
     };
+    const interruption = this.interruptionValue;
+    if (interruption?.runId === runId && !interruption.state.controlReady) {
+      interruption.state.finished = result;
+      return { fenced: true };
+    }
+    this.releaseOwner(runId);
+    return result;
+  }
+
+  /** Start or join the one interrupt controlling this exact owner. */
+  requestInterrupt(runId: string): { token: number; created: boolean } | undefined {
+    if (this.owner() !== runId) return undefined;
+    if (this.interruptionValue?.runId === runId) return { token: this.interruptionValue.state.token, created: false };
+    const token = ++this.interruptionSerial;
+    this.interruptionValue = { runId, state: { token, controlReady: false } };
+    return { token, created: true };
+  }
+
+  interruption(runId: string): number | undefined {
+    return this.interruptionValue?.runId === runId ? this.interruptionValue.state.token : undefined;
+  }
+
+  /** Abort control succeeded; release a prompt boundary that arrived first. */
+  resolveInterrupt(runId: string, token: number): InvocationBoundary<End> | undefined {
+    const interruption = this.interruptionValue;
+    if (!interruption || interruption.runId !== runId || interruption.state.token !== token) return undefined;
+    interruption.state.controlReady = true;
+    const finished = interruption.state.finished;
+    if (!finished) return undefined;
+    this.releaseOwner(runId);
+    return finished;
+  }
+
+  /** Abort control failed; remove the marker and release a boundary that arrived first. */
+  cancelInterrupt(runId: string, token: number): InvocationBoundary<End> | undefined {
+    const interruption = this.interruptionValue;
+    if (!interruption || interruption.runId !== runId || interruption.state.token !== token) return undefined;
+    const finished = interruption.state.finished;
+    this.interruptionValue = undefined;
+    if (!finished) return undefined;
+    this.releaseOwner(runId);
+    return finished;
+  }
+
+  private releaseOwner(runId: string): void {
     this.phaseValue = { kind: "idle" };
     this.invocations.delete(runId);
     this.descendants.delete(runId);
     this.descendantSettled.delete(runId);
-    return result;
+    if (this.interruptionValue?.runId === runId) this.interruptionValue = undefined;
   }
 
   successor(): string | undefined {
@@ -171,6 +233,14 @@ export class SessionLifecycle<End, Message> {
     const inbox = this.inboxes.get(runId);
     if (inbox) inbox.push(message);
     else this.inboxes.set(runId, [message]);
+  }
+
+  /** Append to the stable priority prefix, preserving FIFO within both groups. */
+  enqueuePriority(runId: string, message: Message, isPriority: (candidate: Message) => boolean): void {
+    const inbox = [...this.inbox(runId)];
+    const firstOrdinary = inbox.findIndex((candidate) => !isPriority(candidate));
+    inbox.splice(firstOrdinary < 0 ? inbox.length : firstOrdinary, 0, message);
+    this.inboxes.set(runId, inbox);
   }
 
   inbox(runId: string): readonly Message[] {
@@ -221,6 +291,7 @@ export class SessionLifecycle<End, Message> {
     this.invocations.delete(runId);
     this.descendants.delete(runId);
     this.descendantSettled.delete(runId);
+    if (this.interruptionValue?.runId === runId) this.interruptionValue = undefined;
     if (this.successorRunId === runId) this.successorRunId = undefined;
   }
 

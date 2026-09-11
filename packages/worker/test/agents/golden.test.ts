@@ -9,7 +9,7 @@
  * M13-T45 · the other golden path: a child raises a question through the
  * portable UI surface while a tool runs, the run is `needs_input`, the parent
  * is woken, reads the question through `inspect_agent`, answers it through
- * `send_agent_message`, and the child's dialog resolves with that answer.
+ * `send_agent_message` mode `answer`, and the child's dialog resolves with it.
  *
  * Needs the companion extension's harness module (Lane X). Until its
  * `start_agent` registration exists the suite is skipped, and says so.
@@ -105,7 +105,7 @@ beforeEach(async () => {
       if (called === "start_agent") return { text: "ok" };
       if (called === "inspect_agent") {
         const sessionId = /"sessionId":\s*"([^"]+)"/.exec(lastText)?.[1];
-        return { toolCall: { name: "send_agent_message", args: { sessionId, message: "header" } } };
+        return { toolCall: { name: "send_agent_message", args: { sessionId, message: "header", mode: "answer" } } };
       }
       if (called === "send_agent_message") return { text: "answered" };
       if (last?.role === "user" && lastText.includes("agent.needs_input")) {
@@ -270,7 +270,7 @@ describe.skipIf(!harnessModulePresent || !haveGit)("golden path: start_agent →
   /**
    * M13-T45: a child paused on a question is `needs_input`, its parent is
    * woken with the question, reads it through `inspect_agent`, answers it
-   * through `send_agent_message`, and the child's own dialog resolves with
+   * through `send_agent_message` mode `answer`, and its own dialog resolves with
    * that answer. The question is raised through the real UI bridge of the
    * child's real driver, inside a real running tool.
    */

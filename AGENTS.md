@@ -531,6 +531,15 @@ blockers, not advice.
   nothing the model reads names `list_agents` or `task_list`.
 - Children never block: `start_agent` returns the identities before the child
   has done anything; there is no foreground mode.
+- Parent messages have exactly four modes (D-204): `interrupt` (the default)
+  cancels the current invocation and its foreground tools/question, fences it,
+  then runs first ahead of preserved queued work; `steer` reaches the next
+  model-call boundary without cancellation; `queue` waits after current work;
+  `answer` alone settles a typed `needs_input` question and is refused when no
+  question is open. Steer/queue never become answers. Interrupt control failure
+  is never reported queued/delivered. Explicit stop visibly cancels queued work
+  without auto-resume; late aborts cannot reach a successor; detached background
+  commands are not implicitly killed.
 - The parent chooses isolation per child: `start_agent`'s `worktree` defaults
   to true, and true means a worktree under `<project>/.worktrees/` on
   `agents/<slug>` or a person-facing refusal (not a repository, no commit, a
