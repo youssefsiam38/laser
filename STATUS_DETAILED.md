@@ -2148,8 +2148,8 @@ lane T's own if both were written.
 | M14-T2 | Worker engine: pinned adapter, store, inspector, sign-in, import, companion module, host routing | done | worker mcp-engine (01a091cf-27d3-73a4-a484-ea10ff6969e5) | merged `b6a59e0`; `pnpm -r test` on main: worker 549, pi-extension 112, host 227; `test/mcp` 68 incl. offline OAuth end-to-end; `LASERCODE_MCP_LIVE=1` Playwright pair 2/2 | see notes |
 | M14-T3 | Settings → MCP servers | in-progress | worker mcp-settings-ui (01a091d1-20ed-73a4-a484-ea20d2b4199a) | merged `763dd52`; UI 1191 on main | browser review against the real backend pending (M14-T6) |
 | M14-T4 | Transcript: MCP tool rows and image results | done | worker mcp-transcript (01a091d2-7bd9-73a4-a484-ea27a8d96475) | merged `2b88158`; protocol 56, UI 1191 on main; screenshots `/tmp/mcp-transcript-shots/` | see notes |
-| M14-T5 | Packaged build carries the adapter | todo | — | — | depends on M14-T2 |
-| M14-T6 | Live end-to-end proof with Playwright | todo | — | — | depends on M14-T2/T3/T4 |
+| M14-T5 | Packaged build carries the adapter | in-progress | worker mcp-packaging (01a09264-09f9-73a4-a484-eb29d0307676, `agents/mcp-packaging-766cca38`) | — | claimed by the orchestrator at `c25b7fc`: before-pack visibility check for the adapter, native bindings, jiti cache, the clean-machine gate opens a session with a stdio fixture server from the bundled Node with an empty PATH |
+| M14-T6 | Live end-to-end proof with Playwright | in-progress | worker mcp-live-proof (01a09264-096a-73a4-a484-eb22dc3deee0, main checkout, read-mostly) | — | claimed by the orchestrator at `c25b7fc`: real host + built UI against Playwright over stdio and HTTP, the Settings page browser review (both themes/widths), import, switch-off, sign-in against the offline OAuth fixture; report to `/tmp/mcp-live/REPORT.md` |
 
 #### M14-T1 notes
 - 2026-09-11 claimed: write `docs/mcp.md` (binding design), `packages/protocol/src/mcp.ts`, schemas, feature `mcp`, module `mcp`, `lasercode/mcp/status`, round-trip samples.
