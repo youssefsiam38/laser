@@ -65,6 +65,16 @@ describe("the engine's data directory", () => {
     expect(process.env["PI_CODING_AGENT_DIR"]).toBe(previous);
   });
 
+  it("follows the session directory too, and drops an inherited one the host did not name", () => {
+    const agentDir = join(base, "agent");
+    process.env["PI_CODING_AGENT_SESSION_DIR"] = join(base, "another-installation", "sessions");
+    alignEngineAgentDir(agentDir, join(base, "sessions"));
+    expect(process.env["PI_CODING_AGENT_SESSION_DIR"]).toBe(join(base, "sessions"));
+    alignEngineAgentDir(agentDir);
+    expect(process.env["PI_CODING_AGENT_SESSION_DIR"]).toBeUndefined();
+  });
+
+
   it("is where the engine puts the caches an MCP server produces", async () => {
     const agentDir = join(base, "agent");
     mkdirSync(agentDir, { recursive: true });

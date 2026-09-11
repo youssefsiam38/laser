@@ -61,7 +61,7 @@ async function main(): Promise<void> {
   // Laser-specific instructions. Optional for callers outside the host.
   const stateDir = arg("state-dir");
   const projectTrusted = arg("project-trusted");
-  alignEngineAgentDir(agentDir);
+  alignEngineAgentDir(agentDir, sessionDir);
   extendRuntimePath();
   if (projectTrusted !== undefined && projectTrusted !== "yes" && projectTrusted !== "no") {
     console.error(`${PRODUCT_NAME} worker: --project-trusted must be "yes" or "no", got ${JSON.stringify(projectTrusted)}`);

@@ -15,12 +15,22 @@ import { ENV } from "@lasercode/protocol";
  * a worker started any other way agree with the directory it was given,
  * before anything in the process can read it.
  */
-export function alignEngineAgentDir(agentDir: string | undefined): void {
+export function alignEngineAgentDir(agentDir: string | undefined, sessionDir?: string): void {
   if (!agentDir) return;
   const resolved = resolve(agentDir);
-  // The engine's own variable name, deliberately literal: the worker must not
-  // import the CLI package, which is where it is otherwise spelled.
+  // The engine's own variable names, deliberately literal: the worker must not
+  // import the CLI package, which is where they are otherwise spelled
+  // (`PI_AGENT_DIR_ENV` / `PI_SESSION_DIR_ENV` in `packages/cli/src/config.ts`).
   if (process.env["PI_CODING_AGENT_DIR"] !== resolved) process.env["PI_CODING_AGENT_DIR"] = resolved;
+  // The session directory follows the same rule. An inherited one — a shell
+  // started from inside the app carries both — would otherwise point a worker
+  // at another installation's sessions while its host watches these.
+  if (sessionDir) {
+    const resolvedSessions = resolve(sessionDir);
+    if (process.env["PI_CODING_AGENT_SESSION_DIR"] !== resolvedSessions) process.env["PI_CODING_AGENT_SESSION_DIR"] = resolvedSessions;
+  } else {
+    delete process.env["PI_CODING_AGENT_SESSION_DIR"];
+  }
 }
 
 /**
