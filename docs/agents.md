@@ -196,7 +196,13 @@ run, in order, each exactly once; a text the engine had already delivered is
 gone, a text the harness never sent is kept. Everything that arrives during
 the window joins that successor: a parent's `send_agent_message`, a person's
 queued prompt, an extension's triggering send, a goal's automatic
-continuation, a background command's exit. `interrupt: true` and a person's
+continuation, a background command's exit. A person's message written while
+the child worked reaches it through the pending tray's drain at
+`agent_settled`; the admission lease the server took for that delivery is
+released the moment the harness parks the message, because an extension's
+send ahead of it on the successor starts through the same lease — held until
+the person's acceptance, it would wait for the very turn that acceptance
+follows. `interrupt: true` and a person's
 stop additionally abort the finishing invocation (the declared result
 stands: first declaration wins), and a stop of the run while it is still
 invoking empties the engine's queues into the successor *before* the abort,
@@ -239,9 +245,10 @@ a successor was waiting behind it, only after that successor has become the
 session's live run, so a parent that reacts to the ending by messaging the
 child reaches the run that is actually working. A person's own sends into a
 child's chat — `pi/session/steer`, `pi/session/follow_up`, a pending-tray
-row's Steer, and `pi/session/clear_queue` — go through the same fence as the
-parent's messages, so nothing a person types can enter a queue the engine is
-about to drop. A dialog is stamped with the invocation that raised it; one
+row's Steer, the tray's own drain at `agent_settled`, and
+`pi/session/clear_queue` — go through the same fence as the parent's
+messages, so nothing a person types can enter a queue the engine is about to
+drop. A dialog is stamped with the invocation that raised it; one
 from an invocation the session no longer owns is cancelled (never the
 successor's question, never left hanging) and is not shown to the person.
 

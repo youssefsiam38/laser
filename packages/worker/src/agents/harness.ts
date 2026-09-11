@@ -501,7 +501,20 @@ export class AgentHarness {
       if (admission === "local-queue") return { kind: "deferred" as const };
       return { kind: admission, state };
     });
-    if (plan.kind === "deferred") return deferred;
+    if (plan.kind === "deferred") {
+      // A parked message holds no engine preflight, so the admission lease
+      // the server took for it has done its one job — keeping the runtime
+      // generation still through preflight — and is released now, not at the
+      // message's eventual acceptance. Held that long, it wedges the session:
+      // an extension send ahead of this message on the successor starts
+      // through the server's wrapper, which waits for this very lease, while
+      // the lease waits for an acceptance that only follows that send's turn
+      // (the tray's drain at `agent_settled` reaches here). The kick that
+      // later delivers the message holds no lease either; release is
+      // idempotent, so the server's own `finally` is harmless.
+      options?.admissionLease?.release();
+      return deferred;
+    }
     if (plan.kind === "invoke") return this.invoke(entry, plan.state, driver, content, options);
     if (plan.kind === "bare-concurrent") return driver.prompt(content, options);
 

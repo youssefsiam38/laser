@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { PRODUCT_NAME, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE } from "@lasercode/protocol";
 import type { ContentBlock, JsonRpcMessage, SessionState, UiDialogRequest } from "@lasercode/protocol";
 import { WorkerServer } from "../src/server.js";
-import type { DriverEvent, DriverListener, FirstTurnOptions, PromptOptions, SessionDriver } from "../src/driver.js";
+import type { DriverEvent, DriverListener, ExtensionModelWorkHandler, FirstTurnOptions, PromptOptions, SessionDriver } from "../src/driver.js";
 import { fallbackDefaultAgent, fallbackSnapshot } from "../src/agents/definitions.js";
 
 class FakeDriver implements SessionDriver {
@@ -136,6 +136,9 @@ class FakeDriver implements SessionDriver {
   async fork(entryId: string, options?: unknown) { this.moves.push({ op: "fork", entryId, options }); this.st = { ...this.st, path: `/tmp/fake/fork-${entryId}.jsonl` }; return { state: this.st, editorText: "redo" }; }
   respondToUi(r: unknown) { this.answered.push(r); }
   deliverExtensionCommand(command: unknown) { this.extensionCommands.push(command); return true; }
+  /** The server's admission for extension work that can enter the model; a test drives it the way an extension's `sendMessage` would. */
+  extensionWork: ExtensionModelWorkHandler | undefined;
+  setExtensionModelWorkHandler(handler: ExtensionModelWorkHandler | undefined) { this.extensionWork = handler; }
   pendingUi() { return this.pending; }
   async entries() { return { entries: [], leafId: null }; }
   async goalState() { return null; }
@@ -812,6 +815,71 @@ describe("WorkerServer sends into a child agent's own chat", () => {
     expect(h.server.agents().run(run!.runId)).toMatchObject({ status: "completed", result: { message: "done" } });
     expect(h.server.agents().run(successor.runId)?.status).toBe("running");
     expect(d.engine).toEqual({ steering: [], followUp: [] });
+    expect(await h.server.agents().bridgeOf(h.childPath)!.completeRun({ status: "completed", message: "successor done" })).toEqual({ ok: true, runId: successor.runId });
+    d.releasePrompt();
+    await h.waitFor((message) => "method" in message && message.method === "agents/run" && (message as { params: { run: { runId: string; status: string } } }).params.run.runId === successor.runId && (message as { params: { run: { status: string } } }).params.run.status === "completed");
+    expect(h.runs().map((candidate) => candidate.status)).toEqual(["completed", "completed"]);
+    await h.server.dispose();
+  });
+
+  it("releases the lease a parked tray message took, so an extension's message ahead of it on the successor can start", async () => {
+    // F1 at the fake level: the tray's drain at agent_settled prompts under
+    // the session's admission lease; parked behind an extension's wake on the
+    // successor, it must let that lease go — the wake's start runs through
+    // the server's wrapper, which takes the same lease before the engine
+    // sees the message, and the person's acceptance follows the wake's turn.
+    const h = childHarness();
+    expect((await h.call("session/load", { path: h.childPath })).error).toBeUndefined();
+    const d = h.drivers[0]!;
+    d.holdPrompts = true;
+    const first = h.call("session/prompt", { path: h.childPath, content: h.text("first") });
+    await d.nextHeld();
+    const [run] = h.runs();
+    expect((await h.call("session/pending/add", { path: h.childPath, content: h.text("T") })).error).toBeUndefined();
+    expect(await h.server.agents().bridgeOf(h.childPath)!.completeRun({ status: "completed", message: "done" })).toEqual({ ok: true, runId: run!.runId });
+
+    // During terminal-pending, an extension's custom trigger: first on the
+    // successor. Its `start` is reached only through the server's wrapper.
+    let started = 0;
+    const startedSignal = deferred();
+    const completeWake = deferred<{ disposition: "started" }>();
+    const admitted = d.extensionWork!({
+      kind: "custom",
+      content: h.text("wake"),
+      task: "wake",
+      origin: "agent",
+      start: (ownerRunId, onInvocation) => {
+        started += 1;
+        onInvocation?.({ id: "ext-1", ...(ownerRunId ? { runId: ownerRunId } : {}) });
+        startedSignal.resolve();
+        return { admission: Promise.resolve(), completion: completeWake.promise };
+      },
+    });
+    void admitted.admission.catch(() => undefined);
+    const successor = h.runs().find((candidate) => candidate.runId !== run!.runId)!;
+    expect(successor).toMatchObject({ status: "queued", task: "wake" });
+    expect(started).toBe(0);
+
+    // The old turn ends: the tray drains, its message is parked behind the
+    // wake, the lease that delivery took is released there — and the wake starts.
+    d.releasePrompt();
+    expect((await first).result).toEqual({ accepted: true, queued: false });
+    await startedSignal.promise;
+    expect(started).toBe(1);
+    expect(h.server.agents().run(run!.runId)).toMatchObject({ status: "completed", result: { message: "done" } });
+    expect(h.server.agents().run(successor.runId)?.status).toBe("running");
+    // The tray row is still on its way: the wake's turn comes first.
+    expect(((await h.call("session/pending/list", { path: h.childPath })).result as { messages: Array<{ state: string; text: string }> }).messages).toMatchObject([{ state: "delivering", text: "T" }]);
+    expect(d.routed.filter((entry) => entry.route === "prompt").map((entry) => textOf(entry.content as ContentBlock[]))).toEqual(["first"]);
+
+    // The wake's invocation ends: the tray message is the successor's next
+    // prompt, accepted and gone from the tray; nothing holds the lease, so a
+    // lease-bound request answers while that prompt is still held.
+    completeWake.resolve({ disposition: "started" });
+    await d.nextHeld();
+    expect(d.routed.at(-1)).toMatchObject({ route: "prompt", content: h.text("T") });
+    expect(((await h.call("session/pending/list", { path: h.childPath })).result as { messages: unknown[] }).messages).toEqual([]);
+    expect((await h.call("pi/thinking/set", { path: h.childPath, level: "high" })).error).toBeUndefined();
     expect(await h.server.agents().bridgeOf(h.childPath)!.completeRun({ status: "completed", message: "successor done" })).toEqual({ ok: true, runId: successor.runId });
     d.releasePrompt();
     await h.waitFor((message) => "method" in message && message.method === "agents/run" && (message as { params: { run: { runId: string; status: string } } }).params.run.runId === successor.runId && (message as { params: { run: { status: string } } }).params.run.status === "completed");
