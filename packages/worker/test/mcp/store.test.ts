@@ -155,14 +155,66 @@ describe("McpStore", () => {
     expect(contents.malformed).toHaveLength(3);
     expect(contents.malformed[0]?.name).toBe("broken");
     expect(contents.malformed[0]?.detail).toContain("could not be read");
+    // An entry with no usable name is still something to show a person.
+    expect(contents.malformed[1]?.name).toBeUndefined();
+    expect(contents.malformed[1]?.label).toBe("Entry 3");
     expect(contents.malformed.at(-1)?.detail).toContain("Two saved servers are named");
   });
 
-  it("treats an unreadable or missing file as no servers, never as an error", async () => {
-    writeFileSync(join(agentDir, DATA_DIR_NAME, "mcp.json"), "{ not json");
-    expect((await store.read("global", cwd)).servers).toEqual([]);
-    rmSync(join(agentDir, DATA_DIR_NAME, "mcp.json"));
-    expect((await store.read("global", cwd)).servers).toEqual([]);
+  it("treats a missing file as no servers and an unreadable one as something to say, never as an error", async () => {
+    const file = join(agentDir, DATA_DIR_NAME, "mcp.json");
+    writeFileSync(file, "{ not json");
+    const broken = await store.read("global", cwd);
+    expect(broken.servers).toEqual([]);
+    expect(broken.malformed[0]?.detail).toContain(file);
+    expect(broken.malformed[0]?.label).toBe("Unreadable settings");
+    rmSync(file);
+    const absent = await store.read("global", cwd);
+    expect(absent.servers).toEqual([]);
+    expect(absent.malformed).toEqual([]);
+  });
+
+  it("never writes over a file it could not read", async () => {
+    const file = join(cwd, PROJECT_DIR_NAME, "mcp.json");
+    // The shape a person leaves behind while editing the file they commit.
+    const text = `{\n  "version": 1,\n  "servers": [\n    { "name": "alpha", "transport": { "kind": "stdio", "command": "npx" } },\n  ]\n}\n`;
+    writeFileSync(file, text);
+    await expect(store.save("project", cwd, stdio("beta"))).rejects.toThrow(/could not be read/);
+    await expect(store.remove("project", cwd, "alpha")).rejects.toThrow(/could not be read/);
+    // Their file is exactly as they left it, and the sentence names it.
+    expect(readFileSync(file, "utf8")).toBe(text);
+    await expect(store.save("project", cwd, stdio("beta"))).rejects.toThrow(file);
+  });
+
+  it("keeps an entry it could not read when another server is saved", async () => {
+    const file = join(agentDir, DATA_DIR_NAME, "mcp.json");
+    writeRaw(file, {
+      version: 1,
+      servers: [
+        { name: "broken", transport: { kind: "stdio" } },
+        { name: "good", transport: { kind: "stdio", command: "node" } },
+      ],
+    });
+    await store.save("global", cwd, stdio("fresh"));
+    const written = JSON.parse(readFileSync(file, "utf8")) as { servers: Array<Record<string, unknown>> };
+    // The entry the person was told to edit is still there to edit, in place,
+    // with everything it carried.
+    expect(written.servers[0]).toEqual({ name: "broken", transport: { kind: "stdio" } });
+    expect(written.servers.map((entry) => entry["name"])).toEqual(["broken", "good", "fresh"]);
+    expect(written.servers[1]).toMatchObject({ name: "good" });
+
+    // And removing a server it did read leaves the unreadable one alone.
+    await store.remove("global", cwd, "good");
+    const after = JSON.parse(readFileSync(file, "utf8")) as { servers: Array<Record<string, unknown>> };
+    expect(after.servers.map((entry) => entry["name"])).toEqual(["broken", "fresh"]);
+  });
+
+  it("refuses to write when the secrets file cannot be read, rather than replacing it", async () => {
+    await store.save("global", cwd, { name: "remote", transport: { kind: "http", url: "https://example.test/mcp" }, auth: { kind: "bearer", token: { secret: true, value: "keep" } } });
+    const secrets = readFileSync(store.secretsPath(), "utf8");
+    writeFileSync(store.secretsPath(), `${secrets.slice(0, 20)}`);
+    await expect(store.save("global", cwd, stdio("another"))).rejects.toThrow(/could not be read/);
+    expect(readFileSync(store.secretsPath(), "utf8")).toBe(secrets.slice(0, 20));
   });
 
   it("refuses a duplicate name and a rename onto an existing one", async () => {

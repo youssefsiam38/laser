@@ -122,7 +122,11 @@ describe("toServerEntry", () => {
       sampling: true,
       elicitation: true,
       scriptMode: true,
+      // Never the engine's default, which tells the person to run its own
+      // terminal commands (docs/mcp.md; AGENTS.md §6b).
+      authRequiredMessage: 'Sign in to "${server}" in Settings → MCP servers, then try again.',
     });
+    expect(config.settings?.authRequiredMessage).not.toMatch(/mcp\(|\/mcp/);
     expect(Object.keys(config.mcpServers)).toEqual(["fixture"]);
     expect(config.imports).toBeUndefined();
     expect(config.claudePlugins).toBeUndefined();

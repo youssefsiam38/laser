@@ -133,12 +133,16 @@ export function loadMcpEngine(): Promise<McpEngine> {
     const { createJiti } = await import("jiti");
     const jiti = createJiti(import.meta.url, { moduleCache: true, interopDefault: true });
     const load = async <T>(file: string): Promise<T> => (await jiti.import(join(root, file))) as T;
-    const [index, manager, auth, cache] = await Promise.all([
-      load<{ createMcpAdapter: McpEngine["createMcpAdapter"]; MCP_STATUS_EVENT: string }>("index.ts"),
-      load<{ McpServerManager: McpEngine["Manager"] }>("server-manager.ts"),
-      load<McpAuthFlow>("mcp-auth-flow.ts"),
-      import("pi-mcp-adapter/metadata-cache"),
-    ]);
+    // One at a time, deliberately: jiti records a module in its cache when the
+    // import resolves, so two concurrent imports of graphs that share a module
+    // each build their own copy of it. The adapter's connection manager and
+    // its OAuth flow share the credential store, its cache and its refresh
+    // lock — two copies of that module is two of each, and a credential one
+    // half stores is invisible to the other.
+    const index = await load<{ createMcpAdapter: McpEngine["createMcpAdapter"]; MCP_STATUS_EVENT: string }>("index.ts");
+    const manager = await load<{ McpServerManager: McpEngine["Manager"] }>("server-manager.ts");
+    const auth = await load<McpAuthFlow>("mcp-auth-flow.ts");
+    const cache = await import("pi-mcp-adapter/metadata-cache");
     return {
       createMcpAdapter: index.createMcpAdapter,
       Manager: manager.McpServerManager,

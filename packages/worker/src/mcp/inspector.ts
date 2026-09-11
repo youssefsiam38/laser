@@ -24,6 +24,9 @@ import { prefixedToolName, toServerEntry, type ResolvedSecrets } from "./adapter
 import type { McpConfiguredServer } from "./store.js";
 import { loadMcpEngine, type McpConnection, type McpEngine, type McpEngineResource, type McpManager, type ServerEntry } from "./engine.js";
 
+/** One sentence for every refusal to touch a server that is switched off. */
+const OFF_DETAIL = "This server is turned off. Turn it on to connect and list its tools.";
+
 /** Inline text a person is shown, matching the engine's own 50 KiB guard. */
 const MAX_TEXT_BYTES = 51_200;
 const CONNECT_TIMEOUT_MS = 30_000;
@@ -47,7 +50,14 @@ export class McpInspector {
   private engine: McpEngine | undefined;
   private manager: McpManager | undefined;
   private oauthRuntime: unknown;
-  /** Definitions of the connections currently held, by key. */
+  /**
+   * The connections held, by the inspector's own scoped key. `name` is the key
+   * the engine manager (and, with it, the OS credential store) uses: upstream
+   * accounts OAuth credentials by the name it is handed, so a connection keyed
+   * by anything else can never find the credential sign-in stored. One project
+   * has one definition per name (`store.effective()` shadows the other), so
+   * the plain name is unambiguous here.
+   */
   private readonly held = new Map<string, { name: string; entry: ServerEntry; latencyMs?: number; counts?: LiveCounts }>();
   private ephemeralCounter = 0;
 
@@ -105,12 +115,11 @@ export class McpInspector {
     const key = target.ephemeral ? `draft:${(this.ephemeralCounter += 1)}` : McpInspector.key(scope, config.name);
     const started = Date.now();
     const base: McpInspection = { name: config.name, scope, status: "unknown", tools: [], resources: [], prompts: [] };
-    if (config.disabled) {
-      return { ...base, status: "off", detail: "This server is turned off. Turn it on to connect and list its tools." };
-    }
+    if (config.disabled) return { ...base, status: "off", detail: OFF_DETAIL };
     try {
       const connection = await this.connect(key, config, target.secrets, signal);
       if (connection.status === "needs-auth") {
+        if (target.ephemeral) await this.close(key);
         return { ...base, status: "needs-auth", detail: signInDetail(config.name) };
       }
       const latencyMs = Date.now() - started;
@@ -158,6 +167,7 @@ export class McpInspector {
   /** One `ping` round trip; connects first when nothing is held. */
   async ping(scope: McpScope, config: McpConfiguredServer, secrets: ResolvedSecrets, signal?: AbortSignal): Promise<{ status: McpInspection["status"]; latencyMs?: number; detail?: string }> {
     const key = McpInspector.key(scope, config.name);
+    if (config.disabled) return { status: "off", detail: OFF_DETAIL };
     try {
       const connection = await this.connect(key, config, secrets, signal);
       if (connection.status === "needs-auth") return { status: "needs-auth", detail: signInDetail(config.name) };
@@ -184,6 +194,7 @@ export class McpInspector {
   ): Promise<McpCallResult> {
     const key = McpInspector.key(scope, config.name);
     const started = Date.now();
+    if (config.disabled) return { ok: false, durationMs: 0, content: [], error: OFF_DETAIL };
     try {
       const connection = await this.connect(key, config, secrets, signal);
       if (connection.status === "needs-auth") {
@@ -211,7 +222,9 @@ export class McpInspector {
       throw new Error(`"${config.name}" does not sign in with OAuth. It is reached over ${config.transport.kind === "http" ? "HTTP without sign-in" : "a command"}.`);
     }
     await this.managerOrCreate();
-    const options = { runtime: this.oauthRuntime, authStorageOptions: {}, openAuthorizationUrl: () => {} };
+    // Both callbacks are ours and both do nothing: the app opens the URL, and
+    // upstream's own logger prints it when no `onAuthorizationUrl` is supplied.
+    const options = { runtime: this.oauthRuntime, authStorageOptions: {}, openAuthorizationUrl: () => {}, onAuthorizationUrl: () => {} };
     const { authorizationUrl } = await engine.auth.startAuth(config.name, url, entry, options);
     if (!authorizationUrl) return { authorizationUrl: "", callbackListening: false, alreadyAuthorized: true };
     const callbackListening = isLoopbackRedirect(authorizationUrl);
@@ -261,7 +274,7 @@ export class McpInspector {
     const held = this.held.get(key);
     this.held.delete(key);
     if (!held || !this.manager) return;
-    await this.manager.close(key).catch(() => {});
+    await this.manager.close(held.name).catch(() => {});
   }
 
   async closeServer(scope: McpScope, name: string): Promise<void> {
@@ -282,16 +295,16 @@ export class McpInspector {
   private async connect(key: string, config: McpConfiguredServer, secrets: ResolvedSecrets, signal?: AbortSignal): Promise<McpConnection> {
     const manager = await this.managerOrCreate();
     const entry = toServerEntry(config, secrets);
-    const existing = manager.getConnection(key);
+    const existing = manager.getConnection(config.name);
     const held = this.held.get(key);
     if (existing && existing.status === "connected" && held && sameDefinition(held.entry, entry)) return existing;
     if (held && !sameDefinition(held.entry, entry)) await this.close(key);
+    // A draft of a server that is already held replaces it: the person is
+    // testing a changed definition, and the engine has one connection per name.
+    for (const [other, entryHeld] of [...this.held]) if (other !== key && entryHeld.name === config.name) await this.close(other);
     const timeout = AbortSignal.timeout(CONNECT_TIMEOUT_MS);
     const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
-    // The manager keys connections by name; the inspector's key carries the
-    // scope, so a project server and a global one of the same name are two
-    // connections and never the same child process.
-    const connection = await manager.connect(key, entry, combined);
+    const connection = await manager.connect(config.name, entry, combined);
     this.held.set(key, { name: config.name, entry });
     return connection;
   }
@@ -409,16 +422,17 @@ export function toCallResult(raw: unknown, durationMs: number): McpCallResult {
     if (part.type === "text" && typeof part.text === "string") {
       const { text, truncated } = boundText(part.text);
       firstText ??= part.text;
-      content.push({ type: "text", text: truncated ? `${text}\n\n[Output truncated: the server returned more than 50 KB.]` : text });
+      content.push({ type: "text", text: truncated ? `${text}\n\n${TRUNCATED}` : text });
     } else if ((part.type === "image" || part.type === "audio") && typeof part.data === "string") {
       content.push({ type: part.type, data: part.data, mimeType: part.mimeType ?? "application/octet-stream" });
     } else if (part.type === "resource") {
       const resource = part.resource ?? {};
+      const bounded = typeof resource.text === "string" ? boundText(resource.text) : undefined;
       content.push({
         type: "resource",
         uri: resource.uri ?? part.uri ?? "",
         ...(resource.mimeType ? { mimeType: resource.mimeType } : {}),
-        ...(typeof resource.text === "string" ? { text: boundText(resource.text).text } : {}),
+        ...(bounded ? { text: bounded.truncated ? `${bounded.text}\n\n${TRUNCATED}` : bounded.text } : {}),
       });
     } else if (part.type === "resource_link" && typeof part.uri === "string") {
       content.push({ type: "resource", uri: part.uri, ...(part.mimeType ? { mimeType: part.mimeType } : {}) });
@@ -434,10 +448,16 @@ export function toCallResult(raw: unknown, durationMs: number): McpCallResult {
   };
 }
 
+const TRUNCATED = "[Output truncated: the server returned more than 50 KB.]";
+
+/** Cut on a character boundary, never mid-sequence: the tail is shown to a person. */
 function boundText(text: string): { text: string; truncated: boolean } {
   const buffer = Buffer.from(text, "utf8");
   if (buffer.byteLength <= MAX_TEXT_BYTES) return { text, truncated: false };
-  return { text: buffer.subarray(0, MAX_TEXT_BYTES).toString("utf8"), truncated: true };
+  let end = MAX_TEXT_BYTES;
+  // Back up over UTF-8 continuation bytes so no replacement character appears.
+  while (end > 0 && (buffer[end]! & 0b1100_0000) === 0b1000_0000) end -= 1;
+  return { text: buffer.subarray(0, end).toString("utf8"), truncated: true };
 }
 
 function signInDetail(name: string): string {
@@ -451,7 +471,7 @@ export function describeFailure(error: unknown, name: string): { status: McpInsp
   }
   const message = messageOf(error);
   const stderr = stderrOf(error);
-  if (/unauthor|401|needs? auth|authentication required/i.test(message)) {
+  if (isUnauthorized(error) || /\b(401|HTTP 401)\b/.test(message)) {
     return { status: "needs-auth", detail: signInDetail(name), ...(stderr ? { stderr } : {}) };
   }
   return {
@@ -459,6 +479,22 @@ export function describeFailure(error: unknown, name: string): { status: McpInsp
     detail: `"${name}" could not be reached: ${message}`,
     ...(stderr ? { stderr } : {}),
   };
+}
+
+/**
+ * The engine's own answer where it has one: its MCP client raises
+ * `UnauthorizedError`, and its HTTP errors carry a `status`. Only when neither
+ * is present does the message's status code decide, so a server whose own
+ * error text merely mentions "unauthorized" is not mislabelled.
+ */
+function isUnauthorized(error: unknown): boolean {
+  for (let current: unknown = error, depth = 0; current && depth < 8; depth += 1) {
+    const candidate = current as { name?: unknown; status?: unknown; code?: unknown; errors?: unknown[]; cause?: unknown };
+    if (candidate.name === "UnauthorizedError" || candidate.status === 401 || candidate.code === 401) return true;
+    if (Array.isArray(candidate.errors) && candidate.errors.some((inner) => isUnauthorized(inner))) return true;
+    current = candidate.cause;
+  }
+  return false;
 }
 
 function isAbort(error: unknown): boolean {

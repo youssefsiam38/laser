@@ -152,6 +152,9 @@ export function toAdapterConfig(
       sampling: true,
       elicitation: true,
       scriptMode: true,
+      // The engine's default tells the model and the person to run its own
+      // terminal commands, which Laser does not offer (AGENTS.md §6b).
+      authRequiredMessage: 'Sign in to "${server}" in Settings → MCP servers, then try again.',
     },
   };
 }

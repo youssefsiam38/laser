@@ -7,13 +7,16 @@
  * in memory, with secrets resolved for this process only — never a file the
  * engine discovers for itself.
  *
- * The engine also talks to the person directly: a status line and toasts about
- * servers connecting and tools refreshing, written in its own vocabulary. MCP
- * status belongs on the Settings page, so those two calls are dropped here, at
- * the engine's own boundary, and every dialog it raises (sampling, elicitation,
- * approvals) still reaches the person untouched.
+ * The engine also talks to the person directly: a status line and routine
+ * toasts about servers connecting and tools refreshing, written in its own
+ * vocabulary. MCP status belongs on the Settings page, so the status line and
+ * the *informational* toasts are dropped here, at the engine's own boundary.
+ * A warning or an error — a sign-in that failed, an elicitation that could not
+ * be shown, a prompt that failed — is not status: it is something a person has
+ * to know now, and it passes through, as does every dialog the engine raises.
  */
 import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
+import { getServerPrefix } from "pi-mcp-adapter/types";
 import { toAdapterConfig } from "./adapter-config.js";
 import { loadMcpEngine, type McpConfig } from "./engine.js";
 import { McpStore } from "./store.js";
@@ -29,8 +32,8 @@ export interface McpSessionSetup {
   extension: InlineExtension;
   /** The channel the companion's `mcp` module listens on. */
   statusEvent: string;
-  /** How many servers this session started with. */
-  serverCount: number;
+  /** The servers this session started with, for attributing their commands. */
+  servers: Array<{ name: string; label?: string }>;
 }
 
 /** The engine configuration for a project, or undefined when it has no server. */
@@ -46,6 +49,9 @@ export async function mcpSessionConfig(options: McpSessionOptions): Promise<McpC
 
 /** Build the session's MCP extension, or nothing when no server is enabled. */
 export async function mcpSessionSetup(options: McpSessionOptions): Promise<McpSessionSetup | undefined> {
+  const store = new McpStore(options.agentDir);
+  const servers = await store.enabled(options.cwd, options.projectTrusted);
+  if (servers.length === 0) return undefined;
   const config = await mcpSessionConfig(options);
   if (!config) return undefined;
   const engine = await loadMcpEngine();
@@ -53,12 +59,33 @@ export async function mcpSessionSetup(options: McpSessionOptions): Promise<McpSe
   return {
     extension: { name: "mcp", factory: (pi: ExtensionAPI) => factory(quietEngineUi(pi)) },
     statusEvent: engine.statusEvent,
-    serverCount: Object.keys(config.mcpServers).length,
+    servers: servers.map(({ config: server }) => ({ name: server.name, ...(server.label ? { label: server.label } : {}) })),
   };
 }
 
 /** Commands the engine registers for its own terminal UI; Settings is ours. */
 export const MCP_ENGINE_COMMANDS: readonly string[] = ["mcp", "pi-mcp", "mcp-auth"];
+
+/**
+ * A command the engine registered for one server's MCP prompt, and which
+ * server it belongs to. The engine names them `mcp__<server>__<prompt>`
+ * (`formatPromptCommandName`), so a command that names no configured server is
+ * not one of these and is left alone.
+ */
+export function mcpPromptServer(
+  commandName: string,
+  servers: ReadonlyArray<{ name: string; label?: string }>,
+): string | undefined {
+  for (const server of servers) {
+    if (commandName.startsWith(`${promptCommandPrefix(server.name)}__`)) return server.label ?? server.name;
+  }
+  return undefined;
+}
+
+/** `mcp__<server>`, the engine's own prefix for this server's prompt commands. */
+function promptCommandPrefix(serverName: string): string {
+  return `mcp__${getServerPrefix(serverName, "server")}`;
+}
 
 /**
  * The same extension API, with the session context's status line and toasts
@@ -110,10 +137,23 @@ function quietContext(value: unknown): unknown {
       if (property !== "ui" || !inner || typeof inner !== "object") return inner;
       return new Proxy(inner as object, {
         get(uiTarget, uiProperty, uiReceiver) {
-          // A person sees MCP state in Settings, not as a toast or a status
-          // line in a chat (docs/mcp.md). Dialogs are not touched.
-          if (uiProperty === "setStatus" || uiProperty === "notify") return () => {};
           const uiValue = Reflect.get(uiTarget, uiProperty, uiReceiver);
+          // A person sees MCP state in Settings, not as a status line in a
+          // chat (docs/mcp.md); the engine sets only `mcp` and `mcp-auth`.
+          if (uiProperty === "setStatus") {
+            return (key: string, text: string | undefined) => {
+              if (key === "mcp" || key === "mcp-auth") return;
+              (uiValue as (key: string, text: string | undefined) => void).call(uiTarget, key, text);
+            };
+          }
+          // Routine progress is `info`; a failure the person must act on is
+          // `warning` or `error`, and that still reaches them.
+          if (uiProperty === "notify") {
+            return (message: string, level: "info" | "warning" | "error" = "info") => {
+              if (level === "info") return;
+              (uiValue as (message: string, level?: string) => void).call(uiTarget, message, level);
+            };
+          }
           return typeof uiValue === "function" ? uiValue.bind(uiTarget) : uiValue;
         },
       });

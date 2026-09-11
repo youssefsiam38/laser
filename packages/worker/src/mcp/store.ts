@@ -18,7 +18,7 @@
 import { DATA_DIR_NAME, MCP_SERVER_NAME_PATTERN, PROJECT_DIR_NAME, mcpServerConfigInputSchema, type McpScope, type McpSecretInput, type McpServerConfig, type McpServerConfigInput, type McpValue, type McpValueInput } from "@lasercode/protocol";
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import lockfile from "proper-lockfile";
 import { secretFieldPaths } from "./adapter-config.js";
 
@@ -43,13 +43,23 @@ interface SecretsFile {
 /** An entry Laser could not read. It is never started; the person is told. */
 export interface MalformedEntry {
   scope: McpScope;
+  /** The name it carried, when it carried a usable one. */
   name?: string;
+  /** What to call it in a list when it has no usable name. */
+  label: string;
   detail: string;
 }
 
 export interface ScopeContents {
   servers: McpServerConfig[];
   malformed: MalformedEntry[];
+  /**
+   * The entries exactly as the file holds them. A write starts from these, so
+   * an entry Laser could not read survives a save of a different server.
+   */
+  raw: unknown[];
+  /** The file itself could not be parsed; nothing may be written over it. */
+  unreadable?: string;
 }
 
 export interface EffectiveServer {
@@ -83,9 +93,8 @@ export class McpStore {
 
   /** One scope as written, with unreadable entries separated out. */
   async read(scope: McpScope, cwd: string, projectTrusted?: boolean): Promise<ScopeContents> {
-    if (scope === "project" && projectTrusted === false) return { servers: [], malformed: [] };
-    const raw = await readJson(this.pathFor(scope, cwd));
-    return parseScope(raw, scope);
+    if (scope === "project" && projectTrusted === false) return { servers: [], malformed: [], raw: [] };
+    return parseScope(await readJson(this.pathFor(scope, cwd)), scope, this.pathFor(scope, cwd));
   }
 
   /**
@@ -111,6 +120,7 @@ export class McpStore {
           malformed.push({
             scope: "project",
             name: config.name,
+            label: config.name,
             detail: `"${config.name}" switches off a server this project does not have. Remove the entry, or add the server.`,
           });
           continue;
@@ -257,11 +267,20 @@ export class McpStore {
     return stored;
   }
 
-  private async readSecrets(): Promise<SecretsFile> {
-    const raw = await readJson(this.secretsPath());
+  /**
+   * The secrets file. A read degrades to "no secrets stored" when the file
+   * cannot be parsed — a list must still answer — but a write refuses (see
+   * `writeScope`), so a corrupt file is never replaced with an empty one.
+   */
+  private async readSecrets(): Promise<SecretsFile & { unreadable?: string }> {
+    const file = await readJson(this.secretsPath());
+    const raw = file.kind === "value" ? file.value : undefined;
     const secrets = Array.isArray((raw as SecretsFile | undefined)?.secrets) ? (raw as SecretsFile).secrets : [];
     return {
       version: 1,
+      ...(file.kind === "unreadable"
+        ? { unreadable: `The stored MCP secrets in ${this.secretsPath()} could not be read: ${file.detail}. Fix that file (or move it aside) and try again; nothing was changed.` }
+        : {}),
       secrets: secrets.filter((entry): entry is SecretEntry =>
         !!entry && typeof entry.name === "string" && typeof entry.field === "string" && typeof entry.value === "string"
         && (entry.scope === "global" || entry.scope === "project")),
@@ -283,12 +302,18 @@ export class McpStore {
     let releaseSecrets: (() => Promise<void>) | undefined;
     try {
       releaseSecrets = await lock(this.secretsPath(), "Another MCP server is being saved. Wait for it to finish and retry.");
-      const contents = parseScope(await readJson(file), scope);
+      const contents = parseScope(await readJson(file), scope, file);
       const secretsFile = await this.readSecrets();
+      // A file Laser cannot parse is a file a person is editing, or one a tool
+      // wrote badly. Either way it is theirs: say what is wrong with it and
+      // change nothing, rather than replace their work with our view of it.
+      if (contents.unreadable) throw new Error(contents.unreadable);
+      if (secretsFile.unreadable) throw new Error(secretsFile.unreadable);
+      const known = new Set(contents.servers.map((server) => server.name));
       const servers = contents.servers;
       const secrets = secretsFile.secrets;
       await update(servers, secrets);
-      await writeAtomic(file, { version: 1, servers } satisfies StoreFile, scope === "global" ? 0o600 : 0o644);
+      await writeAtomic(file, { version: 1, servers: mergeIntoRaw(contents.raw, servers, known) }, scope === "global" ? 0o600 : 0o644);
       await writeAtomic(this.secretsPath(), { version: 1, secrets } satisfies SecretsFile, 0o600);
     } finally {
       await releaseSecrets?.();
@@ -309,20 +334,34 @@ export function isConfigured(config: McpServerConfig): config is McpConfiguredSe
   return config.transport !== undefined;
 }
 
-function parseScope(raw: unknown, scope: McpScope): ScopeContents {
+function parseScope(file: ReadResult, scope: McpScope, path: string): ScopeContents {
   const servers: McpServerConfig[] = [];
   const malformed: MalformedEntry[] = [];
-  const list = Array.isArray((raw as StoreFile | undefined)?.servers) ? (raw as StoreFile).servers : [];
+  if (file.kind === "unreadable") {
+    const detail = `The MCP server settings in ${path} could not be read: ${file.detail}. Fix that file (or move it aside) and try again; nothing was changed.`;
+    return { servers, malformed: [{ scope, label: "Unreadable settings", detail }], raw: [], unreadable: detail };
+  }
+  const raw = file.kind === "value" && Array.isArray((file.value as StoreFile | undefined)?.servers)
+    ? ((file.value as StoreFile).servers as unknown[])
+    : [];
   const seen = new Set<string>();
-  for (const entry of list as unknown[]) {
+  let index = 0;
+  for (const entry of raw) {
+    index += 1;
     const record = entry as { name?: unknown; disabled?: unknown; transport?: unknown } | null;
     const name = typeof record?.name === "string" ? record.name : undefined;
     if (!name || !MCP_SERVER_NAME_PATTERN.test(name) || name.length > NAME_LIMIT) {
-      malformed.push({ scope, detail: "One saved MCP server has no usable name and was skipped." });
+      malformed.push({
+        scope,
+        label: name && name.trim() ? name.slice(0, 64) : `Entry ${index}`,
+        detail: name
+          ? `"${name}" is not a usable name: use letters, digits, hyphens and underscores, up to 64 characters. It was skipped.`
+          : `The ${ordinal(index)} entry in ${path} has no name, so it was skipped.`,
+      });
       continue;
     }
     if (seen.has(name)) {
-      malformed.push({ scope, name, detail: `Two saved servers are named "${name}". Only the first is used; remove the duplicate.` });
+      malformed.push({ scope, name, label: name, detail: `Two saved servers are named "${name}". Only the first is used; remove the duplicate.` });
       continue;
     }
     const parsed = mcpServerConfigInputSchema.safeParse(entry);
@@ -331,6 +370,7 @@ function parseScope(raw: unknown, scope: McpScope): ScopeContents {
       malformed.push({
         scope,
         name,
+        label: name,
         detail: `"${name}" could not be read: ${firstIssue(parsed.error.issues) ?? "its saved settings are not valid."} Edit it, or remove and add it again.`,
       });
       continue;
@@ -338,7 +378,37 @@ function parseScope(raw: unknown, scope: McpScope): ScopeContents {
     seen.add(name);
     servers.push(parsed.data as unknown as McpServerConfig);
   }
-  return { servers, malformed };
+  return { servers, malformed, raw };
+}
+
+function ordinal(index: number): string {
+  const names = ["first", "second", "third", "fourth", "fifth"];
+  return names[index - 1] ?? `${index}th`;
+}
+
+/**
+ * The list to write: every entry the file already held, in its own order, with
+ * the ones Laser understands replaced by their updated form and the ones it
+ * could not read left exactly as they are. A removal drops only an entry that
+ * parsed; nothing else in the person's file is touched.
+ */
+function mergeIntoRaw(raw: unknown[], servers: McpServerConfig[], known: Set<string>): unknown[] {
+  const byName = new Map(servers.map((server) => [server.name, server]));
+  const written = new Set<string>();
+  const out: unknown[] = [];
+  for (const entry of raw) {
+    const name = typeof (entry as { name?: unknown } | null)?.name === "string" ? (entry as { name: string }).name : undefined;
+    if (name && byName.has(name) && !written.has(name)) {
+      out.push(byName.get(name));
+      written.add(name);
+      continue;
+    }
+    // A name that parsed on the way in and is gone now was removed on purpose.
+    if (name && known.has(name) && !byName.has(name)) continue;
+    out.push(entry);
+  }
+  for (const server of servers) if (!written.has(server.name)) out.push(server);
+  return out;
 }
 
 function firstIssue(issues: Array<{ path: PropertyKey[]; message: string }>): string | undefined {
@@ -377,19 +447,33 @@ function renameSecrets(secrets: SecretEntry[], scope: McpScope, cwd: string, fro
   for (const entry of secrets) if (matches(entry, scope, cwd, from)) entry.name = to;
 }
 
-async function readJson(path: string): Promise<unknown> {
+/** Absent, read, or there and unreadable — three different answers. */
+type ReadResult =
+  | { kind: "absent" }
+  | { kind: "value"; value: unknown }
+  | { kind: "unreadable"; detail: string };
+
+async function readJson(path: string): Promise<ReadResult> {
+  let text: string;
   try {
-    return JSON.parse((await readFile(path, "utf8")).replace(/^\uFEFF/, "")) as unknown;
+    text = await readFile(path, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as NodeJS.ErrnoException).code === "ENOTDIR") return undefined;
-    if (error instanceof SyntaxError) return undefined;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return { kind: "absent" };
     throw new Error("Could not read the MCP server settings. Check access to app data and retry.");
+  }
+  try {
+    return { kind: "value", value: JSON.parse(text.replace(/^\uFEFF/, "")) as unknown };
+  } catch (error) {
+    return { kind: "unreadable", detail: (error as Error).message.replace(/\s+/g, " ").trim() };
   }
 }
 
 async function lock(path: string, busy: string): Promise<() => Promise<void>> {
-  const directory = path.slice(0, path.lastIndexOf("/"));
-  await mkdir(directory, { recursive: true, mode: 0o700 });
+  // `<project>/.laser` is committed and shared; only the agent directory is
+  // the person's alone, so the restrictive mode applies there only.
+  const directory = dirname(path);
+  await mkdir(directory, { recursive: true, ...(directory.includes(DATA_DIR_NAME) ? { mode: 0o700 } : {}) });
   // Lock the stable path, never the inode the atomic replace swaps out.
   return lockfile
     .lock(path, { realpath: false, retries: { retries: 10, minTimeout: 20, maxTimeout: 200 } })

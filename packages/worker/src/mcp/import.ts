@@ -192,10 +192,13 @@ export function translate(name: string, entry: unknown, id: McpImportSourceId): 
       config: { name: usable, transport: { kind: "stdio", command: "" } },
       conflicts: [],
       inlineSecrets: [],
-      unsupported: "This entry names neither a command, a URL nor a socket, so there is nothing to connect to.",
+      unsupported: "Cannot be imported: it names neither a command, a URL nor a socket, so there is nothing to connect to.",
     };
   }
 
+  // `unsupported` means refused (the protocol says "Skipped"), so it carries
+  // only what makes an entry unimportable — never a note about a field that
+  // was left out of an otherwise usable server.
   let auth: McpAuth | undefined;
   const bearer = string(record["bearerToken"]) ?? string(record["bearer_token"]);
   const oauth = record["oauth"];
@@ -215,16 +218,14 @@ export function translate(name: string, entry: unknown, id: McpImportSourceId): 
   } else if (record["auth"] === false) {
     auth = { kind: "none" };
   }
-  if (auth && transport.kind !== "http") {
-    auth = undefined;
-    unsupported.push("its sign-in settings apply to HTTP servers only and were left out");
-  }
+  // Sign-in on a command server is meaningless to every MCP client; the server
+  // imports without it rather than being refused over a field it never used.
+  if (auth && transport.kind !== "http") auth = undefined;
   if (string(record["bearerTokenEnv"]) || string(record["bearer_token_env_var"])) {
-    unsupported.push("its bearer token comes from an environment variable, which a desktop app does not have; add the token here instead");
+    unsupported.push("its token comes from an environment variable, which a desktop app does not have — add the server here and paste the token");
   }
-  if (record["requestHeadersCommand"]) unsupported.push(`it signs each request with an external command, which ${PRODUCT_DISPLAY_NAME} does not run`);
-  if (record["enabled"] === false || record["disabled"] === true) {
-    // Kept, but off: a person can turn it on after importing.
+  if (record["requestHeadersCommand"]) {
+    unsupported.push(`it signs every request with an external command, which ${PRODUCT_DISPLAY_NAME} does not run`);
   }
 
   const config: McpServerConfig = {
@@ -240,7 +241,7 @@ export function translate(name: string, entry: unknown, id: McpImportSourceId): 
     config,
     conflicts: [],
     inlineSecrets,
-    ...(unsupported.length > 0 ? { unsupported: `Imported without ${unsupported.join("; ")}.` } : {}),
+    ...(unsupported.length > 0 ? { unsupported: `Cannot be imported: ${unsupported.join("; ")}.` } : {}),
   };
 }
 

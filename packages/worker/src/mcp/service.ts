@@ -61,8 +61,12 @@ export class McpService {
       this.snapshots.delete(sessionPath);
       return;
     }
+    // The engine republishes on every connect, catalogue refresh and tool-list
+    // change; a page that reloads on each of those flickers for no news.
+    const previous = this.snapshots.get(sessionPath);
+    const unchanged = previous !== undefined && JSON.stringify(previous.snapshot) === JSON.stringify(snapshot);
     this.snapshots.set(sessionPath, { snapshot, at: Date.now() });
-    this.options.changed();
+    if (!unchanged) this.options.changed();
   }
 
   sessionClosed(sessionPath: string): void {
@@ -130,7 +134,7 @@ export class McpService {
     const started = await this.inspector.authStart(found.scope, found.config, await this.secretsFor(found.config, found.scope), () => this.options.changed());
     if (started.alreadyAuthorized) {
       this.options.changed();
-      return { authorizationUrl: "", callbackListening: false, manualHint: `"${found.config.name}" is already signed in.` };
+      return { alreadyAuthorized: true, authorizationUrl: "", callbackListening: false };
     }
     return {
       authorizationUrl: started.authorizationUrl,
@@ -171,7 +175,7 @@ export class McpService {
     for (const name of params.names) {
       const server = source.servers.find((candidate) => candidate.name === name);
       if (!server) throw new ProtocolError(ErrorCodes.InvalidParams, `"${name}" is not in ${source.label} any more.`);
-      if (server.unsupported) throw new ProtocolError(ErrorCodes.InvalidParams, `"${name}" cannot be imported: ${server.unsupported}`);
+      if (server.unsupported) throw new ProtocolError(ErrorCodes.InvalidParams, `"${name}" ${server.unsupported[0]!.toLowerCase()}${server.unsupported.slice(1)}`);
       const conflicts = existing.get(params.scope)?.has(name) === true;
       if (conflicts && !params.replace) {
         throw new ProtocolError(ErrorCodes.InvalidParams, `A server named "${name}" already exists here. Choose Replace to overwrite it.`);
@@ -260,12 +264,12 @@ export class McpService {
     const states: McpServerState[] = [];
     for (const server of servers) states.push(await this.stateOf(server));
     for (const entry of malformed) {
-      if (!entry.name) continue;
       states.push({
         scope: entry.scope,
-        // Nothing about it could be trusted but its name; the row exists so a
-        // person is told, rather than finding a server silently missing.
-        config: { name: entry.name },
+        // Nothing about it could be trusted, sometimes not even its name; the
+        // row exists so a person is told, rather than finding a server
+        // silently missing. `label` is what to call it in a list.
+        config: { name: entry.name ?? entry.label, ...(entry.name ? {} : { label: entry.label }) },
         status: "failed",
         detail: entry.detail,
       });
@@ -275,7 +279,11 @@ export class McpService {
 
   private async stateOf(server: EffectiveServer): Promise<McpServerState> {
     const { scope, config } = server;
-    const present = await this.store.secretPresence(scope, this.options.cwd, config.name);
+    // A switch-off row shows the global definition, so its stored secrets are
+    // the global ones; reading them at project scope would show every secret
+    // field as empty.
+    const secretScope: McpScope = server.overridesGlobal ? "global" : scope;
+    const present = await this.store.secretPresence(secretScope, this.options.cwd, config.name);
     const state: McpServerState = {
       scope,
       config: withSecretPresence(config, present),

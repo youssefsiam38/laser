@@ -41,16 +41,24 @@ describe("translate", () => {
     expect(off?.config.disabled).toBe(true);
   });
 
-  it("says what it could not bring across instead of importing something else", () => {
+  it("refuses what it cannot represent, and says so as a refusal", () => {
+    // `unsupported` means refused, and every sentence reads like one.
     const envToken = translate("codex", { url: "https://example.test/mcp", bearer_token_env_var: "MY_TOKEN" }, "codex");
+    expect(envToken?.unsupported).toMatch(/^Cannot be imported:/);
     expect(envToken?.unsupported).toContain("environment variable");
     const signing = translate("signed", { url: "https://example.test/mcp", requestHeadersCommand: { command: "sign" } }, "vscode");
     expect(signing?.unsupported).toContain("external command");
-    const authOnCommand = translate("weird", { command: "node", auth: "oauth" }, "cursor");
-    expect(authOnCommand?.config.auth).toBeUndefined();
-    expect(authOnCommand?.unsupported).toContain("HTTP servers only");
     const empty = translate("nothing", { note: "hi" }, "cursor");
     expect(empty?.unsupported).toContain("nothing to connect to");
+  });
+
+  it("imports a server whose sign-in field means nothing for its transport", () => {
+    // Sign-in on a command server is meaningless to every MCP client; the
+    // server is usable without it, so it is imported rather than refused.
+    const authOnCommand = translate("weird", { command: "node", auth: "oauth" }, "cursor");
+    expect(authOnCommand?.unsupported).toBeUndefined();
+    expect(authOnCommand?.config.auth).toBeUndefined();
+    expect(authOnCommand?.config.transport).toMatchObject({ kind: "stdio", command: "node" });
   });
 
   it("makes a foreign name usable and refuses one that cannot be", () => {

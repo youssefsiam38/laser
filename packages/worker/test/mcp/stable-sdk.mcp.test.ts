@@ -11,7 +11,8 @@
  * The engine holds the first prompt until it has initialised (up to 30 s on a
  * cold cache), so these tests are slow by construction, not flaky.
  */
-import { DATA_DIR_NAME, PRODUCT_NAME, type McpRuntimeSnapshot, type McpServerConfig } from "@lasercode/protocol";
+import type { InlineExtension } from "@earendil-works/pi-coding-agent";
+import { DATA_DIR_NAME, PRODUCT_NAME, type FeatureId, type McpRuntimeSnapshot, type McpServerConfig } from "@lasercode/protocol";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -61,11 +62,11 @@ function agentOptions(): DriverAgentOptions {
   return { definition: { ...fallbackDefaultAgent(), model: { provider: "stub", id: "stub-1" } }, role: rootRole("default"), record: rootRecord("default"), policy: fallbackPolicy() };
 }
 
-async function openSession(answers: StubAnswer[]): Promise<StableSdkDriver> {
+async function openSession(answers: StubAnswer[], options: { features?: FeatureId[]; extra?: InlineExtension[] } = {}): Promise<StableSdkDriver> {
   let index = 0;
   stub = await startStubProvider(() => answers[Math.min(index++, answers.length - 1)] ?? { text: "ok" });
   writeStubModels(join(base, "agent"), stub.url);
-  const driver = new StableSdkDriver();
+  const driver = new StableSdkDriver(options.extra ?? []);
   drivers.push(driver);
   driver.subscribe((event) => events.push(event));
   await driver.open({
@@ -73,7 +74,7 @@ async function openSession(answers: StubAnswer[]): Promise<StableSdkDriver> {
     agentDir: join(base, "agent"),
     sessionDir: join(base, "sessions"),
     projectTrusted: true,
-    features: ["mcp", "subagents", "goals"],
+    features: options.features ?? ["mcp", "subagents", "goals"],
     agent: agentOptions(),
   });
   return driver;
@@ -156,6 +157,39 @@ describe("a session with an MCP server", () => {
     expect(commands).not.toContain("pi-mcp");
     expect(commands).not.toContain("mcp-auth");
     expect(commands).toContain("goal");
+  }, 120_000);
+
+  it("attributes a server's prompt command to that server, not to another feature", async () => {
+    writeServers([fixtureServer({ label: "Fixture server" })]);
+    const driver = await openSession([{ text: "done" }]);
+    await promptAndSettle(driver);
+    const commands = await driver.commands();
+    // The fixture publishes one prompt, `greet`; the engine registers it as a
+    // slash command, and it belongs to the server a person configured.
+    const prompt = commands.find((command) => command.name.includes("greet"));
+    expect(prompt, JSON.stringify(commands.map((command) => command.name))).toBeDefined();
+    expect(prompt?.origin).toBe("MCP · Fixture server");
+    expect(commands.find((command) => command.name === "goal")?.origin).toBe("Goals");
+  }, 120_000);
+
+  it("loads nothing when the feature is off, however many servers are configured", async () => {
+    writeServers([fixtureServer()]);
+    const driver = await openSession([{ text: "done" }], { features: ["subagents", "goals"] });
+    await promptAndSettle(driver);
+    const names = toolNamesOf(stub.requests[0]!);
+    expect(names.some((name) => name.startsWith("fixture_"))).toBe(false);
+    expect(names).not.toContain("mcp");
+    expect(snapshots()).toEqual([]);
+  }, 120_000);
+
+  it("opens the session even when another extension's factory throws", async () => {
+    // The engine isolates one extension's failure; the MCP engine sits beside
+    // that extension in the same list, so its tools must still arrive.
+    writeServers([fixtureServer()]);
+    const exploding: InlineExtension = { name: "exploding", factory: () => { throw new Error("this extension is broken"); } };
+    const driver = await openSession([{ text: "done" }], { extra: [exploding] });
+    await promptAndSettle(driver);
+    expect(toolNamesOf(stub.requests[0]!)).toContain("fixture_echo");
   }, 120_000);
 
   it("loads nothing at all when the project has no server", async () => {
