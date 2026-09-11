@@ -96,7 +96,7 @@ export function ToolCall({
         expandable={expandable}
         trailing={trailing}
         aria-description={accessibleDescription}
-        className="[&_[data-slot=tool-fallback-trigger-label]]:shrink-0"
+        className={trailing ? "[&_[data-slot=tool-fallback-trigger-label]]:shrink-0" : undefined}
       />
       {!open && peek ? <div className="mb-1.5 ms-6">{peek}</div> : null}
       {expandable ? <ToolFallbackContent>{children}</ToolFallbackContent> : null}

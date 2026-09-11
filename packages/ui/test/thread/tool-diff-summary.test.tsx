@@ -120,6 +120,27 @@ describe("collapsed diff summaries", () => {
     expect(container.querySelector("button")?.getAttribute("aria-label")).toBe("Run pnpm test, exited non-zero");
   });
 
+  it("lets a long non-count verb truncate on a narrow row", async () => {
+    await act(async () => root.render(
+      <div style={{ width: 390 }}>
+        <ToolCall
+          verb="extremely_long_extension_tool_name_that_must_yield_to_duration"
+          state="done"
+          elapsedMs={1_250}
+          open={false}
+          onOpenChange={vi.fn()}
+        >
+          <p>output</p>
+        </ToolCall>
+      </div>,
+    ));
+
+    const label = container.querySelector<HTMLElement>('[data-slot="tool-fallback-trigger-label"]')!;
+    expect(label.classList).toContain("truncate");
+    expect(label.classList).not.toContain("shrink-0");
+    expect(container.querySelector('[data-slot="tool-fallback-duration"]')?.textContent).toBe("1.3s");
+  });
+
   it("shows aggregate counts collapsed, then each still-collapsed Edit/Write count inside the expanded group", async () => {
     const patch = ["@@ -1,2 +1,5 @@", "-old one", "-old two", "+new one", "+new two", "+new three", "+new four", "+new five"].join("\n");
     const blocks: Block[] = [

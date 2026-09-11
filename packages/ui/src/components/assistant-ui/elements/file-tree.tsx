@@ -105,7 +105,7 @@ export function fileChangesFromParts(messages: readonly MessageLike[]): FileChan
       if (p.isError === true || p.status.type !== "complete") continue;
       const view = diffViewForTool(kind, p.args, resultDetails(p.result));
       if (!view?.path) continue;
-      const { added, removed } = diffStats(view.hunks);
+      const { added, removed } = view.stats ?? diffStats(view.hunks);
       const prev = byPath.get(view.path);
       byPath.set(view.path, { path: view.path, additions: (prev?.additions ?? 0) + added, deletions: (prev?.deletions ?? 0) + removed });
     }
