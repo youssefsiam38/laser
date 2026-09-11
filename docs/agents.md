@@ -143,7 +143,7 @@ agent rows nest as the tree nests, a session's commands hang off the row for
 the session that ran them (after its child agents), ordering is creation
 order, the title is the instance name or the command's first line, the status
 word is the column's (`FLEET_STATUS_WORD` = `FLEET_STATE_LABEL`: Waiting,
-Working, Asking, Needs you, Done, Failed, Ended), elapsed is formatted the
+Working, Asking, Blocked, Done, Failed, Ended), elapsed is formatted the
 same way, and the line is what the row says — the question a paused child is
 stuck on, the tool it is running, the last line a command printed; else the
 final message, the error, the exit code, or who ended it (the column's "you
@@ -214,14 +214,29 @@ Three of these are live, and the one a parent most needs to tell apart from
 | --- | --- | --- |
 | `running` | yes | the child is working |
 | `needs_input` | yes, **stuck** | something the child did raised a question through the portable UI surface (`select`, `confirm`, `input`, `editor` — including any tool that asks before it acts) and its loop is paused until someone answers. The question is on `AgentRun.question` (`AgentRunQuestion`: `id`, `kind`, `title`, `detail?`, `options?`, `toolCallId?`, `toolName?`, `askedAt`). Nothing has ended |
-| `blocked` | no | the child **ended** by saying it could not finish (`complete_agent_run { status: "blocked" }`); the question it asked its parent, if any, is its final `result.message` |
+| `blocked` | no | the child **ended** by saying it could not finish (`complete_agent_run { status: "blocked" }`); the question it asked its parent, if any, is its final `result.message`. Finished work, not a live question (D-189) |
 
 The parent can tell "working" from "stuck waiting on me" from the status
 alone, in `inspect_fleet` (the row says *Asking*, with the question as its
 line), `inspect_agent` and the `start_agent` guidance; in
-the UI the two live shapes are "Working" (live tone) and "Asking" (attention
-tone, the same warm hue as "Needs you"), and both `needs_input` and `blocked`
-count as needing someone in the sidebar chip, the fleet and the map summary.
+the UI the two live shapes are "Working" (live tone) and "Asking" (the warm
+attention tone), and only `needs_input` counts as needing someone in the
+sidebar chip, the fleet and the map summary.
+
+A terminal `blocked` run is **neutral finished work** (D-189). Its word is
+*Blocked* and its tone is muted, the same ink as Done and Ended
+(`RUN_STATUS_LABEL` / `RUN_STATUS_TONE` in `packages/ui/src/agents/model.ts`,
+`FLEET_STATE_LABEL` / `STATE_ATTENTION` in `packages/ui/src/fleet/model.ts`,
+`FLEET_STATUS_WORD` in `packages/worker/src/agents/fleet.ts`); it sits in the
+finished fold with every other ended run, and it counts as finished, never as
+needing someone, in the fleet header, the sidebar chip, `inspect_fleet`'s
+`needsYou` and the map summary. It also never outranks a newer active run: a
+session stands on its newest run (`latestRunForSession`,
+`compareRunsNewestFirst`), so yesterday's blocked ending cannot hide what the
+same session is doing now. Nothing is lost by the move: the final message
+still says what the child could not do, and a live descendant keeps its whole
+branch out of the fold, because a branch is settled only when its whole
+subtree is.
 
 | State | Set by |
 | --- | --- |
@@ -236,8 +251,8 @@ the reason verbatim to the parent's event.
 
 ### Questions: what a stalled child needs, and who answers (M13-T45)
 
-A child can stall on someone in exactly two ways, and each has its own
-status:
+A child's work can come to rest on its parent in exactly two ways, and each
+has its own status — one live, one ended:
 
 1. **It raised a question and is paused on it** — `needs_input`. The question
    travels as a `ui_request` from the child's driver; the harness records it on
@@ -265,13 +280,14 @@ status:
    re-reading the driver's open dialogs on the next event.
 
 2. **It asked its parent something in its final message and ended** —
-   `blocked`, unchanged. The parent reads the question without opening the
-   session: it is the `result.message` in the `agent.blocked` event, in
-   `inspect_fleet` (*Needs you*, with the message as the row's line) and in
-   `inspect_agent` (whose `what_it_needs` says so and
-   says how to reply: `send_agent_message` starts a new run in the same
-   session with the child's history intact). The child's role block tells it
-   this is the way to ask when it genuinely cannot go on.
+   `blocked`. The run is over, so this is finished work rather than a live
+   question (D-189), and what it asked survives in its final message. The
+   parent reads that without opening the session: it is the `result.message`
+   in the `agent.blocked` event, in `inspect_fleet` (*Blocked*, with the
+   message as the row's line) and in `inspect_agent` (whose `what_it_needs`
+   says so and says how to reply: `send_agent_message` starts a new run in the
+   same session with the child's history intact). The child's role block tells
+   it this is the way to ask when it genuinely cannot go on.
 
 Inspecting is read-only in both cases: nothing is prompted, steered or
 answered by looking.
@@ -646,6 +662,11 @@ The binding list lives in `AGENTS.md` ("Agents harness regression checks"):
   ended asking is `blocked`. Every reader of `AgentRunStatus` — the sidebar
   chip and folds, the fleet, the live map, `agents/model.ts`, the CLI — has a
   test for the live-and-stuck value, in the attention tone, never folded away.
+- Terminal `blocked` is neutral finished work (D-189): the neutral word
+  *Blocked* in the muted tone, inside the finished fold, counted as finished
+  and never as needing someone, and never outranking a newer active run of the
+  same session in the fleet, the sidebar or `inspect_fleet`. A live descendant
+  still keeps its branch out of the fold.
 - `inspect_agent` is read-only and bounded (at most 10 excerpted messages).
 - One `inspect_fleet` and no list of either kind (D-163): the tree it returns
   is the fleet column's, scoped to the caller — a child never sees a sibling
