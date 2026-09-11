@@ -2,7 +2,7 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-11T13:27:15Z · orchestrator · HEAD: 726911e
+**Last updated:** 2026-09-11T13:36:21Z · orchestrator · HEAD: e4dc688
 
 **Current focus:** finish this batch and release 0.3.8 (authorized). T111 review corrections → T110 legacy recovery → T113 final release gates. v0.3.7 and installed processes remain unchanged.
 
@@ -33,7 +33,7 @@ T110 legacy draft recovery waits for reviewed/integrated T111 destination owners
 
 ## Next up
 
-1. Approve T111 controller correction plan, verify fixes and integrate.
+1. Complete approved T111 controller correction, verify fixes and integrate.
 2. Implement T110 against integrated T108/T111.
 3. T113: freeze the batch, run final CI/installer gates, publish verified 0.3.8.
 
