@@ -58,5 +58,7 @@ NODE
 
 node "$REPO_ROOT/scripts/identity/generate.mjs"
 
-printf '\nEverything is at %s. Next:\n\n' "$VERSION"
-printf '  git commit -am "chore: v%s" && git tag v%s && git push origin v%s\n\n' "$VERSION" "$VERSION" "$VERSION"
+printf '\nEverything is at %s. This command only synchronized local metadata.\n\n' "$VERSION"
+printf 'Review and commit the metadata, then use scripts/release/release.mjs with the reviewed full source SHA.\n'
+printf 'That entrypoint requires exact-source CI to pass before it creates an immutable tag.\n'
+printf 'Never combine versioning, tagging and pushing into one shortcut.\n\n'

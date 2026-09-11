@@ -17,8 +17,7 @@ export function verifyAssets(expected, remote) {
   if (remote.length !== expected.length) throw new Error("Release contains unexpected assets; review the draft before publishing.");
 }
 
-export function verifyInventory(assets, version) {
-  const names = new Set(assets.map((asset) => asset.name));
+export function releaseInventory(version) {
   const required = ["install.sh", "SHA256SUMS", "provenance.jsonl"];
   for (const arch of ["x86_64", "arm64"]) {
     required.push(`${identity.displayName}-${version}-${arch}.AppImage`);
@@ -27,6 +26,12 @@ export function verifyInventory(assets, version) {
   for (const arch of ["x86_64", "aarch64"]) {
     required.push(`${identity.binary}-${version}.${arch}.rpm`, `${identity.binary}-${version}-${arch}.tar.gz`);
   }
+  return required;
+}
+
+export function verifyInventory(assets, version) {
+  const names = new Set(assets.map((asset) => asset.name));
+  const required = releaseInventory(version);
   for (const name of required) if (!names.has(name)) throw new Error(`Incomplete release: missing ${name}`);
   if (names.size !== assets.length || assets.some((asset) => asset.size <= 0)) throw new Error("Duplicate or empty release asset.");
 }
