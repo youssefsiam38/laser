@@ -85,17 +85,17 @@ export class AgentRunRegistry {
     return structuredClone([...this.runs.values()].filter((run) => run.sessionPath === sessionPath).sort(newestFirst));
   }
 
-  /** The most recent run of a child session, for sidebar attribution. */
+  /** The run that stands for a child session, for sidebar attribution. */
   latestFor(sessionPath: string): AgentRun | undefined {
-    return this.byChildPath(sessionPath)[0];
+    return this.byChildPath(sessionPath).sort(liveFirst)[0];
   }
 
-  /** The latest run per child session, in one pass, for decorating a whole list. */
+  /** The standing run per child session, in one pass, for decorating a whole list. */
   latestByChildPath(): Map<string, AgentRun> {
     const latest = new Map<string, AgentRun>();
     for (const run of this.runs.values()) {
       const current = latest.get(run.sessionPath);
-      if (!current || newestFirst(run, current) < 0) latest.set(run.sessionPath, run);
+      if (!current || liveFirst(run, current) < 0) latest.set(run.sessionPath, run);
     }
     return new Map([...latest].map(([path, run]) => [path, structuredClone(run)]));
   }
@@ -268,6 +268,21 @@ export class AgentRunRegistry {
 
 function newestFirst(a: AgentRun, b: AgentRun): number {
   return a.startedAt < b.startedAt ? 1 : a.startedAt > b.startedAt ? -1 : a.runId.localeCompare(b.runId);
+}
+
+/** 1 for a run that can still act (`running`, `needs_input`), 0 for one that only waits or has ended. */
+const liveness = (run: AgentRun): number => (run.status === "queued" || isTerminalRunStatus(run.status) ? 0 : 1);
+
+/**
+ * The run that stands for a session: one that can still act before one that
+ * only waits behind it, then newest first. While a declared completion
+ * unwinds, the old invocation can still write and the session's row must say
+ * so (M13-T98); the worker's `sessionInfo`, its fleet and the UI's
+ * `compareRunsNewestFirst` rank the same way, so every reader of a child's
+ * standing run agrees.
+ */
+function liveFirst(a: AgentRun, b: AgentRun): number {
+  return liveness(b) - liveness(a) || newestFirst(a, b);
 }
 
 /** Only what a worker could have written; a stale file is untrusted input. */
