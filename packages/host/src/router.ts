@@ -98,6 +98,21 @@ const CWD_ROUTED = new Set([
   "pi/providers/list",
   "web-search/status",
   "web-search/configure",
+  // MCP servers (docs/mcp.md): the worker owns the files, the engine and the
+  // inspector's connections; the host only picks the project's worker and
+  // forwards its `mcp/changed` notifications as they are.
+  "mcp/list",
+  "mcp/save",
+  "mcp/remove",
+  "mcp/inspect",
+  "mcp/ping",
+  "mcp/call",
+  "mcp/disconnect",
+  "mcp/auth/start",
+  "mcp/auth/complete",
+  "mcp/auth/logout",
+  "mcp/import/detect",
+  "mcp/import/apply",
   "pi/models/catalog",
   // Signing in (M10-T6): every message names the cwd so the worker that holds
   // the flow is the one that hears the answer.

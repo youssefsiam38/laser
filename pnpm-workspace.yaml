@@ -6,10 +6,18 @@ packages:
 # but the package does not declare it. It only resolves under npm's flat hoisting, so a
 # strict installer (pnpm, yarn PnP) fails at import time with ERR_MODULE_NOT_FOUND.
 # Tracked in docs/upstream.md. Remove this block once upstream declares the dependency.
+# Same class of bug in pi-mcp-adapter 2.33.0: `index.ts`, `mcp-output-guard.ts`
+# and others import `@earendil-works/pi-coding-agent` (and, through it,
+# `@earendil-works/pi-ai`) as value imports without declaring either. Under
+# pnpm the adapter only resolves them by accident of directory layout.
 packageExtensions:
   "@earendil-works/pi-coding-agent":
     dependencies:
       "@earendil-works/pi-server": "0.85.0"
+  "pi-mcp-adapter":
+    dependencies:
+      "@earendil-works/pi-coding-agent": "0.85.0"
+      "@earendil-works/pi-ai": "0.85.0"
 patchedDependencies:
   '@assistant-ui/core@0.3.17': patches/@assistant-ui__core@0.3.17.patch
   '@earendil-works/pi-coding-agent@0.85.0': patches/@earendil-works__pi-coding-agent@0.85.0.patch

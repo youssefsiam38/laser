@@ -29,6 +29,7 @@ import { KeybindingsAdapter } from "./keybindings.js";
 import { ModelsAdapter, PackagesAdapter } from "./packages.js";
 import { SettingsAdapter } from "./settings.js";
 import { WebSearchService } from "./web-search.js";
+import { McpService } from "./mcp/service.js";
 import { TranscribeService } from "./transcribe.js";
 import type { HarnessSessionRole } from "./agents/bridge.js";
 import { DefinitionsCache } from "./agents/definitions.js";
@@ -117,6 +118,8 @@ export class WorkerServer {
   private filesService: ProjectFilesService | undefined;
   /** M8-T2 dictation. Built on first use; `register()` publishes drain() in-process. */
   private transcribeService: TranscribeService | undefined;
+  /** M14 MCP servers: configuration, the inspector and per-session status. */
+  private mcpService: McpService | undefined;
   /** The companion extension's last capability report; features gate on it (M8-T1). */
   private activeModules = new Set<PiExtensionModuleName>();
   /** Coalesce simultaneous new-chat command requests into one read-only runtime. */
@@ -211,6 +214,8 @@ export class WorkerServer {
   async dispose(): Promise<void> {
     this.transcribeService?.dispose();
     this.transcribeService = undefined;
+    await this.mcpService?.dispose().catch(() => {});
+    this.mcpService = undefined;
     for (const live of this.sessions.values()) {
       live.unsubscribe();
       await this.firstTurnLock.run(live.path, () => live.driver.dispose()).catch(() => {});
@@ -531,6 +536,44 @@ export class WorkerServer {
       case "web-search/configure":
         this.assertCwd(req.params.cwd);
         return new WebSearchService(this.options.agentDir).configure(req.params.change);
+
+      // ------------------------------------------------- M14 MCP servers ---
+      case "mcp/list":
+        this.assertCwd(req.params.cwd);
+        return (await this.mcp().list()) satisfies Result<"mcp/list">;
+      case "mcp/save":
+        this.assertCwd(req.params.cwd);
+        return (await this.mcp().save(req.params)) satisfies Result<"mcp/save">;
+      case "mcp/remove":
+        this.assertCwd(req.params.cwd);
+        return (await this.mcp().remove(req.params)) satisfies Result<"mcp/remove">;
+      case "mcp/inspect":
+        this.assertCwd(req.params.cwd);
+        return (await this.mcp().inspect(req.params)) satisfies Result<"mcp/inspect">;
+      case "mcp/ping":
+        this.assertCwd(req.params.cwd);
+        return (await this.mcp().ping(req.params)) satisfies Result<"mcp/ping">;
+      case "mcp/call":
+        this.assertCwd(req.params.cwd);
+        return (await this.mcp().call(req.params)) satisfies Result<"mcp/call">;
+      case "mcp/disconnect":
+        this.assertCwd(req.params.cwd);
+        return (await this.mcp().disconnect(req.params)) satisfies Result<"mcp/disconnect">;
+      case "mcp/auth/start":
+        this.assertCwd(req.params.cwd);
+        return (await this.mcp().authStart(req.params)) satisfies Result<"mcp/auth/start">;
+      case "mcp/auth/complete":
+        this.assertCwd(req.params.cwd);
+        return (await this.mcp().authComplete(req.params)) satisfies Result<"mcp/auth/complete">;
+      case "mcp/auth/logout":
+        this.assertCwd(req.params.cwd);
+        return (await this.mcp().authLogout(req.params)) satisfies Result<"mcp/auth/logout">;
+      case "mcp/import/detect":
+        this.assertCwd(req.params.cwd);
+        return (await this.mcp().importDetect()) satisfies Result<"mcp/import/detect">;
+      case "mcp/import/apply":
+        this.assertCwd(req.params.cwd);
+        return (await this.mcp().importApply(req.params)) satisfies Result<"mcp/import/apply">;
       case "pi/providers/login/start": {
         this.assertCwd(req.params.cwd);
         const provider = req.params.provider;
@@ -667,6 +710,20 @@ export class WorkerServer {
       ...(this.options.agentDir ? { agentDir: this.options.agentDir } : {}),
     });
     return this.keybindingsAdapter;
+  }
+
+  /**
+   * MCP servers for this project (docs/mcp.md). Built on first use: a worker
+   * whose project has no MCP server never loads the engine at all.
+   */
+  private mcp(): McpService {
+    this.mcpService ??= new McpService({
+      cwd: this.options.cwd,
+      agentDir: this.settings().agentDir,
+      ...(this.options.projectTrusted !== undefined ? { projectTrusted: this.options.projectTrusted } : {}),
+      changed: () => this.notify("mcp/changed", { cwd: this.options.cwd }),
+    });
+    return this.mcpService;
   }
 
   private files(): ProjectFilesService {
@@ -1321,6 +1378,10 @@ export class WorkerServer {
         // The capability report is what gates the microphone and everything
         // else that is only offered where its package is (M8-T1).
         if (event.message.type === "lasercode/capabilities") this.activeModules = new Set(event.message.active);
+        // The newest MCP status any session of this project reported answers
+        // `mcp/list`. A shutdown snapshot is empty and carries no information,
+        // so a closing session never blanks a live one (docs/mcp.md).
+        if (event.message.type === "lasercode/mcp/status") this.mcp().observeSnapshot(live.path, event.message.snapshot);
         // A background command going past is indexed here, so the harness
         // can show it in an agent's fleet (D-163); the host indexes it too.
         this.tasks.observe(live.path, event.message);
@@ -1329,6 +1390,7 @@ export class WorkerServer {
       case "closed":
         live.unsubscribe();
         this.sessions.delete(live.path);
+        this.mcpService?.sessionClosed(live.path);
         this.tasks.sessionClosed(live.path);
         this.gitService?.forget(live.path);
         this.runningTools.delete(live.path);

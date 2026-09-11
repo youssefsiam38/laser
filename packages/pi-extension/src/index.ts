@@ -29,6 +29,7 @@ import { WIRE_NAMESPACE } from "@lasercode/protocol";
 import {
   modules,
   type CommandBus,
+  type McpModuleOptions,
   type ModuleContext,
   type ModuleName,
   type OutboundMessage,
@@ -79,6 +80,8 @@ export interface LaserExtensionOptions {
   agents?: AgentHarnessBridge;
   /** Shell execution with background promotion; omit to keep the engine's own `bash`. */
   backgroundWork?: BackgroundWorkOptions;
+  /** MCP status for this session; omit when no MCP server runs here (docs/mcp.md). */
+  mcp?: McpModuleOptions;
   /** Delivers messages to the worker (in-process callback). */
   send: (message: OutboundMessage) => void;
   /**
@@ -113,6 +116,7 @@ export function createLaserExtension(options: LaserExtensionOptions): InlineExte
         ...(options.webSearch ? { webSearch: options.webSearch } : {}),
         ...(options.agents ? { agents: options.agents } : {}),
         ...(options.backgroundWork ? { backgroundWork: options.backgroundWork } : {}),
+        ...(options.mcp ? { mcp: options.mcp } : {}),
         ...(options.commands ? { commands: options.commands } : {}),
       };
       const wanted = new Set<ModuleName>(options.only ?? modules.map((m) => m.name));

@@ -72,6 +72,7 @@ import { supportedThinkingLevels } from "../packages.js";
 import { disabledModelRefs, engineSettingsOnly, modelSwitchedOff, readEffectiveProductSettings, readLaserProjectSettings } from "../settings.js";
 import { applyDurableOverrides, type EngineSettingsOverrides } from "../settings-overrides.js";
 import { WebSearchService } from "../web-search.js";
+import { MCP_ENGINE_COMMANDS, mcpPromptServer, mcpSessionSetup, type McpSessionSetup } from "../mcp/session.js";
 import {
   DriverUnavailableError,
   type ClearedQueue,
@@ -143,6 +144,8 @@ export class StableSdkDriver implements SessionDriver {
   private unsubscribe: (() => void) | undefined;
   private cwd = "";
   private projectTrusted: boolean | undefined;
+  /** The MCP servers this runtime started with; absent when the engine is not loaded. */
+  private mcpServers: Array<{ name: string; label?: string }> | undefined;
   /** A settings reload asked for mid-turn, owed once the session is idle (M13-T55). */
   private settingsReloadWanted = false;
   private agentDir = "";
@@ -223,10 +226,12 @@ export class StableSdkDriver implements SessionDriver {
     const createCompanion = (
       requestProvenance: ReturnType<typeof createPromptProvenanceObserver>,
       agent: DriverAgentOptions | undefined,
+      mcp: McpSessionSetup | undefined,
     ) => {
       const companion: LaserExtensionOptions = {
         requestProvenance,
         ...(search ? { webSearch: search.search.bind(search) } : {}),
+        ...(mcp ? { mcp: { statusEvent: mcp.statusEvent } } : {}),
         send: (message) => {
           if (message.type === "lasercode/account-usage/state") this.accountUsage = message.state;
           this.emit({ type: "extension", message });
@@ -240,6 +245,7 @@ export class StableSdkDriver implements SessionDriver {
           "file-freshness",
           "transcribe",
           ...(search ? ["web-access" as const] : []),
+          ...(mcp ? ["mcp" as const] : []),
           ...(enabled.has("subagents") ? ["subagents" as const, "background-work" as const] : []),
           ...(enabled.has("goals") ? ["goal" as const] : []),
         ],
@@ -256,7 +262,21 @@ export class StableSdkDriver implements SessionDriver {
       const normalizeThinking = this.runtimeNormalizeThinking;
       const resetThinking = this.runtimeResetThinking;
       const requestProvenance = createPromptProvenanceObserver();
-      const laser = createCompanion(requestProvenance, agent);
+      // MCP servers (docs/mcp.md): the engine is loaded only for a project
+      // that has at least one enabled server, and a failure to load it must
+      // cost this session nothing but its MCP tools.
+      const mcp = enabled.has("mcp")
+        ? await mcpSessionSetup({ cwd, agentDir, ...(options.projectTrusted !== undefined ? { projectTrusted: options.projectTrusted } : {}) }).catch((error: unknown) => {
+          this.push({
+            kind: "extension_error",
+            extension: "mcp",
+            message: `MCP servers could not be started for this conversation: ${error instanceof Error ? error.message : String(error)}`,
+          });
+          return undefined;
+        })
+        : undefined;
+      this.mcpServers = mcp?.servers;
+      const laser = createCompanion(requestProvenance, agent, mcp);
       let liveSession: AgentSession | undefined;
       const settingsManager = SettingsManager.create(cwd, agentDir, {
         // Laser never asks the engine to discover `<cwd>/.pi`. Project
@@ -300,6 +320,7 @@ export class StableSdkDriver implements SessionDriver {
           }),
         );
       }
+      if (mcp) extensionFactories.push(mcp.extension);
       extensionFactories.push(...this.extraExtensionFactories, laser);
 
       const services = await createAgentSessionServices({
@@ -1099,7 +1120,14 @@ export class StableSdkDriver implements SessionDriver {
       // Only reviewed, bundled features are loaded into this runtime. Expose
       // their complete registered command surface; filtering by two names made
       // valid Subagents commands disappear from autocomplete.
-      const feature = command.invocationName === "goal" ? "Goals" : "Agents";
+      //
+      // The one exception is the MCP engine's own terminal commands: outside a
+      // terminal they can only print a refusal, and Settings → MCP servers is
+      // the surface for all of it (docs/mcp.md).
+      if (this.mcpServers && MCP_ENGINE_COMMANDS.includes(command.invocationName)) continue;
+      // An MCP prompt is the server's, not a product feature's: say whose.
+      const promptServer = this.mcpServers ? mcpPromptServer(command.invocationName, this.mcpServers) : undefined;
+      const feature = promptServer ? `MCP · ${promptServer}` : command.invocationName === "goal" ? "Goals" : "Agents";
       commands.push({
         name: command.invocationName,
         source: "feature",

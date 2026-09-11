@@ -14,6 +14,9 @@ small and self-contained (`AGENTS.md` §6).
 | earendil-works/pi | `dist/main.js` → `dist/experimental/server.js` imports `@earendil-works/pi-server`, undeclared in `package.json`; resolves only under npm's flat hoisting, fails under pnpm/strict installers with ERR_MODULE_NOT_FOUND. Fix: declare the dependency (or lazy-import the experimental server). Local workaround: `packageExtensions` in `pnpm-workspace.yaml`. | M0-T4 | — | not filed |
 | earendil-works/pi | `ExtensionAPI.sendMessage` / `sendUserMessage` return `void`, so neither an extension nor a host embedding the SDK can observe whether a send was accepted or refused; the underlying promise is swallowed and a rejection reaches only `emitError`. Fix: return the operation promise from the loader API and the core binding, and widen `SendMessageHandler` / `SendUserMessageHandler` to `Promise<void>`. Local patch: `patches/@earendil-works__pi-coding-agent@0.85.0.patch`. | M13-T93 | — | not filed |
 | earendil-works/pi | Opt-in durable zero-message sessions and append-scoped admission transactions: explicit `SessionManager.flush()`, deferred append commit/rollback, and saved runtime settings counting as existing session state. Local exact-version patch: `patches/@earendil-works__pi-coding-agent@0.85.0.patch`; generic proposal: `/tmp/laser-m13-t108-upstream-proposal.md`. | M13-T108 | — | pending parent review; not filed |
+| pi-mcp-adapter | `index.ts`, `mcp-output-guard.ts` and others import `@earendil-works/pi-coding-agent` (and, through it, `@earendil-works/pi-ai`) as value imports without declaring either as a dependency or a peer; under pnpm they resolve only by accident of directory layout. Fix: declare them. Local workaround: `packageExtensions` in `pnpm-workspace.yaml`. | M14-T2 | — | not filed |
+| pi-mcp-adapter | The package entry is executable TypeScript (`"types"`/`"import"` → `./index.ts`) and only four small modules are compiled to `dist`. Node refuses type stripping under `node_modules`, so any consumer that is not itself running a TypeScript loader cannot `import("pi-mcp-adapter")`: `createMcpAdapter`, `McpServerManager` and the OAuth flow are unreachable. Fix: compile the public surface into `dist` and point `exports` at it (keeping `pi.extensions` on the source for the engine's own loader), and export `server-manager` and `mcp-auth-flow` as subpaths. Local workaround: `packages/worker/src/mcp/engine.ts` loads them through jiti, the same loader the engine uses for extensions. | M14-T2 | — | not filed |
+| pi-mcp-adapter | The host-config importers (`loadImportedConfig`, `extractServers`) are private, so only `findAvailableImportConfigs` (paths, no contents) is reusable. A host that offers its own import UI has to re-read Claude Code/Cursor/VS Code/Codex/OpenCode files itself. Fix: export a read-only `readImportedServers(kind, cwd)`. Local workaround: `packages/worker/src/mcp/import.ts` reads the files the engine located. | M14-T2 | — | not filed |
 
 ---
 
@@ -548,6 +551,34 @@ for the fleet the same summary text `/subagents status` prints:
 ```
 
 Three guards and one summary formatter. No behaviour changes in a terminal.
+
+## pi-mcp-adapter 2.33.0: the MCP engine, as pinned (M14-T2)
+
+`packages/worker` depends on `pi-mcp-adapter` at exact `2.33.0`, used **only**
+through its programmatic entry (`createMcpAdapter({ config })`), its standalone
+`McpServerManager` for the inspector, and its OAuth flow for sign-in. Nothing
+else in the repository may import it (AGENTS.md invariant 1).
+
+Verified here, on Linux x64 with Node 24.11.1, against the pinned engine 0.85.0:
+
+- installs clean beside the engine; its two `pkg.pr.new` tarball dependencies
+  (`@modelcontextprotocol/client` and `@modelcontextprotocol/core`, an
+  unreleased MCP SDK 2.0.0) receive lockfile integrity hashes, and its native
+  modules (`@napi-rs/keyring` 1.3.0, `fs-native-extensions` 1.5.1) ship
+  prebuilt bindings for every desktop target we ship — no toolchain, no build
+  script. **These two dependencies are continuous-release tarballs, not
+  registry releases**: availability and retention are outside npm's guarantees.
+  A mirror or a vendored copy is the mitigation if that ever bites.
+- the programmatic configuration is an isolated snapshot: no `.mcp.json`, no
+  `.pi/mcp.json`, no host-config discovery, no file written (verified by a
+  session with the engine loaded and by reading `config.ts`).
+- stdio and Streamable HTTP both connect, direct tools register under the
+  server-name prefix, image content blocks pass through verbatim, and
+  `dispose()` takes the child process with it.
+- the status channel (`MCP_STATUS_EVENT`) is versioned and read-only, and is
+  the only thing Laser reads for per-session status.
+- no patch was needed. The three upstream gaps above are worked around in
+  `packages/worker/src/mcp/` without modifying the package.
 
 ## pi-web-access 0.28.0: distinguish empty results and challenges (M12-T68)
 

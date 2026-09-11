@@ -1,0 +1,244 @@
+/**
+ * M14-T2 · where MCP configuration lives: two scopes, the overlay between
+ * them, secrets that never enter a shared file, and tolerance for a file a
+ * person edited by hand.
+ */
+import { DATA_DIR_NAME, PRODUCT_NAME, PROJECT_DIR_NAME, type McpServerConfigInput } from "@lasercode/protocol";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { McpStore } from "../../src/mcp/store.js";
+
+let base: string;
+let agentDir: string;
+let cwd: string;
+let store: McpStore;
+
+beforeEach(() => {
+  base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-mcp-store-`));
+  agentDir = join(base, "agent");
+  cwd = join(base, "project");
+  mkdirSync(join(agentDir, DATA_DIR_NAME), { recursive: true });
+  mkdirSync(join(cwd, PROJECT_DIR_NAME), { recursive: true });
+  store = new McpStore(agentDir);
+});
+
+afterEach(() => rmSync(base, { recursive: true, force: true }));
+
+const stdio = (name: string, command = "npx"): McpServerConfigInput => ({
+  name,
+  transport: { kind: "stdio", command, args: ["-y", `${name}-mcp`] },
+  tools: { exposure: "direct" },
+});
+
+function writeRaw(path: string, value: unknown): void {
+  writeFileSync(path, JSON.stringify(value, null, 2));
+}
+
+describe("McpStore", () => {
+  it("saves to both scopes and lays the project over the global by name", async () => {
+    await store.save("global", cwd, stdio("alpha"));
+    await store.save("global", cwd, stdio("beta"));
+    await store.save("project", cwd, { ...stdio("beta", "bunx"), label: "Project beta" });
+
+    const { servers } = await store.effective(cwd);
+    const project = servers.find((server) => server.scope === "project" && server.config.name === "beta");
+    const globalBeta = servers.find((server) => server.scope === "global" && server.config.name === "beta");
+    const globalAlpha = servers.find((server) => server.scope === "global" && server.config.name === "alpha");
+    expect(project?.effective).toBe(true);
+    expect(globalBeta?.shadowed).toBe(true);
+    expect(globalBeta?.effective).toBe(false);
+    expect(globalAlpha?.effective).toBe(true);
+
+    const enabled = await store.enabled(cwd);
+    expect(enabled.map((entry) => `${entry.scope}:${entry.config.name}`).sort()).toEqual(["global:alpha", "project:beta"]);
+    expect(enabled.find((entry) => entry.config.name === "beta")?.config.transport).toMatchObject({ command: "bunx" });
+  });
+
+  it("lets a project entry with only a name and disabled switch a global server off", async () => {
+    await store.save("global", cwd, stdio("alpha"));
+    await store.save("project", cwd, { name: "alpha", disabled: true });
+    expect(JSON.parse(readFileSync(join(cwd, PROJECT_DIR_NAME, "mcp.json"), "utf8")).servers).toEqual([{ name: "alpha", disabled: true }]);
+
+    const { servers } = await store.effective(cwd);
+    const project = servers.find((server) => server.scope === "project");
+    // The row reads as the server it switches off: the global definition,
+    // turned off, marked as an override.
+    expect(project?.overridesGlobal).toBe(true);
+    expect(project?.config).toMatchObject({ name: "alpha", disabled: true, transport: { kind: "stdio", command: "npx" } });
+    expect(project?.effective).toBe(false);
+    const global = servers.find((server) => server.scope === "global");
+    expect(global?.shadowed).toBe(true);
+    expect(global?.effective).toBe(false);
+    expect(await store.enabled(cwd)).toEqual([]);
+  });
+
+  it("refuses a switch-off with nothing to switch off, and one saved for every project", async () => {
+    await expect(store.save("project", cwd, { name: "ghost", disabled: true })).rejects.toThrow(/no server named "ghost" to switch off/i);
+    await expect(store.save("global", cwd, { name: "ghost", disabled: true })).rejects.toThrow(/Only this project/);
+  });
+
+  it("reports a switch-off left behind by a server that is gone, and keeps it out of the engine", async () => {
+    await store.save("global", cwd, stdio("alpha"));
+    await store.save("project", cwd, { name: "alpha", disabled: true });
+    await store.remove("global", cwd, "alpha");
+
+    const { servers, malformed } = await store.effective(cwd);
+    expect(servers).toEqual([]);
+    expect(malformed[0]?.detail).toContain("switches off a server this project does not have");
+    expect(await store.enabled(cwd)).toEqual([]);
+  });
+
+  it("ignores a project file when the project is not trusted", async () => {
+    await store.save("project", cwd, stdio("alpha"));
+    expect((await store.read("project", cwd, false)).servers).toEqual([]);
+    expect(await store.enabled(cwd, false)).toEqual([]);
+    expect((await store.read("project", cwd, true)).servers).toHaveLength(1);
+  });
+
+  it("keeps a secret out of the configuration file and hands it back only in memory", async () => {
+    await store.save("project", cwd, {
+      name: "remote",
+      transport: { kind: "http", url: "https://example.test/mcp", headers: { "X-Api-Key": { secret: true, value: "shhh" } } },
+      auth: { kind: "bearer", token: { secret: true, value: "token-value" } },
+    });
+    const file = readFileSync(join(cwd, PROJECT_DIR_NAME, "mcp.json"), "utf8");
+    expect(file).not.toContain("shhh");
+    expect(file).not.toContain("token-value");
+    expect(JSON.parse(file).servers[0].auth.token).toEqual({ secret: true });
+
+    const secrets = await store.secretsFor("project", cwd, "remote");
+    expect(secrets.get("auth.token")).toBe("token-value");
+    expect(secrets.get("transport.headers.X-Api-Key")).toBe("shhh");
+    expect(await store.secretPresence("project", cwd, "remote")).toEqual(new Set(["auth.token", "transport.headers.X-Api-Key"]));
+    // The secrets file is the person's alone.
+    expect(statSync(store.secretsPath()).mode & 0o777).toBe(0o600);
+  });
+
+  it("keeps a stored secret when a save sends the reference back unchanged", async () => {
+    await store.save("global", cwd, { name: "remote", transport: { kind: "http", url: "https://example.test/mcp" }, auth: { kind: "bearer", token: { secret: true, value: "first" } } });
+    await store.save("global", cwd, { name: "remote", transport: { kind: "http", url: "https://example.test/mcp" }, auth: { kind: "bearer", token: { secret: true } }, startup: "at-start" });
+    expect((await store.secretsFor("global", cwd, "remote")).get("auth.token")).toBe("first");
+  });
+
+  it("moves secrets when a server is renamed and deletes them when it is removed", async () => {
+    await store.save("global", cwd, { name: "old", transport: { kind: "http", url: "https://example.test/mcp" }, auth: { kind: "bearer", token: { secret: true, value: "keep-me" } } });
+    await store.save("global", cwd, { name: "renamed", transport: { kind: "http", url: "https://example.test/mcp" }, auth: { kind: "bearer", token: { secret: true } } }, "old");
+    expect((await store.secretsFor("global", cwd, "old")).size).toBe(0);
+    expect((await store.secretsFor("global", cwd, "renamed")).get("auth.token")).toBe("keep-me");
+
+    await store.remove("global", cwd, "renamed");
+    expect((await store.secretsFor("global", cwd, "renamed")).size).toBe(0);
+    expect(readFileSync(store.secretsPath(), "utf8")).not.toContain("keep-me");
+  });
+
+  it("drops a secret that stopped being one", async () => {
+    await store.save("global", cwd, { name: "remote", transport: { kind: "http", url: "https://example.test/mcp" }, auth: { kind: "bearer", token: { secret: true, value: "old" } } });
+    await store.save("global", cwd, { name: "remote", transport: { kind: "http", url: "https://example.test/mcp" }, auth: { kind: "bearer", token: "$env:TOKEN" } });
+    expect((await store.secretsFor("global", cwd, "remote")).size).toBe(0);
+    expect(readFileSync(store.secretsPath(), "utf8")).not.toContain("old");
+  });
+
+  it("keeps the servers it can read and reports the entries it cannot", async () => {
+    writeRaw(join(agentDir, DATA_DIR_NAME, "mcp.json"), {
+      version: 1,
+      servers: [
+        { name: "good", transport: { kind: "stdio", command: "node" } },
+        { name: "broken", transport: { kind: "stdio" } },
+        { transport: { kind: "stdio", command: "node" } },
+        { name: "good", transport: { kind: "stdio", command: "other" } },
+      ],
+    });
+    const contents = await store.read("global", cwd);
+    expect(contents.servers.map((server) => server.name)).toEqual(["good"]);
+    expect(contents.malformed).toHaveLength(3);
+    expect(contents.malformed[0]?.name).toBe("broken");
+    expect(contents.malformed[0]?.detail).toContain("could not be read");
+    // An entry with no usable name is still something to show a person.
+    expect(contents.malformed[1]?.name).toBeUndefined();
+    expect(contents.malformed[1]?.label).toBe("Entry 3");
+    expect(contents.malformed.at(-1)?.detail).toContain("Two saved servers are named");
+  });
+
+  it("treats a missing file as no servers and an unreadable one as something to say, never as an error", async () => {
+    const file = join(agentDir, DATA_DIR_NAME, "mcp.json");
+    writeFileSync(file, "{ not json");
+    const broken = await store.read("global", cwd);
+    expect(broken.servers).toEqual([]);
+    expect(broken.malformed[0]?.detail).toContain(file);
+    expect(broken.malformed[0]?.label).toBe("Unreadable settings");
+    rmSync(file);
+    const absent = await store.read("global", cwd);
+    expect(absent.servers).toEqual([]);
+    expect(absent.malformed).toEqual([]);
+  });
+
+  it("never writes over a file it could not read", async () => {
+    const file = join(cwd, PROJECT_DIR_NAME, "mcp.json");
+    // The shape a person leaves behind while editing the file they commit.
+    const text = `{\n  "version": 1,\n  "servers": [\n    { "name": "alpha", "transport": { "kind": "stdio", "command": "npx" } },\n  ]\n}\n`;
+    writeFileSync(file, text);
+    await expect(store.save("project", cwd, stdio("beta"))).rejects.toThrow(/could not be read/);
+    await expect(store.remove("project", cwd, "alpha")).rejects.toThrow(/could not be read/);
+    // Their file is exactly as they left it, and the sentence names it.
+    expect(readFileSync(file, "utf8")).toBe(text);
+    await expect(store.save("project", cwd, stdio("beta"))).rejects.toThrow(file);
+  });
+
+  it("keeps an entry it could not read when another server is saved", async () => {
+    const file = join(agentDir, DATA_DIR_NAME, "mcp.json");
+    writeRaw(file, {
+      version: 1,
+      servers: [
+        { name: "broken", transport: { kind: "stdio" } },
+        { name: "good", transport: { kind: "stdio", command: "node" } },
+      ],
+    });
+    await store.save("global", cwd, stdio("fresh"));
+    const written = JSON.parse(readFileSync(file, "utf8")) as { servers: Array<Record<string, unknown>> };
+    // The entry the person was told to edit is still there to edit, in place,
+    // with everything it carried.
+    expect(written.servers[0]).toEqual({ name: "broken", transport: { kind: "stdio" } });
+    expect(written.servers.map((entry) => entry["name"])).toEqual(["broken", "good", "fresh"]);
+    expect(written.servers[1]).toMatchObject({ name: "good" });
+
+    // And removing a server it did read leaves the unreadable one alone.
+    await store.remove("global", cwd, "good");
+    const after = JSON.parse(readFileSync(file, "utf8")) as { servers: Array<Record<string, unknown>> };
+    expect(after.servers.map((entry) => entry["name"])).toEqual(["broken", "fresh"]);
+  });
+
+  it("refuses to write when the secrets file cannot be read, rather than replacing it", async () => {
+    await store.save("global", cwd, { name: "remote", transport: { kind: "http", url: "https://example.test/mcp" }, auth: { kind: "bearer", token: { secret: true, value: "keep" } } });
+    const secrets = readFileSync(store.secretsPath(), "utf8");
+    writeFileSync(store.secretsPath(), `${secrets.slice(0, 20)}`);
+    await expect(store.save("global", cwd, stdio("another"))).rejects.toThrow(/could not be read/);
+    expect(readFileSync(store.secretsPath(), "utf8")).toBe(secrets.slice(0, 20));
+  });
+
+  it("refuses a duplicate name and a rename onto an existing one", async () => {
+    await store.save("global", cwd, stdio("alpha"));
+    await store.save("global", cwd, stdio("beta"));
+    await expect(store.save("global", cwd, { ...stdio("beta"), name: "alpha" }, "beta")).rejects.toThrow(/already exists/);
+    await expect(store.remove("global", cwd, "gamma")).rejects.toThrow(/No server named/);
+  });
+
+  it("refuses sign-in settings on a server that is not reached over HTTP", async () => {
+    await expect(store.save("global", cwd, {
+      name: "local",
+      transport: { kind: "stdio", command: "node" },
+      auth: { kind: "bearer", token: { secret: true, value: "x" } },
+    })).rejects.toThrow(/HTTP/);
+  });
+
+  it("serialises concurrent writes instead of losing one", async () => {
+    await Promise.all([
+      store.save("global", cwd, stdio("one")),
+      store.save("global", cwd, stdio("two")),
+      store.save("global", cwd, stdio("three")),
+    ]);
+    const names = (await store.read("global", cwd)).servers.map((server) => server.name).sort();
+    expect(names).toEqual(["one", "three", "two"]);
+  });
+});
