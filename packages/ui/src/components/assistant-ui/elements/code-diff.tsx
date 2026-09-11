@@ -16,7 +16,7 @@
  */
 import { lazy, Suspense, type ComponentProps, type CSSProperties } from "react";
 
-import { diffStats, type DiffHunk, type DiffView } from "@/components/thread/diff";
+import { diffStats, type DiffHunk, type DiffStats, type DiffView } from "@/components/thread/diff";
 import { cn } from "@/lib/utils";
 
 import { codeScroll, mono } from "./surfaces.js";
@@ -46,6 +46,14 @@ export function CodeDiff({ view, className, ...props }: CodeDiffProps) {
       </div>
     </div>
   );
+}
+
+export function diffStatDescription({ added, removed }: DiffStats): string | undefined {
+  const parts = [
+    added > 0 ? `${added} ${added === 1 ? "line" : "lines"} added` : "",
+    removed > 0 ? `${removed} ${removed === 1 ? "line" : "lines"} removed` : "",
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(", ") : undefined;
 }
 
 export function DiffStat({ added, removed, className }: { added: number; removed: number; className?: string | undefined }) {

@@ -43,7 +43,8 @@ import {
   type ToolGroupMember,
   type ToolGroupSummary,
 } from "@/components/thread/tool-groups";
-import { isNonZeroExit, resultText } from "@/components/thread/tool-summary";
+import { diffStats, diffViewForTool, type DiffStats } from "@/components/thread/diff";
+import { isNonZeroExit, resultDetails, resultText } from "@/components/thread/tool-summary";
 import { markDone, markRunning, useElapsed } from "@/components/thread/timing";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { duration } from "@/format";
@@ -51,6 +52,7 @@ import { cn } from "@/lib/utils";
 import { activityGroupDefaultOpen, toolDisplayResult, useActivityDetailLevel, useLaserState, type ActivityDetailLevel } from "@/runtime";
 import { useActivityDisclosureOverride } from "@/runtime/sessionPreferences";
 
+import { DiffStat, diffStatDescription } from "./code-diff.js";
 import { ReasoningText } from "./reasoning.js";
 import { activityRow, activityTrigger, collapsePanel, mono } from "./surfaces.js";
 
@@ -157,6 +159,8 @@ export type ToolGroupTriggerProps = Omit<React.ComponentProps<typeof Collapsible
   breakdown?: readonly ToolGroupBreakdownItem[] | undefined;
   /** Exact currently running child action, rendered by the assistant-ui thinking indicator. */
   activeLabel?: string | undefined;
+  /** Full-source changes from successfully completed edit/write children. */
+  diffStats?: DiffStats | undefined;
   open?: boolean | undefined;
 };
 
@@ -171,6 +175,7 @@ function ToolGroupTrigger({
   lines,
   breakdown,
   activeLabel,
+  diffStats: changes,
   open = false,
   className,
   ...props
@@ -182,6 +187,7 @@ function ToolGroupTrigger({
       : breakdown?.length
         ? `${label}: ${breakdown.map((item) => item.label).join(", ")}`
         : `${label}${detail ? ` · ${detail}` : ""}`;
+  const changeDescription = changes ? diffStatDescription(changes) : undefined;
   return (
     <CollapsibleTrigger
       data-slot="tool-group-trigger"
@@ -189,7 +195,7 @@ function ToolGroupTrigger({
       title={lines?.join("\n")}
       // Nothing here goes red for a failure, so the accessible name is where
       // a failure is still said out loud.
-      aria-label={`${accessibleSummary}.${failed ? " Something in it failed." : ""} ${open ? "Collapse" : "Expand"} details.`}
+      aria-label={`${accessibleSummary}${changeDescription ? `, ${changeDescription}` : ""}.${failed ? " Something in it failed." : ""} ${open ? "Collapse" : "Expand"} details.`}
       className={cn(
         activityTrigger,
         className,
@@ -234,6 +240,7 @@ function ToolGroupTrigger({
           <span className={cn(mono, "min-w-0 truncate", active || attention ? "text-ink-2" : "text-ink-3")}>{detail}</span>
         ) : null}
       </span>
+      {changes ? <DiffStat added={changes.added} removed={changes.removed} /> : null}
       {elapsedMs !== undefined ? (
         <span className={cn(mono, "shrink-0 tnum", active ? "text-live" : "text-ink-3")}>{duration(elapsedMs)}</span>
       ) : null}
@@ -314,6 +321,11 @@ function useGroupActivity(part: GroupPart): GroupActivity {
       const running = status.type === "running";
       const awaiting = status.type === "requires-action";
       const isError = p.isError === true || (status.type === "incomplete" && status.reason !== "cancelled");
+      const displayResult = toolDisplayResult(p);
+      const view = status.type === "complete" && !isError && (p.toolName === "edit" || p.toolName === "write")
+        ? diffViewForTool(p.toolName, p.args, resultDetails(displayResult))
+        : undefined;
+      const changes = view ? (view.stats ?? diffStats(view.hunks)) : undefined;
       out.push({
         toolCallId: p.toolCallId,
         toolName: p.toolName,
@@ -321,10 +333,11 @@ function useGroupActivity(part: GroupPart): GroupActivity {
         isError,
         // A command that ran and exited non-zero is a result: the aggregate
         // reads exactly as it would had it exited 0 (tool-summary.ts).
-        nonZeroExit: isError && isNonZeroExit(p.toolName, true, resultText(toolDisplayResult(p))),
+        nonZeroExit: isError && isNonZeroExit(p.toolName, true, resultText(displayResult)),
         running,
         awaiting,
         cancelled: status.type === "incomplete" && status.reason === "cancelled",
+        ...(changes ? { diffStats: changes } : {}),
       });
     }
     return { members: out, reasoning: { count: reasoningCount, running: reasoningRunning } };
@@ -449,6 +462,7 @@ export function ToolGroupSummaryRow({
         lines={summary.lines}
         breakdown={summary.breakdown}
         activeLabel={summary.running && activeLabel ? activeLabel : summary.activeLabel}
+        diffStats={summary.diffStats}
         open={open}
       />
       <ToolGroupContent>{children}</ToolGroupContent>

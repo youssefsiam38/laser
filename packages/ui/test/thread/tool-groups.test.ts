@@ -35,6 +35,27 @@ describe("summarizeToolGroup", () => {
     expect(s.family).toBe("edit");
   });
 
+  it("aggregates full-source diff counts across eligible members in mixed activity", () => {
+    const members = [
+      call("edit", { path: "/a.ts" }, { diffStats: { added: 4, removed: 2 } }),
+      call("bash", { command: "pnpm test" }),
+      call("write", { path: "/b.ts" }, { diffStats: { added: 3, removed: 0 } }),
+      call("edit", { path: "/failed.ts" }, { isError: true, diffStats: { added: 100, removed: 100 } }),
+      call("write", { path: "/cancelled.ts" }, { cancelled: true, diffStats: { added: 100, removed: 0 } }),
+      call("edit", { path: "/running.ts" }, { running: true, diffStats: { added: 100, removed: 100 } }),
+    ];
+
+    expect(summarizeToolGroup(members).diffStats).toEqual({ added: 7, removed: 2 });
+    expect(summarizeActivityGroup(members, { count: 1, running: false }).diffStats).toEqual({ added: 7, removed: 2 });
+  });
+
+  it("omits aggregate diff counts when no successful edit or write supplied them", () => {
+    expect(summarizeToolGroup([
+      call("edit", { path: "/failed.ts" }, { isError: true, diffStats: { added: 1, removed: 1 } }),
+      call("write", { path: "/cancelled.ts" }, { cancelled: true, diffStats: { added: 1, removed: 0 } }),
+    ]).diffStats).toBeUndefined();
+  });
+
   it("summarizes mixed activity with counted families in first-seen order", () => {
     const s = summarizeToolGroup([
       call("read", { path: "/a" }),

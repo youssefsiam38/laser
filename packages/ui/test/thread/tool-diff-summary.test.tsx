@@ -2,12 +2,15 @@
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AssistantRuntimeProvider, useExternalStoreRuntime } from "@assistant-ui/react";
+import { AssistantRuntimeProvider, MessagePrimitive, ThreadPrimitive, useExternalStoreRuntime } from "@assistant-ui/react";
 
 import { CodeDiff, DiffStat } from "../../src/components/assistant-ui/elements/code-diff.js";
 import { ToolCall } from "../../src/components/assistant-ui/elements/tool-call.js";
+import { ToolGroup } from "../../src/components/assistant-ui/elements/tool-group.aui.js";
 import { toolTimelineFromParts } from "../../src/components/assistant-ui/elements/tool-timeline.js";
 import { ToolRow } from "../../src/components/thread/ToolRow.js";
+import { projectMessages } from "../../src/runtime/projection.js";
+import type { Block } from "../../src/store.js";
 import { MAX_DIFF_LINES } from "@lasercode/protocol/tool-diff";
 
 const preferences = vi.hoisted(() => ({ path: "/test/session" }));
@@ -115,6 +118,64 @@ describe("collapsed diff summaries", () => {
 
     await act(async () => root.render(row("nonzero")));
     expect(container.querySelector("button")?.getAttribute("aria-label")).toBe("Run pnpm test, exited non-zero");
+  });
+
+  it("shows aggregate counts collapsed, then each still-collapsed Edit/Write count inside the expanded group", async () => {
+    const patch = ["@@ -1,2 +1,5 @@", "-old one", "-old two", "+new one", "+new two", "+new three", "+new four", "+new five"].join("\n");
+    const blocks: Block[] = [
+      { kind: "assistant", id: "group-answer", text: "", thinking: "", streaming: false },
+      {
+        kind: "tool",
+        id: "group-edit",
+        name: "edit",
+        args: { path: "src/edited.ts", edits: [{ oldText: "fallback old", newText: "fallback new" }] },
+        result: { content: [{ type: "text", text: "Edited" }], details: { patch } },
+        done: true,
+      },
+      { kind: "tool", id: "group-bash", name: "bash", args: { command: "pnpm test" }, result: "ok", done: true },
+      { kind: "tool", id: "group-write", name: "write", args: { path: "src/written.ts", content: "one\ntwo\nthree" }, result: "Wrote", done: true },
+    ];
+
+    function Fixture() {
+      const projected = projectMessages({ blocks, running: false, dialogs: [] });
+      const runtime = useExternalStoreRuntime({ messages: projected.messages, isRunning: false, onNew: async () => {} });
+      return (
+        <AssistantRuntimeProvider runtime={runtime}>
+          <ThreadPrimitive.Root>
+            <ThreadPrimitive.Messages>{() => (
+              <MessagePrimitive.Root>
+                <MessagePrimitive.GroupedParts groupBy={() => ["group-activity"]} indicator="empty">
+                  {({ part, children }) => {
+                    if (part.type === "tool-call") return <ToolRow {...part} />;
+                    if (part.type === "group-activity") return <ToolGroup part={part} timingKey="diff-summary-group">{children}</ToolGroup>;
+                    return null;
+                  }}
+                </MessagePrimitive.GroupedParts>
+              </MessagePrimitive.Root>
+            )}</ThreadPrimitive.Messages>
+          </ThreadPrimitive.Root>
+        </AssistantRuntimeProvider>
+      );
+    }
+
+    await act(async () => root.render(<Fixture />));
+    const groupTrigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-group-trigger"]')!;
+    expect(groupTrigger.getAttribute("aria-expanded")).toBe("false");
+    expect(groupTrigger.textContent).toContain("+8 −2");
+    expect(groupTrigger.getAttribute("aria-label")).toContain("8 lines added, 2 lines removed");
+    expect(container.querySelector('[data-tool="edit"]')).toBeNull();
+
+    await act(async () => groupTrigger.click());
+    const edit = container.querySelector<HTMLElement>('[data-tool="edit"]')!;
+    const write = container.querySelector<HTMLElement>('[data-tool="write"]')!;
+    const editTrigger = edit.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
+    const writeTrigger = write.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
+    expect(editTrigger.textContent).toContain("+5 −2");
+    expect(writeTrigger.textContent).toContain("+3");
+    expect(editTrigger.getAttribute("aria-expanded")).toBe("false");
+    expect(writeTrigger.getAttribute("aria-expanded")).toBe("false");
+    expect(edit.querySelector('[data-slot="tool-fallback-content"]')?.hasAttribute("hidden")).toBe(true);
+    expect(write.querySelector('[data-slot="tool-fallback-content"]')?.hasAttribute("hidden")).toBe(true);
   });
 
   it("shows successful Edit and Write counts without opening their bodies", async () => {

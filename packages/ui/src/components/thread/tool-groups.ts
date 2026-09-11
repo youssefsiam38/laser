@@ -4,6 +4,7 @@
  * "Read 5 files", "Searched 2 patterns" — and whether it should open by
  * default. No React, no DOM. Tested in test/thread/tool-groups.test.ts.
  */
+import type { DiffStats } from "./diff.js";
 import { shortPath, summarizeTool, toolKind, type ToolKind } from "./tool-summary.js";
 
 export type ActivityIconKind = ToolKind | "reasoning";
@@ -25,6 +26,8 @@ export interface ToolGroupMember {
   /** An approval or interrupt is waiting on a person. */
   readonly awaiting: boolean;
   readonly cancelled: boolean;
+  /** Full-source file changes, present only for a successfully completed edit/write. */
+  readonly diffStats?: DiffStats | undefined;
 }
 
 /** The family a group is named after. `mixed` = more than one family. */
@@ -56,6 +59,8 @@ export interface ToolGroupSummary {
   readonly activeLabel: string | undefined;
   /** Mixed activity only: one counted item per family, in first-seen order. */
   readonly breakdown: readonly ToolGroupBreakdownItem[];
+  /** Full-source changes across successfully completed edit/write members. */
+  readonly diffStats?: DiffStats | undefined;
   /** Full list for the accessible name and the tooltip: one line per call. */
   readonly lines: readonly string[];
 }
@@ -181,6 +186,17 @@ export function summarizeToolGroup(members: readonly ToolGroupMember[]): ToolGro
   const hasDecision = members.some((m) => m.awaiting);
   const live = members.find((m) => m.running || m.awaiting);
   const active = members.find((m) => m.running);
+  const fileChanges = members.reduce(
+    (total, member) => {
+      const changes = member.isError || member.cancelled || member.running || member.awaiting ? undefined : member.diffStats;
+      return {
+        added: total.added + (changes?.added ?? 0),
+        removed: total.removed + (changes?.removed ?? 0),
+      };
+    },
+    { added: 0, removed: 0 },
+  );
+  const diffStats = fileChanges.added > 0 || fileChanges.removed > 0 ? fileChanges : undefined;
 
   const byFamily = new Map<Exclude<ToolGroupFamily, "mixed" | "reasoning">, ToolGroupMember[]>();
   for (const member of members) {
@@ -237,6 +253,7 @@ export function summarizeToolGroup(members: readonly ToolGroupMember[]): ToolGro
     running,
     activeLabel: active ? activeToolLabel(active) : undefined,
     breakdown: family === "mixed" ? breakdown : [],
+    ...(diffStats ? { diffStats } : {}),
     lines,
   };
 }
@@ -306,6 +323,7 @@ export function summarizeActivityGroup(
     running,
     activeLabel: toolSummary.activeLabel ?? (reasoning.running ? "Thinking" : undefined),
     breakdown: [reasoningItem, ...toolBreakdown],
+    ...(toolSummary.diffStats ? { diffStats: toolSummary.diffStats } : {}),
     lines: [reasoning.running ? "Reasoning — running" : "Reasoned", ...toolSummary.lines],
   };
 }

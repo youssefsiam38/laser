@@ -5,7 +5,7 @@ import { Bot, FolderOpen, GitBranch, MessageSquare } from "lucide-react";
 import { lazy, memo, Suspense, useCallback, useMemo } from "react";
 
 import { useNamerLabel } from "@/agents/hooks";
-import { CodeDiff, DiffStat } from "@/components/assistant-ui/elements/code-diff";
+import { CodeDiff, DiffStat, diffStatDescription } from "@/components/assistant-ui/elements/code-diff";
 import { TerminalBlock } from "@/components/assistant-ui/elements/terminal-block";
 import { ToolCall } from "@/components/assistant-ui/elements/tool-call";
 import { ToolError } from "@/components/assistant-ui/elements/tool-error";
@@ -98,12 +98,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
   const appliedDiffStats = status?.type === "complete" && state === "done" && diffView
     ? (diffView.stats ?? diffStats(diffView.hunks))
     : undefined;
-  const diffDescription = appliedDiffStats
-    ? [
-        appliedDiffStats.added > 0 ? `${appliedDiffStats.added} ${appliedDiffStats.added === 1 ? "line" : "lines"} added` : "",
-        appliedDiffStats.removed > 0 ? `${appliedDiffStats.removed} ${appliedDiffStats.removed === 1 ? "line" : "lines"} removed` : "",
-      ].filter(Boolean).join(", ")
-    : undefined;
+  const diffDescription = appliedDiffStats ? diffStatDescription(appliedDiffStats) : undefined;
   const footer = (
     <>
       {approval ? <RowApproval {...props} /> : null}
