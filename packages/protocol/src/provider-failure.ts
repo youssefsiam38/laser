@@ -101,7 +101,10 @@ export interface ProviderFailure {
 
 const has = (haystack: string, ...needles: string[]) => needles.some((needle) => haystack.includes(needle));
 
-/** Plan and allowance wording, taken from the engine's own non-retryable list. */
+/**
+ * Plan and allowance wording. The one thing a status genuinely cannot tell
+ * apart: a spent subscription window and an ordinary throttle are both 429.
+ */
 const ALLOWANCE_PATTERNS = [
   "gousagelimiterror",
   "freeusagelimiterror",
@@ -113,30 +116,17 @@ const ALLOWANCE_PATTERNS = [
   "subscription limit",
 ];
 
-const CREDIT_PATTERNS = [
-  "insufficient_quota",
-  "insufficient quota",
-  "credit balance",
-  "out of budget",
-  "quota exceeded",
-  "billing",
-  "payment required",
-];
+/** Quota exhaustion, read only alongside a 429/403 — never from prose alone. */
+const QUOTA_PATTERNS = ["insufficient_quota", "insufficient quota", "credit balance", "out of budget", "quota exceeded"];
 
+/** Credential wording, read only alongside a 403 to split it from a permission refusal. */
 const CREDENTIAL_PATTERNS = [
   "authentication_error",
   "invalid_api_key",
   "invalid api key",
   "api key is invalid",
   "incorrect api key",
-  "unauthorized",
-  "no api key",
-  "credentials may have expired",
 ];
-
-const PERMISSION_PATTERNS = ["permission_error", "permission denied", "not allowed", "forbidden"];
-
-const MODEL_MISSING_PATTERNS = ["model_not_found", "unknown model", "no such model", "does not exist"];
 
 const CONTEXT_PATTERNS = [
   "context length",
@@ -153,106 +143,115 @@ const SAFETY_PATTERNS = [
   "content filter",
   "refused to complete",
   "stopped with: sensitive",
-  "safety",
   "blocked by the provider",
 ];
 
+/**
+ * Transport failures, which are the one class that never carries a status:
+ * the request did not complete, so there is nothing to read but the errno or
+ * the fetch wording. Every entry here names a socket, a DNS lookup or a fetch
+ * — nothing that could appear in a provider's description of a bad request.
+ */
 const CONNECTION_PATTERNS = [
   "fetch failed",
-  "network error",
-  "connection error",
-  "connection refused",
-  "connection lost",
   "econnrefused",
   "econnreset",
   "enotfound",
   "eai_again",
+  "etimedout",
   "epipe",
   "getaddrinfo",
+  "connection refused",
+  // The OpenAI SDK's own `APIConnectionError` message, which is what a
+  // provider closing the socket looks like from inside the engine.
+  "connection error",
+  "connection lost",
   "socket hang up",
   "socket connection was closed",
   "other side closed",
-  "upstream connect",
-  "reset before headers",
-  "websocket closed",
-  "websocket error",
-  "etimedout",
-  "timed out",
-  "timeout",
+  "client network socket disconnected",
+  // A stream that died between its start and its terminal event: the request
+  // reached the provider and the connection did not survive it.
+  "stream ended before",
+  "stream ended without",
+  "ended without",
+  // undici's wording when a socket dies mid-stream, which is what a provider
+  // dropping the connection looks like from inside the engine.
   "terminated",
-  "stream ended",
-  "did not get a response",
 ];
-
-const PROVIDER_DOWN_PATTERNS = [
-  "overloaded",
-  "service unavailable",
-  "service_unavailable",
-  "internal server error",
-  "internal error",
-  "server error",
-  "bad gateway",
-  "provider returned error",
-  "resourceexhausted",
-];
-
-const RATE_LIMIT_PATTERNS = ["rate limit", "rate_limit", "too many requests"];
-
-/** A bare status code in the text, as providers prefix their payloads with one. */
-const statusInText = (text: string, ...codes: number[]) =>
-  codes.some((code) => new RegExp(`\\b${code}\\b`).test(text));
 
 /**
- * Read one failed model request.
+ * The HTTP status the engine flattened into the message.
  *
- * Order matters: the most specific account condition wins over the status that
- * carried it, because a spent subscription allowance and an ordinary throttle
- * are both 429 and only one of them will clear on its own.
+ * `formatProviderError` composes `"<status>: <body>"` or `"<prefix> (<status>): <message>"`
+ * (`pi-ai/dist/utils/error-body.js`), and the provider SDKs prefix their own
+ * messages the same way, so the status is there to be read even though the
+ * structured response never reaches us for a failed request. Only those two
+ * shapes are accepted: a bare number anywhere in the text is a number, not a
+ * status — "Requested 500 tokens" is not a server error.
  */
+export function statusInMessage(text: string | undefined): number | undefined {
+  // Two shapes only, both anchored: the status at the very start of the
+  // message (the SDKs' own `"429 You exceeded…"`, and the engine's
+  // `"<status>: <body>"`), or parenthesised before a colon (the engine's
+  // `"<prefix> (<status>): <message>"`). A bare number anywhere else is a
+  // number, not a status — "Requested 500 tokens exceeds the cap" is a bad
+  // request, not a server error.
+  const anchored = /^\s*\(?(\d{3})\)?[\s:\-]/.exec(text ?? "");
+  const parenthesised = /\((\d{3})\)\s*:/.exec(text ?? "");
+  const match = anchored ?? parenthesised;
+  if (!match) return undefined;
+  const status = Number(match[1]);
+  return status >= 100 && status <= 599 ? status : undefined;
+}
+
 export function classifyProviderFailure(signal: ProviderFailureSignal): ProviderFailure {
   if (signal.stopReason === "aborted") return { class: "aborted" };
   const text = (signal.errorMessage ?? "").toLowerCase();
-  const status = signal.response?.status;
   const headers = normalizeHeaders(signal.response?.headers);
   // Headers first, then the provider's own sentence. In practice the sentence
   // is what there is: the provider SDKs throw on an error status before the
   // engine's `after_provider_response` hook runs, so a failed attempt usually
-  // reaches us with no status and no headers at all — only the text the
-  // engine flattened into `errorMessage`.
+  // reaches us with no status object at all — only the text the engine
+  // flattened into `errorMessage`, which carries the status inside it.
   const resetAt = parseProviderResetAt(headers) ?? statedResetAt(signal.errorMessage, Date.now());
   const withReset = (failure: ProviderFailureClass): ProviderFailure =>
     resetAt ? { class: failure, resetAt } : { class: failure };
 
-  // Conditions the engine answers itself, before anything status-shaped.
+  // Conditions the engine answers itself, whatever status carried them.
   if (has(text, ...CONTEXT_PATTERNS)) return { class: "context_overflow" };
   if (has(text, ...SAFETY_PATTERNS)) return { class: "safety" };
 
-  // A spent plan is stated in words, whatever status carried it.
-  if (has(text, ...ALLOWANCE_PATTERNS)) return withReset("allowance");
-  if (has(text, ...CREDIT_PATTERNS) || status === 402) return { class: "credits" };
-
+  const status = signal.response?.status ?? statusInMessage(signal.errorMessage);
   if (status !== undefined) {
     if (status === 401) return { class: "credential" };
-    if (status === 403) return has(text, ...CREDENTIAL_PATTERNS) ? { class: "credential" } : { class: "permission" };
+    if (status === 402) return { class: "credits" };
+    if (status === 403) {
+      if (has(text, ...ALLOWANCE_PATTERNS)) return withReset("allowance");
+      if (has(text, ...QUOTA_PATTERNS)) return { class: "credits" };
+      return has(text, ...CREDENTIAL_PATTERNS) ? { class: "credential" } : { class: "permission" };
+    }
     if (status === 404) return { class: "model_missing" };
-    if (status === 408) return { class: "connection" };
-    if (status === 429) return withReset("rate_limit");
+    if (status === 408 || status === 504) return { class: "connection" };
+    if (status === 429) {
+      if (has(text, ...ALLOWANCE_PATTERNS)) return withReset("allowance");
+      if (has(text, ...QUOTA_PATTERNS)) return { class: "credits" };
+      return withReset("rate_limit");
+    }
     if (status >= 500) return withReset("provider_down");
-    // A 2xx/3xx observed for this attempt says the request reached the
-    // provider, so whatever went wrong afterwards is not model access. Fall
-    // through to the text: a stream can still drop mid-response.
+    // Every other 4xx is a request the provider would not accept — a tool
+    // schema it dislikes, a field it does not know, a value out of range.
+    // Nothing about model access, and switching model would hide the bug
+    // and mark a working model unusable, so it stays `unknown` (which never
+    // switches). 2xx/3xx fall through: a response arrived, and whatever went
+    // wrong afterwards can still be a dropped stream.
+    if (status >= 400) return { class: "unknown" };
   }
 
-  if (has(text, ...CREDENTIAL_PATTERNS) || statusInText(text, 401)) return { class: "credential" };
-  if (has(text, ...PERMISSION_PATTERNS) || statusInText(text, 403)) return { class: "permission" };
-  if (statusInText(text, 402)) return { class: "credits" };
-  if (has(text, ...MODEL_MISSING_PATTERNS) || statusInText(text, 404)) return { class: "model_missing" };
-  if (has(text, ...RATE_LIMIT_PATTERNS) || statusInText(text, 429)) return withReset("rate_limit");
-  if (has(text, ...PROVIDER_DOWN_PATTERNS) || statusInText(text, 500, 502, 503, 504, 524, 529)) {
-    return withReset("provider_down");
-  }
-  // Transport failures are last: their words ("timeout", "terminated") appear
-  // inside richer provider messages that the checks above name better.
+  // No status at all. Only two things may be read out of prose: a spent plan,
+  // which no status distinguishes, and a transport failure, which never has
+  // one.
+  if (has(text, ...ALLOWANCE_PATTERNS)) return withReset("allowance");
   if (has(text, ...CONNECTION_PATTERNS)) return { class: "connection" };
   return { class: "unknown" };
 }

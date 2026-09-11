@@ -42,11 +42,6 @@ import {
   type InlineExtension,
   type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
-// The engine's own retry classifier, from the same exact pin the engine uses
-// (`core/agent-session.js` imports it from here). Reproducing the continuation's
-// retry decision with a copy would drift on the first Pi bump (MX-T2).
-import { isRetryableAssistantError } from "@earendil-works/pi-ai/compat";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { goalExtensionPath, goalStateFromEntries } from "@lasercode/pi-goal";
 import { createCommandBus, createLaserExtension, createPromptProvenanceObserver, toSessionGoal, type LaserExtensionOptions } from "@lasercode/pi-extension";
 import { ErrorCodes, modelKey, ProtocolError, PRODUCT_NAME, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE, SESSION_FALLBACK_ENTRY_TYPE, SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE } from "@lasercode/protocol";
@@ -100,7 +95,7 @@ import { defaultAgentInstructions } from "../agents/engine-instructions.js";
 import { createInstructionTemplateExtension } from "../agents/instruction-templates.js";
 import { modelUnavailableMessage } from "../agents/harness.js";
 import { FallbackController, type FallbackEngine } from "../fallback/controller.js";
-import type { CandidateModel } from "../fallback/policy.js";
+import { createFallbackEnginePort } from "../fallback/engine-port.js";
 import { StableExtensionAdmission } from "./stable-extension-admission.js";
 import { FirstTurnAttempt, type FirstTurnAttemptOwner } from "./first-turn-attempt.js";
 
@@ -498,6 +493,9 @@ export class StableSdkDriver implements SessionDriver {
     // never re-resolved from the model it ended on) and only then from the
     // settings a person wrote (M15-T3).
     this.fallback = new FallbackController(this.fallbackEngine());
+    // One boundary for every native turn this driver drives (B1): prompt, goal
+    // action, and the extension send that wakes a turn of its own.
+    this.extensionAdmission.setAfterNativeTurn(() => this.settleFallback());
     this.fallback.restore(this.session().sessionManager.getEntries());
     this.fallback.activateIfUnset();
     return this.state();
@@ -752,6 +750,8 @@ export class StableSdkDriver implements SessionDriver {
   async dispose(): Promise<void> {
     this.fallback?.cancel();
     this.fallback = undefined;
+    this.extensionAdmission.setAfterNativeTurn(undefined);
+    this.releaseHeldSettled();
     this.flushHeldUserEnd();
     this.unsubscribe?.();
     this.extensionAdmission.invalidate();
@@ -857,10 +857,7 @@ export class StableSdkDriver implements SessionDriver {
     });
     await this.extensionAdmission.runInvocation(
       context,
-      async () => {
-        await nativePrompt(goalCommand(action), { preflightResult: () => context.accept() });
-        await this.settleFallback();
-      },
+      () => nativePrompt(goalCommand(action), { preflightResult: () => context.accept() }),
       false,
     );
     const goal = await this.goalState();
@@ -953,9 +950,6 @@ export class StableSdkDriver implements SessionDriver {
             else finishPreflight();
           },
         });
-        // Inside the same invocation: every update a continuation emits keeps
-        // this turn's stamp, and the caller's promise covers the whole failover.
-        await this.settleFallback();
       }, true);
     } catch (error) {
       // Pi can throw the same busy-shaped error after reporting true. Acceptance
@@ -1383,131 +1377,24 @@ export class StableSdkDriver implements SessionDriver {
   // ------------------------------------------------------------- fallback
 
   /**
-   * The chain's window onto this session (`docs/model-fallback-chains.md` §3).
-   * Everything engine-shaped is here; the policy above it is pure.
+   * The chain's window onto this session (`fallback/engine-port.ts`). The
+   * driver supplies the session and the two things only it can see: the
+   * failure it observed on the event stream, and where an update goes.
    */
   private fallbackEngine(): FallbackEngine {
-    return {
-      chains: () => readFallbackChains(this.agentDir),
-      selectedModel: () => {
-        const model = this.session().model;
-        return model && model.provider !== "unknown" ? { provider: model.provider, id: model.id } : null;
-      },
-      catalogue: () => this.fallbackCatalogue(),
-      names: () => this.fallbackNames(),
-      contextTokens: () => this.session().getContextUsage()?.tokens ?? null,
-      lastFailure: () => {
+    return createFallbackEnginePort({
+      session: () => this.session(),
+      agentDir: this.agentDir,
+      cwd: this.cwd,
+      projectTrusted: this.projectTrusted,
+      failure: () => {
         const failure = this.assistantFailure;
         if (!failure) return undefined;
-        return {
-          ...failure,
-          ...(this.providerResponse ? { response: this.providerResponse } : {}),
-        };
-      },
-      setModel: async (model) => {
-        const match = this.session().modelRuntime.getModels().find((m) => m.provider === model.provider && m.id === model.id);
-        if (!match) throw new DriverUnavailableError(this.kind, `unknown model ${model.provider}/${model.id}`);
-        await this.session().setModel(match);
-        // The status line names the model being tried, so it has to hear about
-        // it while the failover is still running.
-        this.push({ kind: "state", state: this.state() }, this.extensionAdmission.eventInvocation()?.ref);
-      },
-      continueTurn: (options) => this.continueTurn(options),
-      appendEntry: (entry) => {
-        this.session().sessionManager.appendCustomEntry(SESSION_FALLBACK_ENTRY_TYPE, entry);
+        return { ...failure, ...(this.providerResponse ? { response: this.providerResponse } : {}) };
       },
       emit: (update) => this.push(update, this.extensionAdmission.eventInvocation()?.ref),
-      now: () => Date.now(),
-      newId: () => `fb-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-    };
-  }
-
-  /** Eligibility facts per model: is it there, can it be used, how much does it hold. */
-  private async fallbackCatalogue(): Promise<ReadonlyMap<string, CandidateModel>> {
-    const runtime = this.session().modelRuntime;
-    const all = runtime.getModels();
-    let signedIn: Set<string> | undefined;
-    try {
-      const available = await runtime.getAvailable();
-      if (available.length > 0) signedIn = new Set(available.map((model) => modelKey(model)));
-    } catch {
-      // The engine could not answer which providers have credentials. Rather
-      // than declaring every candidate unusable, let `setModel` refuse the
-      // ones that cannot be selected; its refusal is recorded per candidate.
-    }
-    const disabled = disabledModelRefs(readEffectiveProductSettings(this.cwd, this.agentDir, this.projectTrusted)["disabledModels"]);
-    const catalogue = new Map<string, CandidateModel>();
-    for (const model of all) {
-      catalogue.set(modelKey(model), {
-        ref: { provider: model.provider, id: model.id },
-        contextWindow: model.contextWindow,
-        signedIn: signedIn ? signedIn.has(modelKey(model)) : true,
-        offered: !modelSwitchedOff(model, disabled),
-      });
-    }
-    return catalogue;
-  }
-
-  /** Catalogue names for what a person reads about a chain. */
-  private fallbackNames(): ReadonlyMap<string, ModelRef> {
-    const names = new Map<string, ModelRef>();
-    try {
-      for (const model of this.session().modelRuntime.getModels()) names.set(modelKey(model), toModelRef(model));
-    } catch {
-      // No runtime to ask: identities alone still render.
-    }
-    return names;
-  }
-
-  /**
-   * Continue the interrupted turn on the model selected now (§3.1).
-   *
-   * The engine's own idiom, in its own two steps: the failed attempt is removed
-   * from agent state (it stays in the session file as history, and
-   * `agent.continue()` refuses a transcript whose last message is an assistant
-   * message), then the agent continues from the transcript it already has — no
-   * user message, no replayed tool, no second request in flight.
-   *
-   * The post-run loop the engine runs around this is private, so the two parts
-   * of it that are policy are reproduced here from the same settings the engine
-   * reads, with the same classifier it uses: the retry budget for a newly
-   * activated model (`retries: "normal"`), and draining messages queued while
-   * the turn ran. A return attempt gets `retries: "none"` — one request, as the
-   * specification requires.
-   */
-  private async continueTurn(options: { retries: "none" | "normal"; signal: AbortSignal }): Promise<void> {
-    const session = this.session();
-    const settings = session.settingsManager.getRetrySettings();
-    const budget = options.retries === "none" || !settings.enabled ? 0 : settings.maxRetries;
-    let retried = 0;
-    for (let attempt = 0; ; attempt++) {
-      if (options.signal.aborted) return;
-      dropTrailingErrorAssistant(session);
-      await session.agent.continue();
-      // What the engine's post-run loop does last: messages queued during the
-      // turn get their continuation rather than waiting for the next prompt.
-      while (!options.signal.aborted && session.agent.hasQueuedMessages()) await session.agent.continue();
-      const last = lastAssistantMessage(session);
-      if (!last || last.stopReason !== "error") {
-        if (retried > 0) this.push({ kind: "auto_retry_end", ok: true }, this.extensionAdmission.eventInvocation()?.ref);
-        return;
-      }
-      if (attempt >= budget || options.signal.aborted || !isRetryableAssistantError(last)) {
-        if (retried > 0) this.push({ kind: "auto_retry_end", ok: false }, this.extensionAdmission.eventInvocation()?.ref);
-        return;
-      }
-      retried = attempt + 1;
-      this.push(
-        { kind: "auto_retry_start", attempt: retried, maxAttempts: budget },
-        this.extensionAdmission.eventInvocation()?.ref,
-      );
-      try {
-        await sleep(settings.baseDelayMs * 2 ** attempt, options.signal);
-      } catch {
-        this.push({ kind: "auto_retry_end", ok: false }, this.extensionAdmission.eventInvocation()?.ref);
-        return;
-      }
-    }
+      onModelChanged: () => this.push({ kind: "state", state: this.state() }, this.extensionAdmission.eventInvocation()?.ref),
+    });
   }
 
   /**
@@ -1518,6 +1405,19 @@ export class StableSdkDriver implements SessionDriver {
    * it can only ever describe the attempt in hand.
    */
   private noteFallbackEvent(event: AgentSessionEvent): void {
+    if (event.type === "agent_start") {
+      // A new turn: whatever failed before is history. Leaving the old signal
+      // in place would let an invocation that produces no assistant message at
+      // all — a slash command, a compaction, a goal action — open a failover
+      // from a dead failure and change the model nobody asked to change.
+      this.assistantFailure = undefined;
+      this.providerResponse = undefined;
+      // And a settle held for a failover that never ran must not outlive the
+      // turn it belonged to: releasing it here is how that heals instead of
+      // hanging (the harness ends a run on it).
+      if (!this.fallback?.busy) this.releaseHeldSettled();
+      return;
+    }
     if (event.type !== "message_end") return;
     const message = event.message as { role?: unknown; stopReason?: unknown; errorMessage?: unknown };
     if (message.role !== "assistant") return;
@@ -1529,10 +1429,20 @@ export class StableSdkDriver implements SessionDriver {
       : undefined;
   }
 
-  /** Run the chain for a turn that has settled, then release its `agent_settled`. */
+  /**
+   * Run the chain for a turn that has settled, then release its
+   * `agent_settled`. Called from one place only — the admission object's
+   * after-turn hook — so a person's prompt, a goal action and the extension
+   * send that wakes a turn (a child's ending, a background command's exit) all
+   * reach it, and no throw can skip the release.
+   */
   private async settleFallback(): Promise<void> {
     try {
-      await this.fallback?.settle();
+      // Never mid-turn: a nested extension invocation can finish while the
+      // engine is still working or between its own retries, and the failure it
+      // would see there belongs to an attempt the engine has not given up on.
+      const session = this.runtime?.session;
+      if (session && session.isIdle && !session.isRetrying) await this.fallback?.settle();
     } catch (error) {
       console.error(`${PRODUCT_NAME} worker: a model fallback could not be completed:`, error instanceof Error ? error.message : error);
     } finally {
@@ -1582,50 +1492,8 @@ export class StableSdkDriver implements SessionDriver {
   }
 }
 
-/**
- * Remove a failed attempt from agent state, leaving it in the session file.
- *
- * This is the engine's own move, in the two places it continues an interrupted
- * turn (`_prepareRetry`, and the overflow-recovery branch of `_checkCompaction`
- * in `core/agent-session.js`): `agent.continue()` rejects a transcript whose
- * last message is an assistant message, and the error is history, not context.
- */
-function dropTrailingErrorAssistant(session: AgentSession): void {
-  const messages = session.agent.state.messages;
-  const last = messages[messages.length - 1] as { role?: unknown; stopReason?: unknown } | undefined;
-  if (last?.role !== "assistant") return;
-  if (last.stopReason !== "error" && last.stopReason !== "aborted" && last.stopReason !== "length") return;
-  session.agent.state.messages = messages.slice(0, -1);
-}
 
-/** The last assistant message in agent state, failed ones included. */
-function lastAssistantMessage(session: AgentSession): AssistantMessage | undefined {
-  const messages = session.agent.state.messages;
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const message = messages[index];
-    if (message?.role === "assistant") return message;
-  }
-  return undefined;
-}
 
-/** An abortable wait; rejects when the signal fires, so a stop is immediate. */
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) {
-      reject(new Error("aborted"));
-      return;
-    }
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(new Error("aborted"));
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-}
 
 /** De-duplicate existing resource roots while preserving precedence. */
 function existingResourceRoots(paths: string[]): string[] {

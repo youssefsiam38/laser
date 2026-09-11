@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 import { SESSION_FALLBACK_ENTRY_TYPE, type SessionState, type SessionUpdate } from "@lasercode/protocol";
 
-import { applyUpdate, blocksFromEntries, type SessionView } from "../../src/store.js";
+import { applyUpdate, blocksFromEntries, modelNamesOf, type SessionView } from "../../src/store.js";
 
 const state: SessionState = {
   path: "/s.jsonl", id: "s", cwd: "/p", model: null, thinkingLevel: "medium", isStreaming: false, isCompacting: false,
@@ -73,6 +73,17 @@ describe("the same switch, read back from the session file", () => {
     data: { version: 1, event, at: "2026-09-11T12:00:00.000Z", activation: null, models: {}, ...extra },
   });
 
+  const names = modelNamesOf({
+    ...state,
+    fallback: {
+      chain: [
+        { provider: "anthropic", id: "claude-sonnet-4-5", name: "Sonnet 4.5" },
+        { provider: "deepseek", id: "deepseek-chat", name: "DeepSeek V3" },
+      ],
+      position: 1,
+    },
+  });
+
   it("draws the switch, and nothing for the records that are only state", () => {
     const blocks = blocksFromEntries([
       entry("activated", { to: { provider: "anthropic", id: "claude-sonnet-4-5" } }),
@@ -82,14 +93,23 @@ describe("the same switch, read back from the session file", () => {
         to: { provider: "deepseek", id: "deepseek-chat" },
         failure: { class: "rate_limit", at: "2026-09-11T12:00:00.000Z" },
       }),
-    ]);
+    ], undefined, names);
     expect(blocks).toHaveLength(1);
+    // The same sentence the person saw live, names and all — the record stores
+    // identities, and the session's chain says what they are called.
     expect(blocks[0]).toMatchObject({
       kind: "notice",
       level: "info",
-      text: "Continued on deepseek-chat · claude-sonnet-4-5 is being rate-limited.",
+      text: "Continued on DeepSeek V3 · Sonnet 4.5 is being rate-limited.",
       at: "2026-09-11T12:00:00.000Z",
     });
+  });
+
+  it("falls back to the model id when the catalogue cannot name it", () => {
+    const blocks = blocksFromEntries([
+      entry("switched", { from: { provider: "anthropic", id: "claude-sonnet-4-5" }, to: { provider: "deepseek", id: "deepseek-chat" }, failure: { class: "rate_limit", at: "x" } }),
+    ]);
+    expect((blocks[0] as { text: string }).text).toBe("Continued on deepseek-chat · claude-sonnet-4-5 is being rate-limited.");
   });
 
   it("draws an exhausted chain as the same warning it was live", () => {

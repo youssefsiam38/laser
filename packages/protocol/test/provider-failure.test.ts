@@ -31,9 +31,19 @@ describe("provider failure classification", () => {
       expected: "credential",
     },
     {
-      why: "an invalid key with no response observed",
-      signal: failed({ errorMessage: 'authentication_error: API key is invalid.' }),
+      why: "the status the SDK put at the front of its own message",
+      signal: failed({ errorMessage: '401 {"type":"error","error":{"type":"authentication_error","message":"API key is invalid."}}' }),
       expected: "credential",
+    },
+    {
+      why: "the status the engine formatted into the message",
+      signal: failed({ errorMessage: "Anthropic API error (401): authentication_error" }),
+      expected: "credential",
+    },
+    {
+      why: "the same wording with no status at all is not evidence of anything",
+      signal: failed({ errorMessage: "authentication_error: API key is invalid." }),
+      expected: "unknown",
     },
     {
       why: "403 without usage wording is a permission problem",
@@ -66,9 +76,19 @@ describe("provider failure classification", () => {
       expected: "provider_down",
     },
     {
-      why: "overloaded with no response observed",
-      signal: failed({ errorMessage: "Provider is overloaded, please try again" }),
+      why: "an overloaded provider, by the status it sent",
+      signal: failed({ errorMessage: '529 {"type":"error","error":{"type":"overloaded_error"}}' }),
       expected: "provider_down",
+    },
+    {
+      why: "the word overloaded on its own says nothing about model access",
+      signal: failed({ errorMessage: "Provider is overloaded, please try again" }),
+      expected: "unknown",
+    },
+    {
+      why: "the SDK's own connection error, which is what a dropped socket looks like",
+      signal: failed({ errorMessage: "Connection error." }),
+      expected: "connection",
     },
     {
       why: "a refused connection never produces a status",
@@ -118,6 +138,30 @@ describe("provider failure classification", () => {
       expect(classifyProviderFailure(signal).class).toBe(expected);
     });
   }
+
+  // The failures a person meets every day while building a tool schema or
+  // sending an unusual field. Each one used to switch the model behind their
+  // back and mark the model they chose unusable for the rest of the session.
+  const misfires: Array<{ why: string; errorMessage: string }> = [
+    { why: "a tool name the provider does not know", errorMessage: "Invalid value: 'assistant'. Tool 'lookup' does not exist" },
+    { why: "a role the endpoint does not take", errorMessage: "400 Bad Request: messages[3].role is not allowed for this endpoint" },
+    { why: "a schema the provider rejects", errorMessage: "Invalid schema for function: property 'x' is not allowed" },
+    { why: "a number that happens to look like a status", errorMessage: "Requested 500 tokens exceeds the per-request cap of 400" },
+    { why: "throttle wording with no status", errorMessage: "Rate limit reached. Please check your plan and billing details." },
+  ];
+  for (const { why, errorMessage } of misfires) {
+    it(`does not read model access into ${why}`, () => {
+      const failure = classifyProviderFailure(failed({ errorMessage }));
+      expect(failure.class, errorMessage).toBe("unknown");
+      expect(isFallbackEligible(failure.class)).toBe(false);
+    });
+  }
+
+  it("reads a request the provider refused as the bad request it is, never as model access", () => {
+    for (const status of [400, 409, 413, 422]) {
+      expect(classifyProviderFailure(failed({ errorMessage: `${status} Bad Request: something about the payload` })).class, String(status)).toBe("unknown");
+    }
+  });
 
   it("only names the classes a chain may act on, and excludes the rest", () => {
     // The specification's exclusions, asserted as a set rather than case by

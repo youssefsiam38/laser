@@ -390,7 +390,7 @@ export function reduce(state: AppState, action: Action): AppState {
         // carry what the snapshot has, plus what it does not.
         return action.expectSeq !== undefined && v.lastSeq !== action.expectSeq
           ? { ...v, entries: action.entries, leafId: action.leafId, hydrated: true, lastSeq }
-          : { ...v, blocks: blocksFromEntries(action.entries, action.leafId), entries: action.entries, leafId: action.leafId, hydrated: true, pendingSentBy: undefined, lastSeq };
+          : { ...v, blocks: blocksFromEntries(action.entries, action.leafId, modelNamesOf(v.state)), entries: action.entries, leafId: action.leafId, hydrated: true, pendingSentBy: undefined, lastSeq };
       });
     case "entries":
       return updateView(state, action.path, (v) => ({ ...v, entries: action.entries, leafId: action.leafId }));
@@ -1019,7 +1019,7 @@ const STOPPED_SHORT = new Set<string>(["aborted", "length", "error", "deferred"]
  * through the message's version picker instead. Passing no `leafId` reads the
  * last entry as the leaf, which is what the engine does on re-open.
  */
-export function blocksFromEntries(entries: unknown[], leafId?: string | null): Block[] {
+export function blocksFromEntries(entries: unknown[], leafId?: string | null, names?: ModelNames): Block[] {
   const blocks: Block[] = [];
   const toolIndex = new Map<string, number>();
   const branch = activePathIds(entries, leafId);
@@ -1060,7 +1060,7 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null): B
       }
       // A model fallback wrote its own record here (M15-T3). Reading a session
       // back must show the same line the person saw when it happened.
-      const record = fallbackRecord(raw, entryTimestamp(e.timestamp));
+      const record = fallbackRecord(raw, entryTimestamp(e.timestamp), names);
       if (record) blocks.push(record);
       continue;
     }
@@ -1171,6 +1171,25 @@ function sentByOfMarker(raw: unknown): SentByParent | undefined {
   return { parentPath: data.parentPath, ...(typeof data.runId === "string" ? { runId: data.runId } : {}) };
 }
 
+/**
+ * Display names by `provider/id`, for a record that stores identities only.
+ *
+ * The chain snapshot the worker publishes on the session state carries the
+ * catalogue's names, and it holds exactly the models a record can name — so a
+ * line read back from the file says "Sonnet 4.5", like the one the person saw
+ * when it happened, rather than `claude-sonnet-4-5`.
+ */
+export type ModelNames = ReadonlyMap<string, string>;
+
+export function modelNamesOf(state: SessionState | undefined): ModelNames {
+  const names = new Map<string, string>();
+  for (const model of state?.fallback?.chain ?? []) {
+    names.set(`${model.provider}/${model.id}`.toLowerCase(), model.name ?? model.id);
+  }
+  if (state?.model) names.set(`${state.model.provider}/${state.model.id}`.toLowerCase(), state.model.name ?? state.model.id);
+  return names;
+}
+
 /** "Continued on X · Y is not answering." — one line, both live and on reload. */
 function switchedText(to: { name?: string; id: string } | undefined, detail: string | undefined): string {
   const model = to ? (to.name ?? to.id) : "another model";
@@ -1186,7 +1205,7 @@ function exhaustedText(detail: string | undefined): string {
  * the records that are state rather than a moment (an activation, a candidate
  * that was skipped). Written by the worker, read here and nowhere else.
  */
-function fallbackRecord(raw: unknown, at: string | undefined): Extract<Block, { kind: "notice" }> | undefined {
+function fallbackRecord(raw: unknown, at: string | undefined, names?: ModelNames): Extract<Block, { kind: "notice" }> | undefined {
   const entry = raw as { customType?: unknown; data?: unknown } | undefined;
   if (entry?.customType !== SESSION_FALLBACK_ENTRY_TYPE) return undefined;
   const data = entry.data as {
@@ -1197,7 +1216,11 @@ function fallbackRecord(raw: unknown, at: string | undefined): Extract<Block, { 
   } | undefined;
   if (!data) return undefined;
   const failure = typeof data.failure?.class === "string" ? failureWording(data.failure.class as Parameters<typeof failureWording>[0]) : undefined;
-  const said = (model: { id?: string } | undefined) => (typeof model?.id === "string" ? model.id : undefined);
+  const said = (model: { provider?: string; id?: string } | undefined): string | undefined => {
+    if (typeof model?.id !== "string") return undefined;
+    const key = `${model.provider ?? ""}/${model.id}`.toLowerCase();
+    return names?.get(key) ?? model.id;
+  };
   const because = failure && said(data.from) ? `${said(data.from)} ${failure}.` : undefined;
   if (data.event === "switched" || data.event === "returned") {
     const to = said(data.to);

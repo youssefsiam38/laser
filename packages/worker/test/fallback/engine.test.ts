@@ -18,6 +18,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import { fallbackDefaultAgent, fallbackPolicy } from "../../src/agents/definitions.js";
 import { rootRecord, rootRole } from "../../src/agents/session-config.js";
 import { StableSdkDriver } from "../../src/drivers/stable-sdk.js";
@@ -108,8 +109,37 @@ interface Opened {
   path: string;
 }
 
+/**
+ * Captured from inside the session, so a test can wake a turn the way a child
+ * agent's ending and a background command's exit do (`pi.sendMessage` with
+ * `triggerTurn`). It is fire-and-forget for the extension, so a caller waits
+ * for the turn it started.
+ */
+let wake: ((text: string) => void) | undefined;
+const waker: InlineExtension = (pi) => {
+  wake = (text: string) => {
+    pi.sendMessage({ customType: "test/wake", content: text, display: false }, { triggerTurn: true });
+  };
+};
+
+async function waitFor(predicate: () => boolean, what: string, ms = 5_000): Promise<void> {
+  const until = Date.now() + ms;
+  while (!predicate()) {
+    if (Date.now() > until) throw new Error(`timed out waiting for ${what}`);
+    await wait(20);
+  }
+}
+
+/** Wake a turn and wait for it to settle, the way the harness waits for a run. */
+async function woken(updates: SessionUpdate[], text: string): Promise<void> {
+  const before = updates.filter((update) => update.kind === "agent_settled").length;
+  wake!(text);
+  await waitFor(() => updates.filter((update) => update.kind === "agent_settled").length > before, `the woken turn to settle (${text})`);
+  await wait(50);
+}
+
 async function open(sessionPath?: string): Promise<Opened> {
-  const driver = new StableSdkDriver();
+  const driver = new StableSdkDriver([waker]);
   drivers.push(driver);
   const updates: SessionUpdate[] = [];
   driver.subscribe((event: DriverEvent) => {
@@ -420,4 +450,151 @@ it("does the same for a child agent's session, which is a session like any other
   const settled = updates.findIndex((update) => update.kind === "agent_settled");
   const switched = updates.findIndex((update) => update.kind === "model_fallback" && update.phase === "switched");
   expect(settled).toBeGreaterThan(switched);
+});
+
+
+// ------------------------------------------------------- the turns nobody typed
+
+it("falls back on a turn an extension woke, and settles it exactly once", async () => {
+  // This is how a child agent's ending and a background command's exit reach
+  // the model (D-158/D-162): an extension send that starts a turn of its own.
+  // It never goes through `prompt()`, and a run that is never settled is a
+  // parent that waits forever.
+  script.a = () => down();
+  script.b = () => ok("from b");
+  const { driver, updates } = await open();
+  await driver.prompt([{ type: "text", text: "first" }]);
+  expect(idOf(driver)).toBe("stub-b-1");
+  const before = updates.length;
+
+  script.b = () => down();
+  script.c = () => ok("from c");
+  await woken(updates, "a background command finished");
+
+  expect(idOf(driver)).toBe("stub-c-1");
+  const after = updates.slice(before);
+  expect(fallbacks(after).at(-1)).toMatchObject({ phase: "switched", to: { id: "stub-c-1" } });
+  expect(after.filter((update) => update.kind === "agent_settled")).toHaveLength(1);
+});
+
+it("settles a woken turn whose failure no chain can answer, and drains what was queued", async () => {
+  // The excluded case: the turn fails for a reason that is not model access,
+  // so nothing switches — but the settle must still arrive, once.
+  script.a = () => ({ status: 400, body: { error: { message: "messages[3].role is not allowed for this endpoint" } } });
+  const { driver, updates } = await open();
+  await driver.prompt([{ type: "text", text: "first" }]).catch(() => {});
+  const before = updates.length;
+  await woken(updates, "and again");
+  const after = updates.slice(before);
+  expect(fallbacks(after)).toEqual([]);
+  expect(idOf(driver)).toBe("stub-1");
+  expect(after.filter((update) => update.kind === "agent_settled")).toHaveLength(1);
+  expect(driver.state().isStreaming).toBe(false);
+});
+
+// ------------------------------------------------------------------ the bounds
+
+it("skips a model it has no credential for, once, and advances past it", async () => {
+  // The middle model is in the catalogue and has no key: `setModel` would
+  // refuse it, so it is skipped with a reason rather than tried in a loop.
+  mkdirSync(agentDir, { recursive: true });
+  writeFileSync(
+    join(agentDir, "models.json"),
+    JSON.stringify({
+      providers: {
+        stub: { baseUrl: stubs.a.url, api: "openai-completions", apiKey: "k", models: [{ id: "stub-1", name: "Stub A", contextWindow: 8000, maxTokens: 1000 }] },
+        "stub-b": { baseUrl: stubs.b.url, api: "openai-completions", models: [{ id: "stub-b-1", name: "Stub B", contextWindow: 8000, maxTokens: 1000 }] },
+        "stub-c": { baseUrl: stubs.c.url, api: "openai-completions", apiKey: "k", models: [{ id: "stub-c-1", name: "Stub C", contextWindow: 8000, maxTokens: 1000 }] },
+      },
+    }),
+  );
+  script.a = () => down();
+  script.c = () => ok("from c");
+  const { driver } = await open();
+  await driver.prompt([{ type: "text", text: "hello" }]);
+
+  expect(requests("b")).toBe(0);
+  expect(requests("c")).toBe(1);
+  expect(idOf(driver)).toBe("stub-c-1");
+  // And again on the next turn: still no loop, still one request each.
+  script.c = () => ok("still c");
+  await driver.prompt([{ type: "text", text: "again" }]);
+  expect(requests("b")).toBe(0);
+  expect(requests("c")).toBe(2);
+});
+
+it("keeps the position on the model the session ended on, so the badge is not a lie", async () => {
+  script.a = () => down();
+  script.b = () => down();
+  script.c = () => down();
+  const { driver } = await open();
+  await driver.prompt([{ type: "text", text: "hello" }]);
+  expect(idOf(driver)).toBe("stub-c-1");
+  // The selector draws `chain position+1 / length`; after an exhausted chain
+  // that has to be 3/3, not 1/3.
+  expect(driver.state().fallback).toMatchObject({ position: 2 });
+  expect(driver.state().fallback?.chain[2]?.id).toBe("stub-c-1");
+});
+
+it("treats a dropped connection as a reason to fall back", async () => {
+  script.a = () => ({ drop: true });
+  script.b = () => ok("from b");
+  const { driver, updates } = await open();
+  await driver.prompt([{ type: "text", text: "hello" }]);
+  expect(idOf(driver)).toBe("stub-b-1");
+  expect(fallbacks(updates).at(-1)?.reason).toBe("connection");
+});
+
+// ------------------------------------------------------------ races and stops
+
+it("gives a person's choice the last word over a switch already in flight", async () => {
+  // A fails, the chain reaches for B, and B takes its time. The person picks C
+  // meanwhile: their model is the one that stands, and the stale step neither
+  // sets a model nor records anything afterwards.
+  script.a = () => down();
+  script.b = () => ({ text: "from b", delayMs: 400 });
+  script.c = () => ok("from c");
+  const { driver, updates } = await open();
+  const turn = driver.prompt([{ type: "text", text: "hello" }]);
+  while (requests("b") === 0) await wait(20);
+
+  await driver.setModel(MODEL.c);
+  await turn.catch(() => {});
+  await wait(300);
+
+  expect(idOf(driver)).toBe("stub-c-1");
+  // C starts no chain of its own here, so the traversal is gone with it.
+  expect(driver.state().fallback).toBeUndefined();
+  expect(fallbacks(updates).some((event) => event.phase === "switched")).toBe(false);
+  expect(driver.state().isStreaming).toBe(false);
+});
+
+it("does not fall back when the person stops the turn", async () => {
+  script.a = () => ({ text: "slow", delayMs: 400 });
+  const { driver, updates } = await open();
+  const turn = driver.prompt([{ type: "text", text: "hello" }]);
+  while (requests("a") === 0) await wait(20);
+  await driver.abort();
+  await turn.catch(() => {});
+  await wait(200);
+
+  expect(fallbacks(updates)).toEqual([]);
+  expect(requests("b")).toBe(0);
+  expect(idOf(driver)).toBe("stub-1");
+});
+
+it("does not open a second failover from a failure it already acted on", async () => {
+  script.a = () => down();
+  script.b = () => down();
+  script.c = () => down();
+  const { driver, updates } = await open();
+  await driver.prompt([{ type: "text", text: "hello" }]);
+  const exhausted = fallbacks(updates).filter((event) => event.phase === "exhausted");
+  expect(exhausted).toHaveLength(1);
+
+  // A goal action, a command, a compaction: an invocation that produces no
+  // assistant message at all must not reopen the chain from the dead signal.
+  await driver.compact().catch(() => {});
+  await wait(100);
+  expect(fallbacks(updates).filter((event) => event.phase === "exhausted")).toHaveLength(1);
 });

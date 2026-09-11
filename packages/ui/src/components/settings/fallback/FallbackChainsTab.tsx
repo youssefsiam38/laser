@@ -343,12 +343,16 @@ function ChainCard({ index, models, catalogue, addable, issues, busy, draft, onC
                 <ArrowDown aria-hidden="true" />
               </TooltipIconButton>
               <TooltipIconButton
-                tooltip={`Remove ${label} from this chain`}
+                // A chain of one is not a chain, so removing from a pair is
+                // not an edit — it is deleting the chain, and the row says so
+                // rather than refusing afterwards with a sentence about
+                // adding a model.
+                tooltip={models.length > 2 ? `Remove ${label} from this chain` : "A chain needs two models — delete the chain instead"}
                 side="top"
                 variant="ghost"
                 size="icon-sm"
                 className="text-ink-3 hover:text-attention"
-                disabled={busy}
+                disabled={busy || models.length <= 2}
                 onClick={() => onChange(models.filter((_, at) => at !== position))}
               >
                 <X aria-hidden="true" />

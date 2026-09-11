@@ -8,8 +8,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export type StubAnswer =
-  | { text: string }
-  | { toolCall: { name: string; args: Record<string, unknown>; id?: string } }
+  | { text: string; delayMs?: number }
+  | { toolCall: { name: string; args: Record<string, unknown>; id?: string }; delayMs?: number }
   /**
    * A failure, answered before any stream frame: an HTTP status with the
    * body and headers a provider would send (`429` with `retry-after`, `402`
@@ -17,8 +17,8 @@ export type StubAnswer =
    * a response at all — the only way to produce a transport failure, which
    * carries no status for anything above it to read (M15-T3).
    */
-  | { status: number; body?: unknown; headers?: Record<string, string> }
-  | { drop: true };
+  | { status: number; body?: unknown; headers?: Record<string, string>; delayMs?: number }
+  | { drop: true; delayMs?: number };
 
 export interface StubRequest {
   messages: Array<{ role: string; content: unknown; tool_calls?: unknown[]; tool_call_id?: string }>;
@@ -42,7 +42,7 @@ export function startStubProvider(respond: (request: StubRequest, index: number)
   const server = createServer((req, res) => {
     let body = "";
     req.on("data", (chunk: Buffer) => (body += chunk.toString()));
-    req.on("end", () => {
+    req.on("end", async () => {
       if (!req.url?.endsWith("/chat/completions")) {
         res.writeHead(404).end();
         return;
@@ -50,6 +50,9 @@ export function startStubProvider(respond: (request: StubRequest, index: number)
       const request = JSON.parse(body) as StubRequest;
       requests.push(request);
       const answer = respond(request, requests.length - 1);
+      // A provider that takes its time, so a test can do something while a
+      // request is in flight (a person picking another model, a stop).
+      if (answer.delayMs) await new Promise((resolve) => setTimeout(resolve, answer.delayMs));
       if ("drop" in answer) {
         req.socket.destroy();
         return;

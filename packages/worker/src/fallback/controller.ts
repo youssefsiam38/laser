@@ -68,6 +68,8 @@ export interface FallbackEngine {
    */
   lastFailure(): ProviderFailureSignal | undefined;
   setModel(model: FallbackModelRef): Promise<void>;
+  /** Stop whatever the engine has in flight, so a person's choice is final. */
+  abortTurn(): void;
   /** Continue the interrupted turn on the model that is selected now. */
   continueTurn(options: { retries: "none" | "normal"; signal: AbortSignal }): Promise<void>;
   appendEntry(entry: SessionFallbackEntry): void;
@@ -126,8 +128,14 @@ export class FallbackController {
    * with it. Cooldowns are instants and survive.
    */
   onManualSelection(model: FallbackModelRef): void {
+    const wasSwitching = this.switching;
     this.generation++;
     this.abort?.abort();
+    // A request may already be out on a model the person has just replaced.
+    // Stopping the engine is what makes their choice final rather than a race:
+    // a late answer would otherwise land, and its failure would open another
+    // failover on a chain that no longer applies.
+    if (wasSwitching) this.engine.abortTurn();
     const had = this.state.activation !== null || Object.keys(this.state.models).length > 0;
     const activation = activate(this.engine.chains(), model, { id: this.engine.newId(), at: this.iso() });
     this.state = {
@@ -214,15 +222,27 @@ export class FallbackController {
         }
 
         const candidate = traversal.model;
+        let position = traversal.position;
         try {
           await this.engine.setModel(candidate);
-        } catch (error) {
-          // A model the catalogue offered and the engine then refused: record
-          // the refusal in the person's words and carry on down the chain.
-          this.recordAttempt(candidate, { outcome: "skipped", reason: "could not be selected" });
-          if (error instanceof Error && error.message) this.note(candidate, error.message);
+        } catch {
+          // A model the catalogue offered and the engine then refused — no
+          // credential, gone from the catalogue since. That is an attempt, not
+          // a skip: it counts against this failover and marks the model for
+          // the rest of the activation, so the traversal moves on instead of
+          // knocking on the same door forever.
+          this.recordAttempt(candidate, { outcome: "failed", class: "credential", reason: "could not be selected" });
+          this.state = {
+            ...this.state,
+            models: rememberFailure(this.state.models, candidate, { class: "credential" }, { now: this.engine.now() }),
+          };
+          this.write("attempt_failed", { to: candidate, failure: { class: "credential", at: this.iso() } });
           continue;
         }
+        // The session is on this model now, whatever happens next: a failover
+        // that ends without a success leaves it here, and the badge, the next
+        // traversal and the record must all agree with that.
+        this.moveTo(position);
         if (this.stale(generation, abort)) return this.closeEvent("aborted");
 
         let thrown: unknown;
@@ -235,7 +255,7 @@ export class FallbackController {
 
         const after = this.engine.lastFailure();
         if (!after && !thrown) {
-          this.succeeded(failed, candidate, traversal.position, traversal.direction, failure);
+          this.succeeded(failed, candidate, position, traversal.direction, failure);
           return true;
         }
         const next = after ? classifyProviderFailure(after) : { class: "unknown" as const };
@@ -250,11 +270,12 @@ export class FallbackController {
           to: this.ref(candidate),
           reason: next.class,
           detail: `${this.name(candidate)} ${failureWording(next.class)}.`,
-          position: traversal.position,
+          position,
         });
         this.write("attempt_failed", { to: candidate, failure: { class: next.class, at: this.iso() } });
         standing = candidate;
         standingFailure = next;
+        position = this.state.activation?.position ?? position;
         if (!opensFailover(next.class)) {
           // The new model failed for a reason a chain cannot answer (the
           // conversation is too long, the provider refused the content, the
@@ -293,6 +314,13 @@ export class FallbackController {
     this.write("attempt_failed", { from: failed, failure: { class: failure.class, at } });
   }
 
+  /** The session is on the model at this index now; the activation says so. */
+  private moveTo(position: number): void {
+    const activation = this.state.activation;
+    if (!activation || activation.position === position) return;
+    this.state = { ...this.state, activation: { ...activation, position } };
+  }
+
   private closeEvent(ended: NonNullable<FallbackEvent["ended"]>): boolean {
     const failover = this.state.failover;
     if (failover && failover.ended === undefined) {
@@ -319,11 +347,7 @@ export class FallbackController {
   ): void {
     const at = this.iso();
     this.recordAttempt(to, { outcome: "succeeded" });
-    const activation = this.state.activation;
-    this.state = {
-      ...this.state,
-      ...(activation ? { activation: { ...activation, position } } : {}),
-    };
+    this.moveTo(position);
     this.closeEvent(direction === "return" ? "returned" : "switched");
     this.lastSwitch = { from: this.ref(from), to: this.ref(to), reason: failure.class, at };
     this.write(direction === "return" ? "returned" : "switched", {
@@ -359,17 +383,6 @@ export class FallbackController {
       detail,
       position: this.state.activation?.position ?? 0,
     });
-  }
-
-  /** A refusal the engine worded itself, kept as this model's last failure note. */
-  private note(model: FallbackModelRef, _message: string): void {
-    this.state = {
-      ...this.state,
-      models: {
-        ...this.state.models,
-        [modelKey(model)]: { ...this.state.models[modelKey(model)], lastFailure: { class: "unknown", at: this.iso() } },
-      },
-    };
   }
 
   private write(

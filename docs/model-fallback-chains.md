@@ -203,8 +203,15 @@ string (`formatProviderError`, `error-body.js:111`); `retry-after` is consumed
 inside the provider SDK layer (`utils/provider-retry.js:30`) and never reaches
 the message. `diagnostics[]` exists but is populated by only four adapters
 (codex-responses, bedrock, anthropic, pi-messages) and carries no status.
-**So the classification is: the observed HTTP status and headers when there was
-a response, and a pattern match over `errorMessage` when there was not.**
+**So the classification is status-first, and the status is read out of the
+message itself.** `formatProviderError` composes `"<status>: <body>"` or
+`"<prefix> (<status>): <message>"` (`error-body.js:111`), and the provider SDKs
+prefix their own messages the same way (`"429 You exceeded your current
+quota…"`), so `statusInMessage` parses it from those two anchored shapes — never
+a bare number anywhere in the text, which would read "Requested 500 tokens" as a
+server error. Free text decides only two things a status cannot: a spent plan
+(429 and 403 carry both meanings) and a transport failure (which never has a
+status at all).
 
 ### 2.4 Classification — what is a model-access failure
 
@@ -251,7 +258,7 @@ export function classifyProviderFailure(signal: ProviderFailureSignal): {
 | `context_overflow` | `isContextOverflow`-shaped text: `context length`, `maximum context`, `too many tokens` | **no** | The engine answers this with compaction, not with another model. Switching would hide a growing conversation behind a bigger window and then fail again |
 | `safety` | `content_filter`, `refused to complete`, `Provider stopped with: sensitive` | **no** | The specification excludes safety refusals. This is an answer, not an outage |
 | `aborted` | `stopReason: "aborted"` | **no** | The person or the harness stopped the turn. The specification excludes user cancellation |
-| `unknown` | anything else | **no** | The specification says to prefer structured information and avoid broad matching. An error we cannot name is not evidence that another provider would do better; it stays the actionable warning it is today |
+| `unknown` | any other 4xx (400, 409, 413, 422 …), and anything with no status that is neither plan wording nor a transport failure | **no** | The specification says to prefer structured information and avoid broad matching. A request the provider would not accept — a tool schema, an unknown field, a value out of range — is not model access, and an error we cannot name is not evidence that another provider would do better; it stays the actionable warning it is today |
 
 Never reached, and named here so the tests can prove it: a **tool failure** is a
 `toolResult` with `isError`, the assistant turn itself succeeded and
@@ -348,10 +355,11 @@ Every activation carries an `id`, and the controller keeps a monotonic
 `generation` counter in memory. A failover step re-reads both before and after
 every `await`:
 
-- `setModel()` by a person bumps `generation`, cancels the failover in flight
-  (its pending continuation is aborted through `session.abort()` if a request is
-  already out, its pending cooldown wait is resolved), clears the activation and
-  resolves a fresh one. A late failover step whose `generation` is stale exits
+- `setModel()` by a person bumps `generation`, cancels the failover in flight —
+  the controller's own `AbortController` for the backoff wait, **and**
+  `session.abort()` for a request that is already out, so a late answer cannot
+  land and open a failover on a chain that no longer applies — then clears the
+  activation and resolves a fresh one. A late failover step whose `generation` is stale exits
   without touching the model, and records nothing.
 - `abort()` / `session/cancel` cancels the failover event the same way and marks
   it `aborted`, which is not a failure of any candidate.

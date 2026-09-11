@@ -1183,25 +1183,21 @@ export function readEffectiveProductSettings(cwd: string, agentDir: string, proj
  * as no chains, and a session with no chain behaves exactly as it does today.
  */
 export function readFallbackChains(agentDir: string): FallbackChain[] {
-  const chains = readFallbackChainsValue(readGlobalSettingsFile(agentDir)[FALLBACK_CHAINS_SETTING]);
   const starters = new Set<string>();
-  return chains.filter((chain) => {
-    const first = chain.models[0];
-    if (!first || chain.models.length < 2) return false;
-    const key = modelKey(first);
-    if (starters.has(key)) return false;
+  return readFallbackChainsValue(readGlobalSettingsFile(agentDir)[FALLBACK_CHAINS_SETTING]).flatMap((chain) => {
     // A duplicate inside one chain is dropped rather than the chain: the intent
     // of the list is still readable, and the runtime tries each model once.
     const seen = new Set<string>();
-    chain.models = chain.models.filter((model) => {
-      const modelId = modelKey(model);
-      if (seen.has(modelId)) return false;
-      seen.add(modelId);
+    const models = chain.models.filter((model) => {
+      const key = modelKey(model);
+      if (seen.has(key)) return false;
+      seen.add(key);
       return true;
     });
-    if (chain.models.length < 2) return false;
-    starters.add(key);
-    return true;
+    const first = models[0];
+    if (!first || models.length < 2 || starters.has(modelKey(first))) return [];
+    starters.add(modelKey(first));
+    return [{ models }];
   });
 }
 

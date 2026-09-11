@@ -1252,7 +1252,7 @@ export function SessionModelSelector({ className }: { className?: string | undef
                 aria-hidden="true"
                 className={cn(
                   "shrink-0 rounded-sm px-1 text-xs leading-4 tabular-nums",
-                  fallback.switching ? "bg-[color-mix(in_oklab,var(--live)_16%,transparent)] text-live" : "bg-surface-2 text-ink-3",
+                  fallback.switching ? "bg-[color-mix(in_oklab,var(--live)_12%,transparent)] text-live" : "bg-surface-2 text-ink-3",
                 )}
               >
                 {fallback.switching ? "switching" : `chain ${fallback.position + 1}/${fallback.chain.length}`}
