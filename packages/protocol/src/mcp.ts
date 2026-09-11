@@ -251,7 +251,9 @@ export interface McpCallResult {
 // Sign-in
 
 export interface McpAuthStart {
-  /** Open this in a browser. */
+  /** Nothing to open: a valid credential is already stored (or the grant needs no browser). */
+  alreadyAuthorized?: boolean;
+  /** Open this in a browser. Empty only when `alreadyAuthorized`. */
   authorizationUrl: string;
   /** The app listens on a loopback callback; completion arrives on its own. */
   callbackListening: boolean;
