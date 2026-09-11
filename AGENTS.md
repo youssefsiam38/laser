@@ -354,6 +354,27 @@ specifiers (Pi loads extensions this way and we match it), Node 24, pnpm.
 These rules exist because both failures below escaped a local green check and
 reached a pushed release candidate. Treat them as release blockers, not advice.
 
+### Routine releases use the reviewed orchestrator
+
+After explicit user authorization and source review, run the read-only preview,
+then the transaction with the same full reviewed SHA:
+
+```bash
+node scripts/release/release.mjs VERSION --source FULL_REVIEWED_SHA
+node scripts/release/release.mjs VERSION --publish --source FULL_REVIEWED_SHA
+```
+
+Do not spawn a release-preparation agent for this routine path and do not repeat
+the feature review. Changes to the release orchestrator still receive normal
+review. It prepares in its own worktree, stages only package version metadata
+and generated product identity, runs staged identity/full verification with no inherited `GIT_INDEX_FILE`,
+pushes the exact candidate without touching the caller's branch/index, adopts or
+waits for that SHA's trusted `ci.yml` push run, and creates the immutable tag only
+after success. Resume only from its exact checkpoint; stale-lock recovery is
+explicit. It never stashes, resets, cleans, force-pushes, moves a tag, touches an
+installed process, or interprets a network/API error as absence. See
+`scripts/release/README.md` for status wording and recovery.
+
 ### A tag is not a downloadable release
 
 Never publish a release page while architecture jobs are running. Push the tag;

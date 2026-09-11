@@ -7,7 +7,8 @@ for the one thing a laptop cannot mint, the build attestation.
 
 | Script | What it does |
 | --- | --- |
-| `set-version.sh` | Sets one version across every `package.json` in the workspace |
+| `release.mjs` | Orchestrates an authorized reviewed release through isolated versioning, exact-source CI, immutable tag, release workflow and public verification |
+| `set-version.sh` | Sets one version across every `package.json` in the workspace; it never commits, tags or pushes |
 | `build-linux.sh` | Builds every Linux artifact for **one** architecture into a staging directory, gates on the clean-machine check, and derives the tarball from the AppImage so both carry identical bytes |
 | `manifest.sh` | Writes `SHA256SUMS` over a staging directory, in `sha256sum` format, sorted |
 | `sign.sh` | Creates the release key, and signs `SHA256SUMS` with it |
@@ -15,35 +16,54 @@ for the one thing a laptop cannot mint, the build attestation.
 | `publish.sh` | Finalizes the manifest and installer, uploads both architectures and offline provenance to a draft, verifies remote sizes/digests, then publishes |
 | `verify-install.sh` | Runs `install.sh` end to end against a local directory: install, upgrade, tamper, uninstall |
 
-## By hand
+## Routine authorized release
 
-Each architecture is built on a machine of that architecture. There is no
-cross-compile: the bundled Node, the prebuilt keyring binding and the AppImage
-runtime are all native to the build host, so an x64 machine cannot produce a
-working arm64 app.
+Once the person has authorized a release and the complete source is reviewed and
+committed, use its full SHA. The first command is read-only; inspect its frozen
+source, remote main, tag, release and exact-SHA CI facts before executing the
+second:
 
 ```bash
-# 1. Set the version, commit it, tag it. The tag and EVERY package.json in the
-#    workspace must agree or publish.sh refuses — a release whose tag and
-#    version disagree cannot be reproduced from the tag, and a workspace whose
-#    packages disagree gives `laser --version` and the AppStream release entry
-#    two different answers.
-scripts/release/set-version.sh 0.1.0
-git commit -am "chore: v0.1.0"
-git tag v0.1.0 && git push origin v0.1.0
+node scripts/release/release.mjs 0.1.0 --source FULL_REVIEWED_SHA
+node scripts/release/release.mjs 0.1.0 --publish --source FULL_REVIEWED_SHA
+```
 
-# 2. On an x86_64 machine
+Routine execution needs no release-preparation agent and no second feature
+review. Changes to the orchestrator itself still require review. The command
+leaves the caller's branch, index and unrelated dirty/deleted/untracked files
+alone: it prepares in a detached temporary worktree, stages only version
+metadata, pushes the exact candidate directly to remote `main`, waits for that
+SHA's `ci.yml` push run, and only then creates the immutable tag. If interrupted,
+inspect the printed checkpoint and rerun with `--publish --resume`; a crashed
+lock additionally requires the explicit, validated `--recover-stale-lock`.
+
+`pnpm install --frozen-lockfile` is the isolated default. `--offline` is
+available when the pnpm store is already complete. A version already synchronized
+at the reviewed source is a no-op: no extra commit is made, and an existing
+unambiguous successful exact-SHA CI run is adopted.
+
+The tag-triggered workflow remains the builder and publisher. Each architecture
+is built on native hardware; there is no cross-compile because bundled Node,
+prebuilt keyring bindings and AppImage runtime are architecture-specific. The
+workflow runs the packaged clean-machine and installer gates, uploads to a draft,
+attests the exact assets, publishes only after remote verification, and deploys
+native package repositories. The orchestrator then downloads the public assets,
+checks inventory, sizes, states and `SHA256SUMS`, and verifies offline provenance
+against the expected source, tag and release workflow before reporting success.
+
+The lower-level helpers remain useful for local staging and diagnosis, but they
+do not replace the CI-before-tag transaction:
+
+```bash
 scripts/release/build-linux.sh --arch x64 --out release
-
-# 3. On an aarch64 machine, into the same directory (rsync it over)
-scripts/release/build-linux.sh --arch arm64 --out release
-
-# 4. Stage and verify locally. Public publication also requires CI provenance.
+scripts/release/build-linux.sh --arch arm64 --out release   # on arm64 hardware
 scripts/release/publish.sh --tag v0.1.0 --dir release --stage-only
 scripts/release/verify-install.sh --release release
-# The CI publisher supplies the signed bundle outside the attested directory:
-scripts/release/publish.sh --tag v0.1.0 --dir release --provenance /path/provenance.jsonl
 ```
+
+Never restore the old version/commit/tag shortcut. If the orchestrator cannot
+run, stop and repair or review it rather than creating a tag before exact-source
+CI.
 
 `build-linux.sh` runs `packages/desktop/scripts/clean-machine.mjs` against the
 packaged tree before it copies a single artifact out: `PATH` emptied, a

@@ -91,13 +91,13 @@ read_version() { node -e 'process.stdout.write(String(require(process.argv[1]).v
 VERSION="$(read_version "$REPO_ROOT/packages/desktop/package.json")"
 if [ "$TAG" != "v$VERSION" ]; then
   die "the tag $TAG does not match the app's version $VERSION" \
-    "Set the version first, in every packages/*/package.json and the root one,
-commit it, then tag:
+    "Use the reviewed release orchestrator from the authorized source checkout:
 
-  scripts/release/set-version.sh ${TAG#v}
-  git commit -am 'chore: $TAG' && git tag $TAG && git push origin $TAG
+  node scripts/release/release.mjs ${TAG#v} --source FULL_REVIEWED_SHA
+  node scripts/release/release.mjs ${TAG#v} --publish --source FULL_REVIEWED_SHA
 
-A release whose tag and version disagree cannot be reproduced from the tag."
+It synchronizes versions and requires exact-source CI before an annotated tag.
+See scripts/release/README.md; do not create or move release tags manually."
 fi
 
 # …and every package it ships must agree with the app, because the CLI's

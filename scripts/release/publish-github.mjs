@@ -17,8 +17,7 @@ export function verifyAssets(expected, remote) {
   if (remote.length !== expected.length) throw new Error("Release contains unexpected assets; review the draft before publishing.");
 }
 
-export function verifyInventory(assets, version) {
-  const names = new Set(assets.map((asset) => asset.name));
+export function releaseInventory(version) {
   const required = ["install.sh", "SHA256SUMS", "provenance.jsonl"];
   for (const arch of ["x86_64", "arm64"]) {
     required.push(`${identity.displayName}-${version}-${arch}.AppImage`);
@@ -27,19 +26,36 @@ export function verifyInventory(assets, version) {
   for (const arch of ["x86_64", "aarch64"]) {
     required.push(`${identity.binary}-${version}.${arch}.rpm`, `${identity.binary}-${version}-${arch}.tar.gz`);
   }
+  return required;
+}
+
+export function verifyInventory(assets, version) {
+  const names = new Set(assets.map((asset) => asset.name));
+  const required = releaseInventory(version);
   for (const name of required) if (!names.has(name)) throw new Error(`Incomplete release: missing ${name}`);
   if (names.size !== assets.length || assets.some((asset) => asset.size <= 0)) throw new Error("Duplicate or empty release asset.");
+}
+
+export function isExplicitMissingRelease(message) {
+  const text = String(message).trim();
+  return text === "release not found" || /\bHTTP 404\b/i.test(text);
+}
+
+// The REST /tags route omits drafts. Let gh resolve draft tags, then inspect
+// the release by ID to retain raw asset state and SHA-256 digest fields.
+export function inspectReleaseByTag(tag, repo, gh) {
+  const found = gh(["release", "view", tag, "--repo", repo, "--json", "databaseId"], true);
+  if (!found) return null;
+  if (!Number.isSafeInteger(found.databaseId) || found.databaseId <= 0) {
+    throw new Error(`Release ${tag} has an invalid databaseId.`);
+  }
+  return gh(["api", `repos/${repo}/releases/${found.databaseId}`]);
 }
 
 export function publishRelease({ tag, version, repo, assets, notes = "", draft = false }, gh) {
   if (tag !== `v${version}`) throw new Error("Release tag and version disagree.");
   verifyInventory(assets, version);
-  // The REST /tags route omits drafts. Let gh resolve draft tags, then inspect
-  // the release by ID to retain raw asset state and SHA-256 digest fields.
-  const inspect = () => {
-    const found = gh(["release", "view", tag, "--repo", repo, "--json", "databaseId"], true);
-    return found ? gh(["api", `repos/${repo}/releases/${found.databaseId}`]) : null;
-  };
+  const inspect = () => inspectReleaseByTag(tag, repo, gh);
   let release = inspect();
   // A published release is immutable to this script, including retries.
   if (release && !release.draft) {
@@ -67,7 +83,7 @@ function github(args, allowMissing = false) {
   try {
     output = execFileSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   } catch (error) {
-    if (allowMissing && /^(release not found|.*\(HTTP 404\).*)$/m.test(String(error.stderr).trim())) return null;
+    if (allowMissing && isExplicitMissingRelease(error.stderr)) return null;
     throw error;
   }
   return args[0] === "api" || args.includes("--json") ? JSON.parse(output) : output;
