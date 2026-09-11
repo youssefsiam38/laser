@@ -113,8 +113,24 @@ export class ProjectFilesService {
         if (!info.isFile() || info.dev !== before.dev || info.ino !== before.ino) {
           throw new Error("That file changed while opening. Try opening it again.");
         }
-        const mediaType = FILE_MEDIA_TYPES[extname(target).toLowerCase()] ?? "application/octet-stream";
+        let mediaType = FILE_MEDIA_TYPES[extname(target).toLowerCase()];
+        if (!mediaType) {
+          const head = Buffer.alloc(Math.min(info.size, 8 * 1024));
+          let length = 0;
+          while (length < head.length) {
+            const { bytesRead } = await file.read(head, length, head.length - length, length);
+            if (!bytesRead) break;
+            length += bytesRead;
+          }
+          mediaType = head.subarray(0, length).includes(0) ? "application/octet-stream" : "text/plain";
+        }
         const binary = mediaType.startsWith("image/");
+        const readable = mediaType.startsWith("text/") || ["application/json", "application/xml", "application/yaml", "application/toml"].includes(mediaType);
+        if (!binary && !readable) {
+          // A metadata-only binary result: do not decode or transmit lossy text.
+          return { path: rel.split(sep).join("/"), name: basename(target), mediaType: "application/octet-stream",
+            size: info.size, modifiedAt: info.mtime.toISOString(), encoding: "base64", content: "", truncated: false };
+        }
         const cap = (binary ? 12 : 2) * 1024 * 1024;
         const buffer = Buffer.alloc(Math.min(info.size, cap) + 1);
         let length = 0;
@@ -123,7 +139,7 @@ export class ProjectFilesService {
           if (!bytesRead) break;
           length += bytesRead;
         }
-        const truncated = length > cap || info.size > cap;
+        const truncated = length > cap || info.size > cap || (length === buffer.length && info.size < cap);
         const bytes = buffer.subarray(0, Math.min(length, cap));
         // Do not invent a replacement character for a UTF-8 sequence cut by the cap.
         const decoder = new StringDecoder("utf8");

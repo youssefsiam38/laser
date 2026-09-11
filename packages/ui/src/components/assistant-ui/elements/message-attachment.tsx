@@ -29,7 +29,7 @@ const ICON = { image: ImageIcon, document: FileText, file: Paperclip } as const;
 
 export interface MessageAttachmentsProps extends Omit<ComponentProps<"div">, "children"> {
   attachments: readonly MessageAttachmentItem[];
-  onOpen?: ((id: string) => void) | undefined;
+  onOpen?: ((id: string, trigger: HTMLButtonElement) => void) | undefined;
 }
 
 export function MessageAttachments({ attachments, onOpen, className, ...props }: MessageAttachmentsProps) {
@@ -52,8 +52,8 @@ export function MessageAttachments({ attachments, onOpen, className, ...props }:
           <button
             key={item.id}
             type="button"
-            onClick={() => onOpen(item.id)}
-            className={cn(classes, "outline-none transition-colors duration-(--motion-instant) hover:border-ink-3 hover:text-ink focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live")}
+            onClick={event => onOpen(item.id, event.currentTarget)}
+            className={cn(classes, "pointer-coarse:min-h-11 outline-none transition-colors duration-(--motion-instant) hover:border-ink-3 hover:text-ink focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live")}
           >
             {body}
           </button>

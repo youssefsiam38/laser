@@ -56,7 +56,9 @@ it("opens an image attachment from the matching persisted entry without reading 
   await mount([{ id: "u", parentId: null, type: "message", message: { role: "user", content: [{ type: "text", text: "Look at this" }, { type: "image", mimeType: "image/png", data: png }] } }], "u");
   const imageButton = container.querySelector<HTMLButtonElement>('[data-slot="message-attachments"] button')!;
   expect(imageButton).not.toBeNull();
-  await act(async () => { imageButton.focus(); imageButton.click(); });
+  // Safari-style pointer activation does not focus the trigger before opening.
+  expect(document.activeElement).not.toBe(imageButton);
+  await act(async () => { imageButton.click(); });
   expect(document.querySelector('[role="dialog"] img')?.getAttribute("src")).toBe(`data:image/png;base64,${png}`);
   expect(stable.client.request.mock.calls.some(call => (call as unknown[])[0] === "pi/project/read")).toBe(false);
   await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));

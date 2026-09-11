@@ -24,7 +24,7 @@ export interface EntryLike {
   id?: string;
   parentId?: string | null;
   type?: string;
-  message?: { role?: string };
+  message?: { role?: string; content?: unknown };
 }
 
 const asEntry = (raw: unknown): EntryLike => (raw && typeof raw === "object" ? (raw as EntryLike) : {});
@@ -94,6 +94,19 @@ export function userEntryIds(entries: readonly unknown[], leafId?: string | null
     if (isUserEntry(e) && (!path || path.has(e.id!))) out.push(e.id!);
   }
   return out;
+}
+
+/** Image bytes belong to the exact persisted prompt, never a neighboring branch. */
+export function imagePartsOf(entries: readonly unknown[], entryId: string | undefined): { mimeType: string; data: string }[] {
+  if (entryId === undefined) return [];
+  for (const raw of entries) {
+    const entry = asEntry(raw);
+    if (entry.id !== entryId || !isUserEntry(entry)) continue;
+    const content = entry.message?.content;
+    return Array.isArray(content) ? content.filter((part): part is { type: "image"; mimeType: string; data: string } =>
+      part?.type === "image" && typeof part.mimeType === "string" && part.mimeType.startsWith("image/") && typeof part.data === "string") : [];
+  }
+  return [];
 }
 
 /** Entry id of the n-th (zero-based) user message on the live branch, or undefined when it is not persisted yet. */

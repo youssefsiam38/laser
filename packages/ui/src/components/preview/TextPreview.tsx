@@ -17,6 +17,7 @@ import { useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { boundedPreviewText } from "./display.js";
 
 export interface TextPreviewProps {
   text: string;
@@ -25,12 +26,9 @@ export interface TextPreviewProps {
   className?: string | undefined;
 }
 
-/** Characters drawn before the body says the rest is not shown. ~1500 lines of code. */
-const MAX_CHARS = 120_000;
-
 export function TextPreview({ text, truncated, className }: TextPreviewProps) {
   const [wrap, setWrap] = useState(false);
-  const shown = useMemo(() => (text.length > MAX_CHARS ? text.slice(0, MAX_CHARS) : text), [text]);
+  const shown = useMemo(() => boundedPreviewText(text), [text]);
   const clipped = shown.length < text.length;
 
   return (
@@ -60,7 +58,7 @@ export function TextPreview({ text, truncated, className }: TextPreviewProps) {
         >
           {clipped || truncated ? `first ${shown.length.toLocaleString()} chars` : `${text.length.toLocaleString()} chars`}
         </span>
-        <Button variant="ghost" size="xs" onClick={() => setWrap((v) => !v)} aria-pressed={wrap} className="shrink-0">
+        <Button variant="ghost" size="xs" onClick={() => setWrap((v) => !v)} aria-pressed={wrap} className="shrink-0 pointer-coarse:min-h-11">
           <WrapText />
           {wrap ? "No wrap" : "Wrap"}
         </Button>

@@ -97,7 +97,7 @@ export function ImagePreview({ src, alt, className }: ImagePreviewProps) {
             size="xs"
             onClick={() => setActual((v) => !v)}
             aria-pressed={actual}
-            className="shrink-0"
+            className="shrink-0 pointer-coarse:min-h-11"
           >
             {actual ? <Minimize2 /> : <Maximize2 />}
             {actual ? "Fit" : "Actual size"}

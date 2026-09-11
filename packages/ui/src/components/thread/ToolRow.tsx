@@ -110,7 +110,6 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
     ? (diffView.stats ?? diffStats(diffView.hunks))
     : undefined;
   const diffDescription = appliedDiffStats ? diffStatDescription(appliedDiffStats) : undefined;
-  const fileArgs = args as { path?: unknown; content?: unknown } | undefined;
   const footer = (
     <>
       {approval ? <RowApproval {...props} /> : null}
@@ -213,8 +212,8 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
       peek={failed && text ? <ToolError message={text} compact /> : undefined}
       footer={footer}
     >
-      {(kind === "write" || kind === "edit") && state === "done" && status?.type === "complete" && typeof fileArgs?.path === "string" ? (
-        <FileCard path={fileArgs.path} content={kind === "write" && typeof fileArgs.content === "string" ? fileArgs.content : undefined} />
+      {(kind === "write" || kind === "edit") && state === "done" && status?.type === "complete" && diffView?.path ? (
+        <FileCard path={diffView.path} lines={kind === "write" ? appliedDiffStats?.added : undefined} />
       ) : null}
       {hasBody ? (
         body === "terminal" ? (

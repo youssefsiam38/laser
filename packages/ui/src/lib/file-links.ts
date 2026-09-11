@@ -20,6 +20,19 @@ export function fileLinkPath(href: string, cwd?: string): string | undefined {
     if (!cwd?.startsWith("/")) return undefined;
     path = `${cwd}/${path}`;
   }
+  return normalizeFilePath(path);
+}
+
+/** Filesystem strings are not URLs: preserve literal #, %, ? and :digits. */
+export function projectFilePath(cwd: string, path: string): string {
+  return normalizeFilePath(path.startsWith("/") ? path : `${cwd}/${path}`);
+}
+
+export function fileDirectory(path: string): string {
+  return path.slice(0, path.lastIndexOf("/")) || "/";
+}
+
+function normalizeFilePath(path: string): string {
   const parts: string[] = [];
   for (const part of path.split("/")) {
     if (part === "..") parts.pop();

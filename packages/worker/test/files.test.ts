@@ -1,8 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp, writeFile, mkdir, rm, symlink } from "node:fs/promises";
+import { appendFile, mkdtemp, open, writeFile, mkdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+vi.mock("node:fs/promises", async original => {
+  const fs = await original<typeof import("node:fs/promises")>();
+  return { ...fs, open: vi.fn(fs.open) };
+});
 import { ProjectFilesService, scoreMatch } from "../src/files.js";
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
@@ -29,6 +33,8 @@ it('reads relative and absolute project files with metadata', async () => {
   expect(result).toMatchObject({ path: 'document.md', name: 'document.md', mediaType: 'text/markdown', encoding: 'utf8', content: '# Document\n', size: 11, truncated: false });
   expect(Number.isNaN(Date.parse(result.modifiedAt))).toBe(false);
   expect(await service.read(join(cwd, 'document.md'))).toEqual(result);
+  await symlink(join(cwd, 'document.md'), join(cwd, 'alias.md'));
+  expect(await service.read('alias.md')).toEqual(result);
 });
 it('refuses traversal, escaping symlinks, directories and special files', async () => {
   const base = await mkdtemp(join(tmpdir(), 'file-read-')); roots.push(base);
@@ -60,6 +66,35 @@ it('caps UTF-8 at 2 MiB without a partial character and images at 12 MiB', async
   const image = await service.read('large.png');
   expect(image.truncated).toBe(true);
   expect(Buffer.from(image.content, 'base64').length).toBe(12 * 1024 * 1024);
+});
+
+it.each(['LICENSE', '.env', 'notes.unfamiliar'])('sniffs unknown %s as readable text', async path => {
+  const cwd = await mkdtemp(join(tmpdir(), 'file-read-')); roots.push(cwd);
+  await writeFile(join(cwd, path), 'Human-readable text\n');
+  expect(await new ProjectFilesService({ cwd }).read(path)).toMatchObject({ mediaType: 'text/plain', encoding: 'utf8', content: 'Human-readable text\n', truncated: false });
+});
+it.each(['report.pdf', 'archive.zip', 'unknown'])('does not decode or transmit unsupported binary %s', async path => {
+  const cwd = await mkdtemp(join(tmpdir(), 'file-read-')); roots.push(cwd);
+  // PDF has no NUL: the declared binary format, not the sniff, must decide.
+  const content = path === 'unknown' ? Buffer.concat([Buffer.alloc(8191, 65), Buffer.from([0, 255])]) : Buffer.from('%PDF-1.7\nBinary payload');
+  await writeFile(join(cwd, path), content);
+  expect(await new ProjectFilesService({ cwd }).read(path)).toMatchObject({ mediaType: 'application/octet-stream', encoding: 'base64', content: '', size: content.length, truncated: false });
+});
+it('marks a file that grows after stat as truncated', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'file-read-')); roots.push(cwd);
+  const path = join(cwd, 'growing.txt'); await writeFile(path, 'head');
+  const fs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  vi.mocked(open).mockImplementationOnce(async (...args) => {
+    const handle = await fs.open(...args);
+    const info = await handle.stat();
+    vi.spyOn(handle, 'stat').mockImplementationOnce(async () => {
+      // Real bytes grow at the exact boundary, with no timing assumption.
+      await appendFile(path, ' plus appended tail');
+      return info;
+    });
+    return handle;
+  });
+  expect(await new ProjectFilesService({ cwd }).read('growing.txt')).toMatchObject({ content: 'head ', truncated: true });
 });
 
 it('prefers exact filenames to scattered matches and accepts native path separators', () => {

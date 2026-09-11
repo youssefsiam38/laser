@@ -4,9 +4,21 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { AssistantRuntimeProvider, useExternalStoreRuntime } from "@assistant-ui/react";
 import type { ProjectFileContent } from "@lasercode/protocol";
+import { MAX_DIFF_LINES } from "../../src/components/thread/diff.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { FileCard } from "../../src/components/thread/FileCard.js";
 import { FileViewer } from "../../src/components/thread/FileViewer.js";
+import { attachmentFile } from "../../src/components/preview/media.js";
+import { MAX_PREVIEW_CHARS } from "../../src/components/preview/display.js";
+
+const highlighted = vi.hoisted(() => ({ inputs: [] as string[] }));
+vi.mock("@/components/assistant-ui/elements/shiki-highlighter", async original => {
+  const actual = await original<typeof import("../../src/components/assistant-ui/elements/shiki-highlighter.js")>();
+  return { ...actual, SyntaxHighlighter: (props: Parameters<typeof actual.SyntaxHighlighter>[0]) => {
+    highlighted.inputs.push(props.code);
+    return <actual.SyntaxHighlighter {...props} />;
+  } };
+});
 
 const transport = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock("@/runtime", () => ({ useLaserStable: () => ({ client: transport }), useLaserState: (selector: (state: unknown) => unknown) => selector({ current: "/session", open: { "/session": { state: { cwd: "/project" } } } }) }));
@@ -20,6 +32,7 @@ function Fixture({ children }: { children: React.ReactNode }) {
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   transport.request.mockReset().mockResolvedValue(file());
+  highlighted.inputs = [];
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
@@ -38,6 +51,12 @@ it("reads with the owning cwd, highlights code, closes on Escape and restores fo
   await until(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
   expect(document.activeElement).toBe(button("Open"));
 });
+it("uses Shiki's extension grammar when the worker only identifies plain text", async () => {
+  transport.request.mockResolvedValue(file({ path: "example.svelte", name: "example.svelte", mediaType: "text/plain", content: "<script>const answer = 42;</script>\n<h1>{answer}</h1>" }));
+  await act(async () => root.render(<Fixture><FileViewer open source={{ request: { cwd: "/project", path: "example.svelte" } }} onOpenChange={() => {}} /></Fixture>));
+  await until(() => expect(document.querySelector('[role="dialog"] code')?.textContent).toContain("const answer"));
+  await until(() => expect(document.querySelector('[role="dialog"] code span[style*="--syntax-"]')).not.toBeNull());
+});
 it("defaults Markdown to safe Preview and switches to highlighted Source", async () => {
   transport.request.mockResolvedValue(file({ path: "readme.md", name: "readme.md", mediaType: "text/markdown", content: '# A document\n\n<script>globalThis.compromised = true</script>' }));
   await mount();
@@ -49,7 +68,7 @@ it("defaults Markdown to safe Preview and switches to highlighted Source", async
   expect(button("Source").getAttribute("aria-selected")).toBe("true");
 });
 it("draws an image from base64 and does not fetch transcript bytes", async () => {
-  await act(async () => root.render(<Fixture><FileViewer open source={{ name: "Attached image", mediaType: "image/png", data: "iVBORw0KGgo=" }} onOpenChange={() => {}} /></Fixture>));
+  await act(async () => root.render(<Fixture><FileViewer open source={{ file: attachmentFile({ mimeType: "image/png", data: "iVBORw0KGgo=" }, "Attached image") }} onOpenChange={() => {}} /></Fixture>));
   expect(document.querySelector('img')?.getAttribute("src")).toBe("data:image/png;base64,iVBORw0KGgo=");
   expect(transport.request).not.toHaveBeenCalled();
 });
@@ -108,5 +127,52 @@ it("does not interpret HTML or binary content as a document", async () => {
   await click(button("Close"));
   transport.request.mockResolvedValue(file({ path: "archive.zip", mediaType: "application/zip", content: "\0bytes" }));
   await click(button("Open"));
-  expect(document.querySelector('[data-slot="open-externally"]')?.textContent).toContain("does not draw archive");
+  expect(document.querySelector('[data-slot="open-externally"]')?.textContent).toContain("archive preview is not available");
+});
+
+it.each(["LICENSE", "notes.unfamiliar"])("renders readable %s even with a generic media type", async path => {
+  transport.request.mockResolvedValue(file({ path, name: path, content: "Readable document body" }));
+  await mount();
+  expect(document.querySelector('[data-slot="text-preview"]')?.textContent).toContain("Readable document body");
+  expect(document.querySelector('[data-slot="open-externally"]')).toBeNull();
+});
+it("keeps metadata-only PDFs out of the text preview", async () => {
+  transport.request.mockResolvedValue(file({ path: "report.pdf", name: "report.pdf", encoding: "base64", content: "" }));
+  await mount();
+  expect(document.querySelector('[data-slot="open-externally"]')?.textContent).toContain("binary file preview is not available");
+  expect(document.querySelector('[data-slot="text-preview"]')).toBeNull();
+});
+it("bounds 300 KB of source before the real highlighter and offers the editor", async () => {
+  const openSourceFile = vi.fn(async () => ({ opened: true }));
+  vi.stubGlobal("desktop", { openSourceFile });
+  transport.request.mockResolvedValue(file({ content: "// " + "x".repeat(300_000) + "TAIL_NOT_SHOWN" }));
+  await mount();
+  expect(highlighted.inputs.length).toBeGreaterThan(0);
+  expect(highlighted.inputs.every(text => text.length <= MAX_PREVIEW_CHARS)).toBe(true);
+  await until(() => expect(document.querySelector('[role="dialog"] code')?.textContent?.length).toBe(MAX_PREVIEW_CHARS));
+  expect(document.querySelector('[role="status"]')?.textContent).toContain("This preview is truncated");
+  expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain("TAIL_NOT_SHOWN");
+  const editor = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(node => node.textContent === "Open in editor")!;
+  await click(editor);
+  expect(openSourceFile).toHaveBeenCalledWith("/project/src/example.ts");
+});
+it("bounds Markdown before previewing and uses the same head for Source", async () => {
+  transport.request.mockResolvedValue(file({ path: "readme.md", name: "readme.md", mediaType: "text/markdown", content: "# Head\n\n" + "word ".repeat(60_000) + "TAIL_NOT_SHOWN" }));
+  await mount();
+  expect(document.querySelector('[role="tabpanel"] h1')?.textContent).toBe("Head");
+  expect(document.querySelector('[role="tabpanel"]')?.textContent?.length).toBeLessThanOrEqual(MAX_PREVIEW_CHARS);
+  expect(document.querySelector('[role="status"]')?.textContent).toContain("This preview is truncated");
+  expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain("TAIL_NOT_SHOWN");
+  await click(button("Source"));
+  expect(highlighted.inputs.length).toBeGreaterThan(0);
+  expect(highlighted.inputs.every(text => text.length <= MAX_PREVIEW_CHARS)).toBe(true);
+});
+it("bounds a diff through the canonical line budget and reports truncation", async () => {
+  const patch = "@@ -0,0 +1,650 @@\n" + Array.from({ length: 650 }, (_, i) => `+added-line-${i}`).join("\n");
+  transport.request.mockResolvedValue(file({ path: "changes.patch", mediaType: "text/x-patch", content: patch }));
+  await mount();
+  const body = document.querySelector('[role="dialog"]')?.textContent;
+  expect(body).toContain(`added-line-${MAX_DIFF_LINES - 1}`);
+  expect(body).not.toContain(`added-line-${MAX_DIFF_LINES}`);
+  expect(document.querySelector('[role="status"]')?.textContent).toContain("This preview is truncated");
 });
