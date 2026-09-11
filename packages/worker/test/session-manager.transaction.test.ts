@@ -74,7 +74,10 @@ describe("pinned SessionManager durable append transaction", () => {
     expect(() => manager.beginAppendTransaction()).toThrow(/already active/);
     expect(() => manager.newSession()).toThrow(/transaction is active/);
     expect(() => manager.setSessionFile(path)).toThrow(/transaction is active/);
+    const candidateLeaf = manager.getLeafId();
     expect(() => manager.branch(baselineLeaf!)).toThrow(/transaction is active/);
+    expect(() => manager.branchWithSummary(baselineLeaf, "candidate", undefined, false)).toThrow(/transaction is active/);
+    expect(manager.getLeafId()).toBe(candidateLeaf);
     expect(() => manager.resetLeaf()).toThrow(/transaction is active/);
     expect(() => manager.createBranchedSession(baselineLeaf!)).toThrow(/transaction is active/);
 
@@ -141,15 +144,16 @@ describe("pinned SessionManager durable append transaction", () => {
     expect(readFileSync(path)).toEqual(baseline);
   });
 
-  it("removes only its owned partial when the initial exclusive flush fails", () => {
+  it("removes its owned file after exclusive creation and a partial initial flush", () => {
     const manager = SessionManager.create(root, root);
     manager.appendModelChange("stub", "one");
+    // The genuine header and model line are written first; JSON serialization
+    // of this later entry then fails, after this process exclusively created
+    // and partially populated the final path.
+    manager.appendCustomEntry("test/unserializable", { value: 1n });
     const path = manager.getSessionFile()!;
-    chmodSync(root, 0o500);
-    expect(() => manager.flush()).toThrow();
+    expect(() => manager.flush()).toThrow(/BigInt|serializ/);
     expect(existsSync(path)).toBe(false);
-    chmodSync(root, 0o700);
-    manager.flush();
-    expect(existsSync(path)).toBe(true);
+    expect(readdirSync(root).filter((name) => name.includes(".append-") || name.endsWith(".tmp"))).toEqual([]);
   });
 });

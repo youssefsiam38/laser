@@ -50,6 +50,7 @@ import { ProjectRegistry } from "./projects.js";
 import { PushService } from "./push.js";
 import { RelayClient, type RelayClientState, type RelayClientStats } from "./relay-client.js";
 import { Router } from "./router.js";
+import { SessionLoadDelivery } from "./session-load-delivery.js";
 import { ViewCache } from "./views.js";
 import type { WorkerClient } from "./worker-client.js";
 import { WorkerPool, type WorkerPoolOptions } from "./worker-pool.js";
@@ -75,6 +76,8 @@ export interface HostServerOptions {
   workspacesDir?: string;
   /** Idle time before an unused worker is retired; 0 disables retirement. */
   workerIdleMs?: number;
+  /** Test seam for the pool's idle sweep cadence. */
+  workerSweepMs?: number;
   /**
    * Extra browser origins allowed to open the WebSocket, on top of this host's
    * own `http://127.0.0.1:<port>` / `http://localhost:<port>`. Only add one you
@@ -199,6 +202,8 @@ export class HostServer {
   private readonly clients = new Set<WebSocket>();
   /** Session paths each client is following, for the retirement guard. */
   private readonly attached = new Map<WebSocket, Set<string>>();
+  /** Question-only response fences for concurrent session/load requests, per socket. */
+  private readonly loadDeliveries = new Map<WebSocket, Set<SessionLoadDelivery>>();
   private readonly log: (line: string) => void;
   private readonly uiDir: string | undefined;
   /** Set by `listen()`; the port the Origin allowlist is built from. */
@@ -347,6 +352,7 @@ export class HostServer {
       ...(options.workerMain ? { workerMain: options.workerMain } : {}),
       ...(options.nodeBinary ? { nodeBinary: options.nodeBinary } : {}),
       ...(options.workerIdleMs !== undefined ? { idleMs: options.workerIdleMs } : {}),
+      ...(options.workerSweepMs !== undefined ? { sweepMs: options.workerSweepMs } : {}),
       // A worker's first request already sees the agent definitions.
       prime: async (client, cwd) => {
         await client.request("agents/sync", { snapshot: this.agents.snapshot() });
@@ -510,6 +516,8 @@ export class HostServer {
     for (const ws of this.clients) ws.close(1001, "host shutting down");
     this.clients.clear();
     this.attached.clear();
+    for (const deliveries of this.loadDeliveries.values()) for (const delivery of deliveries) delivery.dispose();
+    this.loadDeliveries.clear();
     await this.pool.stopAll();
     // After the workers: their exit fails what was still running.
     this.runs.close();
@@ -752,7 +760,13 @@ export class HostServer {
 
   private broadcast(notification: JsonRpcNotification): void {
     const line = JSON.stringify(notification);
-    for (const ws of this.clients) if (ws.readyState === ws.OPEN) ws.send(line);
+    for (const ws of this.clients) {
+      if (ws.readyState !== ws.OPEN) continue;
+      const held = [...(this.loadDeliveries.get(ws) ?? [])]
+        .map((delivery) => delivery.offer(notification))
+        .some(Boolean);
+      if (!held) ws.send(line);
+    }
     for (const listener of this.notificationListeners) {
       // One relayed device throwing must not cost the others their stream.
       try {
@@ -786,6 +800,7 @@ export class HostServer {
   private onConnection(ws: WebSocket): void {
     this.clients.add(ws);
     this.attached.set(ws, new Set());
+    this.loadDeliveries.set(ws, new Set());
     // A client that connects while a project is waiting on a trust decision
     // must see the question, not a worker that never starts.
     for (const request of this.projects.pendingTrustRequests()) {
@@ -800,9 +815,21 @@ export class HostServer {
         return;
       }
       const request = raw as { method?: unknown; params?: { path?: unknown; id?: unknown } } | null;
-      const response = await this.router.handle(raw);
-      if (!response.error) this.noteRequest(ws, request, response.result);
-      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(response));
+      const delivery = request?.method === "session/load" && typeof request.params?.path === "string"
+        ? new SessionLoadDelivery(request.params.path)
+        : undefined;
+      if (delivery) this.loadDeliveries.get(ws)?.add(delivery);
+      try {
+        const response = await this.router.handle(raw);
+        if (!response.error) this.noteRequest(ws, request, response.result);
+        const sent = await this.sendSocket(ws, JSON.stringify(response));
+        if (delivery && sent && !response.error) {
+          await delivery.flush((notification) => this.sendSocket(ws, JSON.stringify(notification)));
+        }
+      } finally {
+        delivery?.dispose();
+        if (delivery) this.loadDeliveries.get(ws)?.delete(delivery);
+      }
     });
     ws.on("close", () => this.dropClient(ws));
     ws.on("error", () => this.dropClient(ws));
@@ -841,9 +868,23 @@ export class HostServer {
     }
   }
 
+  private sendSocket(ws: WebSocket, line: string): Promise<boolean> {
+    if (ws.readyState !== ws.OPEN || !this.clients.has(ws)) return Promise.resolve(false);
+    return new Promise<boolean>((resolve) => {
+      try {
+        ws.send(line, (error) => resolve(!error && ws.readyState === ws.OPEN && this.clients.has(ws)));
+      } catch {
+        resolve(false);
+      }
+    });
+  }
+
   private dropClient(ws: WebSocket): void {
     this.clients.delete(ws);
     this.attached.delete(ws);
+    const deliveries = this.loadDeliveries.get(ws);
+    if (deliveries) for (const delivery of deliveries) delivery.dispose();
+    this.loadDeliveries.delete(ws);
   }
 
   /**

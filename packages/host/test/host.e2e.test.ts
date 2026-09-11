@@ -106,6 +106,8 @@ beforeEach(async () => {
     agentDir: join(base, "agent"),
     sessionDir: join(base, "sessions"),
     stateDir: join(base, "state"),
+    workerIdleMs: 1_000,
+    workerSweepMs: 10,
     log: (l) => logs.push(l),
   });
 });
@@ -137,6 +139,8 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
       { name: "chat", cwd: join(base, "state", "workspaces", "chat"), kind: "chat" },
     ] as const;
     const created: SessionState[] = [];
+    const bytesByPath = new Map<string, string>();
+    const pidByCwd = new Map<string, number | undefined>();
     try {
       for (const item of roots) {
         const { state } = await client.request<{ state: SessionState }>("session/new", { cwd: item.cwd, agentName: item.name });
@@ -146,13 +150,24 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
         const entries = bytes.trim().split("\n").map((line) => JSON.parse(line) as { type?: string; id?: string; cwd?: string });
         expect(entries[0]).toMatchObject({ type: "session", id: state.id, cwd: state.cwd });
         expect(entries.some((entry) => entry.type === "message")).toBe(false);
-        const firstPid = host.pool.workerInfo(state.cwd)?.pid;
-        await host.pool.restart(state.cwd);
-        expect(host.pool.workerInfo(state.cwd)?.pid).not.toBe(firstPid);
-        const { state: retired } = await client.request<{ state: SessionState }>("session/load", { path: state.path });
-        expect(retired).toMatchObject({ id: state.id, path: state.path, cwd: state.cwd, messageCount: 0, model: state.model, thinkingLevel: state.thinkingLevel, agent: state.agent });
-        expect(readFileSync(state.path, "utf8")).toBe(bytes);
+        bytesByPath.set(state.path, bytes);
+        pidByCwd.set(state.cwd, host.pool.workerInfo(state.cwd)?.pid);
         created.push(state);
+        await client.request("pi/session/detach", { path: state.path });
+      }
+
+      // Exercise the production lifecycle: explicit detach, idle threshold,
+      // timer sweep, orderly worker retirement, then reopen from disk.
+      const deadline = Date.now() + 10_000;
+      while (created.some((state) => host.pool.workerInfo(state.cwd)?.status !== "retired")) {
+        if (Date.now() > deadline) throw new Error(`workers did not retire: ${JSON.stringify(host.pool.status())}`);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      for (const state of created) {
+        const { state: retired } = await client.request<{ state: SessionState }>("session/load", { path: state.path });
+        expect(host.pool.workerInfo(state.cwd)?.pid).not.toBe(pidByCwd.get(state.cwd));
+        expect(retired).toMatchObject({ id: state.id, path: state.path, cwd: state.cwd, messageCount: 0, model: state.model, thinkingLevel: state.thinkingLevel, agent: state.agent });
+        expect(readFileSync(state.path, "utf8")).toBe(bytesByPath.get(state.path));
       }
 
       client.close();

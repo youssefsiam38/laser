@@ -47,9 +47,11 @@ external prompt-admission decision. The local patch adds opt-in
 `SessionManager.flush()` and a single append-scoped transaction. Rollback changes
 no durable byte; commit verifies the exact baseline and atomically replaces it
 with baseline plus the accepted suffix. A failed commit retains that suffix in
-the same manager for one ordered retry, then fails closed. Pi's default remains
-lazy. SDK construction also treats saved model/thinking entries as existing
-zero-message state, so resume does not append another initialization tuple.
+the same manager for one ordered retry, then fails closed. Structural operations,
+including summary branches, are refused before mutation while a transaction is
+active. Pi's default remains lazy. SDK construction also treats saved
+model/thinking entries as existing zero-message state, so resume does not append
+another initialization tuple.
 
 Direct policy tests live in
 `packages/worker/test/session-manager.transaction.test.ts`; Stable integration

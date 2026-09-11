@@ -255,7 +255,7 @@ describe("WorkerServer", () => {
     expect(loaded.result).toMatchObject({ state: { path: "/tmp/fake/s1.jsonl", agent: { agentName: "reviewer", kind: "root" } } });
   });
 
-  it("holds every prompt-entry route at one runtime generation during first-turn replacement", async () => {
+  it("holds mutating prompt-entry routes while baseline hydration reads remain available", async () => {
     const h = harness();
     const snapshot = fallbackSnapshot();
     await h.call(1, "agents/sync", {
@@ -304,16 +304,17 @@ describe("WorkerServer", () => {
       id: (tray.result as { message: { id: string } }).message.id,
     });
     driver.routed = [];
-    const entries = h.call(11, "pi/session/entries", { path: "/tmp/fake/s1.jsonl" });
+    const entries = await h.call(11, "pi/session/entries", { path: "/tmp/fake/s1.jsonl" });
+    expect(entries.result).toMatchObject({ entries: expect.any(Array), leafId: null });
+    expect(driver.routed).toEqual([]);
     const rename = h.call(12, "pi/session/rename", { path: "/tmp/fake/s1.jsonl", name: "wait" });
     const models = h.call(13, "pi/model/list", { path: "/tmp/fake/s1.jsonl" });
 
     expect(driver.routed).toEqual([]);
     prepare.resolve();
-    await Promise.all([binding, steer, follow, thinking, traySteer, entries, rename, models]);
+    await Promise.all([binding, steer, follow, thinking, traySteer, rename, models]);
 
     expect(driver.routed.map((call) => call.route).sort()).toEqual([
-      "entries",
       "followUp",
       "models",
       "prompt",

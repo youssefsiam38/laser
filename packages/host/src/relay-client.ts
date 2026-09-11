@@ -36,6 +36,7 @@ import {
 } from "@lasercode/crypto";
 import { ErrorCodes, type JsonRpcNotification, type JsonRpcResponse, type SessionUpdateParams, WIRE_NAMESPACE } from "@lasercode/protocol";
 import WebSocket from "ws";
+import { SessionLoadDelivery } from "./session-load-delivery.js";
 
 export type RelayClientState =
   | "stopped"
@@ -137,6 +138,12 @@ export class RelayClient {
   private cookie: string | undefined;
   private stopped = true;
   private currentState: RelayClientState = "stopped";
+  /** Changes whenever the Noise transport is torn down; old async sends may not cross it. */
+  private connectionGeneration = 0;
+  /** Serializes unshaped Noise encryption and socket writes within/across generations. */
+  private sendTail: Promise<void> = Promise.resolve();
+  /** Question-only fences for concurrent session/load requests on this device connection. */
+  private readonly loadDeliveries = new Set<SessionLoadDelivery>();
 
   private readonly seqBySession = new Map<string, number>();
   private counters = {
@@ -455,37 +462,62 @@ export class RelayClient {
     // guessed at.
     const message = raw as { id?: unknown; method?: unknown };
     if (typeof message?.method !== "string" || message.id === undefined) return;
-    const response = await this.options.handle(raw);
-    const encoded = this.encode(response);
-    if (encoded) {
-      await this.send(encoded);
-      return;
+    const path = message.method === "session/load"
+      ? (raw as { params?: { path?: unknown } }).params?.path
+      : undefined;
+    const delivery = typeof path === "string" ? new SessionLoadDelivery(path) : undefined;
+    if (delivery) this.loadDeliveries.add(delivery);
+    const generation = this.connectionGeneration;
+    try {
+      const response = await this.options.handle(raw);
+      const encoded = this.encode(response);
+      if (encoded) {
+        const sent = await this.sendForGeneration(encoded, generation);
+        if (delivery && sent && !response.error) {
+          await delivery.flush(async (notification) => {
+            const replay = this.encode(notification);
+            if (!replay) {
+              this.counters.oversizedMessages++;
+              return false;
+            }
+            return this.sendForGeneration(replay, generation);
+          });
+        }
+        return;
+      }
+      this.counters.oversizedMessages++;
+      // Better an error the device can show than a frame that closes the socket.
+      // It is not a usable load response, so its questions are discarded.
+      await this.sendForGeneration(
+        utf8(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: (message as { id: string | number }).id,
+            error: {
+              code: ErrorCodes.Internal,
+              message:
+                "that answer is too large to send over the relay. Open this session on the desktop, " +
+                "or ask for less of it at a time.",
+            },
+          }),
+        ),
+        generation,
+      );
+    } finally {
+      delivery?.dispose();
+      if (delivery) this.loadDeliveries.delete(delivery);
     }
-    this.counters.oversizedMessages++;
-    // Better an error the device can show than a frame that closes the socket.
-    await this.send(
-      utf8(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          id: (message as { id: string | number }).id,
-          error: {
-            code: ErrorCodes.Internal,
-            message:
-              "that answer is too large to send over the relay. Open this session on the desktop, " +
-              "or ask for less of it at a time.",
-          },
-        }),
-      ),
-    );
   }
 
   private onNotification(notification: JsonRpcNotification): void {
+    const held = [...this.loadDeliveries].map((delivery) => delivery.offer(notification)).some(Boolean);
     if (notification.method === "session/update") {
       const params = notification.params as SessionUpdateParams;
       if (params?.sessionPath && typeof params.seq === "number") {
         this.seqBySession.set(params.sessionPath, params.seq);
       }
     }
+    if (held) return;
     if (!this.session) {
       // Dropped on purpose: the device resumes with session/load { fromSeq }.
       this.counters.notificationsDropped++;
@@ -518,11 +550,39 @@ export class RelayClient {
   }
 
   private async send(payload: Uint8Array): Promise<void> {
+    await this.sendForGeneration(payload, this.connectionGeneration);
+  }
+
+  /** Confirm delivery only to the Noise/WebSocket generation that received the request. */
+  private async sendForGeneration(payload: Uint8Array, generation: number): Promise<boolean> {
+    if (generation !== this.connectionGeneration || !this.session || !this.ws || this.ws.readyState !== this.ws.OPEN) return false;
     if (this.shaper) {
       this.shaper.enqueue(payload);
-      return;
+      return generation === this.connectionGeneration && this.session !== null;
     }
-    await this.writeFrame(payload);
+    return this.enqueueSend(async () => {
+      if (generation !== this.connectionGeneration || !this.session || !this.ws || this.ws.readyState !== this.ws.OPEN) return false;
+      const session = this.session;
+      const ws = this.ws;
+      const frame = await session.encrypt(payload);
+      if (generation !== this.connectionGeneration || this.session !== session || this.ws !== ws || ws.readyState !== ws.OPEN) return false;
+      return new Promise<boolean>((resolve) => {
+        try {
+          ws.send(frame, { binary: true }, (error) => {
+            if (!error) this.counters.framesSent++;
+            resolve(!error && generation === this.connectionGeneration && this.session === session && this.ws === ws && ws.readyState === ws.OPEN);
+          });
+        } catch {
+          resolve(false);
+        }
+      });
+    });
+  }
+
+  private enqueueSend<T>(operation: () => Promise<T>): Promise<T> {
+    const queued = this.sendTail.catch(() => {}).then(operation);
+    this.sendTail = queued.then(() => {}, () => {});
+    return queued;
   }
 
   private async writeFrame(payload: Uint8Array | null): Promise<void> {
@@ -545,6 +605,9 @@ export class RelayClient {
   // ------------------------------------------------------------ lifecycle --
 
   private teardown(reason: string): void {
+    this.connectionGeneration++;
+    for (const delivery of this.loadDeliveries) delivery.dispose();
+    this.loadDeliveries.clear();
     this.shaper?.stop();
     this.shaper = null;
     this.session?.close();

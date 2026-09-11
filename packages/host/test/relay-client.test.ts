@@ -20,7 +20,7 @@ import {
   fromUtf8,
   type KeyPair,
 } from "@lasercode/crypto";
-import type { JsonRpcNotification, JsonRpcResponse } from "@lasercode/protocol";
+import { ErrorCodes, type JsonRpcNotification, type JsonRpcResponse } from "@lasercode/protocol";
 import { RelayClient } from "../src/relay-client.js";
 
 /** Mirrors `CHANNEL_PROTOCOL_PREFIX` in @lasercode/relay; see the note above. */
@@ -173,6 +173,12 @@ class Phone {
   }
 }
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 async function until(predicate: () => boolean, timeoutMs: number, what: string): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
@@ -186,7 +192,10 @@ afterEach(async () => {
   for (const fn of cleanup.splice(0).reverse()) await fn();
 });
 
-async function harness(options: { shapeTiming?: boolean } = {}) {
+async function harness(options: {
+  shapeTiming?: boolean;
+  handle?: (raw: unknown, notify: (notification: JsonRpcNotification) => void) => Promise<JsonRpcResponse>;
+} = {}) {
   const relay = new StubRelay();
   const url = await relay.listen();
   cleanup.push(() => relay.close());
@@ -211,6 +220,7 @@ async function harness(options: { shapeTiming?: boolean } = {}) {
     ...(options.shapeTiming ? { shapeTiming: true } : {}),
     handle: async (raw): Promise<JsonRpcResponse> => {
       requests.push(raw);
+      if (options.handle) return options.handle(raw, (notification) => emit(notification));
       const id = (raw as { id: string | number }).id;
       return { jsonrpc: "2.0", id, result: { ok: true, method: (raw as { method: string }).method } };
     },
@@ -240,6 +250,79 @@ describe("RelayClient", () => {
     await until(() => phone.messages.length > 0, 2000, "a response");
     expect(phone.messages[0]).toMatchObject({ id: 1, result: { ok: true, method: "pi/session/list" } });
     expect(h.requests).toHaveLength(1);
+  });
+
+  it("keeps numbered replay before a load response and delivers only unresolved questions after it", async () => {
+    const h = await harness({
+      handle: async (raw, notify) => {
+        const request = raw as { id: number; method: string };
+        notify(update("/s/a.jsonl", 1));
+        notify({ jsonrpc: "2.0", method: "pi/ui/request", params: { path: "/s/a.jsonl", id: "q", method: "confirm", title: "Continue?" } });
+        return { jsonrpc: "2.0", id: request.id, result: { ok: true } };
+      },
+    });
+    const phone = await Phone.attach(h.url, h.channelId, h.device, h.desktop.publicKey);
+    cleanup.push(() => phone.close());
+    await phone.ready();
+    await until(() => h.client.state === "connected", 2000, "connected");
+
+    await phone.send({ jsonrpc: "2.0", id: 1, method: "session/load", params: { path: "/s/a.jsonl", fromSeq: 0 } });
+    await until(() => phone.messages.length === 3, 2000, "update, response, and question");
+    expect(phone.messages.map((message) => (message as { method?: string; id?: number }).method ?? `response:${(message as { id: number }).id}`))
+      .toEqual(["session/update", "response:1", "pi/ui/request"]);
+  });
+
+  it("does not replay a load question when the usable response is oversized", async () => {
+    const h = await harness({
+      handle: async (raw, notify) => {
+        notify({ jsonrpc: "2.0", method: "pi/ui/request", params: { path: "/s/a.jsonl", id: "q", method: "confirm", title: "Continue?" } });
+        return { jsonrpc: "2.0", id: (raw as { id: number }).id, result: { body: "x".repeat(200_000) } };
+      },
+    });
+    const phone = await Phone.attach(h.url, h.channelId, h.device, h.desktop.publicKey);
+    cleanup.push(() => phone.close());
+    await phone.ready();
+    await until(() => h.client.state === "connected", 2000, "connected");
+
+    await phone.send({ jsonrpc: "2.0", id: 1, method: "session/load", params: { path: "/s/a.jsonl" } });
+    await until(() => phone.messages.length > 0, 2000, "oversize error response");
+    expect(phone.messages[0]).toMatchObject({ id: 1, error: { code: ErrorCodes.Internal } });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(phone.messages.some((message) => (message as { method?: string }).method === "pi/ui/request")).toBe(false);
+  });
+
+  it("drops an old connection's held questions when it disconnects during load", async () => {
+    const gate = deferred();
+    let entered = false;
+    const h = await harness({
+      handle: async (raw, notify) => {
+        const request = raw as { id: number; method: string };
+        if (request.id === 1) {
+          notify({ jsonrpc: "2.0", method: "pi/ui/request", params: { path: "/s/a.jsonl", id: "old", method: "confirm", title: "Old?" } });
+          entered = true;
+          await gate.promise;
+        }
+        return { jsonrpc: "2.0", id: request.id, result: { ok: true } };
+      },
+    });
+    const first = await Phone.attach(h.url, h.channelId, h.device, h.desktop.publicKey);
+    await first.ready();
+    await until(() => h.client.state === "connected", 2000, "connected");
+    await first.send({ jsonrpc: "2.0", id: 1, method: "session/load", params: { path: "/s/a.jsonl" } });
+    await until(() => entered, 2000, "load handler");
+    first.close();
+    await until(() => h.client.state === "waiting_for_peer", 2000, "disconnect");
+    gate.resolve();
+
+    const second = await Phone.attach(h.url, h.channelId, h.device, h.desktop.publicKey);
+    cleanup.push(() => second.close());
+    await second.ready();
+    await until(() => h.client.state === "connected", 2000, "reconnected");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(second.messages).toEqual([]);
+    await second.send({ jsonrpc: "2.0", id: 2, method: "session/cancel", params: { path: "/s/a.jsonl" } });
+    await until(() => second.messages.length === 1, 2000, "new response");
+    expect(second.messages[0]).toMatchObject({ id: 2, result: { ok: true } });
   });
 
   it("forwards notifications only while a device is attached, and tracks each session's seq", async () => {

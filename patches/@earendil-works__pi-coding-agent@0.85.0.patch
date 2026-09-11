@@ -145,7 +145,7 @@ index a8d14157e590b439bbe83bacb24d4449d9ea54cb..f2cf836bd2547172a81dff92438df19f
      private _appendEntry;
      /** Append a message as child of current leaf, then advance leaf. Returns entry id.
 diff --git a/dist/core/session-manager.js b/dist/core/session-manager.js
-index fbb784f771553c21e993cf82200a80a854261437..ea8ce71aed391b11bf85123250f4609f127699bb 100644
+index fbb784f771553c21e993cf82200a80a854261437..ed6ec44dd1faaa78830aed35eec89c4c3589d08d 100644
 --- a/dist/core/session-manager.js
 +++ b/dist/core/session-manager.js
 @@ -1,6 +1,6 @@
@@ -378,7 +378,15 @@ index fbb784f771553c21e993cf82200a80a854261437..ea8ce71aed391b11bf85123250f4609f
          this.leafId = null;
      }
      /**
-@@ -1091,6 +1259,7 @@ export class SessionManager {
+@@ -1066,6 +1234,7 @@ export class SessionManager {
+      * context from the abandoned conversation path.
+      */
+     branchWithSummary(branchFromId, summary, details, fromHook, usage) {
++        this._assertNoAppendTransaction("branch with a summary");
+         if (branchFromId !== null && !this.byId.has(branchFromId)) {
+             throw new Error(`Entry ${branchFromId} not found`);
+         }
+@@ -1091,6 +1260,7 @@ export class SessionManager {
       * Returns the new session file path, or undefined if not persisting.
       */
      createBranchedSession(leafId) {

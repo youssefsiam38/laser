@@ -581,6 +581,7 @@ describe("StableSdkDriver with an agent definition", () => {
     await call("agents/sync", { snapshot: { ...snapshot, agents: [...snapshot.agents, selected] } });
 
     const accepted = (await call("session/new", { cwd: join(base, "project"), agentName: original.name }).then((reply) => reply.result as { state: SessionState })).state;
+    const acceptedBaselineEntries = (await call("pi/session/entries", { path: accepted.path }).then((reply) => reply.result as { entries: unknown[]; leafId: string | null }));
     const acceptedStart = messages.length;
     const acceptedRequestId = id + 1;
     const accepting = call("session/prompt", {
@@ -590,11 +591,25 @@ describe("StableSdkDriver with an agent definition", () => {
     });
     await entered[0]!.promise;
     const acceptedQuestion = notificationsSince(acceptedStart, "pi/ui/request")[0];
+    const acceptedQuestionId = (acceptedQuestion!.params as { id: string }).id;
     expect(acceptedQuestion?.params).toMatchObject({ path: accepted.path, method: "confirm", title: "Candidate question" });
     expect(messages.some((message) => "id" in message && !("method" in message) && message.id === acceptedRequestId)).toBe(false);
+
+    // The real UI's complete open sequence must not queue behind the preflight
+    // lease held by this very question, and every read must describe one
+    // genuine pre-candidate baseline while the live question is replayed.
+    const reloaded = await call("session/load", { path: accepted.path, fromSeq: 0 }).then((reply) => reply.result as { state: SessionState; seq: number });
+    const hydratedEntries = await call("pi/session/entries", { path: accepted.path }).then((reply) => reply.result as { entries: unknown[]; leafId: string | null });
+    const hydratedGoal = await call("session/goal/get", { path: accepted.path }).then((reply) => reply.result);
+    const hydratedPending = await call("session/pending/list", { path: accepted.path }).then((reply) => reply.result);
+    expect(reloaded.state).toMatchObject({ id: accepted.id, path: accepted.path, model: accepted.model, thinkingLevel: accepted.thinkingLevel, agent: accepted.agent });
+    expect(hydratedEntries).toEqual(acceptedBaselineEntries);
+    expect(JSON.stringify(hydratedEntries)).not.toContain("candidate-projection");
+    expect(hydratedGoal).toEqual({ goal: null });
+    expect(hydratedPending).toEqual({ messages: [] });
+    expect(notificationsSince(acceptedStart, "pi/ui/request").filter((message) => (message.params as { id: string }).id === acceptedQuestionId)).toHaveLength(2);
     expect(notificationsSince(acceptedStart, "session/update").map((message) => (message.params as { update: { kind: string } }).update.kind)).toEqual(["extension_error"]);
     expect(notificationsSince(acceptedStart, "pi/ui/event").map((message) => (message.params as { method: string }).method)).toEqual(["notify"]);
-    const acceptedQuestionId = (acceptedQuestion!.params as { id: string }).id;
     const acceptedQuestionEvent = driverEvents.find((event) => event.type === "ui_request" && event.request.id === acceptedQuestionId);
     expect(acceptedQuestionEvent).toMatchObject({ type: "ui_request", invocation: { id: expect.any(String) } });
     expect((await call("pi/ui/response", { id: acceptedQuestionId, confirmed: true })).result).toEqual({ delivered: true });

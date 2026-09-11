@@ -62,10 +62,23 @@ export interface WorkerServerOptions {
 /** Sessions whose first prompt may wait for a Namer model; a worker holds few at once. */
 const UNNAMED_MAX = 32;
 
+interface PreAcceptanceHydration {
+  /** Genuine accepted baseline captured before candidate runtime preparation. */
+  state: SessionState;
+  entries: unknown[];
+  leafId: string | null;
+  goal: Awaited<ReturnType<NonNullable<SessionDriver["goalState"]>>>;
+  pending: ReturnType<PendingTray["list"]>;
+  seq: number;
+  buffer: SessionUpdateParams[];
+}
+
 interface Live {
   driver: SessionDriver;
   seq: number;
   buffer: SessionUpdateParams[];
+  /** Read-only hydration baseline while a first turn is speculative/restoring. */
+  preAcceptance?: PreAcceptanceHydration;
   unsubscribe: () => void;
   path: string;
   /** The harness's view of this session, once attached. */
@@ -284,12 +297,11 @@ export class WorkerServer {
       }
 
       // --- the pending tray (pending.ts) ---
-      case "session/pending/list":
-        // Deliberately not part of `session/load`'s answer or of `replay()`:
-        // both run before the response is written, so a client that has just
-        // reconnected would be told about a tray for a session it does not
-        // hold yet. Asking for it is one request and no ordering to get wrong.
-        return { messages: this.tray(req.params.path).list() } satisfies Result<"session/pending/list">;
+      case "session/pending/list": {
+        const live = this.live(req.params.path);
+        const messages = live.preAcceptance?.pending ?? this.tray(req.params.path).list();
+        return { messages } satisfies Result<"session/pending/list">;
+      }
       case "session/pending/add":
         return {
           message: this.tray(req.params.path).add(await this.withDictation(req.params.path, req.params.content)),
@@ -338,6 +350,8 @@ export class WorkerServer {
       }
       case "pi/session/entries": {
         const live = this.live(req.params.path);
+        const baseline = live.preAcceptance;
+        if (baseline) return { entries: baseline.entries, leafId: baseline.leafId } satisfies Result<"pi/session/entries">;
         return (await this.firstTurnLock.run(live.path, () => live.driver.entries())) satisfies Result<"pi/session/entries">;
       }
       case "pi/session/compact": {
@@ -366,7 +380,9 @@ export class WorkerServer {
       }
       case "session/goal/get": {
         const live = this.live(req.params.path);
-        const goal = await this.firstTurnLock.run(live.path, async () => live.driver.goalState ? live.driver.goalState() : null);
+        const goal = live.preAcceptance
+          ? live.preAcceptance.goal
+          : await this.firstTurnLock.run(live.path, async () => live.driver.goalState ? live.driver.goalState() : null);
         return { goal: goal ?? null } satisfies Result<"session/goal/get">;
       }
       case "session/goal/action": {
@@ -727,6 +743,18 @@ export class WorkerServer {
   private async sessionLoad(params: ClientRequests["session/load"]["params"]): Promise<Result<"session/load">> {
     const existing = this.sessions.get(params.path);
     if (existing) {
+      // A no-signal extension question may be holding prompt preflight. Never
+      // queue reconnect hydration behind the lease that only its answer can
+      // release. Serve one coherent genuine baseline, then replay live control.
+      const baseline = existing.preAcceptance;
+      if (baseline) {
+        this.replay(existing, params.fromSeq, baseline);
+        return {
+          state: this.decorate(existing, baseline.state),
+          replayFrom: this.replayFloorFrom(baseline.buffer, baseline.seq, params.fromSeq),
+          seq: baseline.seq,
+        };
+      }
       return this.firstTurnLock.run(existing.path, async () => {
         const state = existing.driver.state();
         this.replay(existing, params.fromSeq);
@@ -878,18 +906,20 @@ export class WorkerServer {
    * lets it notice the mismatch and re-hydrate.
    */
   private replayFloor(live: Live, fromSeq: number | undefined): number {
+    return this.replayFloorFrom(live.buffer, live.seq, fromSeq);
+  }
+
+  private replayFloorFrom(buffer: SessionUpdateParams[], seq: number, fromSeq: number | undefined): number {
     const asked = fromSeq ?? 0;
     // A restarted worker numbers from 1 again, so a client holding seq 40 is
     // asking about an epoch this process never had. Answering `asked` would
     // tell it "you missed nothing" and every update we then send would be
     // deduped away as a replay: alive-looking, rendering nothing. Checked
-    // before the buffer, because the buffer is usually non-empty already —
-    // `WorkerPool.reopen` re-loads the session right after the crash and the
-    // first driver event lands in it.
-    if (asked > live.seq) return live.seq;
-    const oldest = live.buffer[0]?.seq;
-    // Nothing buffered: nothing after `live.seq` can be replayed either.
-    if (oldest === undefined) return live.seq;
+    // before the buffer, because the buffer is usually non-empty already.
+    if (asked > seq) return seq;
+    const oldest = buffer[0]?.seq;
+    // Nothing buffered: nothing after `seq` can be replayed either.
+    if (oldest === undefined) return seq;
     return asked >= oldest - 1 ? asked : oldest - 1;
   }
 
@@ -1050,20 +1080,33 @@ export class WorkerServer {
       lease.release();
       throw new ProtocolError(ErrorCodes.InvalidParams, `No custom agent is called "${firstTurn.agentName}".`);
     }
+    let hydration: PreAcceptanceHydration;
     try {
       const pendingUi = (live.driver as { pendingUi?: () => unknown[] }).pendingUi?.call(live.driver) ?? [];
-      const { entries } = await live.driver.entries();
+      const { entries, leafId } = await live.driver.entries();
       const goal = await live.driver.goalState?.() ?? null;
+      const state = live.driver.state();
+      const pending = this.tray(live.path).list();
       assertFirstTurnAdmission({
-        state: live.driver.state(),
+        state,
         entries,
         roleKind: this.harness.roleOf(live.path)?.kind,
-        pendingTrayCount: live.pending?.list().length ?? 0,
+        pendingTrayCount: pending.length,
         dialogCount: pendingUi.length,
         hasGoal: goal !== null,
         hasLiveWork: this.harness.runs().some((run) => run.rootSessionPath === live.path || run.parent?.sessionPath === live.path),
         runningToolCount: this.runningTools.get(live.path)?.size ?? 0,
       });
+      hydration = {
+        state,
+        entries: [...entries],
+        leafId,
+        goal,
+        pending: [...pending],
+        seq: live.seq,
+        buffer: live.buffer.filter((update) => update.seq <= live.seq),
+      };
+      live.preAcceptance = hydration;
     } catch (error) {
       lease.release();
       throw error;
@@ -1071,6 +1114,7 @@ export class WorkerServer {
 
     const previousHandle = live.handle;
     if (!previousHandle || !live.driver.prepareFirstTurn || !live.driver.rollbackFirstTurn) {
+      if (live.preAcceptance === hydration) delete live.preAcceptance;
       lease.release();
       throw new ProtocolError(ErrorCodes.Unsupported, "This runtime cannot apply a first-turn agent choice safely.");
     }
@@ -1097,6 +1141,7 @@ export class WorkerServer {
       }
       const result = await this.promptLive(live, params.content, params.streamingBehavior, () => {
         accepted = true;
+        if (live.preAcceptance === hydration) delete live.preAcceptance;
         previousHandle.discard();
         nextHandle.attach(live.path, live.driver.state().id);
         live.handle = nextHandle;
@@ -1119,6 +1164,7 @@ export class WorkerServer {
       }
       throw error;
     } finally {
+      if (live.preAcceptance === hydration) delete live.preAcceptance;
       lease.release();
     }
   }
@@ -1324,10 +1370,12 @@ export class WorkerServer {
     this.notify("pi/extension/message", { path: live.path, message: { type: "lasercode/namer/label", toolCallId, label } });
   }
 
-  /** Re-send buffered updates after `fromSeq`, then any dialogs still waiting. */
-  private replay(live: Live, fromSeq: number | undefined): void {
+  /** Re-send accepted updates after `fromSeq`, then any dialogs still waiting. */
+  private replay(live: Live, fromSeq: number | undefined, baseline?: PreAcceptanceHydration): void {
     if (fromSeq !== undefined) {
-      for (const params of live.buffer) if (params.seq > fromSeq) this.notify("session/update", params);
+      const buffer = baseline?.buffer ?? live.buffer;
+      const ceiling = baseline?.seq ?? live.seq;
+      for (const params of buffer) if (params.seq > fromSeq && params.seq <= ceiling) this.notify("session/update", params);
     }
     // Pending dialogs are owned by the driver's UI bridge; the driver re-emits
     // them through `ui_request` events when asked. Drivers that expose

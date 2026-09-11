@@ -18,10 +18,9 @@
  *     that `toolCallId` (see `UiBridgeOptions.pendingToolCallId`) so the client
  *     can render it inside the tool row. The classification is made here, on the
  *     host, at request time; clients never guess it from titles.
- *   - Every way a dialog can end WITHOUT a client answer (Pi's AbortSignal, the
- *     timeout, bridge disposal) emits `{ method: "dialogResolved", id }` so a
- *     client that is showing the dialog drops it. A client answer emits nothing:
- *     the client already knows.
+ *   - Every settlement emits `{ method: "dialogResolved", id }`. The worker is
+ *     the authority even when an answer bypasses a particular host connection;
+ *     duplicate closes are harmless and prevent reconnect replay.
  */
 
 import type {
@@ -90,12 +89,8 @@ export function createUiBridge(handlers: UiBridgeHandlers, options: UiBridgeOpti
    */
   const nonce = Math.random().toString(36).slice(2, 8);
 
-  /**
-   * Settle one pending dialog. `notify` emits `dialogResolved`, which is the
-   * signal for clients to drop a dialog they are showing — so it is sent for
-   * abort / timeout / dispose and never for a client's own answer.
-   */
-  function close(id: string, value: unknown, notify: boolean): void {
+  /** Settle one pending dialog and publish its authoritative close exactly once. */
+  function close(id: string, value: unknown): void {
     const entry = pending.get(id);
     if (!entry) return;
     pending.delete(id);
@@ -103,7 +98,7 @@ export function createUiBridge(handlers: UiBridgeHandlers, options: UiBridgeOpti
     entry.detachSignal?.();
     // Deliberately not routed through `emit()`: dispose() must still be able to
     // tell clients that the dialogs it is tearing down are gone.
-    if (notify) handlers.onEvent({ method: "dialogResolved", id });
+    handlers.onEvent({ method: "dialogResolved", id });
     entry.resolve(value);
   }
 
@@ -130,10 +125,10 @@ export function createUiBridge(handlers: UiBridgeHandlers, options: UiBridgeOpti
     return new Promise<T | undefined>((resolve) => {
       const entry: Pending = { request: full, resolve: resolve as (v: unknown) => void, fallback };
       if (full.timeoutMs !== undefined) {
-        entry.timer = setTimeout(() => close(id, fallback, true), full.timeoutMs);
+        entry.timer = setTimeout(() => close(id, fallback), full.timeoutMs);
       }
       if (signal) {
-        const onAbort = (): void => close(id, fallback, true);
+        const onAbort = (): void => close(id, fallback);
         signal.addEventListener("abort", onAbort, { once: true });
         entry.detachSignal = () => signal.removeEventListener("abort", onAbort);
       }
@@ -226,12 +221,11 @@ export function createUiBridge(handlers: UiBridgeHandlers, options: UiBridgeOpti
       if (!entry) return;
       const value =
         "cancelled" in response ? entry.fallback : "confirmed" in response ? response.confirmed : response.value;
-      // The client answered, so it already knows: no `dialogResolved`.
-      close(response.id, value, false);
+      close(response.id, value);
     },
     pending: () => [...pending.values()].map((p) => p.request),
     dispose() {
-      for (const [id, entry] of [...pending]) close(id, entry.fallback, true);
+      for (const [id, entry] of [...pending]) close(id, entry.fallback);
       pending.clear();
       disposed = true;
     },
