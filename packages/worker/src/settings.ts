@@ -29,7 +29,16 @@
  * interleaved write by a terminal Pi loses nothing but the racing field.
  */
 
-import { PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PROJECT_DIR_NAME } from "@lasercode/protocol";
+import {
+  FALLBACK_CHAINS_SETTING,
+  PRODUCT_DISPLAY_NAME,
+  PRODUCT_NAME,
+  PROJECT_DIR_NAME,
+  modelKey,
+  readFallbackChainsValue,
+  validateFallbackChains,
+  type FallbackChain,
+} from "@lasercode/protocol";
 import {
   SettingsManager,
   VERSION,
@@ -134,7 +143,7 @@ export const PI_SETTINGS_TOP_LEVEL_KEYS: readonly string[] = [
  * hides every model added later. The disable list holds exact `provider/id`
  * references instead; a model it does not name stays offered.
  */
-export const LASER_SETTINGS_KEYS: readonly string[] = ["disabledModels"];
+export const LASER_SETTINGS_KEYS: readonly string[] = ["disabledModels", FALLBACK_CHAINS_SETTING];
 
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: "model", title: "Model and thinking", description: "Which model starts a session, and how hard it thinks." },
@@ -250,6 +259,21 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     section: "model",
     type: { control: "string-list", placeholder: "openai/gpt-5", hint: "Exact references only, matched without regard to case. The project list replaces the global one; it does not extend it." },
     scopes: BOTH,
+    advanced: true,
+  },
+  {
+    path: FALLBACK_CHAINS_SETTING,
+    key: FALLBACK_CHAINS_SETTING,
+    label: "Fallback chains",
+    description:
+      "Ordered lists of models. The first model of a list starts it; the rest take over when it cannot answer. Edited in Providers and models.",
+    section: "model",
+    type: { control: "json" },
+    // Global only (docs/model-fallback-chains.md §1.1): a chain is a statement
+    // about which of a person's provider accounts can stand in for which, not
+    // about a repository, and two files would make "one chain per starting
+    // model" ambiguous.
+    scopes: GLOBAL_ONLY,
     advanced: true,
   },
   {
@@ -1146,6 +1170,41 @@ export function readEffectiveProductSettings(cwd: string, agentDir: string, proj
   return mergeSettings(readGlobalSettingsFile(agentDir), projectTrusted === false ? {} : readLaserProjectSettings(cwd));
 }
 
+/**
+ * The person's fallback chains, from the global settings file only (M15-T3).
+ *
+ * Deliberately not the effective merge: chains are written at global scope, so
+ * reading a project file here would let a checked-in `.laser/settings.json`
+ * silently change which model a conversation falls back to.
+ *
+ * A file edited by hand is read for what it does say: a chain with fewer than
+ * two models, or a second chain starting on a model that already starts one,
+ * is dropped and the rest still work. A value that is not a list at all reads
+ * as no chains, and a session with no chain behaves exactly as it does today.
+ */
+export function readFallbackChains(agentDir: string): FallbackChain[] {
+  const chains = readFallbackChainsValue(readGlobalSettingsFile(agentDir)[FALLBACK_CHAINS_SETTING]);
+  const starters = new Set<string>();
+  return chains.filter((chain) => {
+    const first = chain.models[0];
+    if (!first || chain.models.length < 2) return false;
+    const key = modelKey(first);
+    if (starters.has(key)) return false;
+    // A duplicate inside one chain is dropped rather than the chain: the intent
+    // of the list is still readable, and the runtime tries each model once.
+    const seen = new Set<string>();
+    chain.models = chain.models.filter((model) => {
+      const modelId = modelKey(model);
+      if (seen.has(modelId)) return false;
+      seen.add(modelId);
+      return true;
+    });
+    if (chain.models.length < 2) return false;
+    starters.add(key);
+    return true;
+  });
+}
+
 /** Read a dotted path. Returns undefined when any link is missing or not an object. */
 export function getAtPath(doc: unknown, path: string): unknown {
   let cursor: unknown = doc;
@@ -1241,9 +1300,18 @@ export function validateSettingValue(field: SettingDescriptor, value: unknown): 
       }
       return undefined;
     }
-    case "json":
+    case "json": {
       // Anything JSON-serializable. The value already came through JSON.
-      return value === undefined ? `${field.path} must not be undefined.` : undefined;
+      if (value === undefined) return `${field.path} must not be undefined.`;
+      // …except where the product owns the shape. Fallback chains are checked
+      // with the same function the Settings screen draws its messages from, so
+      // the two cannot disagree (docs/model-fallback-chains.md §1.2).
+      if (field.path === FALLBACK_CHAINS_SETTING) {
+        const issue = validateFallbackChains(value)[0];
+        if (issue) return issue.message;
+      }
+      return undefined;
+    }
   }
 }
 

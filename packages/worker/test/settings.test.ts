@@ -11,8 +11,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SettingDescriptor, SettingsScope } from "@lasercode/protocol";
+import { FALLBACK_CHAINS_SETTING } from "@lasercode/protocol";
 import {
   LASER_SETTINGS_KEYS,
+  readFallbackChains,
   PI_SETTINGS_TOP_LEVEL_KEYS,
   SETTINGS_CLASSIFICATIONS,
   SETTINGS_FIELDS,
@@ -69,7 +71,10 @@ function sampleFor(field: SettingDescriptor): unknown {
     case "enum-map":
       return { "anthropic/claude-sonnet-4-20250514": type.options[0]!.value };
     case "json":
-      return [{ source: "pi-skills", skills: ["brave-search"] }];
+      // The product owns the shape of this one, so its sample is a real chain.
+      return field.path === FALLBACK_CHAINS_SETTING
+        ? [{ models: [{ provider: "anthropic", id: "claude-sonnet-4-5" }, { provider: "deepseek", id: "deepseek-chat" }] }]
+        : [{ source: "pi-skills", skills: ["brave-search"] }];
   }
 }
 
@@ -313,5 +318,67 @@ describe("project trust", () => {
     expect(snapshot.projectTrust.trusted).toBe(true);
     expect(snapshot.effective["steeringMode"]).toBe("all");
     expect(snapshot.project.values["packages"]).toBeUndefined();
+  });
+});
+
+describe("fallback chains", () => {
+  const chain = (...models: Array<[string, string]>) => ({ models: models.map(([provider, id]) => ({ provider, id })) });
+  const sonnetThenDeepseek = chain(["anthropic", "claude-sonnet-4-5"], ["deepseek", "deepseek-chat"]);
+  const writeGlobal = (value: unknown) =>
+    writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ fallbackChains: value }), "utf8");
+
+  it("is a product key the catalogue offers at global scope only", () => {
+    const field = SETTINGS_FIELDS.find((f) => f.path === FALLBACK_CHAINS_SETTING)!;
+    expect(LASER_SETTINGS_KEYS).toContain(FALLBACK_CHAINS_SETTING);
+    expect(field.scopes).toEqual(["global"]);
+    expect(settingsCatalog().fields.some((f) => f.path === FALLBACK_CHAINS_SETTING)).toBe(true);
+  });
+
+  it("refuses a chain a person could not have meant, with the sentence they would read", () => {
+    const field = SETTINGS_FIELDS.find((f) => f.path === FALLBACK_CHAINS_SETTING)!;
+    expect(validateSettingValue(field, [sonnetThenDeepseek])).toBeUndefined();
+    expect(validateSettingValue(field, [chain(["anthropic", "claude-sonnet-4-5"])])).toMatch(/Add a model to fall back to/);
+    expect(
+      validateSettingValue(field, [sonnetThenDeepseek, chain(["anthropic", "claude-sonnet-4-5"], ["google", "gemini-2.5-pro"])]),
+    ).toMatch(/already starts a chain/);
+    expect(validateSettingValue(field, "chains")).toMatch(/must be a list/);
+  });
+
+  it("writes nothing when the chain is invalid, and round-trips one that is not", async () => {
+    const settings = adapter();
+    await expect(
+      settings.apply("global", [{ path: FALLBACK_CHAINS_SETTING, op: "set", value: [chain(["openai", "gpt-5"])] }]),
+    ).rejects.toBeInstanceOf(SettingsError);
+    expect(readFallbackChains(agentDir)).toEqual([]);
+
+    const snapshot = await settings.apply("global", [{ path: FALLBACK_CHAINS_SETTING, op: "set", value: [sonnetThenDeepseek] }]);
+    expect(snapshot.global.values[FALLBACK_CHAINS_SETTING]).toEqual([sonnetThenDeepseek]);
+    expect(readFallbackChains(agentDir)).toEqual([sonnetThenDeepseek]);
+  });
+
+  it("is a person's own configuration: a project file cannot change it", async () => {
+    await expect(
+      adapter(true).apply("project", [{ path: FALLBACK_CHAINS_SETTING, op: "set", value: [sonnetThenDeepseek] }]),
+    ).rejects.toThrow(/only be set at global scope/);
+    // Even written by hand, a project file is not where chains are read from.
+    mkdirSync(join(cwd, PROJECT_DIR_NAME), { recursive: true });
+    writeFileSync(join(cwd, PROJECT_DIR_NAME, "settings.json"), JSON.stringify({ fallbackChains: [sonnetThenDeepseek] }), "utf8");
+    expect(readFallbackChains(agentDir)).toEqual([]);
+  });
+
+  it("reads a hand-edited file for what it does say, and nothing for what it cannot", () => {
+    writeGlobal("nonsense");
+    expect(readFallbackChains(agentDir)).toEqual([]);
+    // A chain of one and a duplicate starter are dropped; the rest still work.
+    writeGlobal([
+      chain(["openai", "gpt-5"]),
+      sonnetThenDeepseek,
+      chain(["Anthropic", "Claude-Sonnet-4-5"], ["google", "gemini-2.5-pro"]),
+      chain(["deepseek", "deepseek-chat"], ["DeepSeek", "deepseek-chat"], ["openrouter", "auto"]),
+    ]);
+    expect(readFallbackChains(agentDir)).toEqual([
+      sonnetThenDeepseek,
+      chain(["deepseek", "deepseek-chat"], ["openrouter", "auto"]),
+    ]);
   });
 });
