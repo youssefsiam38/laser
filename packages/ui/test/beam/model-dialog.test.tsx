@@ -76,6 +76,16 @@ describe("the Beam model choice", () => {
     expect(box.textContent).toContain("fast, capable, inexpensive");
     expect(box.querySelector('[data-slot="model-selector-value"]')?.textContent).toContain("GPT Fast");
     expect(box.querySelector('[data-slot="beam-model-recommended"]')?.textContent).toBe("Recommended");
+    const trigger = box.querySelector<HTMLButtonElement>('[data-slot="model-selector-trigger"]')!;
+    await act(async () => trigger.click());
+    await act(async () => settle(10));
+    const modelMenu = box.querySelector<HTMLElement>('[data-slot="model-selector-content"]');
+    expect(box.querySelector('[data-slot="model-picker-portal"]')?.contains(modelMenu)).toBe(true);
+    await act(async () => modelMenu!.querySelector<HTMLButtonElement>('[aria-label="Filter by provider"]')!.click());
+    await act(async () => settle(10));
+    expect(box.querySelector('input[aria-label="Search providers"]')).not.toBeNull();
+    const providerMenu = box.querySelector('[data-slot="popover-content"]')!;
+    expect(box.querySelector('[data-slot="model-picker-portal"]')?.contains(providerMenu)).toBe(true);
     expect(world.calls.some((call) => call.method === "pi/models/catalog")).toBe(true);
   });
 

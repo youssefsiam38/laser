@@ -9,7 +9,7 @@ import { RotateCw, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
-import { ProviderModelPicker } from "@/components/assistant-ui/elements/model-selector";
+import { ModelPickerDialogPortal, ProviderModelPicker } from "@/components/assistant-ui/elements/model-selector";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
@@ -102,6 +102,7 @@ export function BuiltinModelDialog({
 }) {
   const catalog = useModelCatalog(cwd, open);
   const [choice, setChoice] = useState<AgentModelChoice | null>(current);
+  const [portalContainer, setPortalContainer] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
     if (open) setChoice(current);
   }, [open, current]);
@@ -122,6 +123,7 @@ export function BuiltinModelDialog({
             value={picked}
             loading={catalog.loading}
             placeholder="Choose a model"
+            container={portalContainer}
             onValueChange={(next) => {
               const parsed = parseModelChoice(next);
               if (parsed) setChoice(parsed);
@@ -142,6 +144,7 @@ export function BuiltinModelDialog({
             {busy ? "Saving…" : "Use this model"}
           </Button>
         </DialogFooter>
+        <ModelPickerDialogPortal ref={setPortalContainer} />
       </DialogContent>
     </Dialog>
   );

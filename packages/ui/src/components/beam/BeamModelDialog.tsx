@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useAgentsActions, useAgentsSnapshot, useBeamChoice } from "@/agents";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
-import { ProviderModelPicker, modelOptionId } from "@/components/assistant-ui/elements/model-selector";
+import { ModelPickerDialogPortal, ProviderModelPicker, modelOptionId } from "@/components/assistant-ui/elements/model-selector";
 import { narrowToConnected } from "@/components/assistant-ui/elements/connected-models";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -42,6 +42,7 @@ export function BeamModelDialog() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | undefined>(undefined);
   const [saved, setSaved] = useState(0);
+  const [portalContainer, setPortalContainer] = useState<HTMLDivElement | null>(null);
 
   // The catalog, narrowed to providers that are signed in — a model nobody
   // can call is not offered. The providers list failing is not fatal: the
@@ -132,7 +133,7 @@ export function BeamModelDialog() {
               No models to choose from yet. Sign in to a provider in Settings, and Beam’s choice comes back here.
             </p>
           ) : (
-            <ProviderModelPicker models={models} {...(value ? { value } : {})} onValueChange={setValue} disabled={saving} className="max-w-none" />
+            <ProviderModelPicker models={models} {...(value ? { value } : {})} onValueChange={setValue} disabled={saving} className="max-w-none" container={portalContainer} />
           )}
           {!recommended && suggested && chosen && (
             <p className="text-xs leading-xs text-ink-3">
@@ -157,6 +158,7 @@ export function BeamModelDialog() {
             {saving ? "Saving…" : "Use this model"}
           </Button>
         </DialogFooter>
+        <ModelPickerDialogPortal ref={setPortalContainer} />
       </DialogContent>
     </Dialog>
   );
