@@ -2143,8 +2143,8 @@ lane T's own if both were written.
 | --- | --- | --- | --- | --- | --- |
 | M14-T1 | Protocol: MCP vocabulary, methods and catalog | done | orchestrator-2026-09-11-mcp | `packages/protocol/src/mcp.ts`; `cd packages/protocol && npx vitest run test/schemas.test.ts` — 28 tests incl. the MCP refusals; host/worker/ui typecheck green | see notes |
 | M14-T2 | Worker engine: pinned adapter, store, inspector, sign-in, import, companion module, host routing | in-progress | worker mcp-engine (01a091cf-27d3-73a4-a484-ea10ff6969e5, `agents/mcp-engine-161a7cc9`) | — | see notes |
-| M14-T3 | Settings → MCP servers | in-progress | worker mcp-settings-ui (01a091d1-20ed-73a4-a484-ea20d2b4199a, `agents/mcp-settings-ui-cba83f3f`) | — | see notes |
-| M14-T4 | Transcript: MCP tool rows and image results | in-progress | worker mcp-transcript (01a091d2-7bd9-73a4-a484-ea27a8d96475, `agents/mcp-transcript-568fde54`) | — | see notes |
+| M14-T3 | Settings → MCP servers | in-progress | worker mcp-settings-ui (01a091d1-20ed-73a4-a484-ea20d2b4199a, `agents/mcp-settings-ui-cba83f3f`) | — | ready at `eb6b40e`; under review |
+| M14-T4 | Transcript: MCP tool rows and image results | in-progress | worker mcp-transcript (01a091d2-7bd9-73a4-a484-ea27a8d96475, `agents/mcp-transcript-568fde54`) | — | ready at `6de5f44`; under review; hydration follow-up in flight |
 | M14-T5 | Packaged build carries the adapter | todo | — | — | depends on M14-T2 |
 | M14-T6 | Live end-to-end proof with Playwright | todo | — | — | depends on M14-T2/T3/T4 |
 
@@ -2159,16 +2159,18 @@ lane T's own if both were written.
 
 #### M14-T3 notes
 - 2026-09-11 claimed by the orchestrator for worker `mcp-settings-ui` at base `9ccbf4f`: Settings tab "MCP servers" (`packages/ui/src/components/settings/mcp/`), restyled `elements-mcp-server-panel`, gallery + custom add doors ending in Test, inspector (Overview/Tools/Run/Resources/Prompts), import banner and dialog, sign-in, Features card icon and link; interaction tests against a mocked client; browser review deferred to integration (no backend in the worktree).
+- 2026-09-11 ready at `eb6b40e`: 22 files, 40 new tests (UI 1152 green), typecheck/build/identity clean. The registry CLI cannot run in this workspace (`ERR_PNPM_UNEXPECTED_VIRTUAL_STORE`); the element source was taken from `r.assistant-ui.com` and restyled. Gap found by the worker and closed in the protocol (`fd2d2d6`): a project entry that only switches a global server off needs no transport; the page's "switch it off for this project" must send `{ name, disabled: true }` (review-fix set).
 
 #### M14-T4 notes
 - 2026-09-11 claimed by the orchestrator for worker `mcp-transcript` at base `9ccbf4f`: `mcpServers` store slice from `lasercode/mcp/status`, direct tool rows (`Playwright · navigate`) with Markdown text and image blocks through the `image` element, gateway (`mcp`, `mcp__*`) rows by mode, `mcpScript` row, search projections, `docs/search-content.md` rows.
+- 2026-09-11 ready at `6de5f44`: protocol 55 + UI 1127 green; screenshots `/tmp/mcp-transcript-shots/`. Decision: the summary strips only the server prefix (`browser navigate`, not `navigate`) so a tool's verb survives. Gap found: hydration stores `textOf(content)` for tool results, so a reloaded session loses image blocks and `details` — the same owner keeps `{ content, details }` through `blocksFromEntries` as a follow-up commit.
 
 ## M15 · After the MCP release
 
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
 | M15-T1 | Native file opener: file card and format-aware viewer modal | todo | — | — | after M14 release (D-222) |
-| M15-T2 | Dictation is always transcribed as English | in-progress | worker dictation-english (01a091e2-ac35-73a4-a484-ea5595d1b475, `agents/dictation-english-7a68babc`) | — | research first, then `transcribe.ts`; merges after the M14 tag |
+| M15-T2 | Dictation is always transcribed as English | in-progress | worker dictation-english (01a091e2-ac35-73a4-a484-ea5595d1b475, `agents/dictation-english-7a68babc`) | — | ready at `202f645` (+4 tests, 25 passing; `docs/dictation-language.md`); under review; merges after the M14 tag |
 | M15-T3 | Model fallback chains: settings, runtime, persistence, verification | in-progress | worker fallback-chains (01a091e3-8b36-73a4-a484-ea6b0227d7dd, `agents/fallback-chains-e0b3ad20`) | — | phase 1: design doc + plan (no code) while the MCP engine worker holds `stable-sdk.ts`; phase 2 on the orchestrator's go |
 | M15-T4 | Sidebar activity indicators: one indicator, owned by the session itself | in-progress | worker sidebar-and-slash-fixes (01a091e1-c6e5-73a4-a484-ea4576dad59a, `agents/sidebar-and-slash-fixes-84cd3548`) | — | evidence: `image.png` at the repository root; same owner as T5, T4 first |
 | M15-T5 | Slash completion completes, never sends | in-progress | worker sidebar-and-slash-fixes (same session as T4) | — | after T4; owns Composer.tsx, slash-completion.ts, composer-trigger-popover.aui.tsx (taken out of the MCP transcript worker's scope) |
