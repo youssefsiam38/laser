@@ -350,7 +350,7 @@ record(
 record(
   "MCP stdio tools reach the model and the inspector",
   Boolean(sessionReport?.ok) && activeModules.includes("mcp") &&
-    sessionReport.mcp?.modelTool === "packaged_runtime" && sessionReport.mcp?.inspectedTool === "runtime" &&
+    sessionReport.mcp?.modelTool === "packaged_runtime" && sessionReport.mcp?.inspectedTool === "packaged_runtime" &&
     sessionReport.mcp?.runtime === nodeBinary,
   sessionReport?.mcp
     ? `model: ${sessionReport.mcp.modelTool}; inspect/call: ${sessionReport.mcp.inspectedTool}; child: ${sessionReport.mcp.runtime}`

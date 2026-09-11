@@ -569,6 +569,13 @@ Verified here, on Linux x64 with Node 24.11.1, against the pinned engine 0.85.0:
   script. **These two dependencies are continuous-release tarballs, not
   registry releases**: availability and retention are outside npm's guarantees.
   A mirror or a vendored copy is the mitigation if that ever bites.
+- packaging (M14-T5): the worker directly declares the six desktop
+  `@napi-rs/keyring-<platform>-<arch>` bindings at **1.3.0** as optional
+  dependencies, independently of the desktop's **2.0.0** pins. The binding
+  packages' `os`/`cpu` fields select the build machine. The pre-pack guard
+  checks both direct availability and resolution from the adapter's keyring
+  in the pnpm store for the requested target; this prevents a transitive
+  optional binding from silently disappearing on another architecture.
 - the programmatic configuration is an isolated snapshot: no `.mcp.json`, no
   `.pi/mcp.json`, no host-config discovery, no file written (verified by a
   session with the engine loaded and by reading `config.ts`).

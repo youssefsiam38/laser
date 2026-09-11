@@ -15,6 +15,7 @@
  * the adapter at all (AGENTS.md invariant 1).
  */
 import { createRequire } from "node:module";
+import { accessSync, constants, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { McpConfig, ServerEntry } from "pi-mcp-adapter/types";
@@ -131,9 +132,17 @@ export function loadMcpEngine(): Promise<McpEngine> {
   loading ??= (async (): Promise<McpEngine> => {
     const root = adapterRoot();
     const { createJiti } = await import("jiti");
-    // Installed resources can be read-only. Keep transpilation in memory;
-    // moduleCache still shares imports without writing beside the adapter.
-    const jiti = createJiti(import.meta.url, { moduleCache: true, interopDefault: true, fsCache: false });
+    const { getAgentDir } = await import("@earendil-works/pi-coding-agent");
+    // Persist transpilation across worker restarts in app data, never installed
+    // resources. If app data is read-only too, imports still work in memory.
+    let fsCache: string | false = join(getAgentDir(), "cache", "jiti");
+    try {
+      mkdirSync(fsCache, { recursive: true });
+      accessSync(fsCache, constants.W_OK);
+    } catch {
+      fsCache = false;
+    }
+    const jiti = createJiti(import.meta.url, { moduleCache: true, interopDefault: true, fsCache });
     const load = async <T>(file: string): Promise<T> => (await jiti.import(join(root, file))) as T;
     // One at a time, deliberately: jiti records a module in its cache when the
     // import resolves, so two concurrent imports of graphs that share a module

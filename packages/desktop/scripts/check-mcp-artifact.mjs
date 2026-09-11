@@ -15,6 +15,11 @@ export function assertAdapterFiles(root) {
   for (const file of required) {
     if (!existsSync(join(root, file))) throw new Error(`MCP executable asset missing: ${file}`);
   }
+  const adapter = createRequire(join(root, "package.json"));
+  for (const key of Object.keys(manifest.exports)) {
+    const specifier = key === "." ? manifest.name : `${manifest.name}${key.slice(1)}`;
+    if (!existsSync(adapter.resolve(specifier))) throw new Error(`MCP export missing: ${specifier}`);
+  }
   const skills = [];
   function walk(dir) {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -46,7 +51,7 @@ export function checkMcpArtifact(workerManifest, modules) {
   dependency(adapter, "@modelcontextprotocol/core");
   const keyringPath = dependency(adapter, "@napi-rs/keyring");
   const keyringVersion = JSON.parse(readFileSync(join(dirname(keyringPath), "package.json"), "utf8")).version;
-  if (keyringVersion !== "1.3.0") throw new Error(`The adapter needs keyring 1.3.0, not ${keyringVersion}.`);
+  if (!keyringPath.startsWith(`${realpathSync(root)}${sep}`)) throw new Error(`MCP resolved the desktop's keyring instead of its own: ${keyringPath}`);
   const suffix = { linux: `linux-${process.arch}-gnu`, darwin: `darwin-${process.arch}`, win32: `win32-${process.arch}-msvc` }[process.platform];
   const keyring = createRequire(keyringPath);
   const bindingPath = dependency(keyring, `@napi-rs/keyring-${suffix}`);

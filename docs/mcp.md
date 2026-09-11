@@ -212,14 +212,19 @@ exports, `app-bridge.bundle.js`, `mcp-keyring-helper.cjs`,
 `mcp-script-worker.mjs`, and `skills/` (including Markdown instructions), plus
 jiti, TOML, both integrity-pinned MCP SDK tarballs, the adapter's keyring 1.3.0
 platform binding (separate from the desktop's 2.0.0), and
-`fs-native-extensions/prebuilds`. jiti's filesystem cache is disabled so first
-import needs no write access to installed resources. The adapter's published
+`fs-native-extensions/prebuilds`. The worker directly pins all six desktop
+keyring 1.3.0 platform bindings as optional dependencies, and the pre-pack guard
+checks the build target against the adapter's own resolved keyring. jiti caches
+transpilation under `<agentDir>/cache/jiti` across worker restarts, falling back
+to memory if that directory cannot be created or written; installed resources
+need no write access. The adapter's published
 `files` excludes `conformance/`, `examples/`, `__tests__/` and `*.test.ts`;
 only root Markdown documentation is disposable, not its skills. After
 `pnpm -F @lasercode/desktop run pack`,
 `node packages/desktop/scripts/clean-machine.mjs` validates those assets and
 loads both native bindings with bundled Node. With an empty incoming `PATH`
-and fake `HOME`, it configures an offline shipped stdio fixture using the
+and fake `HOME`, it configures the small, inert acceptance fixture shipped at
+`resources/checks/mcp-server.mjs` using the
 literal command `node`, opens a real session with MCP enabled, observes
 `packaged_runtime` in an actual local provider request, checks the companion's
 active MCP module, and inspects/calls the fixture through the worker's MCP

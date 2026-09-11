@@ -32,12 +32,10 @@ export type PackagedSessionReport =
 /** The companion modules a packaged build must activate for a project session with every feature on. */
 const REQUIRED_MODULES: readonly PiExtensionModuleName[] = ["subagents", "background-work", "file-freshness", "mcp"];
 
-export async function checkPackagedSession(fixture: string): Promise<PackagedSessionReport> {
-  const root = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-packaged-session-`));
-  const driver = new StableSdkDriver();
-  const mcp = new McpService({ cwd: join(root, "project"), agentDir: join(root, "agent"), changed: () => undefined });
+/** Offline model and search routes; expose only facts observed on the wire. */
+async function startProbeServer() {
   let modelTools: string[] = [];
-  const searchServer = createServer((request, response) => {
+  const server = createServer((request, response) => {
     if (request.url === "/v1/chat/completions") {
       let body = "";
       request.on("data", (chunk: Buffer) => { body += chunk.toString(); });
@@ -54,9 +52,30 @@ export async function checkPackagedSession(fixture: string): Promise<PackagedSes
       });
       return;
     }
-    response.setHeader("content-type", "application/json");
-    response.end(JSON.stringify({ results: [{ title: "Packaged source", url: "https://example.com/source", content: "Search runtime verified" }] }));
+    if (new URL(request.url ?? "/", "http://localhost").pathname === "/search") {
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ results: [{ title: "Packaged source", url: "https://example.com/source", content: "Search runtime verified" }] }));
+      return;
+    }
+    response.writeHead(404).end();
   });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  return {
+    baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+    modelTools: () => modelTools,
+    close: async () => {
+      server.closeAllConnections();
+      await new Promise<void>((done) => server.close(() => done()));
+    },
+  };
+}
+
+export async function checkPackagedSession(fixture: string): Promise<PackagedSessionReport> {
+  const root = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-packaged-session-`));
+  const driver = new StableSdkDriver();
+  const mcp = new McpService({ cwd: join(root, "project"), agentDir: join(root, "agent"), changed: () => undefined });
+  let probe: Awaited<ReturnType<typeof startProbeServer>> | undefined;
   try {
     for (const name of ["project", "agent", "sessions", "state"]) {
       mkdirSync(join(root, name), { recursive: true });
@@ -70,9 +89,8 @@ export async function checkPackagedSession(fixture: string): Promise<PackagedSes
       name: "packaged", transport: { kind: "stdio", command: "node", args: [fixture] },
       tools: { exposure: "direct" }, startup: "at-start",
     }] }));
-    searchServer.listen(0, "127.0.0.1");
-    await once(searchServer, "listening");
-    const baseUrl = `http://127.0.0.1:${(searchServer.address() as { port: number }).port}`;
+    probe = await startProbeServer();
+    const { baseUrl } = probe;
     writeFileSync(join(root, "agent", "models.json"), JSON.stringify({ providers: {
       probe: { baseUrl: `${baseUrl}/v1`, api: "openai-completions", apiKey: "offline-probe", models: [{ id: "probe", name: "Offline probe", contextWindow: 32000, maxTokens: 1000 }] },
     } }));
@@ -105,7 +123,8 @@ export async function checkPackagedSession(fixture: string): Promise<PackagedSes
     // Inspect through the same service as mcp/inspect, then actually call the
     // tool: it reports the child executable, proving PATH selected our Node.
     const inspection = await mcp.inspect({ cwd: join(root, "project"), scope: "global", name: "packaged" });
-    if (inspection.status !== "connected" || !inspection.tools.some((tool) => tool.name === "packaged_runtime" && tool.originalName === "runtime")) {
+    const inspectedTool = inspection.tools.find((tool) => tool.name === "packaged_runtime" && tool.originalName === "runtime");
+    if (inspection.status !== "connected" || !inspectedTool) {
       throw new Error(`Packaged MCP inspection failed: ${JSON.stringify(inspection)}`);
     }
     const called = await mcp.call({ cwd: join(root, "project"), scope: "global", name: "packaged", tool: "runtime", args: {} });
@@ -126,7 +145,8 @@ export async function checkPackagedSession(fixture: string): Promise<PackagedSes
       clearTimeout(timer);
       unsubscribe();
     }
-    if (!modelTools.includes("packaged_runtime")) throw new Error(`The model did not receive packaged_runtime (tools: ${modelTools.join(", ")}).`);
+    const modelTool = probe.modelTools().find((name) => name === inspectedTool.name);
+    if (!modelTool) throw new Error(`The model did not receive ${inspectedTool.name} (tools: ${probe.modelTools().join(", ")}).`);
     const search = new WebSearchService(join(root, "agent"));
     await search.configure({ action: "configure", provider: "searxng", connection: { source: "none", baseUrl } });
     await search.configure({ action: "select", provider: "searxng" });
@@ -135,12 +155,11 @@ export async function checkPackagedSession(fixture: string): Promise<PackagedSes
     if (!driver.deliverExtensionCommand({ type: "lasercode/account-usage/refresh" })) {
       throw new Error("The bundled subscription allowance module did not accept refresh.");
     }
-    return { ok: true, sessionId: state.id, modelCount: models.length, modules: active, mcp: { modelTool: "packaged_runtime", inspectedTool: "runtime", runtime: runtime.text } };
+    return { ok: true, sessionId: state.id, modelCount: models.length, modules: active, mcp: { modelTool, inspectedTool: inspectedTool.name, runtime: runtime.text } };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   } finally {
-    searchServer.closeAllConnections();
-    await new Promise<void>((done) => searchServer.close(() => done()));
+    await probe?.close();
     await driver.dispose().catch(() => undefined);
     await mcp.dispose().catch(() => undefined);
     rmSync(root, { recursive: true, force: true });
