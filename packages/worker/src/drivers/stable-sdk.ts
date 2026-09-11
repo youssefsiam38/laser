@@ -89,7 +89,7 @@ import {
 import { createUiBridge, type UiBridge } from "../ui-bridge.js";
 import { GOAL_TOOL_NAMES } from "@lasercode/pi-goal";
 import { isGoalCommand } from "@lasercode/pi-extension";
-import { ENGINE_BUILTIN_TOOLS, ensureWorkspaceSessionCwd, filterSkills } from "../agents/session-config.js";
+import { ENGINE_BUILTIN_TOOLS, ensureWorkspaceSessionCwd, filterSkills, removedWorktreeCwd } from "../agents/session-config.js";
 import { defaultAgentInstructions } from "../agents/engine-instructions.js";
 import { createInstructionTemplateExtension } from "../agents/instruction-templates.js";
 import { modelUnavailableMessage } from "../agents/harness.js";
@@ -398,8 +398,11 @@ export class StableSdkDriver implements SessionDriver {
         throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation has no saved transcript to reopen. Start a new session.");
       }
     }
+    // A child's worktree its parent has since removed: open the transcript in
+    // the project checkout instead of refusing it (M13-T120).
+    const cwdOverride = options.sessionPath ? await removedWorktreeCwd(options.cwd, options.sessionPath) : undefined;
     const sessionManager = options.sessionPath
-      ? SessionManager.open(options.sessionPath)
+      ? SessionManager.open(options.sessionPath, undefined, cwdOverride)
       : SessionManager.create(options.cwd, options.sessionDir);
     const openingEntries = sessionManager.getEntries() as Array<{ type?: unknown; customType?: unknown; data?: unknown }>;
     const savedOverrides = openingEntries.findLast((entry) => entry.type === "custom" && entry.customType === SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE)?.data;

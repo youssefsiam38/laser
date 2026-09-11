@@ -175,6 +175,28 @@ describe("StableSdkDriver with an agent definition", () => {
     // Four real sessions against the engine; the default 5 s is not enough on a loaded machine.
   }, 60_000);
 
+  it("reopens a child whose worktree its parent removed, in the project checkout", async () => {
+    const project = join(base, "owning-project");
+    const worktree = join(project, ".worktrees", "fixer-0f5aacfe");
+    mkdirSync(worktree, { recursive: true });
+    const child = new StableSdkDriver();
+    const state = await child.open({ cwd: worktree, agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), projectTrusted: true, agent: agentOptions(fallbackDefaultAgent()) });
+    await child.prompt([{ type: "text", text: "hello" }]);
+    await child.dispose();
+    expect(existsSync(state.path)).toBe(true);
+
+    // The parent merged and removed the worktree (D-157); the transcript still names it.
+    rmSync(worktree, { recursive: true, force: true });
+    const again = new StableSdkDriver();
+    const reopened = await again.open({ cwd: project, agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), sessionPath: state.path, projectTrusted: true, agent: agentOptions(fallbackDefaultAgent()) });
+    expect(reopened.path).toBe(state.path);
+    expect(reopened.cwd).toBe(project);
+    expect(reopened.messageCount).toBeGreaterThan(0);
+    // Nothing is recreated under `.worktrees`: a plain folder there would pose as a checkout.
+    expect(existsSync(worktree)).toBe(false);
+    await again.dispose();
+  }, 60_000);
+
   it("rebinds the same pristine identity and runs the selected agent on its one first prompt", async () => {
     const original: AgentDefinition = {
       ...fallbackDefaultAgent(),

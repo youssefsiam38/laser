@@ -8,7 +8,8 @@
  */
 import { existsSync, mkdirSync } from "node:fs";
 import { open } from "node:fs/promises";
-import { SESSION_AGENT_ENTRY_TYPE, type AgentDefinition, type SessionAgentKind, type SessionAgentRecord } from "@lasercode/protocol";
+import { join, resolve, sep } from "node:path";
+import { SESSION_AGENT_ENTRY_TYPE, WORKTREES_DIR_NAME, type AgentDefinition, type SessionAgentKind, type SessionAgentRecord } from "@lasercode/protocol";
 import type { HarnessSessionRole } from "./bridge.js";
 
 /**
@@ -177,4 +178,21 @@ export async function ensureWorkspaceSessionCwd(kind: SessionAgentKind, cwd: str
       throw new Error(`${label}'s workspace folder ${dir} is missing and could not be recreated (${why}). Start a new ${label} chat; this one cannot be opened.`);
     }
   }
+}
+
+/**
+ * Where to open a stored session whose directory was a worktree of this
+ * project that no longer exists: the project checkout. A child works in a
+ * worktree its parent owns and may remove once its branch is merged (D-157);
+ * the transcript still names that directory, and the engine refuses a session
+ * whose stored directory is gone. The conversation is history worth reading,
+ * and anything it does next belongs in the checkout it came from. Undefined
+ * for a directory that exists or one that was never a worktree of this
+ * project, so nothing else is reinterpreted.
+ */
+export async function removedWorktreeCwd(projectCwd: string, sessionPath: string): Promise<string | undefined> {
+  const stored = await readSessionHeaderCwd(sessionPath);
+  if (!stored || existsSync(stored)) return undefined;
+  const worktrees = join(resolve(projectCwd), WORKTREES_DIR_NAME) + sep;
+  return resolve(stored).startsWith(worktrees) ? resolve(projectCwd) : undefined;
 }

@@ -133,3 +133,37 @@ describe("workspace sessions whose folder is gone", () => {
     }
   });
 });
+
+describe("a stored session whose directory was a removed worktree", () => {
+  it("opens in the project checkout, and only then", async () => {
+    const { mkdtempSync, mkdirSync, rmSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { removedWorktreeCwd } = await import("../../src/agents/session-config.js");
+    const base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-removed-worktree-`));
+    try {
+      const project = join(base, "project");
+      const worktree = join(project, ".worktrees", "fixer-0f5aacfe");
+      mkdirSync(worktree, { recursive: true });
+      const header = (cwd: string) => `${JSON.stringify({ type: "session", version: 3, id: "s1", timestamp: "2026-09-11T10:00:00.000Z", cwd })}\n`;
+      const child = join(base, "child.jsonl");
+      writeFileSync(child, header(worktree));
+      // Still there: nothing to reinterpret.
+      expect(await removedWorktreeCwd(project, child)).toBeUndefined();
+      // Removed by its parent: the project checkout.
+      rmSync(worktree, { recursive: true, force: true });
+      expect(await removedWorktreeCwd(project, child)).toBe(project);
+      // A missing directory that was never this project's worktree is left to the engine.
+      const elsewhere = join(base, "elsewhere.jsonl");
+      writeFileSync(elsewhere, header(join(base, "gone-project")));
+      expect(await removedWorktreeCwd(project, elsewhere)).toBeUndefined();
+      const otherProject = join(base, "other.jsonl");
+      writeFileSync(otherProject, header(join(base, "other", ".worktrees", "x")));
+      expect(await removedWorktreeCwd(project, otherProject)).toBeUndefined();
+      // No header, no file: nothing.
+      expect(await removedWorktreeCwd(project, join(base, "missing.jsonl"))).toBeUndefined();
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
