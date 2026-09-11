@@ -57,6 +57,11 @@ const runs: AgentRun[] = [
   run({ runId: "run_4", sessionPath: "/sessions/c3.jsonl", subagentName: "ended", startedAt: "2026-09-09T10:03:00.000Z", status: "cancelled", endedAt: "2026-09-09T10:06:00.000Z", endedBy: { initiator: "user" } }),
   // A second run in the first child's session: the row stands on this one.
   run({ runId: "run_5", sessionPath: "/sessions/c4.jsonl", subagentName: "done", startedAt: "2026-09-09T10:04:00.000Z", status: "completed", endedAt: "2026-09-09T10:07:00.000Z", result: { status: "completed", message: "Counted the files.\nThere are 3." } }),
+  // Terminal-pending: a child whose completion was declared but whose
+  // invocation is still executing, with the one successor waiting behind it.
+  // The row stands on the run that can still act, on both sides (M13-T98).
+  run({ runId: "run_old", sessionPath: "/sessions/pending.jsonl", subagentName: "pending", startedAt: "2026-09-09T10:08:00.000Z", status: "running", task: "First task.", activity: { turns: 2, tools: 3, currentTool: "bash", lastAt: "2026-09-09T10:09:30.000Z" } }),
+  run({ runId: "run_next", sessionPath: "/sessions/pending.jsonl", subagentName: "pending", startedAt: "2026-09-09T10:09:00.000Z", status: "queued", task: "Also do this." }),
 ];
 const tasks: BackgroundTask[] = [
   task({ id: "t-dev", sessionPath: ROOT, startedAt: "2026-09-09T09:55:00.000Z", title: "pnpm vite dev", command: "pnpm vite dev --host", activity: "ready in 412 ms" }),
@@ -68,9 +73,9 @@ const tasksOf = (path: string): BackgroundTask[] => tasks.filter((candidate) => 
 describe("buildFleetTree", () => {
   it("nests as the tree nests, orders by creation, and says each row in the fleet's words", () => {
     const fleet = buildFleetTree({ callerPath: ROOT, runs, tasksOf, now: NOW });
-    expect(fleet).toMatchObject({ working: 3, needsYou: 1, finished: 5, total: 8, omitted: 0 });
-    expect(fleet.rows.map((row) => row.title)).toEqual(["migrate", "review", "ended", "done", "pnpm vite dev", "pnpm -r build"]);
-    const [migrate, review, ended, done, dev, build] = fleet.rows;
+    expect(fleet).toMatchObject({ working: 4, needsYou: 1, finished: 5, total: 9, omitted: 0 });
+    expect(fleet.rows.map((row) => row.title)).toEqual(["migrate", "review", "ended", "done", "pending", "pnpm vite dev", "pnpm -r build"]);
+    const [migrate, review, ended, done, pending, dev, build] = fleet.rows;
     expect(migrate).toMatchObject({ kind: "agent", agentName: "worker", subagentName: "migrate", sessionId: "id-/sessions/c1.jsonl", runId: "run_1", state: "needs_input", status: "Asking", line: "Which database?", elapsed: "10m 00s", depth: 0 });
     expect(migrate!.children.map((row) => row.title)).toEqual(["check-tests", "pnpm test"]);
     expect(migrate!.children[0]).toMatchObject({ kind: "agent", runId: "run_3", status: "Working", line: "Reading packages/ui/src/store.ts", elapsed: "8m 00s", depth: 1, children: [] });
@@ -79,6 +84,8 @@ describe("buildFleetTree", () => {
     expect(ended).toMatchObject({ state: "cancelled", status: "Ended", line: "the person ended it" });
     // A final message is one line, its first.
     expect(done).toMatchObject({ state: "completed", status: "Done", line: "Counted the files.", elapsed: "3m 00s" });
+    // The executing run, not the successor waiting behind it.
+    expect(pending).toMatchObject({ kind: "agent", runId: "run_old", state: "running", status: "Working", line: "Running bash", elapsed: "2m 00s" });
     expect(dev).toMatchObject({ kind: "command", taskId: "t-dev", state: "running", status: "Working", line: "ready in 412 ms", elapsed: "15m 00s", depth: 0 });
     expect(dev).not.toHaveProperty("exitCode");
     expect(build).toMatchObject({ kind: "command", state: "completed", status: "Done", line: "exit code 0", exitCode: 0 });
@@ -99,7 +106,7 @@ describe("buildFleetTree", () => {
     const row = fleet.rows.find((candidate) => candidate.title === "done")!;
     expect(row).toMatchObject({ kind: "agent", runId: "run_9", state: "running", status: "Working", line: "One more thing.", elapsed: "1m 00s" });
     // Its place in the order is still where its first run put it.
-    expect(fleet.rows.map((candidate) => candidate.title)).toEqual(["migrate", "review", "ended", "done"]);
+    expect(fleet.rows.map((candidate) => candidate.title)).toEqual(["migrate", "review", "ended", "done", "pending"]);
     expect(fleet.rows.filter((candidate) => candidate.title === "done")).toHaveLength(1);
   });
 
@@ -208,7 +215,9 @@ describe("the agent's fleet agrees with the person's", () => {
       id: item.kind === "agent" ? item.run!.runId : item.task!.id,
     }));
     expect(ours).toEqual(theirs);
-    expect(ours).toHaveLength(8);
+    expect(ours).toHaveLength(9);
+    // The terminal-pending session stands on its executing run on both sides.
+    expect(ours.find((row) => row.title === "pending")).toEqual({ kind: "agent", title: "pending", status: "Working", depth: 0, id: "run_old" });
     // And the counts the header says.
     const tree = scopeFleet(groups, ROOT).tree!;
     const fleet = buildFleetTree({ callerPath: ROOT, runs, tasksOf, now: NOW });

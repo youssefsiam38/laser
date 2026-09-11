@@ -73,12 +73,35 @@ describe("buildAgentTree", () => {
 
   it("keeps the newest run as the node's run and every run in creation order", () => {
     const { runs, sessions } = family();
+    const first = { ...runs[0]!, status: "completed" as const, endedAt: "2026-09-08T10:20:00.000Z" };
     const again = run({ runId: "r-a2", sessionPath: "/p/a.jsonl", subagentName: "reviewer-1", startedAt: "2026-09-08T10:30:00.000Z", status: "blocked" });
-    const tree = buildAgentTree({ rootPath: ROOT, sessions, runs: [again, ...runs] });
+    const tree = buildAgentTree({ rootPath: ROOT, sessions, runs: [again, first, ...runs.slice(1)] });
     const a = tree.byPath.get("/p/a.jsonl")!;
     expect(a.runs.map((r) => r.runId)).toEqual(["r-a", "r-a2"]);
     expect(a.run?.runId).toBe("r-a2");
     expect(a).toMatchObject({ status: "blocked", tone: "muted", ended: true });
+  });
+
+  it("stands a node on the run that can still act while a newer successor only waits behind it", () => {
+    // Terminal-pending (M13-T98): the first run's completion is declared but
+    // its invocation still executes; the successor reserved behind it is
+    // queued. The node — and so the map and the fleet — says Working, on the
+    // executing run; its creation-ordered list still ends on that run.
+    const { runs, sessions } = family();
+    const waiting = run({ runId: "r-a-next", sessionPath: "/p/a.jsonl", subagentName: "reviewer-1", startedAt: "2026-09-08T10:30:00.000Z", status: "queued" });
+    for (const candidates of [[waiting, ...runs], [...runs, waiting]]) {
+      const a = buildAgentTree({ rootPath: ROOT, sessions, runs: candidates }).byPath.get("/p/a.jsonl")!;
+      expect(a.run?.runId).toBe("r-a");
+      expect(a).toMatchObject({ status: "running", tone: "live", ended: false });
+      expect(a.runs.at(-1)?.runId).toBe("r-a");
+      expect(a.runs).toHaveLength(2);
+    }
+    // A successor the person stopped is history; the executing run still stands.
+    const stopped = { ...waiting, status: "cancelled" as const, endedAt: "2026-09-08T10:31:00.000Z" };
+    expect(buildAgentTree({ rootPath: ROOT, sessions, runs: [stopped, ...runs] }).byPath.get("/p/a.jsonl")!.run?.runId).toBe("r-a");
+    // Once the first run has ended, the successor stands, queued or running.
+    const ended = { ...runs[0]!, status: "completed" as const, endedAt: "2026-09-08T10:32:00.000Z" };
+    expect(buildAgentTree({ rootPath: ROOT, sessions, runs: [ended, waiting, ...runs.slice(1)] }).byPath.get("/p/a.jsonl")!).toMatchObject({ run: { runId: "r-a-next" }, status: "queued", ended: false });
   });
 
   it("derives the root's status from attention and the live view", () => {

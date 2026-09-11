@@ -98,6 +98,26 @@ describe("buildFleet", () => {
     expect(fleetSummary(groups)).toMatchObject({ needsYou: 0 });
   });
 
+  it("stands a session on the run that can still act while a newer successor only waits behind it", () => {
+    // Terminal-pending (M13-T98): the row says Working, on the executing run,
+    // until the fence; the queued successor is Waiting, not the session.
+    const unwinding = run({ runId: "run_old", sessionPath: "/p/pending.jsonl", subagentName: "pending", status: "running", startedAt: "2026-09-08T10:01:00.000Z", updatedAt: "2026-09-08T10:03:00.000Z", activity: { turns: 2, tools: 3, currentTool: "bash", lastAt: "2026-09-08T10:03:00.000Z" } });
+    const waiting = run({ runId: "run_next", sessionPath: unwinding.sessionPath, subagentName: "pending", status: "queued", startedAt: "2026-09-08T10:02:00.000Z", updatedAt: "2026-09-08T10:02:00.000Z", task: "Also do this." });
+    for (const candidates of [[unwinding, waiting], [waiting, unwinding]]) {
+      const groups = build({ sessions: [summary({ path: ROOT })], runs: byId(candidates, "runId"), currentPath: ROOT });
+      const item = groups[0]!.items[0]!;
+      expect(item).toMatchObject({ kind: "agent", state: "running", tone: "live", terminal: false, activity: "Running bash", stop: { kind: "agent", runId: "run_old" }, run: unwinding });
+      expect(groups[0]!.items).toHaveLength(1);
+      expect(groups[0]).toMatchObject({ running: 1, needsYou: 0 });
+    }
+    const asking = { ...unwinding, status: "needs_input" as const, question: { id: "q", kind: "confirm" as const, title: "Overwrite?", askedAt: "2026-09-08T10:03:30.000Z" } };
+    expect(build({ sessions: [summary({ path: ROOT })], runs: byId([waiting, asking], "runId"), currentPath: ROOT })[0]!.items[0]).toMatchObject({ state: "needs_input", activity: "Overwrite?", run: asking });
+    // Once the old run has truly ended, the successor — queued or running — is the row.
+    const ended = { ...unwinding, status: "completed" as const, endedAt: "2026-09-08T10:04:00.000Z", updatedAt: "2026-09-08T10:04:00.000Z", result: { status: "completed" as const, message: "First done." } };
+    expect(build({ sessions: [summary({ path: ROOT })], runs: byId([ended, waiting], "runId"), currentPath: ROOT })[0]!.items[0]).toMatchObject({ state: "queued", terminal: false, run: waiting });
+    expect(build({ sessions: [summary({ path: ROOT })], runs: byId([ended, { ...waiting, status: "running" as const }], "runId"), currentPath: ROOT })[0]!.items[0]).toMatchObject({ state: "running", run: { runId: "run_next" } });
+  });
+
   it("shows a child paused on a question as live, needing you, with the question as what it is doing", () => {
     const asking = run({
       runId: "r1",
