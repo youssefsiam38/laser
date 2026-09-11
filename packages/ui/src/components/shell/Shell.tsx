@@ -1,5 +1,5 @@
 import { storageKey } from "@lasercode/protocol";
-import { useCallback, useEffect, useMemo, useState, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef, type ReactNode } from "react";
 
 // Agent map (M13-T7): the main-column view and its fullscreen host.
 import { AgentMapFullscreen, AgentMapView, useMapUi } from "@/components/agents/map";
@@ -78,27 +78,17 @@ const writePrefs = (prefs: ColumnPrefs): void => {
 };
 
 /**
- * The app frame. Desktop: rail | sessions | thread | fleet | monitor — three
- * independently collapsible columns around the conversation, the monitor
- * outermost and the fleet immediately inside it. Tablet: rail + thread, with
- * every column as a sheet. Mobile: thread only; the top bar's back chevron
- * opens the sessions sheet. The body never scrolls; the thread viewport does,
- * and on mobile the main column keeps its bottom edge above the on-screen
- * keyboard through `--kb`.
+ * The opening screen around the frame, and the questions the host may ask
+ * before the frame exists. Project trust is one: the host holds the restored
+ * session's worker start behind it, and the gate holds the frame behind that
+ * load, so the dialog rides the gate rather than the frame (D-218).
+ * `Shell` passes the real frame; a test passes a stub and drives the host.
  */
-export function Shell() {
+export function StartupShell({ children }: { children: ReactNode }) {
   const view = useLaserView();
   const versionMismatch = useLaserState((state) => state.versionMismatch);
   const { startupRestoring } = useLaserStable();
   const connection = useLaserState((state) => state.connection);
-  // The workbench sits above the frame so the frame's own verbs can close it:
-  // the logo's "back to your chat" leaves Settings and Logs the same way it
-  // leaves the map (chat-navigation.tsx).
-  const content = (
-    <WorkbenchProvider>
-      <ShellFrame />
-    </WorkbenchProvider>
-  );
 
   return (
     <div className="flex h-dvh min-h-0 flex-col">
@@ -108,14 +98,34 @@ export function Shell() {
       active={startupRestoring}
       label={versionMismatch ? "Waiting for the update before reconnecting" : connection === "open" ? "Returning to your last session" : "Connecting to your workspace"}
       notice={<HostConnectionState className="absolute inset-x-0 top-0 z-20" />}
-      // The host holds the restored session's worker start behind this
-      // question, so it must be answerable while the screen is still up.
       prompts={<TrustDialog />}
     >
-      <FileLinkDirectory.Provider value={view?.state.cwd}>{content}</FileLinkDirectory.Provider>
+      <FileLinkDirectory.Provider value={view?.state.cwd}>{children}</FileLinkDirectory.Provider>
     </StartupRestorationGate>
       </div>
     </div>
+  );
+}
+
+/**
+ * The app frame. Desktop: rail | sessions | thread | fleet | monitor — three
+ * independently collapsible columns around the conversation, the monitor
+ * outermost and the fleet immediately inside it. Tablet: rail + thread, with
+ * every column as a sheet. Mobile: thread only; the top bar's back chevron
+ * opens the sessions sheet. The body never scrolls; the thread viewport does,
+ * and on mobile the main column keeps its bottom edge above the on-screen
+ * keyboard through `--kb`.
+ */
+export function Shell() {
+  // The workbench sits above the frame so the frame's own verbs can close it:
+  // the logo's "back to your chat" leaves Settings and Logs the same way it
+  // leaves the map (chat-navigation.tsx).
+  return (
+    <StartupShell>
+      <WorkbenchProvider>
+        <ShellFrame />
+      </WorkbenchProvider>
+    </StartupShell>
   );
 }
 
