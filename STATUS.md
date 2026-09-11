@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-11T08:05:00Z · claude-2026-09-11-stabilize · HEAD: e9308c6
+**Last updated:** 2026-09-11T10:40:00Z · claude-2026-09-11-stabilize · HEAD: 46e6e19
 
-**Current focus:** M13 — combined candidate `e9308c6` (admission B1/B2, M13-T98 ownership plus residuals, first-turn U1/U2, docs) is frozen for the final gates: independent review, full verify, browser reruns and the identified packaged-worker restart; publication follows only after all pass (D-194/D-195).
+**Current focus:** M13 — the stabilization is complete and gated on candidate `46e6e19` (verify, independent review and re-review, packaged-worker restart, browser matrix); M13-T94 integrates it into main, versions 0.3.6, and publishes only after clean exact-SHA CI, the tag and the verified release workflow (D-194).
 
 ## Milestones
 
@@ -24,24 +24,23 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M10 Distribution | in-progress | in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
 | M12 Product experience | done | 0.2.13 dispatched |
-| M13 Agents Leap | in-progress | candidate `e9308c6` frozen (worker 434, UI 1029); review/verify/browser/packaged gates running; T94 gated |
+| M13 Agents Leap | in-progress | T89–T93, T95, T96, T98 done on `46e6e19`; T94 releasing 0.3.6; T99/T100 recorded follow-ups |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
 
-- M13-T94: waits on M13-T89/T93/T98 done with independent review, combined `pnpm verify`, browser reruns and the identified packaged-worker restart gate; publication authorized after that (D-194/D-195).
-- M13-T90/T91/T95/T96: preserved implementations need their final combined-candidate browser reruns (approval-footer fixture and mic-conflict toast remain explicit partials).
+- None. M13-T94 is in progress: integration, exact-SHA CI, tag and verified publication.
 
 ## Next up
 
-1. M13-T93 / M13-T98 / M13-T89 (in progress): pass independent review, browser reruns and the packaged-worker gate on `e9308c6`, then M13-T94.
-2. M10-T10: prove the in-app updater installation seam.
-3. M7-T7: complete QR entry and paired browser transport.
+1. M13-T94 (in progress): merge `stabilize/hlc010` into main, version 0.3.6, push, wait for clean CI on the exact SHA, tag, verify the published assets.
+2. M13-T99: fix the keystroke-burst crash in composer draft restore (pre-existing).
+3. M10-T10: prove the in-app updater installation seam.
 
 ## Recently done
 
-- M13-T97: 0.3.5 Latest at `7a05c79`; CI 34527293821, release 34527657277; native checks and 12 verified assets.
-- M13-T88: 0.3.4 Latest with native artifacts and feeds (D-187).
-- M13-T87: compact sidebar state and Chromium review (`b11fd3d`, D-186).
-- M13-T86: pre-turn choices; draft-safe transitions and 968 UI tests (`b11fd3d`, D-185).
-- M13-T85: 0.3.3 verified publication (D-184).
+- M13-T98: queued-completion ownership on the real engine and the identified packaged worker (`82fe0d5`…`46e6e19`, 14 real-engine tests, packaged 91/91, review + re-review APPROVE).
+- M13-T93: extension admission A/C and causal attribution (`db52a6b`, review APPROVE).
+- M13-T89: refused first send keeps the draft and choice; leaving drops only the choice (`c42524a`, browser repro exit 0).
+- M13-T96: terminal blocked is neutral finished work across fleet, sidebar, docs and `inspect_fleet` (`d694b07`, `05bec99`, `e165e7c`, `627aaef`).
+- M13-T92: truthful pending delivery with hidden-return hydration (`e1c24c7`, browser gate 4).
