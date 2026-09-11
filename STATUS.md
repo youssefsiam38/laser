@@ -2,9 +2,9 @@
 
 Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
-**Last updated:** 2026-09-11T07:30:00Z · claude-2026-09-11-stabilize · HEAD: f47d96b
+**Last updated:** 2026-09-11T08:05:00Z · claude-2026-09-11-stabilize · HEAD: e9308c6
 
-**Current focus:** M13 — admission (B1/B2) and the M13-T98 queued-completion ownership fix are merged and green on `stabilize/hlc010`; a follow-up lane closes the residual ownership gaps while the first-turn UI lane finishes; then independent review, combined verify, browser and packaged-worker gates before the authorized next patch.
+**Current focus:** M13 — combined candidate `e9308c6` (admission B1/B2, M13-T98 ownership plus residuals, first-turn U1/U2, docs) is frozen for the final gates: independent review, full verify, browser reruns and the identified packaged-worker restart; publication follows only after all pass (D-194/D-195).
 
 ## Milestones
 
@@ -24,7 +24,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 | M10 Distribution | in-progress | in-app updater seam remains |
 | M11 Theme system | in-progress | cold-start network trace remains |
 | M12 Product experience | done | 0.2.13 dispatched |
-| M13 Agents Leap | in-progress | 0.3.5 verified; T89/T93/T98 lanes merged at `f47d96b` (worker 425, UI 1029); ownership-2 lane running; review, verify, browser and packaged gates next; T94 gated |
+| M13 Agents Leap | in-progress | candidate `e9308c6` frozen (worker 434, UI 1029); review/verify/browser/packaged gates running; T94 gated |
 | MX Cross-cutting | in-progress | pinned engine 0.85.0; identity/seam gates |
 
 ## Blockers
@@ -34,7 +34,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 ## Next up
 
-1. M13-T93 / M13-T98 / M13-T89 (in progress): land the ownership-2 residuals and the first-turn UI lane, then independent review of the exact combined candidate.
+1. M13-T93 / M13-T98 / M13-T89 (in progress): pass independent review, browser reruns and the packaged-worker gate on `e9308c6`, then M13-T94.
 2. M10-T10: prove the in-app updater installation seam.
 3. M7-T7: complete QR entry and paired browser transport.
 
