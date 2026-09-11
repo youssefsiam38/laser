@@ -184,6 +184,7 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/commands/list": { path: "/s.jsonl" },
   "pi/prompts/list": { path: "/s.jsonl" },
   "pi/project/files": { cwd: "/p", query: "srcidx", limit: 50 },
+  "pi/project/read": { cwd: "/p", path: "docs/report.md" },
 
   // --- M7 push ---
   "pi/push/config": {},

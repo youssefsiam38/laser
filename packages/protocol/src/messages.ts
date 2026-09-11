@@ -822,6 +822,27 @@ export interface ProjectFile {
   tracked: boolean;
 }
 
+/**
+ * One file of a project, read for display (M15-T1): the viewer behind a file
+ * card in the transcript. Never executed, never resolved outside the project.
+ */
+export interface ProjectFileContent {
+  /** Posix-separated, relative to the project directory. */
+  path: string;
+  /** Last segment, for the title. */
+  name: string;
+  /** From the extension; `application/octet-stream` when unknown. */
+  mediaType: string;
+  /** Bytes on disk. */
+  size: number;
+  modifiedAt: string;
+  /** `base64` for an image, `utf8` for everything readable as text. */
+  encoding: "utf8" | "base64";
+  content: string;
+  /** `content` stops before `size`; the viewer says so and offers to open it natively. */
+  truncated: boolean;
+}
+
 export interface ProjectFiles {
   cwd: string;
   files: ProjectFile[];
@@ -1171,6 +1192,13 @@ export interface ClientRequests {
    * match over the relative path; omit it for the first `limit` files.
    */
   "pi/project/files": { params: { cwd: string; query?: string; limit?: number }; result: ProjectFiles };
+  /**
+   * Read one file of the project for the viewer (M15-T1). `path` is relative
+   * to `cwd` or absolute; either way it must resolve inside the project (no
+   * traversal, symlinks resolved), or the request is refused. Text is capped
+   * at 2 MiB and images at 12 MiB; beyond that `truncated` is set.
+   */
+  "pi/project/read": { params: { cwd: string; path: string }; result: ProjectFileContent };
 
   // --- M7 · push. Answered by the host itself; the phone is the only caller. ---
 

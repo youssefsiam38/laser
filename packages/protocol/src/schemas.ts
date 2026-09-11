@@ -615,6 +615,7 @@ export const clientParamsSchemas = {
   "pi/project/files": z
     .object({ cwd, query: z.string().max(200).optional(), limit: z.number().int().positive().max(2000).optional() })
     .strict(),
+  "pi/project/read": z.object({ cwd, path: z.string().min(1).max(4096) }).strict(),
 
   // --- M7 push. Endpoints are absolute https URLs from the browser. ---
   "pi/push/config": z.object({}).strict(),

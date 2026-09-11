@@ -126,6 +126,7 @@ const CWD_ROUTED = new Set([
   "pi/keybindings/set",
   // The `@` popover's file list, answered by the worker that owns the directory.
   "pi/project/files",
+  "pi/project/read",
   // Dictation is per project: `status` and `begin` name a cwd; the id-carrying
   // chunk/end/cancel are routed by the upload table below.
   "pi/transcribe/status",
