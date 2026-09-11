@@ -251,7 +251,8 @@ function TestResult({ inspection }: { inspection: McpInspection }) {
         <p className="flex items-center gap-2 text-sm font-medium text-danger">
           <AlertTriangle aria-hidden="true" className="size-4" /> It did not answer
         </p>
-        {inspection.detail && <p className="text-sm leading-6 text-ink-2">{inspection.detail}</p>}
+        {/* A failure names paths (the executable, the PATH it looked in): let them break anywhere so the card holds them on a phone. */}
+        {inspection.detail && <p className="text-sm leading-6 text-ink-2 break-words [overflow-wrap:anywhere]">{inspection.detail}</p>}
         {inspection.stderr?.length ? (
           <pre className="typed max-h-40 overflow-auto rounded-lg bg-surface p-2 whitespace-pre-wrap text-ink-2">
             {inspection.stderr.join("\n")}
