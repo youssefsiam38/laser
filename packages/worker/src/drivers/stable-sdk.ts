@@ -371,8 +371,15 @@ export class StableSdkDriver implements SessionDriver {
       uiContext: this.ui.context,
       abortHandler: () => void session.abort(),
       onError: (error: ExtensionError) => {
-        const invocation = this.extensionAdmission.eventInvocation(generation)?.ref
-          ?? this.extensionAdmission.takeRejectedInvocation(error.error);
+        // Attribution comes only from the async context the error was raised
+        // in — the causal invocation the extension called from, if any —
+        // never from the error text. The engine's own send-rejection
+        // diagnostic runs in the sender's context, so a refused top-level
+        // send arrives unowned; the harness leaves unowned Stable
+        // diagnostics alone because the completion promise already carries
+        // that failure. The update itself is always pushed, so the error
+        // stays visible in the transcript.
+        const invocation = this.extensionAdmission.diagnosticInvocation(generation);
         this.push(
           { kind: "extension_error", extension: error.extensionPath, message: error.error },
           invocation,

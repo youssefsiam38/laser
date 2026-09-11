@@ -44,6 +44,22 @@ class ExtensionAdmissionRefusedError extends Error {
  * This owns original-method preservation, runtime generations, invocation
  * capabilities and A/C separation. StableSdkDriver owns the public session
  * lifecycle and delegates only this narrow admission concern here.
+ *
+ * A = the admission promise handed back to the extension. It settles exactly
+ * once: accepted when the engine takes the message, refused by every failure
+ * that happens before that. Acceptance is monotonic — a failure after it
+ * rejects only C. C = the completion the worker retains: the native
+ * invocation plus its drained causal children.
+ *
+ * Attribution is causal, never textual. The only identity a late callback can
+ * carry is the invocation of the async context it was registered in, which is
+ * what `AsyncLocalStorage` propagates through promise reactions. The engine's
+ * own send diagnostics (`bindCore.sendMessage` / `sendUserMessage` in the
+ * pinned patch) attach their `.then(undefined, …)` at the extension's call
+ * site, so they run in the caller's context: a causal parent invocation when
+ * the extension sent from inside one, otherwise none. Nothing here maps an
+ * error message to an invocation; two refusals with the same text can never
+ * swap identities because they never had one to take.
  */
 export class StableExtensionAdmission {
   private generation = 0;
@@ -51,8 +67,6 @@ export class StableExtensionAdmission {
   private readonly invocation = new AsyncLocalStorage<StableInvocation>();
   private handler: ExtensionModelWorkHandler | undefined;
   private native: NativeMethods | undefined;
-  /** Rejection observers in Pi core run outside our ALS scope; pair their diagnostic by message. */
-  private readonly rejectedInvocations = new Map<string, DriverInvocationRef[]>();
 
   setHandler(handler: ExtensionModelWorkHandler | undefined): void {
     this.handler = handler;
@@ -83,6 +97,12 @@ export class StableExtensionAdmission {
     return generation;
   }
 
+  /**
+   * Retire the installed runtime (fork, dispose). Nothing here outlives a
+   * generation: the only association an invocation has is its own async
+   * context, which carries the generation it was minted in, so a later
+   * generation can never consume it.
+   */
   invalidate(): void {
     this.generation += 1;
     this.native = undefined;
@@ -92,12 +112,15 @@ export class StableExtensionAdmission {
     return this.native?.prompt ?? session.prompt.bind(session);
   }
 
-  takeRejectedInvocation(error: unknown): DriverInvocationRef | undefined {
-    const key = error instanceof Error ? error.message : String(error);
-    const refs = this.rejectedInvocations.get(key);
-    const ref = refs?.shift();
-    if (refs?.length === 0) this.rejectedInvocations.delete(key);
-    return ref;
+  /**
+   * The invocation an engine diagnostic belongs to: the invocation of the
+   * async context it was emitted from, for this generation, or none. A
+   * diagnostic emitted outside any invocation's context — the engine's own
+   * rejection observer for a top-level extension send — is unowned. It is
+   * never inferred from the error text.
+   */
+  diagnosticInvocation(generation = this.generation): DriverInvocationRef | undefined {
+    return this.eventInvocation(generation)?.ref;
   }
 
   createInvocation(input: {
@@ -200,8 +223,7 @@ export class StableExtensionAdmission {
     options: PiPromptOptions,
   ): ExtensionModelExecution {
     if (generation !== this.generation) return staleExecutionError();
-    const admission = deferred<void>();
-    void admission.promise.catch(() => undefined);
+    const admission = admissionGate();
     let preflight: boolean | undefined;
     const wasStreaming = session.isStreaming;
     const context = this.createInvocation({
@@ -223,29 +245,26 @@ export class StableExtensionAdmission {
         }
         if (accepted) {
           parent?.accept();
-          admission.resolve();
+          admission.accept();
         }
       },
     }), true);
     const completion = raw.then(
       () => {
+        // A false preflight is a refusal even when the engine then resolves:
+        // the message was never taken, so A must say so, not hang.
         if (preflight === undefined) {
-          const error = new ExtensionAdmissionRefusedError("The engine resolved an extension prompt without reporting preflight acceptance.");
-          this.rememberRejection(context.ref, error);
-          admission.reject(error);
-          throw error;
+          throw admission.refuse(new ExtensionAdmissionRefusedError("The engine resolved an extension prompt without reporting preflight acceptance."));
         }
         if (!preflight) {
-          const error = new ExtensionAdmissionRefusedError("The extension message was refused before model ownership.");
-          this.rememberRejection(context.ref, error);
-          throw error;
+          throw admission.refuse(new ExtensionAdmissionRefusedError("The extension message was refused before model ownership."));
         }
         return { disposition: wasStreaming ? "queued" as const : context.started ? "started" as const : "consumed" as const };
       },
       (error: unknown) => {
-        this.rememberRejection(context.ref, error);
-        if (preflight !== true) admission.reject(error);
-        throw error;
+        // Before acceptance the failure is the refusal; after it, A stays
+        // resolved and only C carries the failure.
+        throw admission.refuse(error);
       },
     );
     void completion.catch(() => undefined);
@@ -295,8 +314,7 @@ export class StableExtensionAdmission {
     options: PiCustomOptions,
   ): ExtensionModelExecution {
     if (generation !== this.generation) return staleExecutionError();
-    const admission = deferred<void>();
-    void admission.promise.catch(() => undefined);
+    const admission = admissionGate();
     const wasStreaming = session.isStreaming;
     const context = this.createInvocation({
       ...(ownerRunId ? { ownerRunId } : {}),
@@ -305,44 +323,36 @@ export class StableExtensionAdmission {
       accept: () => {},
     });
     onInvocation?.(context.ref);
-    const raw = this.runInvocation(context, () => nativeCustom(message, options), true);
+    const raw = this.runInvocation(context, async () => {
+      await nativeCustom(message, options);
+      // The engine took the message — queued behind the running turn, or as
+      // the turn it started. Acceptance precedes the causal-child drain, so
+      // a child that fails afterwards reaches only C.
+      if (wasStreaming || context.started || session.isStreaming) {
+        parent?.accept();
+        admission.accept();
+      }
+    }, true);
     if (!wasStreaming && session.isStreaming) {
       context.started = true;
       parent?.accept();
-      admission.resolve();
+      admission.accept();
     }
     const completion = raw.then(
       () => {
-        if (wasStreaming) {
-          parent?.accept();
-          admission.resolve();
-          return { disposition: "queued" as const };
+        if (!admission.accepted) {
+          throw admission.refuse(new ExtensionAdmissionRefusedError("The engine did not start the triggering extension message."));
         }
-        if (context.started || session.isStreaming) {
-          parent?.accept();
-          admission.resolve();
-          return { disposition: "started" as const };
-        }
-        const error = new ExtensionAdmissionRefusedError("The engine did not start the triggering extension message.");
-        this.rememberRejection(context.ref, error);
-        admission.reject(error);
-        throw error;
+        return { disposition: wasStreaming ? "queued" as const : "started" as const };
       },
       (error: unknown) => {
-        this.rememberRejection(context.ref, error);
-        if (!wasStreaming && !context.started) admission.reject(error);
-        throw error;
+        // Whether the trigger arrived idle or streaming, a native failure
+        // before acceptance refuses A; a failure after it reaches only C.
+        throw admission.refuse(error);
       },
     );
     void completion.catch(() => undefined);
     return { admission: admission.promise, completion };
-  }
-
-  private rememberRejection(ref: DriverInvocationRef, error: unknown): void {
-    const key = error instanceof Error ? error.message : String(error);
-    const refs = this.rejectedInvocations.get(key) ?? [];
-    refs.push(ref);
-    this.rejectedInvocations.set(key, refs);
   }
 
   private handleWork(request: ExtensionModelWorkRequest, parent: StableInvocation | undefined): Promise<void> {
@@ -374,6 +384,49 @@ function deferred<T>(): { promise: Promise<T>; resolve(value: T): void; reject(e
     reject = no;
   });
   return { promise, resolve, reject };
+}
+
+/**
+ * The extension-visible admission A, as its own state rather than something
+ * inferred from streaming or start flags. It settles exactly once, and
+ * acceptance is monotonic: `accept()` after any settle is a no-op, and
+ * `refuse()` after acceptance leaves A resolved and only hands the error
+ * back for C. `refuse()` always returns the error so a caller can `throw`
+ * it in one step.
+ */
+interface AdmissionGate {
+  readonly promise: Promise<void>;
+  readonly accepted: boolean;
+  readonly settled: boolean;
+  accept(): void;
+  refuse(error: unknown): unknown;
+}
+
+function admissionGate(): AdmissionGate {
+  const gate = deferred<void>();
+  void gate.promise.catch(() => undefined);
+  let state: "open" | "accepted" | "refused" = "open";
+  return {
+    promise: gate.promise,
+    get accepted() {
+      return state === "accepted";
+    },
+    get settled() {
+      return state !== "open";
+    },
+    accept() {
+      if (state !== "open") return;
+      state = "accepted";
+      gate.resolve();
+    },
+    refuse(error) {
+      if (state === "open") {
+        state = "refused";
+        gate.reject(error);
+      }
+      return error;
+    },
+  };
 }
 
 function once(operation: () => void): () => void {

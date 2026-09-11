@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -141,5 +142,50 @@ describe("the pinned extension-send patch", () => {
     process.off("unhandledRejection", unhandled);
     expect(unhandled).not.toHaveBeenCalled();
     expect(errors).toHaveLength(2);
+  });
+
+  it("runs each send diagnostic in the sender's async context, never in the operation's", async () => {
+    // The patched `bindCore` attaches `.then(undefined, emitError)` at the
+    // call site, so AsyncLocalStorage hands the diagnostic the context the
+    // extension sent from. The operation itself is created inside a context
+    // of its own here, and that context must not reach the diagnostic: an
+    // admission helper cannot make the engine's observer carry the new
+    // invocation, and nothing but the caller's context is trustworthy.
+    const als = new AsyncLocalStorage<{ name: string }>();
+    const seen: Array<{ name: string } | undefined> = [];
+    let actions: Actions | undefined;
+    const refuse = () => als.run({ name: "operation" }, () => Promise.reject(new Error("refused before acceptance")));
+    const session = {
+      sendUserMessage: refuse,
+      sendCustomMessage: refuse,
+      sessionManager: {},
+      promptTemplates: [],
+      _resourceLoader: { getSkills: () => ({ skills: [] }) },
+      _bindExtensionCore: undefined as unknown,
+    } as Record<string, unknown>;
+    const entry = join(import.meta.dirname, "..", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "index.js");
+    const agentSessionUrl = pathToFileURL(join(dirname(entry), "core", "agent-session.js")).href;
+    const module = await import(agentSessionUrl) as { AgentSession: { prototype: { _bindExtensionCore(runner: unknown): void } } };
+    module.AgentSession.prototype._bindExtensionCore.call(session, {
+      getRegisteredCommands: () => [],
+      bindCore: (bound: Actions) => {
+        actions = bound;
+      },
+      emitError: () => seen.push(als.getStore()),
+    });
+
+    await actions!.sendUserMessage("top-level").catch(() => undefined);
+    await als.run({ name: "user sender" }, () => actions!.sendUserMessage("nested").catch(() => undefined));
+    await als.run({ name: "custom sender" }, () => actions!.sendMessage({ customType: "test", content: "nested" }, { triggerTurn: true }).catch(() => undefined));
+    // A delayed observer still carries only its own sender's context.
+    const held = pending();
+    session["sendUserMessage"] = () => held.promise;
+    const delayed = als.run({ name: "delayed sender" }, () => actions!.sendUserMessage("delayed").catch(() => undefined));
+    await als.run({ name: "someone else" }, async () => {
+      held.reject(new Error("refused later"));
+      await delayed;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(seen).toEqual([undefined, { name: "user sender" }, { name: "custom sender" }, { name: "delayed sender" }]);
   });
 });
