@@ -214,7 +214,12 @@ export function classifyProviderFailure(signal: ProviderFailureSignal): Provider
   const text = (signal.errorMessage ?? "").toLowerCase();
   const status = signal.response?.status;
   const headers = normalizeHeaders(signal.response?.headers);
-  const resetAt = parseProviderResetAt(headers);
+  // Headers first, then the provider's own sentence. In practice the sentence
+  // is what there is: the provider SDKs throw on an error status before the
+  // engine's `after_provider_response` hook runs, so a failed attempt usually
+  // reaches us with no status and no headers at all — only the text the
+  // engine flattened into `errorMessage`.
+  const resetAt = parseProviderResetAt(headers) ?? statedResetAt(signal.errorMessage, Date.now());
   const withReset = (failure: ProviderFailureClass): ProviderFailure =>
     resetAt ? { class: failure, resetAt } : { class: failure };
 
@@ -250,6 +255,27 @@ export function classifyProviderFailure(signal: ProviderFailureSignal): Provider
   // inside richer provider messages that the checks above name better.
   if (has(text, ...CONNECTION_PATTERNS)) return { class: "connection" };
   return { class: "unknown" };
+}
+
+/**
+ * A recovery time the provider stated in words — "Please try again in 20s",
+ * "retry after 2 minutes" — as an instant. Only an explicit statement counts;
+ * a vague "try again later" is not a time and is left alone.
+ */
+export function statedResetAt(text: string | undefined, now: number): string | undefined {
+  if (!text) return undefined;
+  const match = /(?:try again in|retry after|retry in|available again in)\s+(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|secs?|seconds?|m|mins?|minutes?|h|hours?)\b/i.exec(text);
+  if (!match) return undefined;
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount) || amount <= 0) return undefined;
+  const unit = match[2]!.toLowerCase();
+  const factor = unit.startsWith("ms") || unit.startsWith("milli") ? 1
+    : unit.startsWith("h") ? 3_600_000
+    : unit.startsWith("m") && !unit.startsWith("ms") && (unit.startsWith("min") || unit === "m") ? 60_000
+    : 1_000;
+  const delay = amount * factor;
+  if (delay <= 0 || delay > MAX_PROVIDER_RESET_MS) return undefined;
+  return new Date(now + delay).toISOString();
 }
 
 function normalizeHeaders(headers: Record<string, string> | undefined): Record<string, string> {

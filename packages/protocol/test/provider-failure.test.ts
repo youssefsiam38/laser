@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   classifyProviderFailure,
+  statedResetAt,
   FALLBACK_ELIGIBLE_FAILURES,
   isFallbackEligible,
   MAX_PROVIDER_RESET_MS,
@@ -167,6 +168,21 @@ describe("provider reset headers", () => {
       .toBe(new Date(NOW + 300_000).toISOString());
     // Header names are matched without regard to case, as HTTP requires.
     expect(at({ "ReTrY-AfTeR": "10" })).toBe(new Date(NOW + 10_000).toISOString());
+  });
+
+  it("reads a recovery time the provider stated in words, since a failed attempt rarely has headers", () => {
+    // The provider SDKs throw on an error status before the engine's response
+    // hook runs, so for most failures the sentence is the only evidence there
+    // is. An explicit delay counts; "try again later" is not a time.
+    expect(statedResetAt("Rate limit reached. Please try again in 20s.", NOW)).toBe(new Date(NOW + 20_000).toISOString());
+    expect(statedResetAt("retry after 2 minutes", NOW)).toBe(new Date(NOW + 120_000).toISOString());
+    expect(statedResetAt("Please try again in 500ms", NOW)).toBe(new Date(NOW + 500).toISOString());
+    expect(statedResetAt("Please try again later", NOW)).toBeUndefined();
+    expect(statedResetAt("try again in 48 hours", NOW)).toBeUndefined();
+    expect(statedResetAt(undefined, NOW)).toBeUndefined();
+    const throttled = classifyProviderFailure(failed({ errorMessage: "429 rate limit reached. Please try again in 30s." }));
+    expect(throttled.class).toBe("rate_limit");
+    expect(Date.parse(throttled.resetAt!) - Date.now()).toBeGreaterThan(25_000);
   });
 
   it("ignores what it cannot trust rather than rounding it into a number", () => {

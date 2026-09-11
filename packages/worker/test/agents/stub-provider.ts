@@ -7,7 +7,18 @@ import type { AddressInfo } from "node:net";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-export type StubAnswer = { text: string } | { toolCall: { name: string; args: Record<string, unknown>; id?: string } };
+export type StubAnswer =
+  | { text: string }
+  | { toolCall: { name: string; args: Record<string, unknown>; id?: string } }
+  /**
+   * A failure, answered before any stream frame: an HTTP status with the
+   * body and headers a provider would send (`429` with `retry-after`, `402`
+   * with `insufficient_quota`, `500`), or `drop` to close the socket without
+   * a response at all — the only way to produce a transport failure, which
+   * carries no status for anything above it to read (M15-T3).
+   */
+  | { status: number; body?: unknown; headers?: Record<string, string> }
+  | { drop: true };
 
 export interface StubRequest {
   messages: Array<{ role: string; content: unknown; tool_calls?: unknown[]; tool_call_id?: string }>;
@@ -39,6 +50,16 @@ export function startStubProvider(respond: (request: StubRequest, index: number)
       const request = JSON.parse(body) as StubRequest;
       requests.push(request);
       const answer = respond(request, requests.length - 1);
+      if ("drop" in answer) {
+        req.socket.destroy();
+        return;
+      }
+      if ("status" in answer) {
+        const payload = JSON.stringify(answer.body ?? { error: { message: `stub failure ${answer.status}` } });
+        res.writeHead(answer.status, { "content-type": "application/json", ...(answer.headers ?? {}) });
+        res.end(payload);
+        return;
+      }
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
       const base = { id: `chatcmpl-${++calls}`, object: "chat.completion.chunk", created: 1, model: "stub-1" };
       res.write(sse({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] }));
@@ -69,16 +90,29 @@ export function startStubProvider(respond: (request: StubRequest, index: number)
 }
 
 /** Point a sandboxed agent dir at the stub as provider `stub`, model `stub-1`. */
-export function writeStubModels(agentDir: string, url: string): void {
+export function writeStubModels(agentDir: string, url: string, extra: StubProviderSpec[] = []): void {
   mkdirSync(agentDir, { recursive: true });
-  writeFileSync(
-    join(agentDir, "models.json"),
-    JSON.stringify({
-      providers: {
-        stub: { baseUrl: url, api: "openai-completions", apiKey: "stub-key", models: [{ id: "stub-1", name: "Stub One", contextWindow: 8000, maxTokens: 1000 }] },
-      },
-    }),
-  );
+  const providers: Record<string, unknown> = {
+    stub: { baseUrl: url, api: "openai-completions", apiKey: "stub-key", models: [{ id: "stub-1", name: "Stub One", contextWindow: 8000, maxTokens: 1000 }] },
+  };
+  for (const spec of extra) {
+    providers[spec.provider] = {
+      baseUrl: spec.url,
+      api: "openai-completions",
+      apiKey: "stub-key",
+      models: [{ id: spec.model, name: spec.name ?? spec.model, contextWindow: spec.contextWindow ?? 8000, maxTokens: 1000 }],
+    };
+  }
+  writeFileSync(join(agentDir, "models.json"), JSON.stringify({ providers }));
+}
+
+/** A second (third, fourth) provider, so a chain can cross a provider boundary. */
+export interface StubProviderSpec {
+  provider: string;
+  model: string;
+  url: string;
+  name?: string;
+  contextWindow?: number;
 }
 
 /** The system text of a request, wherever the provider put it. */

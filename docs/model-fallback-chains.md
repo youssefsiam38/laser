@@ -177,12 +177,23 @@ event stream (`stable-sdk.ts:1261`):
    `core/agent-session.js:429`). **`willRetry: false` is the signal that the
    engine has finished**; while it is `true`, Laser does nothing at all and
    D-180's quiet-retry presentation is untouched.
-3. The companion's `provider-log` module already forwards every provider
-   response's **status and headers** as `lasercode/provider/response`
+3. The companion's `provider-log` module forwards a provider response's
+   **status and headers** as `lasercode/provider/response`
    (`packages/pi-extension/src/modules/provider-log.ts:28`, from Pi's
    `after_provider_response` hook, `core/extensions/types.d.ts:534`). The driver
-   keeps the last one seen since the current attempt started. This is the only
-   structured failure signal the engine exposes.
+   keeps the last one seen since the current attempt started, and a new request
+   clears it.
+
+   **Correction, proven in implementation (M15-T3, step 3):** that hook does
+   *not* fire for a failed request. The provider SDKs throw on an error status
+   inside the adapter, before the engine reaches `onResponse`
+   (`core/sdk.js`), so a 429, a 402 or a 500 arrives with **no status and no
+   headers at all**. The hook is still read — an adapter that does deliver one
+   gives the strongest signal available — but the design must not depend on it,
+   and in practice classification runs on the text the engine flattened into
+   `errorMessage`. This is why `classifyProviderFailure` matches both, and why
+   a provider's *stated* delay ("Please try again in 20s") is parsed out of
+   that text: it is the only reset time most failures carry.
 
 What the engine does **not** expose: `AssistantMessage` has `stopReason` and a
 flattened `errorMessage: string` and nothing else
@@ -731,11 +742,13 @@ Required commands at a stable point: `pnpm -F @lasercode/protocol test`,
    triggering a failover, and a Pi-bump checklist item under MX-T2. If a later
    Pi exposes a public "continue this turn" entry point, the controller should
    switch to it and delete its own loop.
-2. **Classification is text-based for anything without an HTTP response.** The
-   engine flattens the status into `errorMessage` before Laser sees it, and
-   `after_provider_response` fires only when a response arrived. A connection
-   failure is therefore matched on text (the same patterns the engine itself
-   uses, `pi-ai/dist/utils/retry.js`). The narrow-by-default rule — `unknown`
+2. **Classification is text-based for nearly every real failure.** The engine
+   flattens the status into `errorMessage` before Laser sees it, and
+   `after_provider_response` does not fire for an error status at all (§2.3):
+   the provider SDK throws first. So a 429, a 402, a 500 and a dropped socket
+   are all matched on text (the same patterns the engine itself uses,
+   `pi-ai/dist/utils/retry.js`), and a reset time exists only when the provider
+   wrote one into its message. The narrow-by-default rule — `unknown`
    never triggers a fallback — is what keeps this from misfiring; the cost is
    that an unusual provider's outage may not trigger a chain until its wording
    is added.
