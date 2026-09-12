@@ -4,7 +4,7 @@ Regenerated from `STATUS_DETAILED.md`; detail and history live there.
 
 **Last updated:** 2026-09-12T03:45:56Z · env-mcp-01a093aa · HEAD: 67e8a79
 
-**Current focus:** M14-T8 investigation handed off (H-11): non-interactive Bash, stale adopted-host environment, and MCP client branding. Report: `docs/incidents/shell-environment-and-mcp-identity.md`. No implementation or installed-process changes.
+**Current focus:** v0.5.1 is public (files and images in the bubble, honest session opening, shell environment reaching the agent, MCP clients identifying as the product). No work in flight. Follow-ups recorded: profile long-transcript teardown on session switch; composer queue-until-ready needs destination-owned drafts; images as real `image` parts; saved-history search vs attached file bodies; file the adapter identity patch upstream.
 
 ## Milestones
 
