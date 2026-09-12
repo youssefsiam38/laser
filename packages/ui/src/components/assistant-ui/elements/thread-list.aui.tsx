@@ -123,6 +123,7 @@ import { dateTime, shortCwd } from "@/format";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
 import { mergeSessions, useLaserStable, useLaserState } from "@/runtime";
+import { pendingSessionPath, sessionOpenPhase } from "@/runtime/main-destination";
 import type { AppState } from "@/store";
 
 // ---------------------------------------------------------------------------
@@ -1106,7 +1107,13 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
   const id = useAuiState((s) => s.threadListItem.id);
   const path = useAuiState((s) => s.threadListItem.externalId ?? s.threadListItem.remoteId);
   const title = useAuiState((s) => s.threadListItem.title);
-  const active = useAuiState((s) => s.threads.mainThreadId === s.threadListItem.id);
+  const runtimeActive = useAuiState((s) => s.threads.mainThreadId === s.threadListItem.id);
+  // Intent precedes both the loaded view and assistant-ui's runtime switch.
+  const active = useLaserState((s) => {
+    const pending = pendingSessionPath(s.destination);
+    return pending !== undefined ? pending === path : runtimeActive;
+  });
+  const opening = useLaserState((s) => !!path && sessionOpenPhase(s, path).phase === "opening");
   const row = useRowModel(path);
   const { pinned } = useSessionsList();
   const workspaces = useContext(WorkspacesContext);
@@ -1150,7 +1157,8 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
       <RunDot status={row.runStatus} tone={errored ? "muted" : stateTone} {...(errored ? { label: ERRORED_RUN_LABEL, hollow: true } : {})} />
     ) : null;
   const runSpeaks = runMark !== null && (activeRun || (errored && !archived));
-  const activity = runSpeaks ? runMark : rowStatus !== "idle" ? <SessionActivity status={rowStatus} /> : runMark;
+  const activity = runSpeaks ? runMark : rowStatus !== "idle" ? <SessionActivity status={rowStatus} />
+    : opening ? <SessionActivity status="working" label="Loading the conversation" /> : runMark;
   // Inside the finished fold the row quiets down — but a failure keeps its ink
   // and its dot, and so does the session you are reading right now.
   const dimmed = layout.dimmed && row.runStatus !== "failed" && !active;

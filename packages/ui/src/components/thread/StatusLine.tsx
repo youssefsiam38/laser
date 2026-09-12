@@ -6,6 +6,7 @@ import type { Status } from "@/components/status/status";
 import { duration, tokens } from "@/format";
 import { cn } from "@/lib/utils";
 import { useLaserState } from "@/runtime";
+import { sessionOpenPhase } from "@/runtime/main-destination";
 import type { AppState } from "@/store";
 import { useSessionUpdates } from "./session-updates.js";
 import { useThreadSlots } from "./thread-slots.js";
@@ -22,10 +23,18 @@ interface Words {
 const wordsFor = (s: AppState): Words | undefined => {
   const path = s.current;
   const view = path ? s.open[path] : undefined;
-  if (!view) return undefined;
+  const open = sessionOpenPhase(s, path);
   if (s.connection !== "open") {
     return { status: "error", text: s.connection === "connecting" ? "reconnecting to the host" : "disconnected from the host", live: false };
   }
+  if (open.phase === "opening") {
+    return { status: "working", text: open.hasTranscript ? "refreshing the conversation" : "loading the conversation", live: false };
+  }
+  if (open.phase === "preparing") return { status: "idle", text: "preparing the workspace", live: false };
+  if (open.phase === "failed") {
+    return { status: "error", text: open.path ? "retry to load this conversation" : "retry to open this view", live: false };
+  }
+  if (!view) return undefined;
   if (view.dialogs.length > 0) return { status: "waiting_for_input", text: "waiting for you", live: true };
   if (view.state.isCompacting) return { status: "working", text: "compacting", live: true };
   // A fallback chain is moving this conversation to another model. The engine

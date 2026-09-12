@@ -587,6 +587,11 @@
       transform: rotate(360deg);
     }
   }
+  @keyframes conversation-breathe {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 1; }
+  }
+
   @keyframes attention-pulse {
     0%,
     100% {
@@ -819,6 +824,12 @@
   line-height: var(--text-code--line-height);
   font-variant-numeric: tabular-nums;
   color-scheme: dark;
+}
+
+/* Known conversation geometry, breathing rather than spinning. */
+@utility conversation-breathe {
+  animation: conversation-breathe calc(var(--motion-slow) * 10) var(--motion-ease) infinite;
+  @media (prefers-reduced-motion: reduce) { animation: none; }
 }
 
 /* Shimmering label (reasoning while streaming). Holds still under reduced motion. */

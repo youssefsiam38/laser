@@ -20,6 +20,7 @@ vi.mock("@/runtime", () => ({
 vi.mock("@/components/thread/thread-slots.js", () => ({ useThreadSlots: () => ({}) }));
 vi.mock("@/components/thread/session-updates.js", () => ({ useSessionUpdates: () => () => () => {} }));
 
+import { initialState } from "../../src/store.js";
 import { StatusLine } from "../../src/components/thread/StatusLine.js";
 
 let root: Root, container: HTMLDivElement;
@@ -42,6 +43,7 @@ const session = (fallback?: SessionState["fallback"], model?: { provider: string
 
 function setSession(state: SessionState, running = false): void {
   app.state = {
+    ...initialState,
     current: state.path,
     connection: "open",
     workers: { "/p": { status: "running" } },
@@ -63,6 +65,25 @@ afterEach(async () => {
 
 const render = () => act(async () => root.render(<StatusLine />));
 const words = () => container.querySelector('[role="status"]')?.textContent?.trim();
+
+it("never calls an opening session idle, including before its view exists", async () => {
+  setSession(session());
+  app.state.sessionLoads = { "/s.jsonl": { phase: "opening" } };
+  await render();
+  expect(words()).toBe("loading the conversation");
+  app.state.current = undefined;
+  app.state.destination = { ...initialState.destination, phase: "resolving", target: { kind: "session", path: "/s.jsonl", visibleTab: "code" } };
+  await render();
+  expect(words()).toBe("loading the conversation");
+});
+
+it("reconnecting outranks a pending load", async () => {
+  setSession(session());
+  app.state.sessionLoads = { "/s.jsonl": { phase: "opening" } };
+  app.state.connection = "connecting";
+  await render();
+  expect(words()).toBe("reconnecting to the host");
+});
 
 it("says idle when nothing is happening, as it always has", async () => {
   setSession(session());

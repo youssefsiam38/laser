@@ -11,7 +11,7 @@ import { StatusDot, type Status } from "@/components/status";
  * attention pulse, the colours and the reduced-motion fallback, so the row has
  * exactly one indicator and one vocabulary.
  */
-export function SessionActivity({ status }: { status: Status }) {
+export function SessionActivity({ status, label }: { status: Status; label?: string | undefined }) {
   if (status === "idle") return null;
-  return <StatusDot status={status} size="sm" />;
+  return <StatusDot status={status} size="sm" {...(label ? { label } : {})} />;
 }

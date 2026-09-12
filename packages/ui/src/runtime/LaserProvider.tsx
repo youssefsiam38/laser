@@ -69,9 +69,10 @@ import {
   isMainReady,
   isSessionInCodeProject,
   mainCodeProject,
-  mainError,
   mainPath,
   mainTab,
+  sessionOpenPhase,
+  sameSessionOpenPhase,
   rememberedCodeOf,
   type MainDestination,
   type MainTab,
@@ -495,6 +496,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    */
   const onHostNotification = useRef<(method: HostNotificationMethod, params: unknown) => void>(() => {});
 
+  const rehydrate = useRef<(path: string) => void>(() => {});
   const client = useMemo(() => {
     const created: HostClient = new HostClient({
       ...(url !== undefined ? { url } : {}),
@@ -518,6 +520,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           seenSeq.current.delete(path);
           created.resync(path, replayFrom);
           dispatch({ type: "resync", path, lastSeq: replayFrom });
+          rehydrate.current(path);
         }
       },
       // Never re-open a Pi session the app has dropped.
@@ -526,9 +529,12 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     return created;
   }, [url]);
 
-  /** Surface every failed request as a toast; never a silent rejection. */
+  /** Loads have an in-place Retry; a second toast would cover it on a phone. */
   const onError = useCallback((error: unknown) => {
-    dispatch({ type: "toast", level: "error", text: error instanceof Error ? error.message : String(error) });
+    const text = error instanceof Error ? error.message : String(error);
+    const current = readState();
+    if (error instanceof SessionLoadError || sessionOpenPhase(current, current.current).reason === text) return;
+    dispatch({ type: "toast", level: "error", text });
   }, []);
 
   const guard = useCallback(
@@ -626,6 +632,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    * thread; without this they race and each one's snapshot clobbers the other.
    */
   const openInFlight = useRef(new Map<string, { promise: Promise<void> }>());
+  const openEpochs = useRef(new Map<string, symbol>());
   /**
    * Sessions whose leaf is being moved right now (`navigate`, `fork`). A
    * move that stops a turn first settles that turn *inside* the request, and
@@ -637,17 +644,26 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
 
   /** Hydrate one cached view. Main-window selection belongs to the controller. */
   const openSession = useCallback(
-    (path: string, _options: { select?: boolean } = {}): Promise<void> => {
+    (path: string, options: { select?: boolean; refreshHistory?: boolean } = {}): Promise<void> => {
       const running = openInFlight.current.get(path);
       if (running) return running.promise;
+      dispatch({ type: "sessionLoad", path, phase: "opening" });
+      const epoch = Symbol();
+      openEpochs.current.set(path, epoch);
+      // Optional reads may outlive readiness, but not a newer open or Retry.
+      let failed = false;
+      const accepting = () => !failed && openEpochs.current.get(path) === epoch;
       const work = (async () => {
         // The page and the socket come up together: without this the first
         // session someone clicks after a reload was a dead click.
-        await client.whenConnected();
+        // An already-open socket can start the request now, before React
+        // tears down the old transcript. An unconditional await yields that
+        // head start even though there is no connection left to wait for.
+        if (readState().connection !== "open") await client.whenConnected();
         const view = readState().open[path];
         const hydrated = view?.hydrated === true;
-        // Not hydrated yet: the snapshot below carries the whole transcript, so
-        // asking the worker to replay its buffer would only duplicate it.
+        // session/load is metadata only. The entries snapshot below is the
+        // transcript; replaying the buffer as well would duplicate it.
         const { state: session, replayFrom, seq: loadedSeq } = await client.request("session/load", {
           path,
           ...(hydrated ? { fromSeq: view.lastSeq } : {}),
@@ -666,9 +682,14 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           client.resync(path, replayFrom);
           dispatch({ type: "resync", path, lastSeq: replayFrom });
         }
-        if (!hydrated || needsResync) {
-          const seqBefore = readState().open[path]?.lastSeq ?? 0;
-          const { entries, leafId } = await client.request("pi/session/entries", { path });
+        // These reads are independent once the worker has loaded the session.
+        // Capture each race watermark before issuing them. Only history is
+        // required for readiness; a missing goal or tray must never hide it.
+        const seqBefore = readState().open[path]?.lastSeq ?? 0;
+        const expectPending = readState().open[path]?.pending;
+        const history = (!hydrated || needsResync || options.refreshHistory)
+          ? client.request("pi/session/entries", { path }).then(({ entries, leafId }) => {
+          if (!accepting()) return;
           // The snapshot is the transcript as the worker held it at `loadedSeq`,
           // so that — not 0 — is the watermark this view now carries. Leaving it
           // at 0 makes the next open ask for `fromSeq: 0` and receive the whole
@@ -676,20 +697,25 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           // still owns the race: an update that landed while the snapshot was in
           // flight keeps the live blocks, and its higher seq wins the stamp.
           dispatch({ type: "hydrate", path, entries, leafId, expectSeq: seqBefore, seq: loadedSeq });
-        }
+        }) : Promise.resolve();
+        void client.request("session/goal/get", { path }).then(({ goal }) => {
+          if (accepting()) dispatch({ type: "goal", path, goal });
+        }).catch(() => {});
+        // A numbered tray update can overtake this list, including the empty
+        // acknowledgement of delivery. The original array is its watermark.
+        void client.request("session/pending/list", { path }).then(({ messages }) => {
+          if (accepting() && expectPending) dispatch({ type: "pending", path, messages, expectPending });
+        }).catch(() => {});
+        await history;
         // Monotonic: the resume `session/load` after a dropped socket asks from
         // here, so an unstamped view would replay its whole buffer there too.
         client.track(path, readState().open[path]?.lastSeq ?? loadedSeq);
-        const { goal } = await client.request("session/goal/get", { path });
-        dispatch({ type: "goal", path, goal });
-        // The pending tray, once, now that the view exists. A numbered update
-        // can overtake this request, including the empty update that acknowledges
-        // delivery. Capture the array itself as a watermark so a delayed list
-        // cannot resurrect an older row; unrelated view updates preserve it.
-        const expectPending = readState().open[path]?.pending;
-        const { messages } = await client.request("session/pending/list", { path });
-        if (expectPending) dispatch({ type: "pending", path, messages, expectPending });
-      })();
+        dispatch({ type: "sessionLoad", path, phase: "ready" });
+      })().catch((error: unknown) => {
+        failed = true;
+        dispatch({ type: "sessionLoad", path, phase: "error", reason: error instanceof Error ? error.message : String(error) });
+        throw new SessionLoadError(error);
+      });
       const entry = {
         promise: work.finally(() => {
           if (openInFlight.current.get(path) === entry) openInFlight.current.delete(path);
@@ -700,6 +726,10 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     },
     [client],
   );
+
+  // A worker can restart at the same zero watermark. Its reopen notification
+  // still warrants a fresh tree, without changing the selected destination.
+  rehydrate.current = (path) => { void openSession(path, { refreshHistory: true }).catch(onError); };
 
   const launchSession = useMemo(() => createSessionLauncher({
     state: readState,
@@ -892,7 +922,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         if (info.status !== "ready" || !info.reopened?.length) return;
         const open = readState().open;
         for (const path of info.reopened) {
-          if (open[path]) void actionsRef.current.openSession(path);
+          if (open[path]) rehydrate.current(path);
         }
         return;
       }
@@ -1011,7 +1041,8 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     };
 
     return {
-      openSession: (path) => guard(() => readScoped === readState ? destination.openSession(path) : openSession(path, { select: false })).then(() => undefined),
+      openSession: (path) => guard(() => readScoped === readState && mainPath(readState().destination) !== path
+        ? destination.openSession(path) : openSession(path, { select: false })).then(() => undefined),
       goTab: (tab) => guard(() => destination.goTab(tab)).then(() => undefined),
       goProject: (cwd) => guard(() => destination.goProject(cwd)).then(() => undefined),
       retryDestination: () => guard(() => destination.retry()).then(() => undefined),
@@ -1365,6 +1396,12 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   );
 }
 
+class SessionLoadError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+  }
+}
+
 function MainLandingDraftBridge({ destination, store }: { destination: MainDestination; store: ReturnType<typeof createMainLandingDraftStore> }): null {
   useMainLandingDrafts(destination, store);
   return null;
@@ -1395,15 +1432,19 @@ function useThreadRuntime(store: SnapshotStore<RuntimeSnapshot>): AssistantRunti
   // Subscribe to this thread's slice only: a delta in another session must not
   // re-render (and re-project) this one.
   const stateStore = snapshot.store;
-  const readView = useCallback(
-    () => (path ? stateStore.getSnapshot().open[path] : undefined),
-    [path, stateStore],
-  );
-  const view = useSyncExternalStore(stateStore.subscribe, readView, readView);
-  const readConnection = useCallback(() => stateStore.getSnapshot().connection, [stateStore]);
-  const connection = useSyncExternalStore(stateStore.subscribe, readConnection, readConnection);
-  const readDestination = useCallback(() => stateStore.getSnapshot().destination, [stateStore]);
-  const destination = useSyncExternalStore(stateStore.subscribe, readDestination, readDestination);
+  const readThread = useMemo(() => {
+    let previous: { view: SessionView | undefined; openPhase: ReturnType<typeof sessionOpenPhase>;
+      connection: AppState["connection"]; destination: MainDestination } | undefined;
+    return () => {
+      const state = stateStore.getSnapshot();
+      const view = path ? state.open[path] : undefined;
+      const openPhase = sessionOpenPhase(state, path);
+      if (previous && previous.view === view && sameSessionOpenPhase(previous.openPhase, openPhase)
+        && previous.connection === state.connection && previous.destination === state.destination) return previous;
+      return previous = { view, openPhase, connection: state.connection, destination: state.destination };
+    };
+  }, [path, stateStore]);
+  const { view, openPhase, connection, destination } = useSyncExternalStore(stateStore.subscribe, readThread, readThread);
 
   // Load + hydrate a thread the first time it becomes the main one. Cheap and
   // idempotent: an already-hydrated view is skipped, and a load the thread list
@@ -1415,7 +1456,9 @@ function useThreadRuntime(store: SnapshotStore<RuntimeSnapshot>): AssistantRunti
     void current.openSession(path).catch(current.onError);
   }, [isMain, path, store]);
 
-  const projection = useMemo(() => projectSessionView(view), [view]);
+  // These are the four inputs projectSessionView consumes. Metadata, optional
+  // goal/tray reads and transaction changes neither blank nor re-project history.
+  const projection = useMemo(() => projectSessionView(view), [view?.blocks, view?.entries, view?.running, view?.dialogs]);
   const sharedRef = useRef<readonly ThreadMessageLike[]>([]);
   const messages = useMemo(() => {
     const shared = shareProjectedMessages(projection.messages, sharedRef.current);
@@ -1479,8 +1522,9 @@ function useThreadRuntime(store: SnapshotStore<RuntimeSnapshot>): AssistantRunti
         projection: { ...projection, messages: messages as ThreadMessageLike[] },
         composer: () => composerRef.current,
         assertCanAct,
+        openPhase,
       }),
-    [assertCanAct, connection, destination, messages, path, projection, resolvePath, snapshot, view],
+    [assertCanAct, connection, destination, openPhase, messages, path, projection, resolvePath, snapshot, view],
   );
 
   const runtime = useExternalStoreRuntime<ThreadMessageLike>(adapter);
@@ -1503,7 +1547,7 @@ function useThreadRuntime(store: SnapshotStore<RuntimeSnapshot>): AssistantRunti
  * that session while the store itself stays one. Derived lazily and cached
  * per underlying state, so identity survives every unrelated delta.
  */
-function createScopedStateStore(store: StateStore, path: string | undefined): StateStore {
+function createScopedStateStore(store: StateStore, path: string | undefined, destination: MainDestination): StateStore {
   let source: AppState | undefined;
   let derived: AppState | undefined;
   return {
@@ -1511,7 +1555,7 @@ function createScopedStateStore(store: StateStore, path: string | undefined): St
       const state = store.getSnapshot();
       if (state !== source || derived === undefined) {
         source = state;
-        derived = state.current === path ? state : { ...state, current: path };
+        derived = { ...state, current: path, destination };
       }
       return derived;
     },
@@ -1606,15 +1650,16 @@ export function LaserThreadScope({ path, onPathChange, filter, createIn, unavail
   // composer must not refuse to send for want of a project, and what it asks
   // about a directory (commands, files, the default model) is asked there.
   const workspace = useLaserState(useCallback((s: AppState) => createInRef.current(s)?.cwd, []));
-  const scopedStore = useMemo(() => createScopedStateStore(store, path), [store, path]);
+  const scopedDestination = useMemo<MainDestination>(() => path
+    ? { phase: "ready-code", intent: 0, code: { kind: "beam-session", path, returnTo: workspace ? { kind: "project-landing", project: workspace } : { kind: "no-project-landing" } } }
+    : { phase: "ready-code", intent: 0, code: workspace ? { kind: "project-landing", project: workspace } : { kind: "no-project-landing" } }, [path, workspace]);
+  const scopedStore = useMemo(() => createScopedStateStore(store, path, scopedDestination), [store, path, scopedDestination]);
   const stable = useMemo<LaserStable>(() => ({
     ...parent,
-    destination: path
-      ? { phase: "ready-code", intent: 0, code: { kind: "beam-session", path, returnTo: workspace ? { kind: "project-landing", project: workspace } : { kind: "no-project-landing" } } }
-      : { phase: "ready-code", intent: 0, code: workspace ? { kind: "project-landing", project: workspace } : { kind: "no-project-landing" } },
+    destination: scopedDestination,
     ...(workspace !== undefined ? { currentProject: workspace } : {}),
     actions: buildActions(scopedStore.getSnapshot),
-  }), [parent, buildActions, path, scopedStore, workspace]);
+  }), [parent, buildActions, scopedDestination, scopedStore, workspace]);
   const unavailableRef = useRef(unavailable);
   unavailableRef.current = unavailable;
   const onPathChangeRef = useRef(onPathChange);
@@ -1701,12 +1746,12 @@ export function LaserThreadScope({ path, onPathChange, filter, createIn, unavail
   );
 
   const snapshotStore = useMemo(
-    () => createSnapshotStore<RuntimeSnapshot>({ store, client, dispatch, onError: scopedOnError, openSession: (target) => openSession(target, { select: false }) }),
+    () => createSnapshotStore<RuntimeSnapshot>({ store: scopedStore, client, dispatch, onError: scopedOnError, openSession: (target) => openSession(target, { select: false }) }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- created once; kept in sync below
     [],
   );
   useEffect(() => {
-    snapshotStore.set({ store, client, dispatch, onError: scopedOnError, openSession: (target) => openSession(target, { select: false }) });
+    snapshotStore.set({ store: scopedStore, client, dispatch, onError: scopedOnError, openSession: (target) => openSession(target, { select: false }) });
   }, [snapshotStore, store, client, dispatch, scopedOnError, openSession, path]);
 
   const runtimeHook = useCallback(

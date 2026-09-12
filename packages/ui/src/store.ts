@@ -235,6 +235,8 @@ export interface AppState {
   /** True once a `pi/session/list` has landed, so an empty list is real. */
   sessionsLoaded: boolean;
   open: Record<string, SessionView>;
+  /** Also covers the interval before session/load creates a view. */
+  sessionLoads: Record<string, { phase: "opening" | "failed"; reason?: string | undefined }>;
   /** Read projection of `destination.path`; scoped runtimes overlay only this field. */
   current: string | undefined;
   /** The sole tab/project/session intent for the main window. */
@@ -251,6 +253,7 @@ export const initialState: AppState = {
   sessions: [],
   sessionsLoaded: false,
   open: {},
+  sessionLoads: {},
   current: undefined,
   destination: initialMainDestination,
   workers: {},
@@ -265,6 +268,8 @@ export type Action =
   | { type: "sessions"; sessions: SessionSummary[] }
   /** Loading/creation warms a view only; only the destination controller selects. */
   | { type: "opened"; state: SessionState }
+  | { type: "sessionLoad"; path: string; phase: "opening" | "ready"; reason?: never }
+  | { type: "sessionLoad"; path: string; phase: "error"; reason: string }
   /** Controller-owned atomic main-window transition; `current` is its projection. */
   | { type: "destination"; destination: MainDestination }
   | { type: "closeView"; path: string }
@@ -344,6 +349,12 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, versionMismatch: action.version };
     case "sessions":
       return { ...state, sessions: action.sessions.map(summary => summary.firstMessage ? { ...summary, firstMessage: summary.firstMessage.split(/(?:^|\s)<attached-file\b/)[0]!.trim() } : summary), sessionsLoaded: true };
+    case "sessionLoad": {
+      const { [action.path]: _previous, ...rest } = state.sessionLoads;
+      return { ...state, sessionLoads: action.phase === "ready" ? rest : {
+        ...rest, [action.path]: { phase: action.phase === "error" ? "failed" : "opening", reason: action.reason },
+      } };
+    }
     case "opened": {
       const existing = state.open[action.state.path];
       const capabilities = action.state.capabilities ?? existing?.capabilities ?? [];
@@ -382,7 +393,8 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, destination: action.destination, current: mainPath(action.destination) };
     case "closeView": {
       const { [action.path]: _gone, ...rest } = state.open;
-      return { ...state, open: rest };
+      const { [action.path]: _load, ...sessionLoads } = state.sessionLoads;
+      return { ...state, open: rest, sessionLoads };
     }
     case "hydrate":
       return updateView(state, action.path, (v) => {

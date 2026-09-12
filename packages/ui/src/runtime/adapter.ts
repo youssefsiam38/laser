@@ -420,6 +420,8 @@ export interface ThreadAdapterDeps {
   /** The session this thread is bound to; `undefined` while a new thread is still local. */
   path: string | undefined;
   view: SessionView | undefined;
+  /** Canonical transaction state, supplied by the owning runtime. */
+  openPhase?: import("./main-destination.js").SessionOpenPhase | undefined;
   connection: "connecting" | "open" | "closed";
   dispatch: (action: Action) => void;
   /** Every rejected request lands here (the provider turns it into a toast). */
@@ -552,8 +554,11 @@ export function createThreadAdapter(deps: ThreadAdapterDeps): ExternalStoreAdapt
     messages: projection.messages,
     convertMessage: (message) => message,
     isRunning: projection.isRunning,
-    // A closed socket or a main destination in motion disables the composer.
-    isDisabled: deps.connection !== "open" || (() => {
+    isLoading: deps.openPhase?.phase === "opening" && !deps.openPhase.hasTranscript && deps.openPhase.expectsTranscript,
+    // Background refreshes never disable a bound composer. The destination
+    // fence still prevents sending through the previous session's runtime.
+    isDisabled: deps.connection !== "open"
+      || (deps.openPhase?.phase === "failed" && !deps.openPhase.hasTranscript) || (() => {
       try {
         deps.assertCanAct?.();
         return false;
