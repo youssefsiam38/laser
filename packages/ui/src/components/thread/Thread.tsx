@@ -94,8 +94,15 @@ export function Thread({ statusSlot, emptyState, followUps }: ThreadProps = {}) 
                     }} />
                 )}
                 <ConversationLoadingGate key={open.path} active={loading} hasContent={open.hasTranscript || loadError || !open.expectsTranscript}>
+                  {/* The welcome is for a conversation that has nothing in it —
+                      decided from the session (its view is hydrated and holds
+                      no history, or no session is open at all), never from the
+                      runtime's message list: for one frame after a switch the
+                      new runtime has no messages yet while the store already
+                      has the transcript, and that frame must not read as
+                      "new session". */}
                   <AuiIf condition={(s) => s.thread.isEmpty}>
-                    {(open.phase === "idle" || open.phase === "ready") && (emptyState ?? <EmptyState />)}
+                    {(open.phase === "idle" || (open.phase === "ready" && !open.expectsTranscript)) && (emptyState ?? <EmptyState />)}
                   </AuiIf>
                   <div data-slot="thread-messages" className="flex flex-col gap-5 pt-5 pb-5 empty:hidden">
                     <ThreadPrimitive.Messages>{() => <ThreadMessage />}</ThreadPrimitive.Messages>

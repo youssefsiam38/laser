@@ -104,7 +104,10 @@ export function sessionOpenPhase(state: AppState, path: string | undefined): Ses
       : view ? "ready" : "idle"),
     path: target,
     hasTranscript,
-    expectsTranscript: target !== undefined && (hasTranscript || (view?.state.messageCount ?? summary?.messageCount) !== 0),
+    // A hydrated view that holds nothing is the one certain "empty"; before
+    // hydration the catalog's count decides, and an unknown count means a
+    // transcript may still be coming.
+    expectsTranscript: target !== undefined && (hasTranscript || (view?.hydrated ? false : (view?.state.messageCount ?? summary?.messageCount) !== 0)),
     reason,
   };
 }
