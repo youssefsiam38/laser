@@ -24,6 +24,8 @@ vi.mock("../../src/components/shell/shell-context.js", async (original) => ({
 }));
 
 import { ComposerPrimitive } from "@assistant-ui/react";
+import { ComposerAttachmentTile } from "../../src/components/assistant-ui/elements/composer.js";
+import { wrapFileAttachment } from "../../src/runtime/attachments.js";
 import type { PendingMessage } from "@lasercode/protocol";
 import { ComposerQueue } from "../../src/components/assistant-ui/elements/message-queue.js";
 import { Composer } from "../../src/components/thread/Composer.js";
@@ -54,7 +56,7 @@ function Open() {
 
 function Reopen() {
   const { actions } = useLaserStable();
-  return <button data-slot="reopen-scoped" onClick={() => void actions.openSession(PATH, { select: false })} />;
+  return <button data-slot="reopen-scoped" onClick={() => void actions.openSession(PATH)} />;
 }
 
 function FirstTurnHarness() {
@@ -93,6 +95,8 @@ function Harness() {
         <Reopen />
         <ComposerPrimitive.Root>
           <ComposerPrimitive.Input data-slot="composer-input" />
+          <ComposerPrimitive.Attachments>{() => <ComposerAttachmentTile />}</ComposerPrimitive.Attachments>
+          <ComposerPrimitive.Send aria-label="Send restored" />
           <ComposerQueue />
         </ComposerPrimitive.Root>
       </TooltipProvider>
@@ -232,6 +236,29 @@ describe("the pending tray", () => {
     await act(async () => settle(10));
     expect(composerText()).toBe("run the tests");
     expect(calls("session/pending/remove").map((call) => (call.params as { id: string }).id)).toEqual(["p-1"]);
+  });
+
+  it.each(["edit", "clear"])("restores prose, a file and an image after queue %s without exposing wrappers", async mode => {
+    const wrapper = wrapFileAttachment({ name: "notes.md", mediaType: "text/markdown", size: 12, content: "private body" });
+    const image = { type: "image" as const, mimeType: "image/png", data: "cGlj" };
+    const queued = pending("p-1", `Notes?\n\n${wrapper}`, { content: [{ type: "text", text: `Notes?\n\n${wrapper}` }, image], images: 1 });
+    world.overrides["session/pending/remove"] = async () => ({});
+    world.overrides["pi/session/steer"] = async () => ({});
+    world.overrides["session/pending/clear"] = async () => ({ messages: [queued] });
+    world.overrides["pi/session/clear_queue"] = async () => ({ steering: [], followUp: [] });
+    await mount();
+    await publish(mode === "edit" ? [queued] : [queued, pending("p-2", "another")]);
+    expect(tray()?.textContent).toContain("Notes?");
+    expect(tray()?.textContent).not.toMatch(/attached-file|private body/);
+    await openMenu(rows()[0]!);
+    await act(async () => menuItems().find(item => item.textContent?.includes(mode === "edit" ? "Edit in the composer" : "Drop all"))!.click());
+    await act(async () => settle(10));
+    expect(composerText()).toBe("Notes?");
+    expect(container.textContent).toContain("notes.md");
+    expect(container.querySelector('[data-slot="composer-attachment"] img')?.getAttribute("src")).toBe("data:image/png;base64,cGlj");
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Send restored"]')!.click());
+    await act(async () => settle(10));
+    expect(calls("pi/session/steer").at(-1)?.params).toMatchObject({ content: [{ type: "text", text: `Notes?\n\n${wrapper}` }, image] });
   });
 
   it("offers a single Clear only when more than one message is waiting", async () => {

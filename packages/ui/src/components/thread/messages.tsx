@@ -9,7 +9,7 @@ import { TaskEventNotice } from "./TaskEventNotice.js";
 import { AGENT_COMPLETION_DATA_PART, AGENT_EVENT_DATA_PART, GOAL_DATA_PART, TASK_EVENT_DATA_PART, type AgentCompletionData } from "@/runtime/projection";
 import type { GoalRecord as GoalRecordData } from "@/runtime/goal-history";
 import { memo, useContext, useMemo, useRef, useState } from "react";
-import { FileViewer, type FileViewerSource } from "./FileViewer.js";
+import { useFileOpener } from "@/lib/file-opener";
 import { attachmentFile, describeMediaType } from "@/components/preview/media";
 import { attachedFileContent, splitAttachedFiles, wrapFileAttachment, type AttachedFile } from "@/runtime/attachments";
 import { formatBytes } from "@/format";
@@ -41,7 +41,7 @@ import { useCopy } from "@/hooks/use-copy";
 import { duration as formatDuration } from "@/format";
 import { cn } from "@/lib/utils";
 import { NOTICE_DATA_PART, sessionTitle, useLaserStable, useLaserState } from "@/runtime";
-import { imagePartsOf, leafOf, userEntryAt, versionsOf } from "./entries.js";
+import { leafOf, userEntryAt, versionsOf } from "./entries.js";
 import { THINKING_LEVELS, useSupportedThinkingLevels } from "@/components/assistant-ui/elements/reasoning-effort";
 import { useElapsed } from "./timing.js";
 import { toolGroupKey } from "./tool-groups.js";
@@ -180,14 +180,12 @@ export function UserMessage() {
   const versions = useMemo(() => (entryId ? versionsOf(entries, entryId) : []), [entries, entryId]);
   const versionIndex = entryId ? versions.indexOf(entryId) : -1;
   const { quote, rest } = useMemo(() => splitLeadingQuote(text), [text]);
-  const [imagePreview, setImagePreview] = useState<FileViewerSource>();
-  const attachmentButton = useRef<HTMLElement | null>(null);
-  const imageBytes = useMemo(() => images.length ? images : imagePartsOf(entries, entryId), [images, entries, entryId]);
+  const opener = useFileOpener();
   const attachments = useMemo<MessageAttachmentItem[]>(
     () => files.map((file, index) => ({ id: String(index), name: file.name, kind: "document", detail: `${describeMediaType(file.mediaType)} · ${formatBytes(file.size)}` })),
     [files],
   );
-  const editContent = () => [{ type: "text" as const, text: [draft, ...files.map(wrapFileAttachment)].filter(Boolean).join("\n\n") }, ...imageBytes];
+  const editContent = () => [{ type: "text" as const, text: [draft, ...files.map(wrapFileAttachment)].filter(Boolean).join("\n\n") }, ...images];
 
   // The engine will not move the leaf while a turn streams, so during one
   // each of these asks the worker to stop the reply first and then move —
@@ -260,21 +258,14 @@ export function UserMessage() {
           >
             {parentPath ? <ParentTask parentPath={parentPath} /> : null}
             {goalSetter && <span className="mb-1 flex items-center gap-1.5 text-xs font-medium text-ink-2"><Target className="size-3.5 text-live" aria-hidden="true" />Goal set</span>}
-            <MessageImages images={imageBytes} onOpen={(index, trigger) => {
-              attachmentButton.current = trigger;
-              setImagePreview({ file: attachmentFile(imageBytes[index]!, `Image ${index + 1}`) });
-            }} />
+            <MessageImages images={images} onOpen={opener ? (index, trigger) => opener.openFile({ file: attachmentFile(images[index]!, `Image ${index + 1}`) }, trigger) : undefined} />
             {quote ? <QuoteReply text={quote} /> : null}
             {rest ? (
               <p className="wrap-break-word whitespace-pre-wrap">
                 <DirectiveString text={rest} />
               </p>
             ) : null}
-            <MessageAttachments attachments={attachments} className="mt-2 self-end" onOpen={(id, trigger) => {
-              attachmentButton.current = trigger;
-              setImagePreview({ file: attachedFileContent(files[Number(id)]!) });
-            }} />
-            {imagePreview ? <FileViewer source={imagePreview} open onOpenChange={open => { if (!open) setImagePreview(undefined); }} returnFocus={attachmentButton.current} /> : null}
+            <MessageAttachments attachments={attachments} className="mt-2 self-end" onOpen={opener ? (id, trigger) => opener.openFile({ file: attachedFileContent(files[Number(id)]!) }, trigger) : undefined} />
           </UserBubble>
         )}
         <MessageFooter className="ms-0 me-0 h-auto min-h-6 justify-end">

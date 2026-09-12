@@ -40,7 +40,6 @@ describe("runtime barrel", () => {
       "sendToSession",
       "contentBlocksFromAppendMessage",
       "imageContentFromDataUrl",
-      "imageCountOfContentBlocks",
       "textOfContentBlocks",
       "queueItemsOf",
       "queueItemId",

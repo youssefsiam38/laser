@@ -2,8 +2,8 @@
 import { expect, it, vi } from "vitest";
 import { MESSAGE_METADATA_NS, type ImageContent } from "@lasercode/protocol";
 import { toast } from "sonner";
-import { ATTACHMENT_SIZE_MESSAGE, MAX_ATTACHMENT_BYTES, splitAttachedFiles, wrapFileAttachment } from "../../src/runtime/attachments.js";
-import { ConversationAttachmentAdapter, contentBlocksFromAppendMessage, restoreUnsentMessage, type UnsentMessageComposer } from "../../src/runtime/adapter.js";
+import { ConversationAttachmentAdapter, ATTACHMENT_SIZE_MESSAGE, MAX_ATTACHMENT_BYTES, splitAttachedFiles, wrapFileAttachment } from "../../src/runtime/attachments.js";
+import { contentBlocksFromAppendMessage, restoreUnsentMessage, type UnsentMessageComposer } from "../../src/runtime/adapter.js";
 import { applyUpdate, blocksFromEntries, initialState, reduce } from "../../src/store.js";
 import { projectMessages } from "../../src/runtime/projection.js";
 import { sessionState } from "../agents/fixtures.js";
@@ -30,15 +30,15 @@ it("retains images and canonical files on optimistic, message_end and hydration 
   const hydrated = blocksFromEntries([{ type: "message", message: { role: "user", content } }])[0]!;
   // Apply the live event through the exported store boundary, independent of entry lookup.
   for (const block of [optimistic, live, liveOnly, hydrated]) {
-    expect(block).toMatchObject({ images: [image], text });
+    expect(block).toMatchObject({ images: [image], text: "Look here", files: [file] });
     const projected = projectMessages({ blocks: [block], running: false, dialogs: [] }).messages[0]!;
     expect(projected.content).toEqual([{ type: "text", text: "Look here" }]);
     expect(projected.metadata?.custom?.[MESSAGE_METADATA_NS]).toMatchObject({ images: [image], files: [file] });
   }
 });
-it("accepts a text file, shows it as a document and sends one wrapper", async () => {
+it.each(["text/markdown", "text/plain", ""])("accepts Markdown with browser MIME %s and restores it as a document", async browserType => {
   const adapter = new ConversationAttachmentAdapter();
-  const pending = await adapter.add({ file: new File([content], file.name, { type: file.mediaType }) });
+  const pending = await adapter.add({ file: new File([content], file.name, { type: browserType }) });
   expect(pending).toMatchObject({ type: "document", name: file.name });
   const complete = await adapter.send(pending);
   const message = { content: [{ type: "text", text: "Read this" }], attachments: [complete] } as unknown as AppendMessage;

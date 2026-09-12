@@ -18,7 +18,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AssistantRuntimeProvider, ThreadPrimitive, useExternalStoreRuntime, type AssistantRuntime } from "@assistant-ui/react";
+import { AssistantRuntimeProvider, ThreadPrimitive, useExternalStoreRuntime, type ThreadMessageLike, type AssistantRuntime } from "@assistant-ui/react";
 import type { HostNotifications, SessionUpdate } from "@lasercode/protocol";
 
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
@@ -123,7 +123,7 @@ const mount = () => {
   function Fixture() {
     const view = useLaserState((s) => s.open[SESSION]);
     const { messages } = projectMessages({ blocks: view?.blocks ?? [], running: view?.running ?? false, dialogs: view?.dialogs ?? [] });
-    const runtime = useExternalStoreRuntime({ messages, isRunning: view?.running ?? false, onNew: async () => {} });
+    const runtime = useExternalStoreRuntime({ convertMessage: (message: ThreadMessageLike) => message, messages, isRunning: view?.running ?? false, onNew: async () => {} });
     mountedRuntime = runtime;
     return (
       <AssistantRuntimeProvider runtime={runtime}>
@@ -388,7 +388,7 @@ it("clears only the exact handed-back file draft after sending an edit in a fork
   open([msg("u1", null, "user", prompt), msg("a1", "u1", "assistant", "Read it")], "a1");
   await mount();
   stable.actions.fork.mockImplementationOnce(async () => {
-    await restoreUnsentMessage(mountedRuntime.thread.composer, { content: [{ type: "text", text: prompt }], attachments: [] } as Parameters<typeof restoreUnsentMessage>[1]);
+    await restoreUnsentMessage(mountedRuntime.thread.composer, { role: "user", content: [{ type: "text", text: prompt }], attachments: [], createdAt: new Date(0), parentId: null, sourceId: null, runConfig: {}, metadata: { custom: {} } });
   });
   await act(async () => control(userRoots()[0]!, "Edit")!.click());
   const forkSend = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "In a new session")!;

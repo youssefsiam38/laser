@@ -40,7 +40,6 @@ import { namespaced, AGENT_EVENT_MESSAGE_TYPE, MESSAGE_METADATA_NS, TASK_EVENT_M
 import type { ThreadMessageLike } from "@assistant-ui/react";
 import type { AgentRun, MessageSpeaker, StopReason, UiDialogRequest, Usage } from "@lasercode/protocol";
 import type { Block, SessionView } from "../store.js";
-import { splitAttachedFiles } from "./attachments.js";
 import { goalRecords, goalForPrompt, type GoalRecord } from "./goal-history.js";
 
 /** `data` part name used for transcript notices. */
@@ -347,8 +346,7 @@ const customMessage = (block: Extract<Block, { kind: "custom" }>): ThreadMessage
 
 const userMessage = (block: Extract<Block, { kind: "user" }>, ordinal: number, goal?: GoalRecord): ThreadMessageLike => {
   const content: ProjectedContentPart[] = [];
-  const attached = splitAttachedFiles(block.text);
-  if (attached.text.trim()) content.push({ type: "text", text: attached.text });
+  if (block.text.trim()) content.push({ type: "text", text: block.text });
   const createdAt = createdAtOf(block);
   return {
     id: block.id,
@@ -360,7 +358,7 @@ const userMessage = (block: Extract<Block, { kind: "user" }>, ordinal: number, g
         [MESSAGE_METADATA_NS]: {
           kind: "user",
           images: block.images,
-          files: attached.files,
+          files: block.files,
           optimistic: block.optimistic === true,
           userOrdinal: ordinal,
           ...(block.entryId !== undefined ? { entryId: block.entryId } : {}),

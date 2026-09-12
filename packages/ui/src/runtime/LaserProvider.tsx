@@ -174,10 +174,10 @@ export interface LaserActions {
   goal(action: GoalAction): Promise<void>;
   /**
    * Empty both queues: the pending tray and whatever the engine already holds.
-   * Resolves with the text of everything dropped, so the composer can offer it
+   * Resolves with the content of everything dropped, so the composer can offer it
    * back rather than lose it.
    */
-  clearQueue(): Promise<string>;
+  clearQueue(): Promise<ContentBlock[]>;
   // Per-message tray operations (steer, edit, drop) go through the thread
   // adapter's queue, which is the one route to the worker — see adapter.ts.
   /**
@@ -1097,8 +1097,8 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
             client.request("session/pending/clear", { path }),
             client.request("pi/session/clear_queue", { path }),
           ]);
-          return [...steering, ...followUp, ...messages.map((message) => message.text)].filter(Boolean).join("\n\n");
-        }).then((text) => text ?? ""),
+          return [...[...steering, ...followUp].filter(Boolean).map(text => ({ type: "text" as const, text })), ...messages.flatMap(message => message.content)];
+        }).then((content) => content ?? []),
       addProject: (cwd) =>
         guard(async () => {
           const trimmed = cwd.trim();

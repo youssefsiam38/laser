@@ -8,7 +8,7 @@ const state: SessionState = {
 };
 
 function view(): SessionView {
-  return { path: "/s.jsonl", state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, dialogs: [], statuses: {}, widgets: {}, openedAt: "2026-09-05T00:00:00.000Z", hydrated: true, entries: [] };
+  return { path: "/s.jsonl", state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, pending: [], capabilities: [], goal: null, namerLabels: {}, dialogs: [], statuses: {}, widgets: {}, openedAt: "2026-09-05T00:00:00.000Z", hydrated: true, entries: [] };
 }
 
 function run(v: SessionView, updates: SessionUpdate[]): SessionView {
@@ -19,7 +19,7 @@ const pending = (id: string): PendingMessage => ({
   id,
   content: [{ type: "text", text: id }],
   text: id,
-  images: [],
+  images: 0,
   createdAt: "2026-09-10T00:00:00.000Z",
   state: "waiting",
 });
@@ -125,7 +125,7 @@ describe("applyUpdate", () => {
       { kind: "message_end", message: { role: "user", content: [{ type: "text", text: "hi" }] } },
     ]);
     expect(v.blocks).toHaveLength(1);
-    expect(v.blocks[0]).toMatchObject({ kind: "user", text: "hi", optimistic: false });
+    expect(v.blocks[0]).toMatchObject({ kind: "user", files: [], text: "hi", optimistic: false });
   });
 
   it("stamps a prompt's entry on its block the moment the engine writes it, and lends it to the tree", () => {
@@ -142,7 +142,7 @@ describe("applyUpdate", () => {
     // so versions can be counted, while the leaf stays where the last read
     // put it — nothing between has been read yet.
     expect(v.running).toBe(true);
-    expect(v.blocks[0]).toMatchObject({ kind: "user", text: "next", optimistic: false, entryId: "u2" });
+    expect(v.blocks[0]).toMatchObject({ kind: "user", files: [], text: "next", optimistic: false, entryId: "u2" });
     expect(v.entries.map((e) => (e as { id: string }).id)).toEqual(["u1", "a1", "u2"]);
     expect(v.entries[2]).toMatchObject({ type: "message", id: "u2", parentId: "a1", message: { role: "user" } });
     expect(v.leafId).toBe("a1");

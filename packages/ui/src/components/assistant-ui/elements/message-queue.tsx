@@ -21,6 +21,8 @@
  *   - The "running" row is gone: the status line directly above the composer
  *     already says the session is working (D-20 §5).
  */
+import type { ContentBlock } from "@lasercode/protocol";
+import { appendAttachedPrompt } from "@/runtime/attachments";
 import { ComposerPrimitive, useAui, useAuiState } from "@assistant-ui/react";
 import { AlertTriangle, Copy, CornerDownRight, Ellipsis, ListEnd, ListX, PencilLine, Send, X } from "lucide-react";
 import { useState, type ComponentProps, type ReactNode } from "react";
@@ -244,11 +246,7 @@ export function ComposerQueue() {
   const waiting = view?.pending ?? [];
 
   /** Put text back where it can be read and rewritten, without losing a draft. */
-  const intoComposer = (text: string) => {
-    if (!text) return;
-    const current = aui.composer.getState().text;
-    aui.composer.setText(current ? `${current}\n${text}` : text);
-  };
+  const intoComposer = (content: string | readonly ContentBlock[]) => appendAttachedPrompt(aui.composer, content);
 
   const clearAll = () => {
     actions
@@ -283,8 +281,7 @@ export function ComposerQueue() {
               onSteer={() => item.move({ lane: "steer", insertAfter: null })}
               onRemove={() => item.remove()}
               onEdit={() => {
-                intoComposer(message.text);
-                item.remove();
+                void intoComposer(message.content).then(() => item.remove());
               }}
               {...(count > 1 ? { onClearAll: clearAll } : {})}
             />

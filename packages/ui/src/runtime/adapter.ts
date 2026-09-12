@@ -38,12 +38,11 @@
  * `MessageNotSentError` so the one lane assistant-ui does handle behaves the
  * same, and the toast says what happened next.
  *
- * Everything above `createThreadAdapter` is pure and unit-tested.
+ * Projection helpers are pure; sending and restoration own their explicit runtime effects.
  */
-import { MessageNotSentError, SimpleImageAttachmentAdapter, type AttachmentAdapter } from "@assistant-ui/react";
+import { MessageNotSentError } from "@assistant-ui/react";
 import { toast } from "sonner";
-import { attachmentMediaType } from "@/components/preview/media";
-import { ATTACHMENT_SIZE_MESSAGE, MAX_ATTACHMENT_BYTES, imagesOfContent, splitAttachedFiles, wrapFileAttachment } from "./attachments.js";
+import { ConversationAttachmentAdapter, imagesOfContent, splitAttachedFiles, wrapFileAttachment } from "./attachments.js";
 import type {
   AppendMessage,
   ExternalStoreAdapter,
@@ -128,10 +127,6 @@ export function textOfContentBlocks(blocks: readonly ContentBlock[]): string {
     .filter((b): b is Extract<ContentBlock, { type: "text" }> => b.type === "text")
     .map((b) => b.text)
     .join("\n");
-}
-
-export function imageCountOfContentBlocks(blocks: readonly ContentBlock[]): number {
-  return blocks.filter((b) => b.type === "image").length;
 }
 
 const EXPLICIT_BEHAVIORS = new Set<string>(["prompt", "steer", "followUp", "pending"]);
@@ -446,35 +441,6 @@ export interface ThreadAdapterDeps {
   assertCanAct?: ((resolvedPath?: string) => void) | undefined;
 }
 
-/**
- * Stateless and shared by every thread: assistant-ui only reads `accept` and
- * calls `add`/`send`/`remove`, and a stable identity keeps `capabilities` from
- * churning on each render.
- */
-/** Images retain the native adapter; bounded text files become canonical prompt text. */
-export class ConversationAttachmentAdapter implements AttachmentAdapter {
-  accept = "*";
-  private images = new SimpleImageAttachmentAdapter();
-  async add({ file }: { file: File }) {
-    if (file.type.startsWith("image/")) return this.images.add({ file });
-    const refuse = (message: string): never => { toast.error(message); throw new Error(message); };
-    const mediaType = attachmentMediaType(file.type, file.name);
-    if (!mediaType) return refuse("This file format can’t be attached. Attach an image or a text file instead.");
-    if (file.size > MAX_ATTACHMENT_BYTES) return refuse(ATTACHMENT_SIZE_MESSAGE);
-    let content: string;
-    try { content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(await file.arrayBuffer()); }
-    catch { return refuse("This file isn’t UTF-8 text. Save a text copy and attach it again."); }
-    if (content.includes("\0")) return refuse("Binary files can’t be attached. Attach an image or a text file instead.");
-    return { id: crypto.randomUUID(), type: "document" as const, name: file.name, contentType: mediaType, file,
-      status: { type: "requires-action" as const, reason: "composer-send" as const },
-      content: [{ type: "text" as const, text: wrapFileAttachment({ name: file.name, mediaType, size: new TextEncoder().encode(content).length, content }) }] };
-  }
-  async send(attachment: Parameters<AttachmentAdapter["send"]>[0]) {
-    if (attachment.type === "image") return this.images.send(attachment);
-    return { ...attachment, status: { type: "complete" as const }, content: attachment.content ?? [] };
-  }
-  async remove() { /* Files remain owned by the browser; there is no upload to delete. */ }
-}
 const attachmentAdapter = new ConversationAttachmentAdapter();
 
 export function createThreadAdapter(deps: ThreadAdapterDeps): ExternalStoreAdapter<ThreadMessageLike> {

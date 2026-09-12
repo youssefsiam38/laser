@@ -1,4 +1,5 @@
 "use client";
+import type { FileViewerSource } from "@/lib/file-opener";
 import type { ProjectFileContent } from "@lasercode/protocol";
 import { useEffect, useMemo, useState } from "react";
 import { Tabs } from "radix-ui";
@@ -20,7 +21,7 @@ import { useCopy } from "@/hooks/use-copy";
 import { useLaserStable } from "@/runtime";
 import type { DiffView } from "./diff.js";
 
-export type FileViewerSource = { request: { cwd: string; path: string }; file?: ProjectFileContent } | { request?: never; file: ProjectFileContent };
+export type { FileViewerSource } from "@/lib/file-opener";
 
 export function FileViewer({ source, open, onOpenChange, returnFocus }: {
   source: FileViewerSource; open: boolean; onOpenChange(open: boolean): void; returnFocus?: HTMLElement | null | undefined;

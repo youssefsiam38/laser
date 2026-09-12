@@ -72,7 +72,7 @@ const view = (over: Partial<SessionView> = {}): SessionView => ({
   blocks: [],
   lastSeq: 0,
   running: false,
-  queue: { steering: [], followUp: [] },
+  queue: { steering: [], followUp: [] }, capabilities: [], goal: null, namerLabels: {},
   pending: [],
   dialogs: [],
   statuses: {},
@@ -565,7 +565,7 @@ describe("createThreadAdapter", () => {
 
   it("projects the view into messages", () => {
     const { adapter } = build({
-      view: view({ blocks: [{ kind: "user", id: "b1", text: "hi", images: [] }] }),
+      view: view({ blocks: [{ kind: "user", files: [], id: "b1", text: "hi", images: [] }] }),
     });
     expect(adapter.messages).toHaveLength(1);
     expect(adapter.convertMessage!(adapter.messages![0]!, 0)).toBe(adapter.messages![0]);

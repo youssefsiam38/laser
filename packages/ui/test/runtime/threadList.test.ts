@@ -46,7 +46,7 @@ const view = (over: Partial<SessionView> = {}): SessionView => ({
   blocks: [],
   lastSeq: 0,
   running: false,
-  queue: { steering: [], followUp: [] },
+  queue: { steering: [], followUp: [] }, pending: [], capabilities: [], goal: null, namerLabels: {},
   dialogs: [],
   statuses: {},
   widgets: {},

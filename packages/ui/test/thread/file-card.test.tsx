@@ -1,3 +1,5 @@
+import { FileOpenerProvider } from "../../src/components/thread/FileOpener.js";
+import type { ThreadMessageLike } from "@assistant-ui/react";
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -26,8 +28,8 @@ async function mount(entries: unknown[], leafId: string) {
   const store = createStateStore(state);
   function Fixture() {
     const { messages } = projectMessages({ blocks: blocksFromEntries(entries, leafId), running: false, dialogs: [] });
-    const runtime = useExternalStoreRuntime({ messages, isRunning: false, onNew: async () => {} });
-    return <AssistantRuntimeProvider runtime={runtime}><ThreadPrimitive.Root><ThreadPrimitive.Messages>{() => <ThreadMessage />}</ThreadPrimitive.Messages></ThreadPrimitive.Root></AssistantRuntimeProvider>;
+    const runtime = useExternalStoreRuntime({ convertMessage: (message: ThreadMessageLike) => message, messages, isRunning: false, onNew: async () => {} });
+    return <AssistantRuntimeProvider runtime={runtime}><FileOpenerProvider><ThreadPrimitive.Root><ThreadPrimitive.Messages>{() => <ThreadMessage />}</ThreadPrimitive.Messages></ThreadPrimitive.Root></FileOpenerProvider></AssistantRuntimeProvider>;
   }
   await act(async () => root.render(<LaserStoreProvider store={store}><TooltipProvider><Fixture /></TooltipProvider></LaserStoreProvider>));
 }

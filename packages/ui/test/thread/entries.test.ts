@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { splitLeadingQuote } from "../../src/components/assistant-ui/elements/quote-reply.js";
-import { activePathIds, continuationsOf, imagePartsOf, laterUserMessages, leafOf, userEntryAt, userEntryIds, versionsOf } from "../../src/components/thread/entries.js";
+import { activePathIds, continuationsOf, laterUserMessages, leafOf, userEntryAt, userEntryIds, versionsOf } from "../../src/components/thread/entries.js";
 
 const msg = (id: string, parentId: string | null, role: string) => ({ id, parentId, type: "message", message: { role } });
 
@@ -24,17 +24,6 @@ const tree = [
   msg("a3", "u3", "assistant"),
   { id: "t", parentId: "a3", type: "message", message: { role: "toolResult" } },
 ];
-
-it("reads image parts only from the exact prompt and rejects malformed parts", () => {
-  const image = { type: "image", mimeType: "image/png", data: "selected" };
-  const entries = [null, 7, { id: "other", type: "message", message: { role: "user", content: [{ ...image, data: "other branch" }] } },
-    { id: "selected", type: "message", message: { role: "user", content: [null, "text", image, { type: "text", data: "not an image" }, { ...image, mimeType: "text/html" }, { ...image, data: 5 }] } },
-    { id: "assistant", type: "message", message: { role: "assistant", content: [image] } }];
-  expect(imagePartsOf(entries, "selected")).toEqual([image]);
-  expect(imagePartsOf(entries, "missing")).toEqual([]);
-  expect(imagePartsOf(entries, "assistant")).toEqual([]);
-  expect(imagePartsOf(entries, undefined)).toEqual([]);
-});
 
 describe("entries: ordinals", () => {
   it("lists the user entries on the branch in play, not every branch in the file", () => {

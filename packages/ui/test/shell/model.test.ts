@@ -55,7 +55,7 @@ const view = (over: Partial<SessionView> = {}): SessionView => ({
   blocks: [],
   lastSeq: 0,
   running: false,
-  queue: { steering: [], followUp: [] },
+  queue: { steering: [], followUp: [] }, pending: [], capabilities: [], goal: null, namerLabels: {},
   dialogs: [],
   statuses: {},
   widgets: {},
@@ -124,7 +124,7 @@ describe("session rows", () => {
     });
     const withTool = view({
       blocks: [
-        { kind: "user", id: "u", text: "hi", images: [] },
+        { kind: "user", files: [], id: "u", text: "hi", images: [] },
         { kind: "tool", id: "t", name: "edit", args: { path: "src/a.ts" }, done: true },
       ],
     });
@@ -267,7 +267,7 @@ describe("entries", () => {
     const accountChild = backgroundUsageSources([run("r2", "openai-codex", "gpt-5.6")]);
     expect(sessionBillingMode(accountParent, accountChild)).toBe("account");
     // A run with no model recorded says nothing about billing.
-    expect(backgroundUsageSources([{ ...run("r3", "anthropic", "x"), model: undefined } as AgentRun])).toEqual([{}]);
+    expect(backgroundUsageSources([{ ...run("r3", "anthropic", "x"), model: null } as AgentRun])).toEqual([{}]);
   });
 
   it("flattens the tree with branch depth, folded tool results, and labels on targets", () => {

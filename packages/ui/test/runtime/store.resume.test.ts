@@ -126,7 +126,7 @@ describe("hydrate", () => {
     ];
     const v = run(withView({ hydrated: false }), [{ type: "hydrate", path: "/s.jsonl", entries, expectSeq: 0 }]);
     expect(v.blocks).toHaveLength(1);
-    expect(v.blocks[0]).toMatchObject({ kind: "user", text: "persisted" });
+    expect(v.blocks[0]).toMatchObject({ kind: "user", files: [], text: "persisted" });
   });
 });
 
@@ -139,7 +139,7 @@ describe("optimistic user block", () => {
       update(3, { kind: "message_end", message: { role: "user", content: [{ type: "text", text: "stop" }] } }),
     ]);
     expect(v.blocks.filter((b) => b.kind === "user")).toHaveLength(1);
-    expect(v.blocks[0]).toMatchObject({ kind: "user", id: "o1", text: "stop", optimistic: false });
+    expect(v.blocks[0]).toMatchObject({ kind: "user", files: [], id: "o1", text: "stop", optimistic: false });
   });
 
   it("rolls the block back when the prompt never reached the worker", () => {

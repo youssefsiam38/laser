@@ -1,3 +1,5 @@
+import { FileOpenerProvider } from "../../src/components/thread/FileOpener.js";
+import type { ThreadMessageLike } from "@assistant-ui/react";
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -26,8 +28,8 @@ let root: Root;
 let container: HTMLDivElement;
 const file = (overrides: Partial<ProjectFileContent> = {}): ProjectFileContent => ({ path: "src/example.ts", name: "example.ts", mediaType: "application/octet-stream", size: 29, modifiedAt: "2026-09-11T00:00:00.000Z", encoding: "utf8", content: 'const answer: number = 42;', truncated: false, ...overrides });
 function Fixture({ children }: { children: React.ReactNode }) {
-  const runtime = useExternalStoreRuntime({ messages: [], isRunning: false, onNew: async () => {} });
-  return <AssistantRuntimeProvider runtime={runtime}><TooltipProvider>{children}</TooltipProvider></AssistantRuntimeProvider>;
+  const runtime = useExternalStoreRuntime({ convertMessage: (message: ThreadMessageLike) => message, messages: [], isRunning: false, onNew: async () => {} });
+  return <AssistantRuntimeProvider runtime={runtime}><TooltipProvider><FileOpenerProvider>{children}</FileOpenerProvider></TooltipProvider></AssistantRuntimeProvider>;
 }
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;

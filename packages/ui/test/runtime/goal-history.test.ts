@@ -39,7 +39,7 @@ describe("durable goal presentation", () => {
     const blocks = blocksFromEntries([state("g1", "active", 1), call, { ...result, message: { ...result.message, content: "Goal completion rejected: stale ID" } }]);
     const goals = goalRecords([state("g1", "active", 1)], blocks);
     expect(goals[0]?.completionToolId).toBeUndefined();
-    expect(projectMessages({ blocks: [{ kind: "user", id: "u", text: "Goal mode is active. Normal user text", images: [] }], goals, running: false, dialogs: [] }).messages[0]?.content).toEqual([{ type: "text", text: "Goal mode is active. Normal user text" }]);
+    expect(projectMessages({ blocks: [{ kind: "user", files: [], id: "u", text: "Goal mode is active. Normal user text", images: [] }], goals, running: false, dialogs: [] }).messages[0]?.content).toEqual([{ type: "text", text: "Goal mode is active. Normal user text" }]);
   });
   it("deduplicates live custom entries and retains them after clear", () => {
     let view = { entries: [], blocks: [] } as unknown as SessionView;

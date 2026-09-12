@@ -7,7 +7,7 @@
  * of transcript state). Past sessions hydrate from `pi/session/entries`.
  */
 import { AGENT_EVENT_MESSAGE_TYPE, SESSION_FALLBACK_ENTRY_TYPE, SESSION_RUN_ENTRY_TYPE, TASK_EVENT_MESSAGE_TYPE, failureWording, isTerminalRunStatus } from "@lasercode/protocol";
-import { imagesOfContent } from "./runtime/attachments.js";
+import { imagesOfContent, splitAttachedFiles, type AttachedFile } from "./runtime/attachments.js";
 import type {
   ImageContent,
   AgentEvent,
@@ -64,6 +64,7 @@ export type Block =
       at?: string;
       text: string;
       images: ImageContent[];
+      files: AttachedFile[];
       optimistic?: boolean;
       sentBy?: SentByParent;
       /**
@@ -342,7 +343,7 @@ export function reduce(state: AppState, action: Action): AppState {
     case "versionMismatch":
       return { ...state, versionMismatch: action.version };
     case "sessions":
-      return { ...state, sessions: action.sessions, sessionsLoaded: true };
+      return { ...state, sessions: action.sessions.map(summary => summary.firstMessage ? { ...summary, firstMessage: summary.firstMessage.split(/(?:^|\s)<attached-file\b/)[0]!.trim() } : summary), sessionsLoaded: true };
     case "opened": {
       const existing = state.open[action.state.path];
       const capabilities = action.state.capabilities ?? existing?.capabilities ?? [];
@@ -413,7 +414,7 @@ export function reduce(state: AppState, action: Action): AppState {
         ...v,
         blocks: [
           ...v.blocks,
-          { kind: "user", id: action.id ?? nextBlockId(), text: action.text, images: action.images, optimistic: true },
+          { kind: "user", id: action.id ?? nextBlockId(), ...splitAttachedFiles(action.text), images: action.images, optimistic: true },
         ],
       }));
     case "optimisticFailed":
@@ -441,7 +442,7 @@ export function reduce(state: AppState, action: Action): AppState {
         // array reference is its watermark: unrelated view updates preserve it,
         // while every real tray change replaces it, including newer `[]`.
         if (v.pending !== action.expectPending) return v;
-        return v.pending.length === 0 && action.messages.length === 0 ? v : { ...v, pending: action.messages };
+        return v.pending.length === 0 && action.messages.length === 0 ? v : { ...v, pending: displayPending(action.messages) };
       });
     case "notification":
       return applyNotification(state, action.method, action.params);
@@ -784,6 +785,16 @@ function lastOptimisticUserIndex(blocks: Block[]): number {
   return -1;
 }
 
+function displayQueuedText(raw: string): string {
+  const { text, files } = splitAttachedFiles(raw);
+  return text || files.map(file => file.name).join(", ");
+}
+
+/** PendingMessage.text is wire-bounded; parse the whole retained content once on arrival. */
+function displayPending(messages: PendingMessage[]): PendingMessage[] {
+  return messages.map(message => ({ ...message, text: displayQueuedText(textOf(message.content)) }));
+}
+
 export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
   switch (u.kind) {
     case "entry_appended": {
@@ -815,7 +826,7 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
         return {
           ...v,
           pendingSentBy: undefined,
-          blocks: [...v.blocks, { kind: "user", id: nextBlockId(), text: "", images: [], ...(sentBy ? { sentBy } : {}) }],
+          blocks: [...v.blocks, { kind: "user", id: nextBlockId(), text: "", files: [], images: [], ...(sentBy ? { sentBy } : {}) }],
         };
       }
       if (u.role === "assistant") {
@@ -861,7 +872,7 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
         const index = optimistic !== -1 ? optimistic : v.blocks.at(-1)?.kind === "user" ? v.blocks.length - 1 : -1;
         if (index === -1) return v;
         const block = v.blocks[index] as Extract<Block, { kind: "user" }>;
-        const blocks = replaceAt(v.blocks, index, { ...block, text: text || block.text, images: imagesOfContent(msg.content), optimistic: false, ...(u.entry ? { entryId: u.entry.id } : {}) });
+        const blocks = replaceAt(v.blocks, index, { ...block, ...splitAttachedFiles(text), images: imagesOfContent(msg.content), optimistic: false, ...(u.entry ? { entryId: u.entry.id } : {}) });
         // The prompt's place in the tree arrives with it, so its actions (fork,
         // jump, edit, versions, the request it produced) work while the turn
         // runs. The tree holds a copy until the next full read: the entry is
@@ -906,9 +917,9 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
         blocks: v.blocks.map((b) => (b.kind === "tool" && b.id === u.toolCallId ? { ...b, result: u.result, isError: u.isError, done: true } : b)),
       };
     case "queue_update":
-      return { ...v, queue: { steering: u.steering, followUp: u.followUp } };
+      return { ...v, queue: { steering: u.steering.map(displayQueuedText), followUp: u.followUp.map(displayQueuedText) } };
     case "pending_update":
-      return { ...v, pending: u.pending };
+      return { ...v, pending: displayPending(u.pending) };
     case "compaction_start":
       return notice(v, "info", "Compacting context…");
     case "compaction_end":
@@ -1077,7 +1088,7 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null, na
         kind: "user",
         id: nextBlockId(),
         ...(at ? { at } : {}),
-        text: textOf(m.content),
+        ...splitAttachedFiles(textOf(m.content)),
         images: imagesOfContent(m.content),
         ...(sentBy ? { sentBy } : {}),
         ...(typeof e.id === "string" ? { entryId: e.id } : {}),

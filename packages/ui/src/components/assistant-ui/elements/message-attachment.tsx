@@ -15,10 +15,10 @@ import { cn } from "@/lib/utils";
 
 import { mono, paper } from "./surfaces.js";
 
-export function MessageImages({ images, onOpen }: { images: readonly ImageContent[]; onOpen(index: number, trigger: HTMLButtonElement): void }) {
+export function MessageImages({ images, onOpen }: { images: readonly ImageContent[]; onOpen?: ((index: number, trigger: HTMLButtonElement) => void) | undefined }) {
   if (!images.length) return null;
   return <div data-slot="message-images" className="mb-2 flex max-w-full flex-wrap gap-2">
-    {images.map((image, index) => <button key={index} type="button" aria-label={`Open Image ${index + 1}`} onClick={event => onOpen(index, event.currentTarget)}
+    {images.map((image, index) => <button key={index} type="button" aria-label={`Open Image ${index + 1}`} disabled={!onOpen} onClick={event => onOpen?.(index, event.currentTarget)}
       className={cn("max-w-full overflow-hidden rounded-lg pointer-coarse:min-h-11 pointer-coarse:min-w-11 outline-none hover:opacity-90 active:opacity-80 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live", images.length > 1 ? "size-28" : "w-full sm:w-auto")}>
       <img data-slot="message-image" src={`data:${image.mimeType};base64,${image.data}`} alt={`Image ${index + 1}`} className={images.length > 1 ? "size-full object-cover" : "max-h-60 w-full max-w-80 object-contain sm:w-auto"} />
     </button>)}

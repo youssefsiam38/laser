@@ -149,12 +149,12 @@ describe("live, while the child is open", () => {
 describe("the projection", () => {
   it("stamps the attribution on the message metadata and leaves the text alone", () => {
     const blocks: Block[] = [
-      { kind: "user", id: "b1", text: TASK, images: [], sentBy: { parentPath: PARENT, runId: "r1" } },
-      { kind: "user", id: "b2", text: "Mine.", images: [] },
+      { kind: "user", files: [], id: "b1", text: TASK, images: [], sentBy: { parentPath: PARENT, runId: "r1" } },
+      { kind: "user", files: [], id: "b2", text: "Mine.", images: [] },
     ];
     const { messages } = projectMessages({ blocks, running: false, dialogs: [] });
     expect(messages[0]!.content).toEqual([{ type: "text", text: TASK }]);
-    expect(messages[0]!.metadata?.custom?.[MESSAGE_METADATA_NS]).toMatchObject({ kind: "user", userOrdinal: 0, sentBy: { parentPath: PARENT, runId: "r1" } });
+    expect(messages[0]!.metadata?.custom?.[MESSAGE_METADATA_NS]).toMatchObject({ kind: "user", files: [], userOrdinal: 0, sentBy: { parentPath: PARENT, runId: "r1" } });
     expect((messages[1]!.metadata?.custom?.[MESSAGE_METADATA_NS] as { sentBy?: unknown }).sentBy).toBeUndefined();
   });
 });
@@ -193,7 +193,7 @@ describe("the bubble", () => {
     return act(async () => root.render(<LaserStoreProvider store={store}><TooltipProvider><Fixture /></TooltipProvider></LaserStoreProvider>));
   };
 
-  const attributed: Block = { kind: "user", id: "b1", text: TASK, images: [], sentBy: { parentPath: PARENT, runId: "r1" } };
+  const attributed: Block = { kind: "user", files: [], id: "b1", text: TASK, images: [], sentBy: { parentPath: PARENT, runId: "r1" } };
 
   it("names the parent, opens it, and keeps the whole task readable and searchable", async () => {
     await mount([attributed]);
@@ -222,7 +222,7 @@ describe("the bubble", () => {
   });
 
   it("leaves the person's own message exactly as it was", async () => {
-    await mount([{ kind: "user", id: "b2", text: "Mine.", images: [] }]);
+    await mount([{ kind: "user", files: [], id: "b2", text: "Mine.", images: [] }]);
     const bubble = container.querySelector<HTMLElement>('[data-slot="user-bubble"]')!;
     expect(bubble.hasAttribute("data-sent-by")).toBe(false);
     expect(container.querySelector('[data-slot="parent-task"]')).toBeNull();
