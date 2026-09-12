@@ -796,8 +796,8 @@ export class Router {
     // worktree is part of its project (invariant 5): a cwd under
     // `.worktrees/<name>` reaches the project's worker as the project, never
     // a second worker of its own, and a file it named keeps its place inside
-    // that worktree (still inside the project, so the worker's containment
-    // check holds).
+    // that worktree. File reads allow machine-wide targets, but a relative
+    // request must retain its originating directory before worker routing.
     if (CWD_ROUTED.has(req.method)) {
       const params = req.params as { cwd: string; path?: string };
       const cwd = projectRootOf(params.cwd);

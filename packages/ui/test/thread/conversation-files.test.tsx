@@ -34,13 +34,15 @@ function Fixture({ text, cwd = "/project", native = true }: { text: string; cwd?
 const mount = async (text: string, cwd?: string, native?: boolean) => { await act(async () => root.render(<Fixture text={text} {...(cwd ? { cwd } : {})} {...(native !== undefined ? { native } : {})} />)); };
 const settle = async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); }); };
 
-it("recognises only project-contained file targets and conservative code paths", () => {
+it("recognises machine file targets and conservative code paths without treating URLs as files", () => {
   expect(projectReferencePath("docs/guide.md:12", "/project")).toBe("/project/docs/guide.md");
   expect(projectReferencePath("/project/src/a.ts", "/project")).toBe("/project/src/a.ts");
-  for (const target of ["../outside.md", "/project-other/a.md", "https://example.test/a.md", "//example.test/a.md", "#heading", "javascript:alert(1)"]) expect(projectReferencePath(target, "/project")).toBeUndefined();
+  expect(projectReferencePath("../outside.md", "/project")).toBe("/outside.md");
+  expect(projectReferencePath("/project-other/a.md", "/project")).toBe("/project-other/a.md");
+  for (const target of ["https://example.test/a.md", "//example.test/a.md", "#heading", "javascript:alert(1)"]) expect(projectReferencePath(target, "/project")).toBeUndefined();
   expect(projectReferencePath("docs/guide.md")).toBeUndefined();
   expect(projectDirectivePath("docs/with%20literal.md", "/project")).toBe("/project/docs/with%20literal.md");
-  for (const target of ["../../etc/passwd", "/etc/passwd", "../project-other/a.md"]) expect(projectDirectivePath(target, "/project")).toBeUndefined();
+  for (const target of ["../../etc/passwd", "/etc/passwd"]) expect(projectDirectivePath(target, "/project")).toBe("/etc/passwd");
   expect(looksLikeFilePath("packages/a/b.ts:12")).toBe(true);
   for (const text of ["words", "foo.bar", "x / y", "https://example.test/a.ts", "run src/file.ts"]) expect(looksLikeFilePath(text)).toBe(false);
 });
@@ -56,6 +58,14 @@ it("opens a Markdown file link with one lazy owning-project read and returns foc
   await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   await settle();
   expect(document.activeElement).toBe(chip);
+});
+it("opens an outside Markdown link in the viewer and labels its absolute host path", async () => {
+  transport.request.mockResolvedValue({ ...file, path: "/outside/guide.md" });
+  await mount("[outside guide](/outside/guide.md)");
+  await act(async () => container.querySelector<HTMLButtonElement>('[data-slot="file-chip"]')!.click());
+  expect(transport.request).toHaveBeenCalledExactlyOnceWith("pi/project/read", { cwd: "/project", path: "/outside/guide.md" });
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("/outside/guide.md");
+  expect(document.querySelector('[role="dialog"] h1')?.textContent).toBe("The guide");
 });
 it("retains Open in editor as a second explicit action", async () => {
   const openSourceFile = vi.fn(async () => ({ opened: true })); vi.stubGlobal("desktop", { openSourceFile });
@@ -82,7 +92,7 @@ it("keeps a failed chip mounted and focused, reporting failure only on activatio
   expect(document.activeElement).toBe(chip);
   expect(error).not.toHaveBeenCalled();
   await act(async () => chip.click());
-  expect(error).toHaveBeenCalledTimes(1);
+  expect(error).toHaveBeenCalledExactlyOnceWith("Missing file");
   expect(document.activeElement).toBe(chip);
   transport.request.mockResolvedValue(file);
   await act(async () => chip.click());
