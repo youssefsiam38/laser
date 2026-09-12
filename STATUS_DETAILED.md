@@ -2210,6 +2210,7 @@ lane T's own if both were written.
 | M16-T9 | Dictation on a fresh project landing | in-progress | worker sidebar-and-dictation | — | `DictateButton` returns null without a session view; the transport needs a `cwd` |
 | M16-T10 | Sidebar: archive takes the tree, long groups fold | in-progress | worker sidebar-and-dictation | — | archive is client-local (`threadList.ts`); children archived with their parent; seven + Load more |
 | M16-T11 | Streaming stays smooth | in-progress | worker perf-batch-1 | — | risk review `/tmp/review-perf-plan.md`: #1/#4/#2 safe with guards, #6 deferred to batch 2; pre-existing timing-namespace defect fixed alongside |
+| M16-T13 | Bidirectional layout for the whole app | in-progress | worker bidi | — | 237 physical utilities vs 338 logical at start; no `dir` handling |
 | M16-T12 | Release 0.5.3 | todo | orchestrator | — | after T8–T11 |
 | M16-T7 | Release 0.5.2 | done | orchestrator | v0.5.2 public: candidate `0259844` from source `981ff74`; CI 34686382218; release run 34686599279; 12 assets; verified; https://github.com/youssefsiam38/laser/releases/tag/v0.5.2 | T8/T9/T10 + perf batch 1 → 0.5.3 |
 | M16-T4 | Release 0.5.1 | done | orchestrator | v0.5.1 public: candidate `77ae5d1` from source `73b753c`; CI 34681235811; release run 34681454161; 12 assets; checkpoint `verified`; https://github.com/youssefsiam38/laser/releases/tag/v0.5.1 | integrated check `/tmp/m16-check/REPORT.md`, two findings fixed at `4460dd5` |
