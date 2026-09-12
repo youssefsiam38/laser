@@ -173,7 +173,7 @@ function Detail({ entry }: { entry: LogEntry }) {
               </Button>
             </div>
             {/* Captured process output is terminal output: it arrives with SGR
-                escapes in it, and a plain `<pre dir="ltr">` renders those as literal
+                escapes in it, and a plain `<pre>` renders those as literal
                 `ESC[31m` noise in front of the very line a reader opened the
                 row to read. Those rows get the terminal ground and the
                 decoder every other stream in the app uses; everything else

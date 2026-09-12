@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { checkDirectionSource } from "./check-direction.mjs";
 
 test("rejects physical utilities including variants, arbitrary spacing and corners", () => {
-  for (const utility of ["ml-2", "hover:mr-auto", "md:-left-3", "right-[12%]", "pr-[var(--x)]", "pl-px", "text-right", "text-left", "rounded-l", "rounded-tr-md", "border-r", "border-l-2", "space-x-2", "-translate-x-1/2", "float-left"]) {
+  for (const utility of ["ml-2", "ml-custom-spacing", "hover:mr-auto", "md:-left-3", "right-[12%]", "pr-[var(--x)]", "pl-px", "text-right", "text-left", "rounded-l", "rounded-tr-md", "border-r", "border-l-2", "space-x-2", "-translate-x-1/2", "float-left"]) {
     assert.ok(checkDirectionSource(`<div className="${utility}"/>`).length, utility);
   }
   assert.ok(checkDirectionSource('const classes = `bg-bg ${active ? "mr-2" : "mr-3"} pl-4`;').length);

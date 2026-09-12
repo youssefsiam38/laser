@@ -90,6 +90,7 @@ function CodeHeader({ language, code }: CodeHeaderProps) {
   return (
     <div
       data-slot="code-header"
+      dir="ltr"
       className="mt-3 flex h-8 items-center justify-between rounded-t-lg border border-b-0 border-line bg-surface-2 pe-1 ps-3"
     >
       {/* The language is the fence's label, not the answer's words: a search

@@ -779,6 +779,8 @@
 
 /* Typed value: the mono face at the 12px floor, tabular. */
 @utility typed {
+  direction: ltr;
+  unicode-bidi: isolate;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   line-height: var(--leading-xs);
@@ -786,6 +788,8 @@
 }
 
 @utility tnum {
+  direction: ltr;
+  unicode-bidi: isolate;
   font-variant-numeric: tabular-nums;
 }
 

@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const utility = /(?:^|[\s:])!?-?(?:(?:ml|mr|pl|pr|left|right|space-x|translate-x)-(?=[\d.[(]|auto\b|px\b|full\b)|text-(?:left|right)\b|(?:rounded-(?:l|r|tl|tr|bl|br)|border-(?:l|r))(?=-|!?(?:\s|$))|float-(?:left|right)\b|hairline-[lr]\b)/g;
+const utility = /(?:^|[\s:])!?-?(?:(?:ml|mr|pl|pr|left|right|space-x|translate-x)-[^\s]+|text-(?:left|right)\b|(?:rounded-(?:l|r|tl|tr|bl|br)|border-(?:l|r))(?=-|!?(?:\s|$))|float-(?:left|right)\b|hairline-[lr]\b)/g;
 const property = /(?<![\w-])(?:left|right|margin-left|margin-right|padding-left|padding-right|border-left(?:-\w+)?|border-right(?:-\w+)?|border-(?:top|bottom)-(?:left|right)-radius)\s*:/g;
 
 export function checkDirectionSource(source, filename = "component.tsx") {

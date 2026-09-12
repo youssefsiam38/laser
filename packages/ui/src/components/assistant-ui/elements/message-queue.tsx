@@ -141,12 +141,14 @@ export function QueuedRow({ text, lane, error, onSteer, onRemove, onEdit, onClea
         aria-hidden="true"
         className={cn(
           "mt-1.5 size-3.5 shrink-0",
+          (Icon === Send || Icon === CornerDownRight) && "rtl:-scale-x-100",
           lane === "steer" ? "text-live" : lane === "failed" ? "text-danger" : "text-ink-3",
         )}
       />
       <button
         type="button"
         aria-expanded={open}
+        dir="auto"
         onClick={() => setOpen((value) => !value)}
         className={cn(
           "min-w-0 flex-1 cursor-text rounded-sm py-1 text-start outline-none focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-live",

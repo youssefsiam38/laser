@@ -501,7 +501,7 @@ export function AppearanceTab() {
                 setTransfer(`Back to ${DEFAULT_PRESET.name}.`);
               }}
               onBlur={() => setConfirmReset(false)}
-              disabled={themeIsDefault && coloursAreOrigin && typeIsOrigin && layoutIsOrigin}
+              disabled={themeIsDefault && coloursAreOrigin && typeIsOrigin && layoutIsOrigin && textDirection === "system"}
             >
               <RotateCcw aria-hidden="true" />
               {confirmReset ? "Discard my theme" : "Reset everything"}

@@ -9,10 +9,10 @@ export function App() {
   const direction = useDirection();
   return (
     <Direction.Provider dir={direction}>
-    <LaserProvider>
-      <Shell />
-      <LinkDestination />
-    </LaserProvider>
+      <LaserProvider>
+        <Shell />
+        <LinkDestination />
+      </LaserProvider>
     </Direction.Provider>
   );
 }

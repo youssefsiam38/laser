@@ -22,8 +22,9 @@ export function resolveDirection(preference: TextDirection): Direction {
 }
 
 /** Legacy side props name the LTR placement; resolve once at the primitive boundary. */
-export function logicalSide<T extends "left" | "right" | "top" | "bottom" | undefined>(side: T, direction: Direction): T {
-  return (direction === "rtl" ? side === "left" ? "right" : side === "right" ? "left" : side : side) as T;
+type Side = "left" | "right" | "top" | "bottom";
+export function logicalSide(side: Side, direction: Direction): Side {
+  return direction === "rtl" ? side === "left" ? "right" : side === "right" ? "left" : side : side;
 }
 
 /** Normalize horizontal navigation only; vertical and editing keys retain their meanings. */

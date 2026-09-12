@@ -10,11 +10,27 @@ import { useTheme } from "../src/theme/use-theme.js";
 import { MessageBranches } from "../src/components/assistant-ui/elements/message-branches.js";
 import { ConversationMap } from "../src/components/assistant-ui/elements/conversation-map.js";
 import { TooltipProvider } from "../src/components/ui/tooltip.js";
+import { CanvasSplitDivider } from "../src/components/assistant-ui/elements/canvas-split.js";
 
 afterEach(() => { themeStore.reset(); vi.restoreAllMocks(); });
 
 it.each([ ["ar", "rtl"], ["he-IL", "rtl"], ["fa", "rtl"], ["ur", "rtl"], ["az-Arab", "rtl"], ["ar-Latn", "ltr"], ["en", "ltr"], ["invalid_locale", "ltr"] ])("resolves %s as %s", (language, expected) => {
   expect(systemDirection(language)).toBe(expected);
+});
+
+it("follows language changes only while the system choice is active", () => {
+  const language = vi.spyOn(navigator, "language", "get").mockReturnValue("ar");
+  const unsubscribe = themeStore.subscribe(() => {});
+  try {
+    themeStore.setTextDirection("system");
+    expect(document.documentElement.dir).toBe("rtl");
+    language.mockReturnValue("en");
+    window.dispatchEvent(new Event("languagechange"));
+    expect(document.documentElement.dir).toBe("ltr");
+    themeStore.setTextDirection("rtl");
+    window.dispatchEvent(new Event("languagechange"));
+    expect(document.documentElement.dir).toBe("rtl");
+  } finally { unsubscribe(); }
 });
 
 it("restores old appearance preferences and rejects invalid directions", () => {
@@ -84,5 +100,28 @@ it("navigates versions and map ticks with logical horizontal arrows", async () =
     await act(async () => themeStore.setTextDirection("ltr"));
     await act(async () => ticks[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })));
     expect(document.activeElement).toBe(ticks[0]);
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+
+it("resizes the end pane toward the physical right in RTL with pointer and keyboard", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  themeStore.setTextDirection("rtl");
+  const change = vi.fn();
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<CanvasSplitDivider width={200} min={100} max={400} onChange={change} />));
+    const divider = container.firstElementChild as HTMLElement;
+    divider.setPointerCapture = vi.fn();
+    await act(async () => divider.dispatchEvent(new PointerEvent("pointerdown", { clientX: 100, pointerId: 1, bubbles: true })));
+    await act(async () => divider.dispatchEvent(new PointerEvent("pointermove", { clientX: 140, pointerId: 1, bubbles: true })));
+    expect(change).toHaveBeenLastCalledWith(240);
+    await act(async () => divider.dispatchEvent(new PointerEvent("pointerup", { pointerId: 1, bubbles: true })));
+    await act(async () => divider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+    expect(change).toHaveBeenLastCalledWith(216);
+    await act(async () => divider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })));
+    expect(change).toHaveBeenLastCalledWith(184);
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
