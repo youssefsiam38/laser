@@ -135,8 +135,9 @@ export async function detectImportSources(cwd: string): Promise<McpImportSource[
   }
 
   const sources: McpImportSource[] = [];
-  for (const candidate of candidates) {
-    const raw = await readSource(candidate.path);
+  const contents = await Promise.all(candidates.map(candidate => readSource(candidate.path)));
+  for (const [index, candidate] of candidates.entries()) {
+    const raw = contents[index];
     if (raw === undefined) continue;
     const servers: McpImportServer[] = [];
     for (const [name, entry] of Object.entries(serversOf(raw, candidate.id))) {

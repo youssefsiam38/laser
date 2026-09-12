@@ -604,3 +604,26 @@ Validation: duplicate-line exact hunk/line-number fixture, patch/source changes,
 reference reuse and full-statistics tests; protocol/host/UI suites, identity and
 workspace build pass, `/tmp/f16-{protocol,host,ui,identity,build}.log`. No renderer
 components or history/projection ownership seams changed.
+
+### F18 — one MCP discovery snapshot
+
+Session configuration and displayed server identities now derive from the same
+validated enabled-server snapshot. Secrets still resolve per session; no shared
+adapter, context, mutable configuration cache or trust decision is introduced.
+Independent import-candidate and project/global fallback-secret reads overlap,
+then merge in the original deterministic precedence order.
+
+Twenty warm synthetic setup pairs with real configuration-file reads and a
+stubbed adapter constructor: **0.268 ms median duplicate discovery + setup →
+0.177 ms single-snapshot setup**. Enabled discovery calls fall **2 → 1** (each
+reads global/project scopes). `/tmp/f18-focused.log` holds all samples; this is
+not real MCP connection latency. A mid-setup file save test proves config and
+attribution stay on the same snapshot and the next setup sees the new one.
+Controlled out-of-order import reads prove deterministic source ordering.
+
+Validation: protocol/host/UI/worker full suites, identity and workspace build
+pass, `/tmp/f18-{protocol,host,ui-retry,worker,identity,build}.log`. The first UI
+run failed one unrelated catalog-arrival assertion after its fixed 100 ms wait;
+its focused rerun (8 tests) and full UI rerun pass, with no test/source change:
+`/tmp/f18-ui-arrival-retry.log`. This is recorded, not dismissed as proven
+flakiness. Real pinned-engine MCP/auth/identity tests are included in worker.
