@@ -46,6 +46,7 @@ import {
   type AgentToolResult,
   type AgentToolUpdateCallback,
   type BashOperations,
+  type BashSpawnContext,
   type BashToolDetails,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
@@ -59,6 +60,20 @@ import {
 import { Type } from "typebox";
 import type { BackgroundWorkOptions } from "../agents-bridge.js";
 import type { LaserModule, ModuleContext } from "./index.js";
+
+/**
+ * Give every process this module starts the project's environment.
+ *
+ * The engine owns shell resolution and its own `PI_*` variables; this only
+ * decorates the environment it assembled, so a project value never has to be
+ * written into the worker's own process environment to reach a command.
+ */
+function projectEnvSpawnHook(
+  projectEnv: BackgroundWorkOptions["projectEnv"],
+): { spawnHook?: (context: BashSpawnContext) => BashSpawnContext } {
+  if (!projectEnv) return {};
+  return { spawnHook: (context) => ({ ...context, env: projectEnv.apply(context.env) }) };
+}
 
 /** Bytes of output kept in memory per task; the log file keeps everything. */
 const TAIL_BYTES = 256 * 1024;
@@ -309,6 +324,7 @@ function startTask(ctx: ModuleContext, state: State, options: BackgroundWorkOpti
     operations,
     ...(options.shellPath ? { shellPath: options.shellPath } : {}),
     ...(options.commandPrefix ? { commandPrefix: options.commandPrefix } : {}),
+    ...projectEnvSpawnHook(options.projectEnv),
   });
   const onUpdate: BashUpdate | undefined = input.onUpdate
     ? (update) => {
@@ -454,6 +470,7 @@ export const backgroundWorkModule: LaserModule = {
     const base = createBashToolDefinition(options.cwd, {
       ...(options.shellPath ? { shellPath: options.shellPath } : {}),
       ...(options.commandPrefix ? { commandPrefix: options.commandPrefix } : {}),
+      ...projectEnvSpawnHook(options.projectEnv),
     });
 
     pi.registerTool({
@@ -482,6 +499,10 @@ export const backgroundWorkModule: LaserModule = {
         ),
       }),
       async execute(toolCallId, { command, timeout, background, notify }, signal, onUpdate, toolCtx): Promise<AgentToolResult<BashOverrideDetails>> {
+        // A project that requires its environment does not run commands with the
+        // wrong one. The refusal is a sentence, not a stack trace, and it says
+        // what to do next.
+        if (options.projectEnv?.blocking()) throw new Error(options.projectEnv.reason());
         if (background === true) {
           const quiet = notify === false;
           const task = startTask(ctx, state, options, { command, timeout, mode: "background", notify: !quiet, toolCallId, toolCtx, onUpdate: undefined }, publish);
