@@ -571,3 +571,28 @@ F14 continuation: coordinator authorized committing the tested implementation
 with **browser acceptance outstanding**, to be covered once for the integrated
 lane rather than used as a per-finding gate. The preceding blocked checkpoint is
 retained as history; the measurement and test evidence above remain unchanged.
+
+### F15 — incremental conversation search and native ranges
+
+Weak caches retain display projections by immutable part and query matches by
+immutable message identity (one query per message). A live suffix reuses settled
+hits. DOM range caches invalidate only changed/remounted message roots; native
+ranges follow scroll without new text walks. Selection changes repaint cached
+highlights separately from the selected-result geometry. Literal request-inspector
+search is unchanged; no React-owned text nodes are wrapped or replaced.
+
+Measured regression fixtures: updating the last of **2,000 messages** projects
+**2,000 → 1 parts**, retaining the settled hit objects and identical search output.
+With find open over **240 mounted messages**, coalesced scroll costs **240 → 0
+text walks**, one changed/remounted root **240 → 1**, and selection navigation
+performs only its one geometry traversal. Tests exercise real MutationObserver,
+React remounts, focus, folded content, native ranges and closing cleanup.
+Loaded-history scope/window actions stay with M16-T16; flattening the hit list
+still visits loaded message identities.
+
+Validation: TypeScript, **167 UI files / 1,392 tests passed, one benchmark skipped**,
+identity and diff checks pass. Logs `/tmp/perf-renderer/f15-{types,ui,identity}.log`.
+Initial test needed to await the existing selected-result scroll timer rather than
+count it as a content invalidation; generated browser YAML was moved intact to
+`/tmp/perf-renderer/playwright-artifacts` after identity correctly rejected it as
+repository source. Browser acceptance remains outstanding for integrated testing.
