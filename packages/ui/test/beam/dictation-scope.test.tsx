@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({ view: undefined as SessionView | undefined, di
 const composer = { getState: () => ({ text: mocks.text }), setText: mocks.setText };
 const aui = { composer };
 const actions = { toast: mocks.toast };
+let client = { request: vi.fn().mockResolvedValue({ available: true }) }; 
 // A browser with a microphone and a supported capture path; what this file is
 // about is which composer a recording belongs to, not the hardware.
 vi.mock("@/pwa", async (importActual) => {
@@ -31,7 +32,7 @@ vi.mock("@/pwa", async (importActual) => {
 vi.mock("../../src/runtime/index.js", async (importActual) => ({
   ...(await importActual<typeof import("../../src/runtime/index.js")>()),
   useLaserView: () => mocks.view,
-  useLaserStable: () => ({ actions, currentProject: mocks.currentProject }),
+  useLaserStable: () => ({ actions, client, currentProject: mocks.currentProject, destination: { phase: "ready-code", code: mocks.currentProject ? { kind: "project-landing", project: mocks.currentProject } : { kind: "no-project-landing" } } }),
 }));
 vi.mock("@assistant-ui/react", async (importActual) => {
   const actual = await importActual<typeof import("@assistant-ui/react")>();
@@ -57,6 +58,8 @@ let root: Root, container: HTMLDivElement;
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   mocks.dictating = false;
+  client = { request: vi.fn().mockResolvedValue({ available: true }) };
+  mocks.toast.mockReset();
   mocks.currentProject = undefined;
   mocks.text = ""; mocks.setText.mockReset(); mocks.sink.mockReset(); mocks.cancel.mockReset();
   setDictationScope(undefined);
@@ -75,11 +78,21 @@ const sessionView = (path: string, cwd: string, capabilities: string[] = ["trans
 };
 
 describe("the microphone in a second composer", () => {
-  it("waits for an open session instead of recording into an unassigned workspace", async () => {
-    mocks.view = undefined; mocks.currentProject = "/state/beam";
+  it("offers a fresh project microphone after checking its directory, claiming only on click", async () => {
+    mocks.view = undefined; mocks.currentProject = "/fresh";
+    await act(async () => root.render(<TooltipProvider><DictateButton /></TooltipProvider>));
+    expect(client.request).toHaveBeenCalledWith("pi/transcribe/status", { cwd: "/fresh" });
+    expect(readDictationScope()).toBeUndefined();
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Dictate a message"]')!.click());
+    expect(readDictationScope()).toEqual({ cwd: "/fresh", path: undefined });
+  });
+
+  it("quietly hides the landing microphone when transcription is unavailable", async () => {
+    mocks.view = undefined; mocks.currentProject = "/unavailable";
+    client.request.mockResolvedValue({ available: false });
     await act(async () => root.render(<TooltipProvider><DictateButton /></TooltipProvider>));
     expect(container.querySelector('[data-slot="dictate"]')).toBeNull();
-    expect(readDictationScope()).toBeUndefined();
+    expect(mocks.toast).not.toHaveBeenCalled();
   });
 
   it("discards through a neutral, named button beside stop without modifying text", async () => {

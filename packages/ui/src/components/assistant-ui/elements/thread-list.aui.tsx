@@ -124,6 +124,7 @@ import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
 import { mergeSessions, useLaserStable, useLaserState } from "@/runtime";
 import { pendingSessionPath, sessionOpenPhase } from "@/runtime/main-destination";
+import { sessionSubtreePaths } from "@/runtime/threadList";
 import type { AppState } from "@/store";
 
 // ---------------------------------------------------------------------------
@@ -137,6 +138,8 @@ export interface ThreadListNode {
   path: string;
   /** What the row is called: the instance name a parent gave it, else its title. */
   label: string;
+  /** Unstarted roots stay above history and outside its batch limit. */
+  empty?: boolean;
   children: ThreadListNode[];
 }
 
@@ -201,6 +204,7 @@ interface ItemMeta {
   child: boolean;
   workspaceKind: "beam" | "chat" | undefined;
   modifiedAt: number;
+  empty: boolean;
   /** When the row was born: the run's start, else the catalog's `createdAt`. */
   startedAt: number;
 }
@@ -237,8 +241,9 @@ export function useThreadListGroups(
   query = "",
   tab: SessionsTab = "code",
   workspaces: Workspaces = {},
+  archived = false,
 ): ThreadListGroup[] {
-  const threadIds = useAuiState((s) => s.threads.threadIds);
+  const threadIds = useAuiState((s) => archived ? s.threads.archivedThreadIds : s.threads.threadIds);
   const threadItems = useAuiState((s) => s.threads.threadItems);
   const runs = useLaserState((s) => s.agents.runs);
   const { pinned } = useSessionsList();
@@ -269,6 +274,7 @@ export function useThreadListGroups(
         child: custom["agentKind"] === "child" || parentPath !== undefined,
         workspaceKind: custom["agentKind"] === "beam" || custom["agentKind"] === "chat" ? custom["agentKind"] : undefined,
         modifiedAt: modified(item),
+        empty: custom["empty"] === true,
         startedAt: time(run?.startedAt) || time(custom["createdAt"]),
       };
       metas.push(meta);
@@ -296,7 +302,7 @@ export function useThreadListGroups(
     const shown = metas.filter((meta) => {
       const groupCwd = groupCwdOf(meta);
       const kind = workspaceKindOf(groupCwd, workspaces);
-      if ((tab === "chat") !== (kind === "chat")) return false;
+      if (!archived && (tab === "chat") !== (kind === "chat")) return false;
       if (tab === "code" && filter && groupCwd !== filter) return false;
       if (needle && !meta.title.toLowerCase().includes(needle)) return false;
       return true;
@@ -321,13 +327,14 @@ export function useThreadListGroups(
     // attention order: a list that reshuffles is a list you cannot learn.
     for (const list of childrenOf.values()) list.sort((a, b) => a.startedAt - b.startedAt || a.path.localeCompare(b.path));
     const newestFirst = (a: ItemMeta, b: ItemMeta) => b.modifiedAt - a.modifiedAt;
-    roots.sort(newestFirst);
+    roots.sort((a, b) => (!archived && tab === "code" ? Number(b.empty) - Number(a.empty) : 0) || newestFirst(a, b));
     detached.sort(newestFirst);
 
     const nodeOf = (meta: ItemMeta, trail: Set<string>): ThreadListNode => ({
       index: meta.index,
       path: meta.path,
       label: meta.label,
+      empty: meta.empty,
       children: (childrenOf.get(meta.path) ?? [])
         .filter((child) => !trail.has(child.path))
         .map((child) => nodeOf(child, new Set([...trail, child.path]))),
@@ -346,7 +353,8 @@ export function useThreadListGroups(
     for (const meta of detached) bucket(groupCwdOf(meta)).detached.push(nodeOf(meta, new Set([meta.path])));
 
     let order: string[];
-    if (tab === "chat") order = workspaces.chat !== undefined ? [workspaces.chat] : [...byCwd.keys()];
+    if (archived) order = [...byCwd.keys()];
+    else if (tab === "chat") order = workspaces.chat !== undefined ? [workspaces.chat] : [...byCwd.keys()];
     else {
       // A child's worktree is listed by the rail while the child is open; it
       // is the child's directory, not a project, so it gets no group of its own.
@@ -361,7 +369,7 @@ export function useThreadListGroups(
       .map((cwd): ThreadListGroup => {
         const kind: SessionGroupKind = workspaceKindOf(cwd, workspaces) ?? "project";
         const held = byCwd.get(cwd) ?? { roots: [], detached: [] };
-        const isPinned = (node: ThreadListNode) => pinned.has(node.path);
+        const isPinned = (node: ThreadListNode) => !archived && pinned.has(node.path);
         const unpinned = held.roots.filter((node) => !isPinned(node));
         // A pinned row keeps its whole branch: it moves to the Pinned section
         // with its children, rather than leaving them nowhere in the list.
@@ -378,7 +386,7 @@ export function useThreadListGroups(
           total: countNodes(held.roots) + countNodes(held.detached),
         };
       });
-  }, [threadIds, threadItems, runs, projects, filter, needle, pinned, tab, workspaces]);
+  }, [threadIds, threadItems, runs, projects, filter, needle, pinned, tab, workspaces, archived]);
 }
 
 /**
@@ -507,6 +515,7 @@ function lineageTo(nodes: readonly ThreadListNode[], path: string): ThreadListNo
 
 const EMPTY_TREE: ReadonlyMap<string, BranchInfo> = new Map();
 const TreeContext = createContext<ReadonlyMap<string, BranchInfo>>(EMPTY_TREE);
+const ArchivedContext = createContext(false);
 
 /**
  * How the rows of one list are drawn.
@@ -636,6 +645,8 @@ export const ThreadList: FC<ThreadListProps> = ({ projects, query = "", onOpen, 
                 group={group}
                 collapsed={list.collapsed.has(group.cwd) && !query.trim()}
                 isCurrent={group.cwd === currentProject}
+                searching={!!query.trim()}
+                openPath={openPath}
                 canCreate={canCreate}
                 editing={editing}
                 onEdit={setEditing}
@@ -653,6 +664,7 @@ export const ThreadList: FC<ThreadListProps> = ({ projects, query = "", onOpen, 
 };
 
 const EMPTY_WORKSPACES: Workspaces = {};
+const EMPTY_PROJECTS: readonly string[] = [];
 const sameWorkspaces = (a: Workspaces | undefined, b: Workspaces | undefined): boolean =>
   a === b || (a !== undefined && b !== undefined && a.beam === b.beam && a.chat === b.chat);
 
@@ -664,6 +676,8 @@ interface ProjectGroupProps {
   group: ThreadListGroup;
   collapsed: boolean;
   isCurrent: boolean;
+  searching: boolean;
+  openPath: string;
   canCreate: boolean;
   editing: string | undefined;
   onEdit(id: string | undefined): void;
@@ -671,10 +685,28 @@ interface ProjectGroupProps {
   onNewSession?: ((cwd: string) => void) | undefined;
 }
 
-const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, canCreate, editing, onEdit, onOpen, onNewSession }: ProjectGroupProps) {
+const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, searching, openPath, canCreate, editing, onEdit, onOpen, onNewSession }: ProjectGroupProps) {
   const aui = useAui();
   const { actions, archive } = useLaserStable();
   const sessions = useLaserState((state) => state.sessions);
+  const { revealed } = useSessionsList();
+  const limit = revealed.get(group.cwd) ?? 7;
+  const summaries = useMemo(() => new Map(sessions.map(session => [session.path, session])), [sessions]);
+  // Keep live work, questions and unread outcomes reachable even outside the
+  // recent batch. Read each descendant too: a quiet root can hold a question.
+  const protectedPaths = useLaserState((state) => {
+    const runs = latestRunsBySession(state.agents.runs);
+    const important = (node: ThreadListNode): boolean => {
+      const summary = summaries.get(node.path);
+      const run = runs.get(node.path);
+      return sessionStatus(state.open[node.path], summary) !== "idle"
+        || (run !== undefined && ACTIVE_RUN.has(run.status)) || node.children.some(important);
+    };
+    return JSON.stringify(group.roots.filter(important).map(node => node.path));
+  });
+  const protectedSet = useMemo(() => new Set<string>(JSON.parse(protectedPaths) as string[]), [protectedPaths]);
+  const shownRoots = group.roots.filter((node, index) => searching || node.empty || index < limit || protectedSet.has(node.path) || lineageTo([node], openPath).length > 0);
+  const hasMore = shownRoots.length < group.roots.length;
   const id = groupDomId(group.cwd);
   const listId = `${id}-list`;
   const beam = group.kind === "beam";
@@ -731,7 +763,12 @@ const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, c
             <DropdownMenuItem
               disabled={total === 0}
               onSelect={() => {
-                const paths = sessions.filter((session) => session.cwd === group.cwd).map((session) => session.path);
+                // Include unwritten sessions present only in the runtime, and
+                // all catalog roots even while the person is filtering titles.
+                const seeds = sessions.filter((session) => session.cwd === group.cwd).map((session) => session.path);
+                const include = (node: ThreadListNode) => { seeds.push(node.path); node.children.forEach(include); };
+                [...group.roots, ...group.pinned, ...group.detached].forEach(include);
+                const paths = sessionSubtreePaths(seeds, sessions);
                 paths.forEach((path) => archive.add(path));
                 void aui.threads.reload();
                 actions.toast("info", `${paths.length} chat${paths.length === 1 ? "" : "s"} archived in ${group.name}.`);
@@ -763,9 +800,20 @@ const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, c
           </div>
         ) : (
           <div id={listId} role="list">
-            {group.roots.map((node) => (
+            {shownRoots.map((node) => (
               <SessionBranch key={node.path} node={node} editing={editing} onEdit={onEdit} onOpen={onOpen} />
             ))}
+            {!searching && group.roots.length > 7 && (hasMore || limit > 7) && (
+              <button
+                type="button"
+                aria-expanded={limit > 7}
+                aria-controls={listId}
+                onClick={() => sessionsList.reveal(group.cwd, hasMore ? limit + 7 : 7)}
+                className="flex h-8 w-full cursor-pointer items-center rounded-md ps-9 pe-2 text-xs text-ink-3 outline-none hover:bg-surface-2 hover:text-ink active:bg-surface-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live pointer-coarse:h-11"
+              >
+                {hasMore ? "Load more" : "Show fewer"}
+              </button>
+            )}
             {group.detached.length > 0 && <DetachedRows nodes={group.detached} editing={editing} onEdit={onEdit} onOpen={onOpen} />}
           </div>
         ))}
@@ -813,11 +861,12 @@ interface BranchProps {
  * keyboard model.
  */
 function SessionBranch({ node, editing, onEdit, onOpen }: BranchProps) {
-  const threadIds = useAuiState((s) => s.threads.threadIds);
+  const archived = useContext(ArchivedContext);
+  const threadIds = useAuiState((s) => archived ? s.threads.archivedThreadIds : s.threads.threadIds);
   const layout = useContext(LayoutContext);
   const info = useContext(TreeContext).get(node.path);
-  const live = info?.live.length ?? 0;
-  const childrenKey = foldKey("children", node.path);
+  const live = archived ? 0 : (info?.live.length ?? 0);
+  const childrenKey = foldKey("children", archived ? `archived:${node.path}` : node.path);
   // The default: open while there is live work under the row. `reveal` pins
   // that the moment it is true, so the branch stays put when the work ends.
   const open = useFoldOpen(childrenKey, live > 0);
@@ -865,7 +914,7 @@ function SessionBranch({ node, editing, onEdit, onOpen }: BranchProps) {
             {!open && branchStatusTone === "attention" ? <BranchStatusMark tone={branchStatusTone} /> : null}
           </button>
         )}
-        <ThreadListPrimitive.ItemByIndex key={threadIds[node.index]} index={node.index} components={{ ThreadListItem: itemComponent(editing, onEdit, onOpen) }} />
+        <ThreadListPrimitive.ItemByIndex key={threadIds[node.index]} index={node.index} archived={archived} components={{ ThreadListItem: itemComponent(editing, onEdit, onOpen, archived) }} />
       </div>
       {info && (
         <Collapsible open={open} onOpenChange={(next) => sessionFolds.set(childrenKey, next)}>
@@ -876,10 +925,10 @@ function SessionBranch({ node, editing, onEdit, onOpen }: BranchProps) {
                 data-slot="session-children"
                 className={cn("relative flex flex-col border-s border-line ps-1.5", layout.nested ? "ms-3" : layout.flat ? "ms-3" : "ms-9")}
               >
-                {info.live.map((child) => (
+                {(archived ? node.children : info.live).map((child) => (
                   <SessionBranch key={child.path} node={child} editing={editing} onEdit={onEdit} onOpen={onOpen} />
                 ))}
-                {info.finished.length > 0 && <FinishedFold parent={node} info={info} editing={editing} onEdit={onEdit} onOpen={onOpen} />}
+                {!archived && info.finished.length > 0 && <FinishedFold parent={node} info={info} editing={editing} onEdit={onEdit} onOpen={onOpen} />}
               </div>
             </LayoutContext>
           </CollapsibleContent>
@@ -973,6 +1022,11 @@ function DetachedRows({ nodes, editing, onEdit, onOpen }: { nodes: readonly Thre
 
 function ArchivedGroup({ editing, onEdit, onOpen }: { editing: string | undefined; onEdit(id: string | undefined): void; onOpen?: (() => void) | undefined }) {
   const archivedIds = useAuiState((s) => s.threads.archivedThreadIds);
+  const groups = useThreadListGroups(EMPTY_PROJECTS, undefined, "", "code", EMPTY_WORKSPACES, true);
+  const runs = useLaserState((s) => s.agents.runs);
+  const tree = useMemo(() => branchInfoOf(groups, runs), [groups, runs]);
+  const roots = useMemo(() => groups.flatMap(group => [...group.roots, ...group.detached]), [groups]);
+  const layout = useMemo(() => ({ ...ROOT_LAYOUT, flat: true, gutter: needsGutter(roots) }), [roots]);
   const [open, setOpen] = useState(false);
   const listId = "session-group-archived";
   return (
@@ -993,9 +1047,13 @@ function ArchivedGroup({ editing, onEdit, onOpen }: { editing: string | undefine
       </div>
       {open && (
         <div id={listId} role="list" className="pb-1">
-          {archivedIds.map((id, index) => (
-            <ThreadListPrimitive.ItemByIndex key={id} index={index} archived components={{ ThreadListItem: itemComponent(editing, onEdit, onOpen, true) }} />
-          ))}
+          <ArchivedContext value={true}>
+            <TreeContext value={tree}>
+              <LayoutContext value={layout}>
+                {roots.map(node => <SessionBranch key={node.path} node={node} editing={editing} onEdit={onEdit} onOpen={onOpen} />)}
+              </LayoutContext>
+            </TreeContext>
+          </ArchivedContext>
         </div>
       )}
     </section>

@@ -121,7 +121,7 @@ export interface TranscribeScope {
 export function transcribeTransport(client: RawRequestClient, scope: () => TranscribeScope | undefined): TranscribeTransport {
   const need = (): TranscribeScope => {
     const current = scope();
-    if (!current) throw new Error("Open a session before dictating.");
+    if (!current) throw new Error("Choose a project before dictating.");
     return current;
   };
   return {
