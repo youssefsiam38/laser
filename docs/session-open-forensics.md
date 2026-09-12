@@ -272,3 +272,30 @@ Raw artifacts and throwaway probes are under **`/tmp/session-open-forensics/`**.
 The throwaway source patch, final instrumented generated build and source maps are retained outside the checkout; each run records build hashes. Earlier intermediate bundles were not all retained. No dependency package was edited: engine hooks transform modules only inside disposable worker processes. No credentials, personal sessions, installed service, native preferences or another worktree were changed. The app's ledger belongs to the coordinator and is untouched.
 
 Limits: one hardware/OS/browser, one desktop theme/width, synthetic prose and warmed OS file caches; no packaged Electron, remote relay, first-install fonts, organic images/code, or input-latency certification. CPU sampling and paint opportunities are explicitly distinguished from phase medians and physical presentation. The test host/provider/browser are isolated, not filesystem/network sandboxed. Timing variation and rejected setup attempts are preserved, not relabeled as product behavior.
+
+## Independent review of this investigation
+
+`/tmp/review-forensics.md` — verdict **sound with caveats**. Every headline number
+reproduces from the raw samples; "the engine is not the wall" is established. Three
+corrections belong next to the findings:
+
+1. **Findings 1 and 2 measured code that no longer exists.** The base is `7c8b8201`,
+   before M16-T16 stage B. B already defaults to a 40-message tail and already fires
+   the entries refresh once per settled turn, so finding 1 is B's design and finding 2
+   is B's fix, both measured by hand beforehand. The post-B re-baseline on this machine:
+   warm 2,000-message switch **176–206 ms at 40 mounted rows, 1,524 elements, no history
+   reads**, and switching away from that conversation **94–117 ms** — against 1,979 ms
+   forward and 1,932 ms reverse here. "Stages C and D remain essential" is extrapolation,
+   not measurement: neither is justified by any number yet.
+2. **Finding 2's readable-time claim is an overclaim.** The scripting delta holds
+   (9 of 10 paired deltas positive); the readable delta flips sign in 5 of 10 pairs,
+   so 2,368 → 2,081 ms is noise, not a result.
+3. **The machine was under concurrent load**, undisclosed here: other lanes were
+   building and benchmarking during these runs, and one finding-1 suite was
+   block-ordered and unpinned with a negative sub-result (`norefresh` slower than
+   baseline) that went unmentioned. The absolute 2.89 s / 4.06 s figures are upper
+   bounds, not clean measurements.
+
+What survives without qualification is finding 3: **worker readiness costs 562 ms**
+(admission → ready 561.97 ms, history-independent at 562/559/547 ms, 75 % of a cold
+short open), untouched by any stage of M16-T16. That is M16-T26.
