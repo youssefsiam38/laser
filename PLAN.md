@@ -655,7 +655,8 @@ Goal: what a person attaches and what the model produces sit inside the bubble t
 | --- | --- | --- |
 | M16-T1 | Attached images and files inside the person's bubble | images the person attached render as thumbnails inside their bubble (single: natural aspect up to a bound; several: a wrapping row of tiles), click/Enter opens the viewer; the "N images attached" note is gone; the composer accepts text-like files (bounded size) as attachments, shown as chips (type icon, name, kind, size) in the bubble that open the viewer; the model receives the file's content; `@file` mention chips open the project file in the viewer; optimistic, live and reloaded messages all look the same |
 | M16-T2 | Files and images the model refers to | a link or bare path in an assistant message that points at a project file renders as a file chip that opens the viewer (editor stays one click further); a Markdown image or an image path within the project renders inline as the picture (bounded, click to enlarge); unresolvable paths stay plain text |
-| M16-T3 | Release 0.5.1 | M14-T8, M14-T9, M16-T1, M16-T2 merged and live-reviewed; the routine release orchestrator |
+| M16-T3 | Opening a session never looks like a new one | clicking a session row never shows the new-session empty state before the transcript arrives; while the history and session information load, the thread shows a minimal, satisfying, motion-safe loading presence (a skeleton of a conversation rather than a spinner) and the clicked row acknowledges the click instantly; loads under ~150 ms show nothing extra; a load that fails says so in place; the state is driven by the store's `hydrated`/opening flags, not a timer |
+| M16-T4 | Release 0.5.1 | M14-T8, M14-T9, M16-T1–T3 merged and live-reviewed; the routine release orchestrator |
 
 ## M15 · After the MCP release: artifacts, dictation language, model fallback chains, two sidebar and composer fixes
 
