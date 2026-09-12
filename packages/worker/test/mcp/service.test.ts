@@ -8,7 +8,7 @@ import { inspectionDefinition, McpService } from "../../src/mcp/service.js";
 import { startFixtureOAuthServer } from "./fixtures/oauth-server.js";
 
 const FIXTURE = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "stdio-server.mjs");
-const fixture = { name: "fixture", transport: { kind: "stdio" as const, command: process.execPath, args: [FIXTURE] }, tools: { exposure: "direct" as const } };
+const fixture = { name: "fixture", transport: { kind: "stdio" as const, command: process.execPath, args: [FIXTURE] }, tools: { alwaysLoad: false } };
 let root: string;
 let cwd: string;
 let service: McpService;
@@ -32,7 +32,7 @@ describe("inspection status in the saved list", () => {
     const result = await service.inspect({ cwd, scope: "project", server: fixture });
     expect(result.status).toBe("connected");
     expect(changed).not.toHaveBeenCalled();
-    const saved = await service.save({ cwd, scope: "project", server: { ...fixture, tools: { exposure: "on-demand" } } });
+    const saved = await service.save({ cwd, scope: "project", server: { ...fixture, tools: { alwaysLoad: false } } });
     expect(saved.servers[0]).toMatchObject({ status: "ready", toolCount: 3, directToolCount: 0, resourceCount: 1, promptCount: 1 });
     expect(saved.servers[0]?.latencyMs).toBeGreaterThanOrEqual(0);
     expect(changed).toHaveBeenCalledTimes(1);

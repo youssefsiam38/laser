@@ -423,7 +423,7 @@ function toPrompt(prompt: { name: string; title?: string; description?: string; 
 
 /** Effective visibility and approval under the server's own tool policy. */
 export function toolInfos(config: McpServerConfig, connection: Pick<McpConnection, "tools">): McpToolInfo[] {
-  const policy: McpToolPolicy = config.tools ?? { exposure: "on-demand" };
+  const policy: McpToolPolicy = config.tools ?? { alwaysLoad: false };
   return connection.tools.map((tool) => {
     const candidates = getToolNameCandidates(tool.name, config.name, "server", false);
     const allowed = isToolAllowed(tool.name, config.name, "server", policy.include, policy.exclude);

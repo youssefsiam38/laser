@@ -22,7 +22,6 @@ import {
   type McpServerState,
   type McpServerStatus,
   type McpStartup,
-  type McpToolExposure,
   type McpToolInfo,
   type McpToolPolicy,
   type McpTransport,
@@ -231,31 +230,6 @@ export function nameIssue(name: string): string | undefined {
 }
 
 // ---------------------------------------------------------------------------
-// Exposure
-
-export function defaultExposure(_toolCount: number): McpToolExposure {
-  return "on-demand";
-}
-
-export const EXPOSURE_LABEL: Record<McpToolExposure, string> = {
-  direct: "Included from the start",
-  "on-demand": "Found when needed",
-  search: "Found when needed",
-};
-
-export function exposureExplanation(exposure: McpToolExposure, toolCount: number | undefined): string {
-  if (exposure === "direct") {
-    return toolCount === undefined
-      ? "Every tool is in the model’s list from the start."
-      : `${toolCount} ${toolCount === 1 ? "tool is" : "tools are"} in the model’s list from the start, so it can call them without looking first.`;
-  }
-  if (exposure === "on-demand") {
-    return "Tools are found when needed, leaving more room for your conversation.";
-  }
-  return "Tools are found when needed, leaving more room for your conversation.";
-}
-
-// ---------------------------------------------------------------------------
 // Input schemas: a compact shape, and a form
 
 /** `{ url: string; fullPage?: boolean }` for an object schema; undefined for anything else. */
@@ -405,10 +379,10 @@ export function contentDataUri(block: { data: string; mimeType: string }): strin
 // Tool policy arithmetic. Every change is one whole `tools` object.
 
 export function policyOf(config: Pick<McpServerConfig, "tools">): McpToolPolicy {
-  return { ...config.tools, exposure: config.tools?.alwaysLoad === true ? "direct" : "on-demand" };
+  return config.tools ?? { alwaysLoad: false };
 }
 
-function withList(policy: McpToolPolicy, key: "only" | "exclude", list: string[] | undefined): McpToolPolicy {
+function withList(policy: McpToolPolicy, key: "exclude", list: string[] | undefined): McpToolPolicy {
   const next: McpToolPolicy = { ...policy };
   if (!list || !list.length) delete next[key];
   else next[key] = [...new Set(list)].sort();
@@ -416,13 +390,13 @@ function withList(policy: McpToolPolicy, key: "only" | "exclude", list: string[]
 }
 
 /**
- * What a tool's three switches show. This is the worker's own answer
+ * What a tool's switches show. This is the worker's own answer
  * (`McpToolInfo.visibility` / `.approval`), not a second reading of the
  * policy: a policy may hold globs, and the engine is the one that matched
  * them.
  */
-export function toolState(tool: Pick<McpToolInfo, "visibility" | "approval">): { enabled: boolean; direct: boolean; ask: boolean } {
-  return { enabled: tool.visibility !== "excluded", direct: tool.visibility === "direct", ask: tool.approval };
+export function toolState(tool: Pick<McpToolInfo, "visibility" | "approval">): { enabled: boolean; ask: boolean } {
+  return { enabled: tool.visibility !== "excluded", ask: tool.approval };
 }
 
 function isPattern(entry: string): boolean {
@@ -434,11 +408,10 @@ function isPattern(entry: string): boolean {
  * `include` list, which decides which tools exist at all) cannot be edited
  * one tool at a time without quietly replacing it with literal names.
  */
-export function policyPatternLocks(policy: McpToolPolicy): { enabled: boolean; direct: boolean; ask: boolean; any: boolean } {
+export function policyPatternLocks(policy: McpToolPolicy): { enabled: boolean; ask: boolean; any: boolean } {
   const enabled = policy.include !== undefined || (policy.exclude ?? []).some(isPattern);
-  const direct = (policy.only ?? []).some(isPattern);
   const ask = policy.approve === true || (Array.isArray(policy.approve) ? policy.approve.some(isPattern) : false);
-  return { enabled, direct, ask, any: enabled || direct || (Array.isArray(policy.approve) && policy.approve.some(isPattern)) };
+  return { enabled, ask, any: enabled || (Array.isArray(policy.approve) && policy.approve.some(isPattern)) };
 }
 
 export const PATTERN_POLICY_NOTE = "This server’s tool list uses patterns; edit it in the form.";
@@ -450,24 +423,6 @@ export function setToolEnabled(policy: McpToolPolicy, tool: string, enabled: boo
   return withList(policy, "exclude", [...exclude]);
 }
 
-export function setToolDirect(policy: McpToolPolicy, tool: string, direct: boolean, allTools: readonly string[]): McpToolPolicy {
-  // `only` absent means "every tool is direct", so switching one off has to
-  // write the rest of the list out before removing it — and an *empty* set is
-  // not "no restriction", it is "nothing is direct", which is what on demand
-  // means. Deleting the key there would have made every tool direct, the
-  // opposite of what the switch says.
-  const only = new Set(policy.only ?? allTools);
-  if (direct) only.add(tool);
-  else only.delete(tool);
-  if (!only.size) return withList({ ...policy, exposure: "on-demand" }, "only", undefined);
-  const covers = allTools.length > 0 && allTools.every((name) => only.has(name));
-  const next = withList(policy, "only", covers ? undefined : [...only]);
-  return direct && policy.exposure !== "direct" ? { ...next, exposure: "direct" } : next;
-}
-
-/** Said out loud when the last direct tool is switched off. */
-export const LAST_DIRECT_TOOL_NOTE =
-  "Nothing is in the model’s list any more, so this server now answers on demand: the model looks its tools up and calls them through one tool.";
 
 export function setToolApproved(policy: McpToolPolicy, tool: string, ask: boolean): McpToolPolicy {
   if (policy.approve === true) return policy;
@@ -488,9 +443,7 @@ export function allToolsOff(policy: McpToolPolicy, allTools: readonly string[]):
   return withList(policy, "exclude", [...allTools]);
 }
 
-export function allToolsDirect(policy: McpToolPolicy): McpToolPolicy {
-  return withList({ ...policy, exposure: "direct" }, "only", undefined);
-}
+
 
 /** Why the model cannot see this tool, or nothing when it can. */
 export function toolVisibilityNote(tool: Pick<McpToolInfo, "visibility">): string | undefined {
@@ -545,7 +498,7 @@ export interface ServerForm {
   protocolVersion: McpProtocolVersion;
   resourcesAsTools: boolean;
   debug: boolean;
-  exposure: McpToolExposure;
+  alwaysLoad: boolean;
   /** Kept across an edit so per-tool choices survive a change of transport. */
   tools?: McpToolPolicy | undefined;
   catalogId?: string | undefined;
@@ -586,7 +539,7 @@ export function emptyForm(): ServerForm {
     protocolVersion: "auto",
     resourcesAsTools: true,
     debug: false,
-    exposure: "on-demand",
+    alwaysLoad: false,
   };
 }
 
@@ -616,7 +569,7 @@ export function configToForm(config: McpServerConfig): ServerForm {
   form.protocolVersion = config.protocolVersion ?? "auto";
   form.resourcesAsTools = config.resourcesAsTools !== false;
   form.debug = config.debug === true;
-  form.exposure = config.tools?.alwaysLoad === true ? "direct" : "on-demand";
+  form.alwaysLoad = config.tools?.alwaysLoad === true;
   form.tools = config.tools;
   form.catalogId = config.catalogId;
   form.disabled = config.disabled;
@@ -718,7 +671,7 @@ export function formToConfig(form: ServerForm): McpServerConfigInput {
     ...(form.label.trim() && form.label.trim() !== form.name.trim() ? { label: form.label.trim() } : {}),
     transport,
     startup: form.startup,
-    tools: { ...(form.tools ?? {}), exposure: form.exposure, alwaysLoad: form.exposure === "direct" },
+    tools: { ...(form.tools ?? {}), alwaysLoad: form.alwaysLoad },
   };
   if (form.kind === "http" && form.authKind !== "none") {
     if (form.authKind === "bearer") {

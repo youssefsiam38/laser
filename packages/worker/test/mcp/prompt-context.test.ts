@@ -11,7 +11,7 @@ import { fallbackDefaultAgent, fallbackPolicy } from "../../src/agents/definitio
 import { rootRecord, rootRole } from "../../src/agents/session-config.js";
 import { StableSdkDriver } from "../../src/drivers/stable-sdk.js";
 import type { DriverEvent } from "../../src/driver.js";
-import { McpPromptContext } from "../../src/mcp/prompt-context.js";
+import { McpPromptFreeze } from "../../src/mcp/prompt-freeze.js";
 import { adapterRoot } from "../../src/mcp/engine.js";
 import { startStubProvider, toolNamesOf, writeStubModels, type StubAnswer } from "../agents/stub-provider.js";
 
@@ -66,7 +66,7 @@ function snapshots(events: DriverEvent[]): McpRuntimeSnapshot[] {
 
 describe("MCP prompt contract through real provider requests", () => {
   it.each(["flat", "function", "google", "bedrock", "relay"])("reads the pinned %s provider payload without rewriting it", (format) => {
-    const context = new McpPromptContext();
+    const context = new McpPromptFreeze();
     const events = new EventEmitter();
     const wrapped = context.wrap({ on: (name: string, callback: (...args: unknown[]) => unknown) => events.on(name, callback), events, registerTool() {} } as unknown as ExtensionAPI, "status");
     wrapped.registerTool({ name: "fixture_echo", label: "Echo", description: "Echo", parameters: {} as never, execute: async () => ({ content: [], details: {} }) });
@@ -87,17 +87,18 @@ describe("MCP prompt contract through real provider requests", () => {
   });
 
   it("fences late registrations and activation changes until a new session boundary", () => {
-    const context = new McpPromptContext();
+    const context = new McpPromptFreeze();
     const events = new EventEmitter();
     const registered = new Map<string, unknown>();
     let active: string[] = [];
     const pi = { on: (name: string, callback: (...args: unknown[]) => unknown) => events.on(name, callback), events,
       registerTool: (tool: { name: string }) => { registered.set(tool.name, tool); if (!active.includes(tool.name)) active.push(tool.name); },
+      unregisterTool: (name: string) => { registered.delete(name); active = active.filter(item => item !== name); },
       getActiveTools: () => active, setActiveTools: (names: string[]) => { active = names; },
     } as unknown as ExtensionAPI;
     const wrapped = context.wrap(pi, "status");
     const definition = (name: string, description = "original") => ({ name, label: name, description, parameters: {} as never, execute: async () => ({ content: [], details: {} }) });
-    wrapped.registerTool(definition("mcp")); wrapped.registerTool(definition("fixture_echo")); wrapped.registerTool(definition("mcp__fixture"));
+    wrapped.registerTool(definition("mcp")); wrapped.registerTool(definition("fixture_echo"));
     expect(active).toEqual(["mcp", "fixture_echo"]);
     const status: Record<string, unknown>[] = [];
     events.on("status", value => status.push(value));
@@ -105,7 +106,7 @@ describe("MCP prompt contract through real provider requests", () => {
     expect(status.at(-1)).not.toHaveProperty("context");
     events.emit("before_provider_request", { payload: { tools: active.map(name => ({ name })) } }, { model: { contextWindow: 1_000_000 }, sessionManager: { getSessionName: () => "original" } });
     const original = [...registered];
-    wrapped.registerTool(definition("fixture_echo", "changed")); wrapped.registerTool(definition("fixture_new")); wrapped.setActiveTools([]);
+    wrapped.registerTool(definition("fixture_echo", "changed")); wrapped.registerTool(definition("fixture_new")); wrapped.setActiveTools([]); Reflect.get(wrapped, "unregisterTool")("fixture_echo");
     expect([...registered]).toEqual(original); expect(active).toEqual(["mcp", "fixture_echo"]);
     pi.registerTool(definition("other_extension"));
     expect(active).toContain("other_extension");
@@ -133,6 +134,7 @@ describe("MCP prompt contract through real provider requests", () => {
     }
     const names = toolNamesOf(stub.requests[0]!);
     expect(names).toContain("mcp"); expect(names).toContain("mcpScript");
+    expect(names.some(name => name.startsWith("mcp__"))).toBe(false);
     expect(names.includes("fixture_echo")).toBe(preload);
     const searchText = (stub.requests[2] as { messages: Array<{ role: string; content: unknown }> }).messages.findLast(message => message.role === "tool")!.content;
     expect(typeof searchText).toBe("string");
@@ -157,16 +159,28 @@ describe("MCP prompt contract through real provider requests", () => {
   }, 120_000);
 });
 
-function policy(window?: number) {
-  const context = new McpPromptContext();
+function policy(window?: number, preloadBytes = 0) {
+  const context = new McpPromptFreeze();
   const events = new EventEmitter();
-  context.wrap({ on: (name: string, callback: (...args: unknown[]) => unknown) => events.on(name, callback), events: { emit() {} }, registerTool() {} } as unknown as ExtensionAPI, "status");
-  events.emit("before_provider_request", { payload: { tools: [] } }, { model: window ? { contextWindow: window } : undefined, sessionManager: { getSessionName: () => undefined } });
+  const wrapped = context.wrap({ on: (name: string, callback: (...args: unknown[]) => unknown) => events.on(name, callback), events: { emit() {} }, registerTool() {} } as unknown as ExtensionAPI, "status");
+  const tool = { name: "preloaded", label: "preloaded", description: "x".repeat(preloadBytes), parameters: {} as never, execute: async () => ({ content: [], details: {} }) };
+  if (preloadBytes) wrapped.registerTool(tool);
+  events.emit("before_provider_request", { payload: { tools: preloadBytes ? [tool] : [] } }, { model: window ? { contextWindow: window } : undefined, sessionManager: { getSessionName: () => undefined } });
   return context;
 }
 const match = (i: number, description = "Read a document") => ({ server: i % 2 ? "second" : "first", score: 100 - i, tool: { name: `tool_${i}`, originalName: `read_${i}`, description, inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] }, outputSchema: { type: "string" } } });
 
 describe("MCP discovery admission", () => {
+  it.each(["names", "summary", "full"])("preload does not consume another server's %s lookup allowance", detail => {
+    const context = policy(1_000_000, 40_000);
+    expect(context.snapshot().preloadedTokens).toBeGreaterThan(20_000);
+    const matches = Array.from({ length: 30 }, (_, index) => match(index));
+    const withPreload = context.search(matches, { query: "read", detail });
+    const withoutPreload = policy(1_000_000).search(matches, { query: "read", detail });
+    expect(withPreload).toEqual(withoutPreload);
+    expect(withPreload.items).toHaveLength(detail === "full" ? 5 : 12);
+  });
+
   it("keeps continuations independent per server and reports response bounds", () => {
     const context = policy(1_000_000);
     const first = [match(0), match(2)];
@@ -227,7 +241,7 @@ describe("MCP discovery admission", () => {
   it("keeps the window unavailable instead of guessing and rejects continuations after catalog changes", () => {
     const context = policy();
     expect(context.snapshot().budget).toBeNull();
-    expect(context.search([match(0)], { query: "read", detail: "full" }).items).toEqual([]);
+    expect(context.search([match(0)], { query: "read", detail: "full" })).toMatchObject({ detail: "summary", items: [expect.objectContaining({ description: expect.any(String) })] });
     expect(context.describe("first", match(0).tool)).toHaveProperty("inputSchema");
     context.search([match(0), match(1)], { query: "read", detail: "names", limit: 1 });
     expect(context.search([match(2)], { query: "read", detail: "names", offset: 1 })).toHaveProperty("message", "The tool catalog changed. Search again from the beginning.");

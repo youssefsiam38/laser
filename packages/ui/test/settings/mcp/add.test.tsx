@@ -79,7 +79,7 @@ it("tests the gallery definition it composed, then saves progressive discovery f
         catalogId: "playwright",
         startup: "on-demand",
         transport: { kind: "stdio", command: "npx", args: ["-y", "@playwright/mcp@latest", "--isolated"] },
-        tools: { exposure: "on-demand", alwaysLoad: false },
+        tools: { alwaysLoad: false },
       },
     },
   ]);
@@ -93,7 +93,7 @@ it("tests the gallery definition it composed, then saves progressive discovery f
 
   await click("Add");
   expect(saved).toHaveLength(1);
-  expect(saved[0]!.server.tools).toEqual({ exposure: "on-demand", alwaysLoad: false });
+  expect(saved[0]!.server.tools).toEqual({ alwaysLoad: false });
   expect(mocks.toast).toHaveBeenCalledWith("info", expect.stringContaining("playwright is saved"));
 });
 
@@ -134,7 +134,7 @@ it("keeps progressive discovery for large servers too", async () => {
   await click("Test");
   expect(text()).toContain("Tools are found when needed");
   await click("Add");
-  expect(saved[0]!.server.tools).toEqual({ exposure: "on-demand", alwaysLoad: false });
+  expect(saved[0]!.server.tools).toEqual({ alwaysLoad: false });
 });
 
 it("keeps a rejected name out of the host and only offers sign-in for a URL", async () => {

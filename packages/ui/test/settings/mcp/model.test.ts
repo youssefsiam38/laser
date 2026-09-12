@@ -2,13 +2,11 @@ import { describe, expect, it } from "vitest";
 import { MCP_KNOWN_SERVERS, type McpServerConfig } from "@lasercode/protocol";
 
 import {
-  allToolsDirect,
   allToolsOff,
   buildArgs,
   catalogForm,
   configToForm,
   defaultCatalogOptions,
-  defaultExposure,
   deriveName,
   formIssues,
   formToConfig,
@@ -21,7 +19,6 @@ import {
   schemaToShape,
   scopeNote,
   setToolApproved,
-  setToolDirect,
   setToolEnabled,
   statusWords,
   toolState,
@@ -85,14 +82,6 @@ describe("names and command lines", () => {
   });
 });
 
-describe("exposure", () => {
-  it("is progressive regardless of legacy tool count", () => {
-    expect(defaultExposure(24)).toBe("on-demand");
-    expect(defaultExposure(40)).toBe("on-demand");
-    expect(defaultExposure(41)).toBe("on-demand");
-    expect(defaultExposure(60)).toBe("on-demand");
-  });
-});
 
 describe("the input schema, compactly", () => {
   it("writes an object schema as a shape with enums and defaults", () => {
@@ -144,48 +133,37 @@ describe("the input schema, compactly", () => {
 describe("tool policy arithmetic", () => {
   const tools = ["navigate", "click", "screenshot"];
 
-  it("maintains exclude, only and approve as lists of original names", () => {
-    let policy = setToolEnabled({ exposure: "direct" }, "click", false);
+  it("maintains exclude and approve as lists of original names", () => {
+    let policy = setToolEnabled({ alwaysLoad: false }, "click", false);
     expect(policy.exclude).toEqual(["click"]);
     policy = setToolEnabled(policy, "click", true);
     expect(policy.exclude).toBeUndefined();
 
-    policy = setToolDirect({ exposure: "direct" }, "click", false, tools);
-    expect(policy.only).toEqual(["navigate", "screenshot"]);
-    policy = setToolDirect(policy, "click", true, tools);
-    expect(policy.only).toBeUndefined();
 
-    policy = setToolApproved({ exposure: "direct" }, "screenshot", true);
+    policy = setToolApproved({ alwaysLoad: false }, "screenshot", true);
     expect(policy.approve).toEqual(["screenshot"]);
-    expect(setToolApproved({ exposure: "direct", approve: true }, "screenshot", false).approve).toBe(true);
+    expect(setToolApproved({ alwaysLoad: false, approve: true }, "screenshot", false).approve).toBe(true);
   });
 
   it("bulk actions clear or fill the whole list", () => {
-    expect(allToolsOff({ exposure: "direct" }, tools).exclude).toEqual(["click", "navigate", "screenshot"]);
-    expect(allToolsDirect({ exposure: "on-demand", only: ["click"] })).toEqual({ exposure: "direct" });
+    expect(allToolsOff({ alwaysLoad: false }, tools).exclude).toEqual(["click", "navigate", "screenshot"]);
   });
 
   it("takes each tool's state from the worker's effective answer, not from a second reading", () => {
-    expect(toolState({ visibility: "direct", approval: false })).toEqual({ enabled: true, direct: true, ask: false });
-    expect(toolState({ visibility: "on-demand", approval: true })).toEqual({ enabled: true, direct: false, ask: true });
-    expect(toolState({ visibility: "excluded", approval: false })).toEqual({ enabled: false, direct: false, ask: false });
+    expect(toolState({ visibility: "direct", approval: false })).toEqual({ enabled: true, ask: false });
+    expect(toolState({ visibility: "on-demand", approval: true })).toEqual({ enabled: true, ask: true });
+    expect(toolState({ visibility: "excluded", approval: false })).toEqual({ enabled: false, ask: false });
     expect(toolVisibilityNote({ visibility: "direct" })).toBeUndefined();
     expect(toolVisibilityNote({ visibility: "excluded" })).toContain("Switched off");
     expect(toolVisibilityNote({ visibility: "on-demand" })).toContain("on demand");
   });
 
-  it("turning the last direct tool off means on demand, never everything direct", () => {
-    const policy = setToolDirect({ exposure: "direct", only: ["navigate"] }, "navigate", false, tools);
-    expect(policy).toEqual({ exposure: "on-demand" });
-    expect(toolState({ visibility: "on-demand", approval: false }).direct).toBe(false);
-  });
 
   it("locks the switches a pattern owns", () => {
-    expect(policyPatternLocks({ exposure: "direct" })).toMatchObject({ enabled: false, direct: false, ask: false, any: false });
-    expect(policyPatternLocks({ exposure: "direct", exclude: ["browser_*"] })).toMatchObject({ enabled: true, any: true });
-    expect(policyPatternLocks({ exposure: "direct", include: ["navigate"] })).toMatchObject({ enabled: true, any: true });
-    expect(policyPatternLocks({ exposure: "direct", only: ["browser_*"] })).toMatchObject({ direct: true, any: true });
-    expect(policyPatternLocks({ exposure: "direct", approve: true })).toMatchObject({ ask: true });
+    expect(policyPatternLocks({ alwaysLoad: false })).toMatchObject({ enabled: false, ask: false, any: false });
+    expect(policyPatternLocks({ alwaysLoad: false, exclude: ["browser_*"] })).toMatchObject({ enabled: true, any: true });
+    expect(policyPatternLocks({ alwaysLoad: false, include: ["navigate"] })).toMatchObject({ enabled: true, any: true });
+    expect(policyPatternLocks({ alwaysLoad: false, approve: true })).toMatchObject({ ask: true });
   });
 });
 
@@ -200,7 +178,7 @@ describe("the form", () => {
       label: "Playwright",
       catalogId: "playwright",
       transport: { kind: "stdio", command: "npx", args: ["-y", "@playwright/mcp@latest", "--isolated"] },
-      tools: { exposure: "on-demand", alwaysLoad: false },
+      tools: { alwaysLoad: false },
     });
   });
 

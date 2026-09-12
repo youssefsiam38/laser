@@ -122,7 +122,7 @@ function changed(): number {
 const fixture = {
   name: "fixture",
   transport: { kind: "stdio" as const, command: process.execPath, args: [FIXTURE] },
-  tools: { exposure: "direct" as const },
+  tools: { alwaysLoad: false },
 };
 
 describe("WorkerServer · mcp/*", () => {

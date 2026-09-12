@@ -85,20 +85,17 @@ describe("toServerEntry", () => {
     expect(toServerEntry(stdio()).lifecycle).toBeUndefined();
   });
 
-  it("maps every exposure and the tool lists", () => {
-    expect(toServerEntry(stdio({ tools: { exposure: "direct" } })).directTools).toBe(false);
-    expect(toServerEntry(stdio({ tools: { exposure: "direct", alwaysLoad: true } })).directTools).toBe(true);
-    expect(toServerEntry(stdio({ tools: { exposure: "direct", only: ["echo"] } })).directTools).toBe(false);
-    expect(toServerEntry(stdio({ tools: { exposure: "direct", alwaysLoad: true, only: ["echo"] } })).directTools).toBe(true);
-    expect(toServerEntry(stdio({ tools: { exposure: "on-demand" } })).directTools).toBe(false);
-    expect(toServerEntry(stdio({ tools: { exposure: "search" } })).directTools).toBe(false);
-    expect(toServerEntry(stdio({ tools: { exposure: "direct", include: ["a*"], exclude: ["ab"], approve: ["danger*"] } }))).toMatchObject({
+  it("maps one preload boolean and preserves tool filters and approvals", () => {
+    expect(toServerEntry(stdio()).directTools).toBe(false);
+    expect(toServerEntry(stdio({ tools: { alwaysLoad: false } })).directTools).toBe(false);
+    expect(toServerEntry(stdio({ tools: { alwaysLoad: true } })).directTools).toBe(true);
+    expect(toServerEntry(stdio({ tools: { alwaysLoad: false, include: ["a*"], exclude: ["ab"], approve: ["danger*"] } }))).toMatchObject({
       includeTools: ["a*"],
       excludeTools: ["ab"],
       approveTools: ["danger*"],
     });
-    expect(toServerEntry(stdio({ tools: { exposure: "direct", approve: true } })).approveTools).toBe(true);
-    expect(toServerEntry(stdio({ tools: { exposure: "direct", approve: false } })).approveTools).toBeUndefined();
+    expect(toServerEntry(stdio({ tools: { alwaysLoad: false, approve: true } })).approveTools).toBe(true);
+    expect(toServerEntry(stdio({ tools: { alwaysLoad: false, approve: false } })).approveTools).toBeUndefined();
   });
 
   it("passes the remaining settings straight across", () => {
@@ -125,6 +122,7 @@ describe("toServerEntry", () => {
       elicitation: true,
       scriptMode: true,
       freezeDirectTools: true,
+      namespaceTools: false,
       // Never the engine's default, which tells the person to run its own
       // terminal commands (docs/mcp.md; AGENTS.md §6b).
       authRequiredMessage: 'Sign in to "${server}" in Settings → MCP servers, then try again.',

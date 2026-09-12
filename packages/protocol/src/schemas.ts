@@ -9,7 +9,7 @@
 import { z } from "zod";
 import { ORIGINS, type InstructionOrigin } from "./pi-extension.js";
 import { WEB_SEARCH_PROVIDER_IDS } from "./web-search.js";
-import { MCP_IMPORT_SOURCES, MCP_PROTOCOL_VERSIONS, MCP_STARTUP_MODES, MCP_TOOL_EXPOSURES } from "./mcp.js";
+import { MCP_IMPORT_SOURCES, MCP_PROTOCOL_VERSIONS, MCP_STARTUP_MODES } from "./mcp.js";
 import {
   AGENT_DESCRIPTION_MAX,
   AGENT_INSTRUCTIONS_MAX,
@@ -196,9 +196,7 @@ export const mcpConversationContextSchema = z.object({
 
 const mcpToolPolicySchema = z
   .object({
-    exposure: z.enum(MCP_TOOL_EXPOSURES),
     alwaysLoad: z.boolean().optional(),
-    only: z.array(mcpNamePattern).max(1000).optional(),
     include: z.array(mcpNamePattern).max(1000).optional(),
     exclude: z.array(mcpNamePattern).max(1000).optional(),
     approve: z.union([z.boolean(), z.array(mcpNamePattern).max(1000)]).optional(),

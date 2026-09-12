@@ -29,7 +29,7 @@ afterEach(() => rmSync(base, { recursive: true, force: true }));
 const stdio = (name: string, command = "npx"): McpServerConfigInput => ({
   name,
   transport: { kind: "stdio", command, args: ["-y", `${name}-mcp`] },
-  tools: { exposure: "direct" },
+  tools: { alwaysLoad: false },
 });
 
 function writeRaw(path: string, value: unknown): void {
@@ -37,6 +37,24 @@ function writeRaw(path: string, value: unknown): void {
 }
 
 describe("McpStore", () => {
+  it.each(["direct", "search", "on-demand"])("migrates stored %s without rewriting files or broadening narrow preload", async exposure => {
+    const legacy = { ...stdio("playwright"), tools: { exposure, only: ["navigate"], alwaysLoad: true, include: ["browser_*"], exclude: ["browser_install"], approve: ["browser_upload"] } };
+    writeRaw(store.globalPath(), { version: 1, servers: [legacy] });
+    const before = readFileSync(store.globalPath(), "utf8");
+    const { servers } = await store.read("global", cwd);
+    expect(servers[0]?.tools).toEqual({ alwaysLoad: false, include: ["browser_*"], exclude: ["browser_install"], approve: ["browser_upload"] });
+    expect(readFileSync(store.globalPath(), "utf8")).toBe(before);
+    await store.save("global", cwd, { ...servers[0]!, tools: { ...servers[0]!.tools, alwaysLoad: true } });
+    expect((await store.read("global", cwd)).servers[0]?.tools).toEqual({ alwaysLoad: true, include: ["browser_*"], exclude: ["browser_install"], approve: ["browser_upload"] });
+    expect(JSON.parse(readFileSync(store.globalPath(), "utf8")).servers[0].tools).not.toHaveProperty("only");
+    expect(JSON.parse(readFileSync(store.globalPath(), "utf8")).servers[0].tools).not.toHaveProperty("exposure");
+  });
+
+  it("does not treat an old direct default as preload consent", async () => {
+    writeRaw(store.globalPath(), { version: 1, servers: [{ ...stdio("playwright"), tools: { exposure: "direct" } }] });
+    expect((await store.read("global", cwd)).servers[0]?.tools).toEqual({ alwaysLoad: false });
+  });
+
   it("saves to both scopes and lays the project over the global by name", async () => {
     await store.save("global", cwd, stdio("alpha"));
     await store.save("global", cwd, stdio("beta"));

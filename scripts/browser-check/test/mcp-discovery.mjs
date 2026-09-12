@@ -28,11 +28,11 @@ export default async function acceptance(check) {
     return state.path;
   }
   const config = (await check.rpc('mcp/list', { cwd })).servers.find(server => server.config.name === 'fixture').config;
-  const tools = { ...config.tools, exposure: 'direct' }; delete tools.alwaysLoad;
+  const tools = { ...config.tools, alwaysLoad: false };
   await check.rpc('mcp/save', { cwd, scope: 'global', server: { ...config, tools } });
   const progressive = await conversation(`Progressive ${check.state.width} ${check.state.theme}`);
   const before = (await check.rpc('mcp/list', { cwd })).conversations.find(item => item.sessionPath === progressive).context;
-  assert.deepEqual(before.preloaded, [], 'legacy direct does not opt into preload');
+  assert.deepEqual(before.preloaded, [], 'progressive does not preload');
   assert.deepEqual(before.discoveries, []);
 
   const settings = page.getByRole('button', { name: 'Settings', exact: true });
@@ -49,7 +49,7 @@ export default async function acceptance(check) {
   const section = inspector.getByRole('region', { name: 'Conversation tools' });
   await section.getByRole('combobox', { name: 'Conversation', exact: true }).selectOption(progressive);
   await section.getByText('No tools discovered from this server in this conversation yet.').waitFor();
-  assert.match(await section.innerText(), /Discovery budget: 20,000 tokens/);
+  assert.match(await section.innerText(), /Per-lookup allowance: 20,000 tokens/);
   await prompt(progressive, 'Discover fixture tools');
   await section.getByText('fixture_echo · Details opened', { exact: true }).waitFor();
   assert.equal(await section.getByRole('list', { name: 'Included tools' }).count(), 0);

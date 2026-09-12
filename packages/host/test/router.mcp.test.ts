@@ -49,7 +49,7 @@ function harness(reply?: unknown) {
 
 const CALLS: Array<[string, Record<string, unknown>]> = [
   ["mcp/list", {}],
-  ["mcp/save", { scope: "global", server: { name: "fixture", transport: { kind: "stdio", command: "node" }, tools: { exposure: "direct", alwaysLoad: true } } }],
+  ["mcp/save", { scope: "global", server: { name: "fixture", transport: { kind: "stdio", command: "node" }, tools: { alwaysLoad: true } } }],
   ["mcp/remove", { scope: "global", name: "fixture" }],
   ["mcp/inspect", { scope: "global", name: "fixture" }],
   ["mcp/ping", { scope: "global", name: "fixture" }],

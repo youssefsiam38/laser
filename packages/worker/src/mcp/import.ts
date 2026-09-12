@@ -234,7 +234,7 @@ export function translate(name: string, entry: unknown, id: McpImportSourceId): 
     transport,
     ...(auth ? { auth } : {}),
     ...(record["enabled"] === false || record["disabled"] === true ? { disabled: true } : {}),
-    tools: { exposure: "direct" },
+    tools: { alwaysLoad: false },
     startup: "on-demand",
   };
   return {

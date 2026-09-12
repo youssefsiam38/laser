@@ -64,17 +64,22 @@ The adapter retains its weighted keyword ranker and exposes an optional ranking
 strategy over the authorized catalog. No embedding service is required.
 
 The automatic discovery target is **2% of the active model's context window**,
-aggregated with MCP provider definitions. The byte-based token bound is deliberately
-conservative and labelled, not presented as billed usage. Full schemas are
+shared across servers within a single lookup. Explicit preload does not consume
+that soft allowance; it is measured and warned about separately. The byte-based
+token bound is deliberately conservative and labelled, not presented as billed usage. Full schemas are
 atomic; oversized automatic detail asks for explicit inspection. An explicit
 single-tool description may exceed the soft share, not the known window;
-unknown windows remain unknown. Provider-sized preload bounds stop the request
-before send. Smallest useful summary responses may exceed the soft target.
+unknown windows retain a labelled 16 KiB names/summary lookup allowance without
+claiming a context-window share. Full-page requests degrade to summaries.
+Provider-sized preload bounds stop the request before send. Smallest useful summary responses may exceed the soft target.
 
 Advanced → **Put every tool in the conversation** is off by default. It applies
 to new session runtimes; running ones retain their captured configuration and
-definitions. Existing exclusions and approval rules survive; legacy `only` data is retained
-without restricting the new explicit override. The inspector separately shows saved policy and explicitly selected
+definitions. Existing exclusions and approval rules survive. On read, legacy
+`exposure` and
+`only` are removed from normalized policy; a nonempty `only` forces preload off
+rather than silently broadening it. Files are not rewritten at startup.
+The inspector separately shows saved policy and explicitly selected
 running-conversation evidence. This is not a claim of provider cache hits or
 permanent discovery history after reload/compaction. See [the design and
 requirements matrix](mcp-client.md).
@@ -144,8 +149,7 @@ names.
   `on-demand-keep`, `at-start` and `always`. Session connections do not idle out
   between turns; legacy idle timing is retained in configuration but not offered
   as a conversation control.
-- **Tools** carry explicit `alwaysLoad` (default false), legacy `exposure`
-  (retained for lossless migration), `only` (legacy selection data, not a filter),
+- **Tools** carry one explicit `alwaysLoad` boolean (default false),
   `include`/`exclude` (which tools exist at all, as names or globs) and `approve`
   (call-time approval for all or for matching tools).
 - **Status** for a person is one of: `connected`, `ready` (tools known from
@@ -253,7 +257,7 @@ wide screen and a page on a phone:
   input schema rendered as a compact shape. Per tool: **On/Off** (exclude),
   **Ask first** (approval). Bulk: all on, all off. Each change is one
   `mcp/save`; no per-tool control silently changes preload policy. A separate
-  conversation selector shows the model window, 2% target, conservative MCP
+  conversation selector shows the model window, per-lookup 2% allowance, conservative MCP
   definition cost, included tool names, and tools found/inspected with their
   revision. Inspector connections are never reported as model discoveries.
 - *Run*: pick a tool, fill its arguments (a form from the schema; JSON for

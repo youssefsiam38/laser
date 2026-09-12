@@ -39,7 +39,8 @@ integration belongs in its existing MCP module, not a new extension/package.
 
 ## Milestone 2 implementation evidence
 
-- Prompt-contract module: `packages/worker/src/mcp/prompt-context.ts`.
+- Engine-boundary module: `packages/worker/src/mcp/prompt-freeze.ts`.
+  Pure, deterministic lookup policy: `packages/worker/src/mcp/discovery-policy.ts`.
 - Dedicated contract tests: `packages/worker/test/mcp/prompt-context.test.ts`.
   The exact test **“keeps the entire tools array stable across connect, discover,
   inspect, script search and execution (preload=%s)”** captures seven real SDK
@@ -51,14 +52,14 @@ integration belongs in its existing MCP module, not a new extension/package.
   Google, Bedrock and Pi relay envelopes without changing their payloads.
 - The same file covers unknown windows, atomic input/output schemas, size-based
   admission, grouped/capped pages, scoped continuations, authorized ranking,
-  late registration/activation fences and a new-session boundary. Oversized
+  late registration, unregistration and activation fences and a new-session boundary. Oversized
   request prevention is tested through the real engine: throwing from Pi's
   pre-request handler is isolated, so prevention uses its abort control instead.
 - Protocol round trips, existing host routing, companion validation and service
   snapshot lifecycle tests pin the inspector boundary. Inspector-only connections
   cannot invent conversation evidence.
 - `scripts/browser-check/test/mcp-discovery.mjs` drives the built host/worker/UI:
-  legacy defaults, names/summary/describe/script/call discovery, keyboard and
+  progressive defaults, names/summary/describe/script/call discovery, keyboard and
   pointer preload controls, and two explicitly selected session snapshots.
   Run with the shared MCP matrix, with mouse/full motion and touch/reduced motion.
 
@@ -284,13 +285,18 @@ absolute budget grows, but page limits still prevent a giant default result.
 This is a conservative initial policy justified by one measured server, not a
 claim of globally optimal retrieval accuracy.
 
-The budget is **aggregate across servers**, not 2% per server. It bounds the next
-automatic discovery response's metadata plus already preloaded MCP definitions.
-It is not a promise to cap accumulated conversation history: repeated explicit
-inspection can exceed it, and tool results cannot be silently deleted. Reserve
-space for gateway descriptors when admitting results. If overrides consume the
-budget, automatic discovery returns the smallest useful names/summary page with
-an over-budget diagnostic; explicit inspection of one tool remains possible.
+The budget is **aggregate across servers within one lookup**, not 2% per server
+or a conversation-total cap. It bounds that lookup's response metadata, including
+connection guidance. Explicit preload is measured and warned about separately;
+it bypasses this soft allowance rather than consuming another server's discovery
+space. Both still participate in known hard-window checks. This review correction
+supersedes the original proposal to subtract preloaded definitions from each lookup.
+
+When the context window is unknown, its share stays unavailable. Automatic
+lookups use names/summaries with a conservative **16 KiB per-lookup byte allowance**,
+default 12 results, maximum 50. A requested full page degrades to summaries with
+an explanation; explicit inspection remains available for one complete schema.
+Repeated lookup history is not capped or silently deleted.
 
 A complete schema is atomic: never cut JSON in half to hit a token budget. Full
 search pages shrink before returning; an individually oversize schema is fetched
@@ -398,25 +404,25 @@ per-call policy and escape tests pass, do not label the current script executor
 
 ### Configuration and migration
 
-Use an engine-neutral explicit field, proposed `tools.alwaysLoad?: boolean`, with
-**missing/false = progressive**. The worker translates it to adapter settings;
-only `true` requests eager direct exposure. Existing `tools.exposure` values can
-be read during migration, but old `direct` alone cannot prove a person opted in:
-it was the gallery/form default. Do **not** silently turn every old direct server
-into a permanent override.
+The sole preload decision is `tools.alwaysLoad?: boolean`:
+**missing/false = progressive**, true = all include/exclude-allowed tools from
+startup. New RPC writes reject `exposure` and `only`; they cannot express a
+contradictory or narrow preload policy.
 
-Normalize legacy direct/search/on-demand entries to progressive for newly started
-conversations unless the new explicit override is true. Preserve include/exclude,
-approve, transport, secrets and startup settings. Retain legacy `only` data for
-migration transparency, but it is not an exclusion/authorization list and must
-not silently disable tools. “Put every tool” means every tool allowed by the
-include/exclude policy; show any restrictions. Existing running sessions keep
-their snapshot. Explain changed exposure once in the server's settings, not with
-a fabricated assistant message. No destructive migration or credential rewrite.
+Stored legacy direct/search/on-demand values are normalized on read, not rewritten
+at startup. Old `direct` alone is not consent. A nonempty legacy `only` list forces
+preload off, even if accompanied by the earlier explicit boolean, rather than
+silently broadening a narrow selection. The obsolete fields are removed from the
+normalized configuration; the Advanced explanation says that old narrow preload
+selections are not carried forward and enabling the switch includes all enabled
+tools. A subsequent save writes only the canonical boolean and preserved filters
+and approvals. Unchanged raw entries remain on disk until a write; no credential
+migration is performed.
 
-The explicit field and legacy treatment are part of milestone 2 review. They
-must round-trip through protocol schemas, imports, edit/save and global/project
-resolution without changing exclusions or approval grants.
+Existing running session runtimes keep their snapshots. Reopening a disposed
+runtime or restarting the application uses the normalized current configuration,
+even for an old transcript. No mid-runtime conversion or fabricated assistant
+message announces the change.
 
 ### Placement and exact copy
 
@@ -451,7 +457,7 @@ runtime evidence**, separate from the inspector's own connection:
 | Actual preloaded definitions | Snapshot of MCP-owned definitions in that session's provider tools array: “Included from the start: N” |
 | Discoveries | Tool names and descriptor revisions actually returned to that session; distinguish “Found” summary from “Details opened”. Not an inspector-connect event |
 | Still retained context | Only claim current retention when selected request/compaction evidence supports it. Otherwise say “Details opened in this conversation”, not “still in context” |
-| Budget | Context window, 2% target, estimated/exact tokenizer basis, preloaded tokens and most recent discovery payload size; identify unknown measurements |
+| Budget | Context window, per-lookup 2% allowance, tokenizer basis, separate preload cost and latest lookup size; never imply a conversation total |
 | Catalog freshness | Fresh/stale/refreshing, last successful revision, failure/retry action; no credential or auth-partition values |
 | Runtime connection | “Connected for this conversation”, “Available when needed”, “Disconnecting after current work”, “Turned off by you”; model vs person origin |
 

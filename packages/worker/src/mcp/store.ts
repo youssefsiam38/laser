@@ -364,7 +364,7 @@ function parseScope(file: ReadResult, scope: McpScope, path: string): ScopeConte
       malformed.push({ scope, name, label: name, detail: `Two saved servers are named "${name}". Only the first is used; remove the duplicate.` });
       continue;
     }
-    const parsed = mcpServerConfigInputSchema.safeParse(entry);
+    const parsed = mcpServerConfigInputSchema.safeParse(migrateStoredPolicy(entry));
     if (!parsed.success) {
       seen.add(name);
       malformed.push({
@@ -491,4 +491,19 @@ async function writeAtomic(path: string, value: unknown, mode: number): Promise<
   } finally {
     await unlink(temporary).catch(() => {});
   }
+}
+
+/** Normalize old files only. New RPC writes cannot express contradictory policy. */
+function migrateStoredPolicy(entry: unknown): unknown {
+  if (!entry || typeof entry !== "object" || !("tools" in entry)) return entry;
+  const tools = entry.tools;
+  if (!tools || typeof tools !== "object" || Array.isArray(tools)) return entry;
+  const { exposure: _exposure, only, ...policy } = tools as Record<string, unknown>;
+  // Leave malformed legacy values for strict validation to reject, rather
+  // than interpreting a misspelled/nonsensical narrow list as consent.
+  if (_exposure !== undefined && !["direct", "on-demand", "search"].includes(String(_exposure))) return entry;
+  if (only !== undefined && (!Array.isArray(only) || !only.every(name => typeof name === "string"))) return entry;
+  // A legacy narrow direct set must never become a broad preload by accident.
+  const narrow = Array.isArray(only) && only.length > 0;
+  return { ...entry, tools: { ...policy, alwaysLoad: !narrow && policy.alwaysLoad === true } };
 }

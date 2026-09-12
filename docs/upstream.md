@@ -36,6 +36,9 @@ An optional `rank` strategy receives the authorized catalog; unknown, disabled,
 duplicate and non-finite ranked entries cannot enter the result. Omitting the
 policy retains standalone behaviour and the existing weighted keyword ranker.
 The application, not this generic patch, chooses its context-share policy.
+Discovery retains connection/auth/connecting guidance and server instructions,
+including zero-match responses. `settings.namespaceTools: false` suppresses
+namespace registration at its source; the host does not drop registrations by name.
 
 Regression evidence: `packages/worker/test/mcp/prompt-context.test.ts` exercises
 the installed patched dependency and real engine request path. Source plus public

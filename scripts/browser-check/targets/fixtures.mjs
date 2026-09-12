@@ -63,7 +63,7 @@ export async function fixture(target, runtime, name) {
     await target.rpc('pi/project/add', { cwd });
     await target.rpc('pi/project/trust', { cwd, trusted: true, remember: true });
     if (name === 'mcp' || name === 'agents') {
-      await target.rpc('mcp/save', { cwd, scope: 'global', server: { name: 'fixture', transport: { kind: 'stdio', command: runtime.node, args: [fileURLToPath(new URL('../../../packages/worker/test/mcp/fixtures/stdio-server.mjs', import.meta.url))] }, tools: { exposure: 'direct', ...(name === 'agents' ? { alwaysLoad: true } : {}), approve: name === 'agents' }, startup: 'on-demand' } });
+      await target.rpc('mcp/save', { cwd, scope: 'global', server: { name: 'fixture', transport: { kind: 'stdio', command: runtime.node, args: [fileURLToPath(new URL('../../../packages/worker/test/mcp/fixtures/stdio-server.mjs', import.meta.url))] }, tools: { alwaysLoad: name === 'agents', approve: name === 'agents' }, startup: 'on-demand' } });
       await target.rpc('mcp/inspect', { cwd, scope: 'global', name: 'fixture' });
     }
     for (const session of project.sessions) {

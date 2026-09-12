@@ -28,7 +28,6 @@ import { selectClass } from "../fields.js";
 import { McpRunPanel } from "./McpRunPanel.js";
 import { McpToolsPanel } from "./McpToolsPanel.js";
 import {
-  EXPOSURE_LABEL,
   failedAgoPhrase,
   policyOf,
   scopeLabel,
@@ -614,7 +613,7 @@ function Overview({
             {state.config.auth?.kind === "bearer" ? "A token, kept in the app’s secret store" : oauth ? "Your account, through your browser" : "None"}
           </dd>
           <dt className="text-ink-3">Tools reach the model</dt>
-          <dd className="text-ink-2">{EXPOSURE_LABEL[policy.exposure]}</dd>
+          <dd className="text-ink-2">{policy.alwaysLoad ? "Included from the start" : "Found when needed"}</dd>
           <dt className="text-ink-3">Saved for</dt>
           <dd className="text-ink-2">{scopeLabel(state.scope)}</dd>
         </dl>
@@ -688,13 +687,16 @@ function ConversationTools({ conversations, server }: {
         </select>
       </label>
       {!context ? <p className="text-sm text-ink-2">Choose a conversation to see its tools. Conversations appear after their first model request.</p> : <>
-        <p className="text-sm text-ink-2">Discovery budget: {context.budget === null ? "unavailable" : `${context.budget.toLocaleString()} tokens`} · {(context.share * 100).toLocaleString()}% of the model’s space, shared across servers.</p>
+        <p className="text-sm text-ink-2">{context.budget === null
+          ? "Model context-window share unavailable. Discovery still provides bounded names and summaries."
+          : `Per-lookup allowance: ${context.budget.toLocaleString()} tokens · ${(context.share * 100).toLocaleString()}% of the model’s space, shared across servers for one lookup, not the conversation total.`}</p>
         <p className="text-xs leading-5 text-ink-3">Estimates use UTF-8 byte counts as token upper bounds, not billed tokens. Discovery figures describe lookup results, which scripts may keep internal.</p>
         <dl className="grid grid-cols-1 gap-1 text-sm text-ink-2">
-          <dt>Included from the start across all servers</dt><dd className="typed text-ink">{context.preloaded.length} tools · {context.preloadedTokens.toLocaleString()} tokens including connection tools</dd>
-          <dt>Last discovery response</dt><dd className="typed text-ink">{context.lastDiscoveryTokens.toLocaleString()} tokens</dd>
+          <dt>Included from the start across all servers</dt><dd className="typed text-ink">{context.preloaded.length} server tools</dd>
+          <dt>All MCP definitions, including connection tools</dt><dd className="typed text-ink">{context.preloadedTokens.toLocaleString()} tokens</dd>
+          <dt>Last discovery response only</dt><dd className="typed text-ink">{context.lastDiscoveryTokens.toLocaleString()} tokens</dd>
         </dl>
-        {context.budget !== null && context.preloadedTokens > context.budget && <p className="text-sm text-attention">The upper estimate is above the 2% target. Turn off “Put every tool in the conversation” in Advanced to leave more room in new conversations.</p>}
+        {context.preloaded.length > 0 && context.budget !== null && context.preloadedTokens > context.budget && <p className="text-sm text-attention">Preloaded definitions exceed the per-lookup target, but do not reduce the lookup allowance. Turn off “Put every tool in the conversation” in Advanced to leave more room in new conversations.</p>}
         {context.preloaded.length > 0 && <ul aria-label="Included tools" className="max-h-40 overflow-auto text-xs leading-5 text-ink-2">{context.preloaded.map((name) => <li className="break-all" key={name}>{name}</li>)}</ul>}
         <p className="text-sm font-medium text-ink">Discovered from this server</p>
         {discoveries.length === 0 ? <p className="text-sm text-ink-2">No tools discovered from this server in this conversation yet.</p> : <ul className="max-h-40 overflow-auto text-sm text-ink-2">{discoveries.map((tool) => <li key={tool.name} className="break-all">{tool.name} · {tool.detail === "full" ? "Details opened" : "Found"}</li>)}</ul>}

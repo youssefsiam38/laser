@@ -23,7 +23,7 @@ let http: FixtureHttpServer;
 const stdioConfig = (args: string[] = []) => ({
   name: "fixture",
   transport: { kind: "stdio" as const, command: process.execPath, args: [FIXTURE, ...args] },
-  tools: { exposure: "direct" as const },
+  tools: { alwaysLoad: false },
 });
 
 beforeAll(async () => {
@@ -79,7 +79,7 @@ describe("McpInspector", () => {
   it("applies the server's tool policy to what the model would see", async () => {
     const inspection = await inspector.inspect({
       scope: "global",
-      config: { ...stdioConfig(), tools: { exposure: "direct", alwaysLoad: true, only: ["echo"], exclude: ["explode"], approve: ["snap*"] } },
+      config: { ...stdioConfig(), tools: { alwaysLoad: true, exclude: ["explode"], approve: ["snap*"] } },
       secrets: new Map(),
     });
     const byName = new Map(inspection.tools.map((tool) => [tool.originalName, tool]));
@@ -112,7 +112,7 @@ describe("McpInspector", () => {
   it("connects over Streamable HTTP", async () => {
     const inspection = await inspector.inspect({
       scope: "global",
-      config: { name: "remote", transport: { kind: "http", url: http.url }, tools: { exposure: "direct" } },
+      config: { name: "remote", transport: { kind: "http", url: http.url }, tools: { alwaysLoad: false } },
       secrets: new Map(),
     });
     expect(inspection.status).toBe("connected");

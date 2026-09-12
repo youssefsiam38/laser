@@ -135,12 +135,11 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
     if (hasIssues(issues)) return;
     setSaving(true);
     setError(undefined);
-    const chosen = form.exposure;
     try {
       const { servers } = await client.request("mcp/save", {
         cwd,
         scope,
-        server: formToConfig({ ...form, exposure: chosen }),
+        server: formToConfig(form),
         ...(edit && edit.config.name !== form.name.trim() ? { originalName: edit.config.name } : {}),
       });
       onSaved(servers, { scope, name: form.name.trim(), needsAuth: inspection?.status === "needs-auth" || form.authKind === "oauth" });
@@ -244,7 +243,7 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
             )}
 
             {inspection && <TestResult inspection={inspection} />}
-            <p className="text-sm leading-6 text-ink-2">{form.exposure === "direct" ? "Every enabled tool is included when a new conversation starts." : "Tools are found when needed, leaving more room for your conversation."} Change this in Advanced.</p>
+            <p className="text-sm leading-6 text-ink-2">{form.alwaysLoad ? "Every enabled tool is included when a new conversation starts." : "Tools are found when needed, leaving more room for your conversation."} Change this in Advanced.</p>
 
 
           </div>

@@ -54,7 +54,7 @@ function writeServers(servers: McpServerConfig[]): void {
 const fixtureServer = (extra: Partial<McpServerConfig> = {}): McpServerConfig => ({
   name: "fixture",
   transport: { kind: "stdio", command: process.execPath, args: [FIXTURE] },
-  tools: { exposure: "direct", alwaysLoad: true },
+  tools: { alwaysLoad: true },
   startup: "on-demand",
   ...extra,
 });

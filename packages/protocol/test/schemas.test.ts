@@ -155,7 +155,7 @@ const samples: Record<ClientMethod, unknown> = {
       name: "playwright",
       transport: { kind: "stdio", command: "npx", args: ["-y", "@playwright/mcp@latest", "--isolated"], env: { TOKEN: { secret: true, value: "abc" }, MODE: "test" } },
       startup: "on-demand",
-      tools: { exposure: "direct", alwaysLoad: true, exclude: ["browser_install"], approve: ["browser_file_upload"] },
+      tools: { alwaysLoad: true, exclude: ["browser_install"], approve: ["browser_file_upload"] },
       catalogId: "playwright",
     },
   },
@@ -588,4 +588,11 @@ it("round-trips session MCP context without guessing an unknown window", () => {
   expect(JSON.parse(JSON.stringify(result)).conversations[0].context).toEqual(context);
   expect(mcpConversationContextSchema.safeParse({ ...context, contextWindow: -1 }).success).toBe(false);
   expect(mcpConversationContextSchema.safeParse({ ...context, measurement: "exact" }).success).toBe(false);
+});
+
+// Legacy disk fields migrate in the worker store; they are not a second RPC API.
+it.each([{ exposure: "direct", alwaysLoad: false }, { only: ["echo"], alwaysLoad: true }])("rejects legacy tool-policy writes: %j", tools => {
+  expect(clientParamsSchemas["mcp/save"].safeParse({
+    cwd: "/p", scope: "project", server: { name: "fixture", transport: { kind: "stdio", command: "node" }, tools },
+  }).success).toBe(false);
 });

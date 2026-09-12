@@ -28,7 +28,7 @@ export async function identityFixture(transport: IdentityTransport, base: string
           ? { kind: "http", url: http.url, stream: transport as "streamable-http" | "sse" }
           : { kind: "stdio", command: process.execPath, args: [fileURLToPath(new URL("./stdio-server.mjs", import.meta.url)), "--client-info", log] },
         startup: "at-start",
-        tools: { exposure: "direct" },
+        tools: { alwaysLoad: false },
         // Force initialize even if a newer SDK begins preferring server/discover.
         protocolVersion: "legacy",
       };

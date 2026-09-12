@@ -79,15 +79,9 @@ export const MCP_STARTUP_MODES = ["on-demand", "on-demand-keep", "at-start", "al
 export type McpStartup = (typeof MCP_STARTUP_MODES)[number];
 
 /** How a server's tools reach the model. */
-export const MCP_TOOL_EXPOSURES = ["direct", "on-demand", "search"] as const;
-export type McpToolExposure = (typeof MCP_TOOL_EXPOSURES)[number];
-
 export interface McpToolPolicy {
-  exposure: McpToolExposure;
-  /** Explicit preload override. Legacy exposure alone never implies consent to preload. */
+  /** Explicit server-wide preload. Omitted means progressive discovery. */
   alwaysLoad?: boolean;
-  /** Legacy direct selection retained for round trips; not an exclusion or preload limit. */
-  only?: string[];
   /** Names or globs; tools not matched do not exist for this server. */
   include?: string[];
   /** Names or globs; applied after `include`. */
@@ -344,7 +338,7 @@ export const MCP_KNOWN_SERVERS: readonly McpCatalogEntry[] = [
     config: {
       transport: { kind: "stdio", command: "npx", args: ["-y", "@playwright/mcp@latest"] },
       startup: "on-demand",
-      tools: { exposure: "on-demand" },
+      tools: { alwaysLoad: false },
     },
     options: [
       {
@@ -392,7 +386,7 @@ export const MCP_KNOWN_SERVERS: readonly McpCatalogEntry[] = [
     config: {
       transport: { kind: "stdio", command: "npx", args: ["-y", "chrome-devtools-mcp@latest"] },
       startup: "on-demand",
-      tools: { exposure: "on-demand" },
+      tools: { alwaysLoad: false },
     },
   },
   {
@@ -403,7 +397,7 @@ export const MCP_KNOWN_SERVERS: readonly McpCatalogEntry[] = [
     config: {
       transport: { kind: "http", url: "https://mcp.context7.com/mcp" },
       startup: "on-demand",
-      tools: { exposure: "on-demand" },
+      tools: { alwaysLoad: false },
     },
   },
   {
@@ -414,7 +408,7 @@ export const MCP_KNOWN_SERVERS: readonly McpCatalogEntry[] = [
     config: {
       transport: { kind: "http", url: "https://mcp.deepwiki.com/mcp" },
       startup: "on-demand",
-      tools: { exposure: "on-demand" },
+      tools: { alwaysLoad: false },
     },
   },
   {
@@ -427,7 +421,7 @@ export const MCP_KNOWN_SERVERS: readonly McpCatalogEntry[] = [
       transport: { kind: "http", url: "https://api.githubcopilot.com/mcp/" },
       auth: { kind: "oauth" },
       startup: "on-demand",
-      tools: { exposure: "on-demand" },
+      tools: { alwaysLoad: false },
     },
   },
   {
@@ -440,7 +434,7 @@ export const MCP_KNOWN_SERVERS: readonly McpCatalogEntry[] = [
       transport: { kind: "http", url: "https://mcp.notion.com/mcp" },
       auth: { kind: "oauth" },
       startup: "on-demand",
-      tools: { exposure: "on-demand" },
+      tools: { alwaysLoad: false },
     },
   },
   {
@@ -453,7 +447,7 @@ export const MCP_KNOWN_SERVERS: readonly McpCatalogEntry[] = [
       transport: { kind: "http", url: "https://mcp.linear.app/mcp" },
       auth: { kind: "oauth" },
       startup: "on-demand",
-      tools: { exposure: "on-demand" },
+      tools: { alwaysLoad: false },
     },
   },
   {
@@ -466,7 +460,7 @@ export const MCP_KNOWN_SERVERS: readonly McpCatalogEntry[] = [
       transport: { kind: "http", url: "https://mcp.sentry.dev/mcp" },
       auth: { kind: "oauth" },
       startup: "on-demand",
-      tools: { exposure: "on-demand" },
+      tools: { alwaysLoad: false },
     },
   },
 ] as const;
