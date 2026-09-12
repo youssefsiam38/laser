@@ -21,6 +21,7 @@ export type StubAnswer =
   | { drop: true; delayMs?: number };
 
 export interface StubRequest {
+  reasoning_effort?: string;
   messages: Array<{ role: string; content: unknown; tool_calls?: unknown[]; tool_call_id?: string }>;
   tools?: Array<{ type: string; function: { name: string } }>;
 }

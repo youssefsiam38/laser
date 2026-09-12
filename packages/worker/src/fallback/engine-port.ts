@@ -23,6 +23,7 @@ import {
   type ProviderFailureSignal,
   type SessionFallbackEntry,
   type SessionUpdate,
+  type ThinkingLevel,
 } from "@lasercode/protocol";
 
 import { disabledModelRefs, modelSwitchedOff, readEffectiveProductSettings, readFallbackChains } from "../settings.js";
@@ -32,6 +33,8 @@ import type { CandidateModel } from "./policy.js";
 export interface FallbackPortOptions {
   /** The live session. Read each time: a runtime replacement swaps it. */
   session: () => AgentSession;
+  /** Latest person-chosen intent, read after the asynchronous model switch. */
+  explicitThinkingLevel?: () => ThinkingLevel | undefined;
   agentDir: string;
   cwd: string;
   projectTrusted: boolean | undefined;
@@ -57,7 +60,14 @@ export function createFallbackEnginePort(options: FallbackPortOptions): Fallback
     setModel: async (model) => {
       const match = session().modelRuntime.getModels().find((m) => m.provider === model.provider && m.id === model.id);
       if (!match) throw new Error(`unknown model ${model.provider}/${model.id}`);
-      await session().setModel(match);
+      const current = session();
+      const thinkingLevel = current.thinkingLevel;
+      await current.setModel(match);
+      // Pi selects model/global defaults on setModel. A fallback changes only
+      // the model, not the person's effort. Let Pi clamp and persist the level
+      // for this model; re-read explicit intent in case it changed during auth
+      // or model-select hooks, and retain it across less-capable candidates.
+      current.setThinkingLevel(options.explicitThinkingLevel?.() ?? thinkingLevel);
       // The status line names the model being tried, so it has to hear about
       // it while the failover is still running.
       options.onModelChanged();
