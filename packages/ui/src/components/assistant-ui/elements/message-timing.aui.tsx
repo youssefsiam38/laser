@@ -17,7 +17,7 @@
  * message footer rather than a mono 11px badge in the action bar, our
  * tooltip is Radix (`asChild`), and tokens are shown alongside time.
  */
-import { WIRE_NAMESPACE } from "@lasercode/protocol";
+import { MESSAGE_METADATA_NS } from "@lasercode/protocol";
 import { useAuiState, useMessageTiming, type MessageState } from "@assistant-ui/react";
 import type { FC } from "react";
 
@@ -32,7 +32,7 @@ interface LaserTimingMeta {
 }
 
 const metaOf = (message: MessageState): LaserTimingMeta =>
-  ((message.metadata as { custom?: Record<string, unknown> } | undefined)?.custom?.[WIRE_NAMESPACE] as LaserTimingMeta | undefined) ?? {};
+  ((message.metadata as { custom?: Record<string, unknown> } | undefined)?.custom?.[MESSAGE_METADATA_NS] as LaserTimingMeta | undefined) ?? {};
 
 const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 

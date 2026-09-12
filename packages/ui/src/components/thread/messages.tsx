@@ -56,6 +56,7 @@ interface LaserMeta {
   files?: readonly AttachedFile[];
   optimistic?: boolean;
   userOrdinal?: number;
+  prompt?: { ordinal: number; entryId?: string };
   /** Pi's entry for a persisted prompt; see `Block.entryId`. */
   entryId?: string;
   goalSetter?: boolean;
@@ -537,33 +538,15 @@ function AssistantFooter() {
   const supported = useSupportedThinkingLevels();
   const thinkingLevels = supported ?? THINKING_LEVELS;
 
-  // The prompt this reply answers: the nearest user message above, by ordinal.
-  // One string so the selector returns a primitive: "<ordinal> <text>".
-  const prompt = useAuiState((s) => {
-    let i = s.message.index - 1;
-    while (i >= 0 && s.thread.messages[i]?.role !== "user") i--;
-    if (i < 0) return undefined;
-    let ordinal = 0;
-    for (let j = 0; j < i; j++) if (s.thread.messages[j]?.role === "user") ordinal++;
-    ordinal = laserMeta(s.thread.messages[i] as MessageState).userOrdinal ?? ordinal;
-    const text = s.thread.messages[i]!.content
-      .map((p) => (p.type === "text" ? p.text : ""))
-      .filter(Boolean)
-      .join("\n\n");
-    // NUL as the separator, not a space: prompt text is arbitrary and may
-    // begin with digits or spaces, so any printable delimiter is ambiguous.
-    return `${ordinal}\u0000${text}`;
-  });
-  const [promptOrdinal, promptText] = useMemo(() => {
-    if (prompt === undefined) return [undefined, undefined] as const;
-    const at = prompt.indexOf("\u0000");
-    return [Number(prompt.slice(0, at)), prompt.slice(at + 1)] as const;
-  }, [prompt]);
-  const promptEntryId = promptOrdinal === undefined ? undefined : userEntryAt(entries, promptOrdinal, leafId);
+  const promptOrdinal = useAuiState((s) => laserMeta(s.message).prompt?.ordinal);
+  const stampedEntryId = useAuiState((s) => laserMeta(s.message).prompt?.entryId);
+  const promptEntryId = stampedEntryId ?? (promptOrdinal === undefined ? undefined : userEntryAt(entries, promptOrdinal, leafId));
 
   const rerun = async (where: "here" | "fork", pick?: RegeneratePick) => {
     if (!promptEntryId) return;
-    let prompt = promptText;
+    const source = aui.thread.getState().messages.find((message) =>
+      message.role === "user" && laserMeta(message as MessageState).userOrdinal === promptOrdinal);
+    let prompt = source?.content.map((part) => part.type === "text" ? part.text : "").filter(Boolean).join("\n\n");
     if (where === "here") {
       const moved = await actions.navigate(promptEntryId);
       if (!moved) return;

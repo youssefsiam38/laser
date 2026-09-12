@@ -16,6 +16,7 @@ import { AssistantRuntimeProvider, ThreadPrimitive, useAui, useExternalStoreRunt
 
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { LaserStoreProvider, createStateStore, type StateStore } from "../../src/runtime/LaserProvider.js";
+import { goalRecords } from "../../src/runtime/goal-history.js";
 import { projectMessages } from "../../src/runtime/projection.js";
 import { blocksFromEntries, initialState, reduce, type AppState } from "../../src/store.js";
 import { sessionState } from "../agents/fixtures.js";
@@ -24,7 +25,10 @@ const stable = vi.hoisted(() => ({
   // The real provider hands every consumer a host client; the "run it again with
   // another model / thinking level" controls inside a message footer ask it for
   // the model catalog on mount. A fixture without one crashes the whole tree.
-  client: { request: vi.fn(async (method: string) => (method === "pi/models/catalog" ? { models: [] } : {})) },
+  footerRenders: new Map<string, number>(),
+  client: { request: vi.fn(async (method: string) => (method === "pi/models/catalog" ? { models: [
+    { provider: "test", id: "fallback", name: "Fallback", thinkingLevels: ["off", "high"] },
+  ] } : {})) },
   actions: {
     openSession: vi.fn(async () => undefined),
     toast: vi.fn(),
@@ -41,6 +45,15 @@ vi.mock("@/runtime", async (importActual) => ({
   ...(await importActual<typeof import("../../src/runtime/index.js")>()),
   useLaserStable: () => stable,
 }));
+vi.mock("@/components/assistant-ui/elements/message-pair", async (importActual) => {
+  const actual = await importActual<typeof import("../../src/components/assistant-ui/elements/message-pair.js")>();
+  const { useAui } = await import("@assistant-ui/react");
+  return { ...actual, MessageFooter: (props: React.ComponentProps<typeof actual.MessageFooter>) => {
+    const message = useAui().message.getState();
+    if (message.role === "assistant") stable.footerRenders.set(message.id, (stable.footerRenders.get(message.id) ?? 0) + 1);
+    return <actual.MessageFooter {...props} />;
+  } };
+});
 vi.mock("@/dialogs", () => ({
   ToolRowDialog: () => null,
   useRegisterToolRow: () => {},
@@ -85,6 +98,7 @@ let store: StateStore;
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  stable.footerRenders.clear();
   for (const fn of Object.values(stable.actions)) fn.mockClear();
   stable.actions.navigate.mockResolvedValue({ editorText: "list the tests" });
   let state: AppState = reduce(initialState, { type: "opened", state: sessionState({ path: SESSION }) });
@@ -103,14 +117,15 @@ afterEach(async () => {
 /** The thread's own composer, reached the way a message reaches it. */
 let threadComposer: { getState(): { text: string }; setText(text: string): void } | undefined;
 
-const mount = () => {
+const mount = (history: unknown[] = entries, leafId: string | undefined = LEAF) => {
   function Probe() {
     const aui = useAui();
     threadComposer = aui.thread.composer();
     return null;
   }
   function Fixture() {
-    const { messages } = projectMessages({ blocks: blocksFromEntries(entries, LEAF), running: false, dialogs: [] });
+    const blocks = blocksFromEntries(history, leafId);
+    const { messages } = projectMessages({ blocks, running: false, dialogs: [], goals: goalRecords(history, blocks) });
     const runtime = useExternalStoreRuntime({ convertMessage: (message: ThreadMessageLike) => message, messages, isRunning: false, onNew: async () => {} });
     return (
       <AssistantRuntimeProvider runtime={runtime}>
@@ -155,6 +170,49 @@ const startEdit = async () => {
   const pencil = [...bubble.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.getAttribute("aria-label") === "Edit")!;
   await click(pencil);
 };
+
+describe("streaming footer subscriptions", () => {
+  it.skipIf(!process.env.PERF_BENCH)("benchmarks 12 settled footers across 500 irrelevant deltas", async () => {
+    const history = Array.from({ length: 24 }, (_, index) => msg(`bench-${index}`, index ? `bench-${index - 1}` : null, index % 2 ? "assistant" : "user", `Message ${index}`));
+    store.dispatch({ type: "hydrate", path: SESSION, entries: history, leafId: "bench-23" });
+    await mount(history, "bench-23");
+    stable.footerRenders.clear();
+    const start = performance.now();
+    const cpu = process.cpuUsage();
+    for (let seq = 1; seq <= 500; seq++) {
+      await act(async () => store.dispatch({ type: "notification", method: "session/update", params: {
+        sessionPath: SESSION, seq, at: "2026-09-12T00:00:00Z",
+        update: { kind: "text_delta", contentIndex: 0, delta: "x" },
+      } }));
+    }
+    const elapsed = process.cpuUsage(cpu);
+    console.log("PERF_BATCH_1", JSON.stringify({ footers: 12, deltas: 500, executions: [...stable.footerRenders.values()].reduce((a, b) => a + b, 0), wallMs: performance.now() - start, cpuMs: (elapsed.user + elapsed.system) / 1000 }));
+  });
+  it("does not execute settled footers for 500 text deltas", async () => {
+    await mount();
+    stable.footerRenders.clear();
+    for (let seq = 1; seq <= 500; seq++) {
+      await act(async () => store.dispatch({ type: "notification", method: "session/update", params: {
+        sessionPath: SESSION, seq, at: new Date().toISOString(),
+        update: { kind: "text_delta", contentIndex: 0, delta: "x" },
+      } }));
+    }
+    expect([...stable.footerRenders.values()].every((count) => count <= 1)).toBe(true);
+  });
+
+  it("uses fallback model capabilities when opening regenerate", async () => {
+    await mount();
+    await act(async () => store.dispatch({ type: "notification", method: "session/update", params: {
+      sessionPath: SESSION, seq: 1, at: new Date().toISOString(),
+      update: { kind: "state", state: sessionState({ path: SESSION, model: { provider: "test", id: "fallback" }, thinkingLevel: "high" }) },
+    } }));
+    await click(byTitle("Try again with another model or thinking level")[0]);
+    const levels = document.querySelector<HTMLSelectElement>('select[aria-label="Thinking level for re-run"]');
+    expect([...levels!.options].map((option) => option.value)).toEqual(["off", "high"]);
+    expect(levels!.value).toBe("high");
+    expect(document.body.textContent).toContain("fallback");
+  });
+});
 
 describe("editing a message you sent", () => {
   it("offers a plain Edit, not a fork, on the bubble", async () => {
@@ -253,6 +311,22 @@ describe("the version picker", () => {
 });
 
 describe("running a reply again", () => {
+  it("returns to the visible goal setter rather than its hidden continuation", async () => {
+    const text = "Goal mode is active.\n<goal_objective>\nVisible objective\n</goal_objective>\n<goal_id>\ng1\n</goal_id>\n<!-- pi-goal-prompt:test-g1 -->";
+    const history = [
+      { id: "goal", type: "custom", customType: "goal-state", data: { goal: { id: "g1", text: "Visible objective", status: "active", startedAt: 1, updatedAt: 1, iteration: 0 } } },
+      msg("visible", "goal", "user", text),
+      msg("reply", "visible", "assistant", "Working"),
+      msg("hidden", "reply", "user", text),
+      msg("final", "hidden", "assistant", "Done"),
+    ];
+    store.dispatch({ type: "hydrate", path: SESSION, entries: history, leafId: "final" });
+    stable.actions.navigate.mockResolvedValue({});
+    await mount(history, "final");
+    await click(byTitle("Try again").at(-1));
+    expect(stable.actions.navigate).toHaveBeenCalledWith("visible");
+    expect(stable.actions.send).toHaveBeenCalledWith([{ type: "text", text: "Visible objective" }], "prompt");
+  });
   it("answers again in this session, from the prompt the engine hands back", async () => {
     await mount();
     const footer = [...container.querySelectorAll('[data-role="assistant"]')].at(-1)!;

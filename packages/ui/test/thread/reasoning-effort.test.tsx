@@ -100,7 +100,7 @@ vi.mock("@/components/thread/session-preparation", () => ({
 vi.mock("@/runtime", () => ({
   isUnstartedSession: () => mocks.unstarted,
   useLaserStable: () => ({ client, actions, dispatch: mocks.dispatch, currentProject: mocks.currentProject }),
-  useLaserState: (selector: (state: unknown) => unknown) => selector({ agents: { snapshot: mocks.snapshot } }),
+  useLaserState: (selector: (state: unknown) => unknown) => selector({ agents: { snapshot: mocks.snapshot }, current: mocks.session ? "session" : undefined, open: { session: { state: mocks.session ? { ...mocks.session, model: mocks.model } : undefined } } }),
   useLaserView: () => mocks.view,
   useSessionMeta: () => ({ session: mocks.session, model: mocks.model, thinkingLevel: mocks.level }),
 }));
