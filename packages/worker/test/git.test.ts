@@ -5,11 +5,80 @@
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, ftruncateSync, mkdtempSync, openSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { GitService, countLines, parseAheadBehind, parseNumstat, parsePorcelain } from "../src/git.js";
+
+vi.mock("node:fs/promises", async (original) => ({ ...await original<typeof import("node:fs/promises")>() }));
+
+describe("bounded new-file admission", () => {
+  it("skips sparse, binary, symlink and disappearing files and enforces an aggregate byte budget", async () => {
+    const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-git-bounds-`));
+    const count = (service: GitService, paths: string[]) => (service as unknown as { linesOfNewFiles(p: string[]): Promise<number> }).linesOfNewFiles(paths);
+    try {
+      const fd = openSync(join(dir, "huge"), "w");
+      ftruncateSync(fd, 2 * 1024 ** 3); closeSync(fd);
+      writeFileSync(join(dir, "binary"), Buffer.alloc(32 * 1024));
+      writeFileSync(join(dir, "small"), "a\nb");
+      symlinkSync("small", join(dir, "link"));
+      const spy = vi.spyOn(fs, "open");
+      try {
+        expect(await count(new GitService({ cwd: dir }), ["huge"])).toBe(0);
+        expect(spy).not.toHaveBeenCalled();
+      } finally { spy.mockRestore(); }
+      expect(await count(new GitService({ cwd: dir }), ["binary", "link", "gone", "small"])).toBe(2);
+      // A producer cannot force an unbounded read by growing after admission.
+      const original = fs.open;
+      const grow = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const file = await original(...args);
+        const stat = file.stat.bind(file);
+        file.stat = async (...statArgs: Parameters<typeof file.stat>) => {
+          const info = await stat(...statArgs);
+          writeFileSync(join(dir, "small"), "x".repeat(1024 * 1024));
+          return info;
+        };
+        return file;
+      });
+      try { expect(await count(new GitService({ cwd: dir, maxNewFileBytes: 100 }), ["small"])).toBe(0); }
+      finally { grow.mockRestore(); }
+      writeFileSync(join(dir, "a"), "a\n"); writeFileSync(join(dir, "b"), "b\n");
+      expect(await count(new GitService({ cwd: dir, maxNewFilesTotalBytes: 3 }), ["a", "b"])).toBe(1);
+      if (process.platform !== "win32") {
+        execFileSync("mkfifo", [join(dir, "pipe")]);
+        expect(await count(new GitService({ cwd: dir }), ["pipe"])).toBe(0);
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+it("starts baseline diff independently and overlaps upstream counts with URL lookup", async () => {
+  const pending = new Map<string, (value: string) => void>();
+  let measuring = false;
+  const service = new GitService({ cwd: tmpdir(), ttlMs: 0, run: async (args) => {
+    if (args.includes("--is-inside-work-tree")) return "true";
+    if (args[0] === "stash") return "baseline";
+    if (args.includes("@{upstream}")) return "origin/main";
+    if (args[0] === "symbolic-ref") return "main";
+    if (measuring && ["diff", "rev-list", "remote"].includes(args[0]!)) {
+      return new Promise<string>((resolve) => pending.set(args[0]!, resolve));
+    }
+    return "";
+  } });
+  await service.baseline("s");
+  measuring = true;
+  const result = service.status("s");
+  try {
+    await vi.waitFor(() => expect([...pending.keys()].sort()).toEqual(["diff", "remote", "rev-list"]));
+  } finally {
+    pending.get("diff")?.("3\t1\tf\n");
+    pending.get("rev-list")?.("2\t4");
+    pending.get("remote")?.("url");
+  }
+  expect(await result).toMatchObject({ branch: "main", added: 3, removed: 1, ahead: 4, behind: 2, remoteUrl: "url" });
+});
 
 describe("git parsers", () => {
   it("sums numstat and skips binaries", () => {

@@ -10,7 +10,7 @@
  * cheapest way to rule out.
  */
 import { ErrorCodes, PRODUCT_NAME } from "@lasercode/protocol";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,6 +24,22 @@ import { ProjectRegistry } from "../src/projects.js";
 import { Router } from "../src/router.js";
 import { ViewCache } from "../src/views.js";
 import type { WorkerPool } from "../src/worker-pool.js";
+
+it("classifies shared project directories once per snapshot, never across requests", () => {
+  const h = harness();
+  const spy = vi.spyOn(ProjectRegistry.prototype, "isExcluded");
+  try {
+    for (let i = 0; i < 5000; i++) h.catalogRows.push({
+      path: `/sessions/${i}.jsonl`, id: String(i), cwd: CWD_A,
+      createdAt: "2026-01-01", modifiedAt: "2026-01-01", messageCount: 1,
+    });
+    expect(h.router.sessions()).toHaveLength(5000);
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockReturnValue(true);
+    expect(h.router.sessions()).toHaveLength(0);
+    expect(spy).toHaveBeenCalledTimes(2);
+  } finally { spy.mockRestore(); h.cleanup(); }
+});
 
 const CWD_A = "/projects/a";
 const CWD_B = "/projects/b";
@@ -83,6 +99,7 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
     list: (cwd?: string) =>
       (cwd === undefined ? catalogRows : catalogRows.filter((row) => row.cwd === cwd)).map((row) => ({ ...row, size: 1 })),
     get: (path: string) => catalogRows.find((row) => row.path === path),
+    getListed: (path: string) => catalogRows.find((row) => row.path === path),
     cwdOf: (path: string) => catalogRows.find((row) => row.path === path)?.cwd,
     cwdCounts: () => new Map<string, number>(),
     invalidate: () => {},

@@ -499,3 +499,89 @@ These support the techniques, not Laser-specific performance estimates:
 - [Electron performance guide](https://www.electronjs.org/docs/latest/tutorial/performance) — avoid blocking critical processes and loading code before it is needed.
 - [MDN WebSocket](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket) and [bufferedAmount](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket/bufferedAmount) — no built-in incoming backpressure; queued outgoing bytes are observable but require an application policy.
 - Existing `docs/perf-chat-loading.md` — paging/virtualization research and the branch owner's measured baseline/acceptance contract.
+
+## Implemented — host and worker lane
+
+Isolated branch `agents/perf-host-worker-a44788ab`, starting at `413c8e2`, Node 24.11.1. Raw probes and validation logs: `/tmp/perf-host-worker/`. Timings below are synthetic source-path measurements, not browser/permission latency or additive application savings. UI and history-window seams remain owned by M16-T16. Ledger updates belong to the orchestrator.
+
+### F01 — linear complete-line assembly
+
+Confirmed in `host/src/catalog.ts`: the unfinished prefix was concatenated and searched on every 256 KiB read. The scanner now searches only incoming bytes and concatenates fragments once at newline. Partial records remain unretained between scans; a growth notification may reread an incomplete record, deliberately avoiding a lifetime-sized buffer. Same-size rewrites restart rather than reuse the append cursor.
+
+Twenty cold application-cache samples per size, same fixture/program (`catalog.mjs`); OS cache warm, machine contention uncontrolled:
+
+| Payload MiB | Before median ms | After median ms | Before concat bytes | After concat bytes |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 3.50 | 1.78 | 3,407,935 | 1,048,638 |
+| 4 | 25.85 | 4.35 | 39,583,807 | 4,194,366 |
+| 16 | 255.78 | 26.68 | 561,774,655 | 16,777,278 |
+| 32 | 1,024.84 | 52.41 | 2,197,553,215 | 33,554,494 |
+
+Regression: actual 16 MiB file, bounded concatenation traffic, incomplete write then newline, multi-byte split, rename and same-size rewrite; existing goal/agent/append tests retained. `pnpm -F @lasercode/host test` (234), `pnpm -F @lasercode/worker test` (682, 3 skipped), `pnpm identity:check`, `pnpm -r build`: pass (`f01-*.log`). No protocol changes. Host heartbeat/permission and browser matrix are not measured here; synchronous large-line parsing remains a possible pause.
+
+### F02 — request-local directory classification and indexed admission
+
+Confirmed the repeated `isSessionDirectory` calls and `list().find` lookups. List/search now memoize only within their synchronous snapshot; authorization/mutation/spawn checks remain uncached. Known-path questions use `getListed`, retaining the catalog’s flat/one-level `.jsonl` admission rather than allowing deletion of arbitrary external session files. Project `get` decorates only its target; `add` returns the emitted snapshot rather than scanning again. Catalog enumeration needed for true project counts remains unchanged.
+
+Same existing 5,000-row/one-cwd/four-root fixture, 20 warmed samples (`containment.mjs`): **40,000 → 8 realpath calls**, median **138.99 → 21.96 ms**, p95 order statistic **158.59 → 37.92 ms**. This is synthetic route work, not client latency. Regression tests assert one classification per distinct cwd per operation and fresh decisions next operation; known-path admission refuses deeper/outside paths and notices deletion without a list scan. Existing containment/trust tests remain green. Many-project timing and live symlink-swap-under-load profiling are not claimed.
+
+`pnpm -F @lasercode/host test` (236), worker test (682, 3 skipped), identity check and recursive build pass (`f02-*.log`). No wire methods changed.
+
+### F08 — bounded Git new-file reads
+
+Confirmed allocation-before-admission in `worker/src/git.ts`. Now canonical containment, regular-file metadata and same-device/inode handle checks precede reading; no-follow/nonblocking opens avoid final symlinks/FIFOs. Reads use one reusable 8 KiB buffer, a per-file sentinel, and a 16 MiB aggregate budget (including binary headers). A budget-cut/growing file contributes no partial line count. Sequential file admission intentionally bounds concurrency to one and keeps budget selection deterministic; baseline exclusions and newline semantics remain unchanged.
+
+Twenty samples of the same 32 MiB new file: median **16.41 → 0.047 ms**, p95 order statistic **18.73 → 0.495 ms** (`git-large.mjs`). The original read allocated/read 32 MiB; the new path opens/reads **zero content bytes** (regression spies on open after metadata admission). Tests also cover a 2 GiB sparse file, binary, symlink, missing file, FIFO, growth after handle stat, accurate small files and aggregate exhaustion. Fixed the initial test spy setup (native ESM namespace is nonconfigurable); the corrected fixture wraps the real filesystem module, not fake reads.
+
+Host (236), worker (683, 3 skipped), identity and recursive build pass (`f08-*.log`). No protocol changes; slow-disk/host-heartbeat measurements remain outstanding integration evidence.
+
+### F09 — overlap independent Git reads
+
+Confirmed serial upstream/counts/URL/diff stages and delayed untracked discovery. Baseline diff and new-file counting now start beside upstream discovery; counts and remote URL overlap after upstream resolution, and detached-HEAD fallback is independent. The three project-file `ls-files` reads start together but still merge tracked first. Baseline capture, index-lock policy, existing caches and error fallbacks are unchanged.
+
+Twenty TTL misses with a deterministic 5 ms asynchronous Git-runner delay per subprocess: median **32.13 → 20.88 ms**, p95 order statistic **36.94 → 22.95 ms** (`git-dag.mjs`). This measures dependency scheduling, **not real Git subprocess speedup**. A barrier regression requires diff, counts and URL requests to all start before any is released; real-repository baseline and file discovery tests remain green. An early after probe ran before worker compilation finished and was discarded; the recorded after sample ran after the complete build gate.
+
+Host (236), worker (684, 3 skipped), identity and recursive build pass (`f09-*.log`). Real cold-cache filesystem/subprocess traces remain integration follow-up.
+
+### F10 — encode captures once; bounded automatic maintenance
+
+Confirmed raw summary serialization duplicated full capture encoding. Full capture summaries now use the **redacted retained byte size**, sharing the one encoding used for storage; summary-only mode still measures its unretained input. Payload/provenance data, redaction and request/response ordering remain synchronous and unchanged. Hot insert statements are reused through a 32-shape cache. Automatic retention deletes at most 256 aged + 256 excess rows per timer turn and batches orphan deletes; explicit administrative `prune`/clear and startup remain synchronous. No diagnostic queue or worker-transfer semantics were introduced.
+
+Twenty repeated in-memory captures per size (`logging.mjs`), median before → after: **1 MiB 4.32 → 2.16 ms; 4 MiB 21.59 → 8.68 ms; 16 MiB 119.74 → 54.67 ms**. 16 MiB p95 order statistic **190.57 → 63.40 ms**. A separate synthetic disk-backed aged 20,000-row DB, one drain sample (`retention.mjs`): maximum concurrent timer gap **219.66 → 16.19 ms**, total drain **229.05 → 303.80 ms**, timer opportunities **2 → 41**, same zero remaining rows. This trades total maintenance latency for responsiveness; it is not a production delay distribution. SQLite scans and large captures can still block; a dedicated logging worker requires a separate ordered byte-queue/failure design after profiling, as the audit prescribes.
+
+Regression: one serialization of a full MiB capture, redaction and immutability after ingestion; first maintenance turn removes only its batch, eventual retention and survivor order unchanged. Fixed the test’s initial reversed query-order expectation. Host (238), worker (684, 3 skipped), identity and recursive build pass (`f10-*.log`). Disk-full/read-only failure injection and shutdown-under-concurrent-inspection were not rerun as new integration probes; there is no asynchronous ingestion to drain.
+
+### F11 — byte-aware reconstructible caches and contiguous replay
+
+Confirmed count-only host views and worker replay. Host full-view LRU retains at most eight snapshots **and 32 MiB serialized bytes**; oversized views bypass caching, replacements/staleness release accounting. Worker replay now uses an insertion-ordered deque with O(1) front removal, at most 5,000 updates **and 16 MiB serialized bytes per loaded session**. Oversized events evict their entire prefix, so the existing replay floor forces hydration instead of hiding a gap. Driver state, pending questions, active work and worker lifetime are not evicted. No history-window, UI-cache, runtime-retirement or protocol redesign was made; those remain with M16-T16/lifecycle ownership.
+
+A 100-switch synthetic full-view soak with an 8 MiB configured budget and 2 MiB materialized strings: count-only **8 paths / 16,777,544 serialized bytes / 16,822,088 B post-GC heap delta** → **3 paths / 6,291,579 bytes / 8,034,200 B post-GC heap delta** (`views.mjs`, Node `--expose-gc`, one soak each). These are cache-owner measurements, not whole-app retainer snapshots; the byte metric is not an exact heap estimate, and accounting adds one serialization on cache admission.
+
+Regression: UTF-8 bytes, LRU, oversized replacement, stale/deleted files and clear accounting; real WorkerServer load with a 512-byte replay budget, oversized delta, correct `replayFrom: 2`, only seq 3 replayed, same driver and pending question preserved. Count-only replay would report floor zero and retain all three events. Host (239), worker (685, 3 skipped), identity and recursive build pass (`f11-*.log`); new source/tests staged before identity. UI reopen/draft/Beam/branch interaction and full heap-retainer matrix remain integration acceptance, not claimed here.
+
+### F20 — indexed run lookups and incremental retention
+
+Confirmed global scans in live-run/child/root/project queries and prune-on-every-upsert. The registry now maintains child/root/mention indexes, terminal-project buckets and live counts. Live upserts do not scan terminal history; terminal admission prunes only its project. Age maintenance checks one terminal-project bucket per timer turn once a minute. Latest lookup scans only a child’s bucket and clones the selected result, not the whole child history twice. Public upsert returns are now isolated copies too; stale-terminal precedence, original insertion-based routing, newest/live-before-terminal selection, worker loss and worktree stamping are retained. Full-list serialization and rare worker-loss/worktree operations still legitimately visit all affected retained data.
+
+5,001 retained runs across ten projects, 20 samples of 100 cycles × five operations (upsert/latest/root/project/live): median **39.24 → 0.99 ms**, p95 order statistic **48.18 → 1.36 ms** (`runs.mjs`). Instrumented global rows visited for one cycle: **17,003 → 0**. Synthetic registry work only, not fleet render timing.
+
+Regression: 5,000 terminal records plus a needs-input run, no global scans for indexed operations, input/return/latest mutation isolation, successor/worker-loss live counts, scheduled age removal preserving questions; existing retention/reload/stale-update/worktree tests pass. Host (241), worker (685, 3 skipped), identity and recursive build pass (`f20-*.log`).
+
+### F21 — rejected as a drop-in optimization; producer lifecycle seam required
+
+**The risk is confirmed, not disproved. No transport/output behavior was changed for this finding.** Applying a byte cap by dropping writes, or awaiting the existing callback, would break the stated durable-output/exit-order invariants; terminating the worker transport would stop agent execution rather than isolate a slow view. This finding spans a missing producer-admission contract, not just a socket option:
+
+- `packages/pi-extension/src/modules/background-work.ts:289–305`: the module wraps `createLocalBashOperations` and receives only `onData(data)`, not the producing streams. `:339–345` ends its log without awaiting finish before publishing terminal status. `docs/agents.md` §6 promises every output byte in the durable task log.
+- The pinned **0.85.0** engine's `dist/core/tools/bash.d.ts:32` declares `onData: (data: Buffer) => void`; its `dist/core/tools/bash.js:79–80` registers this callback directly on stdout/stderr. An async callback is not awaited and cannot apply backpressure. Relying on an undocumented callback `this` to reach those streams would violate the documented-engine-API boundary; replacing the shell runner would take over cancellation, process-tree and inherited-stdio semantics that this task must preserve.
+- `packages/worker/src/server.ts:48` has synchronous `send`; `packages/worker/src/main.ts:94` writes the parent transport directly. Unlike a view socket, this channel has no independent detach/resume lifecycle: pipe end/error triggers shutdown (`main.ts:127–128`), and the worker cannot outlive its host (`:132–140`). An overflow-triggered disconnect here is an agent failure, not a safe cache/replay optimization.
+- `packages/host/src/server.ts:791–808`, `packages/host/src/relay-client.ts:582–585` and `packages/relay/src/server.ts:411` still need per-view byte admission. Implementing only those would leave the audit's sustained-command-output criterion unsatisfied. A blanket cap also needs an oversized authoritative history-response policy coordinated with M16-T16, rather than endless reconnects for a valid full snapshot.
+
+**Fresh reproduction** (`backpressure.mjs`, isolated environment, real pinned `createLocalBashOperations`, synthetic stdout and a blocked `Writable`): a 16,777,216-byte command settled in **35.57 ms** with **16,777,216 bytes queued**, only **65,536 bytes written**, **305 false writes** and an unresolved Promise returned by every callback. Releasing the writable afterward preserved all 16,777,216 bytes. This proves the callback cannot pause production or establish exit-after-durable-output ordering; it is not a real-disk throughput test. There is deliberately **no after result or regression-fix claim**.
+
+Smallest safe follow-up: separately authorize an awaitable/pausable output seam in the pinned engine (with cancellation and inherited-stdio tests), an ordered worker-send admission/failure policy, and view overflow/resume handling aligned with the settled history contract. Then implement byte caps, drain-before-exit, and slow-client/slow-disk/reconnect integration tests together. This rejection uses the brief's explicit correctness-boundary exception; F21 remains unfixed, not silently declared done.
+
+### Lane validation and remaining acceptance
+
+Every finding commit was gated with `pnpm -F @lasercode/host test`, `pnpm -F @lasercode/worker test`, `pnpm identity:check`, and `pnpm -r build`; final F21 characterization-only gate also passes (`/tmp/perf-host-worker/f21-*.log`). Final **`pnpm verify` passes**, including workspace builds/type checks/tests and release-script tests (`final-verify.log`). Protocol methods/types and UI source are unchanged. The copied `docs/perf-chat-loading.md` is reference-only and is not committed.
+
+Seven findings have implementations; F21 is explicitly rejected pending its lifecycle contract. This is implementation evidence for review, **not complete experience/zero-UX-regression acceptance**: no real browser desktop/phone/theme/input matrix, packaged runtime, end-to-end permission latency, real throttled client/reconnect, multi-agent soak, full heap-retainer analysis, or 20 paired production experience samples were produced in this lane. Do not add the microbenchmark deltas or reuse them as click/paint savings. The orchestrator owns those integration gates and the ledger; F21 needs the smallest follow-up stated above. Self-contained handoff: `/tmp/perf-host-worker-report.md`.

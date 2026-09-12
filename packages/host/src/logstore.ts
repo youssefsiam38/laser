@@ -248,6 +248,7 @@ function openDatabase(file: string): Database {
 
 export class LogStore {
   private readonly db: Database;
+  private readonly statements = new Map<string, ReturnType<Database["prepare"]>>();
   private readonly maxRows: number;
   private readonly maxAgeMs: number;
   private readonly pruneEvery: number;
@@ -281,6 +282,7 @@ export class LogStore {
     this.closed = true;
     if (this.pruneTimer) clearTimeout(this.pruneTimer);
     this.pruneTimer = undefined;
+    this.statements.clear();
     this.db.close();
   }
 
@@ -293,12 +295,17 @@ export class LogStore {
    */
   record(input: LogInput): LogEntry | undefined {
     if (this.closed) return undefined;
+    return this.recordEncoded(input, this.encodeDetail(input.detail));
+  }
+
+  /** Reuse the redacted capture for its summary and storage, without a raw copy. */
+  private recordEncoded(input: LogInput, detail: ReturnType<LogStore["encodeDetail"]>): LogEntry | undefined {
+    if (this.closed) return undefined;
     const at = input.at ?? new Date().toISOString();
     const level: LogLevel = input.level ?? "info";
-    const detail = this.encodeDetail(input.detail);
 
-    const info = this.db
-      .prepare(
+    const info = this
+      .statement(
         `INSERT INTO entries
            (at, section, kind, level, cwd, session_path, summary, duration_ms, status, correlation_id,
             detail, detail_ref, detail_bytes, detail_type, detail_preview, search, request_context)
@@ -383,10 +390,21 @@ export class LogStore {
       return { inline: body, ref: null, bytes, contentType: "application/json", preview };
     }
     const ref = createHash("sha256").update(body).digest("hex");
-    this.db
-      .prepare("INSERT OR IGNORE INTO content (ref, bytes, content_type, body) VALUES (?,?,?,?)")
+    this
+      .statement("INSERT OR IGNORE INTO content (ref, bytes, content_type, body) VALUES (?,?,?,?)")
       .run(ref, bytes, "application/json", body);
     return { inline: null, ref, bytes, contentType: "application/json", preview };
+  }
+
+  /** A bounded cache also admits recurring query shapes without retaining every
+   * possible filter combination. Statements hold no capture bodies. */
+  private statement(sql: string): ReturnType<Database["prepare"]> {
+    let statement = this.statements.get(sql);
+    if (statement) return statement;
+    statement = this.db.prepare(sql);
+    if (this.statements.size >= 32) this.statements.delete(this.statements.keys().next().value!);
+    this.statements.set(sql, statement);
+    return statement;
   }
 
   // ------------------------------------------------------------------- read
@@ -534,27 +552,37 @@ export class LogStore {
   // -------------------------------------------------------------- retention
 
   /**
-   * Retention runs off the hot path. `record()` is synchronous `node:sqlite`
-   * and is called per tool event and per provider round-trip, so pruning
-   * inline blocked the WebSocket fan-out — and the worker pipes behind it —
-   * in the middle of a streaming turn.
+   * Timers yield between bounded delete batches; SQL still runs on the host
+   * loop. Explicit prune/clear remain synchronous administrative operations.
    */
   private schedulePrune(): void {
     this.sincePrune = 0;
     if (this.pruneTimer || this.closed) return;
-    this.pruneTimer = setTimeout(() => {
+    const sweep = ++this.sinceSweep >= ORPHAN_SWEEP_EVERY;
+    if (sweep) this.sinceSweep = 0;
+    const step = () => {
       this.pruneTimer = undefined;
       if (this.closed) return;
       try {
-        // The orphan sweep is an unindexed anti-join over every stored body, so
-        // the automatic pass runs it on one prune in ten. An explicit `prune()`
-        // (construction, tests, a manual clear) always sweeps.
-        this.prune(++this.sinceSweep >= ORPHAN_SWEEP_EVERY);
-        if (this.sinceSweep >= ORPHAN_SWEEP_EVERY) this.sinceSweep = 0;
+        const cutoff = new Date(Date.now() - this.maxAgeMs).toISOString();
+        const aged = Number(this.statement("DELETE FROM entries WHERE id IN (SELECT id FROM entries WHERE at < ? LIMIT 256)").run(cutoff).changes);
+        const excess = Number(this.statement(`DELETE FROM entries WHERE id IN (
+          SELECT id FROM entries WHERE id < (SELECT id FROM entries ORDER BY id DESC LIMIT 1 OFFSET ?) LIMIT 256
+        )`).run(this.maxRows - 1).changes);
+        const orphans = sweep && aged < 256 && excess < 256
+          ? Number(this.statement(`DELETE FROM content WHERE ref IN (
+              SELECT ref FROM content WHERE NOT EXISTS (SELECT 1 FROM entries WHERE detail_ref = content.ref) LIMIT 256
+            )`).run().changes)
+          : 0;
+        if (aged === 256 || excess === 256 || orphans === 256) {
+          this.pruneTimer = setTimeout(step, 0);
+          this.pruneTimer.unref?.();
+        }
       } catch {
-        /* retention is housekeeping; a failed pass retries on the next batch */
+        /* failed maintenance retries after the next ingestion batch */
       }
-    }, 0);
+    };
+    this.pruneTimer = setTimeout(step, 0);
     this.pruneTimer.unref?.();
   }
 
@@ -602,16 +630,17 @@ export class LogStore {
   observeExtensionMessage(cwd: string, sessionPath: string, message: PiExtensionMessage): void {
     switch (message.type) {
       case "lasercode/provider/request": {
-        const entry = this.record({
+        if (this.closed) return;
+        const detail = this.encodeDetail(this.providerPayloads === "full" ? message.payload : undefined);
+        const entry = this.recordEncoded({
           section: "provider",
           kind: "provider_request",
           cwd,
           sessionPath,
           at: message.at,
-          summary: describeProviderRequest(message.payload),
+          summary: describeProviderRequest(message.payload, detail.bytes ?? undefined),
           ...(message.context ? { requestContext: message.context } : {}),
-          ...(this.providerPayloads === "full" ? { detail: message.payload } : {}),
-        });
+        }, detail);
         if (entry) {
           this.openProviderRequests.set(sessionPath, { id: entry.id, startedAt: Date.parse(message.at) || Date.now() });
         }
@@ -850,9 +879,9 @@ function escapeLike(value: string): string {
  * (Anthropic messages, OpenAI completions, OpenAI responses) and degrades to a
  * size when it recognises nothing.
  */
-export function describeProviderRequest(payload: unknown): string {
+export function describeProviderRequest(payload: unknown, retainedBytes?: number): string {
   const body = payload as Record<string, unknown> | null;
-  const size = (() => {
+  const size = retainedBytes ?? (() => {
     try {
       return Buffer.byteLength(JSON.stringify(payload) ?? "", "utf8");
     } catch {

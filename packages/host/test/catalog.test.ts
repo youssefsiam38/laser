@@ -1,5 +1,5 @@
 import { PRODUCT_NAME, SESSION_AGENT_ENTRY_TYPE } from "@lasercode/protocol";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,6 +18,31 @@ function session(slug: string, name: string, header: object, when: Date) {
 }
 
 describe("SessionCatalog", () => {
+  it("assembles a 16 MiB line once and preserves split UTF-8 and partial writes", () => {
+    const path = join(dir, "large.jsonl");
+    const header = JSON.stringify({ type: "session", id: "large", cwd: "/project" }) + "\n";
+    const prefix = '{"type":"message","message":{"role":"user","content":"';
+    const text = "x".repeat(256 * 1024 - Buffer.byteLength(prefix) - 1) + "é" + "y".repeat(16 * 1024 * 1024);
+    const line = prefix + text + '"}}';
+    writeFileSync(path, header + line);
+    const catalog = new SessionCatalog(dir);
+    expect(catalog.get(path)?.messageCount).toBe(0);
+    appendFileSync(path, '\n{"type":"session_info","name":"finished é"}\n');
+    let copied = 0;
+    const concat = Buffer.concat;
+    const spy = vi.spyOn(Buffer, "concat").mockImplementation((list, length) => {
+      copied += list.reduce((sum, b) => sum + b.length, 0);
+      return concat(list, length);
+    });
+    try {
+      expect(catalog.get(path)).toMatchObject({ messageCount: 1, name: "finished é", firstMessage: "x".repeat(199) + "…" });
+      expect(copied).toBeLessThan(Buffer.byteLength(line) * 2);
+    } finally { spy.mockRestore(); }
+    // Same-size rewrite is not an append and must restart the scan.
+    writeFileSync(path, header + line.replace('"user"', '"xxxx"') + '\n{"type":"session_info","name":"finished é"}\n');
+    utimesSync(path, new Date("2030-01-01"), new Date("2030-01-01"));
+    expect(catalog.get(path)?.messageCount).toBe(0);
+  });
   it("attributes a session to its agent from the record the worker wrote, and a worktree to its project", () => {
     const child = session("--worktree--", "child.jsonl", { id: "child", cwd: "/project/.worktrees/review-auth" }, new Date("2026-01-03"));
     const catalog = new SessionCatalog(dir);
@@ -68,6 +93,21 @@ describe("SessionCatalog", () => {
     expect(catalog.list("/home/a").map((s) => s.id)).toEqual(["a"]);
     expect(catalog.cwdOf(b)).toBe("/home/b");
     expect(catalog.cwdOf(join(dir, "nope.jsonl"))).toBeUndefined();
+  });
+
+  it("admits known-path lookups only where list would discover them and rechecks deletion", () => {
+    const path = session("project", "s.jsonl", { id: "s", cwd: "/project" }, new Date());
+    const catalog = new SessionCatalog(dir);
+    const spy = vi.spyOn(catalog, "list");
+    expect(catalog.getListed(path)?.id).toBe("s");
+    const outside = join(dir, "project", "deep", "s.jsonl");
+    mkdirSync(join(dir, "project", "deep"));
+    writeFileSync(outside, JSON.stringify({ type: "session", id: "outside", cwd: "/project" }) + "\n");
+    expect(catalog.getListed(outside)).toBeNull();
+    expect(catalog.getListed(join(dir, "..", "outside.jsonl"))).toBeNull();
+    rmSync(path);
+    expect(catalog.getListed(path)).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it("also scans the flat layout Pi uses for an explicit session dir", () => {
