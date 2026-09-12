@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { SessionState } from "@lasercode/protocol";
-import { reduce, type AppState } from "../../src/store.js";
+import { initialState, reduce, type AppState } from "../../src/store.js";
 
 const sessionState = (path: string): SessionState => ({
   path,
@@ -27,7 +27,7 @@ const sessionState = (path: string): SessionState => ({
 
 function twoOpenSessions(): AppState {
   let state = reduce(
-    { connection: "open", sessions: [], sessionsLoaded: true, open: {}, current: undefined, workers: {}, toasts: [] },
+    { ...initialState, connection: "open", sessionsLoaded: true },
     { type: "opened", state: sessionState("/s/a.jsonl") },
   );
   state = reduce(state, { type: "opened", state: sessionState("/s/b.jsonl") });

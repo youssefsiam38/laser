@@ -526,8 +526,9 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     return created;
   }, [url]);
 
-  /** Surface every failed request as a toast; never a silent rejection. */
+  /** Loads have an in-place Retry; a second toast would cover it on a phone. */
   const onError = useCallback((error: unknown) => {
+    if (error instanceof SessionLoadError) return;
     dispatch({ type: "toast", level: "error", text: error instanceof Error ? error.message : String(error) });
   }, []);
 
@@ -640,18 +641,34 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     (path: string, _options: { select?: boolean } = {}): Promise<void> => {
       const running = openInFlight.current.get(path);
       if (running) return running.promise;
+      dispatch({ type: "sessionLoad", path, phase: "opening" });
+      const started = performance.now();
+      const timings: Record<string, number> = {};
+      const measured = async <T,>(stage: string, work: Promise<T>): Promise<T> => {
+        const start = performance.now();
+        const result = await work;
+        timings[stage] = Math.round(performance.now() - start);
+        return result;
+      };
+      // A failed batch may still have read-only siblings in flight. Their
+      // replies cannot land in a later Retry's view.
+      let accepting = true;
       const work = (async () => {
         // The page and the socket come up together: without this the first
         // session someone clicks after a reload was a dead click.
-        await client.whenConnected();
+        // An already-open socket can start the request now, before React
+        // tears down the old transcript. An unconditional await yields that
+        // head start even though there is no connection left to wait for.
+        if (readState().connection !== "open") await client.whenConnected();
+        timings.beforeLoad = Math.round(performance.now() - started);
         const view = readState().open[path];
         const hydrated = view?.hydrated === true;
-        // Not hydrated yet: the snapshot below carries the whole transcript, so
-        // asking the worker to replay its buffer would only duplicate it.
-        const { state: session, replayFrom, seq: loadedSeq } = await client.request("session/load", {
+        // session/load is metadata only. The entries snapshot below is the
+        // transcript; replaying the buffer as well would duplicate it.
+        const { state: session, replayFrom, seq: loadedSeq } = await measured("load", client.request("session/load", {
           path,
           ...(hydrated ? { fromSeq: view.lastSeq } : {}),
-        });
+        }));
         dispatch({ type: "opened", state: session });
         // `replayFrom` is the earliest seq the worker can actually replay. Below
         // what we hold means a fresh worker epoch; *above* it means its replay
@@ -666,9 +683,15 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           client.resync(path, replayFrom);
           dispatch({ type: "resync", path, lastSeq: replayFrom });
         }
-        if (!hydrated || needsResync) {
-          const seqBefore = readState().open[path]?.lastSeq ?? 0;
-          const { entries, leafId } = await client.request("pi/session/entries", { path });
+        // These reads are independent once the worker has loaded the session.
+        // Capture each race watermark before issuing them. Apply each answer
+        // immediately (in particular, never hold a goal behind a large tree),
+        // but expose the completed transaction only once every read settles.
+        const seqBefore = readState().open[path]?.lastSeq ?? 0;
+        const expectPending = readState().open[path]?.pending;
+        const history = (!hydrated || needsResync)
+          ? measured("entries", client.request("pi/session/entries", { path })).then(({ entries, leafId }) => {
+          if (!accepting) return;
           // The snapshot is the transcript as the worker held it at `loadedSeq`,
           // so that — not 0 — is the watermark this view now carries. Leaving it
           // at 0 makes the next open ask for `fromSeq: 0` and receive the whole
@@ -676,20 +699,27 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           // still owns the race: an update that landed while the snapshot was in
           // flight keeps the live blocks, and its higher seq wins the stamp.
           dispatch({ type: "hydrate", path, entries, leafId, expectSeq: seqBefore, seq: loadedSeq });
-        }
+        }) : Promise.resolve();
+        const goal = measured("goal", client.request("session/goal/get", { path })).then(({ goal }) => {
+          if (!accepting) return;
+          dispatch({ type: "goal", path, goal });
+        });
+        // A numbered tray update can overtake this list, including the empty
+        // acknowledgement of delivery. The original array is its watermark.
+        const pending = measured("pending", client.request("session/pending/list", { path })).then(({ messages }) => {
+          if (accepting && expectPending) dispatch({ type: "pending", path, messages, expectPending });
+        });
+        await Promise.all([history, goal, pending]);
         // Monotonic: the resume `session/load` after a dropped socket asks from
         // here, so an unstamped view would replay its whole buffer there too.
         client.track(path, readState().open[path]?.lastSeq ?? loadedSeq);
-        const { goal } = await client.request("session/goal/get", { path });
-        dispatch({ type: "goal", path, goal });
-        // The pending tray, once, now that the view exists. A numbered update
-        // can overtake this request, including the empty update that acknowledges
-        // delivery. Capture the array itself as a watermark so a delayed list
-        // cannot resurrect an older row; unrelated view updates preserve it.
-        const expectPending = readState().open[path]?.pending;
-        const { messages } = await client.request("session/pending/list", { path });
-        if (expectPending) dispatch({ type: "pending", path, messages, expectPending });
-      })();
+        dispatch({ type: "sessionLoad", path, phase: "ready" });
+        if (import.meta.env.DEV) console.debug("Conversation open → hydrated", { ...timings, total: Math.round(performance.now() - started) });
+      })().catch((error: unknown) => {
+        accepting = false;
+        dispatch({ type: "sessionLoad", path, phase: "error" });
+        throw new SessionLoadError(error);
+      });
       const entry = {
         promise: work.finally(() => {
           if (openInFlight.current.get(path) === entry) openInFlight.current.delete(path);
@@ -1365,6 +1395,12 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   );
 }
 
+class SessionLoadError extends Error {
+  constructor(cause: unknown) {
+    super("This session didn’t load. Retry to continue.", { cause });
+  }
+}
+
 function MainLandingDraftBridge({ destination, store }: { destination: MainDestination; store: ReturnType<typeof createMainLandingDraftStore> }): null {
   useMainLandingDrafts(destination, store);
   return null;
@@ -1400,6 +1436,8 @@ function useThreadRuntime(store: SnapshotStore<RuntimeSnapshot>): AssistantRunti
     [path, stateStore],
   );
   const view = useSyncExternalStore(stateStore.subscribe, readView, readView);
+  const readLoadState = useCallback(() => path ? stateStore.getSnapshot().sessionLoads[path] : undefined, [path, stateStore]);
+  const loadState = useSyncExternalStore(stateStore.subscribe, readLoadState, readLoadState);
   const readConnection = useCallback(() => stateStore.getSnapshot().connection, [stateStore]);
   const connection = useSyncExternalStore(stateStore.subscribe, readConnection, readConnection);
   const readDestination = useCallback(() => stateStore.getSnapshot().destination, [stateStore]);
@@ -1415,7 +1453,11 @@ function useThreadRuntime(store: SnapshotStore<RuntimeSnapshot>): AssistantRunti
     void current.openSession(path).catch(current.onError);
   }, [isMain, path, store]);
 
-  const projection = useMemo(() => projectSessionView(view), [view]);
+  // Entry hydration and the independent goal/tray replies each update the
+  // view. Project the complete transcript once, when the open transaction is
+  // ready, not once per reply while the loading gate still covers it.
+  const projectionView = view?.loadState ? undefined : view;
+  const projection = useMemo(() => projectSessionView(projectionView), [projectionView]);
   const sharedRef = useRef<readonly ThreadMessageLike[]>([]);
   const messages = useMemo(() => {
     const shared = shareProjectedMessages(projection.messages, sharedRef.current);
@@ -1479,8 +1521,10 @@ function useThreadRuntime(store: SnapshotStore<RuntimeSnapshot>): AssistantRunti
         projection: { ...projection, messages: messages as ThreadMessageLike[] },
         composer: () => composerRef.current,
         assertCanAct,
+        loading: snapshot.main && isMain && destination.phase === "resolving",
+        loadState,
       }),
-    [assertCanAct, connection, destination, messages, path, projection, resolvePath, snapshot, view],
+    [assertCanAct, connection, destination, loadState, messages, path, projection, resolvePath, snapshot, view],
   );
 
   const runtime = useExternalStoreRuntime<ThreadMessageLike>(adapter);

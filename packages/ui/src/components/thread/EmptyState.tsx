@@ -14,7 +14,7 @@ import { useShellOptional } from "@/components/shell/shell-context";
 import { groupNameOf, workspaceKindOf } from "@/components/shell/session-groups";
 import { Button } from "@/components/ui/button";
 import { shortCwd } from "@/format";
-import { mainError, mainTab, useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
+import { mainTab, useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
 
 const SUGGESTIONS: ReadonlyArray<{ title: string; prompt: string }> = [
   {
@@ -43,7 +43,7 @@ const SUGGESTIONS: ReadonlyArray<{ title: string; prompt: string }> = [
  * the composer beside it is disabled with the same sentence as its placeholder.
  */
 export function EmptyState() {
-  const { actions, currentProject, destination } = useLaserStable();
+  const { currentProject, destination } = useLaserStable();
   const { session } = useSessionMeta();
   const shell = useShellOptional();
   const disabled = useAuiState((s) => s.thread.isDisabled);
@@ -56,30 +56,9 @@ export function EmptyState() {
       : workspaceKindOf(cwd, workspaces ?? {});
   const name = workspaceKind && cwd ? groupNameOf(cwd, workspaceKind) : cwd ? shortCwd(cwd) : PRODUCT_DISPLAY_NAME;
 
-  if (destination.phase === "resolving") {
-    return (
-      <EmptyStateRoot>
-        <div className="flex flex-col gap-2" role="status">
-          <EmptyStateEyebrow>{tab === "chat" ? "Private workspace" : "Conversation"}</EmptyStateEyebrow>
-          <EmptyStateGreeting>{tab === "chat" ? "Preparing Chat" : "Opening conversation"}</EmptyStateGreeting>
-          <EmptyStateDescription>Your previous conversation is no longer actionable while this destination loads.</EmptyStateDescription>
-        </div>
-      </EmptyStateRoot>
-    );
-  }
-
-  if (destination.phase === "unavailable") {
-    return (
-      <EmptyStateRoot>
-        <div className="flex flex-col gap-2">
-          <EmptyStateEyebrow>{tab === "chat" ? "Chat" : "Conversation"}</EmptyStateEyebrow>
-          <EmptyStateGreeting>Couldn’t open this conversation</EmptyStateGreeting>
-          <EmptyStateDescription>{mainError(destination) ?? "Retry it, or start a new conversation from the sessions list."}</EmptyStateDescription>
-        </div>
-        <div><Button size="sm" onClick={() => void actions.retryDestination()}>Retry</Button></div>
-      </EmptyStateRoot>
-    );
-  }
+  // Loading and failure belong to the thread's loading/error surfaces, never
+  // to the welcome for an actually empty conversation.
+  if (destination.phase === "resolving" || destination.phase === "unavailable") return null;
 
   if (!cwd) {
     return (

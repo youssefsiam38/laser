@@ -22,6 +22,13 @@ interface Words {
 const wordsFor = (s: AppState): Words | undefined => {
   const path = s.current;
   const view = path ? s.open[path] : undefined;
+  const loadState = path ? s.sessionLoads[path] : undefined;
+  if ((!path && s.destination.phase === "resolving") || loadState === "opening") {
+    return { status: "working", text: "loading the conversation", live: false };
+  }
+  if ((!path && s.destination.phase === "unavailable") || loadState === "error") {
+    return { status: "error", text: "retry to load this conversation", live: false };
+  }
   if (!view) return undefined;
   if (s.connection !== "open") {
     return { status: "error", text: s.connection === "connecting" ? "reconnecting to the host" : "disconnected from the host", live: false };

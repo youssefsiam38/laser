@@ -420,6 +420,9 @@ export interface ThreadAdapterDeps {
   /** The session this thread is bound to; `undefined` while a new thread is still local. */
   path: string | undefined;
   view: SessionView | undefined;
+  /** A destination can be opening before session/load has returned a view. */
+  loading?: boolean | undefined;
+  loadState?: SessionView["loadState"];
   connection: "connecting" | "open" | "closed";
   dispatch: (action: Action) => void;
   /** Every rejected request lands here (the provider turns it into a toast). */
@@ -450,6 +453,7 @@ const attachmentAdapter = new SimpleImageAttachmentAdapter();
 
 export function createThreadAdapter(deps: ThreadAdapterDeps): ExternalStoreAdapter<ThreadMessageLike> {
   const projection = deps.projection ?? projectSessionView(deps.view);
+  const loadState = deps.loadState ?? deps.view?.loadState;
 
   const resolvePath = async (): Promise<string> => {
     if (deps.path) return deps.path;
@@ -557,8 +561,11 @@ export function createThreadAdapter(deps: ThreadAdapterDeps): ExternalStoreAdapt
     messages: projection.messages,
     convertMessage: (message) => message,
     isRunning: projection.isRunning,
+    isLoading: deps.loading === true || loadState === "opening"
+      || (!!deps.path && !deps.view?.hydrated && loadState !== "error"),
     // A closed socket or a main destination in motion disables the composer.
-    isDisabled: deps.connection !== "open" || (() => {
+    isDisabled: deps.connection !== "open" || deps.loading === true || loadState !== undefined
+      || (!!deps.path && !deps.view?.hydrated) || (() => {
       try {
         deps.assertCanAct?.();
         return false;

@@ -1106,7 +1106,13 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
   const id = useAuiState((s) => s.threadListItem.id);
   const path = useAuiState((s) => s.threadListItem.externalId ?? s.threadListItem.remoteId);
   const title = useAuiState((s) => s.threadListItem.title);
-  const active = useAuiState((s) => s.threads.mainThreadId === s.threadListItem.id);
+  const runtimeActive = useAuiState((s) => s.threads.mainThreadId === s.threadListItem.id);
+  // Intent precedes both the loaded view and assistant-ui's runtime switch.
+  const destination = useLaserState((s) => s.destination);
+  const pendingPath = (destination.phase === "resolving" || destination.phase === "unavailable")
+    && destination.target.kind === "session" ? destination.target.path : undefined;
+  const active = pendingPath !== undefined ? pendingPath === path : runtimeActive;
+  const opening = useLaserState((s) => !!path && s.sessionLoads[path] === "opening");
   const row = useRowModel(path);
   const { pinned } = useSessionsList();
   const workspaces = useContext(WorkspacesContext);
@@ -1150,7 +1156,8 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
       <RunDot status={row.runStatus} tone={errored ? "muted" : stateTone} {...(errored ? { label: ERRORED_RUN_LABEL, hollow: true } : {})} />
     ) : null;
   const runSpeaks = runMark !== null && (activeRun || (errored && !archived));
-  const activity = runSpeaks ? runMark : rowStatus !== "idle" ? <SessionActivity status={rowStatus} /> : runMark;
+  const activity = opening ? <SessionActivity status={rowStatus} opening />
+    : runSpeaks ? runMark : rowStatus !== "idle" ? <SessionActivity status={rowStatus} /> : runMark;
   // Inside the finished fold the row quiets down — but a failure keeps its ink
   // and its dot, and so does the session you are reading right now.
   const dimmed = layout.dimmed && row.runStatus !== "failed" && !active;

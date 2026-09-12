@@ -9,7 +9,7 @@ import { ThreadList } from "../../src/components/assistant-ui/elements/thread-li
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { sessionsList, SESSION_PINS_STORAGE_KEY } from "../../src/components/shell/session-groups.js";
 
-const fixture = vi.hoisted(() => ({ state: { sessions: [
+const fixture = vi.hoisted(() => ({ state: { destination: { phase: "resolving" as string, target: { kind: "session", path: "/none" } }, sessionLoads: {} as Record<string, string>, sessions: [
   { path: "/one/working.jsonl", cwd: "/one", name: "Active work", modifiedAt: "2026-09-07T03:00:00Z", messageCount: 2, attention: "working" },
   { path: "/one/finished.jsonl", cwd: "/one", name: "Finished work", modifiedAt: "2026-09-07T02:00:00Z", messageCount: 2, attention: "finished_unread" },
   { path: "/two/waiting.jsonl", cwd: "/two", name: "Review needed", modifiedAt: "2026-09-07T01:00:00Z", messageCount: 2, attention: "waiting_for_input" },
@@ -39,6 +39,8 @@ let root: Root;
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   sessionsList.reset();
+  fixture.state.destination = { phase: "ready-code", target: { kind: "session", path: "/none" } };
+  fixture.state.sessionLoads = {};
   localStorage.clear();
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
 });
@@ -63,6 +65,20 @@ describe("compact session navigation", () => {
     expect(rows()).toHaveLength(1);
     await act(async () => (header as HTMLButtonElement).click());
     expect(rows()).toHaveLength(3);
+  });
+  it("acknowledges the destination before a view exists with one loading mark", async () => {
+    fixture.state.destination = { phase: "resolving", target: { kind: "session", path: "/one/finished.jsonl" } };
+    fixture.state.sessionLoads = { "/one/finished.jsonl": "opening" };
+    await act(async () => root.render(<Fixture />));
+    const row = rows().find(row => row.textContent?.includes("Finished work"))!;
+    expect(row.getAttribute("data-active")).toBe("true");
+    expect(row.querySelector('[aria-current="page"]')).not.toBeNull();
+    expect(row.querySelectorAll('[data-status]')).toHaveLength(1);
+    expect(row.querySelector('[aria-label="Loading the conversation"]')).not.toBeNull();
+    fixture.state.sessionLoads = {};
+    await act(async () => root.render(<Fixture />));
+    expect(row.querySelector('[aria-label="Loading the conversation"]')).toBeNull();
+    expect(row.querySelector('[data-status="finished_unread"]')).not.toBeNull();
   });
   it("pins each chat once, preserves project filtering, and persists pin order", async () => {
     await act(async () => root.render(<Fixture />));

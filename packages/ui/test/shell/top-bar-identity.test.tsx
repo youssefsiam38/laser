@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const stable = vi.hoisted(() => ({
   currentProject: "/project",
+  destination: { phase: "ready-code", intent: 0, code: { kind: "project-landing", project: "/project" } } as import("../../src/runtime/main-destination.js").MainDestination,
   actions: {
     toast: vi.fn(), rename: vi.fn(), restartWorker: vi.fn(), compact: vi.fn(), fork: vi.fn(), openSession: vi.fn(),
   },
@@ -31,6 +32,7 @@ let root: Root;
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   localStorage.clear();
+  stable.destination = { phase: "ready-code", intent: 0, code: { kind: "project-landing", project: "/project" } };
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -179,6 +181,14 @@ describe("connected top-bar identity", () => {
     const crumb = container.querySelector('[data-slot="parent-crumb"]');
     expect(crumb?.textContent).toContain("A very long session title");
     expect(crumb?.textContent).not.toContain("reviewer-third-pass");
+  });
+
+  it("keeps the requested title while its view does not exist, never New session", async () => {
+    stable.destination = { phase: "resolving", intent: 1, target: { kind: "session", path: B, visibleTab: "code" }, rememberedCode: { kind: "project-landing", project: "/project" } };
+    const store = createStateStore({ ...seed(), current: undefined, open: {} });
+    await mountTopBar(store);
+    expect(container.textContent).toContain("Catalog attribution");
+    expect(container.textContent).not.toContain("New session");
   });
 
   it("keeps compact actions in one touch-reachable More menu instead of duplicating header controls", async () => {

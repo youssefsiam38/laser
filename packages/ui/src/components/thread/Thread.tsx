@@ -1,10 +1,11 @@
-import { AuiConfig, AuiIf, AuiProvider, Suggestions, ThreadPrimitive, useAui } from "@assistant-ui/react";
+import { AuiConfig, AuiIf, AuiProvider, Suggestions, ThreadPrimitive, useAui, useAuiState } from "@assistant-ui/react";
 import { useEffect, useMemo, type ReactNode } from "react";
 
 import { ConversationMapAui } from "@/components/assistant-ui/elements/conversation-map.aui";
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/elements/follow-up-suggestions.aui";
 import { GuardrailNotice } from "@/components/assistant-ui/elements/guardrail-notice";
-import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
+import { ConversationLoadingGate } from "@/components/assistant-ui/elements/loading-state";
+import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { SelectionToolbar } from "@/components/assistant-ui/elements/quote.aui";
 import { ScrollAnchor } from "@/components/assistant-ui/elements/scroll-anchor";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -57,12 +58,11 @@ const FOLLOW_UPS = AuiConfig({
 export function Thread({ statusSlot, emptyState, followUps }: ThreadProps = {}) {
   const view = useLaserView();
   const suggestions = useMemo(() => (followUps ? AuiConfig({ suggestions: Suggestions([...followUps]) }) : FOLLOW_UPS), [followUps]);
-  const { actions } = useLaserStable();
-  const connected = useLaserState(s => s.connection === "open");
-  const { page } = useWorkbench();
-  useSessionSeen({ path: view?.path, seq: view?.lastSeq ?? 0, running: view?.running ?? false,
-    dialogs: view?.dialogs.map(dialog => dialog.id).join("\0") ?? "",
-    ready: connected && !!view?.hydrated, covered: page !== null, markSeen: actions.markSeen });
+  const { actions, destination } = useLaserStable();
+  const loading = useAuiState((s) => s.thread.isLoading);
+  const path = useLaserState(s => s.current);
+  const failed = useLaserState(s => !!s.current && s.sessionLoads[s.current] === "error");
+  const loadError = destination.phase === "unavailable" || failed;
   const slots: ThreadSlots = statusSlot !== undefined ? { statusLine: statusSlot } : {};
   const aui = useAui();
   const find = useConversationFind();
@@ -77,15 +77,24 @@ export function Thread({ statusSlot, emptyState, followUps }: ThreadProps = {}) 
               {/* A long transcript gets a rail of ticks at the viewport's edge, on a wide screen only. */}
               <ConversationMapAui side="right" className="hidden lg:block" />
               <div className="mx-auto flex w-full max-w-(--measure-thread) flex-1 flex-col px-4 md:px-6">
-                <AuiIf condition={(s) => s.thread.isLoading}>
-                  <ThreadLoading />
-                </AuiIf>
-                <AuiIf condition={(s) => s.thread.isEmpty && !s.thread.isLoading}>
-                  {emptyState ?? <EmptyState />}
-                </AuiIf>
-                <div data-slot="thread-messages" className="flex flex-col gap-5 pt-5 pb-5 empty:hidden">
-                  <ThreadPrimitive.Messages>{() => <ThreadMessage />}</ThreadPrimitive.Messages>
-                </div>
+                <ConversationLoadingGate active={loading && !loadError}>
+                  {loadError ? (
+                    <ErrorState className="mt-6" title="This session didn’t load." onRetry={() => {
+                      if (destination.phase === "unavailable") void actions.retryDestination();
+                      else if (path) void actions.openSession(path).catch(() => {});
+                    }} />
+                  ) : (
+                    <>
+                      <SeenConversation />
+                      <AuiIf condition={(s) => s.thread.isEmpty && !s.thread.isLoading}>
+                        {(!view || view.hydrated) && (emptyState ?? <EmptyState />)}
+                      </AuiIf>
+                      <div data-slot="thread-messages" className="flex flex-col gap-5 pt-5 pb-5 empty:hidden">
+                        <ThreadPrimitive.Messages>{() => <ThreadMessage />}</ThreadPrimitive.Messages>
+                      </div>
+                    </>
+                  )}
+                </ConversationLoadingGate>
                 <ThreadPrimitive.ViewportFooter
                   data-slot="thread-footer"
                   className="sticky bottom-0 z-10 mt-auto flex flex-col gap-3 bg-bg pt-2 pb-[calc(var(--spacing)*4+max(env(safe-area-inset-bottom),var(--kb)))]"
@@ -115,13 +124,16 @@ export function Thread({ statusSlot, emptyState, followUps }: ThreadProps = {}) 
   );
 }
 
-/** Thread switch in flight: the loader, left-aligned where the first message will land. */
-function ThreadLoading() {
-  return (
-    <div className="flex flex-col pt-6">
-      <GenerationLoader label="Loading session" />
-    </div>
-  );
+/** Mounted only once the actual content replaces the minimum-display skeleton. */
+function SeenConversation() {
+  const view = useLaserView();
+  const { actions } = useLaserStable();
+  const connected = useLaserState(s => s.connection === "open");
+  const { page } = useWorkbench();
+  useSessionSeen({ path: view?.path, seq: view?.lastSeq ?? 0, running: view?.running ?? false,
+    dialogs: view?.dialogs.map(dialog => dialog.id).join("\0") ?? "",
+    ready: connected && !!view?.hydrated && !view.loadState, covered: page !== null, markSeen: actions.markSeen });
+  return null;
 }
 
 /**

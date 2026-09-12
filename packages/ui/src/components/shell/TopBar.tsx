@@ -101,7 +101,7 @@ function useRoomyTopBar(): { roomy: boolean; markerRef: RefObject<HTMLSpanElemen
 }
 
 export function TopBar() {
-  const { actions, client, currentProject } = useLaserStable();
+  const { actions, client, currentProject, destination } = useLaserStable();
   const view = useLaserView();
   const sessions = useLaserState((s) => s.sessions);
   const meta = useSessionMeta();
@@ -134,7 +134,13 @@ export function TopBar() {
   const stateLabel = sessionStateLabel(view, meta.worker);
   const chip = workerChip(meta.worker);
   // One rule for what a session is called, everywhere (runtime/threadList.ts).
-  const title = view ? (summary ? sessionTitle(summary, view) : (view.state.name ?? view.title ?? firstUserLine(view) ?? "New session")) : "New session";
+  const pendingPath = (destination.phase === "resolving" || destination.phase === "unavailable")
+    && destination.target.kind === "session" ? destination.target.path : undefined;
+  const pendingSummary = pendingPath ? sessions.find(session => session.path === pendingPath) : undefined;
+  const title = pendingSummary ? sessionTitle(pendingSummary)
+    : destination.phase === "resolving" ? "Opening conversation"
+    : destination.phase === "unavailable" ? "Conversation unavailable"
+    : view ? (summary ? sessionTitle(summary, view) : (view.state.name ?? view.title ?? firstUserLine(view) ?? "New session")) : "New session";
   const untitled = view ? title === "New session" : false;
   // The fleet's own count — the open session's tree (M13-T51), plus work
   // whose session was deleted, which the fleet carries because nothing else can.
