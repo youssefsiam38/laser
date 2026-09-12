@@ -2152,7 +2152,8 @@ lane T's own if both were written.
 | M14-T7 | Release M14 as 0.4.0 | done | orchestrator | v0.4.0 public: candidate `75fbe3a` from source `43332b7`; CI 34657053247; release run 34657347501; 12 assets; checkpoint `verified` (digests vs SHA256SUMS, provenance against the tag's source, release page = tag notes, Latest); https://github.com/youssefsiam38/laser/releases/tag/v0.4.0 | first release through the D-223 verification |
 | M14-T6 | Live end-to-end proof with Playwright | done | orchestrator (proof by mcp-live-proof and mcp-live-recheck; fixes by mcp-engine-fixes and mcp-settings-fixes) | `/tmp/mcp-live/REPORT.md` (9 defects found) and `/tmp/mcp-live-2/REPORT.md` (all 9 pass on `b75ed6a`; OAuth loopback and pasted-code flows pass, dialog closes itself, sign-out → needs-auth, a signed-in conversation calls the fixture's tool; memory-only credential store confirmed in the worker's environment); the one low finding (PATH text overflowing the failure card at 390) fixed at `2de5f9f` | see notes |
 
-| M14-T8 | Shell environment and product-owned MCP client identity | in-progress | env-mcp-01a093aa | — | see notes |
+| M14-T8 | Shell environment reaches host, workers, command tool and MCP servers | in-progress | worker shell-environment | — | investigation H-11; implementation assigned 2026-09-12 |
+| M14-T9 | Product-owned MCP client identity on every handshake | in-progress | worker mcp-identity | — | pnpm patch on `pi-mcp-adapter@2.33.0` |
 
 #### M14-T8 notes
 - 2026-09-12 claimed: trace installed launcher → desktop → adopted host → worker → MCP, then fix environment resolution and all MCP client handshakes with real-process regressions. Preserve pre-existing deleted discovery docs and untracked personal files.
@@ -2200,6 +2201,9 @@ lane T's own if both were written.
 | M15-T3 | Model fallback chains: settings, runtime, persistence, verification | done | worker fallback-chains (01a091e3-8b36-73a4-a484-ea6b0227d7dd) | merged `b29843e` (design `d0f5fe7` … fixes `6d24e62`); review REQUEST CHANGES then fixed; live browser pass `/tmp/m15-live/REPORT.md`: switch, return attempt, exhaustion, reload, manual override all pass with the real engine; four editor/presentation findings fixed by the orchestrator at `319ca52` | see notes |
 | M15-T4 | Sidebar activity indicators: one indicator, owned by the session itself | done | worker sidebar-and-slash-fixes (01a091e1-c6e5-73a4-a484-ea4576dad59a) | merged `bbbd908` (`87c675f`, `5eb2008`, `8559c96`); the person's rule: a child's failure never marks the parent, quiet ring on the failed child, no failed count on the fold | see notes |
 | M15-T5 | Slash completion completes, never sends | done | worker sidebar-and-slash-fixes | merged `bbbd908` (`0bd7be9`, `b5dd471`); real-browser Tab proof, chorded Tab and caret tests | see notes |
+| M16-T1 | Attached images and files inside the person's bubble | in-progress | worker chat-files | — | Gemini-style; UI only |
+| M16-T2 | Files and images the model refers to | queued | worker chat-files | — | after T1 |
+| M16-T3 | Release 0.5.1 | queued | orchestrator | — | after M14-T8/T9, M16-T1/T2 |
 | M15-T6 | Release M15 | done | orchestrator | v0.5.0 public: candidate `cb8c84c` from source `6710f2c`; CI 34660427316; release run 34660670373; 12 assets; checkpoint `verified` (digests, provenance, notes, Latest); https://github.com/youssefsiam38/laser/releases/tag/v0.5.0 | live review `/tmp/m15-live/REPORT.md`; four findings fixed at `319ca52` before the candidate |
 
 #### M15-T3 notes
@@ -4302,6 +4306,11 @@ Next: T111 finishes routing; T108 completes its single review correction. Only t
 **Decision.** `removedWorktreeCwd` decides from the child's recorded `worktree.path` (and `removedAt`, which the record parser now keeps) rather than a `<project>/.worktrees/` prefix, so a project opened below the repository root or through a symlink is recognised; the worker rebuilds the recovered role with `isolated: false` under the same rule, so the child's role block says it works in its parent's checkout and is not isolated (D-156). The prefix rule remains only for a session whose record predates worktrees.
 **Why.** M13-T120 reopened the child in the person's live checkout while its role block still said "work only inside your own worktree: <checkout>" — a follow-up prompt could commit into the checkout under a false premise — and only worked when the project was the git toplevel.
 **Consequences.** A recorded removal needs no directory check; an unmounted volume is not mistaken for a removed worktree when the record says nothing. The transcript still does not announce the move; that remains open.
+
+### D-227 · 2026-09-12 · Attachments live in the bubble; a file attachment rides in the prompt text
+**Decision.** The person's bubble shows attached images as thumbnails and attached files as chips (M16). The engine takes text and images only, so a file attachment is carried inside the prompt text in one canonical wrapper the UI recognises again on reload; the bubble never shows the wrapper. File references in assistant prose become chips that open the in-app viewer; the editor is the second door.
+**Why.** The person compared the bubble to Google Gemini: a note that says "1 image attached" with a button is not native. The bytes were already on the client (session entries, `message_end`), only counted.
+**Consequences.** `docs/ux-elements.md` gains the bubble attachment rows; the wrapper format is a documented contract in `docs/attachments.md`; the model sees the file content once, as text.
 
 ### D-226 · 2026-09-12 · Resolve shell exports and own MCP client identity centrally
 **Decision:** Add M14-T8 for shell-environment startup resolution and product-derived MCP client handshake identity across all servers/transports. Preserve explicit environment isolation and never replace a live host just to refresh exports.

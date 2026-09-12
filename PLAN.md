@@ -644,7 +644,18 @@ Dependencies: M8 (companion extension), M13-T3 (worker harness and stub-provider
 | M14-T6 | Live end-to-end proof with Playwright | a real session drives Playwright over stdio and over HTTP from the installed app; sign-in proven against one OAuth server; findings recorded in `docs/mcp.md` |
 | M14-T7 | Release M14 as its own release (D-222) | T1–T6 done; the routine release orchestrator runs from the reviewed source with release notes; exact-source CI, immutable tag, both-architecture public assets verified through digests, provenance and notes |
 
-| M14-T8 | Shell environment and product-owned MCP client identity | desktop/CLI host startup resolves the user shell environment without logging secrets or stopping existing work; inheritance and explicit isolation are tested through real MCP subprocesses; every inspector/session MCP handshake derives its client identity from product metadata, over stdio/HTTP/SSE, with packaged regression coverage |
+| M14-T8 | Shell environment reaches the host, the workers, the command tool and MCP servers | the desktop resolves the person's login shell environment at start (bounded, silent, never logged); an adopted host receives it and uses it for new workers and forwards it to live ones so the next command and the next MCP server see it; explicit MCP `env`/`inheritEnv: false` preserved; real-process tests with a fake HOME whose `.bashrc` carries the interactive early-return guard |
+| M14-T9 | Product-owned MCP client identity on every handshake | every MCP `initialize` (session, inspector, probe, OAuth discovery) and OAuth registration advertises identity derived from `product.json` — never the engine's — over stdio, Streamable HTTP and SSE; tracked pnpm patch on the exact adapter pin; fixture servers assert the received `clientInfo`; a guard test fails if any handshake path can still name the engine |
+
+## M16 · Files and images native in the conversation
+
+Goal: what a person attaches and what the model produces sit inside the bubble the way a modern chat does (the reference is Google Gemini): pictures are seen, files are chips that open, no counting notes.
+
+| Task | Title | Acceptance |
+| --- | --- | --- |
+| M16-T1 | Attached images and files inside the person's bubble | images the person attached render as thumbnails inside their bubble (single: natural aspect up to a bound; several: a wrapping row of tiles), click/Enter opens the viewer; the "N images attached" note is gone; the composer accepts text-like files (bounded size) as attachments, shown as chips (type icon, name, kind, size) in the bubble that open the viewer; the model receives the file's content; `@file` mention chips open the project file in the viewer; optimistic, live and reloaded messages all look the same |
+| M16-T2 | Files and images the model refers to | a link or bare path in an assistant message that points at a project file renders as a file chip that opens the viewer (editor stays one click further); a Markdown image or an image path within the project renders inline as the picture (bounded, click to enlarge); unresolvable paths stay plain text |
+| M16-T3 | Release 0.5.1 | M14-T8, M14-T9, M16-T1, M16-T2 merged and live-reviewed; the routine release orchestrator |
 
 ## M15 · After the MCP release: artifacts, dictation language, model fallback chains, two sidebar and composer fixes
 
