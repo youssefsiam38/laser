@@ -220,6 +220,7 @@ Depends on: M1.
 | M5-T3 | Keychain via `@napi-rs/keyring` for root identity key and relay tokens | key survives restart, never on disk in plain text |
 | M5-T4 | Native notifications and mic permission flow (macOS TCC) | permission prompt once |
 | M5-T5 | Packaging and signing (macOS notarization, Windows Azure Artifact Signing, Linux AppImage) and auto-update | update from version A to B verified |
+| M5-T6 | Preserve Linux command privileges across user-chosen update restart | restart avoids Chromium's privilege-changing relaunch helper, preserves launch configuration and renderer sandbox, waits for orderly host/app exit, reports preparation failure before shutdown; isolated real-process regression proves no new `NoNewPrivs` restriction across restart and into a command child |
 
 ---
 

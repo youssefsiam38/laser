@@ -347,14 +347,32 @@ Pages. The normal Ubuntu/Fedora update services refresh those feeds and own the
 notification and install, exactly like any other system package. Removing the
 package removes its source; upgrading preserves it.
 
-After a native upgrade has unpacked the new files, its package hook sends a
-graceful reload signal only to the daemon whose command line identifies this
-exact `/opt/Laser` installation. The running desktop supervisor starts that
-daemon again from the new bundle, so the UI and host cannot remain on different
-versions. A later desktop launch also replaces any mismatched recorded daemon
-before connecting. A daemon started from the command line stays stopped until
-the next app launch or `laser up`; the root package hook never starts a process
-as a desktop user.
+After a native upgrade has unpacked the new files, its package hook publishes
+an atomic completion marker; it never signals or starts a user process. The
+running desktop offers **Later** or **Restart now**, warning that active work
+will stop. Only the person's choice stops the host and restarts the desktop.
+Version checks prevent adopting or spawning a mismatched generation.
+
+On Linux, this restart uses a prepared stock-Node helper, not Electron's
+`app.relaunch()`: Chromium's relauncher sets `NoNewPrivs=1`, which the next
+host, worker and shell inherit and which prevents ordinary `sudo` elevation.
+The replacement retains the launch arguments, working directory and environment,
+runs through the native launcher (the durable image for AppImage), and starts
+only after the original process exits. Preparation failure leaves the app open;
+an uncommitted helper never launches after a crash. The renderer sandbox stays
+on. This does not grant root or change sudo authentication.
+
+An instance already carrying `NoNewPrivs=1` cannot clear it. Save your work,
+quit completely (including the tray), and open the app from the applications
+menu once. If the desktop session itself is restricted by administrator policy,
+that policy still applies.
+
+Regression: build the desktop, then run `RUN_RELAUNCH_SMOKE=1 pnpm exec vitest run
+test/linux-relaunch-smoke.test.ts` from this package in a Linux desktop terminal
+with `NoNewPrivs=0`. It uses isolated profiles, proves the old helper changes
+0→1 and the replacement keeps 0→0 into a shell child, and never opens real
+sessions. Its downloaded test Electron uses `--no-sandbox` only because CI
+cannot install that binary's setuid helper; production sandbox policy is unchanged.
 
 The per-user AppImage/tar path is deliberately outside APT and DNF and therefore
 does not receive native operating-system prompts. Re-run the installer for that
