@@ -1,0 +1,2 @@
+#!/bin/sh
+pnpm install --frozen-lockfile --offline --prefer-offline && pnpm -r build

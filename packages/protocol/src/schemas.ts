@@ -407,6 +407,19 @@ export const agentPolicyPatchSchema = z
   })
   .strict();
 export const agentRunStatusSchema = z.enum(AGENT_RUN_STATUSES as [string, ...string[]]);
+export const worktreeEnvironmentSchema = z.object({
+  path: z.string().min(1), branch: z.string().min(1), baseCommit: z.string().min(1),
+  parentCheckout: z.string().min(1), absentDirectories: z.array(z.string().min(1)).max(20),
+});
+export const worktreeSetupSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("not-present") }),
+  z.object({ status: z.literal("skipped-untrusted") }),
+  z.object({ status: z.literal("pending"), logPath: z.string().min(1) }),
+  z.object({ status: z.literal("ok"), logPath: z.string().min(1) }),
+  z.object({ status: z.literal("timed-out"), logPath: z.string().min(1) }),
+  z.object({ status: z.literal("cancelled"), logPath: z.string().min(1) }),
+  z.object({ status: z.literal("failed"), logPath: z.string().min(1), exitCode: z.number().int().nullable() }),
+]);
 
 /**
  * The fallback record a session file carries (M15-T3).

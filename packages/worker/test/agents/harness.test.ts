@@ -6,7 +6,8 @@
  * on a question (`needs_input`), the parent answering it, and `inspect_agent`
  * (M13-T45). There is no waiting tool: nothing here waits for anything.
  */
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,9 +17,9 @@ import { DefinitionsCache, fallbackDefaultAgent, fallbackSnapshot } from "../../
 import { AgentHarness, NUDGE_TEXT, type SessionHost, type WorktreeProvider } from "../../src/agents/harness.js";
 import { HarnessError } from "../../src/agents/errors.js";
 import { rootRecord, rootRole } from "../../src/agents/session-config.js";
-import type { CreateWorktreeInput, Worktree, WorktreeFacts } from "../../src/agents/worktrees.js";
+import { WorktreeManager, type CreateWorktreeInput, type Worktree, type WorktreeFacts } from "../../src/agents/worktrees.js";
 import type { IndexedTask } from "../../src/agents/tasks.js";
-import { SESSION_RUN_ENTRY_TYPE, type AgentDefinition, type AgentRun, type AgentsSnapshot, type ContentBlock, type SessionState, type UiDialogRequest, type UiDialogResponse } from "@lasercode/protocol";
+import { PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE, SESSION_RUN_ENTRY_TYPE, type AgentDefinition, type AgentRun, type AgentsSnapshot, type ContentBlock, type SessionState, type UiDialogRequest, type UiDialogResponse } from "@lasercode/protocol";
 
 class FakeDriver implements SessionDriver {
   readonly kind = "stable-sdk" as const;
@@ -176,7 +177,7 @@ function snapshotWith(agents: AgentDefinition[], maxDepth = 3): AgentsSnapshot {
   return { ...base, revision: 1, agents: [...agents, ...base.agents.filter((a) => a.kind === "builtin")], policy: { ...base.policy, maxDepth } };
 }
 
-function makeWorld() {
+function makeWorld(projectCwd = "/repo", projectTrusted = true) {
   const drivers = new Map<string, FakeDriver>();
   const notifications: Notification[] = [];
   const opened: Array<{ cwd: string; parentSessionPath: string; agent: DriverAgentOptions }> = [];
@@ -200,6 +201,7 @@ function makeWorld() {
       const worktree: Worktree = { path, branch: `agents/${input.subagentName}`, baseCommit: "abc123", cwd: path, root: "/repo" };
       return worktree;
     },
+    async runSetup() { return { status: "not-present" }; },
     async remove(root_, path, branch) { this.removed.push(path); this.removedWith.push({ root: root_, path, ...(branch !== undefined ? { branch } : {}) }); },
     ownedBy: () => undefined,
     async rootOf() { return root; },
@@ -224,11 +226,11 @@ function makeWorld() {
     tasks: (path) => tasks.get(path) ?? [],
   };
   const definitions = new DefinitionsCache();
-  const harness = new AgentHarness({ host, definitions, worktrees, backgroundWork: (cwd) => ({ cwd, foregroundCommandSeconds: 120 }), now: () => Date.now() });
+  const harness = new AgentHarness({ host, definitions, worktrees, projectTrusted, backgroundWork: (cwd) => ({ cwd, foregroundCommandSeconds: 120 }), now: () => Date.now() });
   const openRoot = (name = "default", path = "/sessions/root.jsonl", id = "root-1") => {
     const def = definitions.definition(name)!;
-    const handle = harness.prepareSession({ role: rootRole(name), definition: def, record: rootRecord(name), projectCwd: "/repo" });
-    const driver = new FakeDriver(stateFor(path, id, "/repo"));
+    const handle = harness.prepareSession({ role: rootRole(name), definition: def, record: rootRecord(name), projectCwd });
+    const driver = new FakeDriver(stateFor(path, id, projectCwd));
     drivers.set(path, driver);
     handle.attach(path, id);
     return { handle, driver, path, id };
@@ -265,6 +267,92 @@ describe("AgentHarness", () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it.each(["ok", "failed", "timed-out", "parent-stop", "user-stop", "interrupt", "stop-after-exit", "untrusted", "interrupt-then-stop"])("gates the first turn on real setup: %s", async (outcome) => {
+    const repo = mkdtempSync(join(tmpdir(), "worktree-start-"));
+    const manager = new WorktreeManager();
+    try {
+      const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@x", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@x" } });
+      git("init", "-q", "-b", "main");
+      writeFileSync(join(repo, "tracked"), "base");
+      git("add", "."); git("commit", "-qm", "base");
+      mkdirSync(join(repo, PROJECT_DIR_NAME));
+      const hook = join(repo, PROJECT_DIR_NAME, "worktree-setup");
+      // An explicit release file, not a sleep, controls when the real process ends.
+      writeFileSync(hook, `#!/bin/sh\necho running > started\nwhile [ ! -f release ]; do sleep 0.01; done\nexit ${outcome === "failed" ? 2 : 0}\n`);
+      chmodSync(hook, 0o755);
+      world = makeWorld(repo, outcome !== "untrusted");
+      world.worktrees.create = (input) => manager.create(input);
+      world.worktrees.runSetup = (...args) => {
+        if (outcome === "timed-out") vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        return manager.runSetup(...args);
+      };
+      world.definitions.sync(snapshotWith([PARENT, WORKER, REVIEWER]));
+      world.setAutoResolveChildPrompts(false);
+      const root = world.openRoot("lead");
+      const started = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "setup", task: "work" });
+      expect(started.setup?.status).toBe(outcome === "untrusted" ? "skipped-untrusted" : "pending");
+      expect(started.environment?.parentCheckout).toBe(repo);
+      const driver = world.drivers.get("/sessions/child-1.jsonl")!;
+      if (outcome === "untrusted") {
+        expect(driver.prompted).toHaveLength(1);
+        expect(existsSync(join(started.cwd, "started"))).toBe(false);
+        expect((await root.handle.bridge.inspectAgent({ runId: started.runId })).setup).toEqual({ status: "skipped-untrusted" });
+        expect(world.opened[0]!.agent.bridge.role().setup).toEqual({ status: "skipped-untrusted" });
+        return;
+      }
+      await vi.waitFor(() => expect(existsSync(join(started.cwd, "started"))).toBe(true));
+      expect(driver.prompted).toHaveLength(0);
+      if (outcome === "stop-after-exit") {
+        let release!: () => void;
+        const persisted = new Promise<void>((resolve) => { release = resolve; });
+        const append = driver.appendEntry.bind(driver);
+        driver.appendEntry = async (type, data) => {
+          if (type === SESSION_AGENT_ENTRY_TYPE) await persisted;
+          return append(type, data);
+        };
+        writeFileSync(join(started.cwd, "release"), "go");
+        await vi.waitFor(() => expect(world.harness.run(started.runId)?.worktree?.setup?.status).toBe("ok"));
+        const stopping = root.handle.bridge.stopAgent({ runId: started.runId });
+        await vi.waitFor(() => expect(driver.aborts).toBe(1));
+        release();
+        await stopping;
+        expect(driver.prompted).toHaveLength(0);
+        return;
+      }
+      if (outcome === "parent-stop") await root.handle.bridge.stopAgent({ runId: started.runId });
+      else if (outcome === "user-stop") await world.harness.stopRun(started.runId, { initiator: "user" });
+      else if (outcome === "interrupt" || outcome === "interrupt-then-stop") {
+        const interrupted = root.handle.bridge.sendAgentMessage({ sessionId: started.sessionId, message: "redirect", mode: "interrupt" });
+        await vi.waitFor(() => expect(driver.aborts).toBe(1));
+        expect(world.harness.run(started.runId)?.worktree?.setup?.status).toBe("pending");
+        expect(driver.prompted).toHaveLength(0);
+        if (outcome === "interrupt-then-stop") await root.handle.bridge.stopAgent({ runId: started.runId });
+        else writeFileSync(join(started.cwd, "release"), "go");
+        await interrupted;
+      } else if (outcome === "timed-out") {
+        await vi.advanceTimersByTimeAsync(600_000);
+        vi.useRealTimers();
+      } else writeFileSync(join(started.cwd, "release"), "go");
+      const status = ["parent-stop", "user-stop", "interrupt-then-stop"].includes(outcome) ? "cancelled" : outcome === "interrupt" ? "ok" : outcome;
+      await vi.waitFor(() => expect(world.harness.run(started.runId)?.worktree?.setup?.status).toBe(status));
+      const inspected = await root.handle.bridge.inspectAgent({ runId: started.runId });
+      expect(inspected.setup?.status).toBe(status);
+      expect(inspected.environment).toEqual(started.environment);
+      const fleetRow = (await root.handle.bridge.inspectFleet()).rows[0];
+      expect(fleetRow).toMatchObject({ setup: { status } });
+      expect(fleetRow).not.toHaveProperty("environment");
+      expect(world.opened[0]!.agent.bridge.role().setup?.status).toBe(status);
+      if (outcome.endsWith("stop")) expect(driver.prompted).toHaveLength(0);
+      else {
+        await vi.waitFor(() => expect(driver.prompted.length).toBeGreaterThan(0));
+        expect(driver.prompted[0]?.text).toBe(outcome === "interrupt" ? "redirect" : "work");
+      }
+    } finally {
+      for (const run of world.harness.runs()) world.harness.detachSession(run.sessionPath);
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 
   it("offers only allowed, startable agents and refuses the rest", async () => {

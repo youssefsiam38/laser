@@ -148,6 +148,8 @@ function fakeBridge(role: HarnessSessionRole, canDelegate: boolean, entries: Age
             status: "running" as const,
             cwd: `/project/.worktrees/${input.subagentName}`,
             branch: `agents/${input.subagentName}`,
+            environment: { path: `/project/.worktrees/${input.subagentName}`, branch: `agents/${input.subagentName}`, baseCommit: "abc", parentCheckout: "/project", absentDirectories: ["cache/"] },
+            setup: { status: "pending" as const, logPath: "/project/setup.log" },
           },
     ),
     sendAgentMessage: vi.fn(async (input) => ({ sessionId: input.sessionId, runId: "run_8", status: "running" as const, delivery: "delivered" as const })),
@@ -223,6 +225,8 @@ describe("subagents module: tool registration", () => {
       status: "running",
       working_directory: "/project/.worktrees/find-auth",
       branch: "agents/find-auth",
+      environment: { path: "/project/.worktrees/find-auth", branch: "agents/find-auth", baseCommit: "abc", parentCheckout: "/project", absentDirectories: ["cache/"] },
+      setup: { status: "pending", logPath: "/project/setup.log" },
       guidance:
         "Do not wait for find-auth. Carry on with your own work; when it ends, its result will be sent to you as a message. " +
         "Use inspect_agent with runId run_7 to check on it meanwhile — a status of needs_input means it is paused on a question you can answer with send_agent_message mode answer — or inspect_fleet to see everything running under you at once.",
@@ -584,6 +588,27 @@ describe("subagents module: events and the child's role", () => {
     expect(both).toContain("# Your role");
     expect(both).toContain("start_agent");
     expect(roleBlock(root, false, "/project")).toBeUndefined();
+  });
+
+  it("states observed environment facts and each setup outcome without guessing a stack", () => {
+    const environment = { path: "/child", branch: "agents/child", baseCommit: "abc123", parentCheckout: "/parent", absentDirectories: ["unknown-build-cache/"] };
+    const base = { ...child, isolated: true, environment };
+    for (const [setup, text] of [
+      [{ status: "not-present" }, "setup is not present"],
+      [{ status: "skipped-untrusted" }, "setup was skipped because this project is not trusted"],
+      [{ status: "ok", logPath: "/child/setup.log" }, "setup ran and succeeded"],
+      [{ status: "failed", exitCode: 2, logPath: "/child/setup.log" }, "setup failed (exit 2) — read /child/setup.log"],
+      [{ status: "timed-out", logPath: "/child/setup.log" }, "setup timed out — read /child/setup.log"],
+      [{ status: "cancelled", logPath: "/child/setup.log" }, "setup was cancelled — read /child/setup.log"],
+    ] as const) {
+      const block = roleBlock({ ...base, setup }, false, "/child")!;
+      expect(block).toContain(text);
+      expect(block).toContain("clean checkout of abc123");
+      expect(block).toContain("parent checkout is at /parent; do not modify it");
+      expect(block).toContain("unknown-build-cache/");
+      expect(block).toContain("Project instructions (AGENTS.md, CLAUDE.md, README)");
+      expect(roleBlock({ ...base, isolated: false, setup }, false, "/parent")).not.toContain("worktree setup");
+    }
   });
 
   it("tells a child that shares its parent's checkout, and only that child", () => {

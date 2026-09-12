@@ -160,8 +160,20 @@ export function childWorktreeRule(role: HarnessSessionRole, cwd: string): string
     );
   }
   const on = role.branch ? `, on the branch ${role.branch}` : "";
+  const facts = role.environment;
+  const environment = facts
+    ? `You are in a fresh worktree at ${facts.path} on branch ${facts.branch}. It began as a clean checkout of ${facts.baseCommit}: build outputs, dependency directories and caches from the parent checkout were not copied or linked here.\n` +
+      `The parent checkout is at ${facts.parentCheckout}; do not modify it.\n` +
+      (facts.absentDirectories.length ? `Untracked/ignored directories present in the parent but absent here at creation: ${facts.absentDirectories.map((name) => JSON.stringify(name)).join(", ")}.\n` : "") +
+      "Project instructions (AGENTS.md, CLAUDE.md, README) describe how this project installs and builds; follow them inside this worktree.\n"
+    : "";
+  const setup = role.setup;
+  const setupText = !setup || setup.status === "pending" ? "" : setup.status === "not-present" ? "Your project's worktree setup is not present.\n"
+    : setup.status === "skipped-untrusted" ? "Your project's worktree setup was skipped because this project is not trusted.\n"
+    : setup.status === "ok" ? "Your project's worktree setup ran and succeeded.\n"
+    : `Your project's worktree setup ${setup.status === "failed" ? (setup.exitCode === null ? "could not finish" : `failed (exit ${setup.exitCode})`) : setup.status === "timed-out" ? "timed out" : "was cancelled"} — read ${setup.logPath} before assuming the tree is ready.\n`;
   return (
-    `Work only inside your own worktree: ${cwd}${on}. ` +
+    environment + setupText + `Work only inside your own worktree: ${cwd}${on}. ` +
     "Never write into your parent's checkout or another agent's. Do not merge your work anywhere and do not delete the worktree when you are done: your parent reviews the branch, merges what it wants and removes the worktree itself. " +
     "Say in your final message what you changed and where it is, so it can."
   );
@@ -189,6 +201,8 @@ export function startedView(result: StartAgentResult): Record<string, unknown> {
     status: result.status,
     working_directory: result.cwd,
     ...(result.branch !== undefined ? { branch: result.branch } : {}),
+    ...(result.environment ? { environment: result.environment } : {}),
+    ...(result.setup ? { setup: result.setup } : {}),
     guidance: startedGuidance(result),
     your_responsibility: startedResponsibility(result),
   };

@@ -72,6 +72,14 @@ describe("readSessionAgentRecord", () => {
     expect(await readSessionAgentRecord(join(base, "missing.jsonl"))).toBeUndefined();
   });
 
+  it("reads an interrupted setup as cancelled after restart, preserving its log", async () => {
+    const path = join(base, "setup.jsonl");
+    const setup = { status: "pending", logPath: "/child/setup.log" };
+    const data = { agentName: "worker", kind: "child", worktree: { path: "/child", branch: "agents/child", baseCommit: "abc", setup } };
+    writeFileSync(path, JSON.stringify({ type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, data }) + "\n");
+    expect((await readSessionAgentRecord(path))?.worktree?.setup).toEqual({ status: "cancelled", logPath: setup.logPath });
+  });
+
   it("uses the last saved-empty binding but ignores identity claims after history starts", async () => {
     const path = join(base, "rebound.jsonl");
     const line = (value: unknown) => `${JSON.stringify(value)}\n`;

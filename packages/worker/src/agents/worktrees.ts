@@ -10,15 +10,17 @@
  * exists, must be a strict child of `.worktrees/`, and is remembered per run.
  * Git is always spawned with an argument array; no shell string, ever.
  */
-import { execFile } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFile, spawn } from "node:child_process";
+import { accessSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { WORKTREES_DIR_NAME } from "@lasercode/protocol";
+import { PROJECT_DIR_NAME, WORKTREES_DIR_NAME, type WorktreeEnvironment, type WorktreeSetup } from "@lasercode/protocol";
 import { HarnessError } from "./errors.js";
 
 export interface CreateWorktreeInput {
   /** The project the parent session belongs to (the git toplevel is resolved from it). */
   projectCwd: string;
+  /** Host-resolved project trust; explicit false forbids automatic project code. */
+  projectTrusted?: boolean;
   /** The parent's working directory: the child branches from the commit checked out there. */
   baseCwd: string;
   subagentName: string;
@@ -32,6 +34,8 @@ export interface Worktree {
   /** Where the child session runs: the project's cwd relative to the toplevel, inside the worktree. */
   cwd: string;
   root: string;
+  environment?: WorktreeEnvironment;
+  setup?: WorktreeSetup;
 }
 
 /**
@@ -66,9 +70,9 @@ export function worktreeSlug(subagentName: string, runId: string): string {
 }
 
 /** git without throwing, for the questions whose answer may legitimately be "cannot tell". */
-function gitQuiet(cwd: string, args: string[]): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+function gitQuiet(cwd: string, args: string[], timeout?: number): Promise<{ ok: boolean; stdout: string; stderr: string }> {
   return new Promise((done) => {
-    execFile("git", args, { cwd, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" }, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
+    execFile("git", args, { cwd, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" }, maxBuffer: 4 * 1024 * 1024, timeout }, (error, stdout, stderr) => {
       done({ ok: !error, stdout: stdout.toString(), stderr: stderr.toString() });
     });
   });
@@ -126,7 +130,7 @@ export class WorktreeManager {
     const path = join(root, WORKTREES_DIR_NAME, slug);
     const branch = `agents/${slug}`;
     assertSafeWorktreePath(root, path);
-    if (existsSync(path)) throw new HarnessError(`A worktree already exists at ${path}; another agent owns it.`);
+    if (existsSync(path)) throw new HarnessError(`A worktree already exists at ${path}; another agent owns it. Choose another subagent_name for a new git worktree, or start this agent with worktree false so it works in this checkout.`);
     if (this.owned.has(input.runId)) throw new HarnessError(`Run ${input.runId} already owns a worktree.`);
 
     await this.ensureExcluded(root);
@@ -141,12 +145,17 @@ export class WorktreeManager {
       await this.removeAt(root, path, branch);
       throw new HarnessError("The new worktree is not at the parent's commit; refusing to hand it to an agent.");
     }
-    linkNodeModules(input.baseCwd, path, root);
     const projectRel = relative(root, resolve(input.projectCwd));
     const cwd = projectRel && !projectRel.startsWith("..") ? join(path, projectRel) : path;
     const worktree: Worktree = { path, branch, baseCommit, cwd: existsSync(cwd) ? cwd : path, root };
+    worktree.environment = await observeEnvironment(input.baseCwd, worktree);
+    worktree.setup = initialWorktreeSetup(input.projectCwd, path, input.projectTrusted);
     this.owned.set(input.runId, worktree);
     return worktree;
+  }
+
+  runSetup(projectCwd: string, tree: Worktree, signal: AbortSignal, projectTrusted?: boolean): Promise<WorktreeSetup> {
+    return runWorktreeSetup(projectCwd, tree, signal, projectTrusted);
   }
 
   /** The worktree a run owns, when this process created it. */
@@ -202,37 +211,98 @@ export class WorktreeManager {
       return;
     }
     const excludePath = join(gitDir, "info", "exclude");
-    const line = `/${WORKTREES_DIR_NAME}/`;
+    const lines = [`/${WORKTREES_DIR_NAME}/`, `/${WORKTREE_SETUP_LOG}`];
     let current = "";
     try {
       current = readFileSync(excludePath, "utf8");
     } catch {
       current = "";
     }
-    if (current.split(/\r?\n/).some((entry) => entry.trim() === line || entry.trim() === `${WORKTREES_DIR_NAME}/` || entry.trim() === WORKTREES_DIR_NAME)) return;
+    const missing = lines.filter((line) => !current.split(/\r?\n/).includes(line));
+    if (!missing.length) return;
     mkdirSync(dirname(excludePath), { recursive: true });
     const prefix = current === "" || current.endsWith("\n") ? current : `${current}\n`;
-    writeFileSync(excludePath, `${prefix}${line}\n`, "utf8");
+    writeFileSync(excludePath, `${prefix}${missing.join("\n")}\n`, "utf8");
   }
 }
 
-/** Symlink the base checkout's `node_modules` into the worktree when present and absent there. Best effort. */
-function linkNodeModules(baseCwd: string, worktreePath: string, root: string): void {
-  try {
-    const source = join(baseCwd, "node_modules");
-    if (!existsSync(source)) return;
-    const rel = relative(root, resolve(baseCwd));
-    const targetDir = rel && !rel.startsWith("..") && !rel.startsWith(WORKTREES_DIR_NAME) ? join(worktreePath, rel) : worktreePath;
-    const target = join(targetDir, "node_modules");
-    if (!existsSync(targetDir)) return;
+const WORKTREE_SETUP_LOG = `${PROJECT_DIR_NAME}-worktree-setup.log`;
+
+/** No stack inference: only directory names git reports, relative to the parent checkout. */
+async function observeEnvironment(baseCwd: string, tree: Worktree): Promise<WorktreeEnvironment> {
+  const environment: WorktreeEnvironment = { path: tree.path, branch: tree.branch, baseCommit: tree.baseCommit, parentCheckout: baseCwd, absentDirectories: [] };
+  const root = await gitQuiet(baseCwd, ["rev-parse", "--show-toplevel"], 1_000);
+  if (!root.ok) return environment;
+  environment.parentCheckout = root.stdout.trim();
+  const status = await gitQuiet(environment.parentCheckout, ["status", "--porcelain", "--ignored=matching", "--untracked-files=normal", "-z"], 4_000);
+  if (!status.ok) return environment;
+  const names = new Set<string>();
+  const entries = status.stdout.split("\0");
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i]!;
+    if (entry.startsWith("R") || entry.startsWith("C") || entry[1] === "R" || entry[1] === "C") { i++; continue; }
+    if (!entry.startsWith("?? ") && !entry.startsWith("!! ")) continue;
+    const name = entry.slice(3).split("/")[0];
+    if (!name || name === "." || name === "..") continue;
     try {
-      lstatSync(target);
-      return; // already there (checked in, or a previous link)
-    } catch {
-      // absent: link it
-    }
-    symlinkSync(source, target, "dir");
-  } catch {
-    // Best effort only: a missing link costs an install, never a run.
+      if (statSync(join(environment.parentCheckout, name)).isDirectory() && !existsSync(join(tree.path, name))) names.add(`${name}/`);
+    } catch { /* A directory can disappear while git runs. */ }
+    if (names.size === 20) break;
   }
+  environment.absentDirectories = [...names];
+  return environment;
+}
+
+export function initialWorktreeSetup(projectCwd: string, path: string, projectTrusted = true): WorktreeSetup {
+  if (!projectTrusted) return { status: "skipped-untrusted" };
+  try {
+    const hook = join(projectCwd, PROJECT_DIR_NAME, "worktree-setup");
+    if (!statSync(hook).isFile()) return { status: "not-present" };
+    accessSync(hook, constants.X_OK);
+    return { status: "pending", logPath: join(path, WORKTREE_SETUP_LOG) };
+  } catch { return { status: "not-present" }; }
+}
+
+/** Execute the project's program, never a guessed command. No environment values are logged. */
+async function runWorktreeSetup(projectCwd: string, tree: Worktree, signal: AbortSignal, projectTrusted = true): Promise<WorktreeSetup> {
+  if (!projectTrusted) return { status: "skipped-untrusted" };
+  const initial = tree.setup ?? initialWorktreeSetup(projectCwd, tree.path, projectTrusted);
+  if (initial.status !== "pending") return initial;
+  const { logPath } = initial;
+  if (signal.aborted) return { status: "cancelled", logPath };
+  let fd: number;
+  try { fd = openSync(logPath, "wx", 0o600); }
+  catch { return { status: "failed", logPath, exitCode: null }; }
+  return new Promise((done) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const child = spawn(join(projectCwd, PROJECT_DIR_NAME, "worktree-setup"), [], {
+      cwd: tree.cwd, env: process.env,
+      stdio: ["ignore", fd, fd], detached: process.platform !== "win32",
+    });
+    closeSync(fd);
+    const finish = (outcome: WorktreeSetup) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal.removeEventListener("abort", cancel);
+      done(outcome);
+    };
+    const kill = () => {
+      if (!child.pid) return;
+      if (process.platform === "win32") {
+        execFile("taskkill", ["/pid", String(child.pid), "/T", "/F"], () => undefined);
+      } else {
+        try { process.kill(-child.pid, "SIGKILL"); } catch { /* Already exited. */ }
+      }
+    };
+    const cancel = () => { kill(); finish({ status: "cancelled", logPath }); };
+    child.once("error", () => finish({ status: "failed", logPath, exitCode: null }));
+    child.once("exit", (code) => {
+      finish(code === 0 ? { status: "ok", logPath } : { status: "failed", logPath, exitCode: code });
+    });
+    timer = setTimeout(() => { kill(); finish({ status: "timed-out", logPath }); }, 600_000);
+    signal.addEventListener("abort", cancel, { once: true });
+    if (signal.aborted) cancel();
+  });
 }

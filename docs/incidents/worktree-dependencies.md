@@ -1,6 +1,6 @@
 # Worktree dependencies: why child agents keep stalling on `node_modules`
 
-Status: analysis for a decision. Nothing implemented.
+Status: principle adopted in M16-T14. The original incident and superseded options below are retained as history; `docs/agents.md` documents the implementation (asynchronous executable hook, no stack inference).
 
 ## What happens
 
@@ -33,7 +33,7 @@ Laser is a coding agent for every stack — including languages that do not exis
 
 ## The design that follows
 
-1. **No symlink, no install.** A worktree is a clean git checkout of the parent's commit — exactly what `git worktree add` produces. Nothing else is copied or linked. (Removes `linkNodeModules` and the parent-corruption path entirely.)
+1. **No symlink, no install.** A worktree is a clean git checkout of the parent's commit — exactly what `git worktree add` produces. Nothing else is copied or linked. (Removes automatic dependency linking and the parent-corruption path entirely.)
 2. **Tell the child the truth, in its role block**, generated from facts the harness can observe without knowing any stack:
    - "You are in a fresh worktree at `<path>` on branch `<branch>`. It is a clean checkout of `<commit>`: build outputs, dependency directories and caches from the parent checkout are **not** here."
    - "The parent checkout is at `<path>`; do not modify it."

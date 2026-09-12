@@ -174,3 +174,7 @@ in-memory engine overrides.
   missing-file create behavior is not a resume feature, including after recovery.
 - Keychain: root identity key, relay credentials.
 - `<project>/.laser/settings.json`: project-scoped product settings.
+- `<project>/.laser/worktree-setup`: trust-gated executable from the parent project
+  checkout, run inside a new child checkout before its first turn with a fixed
+  ten-minute bound; setup is asynchronous and never installs or
+  links anything unless the project's own program chooses to. See `docs/agents.md`.
