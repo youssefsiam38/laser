@@ -520,3 +520,26 @@ Validation at base `413c8e2` plus this commit: UI TypeScript passes; UI suite
 **164 files / 1,383 passed, one pre-existing benchmark skipped**; identity passes.
 Logs: `/tmp/perf-renderer/f04-{focused,types,ui,identity}.log`. Browser performance
 and the lane-wide visible-surface acceptance matrix remain outstanding.
+
+### F05 — presentation subscriptions and shared fleet structure
+
+The provider's render-only snapshot compares the fields its shell derivations
+actually read; imperative actions still read the authoritative store. Fleet
+consumers share a weakly owned structure cache, with elapsed labels updated
+without rebuilding ancestry. Session metadata, telemetry sections, and the draft
+restore utility no longer subscribe to transcript bodies. Title inputs (including
+the fleet's first nonempty user line), dialogs, lifecycle, catalog membership,
+run/task activity and independently scoped stores remain observable.
+
+Measured React executions over **10 separately flushed deltas × 1/8/32 streams**:
+broad subscribers **10/80/320**, narrowed shell/fleet/session-meta subscribers
+**0/0/0** each, excluding mount. Structural fleet builds across repeated consumers
+and five clock ticks: **8 calls → 1 build**; output equals uncached derivation at
+every tested timestamp. No browser CPU or power reduction is inferred.
+
+Validation: UI TypeScript, **165 files / 1,388 tests passed, one benchmark skipped**,
+and identity pass. `test/runtime/presentation-state.test.tsx` covers counts,
+clock/output equivalence, rename, branch prompt, membership and needs-input
+invalidation; existing fleet/telemetry/runtime/disclosure tests stay green.
+Logs: `/tmp/perf-renderer/f05-{types,ui,identity}.log`. This base has no paged
+catalog reference-set derivation; those M16-T16 additions are not rewritten here.

@@ -84,6 +84,7 @@ import {
   useMainDestinationController,
   type MainInitializationToken,
 } from "./main-destination-controller.js";
+import { createShellSnapshot } from "./presentation-state.js";
 import { createMainLandingDraftStore, useMainLandingDrafts } from "./main-landing-drafts.js";
 import { sessionKindTab } from "./session-tab-memory.js";
 import { useThemeSync } from "./prefs.js";
@@ -496,7 +497,8 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   // Always the committed state, even inside a socket callback that runs before
   // React re-renders.
   const readState = store.getSnapshot;
-  const state = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+  const shellSnapshot = useMemo(() => createShellSnapshot(store.getSnapshot), [store]);
+  const state = useSyncExternalStore(store.subscribe, shellSnapshot, shellSnapshot);
 
   const currentProject = mainCodeProject(state.destination);
   const [projectList, setProjectList] = useState<ProjectInfo[]>([]);
@@ -1888,22 +1890,24 @@ export interface SessionMeta {
 }
 
 export function useSessionMeta(): SessionMeta {
-  const view = useLaserView();
+  const path = useLaserState((s) => s.current);
+  const session = useLaserState((s) => s.current ? s.open[s.current]?.state : undefined);
+  const running = useLaserState((s) => s.current ? s.open[s.current]?.running ?? false : false);
   const connection = useLaserState((s) => s.connection);
-  const workers = useLaserState((s) => s.workers);
+  const worker = useLaserState((s) => session ? s.workers[session.cwd] : undefined);
   return useMemo(
     () => ({
-      path: view?.path,
-      session: view?.state,
-      model: view?.state.model ?? null,
-      thinkingLevel: view?.state.thinkingLevel,
-      contextUsage: view?.state.contextUsage,
-      running: view?.running ?? false,
-      compacting: view?.state.isCompacting ?? false,
+      path: session ? path : undefined,
+      session,
+      model: session?.model ?? null,
+      thinkingLevel: session?.thinkingLevel,
+      contextUsage: session?.contextUsage,
+      running,
+      compacting: session?.isCompacting ?? false,
       connection,
-      worker: view ? workers[view.state.cwd] : undefined,
+      worker,
     }),
-    [connection, view, workers],
+    [connection, path, session, running, worker],
   );
 }
 
