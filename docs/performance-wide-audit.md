@@ -653,3 +653,23 @@ focused reproduction and the full-suite recheck passed without source changes.
 This is recorded, not labeled proven flaky. Logs `/tmp/perf-renderer/f17-*` retain
 both runs. No new regression test is claimed for an intentionally unimplemented
 host seam. Coordinator/host-method ownership is the next action for F17.
+
+### F23 — suspend hidden catalog polling, reconcile on return
+
+The provider's existing 20-second presentation poll now owns a visibility-aware
+scheduler: no interval while hidden, one immediate refresh on becoming visible,
+then the existing cadence. Duplicate visibility events do not add refreshes;
+a queued tick checks visibility before requesting. Disconnect/unmount removes
+both timer and listener. Initial/reconnect/notification-driven refreshes are
+unchanged; transport, questions, running work, dictation and seen/attention paths
+are untouched. Electron throttling and host skill checks remain outside this lane.
+
+Paired fake-clock lifecycle measurement over 60 seconds at the existing cadence:
+visible refreshes **3 → 3**; hidden refreshes **3 → 0**; return **one immediate
+refresh**; after cleanup **0**. Tests also cover initially hidden views and a
+visibility transition before its event is delivered. This is eliminated polling
+work, **not measured CPU/power savings or minimized-Electron acceptance**.
+
+Validation: TypeScript, **169 UI files / 1,395 tests passed, one benchmark skipped**,
+identity and diff checks pass; logs `/tmp/perf-renderer/f23-{types,ui,identity}.log`.
+Browser/minimized-window acceptance remains outstanding for integration.

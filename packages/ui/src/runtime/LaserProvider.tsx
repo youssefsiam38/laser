@@ -85,6 +85,7 @@ import {
   type MainInitializationToken,
 } from "./main-destination-controller.js";
 import { createShellSnapshot } from "./presentation-state.js";
+import { startVisiblePoll } from "./visible-poll.js";
 import { createMainLandingDraftStore, useMainLandingDrafts } from "./main-landing-drafts.js";
 import { sessionKindTab } from "./session-tab-memory.js";
 import { useThemeSync } from "./prefs.js";
@@ -641,8 +642,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   }, [state.connection, migrateLocalProjects, refreshProjects]);
   useEffect(() => {
     if (state.connection !== "open") return;
-    const timer = setInterval(() => void refreshSessions(), 20_000);
-    return () => clearInterval(timer);
+    return startVisiblePoll(() => void refreshSessions(), 20_000);
   }, [state.connection, refreshSessions]);
 
   // --- session lifecycle --------------------------------------------------
