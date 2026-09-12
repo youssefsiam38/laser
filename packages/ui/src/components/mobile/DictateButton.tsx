@@ -24,6 +24,7 @@ import {
 } from "@/pwa";
 import { useLaserStable, useLaserView } from "@/runtime";
 import type { TranscribeScope } from "@/pwa/dictation";
+import { useTranscriptionAvailable } from "@/pwa/transcription-availability";
 
 /**
  * The composer's microphone, drawn by the `composer` element's voice pieces
@@ -35,7 +36,8 @@ import type { TranscribeScope } from "@/pwa/dictation";
  *
  * Hidden entirely where dictation cannot work (R2 — hide the control, never
  * show a dead one): a browser with no microphone or Web Audio capture, an
- * insecure origin (the insecure-origin notice says why), or no open session.
+ * insecure origin (the insecure-origin notice says why), or no transcription
+ * provider. A project landing checks its directory before a session exists.
  * Opening Beam prepares its empty session before showing this composer.
  * The reusable transcription backend ships with Laser. Before the microphone
  * opens, the adapter checks its provider requirement and reports a missing or
@@ -54,11 +56,16 @@ interface DictateButtonProps {
 export function DictateButton({ className, size, touchSized = false }: DictateButtonProps) {
   const env = useEnvironment();
   const view = useLaserView();
-  const available = view?.capabilities.includes("transcribe") ?? false;
+  const { client, destination } = useLaserStable();
+  const supported = env.microphone && PhraseDictationAdapter.isSupported();
+  const landingCwd = destination?.phase === "ready-code" && destination.code.kind === "project-landing"
+    ? destination.code.project : undefined;
+  const cwd = view?.state.cwd ?? landingCwd;
+  const landingAvailable = useTranscriptionAvailable(client, supported && !view ? landingCwd : undefined);
+  const available = view ? view.capabilities.includes("transcribe") : landingAvailable;
 
-  if (!available || !view) return null;
-  if (!env.microphone || !PhraseDictationAdapter.isSupported()) return null;
-  return <DictateControls className={className} size={size} touchSized={touchSized} cwd={view.state.cwd} path={view.path} />;
+  if (!supported || !available || !cwd) return null;
+  return <DictateControls className={className} size={size} touchSized={touchSized} cwd={cwd} path={view?.path} />;
 }
 
 function DictateControls({ className, size, touchSized, cwd, path }: DictateButtonProps & TranscribeScope) {
