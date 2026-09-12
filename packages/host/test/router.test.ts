@@ -106,7 +106,9 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
   } as unknown as SessionCatalog;
 
   const workerRequests: Array<{ cwd: string; method: string; params: unknown }> = [];
+  const prepare = vi.fn(async (_cwd: string) => {});
   const pool = {
+    prepare,
     openSessions: (cwd: string) => open[cwd] ?? [],
     cwdOfSession: (path: string) => bound.get(path),
     bindSession: (path: string, cwd: string) => bound.set(path, cwd),
@@ -140,6 +142,7 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
 
   return {
     router,
+    prepare,
     note,
     bind: (path: string, cwd: string) => bound.set(path, cwd),
     catalogRows,
@@ -205,6 +208,15 @@ describe("Router · history windows", () => {
       expect(h.workerRequests[0]?.params).toEqual({ path, window: { tail: 40 } });
     } finally { h.cleanup(); rmSync(directory, { recursive: true, force: true }); }
   });
+});
+
+it("routes readiness hints to admission without opening a session", async () => {
+  const h = harness();
+  try {
+    expect(await h.router.dispatch({ jsonrpc: "2.0", id: 1, method: "pi/worker/prepare", params: { cwd: CWD_A } })).toEqual({});
+    expect(h.prepare).toHaveBeenCalledExactlyOnceWith(CWD_A);
+    expect(h.workerRequests).toEqual([]);
+  } finally { h.cleanup(); }
 });
 
 describe("Router · dictation cancellation", () => {

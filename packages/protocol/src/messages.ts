@@ -1132,6 +1132,8 @@ export interface ClientRequests {
 
   // --- workers (M2-T1) ---
   "pi/worker/list": { params: {}; result: { workers: WorkerInfo[] } };
+  /** Best-effort readiness hint; never asks for trust or opens a session. */
+  "pi/worker/prepare": { params: { cwd: string }; result: {} };
   /** Start a worker now: retry after a crash, or wake a retired one. */
   "pi/worker/restart": { params: { cwd: string }; result: { worker: WorkerInfo } };
   /** Retire a worker on purpose. Refused while one of its sessions is running. */

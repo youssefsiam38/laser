@@ -92,6 +92,7 @@ import { sessionsList } from "../components/shell/session-groups.js";
 import { beamStore } from "../components/beam/beam-store.js";
 import { createShellSnapshot } from "./presentation-state.js";
 import { startVisiblePoll } from "./visible-poll.js";
+import { useWorkerReadiness } from "./worker-readiness.js";
 import { createMainLandingDraftStore, useMainLandingDrafts } from "./main-landing-drafts.js";
 import { sessionKindTab } from "./session-tab-memory.js";
 import { useThemeSync } from "./prefs.js";
@@ -1315,7 +1316,11 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   const actionsRef = useRef<LaserActions>(actions);
   actionsRef.current = actions;
 
-  const setCurrentProject = destination.setCodeProject;
+  const prepareProject = useWorkerReadiness({ currentProject, connection: state.connection, sessionsLoaded: state.sessionsLoaded, projects: projectList, client, readState, archive });
+  const setCurrentProject = useCallback((cwd: string | undefined) => {
+    destination.setCodeProject(cwd);
+    prepareProject(cwd);
+  }, [destination.setCodeProject, prepareProject]);
 
   // The host owns the list; a session opened before the list arrives (or in a
   // directory the host has not indexed yet) still gets a rail icon. Via a

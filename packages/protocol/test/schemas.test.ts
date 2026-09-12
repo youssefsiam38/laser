@@ -135,6 +135,7 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/project/env/test": { cwd: "/home/me/code/app" },
   "pi/project/env/refresh": { cwd: "/home/me/code/app" },
   "pi/worker/list": {},
+  "pi/worker/prepare": { cwd: "/p" },
   "pi/worker/restart": { cwd: "/p" },
   "pi/worker/stop": { cwd: "/p" },
 

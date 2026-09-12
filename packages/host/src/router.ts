@@ -535,6 +535,10 @@ export class Router {
       case "pi/worker/list":
         return { workers: this.pool.workers() };
 
+      case "pi/worker/prepare":
+        await this.pool.prepare(req.params.cwd);
+        return {};
+
       case "pi/worker/restart":
         return { worker: await this.pool.restart(req.params.cwd) };
 
@@ -574,8 +578,10 @@ export class Router {
           await (await this.pool.get(cwd)).request("web-search/configure", { cwd, change: { action: "test" } });
         }
         const features = this.features().set(req.params.id, req.params.enabled, req.params.scope, req.params.cwd);
+        // A hidden warm process holds startup configuration too. Invalidate it
+        // without restarting/promoting a project the person has not opened.
+        let restartPending = req.params.scope === "global" && !(await this.pool.discardPrepared());
         const targets = req.params.scope === "project" && req.params.cwd ? [req.params.cwd] : this.pool.cwds();
-        let restartPending = false;
         for (const cwd of targets) {
           try {
             await this.pool.restart(cwd);

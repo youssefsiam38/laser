@@ -299,3 +299,169 @@ corrections belong next to the findings:
 What survives without qualification is finding 3: **worker readiness costs 562 ms**
 (admission → ready 561.97 ms, history-independent at 562/559/547 ms, 75 % of a cold
 short open), untouched by any stage of M16-T16. That is M16-T26.
+
+## Implemented — worker readiness
+
+M16-T26, branch `agents/session-readiness-9c8dce6f`, based on
+`7942fb5bfd1451af175f92180fcd3a11936f18ca`. **With the readiness hint completed
+before the click (signal → ready: 726.9 ms median), the cold short-session open
+is 729 → 176 ms; worker admission on that click is 543 → 0.43 ms.** The process
+still takes about 537 ms to prepare; that work now precedes the click.
+
+### Admission and lifecycle
+
+- Signals: actual remembered project at startup; explicit project selection;
+  explicit sidebar group expansion, filter or jump. Each requires a known
+  project with an unarchived session. A 150-ms trailing debounce coalesces
+  rapid navigation. Default-expanded groups, catalog arrival and automatic
+  first-project fallback do not count. **No hover warming**: a sidebar sweep
+  is too weak an intent to justify a roughly 207-MiB process.
+- **Trust is nonprompting.** Unknown/declined projects never warm. The host
+  checks catalog/registry membership, directory presence and current trust
+  immediately before spawn; it never calls the prompting resolver for a hint.
+  `not_required` is allowed because there are no trust-gated local resources.
+  Adoption rechecks trust; revoked speculation is stopped before ordinary
+  click-backed admission. Archive visibility is client-local and checked by
+  the frontend, not invented as host state.
+- **One unused warm worker per host**, beyond workers already in use. New
+  intent evicts the sole least-recently-wanted unused worker, awaiting its
+  actual exit before another spawn. Hints during any spawn are dropped, not
+  queued for later speculative bursts. Protected work prevents eviction.
+- An unused warm process expires after **60 seconds since its last intent**,
+  checked by the existing 30-second sweep: normally **60–90 seconds**, not
+  the ordinary ten-minute idle period. Attachments, running sessions and live
+  agent runs retain their retirement guards. Ordinary idle retirement still
+  governs a worker once used.
+- `get()` joins the same readiness **and priming** promise, rather than merely
+  returning a live PID. Failed speculation is silent; a concurrent or later
+  real open retries through normal admission after the failed process exits.
+  No speculative session, fleet item, lifecycle notification, worker-list row,
+  stderr log or model qualification is published. Namer qualification is
+  deferred until actual adoption, not lost.
+
+The method is `pi/worker/prepare`; it returns no user-facing state. There is
+no guarantee of a fully warm worker when a click immediately follows the
+signal: the click joins whatever readiness remains. Unknown trust and a busy
+spawn lane deliberately retain the normal cold path.
+
+### Reproduction and measurements
+
+Shared `scripts/browser-check` target, built host and real worker, short
+(4-message) and long (240-message) fixtures. **10 samples per cell**, medians;
+80 accepted opens. Cold/warm order alternates within each run. Warm controls
+have only the worker prestarted, not a loaded session. Prepared-cold samples
+start with the destination worker stopped, expand its real sidebar group,
+await that hint's completion, then click the real row. Each reload starts in
+a different, empty source conversation; persisted selection cannot turn the
+measurement into repeated clicks on an already-open row.
+
+| Fixture / worker state at initial signal | Main before: admission → ready | Prepared branch: admission → ready at click | Main before: click → readable | Prepared branch: click → readable |
+| --- | ---: | ---: | ---: | ---: |
+| Short, cold | 543.01 ms | **0.43 ms** | 728.95 ms | **176.00 ms** |
+| Long, cold | 543.47 ms | **0.42 ms** | 1,083.10 ms | **545.65 ms** |
+| Short, already warm control | 0.03 ms | 0.03 ms | 174.85 ms | 173.65 ms |
+| Long, already warm control | 0.03 ms | 0.04 ms | 505.05 ms | 482.80 ms |
+
+**These end-to-end figures include the pre-B full-entries read/render.** B
+independently removes that history cost. The two wins are additive but are
+measured separately; this is not a post-B measurement or a combined estimate.
+The admission result is history-independent, as the investigation predicted.
+
+Preparing has a real cost, measured over the same 10 cold samples per fixture:
+
+| Preparation cost | Short | Long |
+| --- | ---: | ---: |
+| Host prepare admission → primed process | 537.40 ms | 533.09 ms |
+| Child CPU consumed at readiness | 720 ms | 710 ms |
+| Whole-host CPU during the prepare window | 2.11 ms | 2.13 ms |
+| Child RSS / kernel peak RSS at readiness | 207.08 MiB | 205.15 MiB |
+
+Child CPU is Linux `/proc` user+system ticks (10-ms resolution); RSS is a
+process snapshot, not an allocation profile. Host CPU includes any other
+host activity during that window. The cost motivates **one**, not two, spare
+processes and the shorter deadline. All four timing runs also registered a
+never-opened project and verified **zero spawns** for it.
+
+For the before measurements, sources were restored to exact main HEAD bytes
+in this isolated worktree, built and measured, then only this worker's saved implementation
+was restored and rebuilt. Both sides use the same disposable pool-promise
+observer; generated outputs were not patched. Node 24.11.1, Linux Chrome,
+CPU affinity 4–15, warmed OS file cache, synthetic prose. Other application
+sessions may be active; no builds/tests from this worker ran concurrently
+with timing. Readability requires expected text/row count, last-message
+geometry above the composer, and two animation frames—paint opportunity,
+not physical presentation. No packaged/native/remote performance claim.
+
+Primary artifacts under `/tmp/sr/`:
+
+- `sb/run-Hwl8rz`, `lb/run-b6UNDX`: unchanged-main short/long baseline.
+- `sa/run-v9fO6U`, `la/run-wWecIP`: final implementation short/long.
+- `summary.json`, `README.md`: aggregation, exact method, superseded runs and
+  build/process evidence index. Every accepted run reports no owned survivors.
+- `/tmp/session-readiness-bench.mjs`, `/tmp/session-readiness-observe.mjs`:
+  reproducible shared-harness driver and passive host observer. Commands:
+  `taskset -c 4-15 node /tmp/session-readiness-bench.mjs short before 10`
+  (baseline build), then `short after 10`, and each with `long`.
+
+### Validation and worker startup boundary
+
+`pnpm -F @lasercode/host test`: **268 passed**; real-PID tests cover joining,
+priming, failure/retry, eviction, expiry and live-run/attachment protection.
+A real host/socket/worker test proves nonprompting trust admission, no unused
+worker-list/status/session/model-call output, and PID reuse on actual open.
+Router coverage and a protocol schema inventory sample pin the new method.
+`pnpm -F @lasercode/ui test`: **1,412 passed, 1 existing skipped**; real-provider
+tests cover remembered/selected projects, expansion, catalog-only negatives
+and disposal. Pure tests cover archive/trust gates and intent coalescing.
+`pnpm -F @lasercode/protocol test`: **126 passed**. Staged
+`pnpm identity:check` and `pnpm -r build`: **passed**.
+
+The worker's static `StableSdkDriver`/server import graph must load before it
+can actually serve a session. Announcing `ready` before that import would
+only hide the wait and put it back on the first request. This milestone moves
+the entire existing import/validation sequence before the click, without
+weakening the pinned-agent check or changing worker source. A separate desktop
+shell-readiness milestone could revisit perf-analysis finding 7's **392-ms
+bundled import / 419-ms daemon spawn→ready** gate; those are supplied earlier
+measurements, not extra savings reproduced or claimed here. Worker tests,
+full `pnpm verify` and packaged tests were not run: worker source is unchanged,
+and this is not a release gate.
+
+Final browser acceptance: `accept/run-6yFG3O` (pointer/keyboard) and
+`accept/run-xL0R2W` (touch), through `/tmp/session-readiness-acceptance.mjs`:
+1360/390 × dark/light, real group expansion and row opening, hidden unused
+worker, readable 240-message destination, no horizontal page overflow, and
+reduced-motion captures. Both matrices pass and have no owned survivors.
+Screenshots were visually inspected; no presentation changes were introduced.
+
+`unused/run-jqmEqB` adds the stronger negative and lifetime proof: a registered
+project **with saved history** was left unclicked in the default-expanded
+sidebar. Ten pointer hover/rest cycles produced **zero spawns**. Explicit
+expansion then prepared exactly one worker, which was never opened and exited
+at **83.99 seconds** under the production 30-second sweep. Its first three
+idle seconds consumed 30 ms additional child CPU (one sample, not a median).
+`unused-proof.json` and the complete spawn trace retain that evidence; the
+shared-harness script is `/tmp/session-readiness-unused.mjs`. Cleanup reports
+no owned survivors.
+
+### Review corrections
+
+Speculative admission now refuses session-owned, attached, retrying or crashed
+entries, including a recheck after asynchronous eviction. The regression
+crashes an attached real worker, issues a readiness hint, and proves the
+original retry still reloads its saved session and publishes recovery.
+`cwds()` excludes speculation; a global feature change silently retires unused
+prepared processes rather than promoting them or retaining stale startup
+configuration. Live-run and attachment guards also protect that invalidation.
+The provider's readiness effect and refs now live in `useWorkerReadiness`;
+archive/catalog visibility stays in the UI, while the host alone owns trust
+admission. N2/N3 were deliberately left unchanged.
+
+Revised validation: host **270 passed**; UI **1,412 passed, 1 existing skipped**;
+workspace build and identity check passed. The timing table remains the
+measurement of `00da6ba`, independently reproduced during review; it was not
+re-benchmarked for these recovery/inventory fixes. Its headline now carries
+the measured **726.9-ms signal-to-ready** condition explicitly. Keyboard/pointer
+and touch browser matrices also pass on the revised build at
+`accept/run-G3f2CI` and `accept/run-o60mcD` (both widths/themes, reduced motion,
+no owned process survivors).

@@ -2,7 +2,7 @@
 
 ## Recommendation
 
-**Tail-first history reduces the default 2,000-message mount to 40 rows and the measured warm switch from 4,133 to 186.1 ms.** Mounted work, not the ~6 ms of warm host RPCs, was the important axis. See the re-baseline and M16-T24 handoff below.
+**The final merged build mounts 40 rows for a 2,000-message conversation; its measured warm switch is 192.7 ms (three samples).** The original full-history measurement was 4,133 ms; treat cross-run timing as an order-of-magnitude result, not a precise percentage gain. Mounted work, not the ~6 ms of warm host RPCs, was the important axis. See the re-baseline and M16-T24 handoff below.
 
 **M16-T16 stops at catalog paging (A) and tail-first history (B). C/D/E were not started and are no longer this task's follow-on scope.** Their original proposals remain below as research, not authorization. M16-T24 owns further attribution and the decision whether more rendering work is justified. Baseline base: `a0690d36d600bbc3913a055abae1680dc5930f8f`; implementation branch: `agents/chat-loading-9210c750`.
 
@@ -228,7 +228,7 @@ The 2,000-message response is **97.9% smaller**, with **69.1% lower median RPC t
 - Live production browser **1360/390 × light/dark passes**: a real held bash partial remains running through prepend; pointer/keyboard disclosure closes and reopens after animations settle; 500 real provider deltas appear exactly once; the detached reading anchor survives settlement; a valid 256×256 PNG is absent from the initial window and decodes after full loading; restarting the isolated worker changes epoch without losing the response. `/tmp/chat-loading/b-live-results.json`, `b-live-browser.log`, `b-live-{tool,settled,image}-WIDTH-THEME.png`. Harness anchors are captured at the actual page-request boundary, not before a programmatic scroll has settled.
 - Final non-streaming startup samples (not repeated medians): desktop light/dark **1,112/726 ms**, phone light/dark **539/443 ms**. Initial DOM **2,678/2,729 desktop, 1,250/1,309 phone**. Loading all 2,000 messages still creates **57,679/57,687 desktop and 56,147 phone elements**. This explicitly does **not** satisfy D's bounded mounted-row criterion. Anchor comparisons wait for the restoration window to finish, then check the original node, ID, text and offset.
 
-## B review fixes and re-baseline — handoff to M16-T24
+## B review fixes and re-baseline — pre-main-merge handoff to M16-T24
 
 The commit containing this section follows B `6cc8572`; it implements only the four requested review fixes:
 
@@ -269,3 +269,39 @@ Handoff destination: `agents/session-open-forensics-45906d80`. Profile **on top 
 - No retained-transcript controller (C), virtualizer (D), or prefetch (E) was implemented. A one-frame blank is a separate perceptual question. Window reads can start workers, so speculative reads are not harmless by default.
 
 Reproduce the new baseline with the allowlisted `/tmp/chat-loading/clean.py node /tmp/chat-loading/rebaseline-host.mjs`, then Node 24 `/tmp/chat-loading/rebaseline.mjs`. Fixtures/configuration remain under `/tmp/chat-loading/rebaseline-{sessions,state}`; services are stopped after validation. No personal session, credential, installed application or other worktree was used.
+
+## Landing follow-up — History refresh and merged main
+
+F1 is fixed in `5166b9d`: opening telemetry History, and its running transitions while open, use `refreshEntries({ tail: true })`. Composer's no-prompt fork fallback does too. The sibling interaction test checks the actual disclosure and all three refresh calls; the command test checks the fallback arguments. Explicit full-history actions remain explicit.
+
+The branch integrates `main` through `18e8363b2441b9f5c5474ec9a89b6e83afcb1701`, including the later worker-readiness lane. Conflict resolution retains both paged catalog/history and main's narrowed subscriptions, cached conversation matches/native ranges, cancellable saved-history search, selective transcript delivery, byte-bounded replay and per-project environment setup. Removed detached sidebar rows stay removed; paged Chat controls remain. Fleet memoization also observes catalog presence changes, and presentation equality observes the history fields used by titles/emptiness without following every history watermark. Focused integration regressions cover both.
+
+### Final merged measurements
+
+The repository's **shared browser harness** now owns startup, provider, browser, environment, artifact hashing and teardown. The adapter copies the existing synthetic 4/240/2,000-message fixtures **before** server startup, changing only each header's disposable project directory. It delegates to the built-in app target: real built foreground CLI/host/worker, fake provider, no credentials. Its provider uses the harness's 1M context/disabled compaction configuration. Same three-case switch order, 12-second warm-up, one-second pauses, 1360×900 light viewport and destination-text/readable-composer criterion. No build/test from this worker ran during timing.
+
+| Messages | Mounted rows | Total DOM | Warm switch samples (ms) | Median |
+| ---: | ---: | ---: | --- | ---: |
+| 4 | 4 | 615 | 92.0 / 110.0 / 97.4 | **97.4 ms** |
+| 240 | 40 | 1,524 | 200.5 / 149.0 / 166.6 | **166.6 ms** |
+| 2,000 | **40** | **1,524** | 192.7 / 182.6 / 206.3 | **192.7 ms** |
+
+The 186.1 ms pre-merge sample is superseded for publication. Three samples do not establish a material regression or improvement between ~186 and ~193 ms. The stable result is **2,000 → 40 mounted messages**, not an additive latency claim for the other lanes. These remain warm switches, not cold-worker or input-latency measurements. The incoming worker-readiness implementation is distinct from speculative history prefetch; this branch did not implement C/D/E.
+
+### Final validation and reproduction
+
+- `pnpm verify` **passes**: all builds/type checks; UI **1,439 pass / one skip**, protocol **132**, host **274**, worker **716 pass / four skips**; release **42** and browser-harness **9** tests. `/tmp/chat-loading-merge-verify.log`. Identity check passes: `/tmp/chat-loading-merge-identity.log`.
+- Shared-harness **1360/390 × dark/light passes**. Desktop keyboard/phone touch, normal/reduced motion, 40 initial rows/one tail read, anchored prepend (64→64 px desktop, 80→80 phone), original ID/text/focus retained, distant find after explicit full loading, no page errors/overflow. Opening History makes one metadata-tail read and keeps **40** mounted rows in every layout; no all-history request until the explicit search button. Screenshots inspected after finite sheet animation settles.
+- Final artifacts: `/tmp/chat-loading/merged-browser/run-nYs0AT/{evidence,matrix-results,switches}.json`, screenshots/contact sheet; `/tmp/chat-loading/merged-browser-ready-final.log`. Recorded process survivors: **none**. `evidence.json` contains exact host/worker/UI artifact hashes.
+- An earlier broad worker run hit the incoming `project-env-live.test.ts` alpha-variable assertion; its isolated recheck and final full suite pass. A possible exit/FD3-drain race remains an incoming-code observation, not a change made here. Logs: `/tmp/chat-loading-merge-{worker,env-recheck}.log`. The previously accepted non-blocking review findings remain unchanged.
+
+```sh
+export PATH=$HOME/.nvm/versions/node/v24.11.1/bin:$PATH
+node scripts/browser-check/run.mjs \
+  --target /tmp/chat-loading/merged-target.mjs --fixture paired --matrix \
+  --script /tmp/chat-loading/merged-check.mjs \
+  --playwright /home/youssef/.npm/_npx/cbf1b8a072280925/node_modules/playwright/index.mjs \
+  --artifacts /tmp/chat-loading/merged-browser
+```
+
+The temporary target/check scripts are retained for exact reproduction. They adapt the shared engine rather than owning another server stack. The initial phone menu locator omitted its shortcut suffix; the corrected selector uses no forced click. `docs/session-open-forensics.md` now contains the separately completed forensics/readiness work; this merged measurement supplements it.
