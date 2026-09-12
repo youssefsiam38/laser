@@ -22,6 +22,7 @@ import type {
   SessionDriver,
 } from "./driver.js";
 import { ProjectFilesService } from "./files.js";
+import { ReplayBuffer } from "./replay-buffer.js";
 import { assertFirstTurnAdmission, FirstTurnLock } from "./first-turn.js";
 import { PendingTray } from "./pending.js";
 import { GitService } from "./git.js";
@@ -54,6 +55,8 @@ export interface WorkerServerOptions {
   features?: FeatureId[];
   /** Updates kept per session for `fromSeq` replay. */
   replayBuffer?: number;
+  /** Serialized-byte ceiling per replay suffix, independent of live state. */
+  replayBytes?: number;
   /** The package manager to run when settings name none (M10-T5): the one the host bundles. */
   npmCommand?: string[];
   /** Test seam: the model runtime Namer completes through. Defaults to the engine's. */
@@ -74,7 +77,7 @@ interface PreAcceptanceHydration {
 interface Live {
   driver: SessionDriver;
   seq: number;
-  buffer: SessionUpdateParams[];
+  buffer: ReplayBuffer;
   /** Read-only hydration baseline while a first turn is speculative/restoring. */
   preAcceptance?: PreAcceptanceHydration;
   unsubscribe: () => void;
@@ -970,7 +973,7 @@ export class WorkerServer {
     return this.replayFloorFrom(live.buffer, live.seq, fromSeq);
   }
 
-  private replayFloorFrom(buffer: SessionUpdateParams[], seq: number, fromSeq: number | undefined): number {
+  private replayFloorFrom(buffer: ReplayBuffer, seq: number, fromSeq: number | undefined): number {
     const asked = fromSeq ?? 0;
     // A restarted worker numbers from 1 again, so a client holding seq 40 is
     // asking about an epoch this process never had. Answering `asked` would
@@ -978,7 +981,7 @@ export class WorkerServer {
     // deduped away as a replay: alive-looking, rendering nothing. Checked
     // before the buffer, because the buffer is usually non-empty already.
     if (asked > seq) return seq;
-    const oldest = buffer[0]?.seq;
+    const oldest = buffer.first?.seq;
     // Nothing buffered: nothing after `seq` can be replayed either.
     if (oldest === undefined) return seq;
     return asked >= oldest - 1 ? asked : oldest - 1;
@@ -991,7 +994,7 @@ export class WorkerServer {
    */
   private async openAndAttach(openOptions: Parameters<SessionDriver["open"]>[0], handle?: SessionHandle): Promise<Live> {
     const driver = this.options.createDriver();
-    const live: Live = { driver, seq: 0, buffer: [], unsubscribe: () => {}, path: "" };
+    const live: Live = { driver, seq: 0, buffer: new ReplayBuffer(this.replayBuffer, this.options.replayBytes ?? 16 * 1024 * 1024), unsubscribe: () => {}, path: "" };
     driver.setExtensionModelWorkHandler?.((request) => this.admitExtensionModelWork(live, request));
     const queued: DriverEvent[] = [];
     let ready = false;
@@ -1353,7 +1356,6 @@ export class WorkerServer {
           at: new Date().toISOString(),
         };
         live.buffer.push(params);
-        if (live.buffer.length > this.replayBuffer) live.buffer.splice(0, live.buffer.length - this.replayBuffer);
         this.notify("session/update", params);
         if (update.kind === "tool_execution_start") {
           this.running(live.path).add(update.toolCallId);
