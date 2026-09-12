@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 import { EventBubbles } from "./EventBubbles.js";
 import { InspectorBody } from "./Inspector.js";
 import type { VisibleTree } from "./layout.js";
-import { emptyCaption } from "./MapCanvas.js";
+import { emptyCaption } from "./map-caption.js";
 import { mapUi, useMapRootState } from "./map-state.js";
 import { AgentMarkBadge, ChatButton, Elapsed, StatusWord } from "./NodeParts.js";
 import { nodeAgentLabel, nodeAriaLabel, nodeName } from "./node-model.js";

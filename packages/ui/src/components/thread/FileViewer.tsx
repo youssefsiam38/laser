@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Tabs } from "radix-ui";
 import { CodeDiffRows } from "@/components/assistant-ui/elements/code-diff";
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
-import { shikiLanguageFromPath } from "@/components/assistant-ui/elements/shiki-highlighter";
+import { shikiLanguageFromPath } from "@/components/assistant-ui/elements/shiki-language";
 import { FileSource } from "@/components/preview/FileSource";
 import { boundedPreview } from "@/components/preview/display";
 import { ImagePreview } from "@/components/preview/ImagePreview";

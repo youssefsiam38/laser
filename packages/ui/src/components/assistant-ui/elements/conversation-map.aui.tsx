@@ -13,6 +13,7 @@ import { useAuiState, useThreadViewport, type ThreadMessage } from "@assistant-u
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
+import { visibleMessageGeometry } from "@/components/thread/visible-message-geometry.js";
 
 import { ConversationMap, type ConversationMapEntry } from "./conversation-map.js";
 
@@ -128,23 +129,22 @@ export function ConversationMapAui({ side = "right", minTurns = 4, className }: 
   useEffect(() => {
     if (!viewport || typeof ResizeObserver === "undefined") return undefined;
     let frame = 0;
+    let content: HTMLElement | null = null;
     const measure = () => {
       frame = 0;
+      const nextContent = viewport.querySelector<HTMLElement>('[data-slot="thread-messages"]');
+      if (content !== nextContent) {
+        if (content) observer.unobserve(content);
+        content = nextContent;
+        if (content) observer.observe(content);
+      }
       const owners = turnOfRef.current;
       const view = viewport.getBoundingClientRect();
       const line = readingLine(viewport);
-      let current: string | undefined;
-      const onScreen: string[] = [];
-      for (const element of viewport.querySelectorAll<HTMLElement>("[data-message-id]")) {
-        const box = element.getBoundingClientRect();
-        if (box.top >= view.bottom) break;
-        const id = element.dataset["messageId"];
-        const head = id === undefined ? undefined : owners.get(id);
-        if (head === undefined) continue;
-        if (box.top <= line) current = head;
-        if (box.bottom > view.top && !onScreen.includes(head)) onScreen.push(head);
-      }
-      setActiveId(current ?? owners.values().next().value);
+      const elements = [...viewport.querySelectorAll<HTMLElement>("[data-message-id]")]
+        .filter((element) => owners.has(element.dataset["messageId"] ?? ""));
+      const { active, visible: onScreen } = visibleMessageGeometry(elements, owners, view.top, view.bottom, line);
+      setActiveId(active);
       setVisibleIds((previous) => (previous.length === onScreen.length && previous.every((id, index) => id === onScreen[index]) ? previous : onScreen));
     };
     const schedule = () => {

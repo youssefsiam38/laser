@@ -31,6 +31,7 @@ import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { cn } from "@/lib/utils";
 import { motionMs } from "@/motion";
 
+import { emptyCaption } from "./map-caption.js";
 import { AgentEdge, type AgentFlowEdge } from "./AgentEdge.js";
 import { AgentNode, type AgentFlowNode } from "./AgentNode.js";
 import { directionFor, layoutTree, MINIMAP_FROM, NODE_BOX, structureKey, type MapComposition, type MapDirection, type MapSize, type VisibleTree } from "./layout.js";
@@ -270,12 +271,6 @@ function CanvasInner({ rootPath, visible, composition, size, touch = false, clas
     </ReactFlow>
     </div>
   );
-}
-
-/** The lone root's caption: what will appear, or what is folded away. */
-export function emptyCaption(hidden: number): string {
-  if (hidden === 0) return "Agents this session starts will appear here.";
-  return hidden === 1 ? "One ended agent is folded away. Show ended brings it back." : `${hidden} ended agents are folded away. Show ended brings them back.`;
 }
 
 function Legend() {

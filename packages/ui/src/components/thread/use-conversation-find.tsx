@@ -1,8 +1,9 @@
 import { useAuiState } from "@assistant-ui/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ConversationSearch, type SearchHit } from "@/components/assistant-ui/elements/conversation-search";
+import { ConversationSearch } from "@/components/assistant-ui/elements/conversation-search";
 import { motionMs } from "@/motion";
-import { matchExcerpt, partSearchContent, textMatches } from "./search-text.js";
+import { matchExcerpt, textMatches } from "./search-text.js";
+import { createConversationSearch, createMessageRangeCache } from "./conversation-search-cache.js";
 import type { SearchSource } from "./search-state.js";
 
 /** Build ranges across markup boundaries without changing React-owned DOM. */
@@ -58,17 +59,8 @@ export function useConversationFind() {
   const root = useRef<HTMLDivElement>(null);
   const previousThread = useRef(threadId);
   const preferredSource = useRef<SearchSource | undefined>(undefined);
-  const hits = useMemo(() => {
-    if (!open || !query.trim()) return [];
-    return messages.flatMap(message => {
-      let occurrence = 0;
-      return message.content.flatMap((part, partIndex) => {
-        const content = partSearchContent(part as unknown as { type: string; [key: string]: unknown });
-        const source = part.type === "reasoning" ? "reasoning" : part.type === "tool-call" ? "tool" : message.role === "user" ? "user" : "assistant";
-        return content.flatMap((text, fieldIndex) => textMatches(text, query).map((m): SearchHit => ({ id: `${message.id}:${partIndex}:${fieldIndex}:${m.start}`, messageId: message.id, source, occurrence: occurrence++, ...matchExcerpt(text, m) })));
-      });
-    });
-  }, [messages, query, open]);
+  const search = useMemo(() => createConversationSearch(), []);
+  const hits = useMemo(() => open ? search(messages, query) : [], [messages, query, open, search]);
   useEffect(() => {
     if (!preferredSource.current || !hits.length) return;
     const preferred = hits.findIndex(hit => hit.source === preferredSource.current);
@@ -77,6 +69,9 @@ export function useConversationFind() {
   }, [hits]);
   const activeIndex = Math.min(index, Math.max(0, hits.length - 1));
   const active = hits[activeIndex];
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const schedulePaint = useRef<(() => void) | undefined>(undefined);
   const close = useCallback(() => {
     setOpen(false);
     (restoreFocus.current?.isConnected ? restoreFocus.current : root.current?.querySelector<HTMLElement>("textarea"))?.focus({ preventScroll: true });
@@ -113,12 +108,16 @@ export function useConversationFind() {
     const viewport = root.current?.querySelector<HTMLElement>('[data-slot="thread-viewport"]');
     if (!viewport || !open || !query.trim()) return;
     let frame = 0;
+    const cache = createMessageRangeCache(message => findTextRanges(message, query));
     const paint = () => {
       if (!("highlights" in CSS) || typeof Highlight === "undefined") return;
       const ranges: Range[] = [];
       let selected: Range | undefined;
-      for (const message of viewport.querySelectorAll<HTMLElement>("[data-message-id]")) {
-        const found = findTextRanges(message, query);
+      const active = activeRef.current;
+      const messages = [...viewport.querySelectorAll<HTMLElement>("[data-message-id]")];
+      cache.retain(messages);
+      for (const message of messages) {
+        const found = cache.get(message);
         ranges.push(...found);
         if (active && message.dataset.messageId === active.messageId) selected = found[active.occurrence] ?? found[0];
       }
@@ -126,12 +125,13 @@ export function useConversationFind() {
       CSS.highlights.set("conversation-current", new Highlight(...(selected ? [selected] : [])));
     };
     const schedule = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(paint); };
-    const observer = new MutationObserver(schedule);
-    observer.observe(viewport, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["hidden", "data-state"] });
+    const observer = new MutationObserver(records => { cache.invalidate(records); schedule(); });
+    observer.observe(viewport, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["hidden", "aria-hidden", "data-state", "data-search-content", "data-search-exclude"] });
+    schedulePaint.current = schedule;
     schedule();
-    viewport.addEventListener("scroll", schedule, { passive: true });
-    return () => { cancelAnimationFrame(frame); observer.disconnect(); viewport.removeEventListener("scroll", schedule); CSS.highlights?.delete("conversation-matches"); CSS.highlights?.delete("conversation-current"); };
-  }, [open, query, active?.id, active?.messageId, active?.occurrence]);
+    return () => { schedulePaint.current = undefined; cancelAnimationFrame(frame); observer.disconnect(); CSS.highlights?.delete("conversation-matches"); CSS.highlights?.delete("conversation-current"); };
+  }, [open, query]);
+  useEffect(() => { schedulePaint.current?.(); }, [active?.id, active?.messageId, active?.occurrence]);
   useEffect(() => {
     if (!active) return;
     const timer = window.setTimeout(() => {

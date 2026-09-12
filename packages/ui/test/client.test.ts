@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostNotificationMethod } from "@lasercode/protocol";
 import { PRODUCT_VERSION } from "@lasercode/protocol";
 import { HostClient } from "../src/client.js";
+import { createStateStore } from "../src/runtime/LaserProvider.js";
+import { initialState, reduce } from "../src/store.js";
 
 // --- stubs -----------------------------------------------------------------
 
@@ -189,6 +191,77 @@ describe("visibility listener", () => {
 });
 
 describe("delta coalescing", () => {
+  it.each(["frame", "timer", "dialog", "reply", "disconnect"])("publishes once at the %s barrier without skipping accepted sequences", async (barrier) => {
+    vi.useFakeTimers();
+    const initial = reduce(initialState, { type: "opened", state: {
+      path: "/s.jsonl", id: "s", cwd: "/p", model: null, thinkingLevel: "medium",
+      isStreaming: true, isCompacting: false, steeringMode: "one-at-a-time",
+      followUpMode: "one-at-a-time", autoCompactionEnabled: true, messageCount: 0, pendingMessageCount: 0,
+    } });
+    const seeded = reduce(initial, { type: "notification", method: "session/update", params: {
+      sessionPath: "/s.jsonl", seq: 1, at: "", update: { kind: "text_delta", delta: "start", contentIndex: 0 },
+    } });
+    const store = createStateStore(seeded);
+    const unbatched = createStateStore(seeded);
+    const published = vi.fn();
+    const baseline = vi.fn();
+    store.subscribe(published);
+    unbatched.subscribe(baseline);
+    const observed: number[] = [];
+    const { client } = build({
+      batchNotifications: store.batch,
+      onNotification: (method, params) => {
+        if (method !== "session/update") {
+          expect(published).toHaveBeenCalledTimes(1);
+          return;
+        }
+        store.dispatch({ type: "notification", method, params });
+        unbatched.dispatch({ type: "notification", method, params });
+      },
+    });
+    client.subscribe((method) => {
+      if (method === "session/update") observed.push(store.getSnapshot().open["/s.jsonl"]!.lastSeq);
+    });
+    client.connect();
+    const socket = FakeSocket.instances[0]!;
+    socket.accept();
+    for (let seq = 2; seq <= 33; seq++) socket.deliver(updateMessage(seq));
+    expect(published).not.toHaveBeenCalled();
+    if (barrier === "frame") runFrame();
+    if (barrier === "timer") vi.advanceTimersByTime(33);
+    if (barrier === "dialog") socket.deliver({ jsonrpc: "2.0", method: "pi/ui/request", params: {} });
+    if (barrier === "reply") {
+      const reply = client.request("pi/session/list", {});
+      socket.deliver({ jsonrpc: "2.0", id: socket.frames().at(-1)!.id, result: { sessions: [] } });
+      await reply;
+    }
+    if (barrier === "disconnect") socket.close();
+    expect(published).toHaveBeenCalledTimes(1);
+    expect(baseline).toHaveBeenCalledTimes(32);
+    expect(observed).toEqual(Array.from({ length: 32 }, (_, i) => i + 2));
+    expect(store.getSnapshot()).toEqual(unbatched.getSnapshot());
+    runFrame();
+    vi.advanceTimersByTime(33);
+    expect(published).toHaveBeenCalledTimes(1);
+    client.close();
+  });
+
+  it("settles nested and throwing store transactions synchronously; no-op batches do not publish", () => {
+    const store = createStateStore();
+    const published = vi.fn();
+    store.subscribe(published);
+    store.batch(() => {});
+    expect(published).not.toHaveBeenCalled();
+    expect(() => store.batch(() => {
+      store.batch(() => store.dispatch({ type: "connection", state: "open" }));
+      expect(store.getSnapshot().connection).toBe("open");
+      expect(published).not.toHaveBeenCalled();
+      throw new Error("listener");
+    })).toThrow("listener");
+    expect(published).toHaveBeenCalledTimes(1);
+    store.dispatch({ type: "connection", state: "closed" });
+    expect(published).toHaveBeenCalledTimes(2);
+  });
   it("holds session/update until the next frame, in seq order", () => {
     const { client, notifications } = build();
     client.connect();

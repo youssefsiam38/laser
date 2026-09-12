@@ -4,7 +4,7 @@ import type { InstructionTemplateTarget } from "@lasercode/protocol";
 import { useMemo, type CSSProperties, type ReactNode } from "react";
 import { useShikiHighlighter } from "react-shiki";
 
-import { LASER_SHIKI_THEME, SHIKI_ENGINE } from "@/components/assistant-ui/elements/shiki-highlighter";
+import { LASER_SHIKI_THEME, SHIKI_ENGINE } from "@/components/assistant-ui/elements/shiki-theme";
 import { Popover, PopoverContent, PopoverDescription, PopoverHeader, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 

@@ -23,6 +23,7 @@ import { useRequestFind } from "./use-request-find.js";
 import { ConfidenceMarker } from "@/components/assistant-ui/elements/confidence-marker";
 import { FileLinkDirectory } from "@/components/ui/source-file-link";
 import { requestSourceSpans } from "./request-sources.js";
+import { createRequestJsonText } from "./request-json-text.js";
 
 export type ApiRequestTarget = { kind: "log"; entry: LogEntry } | {
   kind: "message"; path: string; entryId?: string; at?: string; beforeAt?: string;
@@ -170,6 +171,7 @@ function RequestBody({entry}:{entry:LogEntry}) {
     return ()=>{live=false;};
   },[client,entry]);
   const view=useMemo(()=>inspectRequest(payload),[payload]);
+  const jsonText=useMemo(()=>createRequestJsonText(payload),[payload]);
   const fields=section==="json"?[]:view[section];
   const query=searchOpen?search:"";
   const searching=Boolean(query.trim());
@@ -223,7 +225,7 @@ function RequestBody({entry}:{entry:LogEntry}) {
             className={cn("rounded px-2 py-1 text-xs font-medium text-ink-2 outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-live",contentView===mode&&"bg-surface text-ink shadow-sm")}>{mode==="plain"?"Plain":"Markdown"}</button>)}
         </div>}
         {!searchOpen&&<Button variant="ghost" size="sm" aria-label="Search request" onClick={()=>{setSearchOpen(true);requestAnimationFrame(()=>find.input.current?.focus());}}><Search/>Search</Button>}
-        <Button variant="ghost" size="sm" onClick={()=>void copy(JSON.stringify(payload,null,2))}>{copied?<Check/>:<Copy/>}{copied?"Copied":"Copy JSON"}</Button>
+        <Button variant="ghost" size="sm" onClick={()=>void copy(jsonText())}>{copied?<Check/>:<Copy/>}{copied?"Copied":"Copy JSON"}</Button>
       </header>
       {searchOpen&&<ConversationSearch data-request-find label={scope==="request"?"Find in full request":`Find in ${sectionLabel.toLowerCase()}`} inputRef={find.input} query={search} hits={find.matches} activeIndex={find.activeIndex} onQueryChange={setSearch} onStep={find.step} onClose={closeSearch}
         toolbar={<div role="group" aria-label="Request search scope" className="flex items-center gap-1 border-b border-line px-2 py-1">
@@ -236,7 +238,7 @@ function RequestBody({entry}:{entry:LogEntry}) {
         {truncated&&<p role="alert" className="mb-3 text-sm text-attention">Payload exceeds the 8 MB inspection limit. This is a truncated capture; structured sections may be unavailable.</p>}
         {/* Full search indexes the payload ONCE, never a concatenation of tabs.
             Section cards index their main text, not previews or duplicate JSON. */}
-        {fullSearch||section==="json"?<RequestJson value={payload} search={searching} literalText={truncated&&typeof payload==="string"?payload:undefined}/>
+        {fullSearch||section==="json"?<RequestJson value={payload} search={searching} getText={jsonText} literalText={truncated&&typeof payload==="string"?payload:undefined}/>
           : fields.length ? <div className="flex flex-col gap-3">{fields.map(field=><RequestFieldCard key={`${entry.id}:${field.path}`} field={field} expanded={section==="instructions"} reveal={searching} markdown={(section==="instructions"||section==="conversation")&&contentView==="markdown"} sources={section==="instructions"?entry.requestContext?.instructionSources ?? EMPTY_SOURCES:undefined}/>)}</div>
           : <p className="py-8 text-center text-sm text-ink-3">No fields recorded in this section. Provider-specific fields remain in Parameters and Full JSON.</p>}
       </div>
@@ -249,7 +251,7 @@ const EMPTY_SOURCES: InstructionSourceMap[] = [];
 
 function RequestFieldCard({field,expanded,markdown,reveal,sources}:{field:RequestField;expanded:boolean;markdown:boolean;reveal:boolean;sources?:InstructionSourceMap[]|undefined}) {
   const [open,setOpen]=useState(expanded);
-  const text=requestFieldText(field.value);
+  const text=useMemo(()=>requestFieldText(field.value),[field.value]);
   const [spans,setSpans]=useState<InstructionSourceSpan[]>();
   useEffect(()=>{
     let live=true;
@@ -281,8 +283,9 @@ function RequestFieldCard({field,expanded,markdown,reveal,sources}:{field:Reques
 
 /** Find exposes the exact retained JSON, including structural keys and syntax.
  * Keep the foldable viewer mounted so clearing find restores its disclosure. */
-function RequestJson({value,search,literalText}:{value:unknown;search:boolean;literalText?:string|undefined}) {
-  const code=useMemo(()=>literalText??JSON.stringify(value,null,2)??"",[value,literalText]);
+function RequestJson({value,search,literalText,getText}:{value:unknown;search:boolean;literalText?:string|undefined;getText?:(()=>string)|undefined}) {
+  const ownText=useMemo(()=>createRequestJsonText(value),[value]);
+  const code=search?(literalText??(getText??ownText)()):"";
   return <>
     <div hidden={search}><JsonViewer value={value} expandedDepth={2} className="max-h-none"/></div>
     {search&&<div data-request-search-content><SyntaxHighlighter code={code} language="json" streaming={code.length>200_000} className="[&>pre]:whitespace-pre-wrap! [&>pre]:wrap-break-word! [&>pre]:overflow-x-hidden!"/></div>}

@@ -19,7 +19,8 @@ import { createAncestryIndex } from "../agents/run-tree.js";
 import { useTick } from "../components/thread/timing.js";
 import { useLaserStable, useLaserState } from "../runtime/index.js";
 import type { AppState } from "../store.js";
-import { buildFleet, fleetSummary, scopeFleet, type FleetGroup } from "./model.js";
+import { samePresentationViews } from "../runtime/presentation-state.js";
+import { selectFleet, fleetSummary, scopeFleet, type FleetGroup } from "./model.js";
 
 export interface FleetView {
   /** The session being read, marked in the tree. Undefined when none is open. */
@@ -45,7 +46,7 @@ export function useFleet(): FleetView {
   const sessionsLoaded = useLaserState((s: AppState) => s.sessionsLoaded);
   const runs = useLaserState((s: AppState) => s.agents.runs);
   const tasks = useLaserState((s: AppState) => s.tasks.tasks);
-  const views = useLaserState((s: AppState) => s.open);
+  const views = useLaserState((s: AppState) => s.open, samePresentationViews);
   const current = useLaserState((s: AppState) => s.current);
 
   // Elapsed is live only while something shown is. Which items are shown is
@@ -59,7 +60,7 @@ export function useFleet(): FleetView {
     // state before the catalog has a row for it; the index answers for the rest.
     const root =
       current === undefined ? undefined : (views[current]?.state.agent?.rootPath ?? createAncestryIndex(runs, sessions).rootOf(current));
-    const groups = buildFleet({ sessions, runs, tasks, views, currentPath: current, sessionsLoaded, now: Date.now() });
+    const groups = selectFleet({ sessions, runs, tasks, views, currentPath: current, sessionsLoaded, now: Date.now() });
     const scope = scopeFleet(groups, root);
     const summary = fleetSummary(scope.tree ? [scope.tree] : []);
     const elsewhere = fleetSummary(scope.elsewhere);

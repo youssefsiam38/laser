@@ -20,7 +20,7 @@ import { Button } from "@/components/ui/button";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { relativeTime } from "@/format";
 import { cn } from "@/lib/utils";
-import { useLaserView } from "@/runtime";
+import { useLaserState } from "@/runtime";
 
 import { mono, paper } from "./surfaces.js";
 
@@ -163,8 +163,8 @@ export function useComposerDraft(path: string | undefined): {
  * textarea in the document — more than one composer can be on screen.
  */
 export function ComposerDraftRestore({ className }: { className?: string | undefined }) {
-  const view = useLaserView();
-  const { saved, restore, discard } = useComposerDraft(view?.path);
+  const path = useLaserState((s) => s.current ? s.open[s.current]?.path : undefined);
+  const { saved, restore, discard } = useComposerDraft(path);
   const offer = useRef<HTMLDivElement>(null);
   if (!saved) return null;
   const restoreAndFocus = () => {

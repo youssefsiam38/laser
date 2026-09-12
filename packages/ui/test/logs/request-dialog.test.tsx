@@ -23,6 +23,31 @@ beforeEach(()=>{globalThis.IS_REACT_ACT_ENVIRONMENT=true;client.request.mockRese
 afterEach(async()=>{await act(async()=>root.unmount());container.remove();vi.restoreAllMocks();vi.unstubAllGlobals();});
 const click=async(text:string)=>{const button=[...document.body.querySelectorAll("button")].find(button=>button.textContent?.includes(text));expect(button).toBeDefined();await act(async()=>button!.click());};
 
+it("defers multi-megabyte JSON formatting until requested, then shares exact text across search and copy",async()=>{
+  const payload={instructions:"Capture instructions",data:"x".repeat(2*1024*1024),nested:{"quoted key":"line\\n\\\"quoted\\\" Ω",flag:true}};
+  const stringify=JSON.stringify;
+  const expected=stringify(payload,null,2);
+  let formats=0;
+  vi.spyOn(JSON,"stringify").mockImplementation(((value:unknown,replacer:never,space:never)=>{
+    if(value===payload)formats++;
+    return stringify(value,replacer,space);
+  }) as typeof JSON.stringify);
+  const clipboard=vi.spyOn(navigator.clipboard,"writeText").mockResolvedValue(undefined);
+  await act(async()=>root.render(<ApiRequestDialog target={{kind:"log",entry:{...entry,detail:payload}}} onClose={()=>{}}/>));
+  await click("Full JSON");
+  expect(formats).toBe(0);
+  await search("quoted key");
+  expect(formats).toBe(1);
+  expect(document.querySelector('[data-request-search-content]')?.textContent).toBe(expected);
+  await click("Copy JSON");
+  expect(clipboard).toHaveBeenCalledWith(expected);
+  expect(formats).toBe(1);
+  await search("Ω");
+  expect(formats).toBe(1);
+  expect(count()).toBe("1 / 1");
+  console.info(`F24: ${expected.length} characters; 0 initial full formats, 1 shared search/copy format`);
+});
+
 it("loads exact message-linked requests and exposes tools, parameters, full JSON and close",async()=>{
   client.request.mockResolvedValue({entries:[entry],hasMore:false});
   const close=vi.fn();

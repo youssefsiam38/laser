@@ -39,7 +39,7 @@ import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { money, tokens } from "@/format";
 import { cn } from "@/lib/utils";
 import { useRunsForRoot } from "@/agents";
-import { useLaserStable, useLaserView, useSessionMeta } from "@/runtime";
+import { useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
 
 import { CheckpointHistory } from "@/components/assistant-ui/elements/checkpoint-history";
 import {
@@ -64,7 +64,6 @@ export interface TelemetryPanelProps {
  * tool activity, and history. Read-only except compact / fork / jump.
  */
 export function TelemetryPanel({ variant }: TelemetryPanelProps) {
-  const view = useLaserView();
   const meta = useSessionMeta();
   const shell = useShell();
 
@@ -84,9 +83,9 @@ export function TelemetryPanel({ variant }: TelemetryPanelProps) {
           ) : null}
         </span>
         <h2 className="eyebrow">Telemetry</h2>
-        {view && (
-          <span className="truncate font-mono text-xs text-ink-3" title={view.path}>
-            {view.state.id.slice(0, 8)}
+        {meta.session && (
+          <span className="truncate font-mono text-xs text-ink-3" title={meta.path}>
+            {meta.session.id.slice(0, 8)}
           </span>
         )}
         {variant === "panel" && (
@@ -101,7 +100,7 @@ export function TelemetryPanel({ variant }: TelemetryPanelProps) {
         )}
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {view ? (
+        {meta.session ? (
           <>
             <ContextSection />
             <UsageSection />
@@ -176,7 +175,6 @@ function NoSession() {
 
 function ContextSection() {
   const { actions } = useLaserStable();
-  const view = useLaserView();
   const meta = useSessionMeta();
   const usage = meta.contextUsage;
   const busy = meta.running || meta.compacting;
@@ -212,9 +210,9 @@ function ContextSection() {
               <div className="mt-2 flex items-center gap-1.5 text-xs text-ink-2">
                 <span
                   aria-hidden="true"
-                  className={cn("size-1.5 rounded-full", view?.state.autoCompactionEnabled ? "bg-ok" : "bg-ink-3")}
+                  className={cn("size-1.5 rounded-full", meta.session?.autoCompactionEnabled ? "bg-ok" : "bg-ink-3")}
                 />
-                Auto-compact {view?.state.autoCompactionEnabled ? "on" : "off"}
+                Auto-compact {meta.session?.autoCompactionEnabled ? "on" : "off"}
               </div>
             </>
           ) : (
@@ -288,9 +286,9 @@ type UsageView = "account" | "api";
 
 function UsageSection() {
   const workbench = useWorkbench();
-  const view = useLaserView();
-  const entries = view?.entries;
-  const childRuns = useRunsForRoot(view?.path);
+  const session = useLaserState((s) => s.current ? s.open[s.current]?.state : undefined);
+  const entries = useLaserState((s) => s.current ? s.open[s.current]?.entries : undefined);
+  const childRuns = useRunsForRoot(session?.path);
   const background = useMemo(
     () => backgroundUsageSources(childRuns),
     [childRuns],
@@ -299,14 +297,14 @@ function UsageSection() {
     () => (entries ? sessionBillingMode(entries, background) : "none"),
     [background, entries],
   );
-  const mode = transcriptMode === "none" && isAccountProvider(view?.state.model?.provider) ? "account" : transcriptMode;
+  const mode = transcriptMode === "none" && isAccountProvider(session?.model?.provider) ? "account" : transcriptMode;
   const [preferred, setPreferred] = useState<UsageView>("account");
   const active: UsageView = mode === "mixed" ? preferred : mode === "account" ? "account" : "api";
   const apiUsage = useMemo<UsageTotals | undefined>(
     () => (entries ? usageFromEntries(entries, "api", background) : undefined),
     [background, entries],
   );
-  const accountUsage = view?.state.accountUsage;
+  const accountUsage = session?.accountUsage;
 
   return (
     <Section
@@ -524,17 +522,16 @@ function ToolsSection() {
 
 function HistorySection() {
   const { actions } = useLaserStable();
-  const view = useLaserView();
   const meta = useSessionMeta();
   const shell = useShell();
-  const entries = view?.entries;
+  const entries = useLaserState((s) => s.current ? s.open[s.current]?.entries : undefined);
   const rows = useMemo(() => (entries ? historyRows(entries) : []), [entries]);
 
   // Refresh when opened and when the session settles; never on callback churn.
   const refresh = useRef(actions.refreshEntries);
   refresh.current = actions.refreshEntries;
-  const path = view?.path;
-  const running = view?.running ?? false;
+  const path = meta.path;
+  const running = meta.running;
   useEffect(() => {
     if (shell.historyOpen && path) void refresh.current();
   }, [shell.historyOpen, path, running]);

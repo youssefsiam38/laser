@@ -823,3 +823,235 @@ still has legacy full delivery until that point. F07 does not preempt one huge
 JSON parse. F12 does not promise never-used optional modules offline. F19 rejects
 unproved runtime sharing/concurrent recovery. These are explicit boundaries,
 not hidden deletion of transcript, capture, question or model functionality.
+## Implemented — renderer lane
+
+### F04 — batched external-store publication
+
+`HostClient` wraps its existing synchronous frame/timer/barrier delivery in a
+store transaction. Every reducer action and event listener still runs in arrival
+order; imperative snapshots immediately contain each accepted sequence. Only
+subscriber publication waits until the transaction finishes (including throws).
+No new scheduling layer, delta merging, history action or hydration change.
+
+Measured paired call counts in `test/client.test.ts`: **32 → 1 subscriber
+publications** for 32 text deltas, with **32 → 32 reducer calls and event-level
+observations**. Identical immutable final state, tested separately at frame,
+hidden-tab timer, dialog, RPC-reply and disconnect barriers. These are deterministic
+source integration counts, not browser React commits or elapsed-time savings.
+
+Validation at base `413c8e2` plus this commit: UI TypeScript passes; UI suite
+**164 files / 1,383 passed, one pre-existing benchmark skipped**; identity passes.
+Logs: `/tmp/perf-renderer/f04-{focused,types,ui,identity}.log`. Browser performance
+and the lane-wide visible-surface acceptance matrix remain outstanding.
+
+### F05 — presentation subscriptions and shared fleet structure
+
+The provider's render-only snapshot compares the fields its shell derivations
+actually read; imperative actions still read the authoritative store. Fleet
+consumers share a weakly owned structure cache, with elapsed labels updated
+without rebuilding ancestry. Session metadata, telemetry sections, and the draft
+restore utility no longer subscribe to transcript bodies. Title inputs (including
+the fleet's first nonempty user line), dialogs, lifecycle, catalog membership,
+run/task activity and independently scoped stores remain observable.
+
+Measured React executions over **10 separately flushed deltas × 1/8/32 streams**:
+broad subscribers **10/80/320**, narrowed shell/fleet/session-meta subscribers
+**0/0/0** each, excluding mount. Structural fleet builds across repeated consumers
+and five clock ticks: **8 calls → 1 build**; output equals uncached derivation at
+every tested timestamp. No browser CPU or power reduction is inferred.
+
+Validation: UI TypeScript, **165 files / 1,388 tests passed, one benchmark skipped**,
+and identity pass. `test/runtime/presentation-state.test.tsx` covers counts,
+clock/output equivalence, rename, branch prompt, membership and needs-input
+invalidation; existing fleet/telemetry/runtime/disclosure tests stay green.
+Logs: `/tmp/perf-renderer/f05-{types,ui,identity}.log`. This base has no paged
+catalog reference-set derivation; those M16-T16 additions are not rewritten here.
+
+### F14 — implemented locally, browser acceptance blocked (not accepted)
+
+Uncommitted measurement-only change: binary-search the normal-flow message roots
+before reading the viewport neighborhood. The existing map owns scrolling;
+no virtualizer/history contract or jump controller was added. A ResizeObserver
+also follows the existing message container for disclosure/image height changes.
+The DOM root query remains linear; the costly rectangle reads do not.
+
+Fresh deterministic 2,000-root test: **2,000 → 14 rectangle reads** near the tail;
+reading identity matches the original scan across gaps and tall/resized bodies.
+Production browser, 2,000 synthetic messages, 20 alternating tail scroll samples:
+**16–17 total message-root rectangle reads/frame** (includes all app callers).
+No paired browser latency improvement is claimed. Raw counts and environment:
+`/tmp/perf-renderer/f14-browser.json`, `f14-build.log`, `seed.mjs`, `paths.json`.
+
+TypeScript, UI **166 files / 1,390 passed, one benchmark skipped**, production UI
+build and identity pass. Browser screenshots at 1360/390 show the correct tail
+and no page overflow, but **all captures remained light**, including attempted
+dark cases. Those files are explicitly renamed `attempted-dark-actual-light`.
+A subsequent theme-button click and browser snapshot search timed out. Browser
+matrix, keyboard/touch, find/jump and live resizing acceptance remain incomplete;
+do not accept this finding based on its green unit suite. Source is uncommitted.
+
+F14 continuation: coordinator authorized committing the tested implementation
+with **browser acceptance outstanding**, to be covered once for the integrated
+lane rather than used as a per-finding gate. The preceding blocked checkpoint is
+retained as history; the measurement and test evidence above remain unchanged.
+
+### F15 — incremental conversation search and native ranges
+
+Weak caches retain display projections by immutable part and query matches by
+immutable message identity (one query per message). A live suffix reuses settled
+hits. DOM range caches invalidate only changed/remounted message roots; native
+ranges follow scroll without new text walks. Selection changes repaint cached
+highlights separately from the selected-result geometry. Literal request-inspector
+search is unchanged; no React-owned text nodes are wrapped or replaced.
+
+Measured regression fixtures: updating the last of **2,000 messages** projects
+**2,000 → 1 parts**, retaining the settled hit objects and identical search output.
+With find open over **240 mounted messages**, coalesced scroll costs **240 → 0
+text walks**, one changed/remounted root **240 → 1**, and selection navigation
+performs only its one geometry traversal. Tests exercise real MutationObserver,
+React remounts, focus, folded content, native ranges and closing cleanup.
+Loaded-history scope/window actions stay with M16-T16; flattening the hit list
+still visits loaded message identities.
+
+Validation: TypeScript, **167 UI files / 1,392 tests passed, one benchmark skipped**,
+identity and diff checks pass. Logs `/tmp/perf-renderer/f15-{types,ui,identity}.log`.
+Initial test needed to await the existing selected-result scroll timer rather than
+count it as a content invalidation; generated browser YAML was moved intact to
+`/tmp/perf-renderer/playwright-artifacts` after identity correctly rejected it as
+repository source. Browser acceptance remains outstanding for integrated testing.
+
+### F13 — close eager highlighter and map import paths
+
+File-card filename inference now imports a dependency-light grammar helper.
+The public highlighter is a shared lazy boundary for **all** callers (including
+request diagnostics and file previews), not just Markdown fences. Themes and
+filename helpers do not import react-shiki/core. The compact lineage caption is
+independent of the canvas; React Flow loads only when a measured canvas is used.
+Map chrome, layout/state and the same-sized plain-code fallback remain in place.
+
+Fresh paired production Vite builds with source maps/manifests (same environment,
+F15 source plus/minus F13): static entry **2,648,508 → 2,337,557 bytes**;
+gzip **791,658 → 692,628 bytes**. Static dependency traversal finds **2 → 0
+XYFlow modules** and **4 → 0 highlighter/core modules**. Optional grammars remain
+available, not deleted. Files and raw inventory: `/tmp/perf-renderer/f13-bundle.json`,
+`f13-{before,after}/`, `f13-{before,after}-build.log`. This measures emitted code,
+not first-install SW transfer or browser execution time.
+
+**Math deferral deliberately not forced:** `markdown-text.tsx:236–264` has one
+synchronous parser/component tree with provenance wrapping and eager math plugins.
+A lazy plugin inserted after paint changes parsing/height (and may remount source
+controls); suspending the whole live message hides existing content. Neither meets
+F13's no-layout-shift/focus boundary without a separately proved math-loading
+presentation. KaTeX remains eager (two mapped modules), and existing math/currency/
+code/provenance behavior is unchanged.
+
+Validation: TypeScript, **168 UI files / 1,393 tests passed, one benchmark skipped**,
+identity and both production builds pass. The new highlighter test proves zero
+engine-module loads for path labels/streaming and one on settlement, preserving
+literal escaped text. Existing full-language and map status/selection/layout tests
+pass; map tests now await real lazy-canvas settlement before measuring nodes,
+not an assumed synchronous mount. Browser acceptance remains outstanding.
+
+### F17 — stopped at the host capability seam (no renderer workaround)
+
+Reverified: `protocol/src/messages.ts:38–45` gives `ModelRef` only an optional
+reasoning boolean, not accepted thinking levels or per-model defaults.
+`pi/model/list` (`:1026`) returns that same insufficient type. Only
+`ModelCatalogEntry` (`:628–651`) plus `pi/models/catalog` supplies the capability
+and configuration defaults consumed by `reasoning-effort.tsx:204–241`.
+
+**Rejected as a renderer-only optimization:** dropping the catalog request or
+substituting `reasoning: true` would guess supported levels and break first-turn
+agent/model/default clamping. A small host-owned capability response for the
+requested/effective model (including accepted levels and configured defaults) is
+required first. No host/protocol mutation was made. Startup catalog traffic is
+**unchanged**; no byte/latency reduction or implementation completion is claimed.
+Caches keyed by client/configuration generation should be addressed with that
+method rather than creating a second provisional lookup contract here.
+
+Validation of the unchanged renderer: TypeScript and identity pass; final UI
+recheck **168 files / 1,393 passed, one skipped**. One preceding broad run failed
+`catalog-arrival.test.tsx:246` after its fixed 100ms wait (destination still blank);
+focused reproduction and the full-suite recheck passed without source changes.
+This is recorded, not labeled proven flaky. Logs `/tmp/perf-renderer/f17-*` retain
+both runs. No new regression test is claimed for an intentionally unimplemented
+host seam. Coordinator/host-method ownership is the next action for F17.
+
+### F23 — suspend hidden catalog polling, reconcile on return
+
+The provider's existing 20-second presentation poll now owns a visibility-aware
+scheduler: no interval while hidden, one immediate refresh on becoming visible,
+then the existing cadence. Duplicate visibility events do not add refreshes;
+a queued tick checks visibility before requesting. Disconnect/unmount removes
+both timer and listener. Initial/reconnect/notification-driven refreshes are
+unchanged; transport, questions, running work, dictation and seen/attention paths
+are untouched. Electron throttling and host skill checks remain outside this lane.
+
+Paired fake-clock lifecycle measurement over 60 seconds at the existing cadence:
+visible refreshes **3 → 3**; hidden refreshes **3 → 0**; return **one immediate
+refresh**; after cleanup **0**. Tests also cover initially hidden views and a
+visibility transition before its event is delivered. This is eliminated polling
+work, **not measured CPU/power savings or minimized-Electron acceptance**.
+
+Validation: TypeScript, **169 UI files / 1,395 tests passed, one benchmark skipped**,
+identity and diff checks pass; logs `/tmp/perf-renderer/f23-{types,ui,identity}.log`.
+Browser/minimized-window acceptance remains outstanding for integration.
+
+### F24 — defer and reuse diagnostic JSON materialization
+
+The request inspector no longer pretty-prints the entire payload just to show its
+foldable JSON tree. An immutable capture/field owns a lazy text getter; explicit
+full-text search and Copy JSON share the exact complete string. Field display text
+is memoized independently of search/UI changes. Literal truncated captures,
+source ranges, JSON keys/syntax, and the existing fold state are unchanged.
+
+A real inspector interaction test uses **2,097,291 formatted characters**:
+initial full-payload formatting **1 → 0**; subsequent full search, copy and query
+changes together format **once**, and rendered/copy text equals the complete
+reference JSON (including escaped keys, quotes and Unicode). Running this exact
+regression against the pre-F24 dialog fails at the initial-format assertion;
+after source was restored it passes. Logs `f24-before.log`, `f24-focused.log`.
+
+Twenty paired synthetic Node 24.11.1 samples per size (not browser latency):
+
+| Payload text | Parse median (unchanged) | Eager pretty-print median | Deferred getter setup median | First explicit use median |
+| --- | ---: | ---: | ---: | ---: |
+| 1 MiB | 0.572 ms | 1.349 ms | 0.0010 ms | 1.343 ms |
+| 4 MiB | 2.495 ms | 5.892 ms | 0.0013 ms | 5.541 ms |
+| 8 MiB | 5.388 ms | 16.708 ms | 0.0015 ms | 16.762 ms |
+
+The cost is avoided when not needed, not made magically cheaper on first use.
+Repeated getters reuse the string. Raw samples and exact source imports:
+`/tmp/perf-renderer/f24-diagnostic-bench.json`, `diagnostic-bench.mjs`.
+Parsing still occurs on the renderer; no off-thread/structured-clone improvement
+is claimed. A worker and wider diagnostic virtualization need separate profiling.
+Static HTTP serving belongs to the host lane and is untouched.
+
+Validation: TypeScript, **169 UI files / 1,396 tests passed, one benchmark skipped**,
+identity and diff checks pass. Existing inspector keyboard search, provenance,
+copy/disclosure and truncated-capture interaction tests remain green. Logs
+`/tmp/perf-renderer/f24-{types,ui,identity}.log`.
+
+### Renderer lane final integration evidence and limits
+
+`pnpm verify` **passed** against `5fe8279` plus the staged F24 implementation:
+direction checks, all workspace builds/typechecks/tests and release regression
+checks. UI: 169 files / 1,396 passed; host: 30 files / 233 passed; worker: 61 files /
+682 passed with existing skips; release: 42 passed. Log
+`/tmp/perf-renderer/final-verify.log`. Intended new sources were staged before the
+identity/full gates; no host/worker source or M16-T16 history seam was changed.
+
+**Browser acceptance outstanding, explicitly handed to the coordinator.** A final
+isolated production sandbox on port 41892 and fresh origin used Playwright media
+emulation: dark theme and 2,000 mounted messages were observed. The initial
+20-second readiness wait expired; later inspection found the expected messages.
+A loader-text readiness check was invalid because the exiting overlay retains
+that text; after correcting the approach, the Small conversation click still
+failed Playwright visibility/stability within five seconds. The lane did not keep
+retrying or manufacture a passed interaction matrix. This does not establish a
+product regression or prove it is only harness behavior. Full 1360/390 × dark/light,
+touch/keyboard, live tool/reasoning/disclosure, find/jump, hidden/minimized and
+request-inspector wheel/focus checks must be run on the integrated target.
+Earlier light screenshots and geometry samples remain labeled with their actual
+scope. No packaged-install or release readiness claim is made. F17 remains the
+explicit host capability seam; F13 math remains the documented deliberate deferral.
