@@ -87,7 +87,7 @@ export interface McpAuthOptions {
 }
 
 export interface McpAuthFlow {
-  createOAuthRuntime(signal?: AbortSignal, clientIdentity?: McpClientIdentity): unknown;
+  createOAuthRuntime(signal: AbortSignal | undefined, clientIdentity: McpClientIdentity): unknown;
   shutdownOAuth(runtime: unknown): Promise<void> | void;
   startAuth(name: string, url: string, definition?: ServerEntry, options?: McpAuthOptions): Promise<{ authorizationUrl: string }>;
   authenticate(name: string, url: string, definition?: ServerEntry, options?: McpAuthOptions): Promise<McpAuthStatusValue>;
@@ -105,8 +105,8 @@ export interface McpCachedServer {
 
 export interface McpEngine {
   /** The adapter extension factory, for `extensionFactories` (never file discovery). */
-  createMcpAdapter(options: { config: McpConfig; clientIdentity?: McpClientIdentity }): InlineExtension;
-  Manager: new (defaultCwd?: string, clientIdentity?: McpClientIdentity) => McpManager;
+  createMcpAdapter(options: { config: McpConfig; clientIdentity: McpClientIdentity }): InlineExtension;
+  Manager: new (defaultCwd: string | undefined, clientIdentity: McpClientIdentity) => McpManager;
   auth: McpAuthFlow;
   /** Channel the adapter publishes its status snapshots on. */
   statusEvent: string;

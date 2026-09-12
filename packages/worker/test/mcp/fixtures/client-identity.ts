@@ -1,4 +1,4 @@
-import type { McpServerConfig } from "@lasercode/protocol";
+import { PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PRODUCT_VERSION, type McpServerConfig } from "@lasercode/protocol";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,6 +6,15 @@ import { startFixtureHttpServer } from "./http-server.js";
 
 export const IDENTITY_TRANSPORTS = ["stdio", "streamable-http", "sse"] as const;
 export type IdentityTransport = typeof IDENTITY_TRANSPORTS[number];
+
+/** The product's wire contract, independent of the production identity helper. */
+export function expectedClientInfo(serverName?: string) {
+  return {
+    name: `${PRODUCT_NAME}-mcp${serverName === undefined ? "" : `-${serverName}`}`,
+    title: PRODUCT_DISPLAY_NAME,
+    version: PRODUCT_VERSION,
+  };
+}
 
 /** Fixture-owned observations, never the identity the client intended to send. */
 export async function identityFixture(transport: IdentityTransport, base: string) {

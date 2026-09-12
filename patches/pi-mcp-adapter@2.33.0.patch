@@ -1,9 +1,9 @@
 diff --git a/client-identity.ts b/client-identity.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..b9ad686a4b017461301f2cfa81f7ba99e8336eeb
+index 0000000000000000000000000000000000000000..57005cea6b80f6153c994bafd0c21d0a5de52b1b
 --- /dev/null
 +++ b/client-identity.ts
-@@ -0,0 +1,18 @@
+@@ -0,0 +1,19 @@
 +import type { McpClientIdentity } from "./types.ts";
 +
 +// Preserve the standalone adapter's historical identities when not embedded.
@@ -15,6 +15,7 @@ index 0000000000000000000000000000000000000000..b9ad686a4b017461301f2cfa81f7ba99
 +
 +/** Project only MCP Implementation fields; OAuth defaults never enter clientInfo. */
 +export function resolveClientInfo(identity: McpClientIdentity | undefined, purpose: keyof typeof DEFAULT_IDENTITIES, serverName?: string) {
++  if (purpose === "server" && serverName === undefined) throw new Error("MCP server name is required for a server identity");
 +  const value = identity ?? DEFAULT_IDENTITIES[purpose];
 +  return {
 +    name: purpose === "server" ? `${value.name}-${serverName}` : value.name,

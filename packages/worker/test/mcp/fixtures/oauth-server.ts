@@ -124,8 +124,12 @@ export function startFixtureOAuthServer(): Promise<FixtureOAuthServer> {
       response.writeHead(404).end();
       return;
     }
+    const challenge = () => json(401, { error: "unauthorized" }, {
+      "www-authenticate": `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource"`,
+    });
     if (request.method !== "POST") {
-      response.writeHead(405).end();
+      if (request.headers.authorization !== `Bearer ${ACCESS_TOKEN}`) challenge();
+      else response.writeHead(405).end();
       return;
     }
     let body = "";
@@ -143,9 +147,7 @@ export function startFixtureOAuthServer(): Promise<FixtureOAuthServer> {
         if (message.method === "initialize") clientInfos.push(message.params?.["clientInfo"]);
       }
       if (request.headers.authorization !== `Bearer ${ACCESS_TOKEN}`) {
-        json(401, { error: "unauthorized" }, {
-          "www-authenticate": `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource"`,
-        });
+        challenge();
         return;
       }
       const replies: unknown[] = [];

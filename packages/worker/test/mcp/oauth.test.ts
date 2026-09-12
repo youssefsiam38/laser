@@ -12,13 +12,16 @@
  * say) leaves a signed-in server stuck on `needs-auth` and makes sign-out
  * remove nothing.
  */
-import { HOMEPAGE, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PRODUCT_VERSION, type McpServerConfig } from "@lasercode/protocol";
+import { HOMEPAGE, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, type McpServerConfig } from "@lasercode/protocol";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createJiti } from "jiti";
 import { McpInspector } from "../../src/mcp/inspector.js";
-import { loadMcpEngine } from "../../src/mcp/engine.js";
+import * as engineModule from "../../src/mcp/engine.js";
+import type { McpAuthFlow } from "../../src/mcp/engine.js";
+import { expectedClientInfo } from "./fixtures/client-identity.js";
 import { mcpClientIdentity } from "../../src/mcp/identity.js";
 import { startFixtureOAuthServer, type FixtureOAuthServer } from "./fixtures/oauth-server.js";
 
@@ -99,9 +102,9 @@ describe("signing in to an MCP server", () => {
     for (const registration of server.registrations) {
       expect(registration).toMatchObject({ client_name: PRODUCT_DISPLAY_NAME, client_uri: HOMEPAGE });
     }
-    const expected = (suffix: string) => ({ name: `${PRODUCT_NAME}-mcp${suffix}`, title: PRODUCT_DISPLAY_NAME, version: PRODUCT_VERSION });
-    expect(server.clientInfos).toEqual(expect.arrayContaining([expected(""), expected("-gated")]));
-    for (const info of server.clientInfos) expect([expected(""), expected("-gated")]).toContainEqual(info);
+    const expected = [expectedClientInfo(), expectedClientInfo("gated")];
+    expect(server.clientInfos).toEqual(expect.arrayContaining(expected));
+    for (const info of server.clientInfos) expect(expected).toContainEqual(info);
     console.log(`received OAuth discovery/connections: ${JSON.stringify(server.clientInfos)}`);
     console.log(`received OAuth registration: ${JSON.stringify(server.registrations.map(({ client_name, client_uri }) => ({ client_name, client_uri })))}`);
 
@@ -112,8 +115,48 @@ describe("signing in to an MCP server", () => {
     expect(afterLogout.status).toBe("needs-auth");
   }, 60_000);
 
+  it("owns an identity-bearing runtime even when logout is the first operation", async () => {
+    const engine = await engineModule.loadMcpEngine();
+    // jiti's live export proxy cannot be spied on directly. Wrap only this
+    // boundary while still delegating to the actual OAuth implementation.
+    const removeAuth = vi.fn(engine.auth.removeAuth);
+    const load = vi.spyOn(engineModule, "loadMcpEngine").mockResolvedValue({ ...engine, auth: { ...engine.auth, removeAuth } });
+    try {
+      await inspector.authLogout("global", config());
+      expect(removeAuth).toHaveBeenCalledOnce();
+      expect(removeAuth.mock.calls[0]?.[1]?.runtime).toMatchObject({ clientIdentity: mcpClientIdentity() });
+      expect(server.clientInfos).toEqual([]);
+      expect(inspector.inspecting("global", "gated")).toBe(false);
+    } finally {
+      load.mockRestore();
+    }
+  });
+
+  it("preserves native OAuth discovery defaults when no identity is supplied", async () => {
+    const jiti = createJiti(import.meta.url, { fsCache: false });
+    type NativeAuth = Omit<McpAuthFlow, "createOAuthRuntime"> & { createOAuthRuntime(signal?: AbortSignal): unknown };
+    const auth = await jiti.import<NativeAuth>(join(engineModule.adapterRoot(), "mcp-auth-flow.ts"));
+    const runtime = auth.createOAuthRuntime();
+    try {
+      await auth.startAuth("native-discovery", server.url, { url: server.url, auth: "oauth" }, {
+        runtime, openAuthorizationUrl: () => {}, onAuthorizationUrl: () => {},
+      });
+      expect(server.clientInfos).toEqual([{ name: "pi-mcp-adapter", version: "2.11.0" }]);
+      console.log(`received native OAuth discovery: ${JSON.stringify(server.clientInfos)}`);
+    } finally {
+      await auth.shutdownOAuth(runtime);
+    }
+  }, 60_000);
+
+  it.each(["GET", "DELETE"])("challenges unauthenticated %s requests before checking the method", async (method) => {
+    const response = await fetch(server.url, { method });
+    expect(response.status).toBe(401);
+    expect(response.headers.get("www-authenticate")).toBe(`Bearer resource_metadata="${new URL(server.url).origin}/.well-known/oauth-protected-resource"`);
+    await response.arrayBuffer();
+  });
+
   it("honours explicit server OAuth registration metadata over the application defaults", async () => {
-    const engine = await loadMcpEngine();
+    const engine = await engineModule.loadMcpEngine();
     const runtime = engine.auth.createOAuthRuntime(undefined, mcpClientIdentity());
     try {
       await engine.auth.startAuth("custom-registration", server.url, {
