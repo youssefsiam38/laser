@@ -20,6 +20,19 @@ describe("captured request inspection", () => {
     expect(view.conversation[0]?.value).toMatchObject({content:[{text:"See this"},image]});
     expect(requestFieldLabel(view.tools[0]!)).toBe("bash");
   });
+  it("files Anthropic mid-conversation effort markers under parameters, not instructions", () => {
+    const marker = { role: "system", content: [], output_config: { effort: "xhigh" } };
+    const view = inspectRequest({ system: [{ type: "text", text: "Rules" }], messages: [
+      { role: "user", content: "Hi" }, marker, { role: "assistant", content: "Hello" }, { role: "user", content: "More" }, marker,
+    ], max_tokens: 1 });
+    expect(view.instructions).toHaveLength(1);
+    expect(view.conversation.map(field => field.path)).toEqual(["messages[0]", "messages[2]", "messages[3]"]);
+    const markers = view.parameters.filter(field => field.path.startsWith("messages["));
+    expect(markers.map(field => field.path)).toEqual(["messages[1]", "messages[4]"]);
+    expect(requestFieldLabel(markers[0]!)).toBe("effort · xhigh");
+    // A real system message with words stays an instruction.
+    expect(inspectRequest({ messages: [{ role: "system", content: "Be brief", output_config: { effort: "low" } }] }).instructions).toHaveLength(1);
+  });
   it("understands Gemini config and Anthropic system blocks without losing custom fields", () => {
     const gemini=inspectRequest({contents:[{role:"user",parts:[{text:"Hello"}]}],config:{systemInstruction:{parts:[{text:"Be kind"}]},tools:[{functionDeclarations:[{name:"read"}]}],temperature:0}});
     expect(requestFieldText(gemini.instructions[0]?.value)).toBe("Be kind");
