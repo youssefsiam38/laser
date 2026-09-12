@@ -38,9 +38,11 @@
  * `MessageNotSentError` so the one lane assistant-ui does handle behaves the
  * same, and the toast says what happened next.
  *
- * Everything above `createThreadAdapter` is pure and unit-tested.
+ * Projection helpers are pure; sending and restoration own their explicit runtime effects.
  */
-import { MessageNotSentError, SimpleImageAttachmentAdapter } from "@assistant-ui/react";
+import { MessageNotSentError } from "@assistant-ui/react";
+import { toast } from "sonner";
+import { ConversationAttachmentAdapter, imagesOfContent, splitAttachedFiles, wrapFileAttachment } from "./attachments.js";
 import type {
   AppendMessage,
   ExternalStoreAdapter,
@@ -125,10 +127,6 @@ export function textOfContentBlocks(blocks: readonly ContentBlock[]): string {
     .filter((b): b is Extract<ContentBlock, { type: "text" }> => b.type === "text")
     .map((b) => b.text)
     .join("\n");
-}
-
-export function imageCountOfContentBlocks(blocks: readonly ContentBlock[]): number {
-  return blocks.filter((b) => b.type === "image").length;
 }
 
 const EXPLICIT_BEHAVIORS = new Set<string>(["prompt", "steer", "followUp", "pending"]);
@@ -282,7 +280,7 @@ export async function sendToSession(
     path,
     id: optimisticId,
     text: textOfContentBlocks(content),
-    images: imageCountOfContentBlocks(content),
+    images: imagesOfContent(content),
   });
   let result: { accepted: boolean };
   try {
@@ -337,13 +335,15 @@ export async function restoreUnsentMessage(
     .filter((part): part is Extract<AppendMessage["content"][number], { type: "text" }> => part.type === "text")
     .map((part) => part.text)
     .join("\n\n");
-  if (text) composer.setText(text);
+  const parsed = splitAttachedFiles(text);
+  if (parsed.text) composer.setText(parsed.text);
+  const restoredFiles = parsed.files.map(file => composer.addAttachment({ id: crypto.randomUUID(), type: "document", name: file.name, contentType: file.mediaType, content: [{ type: "text", text: wrapFileAttachment(file) }] }));
   // `addAttachment` with content (not a File) is synchronous in effect and
   // marks the attachment complete; it was accepted once already, so a refusal
   // here is not a state the person can reach — settle rather than throw so one
   // odd attachment never hides the reason the send failed.
   await Promise.allSettled(
-    (message.attachments ?? []).flatMap((attachment) =>
+    [...restoredFiles, ...(message.attachments ?? []).flatMap((attachment) =>
       attachment.content
         ? [composer.addAttachment({
             id: attachment.id,
@@ -353,7 +353,7 @@ export async function restoreUnsentMessage(
             content: attachment.content,
           })]
         : [],
-    ),
+    )],
   );
   return true;
 }
@@ -441,12 +441,7 @@ export interface ThreadAdapterDeps {
   assertCanAct?: ((resolvedPath?: string) => void) | undefined;
 }
 
-/**
- * Stateless and shared by every thread: assistant-ui only reads `accept` and
- * calls `add`/`send`/`remove`, and a stable identity keeps `capabilities` from
- * churning on each render.
- */
-const attachmentAdapter = new SimpleImageAttachmentAdapter();
+const attachmentAdapter = new ConversationAttachmentAdapter();
 
 export function createThreadAdapter(deps: ThreadAdapterDeps): ExternalStoreAdapter<ThreadMessageLike> {
   const projection = deps.projection ?? projectSessionView(deps.view);

@@ -55,7 +55,6 @@ export {
   contentBlocksFromAppendMessage,
   createThreadAdapter,
   imageContentFromDataUrl,
-  imageCountOfContentBlocks,
   isSteerQueueItemId,
   pendingIdOfQueueItemId,
   pendingQueueItem,

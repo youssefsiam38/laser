@@ -32,7 +32,7 @@ import {
   type CodeHeaderProps,
 } from "@assistant-ui/react-markdown";
 import { Check, Copy } from "lucide-react";
-import { memo, useMemo, useRef, type FC } from "react";
+import { createContext, memo, useContext, useMemo, useRef, type FC } from "react";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -41,6 +41,8 @@ import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { useCopy } from "@/hooks/use-copy";
 import { cn } from "@/lib/utils";
 import { SourceFileLink } from "@/components/ui/source-file-link";
+import { ConversationFileLink, looksLikeFilePath, ProjectFileLink } from "@/components/ui/project-file-link";
+import { ProjectMarkdownImage } from "./image.js";
 import { markdownUrl } from "@/lib/file-links";
 
 import { citationChip } from "./inline-citation.js";
@@ -55,7 +57,12 @@ const preprocess = (text: string): string => escapeCurrencyDollars(normalizeMath
 
 type Components = Parameters<typeof memoizeMarkdownComponents>[0];
 
+const NativeFiles = createContext(false);
+const WithinLink = createContext(false);
+
 export interface MarkdownTextProps {
+  /** Conversation-only file viewing; diagnostic captures keep their source editor links. */
+  nativeFiles?: boolean;
   className?: string | undefined;
   /** Per-render overrides, merged over the default map. */
   components?: Components | undefined;
@@ -115,20 +122,22 @@ const defaultComponents = memoizeMarkdownComponents({
   ),
   h6: ({ className, ...props }) => <h6 className={cn("mt-3 mb-1 eyebrow first:mt-0 last:mb-0", className)} {...props} />,
   p: ({ className, ...props }) => <p className={cn("my-2 first:mt-0 last:mb-0", className)} {...props} />,
-  a: ({ className, ...props }) => {
+  a: function MarkdownLink({ className, children, ...props }) {
+    const native = useContext(NativeFiles);
     // GFM footnote references (`[^1]`) are the citations a transcript actually
     // carries: draw them as the citation chip, in-page, not as external links.
     if ("data-footnote-ref" in props) {
-      return <a className={cn(citationChip, className)} {...props} />;
+      return <a className={cn(citationChip, className)} {...props}>{children}</a>;
     }
-    return (
-      <SourceFileLink
-        className={cn("text-live underline decoration-live/40 underline-offset-[3px] hover:decoration-live", className)}
-        target="_blank"
-        rel="noopener noreferrer"
-        {...props}
-      />
-    );
+    const Link = native ? ConversationFileLink : SourceFileLink;
+    return <Link className={cn("text-live underline decoration-live/40 underline-offset-[3px] hover:decoration-live", className)} {...props}>
+      <WithinLink.Provider value>{children}</WithinLink.Provider>
+    </Link>;
+  },
+  img: function MarkdownImage({ src, ...props }) {
+    const native = useContext(NativeFiles);
+    const withinLink = useContext(WithinLink);
+    return native ? <ProjectMarkdownImage src={typeof src === "string" ? src : undefined} interactive={!withinLink} {...props} /> : <img src={src} {...props} />;
   },
   blockquote: ({ className, ...props }) => (
     <blockquote className={cn("my-2 border-s-2 border-line ps-3 text-ink-2", className)} {...props} />
@@ -188,6 +197,9 @@ const defaultComponents = memoizeMarkdownComponents({
   ),
   code: function Code({ className, ...props }) {
     const isBlock = useIsMarkdownCodeBlock();
+    const native = useContext(NativeFiles);
+    const withinLink = useContext(WithinLink);
+    if (native && !withinLink && !isBlock && typeof props.children === "string" && looksLikeFilePath(props.children)) return <ProjectFileLink path={props.children}>{props.children}</ProjectFileLink>;
     return (
       <code
         className={cn(
@@ -210,7 +222,7 @@ const componentsByLanguage = {
  * Transcript prose at the shared reading measure, never raw HTML. The streaming caret rides on
  * the last block while the part reports `running`.
  */
-const MarkdownTextImpl: FC<MarkdownTextProps> = ({ className, components }) => {
+const MarkdownTextImpl: FC<MarkdownTextProps> = ({ className, components, nativeFiles = false }) => {
   const stableComponents = useShallowStable(components);
   const markdownComponents = useMemo(() => {
     if (!stableComponents) return defaultComponents;
@@ -218,7 +230,7 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ className, components }) => {
   }, [stableComponents]);
 
   return (
-    <MarkdownTextPrimitive
+    <NativeFiles.Provider value={nativeFiles}><MarkdownTextPrimitive
       remarkPlugins={remarkPlugins}
       rehypePlugins={rehypePlugins}
       preprocess={preprocess}
@@ -228,7 +240,7 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ className, components }) => {
       smooth={false}
       defer
       className={cn("md-body max-w-(--measure-prose) text-base break-words text-ink", "[&[data-status=running]>*:last-child]:caret", className)}
-    />
+    /></NativeFiles.Provider>
   );
 };
 

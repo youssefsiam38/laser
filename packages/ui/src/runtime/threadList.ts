@@ -75,7 +75,7 @@ export function sessionAttention(summary: SessionSummary, view?: SessionView | u
 export function sessionTitle(summary: SessionSummary, view?: SessionView | undefined): string {
   const named = summary.name ?? view?.title;
   if (named) return named;
-  const first = summary.firstMessage?.trim() || firstUserText(view);
+  const first = firstUserText(view) ?? summary.firstMessage?.trim();
   if (first) return clipToTitle(first);
   const subagent = summary.agent?.subagentName ?? view?.state.agent?.subagentName;
   return subagent ? clipToTitle(subagent) : "New session";
@@ -84,7 +84,7 @@ export function sessionTitle(summary: SessionSummary, view?: SessionView | undef
 /** The transcript's own first user line, for a session opened before the catalog scanned it. */
 function firstUserText(view: SessionView | undefined): string | undefined {
   if (!view) return undefined;
-  for (const block of view.blocks) if (block.kind === "user" && block.text.trim()) return block.text;
+  for (const block of view.blocks) if (block.kind === "user") return block.text;
   return undefined;
 }
 

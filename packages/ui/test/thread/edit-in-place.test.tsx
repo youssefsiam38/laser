@@ -1,3 +1,4 @@
+import type { ThreadMessageLike } from "@assistant-ui/react";
 // @vitest-environment happy-dom
 /**
  * M13-T35 — which control does which thing.
@@ -110,7 +111,7 @@ const mount = () => {
   }
   function Fixture() {
     const { messages } = projectMessages({ blocks: blocksFromEntries(entries, LEAF), running: false, dialogs: [] });
-    const runtime = useExternalStoreRuntime({ messages, isRunning: false, onNew: async () => {} });
+    const runtime = useExternalStoreRuntime({ convertMessage: (message: ThreadMessageLike) => message, messages, isRunning: false, onNew: async () => {} });
     return (
       <AssistantRuntimeProvider runtime={runtime}>
         <ThreadPrimitive.Root>

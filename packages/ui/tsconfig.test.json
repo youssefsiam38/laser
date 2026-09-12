@@ -1,0 +1,25 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "types": ["node", "vite/client"]
+  },
+  "include": [
+    "src",
+    "test/globals.d.ts",
+    "test/store.test.ts",
+    "test/runtime/attachment*.test.ts",
+    "test/runtime/adapter.test.ts",
+    "test/runtime/projection.test.ts",
+    "test/runtime/project-file-cache.test.ts",
+    "test/runtime/threadList.test.ts",
+    "test/shell/model.test.ts",
+    "test/thread/attachment-composer.test.tsx",
+    "test/thread/conversation-files.test.tsx",
+    "test/thread/edit-in-place.test.tsx",
+    "test/thread/file-card.test.tsx",
+    "test/thread/file-viewer.test.tsx",
+    "test/thread/message-queue.test.tsx",
+    "test/thread/mid-turn-actions.test.tsx"
+  ]
+}

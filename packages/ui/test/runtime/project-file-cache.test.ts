@@ -1,0 +1,42 @@
+import { afterEach, expect, it, vi } from "vitest";
+import type { ProjectFileContent } from "@lasercode/protocol";
+import { ProjectFileCache } from "../../src/runtime/project-file-cache.js";
+const file = (path: string, content = "text"): ProjectFileContent => ({ path, content, name: path, size: content.length, mediaType: "text/plain", encoding: "utf8", modifiedAt: "", truncated: false });
+afterEach(() => vi.useRealTimers());
+it("deduplicates in-flight and retained reads, separates directories and expires old content", async () => {
+  vi.useFakeTimers();
+  const request = vi.fn(async (_cwd: string, path: string) => file(path));
+  const cache = new ProjectFileCache(request);
+  const one = cache.read("/a", "notes.md");
+  expect(cache.read("/a", "notes.md")).toBe(one);
+  await one;
+  expect(cache.read("/a", "notes.md")).toBe(one);
+  await cache.read("/b", "notes.md");
+  expect(request).toHaveBeenCalledTimes(2);
+  vi.advanceTimersByTime(30_001);
+  await cache.read("/a", "notes.md");
+  expect(request).toHaveBeenCalledTimes(3);
+});
+it("evicts least-recent reads at eight entries and retries failures", async () => {
+  const request = vi.fn(async (_cwd: string, path: string) => file(path));
+  const cache = new ProjectFileCache(request);
+  for (let i = 0; i < 8; i++) await cache.read("/p", `${i}`);
+  await cache.read("/p", "0");
+  await cache.read("/p", "8");
+  await cache.read("/p", "0");
+  expect(request).toHaveBeenCalledTimes(9);
+  await cache.read("/p", "1");
+  expect(request).toHaveBeenCalledTimes(10);
+  request.mockRejectedValueOnce(new Error("Missing"));
+  await expect(cache.read("/p", "new")).rejects.toThrow("Missing");
+  await expect(cache.read("/p", "new")).resolves.toMatchObject({ path: "new" });
+});
+it("also bounds retained content, not just the number of files", async () => {
+  const request = vi.fn(async (_cwd: string, path: string) => file(path, "x".repeat(9 * 1024 * 1024)));
+  const cache = new ProjectFileCache(request);
+  await cache.read("/p", "one");
+  const two = cache.read("/p", "two"); await two;
+  expect(cache.read("/p", "two")).toBe(two);
+  await cache.read("/p", "one");
+  expect(request).toHaveBeenCalledTimes(3);
+});

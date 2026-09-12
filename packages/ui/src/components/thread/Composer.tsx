@@ -26,6 +26,7 @@ import { DictateButton } from "@/components/mobile";
 import { useShell } from "@/components/shell/shell-context";
 import { useIsMobile, useIsTouch } from "@/hooks/use-mobile";
 import { finishActiveDictation } from "@/pwa";
+import { appendAttachedPrompt, splitAttachedFiles, wrapFileAttachment } from "@/runtime/attachments";
 import { composerSendPlan, mainCodeProject, mainError, mainTab, useLaserStable, useLaserView, useSessionMeta } from "@/runtime";
 import { mergeRunConfigCustom } from "@/runtime/first-turn";
 import { completeLeadingSlash, matchLeadingSlash, rankSlashCommandMatches } from "./slash-completion.js";
@@ -75,6 +76,7 @@ function ComposerBody() {
         <ComposerDraftRestore />
         <ComposerQueue />
         <StatusLine />
+        {mobile ? <StagedAttachments /> : null}
         {mobile ? (
           <MobileComposer
             above={
@@ -102,9 +104,7 @@ function ComposerBody() {
         ) : (
           <ComposerPrimitive.AttachmentDropzone asChild>
             <ComposerBar>
-              <ComposerAttachments>
-                <ComposerPrimitive.Attachments>{() => <ComposerAttachmentTile />}</ComposerPrimitive.Attachments>
-              </ComposerAttachments>
+              <StagedAttachments />
               {/* Quoted transcript text rides above the input until it is sent (the `quote` element). */}
               <ComposerQuotePreview />
               <ComposerInput />
@@ -160,6 +160,10 @@ function useNothingToSendTo(): string | undefined {
   return "Open a project first — the agent works inside a folder on this computer.";
 }
 
+function StagedAttachments() {
+  return <ComposerAttachments><ComposerPrimitive.Attachments>{() => <ComposerAttachmentTile />}</ComposerPrimitive.Attachments></ComposerAttachments>;
+}
+
 function usePlaceholder(): string {
   const running = useAuiState((s) => s.thread.isRunning);
   const disabled = useAuiState((s) => s.thread.isDisabled);
@@ -185,7 +189,12 @@ export function useHandedBackText(): void {
   const handedBackPath = view?.path;
   useEffect(() => {
     if (handedBack === undefined || handedBackPath === undefined) return;
-    if (handedBack !== "" && aui.composer.getState().text.trim() === "") aui.composer.setText(handedBack);
+    const draft = aui.composer.getState();
+    if (handedBack !== "" && draft.text.trim() === "" && draft.attachments.length === 0 && !draft.quote) {
+      const parsed = splitAttachedFiles(handedBack);
+      aui.composer.setText(parsed.text);
+      for (const file of parsed.files) void aui.composer.addAttachment({ id: crypto.randomUUID(), type: "document", name: file.name, contentType: file.mediaType, content: [{ type: "text", text: wrapFileAttachment(file) }] });
+    }
     actions.takeEditorText(handedBackPath);
   }, [handedBack, handedBackPath, aui, actions]);
 }
@@ -423,10 +432,7 @@ function useSlashCommands() {
   }
 
   async function clearQueue() {
-    const text = await actions.clearQueue();
-    if (!text) return;
-    const current = aui.composer.getState().text;
-    aui.composer.setText(current ? `${current}\n${text}` : text);
+    await appendAttachedPrompt(aui.composer, await actions.clearQueue());
   }
 
   const slash = unstable_useSlashCommandAdapter({ commands, removeOnExecute: true, iconMap: SLASH_ICONS });

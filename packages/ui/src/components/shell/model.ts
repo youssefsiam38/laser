@@ -123,7 +123,7 @@ const lastTool = (blocks: readonly Block[]): Extract<Block, { kind: "tool" }> | 
 };
 
 const firstUserText = (blocks: readonly Block[]): string | undefined => {
-  for (const b of blocks) if (b.kind === "user" && b.text.trim()) return b.text;
+  for (const b of blocks) if (b.kind === "user") return b.text;
   return undefined;
 };
 
@@ -142,7 +142,7 @@ export function sessionSubtitle(summary: SessionSummary, view: SessionView | und
     const args = summariseArgs(tool.name, tool.args);
     return { text: args ? `${tool.name}  ${args}` : tool.name, mono: true, tone: "default" };
   }
-  const first = summary.firstMessage?.trim() || (view ? firstUserText(view.blocks) : undefined);
+  const first = (view ? firstUserText(view.blocks) : undefined) ?? summary.firstMessage?.trim();
   if (first) return { text: first.replace(/\s+/g, " "), mono: false, tone: "default" };
   return { text: "No messages yet", mono: false, tone: "muted" };
 }

@@ -340,7 +340,7 @@ describe("buildFleet", () => {
     const named = view({ path: ROOT });
     named.state.name = "Migration";
     expect(build({ ...loaded, views: { [ROOT]: named } })[0]!.title).toBe("Migration");
-    const spoken = view({ path: ROOT, blocks: [{ kind: "user", id: "u1", text: "  delegate the   review\nplease" } as never] });
+    const spoken = view({ path: ROOT, blocks: [{ kind: "user", files: [], id: "u1", text: "  delegate the   review\nplease" } as never] });
     expect(build({ ...loaded, views: { [ROOT]: spoken } })[0]!.title).toBe("delegate the review please");
     // Not deleted, not named: the file name is still the honest fallback.
     expect(build({ runs: byId([child], "runId") })[0]!.title).toBe("root.jsonl");

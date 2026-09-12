@@ -12,6 +12,7 @@ import { ThreadDialogCards, WaitingNotice } from "@/dialogs";
 import { useLaserStable, useLaserState, useLaserView } from "@/runtime";
 import { useWorkbench } from "@/components/workbench/workbench-context";
 import { useSessionSeen } from "./use-session-seen.js";
+import { FileOpenerProvider } from "./FileOpener.js";
 import { Composer } from "./Composer.js";
 import { EmptyState } from "./EmptyState.js";
 import { ThreadMessage } from "./messages.js";
@@ -71,6 +72,7 @@ export function Thread({ statusSlot, emptyState, followUps }: ThreadProps = {}) 
     <ThreadSlotsProvider slots={slots}>
       <TooltipProvider>
         <AuiProvider extends={aui} config={suggestions}>
+          <FileOpenerProvider scope={view?.path}>
           <ThreadPrimitive.Root ref={find.root} data-slot="thread" className="relative flex h-full min-h-0 flex-col bg-bg">
             {find.bar}
             <ThreadPrimitive.Viewport autoScroll={!find.open} scrollToBottomOnRunStart={!find.open} data-slot="thread-viewport" className="flex flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain">
@@ -108,6 +110,7 @@ export function Thread({ statusSlot, emptyState, followUps }: ThreadProps = {}) 
             <SelectionToolbar />
             <EntriesRefresh />
           </ThreadPrimitive.Root>
+          </FileOpenerProvider>
         </AuiProvider>
       </TooltipProvider>
     </ThreadSlotsProvider>

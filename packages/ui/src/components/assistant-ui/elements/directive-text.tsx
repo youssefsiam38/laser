@@ -11,6 +11,7 @@
 import type { FC } from "react";
 
 import { Badge } from "@/components/ui/badge";
+import { ProjectFileLink } from "@/components/ui/project-file-link";
 
 type IconComponent = FC<{ className?: string }>;
 
@@ -48,6 +49,7 @@ export function createDirectiveText(formatter: DirectiveTextFormatter, options?:
               </span>
             );
           }
+          if (seg.type === "file") return <ProjectFileLink key={i} path={seg.id} literal>{seg.label}</ProjectFileLink>;
           const Icon = iconMap?.[seg.type] ?? fallbackIcon;
           return (
             <Badge

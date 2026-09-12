@@ -8,7 +8,7 @@ const state: SessionState = {
 };
 
 function view(): SessionView {
-  return { path: "/s.jsonl", state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, dialogs: [], statuses: {}, widgets: {}, openedAt: "2026-09-05T00:00:00.000Z", hydrated: true, entries: [] };
+  return { path: "/s.jsonl", state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, pending: [], capabilities: [], goal: null, namerLabels: {}, dialogs: [], statuses: {}, widgets: {}, openedAt: "2026-09-05T00:00:00.000Z", hydrated: true, entries: [] };
 }
 
 function run(v: SessionView, updates: SessionUpdate[]): SessionView {
@@ -119,18 +119,18 @@ describe("applyUpdate", () => {
   });
 
   it("keeps an optimistic user block instead of duplicating it", () => {
-    let v = reduce({ ...initialState, open: { "/s.jsonl": view() } }, { type: "optimisticUser", path: "/s.jsonl", text: "hi", images: 0 }).open["/s.jsonl"]!;
+    let v = reduce({ ...initialState, open: { "/s.jsonl": view() } }, { type: "optimisticUser", path: "/s.jsonl", text: "hi", images: [] }).open["/s.jsonl"]!;
     v = run(v, [
       { kind: "message_start", role: "user" },
       { kind: "message_end", message: { role: "user", content: [{ type: "text", text: "hi" }] } },
     ]);
     expect(v.blocks).toHaveLength(1);
-    expect(v.blocks[0]).toMatchObject({ kind: "user", text: "hi", optimistic: false });
+    expect(v.blocks[0]).toMatchObject({ kind: "user", files: [], text: "hi", optimistic: false });
   });
 
   it("stamps a prompt's entry on its block the moment the engine writes it, and lends it to the tree", () => {
     const opened = { ...view(), entries: [{ type: "message", id: "u1", parentId: null, message: { role: "user", content: [] } }, { type: "message", id: "a1", parentId: "u1", message: { role: "assistant", content: [] } }], leafId: "a1" };
-    let v = reduce({ ...initialState, open: { "/s.jsonl": opened } }, { type: "optimisticUser", path: "/s.jsonl", text: "next", images: 0 }).open["/s.jsonl"]!;
+    let v = reduce({ ...initialState, open: { "/s.jsonl": opened } }, { type: "optimisticUser", path: "/s.jsonl", text: "next", images: [] }).open["/s.jsonl"]!;
     v = run(v, [
       { kind: "agent_start" },
       { kind: "message_start", role: "user" },
@@ -142,7 +142,7 @@ describe("applyUpdate", () => {
     // so versions can be counted, while the leaf stays where the last read
     // put it — nothing between has been read yet.
     expect(v.running).toBe(true);
-    expect(v.blocks[0]).toMatchObject({ kind: "user", text: "next", optimistic: false, entryId: "u2" });
+    expect(v.blocks[0]).toMatchObject({ kind: "user", files: [], text: "next", optimistic: false, entryId: "u2" });
     expect(v.entries.map((e) => (e as { id: string }).id)).toEqual(["u1", "a1", "u2"]);
     expect(v.entries[2]).toMatchObject({ type: "message", id: "u2", parentId: "a1", message: { role: "user" } });
     expect(v.leafId).toBe("a1");
@@ -152,7 +152,7 @@ describe("applyUpdate", () => {
   });
 
   it("leaves a prompt without an entry to the ordinal lookup", () => {
-    let v = reduce({ ...initialState, open: { "/s.jsonl": view() } }, { type: "optimisticUser", path: "/s.jsonl", text: "hi", images: 0 }).open["/s.jsonl"]!;
+    let v = reduce({ ...initialState, open: { "/s.jsonl": view() } }, { type: "optimisticUser", path: "/s.jsonl", text: "hi", images: [] }).open["/s.jsonl"]!;
     v = run(v, [{ kind: "message_end", role: "user", message: { role: "user", content: [{ type: "text", text: "hi" }] } }]);
     expect(v.blocks[0]).not.toHaveProperty("entryId");
     expect(v.entries).toEqual([]);
@@ -204,13 +204,13 @@ describe("blocksFromEntries", () => {
   it("rebuilds user, assistant, tool call and result from Pi entries", () => {
     const blocks = blocksFromEntries([
       { type: "session", version: 3 },
-      { type: "message", message: { role: "user", content: [{ type: "text", text: "do it" }, { type: "image" }] } },
+      { type: "message", message: { role: "user", content: [{ type: "text", text: "do it" }, { type: "image", mimeType: "image/png", data: "cGlj" }] } },
       { type: "message", message: { role: "assistant", content: [{ type: "thinking", thinking: "t" }, { type: "text", text: "ok" }, { type: "toolCall", id: "c1", name: "bash", arguments: { command: "ls" } }] } },
       { type: "message", message: { role: "toolResult", toolCallId: "c1", toolName: "bash", content: [{ type: "text", text: "a b" }], isError: false } },
       { type: "model_change" },
     ]);
     expect(blocks.map((b) => b.kind)).toEqual(["user", "assistant", "tool"]);
-    expect(blocks[0]).toMatchObject({ text: "do it", images: 1 });
+    expect(blocks[0]).toMatchObject({ text: "do it", images: [{ type: "image", mimeType: "image/png", data: "cGlj" }] });
     // An entry without an id (a hand-written fixture) stamps nothing.
     expect(blocks[0]).not.toHaveProperty("entryId");
     expect(blocks[1]).toMatchObject({ text: "ok", thinking: "t" });
