@@ -894,7 +894,10 @@ export function ProviderPicker({ models, value, onValueChange, disabled, loading
 export function ProviderModelPicker({ models, value, onValueChange, disabled, loading, error, placeholder, className, side, align, container }: ProviderModelPickerProps) {
   const options = useMemo(() => models.map(modelOption), [models]);
   return (
-    <ModelSelectorRoot models={options} {...(value ? { value } : {})} onValueChange={onValueChange}>
+    // An empty string is a deliberate "nothing chosen yet" (an add-only
+    // picker shows its placeholder, never a model nobody picked); undefined
+    // leaves the selector uncontrolled as before.
+    <ModelSelectorRoot models={options} {...(value !== undefined ? { value } : {})} onValueChange={onValueChange}>
       <ModelSelectorTrigger disabled={disabled} className={cn("w-full max-w-96", className)}>
         <ModelSelectorValue placeholder={placeholder ?? "Choose a model"} className="min-w-0" />
       </ModelSelectorTrigger>

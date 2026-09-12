@@ -52,7 +52,10 @@ export function StoppedRun({ reason, detail, advice, raw, action, onContinue, to
           {reason}
         </span>
         {detail ? (
-          <span className="min-w-0 flex-1 text-xs leading-4 text-ink-2" title={detail}>
+          // A basis the sentence can actually be read in: with only `min-w-0
+          // flex-1` the explanation shrank to a few pixels beside a long
+          // reason pill and clipped its words instead of wrapping under it.
+          <span className="min-w-0 flex-1 basis-56 text-xs leading-4 text-ink-2" title={detail}>
             {detail}
           </span>
         ) : null}

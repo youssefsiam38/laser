@@ -144,8 +144,8 @@ export function FallbackChainsTab({ cwd, snapshot, onApply }: FallbackChainsTabP
           </p>
           <p className="text-xs leading-5 text-ink-2">
             <span className="font-medium text-ink">Only the first model in a list starts it.</span> A conversation on Sonnet
-            uses Sonnet’s list; switching to another model mid-conversation does not start Sonnet’s list again, it starts that
-            model’s own.
+            uses Sonnet’s list, and keeps it while the app falls back along it. Choosing another model yourself, mid-conversation,
+            starts that model’s own list instead — never Sonnet’s again.
           </p>
           <p className="text-xs leading-5 text-ink-3">
             Chains are yours, not a project’s, and a saved edit applies to conversations started afterwards. A conversation
@@ -285,7 +285,7 @@ function ChainCard({ index, models, catalogue, addable, issues, busy, draft, onC
           side="left"
           variant="ghost"
           size="icon-sm"
-          className="ms-auto text-ink-3 hover:text-attention"
+                className="ms-auto text-ink-3 hover:text-attention pointer-coarse:size-11"
           disabled={busy}
           onClick={onDelete}
         >
@@ -325,7 +325,7 @@ function ChainCard({ index, models, catalogue, addable, issues, busy, draft, onC
                 side="top"
                 variant="ghost"
                 size="icon-sm"
-                className="text-ink-3"
+                className="text-ink-3 pointer-coarse:size-11"
                 disabled={busy || position === 0}
                 onClick={() => move(position, position - 1)}
               >
@@ -336,7 +336,7 @@ function ChainCard({ index, models, catalogue, addable, issues, busy, draft, onC
                 side="top"
                 variant="ghost"
                 size="icon-sm"
-                className="text-ink-3"
+                className="text-ink-3 pointer-coarse:size-11"
                 disabled={busy || position === models.length - 1}
                 onClick={() => move(position, position + 1)}
               >
@@ -351,7 +351,7 @@ function ChainCard({ index, models, catalogue, addable, issues, busy, draft, onC
                 side="top"
                 variant="ghost"
                 size="icon-sm"
-                className="text-ink-3 hover:text-attention"
+                className="text-ink-3 hover:text-attention pointer-coarse:size-11"
                 disabled={busy || models.length <= 2}
                 onClick={() => onChange(models.filter((_, at) => at !== position))}
               >
@@ -375,6 +375,7 @@ function ChainCard({ index, models, catalogue, addable, issues, busy, draft, onC
       <div className="flex flex-wrap items-center gap-2">
         <ProviderModelPicker
           models={addable}
+          value=""
           onValueChange={add}
           disabled={busy || addable.length === 0}
           placeholder={models.length === 0 ? "Choose the first model" : "Add a fallback model"}
