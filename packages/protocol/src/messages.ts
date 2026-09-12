@@ -12,7 +12,6 @@ import type { AgentWorktreeStatus, SessionAgentInfo, SessionWorktreeDisposition 
 import type { ProviderFailureClass } from "./provider-failure.js";
 import { WIRE_NAMESPACE } from "./identity.js";
 import type { HostEnvironmentParams } from "./environment.js";
-import type { ProjectEnvStatus } from "./project-env.js";
 import type { AccountUsageState, PiExtensionMessage, PiExtensionModuleName } from "./pi-extension.js";
 import type { FeatureScope, FeatureState, GoalAction, SessionGoal } from "./features.js";
 import type { PushConfig, PushDeviceInfo, PushSubscriptionJson } from "./push.js";
@@ -1067,32 +1066,6 @@ export interface ClientRequests {
    * excluded. Answered by the host.
    */
   "pi/project/browse": { params: { path?: string }; result: DirectoryListing };
-  /**
-   * The project's environment command (M16-T17, docs/project-environment.md).
-   * Status carries variable **names** only; a value never crosses the protocol.
-   */
-  "pi/project/env/status": { params: { cwd: string }; result: { status: ProjectEnvStatus } };
-  /**
-   * Configure it. Saving through this method is the approval: the person chose
-   * the executable, so the fingerprint of `{command, args}` is recorded here.
-   */
-  "pi/project/env/set": {
-    params: {
-      cwd: string;
-      config: {
-        enabled: boolean;
-        command: string;
-        args?: string[];
-        required?: boolean;
-        allowProviderKeys?: string[];
-      } | null;
-    };
-    result: { status: ProjectEnvStatus };
-  };
-  /** Run it once without applying anything: names and counts, never values. */
-  "pi/project/env/test": { params: { cwd: string }; result: { status: ProjectEnvStatus } };
-  /** Re-resolve for subsequent commands. Running commands keep their environment. */
-  "pi/project/env/refresh": { params: { cwd: string }; result: { status: ProjectEnvStatus } };
 
   // --- workers (M2-T1) ---
   "pi/worker/list": { params: {}; result: { workers: WorkerInfo[] } };
@@ -1355,8 +1328,6 @@ export interface HostNotifications {
   "pi/project/trust_request": { id: string; cwd: string; reasons: string[]; timeoutMs: number };
   /** The request above was settled (by any client, or by the timeout). */
   "pi/project/trust_resolved": { id: string; cwd: string; trusted: boolean };
-  /** A project's environment command changed state (configured, resolved, failed). */
-  "pi/project/env/changed": { status: ProjectEnvStatus };
 
   // ------------------------------------------------------------------ M4 --
   /** `DefaultPackageManager` progress, forwarded while an install/remove/update runs. */

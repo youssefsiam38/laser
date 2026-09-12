@@ -37,10 +37,9 @@ import { ModelsTab } from "./ModelsTab.js";
 import { FeaturesScreen } from "./FeaturesScreen.js";
 import { SettingsForm } from "./SettingsForm.js";
 import { TrustTab } from "./TrustTab.js";
-import { EnvironmentTab } from "./EnvironmentTab.js";
 import { UsageTab } from "./UsageTab.js";
 
-type Tab = "general" | "advanced" | "appearance" | "features" | "mcp" | "models" | "usage" | "keyboard" | "environment" | "trust" | "device";
+type Tab = "general" | "advanced" | "appearance" | "features" | "mcp" | "models" | "usage" | "keyboard" | "trust" | "device";
 
 /**
  * `PROJECTLESS` lists tabs that do not require a selected project, keeping
@@ -69,7 +68,6 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "models", label: "Providers and models" },
   { id: "usage", label: "Usage" },
   { id: "keyboard", label: "Help and shortcuts" },
-  { id: "environment", label: "Environment" },
   { id: "trust", label: "Trust" },
   { id: "device", label: "This device" },
 ];
@@ -240,7 +238,6 @@ export function SettingsScreen({ cwd: project, initialTab }: { cwd: string | und
             {tab === "models" && cwd && <ModelsTab cwd={cwd} snapshot={snapshot} onApply={apply} />}
             {tab === "usage" && <UsageTab />}
             {tab === "keyboard" && <KeyboardTab cwd={cwd} />}
-            {tab === "environment" && <EnvironmentTab cwd={cwd} />}
             {tab === "trust" && <TrustTab />}
             {tab === "device" && <DeviceTab />}
           </>

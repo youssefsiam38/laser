@@ -51,7 +51,6 @@ export type {
   AgentModelEvent,
   AgentRunSummary,
   BackgroundWorkOptions,
-  ProjectEnvironmentBridge,
   CompleteRunInput,
   CompleteRunResult,
   FleetAgentRow,

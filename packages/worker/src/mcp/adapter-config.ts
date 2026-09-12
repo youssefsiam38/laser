@@ -132,57 +132,14 @@ export function toServerEntry(config: McpConfiguredServer, secrets: ResolvedSecr
 }
 
 /**
- * Give a stdio server the project's environment (M16-T17).
- *
- * The engine starts an MCP server itself, from this entry, and there is no
- * spawn hook to decorate on the way. So the environment is decided here
- * instead, and three rules keep that honest:
- *
- *   - A server told `inheritEnv: false` means "only what I configured". It is
- *     left exactly as it is; a project value must not sneak into it.
- *   - An inheriting server is given the environment its project's commands get,
- *     computed once from the worker's own environment. Taking it over in full
- *     is what lets the project's `unset` actually remove an inherited
- *     credential: an `env` map can add a name, but it cannot take one away.
- *   - The server's own configured `env` is applied last, so an explicit value
- *     still wins over the project's.
- *
- * A server that is already connected keeps the environment it started with;
- * picking up a refresh needs a reconnect, exactly as `docs/shell-environment.md`
- * describes for the shell overlay.
- */
-function withProjectEnvironment(entry: ServerEntry, projectEnv: ProjectEnvDecorator | undefined): ServerEntry {
-  if (!projectEnv || entry.command === undefined) return entry;
-  if (entry.inheritEnv === false) return entry;
-
-  const decorated = projectEnv(process.env);
-  const environment: Record<string, string> = {};
-  for (const [name, value] of Object.entries(decorated)) {
-    if (typeof value === "string") environment[name] = value;
-  }
-  return {
-    ...entry,
-    // The configured values are the person's explicit choice for this server.
-    env: { ...environment, ...(entry.env ?? {}) },
-    inheritEnv: false,
-  };
-}
-
-/** Decorates a base environment with the project's values. */
-export type ProjectEnvDecorator = (base: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
-
-/**
  * What the model's session gets. `settings` is Laser's, always: the person
  * configures servers, never the engine's terminal behaviour (AGENTS.md §6b).
  */
 export function toAdapterConfig(
   servers: Array<{ config: McpConfiguredServer; secrets?: ResolvedSecrets }>,
-  projectEnv?: ProjectEnvDecorator,
 ): McpConfig {
   const mcpServers: Record<string, ServerEntry> = {};
-  for (const { config, secrets } of servers) {
-    mcpServers[config.name] = withProjectEnvironment(toServerEntry(config, secrets ?? new Map()), projectEnv);
-  }
+  for (const { config, secrets } of servers) mcpServers[config.name] = toServerEntry(config, secrets ?? new Map());
   return {
     mcpServers,
     settings: {
