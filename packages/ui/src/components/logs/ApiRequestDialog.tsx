@@ -131,7 +131,8 @@ function RequestBody({entry}:{entry:LogEntry}) {
   const [truncated,setTruncated]=useState(false);
   const [section,setSection]=useState<Section>("instructions");
   const [search,setSearch]=useState("");
-  const [searchOpen,setSearchOpen]=useState(true);
+  // Closed until asked for: the page is for reading the request, the find bar is a tool.
+  const [searchOpen,setSearchOpen]=useState(false);
   const [scope,setScope]=useState<"section"|"request">("section");
   const [contentView,setContentView]=useState<ContentView>("plain");
   const {copy,copied}=useCopy();
