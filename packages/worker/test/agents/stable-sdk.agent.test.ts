@@ -60,6 +60,30 @@ async function openAndPrompt(definition: AgentDefinition, text = "hello"): Promi
 }
 
 describe("StableSdkDriver with an agent definition", () => {
+  it("captures the named agent definition and template fields from the real sent request", async () => {
+    const definition: AgentDefinition = { ...fallbackDefaultAgent(), name: "coordinator", engineInstructions: false, instructions: "You are coordinator.\n\n{{availableTools}}\n\n{{projectInstructions}}", model: { provider: "stub", id: "stub-1" } };
+    const path = join(base, "project", "AGENTS.md");
+    writeFileSync(path, "Keep the exact project rule.\n");
+    const driver = new StableSdkDriver(); drivers.push(driver);
+    const captures: Extract<DriverEvent, { type: "extension" }>[] = [];
+    const settled = new Promise<void>(resolve => driver.subscribe(event => {
+      if (event.type === "extension" && event.message.type === "lasercode/provider/request") captures.push(event);
+      if (event.type === "update" && event.update.kind === "agent_settled") resolve();
+    }));
+    await driver.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), projectTrusted: true, agent: agentOptions(definition) });
+    await driver.prompt([{ type: "text", text: "hello" }]); await settled;
+    expect(captures).toHaveLength(1);
+    const message = captures[0]!.message;
+    if (message.type !== "lasercode/provider/request") throw new Error("Missing capture");
+    expect(message.payload).toEqual(stub.requests[0]);
+    const spans = message.context!.instructionSources!.flatMap(map => map.spans);
+    expect(spans.some(span => span.source.label === "Agent · coordinator")).toBe(true);
+    expect(spans.some(span => span.source.origin === "variable" && span.source.label === "Variable · Available tools")).toBe(true);
+    expect(spans.some(span => span.source.path?.startsWith("<"))).toBe(false);
+    expect(spans.some(span => span.source.path === path)).toBe(true);
+    expect(spans.filter(span => span.source.kind === "unrecorded")).toEqual([]);
+  }, 60_000);
+
   it("applies custom instructions and sets the definition's model, and still hands over every tool", async () => {
     const definition: AgentDefinition = { ...fallbackDefaultAgent(), name: "reader", engineInstructions: false, instructions: "You are a careful reader who only inspects.\n\nCurrent working directory: {{workingDirectory}}", model: { provider: "stub", id: "stub-1" } };
     const { driver } = await openAndPrompt(definition);

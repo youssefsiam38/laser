@@ -6,6 +6,7 @@
  */
 
 import type { SessionGoal } from "./features.js";
+import { PRODUCT } from "./identity.js";
 import type { BackgroundTaskUpdate } from "./tasks.js";
 import type { McpRuntimeSnapshot } from "./mcp.js";
 
@@ -64,10 +65,17 @@ export interface ProviderRequestContext {
   instructionSources?: InstructionSourceMap[];
 }
 
+export const INSTRUCTION_APP_ORIGIN = PRODUCT.name;
+export type InstructionOrigin = "engine" | "project" | "skill" | "agent" | "variable" | typeof INSTRUCTION_APP_ORIGIN | "extension" | "environment" | "unrecorded";
 export interface InstructionSource {
-  kind: "agent" | "file" | "skill" | "extension" | "environment" | "unrecorded";
+  kind: "agent" | "file" | "skill" | "variable" | typeof INSTRUCTION_APP_ORIGIN | "extension" | "environment" | "unrecorded";
+  /** Absent only in captures made before origin identities were recorded. */
+  origin?: InstructionOrigin;
   label: string;
+  detail?: string;
   path?: string;
+  /** A named contribution with no source file to open. */
+  inline?: true;
 }
 export interface InstructionSourceSpan {
   /** UTF-16 offsets, matching browser text ranges. */

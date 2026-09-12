@@ -73,6 +73,8 @@ export function ApiRequestDialog({ target, onClose }: { target: ApiRequestTarget
   return <Dialog open onOpenChange={open=>{if(!open)onClose();}}>
     <DialogContent onEscapeKeyDown={e=>{
       const modal=e.target instanceof Element?e.target.closest('[role="dialog"]'):null;
+      const closeSources=modal?.querySelector<HTMLButtonElement>('[data-close-source-panel]');
+      if(closeSources){e.preventDefault();closeSources.click();return;}
       const closeFind=modal?.querySelector<HTMLButtonElement>('[data-request-find] [aria-label="Close search"]');
       if(closeFind){e.preventDefault();closeFind.click();}
     }} className="flex h-[85dvh] w-[96vw] max-w-none min-w-0 flex-col gap-0 overflow-hidden p-0 sm:h-[80dvh] sm:w-[80vw] sm:max-w-none">
@@ -245,11 +247,12 @@ function RequestFieldCard({field,expanded,markdown,reveal,sources}:{field:Reques
   useEffect(()=>{
     let live=true;
     setSpans(undefined);
-    if(sources)void requestSourceSpans(field,sources).then(value=>{if(live)setSpans(value);}).catch(()=>{
+    void requestSourceSpans(field,sources ?? []).then(value=>{if(live)setSpans(value);}).catch(()=>{
       if(live&&text)setSpans([{start:0,end:text.length,source:{kind:"unrecorded",label:"Source verification unavailable on this connection"}}]);
     });
     return()=>{live=false;};
   },[field,sources,text]);
+  const claims=useMemo(()=>spans?.map((span,i)=>({id:String(i),text:(text ?? "").slice(span.start,span.end),source:span.source})) ?? [],[spans,text]);
   const markdownBody=text!==undefined&&<TextMessagePartProvider text={text} isRunning={false}><MarkdownText /></TextMessagePartProvider>;
   const preview = text ?? (field.value === null || typeof field.value === "number" || typeof field.value === "boolean" ? JSON.stringify(field.value) : undefined);
   return <Collapsible open={reveal||open} onOpenChange={setOpen} className={cn(activityRow,"border border-line")}>
@@ -261,7 +264,7 @@ function RequestFieldCard({field,expanded,markdown,reveal,sources}:{field:Reques
     </CollapsibleTrigger>
     <CollapsibleContent className={collapsePanel}>
       <div className="flex min-w-0 flex-col gap-3 border-t border-line p-3">
-        {text!==undefined&&(spans?.length ? <ConfidenceMarker claims={spans.map((span,i)=>({id:String(i),text:text.slice(span.start,span.end),source:span.source}))}>{markdown?markdownBody:undefined}</ConfidenceMarker>
+        {text!==undefined&&(spans?.length ? <ConfidenceMarker claims={claims} markdown={markdown}/>
           :<div data-request-search-content>{markdown?markdownBody:<p className="whitespace-pre-wrap wrap-break-word text-sm leading-relaxed text-ink">{text}</p>}</div>)}
         {typeof field.value!=="string"&&<RequestJson value={field.value} search={reveal&&text===undefined} />}
       </div>

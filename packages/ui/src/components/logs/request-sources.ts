@@ -21,7 +21,7 @@ export async function requestSourceSpans(field: RequestField, maps: InstructionS
   let index = 0;
   for (const leaf of textLeaves(field.value, field.path)) {
     if (index++) {
-      spans.push({ start: offset, end: offset + 2, source: { kind: "agent", label: "Text block separator" } });
+      spans.push({ start: offset, end: offset + 2, source: { kind: "agent", origin: "engine", label: "Text block separator", inline: true } });
       offset += 2;
     }
     const map = maps.find(map => displayPath(map.path) === leaf.path);
@@ -33,7 +33,7 @@ export async function requestSourceSpans(field: RequestField, maps: InstructionS
       cursor = span.end;
       return ok;
     }) && cursor === leaf.text.length;
-    const ranges = valid && map ? map.spans : [{ start: 0, end: leaf.text.length, source: { kind: "unrecorded" as const, label: "Source not recorded for this retained text" } }];
+    const ranges = valid && map ? map.spans : [{ start: 0, end: leaf.text.length, source: { kind: "unrecorded" as const, origin: "unrecorded" as const, inline: true as const, label: "Not recorded", detail: "This part was written by something the app could not observe (an engine override or an older capture)." } }];
     spans.push(...ranges.filter(span => span.end > span.start).map(span => ({ ...span, start: span.start + offset, end: span.end + offset })));
     offset += leaf.text.length;
   }

@@ -112,6 +112,11 @@
  * A second hand-written palette here is what made a fresh install render the
  * pre-theme-system colours instead of the default preset.
  * ------------------------------------------------------------------------- */
+/** Derived at each range so its inline origin token, not the root, owns the tint. */
+.provenance-range {
+  --provenance-tint: color-mix(in srgb, var(--provenance-origin) 7%, var(--surface));
+}
+
 :root {
   /* @theme-default-start */
   --bg: #000000;
@@ -157,6 +162,15 @@
   --syntax-type: #6ed9d2;
   --syntax-variable: #d9dfe5;
   --syntax-punctuation: #9ea6ae;
+  --provenance-engine: #89939e;
+  --provenance-project: #83d494;
+  --provenance-skill: #6ed9d2;
+  --provenance-agent: #78c7fd;
+  --provenance-variable: #f6b669;
+  --provenance-app: #03cc7b;
+  --provenance-extension: #c3a5f9;
+  --provenance-environment: #f6b669;
+  --provenance-unrecorded: #97989b;
   --shadow-float: 0 1px 2px rgb(0 0 0 / 0.4), 0 12px 32px -8px rgb(0 0 0 / 0.6);
   --shadow-float-sm: 0 1px 2px rgb(0 0 0 / 0.4), 0 4px 14px -4px rgb(0 0 0 / 0.5);
   --on-accent: #000000;

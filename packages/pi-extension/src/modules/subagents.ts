@@ -29,6 +29,8 @@
  * touches sessions, files or worktrees itself.
  */
 import { StringEnum } from "@earendil-works/pi-ai";
+import { INSTRUCTION_APP_ORIGIN, PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
+import { recordInstructionWrite } from "../prompt-provenance.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   AGENT_EVENT_MESSAGE_TYPE,
@@ -565,7 +567,10 @@ export const subagentsModule: LaserModule = {
       if (disposed) return undefined;
       const block = roleBlock(bridge.role(), bridge.canDelegate(), session.cwd);
       if (!block) return undefined;
-      return { systemPrompt: `${event.systemPrompt}\n\n${block}` };
+      return recordInstructionWrite({ systemPrompt: `${event.systemPrompt}\n\n${block}` }, {
+        kind: INSTRUCTION_APP_ORIGIN, origin: INSTRUCTION_APP_ORIGIN, label: `${PRODUCT_DISPLAY_NAME} · Agent role`, inline: true,
+        detail: "The session's role, delegation rules and working directory, supplied by the agent harness.",
+      });
     });
 
     return () => {

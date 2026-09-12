@@ -3,7 +3,7 @@ import { act } from "react";
 import { createHash, webcrypto } from "node:crypto";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { LogEntry } from "@lasercode/protocol";
+import { INSTRUCTION_APP_ORIGIN, PRODUCT_DISPLAY_NAME, type LogEntry } from "@lasercode/protocol";
 import { ApiRequestDialog as Inspector } from "../../src/components/logs/ApiRequestDialog.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import type { ComponentProps } from "react";
@@ -47,19 +47,72 @@ it("shows source markers with keyboard/touch details without duplicating instruc
   await act(async()=>root.render(<ApiRequestDialog target={{kind:"log",entry:captured}} onClose={()=>{}}/>));
   await act(async()=>{await new Promise(resolve=>setTimeout(resolve,20));});
   expect(document.querySelector('[data-slot="confidence-marker"]')).not.toBeNull();
-  expect(document.querySelector('[data-request-search-content]')?.textContent).toBe(instructions);
-  const sourceButton=document.querySelector<HTMLButtonElement>('[aria-label="Recorded instruction sources"] button')!;
+  expect(document.querySelector('[data-request-source-text]')?.textContent).toBe(instructions);
+  const sourceButton=document.querySelector<HTMLButtonElement>('[aria-label="Inspect source: AGENTS.md"]')!;
   await act(async()=>{sourceButton.focus();sourceButton.click();});
-  expect(document.querySelector('[data-slot="popover-content"]')?.textContent).toContain("/project/AGENTS.md");
-  expect(document.querySelector('[data-slot="popover-content"]')?.closest('[data-slot="dialog-content"]')).not.toBeNull();
+  expect(document.querySelector('[data-source-panel]')?.textContent).toContain("/project/AGENTS.md");
+  expect(document.querySelector('[data-source-panel]')?.closest('[data-slot="dialog-content"]')).not.toBeNull();
   expect(document.querySelector('[data-request-source-text]')?.hasAttribute("title")).toBe(false);
-  await act(async()=>sourceButton.click());
+  await act(async()=>document.querySelector<HTMLButtonElement>('[data-close-source-panel]')!.click());
   await search("quartz");expect(count()).toBe("1 / 1");
   await search("AGENTS.md");expect(count()).toBe("No matches");
   await click("Markdown");expect(document.querySelector(".md-body strong")?.textContent).toBe("quartz");
   await search("quartz");expect(count()).toBe("1 / 1");
   await click("Full request");expect(count()).toBe("1 / 1");
 });
+it("keeps source disclosure on Markdown's literal XML blocks without executing their markup", async () => {
+  vi.stubGlobal("crypto", webcrypto);
+  const instructions = '<project_instructions path="/project/AGENTS.md">\nKeep quartz changes focused.\n</project_instructions>';
+  const captured: LogEntry = { ...entry, detail: { instructions }, requestContext: { instructionSources: [{ path: ["instructions"], sha256: createHash("sha256").update(instructions).digest("hex"), spans: [{ start: 0, end: instructions.length, source: { kind: "file", origin: "project", label: "AGENTS.md", path: "/project/AGENTS.md" } }] }] } };
+  await act(async () => root.render(<ApiRequestDialog target={{ kind: "log", entry: captured }} onClose={() => {}}/>));
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
+  await click("Markdown");
+  expect(document.getElementsByTagName('project_instructions')).toHaveLength(0);
+  const chip = document.querySelector<HTMLButtonElement>('.md-body [aria-label="Inspect source: AGENTS.md"]');
+  expect(chip).not.toBeNull(); await act(async () => chip!.click());
+  expect(document.querySelector('[data-source-panel]')?.textContent).toContain(instructions);
+  await search("quartz"); expect(count()).toBe("1 / 1");
+  await act(async () => { document.querySelector<HTMLButtonElement>('[data-close-source-panel]')!.click(); await new Promise(resolve => setTimeout(resolve, 30)); });
+  expect(chip!.isConnected).toBe(true); expect(document.activeElement).toBe(chip);
+});
+
+it("follows an origin, opens inline contributions without a file action, and closes sources before find or the dialog", async () => {
+  vi.stubGlobal("crypto", webcrypto);
+  const openFile = vi.fn(); vi.stubGlobal("desktop", { openSourceFile: openFile });
+  const instructions = "# Role\n\nCoordinate quartz work.\n\n# Project\n\nKeep quartz changes small.";
+  const boundary = instructions.indexOf("# Project");
+  const captured: LogEntry = { ...entry, detail: { instructions }, requestContext: { instructionSources: [{ path: ["instructions"], sha256: createHash("sha256").update(instructions).digest("hex"), spans: [
+    { start: 0, end: boundary, source: { kind: INSTRUCTION_APP_ORIGIN, origin: INSTRUCTION_APP_ORIGIN, label: `${PRODUCT_DISPLAY_NAME} · Agent role`, detail: "This session's role.", inline: true, path: "<inline:internal>" } },
+    { start: boundary, end: instructions.length, source: { kind: "file", origin: "project", label: "AGENTS.md", path: "/project/AGENTS.md" } },
+  ] }] } };
+  const close = vi.fn();
+  await act(async () => { root.render(<ApiRequestDialog target={{ kind: "log", entry: captured }} onClose={close}/>); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
+  const legend = document.querySelector('[aria-label="Recorded instruction sources"]')!;
+  const project = [...legend.querySelectorAll("button")].find(button => button.textContent?.startsWith("Project"))!;
+  await act(async () => { project.click(); await new Promise(resolve => setTimeout(resolve, 30)); });
+  expect(document.activeElement?.textContent).toContain("Keep quartz changes small.");
+  expect(project.getAttribute("aria-pressed")).toBe("true");
+  await act(async () => document.querySelector<HTMLButtonElement>(`[aria-label="Inspect source: ${PRODUCT_DISPLAY_NAME} · Agent role"]`)!.click());
+  const panel = document.querySelector('[data-source-panel]')!;
+  const inline = panel.querySelector('[data-source-selected="true"]')!;
+  expect(inline.textContent).toContain("Coordinate quartz work.");
+  expect([...inline.querySelectorAll("button")].map(button => button.textContent)).toEqual(["Show in text"]);
+  expect(openFile).not.toHaveBeenCalled();
+  const region = document.querySelector<HTMLElement>('[data-request-search-content]')!;
+  const selection = window.getSelection()!; const range = document.createRange(); range.selectNodeContents(region); selection.removeAllRanges(); selection.addRange(range);
+  const setData = vi.fn(); const copyEvent = new Event("copy", { bubbles: true, cancelable: true }); Object.defineProperty(copyEvent, "clipboardData", { value: { setData } });
+  region.dispatchEvent(copyEvent); expect(setData).toHaveBeenCalledWith("text/plain", instructions); selection.removeAllRanges();
+  await search("quartz"); expect(count()).toBe("1 / 2");
+  await act(async () => document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  expect(document.querySelector('[data-source-panel]')).toBeNull(); expect(close).not.toHaveBeenCalled();
+  expect(document.querySelector('[role="search"]')).not.toBeNull();
+  await click("Markdown");
+  expect(document.querySelectorAll(".md-body")).toHaveLength(1);
+  expect(document.querySelectorAll('.md-body button[aria-label^="Inspect source:"]').length).toBeGreaterThan(1);
+  await search("quartz"); expect(count()).toBe("1 / 2");
+});
+
 it("labels timestamp fallback and excludes captures linked to a different message",async()=>{
   const {requestContext:_,...legacy}=entry;
   client.request.mockResolvedValueOnce({entries:[],hasMore:false}).mockResolvedValueOnce({entries:[legacy,{...entry,id:2}],hasMore:false});

@@ -1,101 +1,142 @@
 "use client";
-/** assistant-ui confidence-marker, adapted for recorded source identity (D-135).
- * Retains the registry's inline markers and hover/focus basis disclosure. There
- * are deliberately no confidence grades: provenance says who supplied text,
- * not whether it is true. No demo width, extra spaces or raw visual values.
- */
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
-import { FileText, Layers, Puzzle, BookOpen, Monitor, Info, ChevronDown, ArrowUpRight, Copy } from "lucide-react";
-import type { InstructionSource } from "@lasercode/protocol";
-import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from "@/components/ui/command";
+/** assistant-ui confidence-marker, adapted to captured provenance, not certainty.
+ * The document owns the text once. Controls and captured excerpts never enter find. */
+import { memo, useId, useEffect, useCallback, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { TextMessagePartProvider } from "@assistant-ui/react";
+import { INSTRUCTION_APP_ORIGIN, PRODUCT_DISPLAY_NAME, type InstructionOrigin, type InstructionSource } from "@lasercode/protocol";
+import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import { hasSourceEditor, openSourcePath } from "@/components/ui/source-file-link";
+import { MarkdownText } from "./markdown-text";
 import { cn } from "@/lib/utils";
 
 export interface SourceClaim { id: string; text: string; source: InstructionSource }
-const style = {
-  agent: { icon: Layers, ink: "text-ink-2", underline: "decoration-ink-3/50" },
-  file: { icon: FileText, ink: "text-live", underline: "decoration-live/60" },
-  skill: { icon: BookOpen, ink: "text-live", underline: "decoration-live/60 decoration-dashed" },
-  extension: { icon: Puzzle, ink: "text-attention", underline: "decoration-attention/60" },
-  environment: { icon: Monitor, ink: "text-ink-2", underline: "decoration-ink-3/50 decoration-dashed" },
-  unrecorded: { icon: Info, ink: "text-ink-3", underline: "decoration-ink-3/50 decoration-dotted" },
-} as const;
+const origins: Record<InstructionOrigin, string> = { engine: "Engine", project: "Project", skill: "Skills", agent: "Agent", variable: "Variables", [INSTRUCTION_APP_ORIGIN]: PRODUCT_DISPLAY_NAME, extension: "Extensions", environment: "Environment", unrecorded: "Not recorded" };
+const originOf = (source: InstructionSource): InstructionOrigin => source.origin ?? (source.kind === "file" || source.kind === "agent" ? "unrecorded" : source.kind);
+const unknownDetail = "This part was written by something the app could not observe (an engine override or an older capture).";
+const detailOf = (source: InstructionSource) => source.detail ?? (source.kind === "unrecorded" ? unknownDetail : source.kind === "skill" ? "The skill's catalog entry. Its full instructions are read separately when used." : !source.origin && (source.kind === "file" || source.kind === "agent") ? "Source identity retained with this captured request. Its origin category was not recorded." : "Source identity retained with this captured request.");
+const fileOf = (source: InstructionSource) => !source.inline && source.path && !source.path.startsWith("<") ? source.path : undefined;
+const colour = (origin: InstructionOrigin): CSSProperties => ({ "--provenance-origin": `var(--provenance-${origin === INSTRUCTION_APP_ORIGIN ? "app" : origin})` } as CSSProperties);
+const share = (count: number, total: number) => count > 0 && count / total < 0.001 ? "<0.1" : (total ? count / total * 100 : 0).toLocaleString(undefined, { maximumFractionDigits: 1 });
+const action = "rounded-md px-2 py-1 text-xs text-ink outline-none hover:bg-surface-2 active:bg-surface-2 focus-visible:ring-2 focus-visible:ring-live pointer-coarse:min-h-11";
 
-function SourceInfo({ source }: { source: InstructionSource }) {
-  const Icon = style[source.kind].icon;
-  return <div className="flex min-w-0 flex-col gap-1 text-xs">
-    <span className={cn("flex items-center gap-2 font-medium", style[source.kind].ink)}><Icon className="size-4 shrink-0" />{source.label}</span>
-    {source.path && <span className="wrap-anywhere font-mono text-ink-2">{source.path}</span>}
-    {source.kind === "skill" && <span className="text-ink-2">Skill name, description and location. The full skill body is loaded separately when used.</span>}
-    {source.kind === "extension" && <span className="text-ink-2">This contribution was recorded when the extension changed the instructions.</span>}
-  </div>;
-}
-
-export function ConfidenceMarker({ claims, children }: { claims: readonly SourceClaim[]; children?: ReactNode }) {
-  const sources = [...new Map(claims.filter(claim => claim.text.trim()).map(claim => [JSON.stringify(claim.source), claim.source])).entries()];
-  const root = useRef<HTMLDivElement>(null);
-  const tooltipId = useId();
-  const [menu, setMenu] = useState(false);
-  const [hover, setHover] = useState<{ claim: SourceClaim; rect: DOMRect }>();
-  const pointer = useRef(false);
+function SourceChip({ claim, root, onSelect, textHover = false }: { claim: SourceClaim; root: RefObject<HTMLDivElement | null>; onSelect: (source: InstructionSource, button: HTMLButtonElement) => void; textHover?: boolean }) {
+  const [point, setPoint] = useState<DOMRect>();
+  const helpId = useId();
+  const button = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    const clear = () => { pointer.current = false; setHover(undefined); };
-    document.addEventListener("scroll", clear, true);
-    window.addEventListener("blur", clear);
-    return () => { document.removeEventListener("scroll", clear, true); window.removeEventListener("blur", clear); };
-  }, []);
-  const anchor = useMemo(() => ({ current: { getBoundingClientRect: () => hover?.rect ?? new DOMRect() } }), [hover]);
-  // Keep floating layers inside the modal's scroll lock. A body portal appears
-  // correct but its wheel/touch events are blocked by the parent Dialog.
-  const container = root.current?.closest<HTMLElement>('[data-slot="dialog-content"]');
-  const native = hasSourceEditor();
-  const FileAction = native ? ArrowUpRight : Copy;
-  return <div ref={root} data-slot="confidence-marker" className="flex min-w-0 flex-col gap-3">
-    <div className="flex flex-wrap items-center gap-2" aria-label="Recorded instruction sources">
-      <Popover open={menu} onOpenChange={open => { setMenu(open); setHover(undefined); }}><PopoverTrigger asChild><button type="button" className="flex items-center gap-1.5 rounded-md border border-line px-2 py-1 text-xs text-ink-2 outline-none hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-live">
-        <Layers className="size-3 shrink-0" />{sources.length} recorded sources<ChevronDown className="size-3" />
-      </button></PopoverTrigger><PopoverContent container={container} align="start" className="w-96 max-w-[calc(100vw-var(--spacing)*4)] max-h-(--radix-popover-content-available-height) gap-0 overflow-hidden p-0">
-        <Command className="min-h-0" label="Recorded sources">
-          <CommandInput placeholder="Find a source or file…" aria-label="Find a source or file" />
-          <CommandList className="min-h-0 overscroll-contain" aria-label="Instruction sources">
-            <CommandEmpty>No sources match. Try a filename or source name.</CommandEmpty>
-            {Object.keys(style).map(kind => {
-              const rows = sources.filter(([, source]) => source.kind === kind);
-              return rows.length ? <CommandGroup key={kind} heading={`${({agent:"Agent instructions",file:"Project files",skill:"Skills",extension:"Features",environment:"Environment",unrecorded:"Unrecorded"})[kind]} · ${rows.length}`}>
-                {rows.map(([key,source]) => { const Icon = style[source.kind].icon; return <CommandItem key={key} value={key} disabled={!source.path} onSelect={() => {
-                  if (source.path) void openSourcePath(source.path);
-                }} className="items-start gap-3 py-2 data-[disabled=true]:opacity-100">
-                  <Icon className={cn("mt-0.5 size-4", style[source.kind].ink)} />
-                  <span className="min-w-0 flex-1"><span className="block text-sm font-medium">{source.label}</span>{source.path && <span className="mt-1 block wrap-anywhere font-mono text-xs text-ink-3">{source.path}</span>}</span>
-                  {source.path && <FileAction className="mt-0.5 size-3.5 text-ink-3" />}
-                </CommandItem>; })}
-              </CommandGroup> : null;
-            })}
-          </CommandList>
-        </Command>
-        <p className="shrink-0 border-t border-line px-3 py-2 text-xs text-ink-3">{native ? "Select a file to open in your default text editor." : "Select a file to copy its path for the project computer."}</p>
-      </PopoverContent></Popover>
-      {!children&&<span className="text-xs text-ink-3">Hover or focus text to inspect its source.</span>}
-    </div>
-    {children ? <><p className="text-xs text-ink-3">Sources are recorded above. Plain view shows their exact boundaries.</p><div data-request-search-content>{children}</div></>
-      : <p data-request-search-content className="whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-ink">{claims.map(claim => claim.text.trim() ?
-        <span key={claim.id} tabIndex={0} data-request-source-text data-file-path={claim.source.path} role={claim.source.path ? "link" : undefined}
-          aria-describedby={hover?.claim.id === claim.id ? tooltipId : undefined}
-          onPointerMove={event => { if (event.pointerType !== "touch" && !menu) { pointer.current = true; setHover({claim,rect:new DOMRect(event.clientX,event.clientY,0,0)}); } }}
-          onPointerLeave={() => { pointer.current = false; setHover(undefined); }}
-          onFocus={event => { if (!pointer.current && !menu) setHover({claim,rect:event.currentTarget.getClientRects()[0] ?? event.currentTarget.getBoundingClientRect()}); }}
-          onBlur={() => setHover(undefined)}
-          onClick={() => { if (claim.source.path && !window.getSelection()?.toString()) { setHover(undefined); void openSourcePath(claim.source.path); } }}
-          onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); setHover(undefined); } else if (claim.source.path && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); void openSourcePath(claim.source.path); } }}
-          className={cn("cursor-help select-text rounded-sm text-start whitespace-pre-wrap underline decoration-2 underline-offset-2 outline-none hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-live", claim.source.path && "cursor-pointer", style[claim.source.kind].underline)}>{claim.text}</span> : claim.text)}</p>}
-    <Popover open={!!hover && !menu} onOpenChange={open => { if (!open) setHover(undefined); }}>
-      <PopoverAnchor virtualRef={anchor}/>
-      <PopoverContent container={container} id={tooltipId} role="tooltip" side="bottom" align="start" updatePositionStrategy="always"
-        onOpenAutoFocus={event => event.preventDefault()} onCloseAutoFocus={event => event.preventDefault()}
-        className="pointer-events-none w-80 max-w-[calc(100vw-var(--spacing)*4)] rounded-lg p-3 motion-reduce:animate-none">
-        {hover && <><SourceInfo source={hover.claim.source}/>{hover.claim.source.path && <p className="text-xs text-ink-3">{native ? "Click to open in your text editor" : "Click to copy the file path"}</p>}</>}
-      </PopoverContent>
-    </Popover>
-  </div>;
+    const span = textHover ? button.current?.parentElement : undefined;
+    if (!span) return;
+    const move = (event: PointerEvent) => { if (event.pointerType !== "touch") setPoint(new DOMRect(event.clientX, event.clientY, 0, 0)); };
+    const clear = () => setPoint(undefined);
+    const focus = () => { if (button.current) setPoint(button.current.getBoundingClientRect()); };
+    span.addEventListener("pointermove", move); span.addEventListener("pointerleave", clear); span.addEventListener("focus", focus); span.addEventListener("blur", clear);
+    return () => { span.removeEventListener("pointermove", move); span.removeEventListener("pointerleave", clear); span.removeEventListener("focus", focus); span.removeEventListener("blur", clear); };
+  }, [textHover]);
+  useEffect(() => { const clear = () => setPoint(undefined); document.addEventListener("scroll", clear, true); window.addEventListener("blur", clear); window.addEventListener("resize", clear); return () => { document.removeEventListener("scroll", clear, true); window.removeEventListener("blur", clear); window.removeEventListener("resize", clear); }; }, []);
+  const anchor = useMemo(() => ({ current: { getBoundingClientRect: () => point ?? new DOMRect() } }), [point]);
+  return <><button ref={button} type="button" style={colour(originOf(claim.source))} data-search-exclude aria-describedby={point ? helpId : undefined} aria-label={`Inspect source: ${claim.source.label}`} className={cn(action, "my-1 me-2 inline-flex max-w-full select-none items-center gap-2 text-start whitespace-normal wrap-anywhere border border-line bg-surface font-medium")}
+    onPointerMove={event => { if (event.pointerType !== "touch") setPoint(new DOMRect(event.clientX, event.clientY, 0, 0)); }} onPointerLeave={() => setPoint(undefined)}
+    onFocus={event => setPoint(event.currentTarget.getBoundingClientRect())} onBlur={() => setPoint(undefined)}
+    onKeyDown={event => { if (event.key === "Escape" && point) { event.preventDefault(); event.stopPropagation(); setPoint(undefined); } }}
+    onClick={event => { setPoint(undefined); onSelect(claim.source, event.currentTarget); }}>
+    <span aria-hidden className="size-2 shrink-0 rounded-full bg-(--provenance-origin)" /><span aria-hidden data-source-label={claim.source.kind === "unrecorded" ? "Not recorded" : claim.source.label} className="before:content-[attr(data-source-label)]"/>
+  </button><Popover open={!!point} onOpenChange={value => { if (!value) setPoint(undefined); }}><PopoverAnchor virtualRef={anchor}/>
+    <PopoverContent container={root.current?.closest<HTMLElement>('[data-slot="dialog-content"]')} id={helpId} role="tooltip" side="bottom" align="start" updatePositionStrategy="always" onOpenAutoFocus={event => event.preventDefault()} onCloseAutoFocus={event => event.preventDefault()} className="pointer-events-none max-w-prose wrap-anywhere text-xs">{detailOf(claim.source)}</PopoverContent>
+  </Popover></>;
 }
+
+export const ConfidenceMarker = memo(function ConfidenceMarker({ claims, markdown = false }: { claims: readonly SourceClaim[]; markdown?: boolean }) {
+  const root = useRef<HTMLDivElement>(null);
+  const opener = useRef<HTMLButtonElement | null>(null);
+  const panel = useRef<HTMLElement>(null);
+  const [selected, setSelected] = useState<string>();
+  const [filter, setFilter] = useState<InstructionOrigin>();
+  const [flash, setFlash] = useState<string>();
+  const text = claims.map(claim => claim.text).join("");
+  const ranges = useMemo(() => { let start = 0; return claims.map(claim => { const value = { ...claim, start, end: start + claim.text.length }; start = value.end; return value; }); }, [claims]);
+  const sources = useMemo(() => [...new Map(claims.map(claim => [JSON.stringify(claim.source), claim.source])).entries()], [claims]);
+  const totals = useMemo(() => { const result = new Map<InstructionOrigin, number>(); for (const claim of claims) { const origin = originOf(claim.source); result.set(origin, (result.get(origin) ?? 0) + claim.text.length); } return result; }, [claims]);
+  const jump = useCallback((id: string) => {
+    setFlash(id);
+    requestAnimationFrame(() => {
+      const element = [...(root.current?.querySelectorAll<HTMLElement>("[data-source-ids]") ?? [])].find(element => element.dataset.sourceIds?.split(" ").includes(id));
+      const viewport = root.current?.closest<HTMLElement>('[data-slot="request-viewport"]');
+      if (element && viewport) viewport.scrollTop += element.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
+      element?.focus({ preventScroll: true });
+    });
+  }, []);
+  const close = () => { setSelected(undefined); requestAnimationFrame(() => opener.current?.focus({ preventScroll: true })); };
+  const open = (source: InstructionSource, button: HTMLButtonElement) => {
+    opener.current = button; setSelected(JSON.stringify(source));
+    requestAnimationFrame(() => {
+      const current = panel.current;
+      current?.focus({ preventScroll: true });
+      const row = current?.querySelector<HTMLElement>('[data-source-selected="true"]');
+      if (current && row) {
+        const heading = current.querySelector<HTMLElement>("[data-source-panel-heading]");
+        current.scrollTop += row.getBoundingClientRect().top - current.getBoundingClientRect().top - (heading?.getBoundingClientRect().height ?? 0) - parseFloat(getComputedStyle(current).paddingTop || "0");
+      }
+      const viewport = root.current?.closest<HTMLElement>('[data-slot="request-viewport"]');
+      if (current && viewport) viewport.scrollTop += current.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
+    });
+  };
+  const chip = (claim: SourceClaim, textHover = false) => <SourceChip key={claim.id} claim={claim} root={root} onSelect={open} textHover={textHover}/>;
+  const block = (items: SourceClaim[], children: ReactNode) => {
+    const first = items[0];
+    if (!first) return children;
+    const active = !filter || items.some(item => originOf(item.source) === filter);
+    return <div tabIndex={-1} data-source-ids={items.map(item => item.id).join(" ")} data-origin={originOf(first.source)} data-origin-selected={active} style={colour(originOf(first.source))}
+      className={cn("provenance-range border-s-2 border-(--provenance-origin) bg-(--provenance-tint) px-3 py-1 outline-none", !active && "bg-transparent", (filter && active || items.some(item => item.id === flash)) && "ring-2 ring-inset ring-live")}>{items.map(item => chip(item))}{children}</div>;
+  };
+  // One intact Markdown parser; mixed blocks expose every intersecting identity.
+  const sourceBlock = (start: number, end: number, children: ReactNode) => block(ranges.filter(range => range.start < end && range.end > start), children);
+  return <div ref={root} data-slot="confidence-marker" className={cn("flex min-w-0 flex-col gap-3", selected !== undefined && "xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(0,0.7fr)]")}  onKeyDownCapture={event => {
+    if (event.key === "Escape" && selected !== undefined) { event.preventDefault(); event.stopPropagation(); close(); }
+  }}>
+    <div aria-label="Recorded instruction sources" className="flex min-w-0 gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible xl:col-span-2">
+      {[...totals].map(([origin, count]) => <button key={origin} type="button" aria-pressed={filter === origin} style={colour(origin)} className={cn(action, "flex shrink-0 flex-col items-start gap-1 border border-line sm:flex-row sm:items-center sm:gap-2", filter === origin && "ring-2 ring-live")}
+        onClick={() => { setFilter(current => current === origin ? undefined : origin); const first = claims.find(claim => originOf(claim.source) === origin); if (first) jump(first.id); }}>
+        <span className="inline-flex items-center gap-2"><span aria-hidden className="size-2 rounded-full bg-(--provenance-origin)" />{origins[origin]}</span><span className="font-mono tabular-nums text-ink-2">{count.toLocaleString()} · {share(count, text.length)}%</span>
+      </button>)}
+      <button type="button" className={cn(action, "shrink-0")} onClick={event => { if (sources[0]) open(sources[0][1], event.currentTarget); }}>Browse sources</button>
+    </div>
+    <p className="text-xs text-ink-3 xl:col-span-2">{filter ? "Other origin tints are muted. Select the origin again to show all equally." : <><span className="sm:hidden">Source characters · share of instructions</span><span className="hidden sm:inline">Select an origin to follow it. Select a source label to inspect its contribution. Counts are characters in the captured text.</span></>}</p>
+    {selected !== undefined && <aside ref={panel} tabIndex={-1} aria-label="Instruction source panel" data-source-panel className="order-3 min-w-0 xl:col-start-2 xl:row-start-3 max-h-[50dvh] overflow-y-auto overscroll-contain rounded-lg border border-line bg-surface-2 p-3 outline-none focus-visible:ring-2 focus-visible:ring-live">
+      <div data-source-panel-heading className="sticky top-0 flex items-center justify-between gap-2 bg-surface-2 pb-2"><h4 className="text-sm font-medium">Captured sources</h4><button type="button" data-close-source-panel className={action} onClick={close}>Close sources</button></div>
+      {Object.entries(origins).map(([origin, label]) => { const rows = sources.filter(([, source]) => originOf(source) === origin); return rows.length ? <section key={origin} className="mb-3"><h5 className="py-2 text-xs font-medium text-ink-2">{label}</h5>{rows.map(([key, source]) => {
+        const contributions = claims.filter(claim => JSON.stringify(claim.source) === key);
+        const path = fileOf(source);
+        return <article key={key} data-source-selected={selected === key} className={cn("mb-2 rounded-md border border-line bg-surface p-3", selected === key && "ring-2 ring-live")}>
+          <h6 className="wrap-anywhere text-sm font-medium">{source.label}</h6><p className="mt-1 wrap-anywhere text-xs text-ink-2">{detailOf(source)}</p>
+          {path && <p className="mt-1 wrap-anywhere font-mono text-xs text-ink-3">{path}</p>}
+          <div className="my-2 flex flex-wrap items-center gap-2"><span className="font-mono text-xs tabular-nums text-ink-2">{contributions.reduce((sum, claim) => sum + claim.text.length, 0).toLocaleString()} characters</span>
+            <button type="button" className={action} onClick={() => { setFilter(undefined); close(); jump(contributions[0]!.id); }}>Show in text</button>
+            {path && <button type="button" className={action} onClick={() => void openSourcePath(path)}>{hasSourceEditor() ? "Open file" : "Copy path"}</button>}
+          </div>
+          {contributions.map((claim, index) => <details key={claim.id} open={selected === key}><summary className={cn(action, "cursor-pointer")}>Contribution {index + 1} · {claim.text.length.toLocaleString()} characters</summary><pre className="mt-2 whitespace-pre-wrap wrap-anywhere font-mono text-xs text-ink">{claim.text}</pre></details>)}
+        </article>;
+      })}</section> : null; })}
+    </aside>}
+    <div data-request-search-content className="order-2 min-w-0 xl:col-start-1 xl:row-start-3" onCopy={event => {
+      // Markdown keeps native formatted selection copying. Labels are generated
+      // UI content, not text nodes, and cannot enter that copied document.
+      if (markdown) return;
+      const selection = window.getSelection();
+      if (!selection?.rangeCount || !event.currentTarget.contains(selection.anchorNode) || !event.currentTarget.contains(selection.focusNode)) return;
+      const fragment = selection.getRangeAt(0).cloneContents();
+      fragment.querySelectorAll("[data-search-exclude]").forEach(node => node.remove());
+      event.clipboardData.setData("text/plain", fragment.textContent ?? ""); event.preventDefault();
+    }}>
+      {markdown ? <TextMessagePartProvider text={text} isRunning={false}><MarkdownText sourceBlock={sourceBlock}/></TextMessagePartProvider>
+        : <div className="whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-ink">{ranges.map(claim => {
+          const origin = originOf(claim.source);
+          const active = !filter || origin === filter;
+          const leading = claim.text.match(/^\s*/)?.[0] ?? "";
+          return <span key={claim.id} tabIndex={-1} data-source-ids={claim.id} data-origin={origin} data-origin-selected={active} style={colour(origin)}
+            className={cn("provenance-range box-decoration-clone border-s-2 border-(--provenance-origin) bg-(--provenance-tint) ps-1 outline-none", !active && "bg-transparent", (filter && active || claim.id === flash) && "ring-2 ring-inset ring-live")}>
+            {leading && <span data-request-source-text>{leading}</span>}{claim.text.trim() && chip(claim, true)}<span data-request-source-text>{claim.text.slice(leading.length)}</span>
+          </span>;
+        })}</div>}
+    </div>
+  </div>;
+});

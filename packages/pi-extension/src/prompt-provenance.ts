@@ -6,15 +6,28 @@
  * closed, rather than assigning somebody else's words to an AGENTS.md file.
  */
 import { createHash } from "node:crypto";
-import { basename } from "node:path";
+import { basename, dirname } from "node:path";
 import { formatSkillsForPrompt, type BeforeAgentStartEvent, type BeforeProviderRequestEvent, type ExtensionContext, type LoadExtensionsResult, type ResourceLoader } from "@earendil-works/pi-coding-agent";
 import type { InstructionSource, InstructionSourceMap, InstructionSourceSpan } from "@lasercode/protocol";
 
 type Trace = { text: string; spans: InstructionSourceSpan[] };
 type Sources = Pick<ResourceLoader, "getSystemPromptSource" | "getAppendSystemPrompt" | "getAppendSystemPromptSources">;
 type Capture = (event: BeforeProviderRequestEvent, ctx: ExtensionContext, sources: InstructionSourceMap[]) => void;
-const agent: InstructionSource = { kind: "agent", label: "Agent instructions and tool guidance" };
-const unknown: InstructionSource = { kind: "unrecorded", label: "Source not recorded" };
+const agent: InstructionSource = { kind: "agent", origin: "engine", label: "Engine", inline: true, detail: "Base instructions and tool guidance assembled by the engine." };
+const unknown: InstructionSource = { kind: "unrecorded", origin: "unrecorded", label: "Not recorded", inline: true, detail: "This part was written by something the app could not observe (an engine override or an older capture)." };
+/** Out-of-band identity supplied by the writer; never added to the engine event
+ * or provider request. Weak keys keep sessions and completed writes isolated. */
+const writes = new WeakMap<object, InstructionSource | InstructionSourceSpan[]>();
+export function recordInstructionWrite<T extends { systemPrompt: string }>(result: T, source: InstructionSource | InstructionSourceSpan[]): T {
+  writes.set(result, source);
+  return result;
+}
+function extensionSource(path: string, baseDir?: string): InstructionSource {
+  if (path.startsWith("<")) return unknown;
+  const directory = basename(baseDir ?? dirname(path));
+  return { kind: "extension", origin: "extension", label: directory && directory !== "/" ? directory : basename(path), path,
+    detail: "Instructions contributed by this extension." };
+}
 const whole = (text: string, source: InstructionSource): Trace => ({ text, spans: text ? [{ start: 0, end: text.length, source }] : [] });
 
 export function recordBasePrompt(event: BeforeAgentStartEvent, loader?: Sources): Trace {
@@ -30,15 +43,15 @@ export function recordBasePrompt(event: BeforeAgentStartEvent, loader?: Sources)
         if (index) append("\n\n", agent);
         // Pi's source list omits inline inputs; unequal lengths cannot be zipped.
         const path = paths?.length === values.length ? paths[index]?.path : undefined;
-        append(value, { kind: path ? "file" : "agent", label: path ? basename(path) : "Additional instructions", ...(path ? { path } : {}) });
+        append(value, { kind: path ? "file" : "agent", origin: path ? "project" : "agent", label: path ? basename(path) : "Additional instructions", ...(path ? { path } : { inline: true }) });
       });
-    } else append(options.appendSystemPrompt, { kind: "agent", label: "Additional instructions" });
+    } else append(options.appendSystemPrompt, { kind: "agent", origin: "agent", label: "Additional instructions", inline: true });
   }
   if (options.contextFiles?.length) {
     append("\n\n<project_context>\n\nProject-specific instructions and guidelines:\n\n", agent);
     for (const file of options.contextFiles) {
       append(`<project_instructions path="${file.path}">\n`, agent);
-      append(file.content, { kind: "file", label: basename(file.path), path: file.path });
+      append(file.content, { kind: "file", origin: "project", label: basename(file.path), path: file.path, detail: "Project instructions loaded for this request." });
       append("\n</project_instructions>\n\n", agent);
     }
     append("</project_context>\n", agent);
@@ -54,20 +67,20 @@ export function recordBasePrompt(event: BeforeAgentStartEvent, loader?: Sources)
       const block = formatted.slice(start, formatted.lastIndexOf("\n</available_skills>"));
       const at = catalog.indexOf(block, cursor);
       if (start < 0 || at < cursor) return whole(event.systemPrompt, unknown);
-      append(catalog.slice(cursor, at), { kind: "agent", label: "Skill discovery instructions" });
-      append(block, { kind: "skill", label: skill.name, path: skill.filePath });
+      append(catalog.slice(cursor, at), { ...agent, label: "Engine · Skill discovery" });
+      append(block, { kind: "skill", origin: "skill", label: `Skill · ${skill.name}`, path: skill.filePath, detail: "The skill's catalog entry. Its full instructions are read separately when used." });
       cursor = at + block.length;
     }
-    append(catalog.slice(cursor), { kind: "agent", label: "Skill discovery instructions" });
+    append(catalog.slice(cursor), { ...agent, label: "Engine · Skill discovery" });
   }
-  append(`\nCurrent working directory: ${options.cwd.replace(/\\/g, "/")}${options.customPrompt ? "\n" : ""}`, { kind: "environment", label: "Session environment" });
+  append(`\nCurrent working directory: ${options.cwd.replace(/\\/g, "/")}${options.customPrompt ? "\n" : ""}`, { kind: "environment", origin: "environment", label: "Session environment", inline: true });
   const suffix = parts.map(part => part.text).join("");
   if (!event.systemPrompt.endsWith(suffix)) return whole(event.systemPrompt, unknown);
   const prefix = event.systemPrompt.slice(0, event.systemPrompt.length - suffix.length);
   if (options.customPrompt && prefix !== options.customPrompt) return whole(event.systemPrompt, unknown);
   const path = loader?.getSystemPromptSource()?.path;
   const source: InstructionSource = options.customPrompt
-    ? { kind: path ? "file" : "agent", label: path ? basename(path) : "Custom agent instructions", ...(path ? { path } : {}) } : agent;
+    ? { kind: path ? "file" : "agent", origin: "agent", label: path ? basename(path) : "Custom agent instructions", ...(path ? { path } : { inline: true }) } : agent;
   const trace = whole(prefix, source);
   for (const part of parts) {
     trace.spans.push({ start: trace.text.length, end: trace.text.length + part.text.length, source: part.source });
@@ -121,7 +134,7 @@ function projectInstruction(text: string, trace: Trace): Trace {
   // Providers can add preambles or split the system prompt into text blocks.
   const at = trace.text ? text.indexOf(trace.text) : -1;
   if (at >= 0 && text.indexOf(trace.text, at + 1) < 0) {
-    const result = whole(text, { kind: "agent", label: "Provider adapter instructions" });
+    const result = whole(text, { kind: "agent", origin: "engine", label: "Provider adapter instructions", inline: true });
     result.spans = [...sliceSpans(result.spans, 0, at), ...trace.spans.map(span => ({ ...span, start: span.start + at, end: span.end + at })), ...sliceSpans(result.spans, at + trace.text.length, text.length).map(span => ({ ...span, start: span.start + at + trace.text.length, end: span.end + at + trace.text.length }))];
     return result;
   }
@@ -149,14 +162,21 @@ export function createPromptProvenanceObserver() {
         if (installed) return;
         installed = true;
         for (const ext of result.extensions) {
-          const source: InstructionSource = { kind: "extension", label: "Extension modification", path: ext.resolvedPath || ext.path };
+          const source = extensionSource(ext.resolvedPath || ext.path, ext.sourceInfo?.baseDir);
           const handlers = ext.handlers.get("before_agent_start") ?? [];
           ext.handlers.set("before_agent_start", handlers.map(handler => async (...args: unknown[]) => {
             const event = args[0] as BeforeAgentStartEvent;
             if (trace.text !== event.systemPrompt) trace = whole(event.systemPrompt, unknown);
             const returned = await handler(...args);
             const changed = (returned as { systemPrompt?: unknown } | undefined)?.systemPrompt;
-            if (typeof changed === "string") trace = recordPromptChange(trace, changed, source);
+            if (typeof changed === "string") {
+              const identity = returned && typeof returned === "object" ? writes.get(returned) : undefined;
+              if (Array.isArray(identity)) {
+                let cursor = 0;
+                const valid = identity.every(span => { const ok = span.start === cursor && span.end > span.start && span.end <= changed.length; cursor = span.end; return ok; }) && cursor === changed.length;
+                trace = valid ? { text: changed, spans: identity } : whole(changed, unknown);
+              } else trace = recordPromptChange(trace, changed, identity ?? source);
+            }
             return returned;
           }));
         }
@@ -171,7 +191,7 @@ export function createPromptProvenanceObserver() {
           ext.handlers.set("before_provider_request", handlers.map(handler => async (...args: unknown[]) => {
             const returned = await handler(...args);
             const payload = returned === undefined ? (args[0] as BeforeProviderRequestEvent).payload : returned;
-            const source: InstructionSource = { kind: "extension", label: "Request modification", path: ext.resolvedPath || ext.path };
+            const source = extensionSource(ext.resolvedPath || ext.path, ext.sourceInfo?.baseDir);
             requestTraces = new Map(instructionLeaves(payload).map(leaf => {
               const key = JSON.stringify(leaf.path);
               return [key, recordPromptChange(requestTraces.get(key) ?? whole("", unknown), leaf.text, source)];

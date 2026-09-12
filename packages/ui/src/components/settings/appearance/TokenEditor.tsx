@@ -65,6 +65,12 @@ const GROUPS: ReadonlyArray<{ title: string; detail: string; tokens: readonly To
     advanced: true,
   },
   {
+    title: "Instruction sources",
+    detail: "The origin rules and tints in captured instructions. Names remain visible without colour.",
+    tokens: ["provenance-engine", "provenance-project", "provenance-skill", "provenance-agent", "provenance-variable", "provenance-app", "provenance-extension", "provenance-environment", "provenance-unrecorded"],
+    advanced: true,
+  },
+  {
     title: "Syntax",
     detail: "Code highlighting. Kept away from the status hues so a keyword never reads as an error.",
     tokens: [

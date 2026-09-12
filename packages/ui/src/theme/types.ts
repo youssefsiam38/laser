@@ -55,6 +55,7 @@ export type OptionalColorTokenName =
   | "syntax-type"
   | "syntax-variable"
   | "syntax-punctuation"
+  | `provenance-${"engine" | "project" | "skill" | "agent" | "app" | "variable" | "extension" | "environment" | "unrecorded"}`
   | "shadow-float"
   | "shadow-float-sm";
 

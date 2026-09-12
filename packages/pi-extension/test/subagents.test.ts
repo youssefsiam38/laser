@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { AGENT_EVENT_MESSAGE_TYPE, type AgentRun } from "@lasercode/protocol";
+import type { Extension, LoadExtensionsResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { AGENT_EVENT_MESSAGE_TYPE, INSTRUCTION_APP_ORIGIN, PRODUCT_DISPLAY_NAME, WIRE_NAMESPACE, type AgentRun } from "@lasercode/protocol";
 import type { AgentCatalogEntry, AgentHarnessBridge, AgentModelEvent, AgentRunSummary, HarnessSessionRole, InspectAgentResult, InspectFleetResult } from "../src/agents-bridge.js";
-import { createLaserExtension } from "../src/index.js";
+import { createLaserExtension, createPromptProvenanceObserver } from "../src/index.js";
 import type { ModuleContext } from "../src/modules/index.js";
 import { fleetSummary, fleetView, formatEvent, roleBlock, startAgentDescription, startedGuidance, subagentsModule, whatItNeeds } from "../src/modules/subagents.js";
 
@@ -549,6 +549,24 @@ describe("subagents module: events and the child's role", () => {
     expect(message.content.startsWith("agent.needs_input\n")).toBe(true);
     expect(message.content).toContain("Question (select): Which token store?");
     expect(message.content).not.toContain("endedBy");
+  });
+
+  it("records the real harness module's role write as an inline app contribution", async () => {
+    const h = moduleHarness(child, false);
+    const observer = createPromptProvenanceObserver(); const capture = vi.fn(); observer.onRequest(capture);
+    const extension = { path: `<inline:${WIRE_NAMESPACE}>`, resolvedPath: `<inline:${WIRE_NAMESPACE}>`, handlers: h.handlers } as unknown as Extension;
+    observer.extensionsOverride({ extensions: [extension] } as LoadExtensionsResult);
+    for (const handler of h.handlers.get("session_start") ?? []) await handler();
+    let text = "BASE";
+    for (const handler of h.handlers.get("before_agent_start") ?? []) {
+      const result = await handler({ systemPrompt: text, systemPromptOptions: { cwd: "/project" }, prompt: "go" }, { cwd: "/project" }) as { systemPrompt?: string } | undefined;
+      text = result?.systemPrompt ?? text;
+    }
+    for (const handler of h.handlers.get("before_provider_request") ?? []) await handler({ payload: { instructions: text } }, { getSystemPrompt: () => text });
+    const last = capture.mock.calls[0]![2][0].spans.at(-1);
+    expect(last.source).toMatchObject({ kind: INSTRUCTION_APP_ORIGIN, origin: INSTRUCTION_APP_ORIGIN, label: `${PRODUCT_DISPLAY_NAME} · Agent role`, inline: true });
+    expect(last.source.path).toBeUndefined();
+    expect(text.slice(last.start, last.end)).toContain("# Your role");
   });
 
   it("appends the child's role to the system prompt each turn without touching messages", async () => {
