@@ -4,7 +4,7 @@
  * and receives seq-numbered updates. Requires `pnpm -r build` (spawns the
  * worker's dist). Sandboxed dirs; never touches ~/.pi/agent.
  */
-import { PRODUCT_NAME, PRODUCT_VERSION } from "@lasercode/protocol";
+import { PRODUCT_NAME, PRODUCT_VERSION, PROJECT_DIR_NAME } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -119,6 +119,36 @@ afterEach(async () => {
 });
 
 describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
+  it("prepares only known trusted projects without questions, sessions, status noise or model calls", async () => {
+    const client = new Client();
+    await client.connect((await host.listen()).url);
+    const cwd = join(base, "project");
+    try {
+      await client.request("pi/worker/prepare", { cwd });
+      expect(host.pool.cwds()).toEqual([]); // absent from catalog/registry
+      mkdirSync(join(cwd, PROJECT_DIR_NAME));
+      writeFileSync(join(cwd, PROJECT_DIR_NAME, "settings.json"), "{}");
+      await client.request("pi/project/add", { cwd });
+      await client.request("pi/worker/prepare", { cwd });
+      expect(host.pool.cwds()).toEqual([]); // unknown trust, never asks
+      await client.request("pi/project/trust", { cwd, trusted: false });
+      await client.request("pi/worker/prepare", { cwd });
+      expect(host.pool.cwds()).toEqual([]);
+      await client.request("pi/project/trust", { cwd, trusted: true });
+      const before = client.inbound.length;
+      await client.request("pi/worker/prepare", { cwd });
+      expect(host.pool.cwds()).toEqual([cwd]);
+      expect(await client.request("pi/worker/list", {})).toEqual({ workers: [] });
+      expect(host.pool.openSessions(cwd)).toEqual([]);
+      expect(client.inbound.slice(before).filter((m) => "method" in m)).toEqual([]);
+      expect(client.inbound.some((m) => "method" in m && m.method === "pi/project/trust_request")).toBe(false);
+      expect(stub.requests).toEqual([]);
+      const pid = host.pool.liveClients()[0]!.client.pid;
+      const { state } = await client.request<{ state: SessionState }>("session/new", { cwd });
+      expect(state.cwd).toBe(cwd);
+      expect(host.pool.workerInfo(cwd)?.pid).toBe(pid);
+    } finally { client.close(); }
+  });
   it("reopens genuine empty project, Beam and Chat sessions after worker retirement and a full host restart", async () => {
     // Give a later host a different default. The saved empty-session tuple,
     // not that changed default, must win on reopen.

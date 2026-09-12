@@ -621,6 +621,7 @@ export const clientParamsSchemas = {
   "pi/project/env/refresh": z.object({ cwd: z.string().min(1) }).strict(),
 
   "pi/worker/list": z.object({}).strict(),
+  "pi/worker/prepare": z.object({ cwd: z.string().min(1) }).strict(),
   "pi/worker/restart": z.object({ cwd: z.string().min(1) }).strict(),
   "pi/worker/stop": z.object({ cwd: z.string().min(1) }).strict(),
 

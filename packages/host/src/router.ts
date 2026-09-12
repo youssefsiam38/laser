@@ -512,6 +512,10 @@ export class Router {
       case "pi/worker/list":
         return { workers: this.pool.workers() };
 
+      case "pi/worker/prepare":
+        await this.pool.prepare(req.params.cwd);
+        return {};
+
       case "pi/worker/restart":
         return { worker: await this.pool.restart(req.params.cwd) };
 

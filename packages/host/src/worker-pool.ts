@@ -45,6 +45,12 @@ export interface WorkerPoolOptions {
    * keeps Pi's own default. Rejecting refuses the spawn with the reason.
    */
   resolveTrust?: (cwd: string) => Promise<boolean | undefined>;
+  /** Synchronous, nonprompting admission. Undefined refuses speculation. */
+  prepareTrust?: (cwd: string) => { projectTrusted?: boolean } | undefined;
+  /** Unused speculation expires independently of ordinary ten-minute idleness. */
+  warmIdleMs?: number;
+  /** Deferred user-facing background initialization, once speculation is used. */
+  onPreparedUse?: (client: WorkerClient, cwd: string) => void;
   /** True while a connected client is following a session in this directory. */
   isAttached?: (cwd: string) => boolean;
   /** Pi session ids of the sessions this worker holds; for the subagents guard. */
@@ -57,8 +63,8 @@ export interface WorkerPoolOptions {
    * `onStderr` and never fails the spawn: an older worker that does not know
    * the method is still a working worker.
    */
-  prime?: (client: WorkerClient, cwd: string) => Promise<void>;
-  /** Idle time before a retirement is considered. 0 disables retirement. */
+  prime?: (client: WorkerClient, cwd: string, speculative: boolean) => Promise<void>;
+  /** Ordinary idle retirement. 0 disables it, but not unused warm expiry. */
   idleMs?: number;
   /** How often idleness is checked. */
   sweepMs?: number;
@@ -79,6 +85,9 @@ export interface WorkerPoolOptions {
 
 interface Entry {
   cwd: string;
+  /** No session has claimed this process; invisible to lifecycle consumers. */
+  warm: boolean;
+  wantedAt: number;
   client: WorkerClient | undefined;
   starting: Promise<WorkerClient> | undefined;
   status: WorkerStatus;
@@ -130,12 +139,13 @@ export class WorkerPool {
   private readonly setTimer: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
   private sweepTimer: ReturnType<typeof setInterval> | undefined;
   private closed = false;
+  private preparing = false;
 
   constructor(private readonly options: WorkerPoolOptions) {
     this.now = options.now ?? Date.now;
     this.setTimer = options.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
     const sweepMs = options.sweepMs ?? DEFAULTS.sweepMs;
-    if ((options.idleMs ?? DEFAULTS.idleMs) > 0 && sweepMs > 0) {
+    if (sweepMs > 0) {
       this.sweepTimer = setInterval(() => this.sweep(), sweepMs);
       this.sweepTimer.unref?.();
     }
@@ -154,9 +164,9 @@ export class WorkerPool {
     return [...this.entries.values()].filter((e) => e.client?.alive || e.starting).map((e) => e.cwd);
   }
 
-  /** Everything the pool knows, live or not, for `pi/worker/list`. */
+  /** User-requested workers, live or not, for `pi/worker/list`. */
   workers(): WorkerInfo[] {
-    return [...this.entries.values()].map((entry) => this.infoOf(entry));
+    return [...this.entries.values()].filter((entry) => !entry.warm).map((entry) => this.infoOf(entry));
   }
 
   /** Workers that are up right now. Never spawns; used for broadcasts. */
@@ -189,7 +199,50 @@ export class WorkerPool {
 
   workerInfo(cwd: string): WorkerInfo | undefined {
     const entry = this.entries.get(canonical(cwd));
-    return entry ? this.infoOf(entry) : undefined;
+    return entry && !entry.warm ? this.infoOf(entry) : undefined;
+  }
+
+  /**
+   * One unused warm worker at most, shared across all frontends. No queue of
+   * speculative work: intent arriving during ANY spawn is dropped. A newer
+   * intent replaces the least-recently-wanted (sole) idle speculative worker.
+   */
+  async prepare(cwd: string): Promise<void> {
+    if (this.closed || this.preparing) return;
+    this.preparing = true;
+    try {
+      const key = canonical(cwd);
+      if (!this.options.prepareTrust?.(key)) return;
+      const existing = this.entries.get(key);
+      if (existing?.warm) existing.wantedAt = this.now();
+      if (existing?.client?.alive || existing?.starting || existing?.stopped) return;
+      if ([...this.entries.values()].some((entry) => entry.starting)) return;
+      const warm = [...this.entries.values()].filter((entry) => entry.warm && (entry.client || entry.starting || entry.stopped));
+      for (const entry of warm.sort((a, b) => a.wantedAt - b.wantedAt)) {
+        if (!this.unused(entry)) return;
+        await this.retire(entry, "unused readiness replaced");
+      }
+      // A real open may have arrived while an eviction was finishing.
+      if (this.closed || [...this.entries.values()].some((entry) => entry.starting)) return;
+      const entry = this.ensure(key);
+      if (entry.client?.alive || entry.stopped) return;
+      entry.warm = true;
+      entry.wantedAt = this.now();
+      const promise = this.spawn(entry);
+      entry.starting = promise;
+      try { await promise; }
+      finally { if (entry.starting === promise) entry.starting = undefined; }
+    } catch {
+      // A hint never fails a user operation. get() can retry a failed spawn.
+    } finally {
+      this.preparing = false;
+    }
+  }
+
+  private unused(entry: Entry): boolean {
+    return entry.running.size === 0 && entry.open.size === 0
+      && !(this.options.isAttached?.(entry.cwd) ?? false)
+      && !(this.options.hasLiveRun?.(entry.cwd) ?? false);
   }
 
   /** Get the live worker for a cwd, spawning it if needed. Concurrent callers share one spawn. */
@@ -203,8 +256,34 @@ export class WorkerPool {
       entry = this.ensure(key);
     }
     entry.lastActivity = this.now();
+    // Readiness includes priming, not merely a live PID. A click racing a
+    // failed hint retries through normal admission without exposing that failure.
+    if (entry.starting) {
+      const speculative = entry.warm;
+      try {
+        const client = await entry.starting;
+        // Re-enter admission after the shared promise's owner clears it. This
+        // also rechecks a trust decision changed while readiness was in flight.
+        return entry.warm ? this.get(key) : client;
+      } catch (error) {
+        if (!speculative) throw error;
+        if (entry.starting) await entry.starting.catch(() => {});
+        return this.get(key);
+      }
+    }
+    if (entry.warm) {
+      if (entry.client?.alive && !this.options.prepareTrust?.(key)) {
+        if (!this.unused(entry)) throw new ProtocolError(ErrorCodes.ProjectUntrusted, "Project trust changed. Finish its current work before reopening it.");
+        await this.retire(entry, "readiness admission withdrawn");
+        return this.get(key);
+      }
+      entry.warm = false;
+      if (entry.client?.alive) {
+        this.setStatus(entry, "ready");
+        this.options.onPreparedUse?.(entry.client, key);
+      }
+    }
     if (entry.client?.alive) return entry.client;
-    if (entry.starting) return entry.starting;
 
     // An explicit request cancels a pending backoff: the user is asking now.
     this.clearRetry(entry);
@@ -327,6 +406,8 @@ export class WorkerPool {
     if (existing) return existing;
     const entry: Entry = {
       cwd,
+      warm: false,
+      wantedAt: this.now(),
       client: undefined,
       starting: undefined,
       status: "retired",
@@ -360,7 +441,13 @@ export class WorkerPool {
     this.setStatus(entry, "starting", entry.restarts > 0 ? `restarting (attempt ${entry.restarts})` : "starting the agent");
 
     let projectTrusted: boolean | undefined;
-    if (this.options.resolveTrust) {
+    if (entry.warm) {
+      // Never call the prompting resolver for speculation. Re-check immediately
+      // before spawn, after any asynchronous eviction, to avoid stale trust.
+      const admission = this.options.prepareTrust?.(entry.cwd);
+      if (!admission) throw new Error("readiness admission withdrawn");
+      projectTrusted = admission.projectTrusted;
+    } else if (this.options.resolveTrust) {
       try {
         const decision = this.options.resolveTrust(entry.cwd);
         // A decision that is already made settles within a tick. One that does
@@ -399,7 +486,7 @@ export class WorkerPool {
       ...(projectTrusted !== undefined ? { projectTrusted } : {}),
       onNotification: (n) => this.onWorkerNotification(entry, n),
       onExit: (code, signal) => this.onExit(entry, client, code, signal),
-      ...(this.options.onStderr ? { onStderr: (t: string) => this.options.onStderr?.(entry.cwd, t) } : {}),
+      ...(this.options.onStderr ? { onStderr: (t: string) => { if (!entry.warm) this.options.onStderr?.(entry.cwd, t); } } : {}),
     };
     const client = new WorkerClient(clientOptions);
     entry.client = client;
@@ -423,9 +510,9 @@ export class WorkerPool {
     // handler below has already turned into an enriched notification.
     if (this.options.prime && entry.client === client && client.alive) {
       try {
-        await this.options.prime(client, entry.cwd);
+        await this.options.prime(client, entry.cwd, entry.warm);
       } catch (error) {
-        this.options.onStderr?.(entry.cwd, `priming failed: ${error instanceof Error ? error.message : String(error)}\n`);
+        if (!entry.warm) this.options.onStderr?.(entry.cwd, `priming failed: ${error instanceof Error ? error.message : String(error)}\n`);
       }
     }
     return client;
@@ -465,7 +552,7 @@ export class WorkerPool {
         if (kind === "agent_end" || kind === "agent_settled") entry.running.delete(path);
       }
     }
-    this.options.onNotification(entry.cwd, notification);
+    if (!entry.warm) this.options.onNotification(entry.cwd, notification);
   }
 
   private onExit(entry: Entry, client: WorkerClient, code: number | null, signal: NodeJS.Signals | null): void {
@@ -585,14 +672,14 @@ export class WorkerPool {
   /** Retire workers nobody is using. Never throws; it runs on a timer. */
   private sweep(): void {
     const idleMs = this.options.idleMs ?? DEFAULTS.idleMs;
-    if (idleMs <= 0) return;
     const now = this.now();
     const candidates = [...this.entries.values()].filter(
       (entry) =>
         entry.client?.alive &&
+        (entry.warm || idleMs > 0) &&
         entry.status === "ready" &&
         entry.running.size === 0 &&
-        now - entry.lastActivity >= idleMs &&
+        now - (entry.warm ? entry.wantedAt : entry.lastActivity) >= (entry.warm ? (this.options.warmIdleMs ?? 60_000) : idleMs) &&
         !(this.options.isAttached?.(entry.cwd) ?? false),
     );
     if (candidates.length === 0) return;
@@ -630,6 +717,7 @@ export class WorkerPool {
     entry.status = status;
     entry.message = message;
     entry.since = this.now();
+    if (entry.warm) return;
     const info = this.infoOf(entry, reopened);
     const params: HostNotifications["pi/worker/status"] = info;
     this.options.onNotification(entry.cwd, { jsonrpc: "2.0", method: "pi/worker/status", params });
