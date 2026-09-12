@@ -233,12 +233,12 @@ export function FirstRunFlow({ setup, onFinished }: FirstRunFlowProps) {
   );
   const back = (
     <Button variant="ghost" size="sm" onClick={() => go(previousStep(step))} aria-label="Previous step">
-      <ArrowLeft /> Back
+      <ArrowLeft className="rtl:-scale-x-100" /> Back
     </Button>
   );
   const next = (enabled: boolean, label = "Continue") => (
     <Button size="sm" disabled={!enabled} onClick={() => go(nextStep(step))}>
-      {label} <ArrowRight />
+      {label} <ArrowRight className="rtl:-scale-x-100" />
     </Button>
   );
 

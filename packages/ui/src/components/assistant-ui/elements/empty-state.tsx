@@ -71,7 +71,7 @@ export function EmptyStateSuggestion({ title, prompt, index = 0, className, styl
             {prompt}
           </span>
         </span>
-        <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-ink-3 group-hover/suggestion:text-ink" />
+        <ChevronRight aria-hidden="true" className="rtl:-scale-x-100 size-4 shrink-0 text-ink-3 group-hover/suggestion:text-ink" />
       </ThreadPrimitive.Suggestion>
     </li>
   );

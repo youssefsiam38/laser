@@ -22,6 +22,7 @@
 import type { ComponentProps, KeyboardEvent, PointerEvent } from "react";
 
 import { cn } from "@/lib/utils";
+import { useDirection, useLogicalArrowKeys } from "@/hooks/use-direction";
 
 /*
  * The registry's `CanvasSplit` row and `CanvasSplitThread` column are not
@@ -64,12 +65,14 @@ export interface CanvasSplitDividerProps extends Omit<ComponentProps<"div">, "ch
  * around a hairline that shows on hover and focus.
  */
 export function CanvasSplitDivider({ width, min, max, onChange, measure, className, ...props }: CanvasSplitDividerProps) {
+  const direction = useDirection();
+  const logicalKey = useLogicalArrowKeys();
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
     const startX = e.clientX;
     const startWidth = measure?.() ?? width;
     const target = e.currentTarget;
     target.setPointerCapture(e.pointerId);
-    const move = (ev: globalThis.PointerEvent) => onChange(startWidth + (startX - ev.clientX));
+    const move = (ev: globalThis.PointerEvent) => onChange(startWidth + (startX - ev.clientX) * (direction === "rtl" ? -1 : 1));
     const up = () => {
       target.removeEventListener("pointermove", move);
       target.removeEventListener("pointerup", up);
@@ -81,8 +84,9 @@ export function CanvasSplitDivider({ width, min, max, onChange, measure, classNa
   };
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const step = e.shiftKey ? 64 : 16;
-    if (e.key === "ArrowLeft") onChange(width + step);
-    else if (e.key === "ArrowRight") onChange(width - step);
+    const key = logicalKey(e.key);
+    if (key === "ArrowLeft") onChange(width + step);
+    else if (key === "ArrowRight") onChange(width - step);
     else if (e.key === "Home") onChange(min);
     else return;
     e.preventDefault();

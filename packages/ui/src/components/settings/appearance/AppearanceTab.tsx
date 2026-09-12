@@ -453,9 +453,9 @@ export function AppearanceTab() {
           >
             <ChevronRight
               aria-hidden="true"
-              className={cn(
+              className={cn("rtl:-scale-x-100",
                 "size-3.5 text-ink-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none",
-                tokensOpen && "rotate-90",
+                tokensOpen && "rotate-90 rtl:-rotate-90",
               )}
             />
             <span className="text-sm font-semibold text-ink">Custom colours</span>

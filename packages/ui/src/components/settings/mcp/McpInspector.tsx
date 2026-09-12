@@ -1,4 +1,5 @@
 "use client";
+import { useLogicalArrowKeys } from "@/hooks/use-direction";
 /**
  * The inspector (docs/mcp.md "Inspecting"): a full-height sheet on a wide
  * screen, the whole screen on a phone. It connects when it opens — that is
@@ -76,6 +77,7 @@ export function McpInspector({
   onError,
   onNotice,
 }: McpInspectorProps) {
+  const logicalKey = useLogicalArrowKeys();
   const { client } = useLaserStable();
   const [tab, setTab] = useState<InspectorTab>("overview");
   const [inspection, setInspection] = useState<McpInspection>();
@@ -279,7 +281,7 @@ export function McpInspector({
 
   const moveTab = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const keys = { ArrowRight: 1, ArrowLeft: -1 } as const;
-    const step = keys[event.key as keyof typeof keys];
+    const step = keys[logicalKey(event.key) as keyof typeof keys];
     if (step === undefined && event.key !== "Home" && event.key !== "End") return;
     event.preventDefault();
     const index = tabs.findIndex((entry) => entry.id === tab);

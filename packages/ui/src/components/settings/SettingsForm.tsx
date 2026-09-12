@@ -153,7 +153,7 @@ export function SettingsForm({ audience, cwd, catalog, snapshot, onApply }: Sett
                       >
                         <span className="min-w-0 flex-1 truncate">{entry.title}</span>
                         <ChevronRight
-                          className={cn("size-3.5 shrink-0 text-ink-3", entry.id !== activeSection && "opacity-0")}
+                          className={cn("rtl:-scale-x-100", "size-3.5 shrink-0 text-ink-3", entry.id !== activeSection && "opacity-0")}
                         />
                       </button>
                     </li>

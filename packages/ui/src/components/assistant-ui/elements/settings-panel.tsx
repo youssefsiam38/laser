@@ -49,7 +49,7 @@ export function SettingsSwitch({ checked, onCheckedChange, disabled, className, 
         aria-hidden="true"
         className={cn(
           "size-4 rounded-full bg-surface shadow-float-sm transition-transform duration-(--motion-fast) motion-reduce:transition-none",
-          checked && "translate-x-4",
+          checked && "switch-thumb-on",
         )}
       />
     </button>

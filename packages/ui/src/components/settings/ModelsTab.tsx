@@ -407,7 +407,7 @@ function ModelConnectionsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
               >
                 <ChevronRight
                   aria-hidden="true"
-                  className={cn("size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none", patternsOpen && "rotate-90")}
+                  className={cn("rtl:-scale-x-100", "size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none", patternsOpen && "rotate-90 rtl:-rotate-90")}
                 />
                 <span className="eyebrow text-ink-3">Advanced</span>
                 <span className="min-w-0 truncate text-sm font-medium text-ink">Allow-list patterns</span>
@@ -543,7 +543,7 @@ function ModelConnectionsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
                     >
                       <ChevronRight
                         aria-hidden="true"
-                        className={cn("size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none", open && "rotate-90")}
+                        className={cn("rtl:-scale-x-100", "size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none", open && "rotate-90 rtl:-rotate-90")}
                       />
                       <ProviderLogo provider={provider} className="size-4 shrink-0" />
                       <h3 className="min-w-0 truncate text-sm font-semibold text-ink">{provider}</h3>

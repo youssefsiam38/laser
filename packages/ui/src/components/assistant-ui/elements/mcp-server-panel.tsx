@@ -140,7 +140,7 @@ export function McpServerPanel({ rows, selectedId, onSelect, onSignIn, heading, 
                     )}
                   />
                   <span className={cn("text-xs font-medium", TONE_TEXT[row.tone])}>{row.statusLabel}</span>
-                  <ChevronRight aria-hidden="true" className="size-4 text-ink-3" />
+                  <ChevronRight aria-hidden="true" className="rtl:-scale-x-100 size-4 text-ink-3" />
                 </span>
               </button>
               {row.needsAuth && onSignIn && (

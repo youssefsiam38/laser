@@ -62,7 +62,7 @@ export function StoppedRun({ reason, detail, advice, raw, action, onContinue, to
         {onContinue ? (
           <Button variant="ghost" size="xs" className="ms-auto shrink-0" onClick={onContinue}>
             Continue
-            <ArrowRight />
+            <ArrowRight className="rtl:-scale-x-100" />
           </Button>
         ) : null}
       </div>

@@ -697,7 +697,7 @@ const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, c
             "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
           )}
         >
-          <ChevronRight aria-hidden="true" className={cn("size-3 shrink-0 transition-transform duration-(--motion-fast) motion-reduce:transition-none", !collapsed && "rotate-90")} />
+          <ChevronRight aria-hidden="true" className={cn("rtl:-scale-x-100", "size-3 shrink-0 transition-transform duration-(--motion-fast) motion-reduce:transition-none", !collapsed && "rotate-90 rtl:-rotate-90")} />
           {beam ? (
             <Sparkles aria-hidden="true" data-slot="beam-mark" className="size-3.5 shrink-0 text-live" />
           ) : collapsed ? (
@@ -858,7 +858,7 @@ function SessionBranch({ node, editing, onEdit, onOpen }: BranchProps) {
               layout.nested || layout.flat ? "start-0.5 pointer-coarse:w-6" : "start-2 pointer-coarse:w-7",
             )}
           >
-            <ChevronRight aria-hidden="true" className={cn("size-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none", open && "rotate-90")} />
+            <ChevronRight aria-hidden="true" className={cn("rtl:-scale-x-100", "size-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none", open && "rotate-90 rtl:-rotate-90")} />
             {/* Only while the branch is closed, and only for a question: an
                 open branch shows the children wearing their own marks, so the
                 parent has nothing of its own left to say. */}
@@ -915,7 +915,7 @@ function FinishedFold({ parent, info, editing, onEdit, onOpen }: { parent: Threa
           "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live pointer-coarse:h-11",
         )}
       >
-        <ChevronRight aria-hidden="true" className="size-3 shrink-0 transition-transform duration-(--motion-fast) group-data-[state=open]/finished:rotate-90 motion-reduce:transition-none" />
+        <ChevronRight aria-hidden="true" className="rtl:-scale-x-100 size-3 shrink-0 transition-transform duration-(--motion-fast) group-data-[state=open]/finished:rotate-90 group-data-[state=open]/finished:rtl:-rotate-90 motion-reduce:transition-none" />
         <span className="min-w-0 truncate text-xs leading-4">
           <span className="tnum">{info.finishedRows}</span> finished
         </span>
@@ -985,7 +985,7 @@ function ArchivedGroup({ editing, onEdit, onOpen }: { editing: string | undefine
           aria-controls={listId}
           className="flex h-7 min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md text-start outline-none hover:bg-surface-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live"
         >
-          <ChevronRight aria-hidden="true" className={cn("size-3 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none", open && "rotate-90")} />
+          <ChevronRight aria-hidden="true" className={cn("rtl:-scale-x-100", "size-3 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none", open && "rotate-90 rtl:-rotate-90")} />
           <Archive aria-hidden="true" className="size-3.5 shrink-0 text-ink-3" />
           <span className="min-w-0 truncate text-sm leading-5 font-medium text-ink-2">Archived</span>
           <span className="shrink-0 text-xs text-ink-3 tnum">{archivedIds.length}</span>

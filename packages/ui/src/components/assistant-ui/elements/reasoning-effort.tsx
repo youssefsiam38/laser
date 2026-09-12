@@ -1,4 +1,5 @@
 "use client";
+import { useLogicalArrowKeys } from "@/hooks/use-direction";
 /**
  * Reasoning effort — the composer's thinking-level control
  * (docs/ux-elements.md "Reasoning"). Installed from `elements-reasoning-effort`
@@ -63,6 +64,7 @@ export function ReasoningEffort({
   className,
   ...props
 }: ReasoningEffortProps) {
+  const logicalKey = useLogicalArrowKeys();
   const groupRef = useRef<HTMLDivElement>(null);
   const activeIndex = Math.max(
     0,
@@ -81,8 +83,9 @@ export function ReasoningEffort({
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const last = levels.length - 1;
     let next: number | undefined;
-    if (event.key === "ArrowRight" || event.key === "ArrowUp") next = Math.min(last, activeIndex + 1);
-    else if (event.key === "ArrowLeft" || event.key === "ArrowDown") next = Math.max(0, activeIndex - 1);
+    const key = logicalKey(event.key);
+    if (key === "ArrowRight" || key === "ArrowUp") next = Math.min(last, activeIndex + 1);
+    else if (key === "ArrowLeft" || key === "ArrowDown") next = Math.max(0, activeIndex - 1);
     else if (event.key === "Home") next = 0;
     else if (event.key === "End") next = last;
     if (next === undefined) return;

@@ -1,4 +1,5 @@
 "use client";
+import { useLogicalArrowKeys } from "@/hooks/use-direction";
 /**
  * The agent editor: one definition, every field, validated by the host as
  * the person types and again on save. The `default` agent edits like any
@@ -695,13 +696,15 @@ function ModelField({
 }
 
 function ThinkingField({ value, levels, onChange }: { value: ThinkingLevel | null; levels: readonly ThinkingLevel[]; onChange(level: ThinkingLevel | null): void }) {
+  const logicalKey = useLogicalArrowKeys();
   const options: Array<{ id: string; level: ThinkingLevel | null; label: string }> = [
     { id: "default", level: null, label: "Follow the default" },
     ...levels.map((level) => ({ id: level, level, label: THINKING_LABEL[level] })),
   ];
   const current = options.findIndex((option) => option.level === value);
   const move = (event: KeyboardEvent<HTMLDivElement>) => {
-    const delta = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 0;
+    const key = logicalKey(event.key);
+    const delta = key === "ArrowRight" || key === "ArrowDown" ? 1 : key === "ArrowLeft" || key === "ArrowUp" ? -1 : 0;
     if (delta === 0) return;
     event.preventDefault();
     const next = options[(Math.max(current, 0) + delta + options.length) % options.length];

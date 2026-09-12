@@ -18,6 +18,7 @@
  * it is what the app will become at dusk, not what it is now.
  */
 import { useCallback, useRef } from "react";
+import { useLogicalArrowKeys } from "@/hooks/use-direction";
 import { Check, Sun } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -82,6 +83,7 @@ function Row({
   modified: boolean;
   onPick: (id: string) => void;
 }) {
+  const logicalKey = useLogicalArrowKeys();
   const container = useRef<HTMLDivElement>(null);
 
   const move = useCallback(
@@ -107,10 +109,11 @@ function Row({
         aria-label={`${heading} themes`}
         className="grid grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] gap-2"
         onKeyDown={(event) => {
-          if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+          const key = logicalKey(event.key);
+          if (key === "ArrowRight" || key === "ArrowDown") {
             event.preventDefault();
             move(1);
-          } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+          } else if (key === "ArrowLeft" || key === "ArrowUp") {
             event.preventDefault();
             move(-1);
           }

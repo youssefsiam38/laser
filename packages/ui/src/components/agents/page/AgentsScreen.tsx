@@ -187,7 +187,7 @@ export function AgentsScreen({ cwd, target }: AgentsScreenProps) {
             data-slot="agents-editor-column"
             className={cn(
               "min-h-0 min-w-0 flex-1 overflow-y-auto",
-              mobile && "animate-in fade-in-0 slide-in-from-right-2 fill-mode-both duration-(--motion-slow) motion-reduce:animate-none",
+              mobile && "animate-in fade-in-0 ltr:slide-in-from-right-2 rtl:slide-in-from-left-2 fill-mode-both duration-(--motion-slow) motion-reduce:animate-none",
             )}
           >
             {selection === null ? (
@@ -270,7 +270,7 @@ function Header({
       {mobile && editing ? (
         <>
           <TooltipIconButton tooltip="Back to agents" side="bottom" onClick={onBack} data-slot="agents-back">
-            <ChevronLeft />
+            <ChevronLeft className="rtl:-scale-x-100" />
           </TooltipIconButton>
           <h2 className="min-w-0 truncate text-sm font-semibold text-ink">{title ?? "Agents"}</h2>
         </>

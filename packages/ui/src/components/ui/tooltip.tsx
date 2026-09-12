@@ -2,6 +2,8 @@ import type * as React from "react";
 import { Tooltip as TooltipPrimitive } from "radix-ui";
 
 import { cn } from "@/lib/utils";
+import { useDirection } from "@/hooks/use-direction";
+import { logicalSide } from "@/theme/direction";
 
 function TooltipProvider({
   delayDuration = 300,
@@ -29,14 +31,18 @@ function TooltipTrigger({ ...props }: React.ComponentProps<typeof TooltipPrimiti
 function TooltipContent({
   className,
   sideOffset = 6,
+  side = "top",
   children,
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Content>) {
+  const direction = useDirection();
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Content
         data-slot="tooltip-content"
         sideOffset={sideOffset}
+        side={logicalSide(side, direction)}
+        dir={direction}
         className={cn(
           "z-50 inline-flex w-fit max-w-64 items-center gap-2 rounded-md px-2 py-1",
           "bg-ink text-bg text-xs font-medium leading-4",

@@ -14,6 +14,8 @@ import { useCallback, useRef, useState, type ComponentProps, type KeyboardEvent 
 
 import { clamp } from "@/components/assistant-ui/utils/range";
 import { cn } from "@/lib/utils";
+import { useDirection, useLogicalArrowKeys } from "@/hooks/use-direction";
+import { logicalSide } from "@/theme/direction";
 
 import { floating } from "./surfaces.js";
 
@@ -35,6 +37,8 @@ export interface ConversationMapProps extends Omit<ComponentProps<"nav">, "child
 }
 
 export function ConversationMap({ entries, activeId, visibleIds, onSelect, side = "right", className, onKeyDown, ...props }: ConversationMapProps) {
+  const direction = useDirection();
+  const logicalKey = useLogicalArrowKeys();
   const railRef = useRef<HTMLElement>(null);
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
 
@@ -50,12 +54,12 @@ export function ConversationMap({ entries, activeId, visibleIds, onSelect, side 
       if (!ticks?.length) return;
       const current = Array.prototype.indexOf.call(ticks, event.target);
       if (current === -1) return;
-      const next = { ArrowUp: current - 1, ArrowDown: current + 1, Home: 0, End: ticks.length - 1 }[event.key];
+      const next = { ArrowUp: current - 1, ArrowDown: current + 1, ArrowLeft: current - 1, ArrowRight: current + 1, Home: 0, End: ticks.length - 1 }[logicalKey(event.key)];
       if (next === undefined) return;
       event.preventDefault();
       ticks[clamp(next, 0, ticks.length - 1)]?.focus();
     },
-    [onKeyDown],
+    [onKeyDown, logicalKey],
   );
 
   return (
@@ -102,7 +106,8 @@ export function ConversationMap({ entries, activeId, visibleIds, onSelect, side 
             </HoverCard.Trigger>
             <HoverCard.Portal>
               <HoverCard.Content
-                side={side}
+                side={logicalSide(side, direction)}
+                dir={direction}
                 sideOffset={10}
                 collisionPadding={8}
                 className={cn(

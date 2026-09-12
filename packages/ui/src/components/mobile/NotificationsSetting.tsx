@@ -58,7 +58,7 @@ export function NotificationsSetting({ className }: { className?: string }) {
             {push.subscribed ? (
               <>
                 <Button variant="outline" size="sm" disabled={push.busy} onClick={() => void push.test()}>
-                  <Send aria-hidden="true" />
+                  <Send aria-hidden="true" className="rtl:-scale-x-100" />
                   Send a test
                 </Button>
                 <Button variant="ghost" size="sm" disabled={push.busy} onClick={() => void push.disable()}>

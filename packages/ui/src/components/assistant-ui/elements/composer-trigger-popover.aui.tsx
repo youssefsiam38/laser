@@ -282,7 +282,7 @@ function PickerSurface({ title, notice, onQueryChange, onOpenChange, onComplete,
   const selected = scope.items[scope.highlightedIndex];
   return <>
     <div className="flex shrink-0 items-center gap-2 px-3 py-2 hairline-b">
-      {details ? <button type="button" aria-label="Back to results" onClick={() => setDetails(false)} className="flex size-8 shrink-0 items-center justify-center rounded-md text-ink-3 hover:bg-surface-2 pointer-coarse:size-11"><ChevronLeftIcon className="size-4" /></button> : <SearchIcon aria-hidden className="size-4 shrink-0 text-ink-3" />}
+      {details ? <button type="button" aria-label="Back to results" onClick={() => setDetails(false)} className="flex size-8 shrink-0 items-center justify-center rounded-md text-ink-3 hover:bg-surface-2 pointer-coarse:size-11"><ChevronLeftIcon className="rtl:-scale-x-100 size-4" /></button> : <SearchIcon aria-hidden className="size-4 shrink-0 text-ink-3" />}
       <span className="min-w-0 flex-1 truncate text-sm font-medium">{details ? selected?.label : title}</span>
       <span role="status" aria-live="polite" className="text-xs tabular-nums text-ink-3">{scope.isLoading ? 'Searching…' : `${count} ${count === 1 ? 'result' : 'results'}`}</span>
       <button type="button" tabIndex={-1} aria-label="Close suggestions" onClick={() => scope.close()} className="flex size-8 shrink-0 items-center justify-center rounded-md text-ink-3 hover:bg-surface-2 hover:text-ink pointer-coarse:size-11"><XIcon aria-hidden className="size-4" /></button>
@@ -349,7 +349,7 @@ const Categories: FC<CategoriesProps> = ({
                 <Icon className="size-4 text-ink-3" />
                 {cat.label}
               </span>
-              <ChevronRightIcon className="size-4 text-ink-3" />
+              <ChevronRightIcon className="rtl:-scale-x-100 size-4 text-ink-3" />
             </ComposerPrimitive.Unstable_TriggerPopoverCategoryItem>
           );
         })}
@@ -387,7 +387,7 @@ const Items: FC<ItemsProps> = ({
           className="flex flex-col"
         >
           <ComposerPrimitive.Unstable_TriggerPopoverBack className="eyebrow flex cursor-pointer items-center gap-1.5 px-3 py-2 transition-colors duration-(--motion-instant) hairline-b hover:bg-surface-2">
-            <ChevronLeftIcon className="size-3.5" />
+            <ChevronLeftIcon className="rtl:-scale-x-100 size-3.5" />
             {backLabel}
           </ComposerPrimitive.Unstable_TriggerPopoverBack>
 

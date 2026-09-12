@@ -164,7 +164,7 @@ export function FleetPanel({ variant, onClose }: FleetPanelProps) {
         </span>
         {variant === "panel" && onClose && (
           <TooltipIconButton tooltip="Hide the fleet" shortcut="\" className="ms-auto" onClick={onClose}>
-            <PanelRightClose />
+            <PanelRightClose className="rtl:-scale-x-100" />
           </TooltipIconButton>
         )}
       </header>

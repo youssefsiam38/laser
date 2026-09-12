@@ -267,9 +267,9 @@ function ToolFallbackTrigger({
         <ChevronRight
           data-slot="tool-fallback-trigger-chevron"
           aria-hidden="true"
-          className={cn(
+          className={cn("rtl:-scale-x-100",
             "size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) ease-(--motion-ease) motion-reduce:transition-none",
-            "group-data-[state=open]/trigger:rotate-90",
+            "group-data-[state=open]/trigger:rotate-90 group-data-[state=open]/trigger:rtl:-rotate-90",
           )}
         />
       ) : (

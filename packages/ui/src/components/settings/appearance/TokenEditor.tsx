@@ -167,9 +167,9 @@ export function TokenEditor({ theme, issues, onSet, onClear }: TokenEditorProps)
         >
           <ChevronRight
             aria-hidden="true"
-            className={cn(
+            className={cn("rtl:-scale-x-100",
               "size-3.5 transition-transform duration-(--motion-fast) motion-reduce:transition-none",
-              advancedOpen && "rotate-90",
+              advancedOpen && "rotate-90 rtl:-rotate-90",
             )}
           />
           Terminal, syntax and derived colours

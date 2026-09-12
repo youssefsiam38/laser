@@ -96,7 +96,7 @@ export function TelemetryPanel({ variant }: TelemetryPanelProps) {
             className="ms-auto"
             onClick={() => shell.setTelemetryOpen(false)}
           >
-            <PanelRightClose />
+            <PanelRightClose className="rtl:-scale-x-100" />
           </TooltipIconButton>
         )}
       </header>
@@ -318,7 +318,7 @@ function UsageSection() {
       {active === "account" ? (
         <>
           <AccountUsage state={accountUsage} compact />
-          <Button variant="link" size="sm" className="justify-start text-xs" onClick={() => workbench.open("settings", "usage")}>All usage details <ChevronRight className="size-3" /></Button>
+          <Button variant="link" size="sm" className="justify-start text-xs" onClick={() => workbench.open("settings", "usage")}>All usage details <ChevronRight className="rtl:-scale-x-100 size-3" /></Button>
         </>
       ) : (
         <ApiUsage entries={entries} background={background} usage={apiUsage} />
@@ -549,7 +549,7 @@ function HistorySection() {
               className="group -ms-1 flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-md ps-1 text-start outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live"
             >
               <ChevronRight
-                className="size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-instant) group-aria-expanded:rotate-90"
+                className="rtl:-scale-x-100 size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-instant) group-aria-expanded:rotate-90 group-aria-expanded:rtl:-rotate-90"
                 aria-hidden="true"
               />
               <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-surface-2 text-ink-2">

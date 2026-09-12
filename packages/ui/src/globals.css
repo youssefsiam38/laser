@@ -802,6 +802,18 @@
   box-shadow: var(--shadow-float-sm);
 }
 
+/** Geometry on the inline axis, shared by every dialog and switch. */
+@utility center-inline {
+  inset-inline-start: 50%;
+  --tw-translate-x: -50%;
+  translate: var(--tw-translate-x) var(--tw-translate-y);
+  &:dir(rtl) { --tw-translate-x: 50%; }
+}
+@utility switch-thumb-on {
+  translate: calc(var(--spacing) * 4) 0;
+  &:dir(rtl) { translate: calc(var(--spacing) * -4) 0; }
+}
+
 /* Hairline dividers instead of boxes. */
 @utility hairline-t {
   border-top: 1px solid var(--line);
@@ -881,6 +893,9 @@
   height: calc(var(--spacing) / 4);
   background: linear-gradient(90deg, transparent, var(--live), transparent);
 }
+.activity-beam:dir(rtl) { scale: -1 1; }
+/* Mirror the travelling material as a unit; its child's start is physical LTR. */
+.activity-beam:dir(rtl) > span { inset-inline-start: auto; inset-inline-end: 0; }
 @keyframes activity-beam-travel {
   0% { transform: translateX(-110%); opacity: 0; }
   20% { opacity: 1; }

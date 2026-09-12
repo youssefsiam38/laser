@@ -2,6 +2,8 @@ import type * as React from "react";
 import { Popover as PopoverPrimitive } from "radix-ui";
 
 import { cn } from "@/lib/utils";
+import { useDirection } from "@/hooks/use-direction";
+import { logicalSide } from "@/theme/direction";
 
 function Popover({ ...props }: React.ComponentProps<typeof PopoverPrimitive.Root>) {
   return <PopoverPrimitive.Root data-slot="popover" {...props} />;
@@ -15,15 +17,19 @@ function PopoverContent({
   className,
   align = "center",
   sideOffset = 6,
+  side = "bottom",
   collisionPadding = 8,
   container,
   ...props
 }: React.ComponentProps<typeof PopoverPrimitive.Content> & { container?: HTMLElement | null | undefined }) {
+  const direction = useDirection();
   return (
     <PopoverPrimitive.Portal container={container}>
       <PopoverPrimitive.Content
         data-slot="popover-content"
         align={align}
+        dir={direction}
+        side={logicalSide(side, direction)}
         sideOffset={sideOffset}
         collisionPadding={collisionPadding}
         className={cn(

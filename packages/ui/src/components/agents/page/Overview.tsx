@@ -105,7 +105,7 @@ function Line({ tone, className, children, ...props }: ComponentProps<"button"> 
       {...props}
     >
       {children}
-      <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-ink-3" />
+      <ChevronRight aria-hidden="true" className="rtl:-scale-x-100 size-4 shrink-0 text-ink-3" />
     </button>
   );
 }

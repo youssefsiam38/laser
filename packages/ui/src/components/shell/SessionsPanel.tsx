@@ -1,4 +1,5 @@
 import { PRODUCT_NAME } from "@lasercode/protocol";
+import { useLogicalArrowKeys } from "@/hooks/use-direction";
 import type * as React from "react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { FileClock, FolderPlus, MessageSquarePlus, Moon, Plus, Search, Settings, Sun, X } from "lucide-react";
@@ -329,6 +330,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
  * the active one is `aria-selected`, and the panel below is what it controls.
  */
 function SessionsTabs({ tab, onChange }: { tab: SessionsTab; onChange(tab: SessionsTab): void }) {
+  const logicalKey = useLogicalArrowKeys();
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home" && event.key !== "End") return;
     event.preventDefault();
@@ -336,7 +338,7 @@ function SessionsTabs({ tab, onChange }: { tab: SessionsTab; onChange(tab: Sessi
     const next =
       event.key === "Home" ? 0
       : event.key === "End" ? SESSIONS_TABS.length - 1
-      : (index + (event.key === "ArrowRight" ? 1 : SESSIONS_TABS.length - 1)) % SESSIONS_TABS.length;
+      : (index + (logicalKey(event.key) === "ArrowRight" ? 1 : SESSIONS_TABS.length - 1)) % SESSIONS_TABS.length;
     const target = SESSIONS_TABS[next]!;
     onChange(target);
     (event.currentTarget.querySelector<HTMLButtonElement>(`[data-tab="${target}"]`))?.focus();

@@ -75,7 +75,7 @@ function Row({ row, current, busy, onFork, onJump }: { row: HistoryRow; current:
       ))}
       <span className="mt-[3px] flex size-3 shrink-0 items-center justify-center">
         {row.branchStart ? (
-          <CornerDownRight className="size-3 text-ink-3" aria-label="Branch starts here" />
+          <CornerDownRight className="rtl:-scale-x-100 size-3 text-ink-3" aria-label="Branch starts here" />
         ) : (
           <span aria-hidden="true" className={cn("rounded-full", current ? "size-2 bg-live" : primary ? "size-1 bg-ink-3" : "size-1 bg-line")} />
         )}

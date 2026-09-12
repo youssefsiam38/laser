@@ -124,7 +124,7 @@ export function ToolTimeline({ timeline, open, onOpenChange, className, ...props
       >
         <ChevronRight
           aria-hidden="true"
-          className="size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) ease-(--motion-ease) group-data-[state=open]/trigger:rotate-90 motion-reduce:transition-none"
+          className="rtl:-scale-x-100 size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) ease-(--motion-ease) group-data-[state=open]/trigger:rotate-90 group-data-[state=open]/trigger:rtl:-rotate-90 motion-reduce:transition-none"
         />
         <SwapLabel active={streaming ? 0 : 1} className="min-w-0 text-start tabular-nums">
           <ShimmerLabel active={streaming} className="relative inline-block truncate leading-none">
