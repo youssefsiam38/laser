@@ -101,6 +101,7 @@ function lcsOps(a: readonly string[], b: readonly string[]): Op[] {
  * change. Line numbers are 1-based within the inputs.
  */
 export function diffLines(oldText: string, newText: string, context = 3): DiffHunk[] {
+  if (oldText === newText) return [];
   const ops = lcsOps(splitLines(oldText), splitLines(newText));
   const numbered: DiffLine[] = [];
   let oldNo = 1;
@@ -231,8 +232,40 @@ function bounded(hunks: readonly DiffHunk[]): { hunks: DiffHunk[]; truncated: bo
   return { hunks: out, truncated };
 }
 
-/** Build the diff view for an edit/write tool call, or `undefined` when nothing is derivable yet. */
-export function diffViewForTool(
+type DiffInput = { path: string; patch: string; content: string; edits: readonly (readonly [string, string])[] };
+type CachedDiff = { input: DiffInput; value: DiffView | undefined };
+// Weak ownership by tool arguments: no global string-keyed history retention.
+// One latest projection per kind; late patch/result changes replace that entry.
+const toolViews = new WeakMap<object, Partial<Record<"edit" | "write", CachedDiff>>>();
+
+function diffInput(kind: "edit" | "write", args: Record<string, unknown>, details: Record<string, unknown> | undefined): DiffInput {
+  return {
+    path: str(args["path"]),
+    patch: kind === "edit" ? str(details?.["patch"]) : "",
+    content: kind === "write" ? str(args["content"]) : "",
+    edits: kind === "edit" && Array.isArray(args["edits"])
+      ? args["edits"].filter(isRecord).map(edit => [str(edit["oldText"]), str(edit["newText"])] as const) : [],
+  };
+}
+
+/** Shared by search and presentation. Immutable inputs hit by identity without
+ * hashing/serializing their text. Comparing the few source fields also handles
+ * callers that revise arguments or patches in place during streaming. */
+export function diffViewForTool(kind: "edit" | "write", args: unknown, details: Record<string, unknown> | undefined): DiffView | undefined {
+  if (!isRecord(args)) return computeDiffView(kind, args, details);
+  const input = diffInput(kind, args, details);
+  const cached = toolViews.get(args);
+  const prior = cached?.[kind];
+  if (prior && prior.input.path === input.path && prior.input.patch === input.patch && prior.input.content === input.content
+    && prior.input.edits.length === input.edits.length
+    && prior.input.edits.every((edit, i) => edit[0] === input.edits[i]![0] && edit[1] === input.edits[i]![1])) return prior.value;
+  const value = computeDiffView(kind, args, details);
+  toolViews.set(args, { ...cached, [kind]: { input, value } });
+  return value;
+}
+
+/** Build the diff view, or `undefined` when nothing is derivable yet. */
+function computeDiffView(
   kind: "edit" | "write",
   args: unknown,
   details: Record<string, unknown> | undefined,

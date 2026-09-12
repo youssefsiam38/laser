@@ -581,3 +581,26 @@ cancellation, host search projection/cursor tests, UI out-of-order/close/retry
 checks, host/protocol/UI full suites, identity and workspace build pass.
 Logs `/tmp/f07-{protocol,host,ui,identity,build}.log`, final UI/build reruns
 `/tmp/f07-{ui,build}-final.log`; measurement `/tmp/f07-focused.log`.
+
+### F16 — shared diff reuse and identical-text short circuit
+
+`diffViewForTool` now weakly owns one latest projection per argument object and
+kind. Search, tree/timeline/group stats and tool disclosure share it; equivalent
+result wrappers do not trigger LCS again. Source-field snapshots catch in-place
+argument/patch changes without hashing/serializing full bodies. Old returned
+views are not mutated. `diffLines` returns immediately for identical text,
+including inputs above the existing LCS ceiling. Non-identical tie-breaking,
+hunk grouping, statistics and 400-line presentation bound are unchanged.
+
+Twenty paired 1,998-line one-change computations: **36.024 ms median forced
+recomputation → 0.030 ms median shared hit**, `/tmp/f16-focused.log` (all samples
+retained). This is a Node source/test microprobe including equality assertions,
+not renderer or end-to-end disclosure latency; machine contention is visible.
+Forced misses use fresh argument identities and the unchanged LCS algorithm,
+not a separate historical build. Identical 10,000-line text returns no diff
+instead of allocating a replace-all fallback.
+
+Validation: duplicate-line exact hunk/line-number fixture, patch/source changes,
+reference reuse and full-statistics tests; protocol/host/UI suites, identity and
+workspace build pass, `/tmp/f16-{protocol,host,ui,identity,build}.log`. No renderer
+components or history/projection ownership seams changed.
