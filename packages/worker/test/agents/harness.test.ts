@@ -177,7 +177,7 @@ function snapshotWith(agents: AgentDefinition[], maxDepth = 3): AgentsSnapshot {
   return { ...base, revision: 1, agents: [...agents, ...base.agents.filter((a) => a.kind === "builtin")], policy: { ...base.policy, maxDepth } };
 }
 
-function makeWorld(projectCwd = "/repo") {
+function makeWorld(projectCwd = "/repo", projectTrusted = true) {
   const drivers = new Map<string, FakeDriver>();
   const notifications: Notification[] = [];
   const opened: Array<{ cwd: string; parentSessionPath: string; agent: DriverAgentOptions }> = [];
@@ -201,6 +201,7 @@ function makeWorld(projectCwd = "/repo") {
       const worktree: Worktree = { path, branch: `agents/${input.subagentName}`, baseCommit: "abc123", cwd: path, root: "/repo" };
       return worktree;
     },
+    async runSetup() { return { status: "not-present" }; },
     async remove(root_, path, branch) { this.removed.push(path); this.removedWith.push({ root: root_, path, ...(branch !== undefined ? { branch } : {}) }); },
     ownedBy: () => undefined,
     async rootOf() { return root; },
@@ -225,7 +226,7 @@ function makeWorld(projectCwd = "/repo") {
     tasks: (path) => tasks.get(path) ?? [],
   };
   const definitions = new DefinitionsCache();
-  const harness = new AgentHarness({ host, definitions, worktrees, backgroundWork: (cwd) => ({ cwd, foregroundCommandSeconds: 120 }), now: () => Date.now() });
+  const harness = new AgentHarness({ host, definitions, worktrees, projectTrusted, backgroundWork: (cwd) => ({ cwd, foregroundCommandSeconds: 120 }), now: () => Date.now() });
   const openRoot = (name = "default", path = "/sessions/root.jsonl", id = "root-1") => {
     const def = definitions.definition(name)!;
     const handle = harness.prepareSession({ role: rootRole(name), definition: def, record: rootRecord(name), projectCwd });
@@ -268,7 +269,7 @@ describe("AgentHarness", () => {
     vi.useRealTimers();
   });
 
-  it.each(["ok", "failed", "timed-out", "parent-stop", "user-stop", "interrupt", "stop-after-exit"])("gates the first turn on real setup: %s", async (outcome) => {
+  it.each(["ok", "failed", "timed-out", "parent-stop", "user-stop", "interrupt", "stop-after-exit", "untrusted", "interrupt-then-stop"])("gates the first turn on real setup: %s", async (outcome) => {
     const repo = mkdtempSync(join(tmpdir(), "worktree-start-"));
     const manager = new WorktreeManager();
     try {
@@ -281,16 +282,26 @@ describe("AgentHarness", () => {
       // An explicit release file, not a sleep, controls when the real process ends.
       writeFileSync(hook, `#!/bin/sh\necho running > started\nwhile [ ! -f release ]; do sleep 0.01; done\nexit ${outcome === "failed" ? 2 : 0}\n`);
       chmodSync(hook, 0o755);
-      writeFileSync(join(repo, PROJECT_DIR_NAME, "settings.json"), JSON.stringify({ worktreeSetupTimeoutSeconds: outcome === "timed-out" ? 0.3 : 10 }));
-      world = makeWorld(repo);
+      world = makeWorld(repo, outcome !== "untrusted");
       world.worktrees.create = (input) => manager.create(input);
+      world.worktrees.runSetup = (...args) => {
+        if (outcome === "timed-out") vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        return manager.runSetup(...args);
+      };
       world.definitions.sync(snapshotWith([PARENT, WORKER, REVIEWER]));
       world.setAutoResolveChildPrompts(false);
       const root = world.openRoot("lead");
       const started = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "setup", task: "work" });
-      expect(started.setup?.status).toBe("pending");
+      expect(started.setup?.status).toBe(outcome === "untrusted" ? "skipped-untrusted" : "pending");
       expect(started.environment?.parentCheckout).toBe(repo);
       const driver = world.drivers.get("/sessions/child-1.jsonl")!;
+      if (outcome === "untrusted") {
+        expect(driver.prompted).toHaveLength(1);
+        expect(existsSync(join(started.cwd, "started"))).toBe(false);
+        expect((await root.handle.bridge.inspectAgent({ runId: started.runId })).setup).toEqual({ status: "skipped-untrusted" });
+        expect(world.opened[0]!.agent.bridge.role().setup).toEqual({ status: "skipped-untrusted" });
+        return;
+      }
       await vi.waitFor(() => expect(existsSync(join(started.cwd, "started"))).toBe(true));
       expect(driver.prompted).toHaveLength(0);
       if (outcome === "stop-after-exit") {
@@ -312,14 +323,26 @@ describe("AgentHarness", () => {
       }
       if (outcome === "parent-stop") await root.handle.bridge.stopAgent({ runId: started.runId });
       else if (outcome === "user-stop") await world.harness.stopRun(started.runId, { initiator: "user" });
-      else if (outcome === "interrupt") await root.handle.bridge.sendAgentMessage({ sessionId: started.sessionId, message: "redirect", mode: "interrupt" });
-      else if (outcome !== "timed-out") writeFileSync(join(started.cwd, "release"), "go");
-      const status = ["parent-stop", "user-stop", "interrupt"].includes(outcome) ? "cancelled" : outcome;
+      else if (outcome === "interrupt" || outcome === "interrupt-then-stop") {
+        const interrupted = root.handle.bridge.sendAgentMessage({ sessionId: started.sessionId, message: "redirect", mode: "interrupt" });
+        await vi.waitFor(() => expect(driver.aborts).toBe(1));
+        expect(world.harness.run(started.runId)?.worktree?.setup?.status).toBe("pending");
+        expect(driver.prompted).toHaveLength(0);
+        if (outcome === "interrupt-then-stop") await root.handle.bridge.stopAgent({ runId: started.runId });
+        else writeFileSync(join(started.cwd, "release"), "go");
+        await interrupted;
+      } else if (outcome === "timed-out") {
+        await vi.advanceTimersByTimeAsync(600_000);
+        vi.useRealTimers();
+      } else writeFileSync(join(started.cwd, "release"), "go");
+      const status = ["parent-stop", "user-stop", "interrupt-then-stop"].includes(outcome) ? "cancelled" : outcome === "interrupt" ? "ok" : outcome;
       await vi.waitFor(() => expect(world.harness.run(started.runId)?.worktree?.setup?.status).toBe(status));
       const inspected = await root.handle.bridge.inspectAgent({ runId: started.runId });
       expect(inspected.setup?.status).toBe(status);
       expect(inspected.environment).toEqual(started.environment);
-      expect((await root.handle.bridge.inspectFleet()).rows[0]).toMatchObject({ setup: { status }, environment: started.environment });
+      const fleetRow = (await root.handle.bridge.inspectFleet()).rows[0];
+      expect(fleetRow).toMatchObject({ setup: { status } });
+      expect(fleetRow).not.toHaveProperty("environment");
       expect(world.opened[0]!.agent.bridge.role().setup?.status).toBe(status);
       if (outcome.endsWith("stop")) expect(driver.prompted).toHaveLength(0);
       else {

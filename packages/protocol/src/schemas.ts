@@ -413,6 +413,7 @@ export const worktreeEnvironmentSchema = z.object({
 });
 export const worktreeSetupSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("not-present") }),
+  z.object({ status: z.literal("skipped-untrusted") }),
   z.object({ status: z.literal("pending"), logPath: z.string().min(1) }),
   z.object({ status: z.literal("ok"), logPath: z.string().min(1) }),
   z.object({ status: z.literal("timed-out"), logPath: z.string().min(1) }),

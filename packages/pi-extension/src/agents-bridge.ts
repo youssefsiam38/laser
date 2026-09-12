@@ -171,7 +171,6 @@ export interface FleetAgentRow extends FleetRowBase {
   sessionId: string;
   /** The newest run in that session; `inspect_agent { runId }` reads it. */
   runId: string;
-  environment?: WorktreeEnvironment;
   setup?: WorktreeSetup;
 }
 

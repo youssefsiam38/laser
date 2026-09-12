@@ -595,7 +595,7 @@ describe("subagents module: events and the child's role", () => {
     const base = { ...child, isolated: true, environment };
     for (const [setup, text] of [
       [{ status: "not-present" }, "setup is not present"],
-      [{ status: "pending", logPath: "/child/setup.log" }, "setup is pending"],
+      [{ status: "skipped-untrusted" }, "setup was skipped because this project is not trusted"],
       [{ status: "ok", logPath: "/child/setup.log" }, "setup ran and succeeded"],
       [{ status: "failed", exitCode: 2, logPath: "/child/setup.log" }, "setup failed (exit 2) — read /child/setup.log"],
       [{ status: "timed-out", logPath: "/child/setup.log" }, "setup timed out — read /child/setup.log"],

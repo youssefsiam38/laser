@@ -168,8 +168,8 @@ export function childWorktreeRule(role: HarnessSessionRole, cwd: string): string
       "Project instructions (AGENTS.md, CLAUDE.md, README) describe how this project installs and builds; follow them inside this worktree.\n"
     : "";
   const setup = role.setup;
-  const setupText = !setup ? "" : setup.status === "not-present" ? "Your project's worktree setup is not present.\n"
-    : setup.status === "pending" ? "Your project's worktree setup is pending; do not assume the tree is ready.\n"
+  const setupText = !setup || setup.status === "pending" ? "" : setup.status === "not-present" ? "Your project's worktree setup is not present.\n"
+    : setup.status === "skipped-untrusted" ? "Your project's worktree setup was skipped because this project is not trusted.\n"
     : setup.status === "ok" ? "Your project's worktree setup ran and succeeded.\n"
     : `Your project's worktree setup ${setup.status === "failed" ? (setup.exitCode === null ? "could not finish" : `failed (exit ${setup.exitCode})`) : setup.status === "timed-out" ? "timed out" : "was cancelled"} — read ${setup.logPath} before assuming the tree is ready.\n`;
   return (

@@ -322,6 +322,7 @@ export interface WorktreeEnvironment {
 
 export type WorktreeSetup =
   | { status: "not-present" }
+  | { status: "skipped-untrusted" }
   | { status: "pending" | "ok" | "timed-out" | "cancelled"; logPath: string }
   | { status: "failed"; logPath: string; exitCode: number | null };
 

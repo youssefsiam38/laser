@@ -97,11 +97,12 @@ import { buildFleetTree } from "./fleet.js";
 import { assistantMessagesOf, readSessionEntries } from "./inspect.js";
 import { readLogTail, type IndexedTask } from "./tasks.js";
 import { SessionLifecycle, type InvocationBoundary, type InvocationControlTicket } from "./session-lifecycle.js";
-import { runWorktreeSetup, type CreateWorktreeInput, type Worktree, type WorktreeFacts } from "./worktrees.js";
+import type { CreateWorktreeInput, Worktree, WorktreeFacts } from "./worktrees.js";
 
 /** What the harness needs from `WorktreeManager`; an interface so lifecycle tests run without git. */
 export interface WorktreeProvider {
   create(input: CreateWorktreeInput): Promise<Worktree>;
+  runSetup(projectCwd: string, tree: Worktree, signal: AbortSignal, projectTrusted?: boolean): Promise<WorktreeSetup>;
   remove(root: string, path: string, branch?: string): Promise<void>;
   ownedBy(runId: string): Worktree | undefined;
   /** The git toplevel of a project, for a worktree this process did not create. */
@@ -141,6 +142,8 @@ export interface AgentHarnessOptions {
   host: SessionHost;
   definitions: DefinitionsCache;
   worktrees: WorktreeProvider;
+  /** Host-resolved trust, shared with the driver's other project-code gates. */
+  projectTrusted?: boolean;
   /** Background-work options for a session running in `cwd`; passed to every child. */
   backgroundWork?: (cwd: string) => BackgroundWorkOptions;
   now?: () => number;
@@ -310,6 +313,7 @@ export class AgentHarness {
   private readonly host: SessionHost;
   private readonly definitions: DefinitionsCache;
   private readonly worktrees: WorktreeProvider;
+  private readonly projectTrusted: boolean;
   private readonly backgroundWork: ((cwd: string) => BackgroundWorkOptions) | undefined;
   private readonly now: () => number;
   private readonly byPath = new Map<string, Entry>();
@@ -321,6 +325,7 @@ export class AgentHarness {
     this.host = options.host;
     this.definitions = options.definitions;
     this.worktrees = options.worktrees;
+    this.projectTrusted = options.projectTrusted !== false;
     this.backgroundWork = options.backgroundWork;
     this.now = options.now ?? Date.now;
     // A definitions change is announced to every live bridge as a role
@@ -1045,7 +1050,7 @@ export class AgentHarness {
 
     const runId = newRunId();
     const baseCwd = parentDriver.state().cwd;
-    const worktree = isolated ? await this.worktrees.create({ projectCwd: parent.projectCwd, baseCwd, subagentName, runId }) : undefined;
+    const worktree = isolated ? await this.worktrees.create({ projectCwd: parent.projectCwd, projectTrusted: this.projectTrusted, baseCwd, subagentName, runId }) : undefined;
     const childCwd = worktree ? worktree.cwd : baseCwd;
     const goal = await readGoal(parentDriver);
     const rootPath = parent.record.rootPath ?? parent.path;
@@ -1123,21 +1128,7 @@ export class AgentHarness {
       counterpart: { sessionPath: state.path, label: subagentName },
       summary: `Sent the task to ${subagentName}`,
     });
-    if (worktree?.setup?.status === "pending") {
-      const controller = new AbortController();
-      const promise = runWorktreeSetup(parent.projectCwd, worktree, controller.signal)
-        .catch((): WorktreeSetup => ({ status: "failed", exitCode: null, logPath: worktree.setup!.status === "not-present" ? "" : worktree.setup!.logPath }))
-        .then(async (setup) => {
-          worktree.setup = setup;
-          if (entry.record.worktree) entry.record.worktree = { ...entry.record.worktree, setup };
-          entry.role = { ...entry.role, setup };
-          this.touch(runState, (run) => ({ ...run, worktree: run.worktree ? { ...run.worktree, setup } : null }));
-          for (const listener of [...entry.roleListeners]) { try { listener(entry.role); } catch { /* Observers are isolated. */ } }
-          await childDriver?.appendEntry?.(SESSION_AGENT_ENTRY_TYPE, entry.record).catch(() => undefined);
-          return setup;
-        });
-      entry.setupGate = { controller, promise };
-    }
+    if (worktree) this.beginWorktreeSetup(entry, runState, worktree, childDriver);
     void this.kick(runState, task);
     return {
       agentName,
@@ -1148,6 +1139,24 @@ export class AgentHarness {
       cwd: childCwd,
       ...(worktree ? { branch: worktree.branch, environment: worktree.environment, setup: worktree.setup } : {}),
     };
+  }
+
+  private beginWorktreeSetup(entry: Entry, state: RunState, tree: Worktree, driver: SessionDriver | undefined): void {
+    if (tree.setup?.status !== "pending") return;
+    const { logPath } = tree.setup;
+    const controller = new AbortController();
+    const promise = this.worktrees.runSetup(entry.projectCwd, tree, controller.signal, this.projectTrusted)
+      .catch((): WorktreeSetup => ({ status: "failed", exitCode: null, logPath }))
+      .then(async (setup) => {
+        tree.setup = setup;
+        if (entry.record.worktree) entry.record.worktree = { ...entry.record.worktree, setup };
+        entry.role = { ...entry.role, setup };
+        this.touch(state, (run) => ({ ...run, worktree: run.worktree ? { ...run.worktree, setup } : null }));
+        for (const listener of [...entry.roleListeners]) { try { listener(entry.role); } catch { /* Observers are isolated. */ } }
+        await driver?.appendEntry?.(SESSION_AGENT_ENTRY_TYPE, entry.record).catch(() => undefined);
+        return setup;
+      });
+    entry.setupGate = { controller, promise };
   }
 
   private async sendAgentMessage(parent: Entry, input: SendAgentMessageInput): Promise<SendAgentMessageResult> {
@@ -2044,7 +2053,7 @@ export class AgentHarness {
         reason: attempt === "execution" ? "controlled-invocation-started" : control?.kind === "stop" ? "stop" : "parent-interrupt",
         token,
       });
-      entry.setupGate?.controller.abort();
+      if (control?.kind === "stop") entry.setupGate?.controller.abort();
       await driver.abort();
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);

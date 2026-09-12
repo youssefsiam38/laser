@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
-const TRUST_REQUIRING = ["settings.json"] as const;
+const TRUST_REQUIRING = ["settings.json", "worktree-setup"] as const;
 
 export interface TrustReasons {
   /** Human-readable list of what is trust-gated, for the dialog. */

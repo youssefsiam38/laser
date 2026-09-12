@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HarnessError } from "../../src/agents/errors.js";
-import { WorktreeManager, assertSafeWorktreePath, runWorktreeSetup, worktreeSetupTimeoutSeconds, worktreeSlug } from "../../src/agents/worktrees.js";
+import { WorktreeManager, assertSafeWorktreePath, worktreeSlug } from "../../src/agents/worktrees.js";
 
 const haveGit = (() => {
   try {
@@ -51,6 +51,7 @@ describe.skipIf(!haveGit)("WorktreeManager against a repository", () => {
     base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-worktrees-`));
   });
   afterEach(() => {
+    vi.useRealTimers();
     rmSync(base, { recursive: true, force: true });
   });
 
@@ -154,13 +155,25 @@ describe.skipIf(!haveGit)("WorktreeManager against a repository", () => {
     const hook = join(repo, PROJECT_DIR_NAME, "worktree-setup");
     writeFileSync(hook, `#!/bin/sh\n${script}\n`);
     chmodSync(hook, 0o755);
-    writeFileSync(join(repo, PROJECT_DIR_NAME, "settings.json"), JSON.stringify({ worktreeSetupTimeoutSeconds: 0.15 }));
     const tree = await new WorktreeManager().create({ projectCwd: repo, baseCwd: repo, subagentName: "setup", runId: "run_aabb" });
     expect(tree.setup?.status).toBe("pending");
-    const result = await runWorktreeSetup(repo, tree, new AbortController().signal);
+    if (status === "timed-out") vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const running = new WorktreeManager().runSetup(repo, tree, new AbortController().signal);
+    if (status === "timed-out") {
+      if (tree.setup?.status !== "pending") throw new Error("hook missing");
+      const { logPath } = tree.setup;
+      await vi.waitFor(() => expect(readFileSync(logPath, "utf8").trim()).toMatch(/^\d+$/));
+      let settled = false;
+      void running.then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(599_000);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1_000);
+      vi.useRealTimers();
+    }
+    const result = await running;
     expect(result.status).toBe(status);
     if (result.status === "failed") expect(result.exitCode).toBe(exitCode);
-    if (result.status === "not-present") throw new Error("hook missing");
+    if (!("logPath" in result)) throw new Error("hook missing");
     const output = readFileSync(result.logPath, "utf8");
     if (status === "ok") expect(output).toContain(tree.cwd);
     if (status === "failed") expect(output).toContain("broken");
@@ -169,7 +182,7 @@ describe.skipIf(!haveGit)("WorktreeManager against a repository", () => {
     expect(existsSync(join(repo, ".gitignore"))).toBe(false);
   });
 
-  it("cancels a running hook and validates the optional timeout", async () => {
+  it("cancels a running hook and skips a non-executable hook", async () => {
     const repo = repoWithCommit();
     mkdirSync(join(repo, PROJECT_DIR_NAME));
     const hook = join(repo, PROJECT_DIR_NAME, "worktree-setup");
@@ -177,7 +190,7 @@ describe.skipIf(!haveGit)("WorktreeManager against a repository", () => {
     chmodSync(hook, 0o755);
     const tree = await new WorktreeManager().create({ projectCwd: repo, baseCwd: repo, subagentName: "setup", runId: "run_aabb" });
     const controller = new AbortController();
-    const running = runWorktreeSetup(repo, tree, controller.signal);
+    const running = new WorktreeManager().runSetup(repo, tree, controller.signal);
     if (tree.setup?.status !== "pending") throw new Error("hook missing");
     const logPath = tree.setup.logPath;
     await vi.waitFor(() => expect(readFileSync(logPath, "utf8").trim()).toMatch(/^\d+$/));
@@ -185,14 +198,25 @@ describe.skipIf(!haveGit)("WorktreeManager against a repository", () => {
     controller.abort();
     expect((await running).status).toBe("cancelled");
     await expectProcessEnded(pid);
-    expect(worktreeSetupTimeoutSeconds(repo)).toBe(600);
-    for (const value of [-1, 0, "12", null, 3e20]) {
-      writeFileSync(join(repo, PROJECT_DIR_NAME, "settings.json"), JSON.stringify({ worktreeSetupTimeoutSeconds: value }));
-      expect(worktreeSetupTimeoutSeconds(repo)).toBe(600);
-    }
     chmodSync(hook, 0o644);
     const absent = await new WorktreeManager().create({ projectCwd: repo, baseCwd: repo, subagentName: "absent", runId: "run_ccdd" });
     expect(absent.setup).toEqual({ status: "not-present" });
+  });
+
+  it("never executes an untrusted hook, even with a previously pending record", async () => {
+    const repo = repoWithCommit();
+    mkdirSync(join(repo, PROJECT_DIR_NAME));
+    const hook = join(repo, PROJECT_DIR_NAME, "worktree-setup");
+    writeFileSync(hook, "#!/bin/sh\necho unsafe > marker\n");
+    chmodSync(hook, 0o755);
+    const manager = new WorktreeManager();
+    const tree = await manager.create({ projectCwd: repo, projectTrusted: false, baseCwd: repo, subagentName: "untrusted", runId: "run_aabb" });
+    expect(tree.setup).toEqual({ status: "skipped-untrusted" });
+    expect(await manager.runSetup(repo, tree, new AbortController().signal, false)).toEqual({ status: "skipped-untrusted" });
+    tree.setup = { status: "pending", logPath: join(tree.path, "setup.log") };
+    expect(await manager.runSetup(repo, tree, new AbortController().signal, false)).toEqual({ status: "skipped-untrusted" });
+    expect(existsSync(join(tree.path, "marker"))).toBe(false);
+    expect(existsSync(join(tree.path, "setup.log"))).toBe(false);
   });
 
   // M13-T42: the parent is refused a removal that would destroy work, so the

@@ -10,6 +10,7 @@ describe("worktree environment and setup wire facts", () => {
   it("round-trips every asynchronous setup state", () => {
     const samples: WorktreeSetup[] = [
       { status: "not-present" },
+      { status: "skipped-untrusted" },
       ...(["pending", "ok", "timed-out", "cancelled"] as const).map((status) => ({ status, logPath: "/child/setup.log" })),
       { status: "failed", exitCode: 2, logPath: "/child/setup.log" },
       { status: "failed", exitCode: null, logPath: "/child/setup.log" },

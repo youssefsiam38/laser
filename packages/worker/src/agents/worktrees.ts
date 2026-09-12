@@ -19,6 +19,8 @@ import { HarnessError } from "./errors.js";
 export interface CreateWorktreeInput {
   /** The project the parent session belongs to (the git toplevel is resolved from it). */
   projectCwd: string;
+  /** Host-resolved project trust; explicit false forbids automatic project code. */
+  projectTrusted?: boolean;
   /** The parent's working directory: the child branches from the commit checked out there. */
   baseCwd: string;
   subagentName: string;
@@ -147,9 +149,13 @@ export class WorktreeManager {
     const cwd = projectRel && !projectRel.startsWith("..") ? join(path, projectRel) : path;
     const worktree: Worktree = { path, branch, baseCommit, cwd: existsSync(cwd) ? cwd : path, root };
     worktree.environment = await observeEnvironment(input.baseCwd, worktree);
-    worktree.setup = initialWorktreeSetup(input.projectCwd, path);
+    worktree.setup = initialWorktreeSetup(input.projectCwd, path, input.projectTrusted);
     this.owned.set(input.runId, worktree);
     return worktree;
+  }
+
+  runSetup(projectCwd: string, tree: Worktree, signal: AbortSignal, projectTrusted?: boolean): Promise<WorktreeSetup> {
+    return runWorktreeSetup(projectCwd, tree, signal, projectTrusted);
   }
 
   /** The worktree a run owns, when this process created it. */
@@ -220,7 +226,7 @@ export class WorktreeManager {
   }
 }
 
-const WORKTREE_SETUP_LOG = `.${PROJECT_DIR_NAME.slice(1)}-worktree-setup.log`;
+const WORKTREE_SETUP_LOG = `${PROJECT_DIR_NAME}-worktree-setup.log`;
 
 /** No stack inference: only directory names git reports, relative to the parent checkout. */
 async function observeEnvironment(baseCwd: string, tree: Worktree): Promise<WorktreeEnvironment> {
@@ -247,7 +253,8 @@ async function observeEnvironment(baseCwd: string, tree: Worktree): Promise<Work
   return environment;
 }
 
-export function initialWorktreeSetup(projectCwd: string, path: string): WorktreeSetup {
+export function initialWorktreeSetup(projectCwd: string, path: string, projectTrusted = true): WorktreeSetup {
+  if (!projectTrusted) return { status: "skipped-untrusted" };
   try {
     const hook = join(projectCwd, PROJECT_DIR_NAME, "worktree-setup");
     if (!statSync(hook).isFile()) return { status: "not-present" };
@@ -256,19 +263,10 @@ export function initialWorktreeSetup(projectCwd: string, path: string): Worktree
   } catch { return { status: "not-present" }; }
 }
 
-/** Only this product key is read; malformed configuration leaves the bounded default intact. */
-export function worktreeSetupTimeoutSeconds(projectCwd: string): number {
-  try {
-    const settings: unknown = JSON.parse(readFileSync(join(projectCwd, PROJECT_DIR_NAME, "settings.json"), "utf8"));
-    const value = (settings as Record<string, unknown> | null)?.["worktreeSetupTimeoutSeconds"];
-    if (typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 2_147_483) return value;
-  } catch { /* Optional project configuration. */ }
-  return 600;
-}
-
 /** Execute the project's program, never a guessed command. No environment values are logged. */
-export async function runWorktreeSetup(projectCwd: string, tree: Worktree, signal: AbortSignal): Promise<WorktreeSetup> {
-  const initial = tree.setup ?? initialWorktreeSetup(projectCwd, tree.path);
+async function runWorktreeSetup(projectCwd: string, tree: Worktree, signal: AbortSignal, projectTrusted = true): Promise<WorktreeSetup> {
+  if (!projectTrusted) return { status: "skipped-untrusted" };
+  const initial = tree.setup ?? initialWorktreeSetup(projectCwd, tree.path, projectTrusted);
   if (initial.status !== "pending") return initial;
   const { logPath } = initial;
   if (signal.aborted) return { status: "cancelled", logPath };
@@ -301,11 +299,9 @@ export async function runWorktreeSetup(projectCwd: string, tree: Worktree, signa
     const cancel = () => { kill(); finish({ status: "cancelled", logPath }); };
     child.once("error", () => finish({ status: "failed", logPath, exitCode: null }));
     child.once("exit", (code) => {
-      // Descendants must not outlive setup, even if the script backgrounds them.
-      kill();
       finish(code === 0 ? { status: "ok", logPath } : { status: "failed", logPath, exitCode: code });
     });
-    timer = setTimeout(() => { kill(); finish({ status: "timed-out", logPath }); }, worktreeSetupTimeoutSeconds(projectCwd) * 1_000);
+    timer = setTimeout(() => { kill(); finish({ status: "timed-out", logPath }); }, 600_000);
     signal.addEventListener("abort", cancel, { once: true });
     if (signal.aborted) cancel();
   });

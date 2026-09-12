@@ -472,22 +472,26 @@ Everything below is the isolated case
   is best effort; names are facts, not instructions or stack detection.
 - The child's role block states those facts, forbids modifying the parent,
   and points at AGENTS.md, CLAUDE.md and README for the project's own setup.
-- An optional executable `<project>/.laser/worktree-setup` runs with the
-  child's cwd and the worker's environment, stdin ignored. The harness never
-  logs environment values. Output goes to `<worktree>/.laser-worktree-setup.log`,
+- For a trusted project, an optional executable `<project>/.laser/worktree-setup`
+  from the parent project checkout runs with the child's cwd and the worker's
+  environment, stdin ignored. A project shipping the hook requires a trust
+  decision; an untrusted project records `skipped-untrusted` without running it.
+  The harness never logs environment values. Output goes to `<worktree>/.laser-worktree-setup.log`,
   excluded through git's `info/exclude`, never the person's `.gitignore`.
-  The default bound is 600 seconds; `.laser/settings.json` may set a positive
-  finite `worktreeSetupTimeoutSeconds` (at most 2147483 seconds).
+  The fixed bound is ten minutes.
 - `start_agent` still returns without waiting for setup: it carries environment
-  facts and setup `pending` or `not-present`. The first model turn waits for
-  setup to finish; the run record, `inspect_agent`, and `inspect_fleet` then
-  carry `ok`, `failed` (exit code or null when unavailable), `timed-out`, or
-  `cancelled`. The role block states the final outcome, with the log path on
+  facts and setup `pending`, `not-present`, or `skipped-untrusted`. The first
+  model turn waits for setup to finish; the run record and `inspect_agent` carry the environment
+  and final setup outcome. `inspect_fleet` carries setup but no environment blob.
+  Final outcomes are `ok`, `failed` (exit code or null when unavailable),
+  `timed-out`, or `cancelled`. The role block states the final outcome, with the log path on
   failure. Failure and timeout never block the run. Timeout kills the process
   tree, so there is no late-running hook or second completion note.
-- Stop, interrupt and user termination cancel pending setup and kill its
-  process tree; the abandoned invocation never reaches the model. Setup is
-  not rerun for a follow-up in the same checkout.
+- Stop and user termination cancel pending setup and kill its process tree.
+  Interrupt fences the current invocation but preserves setup: the redirected
+  invocation begins only after the shared gate settles. Setup is not rerun for
+  a follow-up in the same checkout. On reload, a persisted `pending` outcome
+  reads as `cancelled`, because the old worker's setup gate no longer exists.
 - Ownership: the path must be a strict child of `.worktrees/`; an existing
   path is refused; a run owns at most one worktree; removal is `worktree
   remove --force`, branch delete, prune — only for a path that passes the same

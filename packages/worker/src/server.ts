@@ -161,6 +161,7 @@ export class WorkerServer {
       host,
       definitions: this.definitions,
       worktrees: new WorktreeManager(),
+      ...(options.projectTrusted !== undefined ? { projectTrusted: options.projectTrusted } : {}),
       backgroundWork: (cwd) => ({ cwd, foregroundCommandSeconds: this.definitions.policy().foregroundCommandSeconds }),
     });
     this.namer = new NamerService({

@@ -4,11 +4,12 @@
  * runs from `session/prompt`, `agents/sync`, `agents/runs/stop`, and the
  * ending a run on the person's behalf.
  */
-import { PRODUCT_NAME, SESSION_AGENT_ENTRY_TYPE, type AgentRun, type ContentBlock, type JsonRpcMessage, type SessionState, type UiDialogResponse } from "@lasercode/protocol";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { PRODUCT_NAME, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE, type AgentRun, type ContentBlock, type JsonRpcMessage, type SessionState, type UiDialogResponse } from "@lasercode/protocol";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fallbackSnapshot } from "../../src/agents/definitions.js";
 import type { NamerModelRuntime } from "../../src/agents/namer.js";
 import type { DriverEvent, DriverListener, DriverOpenOptions, PromptOptions, SessionDriver } from "../../src/driver.js";
@@ -55,7 +56,7 @@ class FakeDriver implements SessionDriver {
   respondToUi(_r: UiDialogResponse) {}
   async commands() { return []; }
   async prompts() { return []; }
-  async entries() { return []; }
+  async entries() { return { entries: [], leafId: null }; }
   async appendEntry(type: string, data: unknown) { this.custom.push({ type, data }); return "e"; }
   async dispose() { this.emit({ type: "closed", reason: "disposed" }); }
 }
@@ -82,7 +83,7 @@ function namedSnapshot() {
 /** Let every floated naming/labelling promise settle. */
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-function harness(options: { namerModels?: () => Promise<NamerModelRuntime> } = {}) {
+function harness(options: { namerModels?: () => Promise<NamerModelRuntime>; projectTrusted?: boolean } = {}) {
   const out: JsonRpcMessage[] = [];
   const drivers: FakeDriver[] = [];
   const server = new WorkerServer({
@@ -93,6 +94,7 @@ function harness(options: { namerModels?: () => Promise<NamerModelRuntime> } = {
     createDriver: () => { const d = new FakeDriver(); drivers.push(d); return d; },
     send: (m) => out.push(m),
     ...(options.namerModels ? { namerModels: options.namerModels } : {}),
+    ...(options.projectTrusted !== undefined ? { projectTrusted: options.projectTrusted } : {}),
   });
   const call = async (id: number, method: string, params?: unknown) => {
     await server.handle({ jsonrpc: "2.0", id, method, params });
@@ -111,6 +113,41 @@ afterEach(() => {
 });
 
 describe("WorkerServer agents", () => {
+  it.each([true, false])("honours host project trust for child setup (trusted=%s)", async (projectTrusted) => {
+    const project = join(base, "project");
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: project, env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@x", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@x" } });
+    git("init", "-q", "-b", "main");
+    writeFileSync(join(project, "source"), "base");
+    git("add", "."); git("commit", "-qm", "base");
+    mkdirSync(join(project, PROJECT_DIR_NAME));
+    const hook = join(project, PROJECT_DIR_NAME, "worktree-setup");
+    writeFileSync(hook, "#!/bin/sh\necho done > setup-ran\n");
+    chmodSync(hook, 0o755);
+    const h = harness({ projectTrusted });
+    try {
+      await h.call(1, "session/new", { cwd: project });
+      const bridge = h.drivers[0]!.opened.agent!.bridge;
+      const started = await bridge.startAgent({ agentName: "default", subagentName: "trust", task: "work" });
+      const status = projectTrusted ? "ok" : "skipped-untrusted";
+      await vi.waitFor(async () => expect((await bridge.inspectAgent({ runId: started.runId })).setup?.status).toBe(status));
+      expect(existsSync(join(started.cwd, "setup-ran"))).toBe(projectTrusted);
+      expect(h.drivers[1]!.opened.agent!.bridge.role().setup?.status).toBe(status);
+    } finally { await h.server.dispose(); }
+  });
+  it("reloads an unfinished setup as cancelled in the child's live role", async () => {
+    const tree = join(base, "project", ".worktrees", "child");
+    mkdirSync(tree, { recursive: true });
+    const path = join(base, "sessions", "pending-setup.jsonl");
+    const logPath = join(tree, "setup.log");
+    const data = { agentName: "default", kind: "child", parentPath: join(base, "sessions", "parent.jsonl"), parentSessionId: "parent", worktree: { path: tree, branch: "agents/child", baseCommit: "abc", setup: { status: "pending", logPath } } };
+    writeFileSync(path, JSON.stringify({ type: "session", id: "child", cwd: tree }) + "\n" + JSON.stringify({ type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, data }) + "\n");
+    const h = harness();
+    try {
+      expect((await h.call(1, "session/load", { path })).error).toBeUndefined();
+      expect(h.drivers[0]!.opened.agent!.bridge.role().setup).toEqual({ status: "cancelled", logPath });
+    } finally { await h.server.dispose(); }
+  });
+
   it("opens a new session as the default agent and reports it on the state", async () => {
     const h = harness();
     const created = await h.call(1, "session/new", { cwd: join(base, "project") });

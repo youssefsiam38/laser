@@ -86,7 +86,7 @@ export function parseSessionAgentRecord(data: unknown): SessionAgentRecord | und
       const setup = worktreeSetupSchema.safeParse(w["setup"]);
       record.worktree = { path, branch, baseCommit, ...(removedAt ? { removedAt } : {}),
         ...(environment.success ? { environment: environment.data } : {}),
-        ...(setup.success ? { setup: setup.data } : {}),
+        ...(setup.success ? { setup: setup.data.status === "pending" ? { status: "cancelled" as const, logPath: setup.data.logPath } : setup.data } : {}),
       };
     }
   }
