@@ -24,7 +24,10 @@ const stable = vi.hoisted(() => ({
   // The real provider hands every consumer a host client; the "run it again with
   // another model / thinking level" controls inside a message footer ask it for
   // the model catalog on mount. A fixture without one crashes the whole tree.
-  client: { request: vi.fn(async (method: string) => (method === "pi/models/catalog" ? { models: [] } : {})) },
+  footerRenders: new Map<string, number>(),
+  client: { request: vi.fn(async (method: string) => (method === "pi/models/catalog" ? { models: [
+    { provider: "test", id: "fallback", name: "Fallback", thinkingLevels: ["off", "high"] },
+  ] } : {})) },
   actions: {
     openSession: vi.fn(async () => undefined),
     toast: vi.fn(),
@@ -41,6 +44,15 @@ vi.mock("@/runtime", async (importActual) => ({
   ...(await importActual<typeof import("../../src/runtime/index.js")>()),
   useLaserStable: () => stable,
 }));
+vi.mock("@/components/assistant-ui/elements/message-pair", async (importActual) => {
+  const actual = await importActual<typeof import("../../src/components/assistant-ui/elements/message-pair.js")>();
+  const { useAui } = await import("@assistant-ui/react");
+  return { ...actual, MessageFooter: (props: React.ComponentProps<typeof actual.MessageFooter>) => {
+    const message = useAui().message.getState();
+    if (message.role === "assistant") stable.footerRenders.set(message.id, (stable.footerRenders.get(message.id) ?? 0) + 1);
+    return <actual.MessageFooter {...props} />;
+  } };
+});
 vi.mock("@/dialogs", () => ({
   ToolRowDialog: () => null,
   useRegisterToolRow: () => {},
@@ -85,6 +97,7 @@ let store: StateStore;
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  stable.footerRenders.clear();
   for (const fn of Object.values(stable.actions)) fn.mockClear();
   stable.actions.navigate.mockResolvedValue({ editorText: "list the tests" });
   let state: AppState = reduce(initialState, { type: "opened", state: sessionState({ path: SESSION }) });
@@ -155,6 +168,33 @@ const startEdit = async () => {
   const pencil = [...bubble.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.getAttribute("aria-label") === "Edit")!;
   await click(pencil);
 };
+
+describe("streaming footer subscriptions", () => {
+  it("does not execute settled footers for 500 text deltas", async () => {
+    await mount();
+    stable.footerRenders.clear();
+    for (let seq = 1; seq <= 500; seq++) {
+      await act(async () => store.dispatch({ type: "notification", method: "session/update", params: {
+        sessionPath: SESSION, seq, at: new Date().toISOString(),
+        update: { kind: "text_delta", contentIndex: 0, delta: "x" },
+      } }));
+    }
+    expect([...stable.footerRenders.values()].every((count) => count <= 1)).toBe(true);
+  });
+
+  it("uses fallback model capabilities when opening regenerate", async () => {
+    await mount();
+    await act(async () => store.dispatch({ type: "notification", method: "session/update", params: {
+      sessionPath: SESSION, seq: 1, at: new Date().toISOString(),
+      update: { kind: "state", state: sessionState({ path: SESSION, model: { provider: "test", id: "fallback" }, thinkingLevel: "high" }) },
+    } }));
+    await click(byTitle("Try again with another model or thinking level")[0]);
+    const levels = document.querySelector<HTMLSelectElement>('select[aria-label="Thinking level for re-run"]');
+    expect([...levels!.options].map((option) => option.value)).toEqual(["off", "high"]);
+    expect(levels!.value).toBe("high");
+    expect(document.body.textContent).toContain("fallback");
+  });
+});
 
 describe("editing a message you sent", () => {
   it("offers a plain Edit, not a fork, on the bubble", async () => {

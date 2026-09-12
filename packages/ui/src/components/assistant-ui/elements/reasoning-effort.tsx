@@ -167,7 +167,8 @@ function useThinkingDefaults(): {
   model: ModelCatalogEntry | undefined;
 } {
   const { client, currentProject } = useLaserStable();
-  const { session, model: sessionModel } = useSessionMeta();
+  const session = useLaserState((s) => s.current ? s.open[s.current]?.state : undefined);
+  const sessionModel = session?.model ?? null;
   const snapshot = useLaserState((s) => s.agents.snapshot);
   const { firstTurn } = useSessionPreparation();
   const cwd = session?.cwd ?? currentProject;
