@@ -287,8 +287,10 @@ export class McpService {
   private async secretsFor(config: McpServerConfig, scope?: McpScope): Promise<ResolvedSecrets> {
     const scopes: McpScope[] = scope ? [scope] : ["project", "global"];
     const values = new Map<string, string>();
-    for (const candidate of scopes) {
-      for (const [field, value] of await this.store.secretsFor(candidate, this.options.cwd, config.name)) {
+    const resolved = await Promise.all(scopes.map(candidate => this.store.secretsFor(candidate, this.options.cwd, config.name)));
+    // Promise completion order cannot change project-before-global precedence.
+    for (const secrets of resolved) {
+      for (const [field, value] of secrets) {
         if (!values.has(field)) values.set(field, value);
       }
     }

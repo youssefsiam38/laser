@@ -529,7 +529,7 @@ export const sessionLoadResultSchema = z
 
 export const clientParamsSchemas = {
   "session/new": z.object({ cwd: z.string().min(1), parentPath: sessionPath.optional(), agentName: agentNameSchema.optional() }).strict(),
-  "session/load": z.object({ path: sessionPath, fromSeq: z.number().int().nonnegative().optional() }).strict(),
+  "session/load": z.object({ path: sessionPath, fromSeq: z.number().int().nonnegative().optional(), transcript: z.literal("loaded").optional() }).strict(),
   "session/prompt": z
     .object({
       path: sessionPath,
@@ -553,7 +553,8 @@ export const clientParamsSchemas = {
     && Object.entries(variables).reduce((size, [key, value]) => size + key.length + value.length + 2, 0) <= 1_048_576,
   "environment is too large") }).strict(),
   "pi/session/list": z.object({ cwd: z.string().min(1).optional() }).strict(),
-  "session/search": z.object({ query: z.string().trim().min(1).max(200), cwd: z.string().min(1).optional(), after: z.string().datetime().optional(), before: z.string().datetime().optional(), cursor: z.number().int().nonnegative().optional() }).strict(),
+  "session/search": z.object({ query: z.string().trim().min(1).max(200), cwd: z.string().min(1).optional(), after: z.string().datetime().optional(), before: z.string().datetime().optional(), cursor: z.number().int().nonnegative().optional(), searchId: z.string().min(1).max(128).optional() }).strict(),
+  "session/search/cancel": z.object({ searchId: z.string().min(1).max(128) }).strict(),
   "pi/session/inbox": z
     .object({ cwd: z.string().min(1).optional(), limit: z.number().int().positive().max(500).optional() })
     .strict(),

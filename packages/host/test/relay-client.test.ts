@@ -256,6 +256,7 @@ describe("RelayClient", () => {
     const h = await harness({
       handle: async (raw, notify) => {
         const request = raw as { id: number; method: string };
+        notify(update("/s/unopened.jsonl", 1));
         notify(update("/s/a.jsonl", 1));
         notify({ jsonrpc: "2.0", method: "pi/ui/request", params: { path: "/s/a.jsonl", id: "q", method: "confirm", title: "Continue?" } });
         return { jsonrpc: "2.0", id: request.id, result: { ok: true } };
@@ -266,7 +267,7 @@ describe("RelayClient", () => {
     await phone.ready();
     await until(() => h.client.state === "connected", 2000, "connected");
 
-    await phone.send({ jsonrpc: "2.0", id: 1, method: "session/load", params: { path: "/s/a.jsonl", fromSeq: 0 } });
+    await phone.send({ jsonrpc: "2.0", id: 1, method: "session/load", params: { path: "/s/a.jsonl", fromSeq: 0, transcript: "loaded" } });
     await until(() => phone.messages.length === 3, 2000, "update, response, and question");
     expect(phone.messages.map((message) => (message as { method?: string; id?: number }).method ?? `response:${(message as { id: number }).id}`))
       .toEqual(["session/update", "response:1", "pi/ui/request"]);

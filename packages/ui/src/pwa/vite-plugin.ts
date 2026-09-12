@@ -164,6 +164,26 @@ export function productIdentityHtml(): Plugin {
   };
 }
 
+/** Static entry dependencies are the offline shell. Dynamic renderers are
+ * allowed in the asset cache but fetched only when a view actually uses them.
+ * Keep all emitted styles/fonts conservatively: they also own theme variants. */
+export function shellAssetSets(bundle: Record<string, { type: "asset" | "chunk"; isEntry?: boolean; imports?: readonly string[] }>): { precache: string[]; assets: string[] } {
+  const emitted = Object.keys(bundle).filter(file => /\.(m?js|css|woff2?)$/.test(file) && !file.endsWith(".map"));
+  const critical = new Set<string>();
+  const visit = (file: string) => {
+    if (critical.has(file)) return;
+    const chunk = bundle[file];
+    if (chunk?.type !== "chunk") return;
+    critical.add(file);
+    for (const dependency of chunk.imports ?? []) visit(dependency);
+  };
+  for (const [file, chunk] of Object.entries(bundle)) if (chunk.type === "chunk" && chunk.isEntry) visit(file);
+  for (const file of emitted) if (/\.(css|woff2?)$/.test(file)) critical.add(file);
+  const unique = (files: string[]) => [...new Set(files)];
+  const base = ["/", "/index.html", ...PUBLIC_SHELL];
+  return { precache: unique([...base, ...[...critical].map(file => `/${file}`)]), assets: unique([...base, ...emitted.map(file => `/${file}`)]) };
+}
+
 export function laserPwa(options: LaserPwaOptions = {}): Plugin {
   const bootModule = options.bootModule ?? "/src/pwa/boot.ts";
   return {
@@ -187,10 +207,7 @@ export function laserPwa(options: LaserPwaOptions = {}): Plugin {
     },
 
     async generateBundle(_options, bundle) {
-      const emitted = Object.keys(bundle)
-        .filter((file) => /\.(m?js|css|woff2?)$/.test(file) && !file.endsWith(".map"))
-        .map((file) => `/${file}`);
-      const precache = ["/", "/index.html", ...PUBLIC_SHELL, ...emitted].filter((p, i, all) => all.indexOf(p) === i);
+      const { precache, assets } = shellAssetSets(bundle);
 
       const source = readFileSync(fileURLToPath(new URL("./sw.ts", import.meta.url)), "utf8");
       const { code } = await transformWithEsbuild(source, "sw.ts", {
@@ -215,10 +232,11 @@ export function laserPwa(options: LaserPwaOptions = {}): Plugin {
         );
       }
 
-      const build = createHash("sha256").update(precache.join("\n")).update(worker).digest("hex").slice(0, 12);
+      const build = createHash("sha256").update(precache.join("\n")).update(assets.join("\n")).update(worker).digest("hex").slice(0, 12);
       const style = offlineStyle();
       const out = worker
         .replace('"__SW_PRECACHE__"', JSON.stringify(precache))
+        .replace('"__SW_ASSETS__"', JSON.stringify(assets))
         .replace("__SW_BUILD__", build)
         .replace("__SW_CACHE_PREFIX__", CACHE_PREFIX)
         .replace("__SW_PRODUCT_NAME__", PRODUCT_DISPLAY_NAME)
@@ -226,6 +244,7 @@ export function laserPwa(options: LaserPwaOptions = {}): Plugin {
         .replace("__SW_PUSH_CHANGED__", SW_PUSH_CHANGED)
         .replace("__SW_OFFLINE_STYLE__", () => style);
       if (!out.includes(JSON.stringify(precache))) throw new Error(`${PLUGIN} — the precache placeholder was not found in sw.ts`);
+      if (out.includes("__SW_ASSETS__")) throw new Error(`${PLUGIN} — the asset allowlist placeholder was not found in sw.ts`);
       if (out.includes("__SW_OFFLINE_STYLE__")) throw new Error(`${PLUGIN} — the offline-style placeholder was not found in sw.ts`);
       this.emitFile({ type: "asset", fileName: "sw.js", source: out });
     },

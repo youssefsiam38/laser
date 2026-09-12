@@ -37,6 +37,8 @@ import {
 import { ErrorCodes, type JsonRpcNotification, type JsonRpcResponse, type SessionUpdateParams, WIRE_NAMESPACE } from "@lasercode/protocol";
 import WebSocket from "ws";
 import { SessionLoadDelivery } from "./session-load-delivery.js";
+import { TranscriptDelivery } from "./transcript-delivery.js";
+import { SearchCancellation } from "./search-cancellation.js";
 
 export type RelayClientState =
   | "stopped"
@@ -58,7 +60,7 @@ export interface RelayClientOptions {
   /** Human label for logs and errors: "Youssef's iPhone". */
   deviceName?: string;
   /** Answer one client request. Wire this to the host `Router.handle`. */
-  handle(raw: unknown): Promise<JsonRpcResponse>;
+  handle(raw: unknown, searches: SearchCancellation): Promise<JsonRpcResponse>;
   /** Subscribe to host notifications. Returns an unsubscribe function. */
   subscribe(listener: (notification: JsonRpcNotification) => void): () => void;
   /**
@@ -144,6 +146,8 @@ export class RelayClient {
   private sendTail: Promise<void> = Promise.resolve();
   /** Question-only fences for concurrent session/load requests on this device connection. */
   private readonly loadDeliveries = new Set<SessionLoadDelivery>();
+  private transcripts = new TranscriptDelivery();
+  private searches = new SearchCancellation();
 
   private readonly seqBySession = new Map<string, number>();
   private counters = {
@@ -468,8 +472,11 @@ export class RelayClient {
     const delivery = typeof path === "string" ? new SessionLoadDelivery(path) : undefined;
     if (delivery) this.loadDeliveries.add(delivery);
     const generation = this.connectionGeneration;
+    const finishTranscript = this.transcripts.begin(raw);
+    let transcriptResponse;
     try {
-      const response = await this.options.handle(raw);
+      const response = await this.options.handle(raw, this.searches);
+      transcriptResponse = response;
       const encoded = this.encode(response);
       if (encoded) {
         const sent = await this.sendForGeneration(encoded, generation);
@@ -504,12 +511,14 @@ export class RelayClient {
         generation,
       );
     } finally {
+      finishTranscript(transcriptResponse);
       delivery?.dispose();
       if (delivery) this.loadDeliveries.delete(delivery);
     }
   }
 
   private onNotification(notification: JsonRpcNotification): void {
+    if (!this.transcripts.accepts(notification)) return;
     const held = [...this.loadDeliveries].map((delivery) => delivery.offer(notification)).some(Boolean);
     if (notification.method === "session/update") {
       const params = notification.params as SessionUpdateParams;
@@ -606,6 +615,9 @@ export class RelayClient {
 
   private teardown(reason: string): void {
     this.connectionGeneration++;
+    this.transcripts = new TranscriptDelivery();
+    this.searches.close();
+    this.searches = new SearchCancellation();
     for (const delivery of this.loadDeliveries) delivery.dispose();
     this.loadDeliveries.clear();
     this.shaper?.stop();

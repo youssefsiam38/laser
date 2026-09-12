@@ -42,8 +42,12 @@ export async function mcpSessionConfig(options: McpSessionOptions): Promise<McpC
   const store = new McpStore(options.agentDir);
   const servers = await store.enabled(options.cwd, options.projectTrusted);
   if (servers.length === 0) return undefined;
+  return resolveConfig(store, servers, options.cwd);
+}
+
+async function resolveConfig(store: McpStore, servers: Awaited<ReturnType<McpStore["enabled"]>>, cwd: string): Promise<McpConfig> {
   const resolved = await Promise.all(
-    servers.map(async ({ scope, config }) => ({ config, secrets: await store.secretsFor(scope, options.cwd, config.name) })),
+    servers.map(async ({ scope, config }) => ({ config, secrets: await store.secretsFor(scope, cwd, config.name) })),
   );
   return toAdapterConfig(resolved);
 }
@@ -53,8 +57,9 @@ export async function mcpSessionSetup(options: McpSessionOptions): Promise<McpSe
   const store = new McpStore(options.agentDir);
   const servers = await store.enabled(options.cwd, options.projectTrusted);
   if (servers.length === 0) return undefined;
-  const config = await mcpSessionConfig(options);
-  if (!config) return undefined;
+  // Configuration and attribution must describe the same validated snapshot,
+  // even if the person saves a changed server while secrets are resolving.
+  const config = await resolveConfig(store, servers, options.cwd);
   const engine = await loadMcpEngine();
   const factory = engine.createMcpAdapter({ config, clientIdentity: mcpClientIdentity() }) as unknown as (pi: ExtensionAPI) => void | Promise<void>;
   return {

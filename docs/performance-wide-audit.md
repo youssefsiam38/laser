@@ -585,3 +585,241 @@ Smallest safe follow-up: separately authorize an awaitable/pausable output seam 
 Every finding commit was gated with `pnpm -F @lasercode/host test`, `pnpm -F @lasercode/worker test`, `pnpm identity:check`, and `pnpm -r build`; final F21 characterization-only gate also passes (`/tmp/perf-host-worker/f21-*.log`). Final **`pnpm verify` passes**, including workspace builds/type checks/tests and release-script tests (`final-verify.log`). Protocol methods/types and UI source are unchanged. The copied `docs/perf-chat-loading.md` is reference-only and is not committed.
 
 Seven findings have implementations; F21 is explicitly rejected pending its lifecycle contract. This is implementation evidence for review, **not complete experience/zero-UX-regression acceptance**: no real browser desktop/phone/theme/input matrix, packaged runtime, end-to-end permission latency, real throttled client/reconnect, multi-agent soak, full heap-retainer analysis, or 20 paired production experience samples were produced in this lane. Do not add the microbenchmark deltas or reuse them as click/paint savings. The orchestrator owns those integration gates and the ledger; F21 needs the smallest follow-up stated above. Self-contained handoff: `/tmp/perf-host-worker-report.md`.
+
+## Implemented — delivery and startup lane
+
+### F03 — retained captures, reference-only default delivery
+
+Reverified at `413c8e2`: CLI/desktop have no raw extension capture consumer;
+`ApiRequestDialog` already fetches `pi/logs/query` and `pi/logs/content`.
+Host broadcast now excludes only provider request/response capture envelopes,
+after observation/retention and before JSON serialization or relay listeners.
+Questions, capabilities and correlated live log rows are unchanged. No new RPC.
+
+Fresh two-WebSocket synthetic 4 MiB capture: **8,389,046 raw envelope bytes →
+2,136 bytes** including the small request/response log rows and a question.
+This is wire serialization size, not latency; the test injects at the real
+worker-notification observation boundary and uses a relay-listener test seam,
+not an encrypted-device benchmark. The real router returns the identical full
+retained JSON via the inspector's existing 8 MiB content route.
+
+Validation: protocol, host (234 tests), UI (1,377 tests, one benchmark skipped),
+identity and workspace build; logs `/tmp/f03-{protocol,host,ui,identity,build}.log`.
+Focused regression: `packages/host/test/provider-delivery.test.ts`; existing UI
+request-dialog content-reference and full-JSON tests pass. No visual change or
+new browser matrix claimed. Capture redaction/provenance storage is untouched.
+
+### F22 — explicit loaded-cache transcript delivery
+
+`session/load { transcript: "loaded" }` opts one connection into raw updates for
+its loaded/created/forked sessions only. Legacy callers still receive the full
+stream. The UI transport opts in on every load, including reconnect. Admission
+starts before the router runs, so replay/live sequence ownership is unchanged;
+failed loads release provisional admission. New/fork first events are admitted
+until their destination is known. Local sockets and encrypted relay share the
+same policy; reconnect gets a new policy instance.
+
+Deliberate boundary: **previously loaded caches remain subscribed**, even after
+retirement detach, because their reducers and sequence watermarks still own live
+state. This cuts never-opened conversations, not background caches. Unsubscribing
+those caches needs coordinated invalidation/hydration with M16-T16; it is not
+silently implemented here. Questions, fleet, attention and worker notifications
+remain global. No attachment/retirement or history-window logic changed.
+
+Synthetic two-client, 1,000-character update bytes at **1/8/32 active sessions**:
+**2,308/18,464/73,900 → 2,308/2,308/2,309**. These are deterministic serialized
+bytes through the admission policy, not measured parse CPU or network latency.
+Two real sockets verify independent delivery; real encrypted relay test verifies
+unopened suppression beside replay → response → question ordering. Existing
+reconnect/replay and dropped-question tests pass. Protocol round-trip and router
+coverage include the optional field; no new method inventory entry is needed.
+
+Validation: `pnpm -r build`, protocol/host/UI suites, identity all pass;
+`/tmp/f22-{build,protocol,host,ui,identity}.log`. Final socket/relay and client
+checks: `/tmp/f22-{transport,client}-final.log`. UI change is only `client.ts`;
+`LaserProvider.tsx` and the M16-T16 history path are untouched. No visual or
+browser performance claim.
+
+### F07 — cancel superseded/closed saved-history searches
+
+The optional `searchId` and host-only `session/search/cancel` route identify a
+read inside one socket/relay generation. Disconnect aborts all owned reads;
+same-ID replacement aborts the predecessor, and late completion cannot delete
+a successor. UI query changes, close and retry cancel the exact outstanding ID;
+stale replies remain fenced. Relay teardown replaces the cancellation owner.
+
+`searchSessions` passes the signal to the real file stream, checks it between
+records/files, and yields every 128 buffered records. Abort rejects rather than
+returning partial hits or incrementing unreadable. Sequential file traversal
+(concurrency **one per search**) and original contiguous cursors/ranking remain;
+no raw-line prefilter, worker spawn, index, byte truncation or parallel parsing.
+A single admitted JSON record still parses synchronously; this does not claim a
+hard CPU deadline or a global multi-client concurrency ceiling.
+
+Fresh real-file measurement, 16,000 records: **17,040,000 bytes read normally →
+65,536 bytes** when cancelled after the first chunk. Stream closure and absence
+of partial success are asserted; pre-aborted reads open no file. This is a warm
+synthetic read/abort probe, not cold-disk or end-to-end heartbeat profiling.
+
+Validation: protocol method inventory + schema round-trip, actual router
+cancellation, host search projection/cursor tests, UI out-of-order/close/retry
+checks, host/protocol/UI full suites, identity and workspace build pass.
+Logs `/tmp/f07-{protocol,host,ui,identity,build}.log`, final UI/build reruns
+`/tmp/f07-{ui,build}-final.log`; measurement `/tmp/f07-focused.log`.
+
+### F16 — shared diff reuse and identical-text short circuit
+
+`diffViewForTool` now weakly owns one latest projection per argument object and
+kind. Search, tree/timeline/group stats and tool disclosure share it; equivalent
+result wrappers do not trigger LCS again. Source-field snapshots catch in-place
+argument/patch changes without hashing/serializing full bodies. Old returned
+views are not mutated. `diffLines` returns immediately for identical text,
+including inputs above the existing LCS ceiling. Non-identical tie-breaking,
+hunk grouping, statistics and 400-line presentation bound are unchanged.
+
+Twenty paired 1,998-line one-change computations: **36.024 ms median forced
+recomputation → 0.030 ms median shared hit**, `/tmp/f16-focused.log` (all samples
+retained). This is a Node source/test microprobe including equality assertions,
+not renderer or end-to-end disclosure latency; machine contention is visible.
+Forced misses use fresh argument identities and the unchanged LCS algorithm,
+not a separate historical build. Identical 10,000-line text returns no diff
+instead of allocating a replace-all fallback.
+
+Validation: duplicate-line exact hunk/line-number fixture, patch/source changes,
+reference reuse and full-statistics tests; protocol/host/UI suites, identity and
+workspace build pass, `/tmp/f16-{protocol,host,ui,identity,build}.log`. No renderer
+components or history/projection ownership seams changed.
+
+### F18 — one MCP discovery snapshot
+
+Session configuration and displayed server identities now derive from the same
+validated enabled-server snapshot. Secrets still resolve per session; no shared
+adapter, context, mutable configuration cache or trust decision is introduced.
+Independent import-candidate and project/global fallback-secret reads overlap,
+then merge in the original deterministic precedence order.
+
+Twenty warm synthetic setup pairs with real configuration-file reads and a
+stubbed adapter constructor: **0.268 ms median duplicate discovery + setup →
+0.177 ms single-snapshot setup**. Enabled discovery calls fall **2 → 1** (each
+reads global/project scopes). `/tmp/f18-focused.log` holds all samples; this is
+not real MCP connection latency. A mid-setup file save test proves config and
+attribution stay on the same snapshot and the next setup sees the new one.
+Controlled out-of-order import reads prove deterministic source ordering.
+
+Validation: protocol/host/UI/worker full suites, identity and workspace build
+pass, `/tmp/f18-{protocol,host,ui-retry,worker,identity,build}.log`. The first UI
+run failed one unrelated catalog-arrival assertion after its fixed 100 ms wait;
+its focused rerun (8 tests) and full UI rerun pass, with no test/source change:
+`/tmp/f18-ui-arrival-retry.log`. This is recorded, not dismissed as proven
+flakiness. Real pinned-engine MCP/auth/identity tests are included in worker.
+
+### F12 — critical-shell install, optional assets on demand
+
+The build follows static entry imports for mandatory JS; all emitted CSS/fonts
+and existing public shell assets remain mandatory conservatively. Other emitted
+JS stays in an exact same-origin asset allowlist and caches on use. Installation
+reuses unchanged hashed assets from this product's older caches, revalidates
+unhashed shell files, and carries already-cached unchanged optional modules
+forward before old generations are removed. Optional downloads are not part of
+install and cannot prevent the shell becoming available.
+
+Offline policy follows the existing promise in `docs/mobile.md:60–65`: offline
+**shell/start/reconnect**, not persisted transcripts or first-use access to every
+optional feature. Previously fetched optional modules work offline; unchanged
+ones survive updates. Newly hashed or never-used optional modules require a
+connection on first use. No transcript/RPC/cross-origin asset caching, automatic
+activation, generation handshake or user-chosen-update changes.
+
+Fresh production build comparison: **371 URLs / 15,354,991 raw bytes → 53 URLs /
+3,502,539 bytes** in mandatory install (**77.2% fewer bytes**). The optional asset
+inventory remains 371 URLs; no language/renderer/font feature was deleted.
+Sizes include both `/` and `/index.html`; they are uncompressed resource sizes,
+not measured encrypted or compressed transfer. Manifests and raw targets:
+`/tmp/perf-delivery-pwa/{before,after-precache,after-assets,browser}.json` and
+`network.jsonl`. Own headless Chrome/CDP fresh-profile probe installed exactly
+53 cached URLs, fetched a 200,960-byte Settings module on demand, then received
+that module and the shell with network disabled and opened the real offline
+app shell. Probe traffic was throttled at the page target; no claim that this
+throttles Chrome's independent service-worker target. Both isolated processes
+were stopped. The shared browser gateway refused creating an isolated context;
+no existing browser context was changed; the own-Chrome alternative succeeded.
+
+Validation: executable generated-worker tests cover critical install despite an
+unavailable optional URL, on-demand/offline module and shell reads, ignored
+private/cross-origin requests, cache reuse/activation and shell revalidation.
+Protocol/host/UI suites, identity and workspace build pass,
+`/tmp/f12-{protocol,host,ui,identity,build}.log`; UI test types and focused worker
+behavior checks also pass. This is not a full optional-view interaction matrix.
+
+### F19 — investigated; runtime reuse/recovery parallelism not implemented
+
+Added opt-in `packages/worker/test/startup-profile.test.ts`: real pinned engine,
+21 distinct saved sessions in one isolated project, default Subagents/Goals/MCP
+feature path (no configured MCP server), real resource loading and extension
+binding, local fake-provider model catalogue after every open. No provider
+request occurs. Opens/disposals remain sequential, one writer per session.
+Wrappers time real SDK operations; they do not substitute fake services.
+
+Two separate source-test processes, Node 24.11.1:
+
+| Operation | First probe | Verification probe |
+| --- | ---: | ---: |
+| First runtime open | 145.23 ms | 42.51 ms |
+| Next 20 opens, upper median | 27.94 ms | 6.92 ms |
+| Warm resource discovery, median | 1.15 ms | 0.39 ms |
+| Warm model/auth creation, median | 9.28 ms | 1.85 ms |
+| Warm extension binding, median | 0.78 ms | 0.23 ms |
+
+These are **not before/after optimization numbers**. OS/module caches and
+machine contention are not controlled; the first open excludes test/module
+import time and is not cold desktop launch. Model/auth create includes an
+internal refresh, so stage times are not additive. Full records, including
+SessionManager load, MCP setup and model refresh, are in
+`/tmp/perf-delivery-startup/{profile,profile-verified}.json`. Reproduce with
+`PERF_STARTUP=1 PERF_STARTUP_REPORT=/tmp/profile.json pnpm -F @lasercode/worker
+exec vitest run test/startup-profile.test.ts` under an isolated HOME and
+credential-free environment; ordinary suites skip this diagnostic.
+
+**Skip rationale:** warm immutable-resource discovery is already small. The
+larger work is mutable model/auth setup and refresh; the pinned engine's
+`core/agent-session-services.js:53–103` creates ModelRuntime, reloads extensions,
+registers their providers, then refreshes again. Dropping that refresh or sharing
+these services is not justified by this probe. `stable-sdk.ts:279–409` owns
+session-specific factories/provenance/settings. Recovery at
+`host/src/worker-pool.ts:274–292,524–545` remains sequential: this profile does
+not establish safe concurrent provider/extension registration. No speculative
+factory parallelism or preview persistence change was made. A real host recovery
+priority/concurrency and packaged-runtime proof would be a separate milestone,
+not an unmeasured speedup in this lane.
+
+Validation: opt-in real-engine profile and post-open model list pass twice;
+full lane suites/identity and final workspace verification are recorded in
+`/tmp/f19-*.log` and `/tmp/perf-delivery-verify.log`. No native package was built
+or installed; no packaged startup or user-session measurement is claimed.
+
+### Final lane gate and measurement limits
+
+`pnpm verify` **passes** on the combined lane: direction checks, workspace
+build/typechecks/tests and 42 release-orchestrator regressions. Explicit final
+package runs: protocol **111**, host **240**, UI **1,380 + one skipped**, worker
+**685 + four skipped**; the opt-in startup profile passed separately. Logs are
+`/tmp/f19-{build,protocol,host,ui,worker,identity}.log` and
+`/tmp/perf-delivery-verify.log`. Final diff/identity checks pass. The reference
+`docs/perf-chat-loading.md` remains untracked intentionally, as supplied by the
+orchestrator; it is not part of this lane's commits.
+
+Supplementary F07 handler probe against this worktree's built source: twenty
+17,040,000-byte full-scan/cancel pairs, **220.75 ms full-scan median vs 2.72 ms
+cancelled-handler median**, cancellation requested after 2 ms. This compares
+completed work with deliberately obsolete work stopped early, not faster query
+results. Raw samples `/tmp/perf-delivery-startup/search-handler.json` show
+substantial machine contention. Existing focused stream test separately proves
+closure after 65,536 bytes; do not combine those independent probes as one run.
+
+Remaining integration checks: the audit's complete phone/desktop/theme/live
+conversation and packaged-runtime matrix is not claimed here. F22 deliberately
+retains loaded caches and opts in at the first `session/load`; a new-only client
+still has legacy full delivery until that point. F07 does not preempt one huge
+JSON parse. F12 does not promise never-used optional modules offline. F19 rejects
+unproved runtime sharing/concurrent recovery. These are explicit boundaries,
+not hidden deletion of transcript, capture, question or model functionality.

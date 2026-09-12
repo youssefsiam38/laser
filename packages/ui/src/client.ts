@@ -187,7 +187,10 @@ export class HostClient {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
-      this.ws!.send(JSON.stringify({ jsonrpc: "2.0", id, method, params, clientVersion: PRODUCT_VERSION }));
+      // Loaded (including background-cached and Beam) views need every seq;
+      // never-opened transcripts do not. Reconnect loads opt in again.
+      const wireParams = method === "session/load" ? { ...params, transcript: "loaded" } : params;
+      this.ws!.send(JSON.stringify({ jsonrpc: "2.0", id, method, params: wireParams, clientVersion: PRODUCT_VERSION }));
     });
   }
 

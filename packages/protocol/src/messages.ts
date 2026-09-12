@@ -908,7 +908,11 @@ export interface ClientRequests {
    * are different states, and conflating them makes the next `session/load`
    * ask for `fromSeq: 0` and receive the whole buffer a second time.
    */
-  "session/load": { params: { path: string; fromSeq?: number }; result: { state: SessionState; replayFrom: number; seq: number } };
+  /** `transcript: "loaded"` opts this connection into updates only for sessions
+   * it loads/creates/forks. Admission starts before replay. Loaded caches remain
+   * subscribed until disconnect, independently of retirement detach; questions,
+   * attention and other small notifications remain global. Omit for full stream. */
+  "session/load": { params: { path: string; fromSeq?: number; transcript?: "loaded" }; result: { state: SessionState; replayFrom: number; seq: number } };
   "session/prompt": {
     params: {
       path: string;
@@ -931,9 +935,11 @@ export interface ClientRequests {
   "pi/session/list": { params: { cwd?: string }; result: { sessions: SessionSummary[] } };
   /** Read-only search of saved conversations; no worker is opened. */
   "session/search": {
-    params: { query: string; cwd?: string; after?: string; before?: string; cursor?: number };
+    params: { query: string; cwd?: string; after?: string; before?: string; cursor?: number; searchId?: string };
     result: { hits: Array<{ path: string; count: number; excerpt: string; source: "user" | "assistant" | "reasoning" | "tool" }>; nextCursor?: number; unreadable: number };
   };
+  /** Cancel only this connection's named saved-history read; never an agent turn. */
+  "session/search/cancel": { params: { searchId: string }; result: {} };
   /**
    * Sessions that want a person, attention-sorted (waiting > error >
    * finished-unread > working > idle), then most recently modified. Across all
