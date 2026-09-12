@@ -58,6 +58,13 @@ and a phone width, in both themes, and look at it the way a demanding
 designer would. "It builds" is not the bar. "I would show this to someone I
 respect" is.
 
+Use the shared browser harness for browser acceptance, not a hand-written stack:
+`node scripts/browser-check/run.mjs --target scripts/browser-check/targets/app.mjs --fixture long --matrix`.
+See `scripts/browser-check/README.md` for scripts, touch, artifacts and teardown.
+The engine is target-neutral: other projects supply their own startup and fixture
+adapters; this repository's host is one built-in example. Keep feature-specific
+interaction assertions in the script you pass with `--script`.
+
 Activity disclosures require interaction tests, not just summary/string tests.
 Reasoning is an independently collapsible action, not a static heading inside
 the aggregate. Share the activity row tokens across reasoning and tools; never

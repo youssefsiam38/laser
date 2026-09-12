@@ -26,6 +26,7 @@ import { buildAgentTree, createAncestryIndex, type AgentTreeNode } from "../agen
 import { runStatusTone, type AgentStatusTone } from "../agents/model.js";
 import { sessionTitle } from "../runtime/threadList.js";
 import type { SessionView } from "../store.js";
+import { samePresentationViews } from "../runtime/presentation-state.js";
 
 export type FleetItemKind = "agent" | "task";
 
@@ -342,6 +343,41 @@ export function buildFleet(input: FleetInput): FleetGroup[] {
       a.title.localeCompare(b.title),
   );
 }
+
+/** Share structural derivation across the column and its ambient controls.
+ * Clocks only copy elapsed labels; they never rebuild ancestry or sort work.
+ * Weak ownership follows the store's run snapshot, not a process-wide session ID.
+ */
+export function createFleetSelector(build: typeof buildFleet = buildFleet): typeof buildFleet {
+  const cache = new WeakMap<FleetInput["runs"], { input: FleetInput; groups: FleetGroup[]; now: number; clocked: FleetGroup[] }>();
+  const clockItem = (item: FleetItem, now: number): FleetItem => {
+    const children = item.children.map((child) => clockItem(child, now));
+    const elapsedMs = elapsed(item.startedAt, item.endedAt, !item.terminal, now);
+    if (elapsedMs === item.elapsedMs && children.every((child, index) => child === item.children[index])) return item;
+    return { ...item, elapsedMs, children };
+  };
+  return (input) => {
+    let entry = cache.get(input.runs);
+    const old = entry?.input;
+    if (!old || old.sessions !== input.sessions || old.tasks !== input.tasks
+      || old.currentPath !== input.currentPath || old.sessionsLoaded !== input.sessionsLoaded || old.sessionPresence !== input.sessionPresence
+      || !samePresentationViews(old.views, input.views)) {
+      const groups = build(input);
+      entry = { input, groups, now: input.now, clocked: groups };
+      cache.set(input.runs, entry);
+    }
+    if (entry!.now !== input.now) {
+      entry!.now = input.now;
+      entry!.clocked = entry!.groups.map((group) => {
+        const items = group.items.map((item) => clockItem(item, input.now));
+        return items.every((item, index) => item === group.items[index]) ? group : { ...group, items };
+      });
+    }
+    return entry!.clocked;
+  };
+}
+
+export const selectFleet = createFleetSelector();
 
 /** The transcript's first user line, for a root the catalog has no row for (mirrors the top bar). */
 function firstUserLine(view: SessionView | undefined): string | undefined {

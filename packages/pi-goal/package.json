@@ -1,6 +1,6 @@
 {
   "name": "@lasercode/pi-goal",
-  "version": "0.5.3",
+  "version": "0.5.5",
   "private": false,
   "type": "module",
   "description": "Reusable Pi-native durable session goal capability.",

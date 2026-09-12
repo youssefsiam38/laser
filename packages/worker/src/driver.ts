@@ -78,6 +78,12 @@ export interface DriverOpenOptions {
   projectTrusted?: boolean;
   /** Laser-owned capabilities enabled for this project. */
   features?: FeatureId[];
+  /**
+   * The project's environment (M16-T17), as a decoration of a base environment.
+   * The shell tool gets it through the engine's spawn hook; an MCP server is
+   * started by the engine itself, so it is applied to that server's entry.
+   */
+  projectEnv?: (base: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
   /** The agent this session runs as. Absent for ephemeral, catalogue-only opens. */
   agent?: DriverAgentOptions;
 }

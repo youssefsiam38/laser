@@ -50,26 +50,56 @@ it("copies the host path in browsers instead of opening a different computer's f
 it("source markers have component-only disclosure and keyboard file activation", async () => {
   const open = vi.fn().mockResolvedValue({ opened: true }); vi.stubGlobal("desktop", { openSourceFile: open });
   await act(async () => root.render(<ConfidenceMarker claims={[{id:"one",text:"Exact source text.",source:{kind:"file",label:"Project rules",path:"/project/AGENTS.md"}}]}/>));
-  const marker = container.querySelector<HTMLElement>("[data-request-source-text]")!;
+  const marker = container.querySelector<HTMLButtonElement>('[aria-label="Inspect source: Project rules"]')!;
   expect(marker.hasAttribute("title")).toBe(false);
   expect(container.querySelectorAll("[title]")).toHaveLength(0);
   await act(async () => { marker.focus(); });
-  expect(document.querySelector('[role="tooltip"]')?.textContent).toContain("/project/AGENTS.md");
-  await act(async () => { marker.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",bubbles:true})); });
+  expect(document.querySelector('[role="tooltip"]')?.textContent).toContain("Source identity retained");
+  await act(async () => { window.dispatchEvent(new Event("resize")); });
+  expect(document.querySelector('[role="tooltip"]')).toBeNull();
+  await act(async () => { container.querySelector('[data-request-source-text]')!.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse", clientX: 120, clientY: 80 })); });
+  expect(document.querySelector('[role="tooltip"]')?.textContent).toContain("Source identity retained");
+  await act(async () => { marker.click(); });
+  expect(open).not.toHaveBeenCalled();
+  expect(container.querySelector('[aria-label="Instruction source panel"]')?.textContent).toContain("/project/AGENTS.md");
+  await act(async () => { [...container.querySelectorAll("button")].find(button => button.textContent === "Open file")!.click(); });
   expect(open).toHaveBeenCalledWith("/project/AGENTS.md");
-  expect(container.querySelector("[data-request-search-content]")?.textContent).toBe("Exact source text.");
+  expect(container.querySelector("[data-request-source-text]")?.textContent).toBe("Exact source text.");
 });
 
-it("filters the source inventory without changing the searchable instruction text", async () => {
+it("does not invent an origin for an ambiguous legacy agent source", async () => {
+  await act(async () => root.render(<ConfidenceMarker claims={[{ id: "legacy", text: "A retained custom template.", source: { kind: "agent", label: "Custom agent instructions" } }]}/>));
+  const origin = [...container.querySelectorAll<HTMLButtonElement>('[aria-label="Recorded instruction sources"] button')].find(button => button.textContent?.startsWith("Not recorded"))!;
+  expect(origin).toBeDefined();
+  await act(async () => { origin.click(); await new Promise(resolve => setTimeout(resolve, 30)); });
+  expect(document.activeElement?.getAttribute("data-origin")).toBe("unrecorded");
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Inspect source: Custom agent instructions"]')!.click());
+  expect(container.querySelector('[data-source-panel]')?.textContent).toContain("Its origin category was not recorded.");
+});
+
+it("places a source label after its leading line breaks, beside its own text", async () => {
+  await act(async () => root.render(<ConfidenceMarker claims={[
+    { id: "first", text: "Tool list ends here.", source: { kind: "agent", origin: "engine", label: "Engine" } },
+    { id: "second", text: "\n\nGuidelines:\nKeep changes focused.", source: { kind: "agent", origin: "agent", label: "Agent role" } },
+  ]}/>));
+  const region = container.querySelector('[data-request-search-content]')!;
+  const label = container.querySelector('[aria-label="Inspect source: Agent role"]')!;
+  const range = document.createRange(); range.setStart(region, 0); range.setEndBefore(label);
+  const beforeLabel = range.cloneContents(); beforeLabel.querySelectorAll('[data-search-exclude]').forEach(node => node.remove());
+  expect(beforeLabel.textContent).toBe("Tool list ends here.\n\n");
+  expect([...region.querySelectorAll('[data-request-source-text]')].map(node => node.textContent).join("")).toBe("Tool list ends here.\n\nGuidelines:\nKeep changes focused.");
+});
+
+it("browses a long captured source panel and jumps back without opening a file", async () => {
   const claims = Array.from({length:25},(_,i)=>({id:String(i),text:`Instruction ${i}.\n`,source:{kind:"file" as const,label:`Source ${i}`,path:`/project/source-${i}.md`}}));
   await act(async () => root.render(<ConfidenceMarker claims={claims}/>));
-  await act(async () => container.querySelector("button")!.click());
-  const input = document.querySelector<HTMLInputElement>('[data-slot="command-input"]')!;
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value")!.set!.call(input,"source-24");
-    input.dispatchEvent(new Event("input",{bubbles:true}));
-  });
-  expect(document.querySelectorAll('[data-slot="command-item"]')).toHaveLength(1);
-  expect(document.querySelector('[data-slot="command-item"]')?.textContent).toContain("/project/source-24.md");
-  expect(container.querySelector("[data-request-search-content]")?.textContent).toBe(claims.map(c=>c.text).join(""));
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Inspect source: Source 24"]')!.click());
+  const panel = container.querySelector('[aria-label="Instruction source panel"]')!;
+  expect(panel.textContent).toContain("/project/source-24.md");
+  const selected = panel.querySelector('[data-source-selected="true"]')!;
+  expect(selected.textContent).toContain("Instruction 24.");
+  await act(async () => { [...selected.querySelectorAll("button")].find(button => button.textContent === "Show in text")!.click(); await new Promise(resolve => setTimeout(resolve, 30)); });
+  expect(container.querySelector('[aria-label="Instruction source panel"]')).toBeNull();
+  expect(document.activeElement?.textContent).toContain("Instruction 24.");
+  expect([...container.querySelectorAll("[data-request-source-text]")].map(node => node.textContent).join("")).toBe(claims.map(c=>c.text).join(""));
 });

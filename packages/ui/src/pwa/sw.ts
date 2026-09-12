@@ -8,7 +8,7 @@
  * fetched.
  *
  *   navigation   network first, cached shell when offline
- *   assets/*     cache first (content-hashed names never change meaning)
+ *   listed assets cache first/on demand (hashed names never change meaning)
  *   anything     network only
  *
  * Push: one Declarative Web Push document per event (`@lasercode/protocol`,
@@ -62,6 +62,8 @@ function isDeclarativePushPayload(value: unknown): value is { notification: Decl
 
 /** Replaced at build time with the precache list (a JSON array of same-origin paths). */
 const PRECACHE: readonly string[] = "__SW_PRECACHE__" as unknown as readonly string[];
+/** Includes optional modules: allowed to cache, not mandatory install fetches. */
+const ASSETS: readonly string[] = "__SW_ASSETS__" as unknown as readonly string[];
 /** Replaced at build time with a hash of the precache list and this file. */
 const BUILD = "__SW_BUILD__";
 
@@ -82,14 +84,39 @@ const SW_PUSH_CHANGED = "__SW_PUSH_CHANGED__";
 const CACHE = `${CACHE_PREFIX}${BUILD}`;
 const SHELL = "/index.html";
 
-const precached = new Set(PRECACHE);
+const allowedAssets = new Set(ASSETS);
+const hashedAsset = (path: string) => /^\/assets\/.+-[\w-]{8,}\.(?:m?js|css|woff2?)$/.test(path);
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
     (async () => {
       const cache = await caches.open(CACHE);
-      // `reload` bypasses the HTTP cache so a stale proxy copy cannot become the shell.
-      await cache.addAll(PRECACHE.map((path) => new Request(path, { cache: "reload" })));
+      const older = await Promise.all((await caches.keys()).filter(name => name.startsWith(CACHE_PREFIX) && name !== CACHE).map(name => caches.open(name)));
+      const reusable = async (path: string) => {
+        if (!hashedAsset(path)) return undefined;
+        for (const previous of older) {
+          const response = await previous.match(path);
+          if (response?.ok) return response;
+        }
+        return undefined;
+      };
+      await Promise.all(PRECACHE.map(async path => {
+        const saved = await reusable(path);
+        if (saved) await cache.put(path, saved);
+        // Unhashed shell files must be revalidated for this generation.
+        else await cache.add(new Request(path, { cache: "reload" }));
+      }));
+      // Keep already-used optional hashed modules across upgrades. No network
+      // warming: failure of an optional module must not prevent shell install.
+      const critical = new Set(PRECACHE);
+      for (const previous of older) {
+        for (const request of await previous.keys()) {
+          const path = new URL(request.url).pathname;
+          if (!allowedAssets.has(path) || critical.has(path) || !hashedAsset(path)) continue;
+          const saved = await previous.match(request);
+          if (saved?.ok) await cache.put(request, saved).catch(() => {});
+        }
+      }
       // Do not skipWaiting here: the page offers "Reload" when an update is ready
       // (register.ts), so a phone never swaps its shell mid-approval.
     })(),
@@ -126,7 +153,7 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(navigation(request));
     return;
   }
-  if (precached.has(url.pathname)) {
+  if (allowedAssets.has(url.pathname)) {
     event.respondWith(cacheFirst(request));
   }
 });
@@ -136,21 +163,23 @@ async function navigation(request: Request): Promise<Response> {
     const fresh = await fetch(request);
     if (fresh.ok) return fresh;
     // The host answered with an error page: prefer the shell we know works.
-    const shell = await caches.match(SHELL);
+    const shell = await (await caches.open(CACHE)).match(SHELL);
     return shell ?? fresh;
   } catch {
-    const shell = await caches.match(SHELL);
+    const shell = await (await caches.open(CACHE)).match(SHELL);
     return shell ?? offlineFallback();
   }
 }
 
 async function cacheFirst(request: Request): Promise<Response> {
-  const cached = await caches.match(request, { ignoreSearch: true });
+  const cache = await caches.open(CACHE);
+  const cached = await cache.match(request, { ignoreSearch: true });
   if (cached) return cached;
   const fresh = await fetch(request);
   if (fresh.ok) {
-    const cache = await caches.open(CACHE);
-    void cache.put(request, fresh.clone());
+    // Settle the write before returning, so the next offline visit can use it.
+    // A quota failure must not hide a successful network read.
+    await cache.put(request, fresh.clone()).catch(() => {});
   }
   return fresh;
 }

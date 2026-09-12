@@ -146,7 +146,7 @@ export function destinationSessionForTab(
   return eligible.find((session) => session.path === remembered) ?? eligible[0];
 }
 
-/** Children climb to their listed root; detached children use the run registry. */
+/** Children climb to their listed root; children without a listed parent use the run registry. */
 export function rootCwdForSession(
   session: SessionSummary,
   sessions: readonly SessionSummary[],

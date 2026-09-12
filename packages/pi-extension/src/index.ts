@@ -24,7 +24,7 @@
 import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { AgentHarnessBridge, BackgroundWorkOptions } from "./agents-bridge.js";
 import type { PromptProvenanceObserver } from "./prompt-provenance.js";
-export { createPromptProvenanceObserver } from "./prompt-provenance.js";
+export { createPromptProvenanceObserver, recordInstructionWrite } from "./prompt-provenance.js";
 import { WIRE_NAMESPACE } from "@lasercode/protocol";
 import {
   modules,
@@ -51,6 +51,7 @@ export type {
   AgentModelEvent,
   AgentRunSummary,
   BackgroundWorkOptions,
+  ProjectEnvironmentBridge,
   CompleteRunInput,
   CompleteRunResult,
   FleetAgentRow,

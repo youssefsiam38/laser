@@ -34,6 +34,7 @@ export const ENV_NAMES = /** @type {const} */ ([
   "NPM_CLI",
   "NPM_COMMAND",
   "PORT",
+  "PROJECT_ENV",
   "RELEASE_KEY",
   "RELEASE_KEY_PEM",
   "PACKAGE_SIGNING_KEY",

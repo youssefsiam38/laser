@@ -1,7 +1,7 @@
 "use client";
 import { useFileOpener } from "@/lib/file-opener";
 import { ArtifactCard } from "@/components/assistant-ui/elements/artifact-card";
-import { shikiLanguageFromPath } from "@/components/assistant-ui/elements/shiki-highlighter";
+import { shikiLanguageFromPath } from "@/components/assistant-ui/elements/shiki-language";
 import { fileDescription } from "@/components/preview/media";
 import { projectFilePath } from "@/lib/file-links";
 import { Button } from "@/components/ui/button";

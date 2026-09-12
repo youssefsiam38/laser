@@ -290,7 +290,7 @@ export class StableSdkDriver implements SessionDriver {
       // that has at least one enabled server, and a failure to load it must
       // cost this session nothing but its MCP tools.
       const mcp = enabled.has("mcp")
-        ? await mcpSessionSetup({ cwd, agentDir, ...(options.projectTrusted !== undefined ? { projectTrusted: options.projectTrusted } : {}) }).catch((error: unknown) => {
+        ? await mcpSessionSetup({ cwd, agentDir, ...(options.projectTrusted !== undefined ? { projectTrusted: options.projectTrusted } : {}), ...(options.projectEnv ? { projectEnv: options.projectEnv } : {}) }).catch((error: unknown) => {
           this.push({
             kind: "extension_error",
             extension: "mcp",

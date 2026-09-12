@@ -130,8 +130,21 @@ export class ProjectRegistry {
 
   get(cwd: string): ProjectInfo {
     const key = canonical(cwd);
-    const found = this.list().find((p) => p.cwd === key);
-    if (found) return found;
+    const count = this.options.catalog.cwdCounts().get(key) ?? 0;
+    const stored = this.stored.get(key);
+    if (!this.isExcluded(key) && (stored || count > 0)) {
+      const { trust, reasons } = this.trustOf(key);
+      return {
+        cwd: key,
+        name: basename(key) || key,
+        addedAt: stored?.addedAt ?? this.now().toISOString(),
+        ...(stored?.lastUsedAt ? { lastUsedAt: stored.lastUsedAt } : {}),
+        trust,
+        ...(reasons.length > 0 ? { trustReasons: reasons } : {}),
+        pinned: stored?.pinned ?? false,
+        sessionCount: count,
+      };
+    }
     const { trust, reasons } = this.trustOf(key);
     return {
       cwd: key,
@@ -150,8 +163,9 @@ export class ProjectRegistry {
     const existing = this.stored.get(key);
     this.stored.set(key, { ...(existing ?? { addedAt: this.now().toISOString() }), pinned: true });
     this.persist();
-    this.emit();
-    return this.get(key);
+    const projects = this.list();
+    this.options.onChange?.(projects);
+    return projects.find((project) => project.cwd === key) ?? this.get(key);
   }
 
   /**

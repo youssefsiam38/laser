@@ -13,9 +13,9 @@
  *   AgentRunRegistry every agent run a worker reported, kept past the worker
  *   SkillsCheck      periodic validation of what definitions point at
  *
- * Every connected client receives every notification; a per-session
- * subscription is not worth its complexity for a handful of local clients, and
- * the relay (M6) carries one client per channel anyway. Binding is loopback
+ * Clients can opt into transcripts for their loaded caches; small lifecycle
+ * notifications remain global and raw provider captures stay in LogStore.
+ * Binding is loopback
  * only; remote access goes through the relay, never by opening this port.
  *
  * Loopback is **not** on its own a defence against a browser. The same-origin
@@ -32,7 +32,7 @@ import type { AddressInfo } from "node:net";
 import { basename, dirname, extname, join, normalize, resolve as resolvePath, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@lasercode/crypto";
-import { ENV, PRODUCT_NAME, decisionPushPayload, type ClientRequests, type HostNotifications, type JsonRpcNotification, type LogEntry, type NamerState, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
+import { ENV, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, projectEnvWorkerConfig, type ClientRequests, type HostNotifications, type JsonRpcNotification, type LogEntry, type NamerState, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
 import { suggestBeamModel } from "./agents/models.js";
 import { AgentRunRegistry } from "./agents/runs.js";
 import { SkillsCheck } from "./agents/skills-check.js";
@@ -44,13 +44,16 @@ import { SessionCatalog, defaultSessionDir } from "./catalog.js";
 import { LogStore } from "./logstore.js";
 import { PackageService, SetupService } from "./packages.js";
 import { TaskRegister } from "./tasks/register.js";
-import { defaultAgentDir, defaultStateDir, ensureWorkspace, workspaceAgentFor, workspacesDir } from "./paths.js";
+import { defaultAgentDir, defaultStateDir, ensureWorkspace, projectRootOf, workspaceAgentFor, workspacesDir } from "./paths.js";
 import { canonical } from "./trust.js";
+import { ProjectEnvStore, projectEnvTrustAllows } from "./project-env.js";
 import { ProjectRegistry } from "./projects.js";
 import { PushService } from "./push.js";
 import { RelayClient, type RelayClientState, type RelayClientStats } from "./relay-client.js";
 import { Router } from "./router.js";
 import { SessionLoadDelivery } from "./session-load-delivery.js";
+import { TranscriptDelivery } from "./transcript-delivery.js";
+import { SearchCancellation } from "./search-cancellation.js";
 import { ViewCache } from "./views.js";
 import type { WorkerClient } from "./worker-client.js";
 import { WorkerPool, type WorkerPoolOptions } from "./worker-pool.js";
@@ -174,6 +177,8 @@ export class HostServer {
   readonly catalog: SessionCatalog;
   readonly attention: AttentionTracker;
   readonly projects: ProjectRegistry;
+  /** The per-project environment command (M16-T17, docs/project-environment.md). */
+  readonly projectEnv: ProjectEnvStore;
   /** Package policy (M10-T5) and first-run state (M10-T6). */
   readonly packages: PackageService;
   readonly setup: SetupService;
@@ -202,6 +207,8 @@ export class HostServer {
   private readonly clients = new Set<WebSocket>();
   /** Session paths each client is following, for the retirement guard. */
   private readonly attached = new Map<WebSocket, Set<string>>();
+  private readonly transcripts = new Map<WebSocket, TranscriptDelivery>();
+  private readonly searches = new Map<WebSocket, SearchCancellation>();
   /** Question-only response fences for concurrent session/load requests, per socket. */
   private readonly loadDeliveries = new Map<WebSocket, Set<SessionLoadDelivery>>();
   private readonly log: (line: string) => void;
@@ -291,6 +298,14 @@ export class HostServer {
       hasClients: () => this.clients.size > 0,
     });
 
+    // The project environment command (M16-T17). Machine-local and keyed by
+    // project root, deliberately not read from inside a checkout: it names an
+    // executable, and a file in a repository must not be able to choose one.
+    this.projectEnv = new ProjectEnvStore({
+      storePath: join(stateDir, "project-env.json"),
+      onChange: (status) => this.notify("pi/project/env/changed", { status }),
+    });
+
     this.tasks = new TaskRegister({ notify: (method, params) => this.notify(method, params) });
 
     this.push = new PushService({ agentDir, log: (line) => this.log(line) });
@@ -348,7 +363,12 @@ export class HostServer {
     const poolOptions: WorkerPoolOptions = {
       ...(options.agentDir ? { agentDir: options.agentDir } : {}),
       ...(npmCommand ? { env: { [ENV.npmCommand]: JSON.stringify(npmCommand) } } : {}),
-      envForCwd: (cwd) => ({ [ENV.features]: JSON.stringify(this.features.enabled(cwd)) }),
+      envForCwd: (cwd) => ({
+        [ENV.features]: JSON.stringify(this.features.enabled(cwd)),
+        // Non-secret: the executable, its arguments and whether this exact pair
+        // was approved. Values never travel this way; the worker runs the hook.
+        ...this.projectEnvForWorker(cwd),
+      }),
       ...(options.sessionDir ? { sessionDir: options.sessionDir } : {}),
       stateDir,
       ...(options.workerMain ? { workerMain: options.workerMain } : {}),
@@ -404,6 +424,7 @@ export class HostServer {
     this.router = new Router(this.pool, this.catalog, {
       attention: this.attention,
       projects: this.projects,
+      projectEnv: this.projectEnv,
       views: this.views,
       logs: this.logs,
       logsUnavailable: this.logsUnavailable,
@@ -481,7 +502,7 @@ export class HostServer {
         staticKeyPair: relay.staticKeyPair,
         devicePublicKey: device.publicKey,
         deviceName: device.name,
-        handle: (raw) => this.router.handle(raw),
+        handle: (raw, searches) => this.router.handle(raw, { searches }),
         subscribe: (listener) => {
           this.notificationListeners.add(listener);
           return () => this.notificationListeners.delete(listener);
@@ -776,6 +797,34 @@ export class HostServer {
     this.logFlush.unref?.();
   }
 
+  /**
+   * The environment-command configuration a worker for `cwd` is started with.
+   *
+   * Two gates before anything is handed down, and both are refusals rather than
+   * warnings:
+   *
+   *   - **Trust.** A project whose trust decision is not "trusted" gets no
+   *     environment command. The hook never runs before a person has approved
+   *     the project, which is the same rule the worktree setup hook follows.
+   *   - **Approval.** The `{command, args}` pair must match the fingerprint
+   *     recorded when a person saved it. Editing the store by hand, or any
+   *     other change to what would actually execute, makes it stale and the
+   *     worker is told the hook is unapproved.
+   *
+   * A worktree resolves to its owning project first (`projectRootOf`), so a
+   * child agent working in `<project>/.worktrees/<name>` gets the project's
+   * approved binding rather than nothing.
+   */
+  private projectEnvForWorker(cwd: string): Record<string, string> {
+    const root = projectRootOf(cwd);
+    const config = this.projectEnv.get(root);
+    if (!config?.enabled) return {};
+    const { trust } = this.projects.trustOf(root);
+    if (!projectEnvTrustAllows(trust)) return {};
+    const worker = projectEnvWorkerConfig(config);
+    return worker ? { [ENV.projectEnv]: JSON.stringify(worker) } : {};
+  }
+
   /** Is any connected client following a session in this directory? */
   private isAttached(cwd: string): boolean {
     for (const paths of this.attached.values()) {
@@ -789,13 +838,21 @@ export class HostServer {
   // ------------------------------------------------------------- sockets
 
   private broadcast(notification: JsonRpcNotification): void {
-    const line = JSON.stringify(notification);
+    // Captures have already reached LogStore in observe(). Views inspect the
+    // redacted retained body via logs/query + logs/content, not this raw event.
+    // Filter before serialization and before relay listeners/frame admission.
+    if (notification.method === "pi/extension/message") {
+      const { message } = notification.params as HostNotifications["pi/extension/message"];
+      const type = (message as { type?: unknown } | null)?.type;
+      if (type === `${WIRE_NAMESPACE}/provider/request` || type === `${WIRE_NAMESPACE}/provider/response`) return;
+    }
+    let line: string | undefined;
     for (const ws of this.clients) {
-      if (ws.readyState !== ws.OPEN) continue;
+      if (ws.readyState !== ws.OPEN || !this.transcripts.get(ws)?.accepts(notification)) continue;
       const held = [...(this.loadDeliveries.get(ws) ?? [])]
         .map((delivery) => delivery.offer(notification))
         .some(Boolean);
-      if (!held) ws.send(line);
+      if (!held) ws.send(line ??= JSON.stringify(notification));
     }
     for (const listener of this.notificationListeners) {
       // One relayed device throwing must not cost the others their stream.
@@ -830,6 +887,10 @@ export class HostServer {
   private onConnection(ws: WebSocket, localEnvironment: boolean): void {
     this.clients.add(ws);
     this.attached.set(ws, new Set());
+    const transcripts = new TranscriptDelivery();
+    this.transcripts.set(ws, transcripts);
+    const searches = new SearchCancellation();
+    this.searches.set(ws, searches);
     this.loadDeliveries.set(ws, new Set());
     // A client that connects while a project is waiting on a trust decision
     // must see the question, not a worker that never starts.
@@ -849,14 +910,18 @@ export class HostServer {
         ? new SessionLoadDelivery(request.params.path)
         : undefined;
       if (delivery) this.loadDeliveries.get(ws)?.add(delivery);
+      const finishTranscript = transcripts.begin(raw);
+      let transcriptResponse;
       try {
-        const response = await this.router.handle(raw, { localEnvironment });
+        const response = await this.router.handle(raw, { localEnvironment, searches });
+        transcriptResponse = response;
         if (!response.error) this.noteRequest(ws, request, response.result);
         const sent = await this.sendSocket(ws, JSON.stringify(response));
         if (delivery && sent && !response.error) {
           await delivery.flush((notification) => this.sendSocket(ws, JSON.stringify(notification)));
         }
       } finally {
+        finishTranscript(transcriptResponse);
         delivery?.dispose();
         if (delivery) this.loadDeliveries.get(ws)?.delete(delivery);
       }
@@ -912,6 +977,9 @@ export class HostServer {
   private dropClient(ws: WebSocket): void {
     this.clients.delete(ws);
     this.attached.delete(ws);
+    this.transcripts.delete(ws);
+    this.searches.get(ws)?.close();
+    this.searches.delete(ws);
     const deliveries = this.loadDeliveries.get(ws);
     if (deliveries) for (const delivery of deliveries) delivery.dispose();
     this.loadDeliveries.delete(ws);

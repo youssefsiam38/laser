@@ -8,8 +8,8 @@ import { HistorySection, ToolsSection } from "../../src/components/shell/Telemet
 
 const mocks = vi.hoisted(() => ({ loadAllEntries: vi.fn(async () => true), refreshEntries: vi.fn(async () => {}), running: false }));
 vi.mock("../../src/runtime/index.js", () => ({
-  useLaserView: () => ({ path: "/session", running: mocks.running, entries: [], history: { complete: false, branchesUnloaded: false } }),
-  useSessionMeta: () => ({ running: mocks.running, compacting: false }),
+  useLaserState: (selector: (state: unknown) => unknown) => selector({ current: "/session", open: { "/session": { path: "/session", running: mocks.running, entries: [], history: { complete: false, branchesUnloaded: false } } } }),
+  useSessionMeta: () => ({ path: "/session", running: mocks.running, compacting: false }),
   useLaserStable: () => ({ actions: mocks }),
 }));
 vi.mock("../../src/components/shell/shell-context.js", async () => {

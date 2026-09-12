@@ -23,6 +23,12 @@ export function periodLabel(now: number, period: number) {
 export function useSessionSearch(query: string, cwd?: string) {
   const { client } = useLaserStable();
   const generation = useRef(0);
+  const activeSearch = useRef<string | undefined>(undefined);
+  const cancel = useCallback(() => {
+    const searchId = activeSearch.current;
+    activeSearch.current = undefined;
+    if (searchId) void client.request("session/search/cancel", { searchId }).catch(() => {});
+  }, [client]);
   const now = useRef(Date.now());
   const lastRequest = useRef({ period: 0, cursor: undefined as number | undefined, reset: true });
   const [state, setState] = useState<{ key: string; hits: Result["hits"]; period: number; cursor?: number; busy: boolean; error: boolean; unreadable: number }>({ key: "", hits: [], period: 0, busy: false, error: false, unreadable: 0 });
@@ -31,22 +37,27 @@ export function useSessionSearch(query: string, cwd?: string) {
     lastRequest.current = { period, cursor, reset };
     setState(s => ({ ...s, busy: true, error: false }));
     const range = searchPeriod(now.current, period);
+    cancel();
+    const searchId = crypto.randomUUID();
+    activeSearch.current = searchId;
     try {
-      const result = await client.request("session/search", { query: query.trim(), ...(cwd ? { cwd } : {}), ...(range.after ? { after: range.after } : {}), ...(range.before ? { before: range.before } : {}), ...(cursor !== undefined ? { cursor } : {}) });
-      if (gen !== generation.current) return;
+      const result = await client.request("session/search", { searchId, query: query.trim(), ...(cwd ? { cwd } : {}), ...(range.after ? { after: range.after } : {}), ...(range.before ? { before: range.before } : {}), ...(cursor !== undefined ? { cursor } : {}) });
+      if (gen !== generation.current || activeSearch.current !== searchId) return;
       setState(s => ({ key, hits: [...new Map([...(reset ? [] : s.hits), ...result.hits].map(h => [h.path, h])).values()], period, ...(result.nextCursor !== undefined ? { cursor: result.nextCursor } : {}), busy: false, error: false, unreadable: (reset ? 0 : s.unreadable) + result.unreadable }));
     } catch {
-      if (gen === generation.current) setState(s => ({ ...s, busy: false, error: true }));
+      if (gen === generation.current && activeSearch.current === searchId) setState(s => ({ ...s, busy: false, error: true }));
+    } finally {
+      if (activeSearch.current === searchId) activeSearch.current = undefined;
     }
-  }, [client, query, cwd, key]);
+  }, [client, query, cwd, key, cancel]);
   useEffect(() => {
     const gen = ++generation.current;
     now.current = Date.now();
     setState({ key, hits: [], period: 0, busy: Boolean(query.trim()), error: false, unreadable: 0 });
     if (!query.trim()) return;
     const timer = setTimeout(() => void request(0, undefined, gen, true), 220);
-    return () => { clearTimeout(timer); generation.current++; };
-  }, [key, request]);
+    return () => { clearTimeout(timer); generation.current++; cancel(); };
+  }, [key, request, cancel]);
   const current = state.key === key ? state : { key, hits: [], period: 0, busy: Boolean(query.trim()), error: false, unreadable: 0 };
   return {
     ...current,

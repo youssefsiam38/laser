@@ -7,16 +7,12 @@ import { useFileOpener } from "@/lib/file-opener";
 import { cn } from "@/lib/utils";
 import { paper } from "@/components/assistant-ui/elements/surfaces";
 
-function containedPath(path: string | undefined, cwd: string): string | undefined {
-  const root = projectFilePath(cwd, ".");
-  return path && (root === "/" || path.startsWith(`${root}/`)) ? path : undefined;
-}
-/** Markdown URLs and literal directives share containment, but not URL decoding. */
+/** Machine paths resolve against the owning project, never the web origin. */
 export function projectReferencePath(href: string, cwd?: string): string | undefined {
-  return cwd ? containedPath(fileLinkPath(href, cwd), cwd) : undefined;
+  return cwd ? fileLinkPath(href, cwd) : undefined;
 }
 export function projectDirectivePath(path: string, cwd?: string): string | undefined {
-  return cwd ? containedPath(projectFilePath(cwd, path), cwd) : undefined;
+  return cwd ? projectFilePath(cwd, path) : undefined;
 }
 export function looksLikeFilePath(text: string): boolean {
   return /^(?:\.{1,2}\/|\/)?(?:[\w@.-]+\/)*[\w@.-]+\.(?:md|markdown|mdx|txt|json|ya?ml|toml|tsx?|jsx?|mjs|cjs|py|go|rs|sh|css|html|vue|svelte|sql|png|jpe?g|gif|webp|svg|pdf)(?::\d+(?::\d+)?)?$/i.test(text);
@@ -44,8 +40,8 @@ function ReadableFileChip({ cwd, path, children }: { cwd: string; path: string; 
       setOpening(true);
       void opener.readFile(cwd, path).then(file => {
         if (accepted === intent.current) opener.openFile({ request: { cwd, path }, file }, trigger);
-      }, () => {
-        if (accepted === intent.current) toast.error("This file couldn’t be read. Check that it still exists in the project.");
+      }, error => {
+        if (accepted === intent.current) toast.error(error instanceof Error ? error.message : "That file could not be read. Try opening it again.");
       }).finally(() => { if (accepted === intent.current) setOpening(false); });
     }}
     className={cn(paper, "inline-flex max-w-full items-center gap-1.5 rounded-md px-1.5 py-0.5 align-baseline text-xs text-ink-2 pointer-coarse:min-h-11 outline-none hover:border-ink-3 hover:text-ink active:bg-surface-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live")}>

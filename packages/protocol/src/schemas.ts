@@ -7,6 +7,7 @@
  * refuse a new method in messages.ts that has no schema here.
  */
 import { z } from "zod";
+import { ORIGINS, type InstructionOrigin } from "./pi-extension.js";
 import { WEB_SEARCH_PROVIDER_IDS } from "./web-search.js";
 import { MCP_IMPORT_SOURCES, MCP_PROTOCOL_VERSIONS, MCP_STARTUP_MODES, MCP_TOOL_EXPOSURES } from "./mcp.js";
 import {
@@ -26,6 +27,21 @@ import { ErrorCodes, type JsonRpcRequest } from "./jsonrpc.js";
 import { PREFS_MAX_BYTES } from "./messages.js";
 import type { ClientMethod, ClientRequests } from "./messages.js";
 import { TASK_COMMAND_MAX, TASK_LINE_MAX } from "./tasks.js";
+
+const originIds = ORIGINS.map(origin => origin.id) as [InstructionOrigin, ...InstructionOrigin[]];
+/** Legacy captures omit origin; new captures always include it. */
+export const instructionSourceSchema = z.object({
+  kind: z.enum(["file", ...originIds]).optional(),
+  origin: z.enum(originIds).optional(),
+  label: z.string(), path: z.string().optional(), inline: z.literal(true).optional(),
+  agentName: z.string().optional(), fieldKey: z.string().optional(), module: z.string().optional(),
+  reason: z.enum(["template-ranges-unavailable", "verification-unavailable"]).optional(),
+});
+export const instructionSourceMapSchema = z.object({
+  path: z.array(z.union([z.string(), z.number().int().nonnegative()])),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  spans: z.array(z.object({ start: z.number().int().nonnegative(), end: z.number().int().positive(), source: instructionSourceSchema })),
+});
 
 // ---------- the product's identity ----------
 
@@ -513,7 +529,7 @@ export const sessionLoadResultSchema = z
 
 export const clientParamsSchemas = {
   "session/new": z.object({ cwd: z.string().min(1), parentPath: sessionPath.optional(), agentName: agentNameSchema.optional() }).strict(),
-  "session/load": z.object({ path: sessionPath, fromSeq: z.number().int().nonnegative().optional() }).strict(),
+  "session/load": z.object({ path: sessionPath, fromSeq: z.number().int().nonnegative().optional(), transcript: z.literal("loaded").optional() }).strict(),
   "session/prompt": z
     .object({
       path: sessionPath,
@@ -547,7 +563,8 @@ export const clientParamsSchemas = {
       probe: z.array(z.string().min(1)).optional(),
     }).strict().optional(),
   }).strict(),
-  "session/search": z.object({ query: z.string().trim().min(1).max(200), cwd: z.string().min(1).optional(), after: z.string().datetime().optional(), before: z.string().datetime().optional(), cursor: z.number().int().nonnegative().optional() }).strict(),
+  "session/search": z.object({ query: z.string().trim().min(1).max(200), cwd: z.string().min(1).optional(), after: z.string().datetime().optional(), before: z.string().datetime().optional(), cursor: z.number().int().nonnegative().optional(), searchId: z.string().min(1).max(128).optional() }).strict(),
+  "session/search/cancel": z.object({ searchId: z.string().min(1).max(128) }).strict(),
   "pi/session/inbox": z
     .object({ cwd: z.string().min(1).optional(), limit: z.number().int().positive().max(500).optional() })
     .strict(),
@@ -599,6 +616,24 @@ export const clientParamsSchemas = {
     .strict(),
   "pi/project/git": z.object({ cwd: z.string().min(1), path: sessionPath.optional() }).strict(),
   "pi/project/browse": z.object({ path: z.string().min(1).max(4096).optional() }).strict(),
+  "pi/project/env/status": z.object({ cwd: z.string().min(1) }).strict(),
+  "pi/project/env/set": z
+    .object({
+      cwd: z.string().min(1),
+      config: z
+        .object({
+          enabled: z.boolean(),
+          command: z.string().min(1).max(4096),
+          args: z.array(z.string().max(4096)).max(64).optional(),
+          required: z.boolean().optional(),
+          allowProviderKeys: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).max(256)).max(64).optional(),
+        })
+        .strict()
+        .nullable(),
+    })
+    .strict(),
+  "pi/project/env/test": z.object({ cwd: z.string().min(1) }).strict(),
+  "pi/project/env/refresh": z.object({ cwd: z.string().min(1) }).strict(),
 
   "pi/worker/list": z.object({}).strict(),
   "pi/worker/restart": z.object({ cwd: z.string().min(1) }).strict(),

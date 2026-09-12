@@ -35,23 +35,32 @@ const DEFAULT_RETENTION_PER_PROJECT = 500;
 
 export class AgentRunRegistry {
   private readonly runs = new Map<string, AgentRun>();
+  private readonly children = new Map<string, Map<string, AgentRun>>();
+  private readonly roots = new Map<string, Map<string, AgentRun>>();
+  private readonly mentions = new Map<string, Map<string, AgentRun>>();
+  private readonly terminals = new Map<string, Map<string, AgentRun>>();
+  private readonly liveCounts = new Map<string, number>();
+  private readonly order = new Map<string, number>();
+  private nextOrder = 0;
+  private pruneTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly now: () => Date;
   private writeTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly options: AgentRunRegistryOptions = {}) {
     this.now = options.now ?? (() => new Date());
     this.load();
+    this.schedulePrune();
   }
 
   /** Record what a worker reported. Newer `updatedAt` wins; an older report is ignored. */
   upsert(run: AgentRun): AgentRun {
     const existing = this.runs.get(run.runId);
-    if (existing && existing.updatedAt > run.updatedAt && isTerminalRunStatus(existing.status)) return existing;
+    if (existing && existing.updatedAt > run.updatedAt && isTerminalRunStatus(existing.status)) return structuredClone(existing);
     const stored = structuredClone(run);
-    this.runs.set(stored.runId, stored);
-    this.prune();
+    this.put(stored);
+    if (isTerminalRunStatus(stored.status)) this.pruneProject(stored.projectCwd);
     this.schedulePersist();
-    return stored;
+    return structuredClone(stored);
   }
 
   get(runId: string): AgentRun | undefined {
@@ -65,57 +74,43 @@ export class AgentRunRegistry {
    */
   /** True while any run of `projectCwd` has not ended; the idle sweep asks this. */
   hasLiveRun(projectCwd: string): boolean {
-    for (const run of this.runs.values()) {
-      if (run.projectCwd === projectCwd && !isTerminalRunStatus(run.status)) return true;
-    }
-    return false;
+    return (this.liveCounts.get(projectCwd) ?? 0) > 0;
   }
 
   list(path?: string): AgentRun[] {
-    let runs = [...this.runs.values()];
-    if (path !== undefined) {
-      const root = this.rootOf(path);
-      runs = runs.filter((run) => run.rootSessionPath === root);
-    }
+    const runs = path === undefined ? [...this.runs.values()] : [...(this.roots.get(this.rootOf(path))?.values() ?? [])];
     return structuredClone(runs.sort(newestFirst));
   }
 
   /** Runs executed in one child session, newest first. */
   byChildPath(sessionPath: string): AgentRun[] {
-    return structuredClone([...this.runs.values()].filter((run) => run.sessionPath === sessionPath).sort(newestFirst));
+    return structuredClone([...(this.children.get(sessionPath)?.values() ?? [])].sort(newestFirst));
   }
 
   /** The run that stands for a child session, for sidebar attribution. */
   latestFor(sessionPath: string): AgentRun | undefined {
-    return this.byChildPath(sessionPath).sort(liveFirst)[0];
+    const run = this.latestInternal(sessionPath);
+    return run ? structuredClone(run) : undefined;
   }
 
   /** The standing run per child session, in one pass, for decorating a whole list. */
   latestByChildPath(): Map<string, AgentRun> {
     const latest = new Map<string, AgentRun>();
-    for (const run of this.runs.values()) {
-      const current = latest.get(run.sessionPath);
-      if (!current || liveFirst(run, current) < 0) latest.set(run.sessionPath, run);
+    for (const path of this.children.keys()) {
+      const run = this.latestInternal(path);
+      if (run) latest.set(path, structuredClone(run));
     }
-    return new Map([...latest].map(([path, run]) => [path, structuredClone(run)]));
+    return latest;
   }
 
   /** The project a session belongs to, from any run that mentions it. */
   projectCwdOf(sessionPath: string): string | undefined {
-    for (const run of this.runs.values()) {
-      if (run.sessionPath === sessionPath || run.rootSessionPath === sessionPath || run.parent?.sessionPath === sessionPath) {
-        return run.projectCwd;
-      }
-    }
-    return undefined;
+    return this.firstIndexed(this.mentions.get(sessionPath))?.projectCwd;
   }
 
   /** The root session of the tree `path` is in: itself unless a run says otherwise. */
   rootOf(path: string): string {
-    for (const run of this.runs.values()) {
-      if (run.sessionPath === path) return run.rootSessionPath;
-    }
-    return path;
+    return this.firstIndexed(this.children.get(path))?.rootSessionPath ?? path;
   }
 
   /** The project's worker is gone: nothing in flight there can end on its own. */
@@ -125,12 +120,10 @@ export class AgentRunRegistry {
     const changed: AgentRun[] = [];
     for (const run of this.runs.values()) {
       if (isTerminalRunStatus(run.status) || canonical(run.projectCwd) !== key) continue;
-      run.status = "failed";
-      run.error = WORKER_LOST_MESSAGE;
-      run.endedBy = { initiator: "harness", reason: WORKER_LOST_MESSAGE };
-      run.endedAt = at;
-      run.updatedAt = at;
-      changed.push(structuredClone(run));
+      const updated: AgentRun = { ...run, status: "failed", error: WORKER_LOST_MESSAGE,
+        endedBy: { initiator: "harness", reason: WORKER_LOST_MESSAGE }, endedAt: at, updatedAt: at };
+      this.put(updated);
+      changed.push(structuredClone(updated));
     }
     if (changed.length > 0) {
       this.schedulePersist();
@@ -152,9 +145,9 @@ export class AgentRunRegistry {
     const changed: AgentRun[] = [];
     for (const run of this.runs.values()) {
       if (!run.worktree || run.worktree.removedAt || canonical(run.worktree.path) !== key) continue;
-      run.worktree = { ...run.worktree, removedAt: at };
-      run.updatedAt = at;
-      changed.push(structuredClone(run));
+      const updated = { ...run, worktree: { ...run.worktree, removedAt: at }, updatedAt: at };
+      this.put(updated);
+      changed.push(structuredClone(updated));
     }
     if (changed.length > 0) {
       this.schedulePersist();
@@ -169,11 +162,9 @@ export class AgentRunRegistry {
     const changed: AgentRun[] = [];
     for (const run of this.runs.values()) {
       if (run.sessionPath !== sessionPath || isTerminalRunStatus(run.status)) continue;
-      run.status = "cancelled";
-      run.endedBy = { initiator: "user", reason: "The session was deleted." };
-      run.endedAt = at;
-      run.updatedAt = at;
-      changed.push(structuredClone(run));
+      const updated: AgentRun = { ...run, status: "cancelled", endedBy: { initiator: "user", reason: "The session was deleted." }, endedAt: at, updatedAt: at };
+      this.put(updated);
+      changed.push(structuredClone(updated));
     }
     if (changed.length > 0) {
       this.schedulePersist();
@@ -183,6 +174,9 @@ export class AgentRunRegistry {
   }
 
   close(): void {
+    if (this.pruneTimer) clearTimeout(this.pruneTimer);
+    this.pruneTimer = undefined;
+    this.prune();
     if (this.writeTimer) {
       clearTimeout(this.writeTimer);
       this.writeTimer = undefined;
@@ -192,25 +186,91 @@ export class AgentRunRegistry {
 
   // -------------------------------------------------------------- internals
 
+  private latestInternal(path: string): AgentRun | undefined {
+    let latest: AgentRun | undefined;
+    for (const run of this.children.get(path)?.values() ?? []) {
+      if (!latest || liveFirst(run, latest) < 0) latest = run;
+    }
+    return latest;
+  }
+
+  private firstIndexed(runs: Map<string, AgentRun> | undefined): AgentRun | undefined {
+    let first: AgentRun | undefined;
+    for (const run of runs?.values() ?? []) {
+      if (!first || this.order.get(run.runId)! < this.order.get(first.runId)!) first = run;
+    }
+    return first;
+  }
+
+  private index(run: AgentRun, remove: boolean): void {
+    const update = (index: Map<string, Map<string, AgentRun>>, key: string) => {
+      const bucket = index.get(key) ?? new Map<string, AgentRun>();
+      if (remove) bucket.delete(run.runId); else bucket.set(run.runId, run);
+      if (bucket.size) index.set(key, bucket); else index.delete(key);
+    };
+    update(this.children, run.sessionPath);
+    update(this.roots, run.rootSessionPath);
+    for (const path of new Set([run.sessionPath, run.rootSessionPath, ...(run.parent ? [run.parent.sessionPath] : [])])) update(this.mentions, path);
+    if (isTerminalRunStatus(run.status)) update(this.terminals, run.projectCwd);
+    else {
+      const count = (this.liveCounts.get(run.projectCwd) ?? 0) + (remove ? -1 : 1);
+      if (count) this.liveCounts.set(run.projectCwd, count); else this.liveCounts.delete(run.projectCwd);
+    }
+  }
+
+  private put(run: AgentRun): void {
+    const old = this.runs.get(run.runId);
+    if (old) this.index(old, true);
+    else this.order.set(run.runId, this.nextOrder++);
+    this.runs.set(run.runId, run);
+    this.index(run, false);
+  }
+
+  private remove(run: AgentRun): void {
+    this.index(run, true);
+    this.runs.delete(run.runId);
+    this.order.delete(run.runId);
+  }
+
+  /** Age maintenance visits one terminal-project bucket per turn, not retained
+   * history on every live activity update. Never prunes a live/question row. */
+  private schedulePrune(): void {
+    this.pruneTimer = setTimeout(() => {
+      const projects = [...this.terminals.keys()];
+      let index = 0;
+      const step = () => {
+        const project = projects[index++];
+        if (project === undefined) { this.schedulePrune(); return; }
+        const before = this.runs.size;
+        this.pruneProject(project);
+        if (this.runs.size !== before) this.schedulePersist();
+        this.pruneTimer = setTimeout(step, 0);
+        this.pruneTimer.unref?.();
+      };
+      step();
+    }, 60_000);
+    this.pruneTimer.unref?.();
+  }
+
   private prune(): void {
+    for (const project of this.terminals.keys()) this.pruneProject(project);
+  }
+
+  private pruneProject(project: string): void {
     const days = this.options.retentionDays ?? DEFAULT_RETENTION_DAYS;
     const perProject = this.options.retentionPerProject ?? DEFAULT_RETENTION_PER_PROJECT;
     const cutoff = new Date(this.now().getTime() - days * 86_400_000).toISOString();
-    const terminalByProject = new Map<string, AgentRun[]>();
-    for (const run of this.runs.values()) {
-      if (!isTerminalRunStatus(run.status)) continue;
+    const retained: AgentRun[] = [];
+    for (const run of this.terminals.get(project)?.values() ?? []) {
       if ((run.endedAt ?? run.updatedAt) < cutoff) {
-        this.runs.delete(run.runId);
+        this.remove(run);
         continue;
       }
-      const list = terminalByProject.get(run.projectCwd) ?? [];
-      list.push(run);
-      terminalByProject.set(run.projectCwd, list);
+      retained.push(run);
     }
-    for (const list of terminalByProject.values()) {
-      if (list.length <= perProject) continue;
-      list.sort(newestFirst);
-      for (const run of list.slice(perProject)) this.runs.delete(run.runId);
+    if (retained.length > perProject) {
+      retained.sort(newestFirst);
+      for (const run of retained.slice(perProject)) this.remove(run);
     }
   }
 
@@ -222,7 +282,7 @@ export class AgentRunRegistry {
       if (!Array.isArray(parsed.runs)) return;
       for (const raw of parsed.runs) {
         const run = readRun(raw);
-        if (run) this.runs.set(run.runId, run);
+        if (run) this.put(run);
       }
     } catch {
       /* first run, or a truncated file: start empty */
@@ -232,11 +292,8 @@ export class AgentRunRegistry {
     let changed = false;
     for (const run of this.runs.values()) {
       if (isTerminalRunStatus(run.status)) continue;
-      run.status = "failed";
-      run.error = WORKER_LOST_MESSAGE;
-      run.endedBy = { initiator: "harness", reason: WORKER_LOST_MESSAGE };
-      run.endedAt = at;
-      run.updatedAt = at;
+      this.put({ ...run, status: "failed", error: WORKER_LOST_MESSAGE,
+        endedBy: { initiator: "harness", reason: WORKER_LOST_MESSAGE }, endedAt: at, updatedAt: at });
       changed = true;
     }
     this.prune();

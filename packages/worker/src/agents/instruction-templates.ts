@@ -13,6 +13,8 @@ import {
 } from "@lasercode/protocol";
 import { join, resolve } from "node:path";
 import type { DriverAgentOptions } from "../driver.js";
+import { recordInstructionWrite } from "@lasercode/pi-extension";
+import { templateProvenance } from "./template-provenance.js";
 
 interface TemplateExtensionOptions {
   agent: DriverAgentOptions;
@@ -108,7 +110,12 @@ export function createInstructionTemplateExtension(options: TemplateExtensionOpt
         const template = options.agent.definition.engineInstructions ? event.systemPromptOptions.customPrompt ?? "" : options.agent.definition.instructions;
         const target = targetOf(options.agent);
         const values = instructionTemplateValues(event.systemPromptOptions, context, options);
-        return { systemPrompt: renderInstructionTemplate(template, target, values) };
+        const systemPrompt = renderInstructionTemplate(template, target, values);
+        try {
+          return recordInstructionWrite({ systemPrompt }, templateProvenance(template, target, values, systemPrompt, options.agent.definition.name, event.systemPromptOptions));
+        } catch {
+          return recordInstructionWrite({ systemPrompt }, { kind: "agent", origin: "agent", inline: true, label: `Agent · ${options.agent.definition.name}`, agentName: options.agent.definition.name, reason: "template-ranges-unavailable" });
+        }
       });
     },
   };

@@ -28,6 +28,8 @@ export interface HostClientOptions {
   onVersionMismatch?: (hostVersion: string) => void;
   url?: string;
   onNotification: NotificationHandler;
+  /** Synchronous publication transaction; event handlers still run in order. */
+  batchNotifications?: (deliver: () => void) => void;
   onConnection?: (state: ConnectionState) => void;
   /**
    * Result of a resume `session/load`. `replayFrom` is the earliest seq the
@@ -187,7 +189,10 @@ export class HostClient {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
-      this.ws!.send(JSON.stringify({ jsonrpc: "2.0", id, method, params, clientVersion: PRODUCT_VERSION }));
+      // Loaded (including background-cached and Beam) views need every seq;
+      // never-opened transcripts do not. Reconnect loads opt in again.
+      const wireParams = method === "session/load" ? { ...params, transcript: "loaded" } : params;
+      this.ws!.send(JSON.stringify({ jsonrpc: "2.0", id, method, params: wireParams, clientVersion: PRODUCT_VERSION }));
     });
   }
 
@@ -285,7 +290,11 @@ export class HostClient {
     }
     if (this.pendingUpdates.length === 0) return;
     const batch = this.pendingUpdates.splice(0, this.pendingUpdates.length);
-    for (const params of batch) this.deliver("session/update", params);
+    const deliver = () => {
+      for (const params of batch) this.deliver("session/update", params);
+    };
+    if (this.options.batchNotifications) this.options.batchNotifications(deliver);
+    else deliver();
   }
 
   /**

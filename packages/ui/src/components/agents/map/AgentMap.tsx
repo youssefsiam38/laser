@@ -12,7 +12,7 @@
 import "@xyflow/react/dist/base.css";
 import "./agent-map.css";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 
 import type { AgentTree } from "@/agents";
 import { useIsTouch } from "@/hooks/use-mobile";
@@ -21,7 +21,9 @@ import { cn } from "@/lib/utils";
 import { InspectorCard, InspectorColumn, InspectorSheet } from "./Inspector.js";
 import { compositionFor, CONSTRAINED_WIDTH, INSPECTOR_ROW_SHARE, INSPECTOR_WIDTH, visibleTreeOf, type MapComposition, type MapSize } from "./layout.js";
 import { LineageList } from "./LineageList.js";
-import { MapCanvas } from "./MapCanvas.js";
+import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state.js";
+
+const MapCanvas = lazy(() => import("./MapCanvas.js").then(module => ({ default: module.MapCanvas })));
 import { MapDataProvider, useMapHost } from "./map-context.js";
 import { MapHeader } from "./MapHeader.js";
 import { mapUi, useMapRootState } from "./map-state.js";
@@ -124,7 +126,9 @@ export function AgentMap({ rootPath, tree, focusPath, chrome = true, notice, cla
             <>
               <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                 <div className="relative min-h-0 min-w-0 flex-1">
-                  <MapCanvas rootPath={rootPath} visible={visible} composition={composition} size={canvasSize} touch={touch || phone} />
+                  <Suspense fallback={<GenerationLoader label="Loading map" className="h-full" />}>
+                    <MapCanvas rootPath={rootPath} visible={visible} composition={composition} size={canvasSize} touch={touch || phone} />
+                  </Suspense>
                 </div>
                 {inspectorRow && selectedNode && <InspectorCard node={selectedNode} onClose={deselect} />}
               </div>

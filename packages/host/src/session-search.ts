@@ -1,5 +1,6 @@
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
+import { setImmediate as yieldToIO } from "node:timers/promises";
 import { goalPromptId, toolSearchContent, toolOutputText, type SearchableTool, type ClientRequests, type SessionSummary } from "@lasercode/protocol";
 
 type Source = "user" | "assistant" | "reasoning" | "tool";
@@ -36,17 +37,19 @@ export function searchableMessage(entry: unknown, pending?: Map<string, Searchab
 }
 
 /** Streaming reads keep full-history search off the synchronous catalog path. */
-export async function searchSessions(sessions: readonly SessionSummary[], query: string, cursor = 0): Promise<ClientRequests["session/search"]["result"]> {
+export async function searchSessions(sessions: readonly SessionSummary[], query: string, cursor = 0, signal?: AbortSignal): Promise<ClientRequests["session/search"]["result"]> {
+  signal?.throwIfAborted();
   const result: ClientRequests["session/search"]["result"] = { hits: [], unreadable: 0 };
   const needle = query.trim();
   if (!needle) return result;
   const expression = new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu");
   for (let index = cursor; index < sessions.length; index++) {
+    signal?.throwIfAborted();
     const session = sessions[index]!;
     let count = 0;
     let excerpt = "";
     let source: Source = "tool";
-    const input = createReadStream(session.path, { encoding: "utf8" });
+    const input = createReadStream(session.path, { encoding: "utf8", ...(signal ? { signal } : {}) });
     const lines = createInterface({ input, crlfDelay: Infinity });
     const pending = new Map<string, SearchableTool>();
     // Match the chat projection: only the first durable goal prompt is visible,
@@ -67,8 +70,13 @@ export async function searchSessions(sessions: readonly SessionSummary[], query:
         }
       }
     };
+    let processed = 0;
     try {
       for await (const line of lines) {
+        // readline may have many records buffered. Yield during that drain so
+        // a cancellation/permission socket callback can run, not only at EOF.
+        if (++processed % 128 === 0) await yieldToIO();
+        signal?.throwIfAborted();
         let entry: unknown;
         try { entry = JSON.parse(line); } catch { continue; }
         const e = entry as { type?: string; customType?: string; data?: { goal?: { id?: string; text?: string; startedAt?: number } }; message?: { role?: string; content?: unknown; toolCallId?: string; isError?: boolean } };
@@ -95,8 +103,11 @@ export async function searchSessions(sessions: readonly SessionSummary[], query:
         }
         collect(searchableMessage(entry, pending));
       }
-    } catch { result.unreadable++; }
-    finally { lines.close(); input.destroy(); }
+    } catch (error) {
+      signal?.throwIfAborted();
+      result.unreadable++;
+    } finally { lines.close(); input.destroy(); }
+    signal?.throwIfAborted();
     for (const call of pending.values()) collect(toolSearchContent(call).map(text => ({ text, source: "tool" })));
     if (count) {
       result.hits.push({ path: session.path, count, excerpt, source });

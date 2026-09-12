@@ -112,6 +112,19 @@
  * A second hand-written palette here is what made a fresh install render the
  * pre-theme-system colours instead of the default preset.
  * ------------------------------------------------------------------------- */
+/** Derived at each range so its inline origin token, not the root, owns the tint. */
+.provenance-range[data-source-flash] {
+  animation: provenance-jump var(--motion-morph) var(--motion-ease);
+}
+@keyframes provenance-jump {
+  from { outline: 2px solid var(--live); outline-offset: 0; }
+  to { outline: 2px solid transparent; outline-offset: 0; }
+}
+
+.provenance-range {
+  --provenance-tint: color-mix(in srgb, var(--provenance-origin) 7%, var(--surface));
+}
+
 :root {
   /* @theme-default-start */
   --bg: #000000;
@@ -157,6 +170,15 @@
   --syntax-type: #6ed9d2;
   --syntax-variable: #d9dfe5;
   --syntax-punctuation: #9ea6ae;
+  --provenance-engine: #61b9ff;
+  --provenance-project: #74c878;
+  --provenance-skill: #00caca;
+  --provenance-agent: #a9a5ff;
+  --provenance-variable: #f49752;
+  --provenance-app: #ef8bc5;
+  --provenance-extension: #fd8994;
+  --provenance-environment: #c6b236;
+  --provenance-unrecorded: #7a7a7a;
   --shadow-float: 0 1px 2px rgb(0 0 0 / 0.4), 0 12px 32px -8px rgb(0 0 0 / 0.6);
   --shadow-float-sm: 0 1px 2px rgb(0 0 0 / 0.4), 0 4px 14px -4px rgb(0 0 0 / 0.5);
   --on-accent: #000000;

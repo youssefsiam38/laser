@@ -24,7 +24,7 @@
  *   pi/ui/response       every live worker (the worker that owns the dialog id
  *                        answers; the others ignore it)
  */
-import { ErrorCodes, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PRODUCT_VERSION, ProtocolError, decisionPushPayload, isTerminalRunStatus, parseClientRequest, type AgentRun, type AgentWorktreeStatus, type JsonRpcError, type JsonRpcResponse, type NamerState, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
+import { ErrorCodes, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PRODUCT_VERSION, ProtocolError, decisionPushPayload, isTerminalRunStatus, parseClientRequest, type AgentRun, type AgentWorktreeStatus, type JsonRpcError, type JsonRpcResponse, type NamerState, type ProjectEnvStatus, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
 import { existsSync, statSync, unlinkSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { HOST_ENVIRONMENT_METHOD, applyHostEnvironment, guardHostEnvironment } from "./environment.js";
@@ -34,8 +34,10 @@ import { removeRunWorktree, worktreeStatus } from "./agents/worktrees.js";
 import type { AgentStore } from "./agents/store.js";
 import type { AttentionTracker } from "./attention.js";
 import type { SessionCatalog } from "./catalog.js";
+import type { ProjectEnvStore } from "./project-env.js";
 import { searchSessions } from "./session-search.js";
 import { pageCatalog } from "./catalog-page.js";
+import type { SearchCancellation } from "./search-cancellation.js";
 import type { LogStore } from "./logstore.js";
 import { browseDirectories, type PackageService, type SetupService } from "./packages.js";
 import type { TaskRegister } from "./tasks/register.js";
@@ -63,6 +65,7 @@ const DEFAULT_INBOX_LIMIT = 50;
 export interface RouterDeps {
   attention: AttentionTracker;
   projects: ProjectRegistry;
+  projectEnv: ProjectEnvStore;
   views: ViewCache;
   /** M4 log store. Absent when the host could not open it (see LogStore). */
   logs?: LogStore | undefined;
@@ -164,7 +167,7 @@ export class Router {
     private readonly deps: RouterDeps,
   ) {}
 
-  async handle(raw: unknown, access: { localEnvironment?: boolean } = {}): Promise<JsonRpcResponse> {
+  async handle(raw: unknown, access: { localEnvironment?: boolean; searches?: SearchCancellation } = {}): Promise<JsonRpcResponse> {
     const id = (raw as { id?: string | number } | null)?.id ?? 0;
     try {
       guardHostEnvironment(raw, access.localEnvironment);
@@ -173,7 +176,7 @@ export class Router {
       if (req.method !== "pi/host/version" && clientVersion && clientVersion !== PRODUCT_VERSION) {
         throw new ProtocolError(ErrorCodes.VersionMismatch, "Refresh this view to match the host before continuing.", { version: PRODUCT_VERSION });
       }
-      const result = await this.dispatch(req);
+      const result = await this.dispatch(req, access.searches);
       return { jsonrpc: "2.0", id: req.id, result };
     } catch (error) {
       return { jsonrpc: "2.0", id, error: toRpcError(error) };
@@ -198,7 +201,8 @@ export class Router {
    * run's id and status from the registry.
    */
   sessions(cwd?: string): SessionSummary[] {
-    const rows = this.catalog.list(cwd).filter((session) => this.isSessionDirectory(session.cwd)).map(({ size: _size, ...summary }) => summary);
+    const isSessionDirectory = this.sessionDirectorySnapshot();
+    const rows = this.catalog.list(cwd).filter((session) => isSessionDirectory(session.cwd)).map(({ size: _size, ...summary }) => summary);
     const known = new Set(rows.map((row) => row.path));
     for (const [path, summary] of this.unwritten) {
       // The catalog has it, or the worker let it go: the stub has done its job.
@@ -206,7 +210,7 @@ export class Router {
         this.unwritten.delete(path);
         continue;
       }
-      if (known.has(path) || !this.isSessionDirectory(summary.cwd)) continue;
+      if (known.has(path) || !isSessionDirectory(summary.cwd)) continue;
       if (cwd !== undefined && summary.cwd !== cwd) continue;
       rows.unshift(summary);
     }
@@ -254,7 +258,7 @@ export class Router {
       .slice(0, limit);
   }
 
-  private async dispatch(req: TypedClientRequest): Promise<unknown> {
+  private async dispatch(req: TypedClientRequest, searches?: SearchCancellation): Promise<unknown> {
     switch (req.method) {
       case "pi/host/version":
         return { version: PRODUCT_VERSION };
@@ -279,10 +283,19 @@ export class Router {
       }
 
       case "session/search": {
-        const { query, cwd, after, before, cursor } = req.params;
-        const sessions = this.catalog.list(cwd).filter(s => this.isSessionDirectory(s.cwd) && (!after || s.modifiedAt >= after) && (!before || s.modifiedAt < before));
-        return searchSessions(sessions, query, cursor);
+        const { query, cwd, after, before, cursor, searchId } = req.params;
+        const read = searches?.begin(searchId ?? `rpc:${req.id}`);
+        try {
+          read?.signal.throwIfAborted();
+          // One classification per request (F02), cancellable search (F07).
+          const isSessionDirectory = this.sessionDirectorySnapshot();
+          const sessions = this.catalog.list(cwd).filter(s => isSessionDirectory(s.cwd) && (!after || s.modifiedAt >= after) && (!before || s.modifiedAt < before));
+          return await searchSessions(sessions, query, cursor, read?.signal);
+        } finally { read?.finish(); }
       }
+      case "session/search/cancel":
+        searches?.cancel(req.params.searchId);
+        return {};
 
       case "pi/session/inbox":
         return { sessions: this.inbox(req.params.cwd, req.params.limit) };
@@ -304,7 +317,7 @@ export class Router {
 
       case "pi/session/delete": {
         const { path } = req.params;
-        const entry = this.catalog.list().find((session) => session.path === path);
+        const entry = this.catalog.getListed(path);
         if (!entry) throw new ProtocolError(ErrorCodes.SessionNotFound, "That session is no longer on disk.");
         if (this.pool.openSessions(entry.cwd).includes(path)) {
           throw new ProtocolError(ErrorCodes.SessionBusy, "Close this session before deleting its transcript.");
@@ -462,6 +475,39 @@ export class Router {
 
       case "pi/project/browse":
         return browseDirectories(req.params.path);
+
+      // --------------------------------- project environment (M16-T17) ---
+      // Configuration and trust live here; the worker runs the hook and owns
+      // the values. Every answer carries names, never values.
+      case "pi/project/env/status":
+        return { status: await this.projectEnvStatus(req.params.cwd) };
+
+      case "pi/project/env/set": {
+        const root = projectRootOf(req.params.cwd);
+        // Saving is the approval: the person is looking at the command.
+        this.deps.projectEnv.set(root, req.params.config);
+        const status = await this.projectEnvStatus(root);
+        this.deps.projectEnv.emit(status);
+        return { status };
+      }
+
+      case "pi/project/env/test":
+      case "pi/project/env/refresh": {
+        const root = projectRootOf(req.params.cwd);
+        const base = this.projectEnvBase(root);
+        // Never start a worker only to test a hook, and never run one for a
+        // project that is not trusted or not approved.
+        if (base.state !== "failed" && base.state !== "ready") return { status: base };
+        const worker = await this.deps.projects.ensureTrusted(root).then(
+          () => this.pool.get(root),
+          () => undefined,
+        );
+        if (!worker) return { status: base };
+        const answer = (await worker.request(req.method, { cwd: root })) as { status: ProjectEnvStatus };
+        const status = { ...base, ...answer.status, cwd: root };
+        this.deps.projectEnv.emit(status);
+        return { status };
+      }
 
       // Package management is deliberately not part of Laser's product API.
       // These old wire methods remain parseable for a clear breaking-change
@@ -786,6 +832,20 @@ export class Router {
     return this.workspaceAgentOf(cwd) !== undefined;
   }
 
+  /** Presentation-only memo, owned by one synchronous list/search operation.
+   * Mutation, trust and spawn checks always resolve containment afresh. */
+  private sessionDirectorySnapshot(): (cwd: string) => boolean {
+    const values = new Map<string, boolean>();
+    return (cwd) => {
+      let value = values.get(cwd);
+      if (value === undefined) {
+        value = this.isSessionDirectory(cwd);
+        values.set(cwd, value);
+      }
+      return value;
+    };
+  }
+
   /** Only real projects and explicitly designated built-in workspaces are session directories. */
   private isSessionDirectory(cwd: string): boolean {
     return !this.deps.projects.isExcluded(cwd) || this.isWorkspace(cwd);
@@ -797,7 +857,7 @@ export class Router {
    * turn that old directory into a project when it is opened.
    */
   private isWorkspaceSession(path: string): boolean {
-    const kind = this.catalog.list().find((session) => session.path === path)?.agent?.kind;
+    const kind = this.catalog.getListed(path)?.agent?.kind;
     return kind === "beam" || kind === "chat";
   }
 
@@ -819,8 +879,8 @@ export class Router {
     // worktree is part of its project (invariant 5): a cwd under
     // `.worktrees/<name>` reaches the project's worker as the project, never
     // a second worker of its own, and a file it named keeps its place inside
-    // that worktree (still inside the project, so the worker's containment
-    // check holds).
+    // that worktree. File reads allow machine-wide targets, but a relative
+    // request must retain its originating directory before worker routing.
     if (CWD_ROUTED.has(req.method)) {
       const params = req.params as { cwd: string; path?: string };
       const cwd = projectRootOf(params.cwd);
@@ -962,6 +1022,37 @@ export class Router {
       );
     }
     return this.deps.logs;
+  }
+
+  /**
+   * What a person sees before any worker is asked: configured, approved,
+   * trusted. A project with no worker running still has a truthful status.
+   */
+  private projectEnvBase(cwd: string): ProjectEnvStatus {
+    const root = projectRootOf(cwd);
+    const { trust } = this.deps.projects.trustOf(root);
+    return this.deps.projectEnv.baseStatus(root, trust);
+  }
+
+  /**
+   * The base status, enriched by the worker when one is already up.
+   *
+   * A worker is never started just to answer a status question: starting one
+   * runs the project's hook, and looking at a settings screen should not.
+   */
+  private async projectEnvStatus(cwd: string): Promise<ProjectEnvStatus> {
+    const root = projectRootOf(cwd);
+    const base = this.projectEnvBase(root);
+    if (base.state === "not-configured" || base.state === "off") return base;
+    const live = this.pool.liveClients().find((entry) => entry.cwd === root);
+    if (!live) return base;
+    try {
+      const answer = (await live.client.request("pi/project/env/status", { cwd: root })) as { status: ProjectEnvStatus };
+      return { ...base, ...answer.status, cwd: root };
+    } catch {
+      // An older worker without the method is still a working worker.
+      return base;
+    }
   }
 
   /**

@@ -18,6 +18,7 @@ export interface CachedView {
 }
 
 interface Cached extends CachedView {
+  bytes: number;
   size: number;
   mtimeMs: number;
   /** Insertion/refresh time; the eviction order. */
@@ -26,10 +27,12 @@ interface Cached extends CachedView {
 
 export class ViewCache {
   private readonly cache = new Map<string, Cached>();
+  private retainedBytes = 0;
 
   constructor(
     private readonly limit = 8,
     private readonly now: () => number = Date.now,
+    private readonly byteLimit = 32 * 1024 * 1024,
   ) {}
 
   /** The cached answer for a path, or undefined when absent or stale. */
@@ -41,11 +44,11 @@ export class ViewCache {
     try {
       ({ size, mtimeMs } = statSync(path));
     } catch {
-      this.cache.delete(path);
+      this.invalidate(path);
       return undefined;
     }
     if (hit.size !== size || hit.mtimeMs !== mtimeMs) {
-      this.cache.delete(path);
+      this.invalidate(path);
       return undefined;
     }
     // Refresh recency: a Map keeps insertion order, so re-set to move to the end.
@@ -55,6 +58,11 @@ export class ViewCache {
   }
 
   set(path: string, view: CachedView): void {
+    this.invalidate(path);
+    // Serialized bytes are an admission metric, not a JS heap estimate.
+    let bytes: number;
+    try { bytes = Buffer.byteLength(JSON.stringify(view)); } catch { return; }
+    if (bytes > this.byteLimit) return;
     let size: number;
     let mtimeMs: number;
     try {
@@ -64,21 +72,26 @@ export class ViewCache {
       // yet, and caching an empty transcript against no file would be a lie.
       return;
     }
-    this.cache.delete(path);
-    this.cache.set(path, { ...view, size, mtimeMs, at: this.now() });
-    while (this.cache.size > this.limit) {
+    this.cache.set(path, { ...view, bytes, size, mtimeMs, at: this.now() });
+    this.retainedBytes += bytes;
+    while (this.cache.size > this.limit || this.retainedBytes > this.byteLimit) {
       const oldest = this.cache.keys().next();
       if (oldest.done) break;
-      this.cache.delete(oldest.value);
+      this.invalidate(oldest.value);
     }
   }
 
   invalidate(path: string): void {
+    this.retainedBytes -= this.cache.get(path)?.bytes ?? 0;
     this.cache.delete(path);
   }
 
+  /** Accounted serialized bytes; diagnostics only. */
+  get bytes(): number { return this.retainedBytes; }
+
   clear(): void {
     this.cache.clear();
+    this.retainedBytes = 0;
   }
 
   /** Cached paths, oldest first. Diagnostics only. */

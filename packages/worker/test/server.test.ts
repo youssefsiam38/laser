@@ -162,7 +162,7 @@ function textOf(content: ContentBlock[]): string {
   return content.map((block) => (block.type === "text" ? block.text : "")).join("");
 }
 
-function harness() {
+function harness(replayBytes?: number) {
   const out: JsonRpcMessage[] = [];
   const drivers: FakeDriver[] = [];
   const server = new WorkerServer({
@@ -170,6 +170,7 @@ function harness() {
     createDriver: () => { const d = new FakeDriver(); drivers.push(d); return d; },
     send: (m) => out.push(m),
     replayBuffer: 3,
+    ...(replayBytes !== undefined ? { replayBytes } : {}),
   });
   const call = async (id: number, method: string, params?: unknown) => {
     await server.handle({ jsonrpc: "2.0", id, method, params });
@@ -192,9 +193,10 @@ describe("WorkerServer", () => {
       await server.handle({ jsonrpc: "2.0", id: 2, method: "pi/project/read", params: { cwd: join(cwd, "other"), path: "note.md" } });
       expect(out.find(message => "id" in message && message.id === 2)).toHaveProperty("error");
       await server.handle({ jsonrpc: "2.0", id: 3, method: "pi/project/read", params: { cwd, path: "missing.txt" } });
-      expect(out.find(message => "id" in message && message.id === 3)).toMatchObject({ error: { code: -32603, message: "That file could not be found. It may have been moved or deleted." } });
+      expect(out.find(message => "id" in message && message.id === 3)).toMatchObject({ error: { code: -32603, message: "This file no longer exists." } });
+      // A path outside the project is readable now (M16-T19); a directory is not.
       await server.handle({ jsonrpc: "2.0", id: 4, method: "pi/project/read", params: { cwd, path: ".." } });
-      expect(out.find(message => "id" in message && message.id === 4)).toMatchObject({ error: { code: -32603, message: "That file is outside this project." } });
+      expect(out.find(message => "id" in message && message.id === 4)).toMatchObject({ error: { code: -32603, message: "That path is a folder." } });
       expect(drivers).toBe(0);
     } finally { rmSync(cwd, { recursive: true, force: true }); }
   });
@@ -470,6 +472,24 @@ describe("WorkerServer", () => {
     expect(accepted.result).toEqual({ accepted: true, queued: false });
     expect(stale.error?.code).toBe(-32602);
     expect(driver.prompted).toHaveLength(2);
+  });
+
+  it("advances the replay floor for an oversized event without evicting pending questions or the driver", async () => {
+    const h = harness(512);
+    await h.call(1, "session/new", { cwd: "/tmp/fake" });
+    const d = h.drivers[0]!;
+    d.emit({ type: "update", update: { kind: "turn_start" } });
+    d.emit({ type: "update", update: { kind: "text_delta", delta: "x".repeat(1024), contentIndex: 0 } });
+    d.emit({ type: "update", update: { kind: "turn_start" } });
+    d.pending = [{ method: "select", id: "byte-question", title: "Pick", options: ["a"] }];
+    h.out.length = 0;
+    const loaded = await h.call(2, "session/load", { path: "/tmp/fake/s1.jsonl", fromSeq: 0 });
+    expect(loaded.result).toMatchObject({ replayFrom: 2, seq: 3 });
+    expect(h.notifications("session/update").map(n => (n.params as { seq: number }).seq)).toEqual([3]);
+    expect(h.notifications("pi/ui/request")[0]!.params).toMatchObject({ id: "byte-question" });
+    expect(h.drivers).toHaveLength(1);
+    expect(d.disposed).toBe(false);
+    await h.server.dispose();
   });
 
   it("replays buffered updates after fromSeq and re-emits pending dialogs on load", async () => {

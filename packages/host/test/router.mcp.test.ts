@@ -95,6 +95,10 @@ describe("a cwd under a child's worktree", () => {
       const absolute = { jsonrpc: "2.0" as const, id: 3, method: "pi/project/read", params: { cwd: CWD, path: `${CWD}/README.md` } };
       await router.handle(absolute as never);
       expect(requests.at(-1)).toEqual({ cwd: CWD, method: "pi/project/read", params: { cwd: CWD, path: `${CWD}/README.md` } });
+      // Machine-wide targets keep their identity even through worktree routing.
+      const outside = { ...absolute, id: 4, params: { cwd: worktree, path: "/outside/notes.txt" } };
+      await router.handle(outside as never);
+      expect(requests.at(-1)).toEqual({ cwd: CWD, method: "pi/project/read", params: { cwd: CWD, path: "/outside/notes.txt" } });
     } finally {
       cleanup();
     }

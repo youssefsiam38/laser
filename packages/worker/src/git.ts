@@ -18,8 +18,9 @@
  * so nothing here writes into a repository the agent may be editing.
  */
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { constants } from "node:fs";
+import { lstat, open, realpath } from "node:fs/promises";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { ProjectGitStatus } from "@lasercode/protocol";
 
 /** `git diff --numstat` line: `added<TAB>removed<TAB>path`; binaries are `-<TAB>-<TAB>path`. */
@@ -100,6 +101,8 @@ export interface GitServiceOptions {
   maxNewFiles?: number;
   /** Skip a new file bigger than this when counting its lines. */
   maxNewFileBytes?: number;
+  /** Aggregate read budget per cache miss, including binary headers/sentinels. */
+  maxNewFilesTotalBytes?: number;
 }
 
 interface Baseline {
@@ -218,9 +221,15 @@ export class GitService {
       this.run(["symbolic-ref", "--quiet", "--short", "HEAD"]).catch(() => ""),
       this.run(["status", "--porcelain=v1", "-z", "--untracked-files=all"]).catch(() => ""),
     ]);
-    const branch =
-      branchName.trim() || (await this.run(["rev-parse", "--short", "HEAD"]).catch(() => "")).trim() || "(no commits)";
+    const branchResult = branchName.trim()
+      ? Promise.resolve(branchName.trim())
+      : this.run(["rev-parse", "--short", "HEAD"]).catch(() => "").then((name) => name.trim() || "(no commits)");
     const { dirty, untracked } = parsePorcelain(porcelain);
+    // These reads share no mutable state. Baseline capture remains ordered.
+    const changes = baseline ? Promise.all([
+      this.run(["diff", "--numstat", baseline.snapshot]).catch(() => ""),
+      this.linesOfNewFiles(untracked.filter((p) => !baseline.untracked.has(p))),
+    ]) : Promise.resolve(["", 0] as const);
 
     // Upstream first; a branch that was never pushed compares against the
     // remote's default branch, which is what a pull request would target.
@@ -232,19 +241,18 @@ export class GitService {
     let behind = 0;
     let remoteUrl = "";
     if (upstream) {
-      const counts = await this.run(["rev-list", "--left-right", "--count", `${upstream}...HEAD`]).catch(() => "");
-      ({ ahead, behind } = parseAheadBehind(counts));
       const remote = upstream.split("/")[0] ?? "";
-      remoteUrl = remote ? (await this.run(["remote", "get-url", remote]).catch(() => "")).trim() : "";
+      const [counts, url] = await Promise.all([
+        this.run(["rev-list", "--left-right", "--count", `${upstream}...HEAD`]).catch(() => ""),
+        remote ? this.run(["remote", "get-url", remote]).catch(() => "") : Promise.resolve(""),
+      ]);
+      ({ ahead, behind } = parseAheadBehind(counts));
+      remoteUrl = url.trim();
     }
 
-    let added = 0;
-    let removed = 0;
-    if (baseline) {
-      const numstat = await this.run(["diff", "--numstat", baseline.snapshot]).catch(() => "");
-      ({ added, removed } = parseNumstat(numstat));
-      added += await this.linesOfNewFiles(untracked.filter((p) => !baseline.untracked.has(p)));
-    }
+    const [[numstat, newLines], branch] = await Promise.all([changes, branchResult]);
+    const { added: trackedAdded, removed } = parseNumstat(numstat);
+    const added = trackedAdded + newLines;
 
     return {
       isRepo: true,
@@ -262,11 +270,43 @@ export class GitService {
   /** Lines in files the session created. Bounded: many or huge new files are not "work", they are output. */
   private async linesOfNewFiles(paths: readonly string[]): Promise<number> {
     let total = 0;
+    let remaining = this.options.maxNewFilesTotalBytes ?? 16 * 1024 * 1024;
+    const root = await realpath(this.options.cwd).catch(() => undefined);
+    if (!root) return 0;
+    // One handle/read at a time bounds memory and preserves deterministic
+    // admission when the aggregate budget is exhausted.
+    const buffer = Buffer.alloc(8192);
     for (const path of paths.slice(0, this.maxNewFiles)) {
+      if (remaining <= 0) break;
       try {
-        const buffer = await readFile(join(this.options.cwd, path));
-        if (buffer.length > this.maxNewFileBytes || looksBinary(buffer)) continue;
-        total += countLines(buffer);
+        const target = resolve(root, path);
+        const rel = relative(root, await realpath(target));
+        if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) continue;
+        const before = await lstat(target);
+        if (!before.isFile() || before.size > this.maxNewFileBytes) continue;
+        const file = await open(target, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
+        try {
+          const info = await file.stat();
+          if (!info.isFile() || info.dev !== before.dev || info.ino !== before.ino || info.size > this.maxNewFileBytes) continue;
+          let bytes = 0;
+          let lines = 0;
+          let last = 0x0a;
+          let complete = false;
+          while (remaining > 0 && bytes <= this.maxNewFileBytes) {
+            const length = Math.min(buffer.length, remaining, this.maxNewFileBytes + 1 - bytes);
+            const { bytesRead } = await file.read(buffer, 0, length, bytes);
+            remaining -= bytesRead;
+            if (!bytesRead) { complete = true; break; }
+            const chunk = buffer.subarray(0, bytesRead);
+            // Check the entire first 8 KiB, even when the OS returns short reads.
+            if (bytes < 8192 && looksBinary(chunk.subarray(0, 8192 - bytes))) break;
+            bytes += bytesRead;
+            for (const byte of chunk) if (byte === 0x0a) lines++;
+            last = chunk[bytesRead - 1]!;
+          }
+          // No partial count when growth or the aggregate budget cut us off.
+          if (complete && bytes <= this.maxNewFileBytes) total += lines + (bytes > 0 && last !== 0x0a ? 1 : 0);
+        } finally { await file.close(); }
       } catch {
         // Deleted between `status` and here, or unreadable: not a line of work.
       }

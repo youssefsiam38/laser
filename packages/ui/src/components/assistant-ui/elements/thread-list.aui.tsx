@@ -34,8 +34,8 @@
  *     depth, on a continuous lineage rail (the grammar of
  *     `elements/subagent-list.tsx`). Its row leads with the instance name and
  *     its run's status; a parent shows how many agents it has. A child whose
- *     parent is no longer listed sits under a "Detached" mini-header rather
- *     than vanishing. Selecting a child opens it like any session.
+ *     parent is not listed sits at its own recency position in its project.
+ *     Selecting a child opens it like any session.
  *
  * Since M13-T24, that nest folds, in two layers (`session-folds.ts`):
  *   - **A parent's sub-sessions fold** behind a disclosure in the row's own
@@ -78,7 +78,6 @@ import {
   Folder,
   FolderInput,
   FolderOpen,
-  Info,
   MessageSquare,
   Pencil,
   Pin,
@@ -86,7 +85,6 @@ import {
   Plus,
   Sparkles,
   Trash2,
-  Unlink,
 } from "lucide-react";
 import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type FC } from "react";
 
@@ -151,8 +149,6 @@ export interface ThreadListGroup {
   roots: ThreadListNode[];
   /** Pinned top-level rows, with their children; rendered in the Pinned section. */
   pinned: ThreadListNode[];
-  /** Children whose parent is not in the list any more, newest first. */
-  detached: ThreadListNode[];
   /** Unpinned top-level indices, newest first (the flattened `roots`). */
   indices: number[];
   pinnedIndices: number[];
@@ -313,22 +309,19 @@ export function useThreadListGroups(
     // that hides under a non-matching parent is a match you cannot see.
     const childrenOf = new Map<string, ItemMeta[]>();
     const roots: ItemMeta[] = [];
-    const detached: ItemMeta[] = [];
     for (const meta of shown) {
       const parent = !needle && meta.child && meta.parentPath !== undefined && shownPaths.has(meta.parentPath) ? meta.parentPath : undefined;
       if (parent !== undefined) {
         const list = childrenOf.get(parent) ?? [];
         list.push(meta);
         childrenOf.set(parent, list);
-      } else if (meta.child && !needle) detached.push(meta);
-      else roots.push(meta);
+      } else roots.push(meta);
     }
     // Children in creation order — the order their runs started — never
     // attention order: a list that reshuffles is a list you cannot learn.
     for (const list of childrenOf.values()) list.sort((a, b) => a.startedAt - b.startedAt || a.path.localeCompare(b.path));
     const newestFirst = (a: ItemMeta, b: ItemMeta) => b.modifiedAt - a.modifiedAt;
     roots.sort((a, b) => (!archived && tab === "code" ? Number(b.empty) - Number(a.empty) : 0) || newestFirst(a, b));
-    detached.sort(newestFirst);
 
     const nodeOf = (meta: ItemMeta, trail: Set<string>): ThreadListNode => ({
       index: meta.index,
@@ -341,16 +334,15 @@ export function useThreadListGroups(
     });
     const countNodes = (nodes: readonly ThreadListNode[]): number => nodes.reduce((n, node) => n + 1 + countNodes(node.children), 0);
 
-    const byCwd = new Map<string, { roots: ThreadListNode[]; detached: ThreadListNode[] }>();
+    const byCwd = new Map<string, { roots: ThreadListNode[] }>();
     const bucket = (cwd: string) => {
       const held = byCwd.get(cwd);
       if (held) return held;
-      const made = { roots: [], detached: [] };
+      const made = { roots: [] };
       byCwd.set(cwd, made);
       return made;
     };
     for (const meta of roots) bucket(groupCwdOf(meta)).roots.push(nodeOf(meta, new Set([meta.path])));
-    for (const meta of detached) bucket(groupCwdOf(meta)).detached.push(nodeOf(meta, new Set([meta.path])));
 
     let order: string[];
     if (archived) order = [...byCwd.keys()];
@@ -368,7 +360,7 @@ export function useThreadListGroups(
       .filter((cwd) => !filter || tab === "chat" || cwd === filter)
       .map((cwd): ThreadListGroup => {
         const kind: SessionGroupKind = workspaceKindOf(cwd, workspaces) ?? "project";
-        const held = byCwd.get(cwd) ?? { roots: [], detached: [] };
+        const held = byCwd.get(cwd) ?? { roots: [] };
         const isPinned = (node: ThreadListNode) => !archived && pinned.has(node.path);
         const unpinned = held.roots.filter((node) => !isPinned(node));
         // A pinned row keeps its whole branch: it moves to the Pinned section
@@ -380,10 +372,9 @@ export function useThreadListGroups(
           kind,
           roots: unpinned,
           pinned: pinnedRoots,
-          detached: held.detached,
           indices: unpinned.map((node) => node.index),
           pinnedIndices: pinnedRoots.map((node) => node.index),
-          total: countNodes(held.roots) + countNodes(held.detached),
+          total: countNodes(held.roots),
         };
       });
   }, [threadIds, threadItems, runs, projects, filter, needle, pinned, tab, workspaces, archived]);
@@ -443,7 +434,6 @@ function branchInfoOf(groups: readonly ThreadListGroup[], runs: Readonly<Record<
   for (const group of groups) {
     group.roots.forEach(walk);
     group.pinned.forEach(walk);
-    group.detached.forEach(walk);
   }
   return info;
 }
@@ -596,7 +586,7 @@ export const ThreadList: FC<ThreadListProps> = ({ projects, query = "", onOpen, 
   useEffect(() => {
     if (!openPath) return;
     for (const group of groups) {
-      const chain = lineageTo([...group.roots, ...group.pinned, ...group.detached], openPath);
+      const chain = lineageTo([...group.roots, ...group.pinned], openPath);
       if (chain.length < 2) continue;
       chain.slice(0, -1).forEach((ancestor, depth) => {
         sessionFolds.reveal(foldKey("children", ancestor.path));
@@ -718,7 +708,7 @@ const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, s
   const id = groupDomId(group.cwd);
   const listId = `${id}-list`;
   const beam = group.kind === "beam";
-  const count = group.roots.length + group.detached.length;
+  const count = group.roots.length;
   const total = catalogPage?.total ?? group.total;
   // Beam's group starts a Beam chat, which opens in the window rather than in
   // the bubble; the panel decides which agent a directory means (D-143).
@@ -775,7 +765,7 @@ const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, s
                 const complete = actions.allSessionSummaries ? await actions.allSessionSummaries() : sessions;
                 const seeds = complete.filter((session) => session.cwd === group.cwd || (beam && workspaceKindOf(session.cwd, workspaces) === "beam")).map((session) => session.path);
                 const include = (node: ThreadListNode) => { seeds.push(node.path); node.children.forEach(include); };
-                [...group.roots, ...group.pinned, ...group.detached].forEach(include);
+                [...group.roots, ...group.pinned].forEach(include);
                 const paths = sessionSubtreePaths(seeds, complete);
                 paths.forEach((path) => archive.add(path));
                 void aui.threads.reload();
@@ -832,7 +822,6 @@ const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, s
                 {loadingMore ? "Loading chats…" : hasMore ? "Load more" : "Show fewer"}
               </button>
             )}
-            {group.detached.length > 0 && <DetachedRows nodes={group.detached} editing={editing} onEdit={onEdit} onOpen={onOpen} />}
           </div>
         ))}
     </section>
@@ -884,7 +873,6 @@ function ChatGroup({ group, searching, openPath, editing, onEdit, onOpen }: { gr
           }}>
           {loading ? "Loading chats…" : hasMore ? "Load more" : "Show fewer"}
         </button>}
-        {group.detached.length > 0 && <DetachedRows nodes={group.detached} editing={editing} onEdit={onEdit} onOpen={onOpen} />}
       </div>
       </LayoutContext>
     </section>
@@ -1041,37 +1029,6 @@ function branchDomId(path: string): string {
   return `session-branch-${h.toString(36)}`;
 }
 
-/** Children whose parent is gone from the list: still reachable, and labelled as such. */
-function DetachedRows({ nodes, editing, onEdit, onOpen }: { nodes: readonly ThreadListNode[] } & Omit<BranchProps, "node">) {
-  const layout = useContext(LayoutContext);
-  const nestedLayout = useMemo<RowLayout>(() => ({ nested: true, flat: layout.flat, gutter: needsGutter(nodes), dimmed: false }), [layout.flat, nodes]);
-  return (
-    <div data-slot="detached-sessions" className={cn("mt-1", layout.flat ? "ps-1" : "ps-7")}>
-      <div className="flex h-7 items-center gap-1.5 px-2 text-xs text-ink-3">
-        <Unlink aria-hidden="true" className="size-3 shrink-0" />
-        <span className="text-xs font-medium">Detached</span>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button type="button" aria-label="Why detached?" className="flex size-5 items-center justify-center rounded-md text-ink-3 outline-none hover:text-ink focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live pointer-coarse:size-6">
-              <Info className="size-3" aria-hidden="true" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="right" className="max-w-56 whitespace-normal">
-            An agent started these, but the session that started them is archived or deleted. They still open like any session.
-          </TooltipContent>
-        </Tooltip>
-      </div>
-      <LayoutContext value={nestedLayout}>
-        <div role="list" className="relative ms-2 flex flex-col border-s border-line ps-1.5">
-          {nodes.map((node) => (
-            <SessionBranch key={node.path} node={node} editing={editing} onEdit={onEdit} onOpen={onOpen} />
-          ))}
-        </div>
-      </LayoutContext>
-    </div>
-  );
-}
-
 function ArchivedGroup({ editing, onEdit, onOpen }: { editing: string | undefined; onEdit(id: string | undefined): void; onOpen?: (() => void) | undefined }) {
   const archivedIds = useAuiState((s) => s.threads.archivedThreadIds);
   const archivedCount = useLaserState(s => s.archivedSessionCount) ?? archivedIds.length;
@@ -1079,7 +1036,7 @@ function ArchivedGroup({ editing, onEdit, onOpen }: { editing: string | undefine
   const groups = useThreadListGroups(EMPTY_PROJECTS, undefined, "", "code", EMPTY_WORKSPACES, true);
   const runs = useLaserState((s) => s.agents.runs);
   const tree = useMemo(() => branchInfoOf(groups, runs), [groups, runs]);
-  const roots = useMemo(() => groups.flatMap(group => [...group.roots, ...group.detached]), [groups]);
+  const roots = useMemo(() => groups.flatMap(group => group.roots), [groups]);
   const layout = useMemo(() => ({ ...ROOT_LAYOUT, flat: true, gutter: needsGutter(roots) }), [roots]);
   const [open, setOpen] = useState(false);
   useEffect(() => open ? actions.expandCatalog?.() : undefined, [actions, open]);

@@ -5,7 +5,7 @@
  * so they are worth a test; the SQL itself is exercised through them.
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -242,7 +242,39 @@ describe("ingestion", () => {
   });
 });
 
+it("serializes each full provider capture once and reuses its retained byte size", () => {
+  const payload = { model: "capture-model", messages: [{ role: "user", content: "x".repeat(1024 * 1024) }], apiKey: "secret" };
+  const stringify = JSON.stringify;
+  let captures = 0;
+  const spy = vi.spyOn(JSON, "stringify").mockImplementation((value, ...args) => {
+    if (value?.model === "capture-model") captures++;
+    return stringify(value, ...args);
+  });
+  try {
+    store.observeExtensionMessage("/project", "s", { type: "lasercode/provider/request", at: new Date().toISOString(), payload });
+    expect(captures).toBe(1);
+  } finally { spy.mockRestore(); }
+  const entry = store.query({}).entries[0]!;
+  const content = store.content(entry.detailRef!.ref);
+  expect(JSON.stringify(content)).not.toContain('"secret"');
+  expect(entry.summary).toContain("1.0 MB");
+  payload.messages[0]!.content = "mutated after ingestion";
+  expect(JSON.stringify(store.content(entry.detailRef!.ref))).not.toContain("mutated after ingestion");
+});
+
 describe("retention", () => {
+  it("yields between bounded maintenance batches and drains to the same retention result", async () => {
+    vi.useFakeTimers();
+    const bounded = new LogStore({ file: ":memory:", maxRows: 5, pruneEvery: 1 });
+    try {
+      for (let i = 0; i < 1200; i++) bounded.record({ section: "host", kind: "note", summary: String(i) });
+      await vi.advanceTimersToNextTimerAsync();
+      expect(bounded.stats().total).toBe(1200 - 256);
+      await vi.runAllTimersAsync();
+      expect(bounded.stats().total).toBe(5);
+      expect(bounded.query({}).entries.map((e) => e.summary)).toEqual(["1195", "1196", "1197", "1198", "1199"]);
+    } finally { bounded.close(); vi.useRealTimers(); }
+  });
   it("keeps at most maxRows and collects orphaned payloads", async () => {
     const bounded = new LogStore({ file: join(base, "bounded.db"), maxRows: 5, pruneEvery: 1 });
     try {

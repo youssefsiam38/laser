@@ -53,6 +53,20 @@ it("reads with the owning cwd, highlights code, closes on Escape and restores fo
   await until(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
   expect(document.activeElement).toBe(button("Open"));
 });
+it.each(["src/example.ts", "/outside/example.ts"])("labels the resolved target %s and uses it for editor/copy actions", async path => {
+  const openSourceFile = vi.fn(async () => ({ opened: true }));
+  const writeText = vi.fn(async () => {});
+  vi.stubGlobal("desktop", { openSourceFile });
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  transport.request.mockResolvedValue(file({ path }));
+  await mount();
+  expect(document.querySelector('[role="dialog"] p[dir="ltr"]')?.textContent).toBe(path);
+  const absolute = path.startsWith("/") ? path : `/project/${path}`;
+  await click(button("Copy path"));
+  expect(writeText).toHaveBeenCalledWith(absolute);
+  await click([...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(node => node.textContent === "Open in editor")!);
+  expect(openSourceFile).toHaveBeenCalledWith(absolute);
+});
 it("uses Shiki's extension grammar when the worker only identifies plain text", async () => {
   transport.request.mockResolvedValue(file({ path: "example.svelte", name: "example.svelte", mediaType: "text/plain", content: "<script>const answer = 42;</script>\n<h1>{answer}</h1>" }));
   await act(async () => root.render(<Fixture><FileViewer open source={{ request: { cwd: "/project", path: "example.svelte" } }} onOpenChange={() => {}} /></Fixture>));
@@ -95,8 +109,8 @@ it("shows loading, a readable failure and a working retry", async () => {
   transport.request.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
   await mount();
   expect(document.querySelector('[role="status"]')?.textContent).toContain("Opening file");
-  await act(async () => reject(new Error("That file is outside this project.")));
-  expect(document.querySelector('[role="alert"]')?.textContent).toContain("That file is outside this project.");
+  await act(async () => reject(new Error("This file no longer exists.")));
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain("This file no longer exists.");
   await click(button("Try again"));
   await until(() => expect(document.querySelector('[role="dialog"] code')?.textContent).toContain("const answer"));
 });
@@ -112,6 +126,7 @@ it("preserves literal filename characters when opening the native editor", async
   const openSourceFile = vi.fn(async () => ({ opened: true }));
   vi.stubGlobal("desktop", { openSourceFile });
   const path = "notes#100%?:3.ts";
+  transport.request.mockResolvedValue(file({ path }));
   await act(async () => root.render(<Fixture><FileCard path={path} /></Fixture>));
   await click(button("Open in editor"));
   expect(openSourceFile).toHaveBeenCalledWith(`/project/${path}`);

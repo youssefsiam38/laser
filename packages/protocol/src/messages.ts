@@ -12,6 +12,7 @@ import type { AgentWorktreeStatus, SessionAgentInfo, SessionWorktreeDisposition 
 import type { ProviderFailureClass } from "./provider-failure.js";
 import { WIRE_NAMESPACE } from "./identity.js";
 import type { HostEnvironmentParams } from "./environment.js";
+import type { ProjectEnvStatus } from "./project-env.js";
 import type { AccountUsageState, PiExtensionMessage, PiExtensionModuleName } from "./pi-extension.js";
 import type { FeatureScope, FeatureState, GoalAction, SessionGoal } from "./features.js";
 import type { PushConfig, PushDeviceInfo, PushSubscriptionJson } from "./push.js";
@@ -889,11 +890,11 @@ export interface ProjectFile {
 }
 
 /**
- * One file of a project, read for display (M15-T1): the viewer behind a file
- * card in the transcript. Never executed, never resolved outside the project.
+ * A machine file read for display: the viewer behind a file card in the
+ * transcript. Never executed; relative requests resolve against the project.
  */
 export interface ProjectFileContent {
-  /** Posix-separated, relative to the project directory. */
+  /** Resolved target: project-relative (POSIX-separated) inside, absolute outside. */
   path: string;
   /** Last segment, for the title. */
   name: string;
@@ -941,7 +942,11 @@ export interface ClientRequests {
    * are different states, and conflating them makes the next `session/load`
    * ask for `fromSeq: 0` and receive the whole buffer a second time.
    */
-  "session/load": { params: { path: string; fromSeq?: number }; result: { state: SessionState; replayFrom: number; seq: number } };
+  /** `transcript: "loaded"` opts this connection into updates only for sessions
+   * it loads/creates/forks. Admission starts before replay. Loaded caches remain
+   * subscribed until disconnect, independently of retirement detach; questions,
+   * attention and other small notifications remain global. Omit for full stream. */
+  "session/load": { params: { path: string; fromSeq?: number; transcript?: "loaded" }; result: { state: SessionState; replayFrom: number; seq: number } };
   "session/prompt": {
     params: {
       path: string;
@@ -967,9 +972,11 @@ export interface ClientRequests {
   };
   /** Read-only search of saved conversations; no worker is opened. */
   "session/search": {
-    params: { query: string; cwd?: string; after?: string; before?: string; cursor?: number };
+    params: { query: string; cwd?: string; after?: string; before?: string; cursor?: number; searchId?: string };
     result: { hits: Array<{ path: string; count: number; excerpt: string; source: "user" | "assistant" | "reasoning" | "tool" }>; nextCursor?: number; unreadable: number };
   };
+  /** Cancel only this connection's named saved-history read; never an agent turn. */
+  "session/search/cancel": { params: { searchId: string }; result: {} };
   /**
    * Sessions that want a person, attention-sorted (waiting > error >
    * finished-unread > working > idle), then most recently modified. Across all
@@ -1096,6 +1103,32 @@ export interface ClientRequests {
    * excluded. Answered by the host.
    */
   "pi/project/browse": { params: { path?: string }; result: DirectoryListing };
+  /**
+   * The project's environment command (M16-T17, docs/project-environment.md).
+   * Status carries variable **names** only; a value never crosses the protocol.
+   */
+  "pi/project/env/status": { params: { cwd: string }; result: { status: ProjectEnvStatus } };
+  /**
+   * Configure it. Saving through this method is the approval: the person chose
+   * the executable, so the fingerprint of `{command, args}` is recorded here.
+   */
+  "pi/project/env/set": {
+    params: {
+      cwd: string;
+      config: {
+        enabled: boolean;
+        command: string;
+        args?: string[];
+        required?: boolean;
+        allowProviderKeys?: string[];
+      } | null;
+    };
+    result: { status: ProjectEnvStatus };
+  };
+  /** Run it once without applying anything: names and counts, never values. */
+  "pi/project/env/test": { params: { cwd: string }; result: { status: ProjectEnvStatus } };
+  /** Re-resolve for subsequent commands. Running commands keep their environment. */
+  "pi/project/env/refresh": { params: { cwd: string }; result: { status: ProjectEnvStatus } };
 
   // --- workers (M2-T1) ---
   "pi/worker/list": { params: {}; result: { workers: WorkerInfo[] } };
@@ -1358,6 +1391,8 @@ export interface HostNotifications {
   "pi/project/trust_request": { id: string; cwd: string; reasons: string[]; timeoutMs: number };
   /** The request above was settled (by any client, or by the timeout). */
   "pi/project/trust_resolved": { id: string; cwd: string; trusted: boolean };
+  /** A project's environment command changed state (configured, resolved, failed). */
+  "pi/project/env/changed": { status: ProjectEnvStatus };
 
   // ------------------------------------------------------------------ M4 --
   /** `DefaultPackageManager` progress, forwarded while an install/remove/update runs. */
