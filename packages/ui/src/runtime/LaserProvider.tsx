@@ -342,9 +342,16 @@ export interface StateStore {
   dispatch(action: Action): void;
 }
 
-export function createStateStore(initial: AppState = initialState): StateStore {
+export function createStateStore(initial: AppState = initialState): StateStore & { batch(deliver: () => void): void } {
   let current = initial;
+  let depth = 0;
+  let dirty = false;
   const listeners = new Set<() => void>();
+  const publish = () => {
+    if (depth || !dirty) return;
+    dirty = false;
+    for (const listener of [...listeners]) listener();
+  };
   return {
     getSnapshot: () => current,
     subscribe(listener) {
@@ -357,7 +364,17 @@ export function createStateStore(initial: AppState = initialState): StateStore {
       const next = reduce(current, action);
       if (Object.is(next, current)) return;
       current = next;
-      for (const listener of [...listeners]) listener();
+      dirty = true;
+      publish();
+    },
+    batch(deliver) {
+      depth++;
+      try {
+        deliver();
+      } finally {
+        depth--;
+        publish();
+      }
     },
   };
 }
@@ -500,6 +517,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   const client = useMemo(() => {
     const created: HostClient = new HostClient({
       ...(url !== undefined ? { url } : {}),
+      batchNotifications: store.batch,
       onNotification: (method, params) => {
         dispatch({ type: "notification", method, params });
         onHostNotification.current(method, params);

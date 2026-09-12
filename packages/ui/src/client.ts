@@ -28,6 +28,8 @@ export interface HostClientOptions {
   onVersionMismatch?: (hostVersion: string) => void;
   url?: string;
   onNotification: NotificationHandler;
+  /** Synchronous publication transaction; event handlers still run in order. */
+  batchNotifications?: (deliver: () => void) => void;
   onConnection?: (state: ConnectionState) => void;
   /**
    * Result of a resume `session/load`. `replayFrom` is the earliest seq the
@@ -285,7 +287,11 @@ export class HostClient {
     }
     if (this.pendingUpdates.length === 0) return;
     const batch = this.pendingUpdates.splice(0, this.pendingUpdates.length);
-    for (const params of batch) this.deliver("session/update", params);
+    const deliver = () => {
+      for (const params of batch) this.deliver("session/update", params);
+    };
+    if (this.options.batchNotifications) this.options.batchNotifications(deliver);
+    else deliver();
   }
 
   /**

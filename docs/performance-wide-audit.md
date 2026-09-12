@@ -499,3 +499,24 @@ These support the techniques, not Laser-specific performance estimates:
 - [Electron performance guide](https://www.electronjs.org/docs/latest/tutorial/performance) — avoid blocking critical processes and loading code before it is needed.
 - [MDN WebSocket](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket) and [bufferedAmount](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket/bufferedAmount) — no built-in incoming backpressure; queued outgoing bytes are observable but require an application policy.
 - Existing `docs/perf-chat-loading.md` — paging/virtualization research and the branch owner's measured baseline/acceptance contract.
+
+## Implemented — renderer lane
+
+### F04 — batched external-store publication
+
+`HostClient` wraps its existing synchronous frame/timer/barrier delivery in a
+store transaction. Every reducer action and event listener still runs in arrival
+order; imperative snapshots immediately contain each accepted sequence. Only
+subscriber publication waits until the transaction finishes (including throws).
+No new scheduling layer, delta merging, history action or hydration change.
+
+Measured paired call counts in `test/client.test.ts`: **32 → 1 subscriber
+publications** for 32 text deltas, with **32 → 32 reducer calls and event-level
+observations**. Identical immutable final state, tested separately at frame,
+hidden-tab timer, dialog, RPC-reply and disconnect barriers. These are deterministic
+source integration counts, not browser React commits or elapsed-time savings.
+
+Validation at base `413c8e2` plus this commit: UI TypeScript passes; UI suite
+**164 files / 1,383 passed, one pre-existing benchmark skipped**; identity passes.
+Logs: `/tmp/perf-renderer/f04-{focused,types,ui,identity}.log`. Browser performance
+and the lane-wide visible-surface acceptance matrix remain outstanding.
