@@ -201,6 +201,15 @@ describe("forked", () => {
 });
 
 describe("blocksFromEntries", () => {
+  it("keeps the turn's token accounting on a reloaded assistant message", () => {
+    const blocks = blocksFromEntries([
+      { type: "message", message: { role: "user", content: [{ type: "text", text: "hi" }] } },
+      { type: "message", message: { role: "assistant", content: [{ type: "text", text: "ok" }], usage: { input: 5, output: 4, cacheRead: 0, cacheWrite: 0, totalTokens: 9 } } },
+      { type: "message", message: { role: "assistant", content: [{ type: "text", text: "no usage" }] } },
+    ]);
+    expect(blocks[1]).toMatchObject({ kind: "assistant", usage: { input: 5, output: 4, totalTokens: 9 } });
+    expect(blocks[2]).not.toHaveProperty("usage");
+  });
   it("rebuilds user, assistant, tool call and result from Pi entries", () => {
     const blocks = blocksFromEntries([
       { type: "session", version: 3 },

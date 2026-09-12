@@ -1012,6 +1012,15 @@ function storedToolResult(message: { content?: unknown; details?: unknown }): un
   return { content: Array.isArray(content) ? content : [{ type: "text", text: textOf(content) }], ...(hasDetails ? { details } : {}) };
 }
 
+
+/** The engine's per-turn `usage` on an assistant entry, or nothing when it reported none. */
+function usageOfEntry(raw: unknown): Usage | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const u = raw as Partial<Usage>;
+  const n = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) ? value : 0);
+  return { input: n(u.input), output: n(u.output), cacheRead: n(u.cacheRead), cacheWrite: n(u.cacheWrite), totalTokens: n(u.totalTokens), ...(u.cost ? { cost: u.cost } : {}) };
+}
+
 export function textOf(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -1116,6 +1125,9 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null, na
       // row — the same list `incompleteReason` in runtime/projection.ts uses.
       const stopReason = STOPPED_SHORT.has(m.stopReason as string) ? (m.stopReason as StopReason) : undefined;
       const errorMessage = typeof m.errorMessage === "string" && m.errorMessage !== "" ? m.errorMessage : undefined;
+      // The engine writes the turn's token counts on the entry; a reloaded
+      // footer shows the same accounting the live one did.
+      const usage = usageOfEntry((m as { usage?: unknown }).usage);
       if (text || thinking || stopReason) {
         blocks.push({
           kind: "assistant",
@@ -1126,6 +1138,7 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null, na
           streaming: false,
           ...(stopReason ? { stopReason } : {}),
           ...(errorMessage ? { errorMessage } : {}),
+          ...(usage ? { usage } : {}),
         });
       }
       for (const p of parts) {
