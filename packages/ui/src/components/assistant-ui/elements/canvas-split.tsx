@@ -41,7 +41,7 @@ export function CanvasSplitPane({ width, className, ...props }: ComponentProps<"
     <aside
       data-slot="canvas-split-pane"
       style={{ width }}
-      className={cn("relative flex h-full min-h-0 shrink-0 flex-col bg-bg hairline-l", className)}
+      className={cn("relative flex h-full min-h-0 shrink-0 flex-col bg-bg hairline-s", className)}
       {...props}
     />
   );

@@ -133,7 +133,7 @@ export function SettingsForm({ audience, cwd, catalog, snapshot, onApply }: Sett
       ) : (
         <div className="flex min-h-0 flex-1">
           {!searching && (
-            <nav aria-label="Setting sections" className="hidden w-56 shrink-0 hairline-r md:block">
+            <nav aria-label="Setting sections" className="hidden w-56 shrink-0 hairline-e md:block">
               <ScrollArea className="h-full">
                 <ul className="flex flex-col gap-0.5 p-2">
                   {sections.map((entry) => (

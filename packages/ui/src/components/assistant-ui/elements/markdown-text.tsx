@@ -158,7 +158,7 @@ const defaultComponents = memoizeMarkdownComponents({
   th: ({ className, ...props }) => (
     <th
       className={cn(
-        "border-b border-line px-3 py-1.5 text-start font-medium text-ink-2 [[align=center]]:text-center [[align=right]]:text-right",
+        "border-b border-line px-3 py-1.5 text-start font-medium text-ink-2 [[align=center]]:text-center [[align=right]]:text-end",
         className,
       )}
       {...props}
@@ -167,7 +167,7 @@ const defaultComponents = memoizeMarkdownComponents({
   td: ({ className, ...props }) => (
     <td
       className={cn(
-        "border-b border-line px-3 py-1.5 align-top [[align=center]]:text-center [[align=right]]:text-right [[align=right]]:tnum",
+        "border-b border-line px-3 py-1.5 align-top [[align=center]]:text-center [[align=right]]:text-end [[align=right]]:tnum",
         className,
       )}
       {...props}

@@ -203,7 +203,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
   return (
     <section
       aria-label="Sessions"
-      className={cn("flex h-full min-h-0 flex-col bg-surface", variant === "panel" && "w-72 shrink-0 hairline-r")}
+      className={cn("flex h-full min-h-0 flex-col bg-surface", variant === "panel" && "w-72 shrink-0 hairline-e")}
     >
       {/* 48px, one row: the sessions hairline has to land on the same y as the
           top bar's and the telemetry header's (DESIGN.md "Layout"). */}

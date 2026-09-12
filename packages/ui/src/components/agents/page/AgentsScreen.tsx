@@ -171,7 +171,7 @@ export function AgentsScreen({ cwd, target }: AgentsScreenProps) {
       />
       <div className="flex min-h-0 flex-1">
         {showList ? (
-          <ScrollArea className={cn("min-h-0 shrink-0", mobile ? "w-full" : "w-72 hairline-r")}>
+          <ScrollArea className={cn("min-h-0 shrink-0", mobile ? "w-full" : "w-72 hairline-e")}>
             <AgentList
               snapshot={snapshot}
               warnings={warnings}
@@ -293,7 +293,7 @@ function Header({
 function PageSkeleton({ mobile }: { mobile: boolean }) {
   return (
     <div className="flex min-h-0 flex-1" aria-busy="true" aria-label="Loading agents" role="status">
-      <div className={cn("flex shrink-0 flex-col gap-2 px-3 py-4", mobile ? "w-full" : "w-72 hairline-r")}>
+      <div className={cn("flex shrink-0 flex-col gap-2 px-3 py-4", mobile ? "w-full" : "w-72 hairline-e")}>
         {Array.from({ length: 6 }, (_, i) => (
           <Skeleton key={i} className="h-10 w-full" />
         ))}

@@ -71,7 +71,7 @@ export function Rail() {
   return (
     <nav
       aria-label="Projects"
-      className="flex h-full w-14 shrink-0 flex-col items-center bg-surface-2 pt-[calc(env(safe-area-inset-top)+8px)] pb-[calc(env(safe-area-inset-bottom)+8px)] hairline-r"
+      className="flex h-full w-14 shrink-0 flex-col items-center bg-surface-2 pt-[calc(env(safe-area-inset-top)+8px)] pb-[calc(env(safe-area-inset-bottom)+8px)] hairline-e"
     >
       <Brand />
       {/* Keyed on the project list: `useLaserState` caches by store state,

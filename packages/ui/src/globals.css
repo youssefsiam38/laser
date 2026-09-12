@@ -319,11 +319,12 @@
 
 .startup-aperture-halo {
   position: absolute;
-  left: 50%;
+  inset-inline: 0;
+  margin-inline: auto;
   top: 0;
   width: var(--startup-aperture-size);
   aspect-ratio: 1;
-  transform: translate(-50%, -38%);
+  transform: translateY(-38%);
   background: radial-gradient(circle, color-mix(in oklab, var(--live) 20%, transparent), transparent 68%);
   filter: blur(calc(var(--space-unit) * 3));
   animation: startup-halo var(--startup-signal-duration) var(--motion-ease) infinite;
@@ -808,11 +809,11 @@
 @utility hairline-b {
   border-bottom: 1px solid var(--line);
 }
-@utility hairline-l {
-  border-left: 1px solid var(--line);
+@utility hairline-s {
+  border-inline-start: 1px solid var(--line);
 }
-@utility hairline-r {
-  border-right: 1px solid var(--line);
+@utility hairline-e {
+  border-inline-end: 1px solid var(--line);
 }
 
 /* Terminal ground: dark in both themes. */
@@ -867,7 +868,7 @@
 .activity-beam > span {
   position: absolute;
   inset-block: 0;
-  left: 0;
+  inset-inline-start: 0;
   width: 60%;
   background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--live) 22%, transparent), transparent);
   animation: activity-beam-travel calc(var(--motion-slow) * 14) var(--motion-ease) infinite;
@@ -897,7 +898,7 @@
     display: inline-block;
     width: 2px;
     height: 1.05em;
-    margin-left: 2px;
+    margin-inline-start: 2px;
     vertical-align: -0.15em;
     background: var(--live);
     border-radius: 1px;

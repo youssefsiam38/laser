@@ -146,7 +146,7 @@ export function FleetPanel({ variant, onClose }: FleetPanelProps) {
     <aside
       aria-label="Fleet"
       data-slot="fleet-panel"
-      className={cn("flex h-full min-h-0 flex-col bg-surface", variant === "panel" && "w-80 shrink-0 hairline-l")}
+      className={cn("flex h-full min-h-0 flex-col bg-surface", variant === "panel" && "w-80 shrink-0 hairline-s")}
     >
       <header className={cn("flex h-12 shrink-0 items-center gap-2 px-4 hairline-b", variant === "sheet" && "pe-12")}>
         <span className="relative flex size-7 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-live">
