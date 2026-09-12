@@ -12,12 +12,14 @@
  * say) leaves a signed-in server stuck on `needs-auth` and makes sign-out
  * remove nothing.
  */
-import { PRODUCT_NAME, type McpServerConfig } from "@lasercode/protocol";
+import { HOMEPAGE, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PRODUCT_VERSION, type McpServerConfig } from "@lasercode/protocol";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { McpInspector } from "../../src/mcp/inspector.js";
+import { loadMcpEngine } from "../../src/mcp/engine.js";
+import { mcpClientIdentity } from "../../src/mcp/identity.js";
 import { startFixtureOAuthServer, type FixtureOAuthServer } from "./fixtures/oauth-server.js";
 
 let base: string;
@@ -93,11 +95,37 @@ describe("signing in to an MCP server", () => {
     const called = await inspector.call("global", server_, new Map(), "gated_whoami", {});
     expect(called.ok).toBe(true);
 
+    expect(server.registrations.length).toBeGreaterThan(0);
+    for (const registration of server.registrations) {
+      expect(registration).toMatchObject({ client_name: PRODUCT_DISPLAY_NAME, client_uri: HOMEPAGE });
+    }
+    const expected = (suffix: string) => ({ name: `${PRODUCT_NAME}-mcp${suffix}`, title: PRODUCT_DISPLAY_NAME, version: PRODUCT_VERSION });
+    expect(server.clientInfos).toEqual(expect.arrayContaining([expected(""), expected("-gated")]));
+    for (const info of server.clientInfos) expect([expected(""), expected("-gated")]).toContainEqual(info);
+    console.log(`received OAuth discovery/connections: ${JSON.stringify(server.clientInfos)}`);
+    console.log(`received OAuth registration: ${JSON.stringify(server.registrations.map(({ client_name, client_uri }) => ({ client_name, client_uri })))}`);
+
     // Signing out removes what signing in stored, so the next connection is
     // refused again rather than silently reusing a credential.
     await inspector.authLogout("global", server_);
     const afterLogout = await inspector.inspect({ scope: "global", config: server_, secrets: new Map() });
     expect(afterLogout.status).toBe("needs-auth");
+  }, 60_000);
+
+  it("honours explicit server OAuth registration metadata over the application defaults", async () => {
+    const engine = await loadMcpEngine();
+    const runtime = engine.auth.createOAuthRuntime(undefined, mcpClientIdentity());
+    try {
+      await engine.auth.startAuth("custom-registration", server.url, {
+        url: server.url, auth: "oauth", oauth: { clientName: "Custom application", clientUri: "https://custom.example/app" },
+      }, { runtime, openAuthorizationUrl: () => {}, onAuthorizationUrl: () => {} });
+      expect(server.registrations.length).toBeGreaterThan(0);
+      for (const registration of server.registrations) {
+        expect(registration).toMatchObject({ client_name: "Custom application", client_uri: "https://custom.example/app" });
+      }
+    } finally {
+      await engine.auth.shutdownOAuth(runtime);
+    }
   }, 60_000);
 
   it("refuses sign-in for a server that does not sign in, and closes a draft that needs it", async () => {

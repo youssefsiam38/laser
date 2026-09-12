@@ -584,8 +584,35 @@ Verified here, on Linux x64 with Node 24.11.1, against the pinned engine 0.85.0:
   `dispose()` takes the child process with it.
 - the status channel (`MCP_STATUS_EVENT`) is versioned and read-only, and is
   the only thing Laser reads for per-session status.
-- no patch was needed. The three upstream gaps above are worked around in
+- no patch was needed for M14-T2. M14-T9 adds the optional client-identity
+  seam described below. The three original upstream gaps are worked around in
   `packages/worker/src/mcp/` without modifying the package.
+
+## pi-mcp-adapter 2.33.0: embedding client identity (M14-T9)
+
+Local exact-version patch: `patches/pi-mcp-adapter@2.33.0.patch`, registered in
+`pnpm-workspace.yaml` and integrity-accounted by `pnpm-lock.yaml`. **Not filed**;
+the orchestrator owns any public proposal after review.
+
+An embedding application must identify itself to MCP servers and OAuth
+registration services without changing the underlying engine's package or data
+directory. The optional `McpClientIdentity` carries a base name, title, version,
+and OAuth client-name/URI defaults. `McpAdapterOptions`, `McpServerManager`,
+`createOAuthRuntime`, the endpoint probe, and the OAuth provider accept it.
+The factory retains it across load-time/session runtime replacement; auth runtime
+ownership carries it through discovery, authorization and token refresh. One
+helper projects only MCP Implementation fields onto `clientInfo`, appending the
+server name for server connections. Explicit per-server OAuth metadata takes
+precedence. With no identity supplied, upstream's historical defaults remain.
+The helper is included in the package's executable-file inventory and the
+public compiled type declarations include the new option.
+
+The worker supplies generated product identity in `src/mcp/identity.ts`; neither
+`PI_PACKAGE_DIR` nor agent-directory resolution changes. Offline tests under
+`packages/worker/test/mcp/` observe actual initialize payloads for two names over
+stdio, Streamable HTTP and legacy SSE through the inspector and real SDK
+sessions, plus probe/discovery payloads and dynamic registration fields. An AST
+guard scans the installed adapter's handshake sites for engine-name literals.
 
 ## pi-web-access 0.28.0: distinguish empty results and challenges (M12-T68)
 

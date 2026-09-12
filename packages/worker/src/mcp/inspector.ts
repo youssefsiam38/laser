@@ -9,6 +9,7 @@
  * to disk the way a session's tool call may.
  */
 import { delimiter } from "node:path";
+import { mcpClientIdentity } from "./identity.js";
 import type {
   McpCallResult,
   McpInspection,
@@ -91,8 +92,8 @@ export class McpInspector {
   private async managerOrCreate(): Promise<McpManager> {
     const engine = await this.engineOrLoad();
     if (!this.manager) {
-      const manager = new engine.Manager(this.cwd);
-      this.oauthRuntime ??= engine.auth.createOAuthRuntime();
+      const manager = new engine.Manager(this.cwd, mcpClientIdentity());
+      this.oauthRuntime ??= engine.auth.createOAuthRuntime(undefined, mcpClientIdentity());
       manager.setOAuthRuntime?.(this.oauthRuntime);
       this.manager = manager;
     }

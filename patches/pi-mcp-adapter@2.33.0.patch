@@ -1,0 +1,411 @@
+diff --git a/client-identity.ts b/client-identity.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..b9ad686a4b017461301f2cfa81f7ba99e8336eeb
+--- /dev/null
++++ b/client-identity.ts
+@@ -0,0 +1,18 @@
++import type { McpClientIdentity } from "./types.ts";
++
++// Preserve the standalone adapter's historical identities when not embedded.
++const DEFAULT_IDENTITIES = {
++  server: { name: "pi-mcp", version: "1.0.0" },
++  discovery: { name: "pi-mcp-adapter", version: "2.11.0" },
++  probe: { name: "pi-mcp-probe", version: "2.1.2" },
++};
++
++/** Project only MCP Implementation fields; OAuth defaults never enter clientInfo. */
++export function resolveClientInfo(identity: McpClientIdentity | undefined, purpose: keyof typeof DEFAULT_IDENTITIES, serverName?: string) {
++  const value = identity ?? DEFAULT_IDENTITIES[purpose];
++  return {
++    name: purpose === "server" ? `${value.name}-${serverName}` : value.name,
++    ...(identity?.title !== undefined ? { title: identity.title } : {}),
++    version: value.version,
++  };
++}
+diff --git a/dist/types.d.ts b/dist/types.d.ts
+index f957e9320a0569c0c0050c08c9a5e5d9215993ce..0bc1d18295866329b5ec8cf25744c628825c8999 100644
+--- a/dist/types.d.ts
++++ b/dist/types.d.ts
+@@ -456,7 +456,17 @@ export interface McpConfig {
+     settings?: McpSettings;
+     claudePlugins?: ClaudePluginConfig[];
+ }
++/** Identity supplied by an embedding application. Server connections append `-<serverName>` to name. */
++export interface McpClientIdentity {
++  name: string;
++  title?: string;
++  version: string;
++  oauthClientName?: string;
++  oauthClientUri?: string;
++}
++
+ export interface McpAdapterOptions {
++  clientIdentity?: McpClientIdentity;
+     config?: McpConfig;
+     configPath?: string;
+ }
+diff --git a/index.ts b/index.ts
+index f655b4fe49bb747741dd4dda7759ad37a17eb992..927a6469aa083b38c0822d320d389f86533e7d53 100644
+--- a/index.ts
++++ b/index.ts
+@@ -188,7 +188,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+   function startGatewayRetryInitialization(ctx: ExtensionContext): void {
+     const generation = ++lifecycleGeneration;
+     const owner = createMcpRuntimeOwner();
+-    const oauthRuntime = createOAuthRuntime(owner.signal);
++    const oauthRuntime = createOAuthRuntime(owner.signal, options.clientIdentity);
+     currentOwner = owner;
+     currentOAuthRuntime = oauthRuntime;
+     state = null;
+@@ -675,6 +675,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+           }
+         : {}),
+       oauthRuntime,
++      clientIdentity: options.clientIdentity,
+     });
+     initPromise = promise;
+ 
+@@ -754,7 +755,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+       if (lifecycleGeneration !== 0 || state || initPromise) return;
+       const generation = ++lifecycleGeneration;
+       const owner = createMcpRuntimeOwner();
+-      const oauthRuntime = createOAuthRuntime(owner.signal);
++      const oauthRuntime = createOAuthRuntime(owner.signal, options.clientIdentity);
+       currentOwner = owner;
+       currentOAuthRuntime = oauthRuntime;
+       startInitialization({
+@@ -782,7 +783,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+     const previousOwner = currentOwner;
+     const previousOAuthRuntime = currentOAuthRuntime;
+     const owner = createMcpRuntimeOwner();
+-    const oauthRuntime = createOAuthRuntime(owner.signal);
++    const oauthRuntime = createOAuthRuntime(owner.signal, options.clientIdentity);
+     currentOwner = owner;
+     currentOAuthRuntime = oauthRuntime;
+     state = null;
+@@ -1623,6 +1624,7 @@ export function createMcpAdapter(options: McpAdapterOptions = {}) {
+     : undefined;
+   return function mcpAdapter(pi: ExtensionAPI) {
+     installMcpAdapter(pi, {
++      ...(options.clientIdentity !== undefined ? { clientIdentity: { ...options.clientIdentity } } : {}),
+       ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
+       ...(factoryConfig !== undefined ? { config: cloneMcpConfig(factoryConfig) } : {}),
+     });
+diff --git a/init.ts b/init.ts
+index 6766d0e0d145d68af88b12d79a041b8b9e868691..f68eb4e7d53c041fb02ecd69fc71d9f9cf38ecdf 100644
+--- a/init.ts
++++ b/init.ts
+@@ -144,8 +144,8 @@ export async function initializeMcp(
+   const authStorageOptions = getAuthStorageOptions(config.settings?.oauthDir, cwd);
+ 
+   const ownsOAuthRuntime = options.oauthRuntime === undefined;
+-  const oauthRuntime = options.oauthRuntime ?? createOAuthRuntime(owner.signal);
+-  const manager = new McpServerManager(cwd);
++  const oauthRuntime = options.oauthRuntime ?? createOAuthRuntime(owner.signal, options.clientIdentity);
++  const manager = new McpServerManager(cwd, options.clientIdentity);
+   manager.setRuntimeSignal?.(owner.signal);
+   manager.setOAuthRuntime?.(oauthRuntime);
+   manager.setDefaultRequestTimeoutMs(config.settings?.requestTimeoutMs);
+diff --git a/mcp-auth-flow.ts b/mcp-auth-flow.ts
+index 1f1e1bedf9d0232ec3fffaa7cae4adf2bc826b1c..d071d5484c1785618c2286fa71d5a11b90fa403c 100644
+--- a/mcp-auth-flow.ts
++++ b/mcp-auth-flow.ts
+@@ -39,7 +39,8 @@ import {
+   type AuthStorageOptions,
+   type StoredTokens,
+ } from "./mcp-auth.ts"
+-import { isServerDisabled, type ServerEntry } from "./types.ts"
++import { resolveClientInfo } from "./client-identity.ts"
++import { isServerDisabled, type McpClientIdentity, type ServerEntry } from "./types.ts"
+ import { formatTerminalError, interpolateEnvVars } from "./utils.ts"
+ import { createOAuthFetch, oauthHeaderResolver, resolveOAuthHeaders } from "./mcp-auth-fetch.ts"
+ import { abortable, throwIfAborted } from "./abort.ts"
+@@ -49,6 +50,7 @@ import { combineAbortSignals, isAbortError } from "./runtime-owner.ts"
+ export type AuthStatus = "authenticated" | "expired" | "not_authenticated"
+ 
+ export interface McpOAuthRuntime {
++  readonly clientIdentity?: McpClientIdentity
+   readonly signal: AbortSignal
+ }
+ 
+@@ -100,9 +102,9 @@ type RuntimeState = {
+ const runtimeStates = new WeakMap<McpOAuthRuntime, RuntimeState>()
+ const activeRuntimes = new Set<McpOAuthRuntime>()
+ 
+-export function createOAuthRuntime(signal?: AbortSignal): McpOAuthRuntime {
++export function createOAuthRuntime(signal?: AbortSignal, clientIdentity?: McpClientIdentity): McpOAuthRuntime {
+   const controller = new AbortController()
+-  const runtime = { signal: combineAbortSignals(signal, controller.signal)! } satisfies McpOAuthRuntime
++  const runtime = { clientIdentity, signal: combineAbortSignals(signal, controller.signal)! } satisfies McpOAuthRuntime
+   runtimeStates.set(runtime, {
+     controller,
+     generation: 0,
+@@ -275,7 +277,7 @@ export function extractOAuthConfig(definition: ServerEntry): McpOAuthConfig {
+   return config
+ }
+ 
+-async function probeAuthDiscovery(serverUrl: string, definition?: Pick<ServerEntry, "headers">, signal?: AbortSignal): Promise<AuthDiscovery> {
++async function probeAuthDiscovery(serverUrl: string, definition?: Pick<ServerEntry, "headers">, signal?: AbortSignal, clientIdentity?: McpClientIdentity): Promise<AuthDiscovery> {
+   // The preliminary probe is command-free; real SDK discovery resolves commands.
+   const serviceHeaders = resolveOAuthHeaders(definition?.headers, false)
+   const probeFetch = createOAuthFetch(serverUrl, () => serviceHeaders, signal, { timeout: false })
+@@ -298,7 +300,7 @@ async function probeAuthDiscovery(serverUrl: string, definition?: Pick<ServerEnt
+         params: {
+           protocolVersion: LATEST_PROTOCOL_VERSION,
+           capabilities: {},
+-          clientInfo: { name: "pi-mcp-adapter", version: "2.11.0" },
++          clientInfo: resolveClientInfo(clientIdentity, "discovery"),
+         },
+       }),
+       ...(discoverySignal ? { signal: discoverySignal } : {}),
+@@ -431,11 +433,11 @@ export async function startAuth(
+       onRedirect: async () => {
+         throw new Error("Browser redirect is not used for client_credentials flow")
+       },
+-    }, authStorageOptions, runtime.signal)
++    }, authStorageOptions, runtime.signal, undefined, runtime.clientIdentity)
+     try {
+       const fetchFn = createOAuthFetch(serverUrl, oauthHeaderResolver(definition?.headers), signal)
+       authProvider.setAuthFetch(fetchFn)
+-      const discovery = applyOAuthConfig(await probeAuthDiscovery(serverUrl, definition, signal), config)
++      const discovery = applyOAuthConfig(await probeAuthDiscovery(serverUrl, definition, signal, runtime.clientIdentity), config)
+       throwIfAborted(signal)
+       const result = await abortable(runSdkAuth(authProvider, { serverUrl, ...discovery, fetchFn }), signal)
+       throwIfAborted(signal)
+@@ -494,7 +496,7 @@ export async function startAuth(
+     onRedirect: async (url) => {
+       capturedUrl = url
+     },
+-  }, authStorageOptions, runtime.signal, oauthState)
++  }, authStorageOptions, runtime.signal, oauthState, runtime.clientIdentity)
+ 
+   try {
+     await withAuthEntryTransaction(serverName, async () => {
+@@ -522,7 +524,7 @@ export async function startAuth(
+ 
+     const fetchFn = createOAuthFetch(serverUrl, oauthHeaderResolver(definition?.headers), signal)
+     authProvider.setAuthFetch(fetchFn)
+-    const discovery = applyOAuthConfig(await probeAuthDiscovery(serverUrl, definition, signal), config)
++    const discovery = applyOAuthConfig(await probeAuthDiscovery(serverUrl, definition, signal, runtime.clientIdentity), config)
+     throwIfAborted(signal)
+     const result = await abortable(runSdkAuth(authProvider, { serverUrl, ...discovery, fetchFn }), signal)
+     throwIfAborted(signal)
+@@ -1058,7 +1060,7 @@ export async function getValidToken(
+       const fetchFn = createOAuthFetch(serverUrl, oauthHeaderResolver(options.definition?.headers), signal)
+       const authProvider = new McpOAuthProvider(serverName, serverUrl, config, {
+         onRedirect: async () => {},
+-      }, authStorageOptions, runtime.signal)
++      }, authStorageOptions, runtime.signal, undefined, runtime.clientIdentity)
+ 
+       try {
+         authProvider.setAuthFetch(fetchFn)
+@@ -1069,7 +1071,7 @@ export async function getValidToken(
+           return null
+         }
+ 
+-        const discovery = applyOAuthConfig(await probeAuthDiscovery(serverUrl, options.definition, signal), config)
++        const discovery = applyOAuthConfig(await probeAuthDiscovery(serverUrl, options.definition, signal, runtime.clientIdentity), config)
+         throwIfAborted(signal)
+         const result = await abortable(runSdkAuth(authProvider, {
+           serverUrl,
+diff --git a/mcp-oauth-provider.ts b/mcp-oauth-provider.ts
+index 0d34d2dad2b1ce6e796076f59c0a12583bc2af9a..89e5ab2515fa55381389ef2976b65682e1fa9b76 100644
+--- a/mcp-oauth-provider.ts
++++ b/mcp-oauth-provider.ts
+@@ -34,6 +34,7 @@ import {
+   type StoredClientInfo,
+ } from "./mcp-auth.ts"
+ import { OAuthMetadataSchema, OpenIdProviderDiscoveryMetadataSchema } from "@modelcontextprotocol/core"
++import type { McpClientIdentity } from "./types.ts"
+ import { authFetch, createOAuthFetch, type OAuthFetch } from "./mcp-auth-fetch.ts"
+ import { resolveCommandSecret } from "./utils.ts"
+ import { getAppClientUri, getAppName } from "./agent-dir.ts"
+@@ -280,6 +281,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
+     private storageOptions: AuthStorageOptions = {},
+     private runtimeSignal?: AbortSignal,
+     initialState?: string,
++    private readonly clientIdentity?: McpClientIdentity,
+   ) {
+     this.authFetch = createOAuthFetch(serverUrl, undefined, runtimeSignal)
+     this.flowState = initialState
+@@ -374,7 +376,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
+ 
+   /** Configured homepage, else the historical default on stock pi, else nothing. */
+   private get clientUri(): string | undefined {
+-    return this.config.clientUri ?? defaultClientUri()
++    return this.config.clientUri ?? this.clientIdentity?.oauthClientUri ?? defaultClientUri()
+   }
+ 
+   /**
+@@ -384,7 +386,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
+   get clientMetadata(): OAuthClientMetadata {
+     if (this.usesClientCredentials) {
+       return {
+-        client_name: this.config.clientName ?? defaultClientName(),
++        client_name: this.config.clientName ?? this.clientIdentity?.oauthClientName ?? defaultClientName(),
+         ...(this.clientUri !== undefined ? { client_uri: this.clientUri } : {}),
+         ...(this.config.logoUri !== undefined ? { logo_uri: this.config.logoUri } : {}),
+         redirect_uris: [],
+@@ -400,7 +402,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
+ 
+     return {
+       redirect_uris: [redirectUrl],
+-      client_name: this.config.clientName ?? defaultClientName(),
++      client_name: this.config.clientName ?? this.clientIdentity?.oauthClientName ?? defaultClientName(),
+       ...(this.clientUri !== undefined ? { client_uri: this.clientUri } : {}),
+       ...(this.config.logoUri !== undefined ? { logo_uri: this.config.logoUri } : {}),
+       grant_types: ["authorization_code", "refresh_token"],
+diff --git a/mcp-probe.ts b/mcp-probe.ts
+index 7af421512bdd0c1bac59eb0b0b4715af2e275289..0584c153549459c69afe0c053e436e03d6f01a11 100644
+--- a/mcp-probe.ts
++++ b/mcp-probe.ts
+@@ -1,3 +1,6 @@
++import type { McpClientIdentity } from "./types.ts";
++import { resolveClientInfo } from "./client-identity.ts";
++
+ const PROBE_TIMEOUT_MS = 5_000;
+ const MODERN_PROTOCOL_VERSION = "2026-07-28";
+ const LEGACY_PROTOCOL_VERSION = "2025-06-18";
+@@ -19,16 +22,16 @@ const DISCOVER_REQUEST = {
+   params: {},
+ };
+ 
+-const INITIALIZE_REQUEST = {
++const initializeRequest = (clientIdentity?: McpClientIdentity) => ({
+   jsonrpc: "2.0",
+   id: 1,
+   method: "initialize",
+   params: {
+     protocolVersion: LEGACY_PROTOCOL_VERSION,
+     capabilities: {},
+-    clientInfo: { name: "pi-mcp-probe", version: "2.1.2" },
++    clientInfo: resolveClientInfo(clientIdentity, "probe"),
+   },
+-};
++});
+ 
+ type ProbeStrategy =
+   | { kind: "modern"; request: RequestInit; allowJson: true }
+@@ -50,7 +53,7 @@ const MODERN_STRATEGY: ProbeStrategy = {
+   allowJson: true,
+ };
+ 
+-const LEGACY_POST_STRATEGY: ProbeStrategy = {
++const legacyPostStrategy = (clientIdentity?: McpClientIdentity): ProbeStrategy => ({
+   kind: "legacy-post",
+   request: {
+     method: "POST",
+@@ -58,10 +61,10 @@ const LEGACY_POST_STRATEGY: ProbeStrategy = {
+       Accept: JSON_ACCEPT,
+       "Content-Type": "application/json",
+     },
+-    body: JSON.stringify(INITIALIZE_REQUEST),
++    body: JSON.stringify(initializeRequest(clientIdentity)),
+   },
+   allowJson: true,
+-};
++});
+ 
+ const LEGACY_SSE_STRATEGY: ProbeStrategy = {
+   kind: "legacy-sse",
+@@ -182,7 +185,7 @@ function ambiguousNotMcp(response: Response): McpProbeResult | undefined {
+ }
+ 
+ /** Makes one unauthenticated metadata-only request to identify an HTTP endpoint's protocol shape. */
+-export async function probeMcpEndpoint(url: string | URL): Promise<McpProbeResult> {
++export async function probeMcpEndpoint(url: string | URL, clientIdentity?: McpClientIdentity): Promise<McpProbeResult> {
+   const { response: modernResponse, outcome: modernOutcome } = await probe(url, MODERN_STRATEGY);
+   if (modernOutcome.kind === "mcp") return modernOutcome.result;
+   let ambiguousResult = ambiguousNotMcp(modernResponse);
+@@ -191,7 +194,7 @@ export async function probeMcpEndpoint(url: string | URL): Promise<McpProbeResul
+     return ambiguousResult ?? notMcp(modernResponse);
+   }
+ 
+-  const { response: postResponse, outcome: postOutcome } = await probe(url, LEGACY_POST_STRATEGY);
++  const { response: postResponse, outcome: postOutcome } = await probe(url, legacyPostStrategy(clientIdentity));
+   if (postOutcome.kind === "mcp") return postOutcome.result;
+   ambiguousResult ??= ambiguousNotMcp(postResponse);
+   if (!POST_ENDPOINT_MISMATCH_STATUSES.has(postResponse.status)) return ambiguousNotMcp(postResponse) ?? ambiguousResult ?? notMcp(postResponse);
+diff --git a/package.json b/package.json
+index 644f032f3aa78b5b182d263314723004d95eb560..1a2414c46c5206cc107b7138b9b69aca57430555 100644
+--- a/package.json
++++ b/package.json
+@@ -79,6 +79,7 @@
+   "files": [
+     "cli.js",
+     "agent-dir.ts",
++    "client-identity.ts",
+     "index.ts",
+     "error-signal.ts",
+     "state.ts",
+diff --git a/server-manager.ts b/server-manager.ts
+index 94154fde19245139887270efd4d500b5d1a96653..708e90e1b8767dbdd1406a88ac30a943b8883df0 100644
+--- a/server-manager.ts
++++ b/server-manager.ts
+@@ -23,6 +23,8 @@ import {
+ } from "@modelcontextprotocol/client";
+ import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+ import { UnixSocketClientTransport } from "./unix-socket-transport.ts";
++import { resolveClientInfo } from "./client-identity.ts";
++import type { McpClientIdentity } from "./types.ts";
+ import { probeMcpEndpoint } from "./mcp-probe.ts";
+ import {
+   isServerDisabled,
+@@ -253,7 +255,7 @@ export class McpServerManager {
+   private stopped = false;
+ 
+   /** Default cwd for stdio servers without an explicit config `cwd`. */
+-  constructor(private readonly defaultCwd?: string) {}
++  constructor(private readonly defaultCwd?: string, private readonly clientIdentity?: McpClientIdentity) {}
+ 
+   setSamplingConfig(config: ServerSamplingConfig | undefined): void {
+     this.samplingConfig = config;
+@@ -1028,7 +1030,7 @@ export class McpServerManager {
+       return new Error(`${originalMessage} — endpoint is temporarily unavailable (HTTP 503)`, { cause: error });
+     }
+     try {
+-      const probe = await probeMcpEndpoint(resolveServerUrl(definition)!);
++      const probe = await probeMcpEndpoint(resolveServerUrl(definition)!, this.clientIdentity);
+       return new Error(`${originalMessage} — probe: ${probe.classification}`, { cause: error });
+     } catch {
+       return error instanceof Error ? error : new Error(originalMessage);
+@@ -1089,7 +1091,7 @@ export class McpServerManager {
+     const versionNegotiation = resolveVersionNegotiation(definition);
+     let client: Client;
+     client = new Client(
+-      { name: `pi-mcp-${serverName}`, version: "1.0.0" },
++      resolveClientInfo(this.clientIdentity, "server", serverName),
+       {
+         jsonSchemaValidator: createJsonSchemaValidator(),
+         ...(versionNegotiation ? { versionNegotiation } : {}),
+@@ -1280,6 +1282,8 @@ export class McpServerManager {
+         { onRedirect: async () => {} },
+         this.authStorageOptions,
+         this.oauthRuntime?.signal,
++        undefined,
++        this.clientIdentity,
+       );
+       provider.setAuthFetch(createOAuthFetch(serverUrl, () => serviceHeaders,
+         combineAbortSignals(this.oauthRuntime?.signal, signal), {
+diff --git a/types.ts b/types.ts
+index 023ee643494b8c669b7b479d590181a9c1b016f8..0d18bd23ef9b7d37e23f7a2918a9c5978fede5d6 100644
+--- a/types.ts
++++ b/types.ts
+@@ -666,7 +666,17 @@ export interface McpConfig {
+   claudePlugins?: ClaudePluginConfig[];
+ }
+ 
++/** Identity supplied by an embedding application. Server connections append `-<serverName>` to name. */
++export interface McpClientIdentity {
++  name: string;
++  title?: string;
++  version: string;
++  oauthClientName?: string;
++  oauthClientUri?: string;
++}
++
+ export interface McpAdapterOptions {
++  clientIdentity?: McpClientIdentity;
+   config?: McpConfig;
+   configPath?: string;
+ }

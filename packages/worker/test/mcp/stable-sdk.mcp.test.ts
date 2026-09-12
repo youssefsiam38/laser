@@ -12,7 +12,7 @@
  * cold cache), so these tests are slow by construction, not flaky.
  */
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
-import { DATA_DIR_NAME, PRODUCT_NAME, type FeatureId, type McpRuntimeSnapshot, type McpServerConfig } from "@lasercode/protocol";
+import { DATA_DIR_NAME, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PRODUCT_VERSION, type FeatureId, type McpRuntimeSnapshot, type McpServerConfig } from "@lasercode/protocol";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -24,6 +24,7 @@ import { StableSdkDriver } from "../../src/drivers/stable-sdk.js";
 import type { DriverAgentOptions, DriverEvent } from "../../src/driver.js";
 import { startStubProvider, toolNamesOf, type StubAnswer, type StubProvider } from "../agents/stub-provider.js";
 import { writeStubModels } from "../agents/stub-provider.js";
+import { IDENTITY_TRANSPORTS, identityFixture } from "./fixtures/client-identity.js";
 
 const FIXTURE = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "stdio-server.mjs");
 
@@ -98,6 +99,35 @@ function snapshots(): McpRuntimeSnapshot[] {
 }
 
 describe("a session with an MCP server", () => {
+  it.each(IDENTITY_TRANSPORTS)("sends product identity for two server names over %s", async (transport) => {
+    const fixture = await identityFixture(transport, base);
+    let driver: StableSdkDriver | undefined;
+    try {
+      const names = ["browser-one", "docs-two"];
+      writeServers(names.map((name) => fixture.config(name)));
+      driver = await openSession([{ text: "done" }], { features: ["mcp"] });
+      await promptAndSettle(driver);
+      const received = fixture.received();
+      // Load-time and session-start runtimes may both connect, in either
+      // order. Check every handshake, including replacement connections.
+      const expected = names.map((name) => ({
+        name: `${PRODUCT_NAME}-mcp-${name}`, title: PRODUCT_DISPLAY_NAME, version: PRODUCT_VERSION,
+      }));
+      expect(received).toEqual(expect.arrayContaining(expected));
+      // Replacing a load-time HTTP connection can trigger its diagnostic
+      // probe; probes use the base identity by contract, never a server suffix.
+      const allowed = transport === "stdio" ? expected : [...expected, {
+        name: `${PRODUCT_NAME}-mcp`, title: PRODUCT_DISPLAY_NAME, version: PRODUCT_VERSION,
+      }];
+      for (const info of received) expect(allowed).toContainEqual(info);
+      console.log(`received session ${transport}: ${JSON.stringify(received)}`);
+    } finally {
+      await driver?.dispose();
+      if (driver) drivers.splice(drivers.indexOf(driver), 1);
+      await fixture.close();
+    }
+  }, 120_000);
+
   it("offers the server's tools to the model under its own prefix and returns an image from a call", async () => {
     writeServers([fixtureServer()]);
     const driver = await openSession([
