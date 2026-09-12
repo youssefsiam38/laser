@@ -55,11 +55,11 @@ describe("main destination model", () => {
     expect(isSessionInCodeProject(child, [root, child], {}, "/project")).toBe(true);
     expect(isSessionInCodeProject(beam, [beam], {}, "/project")).toBe(false);
 
-    const detached = { ...child, agent: { ...child.agent!, parentPath: "/gone", rootPath: "/gone" } };
+    const parentless = { ...child, agent: { ...child.agent!, parentPath: "/gone", rootPath: "/gone" } };
     const run: AgentRun = {
       runId: "run",
       sessionId: "child",
-      sessionPath: detached.path,
+      sessionPath: parentless.path,
       rootSessionPath: "/gone",
       parent: { sessionId: "gone", sessionPath: "/gone" },
       subagentName: "child",
@@ -71,6 +71,6 @@ describe("main destination model", () => {
       updatedAt: "2026-09-10T00:00:00Z",
       endedAt: "2026-09-10T00:00:00Z",
     };
-    expect(codeProjectForSession(detached, [detached], { run }, "/other")).toBe("/actual-project");
+    expect(codeProjectForSession(parentless, [parentless], { run }, "/other")).toBe("/actual-project");
   });
 });

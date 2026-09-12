@@ -140,6 +140,36 @@ it("keeps an older working root and a quiet root with a child's question outside
   expect(row("Asking child")).toBeDefined();
 });
 
+it.each(["archived", "deleted", "search"] as const)("places a child with a %s parent among ordinary project rows", async (reason) => {
+  const child = `${PROJECT_CWD}/child.jsonl`;
+  addSession(world, child, PROJECT_CWD);
+  Object.assign(world.sessions.find(session => session.path === child)!, {
+    name: "Conversation child", attention: "idle", modifiedAt: "2026-09-08T00:00:06.500Z",
+    agent: { kind: "child", agentName: "default", subagentName: "explorer", parentPath: path(1) },
+  });
+  if (reason === "deleted") world.sessions = world.sessions.filter(session => session.path !== path(1));
+  if (reason === "search") world.sessions.find(session => session.path === path(1))!.name = "Parent objective";
+  await render();
+  if (reason === "archived") {
+    // A persisted archive from before tree-wide archiving can contain only the parent.
+    await act(async () => { stable.archive.add(path(1)); await aui.threads.reload(); });
+    await act(async () => settle(60));
+  }
+  if (reason === "search") await render("Conversation");
+  const visible = () => [...container.querySelectorAll<HTMLElement>('[data-slot="aui_thread-list-item"]')];
+  expect(visible()[0]?.textContent).toContain("Conversation child");
+  expect(visible()[1]?.textContent).toBe("Conversation 2");
+  expect(visible().filter(el => el.textContent?.includes("Conversation child"))).toHaveLength(1);
+  expect(row("Conversation child")?.closest("section")?.getAttribute("data-cwd")).toBe(PROJECT_CWD);
+  expect(row("Conversation child")?.querySelector('[data-slot="subagent-name"]')?.textContent).toBe("explorer");
+  expect(visible()).toHaveLength(reason === "search" ? 8 : 7);
+  if (reason !== "search") {
+    await act(async () => button("Load more").click());
+    expect(visible()).toHaveLength(8);
+    expect(row("Conversation 8")).toBeDefined();
+  }
+});
+
 it("the archive action moves a parent and its descendants into a folded archived tree and unarchive restores them", async () => {
   const child = `${PROJECT_CWD}/child.jsonl`, grandchild = `${PROJECT_CWD}/grandchild.jsonl`;
   for (const [childPath, parentPath, name] of [[child, path(1), "Child agent"], [grandchild, child, "Grandchild agent"]]) {
