@@ -543,3 +543,31 @@ clock/output equivalence, rename, branch prompt, membership and needs-input
 invalidation; existing fleet/telemetry/runtime/disclosure tests stay green.
 Logs: `/tmp/perf-renderer/f05-{types,ui,identity}.log`. This base has no paged
 catalog reference-set derivation; those M16-T16 additions are not rewritten here.
+
+### F14 — implemented locally, browser acceptance blocked (not accepted)
+
+Uncommitted measurement-only change: binary-search the normal-flow message roots
+before reading the viewport neighborhood. The existing map owns scrolling;
+no virtualizer/history contract or jump controller was added. A ResizeObserver
+also follows the existing message container for disclosure/image height changes.
+The DOM root query remains linear; the costly rectangle reads do not.
+
+Fresh deterministic 2,000-root test: **2,000 → 14 rectangle reads** near the tail;
+reading identity matches the original scan across gaps and tall/resized bodies.
+Production browser, 2,000 synthetic messages, 20 alternating tail scroll samples:
+**16–17 total message-root rectangle reads/frame** (includes all app callers).
+No paired browser latency improvement is claimed. Raw counts and environment:
+`/tmp/perf-renderer/f14-browser.json`, `f14-build.log`, `seed.mjs`, `paths.json`.
+
+TypeScript, UI **166 files / 1,390 passed, one benchmark skipped**, production UI
+build and identity pass. Browser screenshots at 1360/390 show the correct tail
+and no page overflow, but **all captures remained light**, including attempted
+dark cases. Those files are explicitly renamed `attempted-dark-actual-light`.
+A subsequent theme-button click and browser snapshot search timed out. Browser
+matrix, keyboard/touch, find/jump and live resizing acceptance remain incomplete;
+do not accept this finding based on its green unit suite. Source is uncommitted.
+
+F14 continuation: coordinator authorized committing the tested implementation
+with **browser acceptance outstanding**, to be covered once for the integrated
+lane rather than used as a per-finding gate. The preceding blocked checkpoint is
+retained as history; the measurement and test evidence above remain unchanged.
