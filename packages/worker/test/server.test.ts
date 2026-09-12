@@ -193,9 +193,10 @@ describe("WorkerServer", () => {
       await server.handle({ jsonrpc: "2.0", id: 2, method: "pi/project/read", params: { cwd: join(cwd, "other"), path: "note.md" } });
       expect(out.find(message => "id" in message && message.id === 2)).toHaveProperty("error");
       await server.handle({ jsonrpc: "2.0", id: 3, method: "pi/project/read", params: { cwd, path: "missing.txt" } });
-      expect(out.find(message => "id" in message && message.id === 3)).toMatchObject({ error: { code: -32603, message: "That file could not be found. It may have been moved or deleted." } });
+      expect(out.find(message => "id" in message && message.id === 3)).toMatchObject({ error: { code: -32603, message: "This file no longer exists." } });
+      // A path outside the project is readable now (M16-T19); a directory is not.
       await server.handle({ jsonrpc: "2.0", id: 4, method: "pi/project/read", params: { cwd, path: ".." } });
-      expect(out.find(message => "id" in message && message.id === 4)).toMatchObject({ error: { code: -32603, message: "That file is outside this project." } });
+      expect(out.find(message => "id" in message && message.id === 4)).toMatchObject({ error: { code: -32603, message: "That path is a folder." } });
       expect(drivers).toBe(0);
     } finally { rmSync(cwd, { recursive: true, force: true }); }
   });
