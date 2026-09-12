@@ -627,3 +627,41 @@ run failed one unrelated catalog-arrival assertion after its fixed 100 ms wait;
 its focused rerun (8 tests) and full UI rerun pass, with no test/source change:
 `/tmp/f18-ui-arrival-retry.log`. This is recorded, not dismissed as proven
 flakiness. Real pinned-engine MCP/auth/identity tests are included in worker.
+
+### F12 — critical-shell install, optional assets on demand
+
+The build follows static entry imports for mandatory JS; all emitted CSS/fonts
+and existing public shell assets remain mandatory conservatively. Other emitted
+JS stays in an exact same-origin asset allowlist and caches on use. Installation
+reuses unchanged hashed assets from this product's older caches, revalidates
+unhashed shell files, and carries already-cached unchanged optional modules
+forward before old generations are removed. Optional downloads are not part of
+install and cannot prevent the shell becoming available.
+
+Offline policy follows the existing promise in `docs/mobile.md:60–65`: offline
+**shell/start/reconnect**, not persisted transcripts or first-use access to every
+optional feature. Previously fetched optional modules work offline; unchanged
+ones survive updates. Newly hashed or never-used optional modules require a
+connection on first use. No transcript/RPC/cross-origin asset caching, automatic
+activation, generation handshake or user-chosen-update changes.
+
+Fresh production build comparison: **371 URLs / 15,354,991 raw bytes → 53 URLs /
+3,502,539 bytes** in mandatory install (**77.2% fewer bytes**). The optional asset
+inventory remains 371 URLs; no language/renderer/font feature was deleted.
+Sizes include both `/` and `/index.html`; they are uncompressed resource sizes,
+not measured encrypted or compressed transfer. Manifests and raw targets:
+`/tmp/perf-delivery-pwa/{before,after-precache,after-assets,browser}.json` and
+`network.jsonl`. Own headless Chrome/CDP fresh-profile probe installed exactly
+53 cached URLs, fetched a 200,960-byte Settings module on demand, then received
+that module and the shell with network disabled and opened the real offline
+app shell. Probe traffic was throttled at the page target; no claim that this
+throttles Chrome's independent service-worker target. Both isolated processes
+were stopped. The shared browser gateway refused creating an isolated context;
+no existing browser context was changed; the own-Chrome alternative succeeded.
+
+Validation: executable generated-worker tests cover critical install despite an
+unavailable optional URL, on-demand/offline module and shell reads, ignored
+private/cross-origin requests, cache reuse/activation and shell revalidation.
+Protocol/host/UI suites, identity and workspace build pass,
+`/tmp/f12-{protocol,host,ui,identity,build}.log`; UI test types and focused worker
+behavior checks also pass. This is not a full optional-view interaction matrix.
