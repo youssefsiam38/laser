@@ -25,6 +25,9 @@ import {
   type ProjectEnvWorkerConfig,
 } from "@lasercode/protocol";
 
+/** How long a finished hook's payload pipe may still be delivering. */
+const PAYLOAD_GRACE_MS = 2_000;
+
 export interface ProjectEnvSnapshot {
   state: "off" | "needs-approval" | "ready" | "failed";
   names: string[];
@@ -269,6 +272,18 @@ export function runHook(options: RunOptions): Promise<RunResult> {
       payload += chunk;
     });
     pipe?.on("error", () => {});
+    // The payload is only whole once the pipe itself ends. `exit` can arrive
+    // first, and one `setImmediate` is not enough under load: a busy machine
+    // delivers the last chunk a tick later and the project would start with a
+    // half-read — or empty — environment.
+    let pipeEnded = pipe === null || pipe === undefined;
+    const endPipe = (): void => {
+      pipeEnded = true;
+      if (graceTimer) clearTimeout(graceTimer);
+      if (exited) settle();
+    };
+    pipe?.on("end", endPipe);
+    pipe?.on("close", endPipe);
 
     const kill = (): void => {
       if (child.pid === undefined) return;
@@ -287,6 +302,10 @@ export function runHook(options: RunOptions): Promise<RunResult> {
     }, options.timeoutMs);
     timer.unref?.();
 
+    let exited = false;
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
+    let exit: { code: number | null; signal: NodeJS.Signals | null } = { code: null, signal: null };
+    const settle = (): void => finish(exit);
     const finish = (result: Omit<RunResult, "payload" | "overflowed" | "timedOut">) => {
       if (settled) return;
       settled = true;
@@ -296,10 +315,18 @@ export function runHook(options: RunOptions): Promise<RunResult> {
 
     child.on("error", (error) => finish({ code: null, signal: null, spawnError: error }));
     // `exit`, not `close`: a hook that leaves a long-lived grandchild holding
-    // the descriptor would otherwise keep the project waiting for it.
+    // the descriptor would otherwise keep the project waiting for it. The
+    // payload still has to be whole, so settle when the pipe has also ended —
+    // or, if the grandchild is holding it open, after one turn of the loop.
     child.on("exit", (code, signal) => {
-      // Give the pipe a turn to deliver what was already written.
-      setImmediate(() => finish({ code, signal }));
+      exited = true;
+      exit = { code, signal };
+      if (pipeEnded) { settle(); return; }
+      // The hook has gone but its last write may still be in flight. Wait for
+      // the pipe to end, bounded: a grandchild holding the descriptor open
+      // must not make the project wait for it.
+      graceTimer = setTimeout(settle, PAYLOAD_GRACE_MS);
+      graceTimer.unref?.();
     });
   });
 }
