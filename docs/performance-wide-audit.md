@@ -673,3 +673,62 @@ work, **not measured CPU/power savings or minimized-Electron acceptance**.
 Validation: TypeScript, **169 UI files / 1,395 tests passed, one benchmark skipped**,
 identity and diff checks pass; logs `/tmp/perf-renderer/f23-{types,ui,identity}.log`.
 Browser/minimized-window acceptance remains outstanding for integration.
+
+### F24 — defer and reuse diagnostic JSON materialization
+
+The request inspector no longer pretty-prints the entire payload just to show its
+foldable JSON tree. An immutable capture/field owns a lazy text getter; explicit
+full-text search and Copy JSON share the exact complete string. Field display text
+is memoized independently of search/UI changes. Literal truncated captures,
+source ranges, JSON keys/syntax, and the existing fold state are unchanged.
+
+A real inspector interaction test uses **2,097,291 formatted characters**:
+initial full-payload formatting **1 → 0**; subsequent full search, copy and query
+changes together format **once**, and rendered/copy text equals the complete
+reference JSON (including escaped keys, quotes and Unicode). Running this exact
+regression against the pre-F24 dialog fails at the initial-format assertion;
+after source was restored it passes. Logs `f24-before.log`, `f24-focused.log`.
+
+Twenty paired synthetic Node 24.11.1 samples per size (not browser latency):
+
+| Payload text | Parse median (unchanged) | Eager pretty-print median | Deferred getter setup median | First explicit use median |
+| --- | ---: | ---: | ---: | ---: |
+| 1 MiB | 0.572 ms | 1.349 ms | 0.0010 ms | 1.343 ms |
+| 4 MiB | 2.495 ms | 5.892 ms | 0.0013 ms | 5.541 ms |
+| 8 MiB | 5.388 ms | 16.708 ms | 0.0015 ms | 16.762 ms |
+
+The cost is avoided when not needed, not made magically cheaper on first use.
+Repeated getters reuse the string. Raw samples and exact source imports:
+`/tmp/perf-renderer/f24-diagnostic-bench.json`, `diagnostic-bench.mjs`.
+Parsing still occurs on the renderer; no off-thread/structured-clone improvement
+is claimed. A worker and wider diagnostic virtualization need separate profiling.
+Static HTTP serving belongs to the host lane and is untouched.
+
+Validation: TypeScript, **169 UI files / 1,396 tests passed, one benchmark skipped**,
+identity and diff checks pass. Existing inspector keyboard search, provenance,
+copy/disclosure and truncated-capture interaction tests remain green. Logs
+`/tmp/perf-renderer/f24-{types,ui,identity}.log`.
+
+### Renderer lane final integration evidence and limits
+
+`pnpm verify` **passed** against `5fe8279` plus the staged F24 implementation:
+direction checks, all workspace builds/typechecks/tests and release regression
+checks. UI: 169 files / 1,396 passed; host: 30 files / 233 passed; worker: 61 files /
+682 passed with existing skips; release: 42 passed. Log
+`/tmp/perf-renderer/final-verify.log`. Intended new sources were staged before the
+identity/full gates; no host/worker source or M16-T16 history seam was changed.
+
+**Browser acceptance outstanding, explicitly handed to the coordinator.** A final
+isolated production sandbox on port 41892 and fresh origin used Playwright media
+emulation: dark theme and 2,000 mounted messages were observed. The initial
+20-second readiness wait expired; later inspection found the expected messages.
+A loader-text readiness check was invalid because the exiting overlay retains
+that text; after correcting the approach, the Small conversation click still
+failed Playwright visibility/stability within five seconds. The lane did not keep
+retrying or manufacture a passed interaction matrix. This does not establish a
+product regression or prove it is only harness behavior. Full 1360/390 × dark/light,
+touch/keyboard, live tool/reasoning/disclosure, find/jump, hidden/minimized and
+request-inspector wheel/focus checks must be run on the integrated target.
+Earlier light screenshots and geometry samples remain labeled with their actual
+scope. No packaged-install or release readiness claim is made. F17 remains the
+explicit host capability seam; F13 math remains the documented deliberate deferral.
