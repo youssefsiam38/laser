@@ -935,9 +935,11 @@ export interface ClientRequests {
   "pi/session/list": { params: { cwd?: string }; result: { sessions: SessionSummary[] } };
   /** Read-only search of saved conversations; no worker is opened. */
   "session/search": {
-    params: { query: string; cwd?: string; after?: string; before?: string; cursor?: number };
+    params: { query: string; cwd?: string; after?: string; before?: string; cursor?: number; searchId?: string };
     result: { hits: Array<{ path: string; count: number; excerpt: string; source: "user" | "assistant" | "reasoning" | "tool" }>; nextCursor?: number; unreadable: number };
   };
+  /** Cancel only this connection's named saved-history read; never an agent turn. */
+  "session/search/cancel": { params: { searchId: string }; result: {} };
   /**
    * Sessions that want a person, attention-sorted (waiting > error >
    * finished-unread > working > idle), then most recently modified. Across all

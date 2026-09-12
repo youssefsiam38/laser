@@ -18,16 +18,19 @@ it("ignores out-of-order replies and keeps recent results when explicitly extend
   client.request.mockImplementationOnce(() => new Promise(resolve => { oldReply = resolve; }));
   await act(async () => root.render(<Fixture query="pear" />));
   await act(async () => vi.advanceTimersByTime(250));
+  const oldId = client.request.mock.calls[0]![1].searchId;
+  client.request.mockResolvedValueOnce({}); // cancellation, not the next page
   client.request.mockResolvedValueOnce({ hits: [{ path: "recent", count: 1, excerpt: "Apple", source: "user" }], unreadable: 0 });
   await act(async () => root.render(<Fixture query="Apple" />));
   await act(async () => vi.advanceTimersByTime(250));
   await act(async () => oldReply({ hits: [{ path: "wrong", count: 1, excerpt: "pear", source: "user" }], unreadable: 0 }));
   expect(state.hits.map(h => h.path)).toEqual(["recent"]);
-  expect(client.request).toHaveBeenCalledTimes(2);
+  expect(client.request).toHaveBeenCalledTimes(3);
+  expect(client.request).toHaveBeenCalledWith("session/search/cancel", { searchId: oldId });
   client.request.mockResolvedValueOnce({ hits: [{ path: "older", count: 1, excerpt: "Apple", source: "assistant" }], unreadable: 0 });
   await act(async () => state.more());
   expect(state.hits.map(h => h.path)).toEqual(["recent", "older"]);
-  expect(client.request.mock.calls[2]![1].before).toBe(client.request.mock.calls[1]![1].after);
+  expect(client.request.mock.calls[3]![1].before).toBe(client.request.mock.calls[2]![1].after);
 });
 it("retries the failed older period instead of restarting recent history", async () => {
   client.request.mockResolvedValueOnce({ hits: [], unreadable: 0 });
@@ -38,7 +41,8 @@ it("retries the failed older period instead of restarting recent history", async
   expect(state.error).toBe(true);
   client.request.mockResolvedValueOnce({ hits: [], unreadable: 0 });
   await act(async () => state.retry());
-  expect(client.request.mock.calls[2]![1]).toEqual(client.request.mock.calls[1]![1]);
+  const { searchId: _old, ...prior } = client.request.mock.calls[1]![1];
+  expect(client.request.mock.calls[2]![1]).toMatchObject(prior);
   expect(state.period).toBe(1);
 });
 it("renders the real excerpt as in-flow escaped text with highlighted matches", async () => {
@@ -49,4 +53,13 @@ it("renders the real excerpt as in-flow escaped text with highlighted matches", 
   expect(excerpt.closest('[role="option"]')).not.toBeNull();
   expect(excerpt.className).toContain("[overflow-wrap:anywhere]");
   expect(excerpt.textContent).toContain("Your message");
+});
+
+it("cancels an in-flight host scan when the search surface closes", async () => {
+  client.request.mockImplementation((method: string) => method === "session/search" ? new Promise(() => {}) : Promise.resolve({}));
+  await act(async () => root.render(<Fixture query="huge" />));
+  await act(async () => vi.advanceTimersByTime(250));
+  const searchId = client.request.mock.calls[0]![1].searchId;
+  await act(async () => root.render(null));
+  expect(client.request).toHaveBeenCalledWith("session/search/cancel", { searchId });
 });

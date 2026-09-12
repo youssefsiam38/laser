@@ -38,6 +38,7 @@ import { ErrorCodes, type JsonRpcNotification, type JsonRpcResponse, type Sessio
 import WebSocket from "ws";
 import { SessionLoadDelivery } from "./session-load-delivery.js";
 import { TranscriptDelivery } from "./transcript-delivery.js";
+import { SearchCancellation } from "./search-cancellation.js";
 
 export type RelayClientState =
   | "stopped"
@@ -59,7 +60,7 @@ export interface RelayClientOptions {
   /** Human label for logs and errors: "Youssef's iPhone". */
   deviceName?: string;
   /** Answer one client request. Wire this to the host `Router.handle`. */
-  handle(raw: unknown): Promise<JsonRpcResponse>;
+  handle(raw: unknown, searches: SearchCancellation): Promise<JsonRpcResponse>;
   /** Subscribe to host notifications. Returns an unsubscribe function. */
   subscribe(listener: (notification: JsonRpcNotification) => void): () => void;
   /**
@@ -146,6 +147,7 @@ export class RelayClient {
   /** Question-only fences for concurrent session/load requests on this device connection. */
   private readonly loadDeliveries = new Set<SessionLoadDelivery>();
   private transcripts = new TranscriptDelivery();
+  private searches = new SearchCancellation();
 
   private readonly seqBySession = new Map<string, number>();
   private counters = {
@@ -473,7 +475,7 @@ export class RelayClient {
     const finishTranscript = this.transcripts.begin(raw);
     let transcriptResponse;
     try {
-      const response = await this.options.handle(raw);
+      const response = await this.options.handle(raw, this.searches);
       transcriptResponse = response;
       const encoded = this.encode(response);
       if (encoded) {
@@ -614,6 +616,8 @@ export class RelayClient {
   private teardown(reason: string): void {
     this.connectionGeneration++;
     this.transcripts = new TranscriptDelivery();
+    this.searches.close();
+    this.searches = new SearchCancellation();
     for (const delivery of this.loadDeliveries) delivery.dispose();
     this.loadDeliveries.clear();
     this.shaper?.stop();

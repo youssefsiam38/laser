@@ -197,6 +197,12 @@ describe("Router · sessions not yet on disk", () => {
     try {
       const response = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "session/search", params: { query: "Apple", cwd: CWD_A, after: "2026-05-01T00:00:00Z", before: "2026-07-01T00:00:00Z" } });
       expect(response).toMatchObject({ result: { hits: [{ path, source: "user", count: 1, excerpt: "Apple" }], unreadable: 0 } });
+      const { SearchCancellation } = await import("../src/search-cancellation.js");
+      const searches = new SearchCancellation();
+      const pending = h.router.handle({ jsonrpc: "2.0", id: 3, method: "session/search", params: { query: "Apple", cwd: CWD_A, searchId: "active" } }, { searches });
+      const cancelled = await h.router.handle({ jsonrpc: "2.0", id: 4, method: "session/search/cancel", params: { searchId: "active" } }, { searches });
+      expect(cancelled).toMatchObject({ result: {} });
+      expect(await pending).toHaveProperty("error");
       expect(h.workerRequests).toEqual([]);
       const invalid = await h.router.handle({ jsonrpc: "2.0", id: 2, method: "session/search", params: { query: "Apple", after: "yesterday" } });
       expect(invalid).toHaveProperty("error");

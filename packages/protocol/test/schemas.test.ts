@@ -83,7 +83,8 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/host/environment": { variables: { SYNTHETIC_EXPORT: "fixture", PATH: "/bin:/usr/bin" } },
   "session/new": { cwd: "/p" },
   "session/load": { path: "/s.jsonl", fromSeq: 12, transcript: "loaded" },
-  "session/search": { query: "Apple", cwd: "/p", after: "2026-01-01T00:00:00Z", before: "2026-07-01T00:00:00Z", cursor: 50 },
+  "session/search": { query: "Apple", cwd: "/p", after: "2026-01-01T00:00:00Z", before: "2026-07-01T00:00:00Z", cursor: 50, searchId: "search-1" },
+  "session/search/cancel": { searchId: "search-1" },
   "session/prompt": {
     path: "/s.jsonl",
     content: [{ type: "text", text: "hi" }],

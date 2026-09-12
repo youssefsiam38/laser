@@ -35,6 +35,7 @@ import type { AgentStore } from "./agents/store.js";
 import type { AttentionTracker } from "./attention.js";
 import type { SessionCatalog } from "./catalog.js";
 import { searchSessions } from "./session-search.js";
+import type { SearchCancellation } from "./search-cancellation.js";
 import type { LogStore } from "./logstore.js";
 import { browseDirectories, type PackageService, type SetupService } from "./packages.js";
 import type { TaskRegister } from "./tasks/register.js";
@@ -163,7 +164,7 @@ export class Router {
     private readonly deps: RouterDeps,
   ) {}
 
-  async handle(raw: unknown, access: { localEnvironment?: boolean } = {}): Promise<JsonRpcResponse> {
+  async handle(raw: unknown, access: { localEnvironment?: boolean; searches?: SearchCancellation } = {}): Promise<JsonRpcResponse> {
     const id = (raw as { id?: string | number } | null)?.id ?? 0;
     try {
       guardHostEnvironment(raw, access.localEnvironment);
@@ -172,7 +173,7 @@ export class Router {
       if (req.method !== "pi/host/version" && clientVersion && clientVersion !== PRODUCT_VERSION) {
         throw new ProtocolError(ErrorCodes.VersionMismatch, "Refresh this view to match the host before continuing.", { version: PRODUCT_VERSION });
       }
-      const result = await this.dispatch(req);
+      const result = await this.dispatch(req, access.searches);
       return { jsonrpc: "2.0", id: req.id, result };
     } catch (error) {
       return { jsonrpc: "2.0", id, error: toRpcError(error) };
@@ -253,7 +254,7 @@ export class Router {
       .slice(0, limit);
   }
 
-  private async dispatch(req: TypedClientRequest): Promise<unknown> {
+  private async dispatch(req: TypedClientRequest, searches?: SearchCancellation): Promise<unknown> {
     switch (req.method) {
       case "pi/host/version":
         return { version: PRODUCT_VERSION };
@@ -262,10 +263,17 @@ export class Router {
         return { sessions: this.sessions(req.params.cwd) };
 
       case "session/search": {
-        const { query, cwd, after, before, cursor } = req.params;
-        const sessions = this.catalog.list(cwd).filter(s => this.isSessionDirectory(s.cwd) && (!after || s.modifiedAt >= after) && (!before || s.modifiedAt < before));
-        return searchSessions(sessions, query, cursor);
+        const { query, cwd, after, before, cursor, searchId } = req.params;
+        const read = searches?.begin(searchId ?? `rpc:${req.id}`);
+        try {
+          read?.signal.throwIfAborted();
+          const sessions = this.catalog.list(cwd).filter(s => this.isSessionDirectory(s.cwd) && (!after || s.modifiedAt >= after) && (!before || s.modifiedAt < before));
+          return await searchSessions(sessions, query, cursor, read?.signal);
+        } finally { read?.finish(); }
       }
+      case "session/search/cancel":
+        searches?.cancel(req.params.searchId);
+        return {};
 
       case "pi/session/inbox":
         return { sessions: this.inbox(req.params.cwd, req.params.limit) };

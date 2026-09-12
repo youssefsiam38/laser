@@ -554,3 +554,30 @@ Validation: `pnpm -r build`, protocol/host/UI suites, identity all pass;
 checks: `/tmp/f22-{transport,client}-final.log`. UI change is only `client.ts`;
 `LaserProvider.tsx` and the M16-T16 history path are untouched. No visual or
 browser performance claim.
+
+### F07 — cancel superseded/closed saved-history searches
+
+The optional `searchId` and host-only `session/search/cancel` route identify a
+read inside one socket/relay generation. Disconnect aborts all owned reads;
+same-ID replacement aborts the predecessor, and late completion cannot delete
+a successor. UI query changes, close and retry cancel the exact outstanding ID;
+stale replies remain fenced. Relay teardown replaces the cancellation owner.
+
+`searchSessions` passes the signal to the real file stream, checks it between
+records/files, and yields every 128 buffered records. Abort rejects rather than
+returning partial hits or incrementing unreadable. Sequential file traversal
+(concurrency **one per search**) and original contiguous cursors/ranking remain;
+no raw-line prefilter, worker spawn, index, byte truncation or parallel parsing.
+A single admitted JSON record still parses synchronously; this does not claim a
+hard CPU deadline or a global multi-client concurrency ceiling.
+
+Fresh real-file measurement, 16,000 records: **17,040,000 bytes read normally →
+65,536 bytes** when cancelled after the first chunk. Stream closure and absence
+of partial success are asserted; pre-aborted reads open no file. This is a warm
+synthetic read/abort probe, not cold-disk or end-to-end heartbeat profiling.
+
+Validation: protocol method inventory + schema round-trip, actual router
+cancellation, host search projection/cursor tests, UI out-of-order/close/retry
+checks, host/protocol/UI full suites, identity and workspace build pass.
+Logs `/tmp/f07-{protocol,host,ui,identity,build}.log`, final UI/build reruns
+`/tmp/f07-{ui,build}-final.log`; measurement `/tmp/f07-focused.log`.

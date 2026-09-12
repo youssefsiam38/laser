@@ -52,6 +52,7 @@ import { RelayClient, type RelayClientState, type RelayClientStats } from "./rel
 import { Router } from "./router.js";
 import { SessionLoadDelivery } from "./session-load-delivery.js";
 import { TranscriptDelivery } from "./transcript-delivery.js";
+import { SearchCancellation } from "./search-cancellation.js";
 import { ViewCache } from "./views.js";
 import type { WorkerClient } from "./worker-client.js";
 import { WorkerPool, type WorkerPoolOptions } from "./worker-pool.js";
@@ -204,6 +205,7 @@ export class HostServer {
   /** Session paths each client is following, for the retirement guard. */
   private readonly attached = new Map<WebSocket, Set<string>>();
   private readonly transcripts = new Map<WebSocket, TranscriptDelivery>();
+  private readonly searches = new Map<WebSocket, SearchCancellation>();
   /** Question-only response fences for concurrent session/load requests, per socket. */
   private readonly loadDeliveries = new Map<WebSocket, Set<SessionLoadDelivery>>();
   private readonly log: (line: string) => void;
@@ -483,7 +485,7 @@ export class HostServer {
         staticKeyPair: relay.staticKeyPair,
         devicePublicKey: device.publicKey,
         deviceName: device.name,
-        handle: (raw) => this.router.handle(raw),
+        handle: (raw, searches) => this.router.handle(raw, { searches }),
         subscribe: (listener) => {
           this.notificationListeners.add(listener);
           return () => this.notificationListeners.delete(listener);
@@ -842,6 +844,8 @@ export class HostServer {
     this.attached.set(ws, new Set());
     const transcripts = new TranscriptDelivery();
     this.transcripts.set(ws, transcripts);
+    const searches = new SearchCancellation();
+    this.searches.set(ws, searches);
     this.loadDeliveries.set(ws, new Set());
     // A client that connects while a project is waiting on a trust decision
     // must see the question, not a worker that never starts.
@@ -864,7 +868,7 @@ export class HostServer {
       const finishTranscript = transcripts.begin(raw);
       let transcriptResponse;
       try {
-        const response = await this.router.handle(raw, { localEnvironment });
+        const response = await this.router.handle(raw, { localEnvironment, searches });
         transcriptResponse = response;
         if (!response.error) this.noteRequest(ws, request, response.result);
         const sent = await this.sendSocket(ws, JSON.stringify(response));
@@ -929,6 +933,8 @@ export class HostServer {
     this.clients.delete(ws);
     this.attached.delete(ws);
     this.transcripts.delete(ws);
+    this.searches.get(ws)?.close();
+    this.searches.delete(ws);
     const deliveries = this.loadDeliveries.get(ws);
     if (deliveries) for (const delivery of deliveries) delivery.dispose();
     this.loadDeliveries.delete(ws);
