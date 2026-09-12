@@ -45,7 +45,7 @@ export const PRODUCT = {
 } as const;
 
 /** Build identity, captured in code so replacing installed files cannot change a running process. */
-export const PRODUCT_VERSION: string = "0.5.5";
+export const PRODUCT_VERSION: string = "0.5.6";
 
 /**
  * Every environment variable the product reads, by its unprefixed name.
