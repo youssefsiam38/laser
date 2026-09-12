@@ -165,6 +165,32 @@ export class McpInspector {
         prompts: connection.prompts.map(toPrompt),
         latencyMs,
       };
+      // Test is explicit and unsaved. Merely opening a saved server's inspector
+      // must never navigate the person's selected Chrome tab.
+      if (target.ephemeral && config.catalogId === "playwright") {
+        const timeout = AbortSignal.timeout(20_000);
+        try {
+          const probeSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+          for (const [tool, args] of [
+            ["browser_navigate", { url: "about:blank" }],
+            ["browser_tabs", { action: "list" }],
+          ] as const) {
+            probeSignal.throwIfAborted();
+            const result = await this.runTool(connection, config.name, tool, args, probeSignal);
+            if (!result.ok) throw new Error(result.error ?? "The browser reported an error.");
+          }
+        } catch (error) {
+          inspection.status = "failed";
+          const args = config.transport.kind === "stdio" ? config.transport.args ?? [] : [];
+          const next = args.includes("--extension")
+            ? "Disable extensions that record or automate tabs, then Reconnect"
+            : args.some((arg) => arg.startsWith("--cdp-endpoint"))
+              ? "In Chrome, open chrome://inspect/#remote-debugging and turn on ‘Allow remote debugging for this browser instance’."
+              : "Check that Chrome is installed and can open a browser window, then try again.";
+          const reason = timeout.aborted ? "The browser did not answer within 20 seconds." : signal?.aborted ? "The browser test was cancelled." : messageOf(error);
+          inspection.detail = `Connected, but the browser could not open a page: ${reason} ${next}`;
+        }
+      }
       if (target.ephemeral) await this.close(key);
       return inspection;
     } catch (error) {
@@ -214,12 +240,19 @@ export class McpInspector {
       if (connection.status === "needs-auth") {
         return { ok: false, durationMs: Date.now() - started, content: [], error: signInDetail(config.name) };
       }
-      const original = originalToolName(config.name, tool, connection);
-      const result = await connection.client.callTool({ name: original, arguments: args });
-      return toCallResult(result, Date.now() - started);
+      const result = await this.runTool(connection, config.name, tool, args, signal);
+      return { ...result, durationMs: Date.now() - started };
     } catch (error) {
       return { ok: false, durationMs: Date.now() - started, content: [], error: this.failure(error, config, secrets).detail };
     }
+  }
+
+  /** Run and Test use the same connection, tool-name resolution and result guard. */
+  private async runTool(connection: McpConnection, server: string, tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpCallResult> {
+    const started = Date.now();
+    const original = originalToolName(server, tool, connection);
+    const result = await connection.client.callTool({ name: original, arguments: args }, { signal });
+    return toCallResult(result, Date.now() - started);
   }
 
   /** Begin sign-in. The URL is returned; the worker never opens a browser. */

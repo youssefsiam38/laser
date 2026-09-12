@@ -148,8 +148,40 @@ and the worker keeps the last one per session to answer `mcp/list`.
 A curated catalog, `MCP_KNOWN_SERVERS`, ships in the protocol: Playwright
 first, then Chrome DevTools, Context7, DeepWiki, GitHub, Notion, Linear, Sentry
 — each with a verified definition, the options a person is likely to want
-(Playwright: headless, keep logins between conversations), what it needs on the
+(Playwright: where the browser runs, and whether its own window is hidden), what it needs on the
 machine, and the exposure it should start with.
+
+## Playwright: which browser
+
+The gallery’s **Where the browser runs** choice has three ways in:
+
+| Choice | What happens | Arguments |
+| --- | --- | --- |
+| **A window of its own** (default) | Laser opens its own browser window. Several conversations can browse at once; logins do not carry over. **Hide the browser window** is available only here. | `--isolated`, optionally `--headless` |
+| **Your Chrome, through the Playwright extension** (recommended for your own Chrome) | Uses the Chrome you are signed into. Install the [Playwright Extension from the Chrome Web Store](https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm). The first connection asks you to pick a tab unless `PLAYWRIGHT_MCP_EXTENSION_TOKEN` is in your environment. Only tabs in the Playwright tab group are visible to the model. | `--extension` |
+| **Your Chrome, through remote debugging** | Uses the Chrome you are signed into, without an extension, but is slower. Once, in Chrome, open `chrome://inspect/#remote-debugging` and turn on **Allow remote debugging for this browser instance**. | `--cdp-endpoint=chrome` |
+
+**The extension is the recommended own-Chrome way and works with the token.**
+If pages open in Chrome but the model reports a closed page, another extension
+is taking the tab’s debugger — screen recorders, downloaders and other AI browser
+agents are the usual ones. Disable it and **Reconnect**. This is an extension
+conflict, not a general limitation of Playwright’s extension. Remote debugging is
+the slower alternative when you cannot disable the conflicting extension.
+
+**Test checks browsing, not just connection.** For a Playwright gallery definition,
+Test opens `about:blank` in the selected browser/tab and then lists tabs on the
+same inspector connection. The two calls share a 20-second limit; failure says
+“Connected, but the browser could not open a page” with the browser’s one-line
+reason and the next step for that mode. A successful handshake alone is not
+success. The draft connection closes afterward. Opening the inspector for an
+already saved server does not navigate; neither do tests of other catalog entries.
+
+Catalog options are a backwards-compatible union: a toggle (`kind?: "toggle"`,
+`arg`, boolean `default`) or a choice (`kind: "choice"`, `choices` with IDs,
+labels, descriptions and argument arrays, string `default`). A toggle may require
+one choice; otherwise its reason replaces the control and its argument is omitted.
+These options only compose new definitions in Add. Saved servers keep their exact
+arguments; Edit continues to show the saved command.
 
 ## The experience — Settings → MCP servers
 

@@ -6,7 +6,7 @@
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -173,6 +173,53 @@ describe("McpInspector", () => {
     expect(inspector.inspecting("global", "fixture")).toBe(false);
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect(childProcesses(marker)).toEqual([]);
+  }, 60_000);
+
+  it("proves navigation then tabs on the same draft connection and closes it", async () => {
+    const calls = join(base, "calls.jsonl");
+    const config = { ...stdioConfig(["--browser", "--calls-file", calls]), catalogId: "playwright" };
+    const result = await inspector.inspect({ scope: "global", config, secrets: new Map(), ephemeral: true });
+    expect(result.status).toBe("connected");
+    expect(readFileSync(calls, "utf8").trim().split("\n").map((line) => JSON.parse(line))).toEqual([
+      { name: "browser_navigate", arguments: { url: "about:blank" } },
+      { name: "browser_tabs", arguments: { action: "list" } },
+    ]);
+    expect(inspector.inspecting("global", config.name)).toBe(false);
+  }, 60_000);
+
+  it.each([
+    ["--extension", "--fail-navigate", "Disable extensions that record or automate tabs, then Reconnect"],
+    ["--cdp-endpoint=chrome", "--fail-navigate", "chrome://inspect/#remote-debugging"],
+    ["--isolated", "--fail-tabs", "Check that Chrome is installed"],
+  ])("refuses a handshake-only success for %s (%s)", async (mode, failure, next) => {
+    const config = { ...stdioConfig(["--browser", mode, failure]), catalogId: "playwright" };
+    const result = await inspector.inspect({ scope: "global", config, secrets: new Map(), ephemeral: true });
+    expect(result.server?.name).toBe("fixture");
+    expect(result.status).toBe("failed");
+    expect(result.detail).toMatch(/^Connected, but the browser could not open a page:/);
+    expect(result.detail).toContain(next);
+    expect(result.detail).not.toContain("hidden-stack");
+    expect(result.detail).not.toContain("\n");
+    expect(inspector.inspecting("global", config.name)).toBe(false);
+  }, 60_000);
+
+  it("bounds the entire browser probe to twenty seconds and closes the hung child", async () => {
+    const marker = `mcp-probe-${process.pid}-${Date.now()}`;
+    const config = { ...stdioConfig(["--browser", "--hang-browser", "--extension", "--name", marker]), catalogId: "playwright" };
+    const start = Date.now();
+    const result = await inspector.inspect({ scope: "global", config, secrets: new Map(), ephemeral: true });
+    expect(Date.now() - start).toBeLessThan(25_000);
+    expect(result.status).toBe("failed");
+    expect(result.detail).toContain("within 20 seconds");
+    expect(childProcesses(marker)).toEqual([]);
+  }, 30_000);
+
+  it("does not navigate on ordinary saved inspection or on another catalog's Test", async () => {
+    const calls = join(base, "calls.jsonl");
+    const config = { ...stdioConfig(["--browser", "--calls-file", calls]), catalogId: "playwright" };
+    expect((await inspector.inspect({ scope: "global", config, secrets: new Map() })).status).toBe("connected");
+    expect((await inspector.inspect({ scope: "global", config: { ...config, catalogId: "other" }, secrets: new Map(), ephemeral: true })).status).toBe("connected");
+    expect(existsSync(calls)).toBe(false);
   }, 60_000);
 
   it("keeps an unsaved definition's connection only for the answer", async () => {

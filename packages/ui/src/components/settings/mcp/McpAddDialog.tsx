@@ -21,6 +21,7 @@ import {
 } from "@lasercode/protocol";
 import { AlertTriangle, Check, KeyRound, Plug, Wrench } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { RadioGroup } from "radix-ui";
 
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
 import { Badge } from "@/components/ui/badge";
@@ -35,6 +36,7 @@ import { useLaserStable } from "@/runtime";
 import { McpServerForm, ScopeChoice } from "./McpServerForm.js";
 import {
   catalogForm,
+  catalogOptionReason,
   configToForm,
   defaultCatalogOptions,
   defaultExposure,
@@ -103,15 +105,16 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
     setScope(defaultScope);
   }, [open, entry, edit, defaultScope]);
 
-  const chooseOption = (id: string, on: boolean) => {
+  const chooseOption = (id: string, on: boolean, group?: string) => {
     if (!entry) return;
     const next = new Set(options);
+    if (group) for (const value of next) if (value.startsWith(`${group}:`)) next.delete(value);
     if (on) next.add(id);
     else next.delete(id);
     setOptions(next);
     // The command line is composed from the catalog's definition, so the
     // options stay honest even after the person opened the full settings.
-    setForm((current) => ({ ...catalogForm(entry, next), name: current.name, label: current.label, nameEdited: current.nameEdited }));
+    setForm((current) => ({ ...current, commandLine: catalogForm(entry, next).commandLine }));
     setInspection(undefined);
   };
 
@@ -178,7 +181,39 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
               <section className="flex flex-col gap-3 rounded-xl border border-line bg-surface-2 p-3" aria-label={`${entry.name} options`}>
                 <p className="text-sm leading-6 text-ink-2">{entry.description}</p>
                 {entry.requires && <p className="text-xs leading-5 text-ink-3">Needs: {entry.requires}</p>}
-                {(entry.options ?? []).map((option) => (
+                {(entry.options ?? []).map((option) => option.kind === "choice" ? (
+                  <div key={option.id} className="flex min-w-0 flex-col gap-2">
+                    <p className="text-sm font-medium text-ink">{option.label}</p>
+                    <RadioGroup.Root
+                      aria-label={option.label}
+                      value={option.choices.find((choice) => options.has(`${option.id}:${choice.id}`))?.id ?? ""}
+                      onValueChange={(value) => chooseOption(`${option.id}:${value}`, true, option.id)}
+                      disabled={testing || saving}
+                      className="flex min-w-0 flex-col gap-1"
+                    >
+                      {option.choices.map((choice) => (
+                        <RadioGroup.Item key={choice.id} value={choice.id} aria-label={choice.label}
+                          className="group flex min-w-0 items-start gap-3 rounded-lg p-2 text-start outline-none hover:bg-surface focus-visible:outline-2 focus-visible:outline-live data-[state=checked]:bg-surface disabled:opacity-60 pointer-coarse:min-h-11">
+                          <span aria-hidden="true" className="mt-1 flex size-4 shrink-0 items-center justify-center rounded-full border border-line group-data-[state=checked]:border-live">
+                            <RadioGroup.Indicator className="size-2 rounded-full bg-live" />
+                          </span>
+                          <span className="flex min-w-0 flex-col gap-1">
+                            <span className="text-sm font-medium text-ink">{choice.label}</span>
+                            <span className="text-xs leading-5 text-ink-2 [overflow-wrap:anywhere]">{choice.description}</span>
+                          </span>
+                        </RadioGroup.Item>
+                      ))}
+                    </RadioGroup.Root>
+                    {entry.id === "playwright" && options.has("browser:extension") && (
+                      <a href="https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm" target="_blank" rel="noreferrer"
+                        className="rounded-sm text-xs leading-5 text-live underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-live">
+                        Get the Playwright Extension from the Chrome Web Store
+                      </a>
+                    )}
+                  </div>
+                ) : catalogOptionReason(option, options) ? (
+                  <p key={option.id} className="text-xs leading-5 text-ink-3">{catalogOptionReason(option, options)}</p>
+                ) : (
                   <div key={option.id} className="flex items-start gap-3">
                     <span className="flex min-w-0 flex-1 flex-col">
                       <span className="text-sm text-ink">{option.label}</span>
@@ -186,6 +221,7 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
                     </span>
                     <SettingsSwitch
                       checked={options.has(option.id)}
+                      disabled={testing || saving}
                       aria-label={option.label}
                       onCheckedChange={(on) => chooseOption(option.id, on)}
                     />
@@ -207,7 +243,8 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
               <McpServerForm form={form} onChange={setForm} showIssues={showIssues} disabled={testing || saving} />
             )}
 
-            {testing && <GenerationLoader label="Connecting to the server — this can take up to half a minute" layout="block" />}
+            {form.catalogId === "playwright" && <p className="text-xs leading-5 text-ink-3">Test opens about:blank in the selected browser tab, then checks that tabs can be listed.</p>}
+            {testing && <GenerationLoader label={form.catalogId === "playwright" ? "Connecting and checking the browser" : "Connecting to the server — this can take up to half a minute"} layout="block" />}
 
             {error && (
               <p role="alert" className="text-sm leading-6 text-danger">
@@ -249,7 +286,7 @@ function TestResult({ inspection }: { inspection: McpInspection }) {
     return (
       <section data-slot="mcp-test-result" data-status="failed" className="flex flex-col gap-2 rounded-xl border border-line bg-surface-2 p-3">
         <p className="flex items-center gap-2 text-sm font-medium text-danger">
-          <AlertTriangle aria-hidden="true" className="size-4" /> It did not answer
+          <AlertTriangle aria-hidden="true" className="size-4" /> {inspection.detail?.startsWith("Connected, but") ? "The browser test failed" : "It did not answer"}
         </p>
         {/* A failure names paths (the executable, the PATH it looked in): let them break anywhere so the card holds them on a phone. */}
         {inspection.detail && <p className="text-sm leading-6 text-ink-2 break-words [overflow-wrap:anywhere]">{inspection.detail}</p>}

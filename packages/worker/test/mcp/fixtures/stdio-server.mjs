@@ -20,6 +20,13 @@ const option = (flag, fallback) => {
 };
 const serverName = option("--name", "fixture");
 const failTools = args.includes("--fail-tools");
+const browser = args.includes("--browser");
+const failNavigate = args.includes("--fail-navigate");
+const failTabs = args.includes("--fail-tabs");
+const hangBrowser = args.includes("--hang-browser");
+const callsFile = option("--calls-file", undefined);
+const NO_RESPONSE = Symbol("no response");
+let navigated = false;
 const stderrLine = option("--stderr", undefined);
 if (stderrLine) process.stderr.write(`${stderrLine}\n`);
 if (args.includes("--exit-early")) process.exit(3);
@@ -46,6 +53,10 @@ const TOOLS = [
     inputSchema: { type: "object", properties: {} },
   },
 ];
+
+if (browser) TOOLS.push(...["browser_navigate", "browser_tabs"].map((name) => ({
+  name, description: "Offline browser probe fixture", inputSchema: { type: "object", properties: {} },
+})));
 
 const RESOURCES = [{ uri: "fixture://notes", name: "notes", description: "A note", mimeType: "text/plain" }];
 const TEMPLATES = [{ uriTemplate: "fixture://notes/{id}", name: "note", description: "One note by id" }];
@@ -84,6 +95,19 @@ export function handle(request) {
       return { prompts: PROMPTS };
     case "tools/call": {
       const name = params?.name;
+      if (callsFile) appendFileSync(callsFile, `${JSON.stringify(params)}\n`);
+      if (browser && name === "browser_navigate") {
+        if (hangBrowser) return NO_RESPONSE;
+        if (failNavigate) return { isError: true, content: [{ type: "text", text: "Browser unavailable\n    at hidden-stack" }] };
+        if (params?.arguments?.url !== "about:blank") throw new Error("Expected about:blank");
+        navigated = true;
+        return { content: [{ type: "text", text: "Opened about:blank" }] };
+      }
+      if (browser && name === "browser_tabs") {
+        if (failTabs) throw new Error("Browser detached after navigation");
+        if (!navigated || params?.arguments?.action !== "list") throw new Error("Navigate before listing tabs");
+        return { content: [{ type: "text", text: "0: about:blank" }] };
+      }
       const args = params?.arguments ?? {};
       if (name === "echo") return { content: [{ type: "text", text: `echo: ${String(args.text ?? "")}` }] };
       if (name === "snapshot") {
@@ -110,6 +134,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     if (one.id === undefined) continue; // a notification
     try {
       const value = handle(one);
+      if (value === NO_RESPONSE) continue;
       if (value === undefined) {
         send({ jsonrpc: "2.0", id: one.id, error: { code: -32601, message: `unknown method: ${one.method}` } });
         continue;

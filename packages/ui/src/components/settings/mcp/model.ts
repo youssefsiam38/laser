@@ -792,7 +792,10 @@ export function catalogForm(entry: McpCatalogEntry, chosen: ReadonlySet<string>)
   form.nameEdited = false;
   const base = entry.config.transport;
   if (base?.kind === "stdio") {
-    const extra = (entry.options ?? []).filter((option) => chosen.has(option.id)).map((option) => option.arg);
+    const extra = (entry.options ?? []).flatMap((option) => {
+      if (option.kind === "choice") return option.choices.find((choice) => chosen.has(`${option.id}:${choice.id}`))?.args ?? [];
+      return chosen.has(option.id) && !catalogOptionReason(option, chosen) ? [option.arg] : [];
+    });
     form.commandLine = joinCommand(base.command, [...(base.args ?? []), ...extra]);
   }
   form.catalogId = entry.id;
@@ -800,7 +803,15 @@ export function catalogForm(entry: McpCatalogEntry, chosen: ReadonlySet<string>)
 }
 
 export function defaultCatalogOptions(entry: McpCatalogEntry): Set<string> {
-  return new Set((entry.options ?? []).filter((option) => option.default).map((option) => option.id));
+  return new Set((entry.options ?? []).flatMap((option) => option.kind === "choice"
+    ? [`${option.id}:${option.default}`]
+    : option.default ? [option.id] : []));
+}
+
+export function catalogOptionReason(option: NonNullable<McpCatalogEntry["options"]>[number], chosen: ReadonlySet<string>): string | undefined {
+  if (option.kind === "choice" || !option.requiresChoice) return undefined;
+  const requirement = option.requiresChoice;
+  return chosen.has(`${requirement.id}:${requirement.value}`) ? undefined : requirement.reason;
 }
 
 // ---------------------------------------------------------------------------
