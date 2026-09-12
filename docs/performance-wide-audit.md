@@ -596,3 +596,35 @@ Initial test needed to await the existing selected-result scroll timer rather th
 count it as a content invalidation; generated browser YAML was moved intact to
 `/tmp/perf-renderer/playwright-artifacts` after identity correctly rejected it as
 repository source. Browser acceptance remains outstanding for integrated testing.
+
+### F13 — close eager highlighter and map import paths
+
+File-card filename inference now imports a dependency-light grammar helper.
+The public highlighter is a shared lazy boundary for **all** callers (including
+request diagnostics and file previews), not just Markdown fences. Themes and
+filename helpers do not import react-shiki/core. The compact lineage caption is
+independent of the canvas; React Flow loads only when a measured canvas is used.
+Map chrome, layout/state and the same-sized plain-code fallback remain in place.
+
+Fresh paired production Vite builds with source maps/manifests (same environment,
+F15 source plus/minus F13): static entry **2,648,508 → 2,337,557 bytes**;
+gzip **791,658 → 692,628 bytes**. Static dependency traversal finds **2 → 0
+XYFlow modules** and **4 → 0 highlighter/core modules**. Optional grammars remain
+available, not deleted. Files and raw inventory: `/tmp/perf-renderer/f13-bundle.json`,
+`f13-{before,after}/`, `f13-{before,after}-build.log`. This measures emitted code,
+not first-install SW transfer or browser execution time.
+
+**Math deferral deliberately not forced:** `markdown-text.tsx:236–264` has one
+synchronous parser/component tree with provenance wrapping and eager math plugins.
+A lazy plugin inserted after paint changes parsing/height (and may remount source
+controls); suspending the whole live message hides existing content. Neither meets
+F13's no-layout-shift/focus boundary without a separately proved math-loading
+presentation. KaTeX remains eager (two mapped modules), and existing math/currency/
+code/provenance behavior is unchanged.
+
+Validation: TypeScript, **168 UI files / 1,393 tests passed, one benchmark skipped**,
+identity and both production builds pass. The new highlighter test proves zero
+engine-module loads for path labels/streaming and one on settlement, preserving
+literal escaped text. Existing full-language and map status/selection/layout tests
+pass; map tests now await real lazy-canvas settlement before measuring nodes,
+not an assumed synchronous mount. Browser acceptance remains outstanding.

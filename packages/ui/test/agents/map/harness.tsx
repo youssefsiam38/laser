@@ -6,7 +6,7 @@
 import type { AgentRun } from "@lasercode/protocol";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 
 import { useAgentTree } from "../../../src/agents/index.js";
 import { AgentMap, type AgentMapProps } from "../../../src/components/agents/map/AgentMap.js";
@@ -99,6 +99,13 @@ export async function resize(element: Element | null, width: number, height: num
       observer.callback([entryFor(element, width, height)], observer as unknown as ResizeObserver);
     }
   });
+  const map = element?.closest('[data-slot="agent-map"]');
+  if (map && ["panel", "full"].includes(map.getAttribute("data-composition") ?? "")) {
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(map?.querySelector(".react-flow")).not.toBeNull();
+    });
+  }
   await measureNodes();
 }
 
