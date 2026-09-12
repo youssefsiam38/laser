@@ -127,6 +127,13 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/project/trust": { cwd: "/p", trusted: true, remember: true },
   "pi/project/git": { cwd: "/p", path: "/s.jsonl" },
   "pi/project/browse": { path: "/home/me/code" },
+  "pi/project/env/status": { cwd: "/home/me/code/app" },
+  "pi/project/env/set": {
+    cwd: "/home/me/code/app",
+    config: { enabled: true, command: "/usr/bin/project-env", args: ["--project", "app"], required: true, allowProviderKeys: [] },
+  },
+  "pi/project/env/test": { cwd: "/home/me/code/app" },
+  "pi/project/env/refresh": { cwd: "/home/me/code/app" },
   "pi/worker/list": {},
   "pi/worker/restart": { cwd: "/p" },
   "pi/worker/stop": { cwd: "/p" },

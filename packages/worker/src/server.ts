@@ -10,7 +10,7 @@
  * Pending extension dialogs are re-emitted on load for the same reason.
  */
 
-import { AGENT_MAX_DEPTH_LIMIT, ErrorCodes, PRODUCT_NAME, ProtocolError, parseClientRequest, type AgentDefinition, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type SettingsScope, type TypedClientRequest } from "@lasercode/protocol";
+import { AGENT_MAX_DEPTH_LIMIT, ENV, ErrorCodes, PRODUCT_NAME, ProtocolError, parseClientRequest, type AgentDefinition, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type SettingsScope, type TypedClientRequest } from "@lasercode/protocol";
 import { join, resolve } from "node:path";
 import type {
   DriverAgentOptions,
@@ -32,7 +32,9 @@ import { SettingsAdapter } from "./settings.js";
 import { WebSearchService } from "./web-search.js";
 import { McpService } from "./mcp/service.js";
 import { TranscribeService } from "./transcribe.js";
+import { ProjectEnvironment } from "./project-env.js";
 import type { HarnessSessionRole } from "./agents/bridge.js";
+import type { ProjectEnvironmentBridge } from "@lasercode/pi-extension";
 import { DefinitionsCache } from "./agents/definitions.js";
 import { defaultAgentInstructions } from "./agents/engine-instructions.js";
 import { AgentHarness, modelUnavailableMessage, type SessionHandle, type SessionHost } from "./agents/harness.js";
@@ -127,6 +129,13 @@ export class WorkerServer {
   private activeModules = new Set<PiExtensionModuleName>();
   /** Coalesce simultaneous new-chat command requests into one read-only runtime. */
   private commandCatalogInFlight: Promise<CommandInfo[]> | undefined;
+  /**
+   * The project's environment command (M16-T17). One worker serves one project
+   * directory, so this is the project's environment, held in memory and never
+   * written into `process.env` — the worker's own environment is what the
+   * engine authenticates a model with.
+   */
+  private readonly projectEnv: ProjectEnvironment | undefined;
   /** M13 · agents: the host's definitions, the harness that runs them, and Namer. */
   private readonly definitions: DefinitionsCache;
   private readonly harness: AgentHarness;
@@ -152,6 +161,12 @@ export class WorkerServer {
 
   constructor(private readonly options: WorkerServerOptions) {
     this.replayBuffer = options.replayBuffer ?? 5000;
+    // Configured by the host, machine-local and non-secret: the executable, its
+    // arguments, and whether a person approved exactly that pair.
+    const projectEnvConfig = readProjectEnvConfig();
+    this.projectEnv = projectEnvConfig
+      ? new ProjectEnvironment({ cwd: options.cwd, config: projectEnvConfig })
+      : undefined;
     this.definitions = new DefinitionsCache();
     const host: SessionHost = {
       openChild: (open) => this.openChild(open),
@@ -165,7 +180,13 @@ export class WorkerServer {
       definitions: this.definitions,
       worktrees: new WorktreeManager(),
       ...(options.projectTrusted !== undefined ? { projectTrusted: options.projectTrusted } : {}),
-      backgroundWork: (cwd) => ({ cwd, foregroundCommandSeconds: this.definitions.policy().foregroundCommandSeconds }),
+      backgroundWork: (cwd) => ({
+        cwd,
+        foregroundCommandSeconds: this.definitions.policy().foregroundCommandSeconds,
+        // Every child agent and every worktree of this project runs in this
+        // worker, so they share the project's environment by construction.
+        ...(this.projectEnv ? { projectEnv: this.projectEnvBridge() } : {}),
+      }),
     });
     this.namer = new NamerService({
       models: options.namerModels ?? (() => this.modelCatalog().modelRuntime()),
@@ -468,6 +489,25 @@ export class WorkerServer {
         return (await git.status(req.params.path)) satisfies Result<"pi/project/git">;
       }
 
+      // ------------------------------------------- M16-T17 project env ---
+      case "pi/project/env/status": {
+        this.assertCwd(req.params.cwd);
+        return { status: this.projectEnvStatus() } satisfies Result<"pi/project/env/status">;
+      }
+      case "pi/project/env/test":
+      case "pi/project/env/refresh": {
+        this.assertCwd(req.params.cwd);
+        if (!this.projectEnv) return { status: this.projectEnvStatus() } satisfies Result<"pi/project/env/refresh">;
+        // Both re-run the hook. The difference is only that a refresh is meant
+        // to change what later commands see; a test is a person checking. Work
+        // already running keeps the environment it started with either way,
+        // because a live process's environment cannot be rewritten.
+        await this.projectEnv.refresh();
+        const status = this.projectEnvStatus();
+        this.notify("pi/project/env/changed", { status });
+        return { status } satisfies Result<"pi/project/env/refresh">;
+      }
+
       // -------------------------------------------------- M4-T7 keys ---
       case "pi/keybindings/get":
         this.assertCwd(req.params.cwd);
@@ -661,6 +701,51 @@ export class WorkerServer {
     if (resolve(cwd) !== resolve(this.options.cwd)) {
       throw new ProtocolError(ErrorCodes.InvalidParams, `this worker serves ${this.options.cwd}, not ${cwd}`);
     }
+  }
+
+  /**
+   * The project's environment as a person may see it: names, counts, state and
+   * a sanitised failure. No value is ever put in this object, because this one
+   * crosses the protocol to a renderer and possibly to a phone.
+   */
+  private projectEnvStatus(): ProjectEnvStatus {
+    const cwd = this.options.cwd;
+    if (!this.projectEnv) return { cwd, state: "not-configured", approved: false };
+    const snapshot = this.projectEnv.status();
+    return {
+      cwd,
+      state: snapshot.state,
+      approved: snapshot.state !== "needs-approval",
+      names: snapshot.names,
+      unsetNames: snapshot.unsetNames,
+      ...(snapshot.resolvedAt ? { resolvedAt: snapshot.resolvedAt } : {}),
+      ...(snapshot.error ? { error: snapshot.error } : {}),
+    };
+  }
+
+  /** What the companion extension is given: decoration and a refusal, no values. */
+  private projectEnvBridge(): ProjectEnvironmentBridge {
+    const projectEnv = this.projectEnv;
+    return {
+      apply: (env) => projectEnv?.apply(env) ?? env,
+      blocking: () => projectEnv?.blocking ?? false,
+      reason: () => projectEnv?.blockingReason() ?? "",
+    };
+  }
+
+  /**
+   * Resolve the project's environment before the first command can run.
+   *
+   * Called when a session's runtime is built, so the hook runs once per worker
+   * lifetime rather than once per command, and a tool never has to wait for a
+   * network round trip in the middle of a turn.
+   */
+  private async ensureProjectEnv(): Promise<void> {
+    if (!this.projectEnv) return;
+    const before = this.projectEnv.status().state;
+    await this.projectEnv.ensure();
+    const status = this.projectEnvStatus();
+    if (status.state !== before) this.notify("pi/project/env/changed", { status });
   }
 
   /**
@@ -865,7 +950,11 @@ export class WorkerServer {
       policy: this.definitions.policy(),
       // Bound to the session, so `task_output` can read a command of an agent
       // under it (D-163); the harness builds the same options for a child.
-      backgroundWork: handle.backgroundWork(this.options.cwd) ?? { cwd: this.options.cwd, foregroundCommandSeconds: this.definitions.policy().foregroundCommandSeconds },
+      backgroundWork: handle.backgroundWork(this.options.cwd) ?? {
+        cwd: this.options.cwd,
+        foregroundCommandSeconds: this.definitions.policy().foregroundCommandSeconds,
+        ...(this.projectEnv ? { projectEnv: this.projectEnvBridge() } : {}),
+      },
     };
   }
 
@@ -993,6 +1082,11 @@ export class WorkerServer {
    * are queued and flushed once the session path is known.
    */
   private async openAndAttach(openOptions: Parameters<SessionDriver["open"]>[0], handle?: SessionHandle): Promise<Live> {
+    // Resolve the project's environment before a session exists to run anything
+    // in. Failing here never blocks opening the conversation: the refusal, if
+    // the project requires its environment, belongs to the command that would
+    // have used it, where a person can read it.
+    await this.ensureProjectEnv().catch(() => {});
     const driver = this.options.createDriver();
     const live: Live = { driver, seq: 0, buffer: new ReplayBuffer(this.replayBuffer, this.options.replayBytes ?? 16 * 1024 * 1024), unsubscribe: () => {}, path: "" };
     driver.setExtensionModelWorkHandler?.((request) => this.admitExtensionModelWork(live, request));
@@ -1037,6 +1131,9 @@ export class WorkerServer {
       ...(this.options.stateDir ? { stateDir: this.options.stateDir } : {}),
       ...(this.options.projectTrusted !== undefined ? { projectTrusted: this.options.projectTrusted } : {}),
       ...(this.options.features ? { features: this.options.features } : {}),
+      // Every open goes through here, so an MCP server started for any session
+      // of this project sees the project's environment (M16-T17).
+      ...(this.projectEnv ? { projectEnv: (base: NodeJS.ProcessEnv) => this.projectEnv!.apply(base) } : {}),
     };
   }
 
@@ -1459,6 +1556,38 @@ export class WorkerServer {
           : { code: ErrorCodes.Internal, message: error instanceof Error ? error.message : String(error) },
     };
     this.options.send(response);
+  }
+}
+
+/**
+ * The project's environment configuration, as the host supplied it.
+ *
+ * It arrives as non-secret JSON in the worker's own environment, the same way
+ * the enabled features and the bundled package manager do. Malformed input
+ * means "no environment command" rather than a crash: a worker that cannot
+ * read this must still serve the project.
+ */
+function readProjectEnvConfig(): ProjectEnvWorkerConfig | undefined {
+  try {
+    const parsed: unknown = JSON.parse(process.env[ENV.projectEnv] ?? "null");
+    if (!parsed || typeof parsed !== "object") return undefined;
+    const candidate = parsed as Partial<ProjectEnvWorkerConfig>;
+    if (candidate.enabled !== true) return undefined;
+    if (typeof candidate.command !== "string" || !candidate.command) return undefined;
+    const args = Array.isArray(candidate.args) ? candidate.args.filter((a): a is string => typeof a === "string") : [];
+    const allow = Array.isArray(candidate.allowProviderKeys)
+      ? candidate.allowProviderKeys.filter((a): a is string => typeof a === "string")
+      : [];
+    return {
+      enabled: true,
+      command: candidate.command,
+      args,
+      required: candidate.required !== false,
+      allowProviderKeys: allow,
+      approved: candidate.approved === true,
+    };
+  } catch {
+    return undefined;
   }
 }
 

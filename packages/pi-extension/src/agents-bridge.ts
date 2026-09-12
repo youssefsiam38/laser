@@ -347,6 +347,23 @@ export interface AgentHarnessBridge {
   emitEvent?(event: Omit<AgentEvent, "id" | "at">): void;
 }
 
+/**
+ * The project's environment, supplied by the worker (M16-T17).
+ *
+ * The extension knows nothing about where the values came from — a secret
+ * manager, a file, a password store. It receives a function that decorates the
+ * environment of a process about to be created, and a way to ask whether
+ * execution should happen at all.
+ */
+export interface ProjectEnvironmentBridge {
+  /** Decorate the environment a child process will be created with. */
+  apply(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
+  /** True when the environment could not be prepared and the project requires it. */
+  blocking(): boolean;
+  /** The sentence the model and the person see when execution is refused. */
+  reason(): string;
+}
+
 /** What the `background-work` module needs from the worker. */
 export interface BackgroundWorkOptions {
   cwd: string;
@@ -361,4 +378,6 @@ export interface BackgroundWorkOptions {
    * with a sentence for the model. Absent when the worker keeps no index.
    */
   readTask?: (taskId: string, tailLines: number) => Promise<ReadTaskOutputResult>;
+  /** The project's environment command, when this project configures one. */
+  projectEnv?: ProjectEnvironmentBridge;
 }

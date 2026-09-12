@@ -77,6 +77,11 @@ value; the value itself never enters git. `${VAR}` and `$env:VAR` references
 still work for people who prefer them, with the honest caveat that a desktop
 app's environment is not a shell's.
 
+A project with an environment command (`docs/project-environment.md`) gives its
+stdio servers that environment instead, unless the server is configured with
+`inheritEnv: false`. Explicit `env` values still win, and an already-connected
+server keeps what it started with until it is reconnected.
+
 OAuth tokens are stored by the adapter in the operating system credential
 store, keyed by server name and bound to the server URL; Laser never sees or
 stores them.

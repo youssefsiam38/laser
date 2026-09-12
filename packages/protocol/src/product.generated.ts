@@ -69,6 +69,7 @@ export const ENV = {
   "npmCli": "LASERCODE_NPM_CLI",
   "npmCommand": "LASERCODE_NPM_COMMAND",
   "port": "LASERCODE_PORT",
+  "projectEnv": "LASERCODE_PROJECT_ENV",
   "releaseKey": "LASERCODE_RELEASE_KEY",
   "releaseKeyPem": "LASERCODE_RELEASE_KEY_PEM",
   "packageSigningKey": "LASERCODE_PACKAGE_SIGNING_KEY",

@@ -32,7 +32,7 @@ import type { AddressInfo } from "node:net";
 import { basename, dirname, extname, join, normalize, resolve as resolvePath, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@lasercode/crypto";
-import { ENV, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, type ClientRequests, type HostNotifications, type JsonRpcNotification, type LogEntry, type NamerState, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
+import { ENV, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, projectEnvWorkerConfig, type ClientRequests, type HostNotifications, type JsonRpcNotification, type LogEntry, type NamerState, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
 import { suggestBeamModel } from "./agents/models.js";
 import { AgentRunRegistry } from "./agents/runs.js";
 import { SkillsCheck } from "./agents/skills-check.js";
@@ -44,8 +44,9 @@ import { SessionCatalog, defaultSessionDir } from "./catalog.js";
 import { LogStore } from "./logstore.js";
 import { PackageService, SetupService } from "./packages.js";
 import { TaskRegister } from "./tasks/register.js";
-import { defaultAgentDir, defaultStateDir, ensureWorkspace, workspaceAgentFor, workspacesDir } from "./paths.js";
+import { defaultAgentDir, defaultStateDir, ensureWorkspace, projectRootOf, workspaceAgentFor, workspacesDir } from "./paths.js";
 import { canonical } from "./trust.js";
+import { ProjectEnvStore, projectEnvTrustAllows } from "./project-env.js";
 import { ProjectRegistry } from "./projects.js";
 import { PushService } from "./push.js";
 import { RelayClient, type RelayClientState, type RelayClientStats } from "./relay-client.js";
@@ -176,6 +177,8 @@ export class HostServer {
   readonly catalog: SessionCatalog;
   readonly attention: AttentionTracker;
   readonly projects: ProjectRegistry;
+  /** The per-project environment command (M16-T17, docs/project-environment.md). */
+  readonly projectEnv: ProjectEnvStore;
   /** Package policy (M10-T5) and first-run state (M10-T6). */
   readonly packages: PackageService;
   readonly setup: SetupService;
@@ -295,6 +298,14 @@ export class HostServer {
       hasClients: () => this.clients.size > 0,
     });
 
+    // The project environment command (M16-T17). Machine-local and keyed by
+    // project root, deliberately not read from inside a checkout: it names an
+    // executable, and a file in a repository must not be able to choose one.
+    this.projectEnv = new ProjectEnvStore({
+      storePath: join(stateDir, "project-env.json"),
+      onChange: (status) => this.notify("pi/project/env/changed", { status }),
+    });
+
     this.tasks = new TaskRegister({ notify: (method, params) => this.notify(method, params) });
 
     this.push = new PushService({ agentDir, log: (line) => this.log(line) });
@@ -352,7 +363,12 @@ export class HostServer {
     const poolOptions: WorkerPoolOptions = {
       ...(options.agentDir ? { agentDir: options.agentDir } : {}),
       ...(npmCommand ? { env: { [ENV.npmCommand]: JSON.stringify(npmCommand) } } : {}),
-      envForCwd: (cwd) => ({ [ENV.features]: JSON.stringify(this.features.enabled(cwd)) }),
+      envForCwd: (cwd) => ({
+        [ENV.features]: JSON.stringify(this.features.enabled(cwd)),
+        // Non-secret: the executable, its arguments and whether this exact pair
+        // was approved. Values never travel this way; the worker runs the hook.
+        ...this.projectEnvForWorker(cwd),
+      }),
       ...(options.sessionDir ? { sessionDir: options.sessionDir } : {}),
       stateDir,
       ...(options.workerMain ? { workerMain: options.workerMain } : {}),
@@ -408,6 +424,7 @@ export class HostServer {
     this.router = new Router(this.pool, this.catalog, {
       attention: this.attention,
       projects: this.projects,
+      projectEnv: this.projectEnv,
       views: this.views,
       logs: this.logs,
       logsUnavailable: this.logsUnavailable,
@@ -778,6 +795,34 @@ export class HostServer {
       if (rows.length > 0) this.notify("pi/logs/append", { entries: rows });
     }, LOG_APPEND_FLUSH_MS);
     this.logFlush.unref?.();
+  }
+
+  /**
+   * The environment-command configuration a worker for `cwd` is started with.
+   *
+   * Two gates before anything is handed down, and both are refusals rather than
+   * warnings:
+   *
+   *   - **Trust.** A project whose trust decision is not "trusted" gets no
+   *     environment command. The hook never runs before a person has approved
+   *     the project, which is the same rule the worktree setup hook follows.
+   *   - **Approval.** The `{command, args}` pair must match the fingerprint
+   *     recorded when a person saved it. Editing the store by hand, or any
+   *     other change to what would actually execute, makes it stale and the
+   *     worker is told the hook is unapproved.
+   *
+   * A worktree resolves to its owning project first (`projectRootOf`), so a
+   * child agent working in `<project>/.worktrees/<name>` gets the project's
+   * approved binding rather than nothing.
+   */
+  private projectEnvForWorker(cwd: string): Record<string, string> {
+    const root = projectRootOf(cwd);
+    const config = this.projectEnv.get(root);
+    if (!config?.enabled) return {};
+    const { trust } = this.projects.trustOf(root);
+    if (!projectEnvTrustAllows(trust)) return {};
+    const worker = projectEnvWorkerConfig(config);
+    return worker ? { [ENV.projectEnv]: JSON.stringify(worker) } : {};
   }
 
   /** Is any connected client following a session in this directory? */

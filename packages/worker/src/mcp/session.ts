@@ -17,7 +17,7 @@
  */
 import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
 import { getServerPrefix } from "pi-mcp-adapter/types";
-import { toAdapterConfig } from "./adapter-config.js";
+import { toAdapterConfig, type ProjectEnvDecorator } from "./adapter-config.js";
 import { loadMcpEngine, type McpConfig } from "./engine.js";
 import { McpStore } from "./store.js";
 import { mcpClientIdentity } from "./identity.js";
@@ -26,6 +26,11 @@ export interface McpSessionOptions {
   cwd: string;
   agentDir: string;
   projectTrusted?: boolean;
+  /**
+   * The project's environment (M16-T17). A stdio server is started by the
+   * engine, not by the shell tool, so it is decorated here or not at all.
+   */
+  projectEnv?: ProjectEnvDecorator;
 }
 
 export interface McpSessionSetup {
@@ -42,14 +47,19 @@ export async function mcpSessionConfig(options: McpSessionOptions): Promise<McpC
   const store = new McpStore(options.agentDir);
   const servers = await store.enabled(options.cwd, options.projectTrusted);
   if (servers.length === 0) return undefined;
-  return resolveConfig(store, servers, options.cwd);
+  return resolveConfig(store, servers, options.cwd, options.projectEnv);
 }
 
-async function resolveConfig(store: McpStore, servers: Awaited<ReturnType<McpStore["enabled"]>>, cwd: string): Promise<McpConfig> {
+async function resolveConfig(
+  store: McpStore,
+  servers: Awaited<ReturnType<McpStore["enabled"]>>,
+  cwd: string,
+  projectEnv?: ProjectEnvDecorator,
+): Promise<McpConfig> {
   const resolved = await Promise.all(
     servers.map(async ({ scope, config }) => ({ config, secrets: await store.secretsFor(scope, cwd, config.name) })),
   );
-  return toAdapterConfig(resolved);
+  return toAdapterConfig(resolved, projectEnv);
 }
 
 /** Build the session's MCP extension, or nothing when no server is enabled. */
@@ -59,7 +69,7 @@ export async function mcpSessionSetup(options: McpSessionOptions): Promise<McpSe
   if (servers.length === 0) return undefined;
   // Configuration and attribution must describe the same validated snapshot,
   // even if the person saves a changed server while secrets are resolving.
-  const config = await resolveConfig(store, servers, options.cwd);
+  const config = await resolveConfig(store, servers, options.cwd, options.projectEnv);
   const engine = await loadMcpEngine();
   const factory = engine.createMcpAdapter({ config, clientIdentity: mcpClientIdentity() }) as unknown as (pi: ExtensionAPI) => void | Promise<void>;
   return {
