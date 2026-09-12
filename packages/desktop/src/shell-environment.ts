@@ -44,20 +44,16 @@ export async function resolveShellEnvironment(options: {
     const timer = setTimeout(() => finish(), options.timeoutMs ?? 10_000);
     child.on("error", () => finish());
     child.stdout.on("data", (chunk: Buffer) => {
+      if (done) return;
       size += chunk.length;
-      if (size > MAX_OUTPUT) finish();
-      else chunks.push(chunk);
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      size += chunk.length;
-      if (size > MAX_OUTPUT) finish();
-    });
-    child.on("close", (code) => {
-      if (code !== 0) return finish();
+      if (size > MAX_OUTPUT) return finish();
+      chunks.push(chunk);
+      // The marker, not process/pipe closure, completes the snapshot. A profile
+      // may leave a grandchild holding stdout or a logout hook may fail later.
       const output = Buffer.concat(chunks).toString("utf8");
       const from = output.indexOf(`${start}\0`);
       const to = output.indexOf(`${end}\0`, from + start.length + 1);
-      if (from < 0 || to < 0) return finish();
+      if (from < 0 || to < 0) return;
       const entries = output.slice(from + start.length + 1, to).split("\0").filter(Boolean);
       const variables: Record<string, string> = Object.create(null) as Record<string, string>;
       for (const entry of entries) {
@@ -66,6 +62,11 @@ export async function resolveShellEnvironment(options: {
       }
       finish(environmentOverlay(variables));
     });
+    child.stderr.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_OUTPUT) finish();
+    });
+    child.on("close", () => finish());
   });
   if (!result) {
     options.log("Shell environment unavailable; keeping the current environment.");

@@ -1,5 +1,5 @@
 import { ENV, environmentOverlay, envVar } from "@lasercode/protocol";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -51,6 +51,32 @@ export ${ENV.agentDir}='/other-app'
     env = { ...env, NODE_OPTIONS: "do-not-run", ELECTRON_RUN_AS_NODE: "1", PI_CODING_AGENT_DIR: "/not-ours", [ENV.stateDir]: "/not-ours" };
     writeFileSync(join(home, ".bashrc"), `if [[ -v NODE_OPTIONS || -v ELECTRON_RUN_AS_NODE || -v PI_CODING_AGENT_DIR || -v ${ENV.stateDir} ]]; then exit 4; fi\nexport SYNTHETIC_SCRUBBED=yes\n`);
     expect((await resolve())["SYNTHETIC_SCRUBBED"] === "yes").toBe(true);
+  });
+
+  it.each(["", "disown"])("resolves while a live background child holds stdout (%s)", async (afterSpawn) => {
+    writeFileSync(join(home, ".bashrc"), `sleep 5 &
+child=$!
+printf '%s' "$child" > "$HOME/child.pid"
+kill -0 "$child" && export SYNTHETIC_CHILD_ALIVE=yes
+${afterSpawn}
+export SYNTHETIC_SHELL_EXPORT=private-fixture
+`);
+    try {
+      const resolved = await resolve({ timeoutMs: 1500 });
+      expect(resolved["SYNTHETIC_CHILD_ALIVE"] === "yes").toBe(true);
+      expect(resolved["SYNTHETIC_SHELL_EXPORT"] === "private-fixture").toBe(true);
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).toContain("resolved");
+    } finally {
+      const child = Number(readFileSync(join(home, "child.pid"), "utf8"));
+      try { process.kill(child, "SIGKILL"); } catch { /* Resolver already collected its child. */ }
+    }
+  });
+
+  it("retains a complete snapshot even if the logout file exits unsuccessfully", async () => {
+    writeFileSync(join(home, ".bashrc"), "export SYNTHETIC_SHELL_EXPORT=private-fixture\n");
+    writeFileSync(join(home, ".bash_logout"), "exit 7\n");
+    expect((await resolve())["SYNTHETIC_SHELL_EXPORT"] === "private-fixture").toBe(true);
   });
 
   it("times out a hanging startup and retains the inherited environment", async () => {

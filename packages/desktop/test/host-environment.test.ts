@@ -14,12 +14,11 @@ it("same-version adoption sends the desktop environment and normal Quit leaves t
   const root = mkdtempSync(join(tmpdir(), "desktop-env-"));
   const server = createServer((_req, res) => res.end("ok"));
   const sockets = new WebSocketServer({ server, path: "/ws" });
-  let received = false;
+  let received: { method: string; keys: string[]; hasSyntheticValue: boolean } | undefined;
   sockets.on("connection", (socket) => socket.on("message", (data) => {
     const request = JSON.parse(String(data));
-    received = request.method === "pi/host/environment"
-      && request.params.variables.SYNTHETIC_SHELL_EXPORT === "private-fixture"
-      && !(ENV.agentDir in request.params.variables);
+    received = { method: request.method, keys: Object.keys(request.params.variables).sort(),
+      hasSyntheticValue: request.params.variables.SYNTHETIC_SHELL_EXPORT === "private-fixture" };
     socket.send(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { applied: 1 } }));
   }));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -33,7 +32,9 @@ it("same-version adoption sends the desktop environment and normal Quit leaves t
   const kill = vi.spyOn(process, "kill");
   try {
     expect(await host.start()).toMatchObject({ state: "ready", startedByUs: false });
-    expect(received).toBe(true);
+    expect(received?.method).toBe("pi/host/environment");
+    expect(received?.keys).toEqual(["HOME", "SYNTHETIC_SHELL_EXPORT"]);
+    expect(received?.hasSyntheticValue).toBe(true);
     await host.stop();
     expect(server.listening).toBe(true);
     expect(kill.mock.calls.every(([, signal]) => signal === 0)).toBe(true);

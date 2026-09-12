@@ -10,7 +10,8 @@
 
 import type { AgentWorktreeStatus, SessionAgentInfo, SessionWorktreeDisposition } from "./agents.js";
 import type { ProviderFailureClass } from "./provider-failure.js";
-import { ENV, ENV_PREFIX, WIRE_NAMESPACE } from "./identity.js";
+import { WIRE_NAMESPACE } from "./identity.js";
+import type { HostEnvironmentParams } from "./environment.js";
 import type { AccountUsageState, PiExtensionMessage, PiExtensionModuleName } from "./pi-extension.js";
 import type { FeatureScope, FeatureState, GoalAction, SessionGoal } from "./features.js";
 import type { PushConfig, PushDeviceInfo, PushSubscriptionJson } from "./push.js";
@@ -19,32 +20,6 @@ import type { PushConfig, PushDeviceInfo, PushSubscriptionJson } from "./push.js
 import type { PendingMessage } from "./pending.js";
 
 // ---------- Shared value types (no Pi types allowed here) ----------
-
-/** Private, memory-only desktop/CLI → host → worker environment overlay. */
-export interface HostEnvironmentParams {
-  variables: Record<string, string>;
-}
-
-/** Runtime/directory pins are never imported from a shell or another client. */
-export function isProtectedEnvironmentKey(name: string): boolean {
-  const key = name.toUpperCase();
-  return key.startsWith(`${ENV_PREFIX}_`) || Object.values(ENV).some((value) => value === key)
-    || key.startsWith("ELECTRON_") || key === "NODE_OPTIONS"
-    || key === "PI_CODING_AGENT_DIR" || key === "PI_CODING_AGENT_SESSION_DIR";
-}
-
-/** Omitted keys are retained. Reject invalid names/values without exposing them. */
-export function environmentOverlay(variables: Readonly<Record<string, string | undefined>>): Record<string, string> {
-  return Object.fromEntries(Object.entries(variables).filter(([name, value]) =>
-    /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && !isProtectedEnvironmentKey(name)
-    && typeof value === "string" && !value.includes("\u0000"),
-  )) as Record<string, string>;
-}
-
-/** Host → worker only; never broadcast to frontends or the relay. */
-export interface WorkerNotifications {
-  "pi/host/environment": HostEnvironmentParams;
-}
 
 export interface ImageContent {
   type: "image";

@@ -34,6 +34,7 @@ export {
   daemonArgs,
   logTail,
   openBrowser,
+  refreshHostEnvironment,
   startHost,
   stopHost,
   type StartResult,

@@ -22,12 +22,11 @@
  * rewrite, and the log line below records the exact command so a failed start
  * on someone else's machine is one line to read rather than a guess.
  */
-import { ENV, PRODUCT_NAME, environmentOverlay } from "@lasercode/protocol";
+import { ENV, PRODUCT_NAME } from "@lasercode/protocol";
 import { type ChildProcess, spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import {
   CLI_VERSION,
-  HostRpc,
   cliEntry,
   daemonArgs,
   inspectHost,
@@ -35,6 +34,7 @@ import {
   piEnv,
   portInUse,
   probeHealth,
+  refreshHostEnvironment,
   stopHost,
   type LaserPaths,
 } from "@lasercode/cli";
@@ -145,8 +145,7 @@ export class HostProcess {
           });
         }
       } else {
-        const hostname = existing.record.host === "::1" ? "[::1]" : existing.record.host;
-        await this.refreshEnvironment(`ws://${hostname}:${existing.record.port}/ws`);
+        await refreshHostEnvironment(existing.record, this.options.baseEnv ?? process.env, (line) => log.line(line));
         log.line(`attached to the host already running at ${existing.record.url} (pid ${existing.record.pid})`);
         return this.publish({
           state: "ready",
@@ -235,25 +234,6 @@ export class HostProcess {
     }
 
     return this.spawnDaemon();
-  }
-
-  private async refreshEnvironment(url: string): Promise<void> {
-    let rpc: HostRpc | undefined;
-    let timer: NodeJS.Timeout | undefined;
-    try {
-      if (!["127.0.0.1", "localhost", "[::1]"].includes(new URL(url).hostname)) throw new Error("not local");
-      rpc = await HostRpc.connect({ url });
-      await Promise.race([
-        rpc.request("pi/host/environment", { variables: environmentOverlay(this.options.baseEnv ?? process.env) }),
-        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), 5000); }),
-      ]);
-    } catch {
-      // Never include RPC errors or the payload: they may carry secret values.
-      this.options.log.line("Could not refresh the host environment; keeping its current environment. Reopen the app to try again.");
-    } finally {
-      if (timer) clearTimeout(timer);
-      rpc?.close();
-    }
   }
 
   private async spawnDaemon(): Promise<DesktopHostInfo> {

@@ -7,7 +7,7 @@
  * they type it a second time.
  */
 import { PRODUCT_NAME, environmentOverlay } from "@lasercode/protocol";
-import { HostRpc } from "./rpc.js";
+import { HostRpc, HostRpcError } from "./rpc.js";
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { sep } from "node:path";
@@ -125,8 +125,12 @@ export async function startHost(paths: LaserPaths, timeoutMs = 30_000): Promise<
   });
 }
 
-/** A terminal already resolved its shell; adoption must not discard those exports. */
-export async function refreshHostEnvironment(record: HostRecord, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+/** Advisory for both launchers: an older or unreachable host never blocks adoption. */
+export async function refreshHostEnvironment(
+  record: Pick<HostRecord, "host" | "port">,
+  env: NodeJS.ProcessEnv = process.env,
+  log: (line: string) => void = (line) => { process.stderr.write(`${line}\n`); },
+): Promise<void> {
   let rpc: HostRpc | undefined;
   let timer: NodeJS.Timeout | undefined;
   try {
@@ -137,10 +141,11 @@ export async function refreshHostEnvironment(record: HostRecord, env: NodeJS.Pro
       rpc.request("pi/host/environment", { variables: environmentOverlay(env) }),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), 5000); }),
     ]);
-  } catch {
-    throw new CliError("Could not confirm the running host's environment refresh. The host was not restarted.", {
-      fix: "Try the command again. If an update was installed, restart the app and host together when your work is finished.",
-    });
+  } catch (error) {
+    // No error details or payload: either can contain environment values.
+    log(error instanceof HostRpcError && error.isUnsupported
+      ? "The running host does not support environment refresh. Attached without restarting it."
+      : "Could not confirm the host environment refresh. Attached without restarting it.");
   } finally {
     if (timer) clearTimeout(timer);
     rpc?.close();

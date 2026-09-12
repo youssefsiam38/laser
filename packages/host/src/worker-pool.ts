@@ -124,15 +124,6 @@ const DEFAULTS = {
 
 export class WorkerPool {
   private readonly baseEnv: NodeJS.ProcessEnv = { ...process.env };
-
-  /** Additive, memory-only. Includes starting workers: their pipe preserves order. */
-  applyEnvironment(variables: Record<string, string>): number {
-    const overlay = environmentOverlay(variables);
-    Object.assign(this.baseEnv, overlay);
-    for (const { client } of this.liveClients()) client.notify("pi/host/environment", { variables: overlay });
-    return Object.keys(overlay).length;
-  }
-
   private readonly entries = new Map<string, Entry>();
   private readonly sessionCwd = new Map<string, string>();
   private readonly now: () => number;
@@ -148,6 +139,14 @@ export class WorkerPool {
       this.sweepTimer = setInterval(() => this.sweep(), sweepMs);
       this.sweepTimer.unref?.();
     }
+  }
+
+  /** Additive, memory-only. Includes starting workers: their pipe preserves order. */
+  applyEnvironment(variables: Record<string, string>): number {
+    const overlay = environmentOverlay(variables);
+    Object.assign(this.baseEnv, overlay);
+    for (const { client } of this.liveClients()) client.notify("pi/host/environment", { variables: overlay });
+    return Object.keys(overlay).length;
   }
 
   /** Directories with a live or starting worker. */

@@ -84,7 +84,7 @@ export class WorkerClient {
     });
     this.pipe = this.child.stdio[3] as Duplex;
     // A notification can race a worker exit before the process's exit event.
-    // That event owns settlement; EPIPE must not crash the host in the meantime.
+    // Pending requests still settle through exit; EPIPE must not crash the host.
     this.pipe.on("error", () => {});
 
     let resolveReady!: () => void;

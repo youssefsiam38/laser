@@ -24,10 +24,10 @@
  *   pi/ui/response       every live worker (the worker that owns the dialog id
  *                        answers; the others ignore it)
  */
-import { ErrorCodes, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, ProtocolError, decisionPushPayload, isTerminalRunStatus, parseClientRequest, type AgentRun, type AgentWorktreeStatus, type JsonRpcError, type JsonRpcResponse, type NamerState, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
+import { ErrorCodes, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PRODUCT_VERSION, ProtocolError, decisionPushPayload, isTerminalRunStatus, parseClientRequest, type AgentRun, type AgentWorktreeStatus, type JsonRpcError, type JsonRpcResponse, type NamerState, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
 import { existsSync, statSync, unlinkSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import { PRODUCT_VERSION } from "@lasercode/protocol";
+import { HOST_ENVIRONMENT_METHOD, applyHostEnvironment, guardHostEnvironment } from "./environment.js";
 import { destinationFor, rewriteSessionFile } from "./session-move.js";
 import type { AgentRunRegistry } from "./agents/runs.js";
 import { removeRunWorktree, worktreeStatus } from "./agents/worktrees.js";
@@ -166,10 +166,7 @@ export class Router {
   async handle(raw: unknown, access: { localEnvironment?: boolean } = {}): Promise<JsonRpcResponse> {
     const id = (raw as { id?: string | number } | null)?.id ?? 0;
     try {
-      // Check transport authorization before parsing a potentially secret map.
-      if ((raw as { method?: unknown } | null)?.method === "pi/host/environment" && !access.localEnvironment) {
-        throw new ProtocolError(ErrorCodes.Unsupported, "Environment updates are only accepted from a local app or terminal.");
-      }
+      guardHostEnvironment(raw, access.localEnvironment);
       const req = parseClientRequest(raw);
       const clientVersion = (raw as { clientVersion?: string }).clientVersion;
       if (req.method !== "pi/host/version" && clientVersion && clientVersion !== PRODUCT_VERSION) {
@@ -260,8 +257,7 @@ export class Router {
     switch (req.method) {
       case "pi/host/version":
         return { version: PRODUCT_VERSION };
-      case "pi/host/environment":
-        return { applied: this.pool.applyEnvironment(req.params.variables) };
+      case HOST_ENVIRONMENT_METHOD: return applyHostEnvironment(this.pool, req.params);
       case "pi/session/list":
         return { sessions: this.sessions(req.params.cwd) };
 
