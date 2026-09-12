@@ -16,6 +16,7 @@
  * counts as pinned, because it is.
  */
 import { useId, useState } from "react";
+import { ORIGINS } from "@lasercode/protocol";
 import { AlertTriangle, ChevronRight, RotateCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -62,6 +63,12 @@ const GROUPS: ReadonlyArray<{ title: string; detail: string; tokens: readonly To
     title: "Terminal",
     detail: "Command output, dark in both themes so agent output reads the same everywhere.",
     tokens: ["terminal-bg", "terminal-ink", "terminal-ink-2", "terminal-line"],
+    advanced: true,
+  },
+  {
+    title: "Instruction sources",
+    detail: "The origin rules and tints in captured instructions. Names remain visible without colour.",
+    tokens: ORIGINS.map(origin => origin.token),
     advanced: true,
   },
   {

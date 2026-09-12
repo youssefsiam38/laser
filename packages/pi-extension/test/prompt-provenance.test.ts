@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { expect, it, vi } from "vitest";
 import type { BeforeAgentStartEvent, Extension, ExtensionContext, LoadExtensionsResult, Skill } from "@earendil-works/pi-coding-agent";
-import { createPromptProvenanceObserver, instructionLeaves, recordBasePrompt, recordPromptChange } from "../src/prompt-provenance.js";
+import { createPromptProvenanceObserver, instructionLeaves, recordBasePrompt, recordPromptChange, recordInstructionWrite } from "../src/prompt-provenance.js";
 
 // Test against the pinned engine's actual builder, never a duplicate fixture.
 const { buildSystemPrompt } = await import(new URL("../node_modules/@earendil-works/pi-coding-agent/dist/core/system-prompt.js", import.meta.url).href);
@@ -81,7 +81,7 @@ it("observes ordered prompt and in-place request changes, captures once at the e
     expect(capture).toHaveBeenCalledTimes(turn + 1);
     const map = capture.mock.calls.at(-1)![2][0];
     expect(map.sha256).toBe(createHash("sha256").update(payload.instructions).digest("hex"));
-    expect(map.spans.at(-1).source.label).toBe("Request modification");
+    expect(map.spans.at(-1).source.label).toBe("first");
     expect(map.spans.some((span: { source: { path?: string } }) => span.source.path === "/project/AGENTS.md")).toBe(true);
   }
 });

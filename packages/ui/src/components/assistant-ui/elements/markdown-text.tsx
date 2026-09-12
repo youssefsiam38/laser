@@ -32,7 +32,7 @@ import {
   type CodeHeaderProps,
 } from "@assistant-ui/react-markdown";
 import { Check, Copy } from "lucide-react";
-import { createContext, memo, useContext, useMemo, useRef, type FC } from "react";
+import { createContext, memo, useContext, useMemo, useRef, type FC, type ReactNode, type ComponentProps } from "react";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -69,6 +69,8 @@ export interface MarkdownTextProps {
   className?: string | undefined;
   /** Per-render overrides, merged over the default map. */
   components?: Components | undefined;
+  /** Capture-only provenance, using original parser positions on top-level blocks. */
+  sourceBlock?: ((start: number, end: number, children: ReactNode) => ReactNode) | undefined;
 }
 
 const useShallowStable = <T extends Record<string, unknown> | undefined>(value: T): T => {
@@ -222,29 +224,43 @@ const componentsByLanguage = {
   mermaid: { SyntaxHighlighter: MermaidDiagram },
 };
 
+const SourceBlocks = createContext<MarkdownTextProps["sourceBlock"]>(undefined);
+/** Stable component identity keeps source buttons and focus when the panel opens. */
+function ProvenanceBlock({ node, children, ...props }: ComponentProps<"div"> & { node?: { properties?: Record<string, unknown> } | undefined }) {
+  const render = useContext(SourceBlocks);
+  const start = node?.properties?.provenanceStart;
+  const end = node?.properties?.provenanceEnd;
+  return render && typeof start === "number" && typeof end === "number" ? render(start, end, children) : <div {...props}>{children}</div>;
+}
+
 /**
  * Transcript prose at the shared reading measure, never raw HTML. The streaming caret rides on
  * the last block while the part reports `running`.
  */
-const MarkdownTextImpl: FC<MarkdownTextProps> = ({ className, components, nativeFiles = false, dir = "auto" }) => {
+const MarkdownTextImpl: FC<MarkdownTextProps> = ({ className, components, nativeFiles = false, dir = "auto", sourceBlock }) => {
   const stableComponents = useShallowStable(components);
+  const hasSources = Boolean(sourceBlock);
   const markdownComponents = useMemo(() => {
-    if (!stableComponents) return defaultComponents;
-    return { ...defaultComponents, ...memoizeMarkdownComponents(stableComponents) };
-  }, [stableComponents]);
+    const map = { ...defaultComponents, ...(stableComponents ? memoizeMarkdownComponents(stableComponents) : {}) };
+    return hasSources ? { ...map, div: ProvenanceBlock } satisfies Components : map;
+  }, [stableComponents, hasSources]);
+  const plugins = useMemo(() => hasSources ? [...rehypePlugins, () => (tree: { children: Array<{ type: string; value?: string; position?: { start: { offset?: number }; end: { offset?: number } } }> }) => {
+    tree.children = tree.children.map(node => (node.type === "element" || (node.type === "raw" || node.type === "text") && node.value?.trim()) && node.position?.start.offset !== undefined && node.position.end.offset !== undefined
+      ? { type: "element", tagName: "div", properties: { provenanceStart: node.position.start.offset, provenanceEnd: node.position.end.offset }, children: [node] } : node);
+  }] : rehypePlugins, [hasSources]);
 
   return (
-    <ProseDirection.Provider value={dir}><NativeFiles.Provider value={nativeFiles}><MarkdownTextPrimitive
+    <ProseDirection.Provider value={dir}><SourceBlocks.Provider value={sourceBlock}><NativeFiles.Provider value={nativeFiles}><MarkdownTextPrimitive
       remarkPlugins={remarkPlugins}
-      rehypePlugins={rehypePlugins}
-      preprocess={preprocess}
+      rehypePlugins={plugins}
+      {...(sourceBlock ? {} : { preprocess })}
       urlTransform={markdownUrl}
       components={markdownComponents}
       componentsByLanguage={componentsByLanguage}
       smooth={false}
       defer
       className={cn("md-body max-w-(--measure-prose) text-base break-words text-ink", "[&[data-status=running]>*:last-child]:caret", className)}
-    /></NativeFiles.Provider></ProseDirection.Provider>
+    /></NativeFiles.Provider></SourceBlocks.Provider></ProseDirection.Provider>
   );
 };
 
