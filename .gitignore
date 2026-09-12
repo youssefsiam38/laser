@@ -13,4 +13,4 @@ packages/desktop/runtime/
 /release/
 *.sqlite
 *.sqlite-*
-docs/research/
+docs/research/.playwright-mcp/
