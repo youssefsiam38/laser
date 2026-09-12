@@ -51,6 +51,10 @@ default, `scriptMode` on. Direct tools are registered from the cache, so a
 server that has connected once has its tools in the model's list from the
 first turn of the next session.
 
+| Runtime | Contract |
+| --- | --- |
+| Environment | Desktop startup resolves exported login-shell variables; terminal launches refresh an adopted host too. New commands and newly connected stdio servers inherit them. Existing servers need **Reconnect**; explicit `env` wins and `inheritEnv: false` stays isolated. No host or worker restart. See [Shell environment](shell-environment.md). |
+
 ## Where configuration lives
 
 | Scope | File | Shared with a team |

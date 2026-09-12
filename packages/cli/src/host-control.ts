@@ -6,7 +6,8 @@
  * host attaches to it and prints the URL, which is what a person means when
  * they type it a second time.
  */
-import { PRODUCT_NAME } from "@lasercode/protocol";
+import { PRODUCT_NAME, environmentOverlay } from "@lasercode/protocol";
+import { HostRpc, HostRpcError } from "./rpc.js";
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { sep } from "node:path";
@@ -66,7 +67,10 @@ export interface StartResult {
  */
 export async function startHost(paths: LaserPaths, timeoutMs = 30_000): Promise<StartResult> {
   const existing = await inspectHost(paths);
-  if (existing.state === "running") return { record: existing.record, started: false };
+  if (existing.state === "running") {
+    await refreshHostEnvironment(existing.record);
+    return { record: existing.record, started: false };
+  }
   if (existing.state === "unreachable") {
     throw new CliError(`a ${PRODUCT_NAME} host is recorded as running but is not answering`, {
       details: [existing.reason],
@@ -119,6 +123,33 @@ export async function startHost(paths: LaserPaths, timeoutMs = 30_000): Promise<
     details: logTail(paths.logFile),
     fix: `Check ${paths.logFile}, then try \`${PRODUCT_NAME} up --foreground\` to watch it start.`,
   });
+}
+
+/** Advisory for both launchers: an older or unreachable host never blocks adoption. */
+export async function refreshHostEnvironment(
+  record: Pick<HostRecord, "host" | "port">,
+  env: NodeJS.ProcessEnv = process.env,
+  log: (line: string) => void = (line) => { process.stderr.write(`${line}\n`); },
+): Promise<void> {
+  let rpc: HostRpc | undefined;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(record.host)) throw new Error("not local");
+    const hostname = record.host === "::1" ? "[::1]" : record.host;
+    rpc = await HostRpc.connect({ url: `ws://${hostname}:${record.port}/ws` });
+    await Promise.race([
+      rpc.request("pi/host/environment", { variables: environmentOverlay(env) }),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), 5000); }),
+    ]);
+  } catch (error) {
+    // No error details or payload: either can contain environment values.
+    log(error instanceof HostRpcError && error.isUnsupported
+      ? "The running host does not support environment refresh. Attached without restarting it."
+      : "Could not confirm the host environment refresh. Attached without restarting it.");
+  } finally {
+    if (timer) clearTimeout(timer);
+    rpc?.close();
+  }
 }
 
 /** The arguments a daemon needs to reproduce this CLI's path resolution. */

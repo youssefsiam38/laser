@@ -35,6 +35,7 @@ import { frameColours, parseStartupGround, readStartupGround, writeStartupGround
 import type { AttentionChange, FleetSnapshot } from "./fleet.js";
 import { HostLink } from "./host-link.js";
 import { HostProcess } from "./host-process.js";
+import { resolveShellEnvironment } from "./shell-environment.js";
 import { connectedGpuVendors, linuxDisplayDecision, probeWaylandGlobals } from "./linux-display.js";
 import { loadSecrets } from "./keychain.js";
 import { DesktopLog } from "./log.js";
@@ -628,6 +629,9 @@ async function start(): Promise<void> {
     identity = undefined;
   }
 
+  const shellEnvironment = await resolveShellEnvironment({ log: (line) => log.line(line) });
+  Object.assign(process.env, shellEnvironment);
+  Object.assign(environment, shellEnvironment);
   await host.start();
   updater.start();
   if (app.isPackaged && process.platform === "linux") nativeUpdate.start();

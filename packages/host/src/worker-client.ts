@@ -7,7 +7,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 import type { Duplex } from "node:stream";
-import { ENV, ErrorCodes, LineDecoder, isNotification, isResponse, type JsonRpcError, type JsonRpcMessage, type JsonRpcNotification } from "@lasercode/protocol";
+import { ENV, ErrorCodes, LineDecoder, isNotification, isResponse, type JsonRpcError, type JsonRpcMessage, type JsonRpcNotification, type WorkerNotifications } from "@lasercode/protocol";
 
 export interface WorkerClientOptions {
   cwd: string;
@@ -30,6 +30,8 @@ export interface WorkerClientOptions {
   workerMain?: string;
   /** Node binary to run the worker with; defaults to the current one. */
   nodeBinary?: string;
+  /** Memory-only shell environment, refreshed by local launchers. */
+  baseEnv?: NodeJS.ProcessEnv;
   /** Extra environment for the worker, on top of the host's own. */
   env?: Readonly<Record<string, string>>;
   onNotification: (notification: JsonRpcNotification) => void;
@@ -78,9 +80,12 @@ export class WorkerClient {
       // Engine defaults and subprocesses must never inherit the host's state cwd.
       cwd: options.cwd,
       stdio: ["ignore", "pipe", "pipe", "pipe"],
-      env: { ...process.env, ...options.env, [ENV.workerFd]: "3" },
+      env: { ...(options.baseEnv ?? process.env), ...options.env, [ENV.workerFd]: "3" },
     });
     this.pipe = this.child.stdio[3] as Duplex;
+    // A notification can race a worker exit before the process's exit event.
+    // Pending requests still settle through exit; EPIPE must not crash the host.
+    this.pipe.on("error", () => {});
 
     let resolveReady!: () => void;
     let rejectReady!: (e: Error) => void;
@@ -181,6 +186,16 @@ export class WorkerClient {
         reject(new WorkerRpcError({ code: ErrorCodes.DriverUnavailable, message: error instanceof Error ? error.message : "worker exited" }));
       }
     });
+  }
+
+  /** Private host → worker message. Never echoed into frontend notifications. */
+  notify<M extends keyof WorkerNotifications>(method: M, params: WorkerNotifications[M]): void {
+    if (!this.alive) return;
+    try {
+      this.pipe.write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
+    } catch {
+      // The worker closed concurrently; future workers still get the base.
+    }
   }
 
   /** Close the pipe (worker retires itself) and wait for exit. */

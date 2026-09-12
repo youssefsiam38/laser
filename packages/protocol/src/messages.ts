@@ -11,6 +11,7 @@
 import type { AgentWorktreeStatus, SessionAgentInfo, SessionWorktreeDisposition } from "./agents.js";
 import type { ProviderFailureClass } from "./provider-failure.js";
 import { WIRE_NAMESPACE } from "./identity.js";
+import type { HostEnvironmentParams } from "./environment.js";
 import type { AccountUsageState, PiExtensionMessage, PiExtensionModuleName } from "./pi-extension.js";
 import type { FeatureScope, FeatureState, GoalAction, SessionGoal } from "./features.js";
 import type { PushConfig, PushDeviceInfo, PushSubscriptionJson } from "./push.js";
@@ -894,6 +895,8 @@ export interface ProjectFiles {
 export interface ClientRequests {
   /** Read-only release handshake; complete before hydrating or sending work. */
   "pi/host/version": { params: {}; result: { version: string } };
+  /** Local non-browser launchers only. Never persisted or sent to frontends. */
+  "pi/host/environment": { params: HostEnvironmentParams; result: { applied: number } };
   /** `agentName` picks a definition; omitted means the default agent. */
   "session/new": { params: { cwd: string; parentPath?: string; agentName?: string }; result: { state: SessionState } };
   /**

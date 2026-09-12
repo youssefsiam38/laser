@@ -19,7 +19,7 @@
  * project with an agent still working is never idle however long it takes.
  */
 import type { HostNotifications, JsonRpcNotification, WorkerInfo, WorkerStatus } from "@lasercode/protocol";
-import { ErrorCodes, ProtocolError } from "@lasercode/protocol";
+import { ErrorCodes, ProtocolError, environmentOverlay } from "@lasercode/protocol";
 import { canonical } from "./trust.js";
 import { WorkerClient, type WorkerClientOptions } from "./worker-client.js";
 
@@ -123,6 +123,7 @@ const DEFAULTS = {
 };
 
 export class WorkerPool {
+  private readonly baseEnv: NodeJS.ProcessEnv = { ...process.env };
   private readonly entries = new Map<string, Entry>();
   private readonly sessionCwd = new Map<string, string>();
   private readonly now: () => number;
@@ -138,6 +139,14 @@ export class WorkerPool {
       this.sweepTimer = setInterval(() => this.sweep(), sweepMs);
       this.sweepTimer.unref?.();
     }
+  }
+
+  /** Additive, memory-only. Includes starting workers: their pipe preserves order. */
+  applyEnvironment(variables: Record<string, string>): number {
+    const overlay = environmentOverlay(variables);
+    Object.assign(this.baseEnv, overlay);
+    for (const { client } of this.liveClients()) client.notify("pi/host/environment", { variables: overlay });
+    return Object.keys(overlay).length;
   }
 
   /** Directories with a live or starting worker. */
@@ -378,6 +387,7 @@ export class WorkerPool {
 
     const clientOptions: WorkerClientOptions = {
       cwd: entry.cwd,
+      baseEnv: this.baseEnv,
       ...(this.options.agentDir ? { agentDir: this.options.agentDir } : {}),
       ...(this.options.sessionDir ? { sessionDir: this.options.sessionDir } : {}),
       ...(this.options.stateDir ? { stateDir: this.options.stateDir } : {}),

@@ -431,7 +431,9 @@ export class HostServer {
         done(false, 403, `${PRODUCT_NAME} only accepts WebSocket connections from its own origin`);
       },
     });
-    this.wss.on("connection", (ws) => this.onConnection(ws));
+    this.wss.on("connection", (ws, req) => this.onConnection(ws,
+      !req.headers.origin && ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress ?? ""),
+    ));
   }
 
   async listen(): Promise<{ host: string; port: number; url: string }> {
@@ -825,7 +827,7 @@ export class HostServer {
     return (this.options.allowedOrigins ?? []).includes(origin);
   }
 
-  private onConnection(ws: WebSocket): void {
+  private onConnection(ws: WebSocket, localEnvironment: boolean): void {
     this.clients.add(ws);
     this.attached.set(ws, new Set());
     this.loadDeliveries.set(ws, new Set());
@@ -848,7 +850,7 @@ export class HostServer {
         : undefined;
       if (delivery) this.loadDeliveries.get(ws)?.add(delivery);
       try {
-        const response = await this.router.handle(raw);
+        const response = await this.router.handle(raw, { localEnvironment });
         if (!response.error) this.noteRequest(ws, request, response.result);
         const sent = await this.sendSocket(ws, JSON.stringify(response));
         if (delivery && sent && !response.error) {

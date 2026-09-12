@@ -38,6 +38,8 @@ the original relay research notes (not kept in the repository), decision D-10.
 | Malware on the desktop | Root on the machine running the agent | **No.** Out of scope; it already has the agent |
 | A hostile Pi extension | Runs in the worker process | **No.** Pi extensions are unsandboxed upstream |
 
+A native local process can call `pi/host/environment` through the loopback socket; it already has the same authority there through session prompts and tool execution, while browser-origin and relay callers cannot change the environment.
+
 ## 3. The cryptographic core
 
 `@lasercode/crypto` implements the Noise Protocol Framework (revision 34) with

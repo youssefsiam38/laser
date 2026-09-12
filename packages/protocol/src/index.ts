@@ -14,6 +14,7 @@ export * from "./fallback.js";
 export * from "./mcp.js";
 export * from "./jsonrpc.js";
 export * from "./messages.js";
+export * from "./environment.js";
 export * from "./attention.js";
 export * from "./tasks.js";
 export * from "./pending.js";

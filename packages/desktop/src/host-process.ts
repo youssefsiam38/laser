@@ -34,6 +34,7 @@ import {
   piEnv,
   portInUse,
   probeHealth,
+  refreshHostEnvironment,
   stopHost,
   type LaserPaths,
 } from "@lasercode/cli";
@@ -144,6 +145,7 @@ export class HostProcess {
           });
         }
       } else {
+        await refreshHostEnvironment(existing.record, this.options.baseEnv ?? process.env, (line) => log.line(line));
         log.line(`attached to the host already running at ${existing.record.url} (pid ${existing.record.pid})`);
         return this.publish({
           state: "ready",
