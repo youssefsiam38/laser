@@ -138,7 +138,7 @@ export class SessionCatalog {
     }
     // Continue the previous scan when the file only grew; restart when it was
     // rewritten or truncated (a torn tail repaired by Pi's reader, a fork).
-    const previous = cached && cached.size <= st.size && cached.scan ? cached.scan : undefined;
+    const previous = cached && cached.size < st.size && cached.scan ? cached.scan : undefined;
     const scan = scanBody(path, st.size, previous ?? { offset: header.bodyOffset, messageCount: 0 });
     const entry: CatalogEntry = {
       ...header.entry,
@@ -222,23 +222,36 @@ function scanBody(path: string, size: number, from: Scan): Scan {
   const buffer = Buffer.alloc(CHUNK);
   // Bytes, not a string: a multi-byte character split across two reads would
   // decode to U+FFFD and desynchronise the byte offset we resume from.
-  let carry = Buffer.alloc(0);
+  let fragments: Buffer[] = [];
+  let fragmentBytes = 0;
   let position = result.offset;
   try {
     while (position < size) {
       const n = readSync(fd, buffer, 0, Math.min(CHUNK, size - position), position);
       if (n <= 0) break;
       position += n;
-      const chunk = carry.length === 0 ? buffer.subarray(0, n) : Buffer.concat([carry, buffer.subarray(0, n)]);
+      const chunk = buffer.subarray(0, n);
       let start = 0;
       for (;;) {
         const nl = chunk.indexOf(0x0a, start);
         if (nl === -1) break;
-        applyLine(chunk.subarray(start, nl).toString("utf8"), result);
+        const end = chunk.subarray(start, nl);
+        const line = fragmentBytes === 0 ? end : Buffer.concat([...fragments, end], fragmentBytes + end.length);
+        applyLine(line.toString("utf8"), result);
+        fragments = [];
+        fragmentBytes = 0;
         start = nl + 1;
+        result.offset = position - n + start;
       }
-      carry = Buffer.from(chunk.subarray(start));
-      result.offset = position - carry.length;
+      // The read buffer is reused. Copy each unfinished fragment once, then
+      // assemble only at newline; never rescan/copy the accumulated prefix.
+      if (start < n) {
+        const fragment = Buffer.from(chunk.subarray(start));
+        fragments.push(fragment);
+        fragmentBytes += fragment.length;
+      }
+      // Do not retain potentially enormous partial records in the catalog.
+      // offset stays at their start so a later completed write is interpreted.
     }
   } catch {
     /* a session being written under us: keep what we have */

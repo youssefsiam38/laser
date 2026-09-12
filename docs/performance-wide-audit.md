@@ -499,3 +499,22 @@ These support the techniques, not Laser-specific performance estimates:
 - [Electron performance guide](https://www.electronjs.org/docs/latest/tutorial/performance) — avoid blocking critical processes and loading code before it is needed.
 - [MDN WebSocket](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket) and [bufferedAmount](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket/bufferedAmount) — no built-in incoming backpressure; queued outgoing bytes are observable but require an application policy.
 - Existing `docs/perf-chat-loading.md` — paging/virtualization research and the branch owner's measured baseline/acceptance contract.
+
+## Implemented — host and worker lane
+
+Isolated branch `agents/perf-host-worker-a44788ab`, starting at `413c8e2`, Node 24.11.1. Raw probes and validation logs: `/tmp/perf-host-worker/`. Timings below are synthetic source-path measurements, not browser/permission latency or additive application savings. UI and history-window seams remain owned by M16-T16. Ledger updates belong to the orchestrator.
+
+### F01 — linear complete-line assembly
+
+Confirmed in `host/src/catalog.ts`: the unfinished prefix was concatenated and searched on every 256 KiB read. The scanner now searches only incoming bytes and concatenates fragments once at newline. Partial records remain unretained between scans; a growth notification may reread an incomplete record, deliberately avoiding a lifetime-sized buffer. Same-size rewrites restart rather than reuse the append cursor.
+
+Twenty cold application-cache samples per size, same fixture/program (`catalog.mjs`); OS cache warm, machine contention uncontrolled:
+
+| Payload MiB | Before median ms | After median ms | Before concat bytes | After concat bytes |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 3.50 | 1.78 | 3,407,935 | 1,048,638 |
+| 4 | 25.85 | 4.35 | 39,583,807 | 4,194,366 |
+| 16 | 255.78 | 26.68 | 561,774,655 | 16,777,278 |
+| 32 | 1,024.84 | 52.41 | 2,197,553,215 | 33,554,494 |
+
+Regression: actual 16 MiB file, bounded concatenation traffic, incomplete write then newline, multi-byte split, rename and same-size rewrite; existing goal/agent/append tests retained. `pnpm -F @lasercode/host test` (234), `pnpm -F @lasercode/worker test` (682, 3 skipped), `pnpm identity:check`, `pnpm -r build`: pass (`f01-*.log`). No protocol changes. Host heartbeat/permission and browser matrix are not measured here; synchronous large-line parsing remains a possible pause.
