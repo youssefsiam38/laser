@@ -67,7 +67,10 @@ The automatic discovery target is **2% of the active model's context window**,
 shared across servers within a single lookup. Explicit preload does not consume
 that soft allowance; it is measured and warned about separately. The byte-based
 token bound is deliberately conservative and labelled, not presented as billed usage. Full schemas are
-atomic; oversized automatic detail asks for explicit inspection. An explicit
+atomic; oversized automatic detail asks for explicit inspection. Small known
+windows can therefore return an empty full-schema page; names/summaries and
+explicit inspection remain the supported paths. Actionable guidance is capped
+separately at 1 KiB and cannot displace the lookup’s items. An explicit
 single-tool description may exceed the soft share, not the known window;
 unknown windows retain a labelled 16 KiB names/summary lookup allowance without
 claiming a context-window share. Full-page requests degrade to summaries.

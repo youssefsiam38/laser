@@ -61,9 +61,18 @@ index f957e9320a0569c0c0050c08c9a5e5d9215993ce..79eea6017dab0313305b3751506aed4e
      configPath?: string;
  }
 diff --git a/index.ts b/index.ts
-index f655b4fe49bb747741dd4dda7759ad37a17eb992..c6204f61ae815f312beaf424e34fccebbe81a04f 100644
+index f655b4fe49bb747741dd4dda7759ad37a17eb992..12dd6264806f1188f0e1229b19d93776592966af 100644
 --- a/index.ts
 +++ b/index.ts
+@@ -21,7 +21,7 @@ import { toolErrorOverride } from "./error-signal.ts";
+ import { createMcpRuntimeOwner, createOwnedUi, isAbortError, type McpRuntimeOwner } from "./runtime-owner.ts";
+ import { publishMcpStatusShutdown } from "./mcp-status.ts";
+ import { runMcpScript } from "./mcp-code.ts";
+-import { cleanupMaterializedBinaryResources } from "./tool-registrar.ts";
++import { cleanupMaterializedBinaryResources, deactivateDirectTools } from "./tool-registrar.ts";
+ import { syncNamespaceProxyTools } from "./namespace-tools.ts";
+ import { restoreSessionApprovalState } from "./session-approvals.ts";
+ import { canonicalMcpServerUrl, normalizeMcpInstallRequest } from "./mcp-install.ts";
 @@ -188,7 +188,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
    function startGatewayRetryInitialization(ctx: ExtensionContext): void {
      const generation = ++lifecycleGeneration;
@@ -73,7 +82,35 @@ index f655b4fe49bb747741dd4dda7759ad37a17eb992..c6204f61ae815f312beaf424e34fcceb
      currentOwner = owner;
      currentOAuthRuntime = oauthRuntime;
      state = null;
-@@ -521,6 +521,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+@@ -401,22 +401,11 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+   }
+ 
+   function deactivateTools(toolNames: string[]): string[] {
+-    if (toolNames.length === 0) return [];
+-    const unregisterTool = (pi as ExtensionAPI & { unregisterTool?: (name: string) => boolean }).unregisterTool;
+-    const unregistered = toolNames.filter((toolName) => unregisterTool?.(toolName) === true);
+-    const fallbackNames = toolNames.filter((toolName) => !unregistered.includes(toolName));
+-    const remove = new Set(toolNames);
+-    const activeTools = getActiveToolsIfReady();
+-    if (!activeTools || activeTools.length === 0) {
+-      for (const toolName of fallbackNames) fallbackDeactivatedTools.add(toolName);
+-      return unregistered;
+-    }
+-    const nextActiveTools = activeTools.filter((name) => !remove.has(name));
+-    if (nextActiveTools.length !== activeTools.length) {
+-      for (const toolName of fallbackNames) fallbackDeactivatedTools.add(toolName);
+-      pi.setActiveTools(nextActiveTools);
+-    }
+-    return unregistered;
++    return deactivateDirectTools(toolNames, {
++      unregisterTool: (pi as ExtensionAPI & { unregisterTool?: (name: string) => boolean }).unregisterTool?.bind(pi),
++      getActiveTools: getActiveToolsIfReady,
++      setActiveTools: names => pi.setActiveTools(names),
++    }, fallbackDeactivatedTools);
+   }
+ 
+   function syncDirectTools(config: McpConfig, cache: MetadataCache | null): {
+@@ -521,6 +510,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
      reservedDirectNames: Set<string> = new Set(registeredDirectTools.keys()),
      activeDirectNames: Set<string> = new Set(registeredDirectTools.keys()),
    ): void {
@@ -81,7 +118,7 @@ index f655b4fe49bb747741dd4dda7759ad37a17eb992..c6204f61ae815f312beaf424e34fcceb
      const result = syncNamespaceProxyTools({
        config,
        cache,
-@@ -675,6 +676,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+@@ -675,6 +665,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
            }
          : {}),
        oauthRuntime,
@@ -89,7 +126,7 @@ index f655b4fe49bb747741dd4dda7759ad37a17eb992..c6204f61ae815f312beaf424e34fcceb
      });
      initPromise = promise;
  
-@@ -688,6 +690,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+@@ -688,6 +679,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
          return;
        }
  
@@ -97,7 +134,7 @@ index f655b4fe49bb747741dd4dda7759ad37a17eb992..c6204f61ae815f312beaf424e34fcceb
        state = nextState;
        // Re-read after asynchronous startup so navigation during initialization
        // cannot restore a stale branch.
-@@ -754,7 +757,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+@@ -754,7 +746,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
        if (lifecycleGeneration !== 0 || state || initPromise) return;
        const generation = ++lifecycleGeneration;
        const owner = createMcpRuntimeOwner();
@@ -106,7 +143,7 @@ index f655b4fe49bb747741dd4dda7759ad37a17eb992..c6204f61ae815f312beaf424e34fcceb
        currentOwner = owner;
        currentOAuthRuntime = oauthRuntime;
        startInitialization({
-@@ -782,7 +785,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+@@ -782,7 +774,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
      const previousOwner = currentOwner;
      const previousOAuthRuntime = currentOAuthRuntime;
      const owner = createMcpRuntimeOwner();
@@ -115,7 +152,7 @@ index f655b4fe49bb747741dd4dda7759ad37a17eb992..c6204f61ae815f312beaf424e34fcceb
      currentOwner = owner;
      currentOAuthRuntime = oauthRuntime;
      state = null;
-@@ -1397,7 +1400,8 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+@@ -1397,7 +1389,8 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
          instructions: Type.Optional(Type.String({ description: "Server name to show that server's usage instructions" })),
          search: Type.Optional(Type.String({ description: "Search tools by name/description" })),
          regex: Type.Optional(Type.Boolean({ description: "Treat search as regex (default: substring match)" })),
@@ -125,7 +162,7 @@ index f655b4fe49bb747741dd4dda7759ad37a17eb992..c6204f61ae815f312beaf424e34fcceb
          limit: optionalNumber({ minimum: 1, description: "Maximum search results to return (default: 12)" }),
          offset: optionalNumber({ minimum: 0, description: "Search result offset (default: 0)" }),
          server: Type.Optional(Type.String({ description: "Server name (filters/disambiguates calls and optionally names an install)" })),
-@@ -1413,6 +1417,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+@@ -1413,6 +1406,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
          describe?: string;
          instructions?: string;
          search?: string;
@@ -133,7 +170,7 @@ index f655b4fe49bb747741dd4dda7759ad37a17eb992..c6204f61ae815f312beaf424e34fcceb
          regex?: boolean;
          includeSchemas?: boolean;
          limit?: number;
-@@ -1543,7 +1548,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
+@@ -1543,7 +1537,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
            return executeInstructions(state, params.instructions);
          }
          if (params.search !== undefined) {
@@ -142,7 +179,7 @@ index f655b4fe49bb747741dd4dda7759ad37a17eb992..c6204f61ae815f312beaf424e34fcceb
            if (lazyDirectTools.size === 0) return result;
            holdLazyToolsInactive();
            const matches = (result.details as { matches?: Array<{ server: string; tool: string }> } | undefined)?.matches ?? [];
-@@ -1623,6 +1628,8 @@ export function createMcpAdapter(options: McpAdapterOptions = {}) {
+@@ -1623,6 +1617,8 @@ export function createMcpAdapter(options: McpAdapterOptions = {}) {
      : undefined;
    return function mcpAdapter(pi: ExtensionAPI) {
      installMcpAdapter(pi, {
@@ -269,7 +306,7 @@ index 1f1e1bedf9d0232ec3fffaa7cae4adf2bc826b1c..d071d5484c1785618c2286fa71d5a11b
          const result = await abortable(runSdkAuth(authProvider, {
            serverUrl,
 diff --git a/mcp-code.ts b/mcp-code.ts
-index b337813c119c61a3b216fc4b18609ab66035fa59..717cd82157bbb27297332799e98a52025ff45df4 100644
+index b337813c119c61a3b216fc4b18609ab66035fa59..569b157238777f38b83b94429b92e9e65013c60c 100644
 --- a/mcp-code.ts
 +++ b/mcp-code.ts
 @@ -3,7 +3,7 @@ import { formatWithOptions } from "node:util";
@@ -296,7 +333,7 @@ index b337813c119c61a3b216fc4b18609ab66035fa59..717cd82157bbb27297332799e98a5202
        const offset = typeof input?.offset === "number" ? input.offset : 0;
 -      const page = paginate(rankToolMatches(state, query, server), offset, limit);
 +      const matches = rankToolMatches(state, query, server);
-+      if (state.discovery) return state.discovery.search(matches, { query, guidance: discoveryGuidance(state, server), limit, offset, ...(server ? { server } : {}), ...(typeof input?.detail === "string" ? { detail: input.detail } : {}) });
++      if (state.discovery) return state.discovery.search(matches, { query, guidance: discoveryGuidance(state, server, matches), limit, offset, ...(server ? { server } : {}), ...(typeof input?.detail === "string" ? { detail: input.detail } : {}) });
 +      const page = paginate(matches, offset, limit);
        return {
          ...page,
@@ -440,7 +477,7 @@ index 644f032f3aa78b5b182d263314723004d95eb560..1a2414c46c5206cc107b7138b9b69aca
      "error-signal.ts",
      "state.ts",
 diff --git a/proxy-modes.ts b/proxy-modes.ts
-index 49f1b4eccfbee9a14ef6e71db8d8392dcba6ed23..af126929937cb78f0ecddd5b606b1fcb79aa9608 100644
+index 49f1b4eccfbee9a14ef6e71db8d8392dcba6ed23..aebfaad04f7e6140daed1a408ec8aaaec824a26e 100644
 --- a/proxy-modes.ts
 +++ b/proxy-modes.ts
 @@ -648,6 +648,11 @@ export function executeDescribe(state: McpExtensionState, toolName: string): Pro
@@ -455,14 +492,17 @@ index 49f1b4eccfbee9a14ef6e71db8d8392dcba6ed23..af126929937cb78f0ecddd5b606b1fcb
    const approvalMarker = isToolCallApprovalRequired(state.config, serverName, toolMeta, state.toolMetadata)
      ? " (requires approval)"
      : "";
-@@ -673,6 +678,28 @@ export function executeDescribe(state: McpExtensionState, toolName: string): Pro
+@@ -673,6 +678,31 @@ export function executeDescribe(state: McpExtensionState, toolName: string): Pro
    };
  }
  
 +/** Status/instructions remain available even when discovery has no matches. */
-+export function discoveryGuidance(state: McpExtensionState, server?: string): string[] {
++export function discoveryGuidance(state: McpExtensionState, server?: string, matches: readonly { server: string }[] = []): string[] {
++  const noMatches = matches.length === 0;
++  const addressed = new Set(matches.map(match => match.server));
 +  const names = server ? [server] : Object.keys(state.config.mcpServers)
-+    .filter(name => !isServerDisabled(state.config.mcpServers[name])).sort().slice(0, 12);
++    .filter(name => !isServerDisabled(state.config.mcpServers[name]))
++    .filter(name => noMatches || addressed.has(name)).sort().slice(0, 12);
 +  return names.flatMap(name => {
 +    if (!state.config.mcpServers[name]) return [`Server "${name}" not found. Use mcp({}) to see available servers.`];
 +    const connection = state.manager.getConnection(name);
@@ -476,7 +516,7 @@ index 49f1b4eccfbee9a14ef6e71db8d8392dcba6ed23..af126929937cb78f0ecddd5b606b1fcb
 +      messages.push(`Server "${name}" ${stateText}. Use mcp({ connect: "${name}" }) to connect.`);
 +    }
 +    const instructions = state.serverInstructions.get(name);
-+    if (instructions) messages.push(`Server "${name}" instructions: ${truncateAtWord(instructions, INSTRUCTIONS_PREVIEW_LENGTH)}\nUse mcp({ instructions: "${name}" }) for full instructions.`);
++    if (instructions && noMatches) messages.push(`Server "${name}" instructions: ${truncateAtWord(instructions, INSTRUCTIONS_PREVIEW_LENGTH)}\nUse mcp({ instructions: "${name}" }) for full instructions.`);
 +    return messages;
 +  });
 +}
@@ -484,7 +524,7 @@ index 49f1b4eccfbee9a14ef6e71db8d8392dcba6ed23..af126929937cb78f0ecddd5b606b1fcb
  export function executeSearch(
    state: McpExtensionState,
    query: string,
-@@ -681,6 +708,7 @@ export function executeSearch(
+@@ -681,6 +711,7 @@ export function executeSearch(
    includeSchemas?: boolean,
    limit = 12,
    offset = 0,
@@ -492,12 +532,12 @@ index 49f1b4eccfbee9a14ef6e71db8d8392dcba6ed23..af126929937cb78f0ecddd5b606b1fcb
  ): ProxyToolResult {
    const showSchemas = includeSchemas !== false;
    if (server && isServerDisabled(state.config.mcpServers[server])) return disabledResult("search", server);
-@@ -748,6 +776,12 @@ export function executeSearch(
+@@ -748,6 +779,12 @@ export function executeSearch(
      matches = rankToolMatches(state, query, server);
    }
  
 +  if (state.discovery) {
-+    const guidance = discoveryGuidance(state, server);
++    const guidance = discoveryGuidance(state, server, matches);
 +    if (matches.length === 0) guidance.unshift(`No tools matching "${query}"${server ? ` in "${server}"` : ""}.`);
 +    const page = state.discovery.search(matches, { query, guidance, ...(server ? { server } : {}), detail: detail ?? (includeSchemas === true ? "full" : includeSchemas === false ? "summary" : undefined), limit, offset });
 +    return { content: [{ type: "text", text: JSON.stringify(page) }], details: { mode: "search", ...page } };
@@ -505,7 +545,7 @@ index 49f1b4eccfbee9a14ef6e71db8d8392dcba6ed23..af126929937cb78f0ecddd5b606b1fcb
    const page = paginate(matches, offset, limit);
    if (page.total === 0) {
      const connectingServers = server
-@@ -814,6 +848,10 @@ export function executeSearch(
+@@ -814,6 +851,10 @@ export function executeSearch(
  }
  
  export function executeList(state: McpExtensionState, server: string): ProxyToolResult {
@@ -603,6 +643,45 @@ index e2d825c62fb0600efe3fed042d4292c5dd10e82f..59f762a112eb005db9a2a302a3a91986
    owner: McpRuntimeOwner;
    manager: McpServerManager;
    lifecycle: McpLifecycleManager;
+diff --git a/tool-registrar.ts b/tool-registrar.ts
+index 217e52c1cd4cc99cbd9117219c4546fb146c2d01..49b0358eceae74b37058be80f48be76cb0c405a0 100644
+--- a/tool-registrar.ts
++++ b/tool-registrar.ts
+@@ -251,3 +251,34 @@ function stringifyStructuredContent(value: unknown): string {
+     return String(value);
+   }
+ }
++
++/** Keep the adapter's fallback ledger, not an assertion of engine state.
++ * An embedding host may fence these mutations during a conversation. In that
++ * case names enter the fallback ledger while remaining registered and active;
++ * a later registration consumes the ledger entry and reconciles activation.
++ */
++export function deactivateDirectTools(
++  toolNames: string[],
++  api: {
++    unregisterTool?: ((name: string) => boolean | void) | undefined;
++    getActiveTools(): string[] | undefined;
++    setActiveTools(names: string[]): void;
++  },
++  fallbackDeactivatedTools: Set<string>,
++): string[] {
++  if (toolNames.length === 0) return [];
++  const unregistered = toolNames.filter(name => api.unregisterTool?.(name) === true);
++  const fallbackNames = toolNames.filter(name => !unregistered.includes(name));
++  const remove = new Set(toolNames);
++  const activeTools = api.getActiveTools();
++  if (!activeTools || activeTools.length === 0) {
++    for (const name of fallbackNames) fallbackDeactivatedTools.add(name);
++    return unregistered;
++  }
++  const nextActiveTools = activeTools.filter(name => !remove.has(name));
++  if (nextActiveTools.length !== activeTools.length) {
++    for (const name of fallbackNames) fallbackDeactivatedTools.add(name);
++    api.setActiveTools(nextActiveTools);
++  }
++  return unregistered;
++}
 diff --git a/types.ts b/types.ts
 index 023ee643494b8c669b7b479d590181a9c1b016f8..fba2e63d4778ff981a2a6f87e639eff938d0ad55 100644
 --- a/types.ts

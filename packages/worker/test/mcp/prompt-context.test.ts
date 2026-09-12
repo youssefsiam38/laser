@@ -116,6 +116,42 @@ describe("MCP prompt contract through real provider requests", () => {
     expect(context.snapshot()).toMatchObject({ title: "new", contextWindow: null, discoveries: [] });
   });
 
+  it("records fallback deactivation intent without changing frozen registered or active tools", async () => {
+    const jiti = createJiti(import.meta.url, { fsCache: false });
+    const { deactivateDirectTools } = await jiti.import<{
+      deactivateDirectTools: (names: string[], api: { unregisterTool?: ((name: string) => boolean | void) | undefined; getActiveTools(): string[]; setActiveTools(names: string[]): void }, fallback: Set<string>) => string[];
+    }>(join(adapterRoot(), "tool-registrar.ts"));
+    const events = new EventEmitter();
+    const registered = new Set<string>();
+    let active: string[] = [];
+    const pi = {
+      events, on: (name: string, callback: (...args: unknown[]) => unknown) => events.on(name, callback),
+      registerTool: (tool: { name: string }) => { registered.add(tool.name); active.push(tool.name); },
+      unregisterTool: (name: string) => { active = active.filter(item => item !== name); return registered.delete(name); },
+      getActiveTools: () => [...active], setActiveTools: (names: string[]) => { active = names; },
+    };
+    const context = new McpPromptFreeze();
+    const wrapped = context.wrap(pi as unknown as ExtensionAPI, "status");
+    wrapped.registerTool({ name: "fixture_echo" } as never);
+    const definition = { name: "fixture_echo", description: "original" };
+    events.emit("before_provider_request", { payload: { tools: [definition] } }, { model: { contextWindow: 200_000 }, sessionManager: { getSessionName() {} } });
+    const before = context.snapshot();
+    const fallback = new Set<string>();
+    const api = { unregisterTool: Reflect.get(wrapped, "unregisterTool"), getActiveTools: wrapped.getActiveTools, setActiveTools: wrapped.setActiveTools };
+    expect(deactivateDirectTools(["fixture_echo"], api, fallback)).toEqual([]);
+    // The adapter records intent, not success: future dynamic-server work must
+    // not use this ledger as an inventory of callable or provider-visible tools.
+    expect([...fallback]).toEqual(["fixture_echo"]);
+    expect([...registered]).toEqual(["fixture_echo"]);
+    expect(active).toEqual(["fixture_echo"]);
+    events.emit("before_provider_request", { payload: { tools: [definition] } }, { model: { contextWindow: 200_000 }, sessionManager: { getSessionName() {} } });
+    expect(context.snapshot()).toEqual(before);
+    events.emit("session_start", {}, { sessionManager: { getSessionId: () => "next", getSessionName() {} } });
+    expect(deactivateDirectTools(["fixture_echo"], api, new Set())).toEqual(["fixture_echo"]);
+    expect([...registered]).toEqual([]);
+    expect(active).toEqual([]);
+  });
+
   it("does not send an override whose conservative tool bound exceeds the model window", async () => {
     const { stub, events } = await run(true, 1024);
     expect(stub.requests).toHaveLength(0);

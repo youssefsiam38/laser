@@ -11,6 +11,25 @@ export const revision = (value: unknown): string => createHash("sha256").update(
 // Unknown windows retain useful summary pages without pretending to know a share.
 // This bounds one lookup, not conversation history or explicitly preloaded tools.
 export const UNKNOWN_WINDOW_LOOKUP_BYTES = 16 * 1024;
+// Actionable guidance has its own bounded envelope; it cannot evict matches.
+export const DISCOVERY_GUIDANCE_BYTES = 1024;
+export function boundedGuidance(messages: readonly string[] = []): Record<string, unknown> {
+  const guidance: string[] = [];
+  for (const message of messages) {
+    if (bytes({ guidance: [...guidance, message], guidanceTruncated: true }) <= DISCOVERY_GUIDANCE_BYTES) {
+      guidance.push(message);
+      continue;
+    }
+    let prefix = "";
+    for (const character of message) {
+      if (bytes({ guidance: [...guidance, prefix + character + "…"], guidanceTruncated: true }) > DISCOVERY_GUIDANCE_BYTES) break;
+      prefix += character;
+    }
+    if (prefix) guidance.push(prefix + "…");
+    return { guidance, guidanceTruncated: true };
+  }
+  return guidance.length ? { guidance } : {};
+}
 export const lookupBudget = (window: number | null): number | null =>
   window === null ? null : Math.floor(window * MCP_CONTEXT_SHARE);
 
@@ -73,7 +92,7 @@ export function searchDiscovery(
       server, paths: values.filter(item => item.server === server).map(item => item.path),
     }));
     return {
-      items: values, groups, ...(input.guidance?.length ? { guidance: input.guidance } : {}),
+      items: values, groups,
       total: matches.length, hasMore: end < matches.length,
       nextOffset: end < matches.length ? end : null, revision: catalogRevision, detail,
     };
@@ -89,7 +108,7 @@ export function searchDiscovery(
     items.push(item);
   }
   return {
-    page: { ...pageFor(items), ...(reason ? { message: reason } : {}) },
+    page: { ...pageFor(items), ...(reason ? { message: reason } : {}), ...boundedGuidance(input.guidance) },
     chosen, detail, catalogRevision,
   };
 }

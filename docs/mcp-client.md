@@ -286,15 +286,20 @@ This is a conservative initial policy justified by one measured server, not a
 claim of globally optimal retrieval accuracy.
 
 The budget is **aggregate across servers within one lookup**, not 2% per server
-or a conversation-total cap. It bounds that lookup's response metadata, including
-connection guidance. Explicit preload is measured and warned about separately;
+or a conversation-total cap. It bounds that lookup’s item metadata. Actionable connection guidance is
+admitted afterward within its own byte cap. Explicit preload is measured and warned about separately;
 it bypasses this soft allowance rather than consuming another server's discovery
 space. Both still participate in known hard-window checks. This review correction
 supersedes the original proposal to subtract preloaded definitions from each lookup.
 
 When the context window is unknown, its share stays unavailable. Automatic
 lookups use names/summaries with a conservative **16 KiB per-lookup byte allowance**,
-default 12 results, maximum 50. A requested full page degrades to summaries with
+default 12 results, maximum 50. This is deliberately above a 200k model’s
+derived 4,000-byte share: it buys summaries only, not automatic schemas, and
+does not claim to be the most restrictive possible allowance. Actionable
+guidance has a separate 1 KiB serialized UTF-8 cap and never displaces items.
+Instruction previews are emitted only for zero-match lookups.
+A requested full page degrades to summaries with
 an explanation; explicit inspection remains available for one complete schema.
 Repeated lookup history is not capped or silently deleted.
 
