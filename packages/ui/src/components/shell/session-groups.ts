@@ -245,6 +245,8 @@ export interface SessionsListState {
   readonly collapsed: ReadonlySet<string>;
   /** Session paths, in pin order. Archived/missing sessions are not rendered. */
   readonly pinned: ReadonlySet<string>;
+  /** Number of recent roots revealed per project; this app session only. */
+  readonly revealed: ReadonlyMap<string, number>;
 }
 
 const readPaths = (key: string): Set<string> => {
@@ -264,7 +266,7 @@ const writeCollapsed = (collapsed: ReadonlySet<string>): void => {
   }
 };
 
-let listState: SessionsListState = { filter: undefined, jump: undefined, collapsed: readPaths(SESSION_GROUPS_STORAGE_KEY), pinned: readPaths(SESSION_PINS_STORAGE_KEY) };
+let listState: SessionsListState = { filter: undefined, jump: undefined, collapsed: readPaths(SESSION_GROUPS_STORAGE_KEY), pinned: readPaths(SESSION_PINS_STORAGE_KEY), revealed: new Map() };
 const listeners = new Set<() => void>();
 let jumpNonce = 0;
 
@@ -305,6 +307,11 @@ export const sessionsList = {
     writeCollapsed(collapsed);
     publish({ ...listState, collapsed });
   },
+  reveal(cwd: string, count: number): void {
+    const revealed = new Map(listState.revealed);
+    revealed.set(cwd, count);
+    publish({ ...listState, revealed });
+  },
   togglePinned(path: string): void {
     const pinned = new Set(listState.pinned);
     if (pinned.has(path)) pinned.delete(path);
@@ -318,7 +325,7 @@ export const sessionsList = {
   },
   /** Test seam. */
   reset(): void {
-    publish({ filter: undefined, jump: undefined, collapsed: new Set(), pinned: new Set() });
+    publish({ filter: undefined, jump: undefined, collapsed: new Set(), pinned: new Set(), revealed: new Map() });
   },
 };
 

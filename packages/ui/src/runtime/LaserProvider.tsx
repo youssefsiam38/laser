@@ -1350,7 +1350,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   // (which would drop cached threads and cancel in-flight mutations).
   const signature = useMemo(
     () => threadListSignature(state.sessions, state.open, archive),
-    [archive, state.sessions, state.open],
+    [archive, archiveRevision, state.sessions, state.open],
   );
   // The controller holds selection while assistant-ui adopts a created thread.
   useEffect(() => {

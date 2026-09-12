@@ -156,6 +156,12 @@ export function mergeSessions(
   return [...merged.values()];
 }
 
+/** A first prompt is visible locally before the catalog or state snapshot catches up. */
+export function sessionIsEmpty(summary: SessionSummary, view: SessionView | undefined): boolean {
+  return summary.messageCount === 0 && (view?.state.messageCount ?? 0) === 0
+    && !view?.blocks.some(block => block.kind === "user");
+}
+
 export function toThreadMetadata(
   summary: SessionSummary,
   view: SessionView | undefined,
@@ -173,6 +179,7 @@ export function toThreadMetadata(
       attention: sessionAttention(summary, view),
       modifiedAt: summary.modifiedAt,
       createdAt: summary.createdAt,
+      empty: sessionIsEmpty(summary, view),
       ...(parentPathOf(summary) !== undefined ? { parentPath: parentPathOf(summary) } : {}),
       // Agent attribution (agents leap): the sessions panel nests a child
       // under its parent and labels it with the instance name.
@@ -383,6 +390,27 @@ const emptyTitleStream = () =>
     },
   }) as never;
 
+/** The displayed lineage, including children in other working directories. Cycles are harmless. */
+export function sessionSubtreePaths(paths: readonly string[], sessions: readonly SessionSummary[]): string[] {
+  const children = new Map<string, string[]>();
+  for (const session of sessions) {
+    const parent = parentPathOf(session);
+    if (!parent) continue;
+    const list = children.get(parent) ?? [];
+    list.push(session.path);
+    children.set(parent, list);
+  }
+  const found = new Set<string>();
+  const pending = [...paths];
+  while (pending.length) {
+    const path = pending.pop()!;
+    if (found.has(path)) continue;
+    found.add(path);
+    pending.push(...(children.get(path) ?? []));
+  }
+  return [...found];
+}
+
 export function createThreadListAdapter(deps: ThreadListDeps): RemoteThreadListAdapter {
   const metadataFor = (path: string): RemoteThreadMetadata | undefined => {
     const views = deps.views();
@@ -404,11 +432,11 @@ export function createThreadListAdapter(deps: ThreadListDeps): RemoteThreadListA
     },
 
     archive: async (remoteId) => {
-      deps.archive.add(remoteId);
+      for (const path of sessionSubtreePaths([remoteId], mergeSessions(deps.sessions(), deps.views()))) deps.archive.add(path);
     },
 
     unarchive: async (remoteId) => {
-      deps.archive.remove(remoteId);
+      for (const path of sessionSubtreePaths([remoteId], mergeSessions(deps.sessions(), deps.views()))) deps.archive.remove(path);
     },
 
     delete: async (remoteId) => {
@@ -466,6 +494,7 @@ export function threadListSignature(
         sessionTitle(s, views[s.path]),
         sessionAttention(s, views[s.path]),
         s.modifiedAt,
+        sessionIsEmpty(s, views[s.path]) ? "empty" : "started",
         archive.has(s.path) ? "a" : "r",
         // A child attributed after the fact moves under its parent: the list
         // has to reload for that, so the attribution is part of the signature.

@@ -134,6 +134,17 @@ describe("titles and metadata", () => {
     expect(metadata.lastMessageAt).toEqual(new Date("2026-06-01T00:00:00.000Z"));
   });
 
+  it("lets the first live prompt clear empty ordering before a zero-count catalog catches up", () => {
+    const s = summary({ path: "/a.jsonl", id: "a", messageCount: 0 });
+    const v = view({ state: sessionState({ messageCount: 0 }), blocks: [] });
+    const archive = createArchiveStore(null);
+    const before = threadListSignature([s], { [s.path]: v }, archive);
+    expect(toThreadMetadata(s, v, false).custom?.["empty"]).toBe(true);
+    const sent: SessionView = { ...v, blocks: [{ kind: "user", id: "first", text: "Start here", files: [], images: [] }] };
+    expect(toThreadMetadata(s, sent, false).custom?.["empty"]).toBe(false);
+    expect(threadListSignature([s], { [s.path]: sent }, archive)).not.toBe(before);
+  });
+
   it("marks archived threads archived", () => {
     expect(toThreadMetadata(summary({ path: "/a", id: "x" }), undefined, true).status).toBe("archived");
   });
@@ -361,6 +372,28 @@ describe("createThreadListAdapter", () => {
     expect((await adapter.list()).threads[0]!.status).toBe("archived");
     await adapter.unarchive("/a.jsonl");
     expect(archive.has("/a.jsonl")).toBe(false);
+  });
+
+  it("archives and restores the whole lineage, while a child alone leaves its parent alone", async () => {
+    const sessions = [
+      summary({ path: "/parent", id: "parent" }),
+      summary({ path: "/child-a", id: "child-a", agent: { kind: "child", agentName: "default", parentPath: "/parent" } }),
+      summary({ path: "/child-b", id: "child-b", parentPath: "/parent" }),
+      summary({ path: "/grandchild", id: "grandchild", cwd: "/another-worktree", parentPath: "/child-a" }),
+      summary({ path: "/other", id: "other" }),
+    ];
+    const { adapter, archive } = deps({ sessions: () => sessions });
+    // A multi-selection may include both a parent and a descendant.
+    await Promise.all([adapter.archive("/parent"), adapter.archive("/child-a")]);
+    for (const path of ["/parent", "/child-a", "/child-b", "/grandchild"]) expect(archive.has(path)).toBe(true);
+    expect(archive.has("/other")).toBe(false);
+    await adapter.unarchive("/parent");
+    for (const session of sessions) expect(archive.has(session.path)).toBe(false);
+    await adapter.archive("/child-a");
+    expect(archive.has("/child-a")).toBe(true);
+    expect(archive.has("/grandchild")).toBe(true);
+    expect(archive.has("/parent")).toBe(false);
+    expect(archive.has("/child-b")).toBe(false);
   });
 
   it("deletes an archived transcript through the host and removes the local archive flag", async () => {
