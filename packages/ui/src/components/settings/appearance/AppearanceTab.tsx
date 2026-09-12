@@ -120,7 +120,7 @@ function originOf(theme: Theme): ThemePreset {
 }
 
 export function AppearanceTab() {
-  const { theme, base, followSystem, pair, presets, setPreset, setFollowSystem, updateTheme, setTheme, reset } =
+  const { theme, base, followSystem, pair, presets, setPreset, setFollowSystem, updateTheme, setTheme, reset, textDirection, setTextDirection } =
     useTheme();
 
   const origin = originOf(theme);
@@ -315,6 +315,19 @@ export function AppearanceTab() {
             pair={pair}
             modified={modified}
             onPick={onPickPreset}
+          />
+        </Group>
+
+        <Group title="Text direction" detail="Arrange the interface for the way you read. Messages keep their own text direction.">
+          <Segmented
+            label="Text direction"
+            value={textDirection}
+            options={[
+              { value: "system", label: "Follow system" },
+              { value: "ltr", label: "Left to right" },
+              { value: "rtl", label: "Right to left" },
+            ]}
+            onChange={setTextDirection}
           />
         </Group>
 
