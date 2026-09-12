@@ -20,6 +20,7 @@ export function UserBubble({ className, ...props }: ComponentProps<"div">) {
   return (
     <div
       data-slot="user-bubble"
+      dir="auto"
       className={cn("flex min-w-0 max-w-full flex-col gap-1.5 rounded-xl bg-surface-2 px-3 py-2 text-base text-ink", className)}
       {...props}
     />

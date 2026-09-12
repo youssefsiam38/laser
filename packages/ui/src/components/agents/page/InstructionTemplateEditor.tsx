@@ -25,13 +25,13 @@ const LazyInstructionTemplateSource = lazy(() =>
 
 function PlainSource({ value, ariaLabel, invalid, className }: Pick<InstructionTemplateSourceProps, "value" | "ariaLabel" | "invalid" | "className">) {
   return (
-    <pre
+    <pre dir="ltr"
       data-slot="instruction-template-source"
       data-highlighted="false"
       aria-label={ariaLabel}
       aria-invalid={invalid || undefined}
       className={cn("min-h-40 max-h-120 overflow-auto rounded-lg border border-line bg-surface-2 p-3 font-mono text-sm leading-code whitespace-pre-wrap wrap-break-word text-ink aria-invalid:border-danger", className)}
-    ><code>{value}</code></pre>
+    ><code dir="ltr">{value}</code></pre>
   );
 }
 

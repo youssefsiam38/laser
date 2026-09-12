@@ -518,7 +518,7 @@ function Overview({
       {failedAgo && <p className="text-sm leading-6 text-ink-2">It failed {failedAgo}.</p>}
       {(state.detail || inspection?.detail) && <p className="text-sm leading-6 text-ink-2">{state.detail ?? inspection?.detail}</p>}
       {inspection?.stderr?.length ? (
-        <pre className="typed max-h-40 overflow-auto rounded-lg bg-surface-2 p-2 whitespace-pre-wrap text-ink-2">{inspection.stderr.join("\n")}</pre>
+        <pre dir="ltr" className="typed max-h-40 overflow-auto rounded-lg bg-surface-2 p-2 whitespace-pre-wrap text-ink-2">{inspection.stderr.join("\n")}</pre>
       ) : null}
 
       <div className="flex flex-wrap gap-2">

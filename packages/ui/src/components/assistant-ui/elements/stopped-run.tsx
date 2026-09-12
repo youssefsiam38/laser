@@ -86,7 +86,7 @@ export function StoppedRun({ reason, detail, advice, raw, action, onContinue, to
               </CollapsibleTrigger>
               <CollapsibleContent>
                 {parseJsonText(raw) === undefined ? (
-                  <pre className={cn(field, mono, "mt-1 max-h-40 overflow-auto rounded-lg p-2.5 text-xs leading-4 whitespace-pre-wrap text-ink-2")}>{raw}</pre>
+                  <pre dir="ltr" className={cn(field, mono, "mt-1 max-h-40 overflow-auto rounded-lg p-2.5 text-xs leading-4 whitespace-pre-wrap text-ink-2")}>{raw}</pre>
                 ) : (
                   <JsonViewer value={parseJsonText(raw)} expandedDepth={1} className="mt-1 max-h-40" />
                 )}

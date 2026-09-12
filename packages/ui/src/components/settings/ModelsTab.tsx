@@ -418,7 +418,7 @@ function ModelConnectionsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
             </CollapsibleTrigger>
             <CollapsibleContent className="hairline-t flex flex-col gap-2 px-3 py-3">
               <p className="text-xs leading-5 text-ink-2">
-                Patterns in <code className="font-mono">enabledModels</code> are an allow-list: when set, only what matches is offered, and a
+                Patterns in <code dir="ltr" className="font-mono">enabledModels</code> are an allow-list: when set, only what matches is offered, and a
                 pattern written before a model existed hides every newer one. The switches never edit this list. Leave it empty to offer
                 every model. Written to your {listScope} settings.
               </p>
@@ -505,7 +505,7 @@ function ModelConnectionsTab({ cwd, snapshot, onApply }: ModelsTabProps) {
           {models.length === 0 && !loading && (
             <p className="rounded-lg border border-line px-3 py-6 text-center text-sm text-ink-2">
               No models are available. Add a provider credential above, or point{" "}
-              <code className="font-mono">models.json</code> at a local server.
+              <code dir="ltr" className="font-mono">models.json</code> at a local server.
             </p>
           )}
 

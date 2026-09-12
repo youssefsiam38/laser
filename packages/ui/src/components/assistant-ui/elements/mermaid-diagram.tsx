@@ -230,7 +230,7 @@ const MermaidDiagramImpl: FC<MermaidDiagramProps> = ({ code, className, streamin
   if (result.error !== null) {
     return (
       <div data-slot="mermaid-fallback" className={cn("mb-4 overflow-hidden rounded-b-lg border border-line bg-surface-2 last:mb-0", className)}>
-        <pre className="overflow-x-auto p-3.5 font-mono text-xs leading-sm text-ink">{code.trim()}</pre>
+        <pre dir="ltr" className="overflow-x-auto p-3.5 font-mono text-xs leading-sm text-ink">{code.trim()}</pre>
         <p className={cn(mono, "border-t border-line px-3.5 py-1.5 text-ink-2")}>
           This diagram could not be drawn, so here is its source. {result.error}
         </p>

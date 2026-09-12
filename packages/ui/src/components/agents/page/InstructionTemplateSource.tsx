@@ -44,13 +44,13 @@ const sourceClassName = cn(
 /** Exact-source fallback while the Markdown grammar loads. */
 export function PlainInstructionTemplateSource({ value, ariaLabel, invalid, className }: Pick<InstructionTemplateSourceProps, "value" | "ariaLabel" | "invalid" | "className">) {
   return (
-    <pre
+    <pre dir="ltr"
       data-slot="instruction-template-source"
       data-highlighted="false"
       aria-label={ariaLabel}
       aria-invalid={invalid || undefined}
       className={cn(sourceClassName, className)}
-    ><code>{value}</code></pre>
+    ><code dir="ltr">{value}</code></pre>
   );
 }
 
@@ -115,11 +115,11 @@ function SourceVariable({ variable, context }: { variable: InstructionTemplateVa
           <PopoverTitle>{field.label}</PopoverTitle>
           <PopoverDescription>{field.description}</PopoverDescription>
         </PopoverHeader>
-        <code className="w-fit rounded-md border border-line bg-surface-2 px-2 py-1 font-mono text-xs text-[var(--syntax-variable)]">{variable.token}</code>
+        <code dir="ltr" className="w-fit rounded-md border border-line bg-surface-2 px-2 py-1 font-mono text-xs text-[var(--syntax-variable)]">{variable.token}</code>
         {current.status === "known" ? (
           <div className="min-w-0">
             <p className="eyebrow mb-1">Current value</p>
-            <pre data-slot="instruction-template-current-value" className="max-h-56 overflow-auto whitespace-pre-wrap wrap-break-word rounded-md bg-surface-2 p-2 font-mono text-xs leading-code text-ink">{current.value || "Empty"}</pre>
+            <pre dir="ltr" data-slot="instruction-template-current-value" className="max-h-56 overflow-auto whitespace-pre-wrap wrap-break-word rounded-md bg-surface-2 p-2 font-mono text-xs leading-code text-ink">{current.value || "Empty"}</pre>
             <p className="mt-1 text-xs text-ink-3">{current.provenance}</p>
           </div>
         ) : (
@@ -186,12 +186,12 @@ export function InstructionTemplateSource({ target, value, context, ariaLabel, i
   const syntax = useMemo(() => instructionSyntaxRanges(value, highlighted?.tokens), [highlighted?.tokens, value]);
   const content = useMemo(() => highlightedSource(value, target, context, syntax), [context, syntax, target, value]);
   return (
-    <pre
+    <pre dir="ltr"
       data-slot="instruction-template-source"
       data-highlighted={highlighted ? "true" : "false"}
       aria-label={ariaLabel}
       aria-invalid={invalid || undefined}
       className={cn(sourceClassName, className)}
-    ><code>{content}</code></pre>
+    ><code dir="ltr">{content}</code></pre>
   );
 }

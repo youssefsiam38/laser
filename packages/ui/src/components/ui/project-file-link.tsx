@@ -36,7 +36,7 @@ function ReadableFileChip({ cwd, path, children }: { cwd: string; path: string; 
   useEffect(() => () => { intent.current++; }, [opener]);
   if (!opener) return <>{children}</>;
   const prefetch = () => { void opener.readFile(cwd, path).catch(() => {}); };
-  return <button type="button" data-slot="file-chip" data-file-path={path} aria-busy={opening || undefined}
+  return <button type="button" dir="ltr" data-slot="file-chip" data-file-path={path} aria-busy={opening || undefined}
     onMouseEnter={prefetch} onFocus={prefetch} onKeyDown={event => { if (event.key === "Escape") { intent.current++; setOpening(false); } }}
     onClick={event => {
       const trigger = event.currentTarget;

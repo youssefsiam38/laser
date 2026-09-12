@@ -542,7 +542,7 @@ function ValueChip({ value }: { value: unknown }) {
   if (value === undefined) return <span className="font-mono text-ink-3">—</span>;
   const text = typeof value === "string" ? value : JSON.stringify(value);
   return (
-    <code className="rounded bg-surface-2 px-1 font-mono text-xs text-ink-2">
+    <code dir="ltr" className="rounded bg-surface-2 px-1 font-mono text-xs text-ink-2">
       {text.length > 60 ? `${text.slice(0, 59)}…` : text}
     </code>
   );

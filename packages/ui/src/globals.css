@@ -828,8 +828,17 @@
   border-inline-end: 1px solid var(--line);
 }
 
+/* Source text has intrinsic ordering, even inside an auto-direction prose block. */
+:where(pre, code, [data-file-path], [data-slot="file-name"]) {
+  direction: ltr;
+  unicode-bidi: isolate;
+  text-align: start;
+}
+
 /* Terminal ground: dark in both themes. */
 @utility terminal {
+  direction: ltr;
+  text-align: start;
   background: var(--terminal-bg);
   color: var(--terminal-ink);
   font-family: var(--font-mono);

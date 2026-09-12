@@ -255,7 +255,7 @@ function ReadBody({ args, text, failed }: { args: unknown; text: string; failed:
 }
 
 function PlainSource({ code }: { code: string }) {
-  return <pre className="max-h-96 overflow-auto rounded-lg border border-line bg-surface-2 px-3.5 py-3.5 font-mono text-xs leading-sm whitespace-pre text-ink">{code}</pre>;
+  return <pre dir="ltr" className="max-h-96 overflow-auto rounded-lg border border-line bg-surface-2 px-3.5 py-3.5 font-mono text-xs leading-sm whitespace-pre text-ink">{code}</pre>;
 }
 
 export const ToolRow = memo(ToolRowImpl);

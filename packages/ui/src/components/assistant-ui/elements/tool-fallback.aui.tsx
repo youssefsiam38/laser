@@ -315,7 +315,7 @@ function ToolFallbackArgs({
   return (
     <div data-slot="tool-fallback-args" className={cn(className)} {...props}>
       <ToolFallbackSection label="args">
-        {json === undefined ? <pre className="max-h-80 overflow-auto rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs leading-sm wrap-break-word whitespace-pre-wrap text-ink-2">{argsText}</pre> : <JsonViewer value={json} expandedDepth={1} className="max-h-80" />}
+        {json === undefined ? <pre dir="ltr" className="max-h-80 overflow-auto rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs leading-sm wrap-break-word whitespace-pre-wrap text-ink-2">{argsText}</pre> : <JsonViewer value={json} expandedDepth={1} className="max-h-80" />}
       </ToolFallbackSection>
     </div>
   );
@@ -335,7 +335,7 @@ function ToolFallbackResult({
   return (
     <div data-slot="tool-fallback-result" className={cn(className)} {...props}>
       <ToolFallbackSection label="result">
-        {typeof result === "string" && parseJsonText(result) === undefined ? <pre data-search-content className="max-h-80 overflow-auto rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs leading-sm wrap-break-word whitespace-pre-wrap text-ink-2">{text}</pre> : <JsonViewer value={typeof result === "string" ? parseJsonText(result) : result} expandedDepth={1} className="max-h-80" />}
+        {typeof result === "string" && parseJsonText(result) === undefined ? <pre dir="ltr" data-search-content className="max-h-80 overflow-auto rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs leading-sm wrap-break-word whitespace-pre-wrap text-ink-2">{text}</pre> : <JsonViewer value={typeof result === "string" ? parseJsonText(result) : result} expandedDepth={1} className="max-h-80" />}
       </ToolFallbackSection>
     </div>
   );
@@ -532,7 +532,7 @@ function ToolFallbackApproval({
           <ul className="flex flex-col gap-1">
             {confirming.grants.map((grant) => (
               <li key={grant}>
-                <code className="rounded-sm bg-surface-2 px-1.5 py-0.5 font-mono text-xs text-ink-2">{grant}</code>
+                <code dir="ltr" className="rounded-sm bg-surface-2 px-1.5 py-0.5 font-mono text-xs text-ink-2">{grant}</code>
               </li>
             ))}
           </ul>

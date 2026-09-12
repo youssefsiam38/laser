@@ -20,8 +20,9 @@ export function JsonViewer({ value, className, expandedDepth = 2, tone = "surfac
   return (
     <div
       data-slot="json-viewer"
+      dir="ltr"
       className={cn(
-        "max-h-[60vh] min-w-0 overflow-auto rounded-lg border p-3 font-mono text-xs leading-sm",
+        "max-h-[60vh] min-w-0 overflow-auto rounded-lg border p-3 font-mono text-xs leading-sm text-start",
         tone === "terminal" ? "border-terminal-line bg-terminal text-terminal-ink-2" : "border-line bg-surface-2 text-ink-2",
         className,
       )}

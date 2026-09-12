@@ -139,7 +139,7 @@ export function TerminalBlock({
         </p>
       ) : null}
       {output || running ? (
-        <pre
+        <pre dir="ltr"
           ref={pre}
           onScroll={follow ? onScroll : undefined}
           data-search-content

@@ -40,8 +40,8 @@ SyntaxHighlighter.displayName = "SyntaxHighlighter";
 function PlainFence({ code, className }: { code: string; className?: string | undefined }) {
   return (
     <div className={cn(fenceClassName, "aui-shiki-streaming", className)}>
-      <pre>
-        <code>{code.replace(/\n$/, "")}</code>
+      <pre dir="ltr">
+        <code dir="ltr">{code.replace(/\n$/, "")}</code>
       </pre>
     </div>
   );

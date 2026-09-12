@@ -82,7 +82,7 @@ function FileIconDisplay({ mimeType, className, children, ...props }: ComponentP
 
 function FileName({ className, children, ...props }: ComponentProps<"span">) {
   return (
-    <span data-slot="file-name" className={cn("min-w-0 flex-1 truncate font-medium text-ink", className)} {...props}>
+    <span dir="ltr" data-slot="file-name" className={cn("min-w-0 flex-1 truncate font-medium text-ink", className)} {...props}>
       {children || "Unnamed file"}
     </span>
   );

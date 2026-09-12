@@ -57,10 +57,13 @@ const preprocess = (text: string): string => escapeCurrencyDollars(normalizeMath
 
 type Components = Parameters<typeof memoizeMarkdownComponents>[0];
 
+const ProseDirection = createContext<"auto" | "ltr">("auto");
 const NativeFiles = createContext(false);
 const WithinLink = createContext(false);
 
 export interface MarkdownTextProps {
+  /** Diagnostic captures preserve source ordering rather than natural prose direction. */
+  dir?: "auto" | "ltr";
   /** Conversation-only file viewing; diagnostic captures keep their source editor links. */
   nativeFiles?: boolean;
   className?: string | undefined;
@@ -106,22 +109,22 @@ function CodeHeader({ language, code }: CodeHeaderProps) {
 
 const defaultComponents = memoizeMarkdownComponents({
   h1: ({ className, ...props }) => (
-    <h1 className={cn("mt-5 mb-2 text-xl font-semibold text-ink first:mt-0 last:mb-0", className)} {...props} />
+    <h1 dir={useContext(ProseDirection)} className={cn("mt-5 mb-2 text-xl font-semibold text-ink first:mt-0 last:mb-0", className)} {...props} />
   ),
   h2: ({ className, ...props }) => (
-    <h2 className={cn("mt-5 mb-2 text-lg font-semibold text-ink first:mt-0 last:mb-0", className)} {...props} />
+    <h2 dir={useContext(ProseDirection)} className={cn("mt-5 mb-2 text-lg font-semibold text-ink first:mt-0 last:mb-0", className)} {...props} />
   ),
   h3: ({ className, ...props }) => (
-    <h3 className={cn("mt-4 mb-1.5 text-md font-semibold text-ink first:mt-0 last:mb-0", className)} {...props} />
+    <h3 dir={useContext(ProseDirection)} className={cn("mt-4 mb-1.5 text-md font-semibold text-ink first:mt-0 last:mb-0", className)} {...props} />
   ),
   h4: ({ className, ...props }) => (
-    <h4 className={cn("mt-3 mb-1 text-base font-semibold text-ink first:mt-0 last:mb-0", className)} {...props} />
+    <h4 dir={useContext(ProseDirection)} className={cn("mt-3 mb-1 text-base font-semibold text-ink first:mt-0 last:mb-0", className)} {...props} />
   ),
   h5: ({ className, ...props }) => (
-    <h5 className={cn("mt-3 mb-1 text-sm font-semibold text-ink first:mt-0 last:mb-0", className)} {...props} />
+    <h5 dir={useContext(ProseDirection)} className={cn("mt-3 mb-1 text-sm font-semibold text-ink first:mt-0 last:mb-0", className)} {...props} />
   ),
-  h6: ({ className, ...props }) => <h6 className={cn("mt-3 mb-1 eyebrow first:mt-0 last:mb-0", className)} {...props} />,
-  p: ({ className, ...props }) => <p className={cn("my-2 first:mt-0 last:mb-0", className)} {...props} />,
+  h6: ({ className, ...props }) => <h6 dir={useContext(ProseDirection)} className={cn("mt-3 mb-1 eyebrow first:mt-0 last:mb-0", className)} {...props} />,
+  p: ({ className, ...props }) => <p dir={useContext(ProseDirection)} className={cn("my-2 first:mt-0 last:mb-0", className)} {...props} />,
   a: function MarkdownLink({ className, children, ...props }) {
     const native = useContext(NativeFiles);
     // GFM footnote references (`[^1]`) are the citations a transcript actually
@@ -140,23 +143,23 @@ const defaultComponents = memoizeMarkdownComponents({
     return native ? <ProjectMarkdownImage src={typeof src === "string" ? src : undefined} interactive={!withinLink} {...props} /> : <img src={src} {...props} />;
   },
   blockquote: ({ className, ...props }) => (
-    <blockquote className={cn("my-2 border-s-2 border-line ps-3 text-ink-2", className)} {...props} />
+    <blockquote dir={useContext(ProseDirection)} className={cn("my-2 border-s-2 border-line ps-3 text-ink-2", className)} {...props} />
   ),
   ul: ({ className, ...props }) => (
-    <ul className={cn("my-2 list-disc ps-5 marker:text-ink-3 [&>li]:mt-1", className)} {...props} />
+    <ul dir={useContext(ProseDirection)} className={cn("my-2 list-disc ps-5 marker:text-ink-3 [&>li]:mt-1", className)} {...props} />
   ),
   ol: ({ className, ...props }) => (
-    <ol className={cn("my-2 list-decimal ps-5 marker:text-ink-3 marker:tnum [&>li]:mt-1", className)} {...props} />
+    <ol dir={useContext(ProseDirection)} className={cn("my-2 list-decimal ps-5 marker:text-ink-3 marker:tnum [&>li]:mt-1", className)} {...props} />
   ),
-  li: ({ className, ...props }) => <li className={cn("ps-1 [&>input]:me-1.5", className)} {...props} />,
+  li: ({ className, ...props }) => <li dir={useContext(ProseDirection)} className={cn("ps-1 [&>input]:me-1.5", className)} {...props} />,
   hr: ({ className, ...props }) => <hr className={cn("my-5 border-line", className)} {...props} />,
   table: ({ className, ...props }) => (
     <div className="my-2 overflow-x-auto">
-      <table className={cn("w-full border-collapse text-sm", className)} {...props} />
+      <table dir={useContext(ProseDirection)} className={cn("w-full border-collapse text-sm", className)} {...props} />
     </div>
   ),
   th: ({ className, ...props }) => (
-    <th
+    <th dir={useContext(ProseDirection)}
       className={cn(
         "border-b border-line px-3 py-1.5 text-start font-medium text-ink-2 [[align=center]]:text-center [[align=right]]:text-end",
         className,
@@ -165,7 +168,7 @@ const defaultComponents = memoizeMarkdownComponents({
     />
   ),
   td: ({ className, ...props }) => (
-    <td
+    <td dir={useContext(ProseDirection)}
       className={cn(
         "border-b border-line px-3 py-1.5 align-top [[align=center]]:text-center [[align=right]]:text-end [[align=right]]:tnum",
         className,
@@ -187,7 +190,7 @@ const defaultComponents = memoizeMarkdownComponents({
     />
   ),
   pre: ({ className, ...props }) => (
-    <pre
+    <pre dir="ltr"
       className={cn(
         "mb-3 overflow-x-auto rounded-b-lg border border-line bg-surface-2 font-mono text-xs leading-sm text-ink last:mb-0 [&>code]:block [&>code]:p-3",
         className,
@@ -201,7 +204,7 @@ const defaultComponents = memoizeMarkdownComponents({
     const withinLink = useContext(WithinLink);
     if (native && !withinLink && !isBlock && typeof props.children === "string" && looksLikeFilePath(props.children)) return <ProjectFileLink path={props.children}>{props.children}</ProjectFileLink>;
     return (
-      <code
+      <code dir="ltr"
         className={cn(
           !isBlock && "rounded-md border border-line/70 bg-surface-2 px-1.5 py-0.5 font-mono text-[0.85em] text-ink",
           className,
@@ -222,7 +225,7 @@ const componentsByLanguage = {
  * Transcript prose at the shared reading measure, never raw HTML. The streaming caret rides on
  * the last block while the part reports `running`.
  */
-const MarkdownTextImpl: FC<MarkdownTextProps> = ({ className, components, nativeFiles = false }) => {
+const MarkdownTextImpl: FC<MarkdownTextProps> = ({ className, components, nativeFiles = false, dir = "auto" }) => {
   const stableComponents = useShallowStable(components);
   const markdownComponents = useMemo(() => {
     if (!stableComponents) return defaultComponents;
@@ -230,7 +233,7 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ className, components, native
   }, [stableComponents]);
 
   return (
-    <NativeFiles.Provider value={nativeFiles}><MarkdownTextPrimitive
+    <ProseDirection.Provider value={dir}><NativeFiles.Provider value={nativeFiles}><MarkdownTextPrimitive
       remarkPlugins={remarkPlugins}
       rehypePlugins={rehypePlugins}
       preprocess={preprocess}
@@ -240,7 +243,7 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ className, components, native
       smooth={false}
       defer
       className={cn("md-body max-w-(--measure-prose) text-base break-words text-ink", "[&[data-status=running]>*:last-child]:caret", className)}
-    /></NativeFiles.Provider>
+    /></NativeFiles.Provider></ProseDirection.Provider>
   );
 };
 

@@ -71,7 +71,7 @@ export function ApiRequestDialog({ target, onClose }: { target: ApiRequestTarget
   },[client,targetKey,refresh]);
   const entry = entries.find(item=>item.id===selected);
   return <Dialog open onOpenChange={open=>{if(!open)onClose();}}>
-    <DialogContent onEscapeKeyDown={e=>{
+    <DialogContent dir="ltr" onEscapeKeyDown={e=>{
       const modal=e.target instanceof Element?e.target.closest('[role="dialog"]'):null;
       const closeFind=modal?.querySelector<HTMLButtonElement>('[data-request-find] [aria-label="Close search"]');
       if(closeFind){e.preventDefault();closeFind.click();}
@@ -250,14 +250,14 @@ function RequestFieldCard({field,expanded,markdown,reveal,sources}:{field:Reques
     });
     return()=>{live=false;};
   },[field,sources,text]);
-  const markdownBody=text!==undefined&&<TextMessagePartProvider text={text} isRunning={false}><MarkdownText /></TextMessagePartProvider>;
+  const markdownBody=text!==undefined&&<TextMessagePartProvider text={text} isRunning={false}><MarkdownText dir="ltr" /></TextMessagePartProvider>;
   const preview = text ?? (field.value === null || typeof field.value === "number" || typeof field.value === "boolean" ? JSON.stringify(field.value) : undefined);
   return <Collapsible open={reveal||open} onOpenChange={setOpen} className={cn(activityRow,"border border-line")}>
     <CollapsibleTrigger className={cn(activityTrigger,"py-2")}>
       <ChevronRight className="rtl:-scale-x-100 size-4 shrink-0 transition-transform group-data-[state=open]/trigger:rotate-90 group-data-[state=open]/trigger:rtl:-rotate-90" />
       <span className="min-w-0 truncate font-medium">{requestFieldLabel(field)}</span>
       {preview !== undefined && <span className="min-w-0 flex-1 truncate text-xs text-ink-3">{preview}</span>}
-      <code className="ms-auto min-w-0 truncate text-xs text-ink-3">{field.path}</code>
+      <code dir="ltr" className="ms-auto min-w-0 truncate text-xs text-ink-3">{field.path}</code>
     </CollapsibleTrigger>
     <CollapsibleContent className={collapsePanel}>
       <div className="flex min-w-0 flex-col gap-3 border-t border-line p-3">

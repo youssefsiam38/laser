@@ -61,6 +61,7 @@ export function EditMessage({ value, onValueChange, onSend, onSendInNewSession, 
         <span className={cn(mono, "text-ink-3")}>{busy ? "sending" : stopsReply ? "stops the reply" : "the old version is kept"}</span>
       </div>
       <Textarea
+        dir="auto"
         value={value}
         onChange={(event) => onValueChange(event.target.value)}
         rows={2}
