@@ -529,7 +529,7 @@ export const sessionLoadResultSchema = z
 
 export const clientParamsSchemas = {
   "session/new": z.object({ cwd: z.string().min(1), parentPath: sessionPath.optional(), agentName: agentNameSchema.optional() }).strict(),
-  "session/load": z.object({ path: sessionPath, fromSeq: z.number().int().nonnegative().optional() }).strict(),
+  "session/load": z.object({ path: sessionPath, fromSeq: z.number().int().nonnegative().optional(), transcript: z.literal("loaded").optional() }).strict(),
   "session/prompt": z
     .object({
       path: sessionPath,

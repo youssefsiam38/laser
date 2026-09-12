@@ -908,7 +908,11 @@ export interface ClientRequests {
    * are different states, and conflating them makes the next `session/load`
    * ask for `fromSeq: 0` and receive the whole buffer a second time.
    */
-  "session/load": { params: { path: string; fromSeq?: number }; result: { state: SessionState; replayFrom: number; seq: number } };
+  /** `transcript: "loaded"` opts this connection into updates only for sessions
+   * it loads/creates/forks. Admission starts before replay. Loaded caches remain
+   * subscribed until disconnect, independently of retirement detach; questions,
+   * attention and other small notifications remain global. Omit for full stream. */
+  "session/load": { params: { path: string; fromSeq?: number; transcript?: "loaded" }; result: { state: SessionState; replayFrom: number; seq: number } };
   "session/prompt": {
     params: {
       path: string;

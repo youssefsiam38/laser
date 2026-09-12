@@ -13,9 +13,9 @@
  *   AgentRunRegistry every agent run a worker reported, kept past the worker
  *   SkillsCheck      periodic validation of what definitions point at
  *
- * Every connected client receives every notification; a per-session
- * subscription is not worth its complexity for a handful of local clients, and
- * the relay (M6) carries one client per channel anyway. Binding is loopback
+ * Clients can opt into transcripts for their loaded caches; small lifecycle
+ * notifications remain global and raw provider captures stay in LogStore.
+ * Binding is loopback
  * only; remote access goes through the relay, never by opening this port.
  *
  * Loopback is **not** on its own a defence against a browser. The same-origin
@@ -51,6 +51,7 @@ import { PushService } from "./push.js";
 import { RelayClient, type RelayClientState, type RelayClientStats } from "./relay-client.js";
 import { Router } from "./router.js";
 import { SessionLoadDelivery } from "./session-load-delivery.js";
+import { TranscriptDelivery } from "./transcript-delivery.js";
 import { ViewCache } from "./views.js";
 import type { WorkerClient } from "./worker-client.js";
 import { WorkerPool, type WorkerPoolOptions } from "./worker-pool.js";
@@ -202,6 +203,7 @@ export class HostServer {
   private readonly clients = new Set<WebSocket>();
   /** Session paths each client is following, for the retirement guard. */
   private readonly attached = new Map<WebSocket, Set<string>>();
+  private readonly transcripts = new Map<WebSocket, TranscriptDelivery>();
   /** Question-only response fences for concurrent session/load requests, per socket. */
   private readonly loadDeliveries = new Map<WebSocket, Set<SessionLoadDelivery>>();
   private readonly log: (line: string) => void;
@@ -797,13 +799,13 @@ export class HostServer {
       const type = (message as { type?: unknown } | null)?.type;
       if (type === `${WIRE_NAMESPACE}/provider/request` || type === `${WIRE_NAMESPACE}/provider/response`) return;
     }
-    const line = JSON.stringify(notification);
+    let line: string | undefined;
     for (const ws of this.clients) {
-      if (ws.readyState !== ws.OPEN) continue;
+      if (ws.readyState !== ws.OPEN || !this.transcripts.get(ws)?.accepts(notification)) continue;
       const held = [...(this.loadDeliveries.get(ws) ?? [])]
         .map((delivery) => delivery.offer(notification))
         .some(Boolean);
-      if (!held) ws.send(line);
+      if (!held) ws.send(line ??= JSON.stringify(notification));
     }
     for (const listener of this.notificationListeners) {
       // One relayed device throwing must not cost the others their stream.
@@ -838,6 +840,8 @@ export class HostServer {
   private onConnection(ws: WebSocket, localEnvironment: boolean): void {
     this.clients.add(ws);
     this.attached.set(ws, new Set());
+    const transcripts = new TranscriptDelivery();
+    this.transcripts.set(ws, transcripts);
     this.loadDeliveries.set(ws, new Set());
     // A client that connects while a project is waiting on a trust decision
     // must see the question, not a worker that never starts.
@@ -857,14 +861,18 @@ export class HostServer {
         ? new SessionLoadDelivery(request.params.path)
         : undefined;
       if (delivery) this.loadDeliveries.get(ws)?.add(delivery);
+      const finishTranscript = transcripts.begin(raw);
+      let transcriptResponse;
       try {
         const response = await this.router.handle(raw, { localEnvironment });
+        transcriptResponse = response;
         if (!response.error) this.noteRequest(ws, request, response.result);
         const sent = await this.sendSocket(ws, JSON.stringify(response));
         if (delivery && sent && !response.error) {
           await delivery.flush((notification) => this.sendSocket(ws, JSON.stringify(notification)));
         }
       } finally {
+        finishTranscript(transcriptResponse);
         delivery?.dispose();
         if (delivery) this.loadDeliveries.get(ws)?.delete(delivery);
       }
@@ -920,6 +928,7 @@ export class HostServer {
   private dropClient(ws: WebSocket): void {
     this.clients.delete(ws);
     this.attached.delete(ws);
+    this.transcripts.delete(ws);
     const deliveries = this.loadDeliveries.get(ws);
     if (deliveries) for (const delivery of deliveries) delivery.dispose();
     this.loadDeliveries.delete(ws);

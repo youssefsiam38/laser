@@ -523,3 +523,34 @@ identity and workspace build; logs `/tmp/f03-{protocol,host,ui,identity,build}.l
 Focused regression: `packages/host/test/provider-delivery.test.ts`; existing UI
 request-dialog content-reference and full-JSON tests pass. No visual change or
 new browser matrix claimed. Capture redaction/provenance storage is untouched.
+
+### F22 — explicit loaded-cache transcript delivery
+
+`session/load { transcript: "loaded" }` opts one connection into raw updates for
+its loaded/created/forked sessions only. Legacy callers still receive the full
+stream. The UI transport opts in on every load, including reconnect. Admission
+starts before the router runs, so replay/live sequence ownership is unchanged;
+failed loads release provisional admission. New/fork first events are admitted
+until their destination is known. Local sockets and encrypted relay share the
+same policy; reconnect gets a new policy instance.
+
+Deliberate boundary: **previously loaded caches remain subscribed**, even after
+retirement detach, because their reducers and sequence watermarks still own live
+state. This cuts never-opened conversations, not background caches. Unsubscribing
+those caches needs coordinated invalidation/hydration with M16-T16; it is not
+silently implemented here. Questions, fleet, attention and worker notifications
+remain global. No attachment/retirement or history-window logic changed.
+
+Synthetic two-client, 1,000-character update bytes at **1/8/32 active sessions**:
+**2,308/18,464/73,900 → 2,308/2,308/2,309**. These are deterministic serialized
+bytes through the admission policy, not measured parse CPU or network latency.
+Two real sockets verify independent delivery; real encrypted relay test verifies
+unopened suppression beside replay → response → question ordering. Existing
+reconnect/replay and dropped-question tests pass. Protocol round-trip and router
+coverage include the optional field; no new method inventory entry is needed.
+
+Validation: `pnpm -r build`, protocol/host/UI suites, identity all pass;
+`/tmp/f22-{build,protocol,host,ui,identity}.log`. Final socket/relay and client
+checks: `/tmp/f22-{transport,client}-final.log`. UI change is only `client.ts`;
+`LaserProvider.tsx` and the M16-T16 history path are untouched. No visual or
+browser performance claim.

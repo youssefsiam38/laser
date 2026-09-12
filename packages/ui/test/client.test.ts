@@ -257,7 +257,7 @@ describe("reconnect resume", () => {
     const socket = reconnect(client);
     const loads = socket.frames().filter((f) => f.method === "session/load");
     expect(loads).toHaveLength(1);
-    expect(loads[0]!.params).toEqual({ path: "/keep.jsonl", fromSeq: 4 });
+    expect(loads[0]!.params).toEqual({ path: "/keep.jsonl", fromSeq: 4, transcript: "loaded" });
   });
 
   it("reports replayFrom so a restarted worker's epoch can be adopted", () => {
@@ -285,6 +285,7 @@ describe("reconnect resume", () => {
       expect(third.frames().find((f) => f.method === "session/load")!.params).toEqual({
         path: "/s.jsonl",
         fromSeq: 0,
+        transcript: "loaded",
       });
     });
   });

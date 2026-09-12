@@ -89,3 +89,31 @@ describe("HostServer session/load question ordering", () => {
     await closed;
   }, 10_000);
 });
+
+
+it("filters unopened transcripts per socket without crossing the load/replay boundary", async () => {
+  (host.router as unknown as { handle(raw: unknown): Promise<JsonRpcResponse> }).handle = async raw => {
+    const request = raw as { id: number; params: { path: string } };
+    host.notify("session/update", { sessionPath: request.params.path, seq: 1, at: new Date(0).toISOString(), update: { kind: "agent_start" } });
+    return { jsonrpc: "2.0", id: request.id, result: { state: { path: request.params.path }, seq: 1, replayFrom: 0 } };
+  };
+  const { url } = await host.listen();
+  const sockets = [new WebSocket(`${url.replace("http", "ws")}/ws`), new WebSocket(`${url.replace("http", "ws")}/ws`)];
+  const messages: JsonRpcMessage[][] = [[], []];
+  await Promise.all(sockets.map((socket, i) => {
+    socket.on("message", data => messages[i]!.push(JSON.parse(data.toString())));
+    return new Promise<void>(resolve => socket.once("open", resolve));
+  }));
+  sockets.forEach((socket, i) => socket.send(JSON.stringify({ jsonrpc: "2.0", id: i, method: "session/load", params: { path: `/s/${i}`, transcript: "loaded", fromSeq: 0 } })));
+  await until(() => messages.every((list, i) => list.some(m => "id" in m && m.id === i)));
+  messages.forEach(list => { list.length = 0; });
+  for (let i = 0; i < 3; i++) host.notify("session/update", { sessionPath: `/s/${i}`, seq: 2, at: new Date(0).toISOString(), update: { kind: "agent_end" } });
+  host.notify("pi/ui/request", { path: "/s/2", id: "q", method: "confirm", title: "Continue?" });
+  await until(() => messages.every(list => list.some(m => "method" in m && m.method === "pi/ui/request")));
+  messages.forEach((list, i) => {
+    const updates = list.filter(m => "method" in m && m.method === "session/update");
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toMatchObject({ params: { sessionPath: `/s/${i}`, seq: 2 } });
+  });
+  sockets.forEach(socket => socket.close());
+});

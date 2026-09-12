@@ -307,6 +307,9 @@ describe("Router · session recovery", () => {
         { cwd: CWD_A, method: "session/load", params: { path } },
         { cwd: CWD_A, method: "session/prompt", params },
       ]);
+      const subscribed = await rpc(h.router, "session/load", { path, fromSeq: 12, transcript: "loaded" });
+      expect(subscribed.error).toBeUndefined();
+      expect(h.workerRequests.at(-1)).toMatchObject({ method: "session/load", params: { path, fromSeq: 12, transcript: "loaded" } });
     } finally {
       h.cleanup();
       rmSync(dir, { recursive: true, force: true });
