@@ -106,11 +106,10 @@ export function ConversationSkeleton() {
 
 /**
  * Only presentation is timed; the transaction remains the source of truth.
- * Fast loads paint nothing, and a visible skeleton holds for two fast steps.
- * Faster/zero motion still keeps the 150/300ms anti-flash floor: those are
- * readability limits, not animation. This gate must survive the switch into the loaded runtime.
+ * Fast loads paint nothing. The anti-flash hold applies only while there is
+ * nothing to show: arriving content always wins, including at zero motion.
  */
-export function ConversationLoadingGate({ active, children }: { active: boolean; children: ReactNode }) {
+export function ConversationLoadingGate({ active, hasContent = false, children }: { active: boolean; hasContent?: boolean; children: ReactNode }) {
   const [visible, setVisible] = useState(false);
   const shownAt = useRef<number | undefined>(undefined);
   useEffect(() => {
@@ -130,6 +129,7 @@ export function ConversationLoadingGate({ active, children }: { active: boolean;
     }, Math.max(0, step * 2 - (Date.now() - shownAt.current)));
     return () => clearTimeout(timer);
   }, [active]);
+  if (hasContent) return children;
   return active || visible ? (visible ? <ConversationSkeleton /> : null) : children;
 }
 

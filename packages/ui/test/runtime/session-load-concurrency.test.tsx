@@ -43,26 +43,48 @@ it("starts all independent reads together and projects the final transcript only
     expect(world.calls.some(c => c.method === method && (c.params as { path?: string }).path === path)).toBe(true);
   }
   await act(async () => { tree.resolve({ entries: entries("History") }); await settle(20); });
-  expect(state.open[path]?.loadState).toBe("opening");
-  expect(vi.mocked(projectSessionView).mock.calls.filter(([view]) => view?.path === path && view.entries.length > 0)).toHaveLength(0);
+  expect(state.sessionLoads[path]).toBeUndefined();
+  expect(state.current).toBe(path);
+  expect(vi.mocked(projectSessionView).mock.calls.filter(([view]) => view?.path === path && view.entries.length > 0)).toHaveLength(1);
   await act(async () => { goal.resolve({ goal: null }); pending.resolve({ messages: [] }); await open; await settle(40); });
-  expect(state.open[path]?.loadState).toBeUndefined();
+  expect(state.sessionLoads[path]).toBeUndefined();
   expect(vi.mocked(projectSessionView).mock.calls.filter(([view]) => view?.path === path && view.entries.length > 0)).toHaveLength(1);
 });
 
-it("does not let a failed batch's late history overwrite a successful Retry", async () => {
-  const oldTree = deferred<{ entries: unknown[] }>();
-  world.overrides["pi/session/entries"] = () => oldTree.promise;
-  world.overrides["session/goal/get"] = () => { throw new Error("failed"); };
+it("does not let a failed batch's late decorations overwrite a successful Retry", async () => {
+  const oldGoal = deferred<{ goal: unknown }>();
+  world.overrides["session/goal/get"] = () => oldGoal.promise;
+  world.overrides["pi/session/entries"] = () => { throw new Error("History read failed. Retry."); };
   await act(async () => { await actions.openSession(path).catch(() => {}); await settle(20); });
-  expect(state.open[path]?.loadState).toBe("error");
+  expect(state.sessionLoads[path]).toMatchObject({ phase: "failed", reason: "History read failed. Retry." });
   world.overrides["pi/session/entries"] = () => ({ entries: entries("New history") });
   delete world.overrides["session/goal/get"];
   await act(async () => { await actions.openSession(path); await settle(20); });
-  const blocks = state.open[path]?.blocks;
-  await act(async () => { oldTree.resolve({ entries: entries("Stale history") }); await settle(30); });
-  expect(state.open[path]?.blocks).toBe(blocks);
+  await act(async () => { oldGoal.resolve({ goal: { id: "stale" } }); await settle(30); });
+  expect(state.open[path]?.goal).toBeNull();
   expect(state.open[path]?.entries).toEqual(entries("New history"));
+});
+
+it.each(["session/goal/get", "session/pending/list"])("%s failure cannot fail or prevent tracking the conversation", async method => {
+  const track = vi.spyOn(FakeHostClient.current, "track");
+  world.overrides["pi/session/entries"] = () => ({ entries: entries("Visible history") });
+  world.overrides[method] = () => { throw new Error("Optional read failed"); };
+  await act(async () => { await actions.openSession(path); await settle(20); });
+  expect(state.current).toBe(path);
+  expect(state.open[path]?.hydrated).toBe(true);
+  expect(state.sessionLoads[path]).toBeUndefined();
+  expect(track).toHaveBeenCalledWith(path, 0);
+});
+
+it("late decorations from a successful open cannot overwrite a newer refresh", async () => {
+  const oldGoal = deferred<{ goal: unknown }>();
+  world.overrides["pi/session/entries"] = () => ({ entries: entries("History") });
+  world.overrides["session/goal/get"] = () => oldGoal.promise;
+  await act(async () => { await actions.openSession(path); await settle(20); });
+  delete world.overrides["session/goal/get"];
+  await act(async () => { await actions.openSession(path); await settle(20); });
+  await act(async () => { oldGoal.resolve({ goal: { id: "stale" } }); await settle(20); });
+  expect(state.open[path]?.goal).toBeNull();
 });
 
 it("keeps the sequence and pending watermarks when live updates overtake parallel reads", async () => {

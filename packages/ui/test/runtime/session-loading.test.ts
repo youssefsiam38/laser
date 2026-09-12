@@ -1,51 +1,58 @@
 import { describe, expect, it, vi } from "vitest";
-import { initialState, reduce } from "../../src/store.js";
+import { initialState, reduce, type AppState } from "../../src/store.js";
 import { createThreadAdapter } from "../../src/runtime/adapter.js";
+import { sessionOpenPhase } from "../../src/runtime/main-destination.js";
 import { sessionState } from "../agents/fixtures.js";
 
 const path = "/session.jsonl";
-const adapter = (view = undefined as ReturnType<typeof reduce>["open"][string] | undefined, loading = false, loadState?: "opening" | "error") => createThreadAdapter({
-  view, path, loading, loadState, client: { request: vi.fn() }, connection: "open", dispatch: vi.fn(), onError: vi.fn(),
+const adapter = (state: AppState) => createThreadAdapter({
+  view: state.open[path], path, openPhase: sessionOpenPhase(state, path), client: { request: vi.fn() }, connection: "open", dispatch: vi.fn(), onError: vi.fn(),
 });
+const entries = [{ id: "u", parentId: null, type: "message", message: { role: "user", content: [{ type: "text", text: "Visible history" }] } }];
 
-describe("session opening transaction", () => {
-  it("holds loading through entries, goal and pending; retry clears error without losing history", () => {
+describe("canonical session open phase", () => {
+  it("uses transactions, not snapshot freshness, and preserves history through refresh/failure", () => {
     let state = reduce(initialState, { type: "sessionLoad", path, phase: "opening" });
-    expect(state.sessionLoads[path]).toBe("opening");
-    expect(adapter(undefined, true).isLoading).toBe(true);
+    expect(sessionOpenPhase(state, path)).toMatchObject({ phase: "opening", hasTranscript: false });
+    expect(adapter(state).isLoading).toBe(true);
     state = reduce(state, { type: "opened", state: sessionState({ path }) });
-    expect(state.open[path]).toMatchObject({ hydrated: false, loadState: "opening" });
-    expect(adapter(state.open[path]).isLoading).toBe(true);
-    state = reduce(state, { type: "hydrate", path, entries: [] });
-    expect(state.open[path]?.hydrated).toBe(true);
-    expect(adapter(state.open[path]).isLoading).toBe(true);
-    state = reduce(state, { type: "sessionLoad", path, phase: "error" });
-    expect(state.open[path]?.loadState).toBe("error");
-    expect(adapter(state.open[path]).isLoading).toBe(false);
-    expect(adapter(state.open[path]).isDisabled).toBe(true);
-    state = reduce(state, { type: "sessionLoad", path, phase: "opening" });
-    expect(adapter(state.open[path]).isLoading).toBe(true);
-    const blocks = state.open[path]?.blocks;
-    state = reduce(state, { type: "sessionLoad", path, phase: "ready" });
-    expect(state.sessionLoads[path]).toBeUndefined();
-    expect(state.open[path]?.blocks).toBe(blocks);
-    expect(adapter(state.open[path]).isLoading).toBe(false);
-    expect(adapter(state.open[path]).isDisabled).toBe(false);
-  });
-  it("covers failure before a view exists and a resync that needs entries again", () => {
-    let state = reduce(initialState, { type: "sessionLoad", path, phase: "error" });
-    expect(state.sessionLoads[path]).toBe("error");
-    expect(adapter(undefined, false, "error").isLoading).toBe(false);
-    expect(adapter(undefined, false, "error").isDisabled).toBe(true);
-    state = reduce(state, { type: "sessionLoad", path, phase: "opening" });
-    state = reduce(state, { type: "opened", state: sessionState({ path }) });
-    state = reduce(state, { type: "hydrate", path, entries: [], seq: 10 });
+    state = reduce(state, { type: "hydrate", path, entries, seq: 10 });
+    expect(adapter(state).isLoading).toBe(false);
+    expect(adapter(state).messages).toHaveLength(1);
+    expect(adapter(state).isDisabled).toBe(false);
     state = reduce(state, { type: "sessionLoad", path, phase: "ready" });
     state = reduce(state, { type: "resync", path, lastSeq: 0 });
     expect(state.open[path]?.hydrated).toBe(false);
-    expect(adapter(state.open[path]).isLoading).toBe(true);
+    expect(sessionOpenPhase(state, path).phase).toBe("ready");
+    expect(adapter(state).isLoading).toBe(false);
+    state = reduce(state, { type: "sessionLoad", path, phase: "opening" });
+    expect(adapter(state).isLoading).toBe(false);
+    expect(adapter(state).isDisabled).toBe(false);
+    state = reduce(state, { type: "sessionLoad", path, phase: "error", reason: "History is unavailable. Retry." });
+    expect(sessionOpenPhase(state, path)).toMatchObject({ phase: "failed", hasTranscript: true, reason: "History is unavailable. Retry." });
+    expect(adapter(state).messages).toHaveLength(1);
+    expect(adapter(state).isDisabled).toBe(false);
+  });
+
+  it("retains a pre-view failure reason and clears it on Retry/close", () => {
+    let state = reduce(initialState, { type: "sessionLoad", path, phase: "error", reason: "The host is offline." });
+    expect(sessionOpenPhase(state, path)).toMatchObject({ phase: "failed", reason: "The host is offline." });
+    expect(adapter(state).isLoading).toBe(false);
+    expect(adapter(state).isDisabled).toBe(true);
+    state = reduce(state, { type: "sessionLoad", path, phase: "opening" });
+    expect(sessionOpenPhase(state, path).reason).toBeUndefined();
     state = reduce(state, { type: "closeView", path });
-    expect(state.open[path]).toBeUndefined();
     expect(state.sessionLoads[path]).toBeUndefined();
+  });
+
+  it.each(["chat-tab", "startup-code", "startup-project", "project", "code-tab"] as const)("%s is preparation, not conversation loading", kind => {
+    const state = { ...initialState, destination: { ...initialState.destination, phase: "resolving", target: { kind, project: "/p", code: { kind: "no-project-landing" } } } } as AppState;
+    expect(sessionOpenPhase(state, undefined)).toMatchObject({ phase: "preparing", expectsTranscript: false, hasTranscript: false });
+  });
+
+  it("a known empty session does not promise history", () => {
+    const state = reduce({ ...initialState, sessions: [{ path, messageCount: 0 }] } as AppState, { type: "sessionLoad", path, phase: "opening" });
+    expect(sessionOpenPhase(state, path).expectsTranscript).toBe(false);
+    expect(adapter(state).isLoading).toBe(false);
   });
 });

@@ -1,7 +1,7 @@
 import type { AgentRun, SessionSummary } from "@lasercode/protocol";
 
 import { latestRunForSession } from "../agents/model.js";
-import type { SessionView } from "../store.js";
+import type { AppState, SessionView } from "../store.js";
 import { sessionKindTab, type SessionKindTab } from "./session-tab-memory.js";
 import { mergeSessions, parentPathOf, projectRootOfCwd } from "./threadList.js";
 
@@ -72,6 +72,46 @@ export function mainCodeProject(destination: MainDestination): string | undefine
 
 export function mainError(destination: MainDestination): string | undefined {
   return destination.phase === "unavailable" ? destination.error : undefined;
+}
+
+/** The requested row, before the controller can commit its loaded runtime. */
+export function pendingSessionPath(destination: MainDestination): string | undefined {
+  return (destination.phase === "resolving" || destination.phase === "unavailable")
+    && destination.target.kind === "session" ? destination.target.path : undefined;
+}
+
+export interface SessionOpenPhase {
+  phase: "idle" | "preparing" | "opening" | "ready" | "failed";
+  path: string | undefined;
+  hasTranscript: boolean;
+  expectsTranscript: boolean;
+  reason: string | undefined;
+}
+
+/** Transaction state, not snapshot freshness. Refreshes retain their transcript. */
+export function sessionOpenPhase(state: AppState, path: string | undefined): SessionOpenPhase {
+  const requested = pendingSessionPath(state.destination);
+  const target = path ?? requested;
+  const view = target ? state.open[target] : undefined;
+  const load = target ? state.sessionLoads[target] : undefined;
+  const destinationApplies = path === undefined || path === requested;
+  const hasTranscript = !!view?.blocks.length;
+  const summary = state.sessions.find(session => session.path === target);
+  const reason = load?.reason ?? (destinationApplies ? mainError(state.destination) : undefined);
+  return {
+    phase: load?.phase ?? (reason !== undefined ? "failed"
+      : destinationApplies && state.destination.phase === "resolving" ? "preparing"
+      : view ? "ready" : "idle"),
+    path: target,
+    hasTranscript,
+    expectsTranscript: target !== undefined && (hasTranscript || (view?.state.messageCount ?? summary?.messageCount) !== 0),
+    reason,
+  };
+}
+
+export function sameSessionOpenPhase(a: SessionOpenPhase, b: SessionOpenPhase): boolean {
+  return a.phase === b.phase && a.path === b.path && a.hasTranscript === b.hasTranscript
+    && a.expectsTranscript === b.expectsTranscript && a.reason === b.reason;
 }
 
 export function isMainReady(destination: MainDestination): boolean {

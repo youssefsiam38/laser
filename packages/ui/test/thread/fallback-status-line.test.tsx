@@ -68,12 +68,21 @@ const words = () => container.querySelector('[role="status"]')?.textContent?.tri
 
 it("never calls an opening session idle, including before its view exists", async () => {
   setSession(session());
-  app.state.sessionLoads = { "/s.jsonl": "opening" };
+  app.state.sessionLoads = { "/s.jsonl": { phase: "opening" } };
   await render();
   expect(words()).toBe("loading the conversation");
   app.state.current = undefined;
+  app.state.destination = { ...initialState.destination, phase: "resolving", target: { kind: "session", path: "/s.jsonl", visibleTab: "code" } };
   await render();
   expect(words()).toBe("loading the conversation");
+});
+
+it("reconnecting outranks a pending load", async () => {
+  setSession(session());
+  app.state.sessionLoads = { "/s.jsonl": { phase: "opening" } };
+  app.state.connection = "connecting";
+  await render();
+  expect(words()).toBe("reconnecting to the host");
 });
 
 it("says idle when nothing is happening, as it always has", async () => {
