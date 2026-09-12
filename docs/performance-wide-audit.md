@@ -665,3 +665,76 @@ private/cross-origin requests, cache reuse/activation and shell revalidation.
 Protocol/host/UI suites, identity and workspace build pass,
 `/tmp/f12-{protocol,host,ui,identity,build}.log`; UI test types and focused worker
 behavior checks also pass. This is not a full optional-view interaction matrix.
+
+### F19 — investigated; runtime reuse/recovery parallelism not implemented
+
+Added opt-in `packages/worker/test/startup-profile.test.ts`: real pinned engine,
+21 distinct saved sessions in one isolated project, default Subagents/Goals/MCP
+feature path (no configured MCP server), real resource loading and extension
+binding, local fake-provider model catalogue after every open. No provider
+request occurs. Opens/disposals remain sequential, one writer per session.
+Wrappers time real SDK operations; they do not substitute fake services.
+
+Two separate source-test processes, Node 24.11.1:
+
+| Operation | First probe | Verification probe |
+| --- | ---: | ---: |
+| First runtime open | 145.23 ms | 42.51 ms |
+| Next 20 opens, upper median | 27.94 ms | 6.92 ms |
+| Warm resource discovery, median | 1.15 ms | 0.39 ms |
+| Warm model/auth creation, median | 9.28 ms | 1.85 ms |
+| Warm extension binding, median | 0.78 ms | 0.23 ms |
+
+These are **not before/after optimization numbers**. OS/module caches and
+machine contention are not controlled; the first open excludes test/module
+import time and is not cold desktop launch. Model/auth create includes an
+internal refresh, so stage times are not additive. Full records, including
+SessionManager load, MCP setup and model refresh, are in
+`/tmp/perf-delivery-startup/{profile,profile-verified}.json`. Reproduce with
+`PERF_STARTUP=1 PERF_STARTUP_REPORT=/tmp/profile.json pnpm -F @lasercode/worker
+exec vitest run test/startup-profile.test.ts` under an isolated HOME and
+credential-free environment; ordinary suites skip this diagnostic.
+
+**Skip rationale:** warm immutable-resource discovery is already small. The
+larger work is mutable model/auth setup and refresh; the pinned engine's
+`core/agent-session-services.js:53–103` creates ModelRuntime, reloads extensions,
+registers their providers, then refreshes again. Dropping that refresh or sharing
+these services is not justified by this probe. `stable-sdk.ts:279–409` owns
+session-specific factories/provenance/settings. Recovery at
+`host/src/worker-pool.ts:274–292,524–545` remains sequential: this profile does
+not establish safe concurrent provider/extension registration. No speculative
+factory parallelism or preview persistence change was made. A real host recovery
+priority/concurrency and packaged-runtime proof would be a separate milestone,
+not an unmeasured speedup in this lane.
+
+Validation: opt-in real-engine profile and post-open model list pass twice;
+full lane suites/identity and final workspace verification are recorded in
+`/tmp/f19-*.log` and `/tmp/perf-delivery-verify.log`. No native package was built
+or installed; no packaged startup or user-session measurement is claimed.
+
+### Final lane gate and measurement limits
+
+`pnpm verify` **passes** on the combined lane: direction checks, workspace
+build/typechecks/tests and 42 release-orchestrator regressions. Explicit final
+package runs: protocol **111**, host **240**, UI **1,380 + one skipped**, worker
+**685 + four skipped**; the opt-in startup profile passed separately. Logs are
+`/tmp/f19-{build,protocol,host,ui,worker,identity}.log` and
+`/tmp/perf-delivery-verify.log`. Final diff/identity checks pass. The reference
+`docs/perf-chat-loading.md` remains untracked intentionally, as supplied by the
+orchestrator; it is not part of this lane's commits.
+
+Supplementary F07 handler probe against this worktree's built source: twenty
+17,040,000-byte full-scan/cancel pairs, **220.75 ms full-scan median vs 2.72 ms
+cancelled-handler median**, cancellation requested after 2 ms. This compares
+completed work with deliberately obsolete work stopped early, not faster query
+results. Raw samples `/tmp/perf-delivery-startup/search-handler.json` show
+substantial machine contention. Existing focused stream test separately proves
+closure after 65,536 bytes; do not combine those independent probes as one run.
+
+Remaining integration checks: the audit's complete phone/desktop/theme/live
+conversation and packaged-runtime matrix is not claimed here. F22 deliberately
+retains loaded caches and opts in at the first `session/load`; a new-only client
+still has legacy full delivery until that point. F07 does not preempt one huge
+JSON parse. F12 does not promise never-used optional modules offline. F19 rejects
+unproved runtime sharing/concurrent recovery. These are explicit boundaries,
+not hidden deletion of transcript, capture, question or model functionality.
