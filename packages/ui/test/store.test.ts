@@ -19,7 +19,7 @@ const pending = (id: string): PendingMessage => ({
   id,
   content: [{ type: "text", text: id }],
   text: id,
-  images: 0,
+  images: [],
   createdAt: "2026-09-10T00:00:00.000Z",
   state: "waiting",
 });
@@ -119,7 +119,7 @@ describe("applyUpdate", () => {
   });
 
   it("keeps an optimistic user block instead of duplicating it", () => {
-    let v = reduce({ ...initialState, open: { "/s.jsonl": view() } }, { type: "optimisticUser", path: "/s.jsonl", text: "hi", images: 0 }).open["/s.jsonl"]!;
+    let v = reduce({ ...initialState, open: { "/s.jsonl": view() } }, { type: "optimisticUser", path: "/s.jsonl", text: "hi", images: [] }).open["/s.jsonl"]!;
     v = run(v, [
       { kind: "message_start", role: "user" },
       { kind: "message_end", message: { role: "user", content: [{ type: "text", text: "hi" }] } },
@@ -130,7 +130,7 @@ describe("applyUpdate", () => {
 
   it("stamps a prompt's entry on its block the moment the engine writes it, and lends it to the tree", () => {
     const opened = { ...view(), entries: [{ type: "message", id: "u1", parentId: null, message: { role: "user", content: [] } }, { type: "message", id: "a1", parentId: "u1", message: { role: "assistant", content: [] } }], leafId: "a1" };
-    let v = reduce({ ...initialState, open: { "/s.jsonl": opened } }, { type: "optimisticUser", path: "/s.jsonl", text: "next", images: 0 }).open["/s.jsonl"]!;
+    let v = reduce({ ...initialState, open: { "/s.jsonl": opened } }, { type: "optimisticUser", path: "/s.jsonl", text: "next", images: [] }).open["/s.jsonl"]!;
     v = run(v, [
       { kind: "agent_start" },
       { kind: "message_start", role: "user" },
@@ -152,7 +152,7 @@ describe("applyUpdate", () => {
   });
 
   it("leaves a prompt without an entry to the ordinal lookup", () => {
-    let v = reduce({ ...initialState, open: { "/s.jsonl": view() } }, { type: "optimisticUser", path: "/s.jsonl", text: "hi", images: 0 }).open["/s.jsonl"]!;
+    let v = reduce({ ...initialState, open: { "/s.jsonl": view() } }, { type: "optimisticUser", path: "/s.jsonl", text: "hi", images: [] }).open["/s.jsonl"]!;
     v = run(v, [{ kind: "message_end", role: "user", message: { role: "user", content: [{ type: "text", text: "hi" }] } }]);
     expect(v.blocks[0]).not.toHaveProperty("entryId");
     expect(v.entries).toEqual([]);
@@ -204,13 +204,13 @@ describe("blocksFromEntries", () => {
   it("rebuilds user, assistant, tool call and result from Pi entries", () => {
     const blocks = blocksFromEntries([
       { type: "session", version: 3 },
-      { type: "message", message: { role: "user", content: [{ type: "text", text: "do it" }, { type: "image" }] } },
+      { type: "message", message: { role: "user", content: [{ type: "text", text: "do it" }, { type: "image", mimeType: "image/png", data: "cGlj" }] } },
       { type: "message", message: { role: "assistant", content: [{ type: "thinking", thinking: "t" }, { type: "text", text: "ok" }, { type: "toolCall", id: "c1", name: "bash", arguments: { command: "ls" } }] } },
       { type: "message", message: { role: "toolResult", toolCallId: "c1", toolName: "bash", content: [{ type: "text", text: "a b" }], isError: false } },
       { type: "model_change" },
     ]);
     expect(blocks.map((b) => b.kind)).toEqual(["user", "assistant", "tool"]);
-    expect(blocks[0]).toMatchObject({ text: "do it", images: 1 });
+    expect(blocks[0]).toMatchObject({ text: "do it", images: [{ type: "image", mimeType: "image/png", data: "cGlj" }] });
     // An entry without an id (a hand-written fixture) stamps nothing.
     expect(blocks[0]).not.toHaveProperty("entryId");
     expect(blocks[1]).toMatchObject({ text: "ok", thinking: "t" });

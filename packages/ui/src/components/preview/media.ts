@@ -99,6 +99,18 @@ export function previewKindFor(mediaType: string, path?: string): PreviewKind {
   return "none";
 }
 
+/** Text uploads: browsers often omit MIME types for source files. */
+export function attachmentMediaType(type: string, name: string): string | undefined {
+  const base = baseMediaType(type);
+  const kind = previewKindFor(base, name);
+  if (base !== "application/octet-stream" && ["text", "markdown", "diff"].includes(kind)) return kind === "markdown" ? "text/markdown" : base || "text/plain";
+  const extension = name.split(".").at(-1)?.toLowerCase() ?? "";
+  const types: Record<string, string> = { md: "text/markdown", markdown: "text/markdown", json: "application/json", yaml: "application/yaml", yml: "application/yaml", toml: "application/toml", diff: "text/x-diff", patch: "text/x-patch" };
+  if (types[extension]) return types[extension];
+  if (/^(txt|csv|tsv|xml|html|css|scss|less|js|jsx|mjs|cjs|ts|tsx|py|go|rs|sh|bash|zsh|java|c|h|cpp|hpp|rb|php|sql|svelte|vue|ini|conf|log|mdx)$/.test(extension) || /^(readme|license|dockerfile|makefile)$/i.test(name)) return "text/plain";
+  return undefined;
+}
+
 /** True when a body exists for this document. */
 export function isPreviewable(mediaType: string, path?: string): boolean {
   return previewKindFor(mediaType, path) !== "none";

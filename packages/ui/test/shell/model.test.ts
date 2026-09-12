@@ -124,7 +124,7 @@ describe("session rows", () => {
     });
     const withTool = view({
       blocks: [
-        { kind: "user", id: "u", text: "hi", images: 0 },
+        { kind: "user", id: "u", text: "hi", images: [] },
         { kind: "tool", id: "t", name: "edit", args: { path: "src/a.ts" }, done: true },
       ],
     });

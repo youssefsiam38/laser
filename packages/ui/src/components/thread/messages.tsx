@@ -1,6 +1,6 @@
 import { MESSAGE_METADATA_NS } from "@lasercode/protocol";
 import { MessagePrimitive, useAui, useAuiState, type MessageState } from "@assistant-ui/react";
-import type { ModelRef, ThinkingLevel } from "@lasercode/protocol";
+import type { ImageContent, ModelRef, ThinkingLevel } from "@lasercode/protocol";
 import { Bot, Info, Target, TriangleAlert } from "lucide-react";
 import { GoalRecord } from "./GoalRecord.js";
 import { AgentCompletion } from "./AgentCompletion.js";
@@ -10,10 +10,11 @@ import { AGENT_COMPLETION_DATA_PART, AGENT_EVENT_DATA_PART, GOAL_DATA_PART, TASK
 import type { GoalRecord as GoalRecordData } from "@/runtime/goal-history";
 import { memo, useContext, useMemo, useRef, useState } from "react";
 import { FileViewer, type FileViewerSource } from "./FileViewer.js";
-import { attachmentFile } from "@/components/preview/media";
+import { attachmentFile, describeMediaType } from "@/components/preview/media";
+import { attachedFileContent, wrapFileAttachment, type AttachedFile } from "@/runtime/attachments";
+import { formatBytes } from "@/format";
 import { FindSelectionContext, SearchMessageContext, useSearchReveal } from "./search-state.js";
 
-import { UserMessageAttachments } from "@/components/assistant-ui/elements/attachment.aui";
 import { MessageTimestamp } from "@/components/assistant-ui/elements/message-timestamp";
 import { DirectiveString } from "@/components/assistant-ui/elements/directive-text.aui";
 import { EditMessage } from "@/components/assistant-ui/elements/edit-message";
@@ -22,7 +23,7 @@ import { File } from "@/components/assistant-ui/elements/file";
 import { Image } from "@/components/assistant-ui/elements/image";
 import { MarkdownText } from "@/components/assistant-ui/elements/markdown-text";
 import { MessageActions } from "@/components/assistant-ui/elements/message-actions";
-import { MessageAttachments, type MessageAttachmentItem } from "@/components/assistant-ui/elements/message-attachment";
+import { MessageImages, MessageAttachments, type MessageAttachmentItem } from "@/components/assistant-ui/elements/message-attachment";
 import { MessageBranches } from "@/components/assistant-ui/elements/message-branches";
 import { AssistantBody, MessageFooter, UserBubble, hoverReveal } from "@/components/assistant-ui/elements/message-pair";
 import { MessageTiming } from "@/components/assistant-ui/elements/message-timing.aui";
@@ -51,7 +52,8 @@ import { ApiRequestDialog } from "@/components/logs/ApiRequestDialog";
 interface LaserMeta {
   /** `custom`: a message the transcript draws itself (an agent event, a task exit). */
   kind?: "user" | "turn" | "notice" | "custom";
-  images?: number;
+  images?: readonly ImageContent[];
+  files?: readonly AttachedFile[];
   optimistic?: boolean;
   userOrdinal?: number;
   /** Pi's entry for a persisted prompt; see `Block.entryId`. */
@@ -70,6 +72,8 @@ const laserMeta = (message: MessageState): LaserMeta =>
 const MESSAGE_ROOT = "[content-visibility:auto] [contain-intrinsic-size:auto_320px]";
 
 const EMPTY_ENTRIES: readonly unknown[] = [];
+const EMPTY_IMAGES: readonly ImageContent[] = [];
+const EMPTY_FILES: readonly AttachedFile[] = [];
 
 /** The whole session tree, as Pi persisted it; stable between hydrations. */
 const useEntries = (): readonly unknown[] => useLaserState((s) => (s.current ? s.open[s.current]?.entries : undefined)) ?? EMPTY_ENTRIES;
@@ -131,7 +135,8 @@ export function UserMessage() {
   const aui = useAui();
   const { actions } = useLaserStable();
   const text = useMessageText();
-  const images = useAuiState((s) => laserMeta(s.message).images ?? 0);
+  const images = useAuiState((s) => laserMeta(s.message).images ?? EMPTY_IMAGES);
+  const files = useAuiState((s) => laserMeta(s.message).files ?? EMPTY_FILES);
   const optimistic = useAuiState((s) => laserMeta(s.message).optimistic === true);
   const goalSetter = useAuiState((s) => laserMeta(s.message).goalSetter === true);
   // A primitive, so the selector keeps its identity across re-renders.
@@ -172,11 +177,12 @@ export function UserMessage() {
   const { quote, rest } = useMemo(() => splitLeadingQuote(text), [text]);
   const [imagePreview, setImagePreview] = useState<FileViewerSource>();
   const attachmentButton = useRef<HTMLElement | null>(null);
-  const imageBytes = useMemo(() => imagePartsOf(entries, entryId), [entries, entryId]);
+  const imageBytes = useMemo(() => images.length ? images : imagePartsOf(entries, entryId), [images, entries, entryId]);
   const attachments = useMemo<MessageAttachmentItem[]>(
-    () => Array.from({ length: images }, (_, i) => ({ id: `image-${i}`, name: images === 1 ? "Image" : `Image ${i + 1}`, kind: "image" })),
-    [images],
+    () => files.map((file, index) => ({ id: String(index), name: file.name, kind: "document", detail: `${describeMediaType(file.mediaType)} · ${formatBytes(file.size)}` })),
+    [files],
   );
+  const editContent = () => [{ type: "text" as const, text: [draft, ...files.map(wrapFileAttachment)].filter(Boolean).join("\n\n") }, ...imageBytes];
 
   // The engine will not move the leaf while a turn streams, so during one
   // each of these asks the worker to stop the reply first and then move —
@@ -211,12 +217,12 @@ export function UserMessage() {
         // it does not wait in the tray (D-149).
         if (!(await actions.navigate(entryId, move))) return;
         setEditing(false);
-        await actions.send([{ type: "text", text: draft }], "prompt");
+        await actions.send(editContent(), "prompt");
         return;
       }
       setEditing(false);
       await actions.fork(entryId, move);
-      await actions.send([{ type: "text", text: draft }], "prompt");
+      await actions.send(editContent(), "prompt");
       clearHandedBackPrompt(aui, text);
     } finally {
       setSending(false);
@@ -249,21 +255,21 @@ export function UserMessage() {
           >
             {parentPath ? <ParentTask parentPath={parentPath} /> : null}
             {goalSetter && <span className="mb-1 flex items-center gap-1.5 text-xs font-medium text-ink-2"><Target className="size-3.5 text-live" aria-hidden="true" />Goal set</span>}
+            <MessageImages images={imageBytes} onOpen={(index, trigger) => {
+              attachmentButton.current = trigger;
+              setImagePreview({ file: attachmentFile(imageBytes[index]!, `Image ${index + 1}`) });
+            }} />
             {quote ? <QuoteReply text={quote} /> : null}
             {rest ? (
               <p className="wrap-break-word whitespace-pre-wrap">
                 <DirectiveString text={rest} />
               </p>
             ) : null}
-            <MessageAttachments attachments={attachments} className="self-end" onOpen={imageBytes.length === images && images > 0 ? (id, trigger) => {
-              const index = Number(id.slice("image-".length));
-              const image = imageBytes[index];
-              if (!image) return;
+            <MessageAttachments attachments={attachments} className="mt-2 self-end" onOpen={(id, trigger) => {
               attachmentButton.current = trigger;
-              setImagePreview({ file: attachmentFile(image, images === 1 ? "Image" : `Image ${index + 1}`) });
-            } : undefined} />
+              setImagePreview({ file: attachedFileContent(files[Number(id)]!) });
+            }} />
             {imagePreview ? <FileViewer source={imagePreview} open onOpenChange={open => { if (!open) setImagePreview(undefined); }} returnFocus={attachmentButton.current} /> : null}
-            <UserMessageAttachments />
           </UserBubble>
         )}
         <MessageFooter className="ms-0 me-0 h-auto min-h-6 justify-end">

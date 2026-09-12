@@ -2,8 +2,8 @@
  * Pure projection: laser `SessionView` blocks → assistant-ui `ThreadMessageLike[]`.
  *
  * Rules (see PLAN M1-T10 / DESIGN.md "Transcript"):
- * - A `user` block becomes one user message (text part, plus a short note part
- *   when the prompt carried images — the store keeps only the count). A prompt
+ * - A `user` block becomes one user message with prose and retained attachment
+ *   metadata (images and canonical text-file wrappers). A prompt
  *   a parent agent sent into a child carries the store's `sentBy` on its
  *   metadata, so the bubble can say whose task it is; the text is never
  *   rewritten, wrapped or shortened for it.
@@ -40,6 +40,7 @@ import { namespaced, AGENT_EVENT_MESSAGE_TYPE, MESSAGE_METADATA_NS, TASK_EVENT_M
 import type { ThreadMessageLike } from "@assistant-ui/react";
 import type { AgentRun, MessageSpeaker, StopReason, UiDialogRequest, Usage } from "@lasercode/protocol";
 import type { Block, SessionView } from "../store.js";
+import { splitAttachedFiles } from "./attachments.js";
 import { goalRecords, goalForPrompt, type GoalRecord } from "./goal-history.js";
 
 /** `data` part name used for transcript notices. */
@@ -221,7 +222,7 @@ const createdAtOf = (block: Block): Date | undefined => {
   return Number.isNaN(date.getTime()) ? undefined : date;
 };
 
-const imagesNote = (count: number): string => (count === 1 ? "1 image attached" : `${count} images attached`);
+
 
 const isTurnBlock = (block: Block): block is Extract<Block, { kind: "assistant" | "tool" }> =>
   block.kind === "assistant" || block.kind === "tool";
@@ -346,8 +347,8 @@ const customMessage = (block: Extract<Block, { kind: "custom" }>): ThreadMessage
 
 const userMessage = (block: Extract<Block, { kind: "user" }>, ordinal: number, goal?: GoalRecord): ThreadMessageLike => {
   const content: ProjectedContentPart[] = [];
-  if (block.text.trim()) content.push({ type: "text", text: block.text });
-  if (block.images > 0) content.push({ type: "text", text: imagesNote(block.images) });
+  const attached = splitAttachedFiles(block.text);
+  if (attached.text.trim()) content.push({ type: "text", text: attached.text });
   const createdAt = createdAtOf(block);
   return {
     id: block.id,
@@ -359,6 +360,7 @@ const userMessage = (block: Extract<Block, { kind: "user" }>, ordinal: number, g
         [MESSAGE_METADATA_NS]: {
           kind: "user",
           images: block.images,
+          files: attached.files,
           optimistic: block.optimistic === true,
           userOrdinal: ordinal,
           ...(block.entryId !== undefined ? { entryId: block.entryId } : {}),

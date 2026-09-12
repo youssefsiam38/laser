@@ -8,6 +8,7 @@ import { LaserStoreProvider, createStateStore } from "../../src/runtime/LaserPro
 import { projectMessages } from "../../src/runtime/projection.js";
 import { blocksFromEntries, initialState, reduce } from "../../src/store.js";
 import { sessionState } from "../agents/fixtures.js";
+import { wrapFileAttachment } from "../../src/runtime/attachments.js";
 import { ThreadMessage } from "../../src/components/thread/messages.js";
 
 const stable = vi.hoisted(() => ({ client: { request: vi.fn(async () => ({ models: [] })) }, actions: { listModels: vi.fn(async () => []), send: vi.fn(), openSession: vi.fn() } }));
@@ -54,8 +55,10 @@ it.each([false, true])("offers an edited file only after a successful edit (fail
 it("opens an image attachment from the matching persisted entry without reading a file", async () => {
   const png = "iVBORw0KGgo=";
   await mount([{ id: "u", parentId: null, type: "message", message: { role: "user", content: [{ type: "text", text: "Look at this" }, { type: "image", mimeType: "image/png", data: png }] } }], "u");
-  const imageButton = container.querySelector<HTMLButtonElement>('[data-slot="message-attachments"] button')!;
+  const imageButton = container.querySelector<HTMLButtonElement>('[data-slot="message-images"] button')!;
   expect(imageButton).not.toBeNull();
+  expect(container.querySelector('[data-slot="message-image"]')?.getAttribute("alt")).toBe("Image 1");
+  expect(container.textContent).not.toContain("image attached");
   // Safari-style pointer activation does not focus the trigger before opening.
   expect(document.activeElement).not.toBe(imageButton);
   await act(async () => { imageButton.click(); });
@@ -65,4 +68,26 @@ it("opens an image attachment from the matching persisted entry without reading 
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
   expect(document.querySelector('[role="dialog"]')).toBeNull();
   expect(document.activeElement).toBe(imageButton);
+});
+
+it("renders three retained images above the words", async () => {
+  await mount([{ id: "u", type: "message", message: { role: "user", content: [{ type: "text", text: "Three pictures" }, ...[1, 2, 3].map(() => ({ type: "image", mimeType: "image/png", data: "cGlj" }))] } }], "u");
+  const images = [...container.querySelectorAll('[data-slot="message-image"]')];
+  expect(images.map(image => image.getAttribute("alt"))).toEqual(["Image 1", "Image 2", "Image 3"]);
+  expect(images[0]!.compareDocumentPosition(container.querySelector('[data-role="user"] p')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+it("hides the wrapper, opens attached file content and returns focus to its chip", async () => {
+  const content = "# Attached document";
+  const wrapper = wrapFileAttachment({ name: "notes.md", mediaType: "text/markdown", size: content.length, content });
+  await mount([{ id: "u", type: "message", message: { role: "user", content: [{ type: "text", text: `Read this\n\n${wrapper}` }] } }], "u");
+  expect(container.querySelector('[data-role="user"] p')?.textContent).toBe("Read this");
+  expect(container.textContent).not.toContain("attached-file");
+  const chip = container.querySelector<HTMLButtonElement>('[data-slot="file-chip"]')!;
+  expect(chip.textContent).toContain("notes.md");
+  await act(async () => chip.click());
+  expect(document.querySelector('[role="dialog"] h1')?.textContent).toBe("Attached document");
+  expect(stable.client.request.mock.calls.some(call => (call as unknown[])[0] === "pi/project/read")).toBe(false);
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+  expect(document.activeElement).toBe(chip);
 });

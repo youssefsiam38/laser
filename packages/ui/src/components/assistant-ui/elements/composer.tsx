@@ -185,7 +185,7 @@ export function ComposerAttachmentTile() {
   });
   const [objectUrl, setObjectUrl] = useState<string | undefined>(undefined);
   useEffect(() => {
-    if (!file) return;
+    if (!file || !file.type.startsWith("image/")) return;
     const url = URL.createObjectURL(file);
     setObjectUrl(url);
     return () => {
@@ -236,7 +236,7 @@ export function ComposerAttachButton({ className, ...props }: Omit<TooltipIconBu
   const supported = useAuiState((s) => s.thread.capabilities.attachments);
   return (
     <ComposerPrimitive.AddAttachment asChild>
-      <TooltipIconButton tooltip={supported ? "Attach image" : "Attachments unavailable"} side="top" className={className} {...props}>
+      <TooltipIconButton tooltip={supported ? "Attach file" : "Attachments unavailable"} side="top" className={className} {...props}>
         <Paperclip />
       </TooltipIconButton>
     </ComposerPrimitive.AddAttachment>

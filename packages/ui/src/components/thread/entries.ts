@@ -97,7 +97,7 @@ export function userEntryIds(entries: readonly unknown[], leafId?: string | null
 }
 
 /** Image bytes belong to the exact persisted prompt, never a neighboring branch. */
-export function imagePartsOf(entries: readonly unknown[], entryId: string | undefined): { mimeType: string; data: string }[] {
+export function imagePartsOf(entries: readonly unknown[], entryId: string | undefined): { type: "image"; mimeType: string; data: string }[] {
   if (entryId === undefined) return [];
   for (const raw of entries) {
     const entry = asEntry(raw);

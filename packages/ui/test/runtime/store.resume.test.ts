@@ -133,7 +133,7 @@ describe("hydrate", () => {
 describe("optimistic user block", () => {
   it("reconciles the real message even when deltas landed in between", () => {
     const v = run(withView({ running: true }), [
-      { type: "optimisticUser", path: "/s.jsonl", id: "o1", text: "stop", images: 0 },
+      { type: "optimisticUser", path: "/s.jsonl", id: "o1", text: "stop", images: [] },
       update(1, { kind: "text_delta", delta: "still going", contentIndex: 0 }),
       update(2, { kind: "message_start", role: "user" }),
       update(3, { kind: "message_end", message: { role: "user", content: [{ type: "text", text: "stop" }] } }),
@@ -144,7 +144,7 @@ describe("optimistic user block", () => {
 
   it("rolls the block back when the prompt never reached the worker", () => {
     const v = run(withView(), [
-      { type: "optimisticUser", path: "/s.jsonl", id: "o1", text: "hi", images: 0 },
+      { type: "optimisticUser", path: "/s.jsonl", id: "o1", text: "hi", images: [] },
       { type: "optimisticFailed", path: "/s.jsonl", id: "o1" },
     ]);
     expect(v.blocks).toHaveLength(0);
@@ -152,9 +152,9 @@ describe("optimistic user block", () => {
 
   it("leaves a settled user block alone when a later prompt fails", () => {
     const v = run(withView(), [
-      { type: "optimisticUser", path: "/s.jsonl", id: "o1", text: "first", images: 0 },
+      { type: "optimisticUser", path: "/s.jsonl", id: "o1", text: "first", images: [] },
       update(1, { kind: "message_end", message: { role: "user", content: [{ type: "text", text: "first" }] } }),
-      { type: "optimisticUser", path: "/s.jsonl", id: "o2", text: "second", images: 0 },
+      { type: "optimisticUser", path: "/s.jsonl", id: "o2", text: "second", images: [] },
       { type: "optimisticFailed", path: "/s.jsonl", id: "o2" },
     ]);
     expect(v.blocks).toHaveLength(1);

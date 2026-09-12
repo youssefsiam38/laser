@@ -81,7 +81,7 @@ describe("projectMessages — streaming order", () => {
 
   it("uses block ids as message ids so a streaming turn keeps identity", () => {
     const blocks: Block[] = [
-      { kind: "user", id: "b1", text: "hi", images: 0 },
+      { kind: "user", id: "b1", text: "hi", images: [] },
       { kind: "assistant", id: "b2", text: "a", thinking: "", streaming: true },
       { kind: "tool", id: "t9", name: "bash", args: {}, done: false },
     ];
@@ -89,22 +89,21 @@ describe("projectMessages — streaming order", () => {
     expect(messages.map((m) => m.id)).toEqual(["b1", "b2"]);
   });
 
-  it("notes an image count on the user message", () => {
+  it("keeps image bytes out of the prose", () => {
     const { messages } = projectMessages({
-      blocks: [{ kind: "user", id: "b1", text: "look", images: 2 }],
+      blocks: [{ kind: "user", id: "b1", text: "look", images: [{ type: "image", mimeType: "image/png", data: "cGlj" }] }],
       running: false,
       dialogs: [],
     });
     expect(parts(messages[0]!)).toEqual([
       { type: "text", text: "look" },
-      { type: "text", text: "2 images attached" },
     ]);
   });
 
   it("carries createdAt when a block was stamped", () => {
     const at = "2026-09-05T10:00:00.000Z";
     const { messages } = projectMessages({
-      blocks: [{ kind: "user", id: "b1", at, text: "hi", images: 0 }],
+      blocks: [{ kind: "user", id: "b1", at, text: "hi", images: [] }],
       running: false,
       dialogs: [],
     });
@@ -116,7 +115,7 @@ describe("projectMessages — running status", () => {
   it("marks only the last streaming text part running, and only on the tail message", () => {
     const blocks: Block[] = [
       { kind: "assistant", id: "b1", text: "first", thinking: "", streaming: false },
-      { kind: "user", id: "b2", text: "again", images: 0 },
+      { kind: "user", id: "b2", text: "again", images: [] },
       { kind: "assistant", id: "b3", text: "thinking out loud", thinking: "why", streaming: true },
     ];
     const { messages } = projectMessages({ blocks, running: true, dialogs: [] });
@@ -241,12 +240,12 @@ describe("projectMessages — notices", () => {
 describe("shareProjectedMessages", () => {
   it("reuses the previous array when nothing changed", () => {
     const a = projectMessages({
-      blocks: [{ kind: "user", id: "b1", text: "hi", images: 0 }],
+      blocks: [{ kind: "user", id: "b1", text: "hi", images: [] }],
       running: false,
       dialogs: [],
     }).messages;
     const b = projectMessages({
-      blocks: [{ kind: "user", id: "b1", text: "hi", images: 0 }],
+      blocks: [{ kind: "user", id: "b1", text: "hi", images: [] }],
       running: false,
       dialogs: [],
     }).messages;
@@ -256,7 +255,7 @@ describe("shareProjectedMessages", () => {
   it("reuses untouched messages when only the tail changed", () => {
     const previous = projectMessages({
       blocks: [
-        { kind: "user", id: "b1", text: "hi", images: 0 },
+        { kind: "user", id: "b1", text: "hi", images: [] },
         { kind: "assistant", id: "b2", text: "a", thinking: "", streaming: true },
       ],
       running: true,
@@ -264,7 +263,7 @@ describe("shareProjectedMessages", () => {
     }).messages;
     const next = projectMessages({
       blocks: [
-        { kind: "user", id: "b1", text: "hi", images: 0 },
+        { kind: "user", id: "b1", text: "hi", images: [] },
         { kind: "assistant", id: "b2", text: "ab", thinking: "", streaming: true },
       ],
       running: true,

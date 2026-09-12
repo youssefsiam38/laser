@@ -207,7 +207,7 @@ describe("sendToSession", () => {
     const dispatch = vi.fn<(action: Action) => void>();
     await expect(sendToSession(client, "/s.jsonl", content, "prompt", dispatch)).resolves.toBe("prompt");
     expect(client.calls.map((c) => c.method)).toEqual(["session/prompt"]);
-    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: "optimisticUser", path: "/s.jsonl", text: "hi", images: 0 }));
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: "optimisticUser", path: "/s.jsonl", text: "hi", images: [] }));
   });
 
   it("forwards tentative first-turn configuration on the prompt", async () => {
@@ -372,7 +372,7 @@ describe("createThreadAdapter", () => {
     adapter.queue!.enqueue(message());
     await flush();
     expect(client.calls.map((c) => c.method)).toEqual(["session/prompt"]);
-    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: "optimisticUser", path: "/s.jsonl", text: "hello", images: 0 }));
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: "optimisticUser", path: "/s.jsonl", text: "hello", images: [] }));
   });
 
   it("queue.steer steers and queue.enqueue trays the message while running", async () => {
@@ -565,7 +565,7 @@ describe("createThreadAdapter", () => {
 
   it("projects the view into messages", () => {
     const { adapter } = build({
-      view: view({ blocks: [{ kind: "user", id: "b1", text: "hi", images: 0 }] }),
+      view: view({ blocks: [{ kind: "user", id: "b1", text: "hi", images: [] }] }),
     });
     expect(adapter.messages).toHaveLength(1);
     expect(adapter.convertMessage!(adapter.messages![0]!, 0)).toBe(adapter.messages![0]);

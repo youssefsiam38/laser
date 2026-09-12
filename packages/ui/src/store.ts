@@ -7,7 +7,9 @@
  * of transcript state). Past sessions hydrate from `pi/session/entries`.
  */
 import { AGENT_EVENT_MESSAGE_TYPE, SESSION_FALLBACK_ENTRY_TYPE, SESSION_RUN_ENTRY_TYPE, TASK_EVENT_MESSAGE_TYPE, failureWording, isTerminalRunStatus } from "@lasercode/protocol";
+import { imagesOfContent } from "./runtime/attachments.js";
 import type {
+  ImageContent,
   AgentEvent,
   BackgroundTask,
   AgentModelChoice,
@@ -61,7 +63,7 @@ export type Block =
       id: string;
       at?: string;
       text: string;
-      images: number;
+      images: ImageContent[];
       optimistic?: boolean;
       sentBy?: SentByParent;
       /**
@@ -290,7 +292,7 @@ export type Action =
    */
   | { type: "resync"; path: string; lastSeq: number }
   | { type: "forked"; from: string; state: SessionState }
-  | { type: "optimisticUser"; path: string; text: string; images: number; id?: string }
+  | { type: "optimisticUser"; path: string; text: string; images: ImageContent[]; id?: string }
   /** A prompt never reached the worker: drop the block that stood in for it. */
   | { type: "optimisticFailed"; path: string; id: string }
   | { type: "dialogAnswered"; id: string; path?: string }
@@ -813,7 +815,7 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
         return {
           ...v,
           pendingSentBy: undefined,
-          blocks: [...v.blocks, { kind: "user", id: nextBlockId(), text: "", images: 0, ...(sentBy ? { sentBy } : {}) }],
+          blocks: [...v.blocks, { kind: "user", id: nextBlockId(), text: "", images: [], ...(sentBy ? { sentBy } : {}) }],
         };
       }
       if (u.role === "assistant") {
@@ -859,7 +861,7 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
         const index = optimistic !== -1 ? optimistic : v.blocks.at(-1)?.kind === "user" ? v.blocks.length - 1 : -1;
         if (index === -1) return v;
         const block = v.blocks[index] as Extract<Block, { kind: "user" }>;
-        const blocks = replaceAt(v.blocks, index, { ...block, text: text || block.text, optimistic: false, ...(u.entry ? { entryId: u.entry.id } : {}) });
+        const blocks = replaceAt(v.blocks, index, { ...block, text: text || block.text, images: imagesOfContent(msg.content), optimistic: false, ...(u.entry ? { entryId: u.entry.id } : {}) });
         // The prompt's place in the tree arrives with it, so its actions (fork,
         // jump, edit, versions, the request it produced) work while the turn
         // runs. The tree holds a copy until the next full read: the entry is
@@ -1076,7 +1078,7 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null, na
         id: nextBlockId(),
         ...(at ? { at } : {}),
         text: textOf(m.content),
-        images: countImages(m.content),
+        images: imagesOfContent(m.content),
         ...(sentBy ? { sentBy } : {}),
         ...(typeof e.id === "string" ? { entryId: e.id } : {}),
       });
@@ -1246,8 +1248,4 @@ function entryTimestamp(value: unknown): string | undefined {
     return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
   }
   return undefined;
-}
-
-function countImages(content: unknown): number {
-  return Array.isArray(content) ? content.filter((c) => (c as { type?: string })?.type === "image").length : 0;
 }

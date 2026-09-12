@@ -129,7 +129,7 @@ describe("live, while the child is open", () => {
     const userRun = prompt(started(open(), { origin: "user", parent: null }), 1, "Count them again.");
     expect(userBlocks(userRun.open[CHILD]!.blocks)[0]!.sentBy).toBeUndefined();
 
-    let typed = reduce(open(), { type: "optimisticUser", path: CHILD, text: "Mine.", images: 0, id: "opt" });
+    let typed = reduce(open(), { type: "optimisticUser", path: CHILD, text: "Mine.", images: [], id: "opt" });
     typed = prompt(started(typed), 1, "Mine.");
     expect(userBlocks(typed.open[CHILD]!.blocks)[0]!.sentBy).toBeUndefined();
   });
@@ -149,8 +149,8 @@ describe("live, while the child is open", () => {
 describe("the projection", () => {
   it("stamps the attribution on the message metadata and leaves the text alone", () => {
     const blocks: Block[] = [
-      { kind: "user", id: "b1", text: TASK, images: 0, sentBy: { parentPath: PARENT, runId: "r1" } },
-      { kind: "user", id: "b2", text: "Mine.", images: 0 },
+      { kind: "user", id: "b1", text: TASK, images: [], sentBy: { parentPath: PARENT, runId: "r1" } },
+      { kind: "user", id: "b2", text: "Mine.", images: [] },
     ];
     const { messages } = projectMessages({ blocks, running: false, dialogs: [] });
     expect(messages[0]!.content).toEqual([{ type: "text", text: TASK }]);
@@ -193,7 +193,7 @@ describe("the bubble", () => {
     return act(async () => root.render(<LaserStoreProvider store={store}><TooltipProvider><Fixture /></TooltipProvider></LaserStoreProvider>));
   };
 
-  const attributed: Block = { kind: "user", id: "b1", text: TASK, images: 0, sentBy: { parentPath: PARENT, runId: "r1" } };
+  const attributed: Block = { kind: "user", id: "b1", text: TASK, images: [], sentBy: { parentPath: PARENT, runId: "r1" } };
 
   it("names the parent, opens it, and keeps the whole task readable and searchable", async () => {
     await mount([attributed]);
@@ -222,7 +222,7 @@ describe("the bubble", () => {
   });
 
   it("leaves the person's own message exactly as it was", async () => {
-    await mount([{ kind: "user", id: "b2", text: "Mine.", images: 0 }]);
+    await mount([{ kind: "user", id: "b2", text: "Mine.", images: [] }]);
     const bubble = container.querySelector<HTMLElement>('[data-slot="user-bubble"]')!;
     expect(bubble.hasAttribute("data-sent-by")).toBe(false);
     expect(container.querySelector('[data-slot="parent-task"]')).toBeNull();

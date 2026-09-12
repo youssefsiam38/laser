@@ -40,7 +40,10 @@
  *
  * Everything above `createThreadAdapter` is pure and unit-tested.
  */
-import { MessageNotSentError, SimpleImageAttachmentAdapter } from "@assistant-ui/react";
+import { MessageNotSentError, SimpleImageAttachmentAdapter, type AttachmentAdapter } from "@assistant-ui/react";
+import { toast } from "sonner";
+import { attachmentMediaType } from "@/components/preview/media";
+import { ATTACHMENT_SIZE_MESSAGE, MAX_ATTACHMENT_BYTES, imagesOfContent, splitAttachedFiles, wrapFileAttachment } from "./attachments.js";
 import type {
   AppendMessage,
   ExternalStoreAdapter,
@@ -282,7 +285,7 @@ export async function sendToSession(
     path,
     id: optimisticId,
     text: textOfContentBlocks(content),
-    images: imageCountOfContentBlocks(content),
+    images: imagesOfContent(content),
   });
   let result: { accepted: boolean };
   try {
@@ -337,13 +340,15 @@ export async function restoreUnsentMessage(
     .filter((part): part is Extract<AppendMessage["content"][number], { type: "text" }> => part.type === "text")
     .map((part) => part.text)
     .join("\n\n");
-  if (text) composer.setText(text);
+  const parsed = splitAttachedFiles(text);
+  if (parsed.text) composer.setText(parsed.text);
+  const restoredFiles = parsed.files.map(file => composer.addAttachment({ id: crypto.randomUUID(), type: "document", name: file.name, contentType: file.mediaType, content: [{ type: "text", text: wrapFileAttachment(file) }] }));
   // `addAttachment` with content (not a File) is synchronous in effect and
   // marks the attachment complete; it was accepted once already, so a refusal
   // here is not a state the person can reach — settle rather than throw so one
   // odd attachment never hides the reason the send failed.
   await Promise.allSettled(
-    (message.attachments ?? []).flatMap((attachment) =>
+    [...restoredFiles, ...(message.attachments ?? []).flatMap((attachment) =>
       attachment.content
         ? [composer.addAttachment({
             id: attachment.id,
@@ -353,7 +358,7 @@ export async function restoreUnsentMessage(
             content: attachment.content,
           })]
         : [],
-    ),
+    )],
   );
   return true;
 }
@@ -446,7 +451,31 @@ export interface ThreadAdapterDeps {
  * calls `add`/`send`/`remove`, and a stable identity keeps `capabilities` from
  * churning on each render.
  */
-const attachmentAdapter = new SimpleImageAttachmentAdapter();
+/** Images retain the native adapter; bounded text files become canonical prompt text. */
+export class ConversationAttachmentAdapter implements AttachmentAdapter {
+  accept = "*";
+  private images = new SimpleImageAttachmentAdapter();
+  async add({ file }: { file: File }) {
+    if (file.type.startsWith("image/")) return this.images.add({ file });
+    const refuse = (message: string): never => { toast.error(message); throw new Error(message); };
+    const mediaType = attachmentMediaType(file.type, file.name);
+    if (!mediaType) return refuse("This file format can’t be attached. Attach an image or a text file instead.");
+    if (file.size > MAX_ATTACHMENT_BYTES) return refuse(ATTACHMENT_SIZE_MESSAGE);
+    let content: string;
+    try { content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(await file.arrayBuffer()); }
+    catch { return refuse("This file isn’t UTF-8 text. Save a text copy and attach it again."); }
+    if (content.includes("\0")) return refuse("Binary files can’t be attached. Attach an image or a text file instead.");
+    return { id: crypto.randomUUID(), type: "document" as const, name: file.name, contentType: mediaType, file,
+      status: { type: "requires-action" as const, reason: "composer-send" as const },
+      content: [{ type: "text" as const, text: wrapFileAttachment({ name: file.name, mediaType, size: new TextEncoder().encode(content).length, content }) }] };
+  }
+  async send(attachment: Parameters<AttachmentAdapter["send"]>[0]) {
+    if (attachment.type === "image") return this.images.send(attachment);
+    return { ...attachment, status: { type: "complete" as const }, content: attachment.content ?? [] };
+  }
+  async remove() { /* Files remain owned by the browser; there is no upload to delete. */ }
+}
+const attachmentAdapter = new ConversationAttachmentAdapter();
 
 export function createThreadAdapter(deps: ThreadAdapterDeps): ExternalStoreAdapter<ThreadMessageLike> {
   const projection = deps.projection ?? projectSessionView(deps.view);

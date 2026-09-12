@@ -87,7 +87,7 @@ const update = (u: SessionUpdate) => {
 
 /** A prompt goes in and its turn starts: the shape of every send. */
 const promptTaken = (text: string, entry?: { id: string; parentId: string | null }) => {
-  store.dispatch({ type: "optimisticUser", path: SESSION, text, images: 0 });
+  store.dispatch({ type: "optimisticUser", path: SESSION, text, images: [] });
   update({ kind: "agent_start" });
   update({ kind: "message_start", role: "user" });
   update({ kind: "message_end", role: "user", message: { role: "user", content: [{ type: "text", text }] }, ...(entry ? { entry } : {}) });
@@ -357,7 +357,7 @@ describe("the newest prompt while its turn runs", () => {
   it("gives a prompt the engine has not taken yet nothing to act on", async () => {
     open([msg("u1", null, "user", "explore the repo"), msg("a1", "u1", "assistant", "three packages")], "a1");
     await mount();
-    await dispatch(() => store.dispatch({ type: "optimisticUser", path: SESSION, text: "list the tests", images: 0 }));
+    await dispatch(() => store.dispatch({ type: "optimisticUser", path: SESSION, text: "list the tests", images: [] }));
     const newest = userRoots().at(-1)!;
     expect(newest.dataset["optimistic"]).toBe("true");
     expect(control(newest, "Edit")).toBeUndefined();

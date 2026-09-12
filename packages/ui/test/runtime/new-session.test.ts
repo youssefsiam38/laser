@@ -200,7 +200,7 @@ describe("New session", () => {
 
   it("creates a new chat after an optimistic first send even with a stale zero count", async () => {
     const f = fixture();
-    f.add("/started").blocks.push({ kind: "user", id: "pending", text: "hello", images: 0, optimistic: true });
+    f.add("/started").blocks.push({ kind: "user", id: "pending", text: "hello", images: [], optimistic: true });
     f.state.sessions = [summary("/started")];
     await expect(f.launch("/one")).resolves.toBe("/new-1");
   });
