@@ -376,11 +376,14 @@ export class HostServer {
       ...(options.workerIdleMs !== undefined ? { idleMs: options.workerIdleMs } : {}),
       ...(options.workerSweepMs !== undefined ? { sweepMs: options.workerSweepMs } : {}),
       // A worker's first request already sees the agent definitions.
-      prime: async (client, cwd) => {
+      prime: async (client, cwd, speculative) => {
         await client.request("agents/sync", { snapshot: this.agents.snapshot() });
         // Naming must not wait for a sign-in this run may never see. The first
         // worker to come up benchmarks Namer, after priming so nothing that
         // opened this worker waits on it.
+        if (!speculative) setImmediate(() => void this.qualifyNamer(cwd, client));
+      },
+      onPreparedUse: (client, cwd) => {
         setImmediate(() => void this.qualifyNamer(cwd, client));
       },
       onNotification: (cwd, n) => {
@@ -403,6 +406,15 @@ export class HostServer {
           this.runs.workerLost(info.cwd);
         }
         this.logs?.observeWorkerStatus(info);
+      },
+      prepareTrust: (cwd) => {
+        // Catalog membership is necessary, never sufficient intent. No mkdir,
+        // trust question, environment hook or Namer qualification on a hint.
+        const project = this.projects.list().find((item) => item.cwd === cwd);
+        if (!project || !existsSync(cwd)) return undefined;
+        if (project.trust === "trusted") return { projectTrusted: true };
+        if (project.trust === "not_required") return {};
+        return undefined;
       },
       resolveTrust: (cwd) => {
         // All spawn routes (including recovery and settings) pass here. The

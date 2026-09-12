@@ -142,7 +142,7 @@ export function sessionSubtitle(summary: SessionSummary, view: SessionView | und
     const args = summariseArgs(tool.name, tool.args);
     return { text: args ? `${tool.name}  ${args}` : tool.name, mono: true, tone: "default" };
   }
-  const first = (view ? firstUserText(view.blocks) : undefined) ?? summary.firstMessage?.trim();
+  const first = (view && (view.history?.userOffset ?? 0) === 0 ? firstUserText(view.blocks) : undefined) ?? summary.firstMessage?.trim();
   if (first) return { text: first.replace(/\s+/g, " "), mono: false, tone: "default" };
   return { text: "No messages yet", mono: false, tone: "muted" };
 }
@@ -157,7 +157,7 @@ export function sessionSubtitle(summary: SessionSummary, view: SessionView | und
  * the placeholder is still dimmed.
  */
 export function isUntitled(summary: SessionSummary, view: SessionView | undefined): boolean {
-  return !(summary.name ?? view?.title ?? summary.firstMessage?.trim() ?? (view ? firstUserText(view.blocks) : undefined));
+  return !(summary.name ?? view?.title ?? summary.firstMessage?.trim() ?? (view && (view.history?.userOffset ?? 0) === 0 ? firstUserText(view.blocks) : undefined));
 }
 
 /** One vocabulary for the dot and the words next to it (DESIGN.md "Status language"). */

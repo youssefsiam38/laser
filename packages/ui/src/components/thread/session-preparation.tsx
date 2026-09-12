@@ -90,7 +90,7 @@ export function SessionPreparationProvider({ children }: { children: ReactNode }
     if (!view || !firstTurn) return;
     // Optimistic bubbles appear before the worker answers. Clear only from
     // canonical persisted history so a refused first-turn send remains retryable.
-    const started = view.state.messageCount > 0 || view.entries.some((entry) => {
+    const started = view.state.messageCount > 0 || view.history?.hasHistory === true || view.entries.some((entry) => {
       if (!entry || typeof entry !== "object") return false;
       const item = entry as { type?: unknown };
       return item.type === "message" || item.type === "custom_message";

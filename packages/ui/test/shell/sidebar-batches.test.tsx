@@ -21,8 +21,8 @@ let container: HTMLDivElement, root: Root, world: World;
 const path = (n: number) => `${PROJECT_CWD}/history-${n}.jsonl`;
 const row = (name: string) => [...container.querySelectorAll<HTMLElement>('[data-slot="aui_thread-list-item"]')].find(el => el.textContent?.includes(name));
 const button = (name: string) => [...container.querySelectorAll<HTMLButtonElement>("button")].find(el => el.textContent?.trim() === name)!;
-const render = async (query = "") => {
-  await act(async () => root.render(<LaserProvider url="ws://test"><TooltipProvider><Probe /><ThreadList projects={[PROJECT_CWD]} query={query} /></TooltipProvider></LaserProvider>));
+const render = async (query = "", tab: "code" | "chat" = "code") => {
+  await act(async () => root.render(<LaserProvider url="ws://test"><TooltipProvider><Probe /><ThreadList projects={[PROJECT_CWD]} query={query} tab={tab} /></TooltipProvider></LaserProvider>));
   await act(async () => settle(60));
 };
 const item = (remote: string) => aui.threads.item({ id: aui.threads.getState().threadItems.find(item => item.remoteId === remote)!.id });
@@ -39,6 +39,48 @@ beforeEach(() => {
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
+
+it("fetches the next host page on Load more and keeps focus across the delayed reply", async () => {
+  let deliver!: (value: unknown) => void;
+  const calls: Array<{ page?: { cursor?: string } }> = [];
+  world.overrides["pi/session/list"] = ((params: { page?: { cursor?: string } }) => {
+    calls.push(params);
+    if (params.page?.cursor) return new Promise(resolve => { deliver = resolve; });
+    return { sessions: world.sessions.slice(0, 7), groups: [{ cwd: PROJECT_CWD, total: 8, cursor: "older" }] };
+  }) as never;
+  await render();
+  expect(row("Conversation 8")).toBeUndefined();
+  const more = button("Load more"); more.focus();
+  await act(async () => more.click());
+  expect(calls.filter(call => call.page?.cursor === "older")).toHaveLength(1);
+  expect(row("Conversation 8")).toBeUndefined();
+  expect(button("Loading chats…").getAttribute("aria-disabled")).toBe("true");
+  await act(async () => { deliver({ sessions: [world.sessions[7]!], groups: [{ cwd: PROJECT_CWD, total: 8 }] }); await settle(60); });
+  expect(row("Conversation 8")).toBeDefined();
+  expect(document.activeElement).toBe(button("Show fewer"));
+  await act(async () => button("Show fewer").click());
+  expect(row("Conversation 8")).toBeUndefined();
+});
+
+it("keeps Chat pagination focused through its final page and Show fewer", async () => {
+  const cwd = "/state/chat";
+  const chats = Array.from({ length: 8 }, (_, index) => ({ ...world.sessions[index]!, cwd, path: `${cwd}/${index}.jsonl`, name: `Chat ${index}`, agent: { kind: "chat" as const, agentName: "chat" } }));
+  let deliver!: (value: unknown) => void;
+  world.overrides["pi/session/list"] = ((params: { page?: { cursor?: string } }) => params.page?.cursor
+    ? new Promise(resolve => { deliver = resolve; })
+    : { sessions: chats.slice(0, 7), groups: [{ cwd, total: 8, cursor: "older-chat" }] }) as never;
+  await render("", "chat");
+  expect(row("Chat 7")).toBeUndefined();
+  const more = button("Load more"); more.focus();
+  await act(async () => more.click());
+  expect(button("Loading chats…").getAttribute("aria-disabled")).toBe("true");
+  await act(async () => { deliver({ sessions: [chats[7]!], groups: [{ cwd, total: 8 }] }); await settle(60); });
+  expect(row("Chat 7")).toBeDefined();
+  expect(document.activeElement).toBe(button("Show fewer"));
+  await act(async () => button("Show fewer").click());
+  expect(row("Chat 7")).toBeUndefined();
+  expect(document.activeElement).toBe(button("Load more"));
+});
 
 it("shows seven, expands in place, retains focus and remembers the batch across remounts without persistence", async () => {
   await render();

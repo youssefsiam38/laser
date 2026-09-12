@@ -36,6 +36,7 @@ import type { AttentionTracker } from "./attention.js";
 import type { SessionCatalog } from "./catalog.js";
 import type { ProjectEnvStore } from "./project-env.js";
 import { searchSessions } from "./session-search.js";
+import { pageCatalog } from "./catalog-page.js";
 import type { SearchCancellation } from "./search-cancellation.js";
 import type { LogStore } from "./logstore.js";
 import { browseDirectories, type PackageService, type SetupService } from "./packages.js";
@@ -262,8 +263,24 @@ export class Router {
       case "pi/host/version":
         return { version: PRODUCT_VERSION };
       case HOST_ENVIRONMENT_METHOD: return applyHostEnvironment(this.pool, req.params);
-      case "pi/session/list":
-        return { sessions: this.sessions(req.params.cwd) };
+      case "pi/session/list": {
+        if (!req.params.page) return { sessions: this.sessions(req.params.cwd) };
+        const rows = this.sessions();
+        const byPath = new Map(rows.map(row => [row.path, row]));
+        return pageCatalog(rows, req.params, (row) => {
+          const visited = new Set<string>();
+          let root = row;
+          while (!visited.has(root.path)) {
+            visited.add(root.path);
+            const parent = root.parentPath ?? root.agent?.parentPath;
+            const next = parent ? byPath.get(parent) : undefined;
+            if (!next) break;
+            root = next;
+          }
+          const kind = this.workspaceAgentOf(root.cwd);
+          return kind ? this.deps.agents!.workspaces[kind] : projectRootOf(root.cwd);
+        });
+      }
 
       case "session/search": {
         const { query, cwd, after, before, cursor, searchId } = req.params;
@@ -344,6 +361,12 @@ export class Router {
 
       case "pi/session/entries": {
         const { path } = req.params;
+        if (req.params.window) {
+          // A page is not a full ViewCache snapshot. The serving worker owns
+          // the actual branch pointer and its matching live-update watermark.
+          const worker = await this.workerFor(path);
+          return worker.request(req.method, req.params);
+        }
         const cached = this.deps.views.get(path);
         // The leaf travels with the entries: a navigation moves it without
         // appending anything, so a cache that kept only the entries would
@@ -512,6 +535,10 @@ export class Router {
       case "pi/worker/list":
         return { workers: this.pool.workers() };
 
+      case "pi/worker/prepare":
+        await this.pool.prepare(req.params.cwd);
+        return {};
+
       case "pi/worker/restart":
         return { worker: await this.pool.restart(req.params.cwd) };
 
@@ -551,8 +578,10 @@ export class Router {
           await (await this.pool.get(cwd)).request("web-search/configure", { cwd, change: { action: "test" } });
         }
         const features = this.features().set(req.params.id, req.params.enabled, req.params.scope, req.params.cwd);
+        // A hidden warm process holds startup configuration too. Invalidate it
+        // without restarting/promoting a project the person has not opened.
+        let restartPending = req.params.scope === "global" && !(await this.pool.discardPrepared());
         const targets = req.params.scope === "project" && req.params.cwd ? [req.params.cwd] : this.pool.cwds();
-        let restartPending = false;
         for (const cwd of targets) {
           try {
             await this.pool.restart(cwd);

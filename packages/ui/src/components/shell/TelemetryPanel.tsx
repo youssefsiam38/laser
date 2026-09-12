@@ -64,6 +64,10 @@ export interface TelemetryPanelProps {
  * tool activity, and history. Read-only except compact / fork / jump.
  */
 export function TelemetryPanel({ variant }: TelemetryPanelProps) {
+  const historyScope = useLaserState(s => {
+    const history = s.current ? s.open[s.current]?.history : undefined;
+    return !history ? undefined : !history.complete ? "messages" : history.branchesUnloaded ? "versions" : undefined;
+  });
   const meta = useSessionMeta();
   const shell = useShell();
 
@@ -102,6 +106,7 @@ export function TelemetryPanel({ variant }: TelemetryPanelProps) {
       <div className="min-h-0 flex-1 overflow-y-auto">
         {meta.session ? (
           <>
+            {historyScope && <LoadedHistoryNotice versionsOnly={historyScope === "versions"} />}
             <ContextSection />
             <UsageSection />
             <ModelSection />
@@ -224,6 +229,19 @@ function ContextSection() {
   );
 }
 
+function LoadedHistoryNotice({ versionsOnly }: { versionsOnly: boolean }) {
+  const { actions } = useLaserStable();
+  const [loading, setLoading] = useState(false);
+  return <div className="flex flex-col items-start gap-2 border-b border-line px-4 py-3 text-xs leading-5 text-ink-2">
+    <p>{versionsOnly ? "Other versions are not loaded. Load them for conversation-wide totals and the complete tree." : "Earlier history is not loaded. Conversation-wide totals and older activity appear when it is."}</p>
+    <Button variant="outline" size="sm" className="pointer-coarse:min-h-11" aria-disabled={loading} onClick={() => {
+      if (loading) return;
+      setLoading(true);
+      void actions.loadAllEntries().finally(() => setLoading(false));
+    }}>{loading ? "Loading history…" : "Load complete history"}</Button>
+  </div>;
+}
+
 const TOKEN_TONES = ["bg-live", "bg-ok", "bg-attention", "bg-ink-3"] as const;
 
 function TokenComposition({ usage }: { usage: UsageTotals }) {
@@ -286,6 +304,7 @@ type UsageView = "account" | "api";
 
 function UsageSection() {
   const workbench = useWorkbench();
+  const history = useLaserState((s) => s.current ? s.open[s.current]?.history : undefined);
   const session = useLaserState((s) => s.current ? s.open[s.current]?.state : undefined);
   const entries = useLaserState((s) => s.current ? s.open[s.current]?.entries : undefined);
   const childRuns = useRunsForRoot(session?.path);
@@ -305,6 +324,10 @@ function UsageSection() {
     [background, entries],
   );
   const accountUsage = session?.accountUsage;
+  const partial = Boolean(history && (!history.complete || history.branchesUnloaded));
+  if (partial) return <Section title="Usage" icon={isAccountProvider(session?.model?.provider) ? Landmark : CircleDollarSign}>
+    {isAccountProvider(session?.model?.provider) ? <AccountUsage state={accountUsage} compact /> : <p className="text-xs leading-5 text-ink-2">Load complete history for conversation-wide totals.</p>}
+  </Section>;
 
   return (
     <Section
@@ -433,6 +456,7 @@ function ModelSection() {
  * can see, not a second source of truth.
  */
 function FilesSection() {
+  const partial = useLaserState(s => Boolean(s.current && s.open[s.current]?.history && !s.open[s.current]?.history?.complete));
   const changes = useSessionFileChanges();
   const added = changes.reduce((sum, change) => sum + change.additions, 0);
   const removed = changes.reduce((sum, change) => sum + change.deletions, 0);
@@ -446,7 +470,7 @@ function FilesSection() {
               <FileCode2 className="size-5" aria-hidden="true" />
             </span>
             <div className="min-w-0 flex-1">
-              <p className="text-xs leading-4 text-ink-3">Session footprint</p>
+              <p className="text-xs leading-4 text-ink-3">{partial ? "Loaded history footprint" : "Session footprint"}</p>
               <NumberTicker
                 value={`${changes.length} ${changes.length === 1 ? "file" : "files"}`}
                 label="Files changed"
@@ -466,28 +490,29 @@ function FilesSection() {
           ) : null}
         </InstrumentCard>
       ) : null}
-      <FileTree changes={changes} />
+      {partial && changes.length === 0 ? <p className="text-xs leading-5 text-ink-2">No file changes in the loaded history.</p> : <FileTree changes={changes} />}
     </Section>
   );
 }
 
 /** Every tool call this session made, in order, with the running one live. */
-function ToolsSection() {
+export function ToolsSection() {
   const timeline = useThreadToolTimeline();
   const shell = useShell();
+  const partial = useLaserState(s => Boolean(s.current && s.open[s.current]?.history && !s.open[s.current]?.history?.complete));
   const visibleSteps = timeline.steps.slice(-14);
   return (
     <Section
       title="Tools"
       icon={Wrench}
-      signal={timeline.steps.length > 0 ? <Badge variant={timeline.streaming ? "live" : "mono"}>{timeline.steps.length} calls</Badge> : undefined}
+      signal={timeline.steps.length > 0 ? <Badge variant={timeline.streaming ? "live" : "mono"}>{timeline.steps.length} {partial ? "loaded" : "calls"}</Badge> : undefined}
     >
       {timeline.steps.length > 0 ? (
         <InstrumentCard className="mb-3">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <Activity className={cn("size-4", timeline.streaming ? "text-live" : "text-ink-3")} aria-hidden="true" />
-              <span className="text-xs font-medium text-ink">Run activity</span>
+              <span className="text-xs font-medium text-ink">{partial ? "Loaded activity" : "Run activity"}</span>
             </div>
             <span className="font-mono text-xs text-ink-3 tnum">
               {timeline.streaming ? "live" : "settled"}
@@ -496,7 +521,7 @@ function ToolsSection() {
           <div
             className="mt-3 flex h-2 items-center gap-1"
             role="img"
-            aria-label={`${timeline.steps.length} tool calls; ${timeline.streaming ? "one running" : "all settled"}`}
+            aria-label={`${timeline.steps.length} ${partial ? "loaded " : ""}tool calls; ${timeline.streaming ? "one running" : "all settled"}`}
           >
             {visibleSteps.map((step) => (
               <span
@@ -511,7 +536,7 @@ function ToolsSection() {
           </div>
         </InstrumentCard>
       ) : null}
-      <ToolTimeline timeline={timeline} open={shell.toolsOpen} onOpenChange={shell.setToolsOpen} />
+      {partial && timeline.steps.length === 0 ? <p className="text-xs leading-5 text-ink-2">No tools in the loaded history.</p> : <ToolTimeline timeline={timeline} open={shell.toolsOpen} onOpenChange={shell.setToolsOpen} />}
     </Section>
   );
 }
@@ -520,7 +545,11 @@ function ToolsSection() {
 // arrives in the tool call that produced it; what it has to *ask* is answered
 // inline in the transcript (docs/ux-fleet.md, "Questions").
 
-function HistorySection() {
+export function HistorySection() {
+  const partial = useLaserState(s => {
+    const history = s.current ? s.open[s.current]?.history : undefined;
+    return Boolean(history && (!history.complete || history.branchesUnloaded));
+  });
   const { actions } = useLaserStable();
   const meta = useSessionMeta();
   const shell = useShell();
@@ -533,7 +562,7 @@ function HistorySection() {
   const path = meta.path;
   const running = meta.running;
   useEffect(() => {
-    if (shell.historyOpen && path) void refresh.current();
+    if (shell.historyOpen && path) void refresh.current({ tail: true });
   }, [shell.historyOpen, path, running]);
 
   return (
@@ -556,7 +585,7 @@ function HistorySection() {
               {rows.length > 0 && (
                 <span className="ms-auto flex items-center gap-1 font-mono text-xs text-ink-3 tnum">
                   <Clock3 className="size-3" aria-hidden="true" />
-                  {rows.length}
+                  {rows.length}{partial ? " loaded" : ""}
                 </span>
               )}
             </button>

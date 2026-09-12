@@ -22,6 +22,37 @@ import type { PendingMessage } from "./pending.js";
 
 // ---------- Shared value types (no Pi types allowed here) ----------
 
+export type HistoryWindowRequest =
+  | { tail: number }
+  | { before: string; limit?: number }
+  | { from: string }
+  | { all: true };
+
+/** Accepted, nonterminal work beside a persisted history snapshot. */
+export interface HistoryLiveSnapshot {
+  running: boolean;
+  message?: { id: string; value: unknown; speaker?: MessageSpeaker };
+  tools: { toolCallId: string; toolName: string; args: unknown; partial?: unknown }[];
+}
+
+export interface HistoryWindow {
+  epoch: string;
+  seq: number;
+  before?: string;
+  /** First loaded entry, retained when refreshing an expanded window. */
+  anchor?: string;
+  userOffset: number;
+  /** All messages on the active branch are present (not necessarily other versions). */
+  complete: boolean;
+  /** Alternate branches exist outside this window's active-branch scope. */
+  branchesUnloaded: boolean;
+  /** Durable messages or goal records exist in any branch, even with a reset leaf. */
+  hasHistory: boolean;
+  context: unknown[];
+  priorGoalIds: string[];
+  live?: HistoryLiveSnapshot;
+}
+
 export interface ImageContent {
   type: "image";
   mimeType: string;
@@ -309,6 +340,8 @@ export type SessionUpdate =
 
 export interface SessionUpdateParams {
   sessionPath: string;
+  /** The serving generation, shared with windowed history snapshots. */
+  epoch?: string;
   seq: number;
   update: SessionUpdate;
   at: string;
@@ -933,7 +966,10 @@ export interface ClientRequests {
   "session/cancel": { params: { path: string }; result: {} };
   "session/set_mode": { params: { path: string; mode: string }; result: {} };
 
-  "pi/session/list": { params: { cwd?: string }; result: { sessions: SessionSummary[] } };
+  "pi/session/list": {
+    params: { cwd?: string; page?: { cursor?: string; size?: number; sizes?: Record<string, number>; exclude?: string[]; include?: string[]; probe?: string[] } };
+    result: { sessions: SessionSummary[]; groups?: Array<{ cwd: string; total: number; cursor?: string }>; archivedCount?: number; presence?: Record<string, boolean> };
+  };
   /** Read-only search of saved conversations; no worker is opened. */
   "session/search": {
     params: { query: string; cwd?: string; after?: string; before?: string; cursor?: number; searchId?: string };
@@ -1028,7 +1064,7 @@ export interface ClientRequests {
    * not carry one — read the last entry as the leaf, which is what the engine
    * itself does when it re-opens a file.
    */
-  "pi/session/entries": { params: { path: string }; result: { entries: unknown[]; leafId?: string | null } };
+  "pi/session/entries": { params: { path: string; window?: HistoryWindowRequest }; result: { entries: unknown[]; leafId?: string | null; window?: HistoryWindow } };
   "pi/session/compact": { params: { path: string; instructions?: string }; result: {} };
   "pi/model/list": { params: { path: string }; result: { models: ModelRef[] } };
   "pi/model/set": { params: { path: string; model: ModelRef }; result: { state: SessionState } };
@@ -1096,6 +1132,8 @@ export interface ClientRequests {
 
   // --- workers (M2-T1) ---
   "pi/worker/list": { params: {}; result: { workers: WorkerInfo[] } };
+  /** Best-effort readiness hint; never asks for trust or opens a session. */
+  "pi/worker/prepare": { params: { cwd: string }; result: {} };
   /** Start a worker now: retry after a crash, or wake a retired one. */
   "pi/worker/restart": { params: { cwd: string }; result: { worker: WorkerInfo } };
   /** Retire a worker on purpose. Refused while one of its sessions is running. */

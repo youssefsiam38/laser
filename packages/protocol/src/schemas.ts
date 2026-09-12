@@ -565,7 +565,17 @@ export const clientParamsSchemas = {
   ).refine((variables) => Object.keys(variables).length <= 4096
     && Object.entries(variables).reduce((size, [key, value]) => size + key.length + value.length + 2, 0) <= 1_048_576,
   "environment is too large") }).strict(),
-  "pi/session/list": z.object({ cwd: z.string().min(1).optional() }).strict(),
+  "pi/session/list": z.object({
+    cwd: z.string().min(1).optional(),
+    page: z.object({
+      cursor: z.string().min(1).max(8192).optional(),
+      size: z.number().int().min(1).max(1000).optional(),
+      sizes: z.record(z.string().min(1), z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)).optional(),
+      exclude: z.array(z.string().min(1)).optional(),
+      include: z.array(z.string().min(1)).optional(),
+      probe: z.array(z.string().min(1)).optional(),
+    }).strict().optional(),
+  }).strict(),
   "session/search": z.object({ query: z.string().trim().min(1).max(200), cwd: z.string().min(1).optional(), after: z.string().datetime().optional(), before: z.string().datetime().optional(), cursor: z.number().int().nonnegative().optional(), searchId: z.string().min(1).max(128).optional() }).strict(),
   "session/search/cancel": z.object({ searchId: z.string().min(1).max(128) }).strict(),
   "pi/session/inbox": z
@@ -597,7 +607,12 @@ export const clientParamsSchemas = {
   // `worktree` is optional and defaults to keeping it: a caller that omits the
   // field never destroys a child agent's checkout (M13-T42).
   "pi/session/delete": z.object({ path: sessionPath, worktree: z.enum(["keep", "delete"]).optional() }).strict(),
-  "pi/session/entries": z.object({ path: sessionPath }).strict(),
+  "pi/session/entries": z.object({ path: sessionPath, window: z.union([
+    z.object({ tail: z.number().int().min(1).max(200) }).strict(),
+    z.object({ before: z.string().min(1).max(8192), limit: z.number().int().min(1).max(200).optional() }).strict(),
+    z.object({ from: z.string().min(1).max(1024) }).strict(),
+    z.object({ all: z.literal(true) }).strict(),
+  ]).optional() }).strict(),
   "pi/session/compact": z.object({ path: sessionPath, instructions: z.string().optional() }).strict(),
   "pi/model/list": z.object({ path: sessionPath }).strict(),
   "pi/model/set": z.object({ path: sessionPath, model: modelRefSchema }).strict(),
@@ -634,6 +649,7 @@ export const clientParamsSchemas = {
   "pi/project/env/refresh": z.object({ cwd: z.string().min(1) }).strict(),
 
   "pi/worker/list": z.object({}).strict(),
+  "pi/worker/prepare": z.object({ cwd: z.string().min(1) }).strict(),
   "pi/worker/restart": z.object({ cwd: z.string().min(1) }).strict(),
   "pi/worker/stop": z.object({ cwd: z.string().min(1) }).strict(),
 

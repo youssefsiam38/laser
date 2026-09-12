@@ -106,7 +106,9 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
   } as unknown as SessionCatalog;
 
   const workerRequests: Array<{ cwd: string; method: string; params: unknown }> = [];
+  const prepare = vi.fn(async (_cwd: string) => {});
   const pool = {
+    prepare,
     openSessions: (cwd: string) => open[cwd] ?? [],
     cwdOfSession: (path: string) => bound.get(path),
     bindSession: (path: string, cwd: string) => bound.set(path, cwd),
@@ -131,7 +133,8 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
   const agents = options.agents ? new AgentStore({ agentDir: join(dir, "agent"), workspaces: options.workspaces ?? WORKSPACES }) : undefined;
   // Fixtures date from June; a fixed clock keeps retention from pruning them.
   const runs = options.agents ? new AgentRunRegistry({ now: () => new Date("2026-06-02T00:00:00.000Z") }) : undefined;
-  const router = new Router(pool, catalog, { attention, projects, views: new ViewCache(2), agents, runs });
+  const views = new ViewCache(2);
+  const router = new Router(pool, catalog, { attention, projects, views, agents, runs });
 
   // The Router only records a stub from inside `dispatch`; reach the private
   // recorder the same way `session/new` does, without standing up a worker.
@@ -139,11 +142,13 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
 
   return {
     router,
+    prepare,
     note,
     bind: (path: string, cwd: string) => bound.set(path, cwd),
     catalogRows,
     open,
     workerRequests,
+    views,
     agents,
     runs,
     projects,
@@ -154,6 +159,65 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
     },
   };
 }
+
+describe("Router · paged catalog", () => {
+  it("returns seven summaries per project, then a cursor page, without opening workers", async () => {
+    const rows: SessionSummary[] = Array.from({ length: 150 }, (_, index) => ({
+      cwd: `/projects/${Math.floor(index / 15)}`, path: `/sessions/${String(index).padStart(3, "0")}.jsonl`, id: String(index),
+      createdAt: "2026-06-01T00:00:00.000Z", modifiedAt: "2026-06-01T00:00:00.000Z", messageCount: 2,
+    }));
+    const h = harness({ catalogRows: rows });
+    try {
+      const first = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/session/list", params: { page: {} } });
+      expect(first).toHaveProperty("result.sessions.length", 70);
+      const result = (first as { result: { sessions: SessionSummary[]; groups: Array<{ cwd: string; cursor: string }> } }).result;
+      expect(result.groups).toHaveLength(10);
+      const group = result.groups[0]!;
+      const next = await h.router.handle({ jsonrpc: "2.0", id: 2, method: "pi/session/list", params: { cwd: group.cwd, page: { cursor: group.cursor } } });
+      expect(next).toHaveProperty("result.sessions.length", 7);
+      const more = (next as { result: { sessions: SessionSummary[] } }).result.sessions;
+      expect(more.every(row => !result.sessions.some(firstRow => firstRow.path === row.path))).toBe(true);
+      const invalid = await h.router.handle({ jsonrpc: "2.0", id: 3, method: "pi/session/list", params: { cwd: "/another", page: { cursor: group.cursor } } });
+      expect(invalid).toHaveProperty("error.code", ErrorCodes.InvalidParams);
+      const full = await h.router.handle({ jsonrpc: "2.0", id: 4, method: "pi/session/list", params: {} });
+      expect(full).toHaveProperty("result.sessions.length", 150);
+      expect(h.workerRequests).toEqual([]);
+    } finally { h.cleanup(); }
+  });
+});
+
+describe("Router · history windows", () => {
+  it("routes pages to the serving worker without reading or poisoning the full snapshot cache", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "history-window-"));
+    const path = join(directory, "session.jsonl");
+    writeFileSync(path, "session fixture");
+    const full = { entries: [{ id: "old" }, { id: "tail" }], leafId: "tail" };
+    const page = { entries: [{ id: "tail" }], leafId: "tail", window: { epoch: "one", seq: 12 } };
+    const h = harness({ workerRequest: async (_method, params) => (params as { window?: unknown }).window ? page : full });
+    h.bind(path, CWD_A);
+    h.open[CWD_A]!.push(path);
+    const call = (id: number, window?: { tail: number }) => h.router.handle({ jsonrpc: "2.0", id, method: "pi/session/entries", params: { path, ...(window ? { window } : {}) } });
+    try {
+      expect(await call(1, { tail: 40 })).toMatchObject({ result: page });
+      expect(h.views.get(path)).toBeUndefined();
+      expect(await call(2)).toMatchObject({ result: full });
+      expect(await call(3, { tail: 40 })).toMatchObject({ result: page });
+      expect(h.views.get(path)).toEqual(full);
+      expect(await call(4)).toMatchObject({ result: full });
+      expect(h.workerRequests).toHaveLength(3);
+      expect(h.workerRequests[0]?.params).toEqual({ path, window: { tail: 40 } });
+    } finally { h.cleanup(); rmSync(directory, { recursive: true, force: true }); }
+  });
+});
+
+it("routes readiness hints to admission without opening a session", async () => {
+  const h = harness();
+  try {
+    expect(await h.router.dispatch({ jsonrpc: "2.0", id: 1, method: "pi/worker/prepare", params: { cwd: CWD_A } })).toEqual({});
+    expect(h.prepare).toHaveBeenCalledExactlyOnceWith(CWD_A);
+    expect(h.workerRequests).toEqual([]);
+  } finally { h.cleanup(); }
+});
 
 describe("Router · dictation cancellation", () => {
   it("routes discard while end is still transcribing, then releases the upload route", async () => {

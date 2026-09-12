@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { historyWindow } from "@lasercode/protocol";
 import { act, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
@@ -49,6 +50,23 @@ describe("presentation subscriptions", () => {
     const asking = { ...input, runs: { r: { ...child, status: "needs_input" as const } } };
     expect(select(asking)).toEqual(buildFleet(asking));
     expect(build).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates fleet deletion state when a catalog presence probe changes", () => {
+    const select = createFleetSelector();
+    const child = run({ runId: "r", status: "running" });
+    const input: FleetInput = { sessions: [], runs: { r: child }, tasks: {}, views: {}, now: Date.now(), sessionsLoaded: true, sessionPresence: {} };
+    expect(select(input)[0]?.deleted).toBe(false);
+    expect(select({ ...input, sessionPresence: { [child.rootSessionPath]: false } })[0]?.deleted).toBe(true);
+  });
+
+  it("tracks only history scope needed for titles and reusable-session decisions", () => {
+    const history = historyWindow({ entries: [], leafId: null }, { tail: 40 }, { path: "/p", epoch: "e", seq: 0 }).window;
+    const original = view({ path: "/p", history });
+    const before = { "/p": original };
+    expect(samePresentationViews(before, { "/p": { ...original, history: { ...history, seq: 10 } } })).toBe(true);
+    expect(samePresentationViews(before, { "/p": { ...original, history: { ...history, userOffset: 20 } } })).toBe(false);
+    expect(samePresentationViews(before, { "/p": { ...original, history: { ...history, hasHistory: true } } })).toBe(false);
   });
 
   it("keeps titles, questions, status, membership and run activity live", () => {

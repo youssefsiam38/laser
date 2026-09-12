@@ -11,11 +11,11 @@ import type { SearchSource } from "@/components/thread/search-state";
 
 export interface SearchHit { id: string; messageId: string; before: string; match: string; after: string; occurrence: number; source?: SearchSource }
 
-export function ConversationSearch({ query, hits, activeIndex, onQueryChange, onStep, onClose, inputRef, className, label = "Find in conversation", toolbar, ...props }: Omit<ComponentProps<"div">, "children"> & {
+export function ConversationSearch({ query, hits, activeIndex, onQueryChange, onStep, onClose, inputRef, className, label = "Find in conversation", toolbar, status, ...props }: Omit<ComponentProps<"div">, "children"> & {
   query: string; hits: readonly SearchHit[]; activeIndex: number;
   onQueryChange: (query: string) => void; onStep: (delta: number) => void;
   onClose: () => void; inputRef?: Ref<HTMLInputElement>;
-  label?: string; toolbar?: ReactNode;
+  label?: string; toolbar?: ReactNode; status?: string | undefined;
 }) {
   const active = hits[activeIndex];
   return <div data-slot="conversation-search" role="search" aria-label={label} className={cn("z-20 shrink-0 px-3 py-2", className)} onKeyDown={e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onClose(); } }} {...props}>
@@ -27,7 +27,7 @@ export function ConversationSearch({ query, hits, activeIndex, onQueryChange, on
           aria-label={label} placeholder={label} maxLength={200}
           className="min-w-0 flex-1 bg-transparent py-1 text-sm text-ink outline-none placeholder:text-ink-3 focus-visible:underline [@media(pointer:coarse)]:text-base"
           onKeyDown={e => { if (e.nativeEvent.isComposing) return; if (e.key === "Enter") { e.preventDefault(); onStep(e.shiftKey ? -1 : 1); } if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onClose(); } }} />
-        <span role="status" aria-live="polite" aria-atomic="true" className="shrink-0 px-1 text-xs tabular-nums text-ink-3">{hits.length ? `${activeIndex + 1} / ${hits.length}` : query.trim() ? "No matches" : "0 / 0"}</span>
+        <span role="status" aria-live="polite" aria-atomic="true" className="shrink-0 px-1 text-xs tabular-nums text-ink-3">{status ?? (hits.length ? `${activeIndex + 1} / ${hits.length}` : query.trim() ? "No matches" : "0 / 0")}</span>
         <TooltipIconButton tooltip="Previous match" shortcut="Shift+Enter" disabled={!hits.length} onClick={() => onStep(-1)}><ChevronUp /></TooltipIconButton>
         <TooltipIconButton tooltip="Next match" shortcut="Enter" disabled={!hits.length} onClick={() => onStep(1)}><ChevronDown /></TooltipIconButton>
         <TooltipIconButton tooltip="Close search" shortcut="Esc" onClick={onClose}><X /></TooltipIconButton>

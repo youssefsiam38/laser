@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { CommandPalette as CommandPaletteElement, matchesCommand, type PaletteCommand } from "@/components/assistant-ui/elements/command-palette";
 import { StatusDot } from "@/components/status";
+import { userEntryIds } from "@/components/thread/entries";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { useWorkbench } from "@/components/workbench";
 import { relativeTime, shortCwd, shortcutLabel } from "@/format";
@@ -22,13 +23,15 @@ export function CommandPaletteDialog({ open, onOpenChange }: { open: boolean; on
   const [query, setQuery] = useState("");
   const [activeId, setActiveId] = useState("");
   const commands = usePaletteCommands();
+  const { actions } = useLaserStable();
+  useEffect(() => open ? actions.expandCatalog?.() : undefined, [actions, open]);
 
   // A fresh open starts at the top of the list with an empty box.
   useEffect(() => {
     if (!open) return;
     setQuery("");
-    setActiveId(commands[0]?.id ?? "");
-  }, [open, commands]);
+    setActiveId("");
+  }, [open]);
 
   // The highlight follows the filter: the first match is active by default.
   useEffect(() => {
@@ -78,7 +81,7 @@ function usePaletteCommands(): RunnableCommand[] {
     const session: RunnableCommand[] = view
       ? [
           { id: "compact", group: "This session", label: "Compact context", detail: busy ? "Waits for the turn to finish" : undefined, icon: Shrink, disabled: busy, run: () => void actions.compact() },
-          { id: "fork", group: "This session", label: "Fork from last prompt", icon: GitFork, disabled: meta.running, run: () => void forkFromLastPrompt(view.entries, actions) },
+          { id: "fork", group: "This session", label: "Fork from last prompt", icon: GitFork, disabled: meta.running, run: () => void forkFromLastPrompt(view.entries, actions, view.leafId) },
           { id: "history", group: "This session", label: "Open history", keys: ["]"], icon: GitBranch, run: () => shell.openHistory() },
         ]
       : [];
@@ -120,13 +123,11 @@ function usePaletteCommands(): RunnableCommand[] {
   }, [actions, busy, currentProject, groups, meta.running, shell, theme, toggle, view, workbench]);
 }
 
-async function forkFromLastPrompt(entries: readonly unknown[], actions: ReturnType<typeof useLaserStable>["actions"]): Promise<void> {
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const e = entries[i] as { type?: string; id?: string; message?: { role?: string } };
-    if (e.type === "message" && e.message?.role === "user" && e.id) {
-      await actions.fork(e.id);
-      return;
-    }
+async function forkFromLastPrompt(entries: readonly unknown[], actions: ReturnType<typeof useLaserStable>["actions"], leafId?: string | null): Promise<void> {
+  const entryId = userEntryIds(entries, leafId).at(-1);
+  if (entryId) {
+    await actions.fork(entryId);
+    return;
   }
   actions.toast("warning", "Nothing to fork yet: this session has no prompt.");
 }

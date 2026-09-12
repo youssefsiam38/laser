@@ -88,9 +88,11 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
   const [activeId, setActiveId] = useState<string | undefined>(undefined);
   const search = useSessionSearch(query, tab === "code" ? list.filter : undefined);
 
-  const total = groups.reduce((n, g) => n + g.rows.length, 0);
+  const catalogGroups = useLaserState(s => s.catalogGroups);
+  const total = groups.reduce((n, g) => n + (catalogGroups?.find(page => page.cwd === g.cwd)?.total ?? g.rows.length), 0);
   const filteredName = tab === "code" && list.filter ? shortCwd(list.filter) : undefined;
   const searching = query.trim() !== "";
+  useEffect(() => searching ? actions.expandCatalog?.() : undefined, [actions, searching]);
   const chat = tab === "chat";
 
   /**

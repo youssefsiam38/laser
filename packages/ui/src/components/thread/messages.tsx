@@ -76,7 +76,7 @@ const EMPTY_ENTRIES: readonly unknown[] = [];
 const EMPTY_IMAGES: readonly ImageContent[] = [];
 const EMPTY_FILES: readonly AttachedFile[] = [];
 
-/** The whole session tree, as Pi persisted it; stable between hydrations. */
+/** The loaded tree records; the message menu can request missing history/versions. */
 const useEntries = (): readonly unknown[] => useLaserState((s) => (s.current ? s.open[s.current]?.entries : undefined)) ?? EMPTY_ENTRIES;
 
 /**
@@ -85,6 +85,11 @@ const useEntries = (): readonly unknown[] => useLaserState((s) => (s.current ? s
  * to the entry the person is actually looking at.
  */
 const useLeafId = (): string | null | undefined => useLaserState((s) => (s.current ? s.open[s.current]?.leafId : undefined));
+const useUserOffset = (): number => useLaserState(s => s.current ? s.open[s.current]?.history?.userOffset ?? 0 : 0);
+const usePartialHistory = (): boolean => useLaserState(s => {
+  const history = s.current ? s.open[s.current]?.history : undefined;
+  return Boolean(history && (!history.complete || history.branchesUnloaded));
+});
 
 /** Text of every text part of the message in scope, for copying. */
 const useMessageText = (): string =>
@@ -151,6 +156,8 @@ export function UserMessage() {
   const path = useSessionPath();
   const entries = useEntries();
   const leafId = useLeafId();
+  const userOffset = useUserOffset();
+  const partialHistory = usePartialHistory();
   const { copied, copy } = useCopy();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(text);
@@ -173,8 +180,8 @@ export function UserMessage() {
   // it; the ordinal lookup is for a prompt reported without one.
   const persistedEntryId = useAuiState((s) => laserMeta(s.message).entryId);
   const entryId = useMemo(
-    () => (optimistic ? undefined : persistedEntryId ?? userEntryAt(entries, ordinal, leafId)),
-    [entries, leafId, ordinal, optimistic, persistedEntryId],
+    () => (optimistic ? undefined : persistedEntryId ?? userEntryAt(entries, ordinal - userOffset, leafId)),
+    [entries, leafId, ordinal, userOffset, optimistic, persistedEntryId],
   );
   // Every version of this prompt, oldest first: editing it in place, and
   // running its reply again, both leave the previous one here.
@@ -282,6 +289,7 @@ export function UserMessage() {
             }}
           />
           <MessageActions
+            onLoadHistory={partialHistory ? () => void actions.loadAllEntries() : undefined}
             className={hoverReveal}
             copied={copied}
             onCopy={() => void copy(text)}
@@ -531,6 +539,8 @@ function AssistantFooter() {
   const path = useSessionPath();
   const entries = useEntries();
   const leafId = useLeafId();
+  const userOffset = useUserOffset();
+  const partialHistory = usePartialHistory();
   const busy = useAuiState((s) => s.thread.isRunning);
   const model = useLaserState((s) => (s.current ? s.open[s.current]?.state.model ?? null : null));
   const thinking = useLaserState((s) => (s.current ? s.open[s.current]?.state.thinkingLevel : undefined));
@@ -540,7 +550,7 @@ function AssistantFooter() {
 
   const promptOrdinal = useAuiState((s) => laserMeta(s.message).prompt?.ordinal);
   const stampedEntryId = useAuiState((s) => laserMeta(s.message).prompt?.entryId);
-  const promptEntryId = stampedEntryId ?? (promptOrdinal === undefined ? undefined : userEntryAt(entries, promptOrdinal, leafId));
+  const promptEntryId = stampedEntryId ?? (promptOrdinal === undefined ? undefined : userEntryAt(entries, promptOrdinal - userOffset, leafId));
 
   const rerun = async (where: "here" | "fork", pick?: RegeneratePick) => {
     if (!promptEntryId) return;
@@ -566,6 +576,7 @@ function AssistantFooter() {
   return (
     <MessageFooter>
       <MessageActions
+        onLoadHistory={partialHistory ? () => void actions.loadAllEntries() : undefined}
         className={hoverReveal}
         copied={copied}
         onCopy={() => void copy(text)}

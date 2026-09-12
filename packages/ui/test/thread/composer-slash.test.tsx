@@ -292,7 +292,7 @@ describe("completing a slash command", () => {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    expect(mocks.refreshEntries).toHaveBeenCalled();
+    expect(mocks.refreshEntries).toHaveBeenCalledWith({ tail: true });
     expect(mocks.sent).not.toHaveBeenCalled();
     expect(input().value).toBe("");
   });

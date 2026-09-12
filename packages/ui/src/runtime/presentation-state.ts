@@ -22,7 +22,8 @@ export function samePresentationViews(
     const left = a[path], right = b[path];
     if (left === right) return true;
     if (!left || !right || left.state !== right.state || left.running !== right.running
-      || left.title !== right.title || left.dialogs !== right.dialogs || left.openedAt !== right.openedAt) return false;
+      || left.title !== right.title || left.dialogs !== right.dialogs || left.openedAt !== right.openedAt
+      || left.history?.userOffset !== right.history?.userOffset || left.history?.hasHistory !== right.history?.hasHistory) return false;
     const l = titleInputs(left), r = titleInputs(right);
     return l[0] === r[0] && l[1] === r[1];
   });

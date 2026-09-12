@@ -98,6 +98,164 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+describe("WorkerPool readiness", () => {
+  it("does nothing without nonprompting admission", async () => {
+    let questions = 0;
+    pool = makePool({ resolveTrust: async () => { questions++; return true; } });
+    await pool.prepare(project);
+    expect(pool.cwds()).toEqual([]);
+    expect(questions).toBe(0);
+  });
+
+  it("joins the single real process through priming and keeps unused readiness invisible", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let priming = false;
+    let uses = 0;
+    pool = makePool({ prepareTrust: () => ({}), prime: async () => { priming = true; await held; }, onPreparedUse: () => { uses++; } });
+    const hint = pool.prepare(project);
+    await waitFor(() => priming);
+    const pid = pool.liveClients()[0]!.client.pid;
+    expect(pool.workers()).toEqual([]);
+    expect(statuses).toEqual([]);
+    expect(uses).toBe(0);
+    let opened = false;
+    const opening = pool.get(project).then((client) => { opened = true; return client; });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(opened).toBe(false);
+    expect(pool.cwds()).toEqual([]);
+    expect(pool.liveClients().map(({ cwd }) => cwd)).toEqual([project]);
+    release();
+    await hint;
+    expect((await opening).pid).toBe(pid);
+    expect((await pool.get(project)).pid).toBe(pid);
+    expect(uses).toBe(1);
+    expect(pool.workers()).toMatchObject([{ cwd: project, status: "ready" }]);
+    expect(statusesOf(project)).toEqual(["ready"]);
+  });
+
+  it("bounds speculation to one, evicts the old intent, and never evicts live work", async () => {
+    const other = join(dir, "other"); mkdirSync(other);
+    let live = false;
+    pool = makePool({ prepareTrust: () => ({}), hasLiveRun: (cwd) => live && cwd === project });
+    await pool.prepare(project);
+    live = true;
+    await pool.prepare(other);
+    expect(pool.liveClients().map(({ cwd }) => cwd)).toEqual([project]);
+    live = false;
+    await pool.prepare(other);
+    expect(pool.liveClients().map(({ cwd }) => cwd)).toEqual([other]);
+    expect(pool.cwds()).toEqual([]);
+    expect(statuses).toEqual([]);
+    expect(pool.workers()).toEqual([]);
+  });
+
+  it("invalidates speculative configuration silently without disturbing protected work", async () => {
+    let live = false; let attached = false;
+    pool = makePool({ prepareTrust: () => ({}), hasLiveRun: () => live, isAttached: () => attached });
+    await pool.prepare(project);
+    const client = pool.liveClients()[0]!.client;
+    live = true;
+    expect(await pool.discardPrepared()).toBe(false);
+    live = false; attached = true;
+    expect(await pool.discardPrepared()).toBe(false);
+    expect(client.alive).toBe(true);
+    attached = false;
+    expect(await pool.discardPrepared()).toBe(true);
+    expect(client.alive).toBe(false);
+    expect(pool.cwds()).toEqual([]);
+    expect(statuses).toEqual([]);
+  });
+
+  it("rechecks trust on adoption and replaces revoked speculation through real admission", async () => {
+    let trusted = true; let admissions = 0;
+    pool = makePool({ prepareTrust: () => trusted ? { projectTrusted: true } : undefined, resolveTrust: async () => { admissions++; return false; } });
+    await pool.prepare(project);
+    const pid = pool.liveClients()[0]!.client.pid;
+    trusted = false;
+    const client = await pool.get(project);
+    expect(client.pid).not.toBe(pid);
+    expect(admissions).toBe(1);
+    expect(statusesOf(project)).toEqual(["starting", "ready"]);
+  });
+
+  it("drops hints during any real spawn", async () => {
+    const other = join(dir, "other"); mkdirSync(other);
+    let release!: () => void;
+    pool = makePool({ prepareTrust: () => ({}), resolveTrust: () => new Promise((r) => { release = () => r(true); }) });
+    const opening = pool.get(project);
+    await pool.prepare(other);
+    expect(pool.cwds()).toEqual([project]);
+    release(); await opening;
+  });
+
+  it("expires unused readiness in a minute, preserving live runs and attachments", async () => {
+    let now = 0; let live = false; let attached = false;
+    pool = makePool({ now: () => now, prepareTrust: () => ({}), hasLiveRun: () => live, isAttached: () => attached, sweepMs: 0 });
+    await pool.prepare(project);
+    live = true; now = 61_000; pool["sweep"]();
+    expect(pool.liveClients().map(({ cwd }) => cwd)).toEqual([project]);
+    live = false; attached = true; pool["sweep"]();
+    expect(pool.liveClients().map(({ cwd }) => cwd)).toEqual([project]);
+    attached = false; pool["sweep"]();
+    await waitFor(() => pool.liveClients().length === 0);
+    expect(statuses).toEqual([]);
+  });
+
+  it("a click joining a failing hint retries only after that process exits", async () => {
+    const marker = join(dir, "attempted");
+    writeFileSync(workerMain, `import { existsSync, writeFileSync } from "node:fs";
+      if (!existsSync(${JSON.stringify(marker)})) {
+        writeFileSync(${JSON.stringify(marker)}, "yes");
+        setTimeout(() => process.exit(9), 100);
+      } else { ${FAKE_WORKER.replace('import { Socket } from "node:net";', 'const { Socket } = await import("node:net");')} }`);
+    pool = makePool({ prepareTrust: () => ({}) });
+    const hint = pool.prepare(project);
+    const firstPid = pool.liveClients()[0]!.client.pid;
+    const opening = pool.get(project);
+    await hint;
+    const client = await opening;
+    expect(client.alive).toBe(true);
+    expect(client.pid).not.toBe(firstPid);
+    expect(pool.cwds()).toEqual([project]);
+    expect(statusesOf(project)).toEqual(["starting", "ready"]);
+  });
+
+  it("does not consume an attached crashed worker's retry or hide its recovery", async () => {
+    pool = makePool({ prepareTrust: () => ({}), isAttached: () => true, backoffMs: 10 });
+    const client = await pool.get(project);
+    pool.bindSession("/sessions/a.jsonl", project);
+    void client.request("pi/test/crash", {}).catch(() => {});
+    await waitFor(() => pool.workerInfo(project)?.status === "crashed");
+    const crashed = pool.workerInfo(project)!;
+    const retry = pool["entries"].get(project)!.retryTimer;
+    expect(retry).toBeDefined();
+    await pool.prepare(project);
+    expect(pool.liveClients()).toEqual([]);
+    expect(pool["entries"].get(project)!.warm).toBe(false);
+    expect(pool["entries"].get(project)!.retryTimer).toBe(retry);
+    expect(pool.workerInfo(project)).toEqual(crashed);
+    expect(pool.workers()).toEqual([crashed]);
+    runTimers();
+    await waitFor(() => pool.openSessions(project).includes("/sessions/a.jsonl"));
+    expect(pool.workerInfo(project)).toMatchObject({ status: "ready" });
+    expect(pool.workerInfo(project)?.pid).not.toBe(client.pid);
+    expect(statuses.at(-1)).toMatchObject({ status: "ready", reopened: ["/sessions/a.jsonl"] });
+    expect(pool.cwds()).toEqual([project]);
+  });
+
+  it("a failed hint remains invisible and the next real open succeeds", async () => {
+    writeFileSync(workerMain, "process.exit(9)");
+    pool = makePool({ prepareTrust: () => ({}) });
+    await pool.prepare(project);
+    expect(statuses).toEqual([]);
+    expect(pool.workers()).toEqual([]);
+    writeFileSync(workerMain, FAKE_WORKER);
+    expect((await pool.get(project)).alive).toBe(true);
+    expect(statusesOf(project)).toEqual(["starting", "ready"]);
+  });
+});
+
 describe("WorkerPool", () => {
   it("reports starting before ready, and only one process per cwd", async () => {
     pool = makePool();

@@ -21,13 +21,14 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); });
 const messages: ThreadMessageLike[] = [{ id: "first", role: "user", content: [{ type: "text", text: "Apple Apple" }] }, { id: "last", role: "assistant", content: [{ type: "reasoning", text: "Apple thought" }] }];
-function Body() {
-  const find = useConversationFind();
+type HistoryOptions = { partial?: boolean; loadAll?: () => Promise<boolean> };
+function Body(options: HistoryOptions) {
+  const find = useConversationFind(options);
   return <div ref={find.root}>{find.bar}<div data-slot="thread-viewport"><div data-message-id="first">Apple Apple</div><SearchMessageContext value={find.selectedMessage === "last"}><div data-message-id="last"><ToolGroupRoot><ToolGroupTrigger>Reasoning</ToolGroupTrigger><ToolGroupContent>Apple thought</ToolGroupContent></ToolGroupRoot></div></SearchMessageContext></div></div>;
 }
-function Fixture({ data = messages }: { data?: ThreadMessageLike[] }) {
+function Fixture({ data = messages, ...history }: { data?: ThreadMessageLike[] } & HistoryOptions) {
   const runtime = useExternalStoreRuntime({ messages: data, convertMessage: (m: ThreadMessageLike) => m, isRunning: false, onNew: async () => {} });
-  return <AssistantRuntimeProvider runtime={runtime}><TooltipProvider><Body /></TooltipProvider></AssistantRuntimeProvider>;
+  return <AssistantRuntimeProvider runtime={runtime}><TooltipProvider><Body {...history} /></TooltipProvider></AssistantRuntimeProvider>;
 }
 async function query(text: string) {
   await act(async () => {
@@ -64,6 +65,29 @@ it("does not steal Ctrl+Shift+F and updates matches without replacing the focuse
   await query("Missing");
   expect(container.querySelector('[aria-label="Next match"]')?.hasAttribute("disabled")).toBe(true);
 });
+it("makes partial search explicit, loads missing messages once, and restores keyboard focus after the reply", async () => {
+  let release!: () => void;
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  const data: ThreadMessageLike[] = [{ id: "tail", role: "user", content: "Recent only" }];
+  const loadAll = vi.fn(async () => {
+    await waiting;
+    root.render(<Fixture data={[messages[0]!, ...data]} partial={false} loadAll={loadAll} />);
+    return true;
+  });
+  await act(async () => root.render(<Fixture data={data} partial loadAll={loadAll} />));
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "f", ctrlKey: true })));
+  await query("Apple");
+  expect(container.querySelector('[role="status"]')?.textContent).toBe("No matches");
+  const button = [...container.querySelectorAll("button")].find(button => button.textContent === "Load all messages")!;
+  expect(button).toBeDefined();
+  await act(async () => { button.focus(); button.click(); button.click(); });
+  expect(loadAll).toHaveBeenCalledTimes(1);
+  expect(container.querySelector('[role="status"]')?.textContent).toBe("Loading…");
+  await act(async () => { release(); await loadAll.mock.results[0]!.value; });
+  expect(container.querySelector('[role="status"]')?.textContent).toBe("1 / 2");
+  expect(document.activeElement).toBe(container.querySelector("input"));
+});
+
 it("highlights across markup boundaries without indexing hidden controls or changing DOM", () => {
   container.innerHTML = '<p>Ap<strong>ple</strong></p><button>Apple</button><div hidden>Apple</div>';
   const original = container.innerHTML;

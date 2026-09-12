@@ -289,7 +289,8 @@ function DetailActions({
   onRemoveWorktree?: (() => void) | undefined;
 }) {
   const { actions } = useLaserStable();
-  const reachable = useLaserState((s) => s.sessions.length === 0 || s.sessions.some((session) => session.path === item.sessionPath));
+  const reachable = useLaserState((s) => s.catalogPresence !== undefined ? s.catalogPresence[item.sessionPath] !== false
+    : s.sessions.length === 0 || s.sessions.some((session) => session.path === item.sessionPath));
   const here = useLaserState((s) => s.current === item.sessionPath);
   const task = item.kind === "task";
   return (

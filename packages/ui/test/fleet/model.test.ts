@@ -346,6 +346,14 @@ describe("buildFleet", () => {
     expect(build({ runs: byId([child], "runId") })[0]!.title).toBe("root.jsonl");
   });
 
+  it("does not confuse an unloaded catalog page with a deleted fleet root", () => {
+    const child = run({ parent: { sessionPath: ROOT, sessionId: "root" }, rootSessionPath: ROOT });
+    const input = { runs: byId([child], "runId"), sessionsLoaded: true };
+    expect(build({ ...input, sessionPresence: {} })[0]!.deleted).toBe(false);
+    expect(build({ ...input, sessionPresence: { [ROOT]: true } })[0]!.deleted).toBe(false);
+    expect(build({ ...input, sessionPresence: { [ROOT]: false } })[0]!.deleted).toBe(true);
+  });
+
   it("marks a group whose root is gone from the catalog as deleted, but never before the catalog has arrived", () => {
     const child = run({ runId: "r1", sessionPath: "/p/child.jsonl" });
     // An empty list is a catalog that has not loaded, not proof of a deletion.

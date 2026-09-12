@@ -70,6 +70,7 @@ import {
   isSessionInCodeProject,
   mainCodeProject,
   mainPath,
+  pendingSessionPath,
   mainTab,
   sessionOpenPhase,
   sameSessionOpenPhase,
@@ -82,10 +83,16 @@ import {
   PROJECT_STORAGE_KEY,
   SESSION_STORAGE_KEY,
   useMainDestinationController,
+  readDestinationMemory,
   type MainInitializationToken,
 } from "./main-destination-controller.js";
+import { createCatalogLoader } from "./catalog-loader.js";
+import { createHistoryLoader } from "./history-loader.js";
+import { sessionsList } from "../components/shell/session-groups.js";
+import { beamStore } from "../components/beam/beam-store.js";
 import { createShellSnapshot } from "./presentation-state.js";
 import { startVisiblePoll } from "./visible-poll.js";
+import { useWorkerReadiness } from "./worker-readiness.js";
 import { createMainLandingDraftStore, useMainLandingDrafts } from "./main-landing-drafts.js";
 import { sessionKindTab } from "./session-tab-memory.js";
 import { useThemeSync } from "./prefs.js";
@@ -171,7 +178,12 @@ export interface LaserActions {
   /** `navigate`, plus the engine's text into the composer. The menu's "Jump to this entry". */
   jump(entryId: string, options?: MoveOptions): Promise<void>;
   refreshSessions(): Promise<void>;
-  refreshEntries(): Promise<void>;
+  loadMoreSessions(cwd: string): Promise<boolean>;
+  allSessionSummaries(): Promise<SessionSummary[]>;
+  expandCatalog(): () => void;
+  refreshEntries(options?: { tail?: boolean }): Promise<void>;
+  loadEarlierEntries(): Promise<boolean>;
+  loadAllEntries(): Promise<boolean>;
   /** Refresh cross-app allowance for the session's account provider. */
   refreshAccountUsage(): Promise<void>;
   goal(action: GoalAction): Promise<void>;
@@ -578,14 +590,36 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   // change reaches the others, so a phone opens wearing what the desktop wears.
   useThemeSync(client, state.connection === "open");
 
+  const catalogLoader = useMemo(() => createCatalogLoader({
+    initialSizes: Object.fromEntries(sessionsList.get().revealed),
+    request: (params) => client.request("pi/session/list", params),
+    current: () => ({ sessions: readState().sessions, ...(readState().catalogGroups ? { groups: readState().catalogGroups! } : {}) }),
+    apply: (result) => dispatch({ type: "sessions", ...result }),
+    exclude: () => archive.list(),
+    probe: () => [...new Set([
+      ...Object.values(readState().agents.runs).flatMap(run => [run.sessionPath, run.rootSessionPath, ...(run.parent ? [run.parent.sessionPath] : [])]),
+      ...Object.values(readState().tasks.tasks).map(task => task.sessionPath),
+    ])],
+    include: () => {
+      const pending = pendingSessionPath(readState().destination);
+      const beam = beamStore.getSnapshot().path;
+      const memory = readDestinationMemory();
+      const code = memory.code;
+      return [...new Set([...(readState().current ? [readState().current!] : []), ...scopedPaths.current.keys(), ...sessionsList.get().pinned,
+        ...(pending ? [pending] : []), ...(beam ? [beam] : []),
+        ...(memory.chat ? [memory.chat] : []), ...("path" in code ? [code.path] : []),
+        ...(code.kind === "beam-session" && "path" in code.returnTo ? [code.returnTo.path] : []),
+      ])];
+    },
+  }), [archive, client]);
   const refreshSessions = useCallback(async () => {
-    try {
-      const { sessions } = await client.request("pi/session/list", {});
-      dispatch({ type: "sessions", sessions });
-    } catch {
-      /* not connected yet */
-    }
-  }, [client]);
+    try { await catalogLoader.refresh(); } catch { /* reconnect will retry */ }
+  }, [catalogLoader]);
+  const catalogReferences = [...new Set([
+    ...Object.values(state.agents.runs).flatMap(run => [run.sessionPath, run.rootSessionPath, ...(run.parent ? [run.parent.sessionPath] : [])]),
+    ...Object.values(state.tasks.tasks).map(task => task.sessionPath),
+  ])].sort().join("\n");
+  useEffect(() => { if (state.connection === "open") void refreshSessions(); }, [archiveRevision, catalogReferences, refreshSessions, state.connection]);
 
   /**
    * Coalesced re-list, for attention on a session we do not hold yet (a
@@ -661,6 +695,14 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    * The move re-hydrates when it lands, so the re-read has nothing to add.
    */
   const moving = useRef(new Set<string>());
+  const historyLoader = useMemo(() => createHistoryLoader({
+    get: path => readState().open[path],
+    request: params => client.request("pi/session/entries", params),
+    dispatch,
+    adoptEpoch: (path, seq) => { client.resync(path, seq); seenSeq.current.delete(path); },
+    track: (path, seq) => client.track(path, seq),
+  }), [client]);
+  const readHistory = historyLoader.read;
 
   /** Hydrate one cached view. Main-window selection belongs to the controller. */
   const openSession = useCallback(
@@ -705,19 +747,9 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         // These reads are independent once the worker has loaded the session.
         // Capture each race watermark before issuing them. Only history is
         // required for readiness; a missing goal or tray must never hide it.
-        const seqBefore = readState().open[path]?.lastSeq ?? 0;
         const expectPending = readState().open[path]?.pending;
         const history = (!hydrated || needsResync || options.refreshHistory)
-          ? client.request("pi/session/entries", { path }).then(({ entries, leafId }) => {
-          if (!accepting()) return;
-          // The snapshot is the transcript as the worker held it at `loadedSeq`,
-          // so that — not 0 — is the watermark this view now carries. Leaving it
-          // at 0 makes the next open ask for `fromSeq: 0` and receive the whole
-          // replay buffer on top of the transcript it already shows. `expectSeq`
-          // still owns the race: an update that landed while the snapshot was in
-          // flight keeps the live blocks, and its higher seq wins the stamp.
-          dispatch({ type: "hydrate", path, entries, leafId, expectSeq: seqBefore, seq: loadedSeq });
-        }) : Promise.resolve();
+          ? readHistory(path, false, accepting, loadedSeq) : Promise.resolve();
         void client.request("session/goal/get", { path }).then(({ goal }) => {
           if (accepting()) dispatch({ type: "goal", path, goal });
         }).catch(() => {});
@@ -731,6 +763,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         // here, so an unstamped view would replay its whole buffer there too.
         client.track(path, readState().open[path]?.lastSeq ?? loadedSeq);
         dispatch({ type: "sessionLoad", path, phase: "ready" });
+        if (!catalogLoader.hasIncluded(path)) void refreshSessions();
       })().catch((error: unknown) => {
         failed = true;
         dispatch({ type: "sessionLoad", path, phase: "error", reason: error instanceof Error ? error.message : String(error) });
@@ -744,7 +777,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       openInFlight.current.set(path, entry);
       return entry.promise;
     },
-    [client],
+    [client, refreshSessions, readHistory],
   );
 
   // A worker can restart at the same zero watermark. Its reopen notification
@@ -756,8 +789,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     archived: (path) => archive.has(path),
     refresh: async () => {
       await client.whenConnected();
-      const { sessions } = await client.request("pi/session/list", {});
-      dispatch({ type: "sessions", sessions });
+      await refreshSessions();
     },
     open: openSession,
     // Main and scoped callers coordinate selection outside the quiet launcher.
@@ -1001,13 +1033,18 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       }
     };
 
+    const ensureEntry = async (path: string, entryId: string) => {
+      await historyLoader.ensure(path, entryId, () => readScoped().current === path);
+      if (requireCurrent() !== path) throw new Error("The conversation changed. Choose the message again.");
+      // The engine, not a client-side tree projection, validates the target.
+    };
+
     const fork = async (entryId: string, options?: MoveOptions) => {
       const path = requireCurrent();
+      await ensureEntry(path, entryId);
       moving.current.add(path);
       let session: SessionState;
       let editorText: string | undefined;
-      let entries: unknown[];
-      let leafId: string | null | undefined;
       try {
         // A stop asked for here reaches this store as the original session's
         // own updates (the aborted reply, then settled) before the reply
@@ -1015,17 +1052,15 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         ({ state: session, editorText } = await client.request("pi/session/fork", { path, entryId, ...(options?.stopFirst ? { stopFirst: true } : {}) }));
         client.untrack(path);
         client.track(session.path, 0);
-        // Read the fork's transcript before putting it on screen. Switching
-        // first and hydrating after an await shows an empty transcript for a
-        // frame and rebuilds the thread runtime twice; both dispatches land in
-        // one task instead.
-        ({ entries, leafId } = await client.request("pi/session/entries", { path: session.path }));
+        // Prepare the fork in its own cached view; the visible source survives
+        // until this tail (and any intervening live updates) is ready.
+        dispatch({ type: "opened", state: session });
+        await readHistory(session.path);
       } finally {
         moving.current.delete(path);
       }
       dispatch({ type: "forked", from: path, state: session });
       if (readScoped === readState) destination.replaceMainSession(path, session);
-      dispatch({ type: "hydrate", path: session.path, entries, leafId });
       if (editorText) {
         dispatch({
           type: "notification",
@@ -1043,6 +1078,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
      */
     const navigate = async (entryId: string, options?: MoveOptions): Promise<{ editorText?: string } | false> => {
       const path = requireCurrent();
+      await ensureEntry(path, entryId);
       moving.current.add(path);
       try {
         // The worker owns stop-then-move: a failure after the stop leaves the
@@ -1052,8 +1088,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           dispatch({ type: "toast", level: "warning", text: "A feature stopped that change." });
           return false;
         }
-        const { entries, leafId } = await client.request("pi/session/entries", { path });
-        dispatch({ type: "hydrate", path, entries, leafId });
+        await readHistory(path);
         return editorText !== undefined ? { editorText } : {};
       } finally {
         moving.current.delete(path);
@@ -1119,15 +1154,32 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           }
         }).then(() => undefined),
       refreshSessions,
-      refreshEntries: () =>
+      loadMoreSessions: (cwd) => catalogLoader.more(cwd),
+      allSessionSummaries: () => catalogLoader.all(),
+      expandCatalog: () => {
+        const release = catalogLoader.expand();
+        void catalogLoader.refresh().catch(onError);
+        return () => { release(); void refreshSessions(); };
+      },
+      refreshEntries: (options) =>
         guard(async () => {
           const path = requireCurrent();
-          // A move in flight re-hydrates this session itself; a read now
-          // could land after it with the leaf as it was.
           if (moving.current.has(path)) return;
-          const { entries, leafId } = await client.request("pi/session/entries", { path });
-          dispatch({ type: "entries", path, entries, leafId });
+          const epoch = openEpochs.current.get(path);
+          const accepting = () => !moving.current.has(path) && openEpochs.current.get(path) === epoch;
+          if (!options?.tail) { await readHistory(path, true, accepting); return; }
+          await historyLoader.metadata(path, accepting);
         }).then(() => undefined),
+      loadAllEntries: () => guard(async () => {
+        const path = requireCurrent();
+        const epoch = openEpochs.current.get(path);
+        return historyLoader.all(path, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch);
+      }).then(Boolean),
+      loadEarlierEntries: () => guard(async () => {
+        const path = requireCurrent();
+        const epoch = openEpochs.current.get(path);
+        return historyLoader.earlier(path, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch);
+      }).then(Boolean),
       refreshAccountUsage: () =>
         guard(async () => {
           const { delivered } = await client.request("pi/account-usage/refresh", { path: requireCurrent() }).catch(error => { throw accountUsageRefreshError(error); });
@@ -1197,7 +1249,8 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           const archivedCount = readState().sessions.filter(
             (session) => session.cwd === cwd && archive.has(session.path),
           ).length;
-          const unarchivedCount = Math.max(0, (still?.sessionCount ?? 0) - archivedCount);
+          const unarchivedCount = readState().catalogGroups?.find(group => group.cwd === cwd)?.total
+            ?? Math.max(0, (still?.sessionCount ?? 0) - archivedCount);
           if (still && unarchivedCount > 0) {
             dispatch({
               type: "toast",
@@ -1252,6 +1305,8 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     markSeen,
     openSession,
     readState,
+    readHistory,
+    historyLoader,
     refreshProjects,
     refreshSessions,
   ]);
@@ -1261,7 +1316,11 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   const actionsRef = useRef<LaserActions>(actions);
   actionsRef.current = actions;
 
-  const setCurrentProject = destination.setCodeProject;
+  const prepareProject = useWorkerReadiness({ currentProject, connection: state.connection, sessionsLoaded: state.sessionsLoaded, projects: projectList, client, readState, archive });
+  const setCurrentProject = useCallback((cwd: string | undefined) => {
+    destination.setCodeProject(cwd);
+    prepareProject(cwd);
+  }, [destination.setCodeProject, prepareProject]);
 
   // The host owns the list; a session opened before the list arrives (or in a
   // directory the host has not indexed yet) still gets a rail icon. Via a
@@ -1269,8 +1328,10 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   // half of the context.
   const projectsKey = useMemo(() => {
     const workspaces = state.agents.snapshot?.workspaces;
-    return visibleProjectCwds(projectList, state.sessions, state.open, archive, { exclude: workspaces ? [workspaces.beam, workspaces.chat] : [] }).join("\n");
-  }, [archive, archiveRevision, projectList, state.open, state.sessions, state.agents.snapshot?.workspaces]);
+    return visibleProjectCwds(projectList, state.sessions, state.open, archive, { exclude: workspaces ? [workspaces.beam, workspaces.chat] : [],
+      ...(state.catalogGroups ? { visibleCounts: Object.fromEntries(state.catalogGroups.map(group => [group.cwd, group.total])) } : {}),
+    }).join("\n");
+  }, [archive, archiveRevision, projectList, state.open, state.sessions, state.catalogGroups, state.agents.snapshot?.workspaces]);
   const projects = useMemo(() => (projectsKey ? projectsKey.split("\n") : []), [projectsKey]);
   const projectInfo = useMemo(() => {
     const map: Record<string, ProjectInfo> = {};
@@ -1303,6 +1364,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     () =>
       createThreadListAdapter({
         sessions: () => readState().sessions,
+        allSessions: async () => (await client.request("pi/session/list", {})).sessions,
         views: () => readState().open,
         archive,
         creationTarget: destination.creationTarget,
@@ -1478,7 +1540,7 @@ function useThreadRuntime(store: SnapshotStore<RuntimeSnapshot>): AssistantRunti
 
   // These are the four inputs projectSessionView consumes. Metadata, optional
   // goal/tray reads and transaction changes neither blank nor re-project history.
-  const projection = useMemo(() => projectSessionView(view), [view?.blocks, view?.entries, view?.running, view?.dialogs]);
+  const projection = useMemo(() => projectSessionView(view), [view?.blocks, view?.entries, view?.history, view?.running, view?.dialogs]);
   const sharedRef = useRef<readonly ThreadMessageLike[]>([]);
   const messages = useMemo(() => {
     const shared = shareProjectedMessages(projection.messages, sharedRef.current);
@@ -1720,6 +1782,7 @@ export function LaserThreadScope({ path, onPathChange, filter, createIn, unavail
     () =>
       createThreadListAdapter({
         sessions,
+        allSessions: async () => (await client.request("pi/session/list", {})).sessions,
         views,
         archive,
         creationTarget: () => createInRef.current(store.getSnapshot()),

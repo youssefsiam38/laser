@@ -10,6 +10,7 @@ import { AGENT_EVENT_MESSAGE_TYPE, SESSION_FALLBACK_ENTRY_TYPE, SESSION_RUN_ENTR
 import { imagesOfContent, splitAttachedFiles, type AttachedFile } from "./runtime/attachments.js";
 import type {
   ImageContent,
+  HistoryWindow,
   AgentEvent,
   BackgroundTask,
   AgentModelChoice,
@@ -32,6 +33,7 @@ import type {
 
 import { activePathIds } from "./components/thread/entries.js";
 import { initialMainDestination, mainPath, type MainDestination } from "./runtime/main-destination.js";
+import { receiveHistoryUpdate, reduceHistory, type HistoryAction } from "./runtime/history-loader.js";
 
 /**
  * A user message a parent agent put into this child session, rather than the
@@ -116,6 +118,7 @@ export interface SessionView {
   state: SessionState;
   blocks: Block[];
   lastSeq: number;
+  updateEpoch?: string | undefined;
   running: boolean;
   queue: { steering: string[]; followUp: string[] };
   /**
@@ -138,8 +141,11 @@ export interface SessionView {
    */
   openedAt: string;
   hydrated: boolean;
-  /** Raw persisted entries (for the history/tree panel): every branch of the tree. */
+  /** Loaded entries; history distinguishes incomplete messages from unloaded versions. */
   entries: unknown[];
+  history?: Omit<HistoryWindow, "live"> | undefined;
+  /** Accepted updates buffered only while an authoritative window read is in flight. */
+  historyPending?: { token: string; updates: HostNotifications["session/update"][] } | undefined;
   /**
    * The entry the session is sitting on. The conversation is the path from the
    * root to it; anything off that path is a version the person can go back to
@@ -232,6 +238,9 @@ export interface AppState {
   versionMismatch?: string;
   connection: "connecting" | "open" | "closed";
   sessions: SessionSummary[];
+  catalogGroups?: Array<{ cwd: string; total: number; cursor?: string }>;
+  archivedSessionCount?: number;
+  catalogPresence?: Record<string, boolean> | undefined;
   /** True once a `pi/session/list` has landed, so an empty list is real. */
   sessionsLoaded: boolean;
   open: Record<string, SessionView>;
@@ -265,7 +274,7 @@ export const initialState: AppState = {
 export type Action =
   | { type: "versionMismatch"; version: string }
   | { type: "connection"; state: AppState["connection"] }
-  | { type: "sessions"; sessions: SessionSummary[] }
+  | { type: "sessions"; sessions: SessionSummary[]; groups?: Array<{ cwd: string; total: number; cursor?: string }>; archivedCount?: number; presence?: Record<string, boolean> }
   /** Loading/creation warms a view only; only the destination controller selects. */
   | { type: "opened"; state: SessionState }
   | { type: "sessionLoad"; path: string; phase: "opening" | "ready"; reason?: never }
@@ -288,6 +297,7 @@ export type Action =
    */
   | { type: "hydrate"; path: string; entries: unknown[]; leafId?: string | null | undefined; expectSeq?: number; seq?: number }
   | { type: "entries"; path: string; entries: unknown[]; leafId?: string | null | undefined }
+  | HistoryAction
   | { type: "goal"; path: string; goal: SessionGoal | null }
   /** `session/pending/list`, applied only if no newer tray update replaced the captured reference. */
   | { type: "pending"; path: string; messages: PendingMessage[]; expectPending: PendingMessage[] }
@@ -341,6 +351,8 @@ export function newBlockId(): string {
   return nextBlockId();
 }
 
+const historyFold = { applyUpdate, blocksFromEntries, modelNamesOf, stampNewBlocks, textOf };
+
 export function reduce(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "connection":
@@ -348,7 +360,10 @@ export function reduce(state: AppState, action: Action): AppState {
     case "versionMismatch":
       return { ...state, versionMismatch: action.version };
     case "sessions":
-      return { ...state, sessions: action.sessions.map(summary => summary.firstMessage ? { ...summary, firstMessage: summary.firstMessage.split(/(?:^|\s)<attached-file\b/)[0]!.trim() } : summary), sessionsLoaded: true };
+      return { ...state, sessions: action.sessions.map(summary => summary.firstMessage ? { ...summary, firstMessage: summary.firstMessage.split(/(?:^|\s)<attached-file\b/)[0]!.trim() } : summary), sessionsLoaded: true,
+        ...(action.groups ? { catalogGroups: action.groups, catalogPresence: action.groups.length ? action.presence ?? {} : undefined } : {}),
+        ...(action.archivedCount !== undefined ? { archivedSessionCount: action.archivedCount } : {}),
+      };
     case "sessionLoad": {
       const { [action.path]: _previous, ...rest } = state.sessionLoads;
       return { ...state, sessionLoads: action.phase === "ready" ? rest : {
@@ -384,8 +399,9 @@ export function reduce(state: AppState, action: Action): AppState {
       // The old view's live state moved to a new path; carry the transcript over.
       const old = state.open[action.from];
       const { [action.from]: _gone, ...rest } = state.open;
-      const view: SessionView = old
-        ? { ...old, path: action.state.path, state: action.state, lastSeq: 0, hydrated: false, entries: [], goal: null }
+      const prepared = state.open[action.state.path];
+      const view: SessionView = prepared?.hydrated ? { ...prepared, state: action.state } : old
+        ? { ...old, path: action.state.path, state: action.state, lastSeq: 0, hydrated: false, entries: [], history: undefined, historyPending: undefined, goal: null }
         : { path: action.state.path, state: action.state, blocks: [], lastSeq: 0, running: false, queue: { steering: [], followUp: [] }, pending: [], dialogs: [], statuses: {}, widgets: {}, openedAt: new Date().toISOString(), hydrated: false, entries: [], capabilities: [], goal: null, namerLabels: {} };
       return { ...state, open: { ...rest, [view.path]: view } };
     }
@@ -396,6 +412,12 @@ export function reduce(state: AppState, action: Action): AppState {
       const { [action.path]: _load, ...sessionLoads } = state.sessionLoads;
       return { ...state, open: rest, sessionLoads };
     }
+    case "historyBegin":
+    case "historyEnd":
+    case "historySnapshot":
+    case "historyMetadata":
+    case "historyPrepend":
+      return updateView(state, action.path, v => reduceHistory(v, action, historyFold));
     case "hydrate":
       return updateView(state, action.path, (v) => {
         // The snapshot came from the worker at `seq`; a live update that
@@ -404,8 +426,8 @@ export function reduce(state: AppState, action: Action): AppState {
         // Live updates landed while the snapshot was in flight: they already
         // carry what the snapshot has, plus what it does not.
         return action.expectSeq !== undefined && v.lastSeq !== action.expectSeq
-          ? { ...v, entries: action.entries, leafId: action.leafId, hydrated: true, lastSeq }
-          : { ...v, blocks: blocksFromEntries(action.entries, action.leafId, modelNamesOf(v.state)), entries: action.entries, leafId: action.leafId, hydrated: true, pendingSentBy: undefined, lastSeq };
+          ? { ...v, entries: action.entries, leafId: action.leafId, history: undefined, historyPending: undefined, hydrated: true, lastSeq }
+          : { ...v, blocks: blocksFromEntries(action.entries, action.leafId, modelNamesOf(v.state)), entries: action.entries, leafId: action.leafId, history: undefined, historyPending: undefined, hydrated: true, pendingSentBy: undefined, lastSeq };
       });
     case "entries":
       return updateView(state, action.path, (v) => ({ ...v, entries: action.entries, leafId: action.leafId }));
@@ -633,11 +655,7 @@ function applyNotification(state: AppState, method: HostNotificationMethod, para
   switch (method) {
     case "session/update": {
       const p = params as HostNotifications["session/update"];
-      return updateView(state, p.sessionPath, (v) => {
-        if (p.seq <= v.lastSeq) return v; // replayed duplicate
-        const next = applyUpdate(v, p.update);
-        return { ...next, blocks: stampNewBlocks(v.blocks, next.blocks, p.at), lastSeq: p.seq };
-      });
+      return updateView(state, p.sessionPath, v => receiveHistoryUpdate(v, p, historyFold));
     }
     case "pi/ui/request": {
       const p = params as HostNotifications["pi/ui/request"];
@@ -720,7 +738,7 @@ function applyNotification(state: AppState, method: HostNotificationMethod, para
  * only candidates are the ones past `before.length`; the common delta (same
  * length, same tail id) does no work at all.
  */
-function stampNewBlocks(before: Block[], after: Block[], at: string): Block[] {
+export function stampNewBlocks(before: Block[], after: Block[], at: string): Block[] {
   if (before === after || !at) return after;
   if (after.length <= before.length) return after;
   let changed = false;
@@ -884,7 +902,7 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
         const index = optimistic !== -1 ? optimistic : v.blocks.at(-1)?.kind === "user" ? v.blocks.length - 1 : -1;
         if (index === -1) return v;
         const block = v.blocks[index] as Extract<Block, { kind: "user" }>;
-        const blocks = replaceAt(v.blocks, index, { ...block, ...splitAttachedFiles(text), images: imagesOfContent(msg.content), optimistic: false, ...(u.entry ? { entryId: u.entry.id } : {}) });
+        const blocks = replaceAt(v.blocks, index, { ...block, ...splitAttachedFiles(text), images: imagesOfContent(msg.content), optimistic: false, ...(u.entry ? { id: `entry:${u.entry.id}`, entryId: u.entry.id } : {}) });
         // The prompt's place in the tree arrives with it, so its actions (fork,
         // jump, edit, versions, the request it produced) work while the turn
         // runs. The tree holds a copy until the next full read: the entry is
@@ -1081,7 +1099,7 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null, na
     // persisted as its own entry type, with the message fields at the top.
     if (e.type === "custom_message") {
       const block = customBlock(raw as { customType?: unknown; content?: unknown; details?: unknown }, entryTimestamp(e.timestamp));
-      if (block) blocks.push(block);
+      if (block) blocks.push(typeof e.id === "string" ? { ...block, id: `entry:${e.id}` } : block);
       continue;
     }
     // The harness's run marker is a plain custom entry, not a message: it
@@ -1095,7 +1113,7 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null, na
       // A model fallback wrote its own record here (M15-T3). Reading a session
       // back must show the same line the person saw when it happened.
       const record = fallbackRecord(raw, entryTimestamp(e.timestamp), names);
-      if (record) blocks.push(record);
+      if (record) blocks.push(typeof e.id === "string" ? { ...record, id: `entry:${e.id}` } : record);
       continue;
     }
     if (e.type !== "message" || !e.message) continue;
@@ -1107,7 +1125,7 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null, na
     if (m.role === "user") {
       blocks.push({
         kind: "user",
-        id: nextBlockId(),
+        id: typeof e.id === "string" ? `entry:${e.id}` : nextBlockId(),
         ...(at ? { at } : {}),
         ...splitAttachedFiles(textOf(m.content)),
         images: imagesOfContent(m.content),
@@ -1128,10 +1146,10 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null, na
       // The engine writes the turn's token counts on the entry; a reloaded
       // footer shows the same accounting the live one did.
       const usage = usageOfEntry((m as { usage?: unknown }).usage);
-      if (text || thinking || stopReason) {
+      if (text || thinking || stopReason || parts.some(part => part.type === "toolCall")) {
         blocks.push({
           kind: "assistant",
-          id: nextBlockId(),
+          id: typeof e.id === "string" ? `entry:${e.id}` : nextBlockId(),
           ...(at ? { at } : {}),
           text,
           thinking,
