@@ -177,6 +177,10 @@ function RequestBody({entry}:{entry:LogEntry}) {
   const find=useRequestFind(query,`${section}:${scope}:${contentView}:${loading}`);
   const sectionLabel=SECTIONS.find(item=>item.id===section)!.label;
   const closeSearch=()=>{
+    // Escape from the find input while the source panel is open closes the
+    // panel first — the same order the dialog keeps for Escape anywhere else.
+    const closeSources=find.viewport.current?.closest('[role="dialog"]')?.querySelector<HTMLButtonElement>('[data-close-source-panel]');
+    if(closeSources){closeSources.click();return;}
     setSearch("");setSearchOpen(false);
     requestAnimationFrame(()=>find.viewport.current?.closest('[role="dialog"]')?.querySelector<HTMLButtonElement>('[aria-label="Search request"]')?.focus({preventScroll:true}));
   };

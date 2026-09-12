@@ -222,7 +222,7 @@ it("restores the machine-level Markdown preference",async()=>{
 
 async function search(value:string) {
   // The find bar starts closed; the Search button opens it.
-  if(!document.querySelector('[role="search"] input')) await click("Search");
+  if(!document.querySelector('[role="search"] input')) await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="Search request"]')!.click());
   await act(async()=>{
     const input=document.querySelector<HTMLInputElement>('[role="search"] input')!;
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value")!.set!.call(input,value);
@@ -234,7 +234,7 @@ const highlighted=()=>[...(CSS.highlights.get("request-matches")??[])].map((rang
 it("highlights instructions in place, preserves focus, wraps matches and clears search before closing the modal",async()=>{
   const close=vi.fn();
   await act(async()=>root.render(<ApiRequestDialog target={{kind:"log",entry:{...entry,detail:{instructions:"A needle here. Another needle there."}}}} onClose={close}/>));
-  await click("Search");
+  await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="Search request"]')!.click());
   const input=document.querySelector<HTMLInputElement>('[role="search"] input')!;input.focus();
   await search("needle");expect(document.activeElement).toBe(input);expect(count()).toBe("1 / 2");expect(highlighted()).toEqual(["needle","needle"]);
   await act(async()=>input.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",shiftKey:true,bubbles:true,cancelable:true})));
