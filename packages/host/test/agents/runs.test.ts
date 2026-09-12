@@ -3,7 +3,7 @@
  * ran them is gone, and how a child path finds its tree and its project.
  */
 import { PRODUCT_NAME, type AgentRun } from "@lasercode/protocol";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -41,6 +41,52 @@ function run(runId: string, patch: Partial<AgentRun> = {}): AgentRun {
 const NOW = () => new Date("2026-06-02T00:00:00.000Z");
 
 describe("AgentRunRegistry", () => {
+  it("indexes retained history without global scans and isolates every public mutation boundary", () => {
+    const registry = new AgentRunRegistry({ now: NOW });
+    try {
+      for (let i = 0; i < 5000; i++) registry.upsert(run(`r${i}`, { status: "completed", projectCwd: `/p/${i % 20}`, rootSessionPath: `/root/${i % 20}` }));
+      const input = run("live", { sessionPath: "/s/live", status: "needs_input" });
+      const returned = registry.upsert(input);
+      input.parent!.sessionPath = "caller mutation";
+      returned.status = "failed";
+      const global = (registry as unknown as { runs: Map<string, AgentRun> }).runs;
+      const spy = vi.spyOn(global, "values");
+      try {
+        registry.upsert(run("live", { sessionPath: "/s/live", status: "needs_input" }));
+        expect(registry.hasLiveRun(PROJECT)).toBe(true);
+        expect(registry.latestFor("/s/live")?.status).toBe("needs_input");
+        expect(registry.rootOf("/s/live")).toBe(ROOT);
+        expect(registry.projectCwdOf("/s/live")).toBe(PROJECT);
+        expect(registry.list("/s/live")).toHaveLength(1);
+        expect(spy).not.toHaveBeenCalled();
+      } finally { spy.mockRestore(); }
+      const latest = registry.latestFor("/s/live")!;
+      latest.parent!.sessionPath = "another mutation";
+      expect(registry.get("live")?.parent?.sessionPath).toBe(ROOT);
+      registry.forgetSession("/s/live");
+      expect(registry.hasLiveRun(PROJECT)).toBe(false);
+      registry.upsert(run("next", { sessionPath: "/s/live", startedAt: "2026-06-01T00:00:09.000Z" }));
+      expect(registry.latestFor("/s/live")?.runId).toBe("next");
+      registry.workerLost(PROJECT);
+      expect(registry.hasLiveRun(PROJECT)).toBe(false);
+      expect(registry.latestFor("/s/live")?.status).toBe("failed");
+    } finally { registry.close(); }
+  });
+
+  it("expires idle projects in bounded scheduled passes without expiring live work", async () => {
+    vi.useFakeTimers();
+    let now = NOW();
+    const registry = new AgentRunRegistry({ now: () => now, retentionDays: 1 });
+    try {
+      registry.upsert(run("done", { status: "completed", updatedAt: now.toISOString() }));
+      registry.upsert(run("question", { status: "needs_input" }));
+      now = new Date("2026-06-05");
+      await vi.advanceTimersByTimeAsync(60_010);
+      expect(registry.get("done")).toBeUndefined();
+      expect(registry.latestFor("/sessions/child-question.jsonl")?.status).toBe("needs_input");
+      expect(registry.hasLiveRun(PROJECT)).toBe(true);
+    } finally { registry.close(); vi.useRealTimers(); }
+  });
   it("upserts, lists by tree root through a child path, and finds the project of a child", () => {
     const registry = new AgentRunRegistry({ now: NOW });
     registry.upsert(run("r1", { startedAt: "2026-06-01T00:00:01.000Z" }));
