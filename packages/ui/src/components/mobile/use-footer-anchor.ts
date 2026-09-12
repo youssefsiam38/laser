@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useDirection } from "@/hooks/use-direction";
 
 export interface FooterAnchor {
   /** px from the bottom of the layout viewport to the footer's top edge. */
@@ -21,7 +22,9 @@ const NONE: FooterAnchor = { bottom: 0, left: 0, width: 0 };
  */
 export function useFooterAnchor(selector = '[data-slot="thread-footer"]'): FooterAnchor {
   const [anchor, setAnchor] = useState<FooterAnchor>(NONE);
+  const direction = useDirection();
 
+  // Direction can move the column without changing its observed size.
   useEffect(() => {
     let footer: Element | null = null;
     let resize: ResizeObserver | undefined;
@@ -73,7 +76,7 @@ export function useFooterAnchor(selector = '[data-slot="thread-footer"]'): Foote
       vv?.removeEventListener("scroll", measure);
       window.removeEventListener("resize", measure);
     };
-  }, [selector]);
+  }, [selector, direction]);
 
   return anchor;
 }
