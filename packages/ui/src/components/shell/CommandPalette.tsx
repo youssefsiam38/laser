@@ -22,13 +22,15 @@ export function CommandPaletteDialog({ open, onOpenChange }: { open: boolean; on
   const [query, setQuery] = useState("");
   const [activeId, setActiveId] = useState("");
   const commands = usePaletteCommands();
+  const { actions } = useLaserStable();
+  useEffect(() => open ? actions.expandCatalog?.() : undefined, [actions, open]);
 
   // A fresh open starts at the top of the list with an empty box.
   useEffect(() => {
     if (!open) return;
     setQuery("");
-    setActiveId(commands[0]?.id ?? "");
-  }, [open, commands]);
+    setActiveId("");
+  }, [open]);
 
   // The highlight follows the filter: the first match is active by default.
   useEffect(() => {

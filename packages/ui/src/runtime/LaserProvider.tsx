@@ -70,6 +70,7 @@ import {
   isSessionInCodeProject,
   mainCodeProject,
   mainPath,
+  pendingSessionPath,
   mainTab,
   sessionOpenPhase,
   sameSessionOpenPhase,
@@ -82,8 +83,12 @@ import {
   PROJECT_STORAGE_KEY,
   SESSION_STORAGE_KEY,
   useMainDestinationController,
+  readDestinationMemory,
   type MainInitializationToken,
 } from "./main-destination-controller.js";
+import { createCatalogLoader } from "./catalog-loader.js";
+import { sessionsList } from "../components/shell/session-groups.js";
+import { beamStore } from "../components/beam/beam-store.js";
 import { createMainLandingDraftStore, useMainLandingDrafts } from "./main-landing-drafts.js";
 import { sessionKindTab } from "./session-tab-memory.js";
 import { useThemeSync } from "./prefs.js";
@@ -169,6 +174,9 @@ export interface LaserActions {
   /** `navigate`, plus the engine's text into the composer. The menu's "Jump to this entry". */
   jump(entryId: string, options?: MoveOptions): Promise<void>;
   refreshSessions(): Promise<void>;
+  loadMoreSessions(cwd: string): Promise<boolean>;
+  allSessionSummaries(): Promise<SessionSummary[]>;
+  expandCatalog(): () => void;
   refreshEntries(): Promise<void>;
   /** Refresh cross-app allowance for the session's account provider. */
   refreshAccountUsage(): Promise<void>;
@@ -557,14 +565,36 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   // change reaches the others, so a phone opens wearing what the desktop wears.
   useThemeSync(client, state.connection === "open");
 
+  const catalogLoader = useMemo(() => createCatalogLoader({
+    initialSizes: Object.fromEntries(sessionsList.get().revealed),
+    request: (params) => client.request("pi/session/list", params),
+    current: () => ({ sessions: readState().sessions, ...(readState().catalogGroups ? { groups: readState().catalogGroups! } : {}) }),
+    apply: (result) => dispatch({ type: "sessions", ...result }),
+    exclude: () => archive.list(),
+    probe: () => [...new Set([
+      ...Object.values(readState().agents.runs).flatMap(run => [run.sessionPath, run.rootSessionPath, ...(run.parent ? [run.parent.sessionPath] : [])]),
+      ...Object.values(readState().tasks.tasks).map(task => task.sessionPath),
+    ])],
+    include: () => {
+      const pending = pendingSessionPath(readState().destination);
+      const beam = beamStore.getSnapshot().path;
+      const memory = readDestinationMemory();
+      const code = memory.code;
+      return [...new Set([...(readState().current ? [readState().current!] : []), ...scopedPaths.current.keys(), ...sessionsList.get().pinned,
+        ...(pending ? [pending] : []), ...(beam ? [beam] : []),
+        ...(memory.chat ? [memory.chat] : []), ...("path" in code ? [code.path] : []),
+        ...(code.kind === "beam-session" && "path" in code.returnTo ? [code.returnTo.path] : []),
+      ])];
+    },
+  }), [archive, client]);
   const refreshSessions = useCallback(async () => {
-    try {
-      const { sessions } = await client.request("pi/session/list", {});
-      dispatch({ type: "sessions", sessions });
-    } catch {
-      /* not connected yet */
-    }
-  }, [client]);
+    try { await catalogLoader.refresh(); } catch { /* reconnect will retry */ }
+  }, [catalogLoader]);
+  const catalogReferences = [...new Set([
+    ...Object.values(state.agents.runs).flatMap(run => [run.sessionPath, run.rootSessionPath, ...(run.parent ? [run.parent.sessionPath] : [])]),
+    ...Object.values(state.tasks.tasks).map(task => task.sessionPath),
+  ])].sort().join("\n");
+  useEffect(() => { if (state.connection === "open") void refreshSessions(); }, [archiveRevision, catalogReferences, refreshSessions, state.connection]);
 
   /**
    * Coalesced re-list, for attention on a session we do not hold yet (a
@@ -711,6 +741,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         // here, so an unstamped view would replay its whole buffer there too.
         client.track(path, readState().open[path]?.lastSeq ?? loadedSeq);
         dispatch({ type: "sessionLoad", path, phase: "ready" });
+        if (!catalogLoader.hasIncluded(path)) void refreshSessions();
       })().catch((error: unknown) => {
         failed = true;
         dispatch({ type: "sessionLoad", path, phase: "error", reason: error instanceof Error ? error.message : String(error) });
@@ -724,7 +755,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       openInFlight.current.set(path, entry);
       return entry.promise;
     },
-    [client],
+    [client, refreshSessions],
   );
 
   // A worker can restart at the same zero watermark. Its reopen notification
@@ -736,8 +767,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     archived: (path) => archive.has(path),
     refresh: async () => {
       await client.whenConnected();
-      const { sessions } = await client.request("pi/session/list", {});
-      dispatch({ type: "sessions", sessions });
+      await refreshSessions();
     },
     open: openSession,
     // Main and scoped callers coordinate selection outside the quiet launcher.
@@ -1099,6 +1129,13 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           }
         }).then(() => undefined),
       refreshSessions,
+      loadMoreSessions: (cwd) => catalogLoader.more(cwd),
+      allSessionSummaries: () => catalogLoader.all(),
+      expandCatalog: () => {
+        const release = catalogLoader.expand();
+        void catalogLoader.refresh().catch(onError);
+        return () => { release(); void refreshSessions(); };
+      },
       refreshEntries: () =>
         guard(async () => {
           const path = requireCurrent();
@@ -1177,7 +1214,8 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           const archivedCount = readState().sessions.filter(
             (session) => session.cwd === cwd && archive.has(session.path),
           ).length;
-          const unarchivedCount = Math.max(0, (still?.sessionCount ?? 0) - archivedCount);
+          const unarchivedCount = readState().catalogGroups?.find(group => group.cwd === cwd)?.total
+            ?? Math.max(0, (still?.sessionCount ?? 0) - archivedCount);
           if (still && unarchivedCount > 0) {
             dispatch({
               type: "toast",
@@ -1249,8 +1287,10 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   // half of the context.
   const projectsKey = useMemo(() => {
     const workspaces = state.agents.snapshot?.workspaces;
-    return visibleProjectCwds(projectList, state.sessions, state.open, archive, { exclude: workspaces ? [workspaces.beam, workspaces.chat] : [] }).join("\n");
-  }, [archive, archiveRevision, projectList, state.open, state.sessions, state.agents.snapshot?.workspaces]);
+    return visibleProjectCwds(projectList, state.sessions, state.open, archive, { exclude: workspaces ? [workspaces.beam, workspaces.chat] : [],
+      ...(state.catalogGroups ? { visibleCounts: Object.fromEntries(state.catalogGroups.map(group => [group.cwd, group.total])) } : {}),
+    }).join("\n");
+  }, [archive, archiveRevision, projectList, state.open, state.sessions, state.catalogGroups, state.agents.snapshot?.workspaces]);
   const projects = useMemo(() => (projectsKey ? projectsKey.split("\n") : []), [projectsKey]);
   const projectInfo = useMemo(() => {
     const map: Record<string, ProjectInfo> = {};
@@ -1283,6 +1323,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     () =>
       createThreadListAdapter({
         sessions: () => readState().sessions,
+        allSessions: async () => (await client.request("pi/session/list", {})).sessions,
         views: () => readState().open,
         archive,
         creationTarget: destination.creationTarget,
@@ -1700,6 +1741,7 @@ export function LaserThreadScope({ path, onPathChange, filter, createIn, unavail
     () =>
       createThreadListAdapter({
         sessions,
+        allSessions: async () => (await client.request("pi/session/list", {})).sessions,
         views,
         archive,
         creationTarget: () => createInRef.current(store.getSnapshot()),

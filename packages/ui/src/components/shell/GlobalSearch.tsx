@@ -36,6 +36,7 @@ function GlobalSearchBody({ close }: { close: () => void }) {
   const [activeId, setActiveId] = useState<string>();
   const [opening, setOpening] = useState(false);
   const { actions } = useLaserStable();
+  useEffect(() => actions.expandCatalog?.(), [actions]);
   const sessions = useLaserState(s => s.sessions);
   const views = useLaserState(s => s.open);
   const workspaces = useLaserState(workspacesOf);

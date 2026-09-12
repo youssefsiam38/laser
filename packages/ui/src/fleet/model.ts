@@ -143,6 +143,8 @@ export interface FleetInput {
    * "deleted".
    */
   sessionsLoaded?: boolean | undefined;
+  /** With a paged catalog, only explicit host absence proves deletion. */
+  sessionPresence?: Readonly<Record<string, boolean>> | undefined;
   now: number;
 }
 
@@ -311,7 +313,8 @@ export function buildFleet(input: FleetInput): FleetGroup[] {
     // A root the catalog does not list, once there is a catalog to list it,
     // was deleted underneath its work. An open view of it is not a
     // counter-proof: the view is the client's memory, not the disk.
-    const deleted = summary === undefined && (input.sessionsLoaded ?? sessions.length > 0);
+    const deleted = input.sessionPresence !== undefined ? input.sessionPresence[rootPath] === false
+      : summary === undefined && (input.sessionsLoaded ?? sessions.length > 0);
     groups.push({
       path: rootPath,
       cwd: summary?.cwd ?? view?.state.cwd ?? runList.find((run) => run.rootSessionPath === rootPath)?.projectCwd ?? "",

@@ -526,6 +526,14 @@ describe("client request schemas", () => {
     }
   });
 
+  it("round-trips the paged catalog variant and refuses invalid page bounds", () => {
+    const params = { cwd: "/project", page: { cursor: "opaque", size: 7, sizes: { "/other": 14 }, exclude: ["/archived"], include: ["/selected"], probe: ["/fleet-root"] } };
+    const request = { jsonrpc: "2.0", id: 1, method: "pi/session/list", params };
+    expect(parseClientRequest(JSON.parse(JSON.stringify(request))).params).toEqual(params);
+    for (const size of [0, -1, 1.5, 1001]) expect(() => parseClientRequest({ ...request, params: { page: { size } } })).toThrow();
+    expect(() => parseClientRequest({ ...request, params: { page: { cursor: "x".repeat(8193) } } })).toThrow();
+  });
+
   it("treats missing params as an empty object for methods that allow it", () => {
     const req = parseClientRequest({ jsonrpc: "2.0", id: "a", method: "pi/session/list" });
     expect(req.params).toEqual({});

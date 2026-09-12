@@ -232,6 +232,9 @@ export interface AppState {
   versionMismatch?: string;
   connection: "connecting" | "open" | "closed";
   sessions: SessionSummary[];
+  catalogGroups?: Array<{ cwd: string; total: number; cursor?: string }>;
+  archivedSessionCount?: number;
+  catalogPresence?: Record<string, boolean> | undefined;
   /** True once a `pi/session/list` has landed, so an empty list is real. */
   sessionsLoaded: boolean;
   open: Record<string, SessionView>;
@@ -265,7 +268,7 @@ export const initialState: AppState = {
 export type Action =
   | { type: "versionMismatch"; version: string }
   | { type: "connection"; state: AppState["connection"] }
-  | { type: "sessions"; sessions: SessionSummary[] }
+  | { type: "sessions"; sessions: SessionSummary[]; groups?: Array<{ cwd: string; total: number; cursor?: string }>; archivedCount?: number; presence?: Record<string, boolean> }
   /** Loading/creation warms a view only; only the destination controller selects. */
   | { type: "opened"; state: SessionState }
   | { type: "sessionLoad"; path: string; phase: "opening" | "ready"; reason?: never }
@@ -348,7 +351,10 @@ export function reduce(state: AppState, action: Action): AppState {
     case "versionMismatch":
       return { ...state, versionMismatch: action.version };
     case "sessions":
-      return { ...state, sessions: action.sessions.map(summary => summary.firstMessage ? { ...summary, firstMessage: summary.firstMessage.split(/(?:^|\s)<attached-file\b/)[0]!.trim() } : summary), sessionsLoaded: true };
+      return { ...state, sessions: action.sessions.map(summary => summary.firstMessage ? { ...summary, firstMessage: summary.firstMessage.split(/(?:^|\s)<attached-file\b/)[0]!.trim() } : summary), sessionsLoaded: true,
+        ...(action.groups ? { catalogGroups: action.groups, catalogPresence: action.groups.length ? action.presence ?? {} : undefined } : {}),
+        ...(action.archivedCount !== undefined ? { archivedSessionCount: action.archivedCount } : {}),
+      };
     case "sessionLoad": {
       const { [action.path]: _previous, ...rest } = state.sessionLoads;
       return { ...state, sessionLoads: action.phase === "ready" ? rest : {

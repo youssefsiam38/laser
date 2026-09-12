@@ -49,7 +49,10 @@ function useBeamPath(): string | undefined {
       if (path === undefined) return "none" as const;
       if (s.open[path] !== undefined) return "open" as const;
       if (!s.sessionsLoaded) return "pending" as const;
-      return s.sessions.some((session) => session.path === path) ? "listed" : "gone";
+      if (s.sessions.some((session) => session.path === path)) return "listed" as const;
+      if (s.catalogPresence !== undefined) return s.catalogPresence[path] === false ? "gone" as const
+        : s.catalogPresence[path] === true ? "listed" as const : "pending" as const;
+      return "gone" as const;
     }, [path]),
   );
   useEffect(() => {

@@ -928,7 +928,10 @@ export interface ClientRequests {
   "session/cancel": { params: { path: string }; result: {} };
   "session/set_mode": { params: { path: string; mode: string }; result: {} };
 
-  "pi/session/list": { params: { cwd?: string }; result: { sessions: SessionSummary[] } };
+  "pi/session/list": {
+    params: { cwd?: string; page?: { cursor?: string; size?: number; sizes?: Record<string, number>; exclude?: string[]; include?: string[]; probe?: string[] } };
+    result: { sessions: SessionSummary[]; groups?: Array<{ cwd: string; total: number; cursor?: string }>; archivedCount?: number; presence?: Record<string, boolean> };
+  };
   /** Read-only search of saved conversations; no worker is opened. */
   "session/search": {
     params: { query: string; cwd?: string; after?: string; before?: string; cursor?: number };

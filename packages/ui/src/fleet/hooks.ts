@@ -43,6 +43,7 @@ export interface FleetView {
 export function useFleet(): FleetView {
   const sessions = useLaserState((s: AppState) => s.sessions);
   const sessionsLoaded = useLaserState((s: AppState) => s.sessionsLoaded);
+  const sessionPresence = useLaserState((s: AppState) => s.catalogPresence);
   const runs = useLaserState((s: AppState) => s.agents.runs);
   const tasks = useLaserState((s: AppState) => s.tasks.tasks);
   const views = useLaserState((s: AppState) => s.open);
@@ -59,7 +60,7 @@ export function useFleet(): FleetView {
     // state before the catalog has a row for it; the index answers for the rest.
     const root =
       current === undefined ? undefined : (views[current]?.state.agent?.rootPath ?? createAncestryIndex(runs, sessions).rootOf(current));
-    const groups = buildFleet({ sessions, runs, tasks, views, currentPath: current, sessionsLoaded, now: Date.now() });
+    const groups = buildFleet({ sessions, runs, tasks, views, currentPath: current, sessionsLoaded, sessionPresence, now: Date.now() });
     const scope = scopeFleet(groups, root);
     const summary = fleetSummary(scope.tree ? [scope.tree] : []);
     const elsewhere = fleetSummary(scope.elsewhere);
@@ -76,7 +77,7 @@ export function useFleet(): FleetView {
     };
     // `tick` is the clock: it is in the list on purpose, so elapsed advances
     // without anything else changing.
-  }, [sessions, sessionsLoaded, runs, tasks, views, current, tick]);
+  }, [sessions, sessionsLoaded, sessionPresence, runs, tasks, views, current, tick]);
 
   const nextLive = fleet.running > 0 || fleet.elsewhereRunning > 0;
   useEffect(() => setLive(nextLive), [nextLive]);

@@ -565,8 +565,11 @@ export const ThreadList: FC<ThreadListProps> = ({ projects, query = "", onOpen, 
   const runs = useLaserState((s) => s.agents.runs);
   const groups = useThreadListGroups(projects, tab === "code" ? list.filter : undefined, query, tab, workspaces);
   const tree = useMemo(() => branchInfoOf(groups, runs), [groups, runs]);
-  const archivedCount = useAuiState((s) => s.threads.archivedThreadIds.length);
-  const { currentProject } = useLaserStable();
+  const loadedArchivedCount = useAuiState((s) => s.threads.archivedThreadIds.length);
+  const archivedCount = useLaserState(s => s.archivedSessionCount) ?? loadedArchivedCount;
+  const { currentProject, actions } = useLaserStable();
+  const searchingCatalog = query.trim().length > 0;
+  useEffect(() => searchingCatalog ? actions.expandCatalog?.() : undefined, [actions, searchingCatalog]);
   const [editing, setEditing] = useState<string | undefined>(undefined);
   const openPath = useAuiState((s) => {
     const item = s.threads.threadItems.find((candidate) => candidate.id === s.threads.mainThreadId);
@@ -637,7 +640,7 @@ export const ThreadList: FC<ThreadListProps> = ({ projects, query = "", onOpen, 
         )}
         {chat
           ? groups.map((group) => (
-              <ChatGroup key={group.cwd} group={group} editing={editing} onEdit={setEditing} onOpen={onOpen} />
+              <ChatGroup key={group.cwd} group={group} searching={!!query.trim()} openPath={openPath} editing={editing} onEdit={setEditing} onOpen={onOpen} />
             ))
           : groups.map((group) => (
               <ProjectGroup
@@ -686,10 +689,13 @@ interface ProjectGroupProps {
 }
 
 const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, searching, openPath, canCreate, editing, onEdit, onOpen, onNewSession }: ProjectGroupProps) {
+  const workspaces = useContext(WorkspacesContext);
   const aui = useAui();
   const { actions, archive } = useLaserStable();
   const sessions = useLaserState((state) => state.sessions);
   const { revealed } = useSessionsList();
+  const catalogPage = useLaserState(state => state.catalogGroups?.find(page => page.cwd === group.cwd));
+  const [loadingMore, setLoadingMore] = useState(false);
   const limit = revealed.get(group.cwd) ?? 7;
   const summaries = useMemo(() => new Map(sessions.map(session => [session.path, session])), [sessions]);
   // Keep live work, questions and unread outcomes reachable even outside the
@@ -705,13 +711,15 @@ const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, s
     return JSON.stringify(group.roots.filter(important).map(node => node.path));
   });
   const protectedSet = useMemo(() => new Set<string>(JSON.parse(protectedPaths) as string[]), [protectedPaths]);
-  const shownRoots = group.roots.filter((node, index) => searching || node.empty || index < limit || protectedSet.has(node.path) || lineageTo([node], openPath).length > 0);
-  const hasMore = shownRoots.length < group.roots.length;
+  let ordinaryRoots = 0;
+  const shownRoots = group.roots.filter(node => searching || node.empty || protectedSet.has(node.path) || ordinaryRoots++ < limit || lineageTo([node], openPath).length > 0);
+  const locallyHidden = shownRoots.length < group.roots.length;
+  const hasMore = locallyHidden || !!catalogPage?.cursor;
   const id = groupDomId(group.cwd);
   const listId = `${id}-list`;
   const beam = group.kind === "beam";
   const count = group.roots.length + group.detached.length;
-  const total = group.total;
+  const total = catalogPage?.total ?? group.total;
   // Beam's group starts a Beam chat, which opens in the window rather than in
   // the bubble; the panel decides which agent a directory means (D-143).
   const newSession = onNewSession;
@@ -762,17 +770,17 @@ const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, s
           <DropdownMenuContent align="end" className="min-w-56">
             <DropdownMenuItem
               disabled={total === 0}
-              onSelect={() => {
-                // Include unwritten sessions present only in the runtime, and
-                // all catalog roots even while the person is filtering titles.
-                const seeds = sessions.filter((session) => session.cwd === group.cwd).map((session) => session.path);
+              onSelect={() => { void (async () => {
+                // Archive uses the complete summary tree, not just fetched pages.
+                const complete = actions.allSessionSummaries ? await actions.allSessionSummaries() : sessions;
+                const seeds = complete.filter((session) => session.cwd === group.cwd || (beam && workspaceKindOf(session.cwd, workspaces) === "beam")).map((session) => session.path);
                 const include = (node: ThreadListNode) => { seeds.push(node.path); node.children.forEach(include); };
                 [...group.roots, ...group.pinned, ...group.detached].forEach(include);
-                const paths = sessionSubtreePaths(seeds, sessions);
+                const paths = sessionSubtreePaths(seeds, complete);
                 paths.forEach((path) => archive.add(path));
                 void aui.threads.reload();
                 actions.toast("info", `${paths.length} chat${paths.length === 1 ? "" : "s"} archived in ${group.name}.`);
-              }}
+              })().catch(() => actions.toast("error", "Couldn’t archive these chats. Try again.")); }}
             >
               <Archive /> Archive chats
             </DropdownMenuItem>
@@ -803,15 +811,25 @@ const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, s
             {shownRoots.map((node) => (
               <SessionBranch key={node.path} node={node} editing={editing} onEdit={onEdit} onOpen={onOpen} />
             ))}
-            {!searching && group.roots.length > 7 && (hasMore || limit > 7) && (
+            {!searching && (loadingMore || hasMore || limit > 7) && (
               <button
                 type="button"
                 aria-expanded={limit > 7}
                 aria-controls={listId}
-                onClick={() => sessionsList.reveal(group.cwd, hasMore ? limit + 7 : 7)}
+                aria-disabled={loadingMore}
+                onClick={() => {
+                  if (loadingMore) return;
+                  if (!hasMore) { sessionsList.reveal(group.cwd, 7); return; }
+                  if (locallyHidden) { sessionsList.reveal(group.cwd, limit + 7); return; }
+                  setLoadingMore(true);
+                  void actions.loadMoreSessions(group.cwd).then(applied => {
+                    if (applied) sessionsList.reveal(group.cwd, limit + 7);
+                  }).catch(() => actions.toast("error", "Couldn’t load earlier chats. Try again."))
+                    .finally(() => setLoadingMore(false));
+                }}
                 className="flex h-8 w-full cursor-pointer items-center rounded-md ps-9 pe-2 text-xs text-ink-3 outline-none hover:bg-surface-2 hover:text-ink active:bg-surface-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live pointer-coarse:h-11"
               >
-                {hasMore ? "Load more" : "Show fewer"}
+                {loadingMore ? "Loading chats…" : hasMore ? "Load more" : "Show fewer"}
               </button>
             )}
             {group.detached.length > 0 && <DetachedRows nodes={group.detached} editing={editing} onEdit={onEdit} onOpen={onOpen} />}
@@ -822,16 +840,50 @@ const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, s
 });
 
 /** The Chat tab: no folder, no header — the conversations themselves, newest first. */
-function ChatGroup({ group, editing, onEdit, onOpen }: { group: ThreadListGroup; editing: string | undefined; onEdit(id: string | undefined): void; onOpen?: (() => void) | undefined }) {
+function ChatGroup({ group, searching, openPath, editing, onEdit, onOpen }: { group: ThreadListGroup; searching: boolean; openPath: string; editing: string | undefined; onEdit(id: string | undefined): void; onOpen?: (() => void) | undefined }) {
+  const { actions } = useLaserStable();
+  const cursor = useLaserState(state => state.catalogGroups?.find(page => page.cwd === group.cwd)?.cursor);
+  const { revealed } = useSessionsList();
+  const limit = revealed.get(group.cwd) ?? 7;
+  const protectedPaths = useLaserState(state => {
+    const summaries = new Map(state.sessions.map(summary => [summary.path, summary]));
+    const runs = latestRunsBySession(state.agents.runs);
+    const important = (node: ThreadListNode): boolean => {
+      const run = runs.get(node.path);
+      return node.empty === true || sessionStatus(state.open[node.path], summaries.get(node.path)) !== "idle"
+        || (run !== undefined && ACTIVE_RUN.has(run.status)) || node.children.some(important);
+    };
+    return JSON.stringify(group.roots.filter(important).map(node => node.path));
+  });
+  const protectedSet = useMemo(() => new Set<string>(JSON.parse(protectedPaths) as string[]), [protectedPaths]);
+  let ordinaryRoots = 0;
+  const shownRoots = group.roots.filter(node => searching || protectedSet.has(node.path) || ordinaryRoots++ < limit || lineageTo([node], openPath).length > 0);
+  const locallyHidden = shownRoots.length < group.roots.length;
+  const hasMore = locallyHidden || !!cursor;
+  const [loading, setLoading] = useState(false);
+  const listId = `${groupDomId(group.cwd)}-chats`;
   const layout = useContext(LayoutContext);
   const own = useMemo<RowLayout>(() => ({ ...layout, gutter: needsGutter(group.roots) }), [layout, group.roots]);
   return (
     <section aria-label="Chats" data-cwd={group.cwd} data-kind="chat">
       <LayoutContext value={own}>
-      <div role="list">
-        {group.roots.map((node) => (
+      <div id={listId} role="list">
+        {shownRoots.map((node) => (
           <SessionBranch key={node.path} node={node} editing={editing} onEdit={onEdit} onOpen={onOpen} />
         ))}
+        {!searching && (loading || hasMore || limit > 7) && <button type="button" aria-disabled={loading} aria-expanded={limit > 7} aria-controls={listId}
+          className="flex h-8 w-full cursor-pointer items-center rounded-md px-3 text-xs text-ink-3 outline-none hover:bg-surface-2 hover:text-ink active:bg-surface-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live pointer-coarse:h-11"
+          onClick={() => {
+            if (loading) return;
+            if (!hasMore) { sessionsList.reveal(group.cwd, 7); return; }
+            if (locallyHidden) { sessionsList.reveal(group.cwd, limit + 7); return; }
+            setLoading(true);
+            void actions.loadMoreSessions(group.cwd).then(applied => { if (applied) sessionsList.reveal(group.cwd, limit + 7); })
+              .catch(() => actions.toast("error", "Couldn’t load earlier chats. Try again."))
+              .finally(() => setLoading(false));
+          }}>
+          {loading ? "Loading chats…" : hasMore ? "Load more" : "Show fewer"}
+        </button>}
         {group.detached.length > 0 && <DetachedRows nodes={group.detached} editing={editing} onEdit={onEdit} onOpen={onOpen} />}
       </div>
       </LayoutContext>
@@ -1022,12 +1074,15 @@ function DetachedRows({ nodes, editing, onEdit, onOpen }: { nodes: readonly Thre
 
 function ArchivedGroup({ editing, onEdit, onOpen }: { editing: string | undefined; onEdit(id: string | undefined): void; onOpen?: (() => void) | undefined }) {
   const archivedIds = useAuiState((s) => s.threads.archivedThreadIds);
+  const archivedCount = useLaserState(s => s.archivedSessionCount) ?? archivedIds.length;
+  const { actions } = useLaserStable();
   const groups = useThreadListGroups(EMPTY_PROJECTS, undefined, "", "code", EMPTY_WORKSPACES, true);
   const runs = useLaserState((s) => s.agents.runs);
   const tree = useMemo(() => branchInfoOf(groups, runs), [groups, runs]);
   const roots = useMemo(() => groups.flatMap(group => [...group.roots, ...group.detached]), [groups]);
   const layout = useMemo(() => ({ ...ROOT_LAYOUT, flat: true, gutter: needsGutter(roots) }), [roots]);
   const [open, setOpen] = useState(false);
+  useEffect(() => open ? actions.expandCatalog?.() : undefined, [actions, open]);
   const listId = "session-group-archived";
   return (
     <section aria-label="Archived sessions">
@@ -1042,7 +1097,7 @@ function ArchivedGroup({ editing, onEdit, onOpen }: { editing: string | undefine
           <ChevronRight aria-hidden="true" className={cn("rtl:-scale-x-100", "size-3 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none", open && "rotate-90 rtl:-rotate-90")} />
           <Archive aria-hidden="true" className="size-3.5 shrink-0 text-ink-3" />
           <span className="min-w-0 truncate text-sm leading-5 font-medium text-ink-2">Archived</span>
-          <span className="shrink-0 text-xs text-ink-3 tnum">{archivedIds.length}</span>
+          <span className="shrink-0 text-xs text-ink-3 tnum">{archivedCount}</span>
         </button>
       </div>
       {open && (

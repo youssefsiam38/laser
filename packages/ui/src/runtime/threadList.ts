@@ -281,7 +281,7 @@ export function visibleProjectCwds(
   sessions: readonly SessionSummary[],
   open: Readonly<Record<string, SessionView | undefined>>,
   archive: ArchiveStore,
-  options: { /** Directories that are never projects: the Beam and Chat workspaces. */ exclude?: readonly string[] } = {},
+  options: { /** Directories that are never projects: the Beam and Chat workspaces. */ exclude?: readonly string[]; visibleCounts?: Readonly<Record<string, number>> } = {},
 ): string[] {
   const excluded = (options.exclude ?? []).map((cwd) => cwd.replace(/\\/g, "/").replace(/\/+$/, ""));
   const isExcluded = (cwd: string): boolean => {
@@ -305,7 +305,7 @@ export function visibleProjectCwds(
   // directories the host has not indexed yet, so a transient catalog update
   // cannot reshuffle a person's rail.
   for (const project of projects) {
-    if (project.pinned || project.sessionCount > (archivedByCwd.get(project.cwd) ?? 0)) append(project.cwd);
+    if (project.pinned || (options.visibleCounts?.[project.cwd] ?? project.sessionCount - (archivedByCwd.get(project.cwd) ?? 0)) > 0) append(project.cwd);
   }
   const workspaceKind = (kind: string | undefined) => kind === "beam" || kind === "chat";
   for (const session of sessions) if (!archive.has(session.path) && !workspaceKind(session.agent?.kind)) append(session.cwd);
@@ -338,6 +338,8 @@ export function orderProjectInfos(projects: readonly ProjectInfo[], cwds: readon
 export interface ThreadListDeps {
   /** Current catalog. Read lazily so the adapter identity can stay stable. */
   sessions(): readonly SessionSummary[];
+  /** Explicit archive-tree operations must see descendants outside loaded sidebar pages. */
+  allSessions?(): Promise<readonly SessionSummary[]>;
   /** Currently open views, keyed by path. */
   views(): Readonly<Record<string, SessionView | undefined>>;
   archive: ArchiveStore;
@@ -432,11 +434,13 @@ export function createThreadListAdapter(deps: ThreadListDeps): RemoteThreadListA
     },
 
     archive: async (remoteId) => {
-      for (const path of sessionSubtreePaths([remoteId], mergeSessions(deps.sessions(), deps.views()))) deps.archive.add(path);
+      const sessions = deps.allSessions ? await deps.allSessions() : deps.sessions();
+      for (const path of sessionSubtreePaths([remoteId], mergeSessions(sessions, deps.views()))) deps.archive.add(path);
     },
 
     unarchive: async (remoteId) => {
-      for (const path of sessionSubtreePaths([remoteId], mergeSessions(deps.sessions(), deps.views()))) deps.archive.remove(path);
+      const sessions = deps.allSessions ? await deps.allSessions() : deps.sessions();
+      for (const path of sessionSubtreePaths([remoteId], mergeSessions(sessions, deps.views()))) deps.archive.remove(path);
     },
 
     delete: async (remoteId) => {

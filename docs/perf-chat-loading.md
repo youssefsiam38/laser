@@ -4,7 +4,7 @@
 
 Separate **catalog summaries**, **loaded history**, and **mounted rows**. Page the first two and virtualize the third. Keep the current conversation mounted until the destination is ready; never make an old composer send to a pending destination.
 
-This document contains research, a fresh baseline, and a proposed implementation contract. **No optimization is implemented and no after measurement is claimed.** Base: `a0690d36d600bbc3913a055abae1680dc5930f8f`, isolated branch `agents/chat-loading-9210c750`.
+This document contains research, a fresh baseline, and the implementation contract. **Catalog paging (A) is implemented below; transcript stages B–E remain outstanding.** Baseline base: `a0690d36d600bbc3913a055abae1680dc5930f8f`, isolated branch `agents/chat-loading-9210c750`.
 
 ## Research: established techniques, not guesses about competitors
 
@@ -94,7 +94,7 @@ Extend existing `pi/session/list` with an explicit paged variant; preserve the f
 - Return explicit `hasMore`/cursor per project. `Load more` requests seven more ordinary rows; `Show fewer` reduces visibility without throwing away fetched summary identities.
 - Archive is currently client-owned. Supply an explicit exclusion/visibility scope or refill past archived rows until seven visible ordinary rows are available. Paging raw rows and then hiding the first seven can otherwise yield a falsely empty group. Refresh must reconcile removals without dropping already-fetched older pages or their fold state.
 - Cursor scope includes project/filter/order revision. A changed catalog can invalidate/restart a page rather than silently skip/duplicate rows. Concurrent refresh and load-more are fenced per project; stale responses cannot resurrect deleted rows.
-- Proposed interpretation, requiring clarification before A: full-catalog search remains host-side and independent of the loaded sidebar page, retaining its current streaming file reads. The brief says search uses a full index and “never loads bodies,” but no such full-text index exists. If this prohibits host-side body reads too, persistent indexing becomes an additional dependency. Destination resolution and archive-tree operations must not mistake the partial sidebar array for the full catalog.
+- Confirmed by the coordinator: “never loads bodies” refers to the client/sidebar. Full-catalog search remains host-side, independent of the loaded sidebar page, retaining its current streaming file reads. No persistent full-text index is required. Destination resolution and archive-tree operations must not mistake the partial sidebar array for the full catalog.
 
 **Tests:** schema round-trip and router route inventory; tied timestamps; 150/10 fixture; exceptions/dedup/ancestor closure; archive-only first page; empty-first; refresh while paging; deletion/move; hidden remembered destination; keyboard/touch Load more and Show fewer. **Invariants:** host-only metadata parsing (1), engine-neutral protocol (2), no file writes (8), native attention/seen ownership unchanged.
 
@@ -159,4 +159,39 @@ python3 /tmp/chat-loading/clean.py node /tmp/chat-loading/catalog.mjs
 
 Evidence: `/tmp/chat-loading/{baseline-results,startup-results,tail-startup-results,rpc-results,catalog-results}.json`; scripts beside them. Build logs: `/tmp/chat-loading-build.log`, `/tmp/chat-loading-build-retry.log`. The baseline screenshot is inspection evidence only, not a four-layout acceptance matrix.
 
-Implementation is **outstanding**. Each A–E is an independently testable commit boundary, with A first and B requiring the largest lifecycle contract. After each implemented boundary run host/protocol/UI tests, touched worker seam tests and identity; finish with the required real 1360/390 × light/dark browser matrix, normal/reduced motion, keyboard/touch and before/after paired samples. Append after results here; do not compare a 154-session startup to a three-session switch or call a short complete transcript a proven paged implementation.
+Transcript implementation B–E is **outstanding**; A is recorded below. Each A–E is an independently testable commit boundary, with B requiring the largest lifecycle contract. After each implemented boundary run host/protocol/UI tests, touched worker seam tests and identity; finish with the required real 1360/390 × light/dark browser matrix, normal/reduced motion, keyboard/touch and before/after paired samples. Append after results here; do not compare a 154-session startup to a three-session switch or call a short complete transcript a proven paged implementation.
+
+## Implementation A — paged catalog
+
+The existing `pi/session/list` now accepts `page` with a default seven-row quota, keyset cursor, per-project expanded quotas, archive exclusions, explicitly included destinations/pins, and presence probes for fleet references. The omitted-page route still returns all summaries; saved-history search remains unchanged. All project headers and true counts remain available. Chat's private directories page as one logical group, as does Beam.
+
+Running/attention/empty rows bypass the ordinary quota. Selected/pinned parents retain their branch and visible children retain ancestors. Thus seven is an ordinary-row quota, not a promise that live work will be hidden to enforce a hard cap. Presence probes return booleans for referenced paths, not a complete client-side identity index; absence from a page never proves deletion. Beam restoration, fleet deletion/reachability, startup memory, project counts/removal, archive-tree operations, both searches and the command palette were audited against this distinction.
+
+The UI requests older pages from the host and retains fetched summaries when folded. Project and Chat controls retain focus through a delayed final page and `Show fewer`; empty-first and live exceptions remain. Identical in-flight refreshes coalesce, stale replies are fenced, expanded quotas survive a component/provider remount within the same page, and periodic refreshes refill those quotas. Explicit archive disclosure, title/global search and the command palette may request the complete **summary** list on demand; archive mutations query the complete summary tree without installing it into the sidebar. No message bodies are fetched by these catalog operations.
+
+Implementation detail versus the proposal: catalog cursors are deterministic `(modifiedAt, path)` keysets, not retained immutable catalog snapshots. A refresh reconciles the expanded quota against current recency; pages deduplicate by path. The existing host catalog still scans/stats its complete metadata index. This change bounds rows transferred/mounted initially, not host filesystem enumeration.
+
+### A measurements
+
+Final production UI/host built from this worktree, same isolated Node/Chrome recipe. Ten alternating full/paged route samples over **exactly 150 seen, nonempty sessions / ten projects**:
+
+| Route on the same fixture | Rows | Wire bytes | Median ms (range) |
+| --- | ---: | ---: | ---: |
+| Full summaries | 150 | 58,148–58,149 | 5.13 (4.48–5.60) |
+| Paged summaries | 70 | 30,300–30,301 | 7.68 (6.67–8.83) |
+
+**47.9% fewer bytes and 53.3% fewer initial rows**, at ~2.55 ms additional host RPC time. The <10 ms target passes; the provisional <30 KB target narrowly misses (30.3 KB). The earlier 54,398-byte baseline had different attention/seen fields, so the paired full route above is the byte comparator. Unread/attention exceptions can legitimately return every row; the synthetic fixture was explicitly marked seen before this comparison.
+
+The browser fixture additionally has five control sessions and fifteen Chat sessions. Its initial response is **82 rows / 36,151 bytes**, received **once** per fresh context rather than three identical initial reads observed during development. No transcript switch/open improvement is claimed at A: entries and mounted-message work are unchanged until B–D.
+
+### A validation
+
+- Production builds: protocol, host and UI **pass**; `/tmp/chat-loading-a-build-final.log`.
+- Protocol: **106 tests / 10 files pass**; `/tmp/chat-loading-a-protocol-final.log`.
+- Host: **236 tests / 31 files pass**, including router pagination, full-route compatibility and no worker start; `/tmp/chat-loading-a-host-final.log`.
+- UI: **1,365 tests / 164 files pass, one existing benchmark skipped**, including type checks, delayed paging/focus, stale replies, archives and fleet presence; `/tmp/chat-loading-a-ui-final.log`.
+- Staged identity and diff checks **pass**; `/tmp/chat-loading-a-identity-final.log`. Worker code/driver seam is untouched at A, so its focused SDK suite was not repeated.
+- Real browser **1360/390 × light/dark passes**: both Project and Chat go 7 → 14 → 15 → 7, four actual cursor requests per case, original project-row DOM retained, final-page/fold focus retained, no horizontal page overflow or page errors. Desktop uses keyboard Enter; phone exercises touch; light cases use reduced motion, dark normal motion. Screenshots inspected at every width/theme. Evidence: `/tmp/chat-loading/a-browser-results.json`, `a-browser-final.log`, `a-{catalog,chat}-{1360,390}-{light,dark}.png`.
+- Browser harness corrections: `data-base` is the theme mode (`data-theme` is the preset ID), and phone navigation must finish closing its sheet before reopening it. The rejected runs were harness errors, not successful matrix evidence.
+
+Reproduce with `/tmp/chat-loading/catalog-browser.mjs` and `/tmp/chat-loading/catalog.mjs` through the allowlisted wrapper. The latter temporarily parks only its own synthetic controls, measures the exact-150 catalog, then restores them in `finally`. Raw route samples: `/tmp/chat-loading/a-catalog-results.json`. Remaining acceptance: B–E and their long-history/live/find/scroll/switch browser proofs.

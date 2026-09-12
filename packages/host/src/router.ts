@@ -35,6 +35,7 @@ import type { AgentStore } from "./agents/store.js";
 import type { AttentionTracker } from "./attention.js";
 import type { SessionCatalog } from "./catalog.js";
 import { searchSessions } from "./session-search.js";
+import { pageCatalog } from "./catalog-page.js";
 import type { LogStore } from "./logstore.js";
 import { browseDirectories, type PackageService, type SetupService } from "./packages.js";
 import type { TaskRegister } from "./tasks/register.js";
@@ -258,8 +259,24 @@ export class Router {
       case "pi/host/version":
         return { version: PRODUCT_VERSION };
       case HOST_ENVIRONMENT_METHOD: return applyHostEnvironment(this.pool, req.params);
-      case "pi/session/list":
-        return { sessions: this.sessions(req.params.cwd) };
+      case "pi/session/list": {
+        if (!req.params.page) return { sessions: this.sessions(req.params.cwd) };
+        const rows = this.sessions();
+        const byPath = new Map(rows.map(row => [row.path, row]));
+        return pageCatalog(rows, req.params, (row) => {
+          const visited = new Set<string>();
+          let root = row;
+          while (!visited.has(root.path)) {
+            visited.add(root.path);
+            const parent = root.parentPath ?? root.agent?.parentPath;
+            const next = parent ? byPath.get(parent) : undefined;
+            if (!next) break;
+            root = next;
+          }
+          const kind = this.workspaceAgentOf(root.cwd);
+          return kind ? this.deps.agents!.workspaces[kind] : projectRootOf(root.cwd);
+        });
+      }
 
       case "session/search": {
         const { query, cwd, after, before, cursor } = req.params;

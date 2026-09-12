@@ -138,6 +138,32 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
   };
 }
 
+describe("Router · paged catalog", () => {
+  it("returns seven summaries per project, then a cursor page, without opening workers", async () => {
+    const rows: SessionSummary[] = Array.from({ length: 150 }, (_, index) => ({
+      cwd: `/projects/${Math.floor(index / 15)}`, path: `/sessions/${String(index).padStart(3, "0")}.jsonl`, id: String(index),
+      createdAt: "2026-06-01T00:00:00.000Z", modifiedAt: "2026-06-01T00:00:00.000Z", messageCount: 2,
+    }));
+    const h = harness({ catalogRows: rows });
+    try {
+      const first = await h.router.handle({ jsonrpc: "2.0", id: 1, method: "pi/session/list", params: { page: {} } });
+      expect(first).toHaveProperty("result.sessions.length", 70);
+      const result = (first as { result: { sessions: SessionSummary[]; groups: Array<{ cwd: string; cursor: string }> } }).result;
+      expect(result.groups).toHaveLength(10);
+      const group = result.groups[0]!;
+      const next = await h.router.handle({ jsonrpc: "2.0", id: 2, method: "pi/session/list", params: { cwd: group.cwd, page: { cursor: group.cursor } } });
+      expect(next).toHaveProperty("result.sessions.length", 7);
+      const more = (next as { result: { sessions: SessionSummary[] } }).result.sessions;
+      expect(more.every(row => !result.sessions.some(firstRow => firstRow.path === row.path))).toBe(true);
+      const invalid = await h.router.handle({ jsonrpc: "2.0", id: 3, method: "pi/session/list", params: { cwd: "/another", page: { cursor: group.cursor } } });
+      expect(invalid).toHaveProperty("error.code", ErrorCodes.InvalidParams);
+      const full = await h.router.handle({ jsonrpc: "2.0", id: 4, method: "pi/session/list", params: {} });
+      expect(full).toHaveProperty("result.sessions.length", 150);
+      expect(h.workerRequests).toEqual([]);
+    } finally { h.cleanup(); }
+  });
+});
+
 describe("Router · dictation cancellation", () => {
   it("routes discard while end is still transcribing, then releases the upload route", async () => {
     let finish!: (value: unknown) => void;

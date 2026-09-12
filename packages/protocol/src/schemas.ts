@@ -536,7 +536,17 @@ export const clientParamsSchemas = {
   ).refine((variables) => Object.keys(variables).length <= 4096
     && Object.entries(variables).reduce((size, [key, value]) => size + key.length + value.length + 2, 0) <= 1_048_576,
   "environment is too large") }).strict(),
-  "pi/session/list": z.object({ cwd: z.string().min(1).optional() }).strict(),
+  "pi/session/list": z.object({
+    cwd: z.string().min(1).optional(),
+    page: z.object({
+      cursor: z.string().min(1).max(8192).optional(),
+      size: z.number().int().min(1).max(1000).optional(),
+      sizes: z.record(z.string().min(1), z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)).optional(),
+      exclude: z.array(z.string().min(1)).optional(),
+      include: z.array(z.string().min(1)).optional(),
+      probe: z.array(z.string().min(1)).optional(),
+    }).strict().optional(),
+  }).strict(),
   "session/search": z.object({ query: z.string().trim().min(1).max(200), cwd: z.string().min(1).optional(), after: z.string().datetime().optional(), before: z.string().datetime().optional(), cursor: z.number().int().nonnegative().optional() }).strict(),
   "pi/session/inbox": z
     .object({ cwd: z.string().min(1).optional(), limit: z.number().int().positive().max(500).optional() })
