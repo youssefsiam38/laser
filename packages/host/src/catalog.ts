@@ -17,7 +17,7 @@
  *   {"type":"session","version":3,"id","timestamp","cwd","parentSession"?}
  */
 import { closeSync, openSync, readSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { defaultAgentDir, projectRootOf } from "./paths.js";
 import type { SessionAgentInfo, SessionAgentRecord, SessionSummary } from "@lasercode/protocol";
 import { SESSION_AGENT_ENTRY_TYPE, goalPromptId, toolOutputText } from "@lasercode/protocol";
@@ -101,6 +101,16 @@ export class SessionCatalog {
   /** One session, or null when the file is gone or not a Pi session. */
   get(path: string): CatalogEntry | null {
     return this.read(path);
+  }
+
+  /** Known-path lookup with exactly the flat/one-project-deep list admission. */
+  getListed(path: string): CatalogEntry | null {
+    if (!path.endsWith(".jsonl")) return null;
+    const parent = dirname(path);
+    if (parent !== this.sessionDir && dirname(parent) !== this.sessionDir) return null;
+    // Reject non-normal spellings that list() would never return.
+    if (join(parent, path.slice(parent.length + 1)) !== path) return null;
+    return this.get(path);
   }
 
   /** The cwd recorded in a session file's header, or undefined if unreadable. */

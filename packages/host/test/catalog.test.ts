@@ -95,6 +95,21 @@ describe("SessionCatalog", () => {
     expect(catalog.cwdOf(join(dir, "nope.jsonl"))).toBeUndefined();
   });
 
+  it("admits known-path lookups only where list would discover them and rechecks deletion", () => {
+    const path = session("project", "s.jsonl", { id: "s", cwd: "/project" }, new Date());
+    const catalog = new SessionCatalog(dir);
+    const spy = vi.spyOn(catalog, "list");
+    expect(catalog.getListed(path)?.id).toBe("s");
+    const outside = join(dir, "project", "deep", "s.jsonl");
+    mkdirSync(join(dir, "project", "deep"));
+    writeFileSync(outside, JSON.stringify({ type: "session", id: "outside", cwd: "/project" }) + "\n");
+    expect(catalog.getListed(outside)).toBeNull();
+    expect(catalog.getListed(join(dir, "..", "outside.jsonl"))).toBeNull();
+    rmSync(path);
+    expect(catalog.getListed(path)).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it("also scans the flat layout Pi uses for an explicit session dir", () => {
     const flat = join(dir, "flat_s.jsonl");
     writeFileSync(flat, `${JSON.stringify({ type: "session", version: 3, id: "flat", cwd: "/f" })}\n`);

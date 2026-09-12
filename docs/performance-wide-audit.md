@@ -518,3 +518,11 @@ Twenty cold application-cache samples per size, same fixture/program (`catalog.m
 | 32 | 1,024.84 | 52.41 | 2,197,553,215 | 33,554,494 |
 
 Regression: actual 16 MiB file, bounded concatenation traffic, incomplete write then newline, multi-byte split, rename and same-size rewrite; existing goal/agent/append tests retained. `pnpm -F @lasercode/host test` (234), `pnpm -F @lasercode/worker test` (682, 3 skipped), `pnpm identity:check`, `pnpm -r build`: pass (`f01-*.log`). No protocol changes. Host heartbeat/permission and browser matrix are not measured here; synchronous large-line parsing remains a possible pause.
+
+### F02 — request-local directory classification and indexed admission
+
+Confirmed the repeated `isSessionDirectory` calls and `list().find` lookups. List/search now memoize only within their synchronous snapshot; authorization/mutation/spawn checks remain uncached. Known-path questions use `getListed`, retaining the catalog’s flat/one-level `.jsonl` admission rather than allowing deletion of arbitrary external session files. Project `get` decorates only its target; `add` returns the emitted snapshot rather than scanning again. Catalog enumeration needed for true project counts remains unchanged.
+
+Same existing 5,000-row/one-cwd/four-root fixture, 20 warmed samples (`containment.mjs`): **40,000 → 8 realpath calls**, median **138.99 → 21.96 ms**, p95 order statistic **158.59 → 37.92 ms**. This is synthetic route work, not client latency. Regression tests assert one classification per distinct cwd per operation and fresh decisions next operation; known-path admission refuses deeper/outside paths and notices deletion without a list scan. Existing containment/trust tests remain green. Many-project timing and live symlink-swap-under-load profiling are not claimed.
+
+`pnpm -F @lasercode/host test` (236), worker test (682, 3 skipped), identity check and recursive build pass (`f02-*.log`). No wire methods changed.

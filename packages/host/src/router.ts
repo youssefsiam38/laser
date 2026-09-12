@@ -197,7 +197,8 @@ export class Router {
    * run's id and status from the registry.
    */
   sessions(cwd?: string): SessionSummary[] {
-    const rows = this.catalog.list(cwd).filter((session) => this.isSessionDirectory(session.cwd)).map(({ size: _size, ...summary }) => summary);
+    const isSessionDirectory = this.sessionDirectorySnapshot();
+    const rows = this.catalog.list(cwd).filter((session) => isSessionDirectory(session.cwd)).map(({ size: _size, ...summary }) => summary);
     const known = new Set(rows.map((row) => row.path));
     for (const [path, summary] of this.unwritten) {
       // The catalog has it, or the worker let it go: the stub has done its job.
@@ -205,7 +206,7 @@ export class Router {
         this.unwritten.delete(path);
         continue;
       }
-      if (known.has(path) || !this.isSessionDirectory(summary.cwd)) continue;
+      if (known.has(path) || !isSessionDirectory(summary.cwd)) continue;
       if (cwd !== undefined && summary.cwd !== cwd) continue;
       rows.unshift(summary);
     }
@@ -263,7 +264,8 @@ export class Router {
 
       case "session/search": {
         const { query, cwd, after, before, cursor } = req.params;
-        const sessions = this.catalog.list(cwd).filter(s => this.isSessionDirectory(s.cwd) && (!after || s.modifiedAt >= after) && (!before || s.modifiedAt < before));
+        const isSessionDirectory = this.sessionDirectorySnapshot();
+        const sessions = this.catalog.list(cwd).filter(s => isSessionDirectory(s.cwd) && (!after || s.modifiedAt >= after) && (!before || s.modifiedAt < before));
         return searchSessions(sessions, query, cursor);
       }
 
@@ -287,7 +289,7 @@ export class Router {
 
       case "pi/session/delete": {
         const { path } = req.params;
-        const entry = this.catalog.list().find((session) => session.path === path);
+        const entry = this.catalog.getListed(path);
         if (!entry) throw new ProtocolError(ErrorCodes.SessionNotFound, "That session is no longer on disk.");
         if (this.pool.openSessions(entry.cwd).includes(path)) {
           throw new ProtocolError(ErrorCodes.SessionBusy, "Close this session before deleting its transcript.");
@@ -763,6 +765,20 @@ export class Router {
     return this.workspaceAgentOf(cwd) !== undefined;
   }
 
+  /** Presentation-only memo, owned by one synchronous list/search operation.
+   * Mutation, trust and spawn checks always resolve containment afresh. */
+  private sessionDirectorySnapshot(): (cwd: string) => boolean {
+    const values = new Map<string, boolean>();
+    return (cwd) => {
+      let value = values.get(cwd);
+      if (value === undefined) {
+        value = this.isSessionDirectory(cwd);
+        values.set(cwd, value);
+      }
+      return value;
+    };
+  }
+
   /** Only real projects and explicitly designated built-in workspaces are session directories. */
   private isSessionDirectory(cwd: string): boolean {
     return !this.deps.projects.isExcluded(cwd) || this.isWorkspace(cwd);
@@ -774,7 +790,7 @@ export class Router {
    * turn that old directory into a project when it is opened.
    */
   private isWorkspaceSession(path: string): boolean {
-    const kind = this.catalog.list().find((session) => session.path === path)?.agent?.kind;
+    const kind = this.catalog.getListed(path)?.agent?.kind;
     return kind === "beam" || kind === "chat";
   }
 
