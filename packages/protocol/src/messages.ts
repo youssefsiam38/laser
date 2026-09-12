@@ -856,11 +856,11 @@ export interface ProjectFile {
 }
 
 /**
- * One file of a project, read for display (M15-T1): the viewer behind a file
- * card in the transcript. Never executed, never resolved outside the project.
+ * A machine file read for display: the viewer behind a file card in the
+ * transcript. Never executed; relative requests resolve against the project.
  */
 export interface ProjectFileContent {
-  /** Posix-separated, relative to the project directory. */
+  /** Resolved target: project-relative (POSIX-separated) inside, absolute outside. */
   path: string;
   /** Last segment, for the title. */
   name: string;

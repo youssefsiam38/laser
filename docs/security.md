@@ -22,7 +22,7 @@ the original relay research notes (not kept in the repository), decision D-10.
 | Session transcripts | Source code, secrets pasted into prompts, internal design |
 | Prompts and steering text | The same, plus what the user is thinking |
 | Tool-call approvals | Authority to run commands on the developer's machine |
-| Provider credentials | Never leave the desktop; the phone never sees them |
+| Provider credentials | Not exposed by provider/settings APIs; explicit machine-file reads carry host-user authority (§2) |
 | The desktop itself | A device with relay access can drive the agent |
 
 ## 2. Who we are protecting against
@@ -39,6 +39,24 @@ the original relay research notes (not kept in the repository), decision D-10.
 | A hostile Pi extension | Runs in the worker process | **No.** Pi extensions are unsandboxed upstream |
 
 A native local process can call `pi/host/environment` through the loopback socket; it already has the same authority there through session prompts and tool execution, while browser-origin and relay callers cannot change the environment.
+
+### Machine file previews (M16-T19)
+
+`pi/project/read` permits regular files anywhere on the host machine, for local
+frontends **and authenticated paired phones**. Pairing grants control of the
+same agent, including prompts and command approvals; a project directory is a
+resolution context, not a filesystem sandbox. A local-only preview restriction
+would not restrict that existing authority. The relay still sees only encrypted
+bytes, not paths or file contents. Revoke a lost device as described in §6.
+
+Relative paths resolve against the owning project/worktree. Symlinks may point
+outside it; the viewer labels resolved outside targets with their absolute host
+path. OS permissions still apply. Reads reject folders and special files, use
+nonblocking/no-follow open and a device/inode recheck, and cap transmitted bytes
+with an explicit truncation indication. Previewing does not execute files or
+open them through MIME handlers. File contents are untrusted display data on
+both frontends. This authority can expose any readable file, including secrets;
+pair only a device you trust with the host's agent authority.
 
 ## 3. The cryptographic core
 

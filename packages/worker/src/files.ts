@@ -21,7 +21,7 @@ import { constants, type Dirent } from "node:fs";
 import { open, readdir, realpath, stat } from "node:fs/promises";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import type { ProjectFile, ProjectFileContent, ProjectFiles } from "@lasercode/protocol";
+import { PRODUCT_DISPLAY_NAME, type ProjectFile, type ProjectFileContent, type ProjectFiles } from "@lasercode/protocol";
 
 /** How long one scan is reused. Long enough for a burst of keystrokes. */
 const CACHE_MS = 5_000;
@@ -94,24 +94,24 @@ export class ProjectFilesService {
     };
   }
 
-  /** Bounded display read. Resolve symlinks before testing project containment. */
+  /** Bounded display read of a machine file; containment determines its label only. */
   async read(path: string): Promise<ProjectFileContent> {
     try {
       const root = await realpath(this.options.cwd);
       const target = await realpath(resolve(root, path));
       const rel = relative(root, target);
-      if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-        throw new Error("That file is outside this project.");
-      }
+      const displayPath = rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)
+        ? target : rel.split(sep).join("/");
       const before = await stat(target);
-      if (!before.isFile()) throw new Error("That path is not a regular file. Choose a file to preview.");
+      if (before.isDirectory()) throw new Error("That path is a folder.");
+      if (!before.isFile()) throw new Error("That path is not a regular file.");
       // Nonblocking avoids hanging on a FIFO swapped in after stat; no-follow
       // refuses a final symlink swapped in after realpath.
       const file = await open(target, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
       try {
         const info = await file.stat();
         if (!info.isFile() || info.dev !== before.dev || info.ino !== before.ino) {
-          throw new Error("That file changed while opening. Try opening it again.");
+          throw new Error("This file changed while opening. Try again.");
         }
         let mediaType = FILE_MEDIA_TYPES[extname(target).toLowerCase()];
         if (!mediaType) {
@@ -128,7 +128,7 @@ export class ProjectFilesService {
         const readable = mediaType.startsWith("text/") || ["application/json", "application/xml", "application/yaml", "application/toml"].includes(mediaType);
         if (!binary && !readable) {
           // A metadata-only binary result: do not decode or transmit lossy text.
-          return { path: rel.split(sep).join("/"), name: basename(target), mediaType: "application/octet-stream",
+          return { path: displayPath, name: basename(target), mediaType: "application/octet-stream",
             size: info.size, modifiedAt: info.mtime.toISOString(), encoding: "base64", content: "", truncated: false };
         }
         const cap = (binary ? 12 : 2) * 1024 * 1024;
@@ -144,13 +144,14 @@ export class ProjectFilesService {
         // Do not invent a replacement character for a UTF-8 sequence cut by the cap.
         const decoder = new StringDecoder("utf8");
         const content = binary ? bytes.toString("base64") : decoder.write(bytes) + (truncated ? "" : decoder.end());
-        return { path: rel.split(sep).join("/"), name: basename(target), mediaType,
+        return { path: displayPath, name: basename(target), mediaType,
           size: info.size, modifiedAt: info.mtime.toISOString(), encoding: binary ? "base64" : "utf8", content, truncated };
       } finally { await file.close(); }
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
-      if (code === "ENOENT" || code === "ENOTDIR") throw new Error("That file could not be found. It may have been moved or deleted.");
-      if (code === "EACCES" || code === "EPERM") throw new Error("That file could not be read. Check its permissions and try again.");
+      if (code === "ENOENT" || code === "ENOTDIR") throw new Error("This file no longer exists.");
+      if (code === "EACCES" || code === "EPERM") throw new Error(`${PRODUCT_DISPLAY_NAME} does not have permission to read this file.`);
+      if (code === "ELOOP") throw new Error("This file changed while opening. Try again.");
       if (code) throw new Error("That file could not be opened. Try opening it again.");
       throw error;
     }

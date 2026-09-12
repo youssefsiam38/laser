@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFile, mkdtemp, open, writeFile, mkdir, rm, symlink } from "node:fs/promises";
+import { appendFile, chmod, mkdtemp, open, rename, writeFile, mkdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -36,21 +36,42 @@ it('reads relative and absolute project files with metadata', async () => {
   await symlink(join(cwd, 'document.md'), join(cwd, 'alias.md'));
   expect(await service.read('alias.md')).toEqual(result);
 });
-it('refuses traversal, escaping symlinks, directories and special files', async () => {
+it('reads outside paths and escaping symlinks, but refuses folders and special files', async () => {
   const base = await mkdtemp(join(tmpdir(), 'file-read-')); roots.push(base);
   const cwd = join(base, 'project'); await mkdir(cwd);
   await writeFile(join(base, 'secret.txt'), 'secret');
   await symlink(join(base, 'secret.txt'), join(cwd, 'escape.txt'));
   const service = new ProjectFilesService({ cwd });
   for (const path of ['../secret.txt', join(base, 'secret.txt'), 'escape.txt']) {
-    await expect(service.read(path)).rejects.toThrow('That file is outside this project.');
+    expect(await service.read(path)).toMatchObject({ path: join(base, 'secret.txt'), content: 'secret', truncated: false });
   }
-  await expect(service.read('.')).rejects.toThrow('not a regular file');
+  await expect(service.read('.')).rejects.toThrow('That path is a folder.');
   if (process.platform !== 'win32') {
     execFileSync('mkfifo', [join(cwd, 'pipe')]);
     await expect(service.read('pipe')).rejects.toThrow('not a regular file');
   }
-  await expect(service.read('gone.txt')).rejects.toThrow('That file could not be found. It may have been moved or deleted.');
+  await expect(service.read('gone.txt')).rejects.toThrow('This file no longer exists.');
+});
+it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('reports permission denial for an unreadable file', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'file-read-')); roots.push(cwd);
+  const path = join(cwd, 'private.txt'); await writeFile(path, 'private');
+  await chmod(path, 0);
+  try {
+    await expect(new ProjectFilesService({ cwd }).read(path)).rejects.toThrow('does not have permission to read this file.');
+  } finally { await chmod(path, 0o600); }
+});
+it.each(['replacement', 'symlink'] as const)('refuses a %s swapped in between stat and open', async kind => {
+  const cwd = await mkdtemp(join(tmpdir(), 'file-read-')); roots.push(cwd);
+  const path = join(cwd, 'race.txt'); await writeFile(path, 'original');
+  const replacement = join(cwd, 'replacement.txt'); await writeFile(replacement, 'replacement');
+  const fs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  vi.mocked(open).mockImplementationOnce(async (...args) => {
+    await rename(path, join(cwd, 'original.txt'));
+    if (kind === 'symlink') await symlink(replacement, path);
+    else await rename(replacement, path);
+    return fs.open(...args);
+  });
+  await expect(new ProjectFilesService({ cwd }).read(path)).rejects.toThrow('This file changed while opening. Try again.');
 });
 it('caps UTF-8 at 2 MiB without a partial character and images at 12 MiB', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'file-read-')); roots.push(cwd);

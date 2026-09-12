@@ -42,8 +42,9 @@ function ViewerContents({ source }: { source: FileViewerSource }) {
   const [attempt, setAttempt] = useState(0);
   const cwd = source.request?.cwd;
   const path = source.request?.path;
-  const absolute = path && cwd ? projectFilePath(cwd, path) : undefined;
   const loaded = source.file ?? fetched;
+  const displayPath = path ? loaded?.path ?? path : undefined;
+  const absolute = displayPath && cwd ? projectFilePath(cwd, displayPath) : undefined;
   const preview = useMemo(() => loaded ? boundedPreview(loaded) : undefined, [loaded]);
   const file = preview?.file;
   const name = file?.name ?? path?.split(/[\\/]/).at(-1) ?? "File";
@@ -60,7 +61,7 @@ function ViewerContents({ source }: { source: FileViewerSource }) {
   return <>
     <DialogHeader className="shrink-0 border-b border-line p-4 pe-12">
       <DialogTitle className="break-all">{name}</DialogTitle>
-      {path ? <p className="typed break-all text-ink-3">{path}</p> : null}
+      {displayPath ? <p dir="ltr" className="typed break-all text-ink-3">{displayPath}</p> : null}
       <DialogDescription>{fileDescription(file?.path || path || "", file, shikiLanguageFromPath(file?.path || path || ""))}</DialogDescription>
       {absolute ? <div className="mt-2 flex flex-wrap gap-2">
         {editor ? <Button variant="outline" size="sm" className="pointer-coarse:min-h-11" onClick={editor}>Open in editor</Button> : null}
